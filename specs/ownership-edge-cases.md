@@ -2952,6 +2952,71 @@ end 'main'
 77
 ```
 
+<!-- test: rc-release-at-a-return-and-a-propagating-try-inside-a-loop -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum ScanError implements Error
+	tooBig
+end 'ScanError'
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function check(n Integer) returns Integer throws ScanError
+	if n > 3 'big'
+		throw ScanError.tooBig
+	end 'big'
+
+	return n
+end 'check'
+
+function scan(limit Integer, stopAt Integer) returns Integer throws ScanError
+	let header = "scan {limit}"
+	var total = 0
+
+	for i in 0 upto limit 'each'
+		let row = "{header}/{i}"
+
+		if i == stopAt 'stop'
+			return total
+		end 'stop'
+
+		let step = try check(i)
+		total = total + step
+		print("{row}\n")
+	end 'each'
+
+	print("{header} done\n")
+	return total
+end 'scan'
+
+function main() returns ExitCode
+	let early = try scan(opaque(10), stopAt: opaque(2)) otherwise -1
+	let failed = try scan(opaque(10), stopAt: opaque(8)) otherwise -1
+	let whole = try scan(opaque(3), stopAt: opaque(9)) otherwise -1
+	print("{early} {failed} {whole}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+scan 10/0
+scan 10/1
+scan 10/0
+scan 10/1
+scan 10/2
+scan 10/3
+scan 3/0
+scan 3/1
+scan 3/2
+scan 3 done
+1 -1 3
+```
+
 <!-- test: rc-generic-function-with-scope-ops -->
 Scope-enter, scope-exit and move ops live in the body a monomorphization clones, so the cloner
 must carry them across; a clone that drops them leaves the instantiation with no cleanup at all.
@@ -2984,4 +3049,58 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: rc-release-at-propagating-trys-a-throw-and-a-return-through-shared-drop-blocks -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum StepError implements Error
+	refused
+end 'StepError'
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function step(n Integer, at Integer) returns String throws StepError
+	if n == at 'refuse'
+		throw StepError.refused
+	end 'refuse'
+
+	return "s{at}"
+end 'step'
+
+function run(n Integer) returns Integer throws StepError
+	let a = try step(n, at: 1)
+	let b = try step(n, at: 2)
+	let c = try step(n, at: 3)
+
+	if n == 4 'four'
+		throw StepError.refused
+	end 'four'
+
+	let d = try step(n, at: 5)
+	return a.byteLength() + b.byteLength() + c.byteLength() + d.byteLength()
+end 'run'
+
+function main() returns ExitCode
+	for n in 1 upto 7 'each'
+		let total = try run(opaque(n)) otherwise -1
+		print("{n} {total}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 -1
+2 -1
+3 -1
+4 -1
+5 -1
+6 8
 ```

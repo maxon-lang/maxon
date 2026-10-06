@@ -149,7 +149,7 @@ union GuardedOperand
 	pointeeOf(cell ValueId)
 end 'GuardedOperand'
 
-// The block whose terminator is this site's own `ret` — the return site to guard.
+// The block whose terminator is this site's own exit (`retMatchesValue`) — the site to guard.
 //
 // ⭐⭐ **TWO OF `notFound`'s CAUSES ARE SHUT AT THE PARSE, AND A FOURTH IS STILL OPEN.** `notFound`
 // means "this site's `ret` is not there any more". Two of its causes are one program shape — a
@@ -1348,7 +1348,7 @@ type RangeCheckEmitter
 
 		let term = try self.module.ops.get(block.terminatorIndex()) otherwise panic("retBlockOf: terminatorIndex of block {block.id} in '{String.from(self.func.name)}' not in module.ops")
 
-		if not retMatchesValue(term, target: site.value) 'notThisSitesRet'
+		if not retMatchesValue(term, block: block, target: site.value) 'notThisSitesRet'
 			return RetBlockLookup.notFound
 		end 'notThisSitesRet'
 
@@ -1648,7 +1648,7 @@ function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label B
 	var headBlock = head
 
 	// The tail runs exactly when the head does, and it is the same text.
-	var ok = module.addBlock(func, label: label, heat: headBlock.heat, inlineSite: headBlock.inlineSite)
+	var ok = module.addBlock(func, label: label, heat: headBlock.heat, inlineSite: headBlock.inlineSite, role: headBlock.role)
 
 	ok.terminator = headBlock.terminator
 	ok.condBranch = headBlock.condBranch
@@ -1737,14 +1737,15 @@ function recordConstNeg(constMap ConstValueMap, resultId ValueId, operand ValueI
 	constMap.upsert(resultId, value: -constMap.constantOf(operand))
 end 'recordConstNeg'
 
-// Is `term` the `ret` of exactly `target`? Asked ONCE PER RETURN SITE, of the one block that site's
-// `return` put its terminator in — so a `false` says the site's own `ret` is gone (or carries a value the
+// Is `term` the exit of exactly `target` — its `ret`, or the `branch` carrying it into the
+// function's shared exit chain? Asked ONCE PER RETURN SITE, of the one block that site's `return`
+// put its terminator in — so a `false` says the site's own exit is gone (or carries a value the
 // hand-off promoted out from under the site), which is the whole of `RetBlockLookup.notFound`.
 //
 // It answers a `bool` rather than a union: a payload-carrying union case is a heap box, and this is
 // asked in a loop over every ret-bearing block. One exhaustive `StdOp` match, so a new variant is a
 // compile error here rather than a `ret` this silently stops recognizing.
-function retMatchesValue(term StdOp, target ValueId) returns bool
+function retMatchesValue(term StdOp, block IrBlock, target ValueId) returns bool
 	return match term 'term'
 		const or
 			binOp or
@@ -1755,7 +1756,6 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			div or
 			mod or
 			condBranch or
-			branch or
 			param or
 			call or
 			retVoid or
@@ -1865,6 +1865,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe gives false
+		branch gives block.carriesOnAnEdge(target)
 		ret(retValId) gives retValId == target
 
 		// ⚠ A throwing function leaves through `errorReturn`, not `ret`

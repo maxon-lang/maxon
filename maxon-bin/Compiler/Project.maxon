@@ -5014,7 +5014,8 @@ end 'cacheReadRangeCheckArgSiteArray'
 // @generated library-cache end
 
 // One `return <expr>` in a function whose declared return type is a ranged alias. The pass guards the
-// `ret` terminator of `block` and reports against the function's `returnAlias`.
+// exit terminator of `block` — its `ret`, or its `branch` into the function's shared exit chain —
+// and reports against the function's `returnAlias`.
 //
 // ⚠⚠ **`block` IS WHAT MAKES A SITE'S GUARD ITS OWN, AND IT IS NOT AN OPTIMIZATION.** Naming only
 // the `value` and letting `InsertRangeChecks` find "the first block still returning it" is an
@@ -5026,9 +5027,9 @@ end 'cacheReadRangeCheckArgSiteArray'
 // terminator, so "the `ret` this site owns" has one answer that no ordering can permute. It is the
 // same fact `RangeCheckSite.block` records, for the same reason.
 //
-// It is the block the `ret` terminator was EMITTED into, read after `emitOwnedValueReturn` has emitted
-// it — not the block the `return` keyword was parsed in. The scope drops a hand-off emits first can
-// branch, and a block a drop left behind carries no `ret`.
+// It is the block the exit terminator was EMITTED into, read after `emitOwnedValueReturn` has
+// emitted it — not the block the `return` keyword was parsed in. The scope drops a hand-off emits
+// first can branch, and a block a drop left behind carries no exit.
 export type RangeCheckReturnSite
 	export var value as ValueId
 	export var block as BlockId

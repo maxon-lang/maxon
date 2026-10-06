@@ -1542,6 +1542,11 @@ type MaxonToStdLowering
 			// sidecar rather than silently attributing a runtime body to a user statement.
 			let spanFile = self.spanFileIdOf(srcFunc, project: project)
 
+			// An exit chain runs for every exit that shares it, so its ops step on the function's closing
+			// `end`: under their Maxon-tier span, the first exit that built them, a walk out through the
+			// chain would stop on the line of a `return` that did not run.
+			let closingSpan = project.debugSpanTable.intern(spanFile, line: srcFunc.closeLine, column: srcFunc.closeColumn)
+
 			let entryRef = try srcFunc.blockRefs.get(0) otherwise panic("lowerMaxonToStd: function '{String.from(srcFunc.name)}' has no entry block")
 			let closureLayout = srcFunc.closureLayout
 			let closureFixedElementCount = srcFunc.closureFixedElementCount
@@ -1556,6 +1561,7 @@ type MaxonToStdLowering
 				// per-op ref is re-read through `maxonBlockOpRefAt`, which is two indexed loads.
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
 				let srcBlockId = srcBlock.id
+				let srcBlockRole = srcBlock.role
 				let srcOpCount = srcBlock.opRefs.count()
 				let srcTerminator = srcBlock.terminator
 				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: stdModule.blocks 1:1 with maxonModule.blocks but get({blockRef}) failed")
@@ -1581,7 +1587,7 @@ type MaxonToStdLowering
 					// The debug-span cursor, set beside the op index for the same reason: the Std ops this one
 					// call is about to append are at an arbitrary depth, and a span threaded as an argument is
 					// one every new emitter could forget to pass on.
-					self.stdModule.spans.current = self.spanOf(opIdx, file: spanFile, project: project)
+					self.stdModule.spans.current = closingSpan if srcBlockRole == BlockRole.exitChain else self.spanOf(opIdx, file: spanFile, project: project)
 					self.lowerOp(hlOp, dstBlock: dstBlock)
 				end 'eachOp'
 
@@ -1596,7 +1602,7 @@ type MaxonToStdLowering
 					// ⚠ **THE TERMINATOR IS OUTSIDE THE BODY LOOP, SO IT NEEDS ITS OWN CURSOR SET.** Without
 					// this every `ret` would inherit the last body op's line — and a block with no body ops
 					// would inherit some earlier block's.
-					self.stdModule.spans.current = self.spanOf(termIdx, file: spanFile, project: project)
+					self.stdModule.spans.current = closingSpan if srcBlockRole == BlockRole.exitChain else self.spanOf(termIdx, file: spanFile, project: project)
 					self.lowerTerminator(termOp, dstBlock: dstBlock)
 				end 'hasTerm' else 'noTermOp'
 					// An op-less terminator (`dead` for an unreachable if/else continuation,

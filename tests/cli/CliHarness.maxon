@@ -1486,3 +1486,182 @@ end 'rewrittenFile'
 export function bytesOf(path FilePath) returns ByteArray
 	return try File.readBinary(path) otherwise panic("CliHarness: the gate could not run - could not read {path.toString()}.")
 end 'bytesOf'
+
+export typealias MetricsField = int(0 to 11)
+
+let MetricsFileSuffix = "-metrics.tsv"
+export let MetricsOptionPrefix = "--metrics="
+let MetricsRowSeparator = "\n"
+let MetricsFieldSeparator = "\t"
+let MetricsCommentPrefix = "#"
+let MetricsFieldCount = 12
+let MetricsKindField = 0 as MetricsField
+let MetricsNameField = 1 as MetricsField
+
+export let MetricsAllocsField = 3 as MetricsField
+let MetricsBytesField = 5 as MetricsField
+export let MetricsRegAllocKind = "regalloc"
+let MetricsCodeKind = "code"
+let MetricsUnnamedRow = "-"
+
+export function stagedProgramMetrics(dir FilePath, name String, source String, described String) returns String throws TestFailure
+	stageProgram(dir, name: name, source: source)
+
+	let metricsFileName = "{name}{MetricsFileSuffix}"
+	let built = runDriver([BuildCommandWord, name, "{MetricsOptionPrefix}{metricsFileName}"], workingDirectory: dir)
+
+	try Expect.equal(built.exitCode(), expected: 0, message: "{described} did not build, so it was never measured. It wrote to stderr: {built.stderr}")
+
+	return try File.readText(dir.join(metricsFileName)) otherwise panic("CliHarness: the gate could not run - the build of {described} wrote no metrics table at {metricsFileName}")
+end 'stagedProgramMetrics'
+
+export function metricsCell(table String, kind String, name String, field MetricsField) returns ReportedTally
+	for row in table.split(MetricsRowSeparator) 'eachRow'
+		let line = row.trimEnd()
+
+		if line.isEmpty() or line.startsWith(MetricsCommentPrefix) 'notARow'
+			continue
+		end 'notARow'
+
+		let fields = line.split(MetricsFieldSeparator)
+
+		if fields.count() != MetricsFieldCount 'malformed'
+			panic("CliHarness: the gate could not run - a metrics row carries {fields.count()} fields rather than {MetricsFieldCount}: {line}")
+		end 'malformed'
+
+		let rowKind = try fields.get(MetricsKindField as ElementIndex) otherwise panic("CliHarness: kind field OOB after the field count was checked")
+		let rowName = try fields.get(MetricsNameField as ElementIndex) otherwise panic("CliHarness: name field OOB after the field count was checked")
+
+		if rowKind != kind or rowName != name 'namesAnother'
+			continue
+		end 'namesAnother'
+
+		let cell = try fields.get(field as ElementIndex) otherwise panic("CliHarness: field {field} OOB after the field count was checked")
+		return try reportedTally(cell) otherwise panic("CliHarness: the gate could not run - field {field} of the `{kind}` row named `{name}` states no count: {line}")
+	end 'eachRow'
+
+	panic("CliHarness: the gate could not run - the metrics table carries no `{kind}` row named `{name}`, so it was never measured. The table was: {table}")
+end 'metricsCell'
+
+export enum ErrorPathExit
+	propagatingTry
+	throwStatement
+	earlyReturn
+end 'ErrorPathExit'
+
+typealias BindingTally = int(0 to 64)
+
+let ErrorPathCaseDirNamePrefix = "error-path-drops-"
+let ErrorPathAppDirNamePrefix = "bindings-"
+
+let SmallBindings = 16 as BindingTally
+let MediumBindings = 32 as BindingTally
+let LargeBindings = 64 as BindingTally
+
+// A linear term doubles the growth from one doubling to the next and a quadratic one quadruples
+// it; the bound sits between them.
+let LinearGrowthNumerator = 5
+let LinearGrowthDenominator = 2
+
+let ErrorPathFixturePrelude = "typealias Word = int(0 to u32.max)\n\n"
+let RefusalDeclaration = "enum Refusal implements Error\n\trefused\nend 'Refusal'\n\n"
+let ThrowingMakeDeclaration = "function make(seed Word, index Word) returns String throws Refusal\n\tif seed == index 'refuse'\n\t\tthrow Refusal.refused\n\tend 'refuse'\n\n\treturn \"\{seed\}-\{index\}\"\nend 'make'\n\n"
+let PlainMakeDeclaration = "function make(seed Word, index Word) returns String\n\treturn \"\{seed\}-\{index\}\"\nend 'make'\n\n"
+let ThrowingWorkOpening = "function work(seed Word) returns Word throws Refusal\n"
+let PlainWorkOpening = "function work(seed Word) returns Word\n"
+let RefusalThrow = "throw Refusal.refused"
+let TotalOpening = "\n\tvar total = seed\n"
+let WorkClosing = "\n\treturn total\nend 'work'\n\n"
+let ErrorPathMainOpening = "function main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"PATH\") otherwise \"\"\n\tlet seed = (spelled.byteLength() and 0xFFFF) as Word\n"
+let ThrowingWorkCall = "\tlet answer = try work(seed) otherwise 0\n"
+let PlainWorkCall = "\tlet answer = work(seed)\n"
+let ErrorPathMainClosing = "\n\treturn 0 if answer > 0 else 1\nend 'main'\n"
+
+export function requireErrorPathDropsGrowLinearly(exitKind ErrorPathExit) throws TestFailure
+	try requireHeldOutsideCheckout("{ErrorPathCaseDirNamePrefix}{exitKind.name}", check: ErrorPathDropsGrowLinearly.create(exitKind))
+end 'requireErrorPathDropsGrowLinearly'
+
+function errorPathFixtureOpening(exitKind ErrorPathExit) returns String
+	return match exitKind 'opening'
+		propagatingTry gives "{ErrorPathFixturePrelude}{RefusalDeclaration}{ThrowingMakeDeclaration}{ThrowingWorkOpening}"
+		throwStatement gives "{ErrorPathFixturePrelude}{RefusalDeclaration}{PlainMakeDeclaration}{ThrowingWorkOpening}"
+		earlyReturn gives "{ErrorPathFixturePrelude}{PlainMakeDeclaration}{PlainWorkOpening}"
+	end 'opening'
+end 'errorPathFixtureOpening'
+
+function errorPathBindingLines(exitKind ErrorPathExit, index BindingTally) returns String
+	return match exitKind 'binding'
+		propagatingTry gives "\tlet s{index} = try make(seed, index: {index})\n"
+		throwStatement gives guardedBindingLines(index, exitStatement: RefusalThrow)
+		earlyReturn gives guardedBindingLines(index, exitStatement: "return {index}")
+	end 'binding'
+end 'errorPathBindingLines'
+
+function guardedBindingLines(index BindingTally, exitStatement String) returns String
+	return "\tlet s{index} = make(seed, index: {index})\n\n\tif seed == {index} 'exit{index}'\n\t\t{exitStatement}\n\tend 'exit{index}'\n\n"
+end 'guardedBindingLines'
+
+function errorPathWorkCall(exitKind ErrorPathExit) returns String
+	return match exitKind 'call'
+		propagatingTry or
+			throwStatement gives ThrowingWorkCall
+		earlyReturn gives PlainWorkCall
+	end 'call'
+end 'errorPathWorkCall'
+
+function errorPathExitDescription(exitKind ErrorPathExit) returns String
+	return match exitKind 'description'
+		propagatingTry gives "a propagating `try`"
+		throwStatement gives "a `throw`"
+		earlyReturn gives "an early `return`"
+	end 'description'
+end 'errorPathExitDescription'
+
+function errorPathFixtureSource(exitKind ErrorPathExit, bindings BindingTally) returns String
+	var out = errorPathFixtureOpening(exitKind)
+
+	for index in 0 upto bindings 'eachBinding'
+		out.append(errorPathBindingLines(exitKind, index: index))
+	end 'eachBinding'
+
+	out.append(TotalOpening)
+
+	for index in 0 upto bindings 'eachUse'
+		out.append("\ttotal = (total + (s{index}.byteLength() as Word)) and 0xFFFF\n")
+	end 'eachUse'
+
+	out.append(WorkClosing)
+	out.append(ErrorPathMainOpening)
+	out.append(errorPathWorkCall(exitKind))
+	out.append(ErrorPathMainClosing)
+	return out
+end 'errorPathFixtureSource'
+
+function errorPathCodeBytes(dir FilePath, exitKind ErrorPathExit, bindings BindingTally) returns ReportedTally throws TestFailure
+	let table = try stagedProgramMetrics(dir, name: "{ErrorPathAppDirNamePrefix}{bindings}", source: errorPathFixtureSource(exitKind, bindings: bindings), described: "the {bindings}-binding fixture whose bindings are each followed by {errorPathExitDescription(exitKind)}")
+	return metricsCell(table, kind: MetricsCodeKind, name: MetricsUnnamedRow, field: MetricsBytesField)
+end 'errorPathCodeBytes'
+
+type ErrorPathDropsGrowLinearly implements OutsideCheckoutCase
+	var exitKind as ErrorPathExit
+
+	static function create(exitKind ErrorPathExit) returns ErrorPathDropsGrowLinearly
+		return Self{exitKind: exitKind}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let small = try errorPathCodeBytes(dir, exitKind: self.exitKind, bindings: SmallBindings)
+		let medium = try errorPathCodeBytes(dir, exitKind: self.exitKind, bindings: MediumBindings)
+		let large = try errorPathCodeBytes(dir, exitKind: self.exitKind, bindings: LargeBindings)
+
+		let firstGrowth = medium - small
+		let secondGrowth = large - medium
+		let description = errorPathExitDescription(self.exitKind)
+
+		if firstGrowth <= 0 'noGrowth'
+			panic("error-path-drops: the gate could not run - a function of {SmallBindings} owned bindings, each followed by {description}, compiled to {small} bytes of code and one of {MediumBindings} to {medium}, so doubling the bindings grew no code and there is no growth to compare.")
+		end 'noGrowth'
+
+		try Expect.isTrue(secondGrowth * LinearGrowthDenominator < firstGrowth * LinearGrowthNumerator, message: "a function of {SmallBindings}, {MediumBindings} and {LargeBindings} owned bindings, each followed by {description}, compiled to {small}, {medium} and {large} bytes of code: the second doubling added {secondGrowth} bytes against the first's {firstGrowth}, at least {LinearGrowthNumerator}/{LinearGrowthDenominator} times as many. The error-path code grows faster than the bindings - every exit drops every binding in scope inline rather than joining one shared cascade of drops.")
+	end 'requireHeldIn'
+end 'ErrorPathDropsGrowLinearly'

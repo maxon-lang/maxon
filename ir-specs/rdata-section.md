@@ -152,16 +152,16 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rbx, 0
-  __il_body#6:
+  __il_body#7:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
-  __il_cont#5:
+  __il_cont#6:
     x64.leaRegRdata rax, [rip + __layout_Sizer_bool]
-  __il_body#7:
+  __il_body#8:
     x64.loadRegBaseDisp.word64 rbx, [rax + 56]
-  __il_cont#4:
+  __il_cont#5:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -204,16 +204,16 @@ func @main {
     x64.pushReg rbx
     x64.prologue 40
     x64.movRegImm32 rbx, 0
-  __il_body#6:
+  __il_body#7:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
-  __il_cont#5:
+  __il_cont#6:
     x64.leaRegRdata rax, [rip + __layout_Sizer_bool]
-  __il_body#7:
+  __il_body#8:
     x64.loadRegBaseDisp.word64 rbx, [rax + 56]
-  __il_cont#4:
+  __il_cont#5:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -251,16 +251,16 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-  __il_body#6:
+  __il_body#7:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
-  __il_cont#5:
+  __il_cont#6:
     arm64.leaRdata x1, __layout_Sizer_bool
-  __il_body#7:
+  __il_body#8:
     arm64.loadRegBaseDisp.word64 x19, [x1 + 56]
-  __il_cont#4:
+  __il_cont#5:
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
@@ -297,16 +297,16 @@ func @main {
     arm64.prologue 32
     arm64.storeSlotReg slot0, x19
     arm64.movImm x19, 0
-  __il_body#6:
+  __il_body#7:
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.storeBaseDispReg.word64 [x0 + 0], x19
-  __il_cont#5:
+  __il_cont#6:
     arm64.leaRdata x1, __layout_Sizer_bool
-  __il_body#7:
+  __il_body#8:
     arm64.loadRegBaseDisp.word64 x19, [x1 + 56]
-  __il_cont#4:
+  __il_cont#5:
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:

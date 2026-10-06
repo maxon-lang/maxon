@@ -2478,3 +2478,56 @@ end 'main'
 ```stdout
 9
 ```
+
+<!-- test: a-pair-returned-at-three-depths-through-shared-drop-blocks -->
+A pair returned from three depths of owned bindings reaches the caller whole. Each `return` releases its
+innermost binding in place and branches into the drop blocks it shares with every other exit, so the
+pair rides from one shared drop block to the next before it leaves.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function measure(n Integer) returns (Integer, Integer)
+	let a = "a{n}"
+	let b = "bb{n}"
+
+	if n == 1 'one'
+		return (n, a.byteLength())
+	end 'one'
+
+	let c = "ccc{n}"
+
+	if n == 2 'two'
+		return (n, b.byteLength())
+	end 'two'
+
+	if n == 3 'three'
+		return (n, c.byteLength())
+	end 'three'
+
+	print("{a} {b} {c}\n")
+	return (0, a.byteLength() + b.byteLength() + c.byteLength())
+end 'measure'
+
+function main() returns ExitCode
+	for n in 1 upto 5 'each'
+		let (x, y) = measure(opaque(n))
+		print("{x} {y}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+2 3
+3 4
+a4 bb4 ccc4
+0 9
+```

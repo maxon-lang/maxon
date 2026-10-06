@@ -1,0 +1,33 @@
+let PromotedValueReturnCaseLabel = "a-breakpoint-on-a-value-return-whose-only-drop-was-promoted-away-is-armed-and-hit"
+let PickFunctionName = "pick"
+let CallsTakingTheFinalReturn = 1
+
+test 'a breakpoint on a value return whose only drop was a stack-promoted record arms at code and stops on the call that takes it'
+	let staged = builtFixture(PromotedValueReturnCaseLabel, fixture: PromotedValueFixtureName)
+	let returnLine = anchorLine(staged, anchor: "final-return")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(returnLine)}", RunCommand, ContinueCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(answers.count(), expected: 1, message: "`{BreakCommand} {lineTarget(returnLine)}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let armed = eventAt(answers, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the `return` on line {returnLine} runs when `{PickFunctionName}(1, …)` skips the `if`, so its line has code to arm; `{NoCodeAction}` means the line's only code was the drop of the stack-promoted `p`, and once that drop was deleted the exit block was threaded away with no instruction left under the line. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count(), expected: CallsTakingTheFinalReturn, message: "only `{PickFunctionName}(1, …)` takes the `return` on line {returnLine}, so the breakpoint stops {CallsTakingTheFinalReturn} time. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	for (iter, stop) in stops.withIterator() 'eachStop'
+		try Expect.equal(textOf(stop, node: stop.root, key: ReasonKey), expected: BreakpointStopReason, message: "stop {iter.index()} is the breakpoint's. {said}")
+		try Expect.equal(textOf(stop, node: stop.root, key: FunctionKey), expected: PickFunctionName, message: "stop {iter.index()} is in `{PickFunctionName}`. {said}")
+		try Expect.equal(numberOf(stop, node: stop.root, key: LineKey), expected: returnLine as EventNumber, message: "stop {iter.index()} reports the line the breakpoint was set on. {said}")
+	end 'eachStop'
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	try Expect.equal(exits.count(), expected: 1, message: "the `{ContinueCommand}` runs the program to its exit. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: 0, message: "the program exits 0. {said}")
+end 'a breakpoint on a value return whose only drop was a stack-promoted record arms at code and stops on the call that takes it'

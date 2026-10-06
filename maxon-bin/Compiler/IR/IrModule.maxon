@@ -301,6 +301,102 @@ export type IrModule uses Op
 		end 'eachBlock'
 	end 'collectLiveOpIndices'
 
+	// For each value in `returned` that is an exit chain's block argument: the chain blocks carrying
+	// it (`web`), the values arriving from outside them (`leaves`) and the edges between them
+	// (`joins`). A leaf's source is not always an exit site: a chain block whose argument
+	// `elimTrivialBlockArgs` or `pruneDeadBlockArgs` folded away is outside the web, and its edge
+	// arrives as a leaf.
+	export function exitChainsOf(func IrFunction, returned ValueIdArray) returns ExitChainsByReturn
+		var chains = ExitChainsByReturn.create()
+		var chainIds = BlockIdSet.create()
+		var webOfPhi = ExitWebByPhi.create()
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = self.getBlock(blockRef)
+
+			if block.role != BlockRole.exitChain 'ordinaryBlock'
+				continue
+			end 'ordinaryBlock'
+
+			chainIds.insert(block.id)
+
+			for (position, arg) in block.blockArgs.withIterator() 'eachArg'
+				webOfPhi.upsert(arg.valueId, value: ExitWebBlock.create(block, slot: position.index(), phi: arg.valueId))
+			end 'eachArg'
+		end 'eachBlock'
+
+		if chainIds.count() == 0 'noExitChain'
+			return chains
+		end 'noExitChain'
+
+		let incoming = self.incomingIntoExitChain(func, chainIds: chainIds)
+
+		for value in returned 'eachReturned'
+			let start = try webOfPhi.get(value) otherwise continue
+			chains.upsert(value, value: self.exitChainFrom(start, incoming: incoming, webOfPhi: webOfPhi))
+		end 'eachReturned'
+
+		return chains
+	end 'exitChainsOf'
+
+	function incomingIntoExitChain(func IrFunction, chainIds BlockIdSet) returns ExitIncomingByTarget
+		var incoming = ExitIncomingByTarget.create()
+
+		for blockRef in func.blockRefs 'eachSource'
+			let source = self.getBlock(blockRef)
+
+			for edge in source.branchEdges 'eachEdge'
+				if not chainIds.contains(edge.targetBlockId) 'leavesTheChain'
+					continue
+				end 'leavesTheChain'
+
+				var arrivals = try incoming.get(edge.targetBlockId) otherwise ExitIncomingArray.create()
+				arrivals.push(ExitIncoming.create(source, args: edge.argIds))
+				incoming.upsert(edge.targetBlockId, value: arrivals)
+			end 'eachEdge'
+		end 'eachSource'
+
+		return incoming
+	end 'incomingIntoExitChain'
+
+	function exitChainFrom(start ExitWebBlock, incoming ExitIncomingByTarget, webOfPhi ExitWebByPhi) returns ExitChain
+		var web = ExitWebBlockArray.create()
+		var leaves = ExitArrivalArray.create()
+		var joins = ExitArrivalArray.create()
+		var visited = BlockIdSet.create()
+		var next = 0 as ElementIndex
+		web.push(start)
+		visited.insert(start.block.id)
+
+		while next < web.count() 'untilTheChainIsWalked'
+			let current = try web.get(next) otherwise panic("exitChainFrom: web.get OOB at {next} below its own count")
+			let currentId = current.block.id
+			let currentSlot = current.slot
+			next = next + 1
+			let arrivals = try incoming.get(currentId) otherwise continue
+
+			for arrival in arrivals 'eachArrival'
+				let arg = try arrival.args.get(currentSlot) otherwise panic("exitChainFrom: an edge into the exit chain carries fewer values than the payload slot {currentSlot}")
+
+				if let owner = try webOfPhi.get(arg) 'aChainPhi'
+					joins.push(ExitArrival.create(arrival.source, value: arg))
+
+					if not visited.contains(owner.block.id) 'notYetWalked'
+						visited.insert(owner.block.id)
+						web.push(owner)
+					end 'notYetWalked'
+
+					continue
+				end 'aChainPhi'
+
+				leaves.push(ExitArrival.create(arrival.source, value: arg))
+			end 'eachArrival'
+		end 'untilTheChainIsWalked'
+
+		leaves.sort(function(a, b) gives a.source.terminatorIndex().compare(b.source.terminatorIndex()))
+		return ExitChain.create(web, leaves: leaves, joins: joins)
+	end 'exitChainFrom'
+
 	// THE INVERSE OF `func.blockRefs` — a block's `BlockId` to its POSITION in that array, dense and
 	// built in one walk. It answers the question every consumer of a TERMINATOR has: a terminator
 	// names its successors by `BlockId`, `blockRefs` is in LAYOUT order, and there is otherwise no
@@ -645,11 +741,10 @@ export type IrModule uses Op
 	// inline site defaults to the function's own text: a runtime installer and every pass ahead of the
 	// inliner mint nothing inside a spliced body. A pass that copies or splits a block AFTER the inliner
 	// passes the source block's site, so the copy stays inside the callee it came from.
-	export function addBlock(func IrFunction, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef = InlineSiteRef.none) returns IrBlock
+	export function addBlock(func IrFunction, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef = InlineSiteRef.none, role BlockRole = BlockRole.ordinary) returns IrBlock
 		let id = func.nextBlockId
 		func.nextBlockId = func.nextBlockId + 1
-		let block = createAndRegisterBlock(func.blockRefs, id: id, label: label, heat: heat, inlineSite: inlineSite)
-		return block
+		return createAndRegisterBlock(func.blockRefs, id: id, label: label, heat: heat, inlineSite: inlineSite, role: role)
 	end 'addBlock'
 
 	// There is no mid-list block insertion: a continuation block's ref cannot be spliced between
@@ -658,9 +753,9 @@ export type IrModule uses Op
 	// Create a new IrBlock, append it to the blocks array, and register its
 	// index in the function's blockRefs. The caller must bump func.nextBlockId
 	// after calling this (the function returns the allocated id via the block).
-	function createAndRegisterBlock(blockRefs BlockRefArray, id BlockId, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef) returns IrBlock
+	function createAndRegisterBlock(blockRefs BlockRefArray, id BlockId, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef, role BlockRole) returns IrBlock
 		let blockIdx = blocks.count()
-		let block = IrBlock.create(id, label: label, heat: heat, inlineSite: inlineSite)
+		let block = IrBlock.create(id, label: label, heat: heat, inlineSite: inlineSite, role: role)
 		blocks.push(block)
 		blockRefs.push(blockIdx)
 		return block

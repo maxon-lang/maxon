@@ -11720,7 +11720,7 @@ end 'decodeUtf8Sequence'
 
 // --- M4b loop / on-the-fly SSA support ---
 
-// The floor `emitScopeDrops` releases down to at a FUNCTION exit — the base of the owned-binding
+// The floor a FUNCTION exit (`emitFunctionExit`) releases down to — the base of the owned-binding
 // stack, so every owned binding still in scope is dropped. A block or loop exit passes its own
 // recorded height instead, releasing only what it declared.
 let WholeFunctionScopeFloor = 0 as ElementIndex
@@ -11746,6 +11746,198 @@ type BlockMark
 		return Self{mutableCount: mutableCount, ownedCount: ownedCount}
 	end 'create'
 end 'BlockMark'
+
+let FunctionEntryBlockId = 0 as BlockId
+
+// Each exit keeps its innermost release inline, under its own statement's span, so every exit holds
+// an instruction (and a line-table row) without padding: a debug-info build emits the bytes a plain
+// one does.
+let ExitInlineReleaseCount = 1 as ElementIndex
+let DropCascadeNodeLabel = b"exitdrop"
+let ExitTerminalLabel = b"exitterminal"
+
+enum ExitKind
+	propagate
+	throwScalar
+	throwBoxed
+	returnValue
+	returnVoid
+end 'ExitKind'
+
+union FunctionExit
+	propagate(flag ValueId)
+	throwScalar(error ValueId)
+	throwBoxed(error ValueId)
+	returnValue(value ValueId)
+	returnVoid
+end 'FunctionExit'
+
+type ExitShape
+	export let kind as ExitKind
+	export let tag as ValueTypeTag
+	export let nameId as TypeNameId
+
+	static function create(kind ExitKind, tag ValueTypeTag, nameId TypeNameId) returns Self
+		return Self{kind: kind, tag: tag, nameId: nameId}
+	end 'create'
+
+	function matches(other ExitShape) returns bool
+		return self.kind == other.kind and self.tag == other.tag and self.nameId == other.nameId
+	end 'matches'
+
+	function carriesAWitness() returns bool
+		return self.tag == ValueTypeTag.interfaceRef
+	end 'carriesAWitness'
+end 'ExitShape'
+
+enum ReleaseShape
+	plain
+	cellBox
+	cellWithOccupant
+end 'ReleaseShape'
+
+typealias OwnedBindingPositionArray = Array with ElementIndex
+
+// The hand-off set is part of the key: `emitDecref` makes a drop conditional on the path's
+// `conditionalGives`, so two exits under different hand-offs owe different drops of one value.
+type DropNodeKey
+	export let released as ValueId
+	export let releaseShape as ReleaseShape
+	export let handoffs as ArgumentHandoffArray
+
+	static function create(released ValueId, releaseShape ReleaseShape, handoffs ArgumentHandoffArray) returns Self
+		return Self{released: released, releaseShape: releaseShape, handoffs: handoffs}
+	end 'create'
+
+	function matches(other DropNodeKey) returns bool
+		return self.released == other.released and self.releaseShape == other.releaseShape and not handoffsDiffer(self.handoffs, b: other.handoffs)
+	end 'matches'
+end 'DropNodeKey'
+
+type DropNode
+	export let heldKey as DropNodeKey
+	export let carriedShape as ExitShape
+	export let onward as BlockId
+	export let entry as BlockId
+
+	static function create(key DropNodeKey, exitShape ExitShape, successor BlockId, blockId BlockId) returns Self
+		return Self{heldKey: key, carriedShape: exitShape, onward: successor, entry: blockId}
+	end 'create'
+
+	function answers(key DropNodeKey, exitShape ExitShape, successor BlockId) returns bool
+		return self.onward == successor and self.heldKey.matches(key) and self.carriedShape.matches(exitShape)
+	end 'answers'
+end 'DropNode'
+
+typealias DropNodeArray = Array with DropNode
+typealias DropNodesByValue = Map with (ValueId, DropNodeArray)
+typealias DropNodesByContext = Map with (BlockId, DropNodesByValue)
+
+type ExitTerminal
+	export let shape as ExitShape
+	export let blockId as BlockId
+
+	static function create(shape ExitShape, blockId BlockId) returns Self
+		return Self{shape: shape, blockId: blockId}
+	end 'create'
+end 'ExitTerminal'
+
+typealias ExitTerminalArray = Array with ExitTerminal
+
+type DropCascade
+	export let terminals as ExitTerminalArray
+	export let nodes as DropNodesByContext
+
+	static function create() returns Self
+		return Self{terminals: ExitTerminalArray.create(), nodes: DropNodesByContext.create()}
+	end 'create'
+
+	function terminalFor(shape ExitShape) returns BlockId throws AbsentError
+		for terminal in self.terminals 'eachTerminal'
+			if terminal.shape.matches(shape) 'thisShape'
+				return terminal.blockId
+			end 'thisShape'
+		end 'eachTerminal'
+
+		throw AbsentError.absent
+	end 'terminalFor'
+
+	function nodeFor(key DropNodeKey, exitShape ExitShape, context BlockId, successor BlockId) returns BlockId throws AbsentError
+		let inContext = try self.nodes.get(context) otherwise throw AbsentError.absent
+		let candidates = try inContext.get(key.released) otherwise throw AbsentError.absent
+
+		for candidate in candidates 'eachCandidate'
+			if candidate.answers(key, exitShape: exitShape, successor: successor) 'thisNode'
+				return candidate.entry
+			end 'thisNode'
+		end 'eachCandidate'
+
+		throw AbsentError.absent
+	end 'nodeFor'
+
+	function noteTerminal(shape ExitShape, blockId BlockId)
+		self.terminals.push(ExitTerminal.create(shape, blockId: blockId))
+	end 'noteTerminal'
+
+	function noteNode(key DropNodeKey, exitShape ExitShape, context BlockId, successor BlockId, blockId BlockId)
+		var inContext = try self.nodes.get(context) otherwise DropNodesByValue.create()
+		var candidates = try inContext.get(key.released) otherwise DropNodeArray.create()
+		candidates.push(DropNode.create(key, exitShape: exitShape, successor: successor, blockId: blockId))
+		inContext.upsert(key.released, value: candidates)
+		self.nodes.upsert(context, value: inContext)
+	end 'noteNode'
+end 'DropCascade'
+
+union DropCascadeState
+	unbuilt
+	built(cascade DropCascade)
+end 'DropCascadeState'
+
+function thrownExit(error ValueId, errorIsBoxed bool) returns FunctionExit
+	if errorIsBoxed 'boxed'
+		return FunctionExit.throwBoxed(error)
+	end 'boxed'
+
+	return FunctionExit.throwScalar(error)
+end 'thrownExit'
+
+function exitKindOf(exit FunctionExit) returns ExitKind
+	return match exit 'exit'
+		propagate gives ExitKind.propagate
+		throwScalar gives ExitKind.throwScalar
+		throwBoxed gives ExitKind.throwBoxed
+		returnValue gives ExitKind.returnValue
+		returnVoid gives ExitKind.returnVoid
+	end 'exit'
+end 'exitKindOf'
+
+function exitValueOf(exit FunctionExit) returns ValueId throws AbsentError
+	match exit 'exit'
+		propagate(flag) then return flag
+		throwScalar(error) then return error
+		throwBoxed(error) then return error
+		returnValue(value) then return value
+		returnVoid then throw AbsentError.absent
+	end 'exit'
+end 'exitValueOf'
+
+function inlineReleaseCountOf(releases OwnedBindingPositionArray) returns ElementIndex
+	return releases.count() if releases.count() < ExitInlineReleaseCount else ExitInlineReleaseCount
+end 'inlineReleaseCountOf'
+
+function exitCarriedValue(carried ValueIdArray) returns ValueId
+	return try carried.get(0) otherwise panic("exitCarriedValue: an exit that carries a value was handed an empty payload")
+end 'exitCarriedValue'
+
+function exitTerminatorOp(kind ExitKind, carried ValueIdArray) returns MaxonOp
+	return match kind 'kind'
+		propagate gives MaxonOp.propagateError(exitCarriedValue(carried))
+		throwScalar gives MaxonOp.throwError(exitCarriedValue(carried), errorIsBoxed: false)
+		throwBoxed gives MaxonOp.throwError(exitCarriedValue(carried), errorIsBoxed: true)
+		returnValue gives MaxonOp.ret(exitCarriedValue(carried))
+		returnVoid gives MaxonOp.retVoid
+	end 'kind'
+end 'exitTerminatorOp'
 
 // The door lists of a function no binding has waited on yet: the empty one, at `NoMoveSiteList`.
 function freshMoveSiteLists() returns MoveSiteLists
@@ -13941,13 +14133,13 @@ end 'tryBlockBindingToMatch'
 // The name of the internal binding a `for … in` over an OWNED array TEMPORARY moves that temporary
 // into (`parseForStatement`). It is never installed in a `Scope`, so no source line can name it; the
 // `__` prefix is what says so anyway, since `requireUnreservedName` bars every declaration from that
-// space. It exists only so `emitScopeDrops` — which drops BINDINGS — reaches the record.
+// space. It exists only so `emitScopeRelease` — which drops BINDINGS — reaches the record.
 let IterationSourceBindingName = b"__for_source"
 
 // The name of the internal PER-TRIP binding a cursor loop's `current()` result is re-scoped into
 // (`parseForStatement`'s cursor arm) when that result is an owned temporary. Same reasoning as the source
 // binding one line up — never in a `Scope`, `__`-prefixed so no declaration could collide, and existing only
-// so that the four exits `emitScopeDrops` serves reach the record exactly once each.
+// so that the four exits `scopeReleasesAbove` serves reach the record exactly once each.
 let IterationElementBindingName = b"__for_element"
 
 // The same kind of unnameable internal binding, for the temporary a BORROW was taken out of — an
@@ -16117,7 +16309,7 @@ type FunctionBodyState
 	export var mutableVarInnermost as MutableVarNameIndex
 
 	// The struct-typed bindings currently IN SCOPE, in declaration order — the values a `return`
-	// must DROP (`emitScopeDrops`). Held as the `VarInfo` objects, exactly as `mutableVars` is, and
+	// must DROP (`emitFunctionExit`). Held as the `VarInfo` objects, exactly as `mutableVars` is, and
 	// drained off the end at a block's `end` by the same mark (see `closeBlock`). Reset per function.
 	//
 	// ⚠ **IT IS NOT `Scope.popScope`, AND THAT IS NOT AN OVERSIGHT.** Scope's header argues that a
@@ -16694,6 +16886,7 @@ type FunctionBodyState
 	export var conditionalRefusals as ConditionalRefusalColumn
 	export var loopScans as LoopMoveScanArray
 	export var pendingMergeGives as PendingMergeGiveArray
+	export var dropCascade as DropCascadeState
 
 	// ⭐⭐ **THE INTERVAL A COUNTED LOOP PROVED FOR EACH OF ITS COUNTERS (EC7)** — see `ProvenIntRange` for
 	// what an interval nothing NAMES may and may not decide. Reset per function and SWAPPED across a closure
@@ -17255,6 +17448,7 @@ type FunctionBodyState
 			conditionalRefusals: ConditionalRefusalColumn.unwritten,
 			loopScans: LoopMoveScanArray.create(),
 			pendingMergeGives: PendingMergeGiveArray.create(),
+			dropCascade: DropCascadeState.unbuilt,
 			borrowOperands: noBorrowOperands,
 			countedValueRanges: noProvenIntRanges,
 			charLiteralOps: noCharLiteralOps,
@@ -32836,6 +33030,8 @@ export type Parser
 			// so the block it RETURNS — not `entry` — is the one control falls out of.
 			try self.declareNascentSelfSlots(func, block: entry, nameTok: nameTok)
 			var bodyEnd = try self.parseStatements(func, block: entry)
+			func.closeLine = self.current().line
+			func.closeColumn = self.current().column
 			try self.closeFunctionBody(func, bodyEnd: bodyEnd, nameTok: nameTok)
 			try self.validateNascentSelfAssignments(func)
 			try self.requireDescriptorForOpaqueDrops("'{String.from(nameTok.value)}'", line: nameTok.line, column: nameTok.column)
@@ -33402,7 +33598,7 @@ export type Parser
 		end 'fallsOffEnd'
 
 		// ⭐ **THE IMPLICIT RETURN IS A RETURN, AND IT OWES THE SAME DROPS** — this is the THIRD
-		// exit path a function has. Hanging `emitScopeDrops` off `parseReturnStatement` alone leaves
+		// exit path a function has. Hanging `emitFunctionExit` off `parseReturnStatement` alone leaves
 		// a void function that simply ENDS —
 		//
 		//     function helper()
@@ -33419,8 +33615,7 @@ export type Parser
 		// `self.bodyState.currentBlock`: a body ending in an `if`/`while` leaves `currentBlock` at that construct's BODY,
 		// so drops emitted through it land on one path of a branch whose `retVoid` is on another. See
 		// `emitScopeDrops`.
-		self.emitScopeDrops(bodyEnd, floor: WholeFunctionScopeFloor, anchor: nameTok)
-		self.artifact.emitTerminator(bodyEnd, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
+		self.emitFunctionExit(bodyEnd, exit: FunctionExit.returnVoid, anchor: nameTok)
 	end 'closeFunctionBody'
 
 	// ⭐⭐ **WALK THE CURSOR PAST A BODY THIS PARSE IS NOT BUILDING, leaving it ON the function's own `end`**
@@ -34658,7 +34853,7 @@ export type Parser
 			// marked it moved-into-durable-storage, so the caller transfers ownership at the call site and
 			// this function OWNS the value: it is enrolled exactly as an owned local, so `moveInPayload`
 			// accepts moving it into a field (an owned bare-local reference is poisoned), and if it is NOT
-			// moved on some path `emitScopeDrops` drops it once at function exit — sound whether the analysis
+			// moved on some path `emitFunctionExit` drops it once at function exit — sound whether the analysis
 			// was exact or over-approximated. A SCALAR consumed param owns no heap and is left borrowed (its
 			// consume bit is inert), so it is never enrolled — a decref of an integer would corrupt the count.
 			//
@@ -36549,7 +36744,7 @@ export type Parser
 		//
 		// So every terminating statement that carries an expression drains its own temporaries before its
 		// terminator. This list is the whole argument, so keep it complete:
-		//   • `return wrap("v{x}")` — `parseReturnStatement` → `emitHandoffExitDrops`, ahead of the `ret`.
+		//   • `return wrap("v{x}")` — `parseReturnStatement` → `emitHandoffExit`, ahead of the `ret`.
 		//   • `throw E.p(len("v{x}"))` — `emitThrowError` → the same routine, ahead of the `throwError`.
 		//   • `panic("v{x}")` — `parsePanicStatement`, ahead of the abort op, from the statement's own
 		//     floor (a match arm's scrutinee temporary sits below it and must survive) and with no scope
@@ -36908,7 +37103,7 @@ export type Parser
 			// `a`'s value, `a` is NOT poisoned, and both stay readable: `specs/ownership.md`'s `local-alias`.
 			//
 			// ⭐ **ONE DROP, AND IT IS STILL THE OWNER'S — no refcount traffic.** The alias is NOT enrolled in
-			// `ownedBindings`, so `emitScopeDrops` never sees it and the ONE drop stays where it already was:
+			// `ownedBindings`, so `scopeReleasesAbove` never sees it and the ONE drop stays where it already was:
 			// at the owner's scope exit. That is sound without any liveness analysis because a binding can only
 			// be declared AFTER the name it reads, in that name's scope or one nested inside it — so the owner
 			// always outlives every alias of it, structurally. It is the same shape a borrowed binding
@@ -37771,13 +37966,13 @@ export type Parser
 	// shadowed), its `var`s off the mutable-binding list, and its owned bindings off the
 	// owned list.
 	//
-	// ⚠ **IT EMITS NO DROP, AND THAT IS NOW CORRECT RATHER THAN A DEFERRAL.** The `__mm_decref` for a
+	// ⚠ **IT EMITS NO DROP.** The `__mm_decref` for a
 	// block-local owned binding — `if c 'b' let s = build(1) end 'b'` — is emitted by the code that
 	// makes control LEAVE the block, keyed on HOW it leaves: a fall-through drops it in `parseBlockBody`
 	// (before this pops it), a `break`/`continue` in `parseBreakStatement`/`parseContinueStatement`
-	// (down to the enclosing loop's height), a `return` in `emitScopeDrops` (the whole scope). That
-	// placement is what avoids the double-free/use-after-free this comment once warned the drop-here
-	// approach could not: each edge that leaves the block alive drops exactly once, and a terminated
+	// (down to the enclosing loop's height), a `return` in `emitFunctionExit` (the whole scope). That
+	// placement is what avoids a double free or use-after-free: each edge that leaves the block alive
+	// drops exactly once, and a terminated
 	// edge has already dropped, so this routine only unwinds the TRACKING lists and emits nothing.
 	function closeBlock(mark BlockMark)
 		self.bodyState.scope.popScope()
@@ -38324,7 +38519,7 @@ export type Parser
 	//
 	// ⚠ **THE ONE READER THAT MUST NOT BELIEVE IT IS THE DROP ROUTER, AND IT IS HANDLED WHERE IT LIVES.**
 	// `decrefCalleeFor` routes on the tag, so a `Node`-tagged cell would be freed through `__destruct_Node` —
-	// running a struct's cascade over a cell. `emitScopeDrops`' cell arm therefore frees the box
+	// running a struct's cascade over a cell. `emitScopeRelease`'s cell arm therefore frees the box
 	// EXPLICITLY (`__mm_decref`) instead of asking the router, and releases the occupant through the router
 	// by LOADING it first — which is the value the router is actually right about.
 	//
@@ -38359,7 +38554,7 @@ export type Parser
 	end 'storedOccupantExclusivity'
 
 	// ⭐⭐ **DECLARE A CELL-RESIDENT LOCAL.** The cell is this frame's: it is enrolled in
-	// `ownedBindings`, so `emitScopeDrops` releases what it holds and then frees it — the two-step drop that
+	// `ownedBindings`, so `emitScopeRelease` releases what it holds and then frees it — the two-step drop that
 	// header describes.
 	//
 	// ⚠ **IT IS DELIBERATELY NOT PUSHED INTO `mutableVars`, AND THAT IS THE POINT OF THE WHOLE DESIGN.** A
@@ -38398,7 +38593,7 @@ export type Parser
 	// cell, but the callee's ABI still expects an address, so the caller materializes one.
 	//
 	// ⭐ **THE SLOT IS AN ANONYMOUS CELL BINDING, NOT A THIRD KIND OF TEMPORARY**, which is what gives
-	// it a correct drop for free: `emitScopeDrops` already releases a cell's occupant and then the
+	// it a correct drop for free: `emitScopeRelease` already releases a cell's occupant and then the
 	// cell, so the FINAL occupant — whether the callee replaced it or not — is released exactly once.
 	// That is precisely the discipline `specs/refcount-byref-rvalue-scratch-slot.md` describes, and
 	// the bugs that spec records are in machinery this shape does not need: it identifies the slot by
@@ -40910,8 +41105,7 @@ export type Parser
 				throw SourceParseError.returnValueFromVoid(String.from(func.name), line: retTok.line, column: retTok.column)
 			end 'valueFromVoid'
 
-			self.emitScopeDrops(block, floor: WholeFunctionScopeFloor, anchor: retTok)
-			self.artifact.emitTerminator(block, op: MaxonOp.retVoid, range: SourceRange.ofToken(retTok))
+			self.emitFunctionExit(block, exit: FunctionExit.returnVoid, anchor: retTok)
 			return
 		end 'voidFunction'
 
@@ -41046,16 +41240,17 @@ export type Parser
 		try self.emitOwnedValueReturn(returned, anchor: anchor)
 
 		// P1.9: a `return` in a ranged-int-alias-returning function is a narrowing site. `returned` is the
-		// scalar the `ret` terminator carries (a ranged int return is never an owned value, so
-		// `emitOwnedValueReturn` passes it through unwrapped), so recording it here matches the id the
-		// Std pass finds on the `ret` op. Anchored on the `return` keyword (the E3005 position). A ranged
+		// scalar the exit carries — on its `ret`, or on the edge of its `branch` into the function's
+		// shared exit chain (a ranged int return is never an owned value, so `emitOwnedValueReturn`
+		// passes it through unwrapped), so recording it here matches the id the Std pass finds there
+		// (`retMatchesValue`). Anchored on the `return` keyword (the E3005 position). A ranged
 		// INT alias never widens, so this is the value the coercion returned untouched.
 		//
-		// ⚠ **RECORDED AFTER THE `ret` IS EMITTED, BECAUSE THE BLOCK IS HALF THE SITE** (see
-		// `RangeCheckReturnSite.block`): the guard belongs in front of THIS site's own `ret`, and the
+		// ⚠ **RECORDED AFTER THE EXIT IS EMITTED, BECAUSE THE BLOCK IS HALF THE SITE** (see
+		// `RangeCheckReturnSite.block`): the guard belongs in front of THIS site's own exit, and the
 		// block that terminator went into is `currentBlock` as `emitOwnedValueReturn` left it. The
 		// hand-off's scope drops run first and may branch, so the block the `return` keyword was parsed
-		// in is not reliably the one holding the `ret`.
+		// in is not reliably the one holding the exit.
 		//
 		// ⭐⭐ **AND A `return` WHOSE VALUE THE DECLARED TYPE PROVABLY ADMITS IS NOT A SITE (A4f) — THE
 		// DOOR THIS DEFECT WAS FOUND AT.** `return b` from a `returns ExitCode` function, `b` a `Byte =
@@ -41229,8 +41424,8 @@ export type Parser
 	//     way and a borrowed HEAP String is handed back as ITSELF. `return "{x}"` and `return t` are already
 	//     owned, so they pass through here. This half is return-specific and stays here; the MOVE below is
 	//     the shared hand-off cleanup.
-	//   • MOVE the owned return OUT of both drop sets — the shared `emitHandoffExitDrops` (the throw twin
-	//     performs the SAME move). It belongs to the caller now: out of `ownedBindings` so `emitScopeDrops`
+	//   • MOVE the owned return OUT of both drop sets — the shared `emitHandoffExit` (the throw twin
+	//     performs the SAME move). It belongs to the caller now: out of `ownedBindings` so `emitFunctionExit`
 	//     does not double-free `return t`, and out of `pendingTempDrops` so the interp/promoted temporary is
 	//     not dropped on the dead path the `ret` leaves behind. The `ownedBindings` removal is SCOPED to
 	//     this return's drops and UNDONE after them (the helper's `savedOwnedBindings`), because
@@ -41308,9 +41503,7 @@ export type Parser
 			returned = try self.promoteBorrowedToOwned(returned, door: BorrowLaunderDoor.returned, range: SourceRange.ofToken(anchor))
 		end 'promoteBorrowed'
 
-		self.emitHandoffExitDrops(returned, anchor: anchor)
-
-		self.artifact.emitTerminator(self.bodyState.currentBlock, op: MaxonOp.ret(returned), range: SourceRange.ofToken(anchor))
+		self.emitHandoffExit(FunctionExit.returnValue(returned), anchor: anchor)
 	end 'emitOwnedValueReturn'
 
 	// ============================================================================
@@ -41387,16 +41580,14 @@ export type Parser
 		// The box leaves the local drop sets before the scope drops: the cleanup releases every other
 		// owned local on the throw edge but not the box in flight, which would otherwise be freed here
 		// and adopted by the catch. It is the hand-off cleanup a `return <value>` performs
-		// (`emitHandoffExitDrops`), and the owned list is restored for a sibling exit edge that still
+		// (`emitHandoffExit`), and the owned list is restored for a sibling exit edge that still
 		// owns it. A scalar error owns no heap, so its move-out is inert.
 		if routed 'toTheBlockHandler'
 			self.routeBareThrowToTryBlock(errValue, errorType: errorType, errorIsBoxed: errorIsBoxed, anchor: anchor)
 			return
 		end 'toTheBlockHandler'
 
-		self.emitHandoffExitDrops(errValue, anchor: anchor)
-
-		self.artifact.emitTerminator(self.bodyState.currentBlock, op: MaxonOp.throwError(errValue, errorIsBoxed: errorIsBoxed), range: SourceRange.ofToken(anchor))
+		self.emitHandoffExit(thrownExit(errValue, errorIsBoxed: errorIsBoxed), anchor: anchor)
 	end 'emitThrowError'
 
 	function endADeferredThrow(errValue ValueId, routed bool, anchor Token)
@@ -41429,7 +41620,7 @@ export type Parser
 	// ⚠ **BUT THE BOX IN FLIGHT LEAVES THE DROP SETS FIRST, WHICH IS THE CALL ROUTER'S OWN HAZARD WEARING THE
 	// THROW'S CLOTHES.** A `throw U.case(x)` builds an owned box and hands it to the handler, which adopts it
 	// (`enrollCaughtBox`); left in `pendingTempDrops`/`ownedBindings` the landing pad would release it on the
-	// very edge that transfers it — a double free. `emitHandoffExitDrops` performs exactly this move-out for
+	// very edge that transfers it — a double free. `emitHandoffExit` performs exactly this move-out for
 	// the function-exit form, and its save/restore of `ownedBindings` is kept for its reason: a SIBLING edge
 	// (another arm, the path that did not throw) still owns whatever this one gave away.
 	function routeBareThrowToTryBlock(errValue ValueId, errorType MaxonType, errorIsBoxed bool, anchor Token)
@@ -41580,7 +41771,7 @@ export type Parser
 	//
 	// ⚠ **THE RECORD LEAVES THE PENDING LIST WITHOUT A DROP, AND THAT IS DELIBERATE.** Its bytes are what
 	// the runtime reads, so a `__mm_decref` before the call would free the message being printed; and there
-	// is no "after the call", because `mrt_panic` exits the process. This is `emitHandoffExitDrops`' shape
+	// is no "after the call", because `mrt_panic` exits the process. This is `emitHandoffExit`'s shape
 	// — a value handed away stops being the statement's to release — with the hand-off going to a runtime
 	// rather than to a caller. Every OTHER temporary the message expression built (a `toString()` result an
 	// interpolation spliced in) stays enrolled and is drained by `parsePanicStatement`, in the block its
@@ -42524,8 +42715,7 @@ export type Parser
 		if reportsTheThrow 'anUncaughtThrowInATest'
 			self.emitUncaughtTestThrow(flag, throwsClause: clause, anchor: anchor)
 		end 'anUncaughtThrowInATest' else 'republishTheFlag'
-			self.emitScopeDrops(self.bodyState.currentBlock, floor: WholeFunctionScopeFloor, anchor: anchor)
-			self.artifact.emitTerminator(self.bodyState.currentBlock, op: MaxonOp.propagateError(flag), range: SourceRange.ofToken(anchor))
+			self.emitFunctionExit(self.bodyState.currentBlock, exit: FunctionExit.propagate(flag), anchor: anchor)
 		end 'republishTheFlag'
 
 		_ = self.finishTerminatedTry(fork, result: result)
@@ -42545,7 +42735,7 @@ export type Parser
 	// still leave by an inner `return`. So while the handler parses, the temporaries are enrolled as
 	// anonymous owned bindings (`suspendForkTempsAsOwned`), and every exit's existing scope drops
 	// release them:
-	//   • `return` / `throw` — `emitHandoffExitDrops`, which drops the in-scope list and restores it,
+	//   • `return` / `throw` — `emitHandoffExit`, which drops the in-scope list and restores it,
 	//     so two sibling exits each release them on their own path;
 	//   • a propagating handler — `forkOntoPropagatingHandler`'s whole-function scope drops;
 	//   • `break` / `continue` — `dropTargetBodyOwned`: a target outside the `try` recorded its floor
@@ -42997,10 +43187,9 @@ export type Parser
 		// ⭐ **AND THEN THE TEST FAILS.** The hand-off drop set releases everything this frame still owns —
 		// the interpolation result, and a BOXED foreign error's box, which `recoverCaughtErrorValue` enrolled
 		// for exactly this moment — while the thrown scalar itself owns no heap and moves out inertly. It is
-		// the same two lines `emitThrowError` ends on, because it is the same throw.
+		// the same call `emitThrowError` ends on, because it is the same throw.
 		let failure = self.emitTestFailureAssertion(range)
-		self.emitHandoffExitDrops(failure, anchor: anchor)
-		self.artifact.emitTerminator(self.bodyState.currentBlock, op: MaxonOp.throwError(failure, errorIsBoxed: false), range: range)
+		self.emitHandoffExit(FunctionExit.throwScalar(failure), anchor: anchor)
 
 		// The block is terminated by the line above, so this drops nothing — it DRAINS, which is the half that
 		// matters: the tracking must be back at the floor before `finishTerminatedTry` rewinds the move mark.
@@ -43372,7 +43561,7 @@ export type Parser
 	// released box and a path with no match never releases it. The rule rides the move machinery rather than the
 	// text: the handler enrols an owned entry that owns nothing (`VarInfo.isErrorMatchObligation`), the match
 	// MOVES it here, and the doors that already settle a move on every path settle this one — a join whose paths
-	// disagree (`reconcileMovesAtMerge`) and an exit that reaches it live (`emitScopeDrops`) hold a refusal where
+	// disagree (`reconcileMovesAtMerge`) and an exit that reaches it live (`scopeReleasesAbove`) hold a refusal where
 	// they would have emitted a drop. A loop the handler opened is refused as the move out of a loop is.
 	function consumeErrorMatchObligation(flag ValueId, matchTok Token) throws SourceParseError
 		for i in 0 upto self.bodyState.ownedBindings.count() 'eachOwned'
@@ -43553,7 +43742,7 @@ export type Parser
 		end 'aBindingToDiscriminate'
 
 		// Release the caught box on whichever edge leaves the handler — a `__destruct_<U>`/decref on a live
-		// fall-through (into `errEnd`), the terminating statement's own `emitScopeDrops` on a return/throw —
+		// fall-through (into `errEnd`), the terminating statement's own `emitFunctionExit` on a return/throw —
 		// and drain it off the owned list either way, so the function-end drop never sees a handler binding.
 		// A no-op when the handler enrolled nothing (a scalar error, or none).
 		self.dropArmScopedOwned(ownedFloor, exitBlock: errEnd, anchor: labelTok)
@@ -44064,7 +44253,7 @@ export type Parser
 	// ⚠ **THE CAUGHT ERROR STILL OWES ITS DROP, WHICH IS WHY THE SCOPE FRAME IS HERE.** A boxed error
 	// reaching a `panic` or a re-throw is a live heap box this frame received ownership of; `declareCaughtError`
 	// enrols it (NAMED, or ANONYMOUS when the form binds nothing), the terminating form's own
-	// `emitScopeDrops`/`emitHandoffExitDrops` releases it on the way out, and `dropArmScopedOwned` drains it
+	// `emitScopeDrops`/`emitHandoffExit` releases it on the way out, and `dropArmScopedOwned` drains it
 	// off the owned list either way. This is `parseOtherwiseHandler`'s bracket around the single-call
 	// terminal forms, applied to the block form's — one rule, two constructs.
 	function parseDivergentOtherwise(func IrFunction, flag ValueId, errorType MaxonType, errorUnion ErrorUnionMatch) returns TryHandler throws SourceParseError
@@ -44948,12 +45137,13 @@ export type Parser
 
 	// Emit a `__mm_decref` for every owned binding above `floor`, in REVERSE declaration order.
 	//
-	// ONE routine serves the two kinds of exit that release owned bindings, differing only in how far
-	// down the stack they release: a FUNCTION exit (`return`, an implicit void end) drops the WHOLE
-	// in-scope list (`WholeFunctionScopeFloor`), while a nested BLOCK's fall-through and a
-	// `break`/`continue` drop only what the block or loop itself declared (their recorded height),
-	// leaving the outer bindings for their own scope to release. The floor is the single fact that
-	// tells the two apart, so the reverse-order decref loop lives here and cannot drift between them.
+	// The two kinds of exit that release owned bindings differ only in how far down the stack they
+	// release: a FUNCTION exit (`emitFunctionExit`) drops the WHOLE in-scope list
+	// (`WholeFunctionScopeFloor`), while a nested BLOCK's fall-through and a `break`/`continue` drop
+	// only what the block or loop itself declared (their recorded height), here, leaving the outer
+	// bindings for their own scope to release. The floor is the single fact that tells the two apart,
+	// so both read their list from `scopeReleasesAbove` and the reverse order cannot drift between
+	// them.
 	//
 	// Reverse, because that is the order ownership is conventionally released in — the last thing
 	// built is the first torn down — and because a later binding may (once struct fields land) hold
@@ -44965,41 +45155,47 @@ export type Parser
 	// block's `end`, the `break`/`continue`): no source token spawns a drop, and that statement is
 	// where a reader looks for what happened to the values in it.
 	//
-	// ⛔⛔ **`into` IS THE BLOCK THE DECREFS LAND IN, AND IT IS A PARAMETER BECAUSE IT USED TO BE
-	// `self.bodyState.currentBlock` — WHICH IS NOT THE SAME FACT.** Control leaves a scope at a block a caller
-	// KNOWS; `currentBlock` is where the parser last emitted, and after a nested `if`/`while` those are
-	// different blocks. `closeFunctionBody` believed they agreed — it said so in a comment — and put its
-	// `retVoid` in the threaded `bodyEnd` while these decrefs went to a stale `currentBlock`. MEASURED:
-	// a function ending in an `if` with no `else` released its locals ONLY on the taken path, so the
-	// untaken path LEAKED and a loop body decref'd once PER ITERATION — a double free that corrupted
-	// the heap and segfaulted (`specs/character-ownership.md`'s `local-dropped-once-after-a-loop`).
-	// Naming the block is what makes that impossible to write: there is no implicit destination left to
-	// go stale, and every caller states the block it means.
+	// ⛔⛔ **`into` IS THE BLOCK THE DECREFS LAND IN, AND IT IS NOT `self.bodyState.currentBlock`.**
+	// Control leaves a scope at a block a caller KNOWS; `currentBlock` is where the parser last
+	// emitted, and after a nested `if`/`while` those are different blocks. Drops sent to
+	// `currentBlock` there release the locals on one path only — a leak on the other, and a double
+	// free once per loop iteration (`specs/character-ownership.md`'s
+	// `local-dropped-once-after-a-loop`). Every caller states the block it means.
 	function emitScopeDrops(into IrBlock, floor ElementIndex, anchor Token)
+		let releases = self.scopeReleasesAbove(floor, anchor: anchor)
+		self.emitScopeReleasesInto(into, releases: releases, start: 0, stop: releases.count(), anchor: anchor)
+	end 'emitScopeDrops'
+
+	function emitScopeReleasesInto(into IrBlock, releases OwnedBindingPositionArray, start ElementIndex, stop ElementIndex, anchor Token)
 		let saved = self.bodyState.currentBlock
 		self.bodyState.currentBlock = into
+
+		for index in start upto stop 'eachRelease'
+			self.emitScopeRelease(try releases.get(index) otherwise panic("emitScopeReleasesInto: releases.get OOB at {index} below the bound {stop} its caller read off the list"), anchor: anchor)
+		end 'eachRelease'
+
+		self.bodyState.currentBlock = saved
+	end 'emitScopeReleasesInto'
+
+	function scopeReleasesAbove(floor ElementIndex, anchor Token) returns OwnedBindingPositionArray
+		var releases = OwnedBindingPositionArray.create()
 		var i = self.bodyState.ownedBindings.count()
 
 		while i > floor 'eachOwned'
 			i = i - 1
-			let binding = try self.bodyState.ownedBindings.get(i) otherwise panic("emitScopeDrops: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
+			let binding = try self.bodyState.ownedBindings.get(i) otherwise panic("scopeReleasesAbove: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
 
-			// ⚠ **THE FACTS ARE READ OUT AND THE RECORD LET GO BEFORE ANYTHING IS EMITTED.** A binding
-			// read out of `ownedBindings` is a BORROW of that array, and every emit below writes the parser's
-			// own storage — so holding the record across them is refused (E3070), and the refusal is about a
-			// real shape: this loop caches `count()` and walks downward, so an emit that enrolled a binding
-			// would grow the array under a pointer into it. None of them can dangle.
+			// ⚠ **THE FACTS ARE READ OUT AND THE RECORD LET GO BEFORE ANYTHING IS WRITTEN.** A binding
+			// read out of `ownedBindings` is a BORROW of that array, and `holdErrorMatchRefusal` below
+			// writes the parser's own storage — so holding the record across it is refused (E3070).
 			let bindingMovedFrom = binding.movedFrom
 			let bindingIsObligation = binding.isErrorMatchObligation
 			let bindingName = binding.name
 			let bindingIsCell = binding.isCellBinding
-			let bindingVarType = binding.varType
-			let bindingValue = binding.boundValue
-			let bindingCrossesByReference = binding.cellCrossesByReference
 
 			// ⭐ **DROP-SKIP FOR A MOVED-FROM BINDING.** Its owned value was transferred to another
 			// binding by a `let u = t` / `s = t`, which now owns and drops it — decref-ing it here too
-			// would double-free (the exact bug #41 filed for `s = t`). The moved-from binding stays in
+			// would double-free. The moved-from binding stays in
 			// the list (removal would desync the block/loop drop marks), so the SKIP is what makes a
 			// moved-out value drop exactly once. This one guard serves every exit that funnels through
 			// here — `return`, a block fall-through, a `break`/`continue`.
@@ -45008,33 +45204,206 @@ export type Parser
 				continue
 			end 'leavesUnmatched'
 
-			if not bindingMovedFrom or bindingIsCell 'liveOwner'
-				// ⭐⭐ **A CELL IS DROPPED IN TWO STEPS, BECAUSE IT OWNS TWO THINGS (PBR-2)** — the record it holds
-				// and the box holding it. The occupant is LOADED rather than remembered, for
-				// `reassignCellBinding`'s reason: a callee may have replaced it through the very pointer this
-				// binding hands out, so the value the parser last saw is not what the cell contains. Releasing that
-				// would free a record the cell no longer holds and leak the one it does — which is exactly the leak
-				// `refcount-byref-rvalue-scratch-slot` was written to pin.
-				//
-				// ⚠ Only a cell this frame OWNS reaches here: a by-reference PARAMETER's cell is the caller's and is
-				// never enrolled (`bindParameters`), so `ownedBindings` holds only locals and r-value scratch cells.
-				if bindingIsCell 'aCellOwnsTwoThings'
-					if self.cellOwnsItsOccupant(bindingVarType, crossesByReference: bindingCrossesByReference) 'cellHoldsAManagedRecord'
-						self.emitDecref(self.emitCellLoad(bindingVarType, box: bindingValue, range: SourceRange.ofToken(anchor)), range: SourceRange.ofToken(anchor))
-					end 'cellHoldsAManagedRecord'
+			if bindingMovedFrom and not bindingIsCell 'movedOut'
+				continue
+			end 'movedOut'
 
-					// The BOX, freed explicitly rather than through `emitDecref` — see `allocateCell` for why the
-					// tag-routed drop would run the CONTENT's destructor over a cell.
-					self.emitOwnershipRuntimeCall(MmDecrefName, args: singletonArgs(bindingValue), range: SourceRange.ofToken(anchor))
-					continue
-				end 'aCellOwnsTwoThings'
-
-				self.emitDecref(bindingValue, range: SourceRange.ofToken(anchor))
-			end 'liveOwner'
+			releases.push(i)
 		end 'eachOwned'
 
-		self.bodyState.currentBlock = saved
-	end 'emitScopeDrops'
+		return releases
+	end 'scopeReleasesAbove'
+
+	function ownedBindingAt(position ElementIndex) returns VarInfo
+		return try self.bodyState.ownedBindings.get(position) otherwise panic("ownedBindingAt: ownedBindings.get OOB at {position} — a release position is read while its binding is still enrolled")
+	end 'ownedBindingAt'
+
+	function releaseShapeAt(position ElementIndex) returns ReleaseShape
+		let binding = self.ownedBindingAt(position)
+
+		if not binding.isCellBinding 'aRecord'
+			return ReleaseShape.plain
+		end 'aRecord'
+
+		return ReleaseShape.cellWithOccupant if self.cellOwnsItsOccupant(binding.varType, crossesByReference: binding.cellCrossesByReference) else ReleaseShape.cellBox
+	end 'releaseShapeAt'
+
+	function emitScopeRelease(position ElementIndex, anchor Token)
+		let range = SourceRange.ofToken(anchor)
+		let value = self.ownedBindingAt(position).boundValue
+		let shape = self.releaseShapeAt(position)
+
+		if shape == ReleaseShape.plain 'aRecord'
+			self.emitDecref(value, range: range)
+			return
+		end 'aRecord'
+
+		// ⭐⭐ **A CELL IS DROPPED IN TWO STEPS, BECAUSE IT OWNS TWO THINGS (PBR-2)** — the record it holds
+		// and the box holding it. The occupant is LOADED rather than remembered, for
+		// `reassignCellBinding`'s reason: a callee may have replaced it through the very pointer this
+		// binding hands out, so the value the parser last saw is not what the cell contains. Releasing that
+		// would free a record the cell no longer holds and leak the one it does — which is exactly the leak
+		// `refcount-byref-rvalue-scratch-slot` was written to pin.
+		//
+		// ⚠ Only a cell this frame OWNS reaches here: a by-reference PARAMETER's cell is the caller's and is
+		// never enrolled (`bindParameters`), so `ownedBindings` holds only locals and r-value scratch cells.
+		if shape == ReleaseShape.cellWithOccupant 'cellHoldsAManagedRecord'
+			self.emitDecref(self.emitCellLoad(self.ownedBindingAt(position).varType, box: value, range: range), range: range)
+		end 'cellHoldsAManagedRecord'
+
+		// The BOX, freed explicitly rather than through `emitDecref` — see `allocateCell` for why the
+		// tag-routed drop would run the CONTENT's destructor over a cell.
+		self.emitOwnershipRuntimeCall(MmDecrefName, args: singletonArgs(value), range: range)
+	end 'emitScopeRelease'
+
+	// Every whole-function exit drops its innermost owned binding inline and branches into a chain of
+	// drop nodes shared by every exit that releases the same bindings, so a function's drops, and the
+	// uses its register allocator splits, grow linearly in its exits rather than as their square.
+	// Gated by `tests/cli/error-path-drops-grow-linearly-with-*.maxtest`.
+	function emitFunctionExit(into IrBlock, exit FunctionExit, anchor Token)
+		let releases = self.scopeReleasesAbove(WholeFunctionScopeFloor, anchor: anchor)
+		let shape = self.exitShapeOf(exit)
+		let carried = self.exitPayloadOf(exit, shape: shape)
+		let range = SourceRange.ofToken(anchor)
+
+		if releases.count() == 0 'nothingToRelease'
+			self.artifact.emitTerminator(into, op: exitTerminatorOp(shape.kind, carried: carried), range: range)
+			return
+		end 'nothingToRelease'
+
+		self.emitScopeReleasesInto(into, releases: releases, start: 0, stop: inlineReleaseCountOf(releases), anchor: anchor)
+
+		let entryId = self.dropCascadeEntry(releases, shape: shape, anchor: anchor)
+		var exitSite = into
+		exitSite.role = BlockRole.exitSite
+		self.recordBranchEdge(into, targetId: entryId, argIds: carried)
+		self.artifact.emitTerminator(into, op: MaxonOp.branch(entryId), range: range)
+	end 'emitFunctionExit'
+
+	function exitShapeOf(exit FunctionExit) returns ExitShape
+		let kind = exitKindOf(exit)
+		let value = try exitValueOf(exit) otherwise return ExitShape.create(kind, tag: ValueTypeTag.void, nameId: UnnamedTypeId)
+		return ExitShape.create(kind, tag: self.tagOf(value), nameId: self.valueNameId(value))
+	end 'exitShapeOf'
+
+	function exitPayloadOf(exit FunctionExit, shape ExitShape) returns ValueIdArray
+		let value = try exitValueOf(exit) otherwise return ValueIdArray.create()
+
+		if shape.carriesAWitness() 'anExistential'
+			return pairArgs(value, second: self.witnessOfValue(value))
+		end 'anExistential'
+
+		return singletonArgs(value)
+	end 'exitPayloadOf'
+
+	function dropCascade() returns DropCascade
+		match self.bodyState.dropCascade 'state'
+			built(cascade) then return cascade
+			unbuilt then break 'state'
+		end 'state'
+
+		let cascade = DropCascade.create()
+		self.bodyState.dropCascade = DropCascadeState.built(cascade)
+		return cascade
+	end 'dropCascade'
+
+	// A node is shared only within one innermost loop: header withdrawal (`withdrawOpsDefining`, from
+	// the loop's `blockFloor`) edits the drops inside a loop's block range after the loop is parsed.
+	function dropCascadeContext() returns BlockId
+		if self.bodyState.loopScans.isEmpty() 'outsideEveryLoop'
+			return FunctionEntryBlockId
+		end 'outsideEveryLoop'
+
+		return self.innermostLoopScan().blockFloor
+	end 'dropCascadeContext'
+
+	// Nodes and terminals carry the span of the exit that created them, and an exit sharing them later
+	// leaves it: `StorageProvenance.rootReachesTheDoorUnhanded` orders ops by this span
+	// (`opLiesBetween`). A chain's debug span is chosen apart from it, in `LowerMaxonToStd`.
+	function dropCascadeEntry(releases OwnedBindingPositionArray, shape ExitShape, anchor Token) returns BlockId
+		let cascade = self.dropCascade()
+		let context = self.dropCascadeContext()
+		let inline = inlineReleaseCountOf(releases)
+		var successor = self.dropCascadeTerminal(cascade, shape: shape, anchor: anchor)
+		var pending = releases.count()
+
+		while pending > inline 'sharedSuffix'
+			let owned = try releases.get(pending - 1) otherwise panic("dropCascadeEntry: releases.get OOB at {pending - 1} below its own count")
+			successor = try cascade.nodeFor(self.dropNodeKeyAt(owned), exitShape: shape, context: context, successor: successor) otherwise break
+			pending = pending - 1
+		end 'sharedSuffix'
+
+		let newNodes = pending - inline
+
+		if newNodes == 0 'wholeChainExists'
+			return successor
+		end 'wholeChainExists'
+
+		var func = self.bodyFunction()
+		var fresh = IrBlockArray.create()
+
+		for _ in 0 upto newNodes 'eachNewNode'
+			fresh.push(self.artifact.module.addBlock(func, label: DropCascadeNodeLabel, heat: BlockHeat.normal, role: BlockRole.exitChain))
+		end 'eachNewNode'
+
+		for position in 0 upto newNodes 'eachNewNodeInExecutionOrder'
+			var block = try fresh.get(position) otherwise panic("dropCascadeEntry: fresh.get OOB at {position} below its own count")
+			var nextId = successor
+
+			if position + 1 < newNodes 'anotherNewNodeFollows'
+				nextId = (try fresh.get(position + 1) otherwise panic("dropCascadeEntry: fresh.get OOB at {position + 1} below its own count")).id
+			end 'anotherNewNodeFollows'
+
+			self.emitDropNode(block, releases: releases, index: position + inline, successor: nextId, shape: shape, cascade: cascade, context: context, anchor: anchor)
+		end 'eachNewNodeInExecutionOrder'
+
+		return (try fresh.get(0) otherwise panic("dropCascadeEntry: a chain with nodes still to build holds none")).id
+	end 'dropCascadeEntry'
+
+	function dropNodeKeyAt(position ElementIndex) returns DropNodeKey
+		let released = self.ownedBindingAt(position).boundValue
+		return DropNodeKey.create(released, releaseShape: self.releaseShapeAt(position), handoffs: givesOf(self.bodyState.conditionalGives, value: released))
+	end 'dropNodeKeyAt'
+
+	function dropCascadeTerminal(cascade DropCascade, shape ExitShape, anchor Token) returns BlockId
+		if let existing = try cascade.terminalFor(shape) 'alreadyBuilt'
+			return existing
+		end 'alreadyBuilt'
+
+		var block = self.artifact.module.addBlock(self.bodyFunction(), label: ExitTerminalLabel, heat: BlockHeat.normal, role: BlockRole.exitChain)
+		let carried = self.mintExitPhis(block, shape: shape)
+		self.artifact.emitTerminator(block, op: exitTerminatorOp(shape.kind, carried: carried), range: SourceRange.ofToken(anchor))
+		cascade.noteTerminal(shape, blockId: block.id)
+		return block.id
+	end 'dropCascadeTerminal'
+
+	function emitDropNode(block IrBlock, releases OwnedBindingPositionArray, index ElementIndex, successor BlockId, shape ExitShape, cascade DropCascade, context BlockId, anchor Token)
+		let carried = self.mintExitPhis(block, shape: shape)
+		let key = self.dropNodeKeyAt(try releases.get(index) otherwise panic("emitDropNode: releases.get OOB at {index} below the count of the nodes still to build"))
+		self.emitScopeReleasesInto(block, releases: releases, start: index, stop: index + 1, anchor: anchor)
+		self.recordBranchEdge(block, targetId: successor, argIds: carried)
+		self.artifact.emitTerminator(block, op: MaxonOp.branch(successor), range: SourceRange.ofToken(anchor))
+		cascade.noteNode(key, exitShape: shape, context: context, successor: successor, blockId: block.id)
+	end 'emitDropNode'
+
+	function mintExitPhis(block IrBlock, shape ExitShape) returns ValueIdArray
+		var phis = ValueIdArray.create()
+
+		if shape.kind == ExitKind.returnVoid 'nothingCarried'
+			return phis
+		end 'nothingCarried'
+
+		let carried = self.mintPhi(block, tag: shape.tag, nameId: shape.nameId)
+		phis.push(carried)
+
+		if shape.carriesAWitness() 'anExistential'
+			let witness = self.mintPhi(block, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
+			self.pairInterfaceWitness(carried, witness: witness)
+			phis.push(witness)
+		end 'anExistential'
+
+		return phis
+	end 'mintExitPhis'
 
 	// Emit a single drop — the one shape a dropped owned heap value releases through, shared by every drop
 	// site: `emitScopeDrops` (a binding at scope exit), `drainPendingTemps` (an unconsumed temporary at
@@ -45373,7 +45742,7 @@ export type Parser
 						self.bodyState.currentBlock = edge.block
 						let liveValue = try edge.mark.values.get(i) otherwise panic("reconcileMovesAtMerge: edge mark values.get OOB at {i}")
 
-						// ⚠ A bare decref, where `emitScopeDrops` drops a cell binding in two steps. Sound
+						// ⚠ A bare decref, where `emitScopeRelease` drops a cell binding in two steps. Sound
 						// because the value here is never a cell's box: a cell binding cannot be moved — the
 						// poisoning doors match a binding through `boundValue` and a cell's reads yield fresh
 						// loads — so no cell binding is ever mixed at a merge.
@@ -46242,7 +46611,7 @@ export type Parser
 	// asks (A3h).** An UNCONSUMED owned temporary is freed by `drainPendingTemps` at the statement's tail; a
 	// value some longer-lived thing still reaches must instead be freed at the scope frame's exit, and the
 	// mechanism for that is already the ordinary one — a nameless entry in `ownedBindings`, which every exit
-	// drops through (`emitScopeDrops` for a `return`/`throw` and for the frame's own end, the loop floor for a
+	// drops through (`emitFunctionExit` for a `return`/`throw` and for the frame's own end, the loop floor for a
 	// `break`/`continue`). Exactly once on every path, which is what a hand-placed decref could not promise.
 	//
 	// ⚠ **THE GATE IS `pendingTempsContain`, NOT `valueIsOwnedHeap`, AND THE DIFFERENCE IS A DOUBLE FREE.** A
@@ -46271,7 +46640,7 @@ export type Parser
 	end 'giveTemporaryScopeLifetime'
 
 	// The value a binding holds has been MOVED OUT — a `return` hands its box to the caller — so the
-	// binding must leave `ownedBindings`, else `emitScopeDrops` would decref a box the callee no longer
+	// binding must leave `ownedBindings`, else `emitFunctionExit` would decref a box the callee no longer
 	// owns (a double-free with the caller's own drop). Keyed on the bound VALUE rather than on position:
 	// a returned binding is rarely the last declared, so identity is what stays correct. A filter-rebuild,
 	// the `removeFromPendingTemps` shape for the owned-BINDING list.
@@ -46295,7 +46664,7 @@ export type Parser
 
 	// ⭐ **THE OWNED-VALUE CLEANUP A `return <value>` AND A `throw <value>` SHARE** — the two exits that
 	// HAND a heap value to the caller. Both must, in this exact order, drop every owned value this function
-	// still holds EXCEPT the one in flight, then let the caller emit its own terminator (`ret` / `throwError`):
+	// still holds EXCEPT the one in flight, then leave the function:
 	//
 	//   • MOVE the handed-off value out of the local drop sets — it leaves BOTH the pending-temp list (a
 	//     freshly built `return U.case(x)` / `throw U.case(x)` temporary) and the owned-binding list (a
@@ -46306,17 +46675,17 @@ export type Parser
 	//   • DROP the exit expression's leftover TEMPORARIES: `return wrap("v{x}")` / `throw E.p(len("v{x}"))`
 	//     build an interpolation this statement owns but does NOT hand back. The `count() > 0` guard is
 	//     `drainPendingTemps`' own — almost no exit leaves a temporary, so the common exit pays nothing.
-	//   • DROP every owned BINDING in scope (`emitScopeDrops`).
+	//   • DROP every owned BINDING in scope and LEAVE (`emitFunctionExit`).
 	//   • RESTORE the owned-binding list past those drops: it OUTLIVES this exit, and a SIBLING exit edge of
 	//     an enclosing block still owns the handed-off binding on ITS runtime path (this exit terminated only
 	//     its own), so `removeFromOwnedBindings`' NEW array leaves the original for those edges.
 	//
-	// The drops land AFTER the caller computed the handed-off value (already a register read, no longer a
-	// heap access) and BEFORE the caller's terminator (a `ret`/`throwError` ENDS the block — anything after
-	// it sits on a path control has left, and the value leaks: exit 101). Factoring the WHOLE sequence, not
-	// just the move-out, is what keeps the two exits from drifting on it: a `throw` that drained its bindings
-	// but not its temporaries leaked exactly one interpolation buffer until this became one path.
-	function emitHandoffExitDrops(handedOff ValueId, anchor Token)
+	// The drops land AFTER the caller computed the handed-off value (already a register read, no
+	// longer a heap access) and BEFORE the exit's terminator (a terminator ENDS the block — anything
+	// after it sits on a path control has left, and the value leaks: exit 101). Factoring the WHOLE
+	// sequence, not just the move-out, is what keeps the two exits from drifting on it.
+	function emitHandoffExit(exit FunctionExit, anchor Token)
+		let handedOff = try exitValueOf(exit) otherwise panic("emitHandoffExit: a void return carries nothing to hand off")
 		let savedOwnedBindings = self.bodyState.ownedBindings
 
 		if self.valueIsOwnedHeap(handedOff) or self.valueOwnsGreenThread(handedOff) 'movedOut'
@@ -46328,9 +46697,9 @@ export type Parser
 			self.drainPendingTemps(WholeStatementTempFloor, anchor: anchor)
 		end 'dropExitTemps'
 
-		self.emitScopeDrops(self.bodyState.currentBlock, floor: WholeFunctionScopeFloor, anchor: anchor)
+		self.emitFunctionExit(self.bodyState.currentBlock, exit: exit, anchor: anchor)
 		self.bodyState.ownedBindings = savedOwnedBindings
-	end 'emitHandoffExitDrops'
+	end 'emitHandoffExit'
 
 	// Does `binding` currently owe a scope-exit drop — i.e. is it a LIVE owner in `ownedBindings`? The
 	// reassignment path's test for whether the value being OVERWRITTEN is owned. It reads MEMBERSHIP,
@@ -46546,7 +46915,7 @@ export type Parser
 
 	// ⭐ **MOVE THE VALUE OUT OF ITS CURRENT OWNER.** If `value` is the current value of a LIVE owned
 	// binding — i.e. the RHS of a bind/assign was a bare reference to that binding (`let u = t`) — mark
-	// that source `movedFrom`, so a later read of it is use-after-move (E3102) and `emitScopeDrops`
+	// that source `movedFrom`, so a later read of it is use-after-move (E3102) and `scopeReleasesAbove`
 	// skips its drop (only the new owner drops the value). A fresh owned temp (`build()`, `"{x}"`) is
 	// the value of no binding, so nothing is poisoned — that is a CONSUME (move-in), not a
 	// source-poisoning move.
@@ -47872,7 +48241,7 @@ export type Parser
 	// body, an `if` branch, a short-circuit merge. Clears the list — a temporary belongs to ONE statement.
 	//
 	// `anchor` is the statement's own token; no source token spawns a drop, so it rides the statement that
-	// made control leave the temporary's lifetime, exactly as `emitScopeDrops` rides the `return`.
+	// made control leave the temporary's lifetime, exactly as `emitFunctionExit` rides the `return`.
 	// ⭐ **RELEASE EVERY PENDING TEMPORARY ABOVE `floor`, AND FORGET THEM.** `WholeStatementTempFloor` ends
 	// the whole list (a statement's tail, a hand-off exit); a REGION passes the height it recorded before
 	// parsing itself, so it releases what IT built and leaves the enclosing statement's temporaries alone.
@@ -47920,7 +48289,7 @@ export type Parser
 	// release them without this file knowing which paths abandon.**
 	//
 	// `takeForkTemps` moves them OFF `pendingTempDrops`, because a handler's own drains
-	// (`emitHandoffExitDrops` behind an `otherwise return`, a handler block's statement tails) read the WHOLE
+	// (`emitHandoffExit` behind an `otherwise return`, a handler block's statement tails) read the WHOLE
 	// list with a whole-statement floor: left in place they would release values the ok edge still owns AND
 	// FORGET them, leaking on that path. It COPIES rather than moving the field's array — a handle taken out
 	// of a field that is then reassigned is the exact shape that once crashed this parser (`emitTempDrops`
@@ -49669,7 +50038,7 @@ export type Parser
 			// ⭐ **AN OWNED ARRAY TEMPORARY BECOMES AN OWNED BINDING OF THIS FRAME.** `for x in [1,2,3]`
 			// / `for x in build()` produces a record the statement owns; left in `pendingTempDrops` it
 			// would be dropped by the FIRST `return` inside the body (which drains the WHOLE list,
-			// `emitHandoffExitDrops`) and then LEAK on the fall-through path, because the list is empty
+			// `emitHandoffExit`) and then LEAK on the fall-through path, because the list is empty
 			// by the time the exit block drains it. As a binding it is dropped exactly once on every
 			// exit: the loop's own `end` (`emitScopeDrops` below), a `return`/`throw` out of the body
 			// (the whole binding stack, with the list restored afterwards so this path still drops it),
@@ -53817,7 +54186,7 @@ export type Parser
 		// terminates (`return`/`break`/`continue`) would drain it into that arm's block ALONE, leaking it
 		// on every other arm's runtime path (exit 101, arm-order-dependent). Enrolling it as an owned
 		// binding at the enclosing scope BEFORE the arm loop makes it drop EXACTLY ONCE on all four exits —
-		// a `return` arm and an implicit end through `emitScopeDrops`, a `break`/`continue` arm through the
+		// a `return` arm and an implicit end through `emitFunctionExit`, a `break`/`continue` arm through the
 		// loop-floor drop, a fall-through arm through the enclosing scope's own exit drop — the same
 		// machinery a `let m = U.case(x)` scrutinee already rides. A managed box still drops through its
 		// `__destruct_<U>` cascade, null-guarding any slot a binding arm moved out. An ALREADY-BOUND
@@ -53979,7 +54348,7 @@ export type Parser
 				// — and the DIVERGING one did not pay it (measured: a compiler panic).** `default throws
 				// E.p(Box.make().name)` takes a member borrow off a temporary, so `dispatchMethodOnBase` calls
 				// `giveTemporaryScopeLifetime`, which moves the box from `pendingTempDrops` into
-				// `ownedBindings`; `emitHandoffExitDrops` then RESTORES `ownedBindings`, so the record survives
+				// `ownedBindings`; `emitHandoffExit` then RESTORES `ownedBindings`, so the record survives
 				// the arm with nothing draining it. With no floor to drain to, the mark and the owned-binding
 				// stack fell out of lockstep and `reconcileMovesAtMerge` panicked *"a reaching edge's mark
 				// holds 0 entries but 1 owned bindings are in scope"*, on a legal program.
@@ -54364,8 +54733,8 @@ export type Parser
 	//     bindings here, so drop them into the exit block before it merges (a decref left for the
 	//     continuation would run in a block where a one-arm value is garbage on every other arm's path — a
 	//     use-after-free, exit 0xC0000005);
-	//   • a TERMINATED exit — a `return`/`break`/`continue` — already dropped them via `emitScopeDrops`
-	//     down to its own floor, so drop nothing.
+	//   • a TERMINATED exit — a `return`/`break`/`continue` — already dropped them down to its own floor
+	//     (`emitFunctionExit`, `emitScopeDrops`), so drop nothing.
 	// The tracking is drained to `floor` EITHER way, so the next arm starts clean and the function-end
 	// drop never sees an arm binding. `patternTok` anchors the drop, as the arm's pattern is where a
 	// reader looks for what became of its bindings.
@@ -55299,7 +55668,7 @@ export type Parser
 	// owner (`finalizeMatchMerge` marks the phi owned so its consumer drops it once). So the value must
 	// leave its current owner HERE, before `dropArmScopedOwned` releases the arm's bindings and before the
 	// post-match statement drain runs: an owned temporary leaves the pending list, and a bare-local owner
-	// (the payload binding of `text(s) gives s`, or an outer MUTABLE binding) is poisoned so `emitScopeDrops`
+	// (the payload binding of `text(s) gives s`, or an outer MUTABLE binding) is poisoned so `scopeReleasesAbove`
 	// skips its drop and a later read of it is use-after-move. A borrowed/scalar give owns nothing, so both
 	// calls are no-ops — a borrowed String is promoted at the merge instead, where phi ownership is decided.
 	//

@@ -165,13 +165,13 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 56
-  __il_body#4:
+  __il_body#5:
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
-  __il_cont#3:
+  __il_cont#4:
     x64.leaRegFunc rcx, [rip + Ping.__loop]
     x64.leaRegFunc rax, [rip + Ping.__abandon]
     x64.movRegReg rdx, r8
@@ -239,10 +239,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-  __il_body#6:
+  __il_body#7:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __write_stdout
-  __il_cont#5:
+  __il_cont#6:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -566,13 +566,13 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 56
-  __il_body#4:
+  __il_body#5:
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeBaseDispReg.word64 [r8 + 0], rbx
-  __il_cont#3:
+  __il_cont#4:
     x64.leaRegFunc rcx, [rip + Ping.__loop]
     x64.leaRegFunc rax, [rip + Ping.__abandon]
     x64.movRegReg rdx, r8
@@ -640,10 +640,10 @@ func @main {
     x64.storeBaseDispReg.word64 [rax + 24], rcx
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
-  __il_body#6:
+  __il_body#7:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __write_stdout
-  __il_cont#5:
+  __il_cont#6:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -961,14 +961,14 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-  __il_body#4:
+  __il_body#5:
     arm64.movImm x19, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.storeBaseDispReg.word64 [x1 + 0], x19
-  __il_cont#3:
+  __il_cont#4:
     arm64.leaFuncAddr x0, Ping.__loop
     arm64.leaFuncAddr x2, Ping.__abandon
     arm64.bl __svc_spawn
@@ -1031,10 +1031,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
-  __il_body#6:
+  __il_body#7:
     arm64.movRegReg x0, x25
     arm64.bl __write_stdout
-  __il_cont#5:
+  __il_cont#6:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x19, 0
@@ -1348,14 +1348,14 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-  __il_body#4:
+  __il_body#5:
     arm64.movImm x19, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
     arm64.storeBaseDispReg.word64 [x1 + 0], x19
-  __il_cont#3:
+  __il_cont#4:
     arm64.leaFuncAddr x0, Ping.__loop
     arm64.leaFuncAddr x2, Ping.__abandon
     arm64.bl __svc_spawn
@@ -1418,10 +1418,10 @@ func @main {
     arm64.storeBaseDispReg.word64 [x25 + 24], x0
     arm64.movRegReg x0, x23
     arm64.bl __mm_decref
-  __il_body#6:
+  __il_body#7:
     arm64.movRegReg x0, x25
     arm64.bl __write_stdout
-  __il_cont#5:
+  __il_cont#6:
     arm64.movRegReg x0, x25
     arm64.bl __str_decref
     arm64.movImm x19, 0

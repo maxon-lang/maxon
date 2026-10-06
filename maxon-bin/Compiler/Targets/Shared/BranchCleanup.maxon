@@ -2,7 +2,7 @@
 // Shared by every backend that allocates registers (x64 and arm64); wasm consumes Std directly and
 // never reaches this tier.
 //
-// Six transforms, all of them local to one function's block layout:
+// Seven transforms, all of them local to one function's block layout:
 //
 //   1. JUMP ELISION       — a block whose terminator is the ISA's unconditional branch to the block
 //                           laid down immediately after it loses that branch. Control reaches the
@@ -22,6 +22,13 @@
 //                           conditional is the iteration's one taken branch: its own branch into the
 //                           body, or the complement of its branch to an exit that now falls through
 //                           (transform 2). One instruction fewer per iteration either way.
+//   7. RETURN TAILS       — an exit block (`BlockRole.exitSite`, no conditional branch) whose
+//                           jump reaches a return block of at most `ReturnTailMaxBodyOps` body
+//                           ops ends in its own copy of that tail, under its jump's span. A later
+//                           pass can delete an exit's only inline release (`PromoteStackRecords`,
+//                           `ValueTupleReturn`), and threading would then leave that exit's line
+//                           with no code to break on. Runs between transforms 3 and 4: a kept exit
+//                           is a chain end of threading.
 //
 // ⭐⭐ WHY IT RUNS WHERE IT DOES — AFTER `applyAllocation`, AND NOT ONE PASS EARLIER. THIS IS THE
 // WHOLE CORRECTNESS ARGUMENT FOR TRANSFORM 3.
@@ -45,7 +52,7 @@
 // rotation would part them (`rotateLoops`); no other transform moves a block.
 //
 // ISA-neutrality is not an accident of the transforms: every question this pass asks is answered by
-// a shared roster. `unconditionalBranchTargetOf` classifies both ISAs' terminators, `retargetControlOp`
+// a shared roster. `terminatorExitOf` classifies both ISAs' terminators, `retargetControlOp`
 // covers both ISAs' conditional branches and both jump tables, `Terminator.fallthrough` is a layout
 // fact rather than an encoding, and the single per-ISA fact — a condition code's complement — is
 // `invertX64Cond` / `invertArm64Cond` beside the enums they read (see `invertedCondBranchOnto`).
@@ -69,7 +76,7 @@ export function cleanUpBranches(module TargetModule, project Project)
 	recordPhase(project, phase: CompilePhase.branchCleanup, probe: probe)
 end 'cleanUpBranches'
 
-// ⭐ THE ORDER OF THE SIX IS LOAD-BEARING, in three steps.
+// ⭐ THE ORDER OF THE SEVEN IS LOAD-BEARING, in three steps.
 //
 // Threading and reachability both need a CFG, and the CFG is derived FROM THE OPS — a block's second
 // successor is its conditional branch's target and its first is its terminator's. Transforms 1 and 2
@@ -96,9 +103,17 @@ function cleanUpFunctionBranches(module TargetModule, func IrFunction)
 	// removes whole costs one topology built for nothing.
 	let hasALoop = NaturalLoops.find(topo.succ, nodeCount: topo.numBlocks as CsrIndex).headers.count() > 0
 
-	let resolved = resolveJumpChains(module, topo: topo)
+	let tails = returnTailsOf(module, func: func)
+	var returnOf = noReturnTails(topo)
+	var resolved = resolveJumpChains(module, topo: topo, returnOf: returnOf)
+
+	if keepExitsAsReturns(module, topo: topo, resolved: resolved, tails: tails, returnOf: returnOf) 'anExitKeepsItsReturn'
+		resolved = resolveJumpChains(module, topo: topo, returnOf: returnOf)
+	end 'anExitKeepsItsReturn'
+
 	threadResolvedEdges(module, topo: topo, resolved: resolved)
-	dropUnreachableBlocks(module, func: func, topo: topo, resolved: resolved)
+	let survivors = dropUnreachableBlocks(module, func: func, topo: topo, resolved: resolved, returnOf: returnOf)
+	replaceJumpsWithReturnTails(module, topo: topo, returnOf: returnOf, tails: tails, survivors: survivors)
 	sinkColdBlocks(module, func: func)
 
 	if hasALoop 'loopToRotate'
@@ -120,11 +135,13 @@ union OptionalLocal
 	at(index ElementIndex)
 end 'OptionalLocal'
 
-// The local a block's terminator branches to unconditionally — `unconditionalBranchTargetOf`, the
-// one roster for that question, resolved through the topology.
+// The local a block's terminator branches to unconditionally — `terminatorExitOf`, the one roster
+// for that question, resolved through the topology.
 function unconditionalBranchLocalOf(module TargetModule, topo FuncTopology, block IrBlock) returns OptionalLocal
-	return match unconditionalBranchTargetOf(module, block: block) 'terminator'
-		none gives OptionalLocal.none
+	return match terminatorExitOf(module, block: block) 'terminator'
+		none or
+			returns or
+			table gives OptionalLocal.none
 		blockId(target) gives OptionalLocal.at(localOfBlockId(topo, blockId: target))
 	end 'terminator'
 end 'unconditionalBranchLocalOf'
@@ -139,7 +156,7 @@ end 'unconditionalBranchLocalOf'
 // Resolved with PATH COMPRESSION over an explicit path stack rather than a repeat-until-stable
 // sweep: a chain of K forwarding blocks converges in K rounds of the naive form, which is quadratic
 // in exactly the shape this pass exists to clean up (the inliners emit runs of them).
-function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIndexArray
+function resolveJumpChains(module TargetModule, topo FuncTopology, returnOf CfgIndexArray) returns CfgIndexArray
 	let blockCount = topo.numBlocks
 
 	// Classified in ONE pass over the blocks, so the chain walk below dereferences no block at all.
@@ -155,7 +172,7 @@ function resolveJumpChains(module TargetModule, topo FuncTopology) returns CfgIn
 	for local in 1 upto blockCount 'eachBlock'
 		let target = emptyJumpTargetOf(module, topo: topo, local: local)
 
-		if target == local 'staysPut'
+		if target == local or keepsItsReturn(returnOf, topo: topo, local: local) 'staysPut'
 			continue
 		end 'staysPut'
 
@@ -291,6 +308,108 @@ function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved Cf
 end 'threadResolvedEdges'
 
 // ==========================================================================
+// Transform 7 — return tails
+// ==========================================================================
+
+let ReturnTailMaxBodyOps = 2 as ElementIndex
+
+type ReturnTail
+	export let bodyOps as OpIndexArray
+	export let terminator as ElementIndex
+
+	static function create(bodyOps OpIndexArray, terminator ElementIndex) returns Self
+		return Self{bodyOps: bodyOps, terminator: terminator}
+	end 'create'
+end 'ReturnTail'
+
+typealias ReturnTailsByBlock = Map with (BlockId, ReturnTail)
+
+function returnTailsOf(module TargetModule, func IrFunction) returns ReturnTailsByBlock
+	var tails = ReturnTailsByBlock.create()
+
+	for position in 1 upto func.blockRefs.count() 'eachBlockButTheEntry'
+		let block = try module.blocks.get(try func.blockRefs.get(position) otherwise panic("returnTailsOf: blockRefs.get OOB at {position}")) otherwise panic("returnTailsOf: a block ref of '{String.from(func.name)}' is not in module.blocks")
+
+		if block.opRefs.count() > ReturnTailMaxBodyOps or block.hasCondBranchOp() or not terminatorReturns(module, block: block) 'notASmallReturn'
+			continue
+		end 'notASmallReturn'
+
+		tails.upsert(block.id, value: ReturnTail.create(block.opRefs, terminator: block.terminatorIndex()))
+	end 'eachBlockButTheEntry'
+
+	return tails
+end 'returnTailsOf'
+
+function noReturnTails(topo FuncTopology) returns CfgIndexArray
+	var returnOf = CfgIndexArray.create()
+	returnOf.refill(topo.numBlocks, value: noSuchLocal(topo))
+	return returnOf
+end 'noReturnTails'
+
+function keepsItsReturn(returnOf CfgIndexArray, topo FuncTopology, local ElementIndex) returns bool
+	return (try returnOf.get(local) otherwise panic("keepsItsReturn: returnOf.get OOB at {local}")) != noSuchLocal(topo)
+end 'keepsItsReturn'
+
+function keepExitsAsReturns(module TargetModule, topo FuncTopology, resolved CfgIndexArray, tails ReturnTailsByBlock, returnOf CfgIndexArray) returns bool
+	if tails.count() == 0 'noReturnTail'
+		return false
+	end 'noReturnTail'
+
+	var anyKept = false
+
+	for local in 0 upto topo.numBlocks 'eachBlock'
+		let destination = exitDestinationOf(module, topo: topo, resolved: resolved, local: local)
+
+		if destination == local or not tails.contains(blockAt(module, topo: topo, local: destination).id) 'notAReturnJump'
+			continue
+		end 'notAReturnJump'
+
+		try returnOf.set(local, value: destination) otherwise panic("keepExitsAsReturns: returnOf.set OOB at {local}")
+		anyKept = true
+	end 'eachBlock'
+
+	return anyKept
+end 'keepExitsAsReturns'
+
+function exitDestinationOf(module TargetModule, topo FuncTopology, resolved CfgIndexArray, local ElementIndex) returns ElementIndex
+	let block = blockAt(module, topo: topo, local: local)
+
+	if block.role != BlockRole.exitSite or block.hasCondBranchOp() 'notAPlainExit'
+		return local
+	end 'notAPlainExit'
+
+	return match unconditionalBranchLocalOf(module, topo: topo, block: block) 'terminator'
+		none gives local
+		at(target) gives try resolved.get(target) otherwise panic("exitDestinationOf: resolved.get OOB at the target of local {local}")
+	end 'terminator'
+end 'exitDestinationOf'
+
+function replaceJumpsWithReturnTails(module TargetModule, topo FuncTopology, returnOf CfgIndexArray, tails ReturnTailsByBlock, survivors BoolArray)
+	for local in 0 upto topo.numBlocks 'eachBlock'
+		let target = try returnOf.get(local) otherwise panic("replaceJumpsWithReturnTails: returnOf.get OOB at {local}")
+
+		let survives = try survivors.get(local) otherwise panic("replaceJumpsWithReturnTails: survivors.get OOB at {local}")
+
+		if target == noSuchLocal(topo) or not survives 'staysAJumpOrIsGone'
+			continue
+		end 'staysAJumpOrIsGone'
+
+		let tail = try tails.get(blockAt(module, topo: topo, local: target).id) otherwise panic("replaceJumpsWithReturnTails: local {target} was marked a return tail but holds none")
+		var block = blockAt(module, topo: topo, local: local)
+		let exitSpan = module.spans.at(block.terminatorIndex())
+		let savedSpan = module.spans.current
+		module.spans.current = exitSpan
+
+		for opIdx in tail.bodyOps 'eachBodyOp'
+			module.appendOp(block, op: try module.ops.get(opIdx) otherwise panic("replaceJumpsWithReturnTails: opIdx {opIdx} not in module.ops"))
+		end 'eachBodyOp'
+
+		module.setTerminator(block, op: try module.ops.get(tail.terminator) otherwise panic("replaceJumpsWithReturnTails: terminator {tail.terminator} not in module.ops"))
+		module.spans.current = savedSpan
+	end 'eachBlock'
+end 'replaceJumpsWithReturnTails'
+
+// ==========================================================================
 // Transform 4 — unreachable-block elimination
 // ==========================================================================
 
@@ -304,7 +423,7 @@ end 'threadResolvedEdges'
 // block would silently re-point the live one at whatever survived further down. So the walk adds the
 // physical edge, and it is added WITHOUT going through `resolved`: a fall-through is not a branch,
 // threading never moved it, and the block it names must survive verbatim.
-function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTopology, resolved CfgIndexArray)
+function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTopology, resolved CfgIndexArray, returnOf CfgIndexArray) returns BoolArray
 	var reachable = BoolArray.create()
 	reachable.resize(topo.numBlocks)
 	var stack = CfgIndexArray.create()
@@ -316,6 +435,10 @@ function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTo
 
 	while stack.count() > 0 'walk'
 		let u = try stack.pop() otherwise panic("dropUnreachableBlocks: stack.pop on non-empty failed")
+
+		if keepsItsReturn(returnOf, topo: topo, local: u) 'becomesAReturn'
+			continue
+		end 'becomesAReturn'
 
 		// The edges as they stand AFTER the threading above: every branch target goes through `resolved`.
 		for k in 0 upto topo.succ.degree(u as CsrIndex) 'eachSucc'
@@ -338,6 +461,7 @@ function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTo
 	end 'eachBlock'
 
 	func.blockRefs = kept
+	return reachable
 end 'dropUnreachableBlocks'
 
 // Mark a block reachable and queue it, once. Both columns are the caller's.
@@ -760,8 +884,10 @@ end 'elideFallthroughBranches'
 function elideBranchInto(module TargetModule, blockRef ElementIndex, nextId BlockId)
 	let block = try module.blocks.get(blockRef) otherwise panic("elideBranchInto: blockRef {blockRef} not in module.blocks")
 
-	match unconditionalBranchTargetOf(module, block: block) 'terminator'
-		none then return
+	match terminatorExitOf(module, block: block) 'terminator'
+		none or
+			returns or
+			table then return
 		blockId(elseTarget) then elideAgainstNext(module, blockRef: blockRef, elseTarget: elseTarget, nextId: nextId)
 	end 'terminator'
 end 'elideBranchInto'

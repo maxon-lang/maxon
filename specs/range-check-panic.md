@@ -2357,3 +2357,94 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+
+<!-- test: range-check-panic.a-return-through-the-exit-cascade-is-still-guarded -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Percent = int(0 to 100)
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function scale(n Integer) returns Percent
+	let label = "n={n}"
+
+	if n > 10 'big'
+		return opaque(n * 20)
+	end 'big'
+
+	print("{label}\n")
+	return n
+end 'scale'
+
+function main() returns ExitCode
+	print("{scale(opaque(3))}\n")
+	print("{scale(opaque(42))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+n=3
+3
+```
+```stderr
+panic at range-check-panic.a-return-through-the-exit-cascade-is-still-guarded.test:13: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in scale
+  in main
+  in mrt_start
+```
+
+
+<!-- test: range-check-panic.a-guarded-return-whose-only-drop-was-promoted-away -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Percent = int(0 to 100)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Point
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function scale(n Integer) returns Percent
+	let p = Point.create(n, y: 1)
+
+	if n > 10 'big'
+		return opaque(n * 20)
+	end 'big'
+
+	return p.x + p.y
+end 'scale'
+
+function main() returns ExitCode
+	print("{scale(opaque(3))}\n")
+	print("{scale(opaque(42))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+4
+```
+```stderr
+panic at range-check-panic.a-guarded-return-whose-only-drop-was-promoted-away.test:22: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in scale
+  in main
+  in mrt_start
+```

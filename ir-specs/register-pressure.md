@@ -3757,23 +3757,23 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-  __il_body#11:
+  __il_body#12:
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp whilehdr#12
-  __rc_ok#26:
+    x64.jmp whilehdr#13
+  __rc_ok#27:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc aboveEqual, __im_slow#33
-  __im_load#34:
+    x64.jcc aboveEqual, __im_slow#34
+  __im_load#35:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r14, [rax + r13*8 + 0]
-  __il_body#48:
+  __il_body#49:
     x64.cmpRegImm32 r14, 0
     x64.jcc greaterEqual, shiftok
   never:
     x64.leaRegRdata rcx, [rip + __str_rec_1]  ; ""
-  __il_body#52:
+  __il_body#53:
     x64.callDirect __write_stdout
   shiftok:
     x64.shlRegImm8 r14, r14, 4
@@ -3781,99 +3781,99 @@ func @main {
     x64.movRegImm32 rax, 4294967295
     x64.movRegReg rsi, r14
     x64.andRegReg rsi, r14, rax
-  __rc_ok#28:
+  __rc_ok#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#36
-  __im_bounds#37:
+    x64.jcc less, __im_slow#37
+  __im_bounds#38:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc aboveEqual, __im_slow#36
-  __im_buffer#38:
+    x64.jcc aboveEqual, __im_slow#37
+  __im_buffer#39:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#36
-  __im_viewed#39:
+    x64.jcc equal, __im_slow#37
+  __im_viewed#40:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#36
-  __im_store#40:
+    x64.jcc notEqual, __im_slow#37
+  __im_store#41:
     x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], rsi
-  tryok#19:
+  tryok#20:
     x64.sarRegImm8 r14, r14, 32
     x64.leaRegRegImm32 r13, r13, 1
     x64.movRegReg r12, r14
-  whilehdr#12:
+  whilehdr#13:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, __rc_ok#26
+    x64.jcc less, __rc_ok#27
   whileexit:
     x64.movRegImm32 rdx, 0
-  __us_test#63:
+  __us_test#64:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, whilehdr#21
-  __us_test#64:
+    x64.jcc less, whilehdr#22
+  __us_test#65:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, whilehdr#21
-  __us_test#65:
+    x64.jcc equal, whilehdr#22
+  __us_test#66:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, whilehdr#21
-    x64.jmp whilehdr#53
-  clear#22:
+    x64.jcc notEqual, whilehdr#22
+    x64.jmp whilehdr#54
+  clear#23:
     x64.movRegImm32 rax, 0
-  __rc_ok#30:
+  __rc_ok#31:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __im_slow#42
-  __im_bounds#43:
+    x64.jcc less, __im_slow#43
+  __im_bounds#44:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#42
-  __im_buffer#44:
+    x64.jcc aboveEqual, __im_slow#43
+  __im_buffer#45:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_slow#42
-  __im_viewed#45:
+    x64.jcc equal, __im_slow#43
+  __im_viewed#46:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow#42
-  __im_store#46:
+    x64.jcc notEqual, __im_slow#43
+  __im_store#47:
     x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
-  tryok#24:
+  tryok#25:
     x64.leaRegRegImm32 rdx, rdx, 1
-  whilehdr#21:
+  whilehdr#22:
     x64.cmpRegImm32 rdx, 1
-    x64.jcc less, clear#22
+    x64.jcc less, clear#23
     x64.jmp __il_cont
-  clear#62:
+  clear#63:
     x64.movRegImm32 rsi, 0
-  __im_bounds#60:
+  __im_bounds#61:
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#56
-  __im_store#57:
+    x64.jcc aboveEqual, __im_slow#57
+  __im_store#58:
     x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
-  tryok#54:
+  tryok#55:
     x64.leaRegRegImm32 rdx, rdx, 1
-  whilehdr#53:
+  whilehdr#54:
     x64.cmpRegImm32 rdx, 1
-    x64.jcc less, clear#62
+    x64.jcc less, clear#63
   __il_cont:
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc belowEqual, __im_slow#8
-    x64.jmp __im_load#9
+    x64.jcc belowEqual, __im_slow#9
+    x64.jmp __im_load#10
   tryerr#2:
     x64.movRegImm32 r12, 99
     x64.jmp trycont
-  __im_load#9:
+  __im_load#10:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.movRegReg r8, rax
@@ -3886,7 +3886,7 @@ func @main {
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
-  __rc_ok#4:
+  __rc_ok#5:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -3897,13 +3897,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#33:
+  __im_slow#34:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, critsplit
-  tryerr#16:
+  tryerr#17:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -3916,15 +3916,15 @@ func @main {
     x64.ret
   critsplit:
     x64.movRegReg r14, r8
-    x64.jmp __il_body#48
-  __im_slow#36:
+    x64.jmp __il_body#49
+  __im_slow#37:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.movRegReg rax, rsi
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#19
-  tryerr#20:
+    x64.jcc equal, tryok#20
+  tryerr#21:
     x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -3935,15 +3935,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#42:
+  __im_slow#43:
     x64.storeSlotReg slot0, rdx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_set
     x64.loadRegSlot rdx, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#25
-    x64.jmp tryok#24
-  __im_slow#56:
+    x64.jcc notEqual, tryerr#26
+    x64.jmp tryok#25
+  __im_slow#57:
     x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot0, rdx
@@ -3954,8 +3954,8 @@ func @main {
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#54
-  tryerr#25:
+    x64.jcc equal, tryok#55
+  tryerr#26:
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at reuse-def-confined-by-a-later-call.test:24: clear\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -3966,7 +3966,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#8:
+  __im_slow#9:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
@@ -4015,23 +4015,23 @@ func @main {
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
-  __il_body#11:
+  __il_body#12:
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
-    x64.jmp whilehdr#12
-  __rc_ok#26:
+    x64.jmp whilehdr#13
+  __rc_ok#27:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc aboveEqual, __im_slow#33
-  __im_load#34:
+    x64.jcc aboveEqual, __im_slow#34
+  __im_load#35:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r14, [rax + r13*8 + 0]
-  __il_body#48:
+  __il_body#49:
     x64.cmpRegImm32 r14, 0
     x64.jcc greaterEqual, shiftok
   never:
     x64.leaRegRdata rcx, [rip + __str_rec_1]  ; ""
-  __il_body#52:
+  __il_body#53:
     x64.callDirect __write_stdout
   shiftok:
     x64.shlRegImm8 r14, r14, 4
@@ -4039,99 +4039,99 @@ func @main {
     x64.movRegImm32 rax, 4294967295
     x64.movRegReg rsi, r14
     x64.andRegReg rsi, r14, rax
-  __rc_ok#28:
+  __rc_ok#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#36
-  __im_bounds#37:
+    x64.jcc less, __im_slow#37
+  __im_bounds#38:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc aboveEqual, __im_slow#36
-  __im_buffer#38:
+    x64.jcc aboveEqual, __im_slow#37
+  __im_buffer#39:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#36
-  __im_viewed#39:
+    x64.jcc equal, __im_slow#37
+  __im_viewed#40:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#36
-  __im_store#40:
+    x64.jcc notEqual, __im_slow#37
+  __im_store#41:
     x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], rsi
-  tryok#19:
+  tryok#20:
     x64.sarRegImm8 r14, r14, 32
     x64.leaRegRegImm32 r13, r13, 1
     x64.movRegReg r12, r14
-  whilehdr#12:
+  whilehdr#13:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, __rc_ok#26
+    x64.jcc less, __rc_ok#27
   whileexit:
     x64.movRegImm32 rdx, 0
-  __us_test#63:
+  __us_test#64:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, whilehdr#21
-  __us_test#64:
+    x64.jcc less, whilehdr#22
+  __us_test#65:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, whilehdr#21
-  __us_test#65:
+    x64.jcc equal, whilehdr#22
+  __us_test#66:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, whilehdr#21
-    x64.jmp whilehdr#53
-  clear#22:
+    x64.jcc notEqual, whilehdr#22
+    x64.jmp whilehdr#54
+  clear#23:
     x64.movRegImm32 rax, 0
-  __rc_ok#30:
+  __rc_ok#31:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __im_slow#42
-  __im_bounds#43:
+    x64.jcc less, __im_slow#43
+  __im_bounds#44:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#42
-  __im_buffer#44:
+    x64.jcc aboveEqual, __im_slow#43
+  __im_buffer#45:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_slow#42
-  __im_viewed#45:
+    x64.jcc equal, __im_slow#43
+  __im_viewed#46:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow#42
-  __im_store#46:
+    x64.jcc notEqual, __im_slow#43
+  __im_store#47:
     x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
-  tryok#24:
+  tryok#25:
     x64.leaRegRegImm32 rdx, rdx, 1
-  whilehdr#21:
+  whilehdr#22:
     x64.cmpRegImm32 rdx, 1
-    x64.jcc less, clear#22
+    x64.jcc less, clear#23
     x64.jmp __il_cont
-  clear#62:
+  clear#63:
     x64.movRegImm32 rsi, 0
-  __im_bounds#60:
+  __im_bounds#61:
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#56
-  __im_store#57:
+    x64.jcc aboveEqual, __im_slow#57
+  __im_store#58:
     x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
-  tryok#54:
+  tryok#55:
     x64.leaRegRegImm32 rdx, rdx, 1
-  whilehdr#53:
+  whilehdr#54:
     x64.cmpRegImm32 rdx, 1
-    x64.jcc less, clear#62
+    x64.jcc less, clear#63
   __il_cont:
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegImm32 rax, 1
-    x64.jcc belowEqual, __im_slow#8
-    x64.jmp __im_load#9
+    x64.jcc belowEqual, __im_slow#9
+    x64.jmp __im_load#10
   tryerr#2:
     x64.movRegImm32 r12, 99
     x64.jmp trycont
-  __im_load#9:
+  __im_load#10:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
     x64.movRegReg r8, rax
@@ -4143,7 +4143,7 @@ func @main {
   __rc_chk:
     x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
-  __rc_ok#4:
+  __rc_ok#5:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -4154,13 +4154,13 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#33:
+  __im_slow#34:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, critsplit
-  tryerr#16:
+  tryerr#17:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -4173,15 +4173,15 @@ func @main {
     x64.ret
   critsplit:
     x64.movRegReg r14, r8
-    x64.jmp __il_body#48
-  __im_slow#36:
+    x64.jmp __il_body#49
+  __im_slow#37:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.movRegReg rax, rsi
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#19
-  tryerr#20:
+    x64.jcc equal, tryok#20
+  tryerr#21:
     x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -4192,15 +4192,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#42:
+  __im_slow#43:
     x64.storeSlotReg slot0, rdx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_set
     x64.loadRegSlot rdx, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#25
-    x64.jmp tryok#24
-  __im_slow#56:
+    x64.jcc notEqual, tryerr#26
+    x64.jmp tryok#25
+  __im_slow#57:
     x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot0, rdx
@@ -4211,8 +4211,8 @@ func @main {
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#54
-  tryerr#25:
+    x64.jcc equal, tryok#55
+  tryerr#26:
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at reuse-def-confined-by-a-later-call.test:24: clear\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -4223,7 +4223,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#8:
+  __im_slow#9:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
@@ -4268,122 +4268,122 @@ func @main {
     arm64.movImm x1, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-  __il_body#11:
+  __il_body#12:
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr#12
-  __rc_ok#26:
+    arm64.b whilehdr#13
+  __rc_ok#27:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.b.hs __im_slow#33
-  __im_load#34:
+    arm64.b.hs __im_slow#34
+  __im_load#35:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x22, [x0 + x21*8 + 0]
-  __il_body#48:
+  __il_body#49:
     arm64.cmp x22, 0
     arm64.b.ge shiftok
   never:
     arm64.leaRdata x0, __str_rec_1  ; ""
-  __il_body#52:
+  __il_body#53:
     arm64.bl __write_stdout
   shiftok:
     arm64.lsl x0, x22, 4
     arm64.orr x0, x0, x20
     arm64.movImm x1, 4294967295
     arm64.and x2, x0, x1
-  __rc_ok#28:
+  __rc_ok#29:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
     arm64.cmp x1, 0
-    arm64.b.lt __im_slow#36
-  __im_bounds#37:
+    arm64.b.lt __im_slow#37
+  __im_bounds#38:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.cmp x21, x1
-    arm64.b.hs __im_slow#36
-  __im_buffer#38:
+    arm64.b.hs __im_slow#37
+  __im_buffer#39:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
-    arm64.b.eq __im_slow#36
-  __im_viewed#39:
+    arm64.b.eq __im_slow#37
+  __im_viewed#40:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#36
-  __im_store#40:
+    arm64.b.ne __im_slow#37
+  __im_store#41:
     arm64.storeBaseIndexScaleReg.word64 [x1 + x21*8 + 0], x2
-  tryok#19:
+  tryok#20:
     arm64.asr x0, x0, 32
     arm64.add x21, x21, 1
     arm64.movRegReg x20, x0
-  whilehdr#12:
+  whilehdr#13:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.b.lt __rc_ok#26
+    arm64.b.lt __rc_ok#27
   whileexit:
     arm64.movImm x1, 0
-  __us_test#63:
+  __us_test#64:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.lt whilehdr#21
-  __us_test#64:
+    arm64.b.lt whilehdr#22
+  __us_test#65:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.cmp x2, 0
-    arm64.b.eq whilehdr#21
-  __us_test#65:
+    arm64.b.eq whilehdr#22
+  __us_test#66:
     arm64.sub x3, x2, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne whilehdr#21
-    arm64.b whilehdr#53
-  clear#22:
+    arm64.b.ne whilehdr#22
+    arm64.b whilehdr#54
+  clear#23:
     arm64.movImm x2, 0
-  __rc_ok#30:
+  __rc_ok#31:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.lt __im_slow#42
-  __im_bounds#43:
+    arm64.b.lt __im_slow#43
+  __im_bounds#44:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#42
-  __im_buffer#44:
+    arm64.b.hs __im_slow#43
+  __im_buffer#45:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.b.eq __im_slow#42
-  __im_viewed#45:
+    arm64.b.eq __im_slow#43
+  __im_viewed#46:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#42
-  __im_store#46:
+    arm64.b.ne __im_slow#43
+  __im_store#47:
     arm64.storeBaseIndexScaleReg.word64 [x0 + x1*8 + 0], x2
-  tryok#24:
+  tryok#25:
     arm64.add x1, x1, 1
-  whilehdr#21:
+  whilehdr#22:
     arm64.cmp x1, 1
-    arm64.b.lt clear#22
+    arm64.b.lt clear#23
     arm64.b __il_cont
-  clear#62:
+  clear#63:
     arm64.movImm x3, 0
-  __im_bounds#60:
+  __im_bounds#61:
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#56
-  __im_store#57:
+    arm64.b.hs __im_slow#57
+  __im_store#58:
     arm64.storeBaseIndexScaleReg.word64 [x2 + x1*8 + 0], x3
-  tryok#54:
+  tryok#55:
     arm64.add x1, x1, 1
-  whilehdr#53:
+  whilehdr#54:
     arm64.cmp x1, 1
-    arm64.b.lt clear#62
+    arm64.b.lt clear#63
   __il_cont:
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 1
-    arm64.b.ls __im_slow#8
-    arm64.b __im_load#9
+    arm64.b.ls __im_slow#9
+    arm64.b __im_load#10
   tryerr#2:
     arm64.movImm x20, 99
     arm64.b trycont
-  __im_load#9:
+  __im_load#10:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
   tryok#1:
@@ -4394,7 +4394,7 @@ func @main {
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#4:
+  __rc_ok#5:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -4404,13 +4404,13 @@ func @main {
     arm64.loadRegSlot x22, slot6
     arm64.epilogue 80
     arm64.ret
-  __im_slow#33:
+  __im_slow#34:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.eq critsplit
-  tryerr#16:
+  tryerr#17:
     arm64.leaRdata x0, __str_blob_2  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4422,8 +4422,8 @@ func @main {
     arm64.ret
   critsplit:
     arm64.movRegReg x22, x0
-    arm64.b __il_body#48
-  __im_slow#36:
+    arm64.b __il_body#49
+  __im_slow#37:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -4431,8 +4431,8 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#19
-  tryerr#20:
+    arm64.b.eq tryok#20
+  tryerr#21:
     arm64.leaRdata x0, __str_blob_4  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4442,15 +4442,15 @@ func @main {
     arm64.loadRegSlot x22, slot6
     arm64.epilogue 80
     arm64.ret
-  __im_slow#42:
+  __im_slow#43:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_set
     arm64.loadRegSlot x1, slot1
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#25
-    arm64.b tryok#24
-  __im_slow#56:
+    arm64.b.ne tryerr#26
+    arm64.b tryok#25
+  __im_slow#57:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
@@ -4462,8 +4462,8 @@ func @main {
     arm64.loadRegSlot x1, slot1
     arm64.loadRegSlot x2, slot2
     arm64.cmp x9, 0
-    arm64.b.eq tryok#54
-  tryerr#25:
+    arm64.b.eq tryok#55
+  tryerr#26:
     arm64.leaRdata x0, __str_blob_5  ; "panic at reuse-def-confined-by-a-later-call.test:24: clear\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4473,7 +4473,7 @@ func @main {
     arm64.loadRegSlot x22, slot6
     arm64.epilogue 80
     arm64.ret
-  __im_slow#8:
+  __im_slow#9:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
@@ -4519,122 +4519,122 @@ func @main {
     arm64.movImm x1, 1
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-  __il_body#11:
+  __il_body#12:
     arm64.movImm x20, 0
     arm64.movImm x21, 0
-    arm64.b whilehdr#12
-  __rc_ok#26:
+    arm64.b whilehdr#13
+  __rc_ok#27:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.b.hs __im_slow#33
-  __im_load#34:
+    arm64.b.hs __im_slow#34
+  __im_load#35:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x22, [x0 + x21*8 + 0]
-  __il_body#48:
+  __il_body#49:
     arm64.cmp x22, 0
     arm64.b.ge shiftok
   never:
     arm64.leaRdata x0, __str_rec_1  ; ""
-  __il_body#52:
+  __il_body#53:
     arm64.bl __write_stdout
   shiftok:
     arm64.lsl x0, x22, 4
     arm64.orr x0, x0, x20
     arm64.movImm x1, 4294967295
     arm64.and x2, x0, x1
-  __rc_ok#28:
+  __rc_ok#29:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
     arm64.cmp x1, 0
-    arm64.b.lt __im_slow#36
-  __im_bounds#37:
+    arm64.b.lt __im_slow#37
+  __im_bounds#38:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.cmp x21, x1
-    arm64.b.hs __im_slow#36
-  __im_buffer#38:
+    arm64.b.hs __im_slow#37
+  __im_buffer#39:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
-    arm64.b.eq __im_slow#36
-  __im_viewed#39:
+    arm64.b.eq __im_slow#37
+  __im_viewed#40:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#36
-  __im_store#40:
+    arm64.b.ne __im_slow#37
+  __im_store#41:
     arm64.storeBaseIndexScaleReg.word64 [x1 + x21*8 + 0], x2
-  tryok#19:
+  tryok#20:
     arm64.asr x0, x0, 32
     arm64.add x21, x21, 1
     arm64.movRegReg x20, x0
-  whilehdr#12:
+  whilehdr#13:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.b.lt __rc_ok#26
+    arm64.b.lt __rc_ok#27
   whileexit:
     arm64.movImm x1, 0
-  __us_test#63:
+  __us_test#64:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.lt whilehdr#21
-  __us_test#64:
+    arm64.b.lt whilehdr#22
+  __us_test#65:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.cmp x2, 0
-    arm64.b.eq whilehdr#21
-  __us_test#65:
+    arm64.b.eq whilehdr#22
+  __us_test#66:
     arm64.sub x3, x2, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne whilehdr#21
-    arm64.b whilehdr#53
-  clear#22:
+    arm64.b.ne whilehdr#22
+    arm64.b whilehdr#54
+  clear#23:
     arm64.movImm x2, 0
-  __rc_ok#30:
+  __rc_ok#31:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.lt __im_slow#42
-  __im_bounds#43:
+    arm64.b.lt __im_slow#43
+  __im_bounds#44:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#42
-  __im_buffer#44:
+    arm64.b.hs __im_slow#43
+  __im_buffer#45:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.b.eq __im_slow#42
-  __im_viewed#45:
+    arm64.b.eq __im_slow#43
+  __im_viewed#46:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#42
-  __im_store#46:
+    arm64.b.ne __im_slow#43
+  __im_store#47:
     arm64.storeBaseIndexScaleReg.word64 [x0 + x1*8 + 0], x2
-  tryok#24:
+  tryok#25:
     arm64.add x1, x1, 1
-  whilehdr#21:
+  whilehdr#22:
     arm64.cmp x1, 1
-    arm64.b.lt clear#22
+    arm64.b.lt clear#23
     arm64.b __il_cont
-  clear#62:
+  clear#63:
     arm64.movImm x3, 0
-  __im_bounds#60:
+  __im_bounds#61:
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#56
-  __im_store#57:
+    arm64.b.hs __im_slow#57
+  __im_store#58:
     arm64.storeBaseIndexScaleReg.word64 [x2 + x1*8 + 0], x3
-  tryok#54:
+  tryok#55:
     arm64.add x1, x1, 1
-  whilehdr#53:
+  whilehdr#54:
     arm64.cmp x1, 1
-    arm64.b.lt clear#62
+    arm64.b.lt clear#63
   __il_cont:
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x0, 1
-    arm64.b.ls __im_slow#8
-    arm64.b __im_load#9
+    arm64.b.ls __im_slow#9
+    arm64.b __im_load#10
   tryerr#2:
     arm64.movImm x20, 99
     arm64.b trycont
-  __im_load#9:
+  __im_load#10:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x1*8 + 0]
   tryok#1:
@@ -4645,7 +4645,7 @@ func @main {
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#4:
+  __rc_ok#5:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -4655,13 +4655,13 @@ func @main {
     arm64.loadRegSlot x22, slot6
     arm64.epilogue 80
     arm64.ret
-  __im_slow#33:
+  __im_slow#34:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.eq critsplit
-  tryerr#16:
+  tryerr#17:
     arm64.leaRdata x0, __str_blob_2  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4673,8 +4673,8 @@ func @main {
     arm64.ret
   critsplit:
     arm64.movRegReg x22, x0
-    arm64.b __il_body#48
-  __im_slow#36:
+    arm64.b __il_body#49
+  __im_slow#37:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -4682,8 +4682,8 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#19
-  tryerr#20:
+    arm64.b.eq tryok#20
+  tryerr#21:
     arm64.leaRdata x0, __str_blob_4  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4693,15 +4693,15 @@ func @main {
     arm64.loadRegSlot x22, slot6
     arm64.epilogue 80
     arm64.ret
-  __im_slow#42:
+  __im_slow#43:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_set
     arm64.loadRegSlot x1, slot1
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#25
-    arm64.b tryok#24
-  __im_slow#56:
+    arm64.b.ne tryerr#26
+    arm64.b tryok#25
+  __im_slow#57:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
@@ -4713,8 +4713,8 @@ func @main {
     arm64.loadRegSlot x1, slot1
     arm64.loadRegSlot x2, slot2
     arm64.cmp x9, 0
-    arm64.b.eq tryok#54
-  tryerr#25:
+    arm64.b.eq tryok#55
+  tryerr#26:
     arm64.leaRdata x0, __str_blob_5  ; "panic at reuse-def-confined-by-a-later-call.test:24: clear\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -4724,7 +4724,7 @@ func @main {
     arm64.loadRegSlot x22, slot6
     arm64.epilogue 80
     arm64.ret
-  __im_slow#8:
+  __im_slow#9:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0

@@ -7253,12 +7253,14 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
 	// A function with no registered signature — none, since the parser records one per function it
 	// builds — claims nothing.
 	let returnExistentialSites = try returnExistentialSitesOfFunc(project, name: func.name) otherwise sharedEmptyReturnExistentialSites
+	var retOpIndices = OpIndexArray.create()
+	var retValues = ValueIdArray.create()
 
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("checkReturnsAgainstInterface: opIdx {opIdx} from liveOpIndices not in module.ops")
 
 		match op 'op'
-			ret(value) then checkOneReturnedValue(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: value, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites, retRange: project.opRanges.get(opIdx))
+			ret(value) then noteReturnOp(retOpIndices, retValues: retValues, opIdx: opIdx, value: value)
 
 			// Every other op — a `retVoid` included, which a value-returning function's parser never emits —
 			// hands nothing back through the return registers. Every variant is named, so a newly appended
@@ -7301,7 +7303,30 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
 				existentialWitness then break 'op'
 		end 'op'
 	end 'eachOp'
+
+	let exitChains = module.exitChainsOf(func, returned: retValues)
+
+	for (position, value) in retValues.withIterator() 'eachReturn'
+		checkReturnedValueAtItsSites(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: value, retOpIndex: try retOpIndices.get(position.index()) otherwise panic("checkReturnsAgainstInterface: retOpIndices.get OOB at {position.index()}"), exitChains: exitChains, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites)
+	end 'eachReturn'
 end 'checkReturnsAgainstInterface'
+
+function noteReturnOp(retOpIndices OpIndexArray, retValues ValueIdArray, opIdx ElementIndex, value ValueId)
+	retOpIndices.push(opIdx)
+	retValues.push(value)
+end 'noteReturnOp'
+
+function checkReturnedValueAtItsSites(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, value ValueId, retOpIndex ElementIndex, exitChains ExitChainsByReturn, interfaceName ByteArray, returnExistentialSites GenericInstanceIdArray)
+	if let chain = try exitChains.get(value) 'aSharedReturn'
+		for leaf in chain.leaves 'eachExit'
+			checkOneReturnedValue(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: leaf.value, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites, retRange: project.opRanges.get(leaf.source.terminatorIndex()))
+		end 'eachExit'
+
+		return
+	end 'aSharedReturn'
+
+	checkOneReturnedValue(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: value, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites, retRange: project.opRanges.get(retOpIndex))
+end 'checkReturnedValueAtItsSites'
 
 // One `return`'s value against the interface its function promised — the verdict shared with the argument
 // position, worded for this one. Anchored on the `return` itself, the line an author would change.

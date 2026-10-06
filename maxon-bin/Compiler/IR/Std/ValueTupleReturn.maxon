@@ -214,14 +214,34 @@ type FunctionTupleFlow
 	// is true, so no absent-marker value is needed.
 	export var hasRow as BoolArray
 	export var rowAt as UseTallyArray
+	export let exitChains as ExitChainsByReturn
+	export let returnPlumbing as BlockIdSet
 
-	static function create(valueBound ValueId) returns FunctionTupleFlow
+	static function create(valueBound ValueId, exitChains ExitChainsByReturn) returns FunctionTupleFlow
 		var hasRow = BoolArray.create()
 		hasRow.growFilled(valueBound, value: false)
 		var rowAt = UseTallyArray.create()
 		rowAt.growFilled(valueBound, value: 0)
-		return Self{rows: TupleValueRowArray.create(), hasRow: hasRow, rowAt: rowAt}
+		return Self{rows: TupleValueRowArray.create(), hasRow: hasRow, rowAt: rowAt, exitChains: exitChains, returnPlumbing: BlockIdSet.create()}
 	end 'create'
+
+	// A `ret` of an exit chain's block argument is judged by the values its exits carry into the
+	// chain, each held to this file's admitted shapes; the block argument itself would be
+	// `elsewhere`.
+	function exitValuesOf(retValId ValueId) returns ValueIdArray
+		var values = ValueIdArray.create()
+
+		if let chain = try self.exitChains.get(retValId) 'aSharedReturn'
+			for leaf in chain.leaves 'eachLeaf'
+				values.push(leaf.value)
+			end 'eachLeaf'
+
+			return values
+		end 'aSharedReturn'
+
+		values.push(retValId)
+		return values
+	end 'exitValuesOf'
 
 	function tracks(value ValueId) returns bool
 		return columnMarks(self.hasRow, value: value)
@@ -851,13 +871,14 @@ end 'isCandidateCallee'
 // BRANCH EDGE is read once. A read the classifier has no arm for lands in `other`, which refuses the
 // value, so an op variant appended tomorrow costs a missed rewrite and never a wrong one.
 function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexArray, byName FunctionNameIndex, onTheConvention BoolArray, consts ConstValueMap) returns FunctionTupleFlow
-	var flow = FunctionTupleFlow.create(nextFreeValueId(module, func: func))
+	let returned = returnedValuesOf(module, liveOps: liveOps)
+	var flow = FunctionTupleFlow.create(nextFreeValueId(module, func: func), exitChains: module.exitChainsOf(func, returned: returned))
 
 	// ⚠ THE RETURNED VALUES FIRST, AND SEPARATELY. A `const` gets a row only where a `ret` already named it
 	// (every function holds constants, and a row per constant would make the census as large as the code) —
 	// so the walk that stamps origins has to run against a table the returns have already seeded.
-	for opIdx in liveOps 'eachReturn'
-		trackReturnedValue(try module.ops.get(opIdx) otherwise panic("analyseOneFunction: live op index {opIdx} not in module.ops"), flow: flow)
+	for retValId in returned 'eachReturn'
+		trackReturnedValue(retValId, flow: flow)
 	end 'eachReturn'
 
 	for opIdx in liveOps 'eachDef'
@@ -871,11 +892,17 @@ function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexAr
 	end 'eachUse'
 
 	// ⚠ BRANCH-EDGE ARGS LIVE ON THE BLOCK, NOT ON AN OP, so `collectStdOpUses` structurally cannot see them
-	// and says so. A pair reaching a merge is refused: the merge would need a record to name.
+	// and says so. A pair reaching a merge is refused: the merge would need a record to name. The one
+	// exception is a returned value's exit chain, which `widenTheExitChain` carries as two block
+	// arguments.
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("analyseOneFunction: blockRef from func.blockRefs not in module.blocks")
 
 		for edge in block.branchEdges 'eachEdge'
+			if flow.returnPlumbing.contains(edge.targetBlockId) 'intoAReturnsChain'
+				continue
+			end 'intoAReturnsChain'
+
 			for argId in edge.argIds 'eachArg'
 				noteOtherUse(flow, value: argId)
 			end 'eachArg'
@@ -887,23 +914,39 @@ end 'analyseOneFunction'
 
 // A `ret`'s operand is tracked wherever it comes from, so a returned parameter gets a row whose origin
 // stays `elsewhere` and is refused BY NAME at `retKindOf` rather than by there being no row.
-function trackReturnedValue(op StdOp, flow FunctionTupleFlow)
-	// ⭐ **THE ROLE ANSWERS FOR EVERY OTHER VARIANT.** `OpRole.ret` is declared on `ret` and `retVoid` and
-	// on nothing else, so one test replaces 107 arms that named themselves only to say "not a return".
-	//
-	// ⚠ **THE `default` IS UNREACHABLE BY THE GATE, NOT BY INSPECTION.** An op given `role: ret` without an
-	// arm here reaches it and panics by name — the metadata and this match having come apart is the one
-	// thing that can put an op through, and it says so rather than answering quietly.
+function trackReturnedValue(retValId ValueId, flow FunctionTupleFlow)
+	for value in flow.exitValuesOf(retValId) 'eachExitValue'
+		flow.track(value)
+	end 'eachExitValue'
+
+	let chain = try flow.exitChains.get(retValId) otherwise return
+
+	for entry in chain.web 'eachWebBlock'
+		flow.returnPlumbing.insert(entry.block.id)
+	end 'eachWebBlock'
+end 'trackReturnedValue'
+
+function returnedValuesOf(module StdModule, liveOps OpIndexArray) returns ValueIdArray
+	var returned = ValueIdArray.create()
+
+	for opIdx in liveOps 'eachOp'
+		noteReturnedOperand(try module.ops.get(opIdx) otherwise panic("returnedValuesOf: live op index {opIdx} not in module.ops"), into: returned)
+	end 'eachOp'
+
+	return returned
+end 'returnedValuesOf'
+
+function noteReturnedOperand(op StdOp, into ValueIdArray)
 	if op.rawValue.role != OpRole.ret 'notAReturn'
 		return
 	end 'notAReturn'
 
 	match op 'op'
-		ret(retValId) then flow.track(retValId)
+		ret(retValId) then into.push(retValId)
 		retVoid then break 'op'
-		default panic("trackReturnedValue: `role: ret` but neither `ret` nor `retVoid` — StdOpMeta's role and this match have come apart")
+		default panic("noteReturnedOperand: `role: ret` but neither `ret` nor `retVoid` — StdOpMeta's role and this match have come apart")
 	end 'op'
-end 'trackReturnedValue'
+end 'noteReturnedOperand'
 
 // Stamp where a tracked value came from, and give a row to the call results a rewrite could name.
 function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention BoolArray, flow FunctionTupleFlow, consts ConstValueMap)
@@ -1377,8 +1420,10 @@ function noteOtherUse(flow FunctionTupleFlow, value ValueId)
 end 'noteOtherUse'
 
 function noteReturnedValue(flow FunctionTupleFlow, retValId ValueId)
-	var row = flow.rowOf(retValId)
-	row.returnUses = row.returnUses + 1
+	for value in flow.exitValuesOf(retValId) 'eachExitValue'
+		var row = flow.rowOf(value)
+		row.returnUses = row.returnUses + 1
+	end 'eachExitValue'
 end 'noteReturnedValue'
 
 function noteTrivialDrop(flow FunctionTupleFlow, callee ByteArray, args ValueIdArray)
@@ -1439,31 +1484,15 @@ function collectRetVerdicts(module StdModule, flows FunctionTupleFlowSlotArray, 
 		let flow = try flowOf(flows, funcIndex: funcIndex) otherwise panic("collectRetVerdicts: function {funcIndex} is a candidate and so was analysed — `analyseAffectedFunctions` analyses every candidate")
 		let func = module.getFunc(funcIndex)
 
-		for opIdx in module.liveOpIndices(func) 'eachOp'
-			noteRetVerdict(try module.ops.get(opIdx) otherwise panic("collectRetVerdicts: live op index {opIdx} not in module.ops"), funcIndex: funcIndex, flow: flow, verdicts: verdicts)
-		end 'eachOp'
+		for retValId in returnedValuesOf(module, liveOps: module.liveOpIndices(func)) 'eachReturn'
+			for value in flow.exitValuesOf(retValId) 'eachExitValue'
+				verdicts.push(ValueTupleRetVerdict.create(funcIndex, kind: retKindOf(flow, retValId: value)))
+			end 'eachExitValue'
+		end 'eachReturn'
 	end 'eachFunc'
 
 	return verdicts
 end 'collectRetVerdicts'
-
-function noteRetVerdict(op StdOp, funcIndex ElementIndex, flow FunctionTupleFlow, verdicts ValueTupleRetVerdictArray)
-	// ⭐ **THE ROLE ANSWERS FOR EVERY OTHER VARIANT.** `OpRole.ret` is declared on `ret` and `retVoid` and
-	// on nothing else, so one test replaces 107 arms that named themselves only to say "not a return".
-	//
-	// ⚠ **THE `default` IS UNREACHABLE BY THE GATE, NOT BY INSPECTION.** An op given `role: ret` without an
-	// arm here reaches it and panics by name — the metadata and this match having come apart is the one
-	// thing that can put an op through, and it says so rather than answering quietly.
-	if op.rawValue.role != OpRole.ret 'notAReturn'
-		return
-	end 'notAReturn'
-
-	match op 'op'
-		ret(retValId) then verdicts.push(ValueTupleRetVerdict.create(funcIndex, kind: retKindOf(flow, retValId: retValId)))
-		retVoid then break 'op'
-		default panic("noteRetVerdict: `role: ret` but neither `ret` nor `retVoid` — StdOpMeta's role and this match have come apart")
-	end 'op'
-end 'noteRetVerdict'
 
 // ⭐ **THE CALLEE HALF OF THE GATE**, and the admitted shapes are exactly this file's header's two plus the
 // unreachable panic return. Everything else — a returned parameter, a returned record something else also
@@ -1785,6 +1814,8 @@ function stampTheConvention(module StdModule, onTheConvention BoolArray)
 	end 'eachFunc'
 end 'stampTheConvention'
 
+typealias ChainHighByBlock = Map with (BlockId, ValueId)
+
 // The rewrite plan for one function: which values leave through the two return registers, which boxes stop
 // being built, which call results now arrive as a register pair, and the second value id each pair is
 // captured into.
@@ -1806,13 +1837,15 @@ type ValueTuplePlan
 	export var highOf as ValueIdArray
 	export var anyRewrite as bool
 
+	export let chainHighs as ChainHighByBlock
+
 	// Whether the fixpoint left THIS function on the convention. Only such a function may hand back two
 	// registers, and `markRegisterPair` marks a captured pair as returnable without knowing which function
 	// holds it — so the ABI rewrite asks here before it writes.
 	export let onTheConvention as bool
 
 	static function create(valueBound ValueId, onTheConvention bool) returns ValueTuplePlan
-		return Self{returnsAsAPair: markColumn(valueBound), elidedBox: markColumn(valueBound), registerPair: markColumn(valueBound), lowOf: halfColumn(valueBound), highOf: halfColumn(valueBound), anyRewrite: false, onTheConvention: onTheConvention}
+		return Self{returnsAsAPair: markColumn(valueBound), elidedBox: markColumn(valueBound), registerPair: markColumn(valueBound), lowOf: halfColumn(valueBound), highOf: halfColumn(valueBound), anyRewrite: false, chainHighs: ChainHighByBlock.create(), onTheConvention: onTheConvention}
 	end 'create'
 
 	function returnsAPair(value ValueId) returns bool
@@ -1830,6 +1863,10 @@ type ValueTuplePlan
 	function lowHalfOf(value ValueId) returns ValueId
 		return try self.lowOf.get(value) otherwise panic("ValueTuplePlan.lowHalfOf: lowOf.get OOB at {value} — asked of a value a mark column answered true for")
 	end 'lowHalfOf'
+
+	function chainHighOf(blockId BlockId) returns ValueId
+		return try self.chainHighs.get(blockId) otherwise panic("ValueTuplePlan.chainHighOf: no second block argument was minted for block {blockId} — `planTheExitChain` mints one per block of the chain")
+	end 'chainHighOf'
 
 	function highHalfOf(value ValueId) returns ValueId
 		return try self.highOf.get(value) otherwise panic("ValueTuplePlan.highHalfOf: highOf.get OOB at {value} — asked of a value a mark column answered true for")
@@ -1906,6 +1943,10 @@ function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow Funct
 
 	var subst = ValueIdArray.create()
 	var doomed = DoomedOpSet.create()
+
+	for retValId in returnedValuesOf(module, liveOps: liveOps) 'eachChainReturn'
+		widenTheExitChain(retValId, flow: flow, plan: plan)
+	end 'eachChainReturn'
 
 	for opIdx in liveOps 'eachOp'
 		rewriteOneOp(module, opIdx: opIdx, plan: plan, subst: subst, doomed: doomed)
@@ -2200,16 +2241,26 @@ function planOneOp(op StdOp, funcIndex ElementIndex, flow FunctionTupleFlow, onT
 			osPathQuery or
 			osSocketOverlapped or
 			osSocketServe then break 'op'
-		ret(retValId) then planOneReturn(retValId, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan)
+		ret(retValId) then planOneReturn(retValId, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
 		call(resultId, _, _) then planOneCallResult(resultId, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
 	end 'op'
 end 'planOneOp'
 
-function planOneReturn(retValId ValueId, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray, plan ValueTuplePlan)
+function planOneReturn(retValId ValueId, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray, plan ValueTuplePlan, mint ValueMinter)
 	if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) 'theHeapConvention'
 		return
 	end 'theHeapConvention'
 
+	for value in flow.exitValuesOf(retValId) 'eachExitValue'
+		planReturnedValue(value, funcIndex: funcIndex, flow: flow, plan: plan)
+	end 'eachExitValue'
+
+	if let chain = try flow.exitChains.get(retValId) 'aSharedReturn'
+		planTheExitChain(retValId, chain: chain, plan: plan, mint: mint)
+	end 'aSharedReturn'
+end 'planOneReturn'
+
+function planReturnedValue(retValId ValueId, funcIndex ElementIndex, flow FunctionTupleFlow, plan ValueTuplePlan)
 	match retKindOf(flow, retValId: retValId) 'kind'
 		freshPair then markTheFreshPair(retValId, flow: flow, plan: plan)
 
@@ -2220,9 +2271,18 @@ function planOneReturn(retValId ValueId, funcIndex ElementIndex, flow FunctionTu
 		// The call site's own plan entry has already captured the pair into two registers; this return
 		// merely reads them, and `rewriteOneOp` finds it through the `registerPair` mark.
 		forwarded then break 'kind'
-		unusable then panic("planOneReturn: function {funcIndex} is on the value-tuple convention but one of its returns is neither a fresh pair nor a forwarded one — `settleTheConvention` removes exactly such a candidate before this runs")
+		unusable then panic("planReturnedValue: function {funcIndex} is on the value-tuple convention but one of its returns is neither a fresh pair nor a forwarded one — `settleTheConvention` removes exactly such a candidate before this runs")
 	end 'kind'
-end 'planOneReturn'
+end 'planReturnedValue'
+
+function planTheExitChain(retValId ValueId, chain ExitChain, plan ValueTuplePlan, mint ValueMinter)
+	for entry in chain.web 'eachWebBlock'
+		plan.chainHighs.upsert(entry.block.id, value: mint.mint())
+	end 'eachWebBlock'
+
+	let start = try chain.web.get(0) otherwise panic("planTheExitChain: an exit chain holds no block defining the returned value")
+	plan.markPairHalves(retValId, low: retValId, high: plan.chainHighOf(start.block.id))
+end 'planTheExitChain'
 
 function markTheFreshPair(retValId ValueId, flow FunctionTupleFlow, plan ValueTuplePlan)
 	let row = flow.rowOf(retValId)
@@ -2388,6 +2448,82 @@ function rewriteOneOp(module StdModule, opIdx ElementIndex, plan ValueTuplePlan,
 		storeIndirect(addrId, _, _, _) then doomAStoreIntoAnElidedBox(opIdx, addrId: addrId, plan: plan, doomed: doomed)
 	end 'op'
 end 'rewriteOneOp'
+
+function widenTheExitChain(retValId ValueId, flow FunctionTupleFlow, plan ValueTuplePlan)
+	if not plan.returnsAPair(retValId) 'notAPairReturn'
+		return
+	end 'notAPairReturn'
+
+	let chain = try flow.exitChains.get(retValId) otherwise return
+	var webById = ExitWebByBlock.create()
+	var webByPhi = ExitWebByPhi.create()
+	var rewritten = BlockIdSet.create()
+
+	for entry in chain.web 'eachWebBlock'
+		webById.upsert(entry.block.id, value: entry)
+		webByPhi.upsert(entry.phi, value: entry)
+		widenBlockArgs(entry.block, high: plan.chainHighOf(entry.block.id))
+	end 'eachWebBlock'
+
+	widenArrivalSources(chain.joins, rewritten: rewritten, webById: webById, webByPhi: webByPhi, plan: plan)
+	widenArrivalSources(chain.leaves, rewritten: rewritten, webById: webById, webByPhi: webByPhi, plan: plan)
+end 'widenTheExitChain'
+
+function widenArrivalSources(arrivals ExitArrivalArray, rewritten BlockIdSet, webById ExitWebByBlock, webByPhi ExitWebByPhi, plan ValueTuplePlan)
+	for arrival in arrivals 'eachArrival'
+		if rewritten.contains(arrival.source.id) 'alreadyRewritten'
+			continue
+		end 'alreadyRewritten'
+
+		rewritten.insert(arrival.source.id)
+		replaceEdges(arrival.source, edges: widenedEdges(arrival.source.branchEdges, webById: webById, webByPhi: webByPhi, plan: plan))
+	end 'eachArrival'
+end 'widenArrivalSources'
+
+typealias ExitWebByBlock = Map with (BlockId, ExitWebBlock)
+
+function widenBlockArgs(block IrBlock, high ValueId)
+	var widened = IrBlockArgArray.create()
+	widened.append(block.blockArgs)
+	widened.push(IrBlockArg.create(high, argType: StdType.i64))
+	var target = block
+	target.blockArgs = widened
+end 'widenBlockArgs'
+
+function replaceEdges(block IrBlock, edges BranchEdgeArray)
+	var target = block
+	target.branchEdges = edges
+end 'replaceEdges'
+
+function widenedEdges(edges BranchEdgeArray, webById ExitWebByBlock, webByPhi ExitWebByPhi, plan ValueTuplePlan) returns BranchEdgeArray
+	var widened = BranchEdgeArray.create()
+
+	for edge in edges 'eachEdge'
+		if let target = try webById.get(edge.targetBlockId) 'intoTheChain'
+			widened.push(widenedEdge(edge, target: target, webByPhi: webByPhi, plan: plan))
+			continue
+		end 'intoTheChain'
+
+		widened.push(edge)
+	end 'eachEdge'
+
+	return widened
+end 'widenedEdges'
+
+function widenedEdge(edge BranchEdge, target ExitWebBlock, webByPhi ExitWebByPhi, plan ValueTuplePlan) returns BranchEdge
+	let carried = try edge.argIds.get(target.slot) otherwise panic("widenedEdge: an edge into block {edge.targetBlockId} carries fewer values than the slot {target.slot}")
+	var argIds = ValueIdArray.create()
+	argIds.append(edge.argIds)
+
+	if let owner = try webByPhi.get(carried) 'theChainsOwnPhi'
+		argIds.push(plan.chainHighOf(owner.block.id))
+		return BranchEdge.create(edge.targetBlockId, argIds: argIds)
+	end 'theChainsOwnPhi'
+
+	try argIds.set(target.slot, value: plan.lowHalfOf(carried)) otherwise panic("widenedEdge: argIds.set OOB at {target.slot}")
+	argIds.push(plan.highHalfOf(carried))
+	return BranchEdge.create(edge.targetBlockId, argIds: argIds)
+end 'widenedEdge'
 
 function rewriteOneReturn(module StdModule, opIdx ElementIndex, retValId ValueId, plan ValueTuplePlan)
 	if not plan.returnsAPair(retValId) 'anOrdinaryReturn'

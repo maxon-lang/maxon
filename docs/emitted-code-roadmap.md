@@ -1777,7 +1777,7 @@ walk and latch choice cost the loop's own back edges — the flat-list seeding e
 Θ(headers × back edges), and the walk's worklist is now the shared `LoopMembership`'s), one shared
 membership record and ONE rebuild of `func.blockRefs` — no per-loop allocation, since the corpus has a
 function with N loops; the loopless function is gated on the pre-drop topology and never builds the
-second one. Shared by x64 and arm64 through the ISA-neutral rosters (`unconditionalBranchTargetOf`,
+second one. Shared by x64 and arm64 through the ISA-neutral rosters (`terminatorExitOf`,
 `condBranchTargetOf`); wasm never reaches this tier. Pinned by `specs/loop-rotation-layout.md` (14
 cases: the shape case, and controls for a zero-iteration and a one-iteration loop, a
 nest, a `while` with `continue`, a `while` with two jump latches, a nest whose inner header is the outer

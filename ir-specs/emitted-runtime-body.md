@@ -138,27 +138,27 @@ func @main {
     x64.pushReg r15
     x64.prologue 40
     x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "a/b.txt"
-  __il_body#4:
+  __il_body#5:
     x64.callDirect FilePath.create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#6
-  __il_body#27:
+    x64.jcc notEqual, tryerr#7
+  __il_body#33:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#46:
+  __il_body#52:
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-  __il_cont#45:
+  __il_cont#51:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, ifcont#29
+    x64.jcc notEqual, ifcont#35
   empty:
     x64.movRegImm32 r12, 0
-    x64.jmp __il_cont#26
-  ifcont#29:
+    x64.jmp __il_cont#32
+  ifcont#35:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#48:
+  __il_body#54:
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.jmp whilehdr#30
-  scan#31:
+    x64.jmp whilehdr#36
+  scan#37:
     x64.leaRegRegImm32 r12, rax, -1
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegReg rdx, rax
@@ -169,37 +169,37 @@ func @main {
     x64.andRegReg rax, rax, r12
     x64.orRegReg rdx, rdx, rax
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#36
-  __rc_ok#35:
+    x64.jcc less, __rc_panic#42
+  __rc_ok#41:
     x64.movRegReg rdx, r12
     x64.callDirect String.byteAtOrPanic
     x64.cmpRegImm32 r8, 92
-    x64.jcc notEqual, ifcont#34
+    x64.jcc notEqual, ifcont#40
   isSep:
     x64.leaRegRegImm32 r12, r12, 1
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#38
-    x64.jmp __il_cont#26
-  ifcont#34:
+    x64.jcc less, __rc_panic#44
+    x64.jmp __il_cont#32
+  ifcont#40:
     x64.movRegReg rax, r12
-  whilehdr#30:
+  whilehdr#36:
     x64.cmpRegImm32 rax, 0
-    x64.jcc above, scan#31
-  whileexit#32:
+    x64.jcc above, scan#37
+  whileexit#38:
     x64.movRegImm32 r12, 0
-  __il_cont#26:
+  __il_cont#32:
     x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, ifcont#23
+    x64.jcc notEqual, ifcont#28
   noSep:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __str_retain
     x64.movRegReg r12, r8
-    x64.jmp __il_body#42
-  ifcont#23:
+    x64.jmp __il_body#48
+  ifcont#28:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#44:
+  __il_body#50:
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-  __il_cont#43:
+  __il_cont#49:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect String.addressableBytes
     x64.movRegReg r14, r8
@@ -209,8 +209,8 @@ func @main {
     x64.callDirect __managed_slice
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#24
-  tryerr#25:
+    x64.jcc equal, tryok#29
+  tryerr#30:
     x64.leaRegRdata rcx, [rip + __str_blob_55]  ; "panic at FilePath.maxon:336: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -222,7 +222,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#24:
+  tryok#29:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
@@ -232,27 +232,28 @@ func @main {
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
+  exitterminal:
     x64.movRegReg r12, r13
-  __il_body#42:
+  __il_body#48:
     x64.loadRegBaseDisp.word64 r13, [r12 + 8]
-  __il_cont#41:
+  __il_cont#47:
     x64.cmpRegImm32 r13, 1
-    x64.jcc above, ifcont#10
+    x64.jcc above, ifcont#12
   tooShort:
     x64.leaRegRdata rcx, [rip + __str_rec_56]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
-    x64.jmp __il_cont#7
-  ifcont#10:
+    x64.jmp __il_cont#8
+  ifcont#12:
     x64.movRegReg rcx, r12
     x64.callDirect String.addressableBytes
     x64.movRegReg r14, r8
-  __il_body#40:
+  __il_body#46:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.jmp whilehdr#11
-  scan#12:
+    x64.jmp whilehdr#13
+  scan#14:
     x64.leaRegRegImm32 r15, rax, -1
     x64.movRegReg rcx, rax
     x64.xorRegImm32 rcx, rax, -1
@@ -262,13 +263,13 @@ func @main {
     x64.andRegReg rax, rax, r15
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#19
-  __rc_ok#18:
+    x64.jcc less, __rc_panic#24
+  __rc_ok#23:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r15
     x64.callDirect String.byteAtOrPanic
     x64.cmpRegImm32 r8, 46
-    x64.jcc notEqual, ifcont#17
+    x64.jcc notEqual, ifcont#21
   isDot:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r15
@@ -276,8 +277,8 @@ func @main {
     x64.callDirect __managed_slice
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#15
-  tryerr#16:
+    x64.jcc equal, tryok#17
+  tryerr#18:
     x64.leaRegRdata rcx, [rip + __str_blob_57]  ; "panic at FilePath.maxon:361: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -289,7 +290,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#15:
+  tryok#17:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_retain
     x64.movRegReg rcx, r8
@@ -297,26 +298,29 @@ func @main {
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
+  exitdrop#19:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
+  exitdrop#20:
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
     x64.movRegReg r13, r15
-    x64.jmp __il_cont#7
-  ifcont#17:
+    x64.jmp __il_cont#8
+  ifcont#21:
     x64.movRegReg rax, r15
-  whilehdr#11:
+  whilehdr#13:
     x64.cmpRegImm32 rax, 1
-    x64.jcc above, scan#12
-  whileexit#13:
+    x64.jcc above, scan#14
+  whileexit#15:
     x64.leaRegRdata rcx, [rip + __str_rec_56]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
+  exitdrop#22:
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
-  __il_cont#7:
+  __il_cont#8:
     x64.leaRegRdata rdx, [rip + __str_rec_32]  ; ".txt"
     x64.movRegReg rcx, r13
     x64.callDirect __str_eq
@@ -324,7 +328,7 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.cmpRegImm32 r12, 0
-    x64.jcc equal, ifcont#2
+    x64.jcc equal, ifcont#3
   ok:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
@@ -338,7 +342,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#2:
+  ifcont#3:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_FilePath
@@ -351,7 +355,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#6:
+  tryerr#7:
     x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at FilePath.maxon:46: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -363,7 +367,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#36:
+  __rc_panic#42:
     x64.leaRegRdata rcx, [rip + __str_blob_132]  ; "panic at FilePath.maxon:318: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -375,7 +379,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#38:
+  __rc_panic#44:
     x64.leaRegRdata rcx, [rip + __str_blob_133]  ; "panic at FilePath.maxon:319: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -387,7 +391,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#19:
+  __rc_panic#24:
     x64.leaRegRdata rcx, [rip + __str_blob_134]  ; "panic at FilePath.maxon:359: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -445,27 +449,27 @@ func @main {
     x64.pushReg r15
     x64.prologue 40
     x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "a/b.txt"
-  __il_body#4:
+  __il_body#5:
     x64.callDirect FilePath.create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#6
-  __il_body#27:
+    x64.jcc notEqual, tryerr#7
+  __il_body#33:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#46:
+  __il_body#52:
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-  __il_cont#45:
+  __il_cont#51:
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, ifcont#29
+    x64.jcc notEqual, ifcont#35
   empty:
     x64.movRegImm32 r12, 0
-    x64.jmp __il_cont#26
-  ifcont#29:
+    x64.jmp __il_cont#32
+  ifcont#35:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#48:
+  __il_body#54:
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.jmp whilehdr#30
-  scan#31:
+    x64.jmp whilehdr#36
+  scan#37:
     x64.leaRegRegImm32 r12, rax, -1
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegReg rdx, rax
@@ -476,37 +480,37 @@ func @main {
     x64.andRegReg rax, rax, r12
     x64.orRegReg rdx, rdx, rax
     x64.cmpRegImm32 rdx, 0
-    x64.jcc less, __rc_panic#36
-  __rc_ok#35:
+    x64.jcc less, __rc_panic#42
+  __rc_ok#41:
     x64.movRegReg rdx, r12
     x64.callDirect String.byteAtOrPanic
     x64.cmpRegImm32 r8, 47
-    x64.jcc notEqual, ifcont#34
+    x64.jcc notEqual, ifcont#40
   isSep:
     x64.leaRegRegImm32 r12, r12, 1
     x64.cmpRegImm32 r12, 0
-    x64.jcc less, __rc_panic#38
-    x64.jmp __il_cont#26
-  ifcont#34:
+    x64.jcc less, __rc_panic#44
+    x64.jmp __il_cont#32
+  ifcont#40:
     x64.movRegReg rax, r12
-  whilehdr#30:
+  whilehdr#36:
     x64.cmpRegImm32 rax, 0
-    x64.jcc above, scan#31
-  whileexit#32:
+    x64.jcc above, scan#37
+  whileexit#38:
     x64.movRegImm32 r12, 0
-  __il_cont#26:
+  __il_cont#32:
     x64.cmpRegImm32 r12, 0
-    x64.jcc notEqual, ifcont#23
+    x64.jcc notEqual, ifcont#28
   noSep:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __str_retain
     x64.movRegReg r12, r8
-    x64.jmp __il_body#42
-  ifcont#23:
+    x64.jmp __il_body#48
+  ifcont#28:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-  __il_body#44:
+  __il_body#50:
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-  __il_cont#43:
+  __il_cont#49:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect String.addressableBytes
     x64.movRegReg r14, r8
@@ -516,8 +520,8 @@ func @main {
     x64.callDirect __managed_slice
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#24
-  tryerr#25:
+    x64.jcc equal, tryok#29
+  tryerr#30:
     x64.leaRegRdata rcx, [rip + __str_blob_54]  ; "panic at FilePath.maxon:336: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -529,7 +533,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#24:
+  tryok#29:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
@@ -539,27 +543,28 @@ func @main {
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
+  exitterminal:
     x64.movRegReg r12, r13
-  __il_body#42:
+  __il_body#48:
     x64.loadRegBaseDisp.word64 r13, [r12 + 8]
-  __il_cont#41:
+  __il_cont#47:
     x64.cmpRegImm32 r13, 1
-    x64.jcc above, ifcont#10
+    x64.jcc above, ifcont#12
   tooShort:
     x64.leaRegRdata rcx, [rip + __str_rec_55]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
-    x64.jmp __il_cont#7
-  ifcont#10:
+    x64.jmp __il_cont#8
+  ifcont#12:
     x64.movRegReg rcx, r12
     x64.callDirect String.addressableBytes
     x64.movRegReg r14, r8
-  __il_body#40:
+  __il_body#46:
     x64.loadRegBaseDisp.word64 rax, [r12 + 8]
-    x64.jmp whilehdr#11
-  scan#12:
+    x64.jmp whilehdr#13
+  scan#14:
     x64.leaRegRegImm32 r15, rax, -1
     x64.movRegReg rcx, rax
     x64.xorRegImm32 rcx, rax, -1
@@ -569,13 +574,13 @@ func @main {
     x64.andRegReg rax, rax, r15
     x64.orRegReg rcx, rcx, rax
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#19
-  __rc_ok#18:
+    x64.jcc less, __rc_panic#24
+  __rc_ok#23:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r15
     x64.callDirect String.byteAtOrPanic
     x64.cmpRegImm32 r8, 46
-    x64.jcc notEqual, ifcont#17
+    x64.jcc notEqual, ifcont#21
   isDot:
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r15
@@ -583,8 +588,8 @@ func @main {
     x64.callDirect __managed_slice
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#15
-  tryerr#16:
+    x64.jcc equal, tryok#17
+  tryerr#18:
     x64.leaRegRdata rcx, [rip + __str_blob_56]  ; "panic at FilePath.maxon:361: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -596,7 +601,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#15:
+  tryok#17:
     x64.movRegReg rcx, r13
     x64.callDirect __managed_retain
     x64.movRegReg rcx, r8
@@ -604,26 +609,29 @@ func @main {
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
+  exitdrop#19:
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
+  exitdrop#20:
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
     x64.movRegReg r13, r15
-    x64.jmp __il_cont#7
-  ifcont#17:
+    x64.jmp __il_cont#8
+  ifcont#21:
     x64.movRegReg rax, r15
-  whilehdr#11:
+  whilehdr#13:
     x64.cmpRegImm32 rax, 1
-    x64.jcc above, scan#12
-  whileexit#13:
+    x64.jcc above, scan#14
+  whileexit#15:
     x64.leaRegRdata rcx, [rip + __str_rec_55]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r14
     x64.callDirect __managed_decref
+  exitdrop#22:
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
-  __il_cont#7:
+  __il_cont#8:
     x64.leaRegRdata rdx, [rip + __str_rec_32]  ; ".txt"
     x64.movRegReg rcx, r13
     x64.callDirect __str_eq
@@ -631,7 +639,7 @@ func @main {
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.cmpRegImm32 r12, 0
-    x64.jcc equal, ifcont#2
+    x64.jcc equal, ifcont#3
   ok:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
@@ -645,7 +653,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont#2:
+  ifcont#3:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_FilePath
@@ -658,7 +666,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#6:
+  tryerr#7:
     x64.leaRegRdata rcx, [rip + __str_blob_44]  ; "panic at FilePath.maxon:46: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -670,7 +678,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#36:
+  __rc_panic#42:
     x64.leaRegRdata rcx, [rip + __str_blob_130]  ; "panic at FilePath.maxon:318: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -682,7 +690,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#38:
+  __rc_panic#44:
     x64.leaRegRdata rcx, [rip + __str_blob_131]  ; "panic at FilePath.maxon:319: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -694,7 +702,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#19:
+  __rc_panic#24:
     x64.leaRegRdata rcx, [rip + __str_blob_132]  ; "panic at FilePath.maxon:359: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -748,27 +756,27 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __str_rec_31  ; "a/b.txt"
-  __il_body#4:
+  __il_body#5:
     arm64.bl FilePath.create
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#6
-  __il_body#27:
+    arm64.b.ne tryerr#7
+  __il_body#33:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-  __il_body#46:
+  __il_body#52:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-  __il_cont#45:
+  __il_cont#51:
     arm64.cmp x0, 0
-    arm64.b.ne ifcont#29
+    arm64.b.ne ifcont#35
   empty:
     arm64.movImm x20, 0
-    arm64.b __il_cont#26
-  ifcont#29:
+    arm64.b __il_cont#32
+  ifcont#35:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-  __il_body#48:
+  __il_body#54:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.b whilehdr#30
-  scan#31:
+    arm64.b whilehdr#36
+  scan#37:
     arm64.sub x20, x0, 1
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.movImm x16, 18446744073709551615
@@ -780,38 +788,38 @@ func @main {
     arm64.and x0, x0, x20
     arm64.orr x0, x2, x0
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#36
-  __rc_ok#35:
+    arm64.b.lt __rc_panic#42
+  __rc_ok#41:
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x20
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 47
-    arm64.b.ne ifcont#34
+    arm64.b.ne ifcont#40
   isSep:
     arm64.add x20, x20, 1
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic#38
-    arm64.b __il_cont#26
-  ifcont#34:
+    arm64.b.lt __rc_panic#44
+    arm64.b __il_cont#32
+  ifcont#40:
     arm64.movRegReg x0, x20
-  whilehdr#30:
+  whilehdr#36:
     arm64.cmp x0, 0
-    arm64.b.hi scan#31
-  whileexit#32:
+    arm64.b.hi scan#37
+  whileexit#38:
     arm64.movImm x20, 0
-  __il_cont#26:
+  __il_cont#32:
     arm64.cmp x20, 0
-    arm64.b.ne ifcont#23
+    arm64.b.ne ifcont#28
   noSep:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl __str_retain
     arm64.movRegReg x20, x0
-    arm64.b __il_body#42
-  ifcont#23:
+    arm64.b __il_body#48
+  ifcont#28:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-  __il_body#44:
+  __il_body#50:
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-  __il_cont#43:
+  __il_cont#49:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl String.addressableBytes
     arm64.movRegReg x22, x0
@@ -821,8 +829,8 @@ func @main {
     arm64.bl __managed_slice
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#24
-  tryerr#25:
+    arm64.b.eq tryok#29
+  tryerr#30:
     arm64.leaRdata x0, __str_blob_54  ; "panic at FilePath.maxon:336: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -833,7 +841,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  tryok#24:
+  tryok#29:
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -842,27 +850,28 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
+  exitterminal:
     arm64.movRegReg x20, x21
-  __il_body#42:
+  __il_body#48:
     arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
-  __il_cont#41:
+  __il_cont#47:
     arm64.cmp x21, 1
-    arm64.b.hi ifcont#10
+    arm64.b.hi ifcont#12
   tooShort:
     arm64.leaRdata x0, __str_rec_55  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.b __il_cont#7
-  ifcont#10:
+    arm64.b __il_cont#8
+  ifcont#12:
     arm64.movRegReg x0, x20
     arm64.bl String.addressableBytes
     arm64.movRegReg x22, x0
-  __il_body#40:
+  __il_body#46:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
-    arm64.b whilehdr#11
-  scan#12:
+    arm64.b whilehdr#13
+  scan#14:
     arm64.sub x23, x0, 1
     arm64.movImm x16, 18446744073709551615
     arm64.eor x1, x0, x16
@@ -873,13 +882,13 @@ func @main {
     arm64.and x0, x0, x23
     arm64.orr x0, x1, x0
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#19
-  __rc_ok#18:
+    arm64.b.lt __rc_panic#24
+  __rc_ok#23:
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x23
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 46
-    arm64.b.ne ifcont#17
+    arm64.b.ne ifcont#21
   isDot:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x23
@@ -887,8 +896,8 @@ func @main {
     arm64.bl __managed_slice
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#15
-  tryerr#16:
+    arm64.b.eq tryok#17
+  tryerr#18:
     arm64.leaRdata x0, __str_blob_56  ; "panic at FilePath.maxon:361: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -899,40 +908,43 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  tryok#15:
+  tryok#17:
     arm64.movRegReg x0, x21
     arm64.bl __managed_retain
     arm64.bl String.init
     arm64.movRegReg x23, x0
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
+  exitdrop#19:
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
+  exitdrop#20:
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
     arm64.movRegReg x21, x23
-    arm64.b __il_cont#7
-  ifcont#17:
+    arm64.b __il_cont#8
+  ifcont#21:
     arm64.movRegReg x0, x23
-  whilehdr#11:
+  whilehdr#13:
     arm64.cmp x0, 1
-    arm64.b.hi scan#12
-  whileexit#13:
+    arm64.b.hi scan#14
+  whileexit#15:
     arm64.leaRdata x0, __str_rec_55  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
+  exitdrop#22:
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-  __il_cont#7:
+  __il_cont#8:
     arm64.leaRdata x1, __str_rec_32  ; ".txt"
     arm64.movRegReg x0, x21
     arm64.bl __str_eq
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
-    arm64.cbz x20, ifcont#2
+    arm64.cbz x20, ifcont#3
   ok:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
@@ -945,7 +957,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#2:
+  ifcont#3:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
     arm64.bl __destruct_FilePath
@@ -957,7 +969,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  tryerr#6:
+  tryerr#7:
     arm64.leaRdata x0, __str_blob_44  ; "panic at FilePath.maxon:46: FilePath: invalid path\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -968,7 +980,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_panic#36:
+  __rc_panic#42:
     arm64.leaRdata x0, __str_blob_130  ; "panic at FilePath.maxon:318: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -979,7 +991,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_panic#38:
+  __rc_panic#44:
     arm64.leaRdata x0, __str_blob_131  ; "panic at FilePath.maxon:319: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -990,7 +1002,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_panic#19:
+  __rc_panic#24:
     arm64.leaRdata x0, __str_blob_132  ; "panic at FilePath.maxon:359: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -1042,27 +1054,27 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.leaRdata x0, __str_rec_31  ; "a/b.txt"
-  __il_body#4:
+  __il_body#5:
     arm64.bl FilePath.create
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#6
-  __il_body#27:
+    arm64.b.ne tryerr#7
+  __il_body#33:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-  __il_body#46:
+  __il_body#52:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-  __il_cont#45:
+  __il_cont#51:
     arm64.cmp x0, 0
-    arm64.b.ne ifcont#29
+    arm64.b.ne ifcont#35
   empty:
     arm64.movImm x20, 0
-    arm64.b __il_cont#26
-  ifcont#29:
+    arm64.b __il_cont#32
+  ifcont#35:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-  __il_body#48:
+  __il_body#54:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.b whilehdr#30
-  scan#31:
+    arm64.b whilehdr#36
+  scan#37:
     arm64.sub x20, x0, 1
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.movImm x16, 18446744073709551615
@@ -1074,38 +1086,38 @@ func @main {
     arm64.and x0, x0, x20
     arm64.orr x0, x2, x0
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#36
-  __rc_ok#35:
+    arm64.b.lt __rc_panic#42
+  __rc_ok#41:
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x20
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 47
-    arm64.b.ne ifcont#34
+    arm64.b.ne ifcont#40
   isSep:
     arm64.add x20, x20, 1
     arm64.cmp x20, 0
-    arm64.b.lt __rc_panic#38
-    arm64.b __il_cont#26
-  ifcont#34:
+    arm64.b.lt __rc_panic#44
+    arm64.b __il_cont#32
+  ifcont#40:
     arm64.movRegReg x0, x20
-  whilehdr#30:
+  whilehdr#36:
     arm64.cmp x0, 0
-    arm64.b.hi scan#31
-  whileexit#32:
+    arm64.b.hi scan#37
+  whileexit#38:
     arm64.movImm x20, 0
-  __il_cont#26:
+  __il_cont#32:
     arm64.cmp x20, 0
-    arm64.b.ne ifcont#23
+    arm64.b.ne ifcont#28
   noSep:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl __str_retain
     arm64.movRegReg x20, x0
-    arm64.b __il_body#42
-  ifcont#23:
+    arm64.b __il_body#48
+  ifcont#28:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-  __il_body#44:
+  __il_body#50:
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
-  __il_cont#43:
+  __il_cont#49:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl String.addressableBytes
     arm64.movRegReg x22, x0
@@ -1115,8 +1127,8 @@ func @main {
     arm64.bl __managed_slice
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#24
-  tryerr#25:
+    arm64.b.eq tryok#29
+  tryerr#30:
     arm64.leaRdata x0, __str_blob_54  ; "panic at FilePath.maxon:336: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -1127,7 +1139,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  tryok#24:
+  tryok#29:
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -1136,27 +1148,28 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
+  exitterminal:
     arm64.movRegReg x20, x21
-  __il_body#42:
+  __il_body#48:
     arm64.loadRegBaseDisp.word64 x21, [x20 + 8]
-  __il_cont#41:
+  __il_cont#47:
     arm64.cmp x21, 1
-    arm64.b.hi ifcont#10
+    arm64.b.hi ifcont#12
   tooShort:
     arm64.leaRdata x0, __str_rec_55  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-    arm64.b __il_cont#7
-  ifcont#10:
+    arm64.b __il_cont#8
+  ifcont#12:
     arm64.movRegReg x0, x20
     arm64.bl String.addressableBytes
     arm64.movRegReg x22, x0
-  __il_body#40:
+  __il_body#46:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
-    arm64.b whilehdr#11
-  scan#12:
+    arm64.b whilehdr#13
+  scan#14:
     arm64.sub x23, x0, 1
     arm64.movImm x16, 18446744073709551615
     arm64.eor x1, x0, x16
@@ -1167,13 +1180,13 @@ func @main {
     arm64.and x0, x0, x23
     arm64.orr x0, x1, x0
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#19
-  __rc_ok#18:
+    arm64.b.lt __rc_panic#24
+  __rc_ok#23:
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x23
     arm64.bl String.byteAtOrPanic
     arm64.cmp x0, 46
-    arm64.b.ne ifcont#17
+    arm64.b.ne ifcont#21
   isDot:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x23
@@ -1181,8 +1194,8 @@ func @main {
     arm64.bl __managed_slice
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#15
-  tryerr#16:
+    arm64.b.eq tryok#17
+  tryerr#18:
     arm64.leaRdata x0, __str_blob_56  ; "panic at FilePath.maxon:361: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -1193,40 +1206,43 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  tryok#15:
+  tryok#17:
     arm64.movRegReg x0, x21
     arm64.bl __managed_retain
     arm64.bl String.init
     arm64.movRegReg x23, x0
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
+  exitdrop#19:
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
+  exitdrop#20:
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
     arm64.movRegReg x21, x23
-    arm64.b __il_cont#7
-  ifcont#17:
+    arm64.b __il_cont#8
+  ifcont#21:
     arm64.movRegReg x0, x23
-  whilehdr#11:
+  whilehdr#13:
     arm64.cmp x0, 1
-    arm64.b.hi scan#12
-  whileexit#13:
+    arm64.b.hi scan#14
+  whileexit#15:
     arm64.leaRdata x0, __str_rec_55  ; ""
     arm64.bl __str_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x22
     arm64.bl __managed_decref
+  exitdrop#22:
     arm64.movRegReg x0, x20
     arm64.bl __str_decref
-  __il_cont#7:
+  __il_cont#8:
     arm64.leaRdata x1, __str_rec_32  ; ".txt"
     arm64.movRegReg x0, x21
     arm64.bl __str_eq
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x21
     arm64.bl __str_decref
-    arm64.cbz x20, ifcont#2
+    arm64.cbz x20, ifcont#3
   ok:
     arm64.movImm x20, 0
     arm64.movRegReg x0, x19
@@ -1239,7 +1255,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  ifcont#2:
+  ifcont#3:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
     arm64.bl __destruct_FilePath
@@ -1251,7 +1267,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  tryerr#6:
+  tryerr#7:
     arm64.leaRdata x0, __str_blob_44  ; "panic at FilePath.maxon:46: FilePath: invalid path\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -1262,7 +1278,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_panic#36:
+  __rc_panic#42:
     arm64.leaRdata x0, __str_blob_130  ; "panic at FilePath.maxon:318: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -1273,7 +1289,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_panic#38:
+  __rc_panic#44:
     arm64.leaRdata x0, __str_blob_131  ; "panic at FilePath.maxon:319: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -1284,7 +1300,7 @@ func @main {
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
     arm64.ret
-  __rc_panic#19:
+  __rc_panic#24:
     arm64.leaRdata x0, __str_blob_132  ; "panic at FilePath.maxon:359: Range check failed: value outside typealias 'BytePos'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0

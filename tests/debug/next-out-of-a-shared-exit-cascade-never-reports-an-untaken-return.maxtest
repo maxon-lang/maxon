@@ -1,0 +1,45 @@
+let SharedExitCascadeCaseLabel = "next-out-of-a-shared-exit-cascade-never-reports-an-untaken-return"
+let MeasureFunctionName = "measure"
+let MainFunctionName = "main"
+let NextsPastTheReturn = 4
+
+test 'next through the taken return walks out of the function without ever stopping on the return that did not run'
+	let staged = builtFixture(SharedExitCascadeCaseLabel, fixture: ExitCascadeFixtureName)
+	let untakenLine = anchorLine(staged, anchor: "untaken-return")
+	let takenLine = anchorLine(staged, anchor: "taken-return")
+	let startLine = anchorLine(staged, anchor: "before-the-taken-return")
+	let startTarget = lineTarget(startLine)
+	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {startTarget}", RunCommand, "{ClearCommand} {startTarget}"], rest: repeatedCommand(NextCommand, times: NextsPastTheReturn)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let stops = eventsOfKind(events, kind: StopEventName)
+
+	var walked = StringArray.create()
+
+	for stop in stops 'eachStop'
+		walked.push("{textOf(stop, node: stop.root, key: ReasonKey)} {textOf(stop, node: stop.root, key: FunctionKey)}:{numberOf(stop, node: stop.root, key: LineKey)}")
+	end 'eachStop'
+
+	try Expect.greaterThan(stops.count(), than: 1, message: "the breakpoint and at least one `{NextCommand}` are stops. The session stopped: {renderedRows(walked)}. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let hit = eventAt(stops, index: 0)
+	try Expect.equal(textOf(hit, node: hit.root, key: FunctionKey), expected: MeasureFunctionName, message: "the breakpoint stops in `{MeasureFunctionName}`. The session stopped: {renderedRows(walked)}. {said}")
+	try Expect.equal(numberOf(hit, node: hit.root, key: LineKey), expected: startLine as EventNumber, message: "the breakpoint stops on line {startLine}, the statement before the taken `return`. The session stopped: {renderedRows(walked)}. {said}")
+
+	var leftAt = AbsentEventIndex
+
+	for (iter, stop) in stops.withIterator() 'eachWalked'
+		if textOf(stop, node: stop.root, key: FunctionKey) != MeasureFunctionName 'leftTheFunction'
+			leftAt = iter.index() as EventNumber
+			break
+		end 'leftTheFunction'
+
+		try Expect.notEqual(numberOf(stop, node: stop.root, key: LineKey), expected: untakenLine as EventNumber, message: "stop {iter.index()} inside `{MeasureFunctionName}` reports line {untakenLine}, the `return` inside the `if` that never ran. The drops the taken `return` at line {takenLine} runs belong to that `return` or to the function's closing `end`, never to an exit control did not reach. The session stopped: {renderedRows(walked)}. {said}")
+	end 'eachWalked'
+
+	try Expect.notEqual(leftAt, expected: AbsentEventIndex, message: "{NextsPastTheReturn} `{NextCommand}`s from line {startLine} never left `{MeasureFunctionName}`. The session stopped: {renderedRows(walked)}. {said}")
+
+	let returned = eventAt(stops, index: leftAt as EventIndex)
+	try Expect.equal(textOf(returned, node: returned.root, key: FunctionKey), expected: MainFunctionName, message: "the first stop outside `{MeasureFunctionName}` is in its caller `{MainFunctionName}`. The session stopped: {renderedRows(walked)}. {said}")
+end 'next through the taken return walks out of the function without ever stopping on the return that did not run'

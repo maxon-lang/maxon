@@ -176,19 +176,19 @@ func @appendToken {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
-  __il_body#16:
+  __il_body#17:
     x64.movRegImm32 rax, 0
-  __il_body#20:
+  __il_body#22:
     x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
-  __il_cont#19:
+  __il_cont#21:
     x64.movRegReg rcx, rdx
     x64.movRegReg rdx, rax
     x64.movRegReg rax, rsi
     x64.callDirect __managed_slice
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#17
-  tryerr#18:
+    x64.jcc equal, tryok#18
+  tryerr#19:
     x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at String.maxon:149: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
     x64.callDirect mrt_panic
     x64.epilogue 32
@@ -198,13 +198,13 @@ func @appendToken {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#17:
+  tryok#18:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
-  __il_cont#15:
+  __il_cont#16:
     x64.loadRegBaseDisp.word64 r12, [r13 + 8]
     x64.movRegImm32 r14, 0
     x64.jmp forhdr
@@ -216,7 +216,7 @@ func @appendToken {
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegReg r14, rax
     x64.jcc aboveEqual, __im_slow
-  __im_load#13:
+  __im_load#14:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + r14*8 + 0]
     x64.jmp __im_loaded
@@ -227,7 +227,7 @@ func @appendToken {
     x64.loadRegBaseDisp.word64 rax, [r13 + 8]
     x64.cmpRegReg r14, rax
     x64.jcc aboveEqual, __im_slow
-  __im_load#14:
+  __im_load#15:
     x64.loadRegBaseDisp.word64 rax, [r13 + 0]
     x64.leaRegRegReg rax, rax, r14
     x64.loadRegBaseDisp.byte rax, [rax + 0]
@@ -256,7 +256,6 @@ func @appendToken {
     x64.callDirect __managed_push
     x64.movRegReg rcx, r13
     x64.callDirect __managed_decref
-    x64.movRegReg rax, r8
     x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
@@ -361,7 +360,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_subp_result_stdout
     x64.movRegReg rbx, r8
-  __il_body#11:
+  __il_body#15:
     x64.loadRegBaseDisp.word64 r14, [rbx + 8]
     x64.movRegImm32 r15, 0
     x64.jmp forhdr
@@ -370,8 +369,8 @@ func @main {
     x64.movRegReg rdx, r15
     x64.callDirect __managed_byte_at
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#17
-  tryok#16:
+    x64.jcc notEqual, tryerr#21
+  tryok#20:
     x64.cmpRegImm32 r8, 128
     x64.movRegImm32 rax, 1
     x64.jcc greaterEqual, scmerge
@@ -383,7 +382,7 @@ func @main {
     x64.jcc equal, forstep
   notSingleByte:
     x64.movRegImm32 rdx, 0
-    x64.jmp __il_cont#10
+    x64.jmp __il_cont#14
   forstep:
     x64.leaRegRegImm32 r15, r15, 1
   forhdr:
@@ -391,17 +390,17 @@ func @main {
     x64.jcc less, scan
   forexit:
     x64.movRegImm32 rdx, 1
-  __il_cont#10:
+  __il_cont#14:
     x64.movRegReg rcx, rbx
     x64.callDirect __str_of_buffer
     x64.movRegReg r14, r8
     x64.storeSlotReg slot2, r14
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
-  __il_body#23:
+  __il_body#27:
     x64.loadRegBaseDisp.word64 rbx, [r14 + 8]
     x64.storeSlotReg slot3, rbx
-  __il_cont#22:
+  __il_cont#26:
     x64.leaRegRdata rdx, [rip + __str_rec_15]  ; "hi"
     x64.movRegReg rcx, r14
     x64.callDirect String.startsWith
@@ -555,10 +554,10 @@ func @main {
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot10
     x64.callDirect __mm_decref
-  __il_body#7:
+  __il_body#10:
     x64.loadRegSlot rcx, slot18
     x64.callDirect __write_stdout
-  __il_cont#6:
+  __il_cont#9:
     x64.loadRegSlot rcx, slot18
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot5
@@ -575,10 +574,13 @@ func @main {
   __rc_ok:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
+  exitdrop#4:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __managed_decref
+  exitdrop#5:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
+  exitterminal:
     x64.loadRegSlot r8, slot3
     x64.epilogue 328
     x64.popReg r15
@@ -600,7 +602,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#17:
+  tryerr#21:
     x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at String.maxon:1122: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -1193,19 +1195,19 @@ func @appendToken {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-  __il_body#16:
+  __il_body#17:
     arm64.movImm x2, 0
-  __il_body#20:
+  __il_body#22:
     arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
-  __il_cont#19:
+  __il_cont#21:
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.movRegReg x2, x3
     arm64.bl __managed_slice
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#17
-  tryerr#18:
+    arm64.b.eq tryok#18
+  tryerr#19:
     arm64.leaRdata x0, __str_blob_22  ; "panic at String.maxon:149: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot0
@@ -1214,13 +1216,13 @@ func @appendToken {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok#17:
+  tryok#18:
     arm64.movRegReg x0, x20
     arm64.bl __managed_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-  __il_cont#15:
+  __il_cont#16:
     arm64.loadRegBaseDisp.word64 x20, [x21 + 8]
     arm64.movImm x22, 0
     arm64.b forhdr
@@ -1232,7 +1234,7 @@ func @appendToken {
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x22, x0
     arm64.b.hs __im_slow
-  __im_load#13:
+  __im_load#14:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x22*8 + 0]
     arm64.b __im_loaded
@@ -1243,7 +1245,7 @@ func @appendToken {
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x22, x0
     arm64.b.hs __im_slow
-  __im_load#14:
+  __im_load#15:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, x22
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
@@ -1272,7 +1274,6 @@ func @appendToken {
     arm64.bl __managed_push
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
-    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -1372,17 +1373,17 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __gt_subp_result_stdout
     arm64.movRegReg x19, x0
-  __il_body#12:
+  __il_body#16:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
     arm64.movImm x23, 0
-    arm64.b forhdr#13
+    arm64.b forhdr#17
   scan:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
     arm64.bl __managed_byte_at
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#18
-  tryok#17:
+    arm64.b.ne tryerr#22
+  tryok#21:
     arm64.cmp x0, 128
     arm64.movImm x1, 1
     arm64.b.ge scmerge
@@ -1391,71 +1392,71 @@ func @main {
     arm64.cset x0, eq
     arm64.movRegReg x1, x0
   scmerge:
-    arm64.cbz x1, forstep#15
+    arm64.cbz x1, forstep#19
   notSingleByte:
     arm64.movImm x1, 0
-    arm64.b __il_cont#11
-  forstep#15:
+    arm64.b __il_cont#15
+  forstep#19:
     arm64.add x23, x23, 1
-  forhdr#13:
+  forhdr#17:
     arm64.cmp x23, x22
     arm64.b.lt scan
-  forexit#16:
+  forexit#20:
     arm64.movImm x1, 1
-  __il_cont#11:
+  __il_cont#15:
     arm64.movRegReg x0, x19
     arm64.bl __str_of_buffer
     arm64.movRegReg x22, x0
     arm64.storeSlotReg slot2, x22
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-  __il_body#43:
+  __il_body#47:
     arm64.loadRegBaseDisp.word64 x19, [x22 + 8]
     arm64.storeSlotReg slot3, x19
-  __il_cont#42:
+  __il_cont#46:
     arm64.leaRdata x23, __str_rec_15  ; "hi"
-  __il_body#46:
+  __il_body#50:
     arm64.loadRegBaseDisp.word64 x24, [x23 + 8]
-  __il_body#47:
+  __il_body#51:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-  __il_cont#44:
+  __il_cont#48:
     arm64.cmp x24, x0
-    arm64.b.ls __il_body#27
+    arm64.b.ls __il_body#31
   tooLong:
     arm64.movImm x22, 0
-    arm64.b __il_cont#8
-  __il_body#27:
+    arm64.b __il_cont#11
+  __il_body#31:
     arm64.movImm x25, 0
-    arm64.b forhdr#28
-  __rc_ok#38:
+    arm64.b forhdr#32
+  __rc_ok#42:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x25
     arm64.bl String.byteAt
     arm64.movRegReg x26, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#33
-  __rc_ok#40:
+    arm64.b.ne tryerr#37
+  __rc_ok#44:
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x25
     arm64.bl String.byteAt
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#35
-  tryok#34:
+    arm64.b.ne tryerr#39
+  tryok#38:
     arm64.cmp x26, x0
-    arm64.b.eq forstep#30
+    arm64.b.eq forstep#34
   byte_check:
     arm64.movImm x0, 0
-    arm64.b __il_cont#26
-  forstep#30:
+    arm64.b __il_cont#30
+  forstep#34:
     arm64.add x25, x25, 1
-  forhdr#28:
+  forhdr#32:
     arm64.cmp x25, x24
-    arm64.b.lt __rc_ok#38
-  forexit#31:
+    arm64.b.lt __rc_ok#42
+  forexit#35:
     arm64.movImm x0, 1
-  __il_cont#26:
+  __il_cont#30:
     arm64.movRegReg x22, x0
-  __il_cont#8:
+  __il_cont#11:
     arm64.leaRdata x0, __str_rec_16  ; "timerpolls="
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
@@ -1589,10 +1590,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-  __il_body#7:
+  __il_body#10:
     arm64.loadRegSlot x0, slot7
     arm64.bl __write_stdout
-  __il_cont#6:
+  __il_cont#9:
     arm64.loadRegSlot x0, slot7
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot5
@@ -1606,13 +1607,16 @@ func @main {
     arm64.loadRegSlot x0, slot3
     arm64.cmp x0, 255
     arm64.b.gt __rc_panic
-  __rc_ok#3:
+  __rc_ok#6:
     arm64.loadRegSlot x0, slot2
     arm64.bl __str_decref
+  exitdrop#4:
     arm64.loadRegSlot x0, slot1
     arm64.bl __managed_decref
+  exitdrop#5:
     arm64.loadRegSlot x0, slot0
     arm64.bl __managed_decref
+  exitterminal:
     arm64.loadRegSlot x0, slot3
     arm64.loadRegSlot x19, slot17
     arm64.loadRegSlot x20, slot18
@@ -1642,7 +1646,7 @@ func @main {
     arm64.loadRegSlot x28, slot26
     arm64.epilogue 288 record@48
     arm64.ret
-  tryerr#18:
+  tryerr#22:
     arm64.leaRdata x0, __str_blob_25  ; "panic at String.maxon:1122: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -1658,7 +1662,7 @@ func @main {
     arm64.loadRegSlot x28, slot26
     arm64.epilogue 288 record@48
     arm64.ret
-  tryerr#33:
+  tryerr#37:
     arm64.leaRdata x0, __str_blob_23  ; "panic at String.maxon:1007: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -1674,7 +1678,7 @@ func @main {
     arm64.loadRegSlot x28, slot26
     arm64.epilogue 288 record@48
     arm64.ret
-  tryerr#35:
+  tryerr#39:
     arm64.leaRdata x0, __str_blob_24  ; "panic at String.maxon:1008: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -2286,19 +2290,19 @@ func @appendToken {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
-  __il_body#16:
+  __il_body#17:
     arm64.movImm x2, 0
-  __il_body#20:
+  __il_body#22:
     arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
-  __il_cont#19:
+  __il_cont#21:
     arm64.movRegReg x0, x1
     arm64.movRegReg x1, x2
     arm64.movRegReg x2, x3
     arm64.bl __managed_slice
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#17
-  tryerr#18:
+    arm64.b.eq tryok#18
+  tryerr#19:
     arm64.leaRdata x0, __str_blob_22  ; "panic at String.maxon:149: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
     arm64.bl mrt_panic
     arm64.loadRegSlot x19, slot0
@@ -2307,13 +2311,13 @@ func @appendToken {
     arm64.loadRegSlot x22, slot3
     arm64.epilogue 48
     arm64.ret
-  tryok#17:
+  tryok#18:
     arm64.movRegReg x0, x20
     arm64.bl __managed_retain
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x20
     arm64.bl __managed_decref
-  __il_cont#15:
+  __il_cont#16:
     arm64.loadRegBaseDisp.word64 x20, [x21 + 8]
     arm64.movImm x22, 0
     arm64.b forhdr
@@ -2325,7 +2329,7 @@ func @appendToken {
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x22, x0
     arm64.b.hs __im_slow
-  __im_load#13:
+  __im_load#14:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.loadRegBaseIndexScale.word64 x0, [x0 + x22*8 + 0]
     arm64.b __im_loaded
@@ -2336,7 +2340,7 @@ func @appendToken {
     arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
     arm64.cmp x22, x0
     arm64.b.hs __im_slow
-  __im_load#14:
+  __im_load#15:
     arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
     arm64.add x0, x0, x22
     arm64.loadRegBaseDisp.byte x0, [x0 + 0]
@@ -2365,7 +2369,6 @@ func @appendToken {
     arm64.bl __managed_push
     arm64.movRegReg x0, x21
     arm64.bl __managed_decref
-    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -2465,17 +2468,17 @@ func @main {
     arm64.movRegReg x0, x19
     arm64.bl __gt_subp_result_stdout
     arm64.movRegReg x19, x0
-  __il_body#12:
+  __il_body#16:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
     arm64.movImm x23, 0
-    arm64.b forhdr#13
+    arm64.b forhdr#17
   scan:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
     arm64.bl __managed_byte_at
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#18
-  tryok#17:
+    arm64.b.ne tryerr#22
+  tryok#21:
     arm64.cmp x0, 128
     arm64.movImm x1, 1
     arm64.b.ge scmerge
@@ -2484,71 +2487,71 @@ func @main {
     arm64.cset x0, eq
     arm64.movRegReg x1, x0
   scmerge:
-    arm64.cbz x1, forstep#15
+    arm64.cbz x1, forstep#19
   notSingleByte:
     arm64.movImm x1, 0
-    arm64.b __il_cont#11
-  forstep#15:
+    arm64.b __il_cont#15
+  forstep#19:
     arm64.add x23, x23, 1
-  forhdr#13:
+  forhdr#17:
     arm64.cmp x23, x22
     arm64.b.lt scan
-  forexit#16:
+  forexit#20:
     arm64.movImm x1, 1
-  __il_cont#11:
+  __il_cont#15:
     arm64.movRegReg x0, x19
     arm64.bl __str_of_buffer
     arm64.movRegReg x22, x0
     arm64.storeSlotReg slot2, x22
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
-  __il_body#43:
+  __il_body#47:
     arm64.loadRegBaseDisp.word64 x19, [x22 + 8]
     arm64.storeSlotReg slot3, x19
-  __il_cont#42:
+  __il_cont#46:
     arm64.leaRdata x23, __str_rec_15  ; "hi"
-  __il_body#46:
+  __il_body#50:
     arm64.loadRegBaseDisp.word64 x24, [x23 + 8]
-  __il_body#47:
+  __il_body#51:
     arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-  __il_cont#44:
+  __il_cont#48:
     arm64.cmp x24, x0
-    arm64.b.ls __il_body#27
+    arm64.b.ls __il_body#31
   tooLong:
     arm64.movImm x22, 0
-    arm64.b __il_cont#8
-  __il_body#27:
+    arm64.b __il_cont#11
+  __il_body#31:
     arm64.movImm x25, 0
-    arm64.b forhdr#28
-  __rc_ok#38:
+    arm64.b forhdr#32
+  __rc_ok#42:
     arm64.movRegReg x0, x22
     arm64.movRegReg x1, x25
     arm64.bl String.byteAt
     arm64.movRegReg x26, x0
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#33
-  __rc_ok#40:
+    arm64.b.ne tryerr#37
+  __rc_ok#44:
     arm64.movRegReg x0, x23
     arm64.movRegReg x1, x25
     arm64.bl String.byteAt
     arm64.cmp x9, 0
-    arm64.b.ne tryerr#35
-  tryok#34:
+    arm64.b.ne tryerr#39
+  tryok#38:
     arm64.cmp x26, x0
-    arm64.b.eq forstep#30
+    arm64.b.eq forstep#34
   byte_check:
     arm64.movImm x0, 0
-    arm64.b __il_cont#26
-  forstep#30:
+    arm64.b __il_cont#30
+  forstep#34:
     arm64.add x25, x25, 1
-  forhdr#28:
+  forhdr#32:
     arm64.cmp x25, x24
-    arm64.b.lt __rc_ok#38
-  forexit#31:
+    arm64.b.lt __rc_ok#42
+  forexit#35:
     arm64.movImm x0, 1
-  __il_cont#26:
+  __il_cont#30:
     arm64.movRegReg x22, x0
-  __il_cont#8:
+  __il_cont#11:
     arm64.leaRdata x0, __str_rec_16  ; "timerpolls="
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
@@ -2682,10 +2685,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-  __il_body#7:
+  __il_body#10:
     arm64.loadRegSlot x0, slot7
     arm64.bl __write_stdout
-  __il_cont#6:
+  __il_cont#9:
     arm64.loadRegSlot x0, slot7
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot5
@@ -2699,13 +2702,16 @@ func @main {
     arm64.loadRegSlot x0, slot3
     arm64.cmp x0, 255
     arm64.b.gt __rc_panic
-  __rc_ok#3:
+  __rc_ok#6:
     arm64.loadRegSlot x0, slot2
     arm64.bl __str_decref
+  exitdrop#4:
     arm64.loadRegSlot x0, slot1
     arm64.bl __managed_decref
+  exitdrop#5:
     arm64.loadRegSlot x0, slot0
     arm64.bl __managed_decref
+  exitterminal:
     arm64.loadRegSlot x0, slot3
     arm64.loadRegSlot x19, slot17
     arm64.loadRegSlot x20, slot18
@@ -2735,7 +2741,7 @@ func @main {
     arm64.loadRegSlot x28, slot26
     arm64.epilogue 288 record@48
     arm64.ret
-  tryerr#18:
+  tryerr#22:
     arm64.leaRdata x0, __str_blob_25  ; "panic at String.maxon:1122: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -2751,7 +2757,7 @@ func @main {
     arm64.loadRegSlot x28, slot26
     arm64.epilogue 288 record@48
     arm64.ret
-  tryerr#33:
+  tryerr#37:
     arm64.leaRdata x0, __str_blob_23  ; "panic at String.maxon:1007: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
@@ -2767,7 +2773,7 @@ func @main {
     arm64.loadRegSlot x28, slot26
     arm64.epilogue 288 record@48
     arm64.ret
-  tryerr#35:
+  tryerr#39:
     arm64.leaRdata x0, __str_blob_24  ; "panic at String.maxon:1008: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0

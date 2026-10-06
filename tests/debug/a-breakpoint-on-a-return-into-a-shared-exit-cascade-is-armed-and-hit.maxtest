@@ -1,0 +1,29 @@
+let ReturnIntoCascadeCaseLabel = "a-breakpoint-on-a-return-into-a-shared-exit-cascade-is-armed-and-hit"
+let MeasureFunctionName = "measure"
+let CallsOfMeasure = 2
+
+test 'a breakpoint on a return that branches into the shared exit cascade arms at code and stops on every pass'
+	let staged = builtFixture(ReturnIntoCascadeCaseLabel, fixture: ExitCascadeFixtureName)
+	let takenLine = anchorLine(staged, anchor: "taken-return")
+	let commands = debugCommandLine(["{BreakCommand} {lineTarget(takenLine)}", RunCommand, ContinueCommand, ContinueCommand])
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+	let answers = eventsOfKind(events, kind: BreakpointEventName)
+
+	try Expect.equal(answers.count(), expected: 1, message: "`{BreakCommand} {lineTarget(takenLine)}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	let armed = eventAt(answers, index: 0)
+	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the `return` on line {takenLine} runs on every call of `{MeasureFunctionName}`, so its line has code to arm; `{NoCodeAction}` means its drops and its branch into the shared cascade were all attributed to another line. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	try Expect.equal(stops.count(), expected: CallsOfMeasure, message: "`{MeasureFunctionName}` is called {CallsOfMeasure} times and takes the `return` on line {takenLine} each time, so the breakpoint stops {CallsOfMeasure} times. It printed: {renderedRows(eventKinds(events))}. {said}")
+
+	for (iter, stop) in stops.withIterator() 'eachStop'
+		try Expect.equal(textOf(stop, node: stop.root, key: ReasonKey), expected: BreakpointStopReason, message: "stop {iter.index()} is the breakpoint's. {said}")
+		try Expect.equal(textOf(stop, node: stop.root, key: FunctionKey), expected: MeasureFunctionName, message: "stop {iter.index()} is in `{MeasureFunctionName}`. {said}")
+		try Expect.equal(numberOf(stop, node: stop.root, key: LineKey), expected: takenLine as EventNumber, message: "stop {iter.index()} reports the line the breakpoint was set on. {said}")
+	end 'eachStop'
+
+	try Expect.equal(eventsOfKind(events, kind: ExitEventName).count(), expected: 1, message: "the last `{ContinueCommand}` runs the program to its exit. It printed: {renderedRows(eventKinds(events))}. {said}")
+end 'a breakpoint on a return that branches into the shared exit cascade arms at code and stops on every pass'

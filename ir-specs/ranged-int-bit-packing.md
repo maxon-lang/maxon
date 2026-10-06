@@ -86,7 +86,7 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
     x64.jmp whilehdr
-  __rc_ok#9:
+  __rc_ok#10:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
@@ -102,7 +102,7 @@ func @main {
     x64.leaRegRegImm32 r13, r13, 1
   whilehdr:
     x64.cmpRegImm32 r13, 4
-    x64.jcc less, __rc_ok#9
+    x64.jcc less, __rc_ok#10
   whileexit:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -112,7 +112,7 @@ func @main {
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
-  __rc_ok#11:
+  __rc_ok#12:
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
@@ -182,7 +182,7 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
     x64.jmp whilehdr
-  __rc_ok#9:
+  __rc_ok#10:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
@@ -198,7 +198,7 @@ func @main {
     x64.leaRegRegImm32 r13, r13, 1
   whilehdr:
     x64.cmpRegImm32 r13, 4
-    x64.jcc less, __rc_ok#9
+    x64.jcc less, __rc_ok#10
   whileexit:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -207,7 +207,7 @@ func @main {
   __rc_chk:
     x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
-  __rc_ok#11:
+  __rc_ok#12:
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
@@ -272,7 +272,7 @@ func @main {
     arm64.movImm x20, 0
     arm64.movImm x21, 0
     arm64.b whilehdr
-  __rc_ok#9:
+  __rc_ok#10:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
@@ -285,7 +285,7 @@ func @main {
     arm64.add x21, x21, 1
   whilehdr:
     arm64.cmp x21, 4
-    arm64.b.lt __rc_ok#9
+    arm64.b.lt __rc_ok#10
   whileexit:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -294,7 +294,7 @@ func @main {
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#11:
+  __rc_ok#12:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -359,7 +359,7 @@ func @main {
     arm64.movImm x20, 0
     arm64.movImm x21, 0
     arm64.b whilehdr
-  __rc_ok#9:
+  __rc_ok#10:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
@@ -372,7 +372,7 @@ func @main {
     arm64.add x21, x21, 1
   whilehdr:
     arm64.cmp x21, 4
-    arm64.b.lt __rc_ok#9
+    arm64.b.lt __rc_ok#10
   whileexit:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
@@ -381,7 +381,7 @@ func @main {
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#11:
+  __rc_ok#12:
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -468,36 +468,36 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#3
-  tryerr#4:
+    x64.jcc equal, tryok#4
+  tryerr#5:
     x64.movRegImm32 r12, 0
-    x64.jmp trycont#5
-  tryok#3:
+    x64.jmp trycont#6
+  tryok#4:
     x64.movRegReg r12, r8
-  trycont#5:
+  trycont#6:
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#6
-  tryerr#7:
+    x64.jcc equal, tryok#7
+  tryerr#8:
     x64.movRegImm32 rax, 0
-    x64.jmp trycont#8
-  tryok#6:
+    x64.jmp trycont#9
+  tryok#7:
     x64.movRegReg rax, r8
-  trycont#8:
+  trycont#9:
     x64.leaRegRegReg r12, r12, rax
     x64.movRegImm32 rdx, 4
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#9
-  tryerr#10:
+    x64.jcc equal, tryok#10
+  tryerr#11:
     x64.movRegImm32 rax, 0
-    x64.jmp trycont#11
-  tryok#9:
+    x64.jmp trycont#12
+  tryok#10:
     x64.movRegReg rax, r8
-  trycont#11:
+  trycont#12:
     x64.leaRegRegReg r12, r12, rax
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
@@ -574,36 +574,36 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#3
-  tryerr#4:
+    x64.jcc equal, tryok#4
+  tryerr#5:
     x64.movRegImm32 r12, 0
-    x64.jmp trycont#5
-  tryok#3:
+    x64.jmp trycont#6
+  tryok#4:
     x64.movRegReg r12, r8
-  trycont#5:
+  trycont#6:
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#6
-  tryerr#7:
+    x64.jcc equal, tryok#7
+  tryerr#8:
     x64.movRegImm32 rax, 0
-    x64.jmp trycont#8
-  tryok#6:
+    x64.jmp trycont#9
+  tryok#7:
     x64.movRegReg rax, r8
-  trycont#8:
+  trycont#9:
     x64.leaRegRegReg r12, r12, rax
     x64.movRegImm32 rdx, 4
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#9
-  tryerr#10:
+    x64.jcc equal, tryok#10
+  tryerr#11:
     x64.movRegImm32 rax, 0
-    x64.jmp trycont#11
-  tryok#9:
+    x64.jmp trycont#12
+  tryok#10:
     x64.movRegReg rax, r8
-  trycont#11:
+  trycont#12:
     x64.leaRegRegReg r12, r12, rax
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
@@ -675,29 +675,29 @@ func @main {
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.eq tryok
-  tryerr#4:
+  tryerr#5:
     arm64.movImm x20, 0
-    arm64.b trycont#5
+    arm64.b trycont#6
   tryok:
     arm64.movRegReg x20, x0
-  trycont#5:
+  trycont#6:
     arm64.movImm x1, 3
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.eq trycont#8
-  tryerr#7:
+    arm64.b.eq trycont#9
+  tryerr#8:
     arm64.movImm x0, 0
-  trycont#8:
+  trycont#9:
     arm64.add x20, x20, x0
     arm64.movImm x1, 4
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.eq trycont#11
-  tryerr#10:
+    arm64.b.eq trycont#12
+  tryerr#11:
     arm64.movImm x0, 0
-  trycont#11:
+  trycont#12:
     arm64.add x20, x20, x0
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
@@ -769,29 +769,29 @@ func @main {
     arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.b.eq tryok
-  tryerr#4:
+  tryerr#5:
     arm64.movImm x20, 0
-    arm64.b trycont#5
+    arm64.b trycont#6
   tryok:
     arm64.movRegReg x20, x0
-  trycont#5:
+  trycont#6:
     arm64.movImm x1, 3
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.eq trycont#8
-  tryerr#7:
+    arm64.b.eq trycont#9
+  tryerr#8:
     arm64.movImm x0, 0
-  trycont#8:
+  trycont#9:
     arm64.add x20, x20, x0
     arm64.movImm x1, 4
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.eq trycont#11
-  tryerr#10:
+    arm64.b.eq trycont#12
+  tryerr#11:
     arm64.movImm x0, 0
-  trycont#11:
+  trycont#12:
     arm64.add x20, x20, x0
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic

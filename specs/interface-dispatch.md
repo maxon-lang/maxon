@@ -1107,6 +1107,71 @@ end 'main'
 ```
 
 
+<!-- test: interface-return-of-two-conformers-beside-an-owned-local -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet() returns String
+end 'Greeter'
+
+type English implements Greeter
+	let name as String
+
+	function greet() returns String
+		return "hello {name}"
+	end 'greet'
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'English'
+
+type French implements Greeter
+	let name as String
+
+	function greet() returns String
+		return "bonjour {name}"
+	end 'greet'
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'French'
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function pick(formal bool, who String) returns Greeter
+	let note = "picked {who}"
+
+	if formal 'formal'
+		return French.create(who)
+	end 'formal'
+
+	print("{note}\n")
+	return English.create(who)
+end 'pick'
+
+function main() returns ExitCode
+	let a = pick(opaque(1) > 0, who: "ann{opaque(1)}")
+	let b = pick(opaque(0) > 0, who: "bob{opaque(2)}")
+	print("{a.greet()}\n")
+	print("{b.greet()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+picked bob2
+bonjour ann1
+hello bob2
+```
+
+
 <!-- test: error.interface-returning-function-cannot-throw -->
 ⛔ **THE ONE SECONDARY REGISTER, CONTESTED.** A throwing function already spends it on the error flag, so
 an interface return has nowhere left to put the witness. Admitted, it would emit the throwing return
@@ -1180,6 +1245,43 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/interface-dispatch/error.interface-return-of-a-nonconformer.maxon:17:2: return type mismatch in 'make': type 'Gadget' does not implement interface 'Producer'
+```
+
+
+<!-- test: error.interface-return-of-a-nonconformer-at-two-returns-beside-an-owned-local -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Gadget
+	let value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Gadget'
+
+function make(seed Integer) returns Producer
+	let label = "seed {seed}"
+
+	if seed > 0 'positive'
+		return Gadget.create(seed)
+	end 'positive'
+
+	print("{label}\n")
+	return Gadget.create(0)
+end 'make'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/interface-dispatch/error.interface-return-of-a-nonconformer-at-two-returns-beside-an-owned-local.maxon:20:3: return type mismatch in 'make': type 'Gadget' does not implement interface 'Producer'
+error E3005: specs/interface-dispatch/error.interface-return-of-a-nonconformer-at-two-returns-beside-an-owned-local.maxon:24:2: return type mismatch in 'make': type 'Gadget' does not implement interface 'Producer'
 ```
 
 
@@ -3550,4 +3652,78 @@ end 'main'
 ```
 ```exitcode
 10
+```
+
+
+<!-- test: interface-return-of-two-conformers-at-three-depths-of-owned-locals -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Herald
+	function announce() returns String
+end 'Herald'
+
+type Welsh implements Herald
+	let name as String
+
+	function announce() returns String
+		return "shwmae {name}"
+	end 'announce'
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Welsh'
+
+type Dutch implements Herald
+	let name as String
+
+	function announce() returns String
+		return "hallo {name}"
+	end 'announce'
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Dutch'
+
+function opaque(n Integer) returns Integer
+	return n
+end 'opaque'
+
+function choose(n Integer) returns Herald
+	let opening = "opening {n}"
+	let middle = "middle {n}"
+
+	if n == 1 'one'
+		return Welsh.create(opening)
+	end 'one'
+
+	let closing = "closing {n}"
+
+	if n == 2 'two'
+		return Dutch.create(middle)
+	end 'two'
+
+	print("{opening} {middle} {closing}\n")
+	return Welsh.create(closing)
+end 'choose'
+
+function main() returns ExitCode
+	for n in 1 upto 4 'each'
+		let herald = choose(opaque(n))
+		print("{herald.announce()}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+shwmae opening 1
+hallo middle 2
+opening 3 middle 3 closing 3
+shwmae closing 3
 ```

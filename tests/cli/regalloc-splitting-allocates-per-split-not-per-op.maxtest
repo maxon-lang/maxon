@@ -15,18 +15,6 @@ let LargeAppDirName = "large"
 let SmallRepetitions = 8 as BlockRepetition
 let LargeRepetitions = 64 as BlockRepetition
 
-let MainFileName = "main.maxon"
-let MetricsFileSuffix = "-metrics.tsv"
-let MetricsFlagPrefix = "--metrics="
-
-let MetricsRowSeparator = "\n"
-let MetricsFieldSeparator = "\t"
-let MetricsCommentPrefix = "#"
-let MetricsFieldCount = 12
-let MetricsKindField = 0
-let MetricsNameField = 1
-let MetricsAllocsField = 3
-let MetricsRegAllocKind = "regalloc"
 let SplittingPhaseName = "splitting"
 
 let StatementsPerBlock = 10 as StatementTally
@@ -51,46 +39,9 @@ function fixtureStatements(repetitions BlockRepetition) returns StatementTally
 	return FixtureSetupStatements + StatementsPerBlock * repetitions
 end 'fixtureStatements'
 
-function splittingAllocationsIn(table String) returns ReportedTally
-	for row in table.split(MetricsRowSeparator) 'eachRow'
-		let line = row.trimEnd()
-
-		if line.isEmpty() or line.startsWith(MetricsCommentPrefix) 'notARow'
-			continue
-		end 'notARow'
-
-		let fields = line.split(MetricsFieldSeparator)
-
-		if fields.count() != MetricsFieldCount 'malformed'
-			panic("regalloc-splitting: the gate could not run - a metrics row carries {fields.count()} fields rather than {MetricsFieldCount}: {line}")
-		end 'malformed'
-
-		let kind = try fields.get(MetricsKindField) otherwise panic("regalloc-splitting: kind field OOB after the field count was checked")
-		let name = try fields.get(MetricsNameField) otherwise panic("regalloc-splitting: name field OOB after the field count was checked")
-
-		if kind != MetricsRegAllocKind or name != SplittingPhaseName 'namesAnother'
-			continue
-		end 'namesAnother'
-
-		let allocs = try fields.get(MetricsAllocsField) otherwise panic("regalloc-splitting: allocs field OOB after the field count was checked")
-		return try reportedTally(allocs) otherwise panic("regalloc-splitting: the gate could not run - the allocs column of the {SplittingPhaseName} row states no count: {line}")
-	end 'eachRow'
-
-	panic("regalloc-splitting: the gate could not run - the metrics table carries no `{MetricsRegAllocKind}` row named `{SplittingPhaseName}`, so the pressure sweep's allocations were never measured. The table was: {table}")
-end 'splittingAllocationsIn'
-
 function splittingAllocationsFor(dir FilePath, appDirName String, repetitions BlockRepetition) returns ReportedTally throws TestFailure
-	let app = createdStagedDirectory(dir.join(appDirName))
-
-	try File.writeText(app.join(MainFileName), content: fixtureSource(repetitions)) otherwise panic("regalloc-splitting: the gate could not run - could not write the {repetitions}-block fixture source")
-
-	let metricsFileName = "{appDirName}{MetricsFileSuffix}"
-	let built = runDriver([BuildCommandWord, appDirName, "{MetricsFlagPrefix}{metricsFileName}"], workingDirectory: dir)
-
-	try Expect.equal(built.exitCode(), expected: 0, message: "the {repetitions}-block fixture did not build, so the sweep was never measured over it. It wrote to stderr: {built.stderr}")
-
-	let table = try File.readText(dir.join(metricsFileName)) otherwise panic("regalloc-splitting: the gate could not run - the {repetitions}-block build wrote no metrics table at {metricsFileName}")
-	return splittingAllocationsIn(table)
+	let table = try stagedProgramMetrics(dir, name: appDirName, source: fixtureSource(repetitions), described: "the {repetitions}-block fixture")
+	return metricsCell(table, kind: MetricsRegAllocKind, name: SplittingPhaseName, field: MetricsAllocsField)
 end 'splittingAllocationsFor'
 
 test 'the pressure sweep allocates per function rather than per op'

@@ -198,6 +198,9 @@ tests/
     a-leaf-folded-away-has-no-code.maxtest        a leaf whose every call folds to a constant has no code to arm, and its caller's line does
     break-on-a-line-that-is-only-an-inlined-call-stops.maxtest      a line whose code is an inlined body arms at the body's entry and stops at the call line; `next` runs over the body, `step` enters it
     break-on-a-narrowing-cast-line-stops.maxtest      a cast's range check is its own line's code: the line arms, and a walk from the line before stops on it
+    a-breakpoint-on-a-return-into-a-shared-exit-cascade-is-armed-and-hit.maxtest      a `return` that branches into the shared exit cascade is its own line's code: the line arms and stops on every pass
+    a-breakpoint-on-a-return-whose-only-drop-was-promoted-away-is-armed-and-hit.maxtest      a `return` whose only drop was a stack-promoted record's still has code: the line arms and stops on the call that takes it
+    a-breakpoint-on-a-value-return-whose-only-drop-was-promoted-away-is-armed-and-hit.maxtest      the same for a `return` that carries a value: the line arms and stops on the call that takes it
     step-into-an-inlined-call-that-starts-its-line-enters-it.maxtest      a line whose first code is an inlined call stops before the call, and `step` enters it
     a-line-led-by-an-inlined-call-stops-once-per-pass.maxtest      a kept breakpoint on a loop line led by an inlined call stops once per pass, at the call's entry
     a-line-whose-blocks-split-stops-once-per-pass.maxtest      a line the compiler splits into blocks stops once each time control passes through it
@@ -210,6 +213,7 @@ tests/
     a-stop-inside-the-prologue-shows-the-caller.maxtest      a backtrace from between `push rbp` and `mov rbp, rsp` names the caller one frame down
     a-stop-inside-a-guarded-prologue-shows-the-caller.maxtest      the same stop in a green-thread function, whose prologue starts past its stack guard
     next-from-inside-a-prologue-stays-in-the-frame.maxtest      a `next` from inside a prologue lands on the first positioned row of that same frame
+    next-out-of-a-shared-exit-cascade-never-reports-an-untaken-return.maxtest      a walk through a `return` into the shared exit cascade never stops on the line of a `return` that did not run
     finish-from-inside-a-prologue-returns-to-the-caller.maxtest      a `finish` from inside a prologue returns to the caller
     next-over-a-recursive-call-returns-to-its-own-frame.maxtest      a `next` over a recursive call lands in the frame it was issued from
     next-over-a-call-another-thread-returns-through.maxtest      a `next` over a call other green threads also return through lands on the thread that issued it
@@ -318,7 +322,7 @@ tests/
     coverage-byte-identical.maxtest         instrumentation reaches the flagged build and no other
     fixtures/states/main.maxon.fixture      stored name only - see rule 1
   cli/
-    CliHarness.maxon                        the shared half: the spawn, a staged copy of the compiler, writing a staged file, reading a roster off a listing, and reading and forging library cache lines and entries
+    CliHarness.maxon                        the shared half: the spawn, a staged copy of the compiler, writing a staged file, reading a roster off a listing, reading and forging library cache lines and entries, reading a cell of a build's `--metrics=` table, and the error-path drop family
     no-arguments.maxtest                    `maxon` alone answers, SHORT, sorted, and exits 0
     help-reference.maxtest                  the reference leads with the short list, then what it hides
     help-per-command.maxtest                every documented command answers `help <command>` for itself
@@ -375,6 +379,10 @@ tests/
     library-cache-an-entry-holding-an-out-of-range-number-is-rejected.maxtest    an entry whose checksum holds and whose number is out of range is rejected, and the build is the cold one
     a-record-layout-guard-fails-the-compile-when-the-record-grows.maxtest        a record guarded by its byte size stops compiling when a field is added without regenerating the guard
     a-warm-trivial-build-adopts-one-front-end-worker.maxtest      a warm build of a one-file program adopts at most one front-end worker
+    regalloc-splitting-allocates-per-split-not-per-op.maxtest     a larger function adds fewer `splitting` allocations to the register allocator than it adds statements
+    error-path-drops-grow-linearly-with-propagating-trys.maxtest   a function of 16, 32 and 64 owned bindings, each bound by a propagating `try`, compiles to code that grows linearly in the bindings
+    error-path-drops-grow-linearly-with-throws.maxtest             the same with a guarded `throw` after each binding
+    error-path-drops-grow-linearly-with-early-returns.maxtest      the same with a guarded early `return` after each binding
   profile/
     ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
     profile-hot-ordering.maxtest            the busier function ranks first in every section

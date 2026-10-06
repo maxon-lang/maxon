@@ -100,6 +100,10 @@ export function cacheEnumTablesAgreeInCompilerIRIrBlock() returns bool
 		return false
 	end 'disagreesCacheTableAgreesBlockHeat'
 
+	if not cacheTableAgreesBlockRole() 'disagreesCacheTableAgreesBlockRole'
+		return false
+	end 'disagreesCacheTableAgreesBlockRole'
+
 	if not cacheTableAgreesBlockArgReturnRole() 'disagreesCacheTableAgreesBlockArgReturnRole'
 		return false
 	end 'disagreesCacheTableAgreesBlockArgReturnRole'
@@ -424,6 +428,46 @@ end 'cacheTableAgreesBlockHeat'
 
 // @generated library-cache end
 
+// `exitChain` is a block of a function's shared exit chain (`Parser.emitFunctionExit`), and
+// `exitSite` an exit block that branches into one. Every copy of a block keeps its role:
+// `IrModule.exitChainsOf`, `LowerMaxonToStd`'s debug spans and `BranchCleanup`'s return tails find
+// the chain by it.
+export enum BlockRole
+	ordinary
+	exitChain
+	exitSite
+end 'BlockRole'
+
+// @generated library-cache begin
+let CacheCasesBlockRole = [BlockRole.ordinary, BlockRole.exitChain, BlockRole.exitSite]
+
+function cacheReadBlockRole(reader LibraryCacheReader) returns BlockRole throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesBlockRole.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadBlockRole'
+
+function cacheTableAgreesBlockRole() returns bool
+	let declared = BlockRole.allCases
+
+	if CacheCasesBlockRole.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesBlockRole.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesBlockRole'
+
+// @generated library-cache end
+
 export typealias BlockHeatArray = Array with BlockHeat
 
 // The heat of a block that runs only when BOTH `a`'s block and `b`'s do — a split edge's block — which
@@ -576,6 +620,7 @@ export type IrBlock
 	export var id as BlockId
 	export var label as ByteArray
 	export var heat as BlockHeat
+	export var role as BlockRole
 
 	// The spliced body this block was copied under, so a frame printer can name the callee the block's
 	// code came from. Carried by every copy of the block, exactly as `heat` is.
@@ -603,11 +648,12 @@ export type IrBlock
 	// The heat is REQUIRED: a block minted without saying how often it runs is the omission that leaves a
 	// cold arm's call confined, so no creator may default it. The inline site is required for the same
 	// reason: a block minted inside a spliced body without saying so is a frame a panic trace loses.
-	export static function create(id BlockId, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef) returns IrBlock
+	export static function create(id BlockId, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef, role BlockRole = BlockRole.ordinary) returns IrBlock
 		return Self{
 			id: id,
 			label: label,
 			heat: heat,
+			role: role,
 			inlineSite: inlineSite,
 			opRefs: OpIndexArray.create(),
 			terminator: Terminator.unset,
@@ -620,7 +666,7 @@ export type IrBlock
 	// An empty block carrying `src`'s identity — id, label, heat and inline site — for every tier boundary
 	// and copier that rebuilds a block's body but keeps what the block IS.
 	export static function createLike(src IrBlock) returns IrBlock
-		return IrBlock.create(src.id, label: src.label, heat: src.heat, inlineSite: src.inlineSite)
+		return IrBlock.create(src.id, label: src.label, heat: src.heat, inlineSite: src.inlineSite, role: src.role)
 	end 'createLike'
 
 	// Shift everything that names an op by index — `opRefs`, the terminator, the cond-branch — by
@@ -715,6 +761,18 @@ export type IrBlock
 		end 'unwrap'
 	end 'condBranchIndex'
 
+	export function carriesOnAnEdge(value ValueId) returns bool
+		for edge in self.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachArg'
+				if argId == value 'carriesIt'
+					return true
+				end 'carriesIt'
+			end 'eachArg'
+		end 'eachEdge'
+
+		return false
+	end 'carriesOnAnEdge'
+
 	// Panic if the block was never given a terminator. Called at the end
 	// of the parsing phase to enforce the invariant that every IR block
 	// commits to one of: dead (unreachable), fallthrough (target phase
@@ -733,6 +791,7 @@ export type IrBlock
 		writer.unsigned(self.id as CacheUnsigned)
 		writer.bytes(self.label)
 		writer.unsigned(self.heat.ordinal as CacheUnsigned)
+		writer.unsigned(self.role.ordinal as CacheUnsigned)
 		cacheWriteInlineSiteRef(writer, value: self.inlineSite)
 		cacheWriteOpIndexArray(writer, value: self.opRefs)
 		cacheWriteTerminator(writer, value: self.terminator)
@@ -745,6 +804,7 @@ export type IrBlock
 		let f_id = (try reader.unsigned()) as BlockId
 		let f_label = try reader.bytes()
 		let f_heat = try cacheReadBlockHeat(reader)
+		let f_role = try cacheReadBlockRole(reader)
 		let f_inlineSite = try cacheReadInlineSiteRef(reader)
 		let f_opRefs = try cacheReadOpIndexArray(reader)
 		let f_terminator = try cacheReadTerminator(reader)
@@ -752,11 +812,11 @@ export type IrBlock
 		let f_blockArgs = try cacheReadIrBlockArgArray(reader)
 		let f_branchEdges = try cacheReadBranchEdgeArray(reader)
 
-		return Self{id: f_id, label: f_label, heat: f_heat, inlineSite: f_inlineSite, opRefs: f_opRefs, terminator: f_terminator, condBranch: f_condBranch, blockArgs: f_blockArgs, branchEdges: f_branchEdges}
+		return Self{id: f_id, label: f_label, heat: f_heat, role: f_role, inlineSite: f_inlineSite, opRefs: f_opRefs, terminator: f_terminator, condBranch: f_condBranch, blockArgs: f_blockArgs, branchEdges: f_branchEdges}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize72
-		return sizeof(IrBlock) as CacheSize72
+	static function cacheLayoutBytes() returns CacheSize80
+		return sizeof(IrBlock) as CacheSize80
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -896,3 +956,51 @@ module function resolveFuncBlocks(blocks IrBlockArray, blockRefs BlockRefArray) 
 
 	return result
 end 'resolveFuncBlocks'
+
+export type ExitWebBlock
+	export let block as IrBlock
+	export let slot as ElementIndex
+	export let phi as ValueId
+
+	export static function create(block IrBlock, slot ElementIndex, phi ValueId) returns Self
+		return Self{block: block, slot: slot, phi: phi}
+	end 'create'
+end 'ExitWebBlock'
+
+export typealias ExitWebBlockArray = Array with ExitWebBlock
+
+export type ExitArrival
+	export let source as IrBlock
+	export let value as ValueId
+
+	export static function create(source IrBlock, value ValueId) returns Self
+		return Self{source: source, value: value}
+	end 'create'
+end 'ExitArrival'
+
+export typealias ExitArrivalArray = Array with ExitArrival
+
+export type ExitChain
+	export let web as ExitWebBlockArray
+	export let leaves as ExitArrivalArray
+	export let joins as ExitArrivalArray
+
+	export static function create(web ExitWebBlockArray, leaves ExitArrivalArray, joins ExitArrivalArray) returns Self
+		return Self{web: web, leaves: leaves, joins: joins}
+	end 'create'
+end 'ExitChain'
+
+export typealias ExitChainsByReturn = Map with (ValueId, ExitChain)
+
+module type ExitIncoming
+	export let source as IrBlock
+	export let args as ValueIdArray
+
+	module static function create(source IrBlock, args ValueIdArray) returns Self
+		return Self{source: source, args: args}
+	end 'create'
+end 'ExitIncoming'
+
+module typealias ExitIncomingArray = Array with ExitIncoming
+module typealias ExitIncomingByTarget = Map with (BlockId, ExitIncomingArray)
+module typealias ExitWebByPhi = Map with (ValueId, ExitWebBlock)
