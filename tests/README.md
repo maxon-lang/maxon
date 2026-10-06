@@ -548,11 +548,11 @@ reproduce it.**
 ### 5. Two files, one per corpus, and the per-file deadline is the only thing that would split them further
 
 `test-command/` puts each spawning `test` in its own file because a file is what
-ONE process runs, under a 5,000 ms deadline, and its fixtures each compile a project. These format a
+ONE process runs, under one deadline, and its fixtures each compile a project. These format a
 tiny staged tree. `fixtures.maxtest` holds the fixture corpus and the real-sources census (29
 tests), and `engine-cases.maxtest` the engine corpus (5 tests); **both files together measured
 about 1.9 s**. A split would only buy back process startups, which are not where the time goes; if a
-corpus here ever does approach the deadline, shorten its slowest case or pass `--timeout=`.
+corpus here ever does approach the deadline, shorten its slowest case.
 
 The engine corpus's parity, comment-multiplicity and idempotence checks share ONE test, because each
 reads the same two `fmt` runs, and two spawns fit the deadline where a test per property would not.
@@ -613,10 +613,6 @@ whether the case passed or threw. The staging function itself is private, so no 
 the checkout without that removal. An interface rather than a closure, because a closure may not throw
 (E3101). In `lsp/` each case discards its directory once its session is a value, before it asserts.
 
-⚠ **RUN `lsp/` AS `maxon test tests/lsp --timeout=60000`.** A case that opens a document under a
-`.maxproj` waits for the project check behind it, counting that version's publishes, and the busiest
-case checks a project of 120 sibling files — well past the 5,000 ms default.
-
 ## `spec-harness/` — the spec harness's own refusals and gates
 
 `spec-test` refuses a malformed spec by PANICKING while it parses its own corpus, so a refusal is
@@ -660,9 +656,6 @@ source, so the verdict line, the result-note entry, the census entry and its hea
 summary line are written out in `SpecHarness.maxon` and the gate files. A rewording in `SpecTestRunner`
 or `SpecBatch` fails this corpus, which `spec-test` does not run.
 
-⚠ **RUN IT AS `maxon test tests/spec-harness --timeout=15000`.** A gate that runs `spec-test` twice or
-compiles a batch takes several seconds, which leaves the 5,000 ms default no margin.
-
 ## `ladders/` — the index and the scripts it indexes
 
 `index.maxtest` holds `README.md` against the `*.sh` beside it in three directions — a script with
@@ -694,10 +687,6 @@ control so two runs that both failed to build cannot read as agreement.
 Every case here stages a fixture, builds it with the compiler under test, and then asks that binary
 something: what its sidecar says about itself, what `maxon monitor` sees while it runs, or — for most of
 the corpus — what `maxon debug` can do to it while it is RUNNING.
-
-⛔ **EVERY CASE THAT DEBUGS A RUNNING PROGRAM NEEDS `--timeout=`.** A file's default deadline is 5,000 ms
-and one of these spends a compile plus a debugged run, so the corpus is run as
-`maxon test tests/debug --timeout=60000`. The deadline is per FILE, and one file is one spawning `test`.
 
 ⚠ **THE DRIVER AND THE DEBUGGEE ARE THE SAME BINARY AS THE RUNNER.** `TestedCompilerStem` names it once:
 the compiler that builds each fixture, the driver that debugs it, and the program running the case. A
@@ -829,7 +818,7 @@ because an unreleased adapter process is a leak and exits the run 101.
 The runner, the compiler that builds each fixture and the adapter are one binary, named by
 `TestedCompilerStem` in `DapClient.maxon`, so the `debug/` corpus's warning holds here too: read the pass
 count. The debugger it drives runs on every native host, so the corpus runs on all four of them, and
-like `debug/` each case spends a compile plus a debugged run: `maxon test tests/dap --timeout=60000`.
+like `debug/` each case spends a compile plus a debugged run.
 
 ## `coverage/` — what a `--coverage` binary can be asked about after it has RUN
 
@@ -869,9 +858,6 @@ which byte identity alone is blind to.
 ⛔ **EVERY LINE A CASE NAMES IS FOUND BY AN `// anchor: <name>` COMMENT IN THE FIXTURE**, and exactly one
 line must carry it. A line number written into a case goes stale the moment the fixture grows a line, and
 it goes stale silently — it still names a line, just not the one the case is about.
-
-⚠ **THESE CASES EXCEED THE 5,000 ms PER-FILE DEADLINE**: each compiles between one and three programs
-and spawns the driver repeatedly. Run the corpus with `--timeout=30000`.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
 directory), and it keeps rule 5: one spawning `test`, one file. Every case stages into a directory named
@@ -995,8 +981,7 @@ It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every chi
 directory under `temp/build_manifest/`, which is also what makes the build path-less), and it keeps rule 5:
 one spawning `test`, one file. Each case root holds an empty `stdlib/` directory, so the tree lock a staged
 build takes is the case's own and never the real checkout's; the tree-lock cases plant their records,
-claims and leftovers there. Run it as `maxon test tests/build-manifest --timeout=20000`: the heartbeat
-case holds the tree lock past one 5 s heartbeat, which the default deadline does not leave room for.
+claims and leftovers there.
 
 ## `console-write/` — which console API an emitted x64-windows image imports
 
@@ -1154,8 +1139,7 @@ what makes the absences a reading rather than a search that found nothing.
 is the other reason each case demands a presence beside its absences: the acquire COUNT in the steal
 case, and an acquire ahead of the first slab call in the other.
 
-⚠ **THIS CORPUS RUNS BY NAME ALONE**: `ci.yml` runs `spec-test`, `tests/lsp` (with
-`--timeout=60000`), `tests/fmt`, `tests/spec-harness`, `tests/ladders` and — once `vendor/` is staged —
+⚠ **THIS CORPUS RUNS BY NAME ALONE**: `ci.yml` runs `spec-test`, `tests/lsp`, `tests/fmt`, `tests/spec-harness`, `tests/ladders` and — once `vendor/` is staged —
 `tests/cli` on every lane, and `tests/debug`, `tests/dap` and `tests/mcp` on every lane
 `BackendChoice.backendForHost` serves, which is all four of them. This gate is one a `/land` battery or a
 contributor runs by name — `maxon test tests/emitted-runtime`.
@@ -1166,9 +1150,8 @@ concurrently and one fixture staged twice would be two runs over one tree), and 
 budget `parallel-compile/` prices: one spawning `test` per file, then one compile per BODY per lane for
 the two cases that ask for one body at a time — two for the steal case, four for the relist doors —
 against one compile per LANE for the published words, whose fifteen bodies are named in a single
-comma-separated `--emit-ir-runtime=`. That is the thinnest margin in this corpus: the widest case
-MEASURED at 2.7 s of the 5,000 ms deadline on a Windows host, so a body added to a per-body case is a
-`--timeout=` away from needing one.
+comma-separated `--emit-ir-runtime=`. The widest case MEASURED at 2.7 s on a Windows host, against the
+120,000 ms default deadline.
 
 ⚠ **A COMMA-SEPARATED `--emit-ir-runtime=` COSTS ONE COMPILE AND TAKES ITS WHOLE LIST DOWN WITH ANY ONE
 NAME.** A name this program contains nothing of PANICS the build
@@ -1198,7 +1181,7 @@ comment beside the value.
 
 ⚠ **THE BENCHMARKS RUN AT THE PUBLISHED SIZE, NEVER THEIR DEFAULT.** Each benchmark example takes its
 size as argv[1] and without one runs the benchmark's full size (fannkuch-redux n=11; nbody 50,000,000
-steps; spectral-norm n=5500), which does not fit a file's 5,000 ms deadline. Each case passes the size
+steps; spectral-norm n=5500). Each case passes the size
 the Benchmarks Game's reference output was produced at, and expects that output byte for byte.
 
 ⛔ **THE EXAMPLES ARE BUILT WHERE THEY SIT, NEVER COPIED** — the gate is about the files a reader runs.
@@ -1240,8 +1223,7 @@ each emits. The case name says what its fixture's program declares: `library-reu
 of another shape). `shadowing/` declares its own `Clock`, and its case asserts the library is parsed cold
 instead (`library parsed cold (shadowed)`).
 
-⚠ **IT EXCEEDS THE 5,000 ms PER-FILE DEADLINE**: the driver compiles the program several times. Run the corpus
-with `--timeout=60000`. It applies rule 1's `.fixture` half only and rule 4 (the child runs in a staging
+The driver compiles the program several times. It applies rule 1's `.fixture` half only and rule 4 (the child runs in a staging
 directory under `temp/warm-rebuild/`).
 
 ## `mcp/` — JSON-RPC MCP server for end users and compiler contributors

@@ -279,8 +279,7 @@ facts worth knowing before you get there:
   ```
   ./maxon-bin/.maxon/maxon.exe test tests/test-command
   ```
-  ⚠ **CI runs six of them on every lane** — `tests/lsp` (with `--timeout=60000`: its cases wait out
-  whole-project checks), `tests/fmt`, `tests/spec-harness`, `tests/ladders`, `tests/build-manifest` and
+  ⚠ **CI runs six of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/spec-harness`, `tests/ladders`, `tests/build-manifest` and
   `tests/cli` — plus `tests/debug`,
   `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `/land`'s battery runs `fmt`, `spec-harness` and
   `ladders` beside the suite and the self-compile. Every other corpus runs only when someone names it.
@@ -296,12 +295,11 @@ facts worth knowing before you get there:
   with a `.git` component, and a real `.maxon` under `tests/` is walked by `maxon fmt`, which is the
   tool under test rewriting its own oracle.
 
-One test per file is structural, not tidiness: a file is what ONE process runs and that process has a
-5 s default deadline, so twelve compiler-spawning tests in one file report a spurious `TIMED OUT`.
+One test per file is structural, not tidiness: a file is what ONE process runs and that process has one
+deadline, so twelve compiler-spawning tests in one file share it and report a spurious `TIMED OUT`.
 
 ⚠ **MOST OF `tests/debug`'s CASES DEBUG A RUNNING PROGRAM**, which is a compile plus a
-debugged run inside one file's deadline. Run it as `maxon test tests/debug --timeout=60000`; the default
-deadline reports the corpus as timed out rather than failed.
+debugged run inside one file's deadline.
 
 ## `maxon fmt`
 

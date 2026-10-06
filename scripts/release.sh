@@ -361,11 +361,10 @@ if [ "$mode" = "package" ]; then
 				|| { echo "release.sh: the IR suite FAILED on $host — see $DIST/spec-test-ir-$host.log; nothing packaged" >&2; exit 1; }
 			grep -E "passed, .* failed" "$DIST/spec-test-ir-$host.log" | tail -1
 
-			# The tree-level gates `spec-test` does not run. The timeout is `spec-harness`'s: its gates run
-			# `spec-test` themselves, which leaves the 5 s default no margin.
+			# The tree-level gates `spec-test` does not run.
 			for corpus in fmt spec-harness ladders; do
 				log="$DIST/test-$corpus-$host.log"
-				"$maxon" test "tests/$corpus" --timeout=15000 > "$log" 2>&1 \
+				"$maxon" test "tests/$corpus" > "$log" 2>&1 \
 					|| { echo "release.sh: tests/$corpus FAILED on $host — see $log; nothing packaged" >&2; exit 1; }
 				grep -E "^ *[0-9]+ fail" "$log" | tail -1
 			done

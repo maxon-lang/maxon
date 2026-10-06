@@ -154,21 +154,18 @@ jobs:
       # almost nothing else is: percent-decoding a uri, un-rooting a drive letter, and
       # `FilePath.equals` being case-insensitive on Windows alone. A single-host lane would leave
       # three hosts' path handling unexercised, and what it misses are wrong ANSWERS, not breaks.
-      # Its cases wait out whole-project checks, and the busiest (120 sibling files) runs well past the
-      # 5 s default deadline.
       - name: LSP corpus
         if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/lsp --timeout=60000
+        run: ./maxon-bin/.maxon/maxon test tests/lsp
 
       # These three are tree-level gates `spec-test` does not run.
       - name: Formatter corpus
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/fmt
 
-      # Its gates run `spec-test` themselves, which leaves the 5 s default deadline no margin.
       - name: Spec harness corpus
         if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/spec-harness --timeout=15000
+        run: ./maxon-bin/.maxon/maxon test tests/spec-harness
 
       - name: Ladder index
         if: steps.seed.outputs.seeded == 'yes'
@@ -176,7 +173,7 @@ jobs:
 
       - name: Build manifest corpus
         if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/build-manifest --timeout=20000
+        run: ./maxon-bin/.maxon/maxon test tests/build-manifest
 
       # ⭐ THE ONLY DEBUGGER CODE CI RUNS. `spec-test` covers the language; the debugger's driver, its
       # DAP server and its MCP tools are exercised by these three corpora and by nothing else, so a lane
@@ -197,15 +194,15 @@ jobs:
 
       - name: Debugger corpus
         if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/debug --timeout=60000
+        run: ./maxon-bin/.maxon/maxon test tests/debug
 
       - name: DAP corpus
         if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/dap --timeout=60000
+        run: ./maxon-bin/.maxon/maxon test tests/dap
 
       - name: MCP corpus
         if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/mcp --timeout=60000
+        run: ./maxon-bin/.maxon/maxon test tests/mcp
 
       # `tests/cli` builds wasm32-wasi from this checkout, and wrapping the core module into a
       # component needs `vendor/wasm-tools` (E6005 without it). `vendor/` is gitignored, so nothing

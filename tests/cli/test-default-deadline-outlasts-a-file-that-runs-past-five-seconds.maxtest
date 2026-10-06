@@ -1,0 +1,28 @@
+let CaseDirName = "default-deadline"
+let ProjectDirName = "project"
+let SlowTestFileName = "slow.maxtest"
+let SlowTestSource = "test 'a test that runs about seven seconds'\n\tsleep(7000)\n\tExpect.isTrue(true)\nend 'a test that runs about seven seconds'\n"
+let OnePassLine = " 1 pass\n"
+let NoFailLine = " 0 fail\n"
+
+test 'maxon test with no --timeout= lets a test file run past five seconds'
+	requireHeldOutsideCheckout(CaseDirName, check: SlowFileOutlastsTheDefaultDeadline.create())
+end 'maxon test with no --timeout= lets a test file run past five seconds'
+
+type SlowFileOutlastsTheDefaultDeadline implements OutsideCheckoutCase
+	static function create() returns SlowFileOutlastsTheDefaultDeadline
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let project = createdStagedDirectory(dir.join(ProjectDirName))
+		writeStagedFile(project.join(SlowTestFileName), content: SlowTestSource)
+
+		let tested = runDriver([TestCommandWord, project.toString()], workingDirectory: dir)
+		let said = "the default deadline killed a test file that runs ~7 s; the default must outlast every file in the tree's corpora, so no corpus needs --timeout=. It wrote to stdout: {tested.stdout} and to stderr: {tested.stderr}"
+
+		try Expect.equal(tested.exitCode(), expected: 0, message: said)
+		try Expect.contains(tested.stdout, needle: OnePassLine, message: said)
+		try Expect.contains(tested.stdout, needle: NoFailLine, message: said)
+	end 'requireHeldIn'
+end 'SlowFileOutlastsTheDefaultDeadline'

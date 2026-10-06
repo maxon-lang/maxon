@@ -519,7 +519,7 @@ normally with `maxon build`.
 | `--json` | Emit the report as JSON instead of text. |
 | `--isolate` | Run every test in its own process, instead of one process per test file. |
 | `--bail`, `--bail=N` | Stop starting new work after `N` failures (`--bail` alone means 1). Work already running finishes, so the count may exceed `N`. Without it, every test runs. |
-| `--timeout=<ms>` | Kill a test process after this many milliseconds (default 5000). One process runs one file's tests, so the deadline covers the whole file unless `--isolate` is given. |
+| `--timeout=<ms>` | Kill a test process after this many milliseconds (default 120000). One process runs one file's tests, so the deadline covers the whole file unless `--isolate` is given. |
 | `--no-timing` | Omit durations, making stdout byte-for-byte reproducible. |
 | `--color=auto\|always\|never` | Colour the report. `auto` colours only when stdout is a terminal, `NO_COLOR` is unset and `TERM` is not `dumb`. On `wasm32-wasi` a program cannot detect a terminal, so `auto` means `never` there; use `always` to force colour. |
 | `--target=<cpu>-<os>` | Build the test binary for this target and then run it. On a host that cannot execute that target, every test is reported as not run. |
