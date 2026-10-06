@@ -1,0 +1,43 @@
+let CaseDirName = "warm-build-adopts-one-worker"
+let ProgramDirName = "app"
+let OutputName = "program"
+let FrontEndPoolLinePrefix = "[CMP] DEBUG: front end: "
+let AdoptedCountSuffix = " adopted"
+let PoolLineWordSeparator = " "
+let AdoptedCountFromTheEnd = 2
+let MostAdoptedWorkers = 1
+
+test 'a warm build of a one-file program adopts at most one front-end worker'
+	requireHeldOutsideCheckout(CaseDirName, check: WarmBuildAdoptsOneWorker.create())
+end 'a warm build of a one-file program adopts at most one front-end worker'
+
+type WarmBuildAdoptsOneWorker implements OutsideCheckoutCase
+	static function create() returns WarmBuildAdoptsOneWorker
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+		_ = try requireLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, which: "the cold build")
+
+		let warm = try requireLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, which: "the warm build")
+		let said = "It wrote to stderr: {warm.stderr}"
+
+		let lines = linesOpeningIn(warm.stderr, prefix: FrontEndPoolLinePrefix)
+		try Expect.equal(lines.count(), expected: 1, message: "the warm build printed {lines.count()} line(s) opening `{FrontEndPoolLinePrefix}` under `{CompilerDebugLogFlag}`, where the front end reports its pool once. {said}")
+
+		let line = try lines.get(0) otherwise panic("{CaseDirName}: a list holding one line has a first line")
+		try Expect.isTrue(line.endsWith(AdoptedCountSuffix), message: "the front end's pool line states no `<n>{AdoptedCountSuffix}` count, so how many workers were handed a copy of the signature index cannot be read. It wrote: {line}")
+
+		let words = line.split(PoolLineWordSeparator)
+		let word = try words.get(words.count() - AdoptedCountFromTheEnd) otherwise panic("{CaseDirName}: a line ending in `{AdoptedCountSuffix}` has a word before it")
+
+		if let adopted = try int.fromString(word) 'aCount'
+			try Expect.atMost(adopted, than: MostAdoptedWorkers, message: "a warm build whose only parse job is one author file adopted {adopted} front-end workers, each handed a clone of the signature index it never used. It wrote: {line}")
+			return
+		end 'aCount'
+
+		try Expect.fail("the front end's pool line holds '{word}' where its adopted count belongs. It wrote: {line}")
+	end 'requireHeldIn'
+end 'WarmBuildAdoptsOneWorker'

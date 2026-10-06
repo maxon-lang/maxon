@@ -224,11 +224,165 @@ export union MaxonType
 	cstring
 end 'MaxonType'
 
+// @generated library-cache begin
+export function cacheWriteMaxonType(writer LibraryCacheWriter, value MaxonType)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		boolean then break 'payload'
+		integer then break 'payload'
+		float then break 'payload'
+		named(a0) then cacheWriteMaxonTypeNamed(writer, a0: a0)
+		exitCode then break 'payload'
+		unresolved then break 'payload'
+		structRef(a0) then cacheWriteMaxonTypeStructRef(writer, a0: a0)
+		string then break 'payload'
+		function(a0) then cacheWriteMaxonTypeFunction(writer, a0: a0)
+		typeParameter(a0) then cacheWriteMaxonTypeTypeParameter(writer, a0: a0)
+		genericInstance(a0) then cacheWriteMaxonTypeGenericInstance(writer, a0: a0)
+		character then break 'payload'
+		interfaceRef(a0) then cacheWriteMaxonTypeInterfaceRef(writer, a0: a0)
+		cstring then break 'payload'
+	end 'payload'
+end 'cacheWriteMaxonType'
+
+function cacheWriteMaxonTypeNamed(writer LibraryCacheWriter, a0 TypeNameId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonTypeNamed'
+
+function cacheWriteMaxonTypeStructRef(writer LibraryCacheWriter, a0 TypeNameId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonTypeStructRef'
+
+function cacheWriteMaxonTypeFunction(writer LibraryCacheWriter, a0 TypeNameId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonTypeFunction'
+
+function cacheWriteMaxonTypeTypeParameter(writer LibraryCacheWriter, a0 TypeParamId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonTypeTypeParameter'
+
+function cacheWriteMaxonTypeGenericInstance(writer LibraryCacheWriter, a0 GenericInstanceId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonTypeGenericInstance'
+
+function cacheWriteMaxonTypeInterfaceRef(writer LibraryCacheWriter, a0 TypeNameId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonTypeInterfaceRef'
+
+export function cacheReadMaxonType(reader LibraryCacheReader) returns MaxonType throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives MaxonType.boolean
+		1 gives MaxonType.integer
+		2 gives MaxonType.float
+		3 gives try cacheReadMaxonTypeNamed(reader)
+		4 gives MaxonType.exitCode
+		5 gives MaxonType.unresolved
+		6 gives try cacheReadMaxonTypeStructRef(reader)
+		7 gives MaxonType.string
+		8 gives try cacheReadMaxonTypeFunction(reader)
+		9 gives try cacheReadMaxonTypeTypeParameter(reader)
+		10 gives try cacheReadMaxonTypeGenericInstance(reader)
+		11 gives MaxonType.character
+		12 gives try cacheReadMaxonTypeInterfaceRef(reader)
+		13 gives MaxonType.cstring
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadMaxonType'
+
+function cacheReadMaxonTypeNamed(reader LibraryCacheReader) returns MaxonType throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as TypeNameId
+
+	return MaxonType.named(a0)
+end 'cacheReadMaxonTypeNamed'
+
+function cacheReadMaxonTypeStructRef(reader LibraryCacheReader) returns MaxonType throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as TypeNameId
+
+	return MaxonType.structRef(a0)
+end 'cacheReadMaxonTypeStructRef'
+
+function cacheReadMaxonTypeFunction(reader LibraryCacheReader) returns MaxonType throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as TypeNameId
+
+	return MaxonType.function(a0)
+end 'cacheReadMaxonTypeFunction'
+
+function cacheReadMaxonTypeTypeParameter(reader LibraryCacheReader) returns MaxonType throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as TypeParamId
+
+	return MaxonType.typeParameter(a0)
+end 'cacheReadMaxonTypeTypeParameter'
+
+function cacheReadMaxonTypeGenericInstance(reader LibraryCacheReader) returns MaxonType throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as GenericInstanceId
+
+	return MaxonType.genericInstance(a0)
+end 'cacheReadMaxonTypeGenericInstance'
+
+function cacheReadMaxonTypeInterfaceRef(reader LibraryCacheReader) returns MaxonType throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as TypeNameId
+
+	return MaxonType.interfaceRef(a0)
+end 'cacheReadMaxonTypeInterfaceRef'
+
+// @generated library-cache end
+
 export typealias MaxonTypeArray = Array with MaxonType
+
+// @generated library-cache begin
+export function cacheWriteMaxonTypeArray(writer LibraryCacheWriter, value MaxonTypeArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		cacheWriteMaxonType(writer, value: item)
+	end 'eachItem'
+end 'cacheWriteMaxonTypeArray'
+
+export function cacheReadMaxonTypeArray(reader LibraryCacheReader) returns MaxonTypeArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = MaxonTypeArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadMaxonType(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadMaxonTypeArray'
+
+// @generated library-cache end
 
 // A generic instance's argument list is a `MaxonTypeArray`, and the `GenericInstanceRegistry`
 // (SignatureIndex) keeps one per interned instance — hence an array OF them.
 export typealias MaxonTypeArrayArray = Array with MaxonTypeArray
+
+// @generated library-cache begin
+export function cacheWriteMaxonTypeArrayArray(writer LibraryCacheWriter, value MaxonTypeArrayArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		cacheWriteMaxonTypeArray(writer, value: item)
+	end 'eachItem'
+end 'cacheWriteMaxonTypeArrayArray'
+
+export function cacheReadMaxonTypeArrayArray(reader LibraryCacheReader) returns MaxonTypeArrayArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = MaxonTypeArrayArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadMaxonTypeArray(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadMaxonTypeArrayArray'
+
+// @generated library-cache end
 
 // --- ValueTypeTag: MaxonType's discriminant, WITHOUT its payload ---
 //
@@ -310,8 +464,87 @@ export enum ValueTypeTag
 	cstring
 end 'ValueTypeTag'
 
+// @generated library-cache begin
+let CacheCasesValueTypeTag = [ValueTypeTag.boolean, ValueTypeTag.integer, ValueTypeTag.float, ValueTypeTag.named, ValueTypeTag.exitCode, ValueTypeTag.unresolved, ValueTypeTag.void, ValueTypeTag.structRef, ValueTypeTag.string, ValueTypeTag.function, ValueTypeTag.typeParameter, ValueTypeTag.genericInstance, ValueTypeTag.character, ValueTypeTag.interfaceRef, ValueTypeTag.cstring]
+
+export function cacheReadValueTypeTag(reader LibraryCacheReader) returns ValueTypeTag throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesValueTypeTag.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadValueTypeTag'
+
+function cacheTableAgreesValueTypeTag() returns bool
+	let declared = ValueTypeTag.allCases
+
+	if CacheCasesValueTypeTag.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesValueTypeTag.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesValueTypeTag'
+
+// @generated library-cache end
+
 export typealias ValueTypeTagArray = Array with ValueTypeTag
+
+// @generated library-cache begin
+export function cacheWriteValueTypeTagArray(writer LibraryCacheWriter, value ValueTypeTagArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item.ordinal as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteValueTypeTagArray'
+
+export function cacheReadValueTypeTagArray(reader LibraryCacheReader) returns ValueTypeTagArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ValueTypeTagArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadValueTypeTag(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadValueTypeTagArray'
+
+// @generated library-cache end
+
 export typealias TypeNameIdArray = Array with TypeNameId
+
+// @generated library-cache begin
+export function cacheWriteTypeNameIdArray(writer LibraryCacheWriter, value TypeNameIdArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteTypeNameIdArray'
+
+export function cacheReadTypeNameIdArray(reader LibraryCacheReader) returns TypeNameIdArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = TypeNameIdArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as TypeNameId
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadTypeNameIdArray'
+
+// @generated library-cache end
 
 // The tag of a `MaxonType`. Exhaustive, so a new `MaxonType` arm cannot be added without
 // giving it one.
@@ -535,6 +768,38 @@ export union MaxonReturnType
 	value(inner MaxonType)
 end 'MaxonReturnType'
 
+// @generated library-cache begin
+export function cacheWriteMaxonReturnType(writer LibraryCacheWriter, value MaxonReturnType)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		void then break 'payload'
+		value(a0) then cacheWriteMaxonReturnTypeValue(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteMaxonReturnType'
+
+function cacheWriteMaxonReturnTypeValue(writer LibraryCacheWriter, a0 MaxonType)
+	cacheWriteMaxonType(writer, value: a0)
+end 'cacheWriteMaxonReturnTypeValue'
+
+export function cacheReadMaxonReturnType(reader LibraryCacheReader) returns MaxonReturnType throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives MaxonReturnType.void
+		1 gives try cacheReadMaxonReturnTypeValue(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadMaxonReturnType'
+
+function cacheReadMaxonReturnTypeValue(reader LibraryCacheReader) returns MaxonReturnType throws LibraryCacheDamage
+	let a0 = try cacheReadMaxonType(reader)
+
+	return MaxonReturnType.value(a0)
+end 'cacheReadMaxonReturnTypeValue'
+
+// @generated library-cache end
+
 export function maxonReturnTypeIsVoid(ref MaxonReturnType) returns bool
 	return match ref 'check'
 		void gives true
@@ -737,6 +1002,36 @@ export enum MaxonBinOp
 	modUnsigned
 end 'MaxonBinOp'
 
+// @generated library-cache begin
+let CacheCasesMaxonBinOp = [MaxonBinOp.add, MaxonBinOp.sub, MaxonBinOp.mul, MaxonBinOp.div, MaxonBinOp.mod, MaxonBinOp.bitAnd, MaxonBinOp.bitOr, MaxonBinOp.bitXor, MaxonBinOp.shl, MaxonBinOp.shr, MaxonBinOp.shrLogical, MaxonBinOp.min, MaxonBinOp.max, MaxonBinOp.divUnsigned, MaxonBinOp.modUnsigned]
+
+function cacheReadMaxonBinOp(reader LibraryCacheReader) returns MaxonBinOp throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesMaxonBinOp.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadMaxonBinOp'
+
+function cacheTableAgreesMaxonBinOp() returns bool
+	let declared = MaxonBinOp.allCases
+
+	if CacheCasesMaxonBinOp.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesMaxonBinOp.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesMaxonBinOp'
+
+// @generated library-cache end
+
 // The unary (prefix) operators the Maxon tier represents, starting with `neg` (the
 // prefix `-`). A unary op carries ONE operand (unlike MaxonBinOp's two), so it rides
 // its own `MaxonOp.unaryOp` variant rather than being folded into `binOp` — the
@@ -867,6 +1162,36 @@ export enum MaxonUnaryOp
 	signExtendI32
 end 'MaxonUnaryOp'
 
+// @generated library-cache begin
+let CacheCasesMaxonUnaryOp = [MaxonUnaryOp.neg, MaxonUnaryOp.bitNot, MaxonUnaryOp.logicalNot, MaxonUnaryOp.trunc, MaxonUnaryOp.promoteToFloat, MaxonUnaryOp.floor, MaxonUnaryOp.ceil, MaxonUnaryOp.round, MaxonUnaryOp.sqrt, MaxonUnaryOp.abs, MaxonUnaryOp.fneg, MaxonUnaryOp.floatToBits, MaxonUnaryOp.bitsToFloat, MaxonUnaryOp.signExtendI8, MaxonUnaryOp.signExtendI16, MaxonUnaryOp.signExtendI32]
+
+function cacheReadMaxonUnaryOp(reader LibraryCacheReader) returns MaxonUnaryOp throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesMaxonUnaryOp.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadMaxonUnaryOp'
+
+function cacheTableAgreesMaxonUnaryOp() returns bool
+	let declared = MaxonUnaryOp.allCases
+
+	if CacheCasesMaxonUnaryOp.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesMaxonUnaryOp.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesMaxonUnaryOp'
+
+// @generated library-cache end
+
 // The SLOT WIDTH a sign-extending unary op restores from, or `notASignExtension` for every other member.
 // A union rather than a `0` sentinel, because "this op extends nothing" is an ANSWER — `lowerUnaryOp` asks
 // it of every unary op it meets — and a width of 0 would be a number the expansion could arithmetic on.
@@ -952,6 +1277,36 @@ export enum MaxonCmpOp
 	ge
 end 'MaxonCmpOp'
 
+// @generated library-cache begin
+let CacheCasesMaxonCmpOp = [MaxonCmpOp.eq, MaxonCmpOp.ne, MaxonCmpOp.lt, MaxonCmpOp.gt, MaxonCmpOp.le, MaxonCmpOp.ge]
+
+function cacheReadMaxonCmpOp(reader LibraryCacheReader) returns MaxonCmpOp throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesMaxonCmpOp.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadMaxonCmpOp'
+
+function cacheTableAgreesMaxonCmpOp() returns bool
+	let declared = MaxonCmpOp.allCases
+
+	if CacheCasesMaxonCmpOp.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesMaxonCmpOp.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesMaxonCmpOp'
+
+// @generated library-cache end
+
 // `functionValue` materializes the address of the function's record, which an indirect call loads
 // its code from at offset 0; `codeAddress` the bare `.text` address of a compiler-internal callee,
 // which the drop walk calls as it stands. Either one read as the other is a call through a wrong
@@ -960,6 +1315,68 @@ export enum FunctionRefForm
 	functionValue
 	codeAddress
 end 'FunctionRefForm'
+
+// @generated library-cache begin
+let CacheCasesFunctionRefForm = [FunctionRefForm.functionValue, FunctionRefForm.codeAddress]
+
+function cacheReadFunctionRefForm(reader LibraryCacheReader) returns FunctionRefForm throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesFunctionRefForm.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadFunctionRefForm'
+
+function cacheTableAgreesFunctionRefForm() returns bool
+	let declared = FunctionRefForm.allCases
+
+	if CacheCasesFunctionRefForm.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesFunctionRefForm.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesFunctionRefForm'
+
+export function cacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect() returns bool
+	if not cacheTableAgreesValueTypeTag() 'disagreesCacheTableAgreesValueTypeTag'
+		return false
+	end 'disagreesCacheTableAgreesValueTypeTag'
+
+	if not cacheTableAgreesWriteBlameHolder() 'disagreesCacheTableAgreesWriteBlameHolder'
+		return false
+	end 'disagreesCacheTableAgreesWriteBlameHolder'
+
+	if not cacheTableAgreesCalleeMint() 'disagreesCacheTableAgreesCalleeMint'
+		return false
+	end 'disagreesCacheTableAgreesCalleeMint'
+
+	if not cacheTableAgreesMaxonBinOp() 'disagreesCacheTableAgreesMaxonBinOp'
+		return false
+	end 'disagreesCacheTableAgreesMaxonBinOp'
+
+	if not cacheTableAgreesMaxonUnaryOp() 'disagreesCacheTableAgreesMaxonUnaryOp'
+		return false
+	end 'disagreesCacheTableAgreesMaxonUnaryOp'
+
+	if not cacheTableAgreesMaxonCmpOp() 'disagreesCacheTableAgreesMaxonCmpOp'
+		return false
+	end 'disagreesCacheTableAgreesMaxonCmpOp'
+
+	if not cacheTableAgreesFunctionRefForm() 'disagreesCacheTableAgreesFunctionRefForm'
+		return false
+	end 'disagreesCacheTableAgreesFunctionRefForm'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect'
+
+// @generated library-cache end
 
 // ⭐⭐ **WAS THIS CALL SITE'S CALLEE MINTED BY THE `<primitive>.<method>` REWRITE?** — the ONE
 // fact about a call that its CALLEE BYTES cannot carry, and the reason it rides the op rather than being
@@ -1045,6 +1462,36 @@ export enum CalleeMint
 	rangeOperator
 end 'CalleeMint'
 
+// @generated library-cache begin
+let CacheCasesCalleeMint = [CalleeMint.notMinted, CalleeMint.primitiveStatic, CalleeMint.paramDefaultHelper, CalleeMint.stringLiteralInit, CalleeMint.fieldDefaultHelper, CalleeMint.resolvedTypeQualifier, CalleeMint.rangeOperator]
+
+function cacheReadCalleeMint(reader LibraryCacheReader) returns CalleeMint throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesCalleeMint.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadCalleeMint'
+
+function cacheTableAgreesCalleeMint() returns bool
+	let declared = CalleeMint.allCases
+
+	if CacheCasesCalleeMint.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesCalleeMint.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesCalleeMint'
+
+// @generated library-cache end
+
 // ⭐⭐ **WHICH IMAGE OBJECT ONE POINTER SLOT OF AN IMAGED BOX ADDRESSES.** A slot's bytes are an ADDRESS,
 // and the address of one `.rdata` object written into another is a data-to-data relocation — so a slot is
 // describable exactly when the object it names is one of the shapes below.
@@ -1061,6 +1508,50 @@ export union ImmortalBoxSlotValue
 	box(node ElementIndex)
 end 'ImmortalBoxSlotValue'
 
+// @generated library-cache begin
+function cacheWriteImmortalBoxSlotValue(writer LibraryCacheWriter, value ImmortalBoxSlotValue)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		emptyArray(a0, a1) then cacheWriteImmortalBoxSlotValueEmptyArray(writer, a0: a0, a1: a1)
+		box(a0) then cacheWriteImmortalBoxSlotValueBox(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteImmortalBoxSlotValue'
+
+function cacheWriteImmortalBoxSlotValueEmptyArray(writer LibraryCacheWriter, a0 ElementStride, a1 OwnershipCallee)
+	writer.signed(a0 as CacheSigned)
+	cacheWriteOwnershipCallee(writer, value: a1)
+end 'cacheWriteImmortalBoxSlotValueEmptyArray'
+
+function cacheWriteImmortalBoxSlotValueBox(writer LibraryCacheWriter, a0 ElementIndex)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteImmortalBoxSlotValueBox'
+
+function cacheReadImmortalBoxSlotValue(reader LibraryCacheReader) returns ImmortalBoxSlotValue throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadImmortalBoxSlotValueEmptyArray(reader)
+		1 gives try cacheReadImmortalBoxSlotValueBox(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadImmortalBoxSlotValue'
+
+function cacheReadImmortalBoxSlotValueEmptyArray(reader LibraryCacheReader) returns ImmortalBoxSlotValue throws LibraryCacheDamage
+	let a0 = (try reader.boundedSigned(-4, high: 8)) as ElementStride
+	let a1 = try cacheReadOwnershipCallee(reader)
+
+	return ImmortalBoxSlotValue.emptyArray(a0, elementDestroy: a1)
+end 'cacheReadImmortalBoxSlotValueEmptyArray'
+
+function cacheReadImmortalBoxSlotValueBox(reader LibraryCacheReader) returns ImmortalBoxSlotValue throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ElementIndex
+
+	return ImmortalBoxSlotValue.box(a0)
+end 'cacheReadImmortalBoxSlotValueBox'
+
+// @generated library-cache end
+
 // ⭐⭐ **ONE SLOT OF AN IMAGED RECORD BOX THAT ADDRESSES ANOTHER IMAGE OBJECT** — a `Map`'s or a `Set`'s
 // empty column, a struct field holding one, or a field holding a whole nested box. The lowering registers
 // the object, seeds the slot with its `.rdata` offset (so two boxes are byte-equal exactly when they name
@@ -1072,9 +1563,52 @@ export type ImmortalBoxColumn
 	export static function create(offset ByteOffset, value ImmortalBoxSlotValue) returns ImmortalBoxColumn
 		return Self{offset: offset, value: value}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.offset as CacheUnsigned)
+		cacheWriteImmortalBoxSlotValue(writer, value: self.value)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ImmortalBoxColumn throws LibraryCacheDamage
+		let f_offset = (try reader.unsigned()) as ByteOffset
+		let f_value = try cacheReadImmortalBoxSlotValue(reader)
+
+		return Self{offset: f_offset, value: f_value}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ImmortalBoxColumn) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ImmortalBoxColumn'
 
 export typealias ImmortalBoxColumnArray = Array with ImmortalBoxColumn
+
+// @generated library-cache begin
+function cacheWriteImmortalBoxColumnArray(writer LibraryCacheWriter, value ImmortalBoxColumnArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteImmortalBoxColumnArray'
+
+function cacheReadImmortalBoxColumnArray(reader LibraryCacheReader) returns ImmortalBoxColumnArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ImmortalBoxColumnArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ImmortalBoxColumn.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadImmortalBoxColumnArray'
+
+// @generated library-cache end
 
 // ⭐⭐ **ONE BOX OF AN IMAGED RECORD TREE** — the bytes of the box itself, and the slots that address the
 // other boxes and columns beside it. The tree is held FLAT, in an arena a `box` slot indexes, for
@@ -1086,9 +1620,52 @@ export type ImmortalBoxNode
 	export static function create(bytes ByteArray, columns ImmortalBoxColumnArray) returns ImmortalBoxNode
 		return Self{bytes: bytes, columns: columns}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.bytes)
+		cacheWriteImmortalBoxColumnArray(writer, value: self.columns)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ImmortalBoxNode throws LibraryCacheDamage
+		let f_bytes = try reader.bytes()
+		let f_columns = try cacheReadImmortalBoxColumnArray(reader)
+
+		return Self{bytes: f_bytes, columns: f_columns}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ImmortalBoxNode) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ImmortalBoxNode'
 
 export typealias ImmortalBoxNodeArray = Array with ImmortalBoxNode
+
+// @generated library-cache begin
+export function cacheWriteImmortalBoxNodeArray(writer LibraryCacheWriter, value ImmortalBoxNodeArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteImmortalBoxNodeArray'
+
+export function cacheReadImmortalBoxNodeArray(reader LibraryCacheReader) returns ImmortalBoxNodeArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ImmortalBoxNodeArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ImmortalBoxNode.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadImmortalBoxNodeArray'
+
+// @generated library-cache end
 
 // Variants are declared in CATEGORY-CONTIGUOUS BANDS, in `OpCategory` order, so a pass
 // that treats a whole category uniformly spells it as one `or`-chain of that band's
@@ -1698,6 +2275,632 @@ export union MaxonOp
 	existentialWitness(result ValueId, interfaceName ByteArray, conformer ValueId) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
+// @generated library-cache begin
+export function cacheWriteMaxonOp(writer LibraryCacheWriter, value MaxonOp)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		call(a0, a1, a2, a3, a4, a5, a6, a7) then cacheWriteMaxonOpCall(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7)
+		literal(a0, a1, a2) then cacheWriteMaxonOpLiteral(writer, a0: a0, a1: a1, a2: a2)
+		ret(a0) then cacheWriteMaxonOpRet(writer, a0: a0)
+		retVoid then break 'payload'
+		binOp(a0, a1, a2, a3) then cacheWriteMaxonOpBinOp(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		unaryOp(a0, a1, a2) then cacheWriteMaxonOpUnaryOp(writer, a0: a0, a1: a1, a2: a2)
+		compare(a0, a1, a2, a3, a4) then cacheWriteMaxonOpCompare(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4)
+		condBranch(a0, a1, a2) then cacheWriteMaxonOpCondBranch(writer, a0: a0, a1: a1, a2: a2)
+		branch(a0) then cacheWriteMaxonOpBranch(writer, a0: a0)
+		globalAddr(a0, a1) then cacheWriteMaxonOpGlobalAddr(writer, a0: a0, a1: a1)
+		loadIndirect(a0, a1, a2, a3) then cacheWriteMaxonOpLoadIndirect(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		storeIndirect(a0, a1, a2, a3) then cacheWriteMaxonOpStoreIndirect(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		stringLiteral(a0, a1) then cacheWriteMaxonOpStringLiteral(writer, a0: a0, a1: a1)
+		tryCall(a0, a1, a2, a3, a4, a5, a6, a7, a8) then cacheWriteMaxonOpTryCall(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7, a8: a8)
+		throwError(a0, a1) then cacheWriteMaxonOpThrowError(writer, a0: a0, a1: a1)
+		propagateError(a0) then cacheWriteMaxonOpPropagateError(writer, a0: a0)
+		panicAbort(a0) then cacheWriteMaxonOpPanicAbort(writer, a0: a0)
+		functionRef(a0, a1, a2) then cacheWriteMaxonOpFunctionRef(writer, a0: a0, a1: a1, a2: a2)
+		indirectCall(a0, a1, a2) then cacheWriteMaxonOpIndirectCall(writer, a0: a0, a1: a1, a2: a2)
+		asyncCall(a0, a1, a2, a3, a4, a5, a6) then cacheWriteMaxonOpAsyncCall(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6)
+		await (a0, a1) then cacheWriteMaxonOpAwait(writer, a0: a0, a1: a1)
+		tryAwait(a0, a1, a2) then cacheWriteMaxonOpTryAwait(writer, a0: a0, a1: a1, a2: a2)
+		sizeofType(a0, a1) then cacheWriteMaxonOpSizeofType(writer, a0: a0, a1: a1)
+		constArrayLiteral(a0, a1, a2, a3) then cacheWriteMaxonOpConstArrayLiteral(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		switch(a0, a1, a2) then cacheWriteMaxonOpSwitch(writer, a0: a0, a1: a1, a2: a2)
+		witnessDispatch(a0, a1, a2, a3, a4, a5, a6) then cacheWriteMaxonOpWitnessDispatch(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6)
+		witnessTryDispatch(a0, a1, a2, a3, a4, a5, a6) then cacheWriteMaxonOpWitnessTryDispatch(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6)
+		panicAbortValue(a0) then cacheWriteMaxonOpPanicAbortValue(writer, a0: a0)
+		errorFlagEncode(a0, a1, a2) then cacheWriteMaxonOpErrorFlagEncode(writer, a0: a0, a1: a1, a2: a2)
+		serviceSpawn(a0, a1, a2) then cacheWriteMaxonOpServiceSpawn(writer, a0: a0, a1: a1, a2: a2)
+		serviceSend(a0, a1, a2, a3) then cacheWriteMaxonOpServiceSend(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		serviceReplyCell(a0, a1, a2) then cacheWriteMaxonOpServiceReplyCell(writer, a0: a0, a1: a1, a2: a2)
+		immortalStructRecord(a0, a1, a2) then cacheWriteMaxonOpImmortalStructRecord(writer, a0: a0, a1: a1, a2: a2)
+		immortalStringTable(a0, a1, a2, a3) then cacheWriteMaxonOpImmortalStringTable(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		covPoint(a0) then cacheWriteMaxonOpCovPoint(writer, a0: a0)
+		rawIntrinsic(a0, a1, a2, a3) then cacheWriteMaxonOpRawIntrinsic(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		existentialWitness(a0, a1, a2) then cacheWriteMaxonOpExistentialWitness(writer, a0: a0, a1: a1, a2: a2)
+	end 'payload'
+end 'cacheWriteMaxonOp'
+
+function cacheWriteMaxonOpCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 ByteArrayArray, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray, a7 CalleeMint)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.bytes(a1)
+	cacheWriteValueIdArray(writer, value: a2)
+	cacheWriteByteArrayArray(writer, value: a3)
+	cacheWriteSourceRangeArray(writer, value: a4)
+	cacheWriteWriteBlameArray(writer, value: a5)
+	cacheWriteParamCountArray(writer, value: a6)
+	writer.unsigned(a7.ordinal as CacheUnsigned)
+end 'cacheWriteMaxonOpCall'
+
+function cacheWriteMaxonOpLiteral(writer LibraryCacheWriter, a0 ValueId, a1 ParsedInt, a2 MaxonType)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.signed(a1 as CacheSigned)
+	cacheWriteMaxonType(writer, value: a2)
+end 'cacheWriteMaxonOpLiteral'
+
+function cacheWriteMaxonOpRet(writer LibraryCacheWriter, a0 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonOpRet'
+
+function cacheWriteMaxonOpBinOp(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ValueId, a3 MaxonBinOp)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+	writer.unsigned(a3.ordinal as CacheUnsigned)
+end 'cacheWriteMaxonOpBinOp'
+
+function cacheWriteMaxonOpUnaryOp(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 MaxonUnaryOp)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2.ordinal as CacheUnsigned)
+end 'cacheWriteMaxonOpUnaryOp'
+
+function cacheWriteMaxonOpCompare(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ValueId, a3 MaxonCmpOp, a4 IntegerSignedness)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+	writer.unsigned(a3.ordinal as CacheUnsigned)
+	writer.unsigned(a4.ordinal as CacheUnsigned)
+end 'cacheWriteMaxonOpCompare'
+
+function cacheWriteMaxonOpCondBranch(writer LibraryCacheWriter, a0 ValueId, a1 BlockId, a2 BlockId)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+end 'cacheWriteMaxonOpCondBranch'
+
+function cacheWriteMaxonOpBranch(writer LibraryCacheWriter, a0 BlockId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonOpBranch'
+
+function cacheWriteMaxonOpGlobalAddr(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.bytes(a1)
+end 'cacheWriteMaxonOpGlobalAddr'
+
+function cacheWriteMaxonOpLoadIndirect(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteOffset, a3 MaxonType)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+	cacheWriteMaxonType(writer, value: a3)
+end 'cacheWriteMaxonOpLoadIndirect'
+
+function cacheWriteMaxonOpStoreIndirect(writer LibraryCacheWriter, a0 ValueId, a1 ByteOffset, a2 ValueId, a3 MaxonType)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+	cacheWriteMaxonType(writer, value: a3)
+end 'cacheWriteMaxonOpStoreIndirect'
+
+function cacheWriteMaxonOpStringLiteral(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.bytes(a1)
+end 'cacheWriteMaxonOpStringLiteral'
+
+function cacheWriteMaxonOpTryCall(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteArray, a3 ValueIdArray, a4 ByteArrayArray, a5 SourceRangeArray, a6 WriteBlameArray, a7 ParamCountArray, a8 CalleeMint)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.bytes(a2)
+	cacheWriteValueIdArray(writer, value: a3)
+	cacheWriteByteArrayArray(writer, value: a4)
+	cacheWriteSourceRangeArray(writer, value: a5)
+	cacheWriteWriteBlameArray(writer, value: a6)
+	cacheWriteParamCountArray(writer, value: a7)
+	writer.unsigned(a8.ordinal as CacheUnsigned)
+end 'cacheWriteMaxonOpTryCall'
+
+function cacheWriteMaxonOpThrowError(writer LibraryCacheWriter, a0 ValueId, a1 bool)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.flag(a1)
+end 'cacheWriteMaxonOpThrowError'
+
+function cacheWriteMaxonOpPropagateError(writer LibraryCacheWriter, a0 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonOpPropagateError'
+
+function cacheWriteMaxonOpPanicAbort(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteMaxonOpPanicAbort'
+
+function cacheWriteMaxonOpFunctionRef(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 FunctionRefForm)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.bytes(a1)
+	writer.unsigned(a2.ordinal as CacheUnsigned)
+end 'cacheWriteMaxonOpFunctionRef'
+
+function cacheWriteMaxonOpIndirectCall(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ValueIdArray)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	cacheWriteValueIdArray(writer, value: a2)
+end 'cacheWriteMaxonOpIndirectCall'
+
+function cacheWriteMaxonOpAsyncCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 ByteArrayArray, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.bytes(a1)
+	cacheWriteValueIdArray(writer, value: a2)
+	cacheWriteByteArrayArray(writer, value: a3)
+	cacheWriteSourceRangeArray(writer, value: a4)
+	cacheWriteWriteBlameArray(writer, value: a5)
+	cacheWriteParamCountArray(writer, value: a6)
+end 'cacheWriteMaxonOpAsyncCall'
+
+function cacheWriteMaxonOpAwait(writer LibraryCacheWriter, a0 ValueId, a1 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+end 'cacheWriteMaxonOpAwait'
+
+function cacheWriteMaxonOpTryAwait(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+end 'cacheWriteMaxonOpTryAwait'
+
+function cacheWriteMaxonOpSizeofType(writer LibraryCacheWriter, a0 ValueId, a1 MaxonType)
+	writer.unsigned(a0 as CacheUnsigned)
+	cacheWriteMaxonType(writer, value: a1)
+end 'cacheWriteMaxonOpSizeofType'
+
+function cacheWriteMaxonOpConstArrayLiteral(writer LibraryCacheWriter, a0 ValueId, a1 ElementStride, a2 ParsedInt, a3 ByteArray)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.signed(a1 as CacheSigned)
+	writer.signed(a2 as CacheSigned)
+	writer.bytes(a3)
+end 'cacheWriteMaxonOpConstArrayLiteral'
+
+function cacheWriteMaxonOpSwitch(writer LibraryCacheWriter, a0 ValueId, a1 BlockIdArray, a2 BlockId)
+	writer.unsigned(a0 as CacheUnsigned)
+	cacheWriteBlockIdArray(writer, value: a1)
+	writer.unsigned(a2 as CacheUnsigned)
+end 'cacheWriteMaxonOpSwitch'
+
+function cacheWriteMaxonOpWitnessDispatch(writer LibraryCacheWriter, a0 ValueId, a1 ValueIdArray, a2 ValueId, a3 WitnessMethodIndex, a4 ElementIndex, a5 bool, a6 bool)
+	writer.unsigned(a0 as CacheUnsigned)
+	cacheWriteValueIdArray(writer, value: a1)
+	writer.unsigned(a2 as CacheUnsigned)
+	writer.unsigned(a3 as CacheUnsigned)
+	writer.unsigned(a4 as CacheUnsigned)
+	writer.flag(a5)
+	writer.flag(a6)
+end 'cacheWriteMaxonOpWitnessDispatch'
+
+function cacheWriteMaxonOpWitnessTryDispatch(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ValueIdArray, a3 ValueId, a4 WitnessMethodIndex, a5 ElementIndex, a6 bool)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	cacheWriteValueIdArray(writer, value: a2)
+	writer.unsigned(a3 as CacheUnsigned)
+	writer.unsigned(a4 as CacheUnsigned)
+	writer.unsigned(a5 as CacheUnsigned)
+	writer.flag(a6)
+end 'cacheWriteMaxonOpWitnessTryDispatch'
+
+function cacheWriteMaxonOpPanicAbortValue(writer LibraryCacheWriter, a0 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonOpPanicAbortValue'
+
+function cacheWriteMaxonOpErrorFlagEncode(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 bool)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.flag(a2)
+end 'cacheWriteMaxonOpErrorFlagEncode'
+
+function cacheWriteMaxonOpServiceSpawn(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.bytes(a1)
+	writer.unsigned(a2 as CacheUnsigned)
+end 'cacheWriteMaxonOpServiceSpawn'
+
+function cacheWriteMaxonOpServiceSend(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueId, a3 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.bytes(a1)
+	writer.unsigned(a2 as CacheUnsigned)
+	writer.unsigned(a3 as CacheUnsigned)
+end 'cacheWriteMaxonOpServiceSend'
+
+function cacheWriteMaxonOpServiceReplyCell(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ByteArray)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.bytes(a1)
+	writer.bytes(a2)
+end 'cacheWriteMaxonOpServiceReplyCell'
+
+function cacheWriteMaxonOpImmortalStructRecord(writer LibraryCacheWriter, a0 ValueId, a1 ImmortalBoxNodeArray, a2 ElementIndex)
+	writer.unsigned(a0 as CacheUnsigned)
+	cacheWriteImmortalBoxNodeArray(writer, value: a1)
+	writer.unsigned(a2 as CacheUnsigned)
+end 'cacheWriteMaxonOpImmortalStructRecord'
+
+function cacheWriteMaxonOpImmortalStringTable(writer LibraryCacheWriter, a0 ValueId, a1 ByteArrayArray, a2 ElementStride, a3 OwnershipCallee)
+	writer.unsigned(a0 as CacheUnsigned)
+	cacheWriteByteArrayArray(writer, value: a1)
+	writer.signed(a2 as CacheSigned)
+	cacheWriteOwnershipCallee(writer, value: a3)
+end 'cacheWriteMaxonOpImmortalStringTable'
+
+function cacheWriteMaxonOpCovPoint(writer LibraryCacheWriter, a0 CovPointId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteMaxonOpCovPoint'
+
+function cacheWriteMaxonOpRawIntrinsic(writer LibraryCacheWriter, a0 ValueId, a1 RawIntrinsic, a2 ValueIdArray, a3 ParsedInt)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1.ordinal as CacheUnsigned)
+	cacheWriteValueIdArray(writer, value: a2)
+	writer.signed(a3 as CacheSigned)
+end 'cacheWriteMaxonOpRawIntrinsic'
+
+function cacheWriteMaxonOpExistentialWitness(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.bytes(a1)
+	writer.unsigned(a2 as CacheUnsigned)
+end 'cacheWriteMaxonOpExistentialWitness'
+
+export function cacheReadMaxonOp(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadMaxonOpCall(reader)
+		1 gives try cacheReadMaxonOpLiteral(reader)
+		2 gives try cacheReadMaxonOpRet(reader)
+		3 gives MaxonOp.retVoid
+		4 gives try cacheReadMaxonOpBinOp(reader)
+		5 gives try cacheReadMaxonOpUnaryOp(reader)
+		6 gives try cacheReadMaxonOpCompare(reader)
+		7 gives try cacheReadMaxonOpCondBranch(reader)
+		8 gives try cacheReadMaxonOpBranch(reader)
+		9 gives try cacheReadMaxonOpGlobalAddr(reader)
+		10 gives try cacheReadMaxonOpLoadIndirect(reader)
+		11 gives try cacheReadMaxonOpStoreIndirect(reader)
+		12 gives try cacheReadMaxonOpStringLiteral(reader)
+		13 gives try cacheReadMaxonOpTryCall(reader)
+		14 gives try cacheReadMaxonOpThrowError(reader)
+		15 gives try cacheReadMaxonOpPropagateError(reader)
+		16 gives try cacheReadMaxonOpPanicAbort(reader)
+		17 gives try cacheReadMaxonOpFunctionRef(reader)
+		18 gives try cacheReadMaxonOpIndirectCall(reader)
+		19 gives try cacheReadMaxonOpAsyncCall(reader)
+		20 gives try cacheReadMaxonOpAwait(reader)
+		21 gives try cacheReadMaxonOpTryAwait(reader)
+		22 gives try cacheReadMaxonOpSizeofType(reader)
+		23 gives try cacheReadMaxonOpConstArrayLiteral(reader)
+		24 gives try cacheReadMaxonOpSwitch(reader)
+		25 gives try cacheReadMaxonOpWitnessDispatch(reader)
+		26 gives try cacheReadMaxonOpWitnessTryDispatch(reader)
+		27 gives try cacheReadMaxonOpPanicAbortValue(reader)
+		28 gives try cacheReadMaxonOpErrorFlagEncode(reader)
+		29 gives try cacheReadMaxonOpServiceSpawn(reader)
+		30 gives try cacheReadMaxonOpServiceSend(reader)
+		31 gives try cacheReadMaxonOpServiceReplyCell(reader)
+		32 gives try cacheReadMaxonOpImmortalStructRecord(reader)
+		33 gives try cacheReadMaxonOpImmortalStringTable(reader)
+		34 gives try cacheReadMaxonOpCovPoint(reader)
+		35 gives try cacheReadMaxonOpRawIntrinsic(reader)
+		36 gives try cacheReadMaxonOpExistentialWitness(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadMaxonOp'
+
+function cacheReadMaxonOpCall(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try reader.bytes()
+	let a2 = try cacheReadValueIdArray(reader)
+	let a3 = try cacheReadByteArrayArray(reader)
+	let a4 = try cacheReadSourceRangeArray(reader)
+	let a5 = try cacheReadWriteBlameArray(reader)
+	let a6 = try cacheReadParamCountArray(reader)
+	let a7 = try cacheReadCalleeMint(reader)
+
+	return MaxonOp.call(a0, callee: a1, args: a2, argLabels: a3, argRanges: a4, argImmutableNames: a5, argDefaultSlots: a6, mint: a7)
+end 'cacheReadMaxonOpCall'
+
+function cacheReadMaxonOpLiteral(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.signed()) as ParsedInt
+	let a2 = try cacheReadMaxonType(reader)
+
+	return MaxonOp.literal(a0, value: a1, valueType: a2)
+end 'cacheReadMaxonOpLiteral'
+
+function cacheReadMaxonOpRet(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+
+	return MaxonOp.ret(a0)
+end 'cacheReadMaxonOpRet'
+
+function cacheReadMaxonOpBinOp(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = (try reader.unsigned()) as ValueId
+	let a3 = try cacheReadMaxonBinOp(reader)
+
+	return MaxonOp.binOp(a0, lhs: a1, rhs: a2, op: a3)
+end 'cacheReadMaxonOpBinOp'
+
+function cacheReadMaxonOpUnaryOp(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = try cacheReadMaxonUnaryOp(reader)
+
+	return MaxonOp.unaryOp(a0, operand: a1, op: a2)
+end 'cacheReadMaxonOpUnaryOp'
+
+function cacheReadMaxonOpCompare(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = (try reader.unsigned()) as ValueId
+	let a3 = try cacheReadMaxonCmpOp(reader)
+	let a4 = try cacheReadIntegerSignedness(reader)
+
+	return MaxonOp.compare(a0, lhs: a1, rhs: a2, op: a3, signedness: a4)
+end 'cacheReadMaxonOpCompare'
+
+function cacheReadMaxonOpCondBranch(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as BlockId
+	let a2 = (try reader.unsigned()) as BlockId
+
+	return MaxonOp.condBranch(a0, thenBlockId: a1, elseBlockId: a2)
+end 'cacheReadMaxonOpCondBranch'
+
+function cacheReadMaxonOpBranch(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as BlockId
+
+	return MaxonOp.branch(a0)
+end 'cacheReadMaxonOpBranch'
+
+function cacheReadMaxonOpGlobalAddr(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try reader.bytes()
+
+	return MaxonOp.globalAddr(a0, label: a1)
+end 'cacheReadMaxonOpGlobalAddr'
+
+function cacheReadMaxonOpLoadIndirect(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = (try reader.unsigned()) as ByteOffset
+	let a3 = try cacheReadMaxonType(reader)
+
+	return MaxonOp.loadIndirect(a0, addr: a1, offset: a2, valueType: a3)
+end 'cacheReadMaxonOpLoadIndirect'
+
+function cacheReadMaxonOpStoreIndirect(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ByteOffset
+	let a2 = (try reader.unsigned()) as ValueId
+	let a3 = try cacheReadMaxonType(reader)
+
+	return MaxonOp.storeIndirect(a0, offset: a1, value: a2, valueType: a3)
+end 'cacheReadMaxonOpStoreIndirect'
+
+function cacheReadMaxonOpStringLiteral(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try reader.bytes()
+
+	return MaxonOp.stringLiteral(a0, bytes: a1)
+end 'cacheReadMaxonOpStringLiteral'
+
+function cacheReadMaxonOpTryCall(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = try reader.bytes()
+	let a3 = try cacheReadValueIdArray(reader)
+	let a4 = try cacheReadByteArrayArray(reader)
+	let a5 = try cacheReadSourceRangeArray(reader)
+	let a6 = try cacheReadWriteBlameArray(reader)
+	let a7 = try cacheReadParamCountArray(reader)
+	let a8 = try cacheReadCalleeMint(reader)
+
+	return MaxonOp.tryCall(a0, errorFlag: a1, callee: a2, args: a3, argLabels: a4, argRanges: a5, argImmutableNames: a6, argDefaultSlots: a7, mint: a8)
+end 'cacheReadMaxonOpTryCall'
+
+function cacheReadMaxonOpThrowError(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try reader.flag()
+
+	return MaxonOp.throwError(a0, errorIsBoxed: a1)
+end 'cacheReadMaxonOpThrowError'
+
+function cacheReadMaxonOpPropagateError(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+
+	return MaxonOp.propagateError(a0)
+end 'cacheReadMaxonOpPropagateError'
+
+function cacheReadMaxonOpPanicAbort(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return MaxonOp.panicAbort(a0)
+end 'cacheReadMaxonOpPanicAbort'
+
+function cacheReadMaxonOpFunctionRef(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try reader.bytes()
+	let a2 = try cacheReadFunctionRefForm(reader)
+
+	return MaxonOp.functionRef(a0, funcName: a1, form: a2)
+end 'cacheReadMaxonOpFunctionRef'
+
+function cacheReadMaxonOpIndirectCall(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = try cacheReadValueIdArray(reader)
+
+	return MaxonOp.indirectCall(a0, callee: a1, args: a2)
+end 'cacheReadMaxonOpIndirectCall'
+
+function cacheReadMaxonOpAsyncCall(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try reader.bytes()
+	let a2 = try cacheReadValueIdArray(reader)
+	let a3 = try cacheReadByteArrayArray(reader)
+	let a4 = try cacheReadSourceRangeArray(reader)
+	let a5 = try cacheReadWriteBlameArray(reader)
+	let a6 = try cacheReadParamCountArray(reader)
+
+	return MaxonOp.asyncCall(a0, callee: a1, args: a2, argLabels: a3, argRanges: a4, argImmutableNames: a5, argDefaultSlots: a6)
+end 'cacheReadMaxonOpAsyncCall'
+
+function cacheReadMaxonOpAwait(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+
+	return MaxonOp.await(a0, promise: a1)
+end 'cacheReadMaxonOpAwait'
+
+function cacheReadMaxonOpTryAwait(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = (try reader.unsigned()) as ValueId
+
+	return MaxonOp.tryAwait(a0, errorFlag: a1, promise: a2)
+end 'cacheReadMaxonOpTryAwait'
+
+function cacheReadMaxonOpSizeofType(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try cacheReadMaxonType(reader)
+
+	return MaxonOp.sizeofType(a0, targetType: a1)
+end 'cacheReadMaxonOpSizeofType'
+
+function cacheReadMaxonOpConstArrayLiteral(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.boundedSigned(-4, high: 8)) as ElementStride
+	let a2 = (try reader.signed()) as ParsedInt
+	let a3 = try reader.bytes()
+
+	return MaxonOp.constArrayLiteral(a0, elementSize: a1, elementCount: a2, bytes: a3)
+end 'cacheReadMaxonOpConstArrayLiteral'
+
+function cacheReadMaxonOpSwitch(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try cacheReadBlockIdArray(reader)
+	let a2 = (try reader.unsigned()) as BlockId
+
+	return MaxonOp.switch(a0, denseTargetBlockIds: a1, defaultBlockId: a2)
+end 'cacheReadMaxonOpSwitch'
+
+function cacheReadMaxonOpWitnessDispatch(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try cacheReadValueIdArray(reader)
+	let a2 = (try reader.unsigned()) as ValueId
+	let a3 = (try reader.boundedUnsigned(0, high: u16.max)) as WitnessMethodIndex
+	let a4 = (try reader.unsigned()) as ElementIndex
+	let a5 = try reader.flag()
+	let a6 = try reader.flag()
+
+	return MaxonOp.witnessDispatch(a0, args: a1, witness: a2, methodIndex: a3, interfaceDeclIndex: a4, isVoid: a5, isThrowing: a6)
+end 'cacheReadMaxonOpWitnessDispatch'
+
+function cacheReadMaxonOpWitnessTryDispatch(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = try cacheReadValueIdArray(reader)
+	let a3 = (try reader.unsigned()) as ValueId
+	let a4 = (try reader.boundedUnsigned(0, high: u16.max)) as WitnessMethodIndex
+	let a5 = (try reader.unsigned()) as ElementIndex
+	let a6 = try reader.flag()
+
+	return MaxonOp.witnessTryDispatch(a0, errorFlag: a1, args: a2, witness: a3, methodIndex: a4, interfaceDeclIndex: a5, isVoid: a6)
+end 'cacheReadMaxonOpWitnessTryDispatch'
+
+function cacheReadMaxonOpPanicAbortValue(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+
+	return MaxonOp.panicAbortValue(a0)
+end 'cacheReadMaxonOpPanicAbortValue'
+
+function cacheReadMaxonOpErrorFlagEncode(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = try reader.flag()
+
+	return MaxonOp.errorFlagEncode(a0, errorValue: a1, errorIsBoxed: a2)
+end 'cacheReadMaxonOpErrorFlagEncode'
+
+function cacheReadMaxonOpServiceSpawn(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try reader.bytes()
+	let a2 = (try reader.unsigned()) as ValueId
+
+	return MaxonOp.serviceSpawn(a0, typeName: a1, state: a2)
+end 'cacheReadMaxonOpServiceSpawn'
+
+function cacheReadMaxonOpServiceSend(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try reader.bytes()
+	let a2 = (try reader.unsigned()) as ValueId
+	let a3 = (try reader.unsigned()) as ValueId
+
+	return MaxonOp.serviceSend(a0, callee: a1, handle: a2, request: a3)
+end 'cacheReadMaxonOpServiceSend'
+
+function cacheReadMaxonOpServiceReplyCell(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try reader.bytes()
+	let a2 = try reader.bytes()
+
+	return MaxonOp.serviceReplyCell(a0, messageName: a1, awaitedService: a2)
+end 'cacheReadMaxonOpServiceReplyCell'
+
+function cacheReadMaxonOpImmortalStructRecord(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try cacheReadImmortalBoxNodeArray(reader)
+	let a2 = (try reader.unsigned()) as ElementIndex
+
+	return MaxonOp.immortalStructRecord(a0, nodes: a1, root: a2)
+end 'cacheReadMaxonOpImmortalStructRecord'
+
+function cacheReadMaxonOpImmortalStringTable(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try cacheReadByteArrayArray(reader)
+	let a2 = (try reader.boundedSigned(-4, high: 8)) as ElementStride
+	let a3 = try cacheReadOwnershipCallee(reader)
+
+	return MaxonOp.immortalStringTable(a0, texts: a1, elementSize: a2, elementDestroy: a3)
+end 'cacheReadMaxonOpImmortalStringTable'
+
+function cacheReadMaxonOpCovPoint(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.boundedUnsigned(0, high: u32.max)) as CovPointId
+
+	return MaxonOp.covPoint(a0)
+end 'cacheReadMaxonOpCovPoint'
+
+function cacheReadMaxonOpRawIntrinsic(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try cacheReadRawIntrinsic(reader)
+	let a2 = try cacheReadValueIdArray(reader)
+	let a3 = (try reader.signed()) as ParsedInt
+
+	return MaxonOp.rawIntrinsic(a0, intrinsic: a1, args: a2, constant: a3)
+end 'cacheReadMaxonOpRawIntrinsic'
+
+function cacheReadMaxonOpExistentialWitness(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = try reader.bytes()
+	let a2 = (try reader.unsigned()) as ValueId
+
+	return MaxonOp.existentialWitness(a0, interfaceName: a1, conformer: a2)
+end 'cacheReadMaxonOpExistentialWitness'
+
+// @generated library-cache end
+
 // ⭐ **`args[0]` OF A WITNESS DISPATCH IS THE BORROWED RECEIVER, WHICH FILLS NO FORMAL** — so interface
 // formal `j` is `args[j + WitnessReceiverArgCount]`. `Parser.withWitnessReceiver` is the ONE place the
 // receiver is put back after `slotCallArgs` (which knows only the formals) has reordered the actuals; this
@@ -1991,6 +3194,36 @@ export enum WriteBlameHolder
 	closure
 end 'WriteBlameHolder'
 
+// @generated library-cache begin
+let CacheCasesWriteBlameHolder = [WriteBlameHolder.binding, WriteBlameHolder.closure]
+
+function cacheReadWriteBlameHolder(reader LibraryCacheReader) returns WriteBlameHolder throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesWriteBlameHolder.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadWriteBlameHolder'
+
+function cacheTableAgreesWriteBlameHolder() returns bool
+	let declared = WriteBlameHolder.allCases
+
+	if CacheCasesWriteBlameHolder.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesWriteBlameHolder.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesWriteBlameHolder'
+
+// @generated library-cache end
+
 export union WriteBlame
 	unblamed
 	blamed(name ByteArray, holder WriteBlameHolder)
@@ -2017,7 +3250,65 @@ export union WriteBlame
 	end 'blamedName'
 end 'WriteBlame'
 
+// @generated library-cache begin
+export function cacheWriteWriteBlame(writer LibraryCacheWriter, value WriteBlame)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unblamed then break 'payload'
+		blamed(a0, a1) then cacheWriteWriteBlameBlamed(writer, a0: a0, a1: a1)
+	end 'payload'
+end 'cacheWriteWriteBlame'
+
+function cacheWriteWriteBlameBlamed(writer LibraryCacheWriter, a0 ByteArray, a1 WriteBlameHolder)
+	writer.bytes(a0)
+	writer.unsigned(a1.ordinal as CacheUnsigned)
+end 'cacheWriteWriteBlameBlamed'
+
+export function cacheReadWriteBlame(reader LibraryCacheReader) returns WriteBlame throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives WriteBlame.unblamed
+		1 gives try cacheReadWriteBlameBlamed(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadWriteBlame'
+
+function cacheReadWriteBlameBlamed(reader LibraryCacheReader) returns WriteBlame throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = try cacheReadWriteBlameHolder(reader)
+
+	return WriteBlame.blamed(a0, holder: a1)
+end 'cacheReadWriteBlameBlamed'
+
+// @generated library-cache end
+
 export typealias WriteBlameArray = Array with WriteBlame
+
+// @generated library-cache begin
+function cacheWriteWriteBlameArray(writer LibraryCacheWriter, value WriteBlameArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		cacheWriteWriteBlame(writer, value: item)
+	end 'eachItem'
+end 'cacheWriteWriteBlameArray'
+
+function cacheReadWriteBlameArray(reader LibraryCacheReader) returns WriteBlameArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = WriteBlameArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadWriteBlame(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadWriteBlameArray'
+
+// @generated library-cache end
 
 // The same op with its ARGUMENT LIST and blame names replaced — every other operand, the parallel
 // label / range / default-slot columns included, carried through verbatim. `withRewrittenCallee`'s

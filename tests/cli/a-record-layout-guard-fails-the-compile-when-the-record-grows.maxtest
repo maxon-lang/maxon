@@ -1,0 +1,33 @@
+let CaseDirName = "layout-guard"
+let CurrentProgramDirName = "current"
+let StaleProgramDirName = "stale"
+let OutputName = "program"
+let CurrentPairBytes = 16 as GuardBytes
+let StalePairBytes = 8 as GuardBytes
+
+typealias GuardBytes = int(0 to 4096)
+
+test 'a record guarded by its byte size stops compiling when a field is added without the guard being updated'
+	requireHeldOutsideCheckout(CaseDirName, check: LayoutGuardFailsTheCompile.create())
+end 'a record guarded by its byte size stops compiling when a field is added without the guard being updated'
+
+function guardedProgramSource(size GuardBytes) returns String
+	return "typealias Slot = int(0 to 1000)\ntypealias GuardedSize = int({size} to {size})\n\ntype Pair\n\texport var left as Slot\n\texport var right as Slot\n\n\tstatic function guardedBytes() returns GuardedSize\n\t\treturn sizeof(Pair) as GuardedSize\n\tend 'guardedBytes'\nend 'Pair'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+end 'guardedProgramSource'
+
+type LayoutGuardFailsTheCompile implements OutsideCheckoutCase
+	static function create() returns LayoutGuardFailsTheCompile
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: CurrentProgramDirName, source: guardedProgramSource(CurrentPairBytes))
+		stageProgram(dir, name: StaleProgramDirName, source: guardedProgramSource(StalePairBytes))
+
+		_ = try requireLibraryCacheBuild(dir, program: CurrentProgramDirName, output: OutputName, which: "the build of a record whose guard names its real size")
+
+		let stale = runLibraryCacheBuild(dir, program: StaleProgramDirName, output: OutputName, options: ListedWordArray.create())
+		try Expect.equal(stale.exitCode(), expected: 1, message: "a record whose guard names a size it no longer has did not fail the way a refused program does. It wrote to stdout: {stale.stdout} and to stderr: {stale.stderr}")
+		try Expect.equal(stale.stderr.contains("E3005"), expected: true, message: "the stale guard was refused, but not as E3005. It wrote to stderr: {stale.stderr}")
+	end 'requireHeldIn'
+end 'LayoutGuardFailsTheCompile'

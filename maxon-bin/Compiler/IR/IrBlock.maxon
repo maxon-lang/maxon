@@ -67,6 +67,48 @@ export enum BlockArgReturnRole
 	errorFlag
 end 'BlockArgReturnRole'
 
+// @generated library-cache begin
+let CacheCasesBlockArgReturnRole = [BlockArgReturnRole.none, BlockArgReturnRole.primaryReturn, BlockArgReturnRole.errorFlag]
+
+function cacheReadBlockArgReturnRole(reader LibraryCacheReader) returns BlockArgReturnRole throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesBlockArgReturnRole.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadBlockArgReturnRole'
+
+function cacheTableAgreesBlockArgReturnRole() returns bool
+	let declared = BlockArgReturnRole.allCases
+
+	if CacheCasesBlockArgReturnRole.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesBlockArgReturnRole.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesBlockArgReturnRole'
+
+export function cacheEnumTablesAgreeInCompilerIRIrBlock() returns bool
+	if not cacheTableAgreesBlockHeat() 'disagreesCacheTableAgreesBlockHeat'
+		return false
+	end 'disagreesCacheTableAgreesBlockHeat'
+
+	if not cacheTableAgreesBlockArgReturnRole() 'disagreesCacheTableAgreesBlockArgReturnRole'
+		return false
+	end 'disagreesCacheTableAgreesBlockArgReturnRole'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerIRIrBlock'
+
+// @generated library-cache end
+
 // A block argument (phi node): a value defined at block entry, bound by
 // the branch op that transfers control to this block. Minted by the
 // parser's on-the-fly SSA at the Maxon phase (see this file's header) and
@@ -82,9 +124,54 @@ export type IrBlockArg
 	export static function create(valueId ValueId, argType StdType, returnRole BlockArgReturnRole = BlockArgReturnRole.none) returns IrBlockArg
 		return Self{valueId: valueId, argType: argType, returnRole: returnRole}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.valueId as CacheUnsigned)
+		writer.unsigned(self.argType.ordinal as CacheUnsigned)
+		writer.unsigned(self.returnRole.ordinal as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns IrBlockArg throws LibraryCacheDamage
+		let f_valueId = (try reader.unsigned()) as ValueId
+		let f_argType = try cacheReadStdType(reader)
+		let f_returnRole = try cacheReadBlockArgReturnRole(reader)
+
+		return Self{valueId: f_valueId, argType: f_argType, returnRole: f_returnRole}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(IrBlockArg) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'IrBlockArg'
 
 export typealias IrBlockArgArray = Array with IrBlockArg
+
+// @generated library-cache begin
+function cacheWriteIrBlockArgArray(writer LibraryCacheWriter, value IrBlockArgArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteIrBlockArgArray'
+
+function cacheReadIrBlockArgArray(reader LibraryCacheReader) returns IrBlockArgArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = IrBlockArgArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try IrBlockArg.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadIrBlockArgArray'
+
+// @generated library-cache end
 
 // An outgoing branch arg list paired with its successor block id: the values a
 // predecessor passes to the successor's block-args (phis) on that edge. Recorded by
@@ -100,9 +187,52 @@ export type BranchEdge
 	export static function create(targetBlockId BlockId, argIds ValueIdArray) returns BranchEdge
 		return Self{targetBlockId: targetBlockId, argIds: argIds}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.targetBlockId as CacheUnsigned)
+		cacheWriteValueIdArray(writer, value: self.argIds)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns BranchEdge throws LibraryCacheDamage
+		let f_targetBlockId = (try reader.unsigned()) as BlockId
+		let f_argIds = try cacheReadValueIdArray(reader)
+
+		return Self{targetBlockId: f_targetBlockId, argIds: f_argIds}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(BranchEdge) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'BranchEdge'
 
 export typealias BranchEdgeArray = Array with BranchEdge
+
+// @generated library-cache begin
+function cacheWriteBranchEdgeArray(writer LibraryCacheWriter, value BranchEdgeArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteBranchEdgeArray'
+
+function cacheReadBranchEdgeArray(reader LibraryCacheReader) returns BranchEdgeArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = BranchEdgeArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try BranchEdge.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadBranchEdgeArray'
+
+// @generated library-cache end
 
 // A block's terminator status.
 //   unset — no terminator op is currently attached. The parser starts
@@ -122,6 +252,42 @@ export union Terminator
 	fallthrough
 	opIndex(index ElementIndex)
 end 'Terminator'
+
+// @generated library-cache begin
+function cacheWriteTerminator(writer LibraryCacheWriter, value Terminator)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unset then break 'payload'
+		dead then break 'payload'
+		fallthrough then break 'payload'
+		opIndex(a0) then cacheWriteTerminatorOpIndex(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteTerminator'
+
+function cacheWriteTerminatorOpIndex(writer LibraryCacheWriter, a0 ElementIndex)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteTerminatorOpIndex'
+
+function cacheReadTerminator(reader LibraryCacheReader) returns Terminator throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives Terminator.unset
+		1 gives Terminator.dead
+		2 gives Terminator.fallthrough
+		3 gives try cacheReadTerminatorOpIndex(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadTerminator'
+
+function cacheReadTerminatorOpIndex(reader LibraryCacheReader) returns Terminator throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ElementIndex
+
+	return Terminator.opIndex(a0)
+end 'cacheReadTerminatorOpIndex'
+
+// @generated library-cache end
 
 // ⭐ **THE TWO QUESTIONS ABOUT A TERMINATOR SLOT, ASKED OF THE SLOT ITSELF.** `IrBlock.hasTerminatorOp` /
 // `terminatorIndex` are these read off `self.terminator`, and they delegate rather than restate — one rule,
@@ -181,6 +347,38 @@ export union CondBranch
 	opIndex(index ElementIndex)
 end 'CondBranch'
 
+// @generated library-cache begin
+function cacheWriteCondBranch(writer LibraryCacheWriter, value CondBranch)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break 'payload'
+		opIndex(a0) then cacheWriteCondBranchOpIndex(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteCondBranch'
+
+function cacheWriteCondBranchOpIndex(writer LibraryCacheWriter, a0 ElementIndex)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteCondBranchOpIndex'
+
+function cacheReadCondBranch(reader LibraryCacheReader) returns CondBranch throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives CondBranch.none
+		1 gives try cacheReadCondBranchOpIndex(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadCondBranch'
+
+function cacheReadCondBranchOpIndex(reader LibraryCacheReader) returns CondBranch throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ElementIndex
+
+	return CondBranch.opIndex(a0)
+end 'cacheReadCondBranchOpIndex'
+
+// @generated library-cache end
+
 // How often a block is expected to run, as far as the pass that minted it can say. `cold` is a block
 // reached only when a guard refuses — an inlined access's slow arm, a range check's panic, a
 // `try … otherwise panic` handler — and it changes one thing: a call in a cold block does not confine
@@ -195,6 +393,36 @@ export enum BlockHeat
 	normal
 	cold
 end 'BlockHeat'
+
+// @generated library-cache begin
+let CacheCasesBlockHeat = [BlockHeat.normal, BlockHeat.cold]
+
+function cacheReadBlockHeat(reader LibraryCacheReader) returns BlockHeat throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesBlockHeat.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadBlockHeat'
+
+function cacheTableAgreesBlockHeat() returns bool
+	let declared = BlockHeat.allCases
+
+	if CacheCasesBlockHeat.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesBlockHeat.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesBlockHeat'
+
+// @generated library-cache end
 
 export typealias BlockHeatArray = Array with BlockHeat
 
@@ -211,6 +439,38 @@ export union InlineSiteRef
 	none
 	site(index ElementIndex)
 end 'InlineSiteRef'
+
+// @generated library-cache begin
+module function cacheWriteInlineSiteRef(writer LibraryCacheWriter, value InlineSiteRef)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break 'payload'
+		site(a0) then cacheWriteInlineSiteRefSite(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteInlineSiteRef'
+
+function cacheWriteInlineSiteRefSite(writer LibraryCacheWriter, a0 ElementIndex)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteInlineSiteRefSite'
+
+module function cacheReadInlineSiteRef(reader LibraryCacheReader) returns InlineSiteRef throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives InlineSiteRef.none
+		1 gives try cacheReadInlineSiteRefSite(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadInlineSiteRef'
+
+function cacheReadInlineSiteRefSite(reader LibraryCacheReader) returns InlineSiteRef throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ElementIndex
+
+	return InlineSiteRef.site(a0)
+end 'cacheReadInlineSiteRefSite'
+
+// @generated library-cache end
 
 export typealias InlineSiteRefArray = Array with InlineSiteRef
 
@@ -261,9 +521,56 @@ export type InlineSite
 	export function reparented(newParent InlineSiteRef) returns InlineSite
 		return Self{calleeName: self.calleeName, parent: newParent, callSpan: self.callSpan, calleeSourceFile: self.calleeSourceFile}
 	end 'reparented'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.calleeName)
+		cacheWriteInlineSiteRef(writer, value: self.parent)
+		writer.unsigned(self.callSpan as CacheUnsigned)
+		writer.text(self.calleeSourceFile.toString())
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns InlineSite throws LibraryCacheDamage
+		let f_calleeName = try reader.bytes()
+		let f_parent = try cacheReadInlineSiteRef(reader)
+		let f_callSpan = (try reader.boundedUnsigned(0, high: u32.max)) as SpanId
+		let f_calleeSourceFile = try reader.path()
+
+		return Self{calleeName: f_calleeName, parent: f_parent, callSpan: f_callSpan, calleeSourceFile: f_calleeSourceFile}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(InlineSite) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'InlineSite'
 
 export typealias InlineSiteArray = Array with InlineSite
+
+// @generated library-cache begin
+module function cacheWriteInlineSiteArray(writer LibraryCacheWriter, value InlineSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteInlineSiteArray'
+
+module function cacheReadInlineSiteArray(reader LibraryCacheReader) returns InlineSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = InlineSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try InlineSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadInlineSiteArray'
+
+// @generated library-cache end
 
 export type IrBlock
 	export var id as BlockId
@@ -420,9 +727,66 @@ export type IrBlock
 				opIndex then break 'check'
 		end 'check'
 	end 'assertTerminated'
+
+	// @generated library-cache begin
+	export function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.id as CacheUnsigned)
+		writer.bytes(self.label)
+		writer.unsigned(self.heat.ordinal as CacheUnsigned)
+		cacheWriteInlineSiteRef(writer, value: self.inlineSite)
+		cacheWriteOpIndexArray(writer, value: self.opRefs)
+		cacheWriteTerminator(writer, value: self.terminator)
+		cacheWriteCondBranch(writer, value: self.condBranch)
+		cacheWriteIrBlockArgArray(writer, value: self.blockArgs)
+		cacheWriteBranchEdgeArray(writer, value: self.branchEdges)
+	end 'cacheWrite'
+
+	export static function cacheRead(reader LibraryCacheReader) returns IrBlock throws LibraryCacheDamage
+		let f_id = (try reader.unsigned()) as BlockId
+		let f_label = try reader.bytes()
+		let f_heat = try cacheReadBlockHeat(reader)
+		let f_inlineSite = try cacheReadInlineSiteRef(reader)
+		let f_opRefs = try cacheReadOpIndexArray(reader)
+		let f_terminator = try cacheReadTerminator(reader)
+		let f_condBranch = try cacheReadCondBranch(reader)
+		let f_blockArgs = try cacheReadIrBlockArgArray(reader)
+		let f_branchEdges = try cacheReadBranchEdgeArray(reader)
+
+		return Self{id: f_id, label: f_label, heat: f_heat, inlineSite: f_inlineSite, opRefs: f_opRefs, terminator: f_terminator, condBranch: f_condBranch, blockArgs: f_blockArgs, branchEdges: f_branchEdges}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize72
+		return sizeof(IrBlock) as CacheSize72
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'IrBlock'
 
 export typealias IrBlockArray = Array with IrBlock
+
+// @generated library-cache begin
+export function cacheWriteIrBlockArray(writer LibraryCacheWriter, value IrBlockArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteIrBlockArray'
+
+export function cacheReadIrBlockArray(reader LibraryCacheReader) returns IrBlockArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = IrBlockArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try IrBlock.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadIrBlockArray'
+
+// @generated library-cache end
 
 // ⛔ There is deliberately NO `resolveBlockLabel(blockId, blocks)` here any more.
 //

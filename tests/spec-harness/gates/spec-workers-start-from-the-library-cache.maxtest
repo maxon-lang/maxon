@@ -1,0 +1,116 @@
+let LibraryCacheSpecName = "library-cache"
+let LibraryCacheCaseName = "library-cache.trivial"
+let LibraryCacheWorkersFlag = "--workers=1"
+let LibraryCacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+let ColdRunName = "the first run"
+let WarmRunName = "the second run"
+let LibraryCacheSummaryPrefix = "library cache: "
+let LibraryCacheSummaryShape = "library cache: <n> loaded, <n> written, <n> rejected"
+let LibraryCacheSummaryFieldSeparator = ", "
+let LibraryCacheSummaryCountSeparator = " "
+
+enum LibraryCacheSummaryField
+	loaded
+	written
+	rejected
+end 'LibraryCacheSummaryField'
+
+typealias LibraryCacheTally = int(0 to u64.max)
+typealias LibraryCacheTallyArray = Array with LibraryCacheTally
+
+test 'a second spec-test run starts its workers from the library cache the first run wrote'
+	requireNothingBroken(coldThenWarmRunFailures(LibraryCacheSpecName, caseName: LibraryCacheCaseName), headline: "spec-test workers start from the library cache")
+end 'a second spec-test run starts its workers from the library cache the first run wrote'
+
+module function coldThenWarmRunFailures(specName String, caseName String, caller String = __file__) returns StringArray
+	let cacheRoot = stagedRunCacheRoot(caller)
+	let environment = Environment.inheritUpdating([LibraryCacheRootVariable: cacheRoot.toString()])
+
+	let cold = runGateFixtureOnce([LibraryCacheWorkersFlag], environment: environment, caller: caller)
+	let warm = runGateFixtureOnce([LibraryCacheWorkersFlag], environment: environment, caller: caller)
+	discardStaging(cacheRoot)
+
+	var broken = StringArray.create()
+
+	collectRunFailures(cold, which: ColdRunName, specName: specName, caseName: caseName, broken: broken)
+	collectRunFailures(warm, which: WarmRunName, specName: specName, caseName: caseName, broken: broken)
+	collectWarmRunNotStartedFromColdRun(cold, warm: warm, broken: broken)
+
+	return broken
+end 'coldThenWarmRunFailures'
+
+function collectWarmRunNotStartedFromColdRun(cold CollectedOutput, warm CollectedOutput, broken StringArray)
+	let coldCounts = libraryCacheSummaryOf(cold, which: ColdRunName, broken: broken)
+
+	if let written = try coldCounts.get(LibraryCacheSummaryField.written.ordinal) 'coldRead'
+		if written == 0 'nothingWritten'
+			broken.push("the first run's workers wrote nothing to the library cache, so the second run has nothing to start from. It wrote to stderr:\n{cold.stderr}\n")
+		end 'nothingWritten'
+	end 'coldRead'
+
+	let warmCounts = libraryCacheSummaryOf(warm, which: WarmRunName, broken: broken)
+
+	if let loaded = try warmCounts.get(LibraryCacheSummaryField.loaded.ordinal) 'warmLoadedRead'
+		if loaded == 0 'nothingLoaded'
+			broken.push("the second run's workers loaded nothing from the library cache the first run wrote, so every worker lexed, swept and parsed the library again. It wrote to stderr:\n{warm.stderr}\n")
+		end 'nothingLoaded'
+	end 'warmLoadedRead'
+
+	if let written = try warmCounts.get(LibraryCacheSummaryField.written.ordinal) 'warmWrittenRead'
+		if written != 0 'wroteAgain'
+			broken.push("the second run's workers wrote {written} library cache entries the first run had already written. It wrote to stderr:\n{warm.stderr}\n")
+		end 'wroteAgain'
+	end 'warmWrittenRead'
+end 'collectWarmRunNotStartedFromColdRun'
+
+function collectRunFailures(run CollectedOutput, which String, specName String, caseName String, broken StringArray)
+	let said = everythingSaid(run)
+	collectNotPassed(said, specName: specName, testNames: [caseName], broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("{which} exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+end 'collectRunFailures'
+
+function libraryCacheSummaryOf(run CollectedOutput, which String, broken StringArray) returns LibraryCacheTallyArray
+	var counts = LibraryCacheTallyArray.create()
+	var lines = StringArray.create()
+
+	for line in run.stderr.split("\n") 'eachLine'
+		if line.trim().startsWith(LibraryCacheSummaryPrefix) 'aSummary'
+			lines.push(line.trim())
+		end 'aSummary'
+	end 'eachLine'
+
+	if lines.count() != 1 'notOneLine'
+		broken.push("{which} printed {lines.count()} line(s) opening `{LibraryCacheSummaryPrefix}` on stderr, where `spec-test` reports once, after its summary, what its workers' library cache loaded, wrote and rejected. It wrote to stderr:\n{run.stderr}\n")
+		return counts
+	end 'notOneLine'
+
+	let line = try lines.get(0) otherwise panic("spec-harness tests: a list holding one line has a first line")
+	let rest = try line.split(LibraryCacheSummaryPrefix).get(1) otherwise panic("spec-harness tests: a line opening with a prefix splits after it")
+	let fields = rest.split(LibraryCacheSummaryFieldSeparator)
+
+	if fields.count() != LibraryCacheSummaryField.allCases.count() 'misshapen'
+		broken.push("{which}'s library cache line does not read `{LibraryCacheSummaryShape}`. It wrote: {line}\n")
+		return counts
+	end 'misshapen'
+
+	for field in LibraryCacheSummaryField.allCases 'eachField'
+		let text = try fields.get(field.ordinal) otherwise panic("spec-harness tests: a line already counted to hold every field has none at {field.ordinal}")
+		let word = try text.split(LibraryCacheSummaryCountSeparator).get(0) otherwise panic("spec-harness tests: a split always yields a first part")
+		let count = try int.fromString(word) otherwise 'notACount'
+			broken.push("{which}'s library cache line holds '{word}' where a count belongs, against `{LibraryCacheSummaryShape}`. It wrote: {line}\n")
+			return LibraryCacheTallyArray.create()
+		end 'notACount'
+
+		if text != "{count}{LibraryCacheSummaryCountSeparator}{field.name}" 'mislabelled'
+			broken.push("{which}'s library cache line does not state `<n> {field.name}` where `{LibraryCacheSummaryShape}` does. It wrote: {line}\n")
+			return LibraryCacheTallyArray.create()
+		end 'mislabelled'
+
+		counts.push(count as LibraryCacheTally)
+	end 'eachField'
+
+	return counts
+end 'libraryCacheSummaryOf'

@@ -141,6 +141,38 @@ export union ParseMints
 	minted(mints LocalInstanceMints)
 end 'ParseMints'
 
+// @generated library-cache begin
+function cacheWriteParseMints(writer LibraryCacheWriter, value ParseMints)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break 'payload'
+		minted(a0) then cacheWriteParseMintsMinted(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteParseMints'
+
+function cacheWriteParseMintsMinted(writer LibraryCacheWriter, a0 LocalInstanceMints)
+	a0.cacheWrite(writer)
+end 'cacheWriteParseMintsMinted'
+
+function cacheReadParseMints(reader LibraryCacheReader) returns ParseMints throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives ParseMints.none
+		1 gives try cacheReadParseMintsMinted(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadParseMints'
+
+function cacheReadParseMintsMinted(reader LibraryCacheReader) returns ParseMints throws LibraryCacheDamage
+	let a0 = try LocalInstanceMints.cacheRead(reader)
+
+	return ParseMints.minted(a0)
+end 'cacheReadParseMintsMinted'
+
+// @generated library-cache end
+
 // One function's name and declared return type, recorded by the declaration sweep and applied by
 // `ProgramSignatures.record`.
 //
@@ -243,14 +275,107 @@ export type FuncSignatureEntry
 	export static function create(name ByteArray, signature FuncSignature, returnType MaxonReturnType, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool, role FunctionDeclarationRole) returns FuncSignatureEntry
 		return Self{name: name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized, role: role, returnType: returnType}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		self.signature.cacheWrite(writer)
+		writer.unsigned(self.nameLine as CacheUnsigned)
+		writer.unsigned(self.nameColumn as CacheUnsigned)
+		writer.text(self.sourceFilePath.toString())
+		writer.flag(self.synthesized)
+		writer.unsigned(self.role.ordinal as CacheUnsigned)
+		cacheWriteMaxonReturnType(writer, value: self.returnType)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns FuncSignatureEntry throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_signature = try FuncSignature.cacheRead(reader)
+		let f_nameLine = (try reader.unsigned()) as LineNumber
+		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
+		let f_sourceFilePath = try reader.path()
+		let f_synthesized = try reader.flag()
+		let f_role = try cacheReadFunctionDeclarationRole(reader)
+		let f_returnType = try cacheReadMaxonReturnType(reader)
+
+		return Self{name: f_name, signature: f_signature, nameLine: f_nameLine, nameColumn: f_nameColumn, sourceFilePath: f_sourceFilePath, synthesized: f_synthesized, role: f_role, returnType: f_returnType}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize64
+		return sizeof(FuncSignatureEntry) as CacheSize64
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FuncSignatureEntry'
 
 export typealias FuncSignatureEntryArray = Array with FuncSignatureEntry
+
+// @generated library-cache begin
+function cacheWriteFuncSignatureEntryArray(writer LibraryCacheWriter, value FuncSignatureEntryArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteFuncSignatureEntryArray'
+
+function cacheReadFuncSignatureEntryArray(reader LibraryCacheReader) returns FuncSignatureEntryArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FuncSignatureEntryArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try FuncSignatureEntry.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadFuncSignatureEntryArray'
+
+// @generated library-cache end
 
 export enum FunctionDeclarationRole
 	ordinary
 	contestedFreeFunction
 end 'FunctionDeclarationRole'
+
+// @generated library-cache begin
+let CacheCasesFunctionDeclarationRole = [FunctionDeclarationRole.ordinary, FunctionDeclarationRole.contestedFreeFunction]
+
+function cacheReadFunctionDeclarationRole(reader LibraryCacheReader) returns FunctionDeclarationRole throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesFunctionDeclarationRole.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadFunctionDeclarationRole'
+
+function cacheTableAgreesFunctionDeclarationRole() returns bool
+	let declared = FunctionDeclarationRole.allCases
+
+	if CacheCasesFunctionDeclarationRole.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesFunctionDeclarationRole.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesFunctionDeclarationRole'
+
+module function cacheEnumTablesAgreeInCompilerParseStaging() returns bool
+	if not cacheTableAgreesFunctionDeclarationRole() 'disagreesCacheTableAgreesFunctionDeclarationRole'
+		return false
+	end 'disagreesCacheTableAgreesFunctionDeclarationRole'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerParseStaging'
+
+// @generated library-cache end
 
 module typealias FuncSignatureFloorMap = Map with (ByteArray, FuncSignatureEntry)
 
@@ -268,9 +393,52 @@ type FunctionRangeCheckEntry
 	static function create(name ByteArray, checks FunctionRangeChecks) returns FunctionRangeCheckEntry
 		return Self{name: name, checks: checks}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		self.checks.cacheWrite(writer)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns FunctionRangeCheckEntry throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_checks = try FunctionRangeChecks.cacheRead(reader)
+
+		return Self{name: f_name, checks: f_checks}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(FunctionRangeCheckEntry) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FunctionRangeCheckEntry'
 
 export typealias FunctionRangeCheckEntryArray = Array with FunctionRangeCheckEntry
+
+// @generated library-cache begin
+function cacheWriteFunctionRangeCheckEntryArray(writer LibraryCacheWriter, value FunctionRangeCheckEntryArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteFunctionRangeCheckEntryArray'
+
+function cacheReadFunctionRangeCheckEntryArray(reader LibraryCacheReader) returns FunctionRangeCheckEntryArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FunctionRangeCheckEntryArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try FunctionRangeCheckEntry.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadFunctionRangeCheckEntryArray'
+
+// @generated library-cache end
 
 export type FileParseArtifact
 	// The file this artifact was parsed from (its identity + merge order anchor).
@@ -946,6 +1114,105 @@ export type FileParseArtifact
 
 		return id
 	end 'recordCovPoint'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		writer.text(self.filePath.toString())
+		writer.flag(self.livesUnderStdlibDirectory)
+		writer.flag(self.typeIdsAreProjectGlobal)
+		cacheWriteMaxonModule(writer, value: self.module)
+		self.opRanges.cacheWrite(writer)
+		cacheWriteCovPointArray(writer, value: self.covPoints)
+		cacheWriteAsyncSpawnSiteMap(writer, value: self.asyncSpawnSites)
+		cacheWriteServiceAwaitSiteMap(writer, value: self.serviceAwaitSites)
+		cacheWriteModuleVarAccessSiteMap(writer, value: self.moduleVarAccessSites)
+		cacheWriteRegistryUseSiteTable(writer, value: self.registryUseSites)
+		cacheWriteAllocTagSiteMap(writer, value: self.allocTagSites)
+		cacheWriteDebugStreamNameSiteMap(writer, value: self.debugStreamNameSites)
+		cacheWriteImmortalConstArraySiteMap(writer, value: self.immortalConstArraySites)
+		self.valueOrigins.cacheWrite(writer)
+		self.deferralSources.cacheWrite(writer)
+		cacheWriteFuncSignatureEntryArray(writer, value: self.funcSignatures)
+		cacheWriteOverloadSetTable(writer, value: self.overloadSets)
+		cacheWritePendingFnMergeCheckArray(writer, value: self.pendingFnMergeChecks)
+		cacheWritePendingFunctionTypeDoorArray(writer, value: self.pendingFunctionTypeDoors)
+		cacheWritePendingDiscardedResultArray(writer, value: self.pendingDiscardedResults)
+		cacheWriteFunctionRangeCheckEntryArray(writer, value: self.rangeChecks)
+		cacheWriteRangedTypeAliasArray(writer, value: self.typeAliases)
+		cacheWriteFunctionTypeAliasArray(writer, value: self.functionTypeAliases)
+		cacheWriteStructLayoutArray(writer, value: self.structTypes)
+		cacheWriteEnumLayoutArray(writer, value: self.enumTypes)
+		cacheWriteIrInterfaceArray(writer, value: self.interfaces)
+		cacheWriteTypeNameDeclArray(writer, value: self.typeNameDecls)
+		cacheWriteGenericFunctionInstanceArray(writer, value: self.genericInstanceRequests)
+		cacheWriteUsedTypeNameRoster(writer, value: self.usedTypeNames)
+		cacheWriteUsedTypeNameRoster(writer, value: self.memberAccessedTypeNames)
+		cacheWriteConformanceDeclArray(writer, value: self.conformances)
+		cacheWriteLiteralInitSiteArray(writer, value: self.literalInitSites)
+		cacheWriteGenericInstantiationSiteArray(writer, value: self.inferredInstantiationSites)
+		cacheWriteTypeNameInterner(writer, value: self.typeNames)
+		writer.unsigned(self.currentFuncIndex as CacheUnsigned)
+		cacheWriteDiagnosticArray(writer, value: self.diagnostics)
+		cacheWriteDeferredNameDiagnosticRoster(writer, value: self.unusedTypeAliases)
+		cacheWriteDeferredDiagnosticRoster(writer, value: self.hiddenTypeNames)
+		cacheWriteDeferredParseErrorArray(writer, value: self.deferredParseErrors)
+		cacheWriteDiagnosticArray(writer, value: self.bindingHygieneDiagnostics)
+		cacheWriteParseMints(writer, value: self.parseMints)
+		cacheWriteGenericInstanceIdArray(writer, value: self.instanceIdsInUse)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns FileParseArtifact throws LibraryCacheDamage
+		let f_filePath = try reader.path()
+		let f_livesUnderStdlibDirectory = try reader.flag()
+		let f_typeIdsAreProjectGlobal = try reader.flag()
+		let f_module = try cacheReadMaxonModule(reader)
+		let f_opRanges = try SourceRangeTable.cacheRead(reader)
+		let f_covPoints = try cacheReadCovPointArray(reader)
+		let f_asyncSpawnSites = try cacheReadAsyncSpawnSiteMap(reader)
+		let f_serviceAwaitSites = try cacheReadServiceAwaitSiteMap(reader)
+		let f_moduleVarAccessSites = try cacheReadModuleVarAccessSiteMap(reader)
+		let f_registryUseSites = try cacheReadRegistryUseSiteTable(reader)
+		let f_allocTagSites = try cacheReadAllocTagSiteMap(reader)
+		let f_debugStreamNameSites = try cacheReadDebugStreamNameSiteMap(reader)
+		let f_immortalConstArraySites = try cacheReadImmortalConstArraySiteMap(reader)
+		let f_valueOrigins = try ValueOriginTable.cacheRead(reader)
+		let f_deferralSources = try DeferralSourceTable.cacheRead(reader)
+		let f_funcSignatures = try cacheReadFuncSignatureEntryArray(reader)
+		let f_overloadSets = try cacheReadOverloadSetTable(reader)
+		let f_pendingFnMergeChecks = try cacheReadPendingFnMergeCheckArray(reader)
+		let f_pendingFunctionTypeDoors = try cacheReadPendingFunctionTypeDoorArray(reader)
+		let f_pendingDiscardedResults = try cacheReadPendingDiscardedResultArray(reader)
+		let f_rangeChecks = try cacheReadFunctionRangeCheckEntryArray(reader)
+		let f_typeAliases = try cacheReadRangedTypeAliasArray(reader)
+		let f_functionTypeAliases = try cacheReadFunctionTypeAliasArray(reader)
+		let f_structTypes = try cacheReadStructLayoutArray(reader)
+		let f_enumTypes = try cacheReadEnumLayoutArray(reader)
+		let f_interfaces = try cacheReadIrInterfaceArray(reader)
+		let f_typeNameDecls = try cacheReadTypeNameDeclArray(reader)
+		let f_genericInstanceRequests = try cacheReadGenericFunctionInstanceArray(reader)
+		let f_usedTypeNames = try cacheReadUsedTypeNameRoster(reader)
+		let f_memberAccessedTypeNames = try cacheReadUsedTypeNameRoster(reader)
+		let f_conformances = try cacheReadConformanceDeclArray(reader)
+		let f_literalInitSites = try cacheReadLiteralInitSiteArray(reader)
+		let f_inferredInstantiationSites = try cacheReadGenericInstantiationSiteArray(reader)
+		let f_typeNames = try cacheReadTypeNameInterner(reader)
+		let f_currentFuncIndex = (try reader.unsigned()) as ElementIndex
+		let f_diagnostics = try cacheReadDiagnosticArray(reader)
+		let f_unusedTypeAliases = try cacheReadDeferredNameDiagnosticRoster(reader)
+		let f_hiddenTypeNames = try cacheReadDeferredDiagnosticRoster(reader)
+		let f_deferredParseErrors = try cacheReadDeferredParseErrorArray(reader)
+		let f_bindingHygieneDiagnostics = try cacheReadDiagnosticArray(reader)
+		let f_parseMints = try cacheReadParseMints(reader)
+		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
+
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, moduleVarAccessSites: f_moduleVarAccessSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferralSources: f_deferralSources, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, deferredParseErrors: f_deferredParseErrors, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize336
+		return sizeof(FileParseArtifact) as CacheSize336
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FileParseArtifact'
 
 // ⭐⭐ **THE OP AS THE ARTIFACT KEEPS IT: every record in its payload the artifact's own.** A name, a label, a

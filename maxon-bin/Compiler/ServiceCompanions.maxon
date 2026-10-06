@@ -52,14 +52,97 @@ export type ServiceSpawnCandidate
 	export static function create(typeName ByteArray, member ByteArray, gate SpawnGate, declFilePath FilePath, line LineNumber, column ColumnNumber) returns ServiceSpawnCandidate
 		return Self{typeName: typeName, member: member, gate: gate, declFilePath: declFilePath, line: line, column: column}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.typeName)
+		writer.bytes(self.member)
+		cacheWriteSpawnGate(writer, value: self.gate)
+		writer.text(self.declFilePath.toString())
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ServiceSpawnCandidate throws LibraryCacheDamage
+		let f_typeName = try reader.bytes()
+		let f_member = try reader.bytes()
+		let f_gate = try cacheReadSpawnGate(reader)
+		let f_declFilePath = try reader.path()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{typeName: f_typeName, member: f_member, gate: f_gate, declFilePath: f_declFilePath, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(ServiceSpawnCandidate) as CacheSize48
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ServiceSpawnCandidate'
 
 module typealias ServiceSpawnCandidateArray = Array with ServiceSpawnCandidate
+
+// @generated library-cache begin
+module function cacheWriteServiceSpawnCandidateArray(writer LibraryCacheWriter, value ServiceSpawnCandidateArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteServiceSpawnCandidateArray'
+
+module function cacheReadServiceSpawnCandidateArray(reader LibraryCacheReader) returns ServiceSpawnCandidateArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ServiceSpawnCandidateArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ServiceSpawnCandidate.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadServiceSpawnCandidateArray'
+
+// @generated library-cache end
 
 export union SpawnGate
 	always
 	defaultOf(declaration DefaultDeclaration)
 end 'SpawnGate'
+
+// @generated library-cache begin
+function cacheWriteSpawnGate(writer LibraryCacheWriter, value SpawnGate)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		always then break 'payload'
+		defaultOf(a0) then cacheWriteSpawnGateDefaultOf(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteSpawnGate'
+
+function cacheWriteSpawnGateDefaultOf(writer LibraryCacheWriter, a0 DefaultDeclaration)
+	a0.cacheWrite(writer)
+end 'cacheWriteSpawnGateDefaultOf'
+
+function cacheReadSpawnGate(reader LibraryCacheReader) returns SpawnGate throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives SpawnGate.always
+		1 gives try cacheReadSpawnGateDefaultOf(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadSpawnGate'
+
+function cacheReadSpawnGateDefaultOf(reader LibraryCacheReader) returns SpawnGate throws LibraryCacheDamage
+	let a0 = try DefaultDeclaration.cacheRead(reader)
+
+	return SpawnGate.defaultOf(a0)
+end 'cacheReadSpawnGateDefaultOf'
+
+// @generated library-cache end
 
 export union DefaultSpawn
 	value
@@ -72,6 +155,38 @@ export union DefaultSpawn
 		end 'spawn'
 	end 'spawnedTypeName'
 end 'DefaultSpawn'
+
+// @generated library-cache begin
+function cacheWriteDefaultSpawn(writer LibraryCacheWriter, value DefaultSpawn)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		value then break 'payload'
+		spawns(a0) then cacheWriteDefaultSpawnSpawns(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteDefaultSpawn'
+
+function cacheWriteDefaultSpawnSpawns(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteDefaultSpawnSpawns'
+
+function cacheReadDefaultSpawn(reader LibraryCacheReader) returns DefaultSpawn throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives DefaultSpawn.value
+		1 gives try cacheReadDefaultSpawnSpawns(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDefaultSpawn'
+
+function cacheReadDefaultSpawnSpawns(reader LibraryCacheReader) returns DefaultSpawn throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return DefaultSpawn.spawns(a0)
+end 'cacheReadDefaultSpawnSpawns'
+
+// @generated library-cache end
 
 export type DefaultDeclaration
 	export let key as ByteArray
@@ -91,10 +206,91 @@ export type DefaultDeclaration
 	export function isTheSameDeclaration(other DefaultDeclaration) returns bool
 		return self.declFilePath.equals(other.declFilePath) and self.keyLine == other.keyLine and self.keyColumn == other.keyColumn
 	end 'isTheSameDeclaration'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.key)
+		writer.text(self.declFilePath.toString())
+		writer.unsigned(self.keyLine as CacheUnsigned)
+		writer.unsigned(self.keyColumn as CacheUnsigned)
+		self.keyRange.cacheWrite(writer)
+		writer.flag(self.isStdlibSource)
+		writer.unsigned(self.exprStart as CacheUnsigned)
+		writer.unsigned(self.exprEnd as CacheUnsigned)
+		cacheWriteDefaultSpawn(writer, value: self.spawn)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns DefaultDeclaration throws LibraryCacheDamage
+		let f_key = try reader.bytes()
+		let f_declFilePath = try reader.path()
+		let f_keyLine = (try reader.unsigned()) as LineNumber
+		let f_keyColumn = (try reader.unsigned()) as ColumnNumber
+		let f_keyRange = try SourceRange.cacheRead(reader)
+		let f_isStdlibSource = try reader.flag()
+		let f_exprStart = (try reader.unsigned()) as ElementIndex
+		let f_exprEnd = (try reader.unsigned()) as ElementIndex
+		let f_spawn = try cacheReadDefaultSpawn(reader)
+
+		return Self{key: f_key, declFilePath: f_declFilePath, keyLine: f_keyLine, keyColumn: f_keyColumn, keyRange: f_keyRange, isStdlibSource: f_isStdlibSource, exprStart: f_exprStart, exprEnd: f_exprEnd, spawn: f_spawn}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize72
+		return sizeof(DefaultDeclaration) as CacheSize72
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'DefaultDeclaration'
 
 export typealias DefaultDeclarationArray = Array with DefaultDeclaration
+
+// @generated library-cache begin
+module function cacheWriteDefaultDeclarationArray(writer LibraryCacheWriter, value DefaultDeclarationArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteDefaultDeclarationArray'
+
+module function cacheReadDefaultDeclarationArray(reader LibraryCacheReader) returns DefaultDeclarationArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DefaultDeclarationArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try DefaultDeclaration.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDefaultDeclarationArray'
+
+// @generated library-cache end
+
 export typealias DefaultKeyNameSet = Set with ByteArray
+
+// @generated library-cache begin
+module function cacheWriteDefaultKeyNameSet(writer LibraryCacheWriter, value DefaultKeyNameSet)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.bytes(item)
+	end 'eachItem'
+end 'cacheWriteDefaultKeyNameSet'
+
+module function cacheReadDefaultKeyNameSet(reader LibraryCacheReader) returns DefaultKeyNameSet throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DefaultKeyNameSet.create()
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.bytes()
+		result.insert(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDefaultKeyNameSet'
+
+// @generated library-cache end
 
 module function spawnGatesAgree(gate SpawnGate, other SpawnGate) returns bool
 	return match gate 'gate'
@@ -1338,9 +1534,55 @@ module type ServiceMessage
 	static function create(callee ByteArray, typeName ByteArray, methodName ByteArray) returns ServiceMessage
 		return Self{callee: callee, typeName: typeName, methodName: methodName}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.callee)
+		writer.bytes(self.typeName)
+		writer.bytes(self.methodName)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ServiceMessage throws LibraryCacheDamage
+		let f_callee = try reader.bytes()
+		let f_typeName = try reader.bytes()
+		let f_methodName = try reader.bytes()
+
+		return Self{callee: f_callee, typeName: f_typeName, methodName: f_methodName}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(ServiceMessage) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ServiceMessage'
 
 module typealias ServiceMessageIndex = Map with (ByteArray, ServiceMessage)
+
+// @generated library-cache begin
+module function cacheWriteServiceMessageIndex(writer LibraryCacheWriter, value ServiceMessageIndex)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteServiceMessageIndex'
+
+module function cacheReadServiceMessageIndex(reader LibraryCacheReader) returns ServiceMessageIndex throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ServiceMessageIndex.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try ServiceMessage.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadServiceMessageIndex'
+
+// @generated library-cache end
 
 // ⭐⭐ **EVERY MESSAGE, KEYED BY ITS QUALIFIED HANDLER NAME, WITH ITS SERVICE** — the name is
 // what an `IrFunction` carries. The reply-escape rule and the cycle check both read it, so the two

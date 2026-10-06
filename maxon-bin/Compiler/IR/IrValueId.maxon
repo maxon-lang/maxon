@@ -27,9 +27,58 @@ export typealias ValueId = int(0 to u64.max) implements ElementIndex
 // the block-arg lists on `BranchEdge`. A flat i64 array, NOT an array of heap
 // name objects: that is the whole point of minting ValueIds in the parser.
 export typealias ValueIdArray = Array with ValueId
+
+// @generated library-cache begin
+module function cacheWriteValueIdArray(writer LibraryCacheWriter, value ValueIdArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteValueIdArray'
+
+module function cacheReadValueIdArray(reader LibraryCacheReader) returns ValueIdArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ValueIdArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ValueId
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadValueIdArray'
+
+// @generated library-cache end
+
 export typealias VarSlot = int(0 to u64.max)
 export typealias BlockId = int(0 to u64.max) implements ElementIndex
 export typealias BlockIdArray = Array with BlockId
+
+// @generated library-cache begin
+export function cacheWriteBlockIdArray(writer LibraryCacheWriter, value BlockIdArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteBlockIdArray'
+
+export function cacheReadBlockIdArray(reader LibraryCacheReader) returns BlockIdArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = BlockIdArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as BlockId
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadBlockIdArray'
+
+// @generated library-cache end
 
 export typealias BlockIdSet = Set with BlockId
 
@@ -49,6 +98,29 @@ export typealias BlockIdSet = Set with BlockId
 // `FunctionRangeChecks` (`Project.maxon`) — and a type three files must name is not the parser's to hold.
 export typealias ValueMarkSet = Set with ValueId
 
+// @generated library-cache begin
+function cacheWriteValueMarkSet(writer LibraryCacheWriter, value ValueMarkSet)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteValueMarkSet'
+
+function cacheReadValueMarkSet(reader LibraryCacheReader) returns ValueMarkSet throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ValueMarkSet.create()
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ValueId
+		result.insert(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadValueMarkSet'
+
+// @generated library-cache end
+
 // ⭐⭐ **"THIS FUNCTION MARKED NOTHING" AS A SPELLED STATE, ONE COLUMN TYPE FOR EVERY PER-VALUE MARK.** A
 // shared empty `ValueMarkSet` cannot carry it: a module-level `let` container is IMAGE DATA, so a
 // construction literal seeded from one holds a private DEEP COPY, and a test asking whether a field holds
@@ -61,6 +133,38 @@ export union ValueMarkColumn
 	unwritten
 	entries(marked ValueMarkSet)
 end 'ValueMarkColumn'
+
+// @generated library-cache begin
+export function cacheWriteValueMarkColumn(writer LibraryCacheWriter, value ValueMarkColumn)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unwritten then break 'payload'
+		entries(a0) then cacheWriteValueMarkColumnEntries(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteValueMarkColumn'
+
+function cacheWriteValueMarkColumnEntries(writer LibraryCacheWriter, a0 ValueMarkSet)
+	cacheWriteValueMarkSet(writer, value: a0)
+end 'cacheWriteValueMarkColumnEntries'
+
+export function cacheReadValueMarkColumn(reader LibraryCacheReader) returns ValueMarkColumn throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives ValueMarkColumn.unwritten
+		1 gives try cacheReadValueMarkColumnEntries(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadValueMarkColumn'
+
+function cacheReadValueMarkColumnEntries(reader LibraryCacheReader) returns ValueMarkColumn throws LibraryCacheDamage
+	let a0 = try cacheReadValueMarkSet(reader)
+
+	return ValueMarkColumn.entries(a0)
+end 'cacheReadValueMarkColumnEntries'
+
+// @generated library-cache end
 
 export let noValueMarks = ValueMarkColumn.unwritten
 
@@ -184,6 +288,31 @@ export function blockIdArrayContains(list BlockIdArray, value BlockId) returns b
 end 'blockIdArrayContains'
 
 export typealias BlockRefArray = Array with ElementIndex
+
+// @generated library-cache begin
+module function cacheWriteBlockRefArray(writer LibraryCacheWriter, value BlockRefArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteBlockRefArray'
+
+module function cacheReadBlockRefArray(reader LibraryCacheReader) returns BlockRefArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = BlockRefArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ElementIndex
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadBlockRefArray'
+
+// @generated library-cache end
+
 export typealias ParamCount = int(0 to u64.max) implements ElementIndex
 
 // The Std ABI numbers a function's parameters first: parameter `position` owns ValueId `position`, and
@@ -208,7 +337,56 @@ end 'valueIsAParameter'
 // endpoints with (`SemanticCheck.CallParamEdges`). Same dense-int representation as `OpIndexArray`,
 // named apart because it holds parameter positions.
 export typealias ParamCountArray = Array with ParamCount
+
+// @generated library-cache begin
+module function cacheWriteParamCountArray(writer LibraryCacheWriter, value ParamCountArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteParamCountArray'
+
+module function cacheReadParamCountArray(reader LibraryCacheReader) returns ParamCountArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ParamCountArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ParamCount
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadParamCountArray'
+
+// @generated library-cache end
+
 export typealias StdTypeArray = Array with StdType
+
+// @generated library-cache begin
+module function cacheWriteStdTypeArray(writer LibraryCacheWriter, value StdTypeArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item.ordinal as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteStdTypeArray'
+
+module function cacheReadStdTypeArray(reader LibraryCacheReader) returns StdTypeArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = StdTypeArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadStdType(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadStdTypeArray'
+
+// @generated library-cache end
 
 // ValueIdRef: a mutable per-function counter for allocating ValueIds.
 //
@@ -233,5 +411,29 @@ export function allocValueId(ref ValueIdRef) returns ValueId
 end 'allocValueId'
 
 export typealias OpIndexArray = Array with ElementIndex
+
+// @generated library-cache begin
+module function cacheWriteOpIndexArray(writer LibraryCacheWriter, value OpIndexArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteOpIndexArray'
+
+module function cacheReadOpIndexArray(reader LibraryCacheReader) returns OpIndexArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = OpIndexArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ElementIndex
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadOpIndexArray'
+
+// @generated library-cache end
 
 export typealias BlockOpPosArray = Array with ElementIndex

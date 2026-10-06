@@ -294,6 +294,7 @@ module type FrontEndPool
 
 	// By worker slot: whether that worker holds a copy of `baseline`.
 	var adopted as BoolArray
+	var adoptions as ElementIndex
 	var baselineRevision as LiveKeysRevision
 	var heldRevisions as LiveKeysRevisionArray
 
@@ -302,7 +303,7 @@ module type FrontEndPool
 	var parsed as bool
 
 	module static function create() returns FrontEndPool
-		return Self{workers: FrontEndWorkerHandleArray.create(), inProcess: FrontEndWorkerStateArray.create(), mostFilesDispatched: 0, baseline: HeldIndexArray.create(), adopted: BoolArray.create(), baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(), lexed: false, parsed: false}
+		return Self{workers: FrontEndWorkerHandleArray.create(), inProcess: FrontEndWorkerStateArray.create(), mostFilesDispatched: 0, baseline: HeldIndexArray.create(), adopted: BoolArray.create(), adoptions: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(), lexed: false, parsed: false}
 	end 'create'
 
 	// ⭐ **EVERY FILE WHOSE RESOLVED STREAM NO MEMO HOLDS, LEXED AND FILTERED ON THE WORKERS**, then landed through
@@ -395,7 +396,7 @@ module type FrontEndPool
 			end 'theReportedPoolIsNotTheOneThatRan'
 
 			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-				compilerLogger(CompilerLogGroup.compiler).debug(sizing.line(PoolKind.frontEnd))
+				compilerLogger(CompilerLogGroup.compiler).debug("{sizing.line(PoolKind.frontEnd)}, {self.adoptions} adopted")
 			end 'debugging'
 		end 'onTheWorkers' else 'inProcess'
 			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
@@ -473,6 +474,7 @@ module type FrontEndPool
 
 		// A TEMPORARY, so the send moves it: the copy is the worker's alone.
 		worker.adopt(signatures.clone())
+		self.adoptions = self.adoptions + 1
 		try self.adopted.set(workerSlot, value: true) otherwise panic("FrontEndPool.requireAdopted: adopted.set OOB at {workerSlot} below count {self.adopted.count()}")
 		try self.heldRevisions.set(workerSlot, value: self.baselineRevision) otherwise panic("FrontEndPool.requireAdopted: heldRevisions.set OOB at {workerSlot} below count {self.heldRevisions.count()}")
 	end 'requireAdopted'

@@ -111,6 +111,13 @@ image to `maxon.previous` and writes the new one in its place; a FAILED build le
 compiler in the slot, so it can build the fix. `scripts/fixpoint.sh` builds the compiler with itself twice and checks that the two
 binaries are byte-identical.
 
+The library cache's codecs are generated into the compiler's sources, between
+`// @generated library-cache` markers. After editing a type the cache stores, a hand-written codec
+(`maxon-bin/Compiler/ContentHash.maxon`, `LibraryCacheCodecs.maxon` or `LibraryCacheFormat.maxon` —
+comments included, since the schema fingerprint hashes those files whole) or anything under
+`scripts/library-cache/`, run `python scripts/library-cache/generate-codecs.py`. CI runs it with `--check`
+and fails on a source that differs from what it generates.
+
 Run a program with the freshly built compiler:
 
 ```bash

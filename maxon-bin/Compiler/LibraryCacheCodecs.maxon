@@ -1,0 +1,188 @@
+module type ViewEntry
+	module let facts as RawStreamFacts
+	module let view as SharedBuildView
+
+	module static function create(facts RawStreamFacts, view SharedBuildView) returns ViewEntry
+		return Self{facts: facts, view: view}
+	end 'create'
+end 'ViewEntry'
+
+module function encodedViewSection(facts RawStreamFacts, view SharedBuildView) returns ByteArray
+	var writer = LibraryCacheWriter.create()
+	cacheWriteByteArrayArray(writer, value: facts.declaredTypeNames)
+	cacheWriteByteArrayArray(writer, value: facts.reservedSpellings)
+	writer.flag(view.producerMaskComputed)
+	writer.unsigned(view.producerMask as CacheUnsigned)
+	cacheWriteTokenArray(writer, value: view.activeTokens)
+
+	return writer.payload()
+end 'encodedViewSection'
+
+module function decodedViewSection(reader LibraryCacheReader, buildKey BuildKey) returns ViewEntry throws LibraryCacheDamage
+	let names = try cacheReadByteArrayArray(reader)
+	let reserved = try cacheReadByteArrayArray(reader)
+	let maskComputed = try reader.flag()
+	let mask = try cacheReadProducerMask(reader)
+	let tokens = try cacheReadTokenArray(reader)
+	try reader.finished()
+
+	return ViewEntry.create(RawStreamFacts.create(names, reservedSpellings: reserved), view: SharedBuildView.restored(buildKey, activeTokens: tokens, producerMask: mask, producerMaskComputed: maskComputed))
+end 'decodedViewSection'
+
+export function cacheWriteSourceParseError(writer LibraryCacheWriter, value SourceParseError)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+	writer.refuse()
+end 'cacheWriteSourceParseError'
+
+export function cacheReadSourceParseError(_ LibraryCacheReader) returns SourceParseError throws LibraryCacheDamage
+	throw LibraryCacheDamage.unrepresentable
+end 'cacheReadSourceParseError'
+
+module function encodedBaseline(declarations LibraryDeclarations, key HashDigest) returns ByteArray throws LibraryCacheDamage
+	var writer = LibraryCacheWriter.create()
+	writer.unsigned(key as CacheUnsigned)
+	cacheWriteFilePathArray(writer, value: declarations.manifest.deferred)
+	cacheWriteFilePathArray(writer, value: declarations.manifest.streamed)
+	cacheWriteByteArrayArray(writer, value: declarations.manifest.templates)
+	declarations.signatures.cacheWrite(writer)
+
+	if writer.refused() 'aCaseTheFormatDoesNotCarry'
+		throw LibraryCacheDamage.unrepresentable
+	end 'aCaseTheFormatDoesNotCarry'
+
+	return writer.sealed()
+end 'encodedBaseline'
+
+module function decodedManifest(reader LibraryCacheReader, key HashDigest) returns LibraryManifest throws LibraryCacheDamage
+	try requireKey(reader, expected: key)
+	let deferred = try cacheReadFilePathArray(reader)
+	let streamed = try cacheReadFilePathArray(reader)
+	let templates = try cacheReadByteArrayArray(reader)
+
+	return LibraryManifest.create(deferred, streamed: streamed, templates: templates)
+end 'decodedManifest'
+
+module function decodedSignatures(reader LibraryCacheReader) returns ProgramSignatures throws LibraryCacheDamage
+	var signatures = try ProgramSignatures.cacheRead(reader)
+	try reader.finished()
+	signatures.shareModuleDirectoriesWithProvenance()
+
+	return signatures
+end 'decodedSignatures'
+
+module function encodedParseSection(held SharedLibraryParse) returns ByteArray throws LibraryCacheDamage
+	var writer = LibraryCacheWriter.create()
+	cacheWriteSharedLibraryParse(writer, value: held)
+
+	if writer.refused() 'aCaseTheFormatDoesNotCarry'
+		throw LibraryCacheDamage.unrepresentable
+	end 'aCaseTheFormatDoesNotCarry'
+
+	return writer.payload()
+end 'encodedParseSection'
+
+module function decodedParseSection(reader LibraryCacheReader, variant HashDigest, key HashDigest) returns SharedLibraryParse throws LibraryCacheDamage
+	let held = try cacheReadSharedLibraryParse(reader, variant: variant, key: key)
+	try reader.finished()
+
+	return held
+end 'decodedParseSection'
+
+export function cacheWriteTypeNameInterner(writer LibraryCacheWriter, value TypeNameInterner)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for id in 0 upto value.count() 'eachName'
+		writer.bytes(try value.nameOf(id) otherwise panic("cacheWriteTypeNameInterner: id {id} is below the interner's count {value.count()} and has no name"))
+	end 'eachName'
+end 'cacheWriteTypeNameInterner'
+
+export function cacheReadTypeNameInterner(reader LibraryCacheReader) returns TypeNameInterner throws LibraryCacheDamage
+	let count = try reader.count()
+	var interner = TypeNameInterner.createForSource(0)
+
+	for position in 0 upto count 'eachName'
+		let id = interner.intern(try reader.bytes())
+
+		if id != position as TypeNameId 'aNameRepeated'
+			throw LibraryCacheDamage.repeatedName
+		end 'aNameRepeated'
+	end 'eachName'
+
+	return interner
+end 'cacheReadTypeNameInterner'
+
+module function cacheWriteToken(writer LibraryCacheWriter, value Token)
+	writer.unsigned(value.kind.ordinal as CacheUnsigned)
+	writer.bytes(value.value)
+	writer.unsigned(value.line as CacheUnsigned)
+	writer.unsigned(value.column as CacheUnsigned)
+	writer.unsigned(value.startByte as CacheUnsigned)
+	writer.unsigned(value.endByte as CacheUnsigned)
+end 'cacheWriteToken'
+
+module function cacheReadToken(reader LibraryCacheReader) returns Token throws LibraryCacheDamage
+	let kind = try cacheReadTokenKind(reader)
+	let value = try reader.bytes()
+	let line = (try reader.unsigned()) as LineNumber
+	let column = (try reader.unsigned()) as ColumnNumber
+	let startByte = (try reader.unsigned()) as ByteOffset
+	let endByte = (try reader.unsigned()) as ByteOffset
+
+	return Token.create(kind, line: line, column: column, value: value, startByte: startByte, endByte: endByte)
+end 'cacheReadToken'
+
+function cacheWriteSharedLibraryParse(writer LibraryCacheWriter, value SharedLibraryParse)
+	writer.unsigned(value.variantOf() as CacheUnsigned)
+	writer.unsigned(value.keyOf() as CacheUnsigned)
+	value.footprint.cacheWrite(writer)
+	value.artifact.cacheWrite(writer)
+end 'cacheWriteSharedLibraryParse'
+
+function cacheReadSharedLibraryParse(reader LibraryCacheReader, variant HashDigest, key HashDigest) returns SharedLibraryParse throws LibraryCacheDamage
+	try requireKey(reader, expected: variant)
+	try requireKey(reader, expected: key)
+
+	let footprint = try ParseFootprint.cacheRead(reader)
+	let artifact = try FileParseArtifact.cacheRead(reader)
+
+	return SharedLibraryParse.create(variant, key: key, footprint: footprint, artifact: artifact)
+end 'cacheReadSharedLibraryParse'
+
+module function cacheWriteFixedElementCountColumn(writer LibraryCacheWriter, value FixedElementCountColumn)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for position in 0 upto value.count() 'eachEntry'
+		let held = value.holds(position)
+		writer.flag(held)
+
+		if held 'aHeldCount'
+			writer.unsigned((try value.get(position) otherwise panic("cacheWriteFixedElementCountColumn: entry {position} is held and absent at once")) as CacheUnsigned)
+		end 'aHeldCount'
+	end 'eachEntry'
+end 'cacheWriteFixedElementCountColumn'
+
+module function cacheReadFixedElementCountColumn(reader LibraryCacheReader) returns FixedElementCountColumn throws LibraryCacheDamage
+	let count = try reader.count()
+	var column = FixedElementCountColumn.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let held = try reader.flag()
+
+		if held 'aHeldCount'
+			column.push(try cacheReadFixedElementCount(reader))
+			continue
+		end 'aHeldCount'
+
+		column.pushAbsent()
+	end 'eachEntry'
+
+	return column
+end 'cacheReadFixedElementCountColumn'
+
+function requireKey(reader LibraryCacheReader, expected HashDigest) throws LibraryCacheDamage
+	let carried = try reader.unsigned()
+
+	if carried != expected as CacheUnsigned 'aDifferentEntry'
+		throw LibraryCacheDamage.anotherEntry
+	end 'aDifferentEntry'
+end 'requireKey'

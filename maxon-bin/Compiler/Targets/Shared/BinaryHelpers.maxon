@@ -7,6 +7,30 @@ export typealias ByteOffset = int(0 to u64.max) implements ElementIndex
 // Dense column of byte offsets — the two span columns of `SourceRangeTable`.
 export typealias ByteOffsetArray = Array with ByteOffset
 
+// @generated library-cache begin
+export function cacheWriteByteOffsetArray(writer LibraryCacheWriter, value ByteOffsetArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteByteOffsetArray'
+
+export function cacheReadByteOffsetArray(reader LibraryCacheReader) returns ByteOffsetArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ByteOffsetArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ByteOffset
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadByteOffsetArray'
+
+// @generated library-cache end
+
 // ⚠ A SECOND `MachineWord` EXISTS AND IT AGREES WITH THIS ONE. `runtime/Word.maxon` also
 // declares `MachineWord = bits(64)`, for the same reason: an address, a size, a file
 // offset, a raw bit pattern is unsigned by nature.

@@ -198,6 +198,50 @@ export union AliasSlotIdentity
 	nameOnly
 end 'AliasSlotIdentity'
 
+// @generated library-cache begin
+module function cacheWriteAliasSlotIdentity(writer LibraryCacheWriter, value AliasSlotIdentity)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		typeParamToken(a0) then cacheWriteAliasSlotIdentityTypeParamToken(writer, a0: a0)
+		genericInstance(a0) then cacheWriteAliasSlotIdentityGenericInstance(writer, a0: a0)
+		nameOnly then break 'payload'
+	end 'payload'
+end 'cacheWriteAliasSlotIdentity'
+
+function cacheWriteAliasSlotIdentityTypeParamToken(writer LibraryCacheWriter, a0 TypeParamId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteAliasSlotIdentityTypeParamToken'
+
+function cacheWriteAliasSlotIdentityGenericInstance(writer LibraryCacheWriter, a0 GenericInstanceId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteAliasSlotIdentityGenericInstance'
+
+module function cacheReadAliasSlotIdentity(reader LibraryCacheReader) returns AliasSlotIdentity throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadAliasSlotIdentityTypeParamToken(reader)
+		1 gives try cacheReadAliasSlotIdentityGenericInstance(reader)
+		2 gives AliasSlotIdentity.nameOnly
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadAliasSlotIdentity'
+
+function cacheReadAliasSlotIdentityTypeParamToken(reader LibraryCacheReader) returns AliasSlotIdentity throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as TypeParamId
+
+	return AliasSlotIdentity.typeParamToken(a0)
+end 'cacheReadAliasSlotIdentityTypeParamToken'
+
+function cacheReadAliasSlotIdentityGenericInstance(reader LibraryCacheReader) returns AliasSlotIdentity throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as GenericInstanceId
+
+	return AliasSlotIdentity.genericInstance(a0)
+end 'cacheReadAliasSlotIdentityGenericInstance'
+
+// @generated library-cache end
+
 // ⭐ **THE ONE REBUILD OF A TYPE STORED AS AN INTERNER-FREE `(tag, NAME)` PAIR** — the shape
 // `FunctionTypeAlias` keeps for its parameters and its return (see there for why it travels by name rather
 // than by id). The stored TAG already answers for every type whose spelling `parseTypeReference` settled

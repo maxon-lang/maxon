@@ -1,0 +1,27 @@
+let CaseDirName = "cache-clear-front-end-store"
+let ProgramDirName = "app"
+let OutputName = "program"
+
+test 'cache clear removes the library cache a build wrote'
+	requireHeldOutsideCheckout(CaseDirName, check: CacheClearRemovesTheLibraryCache.create())
+end 'cache clear removes the library cache a build wrote'
+
+type CacheClearRemovesTheLibraryCache implements OutsideCheckoutCase
+	static function create() returns CacheClearRemovesTheLibraryCache
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+		let built = try requireLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, which: "the build that fills the library cache")
+
+		let library = libraryCacheDirIn(dir)
+		try Expect.isTrue(Directory.isDirectory(library), message: "a build left no library cache at {library.toString()}, so the next compile lexes, sweeps and parses the whole library again. It wrote to stderr: {built.stderr}")
+
+		let cleared = runWithCacheRoot([CacheCommandWord, CacheClearVerb], cacheRoot: cacheRootIn(dir), workingDirectory: dir)
+		let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
+		try Expect.equal(cleared.exitCode(), expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over a cache holding a library cache. {said}")
+		try Expect.isFalse(Directory.exists(library), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left the library cache at {library.toString()} standing. {said}")
+	end 'requireHeldIn'
+end 'CacheClearRemovesTheLibraryCache'

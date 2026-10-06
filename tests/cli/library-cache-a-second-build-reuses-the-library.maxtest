@@ -1,0 +1,29 @@
+let CaseDirName = "library-cache-second-build"
+let ProgramDirName = "app"
+let OutputName = "program"
+
+test 'a second build in a fresh process loads the library from the cache the first one wrote'
+	requireHeldOutsideCheckout(CaseDirName, check: SecondBuildReusesTheLibrary.create())
+end 'a second build in a fresh process loads the library from the cache the first one wrote'
+
+type SecondBuildReusesTheLibrary implements OutsideCheckoutCase
+	static function create() returns SecondBuildReusesTheLibrary
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+		let cold = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+		try Expect.equal(cold.baseline, expected: LibraryBaseline.built, message: "the first build under an empty cache root did not report building the library baseline itself. It wrote: {cold.line}")
+		try Expect.greaterThan(cold.written, than: 0, message: "the first build under an empty cache root wrote nothing to the library cache, so no later build has anything to load. It wrote: {cold.line}")
+
+		let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: ListedWordArray.create()), which: "the second build under the same cache root")
+		try Expect.equal(warm.baseline, expected: LibraryBaseline.loaded, message: "the second build did not load the library baseline the first build wrote. It wrote: {warm.line}")
+		try Expect.greaterThan(warm.loaded, than: 0, message: "the second build loaded no library cache entry. It wrote: {warm.line}")
+		try Expect.equal(warm.written, expected: 0, message: "the second build wrote library cache entries the first build had already written. It wrote: {warm.line}")
+		try Expect.equal(warm.rejected, expected: 0, message: "the second build rejected entries the first build had just written. It wrote: {warm.line}")
+		try Expect.equal(warm.swept, expected: 0, message: "the second build swept library files itself instead of loading them. It wrote: {warm.line}")
+		try Expect.equal(warm.parsed, expected: 0, message: "the second build parsed library files itself instead of loading them. It wrote: {warm.line}")
+	end 'requireHeldIn'
+end 'SecondBuildReusesTheLibrary'

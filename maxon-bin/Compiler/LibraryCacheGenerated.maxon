@@ -1,0 +1,258 @@
+// @generated library-cache begin
+let CacheCasesMmTag = [MmTag.Untagged, MmTag.StringRecord, MmTag.ArrayRecord, MmTag.ElementBuffer, MmTag.CString, MmTag.ListRecord, MmTag.ListNode, MmTag.CursorRecord, MmTag.FileBox, MmTag.DirectoryBox, MmTag.InterpolationScratch, MmTag.ClosureEnv, MmTag.ParameterCell, MmTag.WalkVisitTable]
+
+export function cacheReadMmTag(reader LibraryCacheReader) returns MmTag throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesMmTag.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadMmTag'
+
+function cacheTableAgreesMmTag() returns bool
+	let declared = MmTag.allCases
+
+	if CacheCasesMmTag.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesMmTag.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesMmTag'
+
+export function cacheWriteParsedIntArray(writer LibraryCacheWriter, value ParsedIntArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.signed(item as CacheSigned)
+	end 'eachItem'
+end 'cacheWriteParsedIntArray'
+
+export function cacheReadParsedIntArray(reader LibraryCacheReader) returns ParsedIntArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ParsedIntArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.signed()) as ParsedInt
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadParsedIntArray'
+
+export function cacheWriteStringArray(writer LibraryCacheWriter, value StringArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.text(item)
+	end 'eachItem'
+end 'cacheWriteStringArray'
+
+export function cacheReadStringArray(reader LibraryCacheReader) returns StringArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = StringArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.text()
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadStringArray'
+
+let CacheCasesErrorCode = [ErrorCode.lexerUnterminatedString, ErrorCode.lexerInvalidEscape, ErrorCode.lexerUnescapedBrace, ErrorCode.lexerUnterminatedBlockComment, ErrorCode.lexerUnexpectedEof, ErrorCode.lexerUnknownDirective, ErrorCode.parserUnexpectedToken, ErrorCode.parserExpectedType, ErrorCode.parserExpressionError, ErrorCode.parserUnexpectedEof, ErrorCode.parserMismatchedEndLabel, ErrorCode.parserExpectedToken, ErrorCode.parserLiteralOverflow, ErrorCode.parserCircularDependency, ErrorCode.assignToImmutable, ErrorCode.duplicateParameter, ErrorCode.parserUnsupportedFeature, ErrorCode.parserInvalidCharacterLiteral, ErrorCode.matchFallthroughWithReturn, ErrorCode.matchNotExhaustive, ErrorCode.matchDuplicatePattern, ErrorCode.matchTypeMismatch, ErrorCode.matchDefaultNotLast, ErrorCode.matchMissingBlockId, ErrorCode.matchMismatchedBlockId, ErrorCode.parserNonConstantInitializer, ErrorCode.matchDefaultEnumMustThrow, ErrorCode.controlOutsideLoop, ErrorCode.labelTargetsOwnLoop, ErrorCode.matchBlockStatement, ErrorCode.otherwiseBlockMissingBinding, ErrorCode.reservedIdentifier, ErrorCode.callFirstArgNamed, ErrorCode.callArgMissingLabel, ErrorCode.shiftCountNegative, ErrorCode.genericBaseNotGeneric, ErrorCode.genericArityMismatch, ErrorCode.parserTestOutsideTestFile, ErrorCode.parserTestEmptyName, ErrorCode.parserCallerLocationOutsideDefault, ErrorCode.genericBarePrimitiveArg, ErrorCode.genericFloatTypeArg, ErrorCode.directiveUnbalanced, ErrorCode.directiveUnknownPredicate, ErrorCode.directiveMalformedCondition, ErrorCode.conformanceWithArgSurplus, ErrorCode.builtinArgNamed, ErrorCode.parserMalformedNumericLiteral, ErrorCode.vectorSizeMalformed, ErrorCode.ucdTableLabelUnknown, ErrorCode.unknownStaticMember, ErrorCode.nestedProjectFile, ErrorCode.noMainFunction, ErrorCode.mainWrongReturnType, ErrorCode.callUnknownFunction, ErrorCode.typeMismatch, ErrorCode.duplicateDefinition, ErrorCode.semanticAmbiguousOverload, ErrorCode.symbolNotExported, ErrorCode.semanticUnsafeCast, ErrorCode.semanticUnneededCast, ErrorCode.unknownType, ErrorCode.semanticUnusedVariable, ErrorCode.missingReturn, ErrorCode.unexportedFieldAccess, ErrorCode.semanticUnknownInterface, ErrorCode.semanticPartialInterfaceImpl, ErrorCode.semanticWhereConstraintViolation, ErrorCode.semanticUnknownField, ErrorCode.semanticImmutableRefToMutatingParam, ErrorCode.enumDuplicateCase, ErrorCode.enumDuplicateRawValue, ErrorCode.enumRawValueTypeMismatch, ErrorCode.enumUnknownCase, ErrorCode.enumWrongBindingCount, ErrorCode.callArgCountMismatch, ErrorCode.callUnknownArgLabel, ErrorCode.callDuplicateArg, ErrorCode.mainCannotThrow, ErrorCode.tryRequiresThrowingFunction, ErrorCode.throwingFunctionRequiresTry, ErrorCode.otherwiseRequiresTry, ErrorCode.errorTypeMismatch, ErrorCode.semanticDuplicateTypeAlias, ErrorCode.semanticUnusedTypeAlias, ErrorCode.semanticAmbiguousTypeAlias, ErrorCode.semanticDiscardedPureResult, ErrorCode.semanticDiscardedImpureResult, ErrorCode.semanticEnumNotComparable, ErrorCode.semanticSelfAssignment, ErrorCode.refIdentityOnPrimitive, ErrorCode.semanticBorrowConflict, ErrorCode.semanticUnreachableCode, ErrorCode.semanticBuiltinTypeConstruction, ErrorCode.asyncNonYielding, ErrorCode.semanticSubprocessUnsupportedTarget, ErrorCode.matchQualifiedCaseName, ErrorCode.semanticConstructorRestriction, ErrorCode.semanticVarShouldBeLet, ErrorCode.semanticVarFromImmutable, ErrorCode.semanticMatchDiscardedBindings, ErrorCode.semanticEmptyBlock, ErrorCode.tryBlockNoThrows, ErrorCode.tryBlockBindingNotMatched, ErrorCode.unionMatchPatternAmbiguous, ErrorCode.semanticFieldNotInitialized, ErrorCode.redundantContainsGet, ErrorCode.symbolNotInModuleScope, ErrorCode.semanticTypeResolutionCycle, ErrorCode.semanticUnusedExportedSymbol, ErrorCode.semanticExportableAsModule, ErrorCode.semanticUnusedModuleSymbol, ErrorCode.semanticAmbiguousCrossFileCall, ErrorCode.semanticEnumAccessorComparison, ErrorCode.promiseErrorTypeMismatch, ErrorCode.promiseAlreadyAwaited, ErrorCode.throwingFunctionAsValue, ErrorCode.useAfterMove, ErrorCode.semanticDivisionByZero, ErrorCode.targetUnsupportedConstruct, ErrorCode.semanticArrayResizeManagedElement, ErrorCode.semanticDuplicateTestName, ErrorCode.semanticBufferSetManagedElement, ErrorCode.semanticBufferByteAccessManagedElement, ErrorCode.semanticConflictingInterfaceConformance, ErrorCode.stdlibShadowedNameIsAlsoAMember, ErrorCode.throwsTypeNotAnErrorEnum, ErrorCode.semanticAmbiguousWitnessDispatch, ErrorCode.semanticNoWitnessRequirementForArgCount, ErrorCode.semanticStaticRequirementNotDispatchable, ErrorCode.rawByteFillNarrowElement, ErrorCode.rawByteWriteSlotDomain, ErrorCode.associatedTypeAbiDisagreement, ErrorCode.associatedTypeReturnNotMachineWord, ErrorCode.floatWidenedToExistential, ErrorCode.ifTryDiscardsResult, ErrorCode.interfaceInstantiationBindingDisagreement, ErrorCode.heldAssociatedTypeBindingNotConforming, ErrorCode.existentialWideningBindingDisagreement, ErrorCode.semanticSharedConformanceReadsDictionary, ErrorCode.matchArmPayloadBindingConflict, ErrorCode.semanticGrantedConformanceMemberMismatch, ErrorCode.castTargetIsAContainer, ErrorCode.semanticParametricConstraintWitnessRead, ErrorCode.semanticWhereConstraintBindingDisagreement, ErrorCode.semanticServiceNotASpawnTarget, ErrorCode.semanticServiceValueNotTransferable, ErrorCode.semanticServiceNotAMessage, ErrorCode.semanticServiceReplyAliasesState, ErrorCode.semanticServiceArgumentNotUnique, ErrorCode.semanticServiceCallCycle, ErrorCode.semanticServiceReplyNotCarriable, ErrorCode.semanticPromiseCannotBeBorrowed, ErrorCode.semanticPromiseAlreadyConsumed, ErrorCode.semanticSharedGlobalAccessFromGreenThread, ErrorCode.semanticUnknownPayloadName, ErrorCode.semanticServiceReplyInstanceUnknown, ErrorCode.matchEnumCaseRange, ErrorCode.matchOrChainNeedsOwnLine, ErrorCode.semanticIllegalBitWidth, ErrorCode.defineNoSuchConstant, ErrorCode.defineAmbiguous, ErrorCode.defineNotAStringLiteral, ErrorCode.rawIntrinsicOutsideRuntimeTier, ErrorCode.managedValueInRuntimeSource, ErrorCode.wideVisibilityInRuntimeSource, ErrorCode.reservedNameAsFunctionValue, ErrorCode.interfaceParameterInFunctionValueTarget, ErrorCode.contradictoryFrameDirectives, ErrorCode.alwaysSplicedBodyIsStillCalled, ErrorCode.semanticWriteThroughImmutableRecord, ErrorCode.errorMatchNotExactlyOnce, ErrorCode.bareGenericSubjectUnbound, ErrorCode.semanticUnmarkableLetReadByAMessage, ErrorCode.semanticSpawnDuringGlobalInitialization, ErrorCode.semanticLetInitializerReachesAVar, ErrorCode.semanticVarInitializerTakesALetRecord, ErrorCode.semanticSignatureTypeLessVisibleThanFunction, ErrorCode.throwsFunctionNeverThrows, ErrorCode.registryDuplicateDefault, ErrorCode.registryDefaultServiceDoesNotImplementKey, ErrorCode.registryValueNotShareable, ErrorCode.registryDefaultsReachEachOther, ErrorCode.registryReachedFromGlobalInitializer, ErrorCode.registryPublishedValueNotSolelyOwned, ErrorCode.registryKeyDeclaresARegistryMember, ErrorCode.extensionMemberHidesOwnMember, ErrorCode.interfaceHandleImplementersDisagree, ErrorCode.aliasImplementsRangeDoesNotFit, ErrorCode.genericTypeParameterNotInferable, ErrorCode.genericArgumentsHaveNoCommonType, ErrorCode.genericArgumentKindUnsupported, ErrorCode.namespaceDirectoryNotNameable, ErrorCode.closureStoredIntoWhatItCaptures, ErrorCode.invalidFieldAccess, ErrorCode.irTypeCycle, ErrorCode.declarationTakesCompilerOwnedName, ErrorCode.builtinErrorEnumMismatch, ErrorCode.registerPressure, ErrorCode.codeEmitterCoverageNeedsDebugInfo, ErrorCode.binaryOutputNotReplaceable, ErrorCode.binaryOutputNotWritten, ErrorCode.binaryOutputDirectoryNotCreated, ErrorCode.binaryWasmComponentNotProduced, ErrorCode.internalDroppedSignature, ErrorCode.internalDeclarationTheSweepMissed]
+
+export function cacheReadErrorCode(reader LibraryCacheReader) returns ErrorCode throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesErrorCode.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadErrorCode'
+
+function cacheTableAgreesErrorCode() returns bool
+	let declared = ErrorCode.allCases
+
+	if CacheCasesErrorCode.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesErrorCode.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesErrorCode'
+
+export function cacheWriteFilePathArray(writer LibraryCacheWriter, value FilePathArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.text(item.toString())
+	end 'eachItem'
+end 'cacheWriteFilePathArray'
+
+export function cacheReadFilePathArray(reader LibraryCacheReader) returns FilePathArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FilePathArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.path()
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadFilePathArray'
+
+module typealias CacheSize16 = int(16 to 16)
+
+module typealias CacheSize24 = int(24 to 24)
+
+module typealias CacheSize32 = int(32 to 32)
+
+module typealias CacheSize40 = int(40 to 40)
+
+module typealias CacheSize48 = int(48 to 48)
+
+module typealias CacheSize56 = int(56 to 56)
+
+module typealias CacheSize64 = int(64 to 64)
+
+module typealias CacheSize72 = int(72 to 72)
+
+module typealias CacheSize80 = int(80 to 80)
+
+module typealias CacheSize88 = int(88 to 88)
+
+module typealias CacheSize96 = int(96 to 96)
+
+module typealias CacheSize104 = int(104 to 104)
+
+module typealias CacheSize120 = int(120 to 120)
+
+module typealias CacheSize128 = int(128 to 128)
+
+module typealias CacheSize184 = int(184 to 184)
+
+module typealias CacheSize208 = int(208 to 208)
+
+module typealias CacheSize336 = int(336 to 336)
+
+module typealias CacheSize440 = int(440 to 440)
+
+module typealias CacheSize1672 = int(1672 to 1672)
+
+module function cacheReadProducerMask(reader LibraryCacheReader) returns ProducerMask throws LibraryCacheDamage
+	return (try reader.boundedUnsigned(0, high: 31)) as ProducerMask
+end 'cacheReadProducerMask'
+
+module function cacheReadFixedElementCount(reader LibraryCacheReader) returns FixedElementCount throws LibraryCacheDamage
+	return (try reader.boundedUnsigned(1, high: u32.max)) as FixedElementCount
+end 'cacheReadFixedElementCount'
+
+module let CacheSchemaFingerprint = 0x0CB0104F1BD88AD7 as HashDigest
+
+export function cacheWriteMaxonModule(writer LibraryCacheWriter, value MaxonModule)
+	cacheWriteIrFunctionArray(writer, value: value.functions)
+	cacheWriteIrBlockArray(writer, value: value.blocks)
+	writer.unsigned(value.ops.count() as CacheUnsigned)
+
+	for op in value.ops 'eachOp'
+		cacheWriteMaxonOp(writer, value: op)
+	end 'eachOp'
+
+	value.spans.cacheWrite(writer)
+end 'cacheWriteMaxonModule'
+
+export function cacheReadMaxonModule(reader LibraryCacheReader) returns MaxonModule throws LibraryCacheDamage
+	var assembled = MaxonModule.create()
+
+	let f_functions = try cacheReadIrFunctionArray(reader)
+	assembled.functions = f_functions
+	let f_blocks = try cacheReadIrBlockArray(reader)
+	assembled.blocks = f_blocks
+	let opCount = try reader.count()
+
+	for _ in 0 upto opCount 'eachOp'
+		assembled.ops.push(try cacheReadMaxonOp(reader))
+	end 'eachOp'
+
+	let f_spans = try DebugSpanColumn.cacheRead(reader)
+	assembled.spans = f_spans
+
+	return assembled
+end 'cacheReadMaxonModule'
+
+export function cacheEnumTablesAgree() returns bool
+	if not cacheEnumTablesAgreeInCompilerLexer() 'disagreesCacheEnumTablesAgreeInCompilerLexer'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerLexer'
+
+	if not cacheEnumTablesAgreeInCompilerProject() 'disagreesCacheEnumTablesAgreeInCompilerProject'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerProject'
+
+	if not cacheEnumTablesAgreeInCompilerSignatureIndex() 'disagreesCacheEnumTablesAgreeInCompilerSignatureIndex'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerSignatureIndex'
+
+	if not cacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect() 'disagreesCacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect'
+
+	if not cacheEnumTablesAgreeInCompilerIRMaxonValueOrigin() 'disagreesCacheEnumTablesAgreeInCompilerIRMaxonValueOrigin'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerIRMaxonValueOrigin'
+
+	if not cacheEnumTablesAgreeInCompilerParseStaging() 'disagreesCacheEnumTablesAgreeInCompilerParseStaging'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerParseStaging'
+
+	if not cacheEnumTablesAgreeInCompilerIRIrFunction() 'disagreesCacheEnumTablesAgreeInCompilerIRIrFunction'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerIRIrFunction'
+
+	if not cacheEnumTablesAgreeInCompilerGenericFunctions() 'disagreesCacheEnumTablesAgreeInCompilerGenericFunctions'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerGenericFunctions'
+
+	if not cacheEnumTablesAgreeInCompilerIRStdStdDialect() 'disagreesCacheEnumTablesAgreeInCompilerIRStdStdDialect'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerIRStdStdDialect'
+
+	if not cacheEnumTablesAgreeInCompilerIRIrBlock() 'disagreesCacheEnumTablesAgreeInCompilerIRIrBlock'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerIRIrBlock'
+
+	if not cacheEnumTablesAgreeInCompilerRawIntrinsics() 'disagreesCacheEnumTablesAgreeInCompilerRawIntrinsics'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerRawIntrinsics'
+
+	if not cacheEnumTablesAgreeInCompilerIRLayoutDescriptor() 'disagreesCacheEnumTablesAgreeInCompilerIRLayoutDescriptor'
+		return false
+	end 'disagreesCacheEnumTablesAgreeInCompilerIRLayoutDescriptor'
+
+	if not cacheTableAgreesMmTag() 'disagreesCacheTableAgreesMmTag'
+		return false
+	end 'disagreesCacheTableAgreesMmTag'
+
+	if not cacheTableAgreesErrorCode() 'disagreesCacheTableAgreesErrorCode'
+		return false
+	end 'disagreesCacheTableAgreesErrorCode'
+
+	return true
+end 'cacheEnumTablesAgree'
+
+// @generated library-cache end

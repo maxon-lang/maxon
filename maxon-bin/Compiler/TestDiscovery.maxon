@@ -47,12 +47,59 @@ export type DiscoveredTest
 	export static function create(symbol ByteArray, displayName String, file FilePath, line LineNumber) returns DiscoveredTest
 		return Self{symbol: symbol, displayName: displayName, file: file, line: line}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.symbol)
+		writer.text(self.displayName)
+		writer.text(self.file.toString())
+		writer.unsigned(self.line as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns DiscoveredTest throws LibraryCacheDamage
+		let f_symbol = try reader.bytes()
+		let f_displayName = try reader.text()
+		let f_file = try reader.path()
+		let f_line = (try reader.unsigned()) as LineNumber
+
+		return Self{symbol: f_symbol, displayName: f_displayName, file: f_file, line: f_line}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(DiscoveredTest) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'DiscoveredTest'
 
 // Discovered tests IN THE ORDER THE SWEEP REACHED THEM, which is the walk's file order and, within a
 // file, declaration order. The ORDER is the fact this alias carries: it is the run's numbering, the
 // report's reading order, and what makes a redirected run byte-reproducible.
 export typealias DiscoveredTestArray = Array with DiscoveredTest
+
+// @generated library-cache begin
+module function cacheWriteDiscoveredTestArray(writer LibraryCacheWriter, value DiscoveredTestArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteDiscoveredTestArray'
+
+module function cacheReadDiscoveredTestArray(reader LibraryCacheReader) returns DiscoveredTestArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DiscoveredTestArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try DiscoveredTest.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDiscoveredTestArray'
+
+// @generated library-cache end
 
 module function testDisplayName(prose String) returns String
 	return "{TestKeywordSpelling} '{prose}'"

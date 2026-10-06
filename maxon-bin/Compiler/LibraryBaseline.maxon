@@ -1,0 +1,288 @@
+export type LibraryManifest
+	export let deferred as FilePathArray
+	export let streamed as FilePathArray
+	export let templates as ByteArrayArray
+
+	export static function create(deferred FilePathArray, streamed FilePathArray, templates ByteArrayArray) returns LibraryManifest
+		return Self{deferred: deferred, streamed: streamed, templates: templates}
+	end 'create'
+
+	export function requestsATemplate(instances RequestedGenericInstances) returns bool
+		for (_, instance) in instances.byName 'eachRequested'
+			if self.templates.contains(instance.templateKey) 'aTemplateOfTheLibrary'
+				return true
+			end 'aTemplateOfTheLibrary'
+		end 'eachRequested'
+
+		return false
+	end 'requestsATemplate'
+end 'LibraryManifest'
+
+export type LibraryDeclarations
+	export let signatures as ProgramSignatures
+	export let manifest as LibraryManifest
+
+	export static function create(signatures ProgramSignatures, manifest LibraryManifest) returns LibraryDeclarations
+		return Self{signatures: signatures, manifest: manifest}
+	end 'create'
+end 'LibraryDeclarations'
+
+module type LibraryStart
+	module var signatures as ProgramSignatures
+	module let remainder as FilePathArray
+	module let streamed as FilePathArray
+
+	module static function create(signatures ProgramSignatures, remainder FilePathArray, streamed FilePathArray) returns LibraryStart
+		return Self{signatures: signatures, remainder: remainder, streamed: streamed}
+	end 'create'
+end 'LibraryStart'
+
+function libraryBaselineKey(project Project, partition ProgramPartition) returns HashDigest throws CompileError
+	var key = mixBytes(buildKeyOf(project) as HashDigest, bytes: project.stdlibDir.toString().toByteArray())
+	key = mixBytes(key, bytes: project.runtimeDir.toString().toByteArray())
+	key = try keyWithLibraryPaths(project, key: key, paths: partition.runtimePaths)
+
+	return try keyWithLibraryPaths(project, key: key, paths: partition.stdlibPaths)
+end 'libraryBaselineKey'
+
+function keyWithLibraryPaths(project Project, key HashDigest, paths MaxonSourcePathArray) returns HashDigest throws CompileError
+	var folded = key
+
+	for path in paths 'eachPath'
+		folded = mixBytes(folded, bytes: path.toString().toByteArray())
+		folded = Hasher.combined(folded, value: (try sourceEntryOf(project, path: path)).contentHash)
+	end 'eachPath'
+
+	return folded
+end 'keyWithLibraryPaths'
+
+module function libraryStateKeyOf(project Project) returns HashDigest throws CompileError
+	let sources = compositeSourceHash(project)
+
+	if project.db.libraryStateKeyComputed and project.db.libraryStateKeySources == sources 'memoized'
+		return project.db.libraryStateKey
+	end 'memoized'
+
+	let key = try libraryBaselineKey(project, partition: partitionedByTier(project, paths: project.db.sourcePaths))
+	project.db.libraryStateKey = key
+	project.db.libraryStateKeySources = sources
+	project.db.libraryStateKeyComputed = true
+
+	return key
+end 'libraryStateKeyOf'
+
+function copiedBaseline(held ProgramSignatures) returns ProgramSignatures
+	held.releaseTypeNameViews()
+
+	var copy = held.clone()
+	copy.shareModuleDirectoriesWithProvenance()
+
+	return copy
+end 'copiedBaseline'
+
+// A library file declaring a generic function template folds differently once a program's instances
+// of it are adopted. A program requesting one starts from the core baseline, which lacks those
+// files, and folds them itself (`Queries.foldLibraryRemainder`).
+function kindFor(project Project, manifest LibraryManifest) returns LibraryEntryKind
+	if manifest.requestsATemplate(project.db.genericInstances) 'aTemplateIsInstantiated'
+		return LibraryEntryKind.coreBaseline
+	end 'aTemplateIsInstantiated'
+
+	return LibraryEntryKind.baseline
+end 'kindFor'
+
+function remainderOf(manifest LibraryManifest, kind LibraryEntryKind) returns FilePathArray
+	if kind != LibraryEntryKind.coreBaseline 'nothingLeftToFold'
+		return FilePathArray.create()
+	end 'nothingLeftToFold'
+
+	return manifest.deferred
+end 'remainderOf'
+
+function noteBaselineState(project Project, state LibraryBaselineState)
+	if project.db.libraryBaseline != LibraryBaselineState.built 'stillTheBuildingCompile'
+		project.db.libraryBaseline = state
+	end 'stillTheBuildingCompile'
+end 'noteBaselineState'
+
+function startFrom(project Project, key HashDigest, kind LibraryEntryKind, loaded LibraryDeclarations, state LibraryBaselineState) returns LibraryStart
+	let library = project.session.fileMemos.library
+	let remainder = remainderOf(loaded.manifest, kind: kind)
+	noteBaselineState(project, state: state)
+
+	if not library.retainsWhatItLoads() 'oneCompile'
+		return LibraryStart.create(loaded.signatures, remainder: remainder, streamed: loaded.manifest.streamed)
+	end 'oneCompile'
+
+	library.holdBaseline(key, kind: kind, declarations: loaded)
+
+	return LibraryStart.create(copiedBaseline(loaded.signatures), remainder: remainder, streamed: loaded.manifest.streamed)
+end 'startFrom'
+
+module function libraryBaselineFor(project Project, partition ProgramPartition) returns LibraryStart throws CompileError
+	let key = try libraryStateKeyOf(project)
+
+	if let held = try heldStart(project, key: key) 'heldInMemory'
+		return held
+	end 'heldInMemory'
+
+	if let loaded = try loadedStart(project, key: key) 'onDisk'
+		return loaded
+	end 'onDisk'
+
+	return try builtStart(project, partition: partition, key: key)
+end 'libraryBaselineFor'
+
+function heldStart(project Project, key HashDigest) returns LibraryStart throws LibraryEntryMiss
+	let library = project.session.fileMemos.library
+	let kind = kindFor(project, manifest: try library.heldManifest(key))
+	let chosen = try library.heldBaseline(key, kind: kind)
+	noteBaselineState(project, state: LibraryBaselineState.loaded)
+
+	return LibraryStart.create(copiedBaseline(chosen.signatures), remainder: remainderOf(chosen.manifest, kind: kind), streamed: chosen.manifest.streamed)
+end 'heldStart'
+
+function rejecting(project Project, name String, damage LibraryCacheDamage) returns LibraryEntryMiss
+	project.session.fileMemos.library.rejectDecoded(project.target, name: name, damage: damage, tally: project.db.libraryTally)
+
+	return LibraryEntryMiss.rejected
+end 'rejecting'
+
+function loadedStart(project Project, key HashDigest) returns LibraryStart throws LibraryEntryMiss
+	let library = project.session.fileMemos.library
+	let completeName = libraryEntryName(LibraryEntryKind.baseline, parts: [key])
+	let reader = try library.open(project.target, name: completeName, tally: project.db.libraryTally)
+
+	let manifest = try decodedManifest(reader, key: key) otherwise (damage) 'damaged'
+		throw rejecting(project, name: completeName, damage: damage)
+	end 'damaged'
+
+	let kind = kindFor(project, manifest: manifest)
+	var name = completeName
+	var source = reader
+
+	if kind == LibraryEntryKind.coreBaseline 'theCoreIsWanted'
+		name = libraryEntryName(kind, parts: [key])
+		source = try library.open(project.target, name: name, tally: project.db.libraryTally)
+
+		_ = try decodedManifest(source, key: key) otherwise (damage) 'damagedCore'
+			throw rejecting(project, name: name, damage: damage)
+		end 'damagedCore'
+	end 'theCoreIsWanted'
+
+	let signatures = try decodedSignatures(source) otherwise (damage) 'undecodable'
+		throw rejecting(project, name: name, damage: damage)
+	end 'undecodable'
+
+	project.db.libraryTally.loaded = project.db.libraryTally.loaded + 1
+
+	return startFrom(project, key: key, kind: kind, loaded: LibraryDeclarations.create(signatures, manifest: manifest), state: LibraryBaselineState.loaded)
+end 'loadedStart'
+
+function builtStart(project Project, partition ProgramPartition, key HashDigest) returns LibraryStart throws CompileError
+	let diagnosticsBefore = project.diagnostics.count()
+	let deferred = try deferredLibraryPaths(project, partition: partition)
+	var core = ProgramSignatures.create(project.target.os)
+	try foldDeclarationsOf(project, signatures: core, leadingPaths: withoutPaths(partition.runtimePaths, excluded: deferred), stdlibPaths: withoutPaths(partition.stdlibPaths, excluded: deferred), handedOver: DiscoveredTokenFacts.none())
+
+	var complete = copiedBaseline(core)
+	try foldLibraryRemainder(project, signatures: complete, deferred: deferred)
+
+	let manifest = LibraryManifest.create(deferred, streamed: complete.declTokenStreamPaths(), templates: complete.genericTemplateKeys())
+	noteLibraryCacheTrouble("built the library state: {deferred.count()} file(s) deferred, {manifest.templates.count()} generic function template(s)")
+
+	let kind = kindFor(project, manifest: manifest)
+	let completeDeclarations = LibraryDeclarations.create(complete, manifest: manifest)
+	let coreDeclarations = LibraryDeclarations.create(core, manifest: manifest)
+	project.db.libraryBaseline = LibraryBaselineState.built
+
+	if project.diagnostics.count() != diagnosticsBefore 'theSweepReported'
+		return startFrom(project, key: key, kind: kind, loaded: coreDeclarations if kind == LibraryEntryKind.coreBaseline else completeDeclarations, state: LibraryBaselineState.built)
+	end 'theSweepReported'
+
+	let completeCanonical = persistedBaseline(project, key: key, kind: LibraryEntryKind.baseline, declarations: completeDeclarations, wanted: kind == LibraryEntryKind.baseline)
+
+	if kind == LibraryEntryKind.baseline 'theCompleteStateServes'
+		return startFrom(project, key: key, kind: kind, loaded: completeCanonical, state: LibraryBaselineState.built)
+	end 'theCompleteStateServes'
+
+	let coreCanonical = persistedBaseline(project, key: key, kind: LibraryEntryKind.coreBaseline, declarations: coreDeclarations, wanted: true)
+
+	return startFrom(project, key: key, kind: kind, loaded: coreCanonical, state: LibraryBaselineState.built)
+end 'builtStart'
+
+function persistedBaseline(project Project, key HashDigest, kind LibraryEntryKind, declarations LibraryDeclarations, wanted bool) returns LibraryDeclarations
+	let library = project.session.fileMemos.library
+
+	if not library.isAvailable(project.target) 'noDiskTier'
+		return declarations
+	end 'noDiskTier'
+
+	let name = libraryEntryName(kind, parts: [key])
+
+	if not wanted and library.holds(project.target, name: name) 'writtenAlready'
+		return declarations
+	end 'writtenAlready'
+
+	let image = try encodedBaseline(declarations, key: key) otherwise return declarations
+
+	if library.write(project.target, name: name, image: image, tally: project.db.libraryTally) 'written'
+		library.trimEntries(project.target, kind: kind, kept: name, most: MostEntriesOfAKind)
+	end 'written'
+
+	if not wanted 'onlyForTheNextCompile'
+		return declarations
+	end 'onlyForTheNextCompile'
+
+	let reader = try LibraryCacheReader.open(image) otherwise (damage) 'undecodable'
+		panic("persistedBaseline: the baseline just encoded does not open: {damage.displayReason()}")
+	end 'undecodable'
+
+	_ = try decodedManifest(reader, key: key) otherwise (damage) 'undecodable'
+		panic("persistedBaseline: the baseline just encoded does not decode: {damage.displayReason()}")
+	end 'undecodable'
+
+	let signatures = try decodedSignatures(reader) otherwise (damage) 'undecodable'
+		panic("persistedBaseline: the baseline just encoded does not decode: {damage.displayReason()}")
+	end 'undecodable'
+
+	return LibraryDeclarations.create(signatures, manifest: declarations.manifest)
+end 'persistedBaseline'
+
+function deferredLibraryPaths(project Project, partition ProgramPartition) returns FilePathArray throws CompileError
+	var deferred = FilePathArray.create()
+	var library = MaxonSourcePathArray.create()
+	library.append(partition.runtimePaths)
+	library.append(partition.stdlibPaths)
+	let scratch = ProgramSignatures.create(project.target.os)
+
+	for path in library 'eachLibraryFile'
+		let declares = try declaresGenericFunctionTemplate(project, scratch: scratch, path: path)
+
+		if declares 'aTemplate'
+			deferred.push(path)
+		end 'aTemplate'
+	end 'eachLibraryFile'
+
+	return deferred
+end 'deferredLibraryPaths'
+
+function declaresGenericFunctionTemplate(project Project, scratch ProgramSignatures, path FilePath) returns bool throws CompileError
+	let tokens = try queryActiveTokens(project, path: path)
+	let prepared = PreparedTokens.create(tokens, qualifiedNominalAt: QualifiedNominalSpellingMap.create())
+	let scanner = Parser.createOverPreparedTokens(prepared, job: ParseJob.forConstantInitializer(path, namespace: ""), signatures: scratch, anchors: project.readerAnchors)
+
+	return scanner.declaresGenericFunctionTemplate()
+end 'declaresGenericFunctionTemplate'
+
+function withoutPaths(paths MaxonSourcePathArray, excluded FilePathArray) returns MaxonSourcePathArray
+	var kept = MaxonSourcePathArray.create()
+
+	for path in paths 'eachPath'
+		if not excluded.contains(path) 'stillWanted'
+			kept.push(path)
+		end 'stillWanted'
+	end 'eachPath'
+
+	return kept
+end 'withoutPaths'

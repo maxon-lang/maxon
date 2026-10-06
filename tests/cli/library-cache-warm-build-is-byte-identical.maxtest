@@ -1,0 +1,18 @@
+let CaseDirName = "library-cache-byte-identical"
+let ProgramDirName = "app"
+let OutputName = "program"
+
+test 'a build that loads the library from the cache writes the bytes a cold build writes'
+	requireHeldOutsideCheckout(CaseDirName, check: WarmBuildIsByteIdentical.create())
+end 'a build that loads the library from the cache writes the bytes a cold build writes'
+
+type WarmBuildIsByteIdentical implements OutsideCheckoutCase
+	static function create() returns WarmBuildIsByteIdentical
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+		_ = try requireWarmBuildMatchesCold(dir, program: ProgramDirName, output: OutputName, subject: "a trivial program")
+	end 'requireHeldIn'
+end 'WarmBuildIsByteIdentical'

@@ -77,9 +77,14 @@
 //                                                     a SKIP's refusals — escaped onto this one line
 //       WORKER_JOB_BATCH:<batched>:<programs>:<alone>
 //                                                     exactly once per job, immediately BEFORE that
-//                                                     job's WORKER_JOB_CPU: how many run cases shared a
-//                                                     program, in how many programs, and how many ran
-//                                                     alone
+//                                                     job's WORKER_JOB_LIBRARY: how many run cases
+//                                                     shared a program, in how many programs, and
+//                                                     how many ran alone
+//       WORKER_JOB_LIBRARY:<loaded>:<written>:<rejected>
+//                                                     exactly once per job, immediately BEFORE that
+//                                                     job's WORKER_JOB_CPU: the library cache
+//                                                     entries this worker loaded, wrote and
+//                                                     rejected since its previous job
 //       WORKER_JOB_CPU:<ticks>:<reported>:<unreported>
 //                                                     exactly once per job, immediately BEFORE that
 //                                                     job's WORKER_READY: what compiling this spec's
@@ -156,6 +161,7 @@ let WorkerReadyMarker = "WORKER_READY"
 let WorkerResultMarker = "WORKER_SINGLE_RESULT:"
 let WorkerJobCpuMarker = "WORKER_JOB_CPU:"
 let WorkerJobBatchMarker = "WORKER_JOB_BATCH:"
+let WorkerJobLibraryMarker = "WORKER_JOB_LIBRARY:"
 let WorkerStepMarker = "WORKER_STEP:"
 let JobSinglesPrefix = "JOB:singles:"
 let JobAlonePrefix = "JOB:alone:"
@@ -738,6 +744,9 @@ function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatt
 	// LAST, after every record — the parent takes it off the end of the drained lines before it
 	// checks the records against its plan. See this file's protocol note.
 	print("{jobCountsLine(WorkerJobBatchMarker, first: run.batch.batched as ParsedCount, second: run.batch.programs as ParsedCount, third: run.batch.alone as ParsedCount)}\n")
+
+	let library = fileMemos.library.takeTotals()
+	print("{jobCountsLine(WorkerJobLibraryMarker, first: library.loaded as ParsedCount, second: library.written as ParsedCount, third: library.rejected as ParsedCount)}\n")
 	print("{jobCountsLine(WorkerJobCpuMarker, first: run.cpu.ticks as ParsedCount, second: run.cpu.reported as ParsedCount, third: run.cpu.unreported as ParsedCount)}\n")
 end 'runSpecJob'
 
@@ -1009,6 +1018,16 @@ function takeJobBatchRecord(lines StringArray, specName String) returns BatchTal
 	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobBatchMarker, names: JobCountNames.create("batched count", second: "program count", third: "alone count"))
 	return BatchTally.create(counts.first as TestTally, programs: counts.second as TestTally, alone: counts.third as TestTally)
 end 'takeJobBatchRecord'
+
+function takeJobLibraryRecord(lines StringArray, specName String) returns LibraryCacheTally
+	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobLibraryMarker, names: JobCountNames.create("loaded count", second: "written count", third: "rejected count"))
+	var tally = LibraryCacheTally.create()
+	tally.loaded = counts.first as LibraryEntryTally
+	tally.written = counts.second as LibraryEntryTally
+	tally.rejected = counts.third as LibraryEntryTally
+
+	return tally
+end 'takeJobLibraryRecord'
 
 type JobCountNames
 	export let first as String
@@ -1896,6 +1915,7 @@ export type PoolRun
 	export let failedWorkers as WorkerTally
 	export let cpu as SuiteCpuTally
 	export let batch as BatchTally
+	export let library as LibraryCacheTally
 	export let poolSize as WorkerCount
 
 	// The cases this run passed over and owes the reader a sentence about, from the parent's own plan walk
@@ -1906,8 +1926,8 @@ export type PoolRun
 
 	export let unmatchedPatterns as FilterPatternArray
 
-	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, batch BatchTally, poolSize WorkerCount, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray) returns PoolRun
-		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, poolSize: poolSize, excluded: excluded, unmatchedPatterns: unmatchedPatterns}
+	export static function create(results SpecTestResultArray, failedWorkers WorkerTally, cpu SuiteCpuTally, batch BatchTally, library LibraryCacheTally, poolSize WorkerCount, excluded ExcludedCaseArray, unmatchedPatterns FilterPatternArray) returns PoolRun
+		return Self{results: results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: poolSize, excluded: excluded, unmatchedPatterns: unmatchedPatterns}
 	end 'create'
 end 'PoolRun'
 
@@ -1968,7 +1988,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		//
 		// The excluded census rides out here too: a run whose whole selection was live-network reaches
 		// this return, and "no tests selected" alone would hide the cause.
-		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), poolSize: workerCount, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
+		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0, cpu: SuiteCpuTally.zero(), batch: BatchTally.zero(), library: LibraryCacheTally.create(), poolSize: workerCount, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
 	end 'selectsNothing'
 
 	try prepareSharedDirs(specDir)
@@ -2070,6 +2090,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// with the scheduling, the set of jobs does not.
 	var cpu = SuiteCpuTally.zero()
 	var batch = BatchTally.zero()
+	var library = LibraryCacheTally.create()
 
 	// The watchdog's whole state. `dispatched + completed` counts every progress event this loop can
 	// make, so a poll that finds it unchanged since the previous poll found nothing moving — which is
@@ -2180,6 +2201,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 			// plan, one per test with no allowance for a line of any other kind.
 			var records = recordLinesOf(lines)
 			cpu = cpu.plus(takeJobCpuRecord(records, specName: job.specName))
+			library.add(takeJobLibraryRecord(records, specName: job.specName))
 			batch = batch.plus(takeJobBatchRecord(records, specName: job.specName))
 
 			try buckets.set(job.planIndex, value: resultsFromLines(records, plan: plan)) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
@@ -2243,7 +2265,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		panic("runSpecPool: the compile-CPU tally covers {cpu.tests()} test(s) but the run reported {results.count()} — a job's {WorkerJobCpuMarker} record was counted against the wrong job")
 	end 'cpuCoverageGap'
 
-	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, poolSize: poolSize, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
+	return PoolRun.create(results, failedWorkers: failedWorkers, cpu: cpu, batch: batch, library: library, poolSize: poolSize, excluded: suitePlan.excluded, unmatchedPatterns: suitePlan.unmatchedPatterns)
 end 'runSpecPool'
 
 // The buckets, in plan order — the suite's report, assembled at last from answers that arrived in

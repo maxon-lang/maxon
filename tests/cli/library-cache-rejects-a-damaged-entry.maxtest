@@ -1,0 +1,45 @@
+let CaseDirName = "library-cache-damaged-entry"
+let ProgramDirName = "app"
+let OutputName = "program"
+let ColdImageName = "cold-image"
+let KeptFraction = 2
+
+test 'a damaged library cache entry is rejected and rewritten, and the build is the cold one'
+	requireHeldOutsideCheckout(CaseDirName, check: DamagedEntryIsRejected.create())
+end 'a damaged library cache entry is rejected and rewritten, and the build is the cold one'
+
+type DamagedEntryIsRejected implements OutsideCheckoutCase
+	static function create() returns DamagedEntryIsRejected
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+		let image = dir.join("{OutputName}{executableSuffix()}")
+
+		let cold = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: ListedWordArray.create()), which: "the cold build")
+		try Expect.greaterThan(cold.written, than: 0, message: "the cold build wrote nothing to the library cache, so there is no entry to damage. It wrote: {cold.line}")
+
+		let coldImage = retainedAside(image, aside: dir.join(ColdImageName))
+		let library = libraryCacheDirIn(dir)
+		let entries = filesUnder(library)
+		try Expect.greaterThan(entries.count(), than: 0, message: "the cold build reported writing {cold.written} library cache entries and {library.toString()} holds no file. It wrote: {cold.line}")
+
+		for entry in entries 'eachEntry'
+			var bytes = bytesOf(entry)
+			bytes.truncate(bytes.count() / KeptFraction)
+			rewrittenFile(entry, bytes: bytes)
+		end 'eachEntry'
+
+		let damaged = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: ListedWordArray.create()), which: "the build over a damaged library cache")
+		try Expect.greaterThan(damaged.rejected, than: 0, message: "the build over {entries.count()} truncated library cache entries rejected none of them. It wrote: {damaged.line}")
+		try Expect.greaterThan(damaged.written, than: 0, message: "the build that rejected damaged library cache entries wrote none back, so every later build rejects them again. It wrote: {damaged.line}")
+		try requireSameBytes(coldImage, second: image, why: "the build over a damaged library cache wrote an executable that is not the cold build's.")
+
+		let repaired = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: ListedWordArray.create()), which: "the build after the damaged entries were rewritten")
+		try Expect.equal(repaired.baseline, expected: LibraryBaseline.loaded, message: "the build after the damaged entries were rewritten did not load the library baseline. It wrote: {repaired.line}")
+		try Expect.equal(repaired.rejected, expected: 0, message: "the build after the damaged entries were rewritten still rejected entries. It wrote: {repaired.line}")
+		try Expect.equal(repaired.written, expected: 0, message: "the build after the damaged entries were rewritten wrote entries again. It wrote: {repaired.line}")
+	end 'requireHeldIn'
+end 'DamagedEntryIsRejected'

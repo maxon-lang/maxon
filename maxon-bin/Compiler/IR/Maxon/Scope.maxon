@@ -68,6 +68,30 @@ end 'ScopeError'
 
 typealias ScopeMarkArray = Array with ElementIndex
 
+// @generated library-cache begin
+function cacheWriteScopeMarkArray(writer LibraryCacheWriter, value ScopeMarkArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteScopeMarkArray'
+
+function cacheReadScopeMarkArray(reader LibraryCacheReader) returns ScopeMarkArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ScopeMarkArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ElementIndex
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadScopeMarkArray'
+
+// @generated library-cache end
+
 export type Scope
 	var vars as VarInfoMap
 
@@ -371,4 +395,31 @@ export type Scope
 			end 'removeOnly'
 		end 'drain'
 	end 'popScope'
+
+	// @generated library-cache begin
+	export function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteVarInfoMap(writer, value: self.vars)
+		cacheWriteByteArrayArray(writer, value: self.declNames)
+		cacheWriteBoolArray(writer, value: self.declShadowed)
+		cacheWriteVarInfoArray(writer, value: self.shadowedInfos)
+		cacheWriteScopeMarkArray(writer, value: self.frameMarks)
+		writer.unsigned(self.nextSlot as CacheUnsigned)
+	end 'cacheWrite'
+
+	export static function cacheRead(reader LibraryCacheReader) returns Scope throws LibraryCacheDamage
+		let f_vars = try cacheReadVarInfoMap(reader)
+		let f_declNames = try cacheReadByteArrayArray(reader)
+		let f_declShadowed = try cacheReadBoolArray(reader)
+		let f_shadowedInfos = try cacheReadVarInfoArray(reader)
+		let f_frameMarks = try cacheReadScopeMarkArray(reader)
+		let f_nextSlot = (try reader.unsigned()) as VarSlot
+
+		return Self{vars: f_vars, declNames: f_declNames, declShadowed: f_declShadowed, shadowedInfos: f_shadowedInfos, frameMarks: f_frameMarks, nextSlot: f_nextSlot}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(Scope) as CacheSize48
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'Scope'

@@ -1,7 +1,21 @@
 let SnippetCacheStagingDir = "temp/mcp-snippet-cache-root"
-let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
 let ExtensionlessTarget = "x64-linux"
 let PrintingSnippet = "function main() returns ExitCode\n\tprint(\"staged\\n\")\n\n\treturn 0\nend 'main'\n"
+
+let LibraryCacheDir = "library"
+
+function builtFromTheSnippet(files FilePathArray, cacheRoot FilePath) returns FilePathArray
+	let libraryCache = cacheRoot.join(CacheVendorDirName).join(LibraryCacheDir)
+	var kept = FilePathArray.create()
+
+	for file in files 'eachFile'
+		if not file.path.startsWith(libraryCache.path) 'theLibrarysOwn'
+			kept.push(file)
+		end 'theLibrarysOwn'
+	end 'eachFile'
+
+	return kept
+end 'builtFromTheSnippet'
 
 test 'a snippet staged for a tool call, and everything the call built from it, is gone once the call has answered'
 	let cacheRoot = stagingDir(SnippetCacheStagingDir)
@@ -22,7 +36,7 @@ test 'a snippet staged for a tool call, and everything the call built from it, i
 	let built = try docs.get(2) otherwise panic("a-staged-snippet-is-removed-after-its-call: no answer to `{BuildTool}`")
 	let formatted = try docs.get(3) otherwise panic("a-staged-snippet-is-removed-after-its-call: no answer to `{FmtTool}`")
 	let crossBuilt = try docs.get(4) otherwise panic("a-staged-snippet-is-removed-after-its-call: no answer to the {ExtensionlessTarget} `{BuildTool}`")
-	let left = filesUnder(cacheRoot)
+	let left = builtFromTheSnippet(filesUnder(cacheRoot), cacheRoot: cacheRoot)
 
 	try Expect.isFalse(toolCallIsError(executed), message: "the control: `{ExecuteTool}` must run the staged snippet: {toolCallText(executed)}")
 	try Expect.isFalse(toolCallIsError(built), message: "the control: `{BuildTool}` must build the staged snippet: {toolCallText(built)}")

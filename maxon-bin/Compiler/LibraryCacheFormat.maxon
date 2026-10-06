@@ -1,0 +1,502 @@
+export typealias CacheUnsigned = int(0 to u64.max)
+export typealias CacheSigned = int(i64.min to i64.max)
+typealias CacheWord = bits(64)
+typealias CacheByteValue = int(0 to u8.max)
+
+let LibraryCacheMagic = "MXLC"
+let HeaderWordByteCount = 8
+let HeaderWordCount = 2
+let ByteBitWidth = 8
+let ByteMask = 0xFF
+let VarintPayloadMask = 0x7F
+let VarintContinuationBit = 0x80
+let VarintPayloadBits = 7
+let VarintMostBytes = 10
+let VarintLastBytePayloadCeiling = 1
+let NonNegativeMark = 0
+let NegativeMark = 1
+let LargestSignedMagnitude = 9223372036854775807 as CacheUnsigned
+
+export union LibraryCacheDamage implements Error
+	truncated
+	badMagic
+	checksumMismatch
+	unterminatedNumber
+	trailingBytes
+	unknownTag(tag CacheUnsigned)
+	notText
+	unrepresentable
+	outOfRange
+	anotherEntry
+	anotherSchema
+	repeatedName
+
+	export function displayReason() returns String
+		return match self 'reason'
+			unrepresentable gives "the value holds a case the entry format does not carry"
+			outOfRange gives "a number in the entry is outside the range it is read into"
+			anotherEntry gives "the entry carries the key of another entry"
+			anotherSchema gives "the entry was written under another codec schema"
+			repeatedName gives "the entry names one type twice"
+			truncated gives "the entry ends before the data it announces"
+			badMagic gives "the entry does not start with the library cache magic"
+			checksumMismatch gives "the entry's bytes do not hash to the checksum it carries"
+			unterminatedNumber gives "a number in the entry never ends"
+			trailingBytes gives "the entry holds bytes past the data it announces"
+			unknownTag(tag) gives "the entry names the case {tag}, which this build does not have"
+			notText gives "a text in the entry is not UTF-8"
+		end 'reason'
+	end 'displayReason'
+end 'LibraryCacheDamage'
+
+export type LibraryCacheWriter
+	var buffer as ByteArray
+	var refusal as bool
+
+	export static function create() returns LibraryCacheWriter
+		return Self{buffer: ByteArray.create(), refusal: false}
+	end 'create'
+
+	export function refuse()
+		self.refusal = true
+	end 'refuse'
+
+	export function refused() returns bool
+		return self.refusal
+	end 'refused'
+
+	export function unsigned(value CacheUnsigned)
+		var rest = value as CacheWord
+
+		for _ in 0 upto VarintMostBytes 'eachByte'
+			let low = rest and VarintPayloadMask
+			rest = rest shr VarintPayloadBits
+
+			if rest == 0 'last'
+				self.buffer.push(low as CacheByteValue)
+				return
+			end 'last'
+
+			self.buffer.push((low or VarintContinuationBit) as CacheByteValue)
+		end 'eachByte'
+
+		panic("LibraryCacheWriter.unsigned: {value} did not end within {VarintMostBytes} bytes")
+	end 'unsigned'
+
+	export function signed(value CacheSigned)
+		if value < 0 'negative'
+			self.buffer.push(NegativeMark)
+			self.unsigned((-1 - value) as CacheUnsigned)
+			return
+		end 'negative'
+
+		self.buffer.push(NonNegativeMark)
+		self.unsigned(value as CacheUnsigned)
+	end 'signed'
+
+	export function flag(value bool)
+		self.buffer.push(1 if value else 0)
+	end 'flag'
+
+	export function real(value ParsedFloat)
+		self.signed(__Builtins.floatToBits(value) as CacheSigned)
+	end 'real'
+
+	export function bytes(value ByteArray)
+		self.unsigned(value.count() as CacheUnsigned)
+		self.buffer.append(value)
+	end 'bytes'
+
+	export function text(value String)
+		self.bytes(value.toByteArray())
+	end 'text'
+
+	export function raw(value ByteArray)
+		self.buffer.append(value)
+	end 'raw'
+
+	export function payload() returns ByteArray
+		return self.buffer
+	end 'payload'
+
+	export function sealed() returns ByteArray
+		var image = LibraryCacheMagic.toByteArray()
+		image.append(headerWordBytes(CacheSchemaFingerprint as CacheWord))
+		image.append(headerWordBytes(mixBytes(Hasher.empty(), bytes: self.buffer) as CacheWord))
+		image.append(self.buffer)
+
+		return image
+	end 'sealed'
+end 'LibraryCacheWriter'
+
+function headerWordBytes(word CacheWord) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for position in 0 upto HeaderWordByteCount 'eachByte'
+		bytes.push(((word shr (position * ByteBitWidth)) and ByteMask) as CacheByteValue)
+	end 'eachByte'
+
+	return bytes
+end 'headerWordBytes'
+
+function headerWordAt(image ByteArray, start ElementIndex) returns CacheWord throws LibraryCacheDamage
+	var word = 0 as CacheWord
+
+	for position in 0 upto HeaderWordByteCount 'eachByte'
+		let byte = try image.get(start + position) otherwise throw LibraryCacheDamage.truncated
+		word = word or ((byte as CacheWord) shl (position * ByteBitWidth))
+	end 'eachByte'
+
+	return word
+end 'headerWordAt'
+
+typealias ReaderPathMap = Map with (ByteArray, FilePath)
+
+export type LibraryCacheReader
+	let image as ByteArray
+	let limit as ElementIndex
+	var position as ElementIndex
+	var paths as ReaderPathMap
+
+	export static function open(image ByteArray) returns LibraryCacheReader throws LibraryCacheDamage
+		let magicCount = LibraryCacheMagic.byteLength()
+		let headerCount = magicCount + HeaderWordCount * HeaderWordByteCount
+
+		if image.count() < headerCount 'tooShortForAHeader'
+			throw LibraryCacheDamage.truncated
+		end 'tooShortForAHeader'
+
+		let magic = try image.slice(0, endIndex: LibraryCacheMagic.byteLength()) otherwise throw LibraryCacheDamage.truncated
+
+		if not magic.equals(LibraryCacheMagic.toByteArray()) 'notOurs'
+			throw LibraryCacheDamage.badMagic
+		end 'notOurs'
+
+		if (try headerWordAt(image, start: magicCount)) != (CacheSchemaFingerprint as CacheWord) 'anotherCodec'
+			throw LibraryCacheDamage.anotherSchema
+		end 'anotherCodec'
+
+		let carried = try headerWordAt(image, start: magicCount + HeaderWordByteCount)
+		let payload = try image.slice(headerCount, endIndex: image.count()) otherwise throw LibraryCacheDamage.truncated
+
+		if (mixBytes(Hasher.empty(), bytes: payload) as CacheWord) != carried 'corrupt'
+			throw LibraryCacheDamage.checksumMismatch
+		end 'corrupt'
+
+		return Self{image: image, limit: image.count(), position: headerCount, paths: ReaderPathMap.create()}
+	end 'open'
+
+	export static function over(image ByteArray, start ElementIndex, endIndex ElementIndex) returns LibraryCacheReader
+		return Self{image: image, limit: endIndex, position: start, paths: ReaderPathMap.create()}
+	end 'over'
+
+	function nextByte() returns CacheByteValue throws LibraryCacheDamage
+		if self.position >= self.limit 'pastTheEnd'
+			throw LibraryCacheDamage.truncated
+		end 'pastTheEnd'
+
+		let byte = try self.image.get(self.position) otherwise throw LibraryCacheDamage.truncated
+		self.position = self.position + 1
+
+		return byte
+	end 'nextByte'
+
+	export function offset() returns ElementIndex
+		return self.position
+	end 'offset'
+
+	function remainingBytes() returns ByteArray
+		return try self.image.slice(self.position, endIndex: self.limit) otherwise panic("LibraryCacheReader.remainingBytes: {self.position} to {self.limit} lies outside the {self.image.count()} bytes the reader was opened over")
+	end 'remainingBytes'
+
+	export function unsigned() returns CacheUnsigned throws LibraryCacheDamage
+		let first = try self.nextByte()
+
+		if (first and VarintContinuationBit) == 0 'oneByte'
+			return first as CacheUnsigned
+		end 'oneByte'
+
+		var result = (first and VarintPayloadMask) as CacheWord
+
+		for index in 1 upto VarintMostBytes 'eachByte'
+			let byte = try self.nextByte()
+
+			if index == VarintMostBytes - 1 and (byte and VarintPayloadMask) > VarintLastBytePayloadCeiling 'pastSixtyFourBits'
+				throw LibraryCacheDamage.outOfRange
+			end 'pastSixtyFourBits'
+
+			result = result or (((byte and VarintPayloadMask) as CacheWord) shl (index * VarintPayloadBits))
+
+			if (byte and VarintContinuationBit) == 0 'last'
+				return result as CacheUnsigned
+			end 'last'
+		end 'eachByte'
+
+		throw LibraryCacheDamage.unterminatedNumber
+	end 'unsigned'
+
+	export function boundedUnsigned(low CacheUnsigned, high CacheUnsigned) returns CacheUnsigned throws LibraryCacheDamage
+		let value = try self.unsigned()
+
+		if value < low or value > high 'outsideTheRange'
+			throw LibraryCacheDamage.outOfRange
+		end 'outsideTheRange'
+
+		return value
+	end 'boundedUnsigned'
+
+	export function signed() returns CacheSigned throws LibraryCacheDamage
+		let mark = try self.nextByte()
+		let magnitude = try self.unsigned()
+
+		if magnitude > LargestSignedMagnitude 'pastTheRange'
+			throw LibraryCacheDamage.outOfRange
+		end 'pastTheRange'
+
+		if mark == NonNegativeMark 'nonNegative'
+			return magnitude as CacheSigned
+		end 'nonNegative'
+
+		if mark == NegativeMark 'negative'
+			return -1 - (magnitude as CacheSigned)
+		end 'negative'
+
+		throw LibraryCacheDamage.unknownTag(mark as CacheUnsigned)
+	end 'signed'
+
+	export function boundedSigned(low CacheSigned, high CacheSigned) returns CacheSigned throws LibraryCacheDamage
+		let value = try self.signed()
+
+		if value < low or value > high 'outsideTheRange'
+			throw LibraryCacheDamage.outOfRange
+		end 'outsideTheRange'
+
+		return value
+	end 'boundedSigned'
+
+	export function flag() returns bool throws LibraryCacheDamage
+		let byte = try self.nextByte()
+
+		return match byte 'flag'
+			0 gives false
+			1 gives true
+			default throws LibraryCacheDamage.unknownTag(byte as CacheUnsigned)
+		end 'flag'
+	end 'flag'
+
+	export function bytes() returns ByteArray throws LibraryCacheDamage
+		let count = try self.unsigned()
+		let start = self.position
+
+		if count > (self.limit - start) as CacheUnsigned 'pastTheEnd'
+			throw LibraryCacheDamage.truncated
+		end 'pastTheEnd'
+
+		if count == 0 'nothingSpelled'
+			return EmptySourceText
+		end 'nothingSpelled'
+
+		self.position = start + (count as ElementIndex)
+
+		return try self.image.slice(start, endIndex: self.position) otherwise throw LibraryCacheDamage.truncated
+	end 'bytes'
+
+	export function text() returns String throws LibraryCacheDamage
+		return String.from(try self.bytes())
+	end 'text'
+
+	export function real() returns ParsedFloat throws LibraryCacheDamage
+		return __Builtins.bitsToFloat(try self.signed())
+	end 'real'
+
+	export function path() returns FilePath throws LibraryCacheDamage
+		let spelled = try self.bytes()
+
+		if let known = try self.paths.get(spelled) 'seenBefore'
+			return known
+		end 'seenBefore'
+
+		let parsed = try FilePath.from(String.from(spelled)) otherwise throw LibraryCacheDamage.notText
+		self.paths.upsert(spelled, value: parsed)
+
+		return parsed
+	end 'path'
+
+	export function count() returns ElementIndex throws LibraryCacheDamage
+		let announced = try self.unsigned()
+
+		if announced > (self.limit - self.position) as CacheUnsigned 'moreThanTheBytesLeft'
+			throw LibraryCacheDamage.truncated
+		end 'moreThanTheBytesLeft'
+
+		return announced as ElementIndex
+	end 'count'
+
+	export function finished() throws LibraryCacheDamage
+		if self.position != self.limit 'bytesLeft'
+			throw LibraryCacheDamage.trailingBytes
+		end 'bytesLeft'
+	end 'finished'
+end 'LibraryCacheReader'
+
+typealias PackOffsetArray = Array with ElementIndex
+
+export let NoRowQualifier = 0 as HashDigest
+
+type PackRowKey
+	export let first as HashDigest
+	export let second as HashDigest
+	export let third as HashDigest
+
+	static function create(first HashDigest, second HashDigest, third HashDigest) returns PackRowKey
+		return Self{first: first, second: second, third: third}
+	end 'create'
+
+	function sharesGroupWith(other PackRowKey) returns bool
+		return self.first == other.first and self.second == other.second
+	end 'sharesGroupWith'
+
+	function equals(other PackRowKey) returns bool
+		return self.sharesGroupWith(other) and self.third == other.third
+	end 'equals'
+end 'PackRowKey'
+
+typealias PackRowKeyArray = Array with PackRowKey
+
+function rowPositionIn(rows PackRowKeyArray, key PackRowKey) returns ElementIndex throws LibraryEntryMiss
+	for (iter, row) in rows.withIterator() 'eachRow'
+		if row.equals(key) 'thisRow'
+			return iter.index()
+		end 'thisRow'
+	end 'eachRow'
+
+	throw LibraryEntryMiss.absent
+end 'rowPositionIn'
+
+// One file per kind and library state, rather than one per entry, because per-file I/O dominates
+// the cost of a load on Windows.
+export type LibraryPackBuilder
+	var rows as PackRowKeyArray
+	var sections as ByteArrayArray
+
+	export static function create() returns LibraryPackBuilder
+		return Self{rows: PackRowKeyArray.create(), sections: ByteArrayArray.create()}
+	end 'create'
+
+	export function add(first HashDigest, second HashDigest, third HashDigest, payload ByteArray)
+		self.addRow(PackRowKey.create(first, second: second, third: third), payload: payload)
+	end 'add'
+
+	function addRow(key PackRowKey, payload ByteArray)
+		if let position = try rowPositionIn(self.rows, key: key) 'alreadyHeld'
+			try self.sections.set(position, value: payload) otherwise panic("LibraryPackBuilder.addRow: sections.set OOB at {position}, the position of a row, which is index-parallel to the sections")
+			return
+		end 'alreadyHeld'
+
+		self.rows.push(key)
+		self.sections.push(payload)
+	end 'addRow'
+
+	function holdsRow(key PackRowKey) returns bool
+		_ = try rowPositionIn(self.rows, key: key) otherwise return false
+		return true
+	end 'holdsRow'
+
+	function countInGroupOf(key PackRowKey) returns ElementIndex
+		var found = 0 as ElementIndex
+
+		for row in self.rows 'eachRow'
+			if row.sharesGroupWith(key) 'thisGroup'
+				found = found + 1
+			end 'thisGroup'
+		end 'eachRow'
+
+		return found
+	end 'countInGroupOf'
+
+	export function sealed() returns ByteArray
+		var writer = LibraryCacheWriter.create()
+		writer.unsigned(self.rows.count() as CacheUnsigned)
+
+		for (iter, row) in self.rows.withIterator() 'eachRow'
+			let section = try self.sections.get(iter.index()) otherwise panic("LibraryPackBuilder.sealed: sections.get OOB at {iter.index()} below count {self.sections.count()}, which is index-parallel to the rows")
+			writer.unsigned(row.first as CacheUnsigned)
+			writer.unsigned(row.second as CacheUnsigned)
+			writer.unsigned(row.third as CacheUnsigned)
+			writer.unsigned(section.count() as CacheUnsigned)
+		end 'eachRow'
+
+		for section in self.sections 'eachSection'
+			writer.raw(section)
+		end 'eachSection'
+
+		return writer.sealed()
+	end 'sealed'
+end 'LibraryPackBuilder'
+
+export type LibraryPack
+	let image as ByteArray
+	let rows as PackRowKeyArray
+	let starts as PackOffsetArray
+	let ends as PackOffsetArray
+
+	export static function open(image ByteArray) returns LibraryPack throws LibraryCacheDamage
+		var reader = try LibraryCacheReader.open(image)
+		let count = try reader.count()
+		var rows = PackRowKeyArray.create()
+		var lengths = PackOffsetArray.create()
+		rows.reserve(count)
+		lengths.reserve(count)
+
+		for _ in 0 upto count 'eachRow'
+			let first = (try reader.unsigned()) as HashDigest
+			let second = (try reader.unsigned()) as HashDigest
+			let third = (try reader.unsigned()) as HashDigest
+			rows.push(PackRowKey.create(first, second: second, third: third))
+			lengths.push(try reader.count())
+		end 'eachRow'
+
+		var starts = PackOffsetArray.create()
+		var ends = PackOffsetArray.create()
+		starts.reserve(count)
+		ends.reserve(count)
+		var at = reader.offset()
+
+		for length in lengths 'eachLength'
+			starts.push(at)
+			at = at + length
+			ends.push(at)
+		end 'eachLength'
+
+		if at > image.count() 'sectionsPastTheEnd'
+			throw LibraryCacheDamage.truncated
+		end 'sectionsPastTheEnd'
+
+		if at < image.count() 'bytesPastTheSections'
+			throw LibraryCacheDamage.trailingBytes
+		end 'bytesPastTheSections'
+
+		return Self{image: image, rows: rows, starts: starts, ends: ends}
+	end 'open'
+
+	function readerAt(position ElementIndex) returns LibraryCacheReader
+		let start = try self.starts.get(position) otherwise panic("LibraryPack.readerAt: starts.get OOB at {position} below count {self.starts.count()}, which is index-parallel to the rows")
+		let finish = try self.ends.get(position) otherwise panic("LibraryPack.readerAt: ends.get OOB at {position} below count {self.ends.count()}, which is index-parallel to the rows")
+
+		return LibraryCacheReader.over(self.image, start: start, endIndex: finish)
+	end 'readerAt'
+
+	export function copiedInto(builder LibraryPackBuilder, mostPerGroup ElementIndex)
+		for (iter, row) in self.rows.withIterator() 'eachRow'
+			if builder.holdsRow(row) or builder.countInGroupOf(row) >= mostPerGroup 'notWorthCarrying'
+				continue
+			end 'notWorthCarrying'
+
+			builder.addRow(row, payload: self.readerAt(iter.index()).remainingBytes())
+		end 'eachRow'
+	end 'copiedInto'
+
+	export function section(first HashDigest, second HashDigest, third HashDigest) returns LibraryCacheReader throws LibraryEntryMiss
+		return self.readerAt(try rowPositionIn(self.rows, key: PackRowKey.create(first, second: second, third: third)))
+	end 'section'
+end 'LibraryPack'

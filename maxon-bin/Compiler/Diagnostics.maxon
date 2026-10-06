@@ -36,6 +36,44 @@ export union DiagnosticNote
 	end 'respelledFor'
 end 'DiagnosticNote'
 
+// @generated library-cache begin
+function cacheWriteDiagnosticNote(writer LibraryCacheWriter, value DiagnosticNote)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break 'payload'
+		at(a0, a1, a2, a3) then cacheWriteDiagnosticNoteAt(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+	end 'payload'
+end 'cacheWriteDiagnosticNote'
+
+function cacheWriteDiagnosticNoteAt(writer LibraryCacheWriter, a0 String, a1 LineNumber, a2 ColumnNumber, a3 FilePath)
+	writer.text(a0)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+	writer.text(a3.toString())
+end 'cacheWriteDiagnosticNoteAt'
+
+function cacheReadDiagnosticNote(reader LibraryCacheReader) returns DiagnosticNote throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives DiagnosticNote.none
+		1 gives try cacheReadDiagnosticNoteAt(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDiagnosticNote'
+
+function cacheReadDiagnosticNoteAt(reader LibraryCacheReader) returns DiagnosticNote throws LibraryCacheDamage
+	let a0 = try reader.text()
+	let a1 = (try reader.unsigned()) as LineNumber
+	let a2 = (try reader.unsigned()) as ColumnNumber
+	let a3 = try reader.path()
+
+	return DiagnosticNote.at(a0, line: a1, column: a2, filePath: a3)
+end 'cacheReadDiagnosticNoteAt'
+
+// @generated library-cache end
+
 export enum ShadowSpellingReader
 	authorCode
 	libraryCode
@@ -67,9 +105,54 @@ export type StdlibShadowSpelling
 	function bareName() returns ByteArray
 		return self.bare
 	end 'bareName'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.minted)
+		writer.bytes(self.qualified)
+		writer.bytes(self.bare)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns StdlibShadowSpelling throws LibraryCacheDamage
+		let f_minted = try reader.bytes()
+		let f_qualified = try reader.bytes()
+		let f_bare = try reader.bytes()
+
+		return Self{minted: f_minted, qualified: f_qualified, bare: f_bare}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(StdlibShadowSpelling) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'StdlibShadowSpelling'
 
 export typealias StdlibShadowSpellingArray = Array with StdlibShadowSpelling
+
+// @generated library-cache begin
+module function cacheWriteStdlibShadowSpellingArray(writer LibraryCacheWriter, value StdlibShadowSpellingArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteStdlibShadowSpellingArray'
+
+module function cacheReadStdlibShadowSpellingArray(reader LibraryCacheReader) returns StdlibShadowSpellingArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = StdlibShadowSpellingArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try StdlibShadowSpelling.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadStdlibShadowSpellingArray'
+
+// @generated library-cache end
 
 export type ShadowRespelling
 	export let minted as ByteArray
@@ -232,6 +315,40 @@ export union DiagnosticCause
 	end 'identityText'
 end 'DiagnosticCause'
 
+// @generated library-cache begin
+function cacheWriteDiagnosticCause(writer LibraryCacheWriter, value DiagnosticCause)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		standsAlone then break 'payload'
+		undeclaredCalls(a0, a1) then cacheWriteDiagnosticCauseUndeclaredCalls(writer, a0: a0, a1: a1)
+	end 'payload'
+end 'cacheWriteDiagnosticCause'
+
+function cacheWriteDiagnosticCauseUndeclaredCalls(writer LibraryCacheWriter, a0 SourceRangeArray, a1 FilePath)
+	cacheWriteSourceRangeArray(writer, value: a0)
+	writer.text(a1.toString())
+end 'cacheWriteDiagnosticCauseUndeclaredCalls'
+
+function cacheReadDiagnosticCause(reader LibraryCacheReader) returns DiagnosticCause throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives DiagnosticCause.standsAlone
+		1 gives try cacheReadDiagnosticCauseUndeclaredCalls(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDiagnosticCause'
+
+function cacheReadDiagnosticCauseUndeclaredCalls(reader LibraryCacheReader) returns DiagnosticCause throws LibraryCacheDamage
+	let a0 = try cacheReadSourceRangeArray(reader)
+	let a1 = try reader.path()
+
+	return DiagnosticCause.undeclaredCalls(a0, filePath: a1)
+end 'cacheReadDiagnosticCauseUndeclaredCalls'
+
+// @generated library-cache end
+
 function undeclaredCallsIdentity(calls SourceRangeArray, filePath FilePath) returns String
 	var identity = "\ncause: {filePath.toString()}"
 
@@ -316,6 +433,54 @@ export union DiagnosticAnchor
 		end 'anchor'
 	end 'renderedPosition'
 end 'DiagnosticAnchor'
+
+// @generated library-cache begin
+function cacheWriteDiagnosticAnchor(writer LibraryCacheWriter, value DiagnosticAnchor)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		programWide then break 'payload'
+		file(a0) then cacheWriteDiagnosticAnchorFile(writer, a0: a0)
+		at(a0, a1, a2) then cacheWriteDiagnosticAnchorAt(writer, a0: a0, a1: a1, a2: a2)
+	end 'payload'
+end 'cacheWriteDiagnosticAnchor'
+
+function cacheWriteDiagnosticAnchorFile(writer LibraryCacheWriter, a0 FilePath)
+	writer.text(a0.toString())
+end 'cacheWriteDiagnosticAnchorFile'
+
+function cacheWriteDiagnosticAnchorAt(writer LibraryCacheWriter, a0 FilePath, a1 DiagnosticLine, a2 DiagnosticColumn)
+	writer.text(a0.toString())
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.unsigned(a2 as CacheUnsigned)
+end 'cacheWriteDiagnosticAnchorAt'
+
+function cacheReadDiagnosticAnchor(reader LibraryCacheReader) returns DiagnosticAnchor throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives DiagnosticAnchor.programWide
+		1 gives try cacheReadDiagnosticAnchorFile(reader)
+		2 gives try cacheReadDiagnosticAnchorAt(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDiagnosticAnchor'
+
+function cacheReadDiagnosticAnchorFile(reader LibraryCacheReader) returns DiagnosticAnchor throws LibraryCacheDamage
+	let a0 = try reader.path()
+
+	return DiagnosticAnchor.file(a0)
+end 'cacheReadDiagnosticAnchorFile'
+
+function cacheReadDiagnosticAnchorAt(reader LibraryCacheReader) returns DiagnosticAnchor throws LibraryCacheDamage
+	let a0 = try reader.path()
+	let a1 = (try reader.boundedUnsigned(1, high: u64.max)) as DiagnosticLine
+	let a2 = (try reader.boundedUnsigned(1, high: u64.max)) as DiagnosticColumn
+
+	return DiagnosticAnchor.at(a0, line: a1, column: a2)
+end 'cacheReadDiagnosticAnchorAt'
+
+// @generated library-cache end
 
 export type Diagnostic
 	export let code as ErrorCode
@@ -415,9 +580,58 @@ export type Diagnostic
 			at(noteText, noteLine, noteColumn, notePath) then return "\nnote: {notePath.toString()}:{noteLine}:{noteColumn}: {noteText}"
 		end 'note'
 	end 'renderedNote'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.code.ordinal as CacheUnsigned)
+		writer.text(self.message)
+		cacheWriteDiagnosticAnchor(writer, value: self.anchor)
+		cacheWriteDiagnosticNote(writer, value: self.note)
+		cacheWriteDiagnosticCause(writer, value: self.cause)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns Diagnostic throws LibraryCacheDamage
+		let f_code = try cacheReadErrorCode(reader)
+		let f_message = try reader.text()
+		let f_anchor = try cacheReadDiagnosticAnchor(reader)
+		let f_note = try cacheReadDiagnosticNote(reader)
+		let f_cause = try cacheReadDiagnosticCause(reader)
+
+		return Self{code: f_code, message: f_message, anchor: f_anchor, note: f_note, cause: f_cause}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(Diagnostic) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'Diagnostic'
 
 export typealias DiagnosticArray = Array with Diagnostic
+
+// @generated library-cache begin
+module function cacheWriteDiagnosticArray(writer LibraryCacheWriter, value DiagnosticArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteDiagnosticArray'
+
+module function cacheReadDiagnosticArray(reader LibraryCacheReader) returns DiagnosticArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DiagnosticArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try Diagnostic.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDiagnosticArray'
+
+// @generated library-cache end
 
 // Driver / query-pipeline failure modes. Distinct from a `Diagnostic`: a
 // `CompileError` is thrown to unwind the build, whereas diagnostics accumulate

@@ -33,9 +33,62 @@ export type CovPoint
 	export static function create(funcName String, filePath String, line LineNumber, col ColumnNumber, branchLine LineNumber, branchCol ColumnNumber, flags CovPointFlags) returns CovPoint
 		return Self{funcName: funcName, filePath: filePath, line: line, col: col, branchLine: branchLine, branchCol: branchCol, flags: flags}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.text(self.funcName)
+		writer.text(self.filePath)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.col as CacheUnsigned)
+		writer.unsigned(self.branchLine as CacheUnsigned)
+		writer.unsigned(self.branchCol as CacheUnsigned)
+		writer.unsigned(self.flags as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns CovPoint throws LibraryCacheDamage
+		let f_funcName = try reader.text()
+		let f_filePath = try reader.text()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_col = (try reader.unsigned()) as ColumnNumber
+		let f_branchLine = (try reader.unsigned()) as LineNumber
+		let f_branchCol = (try reader.unsigned()) as ColumnNumber
+		let f_flags = (try reader.boundedUnsigned(0, high: u32.max)) as CovPointFlags
+
+		return Self{funcName: f_funcName, filePath: f_filePath, line: f_line, col: f_col, branchLine: f_branchLine, branchCol: f_branchCol, flags: f_flags}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(CovPoint) as CacheSize56
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'CovPoint'
 
 export typealias CovPointArray = Array with CovPoint
+
+// @generated library-cache begin
+export function cacheWriteCovPointArray(writer LibraryCacheWriter, value CovPointArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteCovPointArray'
+
+export function cacheReadCovPointArray(reader LibraryCacheReader) returns CovPointArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = CovPointArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try CovPoint.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadCovPointArray'
+
+// @generated library-cache end
 
 // The module's coverage points, in mint order. EMPTY unless the compile was asked for `--coverage`:
 // nothing consults it otherwise, so an ordinary build carries no points and emits no instrumentation.

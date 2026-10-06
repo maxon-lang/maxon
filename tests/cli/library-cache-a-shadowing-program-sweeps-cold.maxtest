@@ -1,0 +1,32 @@
+let CaseDirName = "library-cache-shadowing"
+let TrivialProgramDirName = "app"
+let ShadowingProgramDirName = "shadowing"
+let TrivialOutputName = "program"
+let ShadowingOutputName = "shadowing-program"
+let ShadowedTypeName = "Clock"
+let ShadowingProgramSource = "typealias Tick = int(0 to 1000)\n\ntype Clock\n\texport var ticks as Tick\n\n\tstatic function create(ticks Tick) returns Self\n\t\treturn Self\{ticks: ticks\}\n\tend 'create'\nend 'Clock'\n\nfunction main() returns ExitCode\n\tlet clock = Clock.create(7)\n\treturn clock.ticks as ExitCode\nend 'main'\n"
+let ShadowingProgramExitCode = 7
+
+test 'a program shadowing a library type sweeps the library itself and leaves the cached baseline unused'
+	requireHeldOutsideCheckout(CaseDirName, check: ShadowingProgramSweepsCold.create())
+end 'a program shadowing a library type sweeps the library itself and leaves the cached baseline unused'
+
+type ShadowingProgramSweepsCold implements OutsideCheckoutCase
+	static function create() returns ShadowingProgramSweepsCold
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: TrivialProgramDirName, source: TrivialProgramSource)
+		stageProgram(dir, name: ShadowingProgramDirName, source: ShadowingProgramSource)
+
+		_ = try requireLibraryCacheBuild(dir, program: TrivialProgramDirName, output: TrivialOutputName, which: "the build that fills the library cache")
+
+		let shadowing = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ShadowingProgramDirName, output: ShadowingOutputName, options: ListedWordArray.create()), which: "the build of a program declaring its own `{ShadowedTypeName}`")
+		try Expect.equal(shadowing.baseline, expected: LibraryBaseline.unused, message: "a program declaring its own `{ShadowedTypeName}` did not leave the library baseline unused, and that baseline resolves `{ShadowedTypeName}` to the library's. It wrote: {shadowing.line}")
+		try Expect.greaterThan(shadowing.swept, than: 0, message: "a program declaring its own `{ShadowedTypeName}` swept no library file itself. It wrote: {shadowing.line}")
+
+		let ran = runDriver(ListedWordArray.create(), binary: dir.join("{ShadowingOutputName}{executableSuffix()}"), workingDirectory: dir)
+		try Expect.equal(ran.exitCode(), expected: ShadowingProgramExitCode, message: "the program declaring its own `{ShadowedTypeName}` did not answer what its own type holds. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
+	end 'requireHeldIn'
+end 'ShadowingProgramSweepsCold'

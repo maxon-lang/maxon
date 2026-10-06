@@ -53,6 +53,29 @@ export type SourceRange
 	export function isEmpty() returns bool
 		return startByte == endByte
 	end 'isEmpty'
+
+	// @generated library-cache begin
+	export function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.startByte as CacheUnsigned)
+		writer.unsigned(self.endByte as CacheUnsigned)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	export static function cacheRead(reader LibraryCacheReader) returns SourceRange throws LibraryCacheDamage
+		let f_startByte = (try reader.unsigned()) as ByteOffset
+		let f_endByte = (try reader.unsigned()) as ByteOffset
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{startByte: f_startByte, endByte: f_endByte, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(SourceRange) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'SourceRange'
 
 function namesASourcePosition(line LineNumber, column ColumnNumber) returns bool
@@ -68,6 +91,30 @@ end 'OpPlacement'
 // per-ARGUMENT payload — they are not per-op, so they do not belong in the
 // op-parallel `SourceRangeTable` and stay on the op.
 export typealias SourceRangeArray = Array with SourceRange
+
+// @generated library-cache begin
+export function cacheWriteSourceRangeArray(writer LibraryCacheWriter, value SourceRangeArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteSourceRangeArray'
+
+export function cacheReadSourceRangeArray(reader LibraryCacheReader) returns SourceRangeArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = SourceRangeArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try SourceRange.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadSourceRangeArray'
+
+// @generated library-cache end
 
 // --- SourceRangeTable: the op-parallel span store ---
 //
@@ -168,6 +215,29 @@ export type SourceRangeTable
 		self.lines.append(source.lines)
 		self.columns.append(source.columns)
 	end 'appendFrom'
+
+	// @generated library-cache begin
+	export function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteByteOffsetArray(writer, value: self.startBytes)
+		cacheWriteByteOffsetArray(writer, value: self.endBytes)
+		cacheWriteLineNumberArray(writer, value: self.lines)
+		cacheWriteColumnNumberArray(writer, value: self.columns)
+	end 'cacheWrite'
+
+	export static function cacheRead(reader LibraryCacheReader) returns SourceRangeTable throws LibraryCacheDamage
+		let f_startBytes = try cacheReadByteOffsetArray(reader)
+		let f_endBytes = try cacheReadByteOffsetArray(reader)
+		let f_lines = try cacheReadLineNumberArray(reader)
+		let f_columns = try cacheReadColumnNumberArray(reader)
+
+		return Self{startBytes: f_startBytes, endBytes: f_endBytes, lines: f_lines, columns: f_columns}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(SourceRangeTable) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'SourceRangeTable'
 
 // --- Debug spans: the channel that carries a source position PAST the Maxon tier ---
@@ -183,6 +253,30 @@ end 'SourceRangeTable'
 // rule the sidecar writes its line rows by.
 export typealias SpanId = int(0 to u32.max) implements ElementIndex
 export typealias SpanIdArray = Array with SpanId
+
+// @generated library-cache begin
+function cacheWriteSpanIdArray(writer LibraryCacheWriter, value SpanIdArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteSpanIdArray'
+
+function cacheReadSpanIdArray(reader LibraryCacheReader) returns SpanIdArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = SpanIdArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.boundedUnsigned(0, high: u32.max)) as SpanId
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadSpanIdArray'
+
+// @generated library-cache end
 
 // A source file registered in a `DebugSpanTable`, as a line row names one.
 export typealias DebugFileId = int(0 to u32.max) implements ElementIndex
@@ -445,6 +539,27 @@ export type DebugSpanColumn
 			panic("DebugSpanColumn: op {opIndex} recorded into slot {self.ids.count()} — an op reached module.ops without a span, and every later span would be misattributed")
 		end 'outOfStep'
 	end 'requireNextSlot'
+
+	// @generated library-cache begin
+	export function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteSpanIdArray(writer, value: self.ids)
+		writer.unsigned(self.current as CacheUnsigned)
+		writer.flag(self.armed)
+	end 'cacheWrite'
+
+	export static function cacheRead(reader LibraryCacheReader) returns DebugSpanColumn throws LibraryCacheDamage
+		let f_ids = try cacheReadSpanIdArray(reader)
+		let f_current = (try reader.boundedUnsigned(0, high: u32.max)) as SpanId
+		let f_armed = try reader.flag()
+
+		return Self{ids: f_ids, current: f_current, armed: f_armed}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(DebugSpanColumn) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'DebugSpanColumn'
 
 export function sourceSpanOf(project Project, filePath FilePath, line LineNumber, column ColumnNumber) returns SpanId

@@ -37,7 +37,7 @@ let CacheFormatPrefix = "v"
 let FormatNameParts = 2
 let FormatNumberPart = 1
 
-typealias CacheFormatNumber = int(1 to u32.max)
+export typealias CacheFormatNumber = int(1 to u32.max)
 
 // ⭐⭐ **EVERY ROOT IS INSIDE A DIRECTORY ONLY ITS OWNER MAY WRITE, WHICH IS WHY A HOST NAMING NONE OF
 // THEM IS REFUSED BY NAME ON BOTH LANES.** A cache under a world-writable directory belongs to every user
@@ -78,6 +78,7 @@ let ChainSeparator = ", then "
 // ⛔ **NOTHING PUBLISHED CAN END IN THE PENDING MARKER**, which is what keeps a half-written build out of
 // the hit test: a published name ends in the key's hex digits, and `p` is not one.
 let SlotKeySeparator = "-"
+let PendingWriterSeparator = "."
 let PendingBuildMarker = ".tmp"
 
 // A slot path has a budget, and Windows sets it at 260 characters: two full SHA-256s spelled out
@@ -119,6 +120,12 @@ typealias BuildNameArray = Array with String
 // sentence to the reader, so the arm is the fact and the payload is the sentence.
 export union RunCacheError implements Error
 	unavailable(reason String)
+
+	export function sentence() returns String
+		return match self 'why'
+			unavailable(reason) gives reason
+		end 'why'
+	end 'sentence'
 end 'RunCacheError'
 
 // One program's place in the cache: the path its key was computed over, the build the current inputs
@@ -162,8 +169,12 @@ module function locateRunSlot(spelled FilePath, isProject bool, target Target, e
 	let binarySuffix = executableExtension(target.os)
 	let built = "{stem}{SlotKeySeparator}{key}"
 
-	return RunSlot.create(program, directory: dir, executable: dir.join("{built}{binarySuffix}"), pending: dir.join("{built}.{__Builtins.currentProcessId()}{PendingBuildMarker}{binarySuffix}"), binarySuffix: binarySuffix, formatsRoot: formatsRoot)
+	return RunSlot.create(program, directory: dir, executable: dir.join("{built}{binarySuffix}"), pending: dir.join("{pendingSpellingOf(built)}{binarySuffix}"), binarySuffix: binarySuffix, formatsRoot: formatsRoot)
 end 'locateRunSlot'
+
+export function pendingSpellingOf(published String) returns String
+	return "{published}{PendingWriterSeparator}{__Builtins.currentProcessId()}{PendingBuildMarker}"
+end 'pendingSpellingOf'
 
 // Take the built program's key-name, which IS publishing it: from that moment every other run reads it as
 // a hit.
@@ -245,7 +256,7 @@ function discardOlderCacheFormats(slot RunSlot)
 			continue
 		end 'aSlotOfTheUnversionedLayout'
 
-		if not isOlderCacheFormatName(name) 'notOlder'
+		if not isOlderCacheFormatName(name, than: CacheFormat) 'notOlder'
 			continue
 		end 'notOlder'
 
@@ -260,7 +271,7 @@ function discardOlderCacheFormats(slot RunSlot)
 end 'discardOlderCacheFormats'
 
 // A prefixed name that is not the prefix and a number was written by no driver, and is left alone.
-function isOlderCacheFormatName(name String) returns bool
+export function isOlderCacheFormatName(name String, than CacheFormatNumber) returns bool
 	let parts = name.split(CacheFormatPrefix)
 
 	if parts.count() != FormatNameParts 'notAFormatName'
@@ -270,7 +281,7 @@ function isOlderCacheFormatName(name String) returns bool
 	let digits = try parts.get(FormatNumberPart) otherwise panic("isOlderCacheFormatName: the count is {FormatNameParts} on the line above")
 	let format = try int.fromString(digits) otherwise return false
 
-	return format < CacheFormat
+	return format < (than as ParsedInt)
 end 'isOlderCacheFormatName'
 
 enum PendingBuilds
@@ -533,8 +544,12 @@ function runCacheRoot() returns FilePath throws RunCacheError
 	return root.join(CacheCommandDirName)
 end 'runCacheRoot'
 
+export function cacheFormatDirectoryName(format CacheFormatNumber) returns String
+	return "{CacheFormatPrefix}{format}"
+end 'cacheFormatDirectoryName'
+
 function cacheFormatName() returns String
-	return "{CacheFormatPrefix}{CacheFormat}"
+	return cacheFormatDirectoryName(CacheFormat)
 end 'cacheFormatName'
 
 // What matters is that the slot is there afterwards, not that this run made it: a run losing the
@@ -657,17 +672,58 @@ end 'versionLine'
 //
 // The TARGET rides beside it because one compiler emits several.
 function compilerLine(target Target) returns String throws RunCacheError
+	let identity = try compilerIdentity(target)
+
+	return manifestLine(CompilerFieldLabel, fields: identity.fields())
+end 'compilerLine'
+
+export type CompilerIdentity
+	export let path as FilePath
+	export let size as FileSize
+	export let modifiedTime as Timestamp
+	export let target as Target
+
+	static function create(path FilePath, size FileSize, modifiedTime Timestamp, target Target) returns CompilerIdentity
+		return Self{path: path, size: size, modifiedTime: modifiedTime, target: target}
+	end 'create'
+
+	function fields() returns ManifestFieldArray
+		var fields = ManifestFieldArray.create()
+		fields.push(self.path.toString())
+		fields.push("{self.size}")
+		fields.push("{self.modifiedTime}")
+		fields.push(targetToString(self.target))
+
+		return fields
+	end 'fields'
+
+	export function lineage() returns String
+		var fields = ManifestFieldArray.create()
+		fields.push(self.path.toString())
+		fields.push(targetToString(self.target))
+
+		return fieldsDigest(fields)
+	end 'lineage'
+
+	export function build() returns String
+		var fields = ManifestFieldArray.create()
+		fields.push("{self.size}")
+		fields.push("{self.modifiedTime}")
+
+		return fieldsDigest(fields)
+	end 'build'
+end 'CompilerIdentity'
+
+function fieldsDigest(fields ManifestFieldArray) returns String
+	return hexOfLeadingBytes(sha256(manifestLine(CompilerFieldLabel, fields: fields).toByteArray()), count: CacheNameDigestBytes)
+end 'fieldsDigest'
+
+export function compilerIdentity(target Target) returns CompilerIdentity throws RunCacheError
 	let exe = try Process.executablePath() otherwise throw RunCacheError.unavailable("could not determine this compiler's own path, which the build cache key is computed over")
 	let info = try File.info(exe) otherwise throw RunCacheError.unavailable("could not read {exe.toString()}, which the build cache key is computed over")
 
-	var fields = ManifestFieldArray.create()
-	fields.push(exe.toString())
-	fields.push("{info.size}")
-	fields.push("{info.modifiedTime}")
-	fields.push(targetToString(target))
-
-	return manifestLine(CompilerFieldLabel, fields: fields)
-end 'compilerLine'
+	return CompilerIdentity.create(exe, size: info.size, modifiedTime: info.modifiedTime, target: target)
+end 'compilerIdentity'
 
 // ⭐ **WALK ORDER IS PART OF THE KEY.** The loader registers sources in the order the walk found them and
 // never sorts, so two orders are two programs. The PATH rides in the line beside the digest for the same

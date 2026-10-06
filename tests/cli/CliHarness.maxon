@@ -319,8 +319,7 @@ export function stageCompiler(caseDirName String, binaryIn String, stdlibIn Stri
 
 	let staged = stagingDir(caseRelative(caseDirName, relative: binaryIn)).join("{CompilerBaseName}{executableSuffix()}")
 	let original = testedCompilerPath()
-	let image = try File.readBinary(original) otherwise panic("CliHarness: the gate could not run - could not read {original.toString()} to copy it.")
-	try File.writeBinary(staged, content: image, mode: FilePermission.executable) otherwise panic("CliHarness: the gate could not run - could not write the copy at {staged.toString()}.")
+	copyFile(original, into: staged, mode: FilePermission.executable)
 
 	return staged
 end 'stageCompiler'
@@ -800,8 +799,7 @@ function copyTree(from FilePath, into FilePath)
 end 'copyTree'
 
 function copyFile(from FilePath, into FilePath, mode FilePermission)
-	let bytes = try File.readBinary(from) otherwise panic("CliHarness: the gate could not run - could not read {from.toString()} to copy it.")
-	try File.writeBinary(into, content: bytes, mode: mode) otherwise panic("CliHarness: the gate could not run - could not write the copy at {into.toString()}.")
+	rewrittenFile(into, bytes: bytesOf(from), mode: mode)
 end 'copyFile'
 
 function requireStaysInStaging(component String)
@@ -971,18 +969,17 @@ export function spellingsIn(text String) returns ListedWordArray
 	return spellings
 end 'spellingsIn'
 
-// Every `Usage:` line a refusal printed, trimmed: a subcommand's own usage is its roster of options.
-export function usageLinesIn(text String) returns ListedWordArray
+export function linesOpeningIn(text String, prefix String) returns ListedWordArray
 	var lines = ListedWordArray.create()
 
 	for line in text.split("\n") 'eachLine'
-		if line.startsWith(UsageLinePrefix) 'aUsageLine'
+		if line.startsWith(prefix) 'opensWithIt'
 			lines.push(line.trim())
-		end 'aUsageLine'
+		end 'opensWithIt'
 	end 'eachLine'
 
 	return lines
-end 'usageLinesIn'
+end 'linesOpeningIn'
 
 // The CLI reference document, with Windows line endings folded so a line is the same line on every host.
 export function cliReferenceText() returns String
@@ -1171,3 +1168,320 @@ function firstWordOf(line String) returns String
 
 	panic("CliHarness: '{line}' was taken for a label but holds no word — the layout this corpus reads the roster by has changed, and every census here is now reading nothing.")
 end 'firstWordOf'
+
+export let CompilerDebugLogFlag = "--log=compiler:debug"
+export let TargetOptionPrefix = "--target="
+export let LibraryCacheDirName = "library"
+export let SidecarSuffix = ".mxdbg"
+export let TrivialProgramSource = "function main() returns ExitCode\n\treturn 42\nend 'main'\n"
+let StagedProgramFileName = "main.maxon"
+let ColdImageName = "cold-image"
+let ColdSidecarName = "cold-sidecar"
+
+let LibraryCacheLinePrefix = "[CMP] DEBUG: library cache — "
+let LibraryCacheFieldSeparator = ", "
+let LibraryCacheBaselineLabel = "baseline "
+let LibraryCacheCountSeparator = " "
+let LibraryCacheLineShape = "baseline <loaded|built|unused>, <n> loaded, <n> written, <n> rejected, <n> library file(s) swept, <n> library file(s) parsed"
+
+export enum LibraryBaseline
+	loaded
+	built
+	unused
+end 'LibraryBaseline'
+
+enum LibraryCacheField
+	baseline
+	loaded
+	written
+	rejected
+	swept
+	parsed
+end 'LibraryCacheField'
+
+export type LibraryCacheReport
+	export let baseline as LibraryBaseline
+	export let loaded as ReportedTally
+	export let written as ReportedTally
+	export let rejected as ReportedTally
+	export let swept as ReportedTally
+	export let parsed as ReportedTally
+	export let line as String
+
+	static function create(baseline LibraryBaseline, loaded ReportedTally, written ReportedTally, rejected ReportedTally, swept ReportedTally, parsed ReportedTally, line String) returns LibraryCacheReport
+		return Self{baseline: baseline, loaded: loaded, written: written, rejected: rejected, swept: swept, parsed: parsed, line: line}
+	end 'create'
+end 'LibraryCacheReport'
+
+export function stageProgram(dir FilePath, name String, source String)
+	writeStagedFile(createdStagedDirectory(dir.join(name)).join(StagedProgramFileName), content: source)
+end 'stageProgram'
+
+export function libraryCacheDirIn(dir FilePath) returns FilePath
+	return cacheRootIn(dir).join(CacheVendorDirName).join(LibraryCacheDirName)
+end 'libraryCacheDirIn'
+
+export function runLibraryCacheBuild(dir FilePath, program String, output String, options ListedWordArray) returns CollectedOutput
+	var arguments = ListedWordArray.create()
+	arguments.push(BuildCommandWord)
+	arguments.push(program)
+	arguments.push(CompilerDebugLogFlag)
+	arguments.push("{OutputOptionPrefix}{dir.join(output).toString()}")
+
+	for option in options 'eachOption'
+		arguments.push(option)
+	end 'eachOption'
+
+	return runWithCacheRoot(arguments, cacheRoot: cacheRootIn(dir), workingDirectory: dir)
+end 'runLibraryCacheBuild'
+
+export function requireLibraryCacheBuild(dir FilePath, program String, output String, which String) returns CollectedOutput throws TestFailure
+	let built = runLibraryCacheBuild(dir, program: program, output: output, options: ListedWordArray.create())
+	try Expect.equal(built.exitCode(), expected: 0, message: "{which} did not succeed. It wrote to stdout: {built.stdout} and to stderr: {built.stderr}")
+
+	return built
+end 'requireLibraryCacheBuild'
+
+export type ColdAndWarmBuilds
+	export let cold as CollectedOutput
+	export let warm as LibraryCacheReport
+
+	static function create(cold CollectedOutput, warm LibraryCacheReport) returns ColdAndWarmBuilds
+		return Self{cold: cold, warm: warm}
+	end 'create'
+end 'ColdAndWarmBuilds'
+
+export function requireWarmBuildMatchesCold(dir FilePath, program String, output String, subject String) returns ColdAndWarmBuilds throws TestFailure
+	let image = dir.join("{output}{executableSuffix()}")
+	let sidecar = dir.join("{output}{executableSuffix()}{SidecarSuffix}")
+
+	let cold = try requireLibraryCacheBuild(dir, program: program, output: output, which: "the cold build of {subject}")
+	let coldImage = retainedAside(image, aside: dir.join(ColdImageName))
+	let coldSidecar = retainedAside(sidecar, aside: dir.join(ColdSidecarName))
+
+	let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: program, output: output, options: ListedWordArray.create()), which: "the warm build of {subject}")
+	try Expect.equal(warm.baseline, expected: LibraryBaseline.loaded, message: "the warm build of {subject} did not load the library baseline the cold build wrote, so comparing its bytes with the cold build's compares two cold builds. It wrote: {warm.line}")
+	try Expect.greaterThan(warm.loaded, than: 0, message: "the warm build of {subject} loaded no library cache entry, so comparing its bytes with the cold build's compares two cold builds. It wrote: {warm.line}")
+
+	try requireSameBytes(coldImage, second: image, why: "the warm build's executable of {subject} is not the cold build's, so loading the library from the cache changed the program.")
+	try requireSameBytes(coldSidecar, second: sidecar, why: "the warm build's debug sidecar of {subject} is not the cold build's, so loading the library from the cache changed what the debugger is told.")
+
+	return ColdAndWarmBuilds.create(cold, warm: warm)
+end 'requireWarmBuildMatchesCold'
+
+export function libraryCacheReportOf(build CollectedOutput, which String) returns LibraryCacheReport throws TestFailure
+	try Expect.equal(build.exitCode(), expected: 0, message: "{which} did not succeed. It wrote to stdout: {build.stdout} and to stderr: {build.stderr}")
+
+	return try libraryCacheReportIn(build, which: which)
+end 'libraryCacheReportOf'
+
+export function libraryCacheReportOfARefusedBuild(build CollectedOutput, which String) returns LibraryCacheReport throws TestFailure
+	try Expect.notEqual(build.exitCode(), expected: 0, message: "{which} succeeded, and it was meant to be refused. It wrote to stdout: {build.stdout} and to stderr: {build.stderr}")
+
+	return try libraryCacheReportIn(build, which: which)
+end 'libraryCacheReportOfARefusedBuild'
+
+function libraryCacheReportIn(build CollectedOutput, which String) returns LibraryCacheReport throws TestFailure
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+	let lines = linesOpeningIn(build.stderr, prefix: LibraryCacheLinePrefix)
+	try Expect.equal(lines.count(), expected: 1, message: "{which} printed {lines.count()} line(s) opening `{LibraryCacheLinePrefix}` under `{CompilerDebugLogFlag}`, where every compile reports exactly once, after its front end, whether it loaded the library from the cache, built it or could not use it. {said}")
+
+	let line = try lines.get(0) otherwise panic("CliHarness: a list holding one line has a first line")
+	let rest = try line.split(LibraryCacheLinePrefix).get(1) otherwise panic("CliHarness: a line opening with a prefix splits after it")
+	let fields = rest.split(LibraryCacheFieldSeparator)
+	try Expect.equal(fields.count(), expected: LibraryCacheField.allCases.count(), message: "{which}'s library cache line does not read `{LibraryCacheLineShape}`. It wrote: {line}")
+
+	let baselineText = libraryCacheFieldText(fields, field: LibraryCacheField.baseline)
+	let baselineWord = try baselineText.split(LibraryCacheBaselineLabel).get(1) otherwise ""
+
+	if let baseline = try LibraryBaseline.fromName(baselineWord) 'aBaseline'
+		if baselineText == "{LibraryCacheBaselineLabel}{baselineWord}" 'labelled'
+			let loaded = try libraryCacheCount(fields, field: LibraryCacheField.loaded, line: line, which: which)
+			let written = try libraryCacheCount(fields, field: LibraryCacheField.written, line: line, which: which)
+			let rejected = try libraryCacheCount(fields, field: LibraryCacheField.rejected, line: line, which: which)
+			let swept = try libraryCacheCount(fields, field: LibraryCacheField.swept, line: line, which: which)
+			let parsed = try libraryCacheCount(fields, field: LibraryCacheField.parsed, line: line, which: which)
+
+			return LibraryCacheReport.create(baseline, loaded: loaded, written: written, rejected: rejected, swept: swept, parsed: parsed, line: line)
+		end 'labelled'
+	end 'aBaseline'
+
+	try Expect.fail("{which}'s library cache line names no baseline state as `{LibraryCacheLineShape}` does. It wrote: {line}")
+	panic("CliHarness: Expect.fail returned")
+end 'libraryCacheReportIn'
+
+function libraryCacheFieldText(fields StringArray, field LibraryCacheField) returns String
+	return try fields.get(field.ordinal) otherwise panic("CliHarness: a library cache line already counted to hold every field has none at {field.ordinal}")
+end 'libraryCacheFieldText'
+
+function libraryCacheCount(fields StringArray, field LibraryCacheField, line String, which String) returns ReportedTally throws TestFailure
+	let text = libraryCacheFieldText(fields, field: field)
+	let word = try text.split(LibraryCacheCountSeparator).get(0) otherwise panic("CliHarness: a split always yields a first part")
+
+	if let count = try int.fromString(word) 'aNumber'
+		if text == "{count}{LibraryCacheCountSeparator}{libraryCacheLabelOf(field)}" 'labelled'
+			return count
+		end 'labelled'
+	end 'aNumber'
+
+	try Expect.fail("{which}'s library cache line does not state `<n> {libraryCacheLabelOf(field)}` where `{LibraryCacheLineShape}` does. It wrote: {line}")
+	panic("CliHarness: Expect.fail returned")
+end 'libraryCacheCount'
+
+function libraryCacheLabelOf(field LibraryCacheField) returns String
+	return match field 'label'
+		loaded gives "loaded"
+		written gives "written"
+		rejected gives "rejected"
+		swept gives "library file(s) swept"
+		parsed gives "library file(s) parsed"
+		default panic("CliHarness: the baseline field states a word, not a count")
+	end 'label'
+end 'libraryCacheLabelOf'
+
+export function retainedAside(path FilePath, aside FilePath) returns FilePath
+	copyFile(path, into: aside, mode: FilePermission.normal)
+	try File.delete(path) otherwise panic("CliHarness: the gate could not run - could not clear {path.toString()}, so the next build cannot be handed that path.")
+
+	return aside
+end 'retainedAside'
+
+export function requireSameBytes(first FilePath, second FilePath, why String) throws TestFailure
+	let firstBytes = bytesOf(first)
+	let secondBytes = bytesOf(second)
+
+	try Expect.notEqual(firstBytes.count(), expected: 0, message: "positive control: {first.toString()} is empty, and two empty files agree about nothing.")
+	try Expect.isTrue(firstBytes.equals(secondBytes), message: "{why} {first.toString()} holds {firstBytes.count()} bytes and {second.toString()} {secondBytes.count()}, and they differ.")
+end 'requireSameBytes'
+
+let ViewsEntryPrefix = "views-"
+export let AnotherSchemaReason = "the entry was written under another codec schema"
+export let OutOfRangeReason = "a number in the entry is outside the range it is read into"
+export let ForgedProducerMask = 99
+let EntryWordByteCount = 8
+let EntryFingerprintOffset = 4
+let EntryChecksumOffset = 12
+let EntryPayloadOffset = 20
+let EntryRowKeyCount = 3
+let ViewFlagByteCount = 1
+let VarintContinuationBit = 0x80
+let VarintPayloadMask = 0x7F
+let VarintPayloadBits = 7
+let VarintMostBytes = 10
+let EntryByteMask = 0xFF
+let EntryByteBits = 8
+
+typealias EntryNumber = int(0 to u64.max)
+typealias EntryLengthArray = Array with EntryNumber
+
+type EntryNumberRead
+	export let value as EntryNumber
+	export let next as ElementIndex
+
+	static function create(value EntryNumber, next ElementIndex) returns EntryNumberRead
+		return Self{value: value, next: next}
+	end 'create'
+end 'EntryNumberRead'
+
+export function viewsEntryIn(dir FilePath) returns FilePath
+	for entry in filesUnder(libraryCacheDirIn(dir)) 'eachEntry'
+		if entry.filename().startsWith(ViewsEntryPrefix) 'theViewsEntry'
+			return entry
+		end 'theViewsEntry'
+	end 'eachEntry'
+
+	panic("CliHarness: the gate could not run - the build wrote no `{ViewsEntryPrefix}` entry under {libraryCacheDirIn(dir).toString()}.")
+end 'viewsEntryIn'
+
+function entryNumberAt(image ByteArray, start ElementIndex) returns EntryNumberRead
+	var value = 0 as EntryNumber
+	var at = start
+	var shift = 0
+
+	for _ in 0 upto VarintMostBytes 'eachByte'
+		let byte = try image.get(at) otherwise panic("CliHarness: the gate could not run - a number in the entry at {start} runs off its end.")
+		value = value or (((byte and VarintPayloadMask) as EntryNumber) shl shift)
+		at = at + 1
+		shift = shift + VarintPayloadBits
+
+		if (byte and VarintContinuationBit) == 0 'last'
+			return EntryNumberRead.create(value, next: at)
+		end 'last'
+	end 'eachByte'
+
+	panic("CliHarness: the gate could not run - a number in the entry at {start} does not end within {VarintMostBytes} bytes.")
+end 'entryNumberAt'
+
+// Walks the field order `encodedViewSection` writes; a field added ahead of the mask there moves it.
+function producerMaskOffsetIn(image ByteArray, section ElementIndex) returns ElementIndex
+	let afterDeclaredNames = byteArrayArrayEndsAt(image, start: section)
+	let afterReservedSpellings = byteArrayArrayEndsAt(image, start: afterDeclaredNames)
+
+	return afterReservedSpellings + ViewFlagByteCount
+end 'producerMaskOffsetIn'
+
+function byteArrayArrayEndsAt(image ByteArray, start ElementIndex) returns ElementIndex
+	let elements = entryNumberAt(image, start: start)
+	var at = elements.next
+
+	for _ in 0 upto elements.value 'eachElement'
+		let element = entryNumberAt(image, start: at)
+		at = element.next + (element.value as ElementIndex)
+	end 'eachElement'
+
+	return at
+end 'byteArrayArrayEndsAt'
+
+export function entryWithEveryProducerMaskForged(image ByteArray) returns ByteArray
+	let rowCount = entryNumberAt(image, start: EntryPayloadOffset)
+	var at = rowCount.next
+	var lengths = EntryLengthArray.create()
+
+	for _ in 0 upto rowCount.value 'eachRow'
+		for _ in 0 upto EntryRowKeyCount 'eachRowKey'
+			at = entryNumberAt(image, start: at).next
+		end 'eachRowKey'
+
+		let length = entryNumberAt(image, start: at)
+		at = length.next
+		lengths.push(length.value)
+	end 'eachRow'
+
+	var forged = image.clone()
+
+	for length in lengths 'eachSection'
+		let offset = producerMaskOffsetIn(image, section: at)
+		try forged.set(offset, value: ForgedProducerMask) otherwise panic("CliHarness: the gate could not run - byte {offset} lies outside the {image.count()}-byte entry.")
+		at = at + (length as ElementIndex)
+	end 'eachSection'
+
+	return forged
+end 'entryWithEveryProducerMaskForged'
+
+export function entryWithChecksumOfItsPayload(image ByteArray) returns ByteArray
+	let payload = try image.slice(EntryPayloadOffset, endIndex: image.count()) otherwise panic("CliHarness: the gate could not run - the entry is shorter than its header.")
+	let checksum = Hasher.combined(Hasher.combined(Hasher.empty(), bytes: payload), value: payload.count() as HashDigest)
+	var sealed = image.clone()
+
+	for position in 0 upto EntryWordByteCount 'eachByte'
+		try sealed.set(EntryChecksumOffset + position, value: ((checksum shr (position * EntryByteBits)) and EntryByteMask) as Byte) otherwise panic("CliHarness: the gate could not run - the entry has no checksum byte {position}.")
+	end 'eachByte'
+
+	return sealed
+end 'entryWithChecksumOfItsPayload'
+
+export function entryWithAnotherSchema(image ByteArray) returns ByteArray
+	let first = try image.get(EntryFingerprintOffset) otherwise panic("CliHarness: the gate could not run - the entry is shorter than its header.")
+	var altered = image.clone()
+	try altered.set(EntryFingerprintOffset, value: ((first + 1) and EntryByteMask) as Byte) otherwise panic("CliHarness: the gate could not run - the entry is shorter than its header.")
+
+	return altered
+end 'entryWithAnotherSchema'
+
+export function rewrittenFile(path FilePath, bytes ByteArray, mode FilePermission = FilePermission.normal)
+	try File.writeBinary(path, content: bytes, mode: mode) otherwise panic("CliHarness: the gate could not run - could not write {path.toString()}.")
+end 'rewrittenFile'
+
+export function bytesOf(path FilePath) returns ByteArray
+	return try File.readBinary(path) otherwise panic("CliHarness: the gate could not run - could not read {path.toString()}.")
+end 'bytesOf'

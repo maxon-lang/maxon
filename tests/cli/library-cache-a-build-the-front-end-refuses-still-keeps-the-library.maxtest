@@ -1,0 +1,33 @@
+let CaseDirName = "library-cache-refused-build"
+let RefusedProgramDirName = "refused"
+let SoundProgramDirName = "app"
+let RefusedOutputName = "refused-program"
+let SoundOutputName = "program"
+let RefusedProgramSource = "typealias Tick = int(0 to 1000)\n\ntype Twin\n\texport var ticks as Tick\nend 'Twin'\n\ntype Twin\n\texport var ticks as Tick\nend 'Twin'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let EntriesTheRefusedBuildWrites = 2
+
+test 'a build the front end refuses still reports and keeps the library entries it produced, and the next build loads them'
+	requireHeldOutsideCheckout(CaseDirName, check: RefusedBuildKeepsTheLibrary.create())
+end 'a build the front end refuses still reports and keeps the library entries it produced, and the next build loads them'
+
+type RefusedBuildKeepsTheLibrary implements OutsideCheckoutCase
+	static function create() returns RefusedBuildKeepsTheLibrary
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: RefusedProgramDirName, source: RefusedProgramSource)
+		stageProgram(dir, name: SoundProgramDirName, source: TrivialProgramSource)
+
+		let refused = try libraryCacheReportOfARefusedBuild(runLibraryCacheBuild(dir, program: RefusedProgramDirName, output: RefusedOutputName, options: ListedWordArray.create()), which: "the build of a program declaring one type twice")
+		try Expect.equal(refused.baseline, expected: LibraryBaseline.built, message: "the refused build did not report building the library baseline itself. It wrote: {refused.line}")
+		try Expect.atLeast(refused.written, than: EntriesTheRefusedBuildWrites, message: "the refused build wrote fewer than the library baseline and the library's token views, so a compile the front end refuses throws its library work away. It wrote: {refused.line}")
+		try Expect.equal(refused.rejected, expected: 0, message: "the refused build rejected entries under an empty cache root. It wrote: {refused.line}")
+
+		let sound = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: SoundProgramDirName, output: SoundOutputName, options: ListedWordArray.create()), which: "the build after the refused one")
+		try Expect.equal(sound.baseline, expected: LibraryBaseline.loaded, message: "the build after the refused one did not load the library baseline the refused build wrote. It wrote: {sound.line}")
+		try Expect.atLeast(sound.loaded, than: refused.written, message: "the build after the refused one loaded fewer entries than the refused build wrote ({refused.written}). It wrote: {sound.line}")
+		try Expect.equal(sound.swept, expected: 0, message: "the build after the refused one swept library files itself instead of loading the baseline the refused build wrote. It wrote: {sound.line}")
+		try Expect.equal(sound.rejected, expected: 0, message: "the build after the refused one rejected entries the refused build had just written. It wrote: {sound.line}")
+	end 'requireHeldIn'
+end 'RefusedBuildKeepsTheLibrary'

@@ -318,7 +318,7 @@ tests/
     coverage-byte-identical.maxtest         instrumentation reaches the flagged build and no other
     fixtures/states/main.maxon.fixture      stored name only - see rule 1
   cli/
-    CliHarness.maxon                        the shared half: the spawn, a staged copy of the compiler, writing a staged file, and reading a roster off a listing
+    CliHarness.maxon                        the shared half: the spawn, a staged copy of the compiler, writing a staged file, reading a roster off a listing, and reading and forging library cache lines and entries
     no-arguments.maxtest                    `maxon` alone answers, SHORT, sorted, and exits 0
     help-reference.maxtest                  the reference leads with the short list, then what it hides
     help-per-command.maxtest                every documented command answers `help <command>` for itself
@@ -362,6 +362,19 @@ tests/
     an-empty-option-value-is-refused.maxtest                an option stated with an empty value (`--output=`) is refused as an invalid option value
     an-empty-word-is-refused.maxtest                        an empty positional argument is refused as a word that names nothing
     monitor-refuses-an-empty-filter.maxtest                 `monitor --filter=` is refused, never read as every family
+    cache-reports-the-library-cache.maxtest                 bare `cache` reports the library cache under its root, with its entry count
+    cache-clear-removes-the-library-cache.maxtest           `cache clear` removes the library cache a build wrote
+    library-cache-a-second-build-reuses-the-library.maxtest         a second build in a fresh process loads the library the first one cached
+    library-cache-warm-build-is-byte-identical.maxtest      a build that loads the library from the cache writes the bytes, sidecar included, a cold build writes
+    library-cache-a-program-calling-a-generic-stdlib-function-uses-the-baseline.maxtest   a program calling a generic stdlib function builds warm on the baseline, byte-identical to cold
+    library-cache-a-shadowing-program-sweeps-cold.maxtest   a program shadowing a library type sweeps the library itself and leaves the baseline unused
+    library-cache-a-build-the-front-end-refuses-still-keeps-the-library.maxtest   a refused build still reports and keeps the library entries it produced, and the next build loads them
+    library-cache-is-per-target.maxtest                     a build for another target loads none of the baseline another target wrote
+    library-cache-rejects-a-damaged-entry.maxtest           a damaged entry is rejected and rewritten, and the build is the cold one
+    library-cache-an-entry-written-under-another-schema-is-rejected.maxtest      an entry carrying another codec schema's fingerprint is rejected, and the build is the cold one
+    library-cache-an-entry-holding-an-out-of-range-number-is-rejected.maxtest    an entry whose checksum holds and whose number is out of range is rejected, and the build is the cold one
+    a-record-layout-guard-fails-the-compile-when-the-record-grows.maxtest        a record guarded by its byte size stops compiling when a field is added without regenerating the guard
+    a-warm-trivial-build-adopts-one-front-end-worker.maxtest      a warm build of a one-file program adopts at most one front-end worker
   profile/
     ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
     profile-hot-ordering.maxtest            the busier function ranks first in every section
@@ -624,8 +637,9 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   marker, a case that passes alone but fails batched reported as a batching gap, a case marked
   `process: own` running in a program of its own, output outside the case markers failing every case of
   its program, a case staged below a `.maxonignore`d directory compiling its own files, a shared library
-  parse served to a later program leaving that program's index at its baseline, and the two marker shapes the
-  reference grammar reads.
+  parse served to a later program leaving that program's index at its baseline, a second run's workers
+  starting from the library cache the first run wrote, a library diagnostic respelled by that warm run
+  exactly as the cold run respelled it, and the two marker shapes the reference grammar reads.
   Each fixture's own preamble says what its test asserts.
 - **`corpus.maxtest`** holds the pairing: every fixture directory has its `<case>.maxtest` beside
   it, every test file its fixture, and every refusal fixture exactly one spec and its expectation.

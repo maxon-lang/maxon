@@ -42,10 +42,10 @@
 //     globals gets the `$1` suffix follow the order the merge folds the files in, and that order is
 //     `Queries.sourceFilesInEmissionOrder`'s key over each file's tier and path, never the walk's.
 //
-// ⚠ **THERE IS NO SEPARATE PARSED-STDLIB CACHE.** These files are registered as ordinary sources,
-// so the query spine's memos cover them and a second cache would be the same fact stored twice. The
-// memo that outlives a `Project` (QueryEngine.maxon) is that same spine with a longer life, and the
-// loop below is what admits these files to it.
+// ⚠ **THE LIBRARY IS CACHED ONLY THROUGH THE QUERY SPINE.** These files are registered as ordinary
+// sources, so the query spine's memos cover them and a second cache would be the same fact stored
+// twice. The memo that outlives a `Project` (QueryEngine.maxon), and its disk tier, are that same
+// spine with a longer life, and the loop below is what admits these files to it.
 //
 // ⭐ THE ONE INVARIANT, WHICH OUTLIVED THE FILTER AND IS NOW THE WHOLE RULE: adding a module to
 // `stdlib/` changes NOTHING for a program that does not reach it. A program that never calls Clock must
@@ -414,10 +414,10 @@ function declaredTypeNamesOfLibraryFile(project Project, path FilePath) returns 
 
 	let contentHash = (try sourceEntryOf(project, path: path)).contentHash
 
-	let held = try sharedDeclaredTypeNamesOf(project, contentHash: contentHash) otherwise 'notHeldYet'
+	let held = try sharedRawStreamFactsOf(project, contentHash: contentHash) otherwise 'notHeldYet'
 		_ = try queryActiveTokens(project, path: path)
-		return try sharedDeclaredTypeNamesOf(project, contentHash: contentHash) otherwise panic("declaredTypeNamesOfLibraryFile: the store does not hold {path.toString()} right after an admitted compile lexed it")
+		return (try sharedRawStreamFactsOf(project, contentHash: contentHash) otherwise panic("declaredTypeNamesOfLibraryFile: the store does not hold {path.toString()} right after an admitted compile lexed it")).declaredTypeNames
 	end 'notHeldYet'
 
-	return held
+	return held.declaredTypeNames
 end 'declaredTypeNamesOfLibraryFile'

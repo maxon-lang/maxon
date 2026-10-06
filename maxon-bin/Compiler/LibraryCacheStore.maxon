@@ -1,0 +1,422 @@
+export let LibraryCacheDirName = "library"
+let LibraryCacheFormat = 3 as CacheFormatNumber
+let LibraryEntryExtension = ".mxlc"
+let LibraryEntryNameSeparator = "-"
+
+export typealias LibraryEntryTally = int(0 to u64.max)
+
+export enum LibraryEntryKind
+	views
+	parses
+	baseline
+	coreBaseline
+end 'LibraryEntryKind'
+
+export enum LibraryBaselineState
+	loaded
+	built
+	unused
+end 'LibraryBaselineState'
+
+export union LibraryEntryMiss implements Error
+	absent
+	rejected
+	unavailable
+end 'LibraryEntryMiss'
+
+export type LibraryCacheTally
+	export var loaded as LibraryEntryTally
+	export var written as LibraryEntryTally
+	export var rejected as LibraryEntryTally
+	export var swept as LibraryEntryTally
+	export var parsed as LibraryEntryTally
+
+	export static function create() returns LibraryCacheTally
+		return Self{loaded: 0, written: 0, rejected: 0, swept: 0, parsed: 0}
+	end 'create'
+
+	export function add(other LibraryCacheTally)
+		self.loaded = self.loaded + other.loaded
+		self.written = self.written + other.written
+		self.rejected = self.rejected + other.rejected
+		self.swept = self.swept + other.swept
+		self.parsed = self.parsed + other.parsed
+	end 'add'
+end 'LibraryCacheTally'
+
+union LibraryCacheDirectory
+	available(entries FilePath)
+	unavailable
+end 'LibraryCacheDirectory'
+
+typealias LibraryDirectoryMap = Map with (String, LibraryCacheDirectory)
+typealias LibraryPackMap = Map with (String, LibraryPack)
+typealias AbsentPackSet = Set with String
+export typealias LibraryEntryKeyArray = Array with HashDigest
+
+let MostHeldBaselines = 4
+
+// A lineage is one compiler path and target, so `maxon.previous`, retired images and temporary
+// compilers each start one; without this bound they accumulate forever.
+let MostLibraryLineages = 16 as ElementIndex
+export let MostEntriesOfAKind = 4 as ElementIndex
+export let MostParsePacks = 16 as ElementIndex
+
+type EntryStamp
+	export let path as FilePath
+	export let modifiedTime as Timestamp
+
+	static function create(path FilePath, modifiedTime Timestamp) returns EntryStamp
+		return Self{path: path, modifiedTime: modifiedTime}
+	end 'create'
+end 'EntryStamp'
+
+typealias EntryStampArray = Array with EntryStamp
+
+type HeldBaseline
+	export let key as HashDigest
+	export let kind as LibraryEntryKind
+	export let declarations as LibraryDeclarations
+
+	static function create(key HashDigest, kind LibraryEntryKind, declarations LibraryDeclarations) returns HeldBaseline
+		return Self{key: key, kind: kind, declarations: declarations}
+	end 'create'
+end 'HeldBaseline'
+
+typealias HeldBaselineArray = Array with HeldBaseline
+
+export type LibraryCache
+	var directories as LibraryDirectoryMap
+	var baselines as HeldBaselineArray
+	var packs as LibraryPackMap
+	var absent as AbsentPackSet
+	let onDisk as bool
+	let retains as bool
+	export var totals as LibraryCacheTally
+
+	static function holding(onDisk bool, retains bool) returns LibraryCache
+		return Self{directories: LibraryDirectoryMap.create(), baselines: HeldBaselineArray.create(), packs: LibraryPackMap.create(), absent: AbsentPackSet.create(), onDisk: onDisk, retains: retains, totals: LibraryCacheTally.create()}
+	end 'holding'
+
+	export static function create() returns LibraryCache
+		return Self.holding(true, retains: true)
+	end 'create'
+
+	export static function forOneCompile() returns LibraryCache
+		return Self.holding(true, retains: false)
+	end 'forOneCompile'
+
+	export static function withoutDiskTier() returns LibraryCache
+		return Self.holding(false, retains: true)
+	end 'withoutDiskTier'
+
+	// A compile mutates the baseline and parses it is given, so a retaining cache holds what it loads
+	// and hands each compile a deep copy; a one-compile cache hands the loaded objects over uncopied.
+	export function retainsWhatItLoads() returns bool
+		return self.retains
+	end 'retainsWhatItLoads'
+
+	export function takeTotals() returns LibraryCacheTally
+		let taken = self.totals
+		self.totals = LibraryCacheTally.create()
+
+		return taken
+	end 'takeTotals'
+
+	export function heldManifest(key HashDigest) returns LibraryManifest throws LibraryEntryMiss
+		for held in self.baselines 'eachHeld'
+			if held.key == key 'thisLibrary'
+				return held.declarations.manifest
+			end 'thisLibrary'
+		end 'eachHeld'
+
+		throw LibraryEntryMiss.absent
+	end 'heldManifest'
+
+	function heldPosition(key HashDigest, kind LibraryEntryKind) returns ElementIndex throws LibraryEntryMiss
+		for (iter, held) in self.baselines.withIterator() 'eachHeld'
+			if held.key == key and held.kind == kind 'thisLibrary'
+				return iter.index()
+			end 'thisLibrary'
+		end 'eachHeld'
+
+		throw LibraryEntryMiss.absent
+	end 'heldPosition'
+
+	export function heldBaseline(key HashDigest, kind LibraryEntryKind) returns LibraryDeclarations throws LibraryEntryMiss
+		let position = try self.heldPosition(key, kind: kind)
+
+		return (try self.baselines.get(position) otherwise panic("LibraryCache.heldBaseline: baselines.get OOB at {position}, the position just found")).declarations
+	end 'heldBaseline'
+
+	export function holdBaseline(key HashDigest, kind LibraryEntryKind, declarations LibraryDeclarations)
+		let held = HeldBaseline.create(key, kind: kind, declarations: declarations)
+
+		if let position = try self.heldPosition(key, kind: kind) 'alreadyHeld'
+			try self.baselines.set(position, value: held) otherwise panic("LibraryCache.holdBaseline: baselines.set OOB at {position}, the position just found")
+			return
+		end 'alreadyHeld'
+
+		self.baselines.push(held)
+
+		if self.baselines.count() > MostHeldBaselines 'moreThanWorthKeeping'
+			_ = try self.baselines.remove(0) otherwise panic("LibraryCache.holdBaseline: remove(0) of {self.baselines.count()} held baselines")
+		end 'moreThanWorthKeeping'
+	end 'holdBaseline'
+
+	function directoryFor(target Target) returns LibraryCacheDirectory
+		let key = targetToString(target)
+
+		if let resolved = try self.directories.get(key) 'alreadyResolved'
+			return resolved
+		end 'alreadyResolved'
+
+		let resolved = resolvedLibraryDirectory(target) if self.onDisk else LibraryCacheDirectory.unavailable
+		self.directories.upsert(key, value: resolved)
+
+		return resolved
+	end 'directoryFor'
+
+	function entriesFor(target Target) returns FilePath throws LibraryEntryMiss
+		match self.directoryFor(target) 'directory'
+			available(entries) then return entries
+			unavailable then throw LibraryEntryMiss.unavailable
+		end 'directory'
+	end 'entriesFor'
+
+	export function isAvailable(target Target) returns bool
+		return match self.directoryFor(target) 'directory'
+			available gives true
+			unavailable gives false
+		end 'directory'
+	end 'isAvailable'
+
+	export function holds(target Target, name String) returns bool
+		let entries = try self.entriesFor(target) otherwise return false
+
+		return File.exists(entries.join(name))
+	end 'holds'
+
+	function imageOf(target Target, name String) returns ByteArray throws LibraryEntryMiss
+		let path = (try self.entriesFor(target)).join(name)
+
+		if not File.exists(path) 'nothingThere'
+			throw LibraryEntryMiss.absent
+		end 'nothingThere'
+
+		return try File.readBinary(path) otherwise 'unreadable'
+			noteLibraryCacheTrouble("{path.toString()} could not be read")
+			throw LibraryEntryMiss.absent
+		end 'unreadable'
+	end 'imageOf'
+
+	export function open(target Target, name String, tally LibraryCacheTally) returns LibraryCacheReader throws LibraryEntryMiss
+		let image = try self.imageOf(target, name: name)
+
+		return try LibraryCacheReader.open(image) otherwise (damage) 'damaged'
+			self.rejectDecoded(target, name: name, damage: damage, tally: tally)
+			throw LibraryEntryMiss.rejected
+		end 'damaged'
+	end 'open'
+
+	export function openPack(target Target, name String, tally LibraryCacheTally) returns LibraryPack throws LibraryEntryMiss
+		if let held = try self.packs.get(name) 'alreadyOpen'
+			return held
+		end 'alreadyOpen'
+
+		if self.absent.contains(name) 'knownToBeMissing'
+			throw LibraryEntryMiss.absent
+		end 'knownToBeMissing'
+
+		let image = try self.imageOf(target, name: name) otherwise (miss) 'missing'
+			self.absent.insert(name)
+			throw miss
+		end 'missing'
+
+		let pack = try LibraryPack.open(image) otherwise (damage) 'damaged'
+			self.rejectDecoded(target, name: name, damage: damage, tally: tally)
+			throw LibraryEntryMiss.rejected
+		end 'damaged'
+
+		self.packs.upsert(name, value: pack)
+		tally.loaded = tally.loaded + 1
+
+		return pack
+	end 'openPack'
+
+	export function forgetPack(name String)
+		_ = self.packs.remove(name)
+		_ = self.absent.remove(name)
+	end 'forgetPack'
+
+	export function rejectDecoded(target Target, name String, damage LibraryCacheDamage, tally LibraryCacheTally)
+		let entries = try self.entriesFor(target) otherwise return
+		self.forgetPack(name)
+		self.discardRejected(entries.join(name), damage: damage, tally: tally)
+	end 'rejectDecoded'
+
+	function discardRejected(path FilePath, damage LibraryCacheDamage, tally LibraryCacheTally)
+		tally.rejected = tally.rejected + 1
+		noteLibraryCacheTrouble("rejected {path.toString()}: {damage.displayReason()}")
+
+		try File.delete(path) otherwise ignore
+	end 'discardRejected'
+
+	export function trimEntries(target Target, kind LibraryEntryKind, kept String, most ElementIndex)
+		let entries = try self.entriesFor(target) otherwise return
+		let listed = try Directory.list(entries) otherwise return
+		let prefix = "{libraryEntryPrefix(kind)}{LibraryEntryNameSeparator}"
+		var stamps = EntryStampArray.create()
+
+		for path in listed 'eachEntry'
+			let name = path.filename()
+
+			if name.startsWith(prefix) and name.endsWith(LibraryEntryExtension) and name != kept 'anotherOfThisKind'
+				stamps.push(EntryStamp.create(path, modifiedTime: (try File.info(path) otherwise continue).modifiedTime))
+			end 'anotherOfThisKind'
+		end 'eachEntry'
+
+		discardAllButNewest(stamps, kept: most - 1)
+	end 'trimEntries'
+
+	export function write(target Target, name String, image ByteArray, tally LibraryCacheTally) returns bool
+		let entries = try self.entriesFor(target) otherwise return false
+		let published = entries.join(name)
+		let pending = entries.join(pendingSpellingOf(name))
+
+		if not pendingWritten(entries, pending: pending, image: image) 'notWritten'
+			noteLibraryCacheTrouble("{pending.toString()} could not be written")
+			try File.delete(pending) otherwise ignore
+			return false
+		end 'notWritten'
+
+		try File.rename(pending, to: published) otherwise 'notPublished'
+			noteLibraryCacheTrouble("{pending.toString()} could not be renamed to {published.toString()}")
+			try File.delete(pending) otherwise ignore
+			return false
+		end 'notPublished'
+
+		tally.written = tally.written + 1
+		self.forgetPack(name)
+
+		return true
+	end 'write'
+end 'LibraryCache'
+
+function pendingWritten(entries FilePath, pending FilePath, image ByteArray) returns bool
+	try File.writeBinary(pending, content: image) otherwise 'firstAttemptFailed'
+		_ = Directory.create(entries)
+		try File.writeBinary(pending, content: image) otherwise return false
+	end 'firstAttemptFailed'
+
+	return true
+end 'pendingWritten'
+
+function libraryEntryPrefix(kind LibraryEntryKind) returns String
+	return match kind 'prefix'
+		views gives "views"
+		parses gives "parses"
+		baseline gives "baseline"
+		coreBaseline gives "core"
+	end 'prefix'
+end 'libraryEntryPrefix'
+
+export function libraryEntryName(kind LibraryEntryKind, parts LibraryEntryKeyArray) returns String
+	var name = libraryEntryPrefix(kind)
+
+	for part in parts 'eachPart'
+		name.append("{LibraryEntryNameSeparator}{part:016x}")
+	end 'eachPart'
+
+	name.append(LibraryEntryExtension)
+
+	return name
+end 'libraryEntryName'
+
+function resolvedLibraryDirectory(target Target) returns LibraryCacheDirectory
+	if not cacheEnumTablesAgree() 'staleEnumTables'
+		noteLibraryCacheTrouble("no library cache: a generated codec lists the cases of an enum differently from the enum")
+		return LibraryCacheDirectory.unavailable
+	end 'staleEnumTables'
+
+	let identity = try compilerIdentity(target) otherwise (reason) 'noIdentity'
+		noteLibraryCacheTrouble("no library cache: {reason.sentence()}")
+		return LibraryCacheDirectory.unavailable
+	end 'noIdentity'
+
+	let root = try hostCacheRoot() otherwise (reason) 'noRoot'
+		noteLibraryCacheTrouble("no library cache: {reason.sentence()}")
+		return LibraryCacheDirectory.unavailable
+	end 'noRoot'
+
+	// The identity's modification time is whole seconds, so two builds of one size inside one second
+	// share a directory. The schema fingerprint in every entry refuses an entry whose codec differs,
+	// and nothing else tells the two apart.
+	let formats = root.join(LibraryCacheDirName)
+	let lineage = formats.join(cacheFormatDirectoryName(LibraryCacheFormat)).join(identity.lineage())
+	let entries = lineage.join(identity.build())
+
+	if not Directory.create(entries) 'notCreated'
+		noteLibraryCacheTrouble("no library cache: {entries.toString()} could not be created")
+		return LibraryCacheDirectory.unavailable
+	end 'notCreated'
+
+	discardSupersededLibraryCaches(formats, lineage: lineage, current: entries)
+
+	return LibraryCacheDirectory.available(entries)
+end 'resolvedLibraryDirectory'
+
+function discardSupersededLibraryCaches(formats FilePath, lineage FilePath, current FilePath)
+	let formatDirectories = try Directory.list(formats) otherwise return
+
+	for directory in formatDirectories 'eachFormat'
+		if isOlderCacheFormatName(directory.filename(), than: LibraryCacheFormat) 'olderFormat'
+			discardCacheTree(directory)
+		end 'olderFormat'
+	end 'eachFormat'
+
+	if let builds = try Directory.list(lineage) 'buildsListed'
+		for build in builds 'eachBuild'
+			if not build.equals(current) 'aSupersededBuild'
+				discardCacheTree(build)
+			end 'aSupersededBuild'
+		end 'eachBuild'
+	end 'buildsListed'
+
+	discardStaleLineages(lineage)
+end 'discardSupersededLibraryCaches'
+
+function discardStaleLineages(current FilePath)
+	let lineages = try current.parent() otherwise return
+	let listed = try Directory.list(lineages) otherwise return
+	var stamps = EntryStampArray.create()
+
+	for lineage in listed 'eachLineage'
+		if not lineage.equals(current) 'anotherCompiler'
+			stamps.push(EntryStamp.create(lineage, modifiedTime: (try File.info(lineage) otherwise continue).modifiedTime))
+		end 'anotherCompiler'
+	end 'eachLineage'
+
+	discardAllButNewest(stamps, kept: MostLibraryLineages - 1)
+end 'discardStaleLineages'
+
+function discardAllButNewest(stamps EntryStampArray, kept ElementIndex)
+	stamps.sort(function(left EntryStamp, right EntryStamp) gives right.modifiedTime.compare(left.modifiedTime))
+
+	for position in kept upto stamps.count() 'eachSuperseded'
+		let path = (try stamps.get(position) otherwise panic("discardAllButNewest: stamps.get OOB at {position} below count {stamps.count()}")).path
+
+		if Directory.isDirectory(path) 'aDirectory'
+			discardCacheTree(path)
+			continue
+		end 'aDirectory'
+
+		try File.delete(path) otherwise ignore
+	end 'eachSuperseded'
+end 'discardAllButNewest'
+
+module function noteLibraryCacheTrouble(message String)
+	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.compiler).debug("library cache: {message}")
+	end 'debugging'
+end 'noteLibraryCacheTrouble'

@@ -282,6 +282,44 @@ export enum ElementPacking
 	fourBits
 end 'ElementPacking'
 
+// @generated library-cache begin
+let CacheCasesElementPacking = [ElementPacking.byteStrided, ElementPacking.oneBit, ElementPacking.twoBits, ElementPacking.fourBits]
+
+export function cacheReadElementPacking(reader LibraryCacheReader) returns ElementPacking throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesElementPacking.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadElementPacking'
+
+function cacheTableAgreesElementPacking() returns bool
+	let declared = ElementPacking.allCases
+
+	if CacheCasesElementPacking.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesElementPacking.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesElementPacking'
+
+export function cacheEnumTablesAgreeInCompilerIRLayoutDescriptor() returns bool
+	if not cacheTableAgreesElementPacking() 'disagreesCacheTableAgreesElementPacking'
+		return false
+	end 'disagreesCacheTableAgreesElementPacking'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerIRLayoutDescriptor'
+
+// @generated library-cache end
+
 export function packedWidthOf(packing ElementPacking) returns PackedBitWidth throws ElementPackingLookup
 	match packing 'packing'
 		byteStrided then throw ElementPackingLookup.byteStrided

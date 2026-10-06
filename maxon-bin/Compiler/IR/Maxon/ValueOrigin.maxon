@@ -39,6 +39,30 @@
 // quantity, and `as` is the door between two of them.
 export typealias FuncIndexArray = Array with ElementIndex
 
+// @generated library-cache begin
+function cacheWriteFuncIndexArray(writer LibraryCacheWriter, value FuncIndexArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteFuncIndexArray'
+
+function cacheReadFuncIndexArray(reader LibraryCacheReader) returns FuncIndexArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FuncIndexArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ElementIndex
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadFuncIndexArray'
+
+// @generated library-cache end
+
 // The result-value of a Maxon op: `value(id)` for an op that DEFINES an SSA value
 // (`literal`/`binOp`/`unaryOp`/`compare`/`call`), `none` for one that defines none
 // (`ret`/`retVoid`/`condBranch`/`branch` — they USE or branch, never produce a value).
@@ -341,6 +365,33 @@ export type ParamOriginTable
 		compactLineNumbers(self.lines, rows: rows)
 		compactColumnNumbers(self.columns, rows: rows)
 	end 'remapFunctionIndices'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteFuncIndexArray(writer, value: self.funcIndices)
+		cacheWriteValueIdArray(writer, value: self.valueIds)
+		cacheWriteByteOffsetArray(writer, value: self.startBytes)
+		cacheWriteByteOffsetArray(writer, value: self.endBytes)
+		cacheWriteLineNumberArray(writer, value: self.lines)
+		cacheWriteColumnNumberArray(writer, value: self.columns)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ParamOriginTable throws LibraryCacheDamage
+		let f_funcIndices = try cacheReadFuncIndexArray(reader)
+		let f_valueIds = try cacheReadValueIdArray(reader)
+		let f_startBytes = try cacheReadByteOffsetArray(reader)
+		let f_endBytes = try cacheReadByteOffsetArray(reader)
+		let f_lines = try cacheReadLineNumberArray(reader)
+		let f_columns = try cacheReadColumnNumberArray(reader)
+
+		return Self{funcIndices: f_funcIndices, valueIds: f_valueIds, startBytes: f_startBytes, endBytes: f_endBytes, lines: f_lines, columns: f_columns}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(ParamOriginTable) as CacheSize48
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ParamOriginTable'
 
 // The keep-and-compact a function renumbering applies to every function-keyed table: a row whose
@@ -718,6 +769,37 @@ export type ValueOriginTable
 			self.recordDerivedRange(f + funcOffset, first: first, bound: bound, sourceId: sourceId)
 		end 'eachDerived'
 	end 'appendFrom'
+
+	// @generated library-cache begin
+	export function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteFuncIndexArray(writer, value: self.funcIndices)
+		cacheWriteValueIdArray(writer, value: self.valueIds)
+		cacheWriteOpIndexArray(writer, value: self.opIndices)
+		self.paramOrigins.cacheWrite(writer)
+		cacheWriteFuncIndexArray(writer, value: self.derivedFuncIndices)
+		cacheWriteValueIdArray(writer, value: self.derivedFirstIds)
+		cacheWriteValueIdArray(writer, value: self.derivedEndIds)
+		cacheWriteValueIdArray(writer, value: self.derivedSourceIds)
+	end 'cacheWrite'
+
+	export static function cacheRead(reader LibraryCacheReader) returns ValueOriginTable throws LibraryCacheDamage
+		let f_funcIndices = try cacheReadFuncIndexArray(reader)
+		let f_valueIds = try cacheReadValueIdArray(reader)
+		let f_opIndices = try cacheReadOpIndexArray(reader)
+		let f_paramOrigins = try ParamOriginTable.cacheRead(reader)
+		let f_derivedFuncIndices = try cacheReadFuncIndexArray(reader)
+		let f_derivedFirstIds = try cacheReadValueIdArray(reader)
+		let f_derivedEndIds = try cacheReadValueIdArray(reader)
+		let f_derivedSourceIds = try cacheReadValueIdArray(reader)
+
+		return Self{funcIndices: f_funcIndices, valueIds: f_valueIds, opIndices: f_opIndices, paramOrigins: f_paramOrigins, derivedFuncIndices: f_derivedFuncIndices, derivedFirstIds: f_derivedFirstIds, derivedEndIds: f_derivedEndIds, derivedSourceIds: f_derivedSourceIds}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize64
+		return sizeof(ValueOriginTable) as CacheSize64
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ValueOriginTable'
 
 // ⭐ **THE DERIVED ROWS ONE FUNCTION'S PASSES FILE OFF THE MAIN THREAD** (`ValueOriginTable.recordDerived`
@@ -915,7 +997,69 @@ export enum DeferredChainCalls
 	lastLinkIsACall
 end 'DeferredChainCalls'
 
+// @generated library-cache begin
+let CacheCasesDeferredChainCalls = [DeferredChainCalls.noCall, DeferredChainCalls.callBeforeTheLastLink, DeferredChainCalls.lastLinkIsACall]
+
+function cacheReadDeferredChainCalls(reader LibraryCacheReader) returns DeferredChainCalls throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesDeferredChainCalls.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadDeferredChainCalls'
+
+function cacheTableAgreesDeferredChainCalls() returns bool
+	let declared = DeferredChainCalls.allCases
+
+	if CacheCasesDeferredChainCalls.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesDeferredChainCalls.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesDeferredChainCalls'
+
+export function cacheEnumTablesAgreeInCompilerIRMaxonValueOrigin() returns bool
+	if not cacheTableAgreesDeferredChainCalls() 'disagreesCacheTableAgreesDeferredChainCalls'
+		return false
+	end 'disagreesCacheTableAgreesDeferredChainCalls'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerIRMaxonValueOrigin'
+
+// @generated library-cache end
+
 typealias DeferredChainCallsArray = Array with DeferredChainCalls
+
+// @generated library-cache begin
+function cacheWriteDeferredChainCallsArray(writer LibraryCacheWriter, value DeferredChainCallsArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item.ordinal as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteDeferredChainCallsArray'
+
+function cacheReadDeferredChainCallsArray(reader LibraryCacheReader) returns DeferredChainCallsArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DeferredChainCallsArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadDeferredChainCalls(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDeferredChainCallsArray'
+
+// @generated library-cache end
 
 union DeferralRowLookup
 	absent
@@ -1005,4 +1149,29 @@ export type DeferralSourceTable
 			self.record(f + funcOffset, valueId: v, sourceFuncIndex: sourceFunc + funcOffset, sourceId: sourceId, chainCalls: source.chainCallsAt(i))
 		end 'each'
 	end 'appendFrom'
+
+	// @generated library-cache begin
+	export function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteFuncIndexArray(writer, value: self.funcIndices)
+		cacheWriteValueIdArray(writer, value: self.valueIds)
+		cacheWriteFuncIndexArray(writer, value: self.sourceFuncIndices)
+		cacheWriteValueIdArray(writer, value: self.sourceIds)
+		cacheWriteDeferredChainCallsArray(writer, value: self.chainCallKinds)
+	end 'cacheWrite'
+
+	export static function cacheRead(reader LibraryCacheReader) returns DeferralSourceTable throws LibraryCacheDamage
+		let f_funcIndices = try cacheReadFuncIndexArray(reader)
+		let f_valueIds = try cacheReadValueIdArray(reader)
+		let f_sourceFuncIndices = try cacheReadFuncIndexArray(reader)
+		let f_sourceIds = try cacheReadValueIdArray(reader)
+		let f_chainCallKinds = try cacheReadDeferredChainCallsArray(reader)
+
+		return Self{funcIndices: f_funcIndices, valueIds: f_valueIds, sourceFuncIndices: f_sourceFuncIndices, sourceIds: f_sourceIds, chainCallKinds: f_chainCallKinds}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(DeferralSourceTable) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'DeferralSourceTable'

@@ -137,10 +137,15 @@ export type SharedBuildView
 	// sweep wants the mask.
 	export var producerMask as ProducerMask
 	export var producerMaskComputed as bool
+	export var persisted as bool
 
 	export static function create(buildKey BuildKey, activeTokens TokenArray) returns SharedBuildView
-		return Self{buildKey: buildKey, activeTokens: activeTokens, producerMask: 0, producerMaskComputed: false}
+		return Self{buildKey: buildKey, activeTokens: activeTokens, producerMask: 0, producerMaskComputed: false, persisted: false}
 	end 'create'
+
+	export static function restored(buildKey BuildKey, activeTokens TokenArray, producerMask ProducerMask, producerMaskComputed bool) returns SharedBuildView
+		return Self{buildKey: buildKey, activeTokens: activeTokens, producerMask: producerMask, producerMaskComputed: producerMaskComputed, persisted: true}
+	end 'restored'
 
 	// ONE writer for the mask and the bit that says it is there, so a filled mask can never be
 	// read as absent nor an absent one as zero — a producer mask of 0 is a legitimate answer (a
@@ -148,12 +153,42 @@ export type SharedBuildView
 	export function rememberProducerMask(mask ProducerMask)
 		self.producerMask = mask
 		self.producerMaskComputed = true
+		self.persisted = false
 	end 'rememberProducerMask'
+
+	export function markPersisted()
+		self.persisted = true
+	end 'markPersisted'
 end 'SharedBuildView'
 
 export typealias SharedBuildViewArray = Array with SharedBuildView
 
 export typealias FootprintNameIdArray = Array with TypeNameId
+
+// @generated library-cache begin
+function cacheWriteFootprintNameIdArray(writer LibraryCacheWriter, value FootprintNameIdArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteFootprintNameIdArray'
+
+function cacheReadFootprintNameIdArray(reader LibraryCacheReader) returns FootprintNameIdArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FootprintNameIdArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as TypeNameId
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadFootprintNameIdArray'
+
+// @generated library-cache end
+
 export typealias NameIdMap = Map with (TypeNameId, TypeNameId)
 
 export type FootprintRow
@@ -167,9 +202,60 @@ export type FootprintRow
 	export static function create(id GenericInstanceId, baseId TypeNameId, args MaxonTypeArray, fixedSize InstanceSize, speculative bool, compiledName ByteArray) returns FootprintRow
 		return Self{id: id, baseId: baseId, args: args, fixedSize: fixedSize, speculative: speculative, compiledName: compiledName}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.id as CacheUnsigned)
+		writer.unsigned(self.baseId as CacheUnsigned)
+		cacheWriteMaxonTypeArray(writer, value: self.args)
+		cacheWriteInstanceSize(writer, value: self.fixedSize)
+		writer.flag(self.speculative)
+		writer.bytes(self.compiledName)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns FootprintRow throws LibraryCacheDamage
+		let f_id = (try reader.unsigned()) as GenericInstanceId
+		let f_baseId = (try reader.unsigned()) as TypeNameId
+		let f_args = try cacheReadMaxonTypeArray(reader)
+		let f_fixedSize = try cacheReadInstanceSize(reader)
+		let f_speculative = try reader.flag()
+		let f_compiledName = try reader.bytes()
+
+		return Self{id: f_id, baseId: f_baseId, args: f_args, fixedSize: f_fixedSize, speculative: f_speculative, compiledName: f_compiledName}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(FootprintRow) as CacheSize48
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FootprintRow'
 
 export typealias FootprintRowArray = Array with FootprintRow
+
+// @generated library-cache begin
+function cacheWriteFootprintRowArray(writer LibraryCacheWriter, value FootprintRowArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteFootprintRowArray'
+
+function cacheReadFootprintRowArray(reader LibraryCacheReader) returns FootprintRowArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FootprintRowArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try FootprintRow.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadFootprintRowArray'
+
+// @generated library-cache end
 
 export type FootprintInterface
 	export let declIndex as ElementIndex
@@ -178,9 +264,52 @@ export type FootprintInterface
 	export static function create(declIndex ElementIndex, name ByteArray) returns FootprintInterface
 		return Self{declIndex: declIndex, name: name}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.declIndex as CacheUnsigned)
+		writer.bytes(self.name)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns FootprintInterface throws LibraryCacheDamage
+		let f_declIndex = (try reader.unsigned()) as ElementIndex
+		let f_name = try reader.bytes()
+
+		return Self{declIndex: f_declIndex, name: f_name}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(FootprintInterface) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FootprintInterface'
 
 export typealias FootprintInterfaceArray = Array with FootprintInterface
+
+// @generated library-cache begin
+function cacheWriteFootprintInterfaceArray(writer LibraryCacheWriter, value FootprintInterfaceArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteFootprintInterfaceArray'
+
+function cacheReadFootprintInterfaceArray(reader LibraryCacheReader) returns FootprintInterfaceArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FootprintInterfaceArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try FootprintInterface.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadFootprintInterfaceArray'
+
+// @generated library-cache end
 
 export type ParseFootprint
 	export var rows as FootprintRowArray
@@ -191,6 +320,29 @@ export type ParseFootprint
 	export static function create() returns ParseFootprint
 		return Self{rows: FootprintRowArray.create(), nameIds: FootprintNameIdArray.create(), nameBytes: ByteArrayArray.create(), interfaces: FootprintInterfaceArray.create()}
 	end 'create'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteFootprintRowArray(writer, value: self.rows)
+		cacheWriteFootprintNameIdArray(writer, value: self.nameIds)
+		cacheWriteByteArrayArray(writer, value: self.nameBytes)
+		cacheWriteFootprintInterfaceArray(writer, value: self.interfaces)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns ParseFootprint throws LibraryCacheDamage
+		let f_rows = try cacheReadFootprintRowArray(reader)
+		let f_nameIds = try cacheReadFootprintNameIdArray(reader)
+		let f_nameBytes = try cacheReadByteArrayArray(reader)
+		let f_interfaces = try cacheReadFootprintInterfaceArray(reader)
+
+		return Self{rows: f_rows, nameIds: f_nameIds, nameBytes: f_nameBytes, interfaces: f_interfaces}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(ParseFootprint) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ParseFootprint'
 
 export type ParseRebase
@@ -216,21 +368,37 @@ end 'RebasedParse'
 export type SharedLibraryParse
 	let variant as HashDigest
 	let key as HashDigest
-	let footprint as ParseFootprint
-	let artifact as FileParseArtifact
+	module let footprint as ParseFootprint
+	module let artifact as FileParseArtifact
 
 	export static function create(variant HashDigest, key HashDigest, footprint ParseFootprint, artifact FileParseArtifact) returns SharedLibraryParse
 		return Self{variant: variant, key: key, footprint: footprint, artifact: artifact}
 	end 'create'
 
-	function rebasedOnto(signatures ProgramSignatures, overrides RowSetOverrideTable) returns RebasedParse throws SharedMemoMiss
+	export function keyOf() returns HashDigest
+		return self.key
+	end 'keyOf'
+
+	export function cloned() returns SharedLibraryParse
+		return Self{variant: self.variant, key: self.key, footprint: self.footprint.clone(), artifact: self.artifact.clone()}
+	end 'cloned'
+
+	export function workingArtifact(consuming bool) returns FileParseArtifact
+		if consuming 'handedOver'
+			return self.artifact
+		end 'handedOver'
+
+		return self.artifact.clone()
+	end 'workingArtifact'
+
+	function rebasedOnto(signatures ProgramSignatures, overrides RowSetOverrideTable, consuming bool) returns RebasedParse throws SharedMemoMiss
 		let rebase = try signatures.rebaseFor(self.footprint)
 
 		if not self.toldAnswersHold(signatures, overrides: overrides) 'anAnswerMoved'
 			throw SharedMemoMiss.footprintMoved
 		end 'anAnswerMoved'
 
-		var rebasedArtifact = self.artifact.clone()
+		var rebasedArtifact = self.workingArtifact(consuming)
 
 		match rebasedArtifact.parseMints 'mints'
 			none then break 'mints'
@@ -255,14 +423,16 @@ export type SharedLibraryParse
 		return self.variant == wantedVariant
 	end 'isOfVariant'
 
-	function variantOf() returns HashDigest
+	export function variantOf() returns HashDigest
 		return self.variant
 	end 'variantOf'
 end 'SharedLibraryParse'
 
-typealias SharedLibraryParseArray = Array with SharedLibraryParse
+export typealias SharedLibraryParseArray = Array with SharedLibraryParse
 
 export typealias PendingSharedParseMap = Map with (HashDigest, SharedLibraryParse)
+
+export typealias StashedParsePackMap = Map with (HashDigest, LibraryPackBuilder)
 
 export union SharedParsePlan
 	unshared
@@ -278,6 +448,23 @@ export type ParseStamp
 	end 'create'
 end 'ParseStamp'
 
+export type RawStreamFacts
+	export let declaredTypeNames as ByteArrayArray
+	export let reservedSpellings as ByteArrayArray
+
+	export static function create(declaredTypeNames ByteArrayArray, reservedSpellings ByteArrayArray) returns RawStreamFacts
+		return Self{declaredTypeNames: declaredTypeNames, reservedSpellings: reservedSpellings}
+	end 'create'
+
+	export static function nothing() returns RawStreamFacts
+		return Self{declaredTypeNames: ByteArrayArray.create(), reservedSpellings: ByteArrayArray.create()}
+	end 'nothing'
+
+	export static function of(tokens TokenArray) returns RawStreamFacts
+		return Self{declaredTypeNames: declaredTypeNamesIn(tokens), reservedSpellings: reservedSpellingsIn(tokens)}
+	end 'of'
+end 'RawStreamFacts'
+
 // What one file's BYTES lex to, plus one view per build key this process has been asked about.
 //
 // The views are an ARRAY walked linearly, not a map: a process compiles for ONE target in every
@@ -285,9 +472,10 @@ end 'ParseStamp'
 // other key component is the `debugStream` flag, so the walk is over at most two elements and a
 // `Map` would cost a hash to answer a question a compare answers.
 export type SharedFileMemo
-	// The RAW stream, build-independent: `tokenize` sees neither a target nor a flag.
-	export let tokens as TokenArray
-	export let declaredTypeNames as ByteArrayArray
+	var rawTokens as TokenArray
+	var rawHeld as bool
+	var facts as RawStreamFacts
+	var factsKnown as bool
 	export var views as SharedBuildViewArray
 	var parses as SharedLibraryParseArray
 
@@ -296,18 +484,83 @@ export type SharedFileMemo
 	end 'parseCount'
 
 	export static function create(tokens TokenArray) returns SharedFileMemo
-		return Self{tokens: tokens, declaredTypeNames: declaredTypeNamesIn(tokens), views: SharedBuildViewArray.create(), parses: SharedLibraryParseArray.create()}
+		return Self{rawTokens: tokens, rawHeld: true, facts: RawStreamFacts.of(tokens), factsKnown: true, views: SharedBuildViewArray.create(), parses: SharedLibraryParseArray.create()}
 	end 'create'
 
-	export function parseOf(variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable) returns RebasedParse throws SharedMemoMiss
-		for held in self.parses 'eachHeld'
+	export static function holdingNothingYet() returns SharedFileMemo
+		return Self{rawTokens: TokenArray.create(), rawHeld: false, facts: RawStreamFacts.nothing(), factsKnown: false, views: SharedBuildViewArray.create(), parses: SharedLibraryParseArray.create()}
+	end 'holdingNothingYet'
+
+	export function holdsRawTokens() returns bool
+		return self.rawHeld
+	end 'holdsRawTokens'
+
+	export function rawTokensHeld() returns TokenArray throws SharedMemoMiss
+		if not self.rawHeld 'notHere'
+			throw SharedMemoMiss.notHeld
+		end 'notHere'
+
+		return self.rawTokens
+	end 'rawTokensHeld'
+
+	export function holdRawTokens(tokens TokenArray)
+		self.rawTokens = tokens
+		self.rawHeld = true
+
+		if not self.factsKnown 'factsStillToLearn'
+			self.facts = RawStreamFacts.of(tokens)
+			self.factsKnown = true
+		end 'factsStillToLearn'
+	end 'holdRawTokens'
+
+	export function rawStreamFactsHeld() returns RawStreamFacts throws SharedMemoMiss
+		if not self.factsKnown 'notYetLearnt'
+			throw SharedMemoMiss.notHeld
+		end 'notYetLearnt'
+
+		return self.facts
+	end 'rawStreamFactsHeld'
+
+	export function learnRawStreamFacts(learned RawStreamFacts)
+		if self.factsKnown 'knownAlready'
+			return
+		end 'knownAlready'
+
+		self.facts = learned
+		self.factsKnown = true
+	end 'learnRawStreamFacts'
+
+	export function parseOf(variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable, consuming bool) returns RebasedParse throws SharedMemoMiss
+		let position = try self.positionAnswering(variant, key: key)
+		let held = try self.parses.get(position) otherwise panic("SharedFileMemo.parseOf: parses.get OOB at {position}, the position just found")
+		let rebased = try held.rebasedOnto(signatures, overrides: overrides, consuming: consuming)
+
+		if consuming 'noLaterCompileWillAsk'
+			_ = try self.parses.remove(position) otherwise panic("SharedFileMemo.parseOf: remove({position}) of {self.parses.count()} held parses")
+		end 'noLaterCompileWillAsk'
+
+		return rebased
+	end 'parseOf'
+
+	function positionAnswering(variant HashDigest, key HashDigest) returns ElementIndex throws SharedMemoMiss
+		for (iter, held) in self.parses.withIterator() 'eachHeld'
 			if held.answers(variant, wantedKey: key) 'thisParse'
-				return try held.rebasedOnto(signatures, overrides: overrides)
+				return iter.index()
 			end 'thisParse'
 		end 'eachHeld'
 
 		throw SharedMemoMiss.notHeld
-	end 'parseOf'
+	end 'positionAnswering'
+
+	export function holdsParseAnswering(variant HashDigest, key HashDigest) returns bool
+		for held in self.parses 'eachHeld'
+			if held.answers(variant, wantedKey: key) 'thisParse'
+				return true
+			end 'thisParse'
+		end 'eachHeld'
+
+		return false
+	end 'holdsParseAnswering'
 
 	export function holdParse(held SharedLibraryParse)
 		for position in 0 upto self.parses.count() 'eachHeld'
@@ -320,8 +573,6 @@ export type SharedFileMemo
 		self.parses.push(held)
 	end 'holdParse'
 
-	// This build's view, or nothing yet. A linear walk for the reason the field's comment gives:
-	// the array holds at most two elements in every driver that exists.
 	export function viewOf(buildKey BuildKey) returns SharedBuildView throws SharedMemoMiss
 		for view in self.views 'eachView'
 			if view.buildKey == buildKey 'thisBuild'
@@ -345,7 +596,28 @@ export union SharedMemoMiss implements Error
 	footprintMoved
 end 'SharedMemoMiss'
 
-export typealias SharedFileMemoMap = Map with (HashDigest, SharedFileMemo)
+export typealias SharedFileMemoEntryMap = Map with (HashDigest, SharedFileMemo)
+
+export type SharedFileMemoMap
+	export var entries as SharedFileMemoEntryMap
+	export var library as LibraryCache
+
+	static function over(library LibraryCache) returns SharedFileMemoMap
+		return Self{entries: SharedFileMemoEntryMap.create(), library: library}
+	end 'over'
+
+	export static function create() returns SharedFileMemoMap
+		return Self.over(LibraryCache.create())
+	end 'create'
+
+	export static function forOneCompile() returns SharedFileMemoMap
+		return Self.over(LibraryCache.forOneCompile())
+	end 'forOneCompile'
+
+	export static function withoutLibraryCache() returns SharedFileMemoMap
+		return Self.over(LibraryCache.withoutDiskTier())
+	end 'withoutLibraryCache'
+end 'SharedFileMemoMap'
 
 // The byte-contents this compile is willing to hand to the shared memo — filled by
 // `StdlibLoader.loadLibrarySources`, which is the one place that knows a file came out of an
@@ -356,6 +628,29 @@ export typealias SharedFileMemoMap = Map with (HashDigest, SharedFileMemo)
 // spec fragment — thousands of arrays nothing will ever read again. The stdlib's fifty-odd files
 // are re-lexed by every compile, so they are exactly the set worth keeping.
 export typealias HashDigestSet = Set with HashDigest
+
+// @generated library-cache begin
+module function cacheWriteHashDigestSet(writer LibraryCacheWriter, value HashDigestSet)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteHashDigestSet'
+
+module function cacheReadHashDigestSet(reader LibraryCacheReader) returns HashDigestSet throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = HashDigestSet.create()
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as HashDigest
+		result.insert(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadHashDigestSet'
+
+// @generated library-cache end
 
 // A source file input: its content plus the content hash all per-file memos key
 // against. The hash is computed once, at `fileChanged` time.
@@ -590,6 +885,12 @@ export type QueryDatabase
 	export var sharedParseDrifts as QueryCount
 	export var sharedParseReusedFiles as HashDigestSet
 	export var pendingSharedParses as PendingSharedParseMap
+	export var stashedParsePacks as StashedParsePackMap
+	export var libraryTally as LibraryCacheTally
+	export var libraryBaseline as LibraryBaselineState
+	export var libraryStateKey as HashDigest
+	export var libraryStateKeySources as HashDigest
+	export var libraryStateKeyComputed as bool
 
 	// `os` is the TARGET's, and it reaches only the empty signature sentinel below — see
 	// `SignatureMemo.empty`. A database is filled for one target, exactly as the `Project` that owns it is
@@ -612,7 +913,7 @@ export type QueryDatabase
 			signatureCache: SignatureMemo.empty(os),
 			allModuleCache: ModuleMemo.empty(),
 			tokenHits: 0, tokenMisses: 0,
-			sharedTokenHits: 0, sharedActiveTokenHits: 0, sharedProducerMaskHits: 0, sharedParseHits: 0, sharedParseMisses: 0, sharedParsePublishes: 0, sharedParseDrifts: 0, sharedParseReusedFiles: HashDigestSet.create(), pendingSharedParses: PendingSharedParseMap.create(),
+			sharedTokenHits: 0, sharedActiveTokenHits: 0, sharedProducerMaskHits: 0, sharedParseHits: 0, sharedParseMisses: 0, sharedParsePublishes: 0, sharedParseDrifts: 0, sharedParseReusedFiles: HashDigestSet.create(), pendingSharedParses: PendingSharedParseMap.create(), stashedParsePacks: StashedParsePackMap.create(), libraryTally: LibraryCacheTally.create(), libraryBaseline: LibraryBaselineState.unused, libraryStateKey: 0, libraryStateKeySources: 0, libraryStateKeyComputed: false,
 			activeTokenHits: 0, activeTokenMisses: 0,
 			parseHits: 0, parseMisses: 0, parseMissPaths: ParseMissPathRoster.create(), recordParseMissPaths: false,
 			signatureHits: 0, signatureMisses: 0,
@@ -647,6 +948,18 @@ function declaredTypeNamesIn(tokens TokenArray) returns ByteArrayArray
 
 	return names
 end 'declaredTypeNamesIn'
+
+module function reservedSpellingsIn(tokens TokenArray) returns ByteArrayArray
+	var spellings = ByteArrayArray.create()
+
+	for token in tokens 'eachToken'
+		if token.kind == TokenKind.identifier and bytesStartWith(token.value, prefix: ReservedTypeNamePrefix) 'aReservedSpelling'
+			spellings.push(token.value)
+		end 'aReservedSpelling'
+	end 'eachToken'
+
+	return spellings
+end 'reservedSpellingsIn'
 
 function tokenKindDeclaresATypeName(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias

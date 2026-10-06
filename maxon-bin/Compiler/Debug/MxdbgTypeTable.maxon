@@ -144,7 +144,7 @@ export type MxdbgTypeTable
 		fields.reserve(closure.closureEnvFields.count())
 
 		for field in closure.closureEnvFields 'eachCapture'
-			fields.push(MxdbgFieldDesc.create(field.name, offset: envSlotOffset(field.slot) as MxdbgIndex, typeName: mxdbgTypeNameOf(project, signatures: signatures, ref: field.declaredType)))
+			fields.push(MxdbgFieldDesc.create(field.name, offset: envSlotOffset(field.slot) as MxdbgIndex, typeName: mxdbgTypeNameOf(project.typeNames, signatures: signatures, ref: field.declaredType)))
 		end 'eachCapture'
 
 		self.closureEnvs.upsert(closure.name, value: fields)
@@ -159,7 +159,7 @@ export type MxdbgTypeTable
 	// entry's id is its position in the NAME order `seal` fixes, so the table is the same table whatever
 	// order it was discovered in.
 	export function closeDeclaredTypes(project Project, signatures ProgramSignatures)
-		self.indexArrayInstances(project, signatures: signatures)
+		self.indexArrayInstances(signatures)
 
 		for (name, _) in project.structTypes 'eachStruct'
 			self.close(project, signatures: signatures, name: name)
@@ -170,13 +170,15 @@ export type MxdbgTypeTable
 		end 'eachEnumOrUnion'
 	end 'closeDeclaredTypes'
 
-	function indexArrayInstances(project Project, signatures ProgramSignatures)
+	// An element type's id is in the index's own interner, which numbers names differently from
+	// `project.typeNames`; read through the project's table it names another type.
+	function indexArrayInstances(signatures ProgramSignatures)
 		for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
 			if not signatures.isArrayBaseName(signatures.genericInstanceBaseName(id as GenericInstanceId)) 'notAnArray'
 				continue
 			end 'notAnArray'
 
-			self.arrayElements.upsert(signatures.mangleGenericInstance(id as GenericInstanceId), value: mxdbgTypeNameOf(project, signatures: signatures, ref: signatures.containerElementType(id as GenericInstanceId)))
+			self.arrayElements.upsert(signatures.mangleGenericInstance(id as GenericInstanceId), value: mxdbgTypeNameOf(signatures.typeNameTable(), signatures: signatures, ref: signatures.containerElementType(id as GenericInstanceId)))
 		end 'eachInstance'
 	end 'indexArrayInstances'
 
@@ -322,17 +324,17 @@ end 'MxdbgTypeTable'
 // ⭐ **THE NAME A `MaxonType` IS DESCRIBED UNDER, AND THE ONE PLACE IT IS CHOSEN.** A field's type and a
 // local's type both come through here, so an entry a record points at and the entry the table built are
 // the same by construction rather than by agreement.
-export function mxdbgTypeNameOf(project Project, signatures ProgramSignatures, ref MaxonType) returns ByteArray
+export function mxdbgTypeNameOf(names TypeNameInterner, signatures ProgramSignatures, ref MaxonType) returns ByteArray
 	return match ref 'arm'
 		boolean gives MxdbgBoolName
 		integer gives MxdbgIntName
 		float gives MxdbgFloatName
-		named(id) gives mxdbgInternedName(project, id: id)
+		named(id) gives mxdbgInternedName(names, id: id)
 		exitCode gives MxdbgExitCodeName
 		unresolved gives MxdbgUnresolvedName
-		structRef(id) gives mxdbgInternedName(project, id: id)
+		structRef(id) gives mxdbgInternedName(names, id: id)
 		string gives MxdbgStringName
-		function(id) gives mxdbgInternedName(project, id: id)
+		function(id) gives mxdbgInternedName(names, id: id)
 		typeParameter gives MxdbgTypeParameterName
 		genericInstance(id) gives signatures.mangleGenericInstance(id)
 		character gives MxdbgCharacterName
@@ -340,15 +342,15 @@ export function mxdbgTypeNameOf(project Project, signatures ProgramSignatures, r
 		// A `cstring` is a raw byte POINTER and names no declared type, so the sidecar describes it by the
 		// keyword the source wrote — `string`'s arm, one pointer kind over.
 		cstring gives MxdbgCstringName
-		interfaceRef(id) gives mxdbgInternedName(project, id: id)
+		interfaceRef(id) gives mxdbgInternedName(names, id: id)
 	end 'arm'
 end 'mxdbgTypeNameOf'
 
 // A name the interner does not know is a compiler invariant break rather than a user error, but the
 // sidecar is a diagnostic side output and must never fail a build that produced a correct executable —
 // so it is described under an honest placeholder instead.
-function mxdbgInternedName(project Project, id TypeNameId) returns ByteArray
-	return try project.typeNames.nameOf(id) otherwise MxdbgUnnamedName
+function mxdbgInternedName(names TypeNameInterner, id TypeNameId) returns ByteArray
+	return try names.nameOf(id) otherwise MxdbgUnnamedName
 end 'mxdbgInternedName'
 
 // ============================================================================================
@@ -405,7 +407,7 @@ function mxdbgDescribeStruct(project Project, signatures ProgramSignatures, layo
 
 	for i in 0 upto layout.fieldCount() 'eachField'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("mxdbgDescribeStruct: fieldTypes.get OOB at {i} for `type {String.from(layout.name)}`, whose columns are index-parallel")
-		fields.push(MxdbgFieldDesc.create(layout.fieldNameAt(i), offset: layout.offsetOfField(i) as MxdbgIndex, typeName: mxdbgTypeNameOf(project, signatures: signatures, ref: fieldType)))
+		fields.push(MxdbgFieldDesc.create(layout.fieldNameAt(i), offset: layout.offsetOfField(i) as MxdbgIndex, typeName: mxdbgTypeNameOf(project.typeNames, signatures: signatures, ref: fieldType)))
 	end 'eachField'
 
 	return MxdbgTypeDesc.create(MxdbgTypeKindStruct, size: layout.sizeBytes() as MxdbgIndex, align: MxdbgAggregateAlign, fields: fields)
@@ -452,7 +454,7 @@ function mxdbgCasePayloadName(project Project, signatures ProgramSignatures, pay
 
 	let only = try payload.get(0) otherwise panic("mxdbgCasePayloadName: payload.get OOB at 0 of a payload holding {payload.count()}")
 
-	return mxdbgTypeNameOf(project, signatures: signatures, ref: only.declaredType)
+	return mxdbgTypeNameOf(project.typeNames, signatures: signatures, ref: only.declaredType)
 end 'mxdbgCasePayloadName'
 
 // A ranged alias carries the width it is STORED in, not the width of the keyword it was declared over —

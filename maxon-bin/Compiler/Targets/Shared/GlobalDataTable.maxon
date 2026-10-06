@@ -322,6 +322,30 @@ end 'twosComplementDistance'
 // The rdata payloads themselves — one raw byte blob per registered global.
 export typealias ByteArrayArray = Array with ByteArray
 
+// @generated library-cache begin
+export function cacheWriteByteArrayArray(writer LibraryCacheWriter, value ByteArrayArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.bytes(item)
+	end 'eachItem'
+end 'cacheWriteByteArrayArray'
+
+export function cacheReadByteArrayArray(reader LibraryCacheReader) returns ByteArrayArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ByteArrayArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.bytes()
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadByteArrayArray'
+
+// @generated library-cache end
+
 // Does `bytes` begin with `prefix`? The byte-slice twin of `String.startsWith`, for name comparisons on
 // source slices.
 export function bytesStartWith(bytes ByteArray, prefix ByteArray) returns bool

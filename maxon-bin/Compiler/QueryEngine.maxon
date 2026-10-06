@@ -71,9 +71,10 @@ end 'forgetOneSourceFile'
 
 // --- The memo that outlives a `Project` ---
 //
-// ⭐⭐ **ONE STORE PER `CompileSession.fileMemos` OWNER.** A spec worker process, the language server's document projects
-// and each MCP session compile many programs, and every one of them would otherwise re-lex the same
-// `stdlib/` files from scratch.
+// ⭐⭐ **ONE STORE PER `CompileSession.fileMemos` OWNER.** A spec worker process, the language
+// server's document projects and each MCP session compile many programs, and every one of them
+// would otherwise re-lex the same `stdlib/` files from scratch. Its disk tier (`LibraryCacheStore`)
+// carries the views, the held parses and the library baseline from one process to the next.
 //
 // ⚠ **THIS IS NOT A SECOND CACHE BESIDE THE QUERY SPINE'S — IT IS THE SAME MEMO WITH A LONGER
 // LIFE.** `StdlibLoader`'s header argues against storing the stdlib twice, and that argument
@@ -84,22 +85,25 @@ end 'forgetOneSourceFile'
 // type-name ids, generic-instance ids, interface declaration indexes in witness ops — that the
 // asking program's own declarations shift. So each held parse carries a footprint of those facts
 // (`ParseFootprint`), and a hit is rebased onto the current program, or misses when a row or a told
-// answer moved (`sharedParseDrifts`). It is deep-cloned at the stash and at every hit: the merge
-// renumbers an artifact in place, so nothing a `Project` can reach may be the stored one.
+// answer moved (`sharedParseDrifts`). A store that retains what it loads
+// (`SharedFileMemoMap.create`) deep-clones it at the stash and at every hit: the merge renumbers an
+// artifact in place, so nothing a `Project` can reach may be the stored one. A one-compile store
+// (`forOneCompile`) hands the held parse over and drops it, since no later compile asks.
 //
 // Its key is the library-only signature hash (`ProgramSignatures.libraryHash`), because the
 // whole-program hash moves with every user declaration. A program that shadows or overlaps a
 // library name, or declares a runtime name, parses the library cold (`LibraryParseSharing`).
 //
 // ⛔⛔ **A SWEPT DECLARATION IS NOT HELD: THE DECLARATION SCAN IS NOT A FUNCTION OF THE BYTES.**
-// `Parser.foldDeclaredSignaturesInto` READS the whole-program index while it walks (every user file
-// is folded into it first, because the two fold loops sit either side of the stdlib/user shadow
-// contest in `Queries.queryProgramSignatures`), WRITES it (`recordTupleAlias` / `internTupleType`),
-// and its output records are mutated in place by the whole-program tail. Serving it from here needs
-// a dependency key over what the walk can see and a deep clone on every serve, and the clone costs
-// more than the walk it replaces: it duplicates the file's `TokenArray` and the interner's source
-// slices, which a swept declaration shares. That changes only once the language can mark a value
-// deeply immutable, so a clone may share it.
+// `Parser.foldDeclaredSignaturesInto` READS the whole-program index while it walks (whatever the
+// files folded before it put there, in the order `Queries.foldedProgramDeclarations` chose), WRITES
+// it (`recordTupleAlias` / `internTupleType`), and its output records are mutated in place by the
+// whole-program tail. Serving it from here needs a dependency key over what the walk can see and a
+// deep clone on every serve, and the clone costs more than the walk it replaces: it duplicates the
+// file's `TokenArray` and the interner's source slices, which a swept declaration shares. That
+// changes only once the language can mark a value deeply immutable, so a clone may share it. What
+// is held instead is the whole library's sweep, one index a program starts from
+// (`LibraryBaseline`).
 //
 // A TOKEN needs neither a footprint nor a clone. `Token`'s every field is a `let`, no consumer
 // mutates a token array (`filterConditionalTokens` returns its input or builds a fresh array, and
@@ -124,13 +128,13 @@ end 'forgetOneSourceFile'
 // BOUNDED: a store that grows with the corpus rather than with `stdlib/` is a worker leaking one
 // token array per spec fragment, and no hit count can see that.
 export function sharedMemoEntryCount(project Project) returns QueryCount
-	return project.session.fileMemos.count()
+	return project.session.fileMemos.entries.count()
 end 'sharedMemoEntryCount'
 
 export function sharedParseEntryCount(project Project) returns QueryCount
 	var held = 0 as QueryCount
 
-	for (_, memo) in project.session.fileMemos 'eachMemo'
+	for (_, memo) in project.session.fileMemos.entries 'eachMemo'
 		held = held + (memo.parseCount() as QueryCount)
 	end 'eachMemo'
 
@@ -163,22 +167,86 @@ export function markSharedTokenSource(project Project, path FilePath) throws Com
 end 'markSharedTokenSource'
 
 // The store's entry for these bytes. The ONE place a `MapError` becomes a `SharedMemoMiss`, so the
-// five doors below cannot come to disagree about what "not held" is — and so an absent entry has one
-// meaning everywhere: nothing sharing this store has lexed these bytes, whether because no compile has
-// reached them yet, because no compile ADMITTED them, or because the one that did failed to lex.
+// doors below cannot come to disagree about what "not held" is.
 function heldMemoFor(project Project, contentHash HashDigest) returns SharedFileMemo throws SharedMemoMiss
-	return try project.session.fileMemos.get(contentHash) otherwise throw SharedMemoMiss.notHeld
+	return try project.session.fileMemos.entries.get(contentHash) otherwise throw SharedMemoMiss.notHeld
 end 'heldMemoFor'
 
-export function sharedDeclaredTypeNamesOf(project Project, contentHash HashDigest) returns ByteArrayArray throws SharedMemoMiss
-	return (try heldMemoFor(project, contentHash: contentHash)).declaredTypeNames
-end 'sharedDeclaredTypeNamesOf'
+function memoOrNew(project Project, contentHash HashDigest) returns SharedFileMemo
+	if let memo = try project.session.fileMemos.entries.get(contentHash) 'alreadyHeld'
+		return memo
+	end 'alreadyHeld'
+
+	let created = SharedFileMemo.holdingNothingYet()
+	project.session.fileMemos.entries.upsert(contentHash, value: created)
+
+	return created
+end 'memoOrNew'
+
+module function rawTokensAreHeldInMemory(project Project, contentHash HashDigest) returns bool
+	let memo = try heldMemoFor(project, contentHash: contentHash) otherwise return false
+
+	return memo.holdsRawTokens()
+end 'rawTokensAreHeldInMemory'
+
+function viewsPackName(project Project) returns String throws CompileError
+	let state = try libraryStateKeyOf(project)
+
+	return libraryEntryName(LibraryEntryKind.views, parts: [state])
+end 'viewsPackName'
+
+type OpenViewsPack
+	export let name as String
+	export let pack as LibraryPack
+
+	static function create(name String, pack LibraryPack) returns OpenViewsPack
+		return Self{name: name, pack: pack}
+	end 'create'
+end 'OpenViewsPack'
+
+function viewsPackFor(project Project, contentHash HashDigest) returns OpenViewsPack throws SharedMemoMiss
+	if not project.db.shareableTokenHashes.contains(contentHash) 'neverAdmitted'
+		throw SharedMemoMiss.notHeld
+	end 'neverAdmitted'
+
+	let name = try viewsPackName(project) otherwise throw SharedMemoMiss.notHeld
+	let pack = try project.session.fileMemos.library.openPack(project.target, name: name, tally: project.db.libraryTally) otherwise throw SharedMemoMiss.notHeld
+
+	return OpenViewsPack.create(name, pack: pack)
+end 'viewsPackFor'
+
+function loadedView(project Project, contentHash HashDigest, buildKey BuildKey) returns ViewEntry throws SharedMemoMiss
+	let opened = try viewsPackFor(project, contentHash: contentHash)
+	let reader = try opened.pack.section(contentHash, second: NoRowQualifier, third: NoRowQualifier) otherwise throw SharedMemoMiss.notHeld
+
+	return try decodedViewSection(reader, buildKey: buildKey) otherwise (damage) 'damaged'
+		project.session.fileMemos.library.rejectDecoded(project.target, name: opened.name, damage: damage, tally: project.db.libraryTally)
+		throw SharedMemoMiss.notHeld
+	end 'damaged'
+end 'loadedView'
+
+export function sharedRawStreamFactsOf(project Project, contentHash HashDigest) returns RawStreamFacts throws SharedMemoMiss
+	return try (try heldMemoFor(project, contentHash: contentHash)).rawStreamFactsHeld()
+end 'sharedRawStreamFactsOf'
 
 // The store's view for these bytes AND this build — `heldMemoFor` composed with `viewOf`, once,
 // because all three doors below want exactly that pair and a composition spelled three times is
 // three places for the two halves to come apart.
-function heldViewFor(project Project, contentHash HashDigest, buildKey BuildKey) returns SharedBuildView throws SharedMemoMiss
+function memoViewOf(project Project, contentHash HashDigest, buildKey BuildKey) returns SharedBuildView throws SharedMemoMiss
 	return try (try heldMemoFor(project, contentHash: contentHash)).viewOf(buildKey)
+end 'memoViewOf'
+
+function heldViewFor(project Project, contentHash HashDigest, buildKey BuildKey) returns SharedBuildView throws SharedMemoMiss
+	if let view = try memoViewOf(project, contentHash: contentHash, buildKey: buildKey) 'inMemory'
+		return view
+	end 'inMemory'
+
+	let entry = try loadedView(project, contentHash: contentHash, buildKey: buildKey)
+	var memo = memoOrNew(project, contentHash: contentHash)
+	memo.learnRawStreamFacts(entry.facts)
+	memo.addView(entry.view)
+
+	return entry.view
 end 'heldViewFor'
 
 // The tokens some earlier compile sharing this store already lexed from these exact bytes. Throws on a
@@ -189,27 +257,19 @@ end 'heldViewFor'
 // asks. A user fragment byte-identical to an admitted file gets the same tokens because it has the
 // same bytes, which is the only claim this store ever makes.
 export function sharedTokensOf(project Project, contentHash HashDigest) returns TokenArray throws SharedMemoMiss
-	let memo = try heldMemoFor(project, contentHash: contentHash)
+	let tokens = try (try heldMemoFor(project, contentHash: contentHash)).rawTokensHeld()
 	project.db.sharedTokenHits = project.db.sharedTokenHits + 1
-	return memo.tokens
+
+	return tokens
 end 'sharedTokensOf'
 
-// ⭐⭐ **THE ONE PLACE THE ADMISSION LIST IS CONSULTED, AND THE ONLY PLACE AN ENTRY IS CREATED.**
-// Every publish below reads admission off the ENTRY instead of asking again — an absent entry means
-// the bytes were never admitted, which is the same "nothing to hang a view on" as a failed lex. One
-// fact, one reader; three copies of `contains` would be three places to forget it.
-//
-// ⚠ **THE UPSERT CANNOT OVERWRITE AN ENTRY THAT HAS ACQUIRED VIEWS, AND THAT IS A REACHABILITY
-// ARGUMENT RATHER THAN A GUARD.** `queryTokens` publishes only after asking `sharedTokensOf` and
-// being told no — so an entry already in the store returns through the hit path and never reaches
-// here. A defensive `already held?` test would be code no input can run, which is the shape this
-// project refuses; if a second publisher is ever added, it is THIS paragraph that stops holding.
 export function shareTokens(project Project, contentHash HashDigest, tokens TokenArray)
 	if not project.db.shareableTokenHashes.contains(contentHash) 'notAdmitted'
 		return
 	end 'notAdmitted'
 
-	project.session.fileMemos.upsert(contentHash, value: SharedFileMemo.create(tokens))
+	var memo = memoOrNew(project, contentHash: contentHash)
+	memo.holdRawTokens(tokens)
 end 'shareTokens'
 
 // The `#if`-resolved stream for these bytes AND this build, if this store has one.
@@ -219,8 +279,10 @@ export function sharedActiveTokensOf(project Project, contentHash HashDigest, bu
 	return view.activeTokens
 end 'sharedActiveTokensOf'
 
-// Whether `sharedActiveTokensOf` would answer, without counting a hit — the front end's pool asks it of every
-// file before deciding which to lex, and the query that later serves the file is the one that counts.
+// Whether `sharedActiveTokensOf` would answer, without counting a hit — the front end's pool asks
+// it of every file before deciding which to lex, and the query that later serves the file is the
+// one that counts. A view on disk is decoded to answer, so a row that does not decode is lexed on
+// the pool.
 export function holdsSharedActiveTokens(project Project, contentHash HashDigest, buildKey BuildKey) returns bool
 	_ = try heldViewFor(project, contentHash: contentHash, buildKey: buildKey) otherwise return false
 	return true
@@ -235,10 +297,17 @@ end 'holdsSharedActiveTokens'
 // A later compile of a program that merely shares the bytes has neither, so serving it the empty
 // stream would be a file silently compiling as though it were blank.
 export function shareActiveTokens(project Project, contentHash HashDigest, buildKey BuildKey, activeTokens TokenArray)
-	// No entry means the bytes were never admitted — see `shareTokens`, which owns that decision. A
-	// view is only ever ADDED here, never replaced: `queryActiveTokens` reaches this line only after
+	// A view is published only beside a raw stream this process lexed. `heldViewFor` and
+	// `heldParseFor` create entries holding none, and a file that failed to lex arrives with an empty
+	// stream that a later compile would read as a blank file, with no diagnostic. A view is only ever
+	// ADDED here, never replaced: `queryActiveTokens` reaches this line only after
 	// `sharedActiveTokensOf` answered no for this build.
 	var memo = try heldMemoFor(project, contentHash: contentHash) otherwise return
+
+	if not memo.holdsRawTokens() 'theRawStreamDidNotLex'
+		return
+	end 'theRawStreamDidNotLex'
+
 	memo.addView(SharedBuildView.create(buildKey, activeTokens: activeTokens))
 end 'shareActiveTokens'
 
@@ -258,10 +327,10 @@ export function sharedProducerMaskOf(project Project, contentHash HashDigest, bu
 end 'sharedProducerMaskOf'
 
 export function shareProducerMask(project Project, contentHash HashDigest, buildKey BuildKey, mask ProducerMask)
-	// Two ways there is nothing to write to, and both are ordinary: the bytes were never admitted (no
-	// entry — see `shareTokens`), or this build has no view because the file's `#if` filter FAILED and
-	// a failure is deliberately not published (see `shareActiveTokens`). The sweep still walks the empty
-	// stream that failure produced, so it still arrives here with a mask.
+	// Two ways there is nothing to write to, and both are ordinary: the bytes were never admitted, or
+	// this build has no view because the file failed to lex or its `#if` filter FAILED and a failure is
+	// deliberately not published (see `shareActiveTokens`). The sweep still walks the empty stream that
+	// failure produced, so it still arrives here with a mask.
 	var view = try heldViewFor(project, contentHash: contentHash, buildKey: buildKey) otherwise return
 	view.rememberProducerMask(mask)
 end 'shareProducerMask'
@@ -378,7 +447,11 @@ end 'sharedParseOf'
 // The baseline is restored after every lookup, hit or miss: checking a held parse's told row-set
 // answers re-asks them, which writes journaled memos onto this program's index.
 function heldParseFor(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable) returns FileParseArtifact throws SharedMemoMiss
-	let rebased = try (try heldMemoFor(project, contentHash: contentHash)).parseOf(variant, key: key, signatures: signatures, overrides: overrides) otherwise (miss) 'notHeld'
+	var memo = memoOrNew(project, contentHash: contentHash)
+	loadParseIfAbsent(project, memo: memo, contentHash: contentHash, variant: variant, key: key, libraryHash: signatures.libraryHash)
+
+	let consuming = not project.session.fileMemos.library.retainsWhatItLoads()
+	let rebased = try memo.parseOf(variant, key: key, signatures: signatures, overrides: overrides, consuming: consuming) otherwise (miss) 'notHeld'
 		signatures.restoreBaseline()
 		project.db.sharedParseMisses = project.db.sharedParseMisses + 1
 
@@ -398,22 +471,151 @@ function heldParseFor(project Project, contentHash HashDigest, variant HashDiges
 	return rebased.artifact
 end 'heldParseFor'
 
-export function stashParse(project Project, plan SharedParsePlan, artifact FileParseArtifact)
-	match plan 'plan'
-		unshared then return
-		shareable(contentHash, variant, key) then stashShareableParse(project, contentHash: contentHash, variant: variant, key: key, artifact: artifact)
+let MostKeysPerLibraryParse = 6 as ElementIndex
+
+function parsesPackName(project Project, libraryHash HashDigest) returns String throws CompileError
+	let state = try libraryStateKeyOf(project)
+
+	return libraryEntryName(LibraryEntryKind.parses, parts: [state, libraryHash])
+end 'parsesPackName'
+
+function loadParseIfAbsent(project Project, memo SharedFileMemo, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest)
+	if memo.holdsParseAnswering(variant, key: key) 'inMemory'
+		return
+	end 'inMemory'
+
+	let library = project.session.fileMemos.library
+	let name = try parsesPackName(project, libraryHash: libraryHash) otherwise return
+	let pack = try library.openPack(project.target, name: name, tally: project.db.libraryTally) otherwise return
+	let reader = try pack.section(contentHash, second: variant, third: key) otherwise return
+
+	let parse = try decodedParseSection(reader, variant: variant, key: key) otherwise (damage) 'damaged'
+		library.rejectDecoded(project.target, name: name, damage: damage, tally: project.db.libraryTally)
+		return
+	end 'damaged'
+
+	memo.holdParse(parse)
+end 'loadParseIfAbsent'
+
+export function persistSharedEntries(project Project)
+	let library = project.session.fileMemos.library
+
+	if not library.isAvailable(project.target) 'noDiskTier'
+		return
+	end 'noDiskTier'
+
+	let name = try viewsPackName(project) otherwise return
+	let buildKey = buildKeyOf(project)
+	var views = LibraryPackBuilder.create()
+	var fresh = false
+
+	for contentHash in project.db.shareableTokenHashes 'eachAdmitted'
+		let view = try memoViewOf(project, contentHash: contentHash, buildKey: buildKey) otherwise continue
+
+		if not view.persisted 'newToTheDisk'
+			fresh = true
+		end 'newToTheDisk'
+	end 'eachAdmitted'
+
+	if not fresh 'nothingNew'
+		return
+	end 'nothingNew'
+
+	for contentHash in project.db.shareableTokenHashes 'eachToWrite'
+		let memo = try heldMemoFor(project, contentHash: contentHash) otherwise continue
+		let view = try memo.viewOf(buildKey) otherwise continue
+		let facts = try memo.rawStreamFactsHeld() otherwise panic("persistSharedEntries: a memo holds a view but not its raw stream's facts, and every view is added beside them")
+		views.add(contentHash, second: NoRowQualifier, third: NoRowQualifier, payload: encodedViewSection(facts, view: view))
+	end 'eachToWrite'
+
+	if not library.write(project.target, name: name, image: views.sealed(), tally: project.db.libraryTally) 'notWritten'
+		return
+	end 'notWritten'
+
+	library.trimEntries(project.target, kind: LibraryEntryKind.views, kept: name, most: MostEntriesOfAKind)
+
+	for contentHash in project.db.shareableTokenHashes 'eachWritten'
+		var view = try memoViewOf(project, contentHash: contentHash, buildKey: buildKey) otherwise continue
+		view.markPersisted()
+	end 'eachWritten'
+end 'persistSharedEntries'
+
+export function persistStashedParses(project Project)
+	var stashed = project.db.stashedParsePacks
+	project.db.stashedParsePacks = StashedParsePackMap.create()
+	let library = project.session.fileMemos.library
+
+	for (libraryHash, _) in stashed 'eachLibraryState'
+		var pack = try stashed.get(libraryHash) otherwise panic("persistStashedParses: the map iterated {libraryHash} and does not hold it")
+		let name = try parsesPackName(project, libraryHash: libraryHash) otherwise continue
+
+		// Re-read from disk, not from the pack this process opened, so rows another process wrote since
+		// are carried. A row lost to two writers racing costs a later miss, never a wrong answer.
+		library.forgetPack(name)
+
+		if let earlier = try library.openPack(project.target, name: name, tally: project.db.libraryTally) 'anEarlierPack'
+			earlier.copiedInto(pack, mostPerGroup: MostKeysPerLibraryParse)
+		end 'anEarlierPack'
+
+		if library.write(project.target, name: name, image: pack.sealed(), tally: project.db.libraryTally) 'written'
+			library.trimEntries(project.target, kind: LibraryEntryKind.parses, kept: name, most: MostParsePacks)
+		end 'written'
+	end 'eachLibraryState'
+end 'persistStashedParses'
+
+export function stashParse(project Project, plan SharedParsePlan, artifact FileParseArtifact) returns FileParseArtifact
+	return match plan 'plan'
+		unshared gives artifact
+		shareable(contentHash, variant, key) gives stashShareableParse(project, contentHash: contentHash, variant: variant, key: key, artifact: artifact)
 	end 'plan'
 end 'stashParse'
 
-function stashShareableParse(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, artifact FileParseArtifact)
+function stashShareableParse(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, artifact FileParseArtifact) returns FileParseArtifact
 	if artifact.diagnostics.count() != 0 or artifact.deferredParseErrors.count() != 0 'carriesFaults'
-		return
+		return artifact
 	end 'carriesFaults'
 
-	let footprint = footprintOf(project, artifact: artifact, signatures: programSignaturesIn(project, asker: "stashShareableParse"))
+	let signatures = programSignaturesIn(project, asker: "stashShareableParse")
+	let footprint = footprintOf(project, artifact: artifact, signatures: signatures)
+	let held = SharedLibraryParse.create(variant, key: key, footprint: footprint, artifact: artifact)
 
-	project.db.pendingSharedParses.upsert(contentHash, value: SharedLibraryParse.create(variant, key: key, footprint: footprint, artifact: artifact.clone()))
+	let retains = project.session.fileMemos.library.retainsWhatItLoads()
+
+	let canonical = try persistedCanonicalParse(project, held: held, contentHash: contentHash, libraryHash: signatures.libraryHash) otherwise 'notPersistable'
+		if retains 'aLaterCompileMayAsk'
+			project.db.pendingSharedParses.upsert(contentHash, value: held.cloned())
+		end 'aLaterCompileMayAsk'
+
+		return artifact
+	end 'notPersistable'
+
+	if retains 'aLaterCompileMayAsk'
+		project.db.pendingSharedParses.upsert(contentHash, value: canonical)
+	end 'aLaterCompileMayAsk'
+
+	return canonical.workingArtifact(not retains)
 end 'stashShareableParse'
+
+// The compile goes on with the decoded copy, not the parse it built, so a compile that writes the
+// cache and one that reads it work from the same canonical objects and emit the same bytes
+// (`tests/cli/library-cache-warm-build-is-byte-identical`). `LibraryBaseline.persistedBaseline`
+// does the same for the baseline.
+function persistedCanonicalParse(project Project, held SharedLibraryParse, contentHash HashDigest, libraryHash HashDigest) returns SharedLibraryParse throws LibraryEntryMiss
+	let library = project.session.fileMemos.library
+
+	if not library.isAvailable(project.target) 'noDiskTier'
+		throw LibraryEntryMiss.unavailable
+	end 'noDiskTier'
+
+	let payload = try encodedParseSection(held) otherwise throw LibraryEntryMiss.unavailable
+	var pack = try project.db.stashedParsePacks.get(libraryHash) otherwise LibraryPackBuilder.create()
+	pack.add(contentHash, second: held.variantOf(), third: held.keyOf(), payload: payload)
+	project.db.stashedParsePacks.upsert(libraryHash, value: pack)
+
+	return try decodedParseSection(LibraryCacheReader.over(payload, start: 0, endIndex: payload.count()), variant: held.variantOf(), key: held.keyOf()) otherwise (damage) 'undecodable'
+		panic("persistedCanonicalParse: the section just encoded for {contentHash} does not decode: {damage.displayReason()}")
+	end 'undecodable'
+end 'persistedCanonicalParse'
 
 export function publishStandingParses(project Project)
 	let pending = project.db.pendingSharedParses

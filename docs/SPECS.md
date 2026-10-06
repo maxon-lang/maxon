@@ -464,6 +464,14 @@ a case in `specs/arrays.md` named `push`, `specs/arrays/push.maxon:3:5` — or b
 output to one form before comparing, so the path decides nothing. A multi-file case keeps the directory
 prefix of each file ahead of the name (`app/specs/arrays/push.maxon:10:13`).
 
+### Workers start warm
+
+Every worker compiles its cases inside one process and starts from the
+[library cache](CLI_REFERENCE.md#the-library-cache): the standard library's tokens, declarations and
+parses that an earlier compile with the same compiler and target wrote, so each worker of a run after the
+first loads the library from it. After the summary, `spec-test` prints
+`library cache: <n> loaded, <n> written, <n> rejected` on stderr, summed over its workers.
+
 ### Batched runs
 
 A default run compiles a spec's plain run cases into the fewest programs whose declared names do not

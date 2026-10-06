@@ -82,6 +82,36 @@ export enum StdType
 	f64 = StdTypeInfo{isFloat: true, isUnsigned: false, castCategory: CastCategory.float, storageBytes: 8}
 end 'StdType'
 
+// @generated library-cache begin
+let CacheCasesStdType = [StdType.i1, StdType.i8, StdType.i16, StdType.i32, StdType.i64, StdType.u8, StdType.u16, StdType.u32, StdType.u64, StdType.f32, StdType.f64]
+
+export function cacheReadStdType(reader LibraryCacheReader) returns StdType throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesStdType.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadStdType'
+
+function cacheTableAgreesStdType() returns bool
+	let declared = StdType.allCases
+
+	if CacheCasesStdType.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesStdType.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesStdType'
+
+// @generated library-cache end
+
 export function stdTypeIsFloat(t StdType) returns bool
 	return t.rawValue.isFloat
 end 'stdTypeIsFloat'
@@ -185,6 +215,48 @@ export enum IntegerSignedness
 	unsigned
 end 'IntegerSignedness'
 
+// @generated library-cache begin
+let CacheCasesIntegerSignedness = [IntegerSignedness.signed, IntegerSignedness.unsigned]
+
+export function cacheReadIntegerSignedness(reader LibraryCacheReader) returns IntegerSignedness throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesIntegerSignedness.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadIntegerSignedness'
+
+function cacheTableAgreesIntegerSignedness() returns bool
+	let declared = IntegerSignedness.allCases
+
+	if CacheCasesIntegerSignedness.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesIntegerSignedness.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesIntegerSignedness'
+
+export function cacheEnumTablesAgreeInCompilerIRStdStdDialect() returns bool
+	if not cacheTableAgreesStdType() 'disagreesCacheTableAgreesStdType'
+		return false
+	end 'disagreesCacheTableAgreesStdType'
+
+	if not cacheTableAgreesIntegerSignedness() 'disagreesCacheTableAgreesIntegerSignedness'
+		return false
+	end 'disagreesCacheTableAgreesIntegerSignedness'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerIRStdStdDialect'
+
+// @generated library-cache end
+
 // ⭐⭐ **THE CANONICAL `StdType` OF AN ABI CLASS — so that a backend which holds only the float BIT can
 // rejoin the one type→valtype door instead of restating it.** `stdTypeOfAbiClass(stdTypeIsFloat(t))` is `t`'s
 // class representative, and every `StdType` in a class maps to one ABI valtype by construction, so
@@ -251,6 +323,38 @@ export union StdReturnType
 	void
 	value(inner StdType)
 end 'StdReturnType'
+
+// @generated library-cache begin
+export function cacheWriteStdReturnType(writer LibraryCacheWriter, value StdReturnType)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		void then break 'payload'
+		value(a0) then cacheWriteStdReturnTypeValue(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteStdReturnType'
+
+function cacheWriteStdReturnTypeValue(writer LibraryCacheWriter, a0 StdType)
+	writer.unsigned(a0.ordinal as CacheUnsigned)
+end 'cacheWriteStdReturnTypeValue'
+
+export function cacheReadStdReturnType(reader LibraryCacheReader) returns StdReturnType throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives StdReturnType.void
+		1 gives try cacheReadStdReturnTypeValue(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadStdReturnType'
+
+function cacheReadStdReturnTypeValue(reader LibraryCacheReader) returns StdReturnType throws LibraryCacheDamage
+	let a0 = try cacheReadStdType(reader)
+
+	return StdReturnType.value(a0)
+end 'cacheReadStdReturnTypeValue'
+
+// @generated library-cache end
 
 export typealias StdReturnTypeArray = Array with StdReturnType
 

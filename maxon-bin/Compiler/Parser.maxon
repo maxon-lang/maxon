@@ -40,6 +40,30 @@
 // that raises nothing almost every time, where an index is a scalar `self.tokenAt` recovers for free.
 export typealias TokenIndexArray = Array with ElementIndex
 
+// @generated library-cache begin
+module function cacheWriteTokenIndexArray(writer LibraryCacheWriter, value TokenIndexArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteTokenIndexArray'
+
+module function cacheReadTokenIndexArray(reader LibraryCacheReader) returns TokenIndexArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = TokenIndexArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ElementIndex
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadTokenIndexArray'
+
+// @generated library-cache end
+
 // How many blocks are open around a token. 0 is FILE SCOPE — the depth at which a `let` is a
 // top-level constant rather than a body-local binding (see `foldDeclaredSignaturesInto`). Wide
 // range: nesting is unbounded.
@@ -1981,9 +2005,44 @@ export type DeferredParseError
 	export function relocated(funcOffset ElementIndex) returns DeferredParseError
 		return Self{error: self.error, filePath: self.filePath, funcIndex: self.funcIndex + funcOffset, value: self.value}
 	end 'relocated'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.refuse()
+	end 'cacheWrite'
+
+	static function cacheRead(_ LibraryCacheReader) returns DeferredParseError throws LibraryCacheDamage
+		throw LibraryCacheDamage.unrepresentable
+	end 'cacheRead'
+
+	// @generated library-cache end
 end 'DeferredParseError'
 
 export typealias DeferredParseErrorArray = Array with DeferredParseError
+
+// @generated library-cache begin
+module function cacheWriteDeferredParseErrorArray(writer LibraryCacheWriter, value DeferredParseErrorArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteDeferredParseErrorArray'
+
+module function cacheReadDeferredParseErrorArray(reader LibraryCacheReader) returns DeferredParseErrorArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DeferredParseErrorArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try DeferredParseError.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDeferredParseErrorArray'
+
+// @generated library-cache end
 
 // Which refusal an `end` whose label does not repeat its header's is: a block's (E2008) or a match's (E2043).
 enum EndLabelRule
@@ -2029,9 +2088,56 @@ export type DeferredNameDiagnostic
 	export static function create(name ByteArray, filePath FilePath, line LineNumber, column ColumnNumber) returns DeferredNameDiagnostic
 		return Self{name: name, filePath: filePath, line: line, column: column}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		writer.text(self.filePath.toString())
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns DeferredNameDiagnostic throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_filePath = try reader.path()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{name: f_name, filePath: f_filePath, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(DeferredNameDiagnostic) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'DeferredNameDiagnostic'
 
 export typealias DeferredNameDiagnosticArray = Array with DeferredNameDiagnostic
+
+// @generated library-cache begin
+function cacheWriteDeferredNameDiagnosticArray(writer LibraryCacheWriter, value DeferredNameDiagnosticArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteDeferredNameDiagnosticArray'
+
+function cacheReadDeferredNameDiagnosticArray(reader LibraryCacheReader) returns DeferredNameDiagnosticArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DeferredNameDiagnosticArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try DeferredNameDiagnostic.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDeferredNameDiagnosticArray'
+
+// @generated library-cache end
 
 // The result of recovering a promise handle's AWAITED callee name from its defining `asyncCall`
 // (P1.5-B2b) — `found` for a real async spawn's result, `none` for a value that is not one.
@@ -2527,6 +2633,29 @@ end 'enumInterpRendering'
 // (`Parser.memberAccessedTypeNames`). They are two facts and are deliberately not merged — see there.
 export typealias UsedTypeNameSet = Set with ByteArray
 
+// @generated library-cache begin
+function cacheWriteUsedTypeNameSet(writer LibraryCacheWriter, value UsedTypeNameSet)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.bytes(item)
+	end 'eachItem'
+end 'cacheWriteUsedTypeNameSet'
+
+function cacheReadUsedTypeNameSet(reader LibraryCacheReader) returns UsedTypeNameSet throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = UsedTypeNameSet.create()
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.bytes()
+		result.insert(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadUsedTypeNameSet'
+
+// @generated library-cache end
+
 // ⭐⭐ **"THIS WALK RECORDED NO TYPE NAME" AS A SPELLED STATE.** Its twin one screen down carries the whole
 // argument; what is particular here is that the roster ESCAPES — `FileParseArtifact` holds this very column
 // and `UnusedExportCheck` walks it — so the state travels with it rather than being unwrapped at the border.
@@ -2538,6 +2667,38 @@ export union UsedTypeNameRoster
 	unwritten
 	entries(names UsedTypeNameSet)
 end 'UsedTypeNameRoster'
+
+// @generated library-cache begin
+module function cacheWriteUsedTypeNameRoster(writer LibraryCacheWriter, value UsedTypeNameRoster)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unwritten then break 'payload'
+		entries(a0) then cacheWriteUsedTypeNameRosterEntries(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteUsedTypeNameRoster'
+
+function cacheWriteUsedTypeNameRosterEntries(writer LibraryCacheWriter, a0 UsedTypeNameSet)
+	cacheWriteUsedTypeNameSet(writer, value: a0)
+end 'cacheWriteUsedTypeNameRosterEntries'
+
+module function cacheReadUsedTypeNameRoster(reader LibraryCacheReader) returns UsedTypeNameRoster throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives UsedTypeNameRoster.unwritten
+		1 gives try cacheReadUsedTypeNameRosterEntries(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadUsedTypeNameRoster'
+
+function cacheReadUsedTypeNameRosterEntries(reader LibraryCacheReader) returns UsedTypeNameRoster throws LibraryCacheDamage
+	let a0 = try cacheReadUsedTypeNameSet(reader)
+
+	return UsedTypeNameRoster.entries(a0)
+end 'cacheReadUsedTypeNameRosterEntries'
+
+// @generated library-cache end
 
 export let noUsedTypeNames = UsedTypeNameRoster.unwritten
 
@@ -2580,12 +2741,76 @@ export union DeferredNameDiagnosticRoster
 	entries(recorded DeferredNameDiagnosticArray)
 end 'DeferredNameDiagnosticRoster'
 
+// @generated library-cache begin
+module function cacheWriteDeferredNameDiagnosticRoster(writer LibraryCacheWriter, value DeferredNameDiagnosticRoster)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unwritten then break 'payload'
+		entries(a0) then cacheWriteDeferredNameDiagnosticRosterEntries(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteDeferredNameDiagnosticRoster'
+
+function cacheWriteDeferredNameDiagnosticRosterEntries(writer LibraryCacheWriter, a0 DeferredNameDiagnosticArray)
+	cacheWriteDeferredNameDiagnosticArray(writer, value: a0)
+end 'cacheWriteDeferredNameDiagnosticRosterEntries'
+
+module function cacheReadDeferredNameDiagnosticRoster(reader LibraryCacheReader) returns DeferredNameDiagnosticRoster throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives DeferredNameDiagnosticRoster.unwritten
+		1 gives try cacheReadDeferredNameDiagnosticRosterEntries(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDeferredNameDiagnosticRoster'
+
+function cacheReadDeferredNameDiagnosticRosterEntries(reader LibraryCacheReader) returns DeferredNameDiagnosticRoster throws LibraryCacheDamage
+	let a0 = try cacheReadDeferredNameDiagnosticArray(reader)
+
+	return DeferredNameDiagnosticRoster.entries(a0)
+end 'cacheReadDeferredNameDiagnosticRosterEntries'
+
+// @generated library-cache end
+
 export let noDeferredNameDiagnostics = DeferredNameDiagnosticRoster.unwritten
 
 export union DeferredDiagnosticRoster
 	unwritten
 	entries(recorded DiagnosticArray)
 end 'DeferredDiagnosticRoster'
+
+// @generated library-cache begin
+module function cacheWriteDeferredDiagnosticRoster(writer LibraryCacheWriter, value DeferredDiagnosticRoster)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unwritten then break 'payload'
+		entries(a0) then cacheWriteDeferredDiagnosticRosterEntries(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteDeferredDiagnosticRoster'
+
+function cacheWriteDeferredDiagnosticRosterEntries(writer LibraryCacheWriter, a0 DiagnosticArray)
+	cacheWriteDiagnosticArray(writer, value: a0)
+end 'cacheWriteDeferredDiagnosticRosterEntries'
+
+module function cacheReadDeferredDiagnosticRoster(reader LibraryCacheReader) returns DeferredDiagnosticRoster throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives DeferredDiagnosticRoster.unwritten
+		1 gives try cacheReadDeferredDiagnosticRosterEntries(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDeferredDiagnosticRoster'
+
+function cacheReadDeferredDiagnosticRosterEntries(reader LibraryCacheReader) returns DeferredDiagnosticRoster throws LibraryCacheDamage
+	let a0 = try cacheReadDiagnosticArray(reader)
+
+	return DeferredDiagnosticRoster.entries(a0)
+end 'cacheReadDeferredDiagnosticRosterEntries'
+
+// @generated library-cache end
 
 export let noDeferredDiagnostics = DeferredDiagnosticRoster.unwritten
 
@@ -8678,7 +8903,7 @@ module let ModuleModifierName = b"module"
 let SpawnKeywordName = b"spawn"
 
 // Is `tok` the WORD `spawn`? A free function over a TOKEN because the two askers hold different things: the
-// PARSER asks it at a cursor, and the whole-program discovery walk (`Queries.noteWholeProgramTokenFactsIn`)
+// PARSER asks it at a cursor, and the whole-program discovery walk (`Queries.discoveredTokenFactsOf`)
 // asks it of a raw `TokenArray` with no `Parser` in scope at all. Two spellings of "is this the keyword" is
 // the shape where the walk and the arm come to disagree about which programs contain a `spawn`.
 module function tokenIsTheSpawnKeyword(tok Token) returns bool
@@ -13852,7 +14077,7 @@ end 'NameContext'
 // next keyword a corpus file declares.
 //
 // ⚠ `module`, not file-private: the whole-program `spawn` discovery walk
-// (`Queries.noteServiceSpawnFollowing`) asks the identical question of a raw `TokenArray` with no `Parser`
+// (`Queries.serviceSpawnFollowing`) asks the identical question of a raw `TokenArray` with no `Parser`
 // in scope, and a second spelling of "may this token be a name" would let that walk and
 // `Parser.atSpawnPrefix` accept different programs — companions minted for a spawn the parser refuses, or a
 // spawn the parser claims that nothing minted companions for.
@@ -26859,6 +27084,16 @@ export type Parser
 		return self.kindAt(close) == TokenKind.rightParen and self.kindAt(close + 1) == TokenKind.uses
 	end 'functionDeclaresTypeParamsAt'
 
+	export function declaresGenericFunctionTemplate() returns bool
+		for position in 0 upto self.tokens.count() 'eachToken'
+			if functionDeclarationShapeIn(self.tokens, index: position) and self.functionDeclaresTypeParamsAt(position + 1) 'aTemplate'
+				return true
+			end 'aTemplate'
+		end 'eachToken'
+
+		return false
+	end 'declaresGenericFunctionTemplate'
+
 	function readFunctionTypeParams() returns ByteArrayArray throws SourceParseError
 		try self.consume(TokenKind.uses)
 		let names = self.readUsesNames()
@@ -34771,6 +35006,7 @@ export type Parser
 
 		if qualifierDots == 0 'aBareName'
 			try self.requireNameableTypeNameAt(headIndex, dots: qualifierDots, written: nameTok.value, anchor: nameTok)
+
 			return ThrowsClause.throwing(String.from(self.typeNameIdentityAt(headIndex, name: nameTok.value)))
 		end 'aBareName'
 
@@ -59920,7 +60156,7 @@ export type Parser
 
 		// ⛔ **`spawn Self.create()` IS REFUSED, AND THE REFUSAL IS THE DISCOVERY WALK'S SHAPE RATHER THAN A
 		// GAP IN THIS READER.** Which types are services is decided before any file is parsed, by a walk over
-		// raw tokens (`Queries.noteServiceSpawnFollowing`) that has no type scope to resolve `Self` against — so a
+		// raw tokens (`Queries.serviceSpawnFollowing`) that has no type scope to resolve `Self` against — so a
 		// `Self` spawn would name a service nothing minted companions for. Admitted by `atSpawnPrefix` purely
 		// so it can be refused in its own words instead of dying as `E2001 unexpected token: 'Self'`.
 		if self.at(TokenKind.selfType) 'selfTarget'
@@ -60071,7 +60307,7 @@ export type Parser
 	end 'serviceHandleLayout'
 
 	// Does a `. <member> (` follow the type name a `spawn` just consumed? The SHAPE test, kept apart from the
-	// classification above because it is about TOKENS: it is the same shape `Queries.noteServiceSpawnFollowing`
+	// classification above because it is about TOKENS: it is the same shape `Queries.serviceSpawnFollowing`
 	// matches on, and a shape this accepts that the walk declined would be a spawn nobody minted companions
 	// for. Both spell `<Type> . <member> (` and neither may loosen alone.
 	function atSpawnTargetCall() returns bool
@@ -69342,7 +69578,7 @@ export type Parser
 	// ⭐⭐ **THE INSTANTIATION A FACTORY CALL ON A BARE GENERIC BASE STARTS, READ OFF ITS ARGUMENTS.** Two
 	// roads reach it and they differ only in what a MISS means: a `spawn` names a bare generic type and
 	// cannot name an alias — the whole-program walk that decides which types are services reads raw tokens
-	// with no scope to resolve one (`Queries.noteServiceSpawnFollowing`) — so there the arguments are the
+	// with no scope to resolve one (`Queries.serviceSpawnFollowing`) — so there the arguments are the
 	// only thing that can fix `T` and a miss is a refusal; an ordinary static call keeps the base `structRef`
 	// it would otherwise have had.
 	//

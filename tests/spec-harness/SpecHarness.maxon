@@ -13,6 +13,7 @@ module let SuccessExitCode = 0
 
 let StagingDirNamePrefix = "maxon-tests-spec-harness"
 let IgnoredWrapperDirName = "ignored"
+let RunCacheRootDirName = "run-cache"
 let IgnoredWrapperInnerDirName = "spec"
 let IgnoreMarkerFileName = ".maxonignore"
 let CheckoutMarkerDirName = "stdlib"
@@ -87,8 +88,8 @@ module function saidByOneGateRun(caller String = __file__) returns String
 	return everythingSaid(runGateFixtureOnce(StringArray.create(), caller: caller))
 end 'saidByOneGateRun'
 
-module function runGateFixtureOnce(extraArguments StringArray, caller String = __file__) returns CollectedOutput
-	return runOnceThenDiscard(stagedGateFixture(caller), extraArguments: extraArguments)
+module function runGateFixtureOnce(extraArguments StringArray, environment Environment = Environment.inherit, caller String = __file__) returns CollectedOutput
+	return runOnceThenDiscard(stagedGateFixture(caller), extraArguments: extraArguments, environment: environment)
 end 'runGateFixtureOnce'
 
 module function requireMarkerShapeRan(label String, caller String = __file__) throws TestFailure
@@ -98,7 +99,7 @@ module function requireMarkerShapeRan(label String, caller String = __file__) th
 	try Expect.isTrue(said.contains(ranVerdict), message: "the fixture did NOT run '{label}': the compiler no longer reads this marker shape the way the reference does, and the case is simply GONE. Expected '{ranVerdict}', and it said:\n{said}")
 end 'requireMarkerShapeRan'
 
-module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments StringArray = StringArray.create()) returns CollectedOutput
+module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments StringArray = StringArray.create(), environment Environment = Environment.inherit) returns CollectedOutput
 	let binary = testedCompilerPath()
 
 	if not File.exists(binary) 'noBinary'
@@ -120,6 +121,7 @@ module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments
 	var config = Configuration.create(Executable.path(binary))
 	config.arguments = arguments
 	config.workingDirectory = staged
+	config.environment = environment
 
 	let run = try config.run() otherwise (e) 'spawnFailed'
 		panic("spec-harness tests: the gate could not run - could not spawn `{SpecTestCommandWord}` at {staged.toString()} ({e.displayReason()}).")
@@ -128,8 +130,8 @@ module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments
 	return CollectedOutput.create(run.status, stdout: withoutCarriageReturns(run.stdout), stderr: withoutCarriageReturns(run.stderr), pid: run.pid, durationMs: run.durationMs)
 end 'runSpecTest'
 
-function runOnceThenDiscard(staged FilePath, extraArguments StringArray = StringArray.create()) returns CollectedOutput
-	let run = runSpecTest(staged, includeNetwork: false, extraArguments: extraArguments)
+function runOnceThenDiscard(staged FilePath, extraArguments StringArray = StringArray.create(), environment Environment = Environment.inherit) returns CollectedOutput
+	let run = runSpecTest(staged, includeNetwork: false, extraArguments: extraArguments, environment: environment)
 	discardStaging(staged)
 	return run
 end 'runOnceThenDiscard'
@@ -287,6 +289,13 @@ function stagedCopyOf(fixture HarnessFixture) returns FilePath
 	copyFixtureInto(fixture, staged: staged)
 	return staged
 end 'stagedCopyOf'
+
+module function stagedRunCacheRoot(caller String = __file__) returns FilePath
+	let fixture = fixtureOf(caller, kind: GatesDirName)
+	let root = hostTempDir().join("{StagingDirNamePrefix}-{__Builtins.currentProcessId()}-{RunCacheRootDirName}-{fixture.caseName}").resolve(Directory.currentPath())
+	createFreshDirectory(root)
+	return root
+end 'stagedRunCacheRoot'
 
 module function runGateFixtureBelowAnIgnoredDirectory(caller String = __file__) returns CollectedOutput
 	let fixture = fixtureOf(caller, kind: GatesDirName)

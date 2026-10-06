@@ -1,0 +1,36 @@
+let CaseDirName = "library-cache-per-target"
+let ProgramDirName = "app"
+let HostOutputName = "host-program"
+let ForeignOutputName = "foreign-program"
+
+#if os(Windows)
+	let ForeignTarget = "x64-linux"
+#else
+	let ForeignTarget = "x64-windows"
+#endif
+
+test 'a build for another target does not load the library baseline another target wrote'
+	requireHeldOutsideCheckout(CaseDirName, check: LibraryCacheIsPerTarget.create())
+end 'a build for another target does not load the library baseline another target wrote'
+
+type LibraryCacheIsPerTarget implements OutsideCheckoutCase
+	static function create() returns LibraryCacheIsPerTarget
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+		let host = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: HostOutputName, options: ListedWordArray.create()), which: "the host build")
+		try Expect.greaterThan(host.written, than: 0, message: "the host build wrote nothing to the library cache, so a {ForeignTarget} build has nothing it could wrongly load. It wrote: {host.line}")
+
+		let foreignOption = "{TargetOptionPrefix}{ForeignTarget}"
+
+		let firstForeign = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: ForeignOutputName, options: [foreignOption]), which: "the first {ForeignTarget} build")
+		try Expect.equal(firstForeign.baseline, expected: LibraryBaseline.built, message: "the first {ForeignTarget} build did not build its own library baseline after a host build had written one, so it reused a library whose `#if` views were taken for another target. It wrote: {firstForeign.line}")
+		try Expect.greaterThan(firstForeign.written, than: 0, message: "the first {ForeignTarget} build wrote nothing to the library cache. It wrote: {firstForeign.line}")
+
+		let secondForeign = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: ForeignOutputName, options: [foreignOption]), which: "the second {ForeignTarget} build")
+		try Expect.equal(secondForeign.baseline, expected: LibraryBaseline.loaded, message: "the second {ForeignTarget} build did not load the library baseline the first one wrote. It wrote: {secondForeign.line}")
+	end 'requireHeldIn'
+end 'LibraryCacheIsPerTarget'

@@ -80,10 +80,15 @@ module enum TokenMemoMiss implements Error
 	stale
 end 'TokenMemoMiss'
 
-module function memoizedTokensOf(project Project, path FilePath) returns TokenArray throws TokenMemoMiss
-	let entry = try sourceEntryOf(project, path: path) otherwise throw TokenMemoMiss.absent
-	return try validMemoValue(project.db.tokenCache, path: path, entry: entry)
-end 'memoizedTokensOf'
+// Read off the RAW stream, so a `__` spelling in an inactive `#if` branch counts. The facts held with
+// the bytes answer for a library file whose view came from the disk tier and was never lexed here.
+module function reservedSpellingsOf(project Project, path FilePath, entry SourceFileEntry) returns ByteArrayArray throws TokenMemoMiss
+	if let facts = try sharedRawStreamFactsOf(project, contentHash: entry.contentHash) 'heldWithTheBytes'
+		return facts.reservedSpellings
+	end 'heldWithTheBytes'
+
+	return reservedSpellingsIn(try validMemoValue(project.db.tokenCache, path: path, entry: entry))
+end 'reservedSpellingsOf'
 
 // A per-file memo's value when it was stamped with these bytes' hash.
 function validMemoValue(cache TokenCacheMap, path FilePath, entry SourceFileEntry) returns TokenArray throws TokenMemoMiss
@@ -142,20 +147,25 @@ module function queryActiveTokens(project Project, path FilePath, lexing LexSour
 
 	project.db.activeTokenMisses = project.db.activeTokenMisses + 1
 
+	// This memo's key carries the target and the flag because a memo that outlives the `Project` has
+	// no guarantee of a single build for its life — see this function's header.
+	let buildKey = buildKeyOf(project)
+
+	// Ahead of `queryTokens` only while no compile in this process holds these bytes' raw stream: a
+	// view from the disk tier then spares the lex, and leaves this project's `tokenCache` empty for
+	// the file. Otherwise `queryTokens` runs first, so a shared hit still fills that cache.
+	if not rawTokensAreHeldInMemory(project, contentHash: entry.contentHash) 'rawStillToLoad'
+		if let shared = try sharedActiveTokensServed(project, path: path, entry: entry, buildKey: buildKey) 'viewFirst'
+			return shared
+		end 'viewFirst'
+	end 'rawStillToLoad'
+
 	// Outside the probe, exactly as `queryParseOps` keeps `queryTokens` outside its `parse` probe: the
 	// tokens query does its own `lex` timing, and a phase that absorbed another's is the defect
 	// CompileTimings' header is about.
 	let tokens = try queryTokens(project, path: path, lexing: lexing)
 
-	// This memo's key carries the target and the flag because a memo that outlives the `Project` has
-	// no guarantee of a single build for its life — see this function's header.
-	//
-	// Asked below `queryTokens`, not above it: a shared hit that skipped it would leave this project's
-	// `tokenCache` empty, so the next re-query of an unchanged file would miss.
-	let buildKey = buildKeyOf(project)
-
-	if let shared = try sharedActiveTokensOf(project, contentHash: entry.contentHash, buildKey: buildKey) 'sharedHit'
-		project.db.activeTokenCache.upsert(path, value: TokenMemo.create(shared, keyHash: entry.contentHash))
+	if let shared = try sharedActiveTokensServed(project, path: path, entry: entry, buildKey: buildKey) 'sharedHit'
 		return shared
 	end 'sharedHit'
 
@@ -176,6 +186,13 @@ module function queryActiveTokens(project Project, path FilePath, lexing LexSour
 
 	return filtered.value
 end 'queryActiveTokens'
+
+function sharedActiveTokensServed(project Project, path FilePath, entry SourceFileEntry, buildKey BuildKey) returns TokenArray throws SharedMemoMiss
+	let shared = try sharedActiveTokensOf(project, contentHash: entry.contentHash, buildKey: buildKey)
+	project.db.activeTokenCache.upsert(path, value: TokenMemo.create(shared, keyHash: entry.contentHash))
+
+	return shared
+end 'sharedActiveTokensServed'
 
 // An empty stream is a legitimate value for a genuinely empty file, so a caller cannot tell that
 // apart from a failure by looking at `value` alone — `filtered` carries the difference explicitly
@@ -229,10 +246,11 @@ end 'activeTokensAreHeld'
 // Built from tokens, never from parses: a parse needs this index, so the index cannot need a parse.
 // See SignatureIndex.maxon for the wrong answer a per-file version of this query exists to kill.
 //
-// One token-level sweep of every file per miss, linear in the program's tokens, re-reading them
-// from the token memo so an unchanged file is only re-swept, not re-lexed. A per-file signature
-// memo would save that sweep and buy nothing else: the whole-program fold it feeds is itself O(all
-// declarations), so the two are the same order.
+// One token-level sweep per miss of every file the library baseline does not hold
+// (`LibraryBaseline`), linear in the program's tokens, re-reading them from the token memo so an
+// unchanged file is only re-swept, not re-lexed. A per-file signature memo would save that sweep
+// and buy nothing else: the whole-program fold it feeds is itself O(all declarations), so the two
+// are the same order.
 //
 // ⚠ This is a whole-program query sitting under a per-file one, so anything O(files) inside it
 // would be O(files²). It is not: the memo makes it run once per build, and the constant evaluation
@@ -280,7 +298,8 @@ function foldedUserFilesOf(project Project, recordingClaims bool) returns UserFi
 		userPaths.push(path)
 	end 'eachFile'
 
-	try foldEveryDeclaration(project, signatures: signatures, userPaths: userPaths, stdlibPaths: MaxonSourcePathArray.create())
+	try foldDeclarationsOf(project, signatures: signatures, leadingPaths: userPaths, stdlibPaths: MaxonSourcePathArray.create(), handedOver: DiscoveredTokenFacts.none())
+	closeDeclarationFold(signatures)
 	return UserFileFold.create(signatures, paths: userPaths)
 end 'foldedUserFilesOf'
 
@@ -403,9 +422,7 @@ function namesTheLibraryAlsoDeclares(project Project, nominals StringArray, alia
 	return shadowed
 end 'namesTheLibraryAlsoDeclares'
 
-function newProgramSignatures(project Project) returns ProgramSignatures
-	var signatures = ProgramSignatures.create(project.target.os)
-
+function adoptProgramFacts(project Project, signatures ProgramSignatures)
 	// Only the project table is sized from the whole program: it accumulates every file's names and is
 	// never cloned. The index's own table holds the baseline plus one parse band and is sized by
 	// `settleBaseline` — a whole-program hint there would be slots and an arena copied into every worker.
@@ -413,6 +430,11 @@ function newProgramSignatures(project Project) returns ProgramSignatures
 	signatures.adoptInstantiatedByAParse(project.db.instantiatedByAParse)
 	signatures.adoptGenericFunctionInstances(project.db.genericInstances)
 	signatures.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
+end 'adoptProgramFacts'
+
+function newProgramSignatures(project Project) returns ProgramSignatures
+	var signatures = ProgramSignatures.create(project.target.os)
+	adoptProgramFacts(project, signatures: signatures)
 
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
 	// query) sees the answer rather than the seeded `false`. See `livesUnderStdlibDirectory`.
@@ -421,24 +443,26 @@ function newProgramSignatures(project Project) returns ProgramSignatures
 	return signatures
 end 'newProgramSignatures'
 
-function foldEveryDeclaration(project Project, signatures ProgramSignatures, userPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray) throws CompileError
+module function foldDeclarationsOf(project Project, signatures ProgramSignatures, leadingPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray, handedOver DiscoveredTokenFacts) throws CompileError
 	// Which declarations carry the array-literal marker, ahead of both halves: the fold itself asks,
 	// so the answer cannot come from the fold — the same ordering argument the contest below makes.
 	var extents = BlockExtentsByPath.create()
-	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths, extents: extents)
+	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: leadingPaths, stdlibPaths: stdlibPaths, extents: extents, handedOver: handedOver)
 	try contestStdlibDeclarationsAgainstUserNames(project, signatures: signatures, stdlibPaths: stdlibPaths)
 	signatures.settleNominalNameCollisions(project.db.sourcePaths)
 
-	for path in userPaths 'eachUserFile'
-		try requireStillWanted(project)
-		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false, extents: extents)
-	end 'eachUserFile'
+	try foldFilesInto(project, signatures: signatures, paths: leadingPaths, isStdlibSource: false, extents: extents)
+	try foldFilesInto(project, signatures: signatures, paths: stdlibPaths, isStdlibSource: true, extents: extents)
+end 'foldDeclarationsOf'
 
-	for path in stdlibPaths 'eachStdlibFile'
+function foldFilesInto(project Project, signatures ProgramSignatures, paths MaxonSourcePathArray, isStdlibSource bool, extents BlockExtentsByPath) throws CompileError
+	for path in paths 'eachFile'
 		try requireStillWanted(project)
-		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: true, extents: extents)
-	end 'eachStdlibFile'
+		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, extents: extents)
+	end 'eachFile'
+end 'foldFilesInto'
 
+function closeDeclarationFold(signatures ProgramSignatures)
 	signatures.attributeHashEventsTo(HashEventSource.whole)
 
 	// The instances the compiler mints for itself (array literals, byte strings, the `from […]`
@@ -464,20 +488,9 @@ function foldEveryDeclaration(project Project, signatures ProgramSignatures, use
 
 	// Before anything can read an enum case's function: the contest that decides the name is complete only now.
 	signatures.settleFunctionBackedEnumCases()
-end 'foldEveryDeclaration'
+end 'closeDeclarationFold'
 
-export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
-	if signaturesCacheValid(project) 'hit'
-		project.db.signatureHits = project.db.signatureHits + 1
-
-		// The sweep reads no liveness, so the memo's key omits the live keys and a hit adopts the current
-		// ones.
-		project.db.signatureCache.value.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
-		return project.db.signatureCache.value
-	end 'hit'
-
-	project.db.signatureMisses = project.db.signatureMisses + 1
-
+function declarationsFoldedUserFirst(project Project, handedOver DiscoveredTokenFacts) returns ProgramSignatures throws CompileError
 	var signatures = newProgramSignatures(project)
 
 	// The sweep is partitioned by provenance, user files first, stdlib files second. The shadow
@@ -492,7 +505,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// ⚠ A RUNTIME file is on the `userPaths` side of that partition, and deliberately: the contest is
 	// about the stdlib's parser privileges — the shadow rename, the `module` tier, the `__` doors —
 	// and a `runtime/` file holds none of them. What it does need is its OWN namespace anchor, which
-	// is a fact about the PATH and not about the contest, so `noteWholeProgramTokenFactsIn` asks for
+	// is a fact about the PATH and not about the contest, so `discoveredTokenFactsOf` asks for
 	// it separately rather than reading it off this partition.
 	var userPaths = MaxonSourcePathArray.create()
 	var stdlibPaths = MaxonSourcePathArray.create()
@@ -506,7 +519,174 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 		userPaths.push(path)
 	end 'eachFile'
 
-	try foldEveryDeclaration(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths)
+	try foldDeclarationsOf(project, signatures: signatures, leadingPaths: userPaths, stdlibPaths: stdlibPaths, handedOver: handedOver)
+	closeDeclarationFold(signatures)
+
+	return signatures
+end 'declarationsFoldedUserFirst'
+
+module type ProgramPartition
+	module let userPaths as MaxonSourcePathArray
+	module let runtimePaths as MaxonSourcePathArray
+	module let stdlibPaths as MaxonSourcePathArray
+
+	module static function create(userPaths MaxonSourcePathArray, runtimePaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray) returns ProgramPartition
+		return Self{userPaths: userPaths, runtimePaths: runtimePaths, stdlibPaths: stdlibPaths}
+	end 'create'
+end 'ProgramPartition'
+
+module function partitionedByTier(project Project, paths FilePathArray) returns ProgramPartition
+	var userPaths = MaxonSourcePathArray.create()
+	var runtimePaths = MaxonSourcePathArray.create()
+	var stdlibPaths = MaxonSourcePathArray.create()
+
+	for path in paths 'eachFile'
+		if isStdlibSourceFile(project, path: path) 'stdlibSource'
+			stdlibPaths.push(path)
+			continue
+		end 'stdlibSource'
+
+		if isRuntimeSourceFile(project, path: path) 'runtimeSource'
+			runtimePaths.push(path)
+			continue
+		end 'runtimeSource'
+
+		userPaths.push(path)
+	end 'eachFile'
+
+	return ProgramPartition.create(userPaths, runtimePaths: runtimePaths, stdlibPaths: stdlibPaths)
+end 'partitionedByTier'
+
+module function foldLibraryRemainder(project Project, signatures ProgramSignatures, deferred FilePathArray) throws CompileError
+	if deferred.isEmpty() 'nothingDeferred'
+		return
+	end 'nothingDeferred'
+
+	let tiers = partitionedByTier(project, paths: deferred)
+	var extents = BlockExtentsByPath.create()
+	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: tiers.runtimePaths, stdlibPaths: tiers.stdlibPaths, extents: extents, handedOver: DiscoveredTokenFacts.none())
+	signatures.noteStdlibDeclaredTypeNames((try stdlibDeclarationsIn(project, stdlibPaths: tiers.stdlibPaths)).names)
+	try foldFilesInto(project, signatures: signatures, paths: tiers.runtimePaths, isStdlibSource: false, extents: extents)
+	try foldFilesInto(project, signatures: signatures, paths: tiers.stdlibPaths, isStdlibSource: true, extents: extents)
+end 'foldLibraryRemainder'
+
+function restoreDeclTokenStreams(project Project, signatures ProgramSignatures, streamed FilePathArray) throws CompileError
+	for path in streamed 'eachStream'
+		let tokens = try queryActiveTokens(project, path: path)
+		signatures.restoreDeclTokenStream(path.toString(), tokens: PreparedTokens.create(tokens, qualifiedNominalAt: QualifiedNominalSpellingMap.create()))
+	end 'eachStream'
+end 'restoreDeclTokenStreams'
+
+union BaselineFold
+	served(signatures ProgramSignatures)
+	declined(discovered DiscoveredTokenFacts)
+end 'BaselineFold'
+
+// A program whose names must win a contest against the library's — it shadows a library type,
+// declares a name the library means, or is rooted inside `stdlib/` — is swept user first, so its
+// names are settled before the library folds. Every other program starts from the library baseline
+// and folds only its own files on top. A decline hands over the user files' discovered facts, so no
+// file is discovered twice.
+function foldedProgramDeclarations(project Project) returns ProgramSignatures throws CompileError
+	match try declarationsFoldedOntoTheLibraryBaseline(project) 'onTheBaseline'
+		served(signatures) then return signatures
+		declined(discovered) then return try declarationsFoldedUserFirst(project, handedOver: discovered)
+	end 'onTheBaseline'
+end 'foldedProgramDeclarations'
+
+function declarationsFoldedOntoTheLibraryBaseline(project Project) returns BaselineFold throws CompileError
+	if rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: Directory.currentPath()) 'theProjectIsTheLibrary'
+		noteLibraryCacheTrouble("no baseline: the program is rooted inside the library")
+		return BaselineFold.declined(DiscoveredTokenFacts.none())
+	end 'theProjectIsTheLibrary'
+
+	let partition = partitionedByTier(project, paths: project.db.sourcePaths)
+
+	if partition.stdlibPaths.isEmpty() 'noLibraryToStartFrom'
+		noteLibraryCacheTrouble("no baseline: the program lists no library file")
+		return BaselineFold.declined(DiscoveredTokenFacts.none())
+	end 'noLibraryToStartFrom'
+
+	let diagnosticsBefore = project.diagnostics.count()
+	var start = try libraryBaselineFor(project, partition: partition)
+	var signatures = start.signatures
+	try restoreDeclTokenStreams(project, signatures: signatures, streamed: start.streamed)
+
+	// Before the remainder folds: the deferred files declare generic function templates, and their
+	// fold reads the instances this program requests.
+	adoptProgramFacts(project, signatures: signatures)
+
+	try foldLibraryRemainder(project, signatures: signatures, deferred: start.remainder)
+
+	var extents = BlockExtentsByPath.create()
+	var discovered = DiscoveredTokenFacts.none()
+
+	for path in partition.userPaths 'eachUserFileDiscovered'
+		let facts = try discoveredTokenFactsOf(project, signatures: signatures, path: path, isStdlibSource: false)
+		discovered.hold(path, facts: facts)
+		facts.noteInto(signatures, path: path, isStdlibSource: false, extents: extents)
+
+		if signatures.authorNamesOverlapTheLibrary() 'aDiscoveredNameIsMeantByTheLibrary'
+			return declinedForASharedName(project, diagnosticsBefore: diagnosticsBefore, discovered: discovered)
+		end 'aDiscoveredNameIsMeantByTheLibrary'
+	end 'eachUserFileDiscovered'
+
+	closeTokenFactDiscovery(signatures)
+
+	let contested = signatures.libraryTypeNamesTheAuthorContests()
+
+	if not contested.isEmpty() 'theAuthorContestsTheLibrary'
+		noteLibraryCacheTrouble("no baseline: the program declares {contested.count()} type name(s) the library declares, the first being {String.from(try contested.get(0) otherwise panic("declarationsFoldedOntoTheLibraryBaseline: a list holding names has a first"))}")
+		return declinedBaseline(project, diagnosticsBefore: diagnosticsBefore, discovered: discovered)
+	end 'theAuthorContestsTheLibrary'
+
+	// With no contested name this settles only the alias-family spellings, which
+	// `closeTokenFactDiscovery` has just settled again with the user's claims in.
+	signatures.settleStdlibShadowSpellings(ByteArrayArray.create(), declaringFiles: FilePathArray.create())
+	adoptShadowSpellings(project, spellings: signatures.shadowSpellings())
+	signatures.settleNominalNameCollisions(project.db.sourcePaths)
+
+	for path in partition.userPaths 'eachUserFile'
+		try requireStillWanted(project)
+		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false, extents: extents)
+
+		if signatures.authorNamesOverlapTheLibrary() 'aFoldedNameIsMeantByTheLibrary'
+			return declinedForASharedName(project, diagnosticsBefore: diagnosticsBefore, discovered: discovered)
+		end 'aFoldedNameIsMeantByTheLibrary'
+	end 'eachUserFile'
+
+	closeDeclarationFold(signatures)
+
+	return BaselineFold.served(signatures)
+end 'declarationsFoldedOntoTheLibraryBaseline'
+
+function declinedForASharedName(project Project, diagnosticsBefore ElementIndex, discovered DiscoveredTokenFacts) returns BaselineFold
+	noteLibraryCacheTrouble("no baseline: a name the program declares is a name the library means")
+
+	return declinedBaseline(project, diagnosticsBefore: diagnosticsBefore, discovered: discovered)
+end 'declinedForASharedName'
+
+function declinedBaseline(project Project, diagnosticsBefore ElementIndex, discovered DiscoveredTokenFacts) returns BaselineFold
+	project.diagnostics.truncate(diagnosticsBefore)
+	project.db.libraryBaseline = LibraryBaselineState.unused
+	adoptShadowSpellings(project, spellings: StdlibShadowSpellingArray.create())
+
+	return BaselineFold.declined(discovered)
+end 'declinedBaseline'
+
+export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
+	if signaturesCacheValid(project) 'hit'
+		project.db.signatureHits = project.db.signatureHits + 1
+
+		// The sweep reads no liveness, so the memo's key omits the live keys and a hit adopts the current
+		// ones.
+		project.db.signatureCache.value.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
+		return project.db.signatureCache.value
+	end 'hit'
+
+	project.db.signatureMisses = project.db.signatureMisses + 1
+
+	var signatures = try foldedProgramDeclarations(project)
 
 	// Every file is folded in; now the top-level constants can be evaluated, and not one moment
 	// earlier — a constant's initializer may name a constant declared later in its own file or in a
@@ -641,10 +821,10 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	recordPhase(project, phase: CompilePhase.signatures, probe: constProbe)
 
 	// Reported because a cache nobody can see fire is a cache nobody can prove fired: every counter
-	// here is at its final value by this line, and a first compile in a process reads zero across the
-	// board. `admitted` is what THIS compile offered `stdlib/`'s files; `holding` is what the process
-	// has kept — the two are equal while the store is bounded, and only `holding` moves if it ever
-	// stops being.
+	// here is at its final value by this line, and a first compile in a process that finds nothing in
+	// the disk tier reads zero across the board. `admitted` is what THIS compile offered `stdlib/`'s
+	// files; `holding` is what the process has kept — the two are equal while the store is bounded,
+	// and only `holding` moves if it ever stops being.
 	let holding = sharedMemoEntryCount(project)
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
@@ -660,6 +840,10 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	// the tokens query does its own `lex` timing, and a phase that absorbed another's is the defect
 	// CompileTimings' header is about.
 	let tokens = try queryActiveTokens(project, path: path)
+
+	if isLibrarySourceFile(project, path: path) 'aLibrarySweep'
+		project.db.libraryTally.swept = project.db.libraryTally.swept + 1
+	end 'aLibrarySweep'
 
 	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
 
@@ -791,12 +975,16 @@ end 'libraryConeAnchor'
 // nothing else, so the scan walks only the kinds a header can contain and stops at the first token
 // that cannot be one. `type` is legal as a parameter name, so a spurious start is expected and is
 // what the allow-list stops: `f(type Foo)` reaches `returns` and ends, having seen no `implements`.
-function discoverWholeProgramTokenFacts(project Project, signatures ProgramSignatures, userPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray, extents BlockExtentsByPath) throws CompileError
-	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: userPaths, isStdlibSource: false, extents: extents)
-	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: stdlibPaths, isStdlibSource: true, extents: extents)
+function discoverWholeProgramTokenFacts(project Project, signatures ProgramSignatures, userPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray, extents BlockExtentsByPath, handedOver DiscoveredTokenFacts) throws CompileError
+	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: userPaths, isStdlibSource: false, extents: extents, handedOver: handedOver)
+	try noteWholeProgramTokenFactsIn(project, signatures: signatures, paths: stdlibPaths, isStdlibSource: true, extents: extents, handedOver: handedOver)
+	closeTokenFactDiscovery(signatures)
+end 'discoverWholeProgramTokenFacts'
+
+function closeTokenFactDiscovery(signatures ProgramSignatures)
 	signatures.attributeHashEventsTo(HashEventSource.whole)
 	signatures.settleAliasFamiliesBesideNominals()
-end 'discoverWholeProgramTokenFacts'
+end 'closeTokenFactDiscovery'
 
 // Every question is asked per token and the array is walked once: the `spawn` probe joins the
 // array-literal probe here rather than bringing a second complete pass of its own over every file
@@ -805,79 +993,178 @@ end 'discoverWholeProgramTokenFacts'
 // ⚠ Runs over `stdlib/` too, deliberately: the probe is a compare on a walk that visits those
 // tokens either way, so excluding them would buy nothing and would make "stdlib never spawns" a
 // premise this walk depends on instead of a fact about the corpus as it stands.
-function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatures, paths MaxonSourcePathArray, isStdlibSource bool, extents BlockExtentsByPath) throws CompileError
+function noteWholeProgramTokenFactsIn(project Project, signatures ProgramSignatures, paths MaxonSourcePathArray, isStdlibSource bool, extents BlockExtentsByPath, handedOver DiscoveredTokenFacts) throws CompileError
 	for path in paths 'eachFile'
-		let tokens = try queryActiveTokens(project, path: path)
-		var gate = SpawnGate.always
-		var gateEnd = 0 as ElementIndex
-		let isRuntimeSource = not isStdlibSource and isRuntimeSourceFile(project, path: path)
-		signatures.attributeHashEventsTo(hashEventSourceOf(isStdlibSource, isRuntimeSource: isRuntimeSource))
-
-		// Derived here, once, before any file's declarations are folded, so every later reader (the
-		// type-name admission, the sweep's `module`-tier questions, the real parse, the constant
-		// evaluator) reads an index rather than re-deriving a string from a path. ⚠ The anchor is chosen
-		// by where the file lives, not by whose it is — see `moduleDirectoryForFile`.
-		let moduleDirectory = moduleDirectoryForFile(project, path: path, livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), livesUnderRuntimeDirectory: isRuntimeSource)
-		signatures.recordFileModuleDirectory(path, moduleDirectory: moduleDirectory, isLibrary: isStdlibSource or isRuntimeSource)
-
-		let reader = Parser.structuralReader(tokens, job: parseJobFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, buildsBodies: false), signatures: signatures, anchors: project.readerAnchors)
-		let headers = reader.topLevelDeclarationHeaders()
-
-		if isRuntimeSource 'declaresNamesOnlyTheLibraryMeans'
-			for header in headers.types 'eachRuntimeHeader'
-				signatures.noteDeclaredName(header.name)
-			end 'eachRuntimeHeader'
-
-			for binding in headers.bindings 'eachRuntimeBinding'
-				signatures.noteDeclaredName(binding.name)
-			end 'eachRuntimeBinding'
-		end 'declaresNamesOnlyTheLibraryMeans' else 'declaresNamesOutsideItsTier'
-			extents.upsert(path.toString(), value: reader.blockExtents())
-
-			for header in headers.types 'eachHeader'
-				noteTopLevelTypeDeclaration(signatures, header: header, path: path, moduleDirectory: moduleDirectory, isStdlibSource: isStdlibSource)
-			end 'eachHeader'
-
-			for binding in headers.bindings 'eachBinding'
-				signatures.noteTopLevelBinding(binding.name, site: TopLevelBindingSite.create(binding.visibility, declFilePath: path))
-				signatures.noteDeclaredName(binding.name)
-			end 'eachBinding'
-		end 'declaresNamesOutsideItsTier'
-
-		for i in 0 upto tokens.count() 'eachToken'
-			let tok = try tokens.get(i) otherwise panic("noteWholeProgramTokenFactsIn: tokens.get OOB at {i} below count {tokens.count()}")
-
-			// A spawn inside a `default`'s expression makes its type a service only while the key is live,
-			// so a program that never reaches the key spawns nothing and keeps its single-threaded runtime.
-			if defaultDeclarationAt(tokens, index: i) 'aDefaultDeclaration'
-				let declaration = defaultDeclarationFrom(tokens, index: i, path: path, isStdlibSource: isStdlibSource)
-				signatures.noteDefaultDeclaration(declaration)
-				gate = SpawnGate.defaultOf(declaration)
-				gateEnd = declaration.exprEnd
-			end 'aDefaultDeclaration'
-
-			if tokenIsTheSpawnKeyword(tok) 'aSpawnMayStartHere'
-				noteServiceSpawnFollowing(signatures, tokens: tokens, index: i, path: path, gate: gate.clone() if i < gateEnd else SpawnGate.always)
-			end 'aSpawnMayStartHere'
-
-			if tok.kind != TokenKind.type 'notATypeKeyword'
-				continue
-			end 'notATypeKeyword'
-
-			let nameTok = try tokens.get(i + 1) otherwise break
-
-			if nameTok.kind != TokenKind.identifier 'malformedDeclaration'
-				continue
-			end 'malformedDeclaration'
-
-			if not headerDeclaresTheArrayLiteralMarker(tokens, headerStart: (i + 2) as ElementIndex) 'notAConformer'
-				continue
-			end 'notAConformer'
-
-			signatures.noteArrayLiteralConformer(nameTok.value, isStdlibSource: isStdlibSource)
-		end 'eachToken'
+		let facts = try tokenFactsFor(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource, handedOver: handedOver)
+		facts.noteInto(signatures, path: path, isStdlibSource: isStdlibSource, extents: extents)
 	end 'eachFile'
 end 'noteWholeProgramTokenFactsIn'
+
+function tokenFactsFor(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, handedOver DiscoveredTokenFacts) returns FileTokenFacts throws CompileError
+	if let held = try handedOver.heldFor(path) 'handedOver'
+		return held
+	end 'handedOver'
+
+	return try discoveredTokenFactsOf(project, signatures: signatures, path: path, isStdlibSource: isStdlibSource)
+end 'tokenFactsFor'
+
+enum NoFactsHeld implements Error
+	notDiscovered
+end 'NoFactsHeld'
+
+module type DiscoveredTokenFacts
+	var byPath as TokenFactsByPath
+
+	module static function none() returns DiscoveredTokenFacts
+		return Self{byPath: TokenFactsByPath.create()}
+	end 'none'
+
+	function hold(path FilePath, facts FileTokenFacts)
+		self.byPath.upsert(path.toString(), value: facts)
+	end 'hold'
+
+	function heldFor(path FilePath) returns FileTokenFacts throws NoFactsHeld
+		return try self.byPath.get(path.toString()) otherwise throw NoFactsHeld.notDiscovered
+	end 'heldFor'
+end 'DiscoveredTokenFacts'
+
+typealias TokenFactsByPath = Map with (String, FileTokenFacts)
+typealias TokenFactEventArray = Array with TokenFactEvent
+
+union TokenFactEvent
+	defaultDeclaration(declaration DefaultDeclaration)
+	serviceSpawn(typeName ByteArray, member ByteArray, gate SpawnGate, line LineNumber, column ColumnNumber)
+	arrayLiteralConformer(name ByteArray)
+
+	function noteInto(signatures ProgramSignatures, path FilePath, isStdlibSource bool)
+		match self 'event'
+			defaultDeclaration(declaration) then signatures.noteDefaultDeclaration(declaration)
+			serviceSpawn(typeName, member, gate, line, column) then signatures.noteServiceSpawnCandidate(typeName, member: member, gate: gate, declFilePath: path, line: line, column: column)
+			arrayLiteralConformer(name) then signatures.noteArrayLiteralConformer(name, isStdlibSource: isStdlibSource)
+		end 'event'
+	end 'noteInto'
+end 'TokenFactEvent'
+
+union FileDeclarationHeaders
+	runtimeTier(headers TopLevelDeclarationHeaders)
+	otherTiers(headers TopLevelDeclarationHeaders, extents BlockExtents)
+
+	function isRuntimeTier() returns bool
+		return match self 'tier'
+			runtimeTier gives true
+			otherTiers gives false
+		end 'tier'
+	end 'isRuntimeTier'
+
+	function noteInto(signatures ProgramSignatures, path FilePath, moduleDirectory String, isStdlibSource bool, extents BlockExtentsByPath)
+		match self 'tier'
+			runtimeTier(headers) then noteRuntimeTierDeclarations(signatures, headers: headers)
+			otherTiers(headers, built) then noteOtherTierDeclarations(signatures, headers: headers, path: path, moduleDirectory: moduleDirectory, isStdlibSource: isStdlibSource, built: built, extents: extents)
+		end 'tier'
+	end 'noteInto'
+end 'FileDeclarationHeaders'
+
+function noteRuntimeTierDeclarations(signatures ProgramSignatures, headers TopLevelDeclarationHeaders)
+	for header in headers.types 'eachRuntimeHeader'
+		signatures.noteDeclaredName(header.name)
+	end 'eachRuntimeHeader'
+
+	for binding in headers.bindings 'eachRuntimeBinding'
+		signatures.noteDeclaredName(binding.name)
+	end 'eachRuntimeBinding'
+end 'noteRuntimeTierDeclarations'
+
+function noteOtherTierDeclarations(signatures ProgramSignatures, headers TopLevelDeclarationHeaders, path FilePath, moduleDirectory String, isStdlibSource bool, built BlockExtents, extents BlockExtentsByPath)
+	extents.upsert(path.toString(), value: built)
+
+	for header in headers.types 'eachHeader'
+		noteTopLevelTypeDeclaration(signatures, header: header, path: path, moduleDirectory: moduleDirectory, isStdlibSource: isStdlibSource)
+	end 'eachHeader'
+
+	for binding in headers.bindings 'eachBinding'
+		signatures.noteTopLevelBinding(binding.name, site: TopLevelBindingSite.create(binding.visibility, declFilePath: path))
+		signatures.noteDeclaredName(binding.name)
+	end 'eachBinding'
+end 'noteOtherTierDeclarations'
+
+type FileTokenFacts
+	let moduleDirectory as String
+	let declarations as FileDeclarationHeaders
+	let events as TokenFactEventArray
+
+	static function create(moduleDirectory String, declarations FileDeclarationHeaders, events TokenFactEventArray) returns FileTokenFacts
+		return Self{moduleDirectory: moduleDirectory, declarations: declarations, events: events}
+	end 'create'
+
+	function noteInto(signatures ProgramSignatures, path FilePath, isStdlibSource bool, extents BlockExtentsByPath)
+		let isRuntimeSource = self.declarations.isRuntimeTier()
+		signatures.attributeHashEventsTo(hashEventSourceOf(isStdlibSource, isRuntimeSource: isRuntimeSource))
+		signatures.recordFileModuleDirectory(path, moduleDirectory: self.moduleDirectory, isLibrary: isStdlibSource or isRuntimeSource)
+		self.declarations.noteInto(signatures, path: path, moduleDirectory: self.moduleDirectory, isStdlibSource: isStdlibSource, extents: extents)
+
+		for event in self.events 'eachEvent'
+			event.noteInto(signatures, path: path, isStdlibSource: isStdlibSource)
+		end 'eachEvent'
+	end 'noteInto'
+end 'FileTokenFacts'
+
+function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool) returns FileTokenFacts throws CompileError
+	let tokens = try queryActiveTokens(project, path: path)
+	var gate = SpawnGate.always
+	var gateEnd = 0 as ElementIndex
+	var events = TokenFactEventArray.create()
+	let isRuntimeSource = not isStdlibSource and isRuntimeSourceFile(project, path: path)
+	let livesUnderTheLibrary = livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource)
+
+	// Derived here, once, before any file's declarations are folded, so every later reader (the
+	// type-name admission, the sweep's `module`-tier questions, the real parse, the constant
+	// evaluator) reads an index rather than re-deriving a string from a path. ⚠ The anchor is chosen
+	// by where the file lives, not by whose it is — see `moduleDirectoryForFile`.
+	let moduleDirectory = moduleDirectoryForFile(project, path: path, livesUnderStdlibDirectory: livesUnderTheLibrary, livesUnderRuntimeDirectory: isRuntimeSource)
+
+	let job = parseJobFrom(project, path: path, namespace: namespaceForModuleDirectory(moduleDirectory), livesUnderStdlibDirectory: livesUnderTheLibrary, isStdlibSource: isStdlibSource, buildsBodies: false)
+	let reader = Parser.structuralReader(tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
+	let headers = reader.topLevelDeclarationHeaders()
+
+	let declarations = FileDeclarationHeaders.runtimeTier(headers) if isRuntimeSource else FileDeclarationHeaders.otherTiers(headers, extents: reader.blockExtents())
+
+	for i in 0 upto tokens.count() 'eachToken'
+		let tok = try tokens.get(i) otherwise panic("discoveredTokenFactsOf: tokens.get OOB at {i} below count {tokens.count()}")
+
+		// A spawn inside a `default`'s expression makes its type a service only while the key is live,
+		// so a program that never reaches the key spawns nothing and keeps its single-threaded runtime.
+		if defaultDeclarationAt(tokens, index: i) 'aDefaultDeclaration'
+			let declaration = defaultDeclarationFrom(tokens, index: i, path: path, isStdlibSource: isStdlibSource)
+			events.push(TokenFactEvent.defaultDeclaration(declaration))
+			gate = SpawnGate.defaultOf(declaration)
+			gateEnd = declaration.exprEnd
+		end 'aDefaultDeclaration'
+
+		if tokenIsTheSpawnKeyword(tok) 'aSpawnMayStartHere'
+			if let spawn = try serviceSpawnFollowing(tokens, index: i, gate: gate.clone() if i < gateEnd else SpawnGate.always) 'aServiceSpawn'
+				events.push(spawn)
+			end 'aServiceSpawn'
+		end 'aSpawnMayStartHere'
+
+		if tok.kind != TokenKind.type 'notATypeKeyword'
+			continue
+		end 'notATypeKeyword'
+
+		let nameTok = try tokens.get(i + 1) otherwise break
+
+		if nameTok.kind != TokenKind.identifier 'malformedDeclaration'
+			continue
+		end 'malformedDeclaration'
+
+		if not headerDeclaresTheArrayLiteralMarker(tokens, headerStart: (i + 2) as ElementIndex) 'notAConformer'
+			continue
+		end 'notAConformer'
+
+		events.push(TokenFactEvent.arrayLiteralConformer(nameTok.value))
+	end 'eachToken'
+
+	return FileTokenFacts.create(moduleDirectory, declarations: declarations, events: events)
+end 'discoveredTokenFactsOf'
 
 // Matches `spawn <Type> . <member> (` and nothing looser, reading the four tokens after the
 // already-matched `spawn` keyword at `index`.
@@ -900,36 +1187,41 @@ end 'noteWholeProgramTokenFactsIn'
 // service, because `bump` is an instance method — see `ServiceTargetVerdict`. A shape this probe
 // declines is still refused at the site: `Parser.parseSpawn` claims every `spawn <name>` the
 // grammar can reach.
-function noteServiceSpawnFollowing(signatures ProgramSignatures, tokens TokenArray, index ElementIndex, path FilePath, gate SpawnGate)
-	let typeTok = try tokens.get(index + 1) otherwise return
+function serviceSpawnFollowing(tokens TokenArray, index ElementIndex, gate SpawnGate) returns TokenFactEvent throws NoServiceSpawn
+	let typeTok = try tokens.get(index + 1) otherwise throw NoServiceSpawn.notOne
 
 	if not tokenCanBeAName(typeTok) 'notATypeName'
-		return
+		throw NoServiceSpawn.notOne
 	end 'notATypeName'
 
-	let dotTok = try tokens.get(index + 2) otherwise return
+	let dotTok = try tokens.get(index + 2) otherwise throw NoServiceSpawn.notOne
 
 	if dotTok.kind != TokenKind.dot 'notQualified'
-		return
+		throw NoServiceSpawn.notOne
 	end 'notQualified'
 
-	let memberTok = try tokens.get(index + 3) otherwise return
+	let memberTok = try tokens.get(index + 3) otherwise throw NoServiceSpawn.notOne
 
 	if not tokenCanBeAName(memberTok) 'notAMemberName'
-		return
+		throw NoServiceSpawn.notOne
 	end 'notAMemberName'
 
-	let openTok = try tokens.get(index + 4) otherwise return
+	let openTok = try tokens.get(index + 4) otherwise throw NoServiceSpawn.notOne
 
 	if openTok.kind != TokenKind.leftParen 'notACall'
-		return
+		throw NoServiceSpawn.notOne
 	end 'notACall'
 
 	// The `spawn` KEYWORD's position, not the type token's: it is the construct the note names, and it
 	// is what an author scanning for "where did this become a service?" is looking for.
-	let spawnTok = try tokens.get(index) otherwise return
-	signatures.noteServiceSpawnCandidate(typeTok.value, member: memberTok.value, gate: gate, declFilePath: path, line: spawnTok.line, column: spawnTok.column)
-end 'noteServiceSpawnFollowing'
+	let spawnTok = try tokens.get(index) otherwise panic("serviceSpawnFollowing: the spawn keyword at {index} was read by the caller")
+
+	return TokenFactEvent.serviceSpawn(typeTok.value, member: memberTok.value, gate: gate, line: spawnTok.line, column: spawnTok.column)
+end 'serviceSpawnFollowing'
+
+enum NoServiceSpawn implements Error
+	notOne
+end 'NoServiceSpawn'
 
 // The walk advances while the token could belong to a header and stops the moment one could not, so
 // it can never read past the declaration it was started on.
@@ -1009,7 +1301,16 @@ end 'tokenKindBelongsInATypeHeader'
 // the modules it had already passed. Naming the whole stdlib side first and deciding against a
 // complete picture also makes the mint independent of the order the loader happened to enumerate
 // `stdlib/` in.
-function contestStdlibDeclarationsAgainstUserNames(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
+type StdlibDeclarations
+	export let names as ByteArrayArray
+	export let files as FilePathArray
+
+	static function create(names ByteArrayArray, files FilePathArray) returns StdlibDeclarations
+		return Self{names: names, files: files}
+	end 'create'
+end 'StdlibDeclarations'
+
+function stdlibDeclarationsIn(project Project, stdlibPaths MaxonSourcePathArray) returns StdlibDeclarations throws CompileError
 	var declaredNames = ByteArrayArray.create()
 	var declaringFiles = FilePathArray.create()
 
@@ -1017,7 +1318,7 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 		let tokens = try queryActiveTokens(project, path: path)
 
 		for i in 0 upto tokens.count() 'eachToken'
-			let tok = try tokens.get(i) otherwise panic("contestStdlibDeclarationsAgainstUserNames: tokens.get OOB at {i} below count {tokens.count()}")
+			let tok = try tokens.get(i) otherwise panic("stdlibDeclarationsIn: tokens.get OOB at {i} below count {tokens.count()}")
 
 			if not declaresANominalTypeName(tok.kind) 'notADeclarationKeyword'
 				continue
@@ -1034,13 +1335,18 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 		end 'eachToken'
 	end 'eachStdlibFile'
 
-	signatures.noteStdlibDeclaredTypeNames(declaredNames)
+	return StdlibDeclarations.create(declaredNames, files: declaringFiles)
+end 'stdlibDeclarationsIn'
 
-	for name in declaredNames 'eachDeclaredName'
+function contestStdlibDeclarationsAgainstUserNames(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
+	let declared = try stdlibDeclarationsIn(project, stdlibPaths: stdlibPaths)
+	signatures.noteStdlibDeclaredTypeNames(declared.names)
+
+	for name in declared.names 'eachDeclaredName'
 		signatures.contestStdlibTypeName(name)
 	end 'eachDeclaredName'
 
-	signatures.settleStdlibShadowSpellings(declaredNames, declaringFiles: declaringFiles)
+	signatures.settleStdlibShadowSpellings(declared.names, declaringFiles: declared.files)
 	adoptShadowSpellings(project, spellings: signatures.shadowSpellings())
 
 	if not signatures.hasStdlibShadowRenames() 'nothingContested'
@@ -1515,6 +1821,10 @@ end 'parsedHere'
 // What a compile keeps of one file's parse, wherever it ran: a clean artifact is memoized, and a refusal is
 // reported.
 module function landParseOutcome(project Project, path FilePath, outcome FileParseOutcome, stamp ParseStamp) returns FileParseArtifact
+	if isLibrarySourceFile(project, path: path) 'aLibraryParse'
+		project.db.libraryTally.parsed = project.db.libraryTally.parsed + 1
+	end 'aLibraryParse'
+
 	return match outcome 'outcome'
 		parsed(artifact) gives memoizedArtifact(project, path: path, artifact: artifact, stamp: stamp)
 		failed(error, blame, salvaged) gives reportFailedParse(project, path: path, error: error, blame: blame, salvaged: salvaged)
@@ -1578,9 +1888,9 @@ end 'parseStoppedInside'
 // cannot disagree about what a parse depends on.
 function memoizedArtifact(project Project, path FilePath, artifact FileParseArtifact, stamp ParseStamp) returns FileParseArtifact
 	artifact.module.assertAllBlocksTerminated()
-	project.db.parseCache.upsert(path, value: ParseMemo.create(artifact, keyHash: stamp.keyHash))
-	stashParse(project, plan: stamp.sharing, artifact: artifact)
-	return artifact
+	let canonical = stashParse(project, plan: stamp.sharing, artifact: artifact)
+	project.db.parseCache.upsert(path, value: ParseMemo.create(canonical, keyHash: stamp.keyHash))
+	return canonical
 end 'memoizedArtifact'
 
 export enum NamespaceDirectoryCheck
@@ -1595,10 +1905,12 @@ export function queryAllModule(project Project, directories NamespaceDirectoryCh
 
 	let merged = try queryAllModuleOn(project, pool: pool, directories: directories) otherwise (err) 'frontEndFailed'
 		pool.close(project)
+		finishLibraryCache(project)
 		throw err
 	end 'frontEndFailed'
 
 	pool.close(project)
+	finishLibraryCache(project)
 	return merged
 end 'queryAllModule'
 
@@ -1632,6 +1944,25 @@ function queryAllModuleOn(project Project, pool FrontEndPool, directories Namesp
 	project.db.allModuleCache = ModuleMemo.create(merged, keyHash: compositeSourceHash(project), computed: true)
 	return merged
 end 'queryAllModuleOn'
+
+// Runs once per `queryAllModule`, on a refused front end too. A stashed parse stays sound after a
+// refusal elsewhere in the program: its key covers its content, variant, library hash, overrides
+// and liveness, and it is validated again when loaded. The resets are for a retained `Project`,
+// which compiles again.
+function finishLibraryCache(project Project)
+	persistSharedEntries(project)
+	persistStashedParses(project)
+
+	let tally = project.db.libraryTally
+
+	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.compiler).debug("library cache — baseline {project.db.libraryBaseline.name}, {tally.loaded} loaded, {tally.written} written, {tally.rejected} rejected, {tally.swept} library file(s) swept, {tally.parsed} library file(s) parsed")
+	end 'debugging'
+
+	project.session.fileMemos.library.totals.add(tally)
+	project.db.libraryTally = LibraryCacheTally.create()
+	project.db.libraryBaseline = LibraryBaselineState.unused
+end 'finishLibraryCache'
 
 function refuseUnnameableNamespaceDirectories(project Project, pool FrontEndPool) throws CompileError
 	// On the pool first, so the signature query reads memoized token streams rather than lexing
@@ -2416,13 +2747,17 @@ end 'isCompilerWrittenDeclaration'
 // once per file from the anchor only it holds, and a second derivation is a second chance to pick a
 // different anchor for the same file.
 function parseJobFor(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, buildsBodies bool) returns ParseJob
+	return parseJobFrom(project, path: path, namespace: signatures.namespaceOf(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
+end 'parseJobFor'
+
+function parseJobFrom(project Project, path FilePath, namespace String, livesUnderStdlibDirectory bool, isStdlibSource bool, buildsBodies bool) returns ParseJob
 	// Probed ONCE and handed to both readers: the tier bit the parser carries and the declaration
 	// exemption derived from it. Two probes would be two chances to classify one file two ways inside
 	// one compile, which is the drift this routine exists to prevent.
 	let isRuntimeSource = isRuntimeSourceFile(project, path: path)
 
-	return ParseJob.create(path, namespace: signatures.namespaceOf(path), isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: project.compilerWrittenSources.mintedNamesIn(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
-end 'parseJobFor'
+	return ParseJob.create(path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: project.compilerWrittenSources.mintedNamesIn(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
+end 'parseJobFrom'
 
 // A reader over one file for a pass that folds what it reads into the index rather than building an artifact —
 // the sweep and the whole-program declaration folds — sharing the project's anchors.

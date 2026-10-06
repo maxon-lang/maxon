@@ -529,9 +529,66 @@ export type InterfaceMethodSig
 	export static function create(name ByteArray, paramNames ByteArrayArray, paramTypeNames ByteArrayArray, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray, nameLine LineNumber, nameColumn ColumnNumber) returns InterfaceMethodSig
 		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		cacheWriteByteArrayArray(writer, value: self.paramNames)
+		cacheWriteByteArrayArray(writer, value: self.paramTypeNames)
+		writer.bytes(self.returnTypeName)
+		writer.flag(self.isStatic)
+		cacheWriteThrowsClause(writer, value: self.throwsClause)
+		cacheWriteBoolArray(writer, value: self.paramIsBuffer)
+		writer.unsigned(self.nameLine as CacheUnsigned)
+		writer.unsigned(self.nameColumn as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns InterfaceMethodSig throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_paramNames = try cacheReadByteArrayArray(reader)
+		let f_paramTypeNames = try cacheReadByteArrayArray(reader)
+		let f_returnTypeName = try reader.bytes()
+		let f_isStatic = try reader.flag()
+		let f_throwsClause = try cacheReadThrowsClause(reader)
+		let f_paramIsBuffer = try cacheReadBoolArray(reader)
+		let f_nameLine = (try reader.unsigned()) as LineNumber
+		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
+
+		return Self{name: f_name, paramNames: f_paramNames, paramTypeNames: f_paramTypeNames, returnTypeName: f_returnTypeName, isStatic: f_isStatic, throwsClause: f_throwsClause, paramIsBuffer: f_paramIsBuffer, nameLine: f_nameLine, nameColumn: f_nameColumn}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize72
+		return sizeof(InterfaceMethodSig) as CacheSize72
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'InterfaceMethodSig'
 
 export typealias InterfaceMethodSigArray = Array with InterfaceMethodSig
+
+// @generated library-cache begin
+function cacheWriteInterfaceMethodSigArray(writer LibraryCacheWriter, value InterfaceMethodSigArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteInterfaceMethodSigArray'
+
+function cacheReadInterfaceMethodSigArray(reader LibraryCacheReader) returns InterfaceMethodSigArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = InterfaceMethodSigArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try InterfaceMethodSig.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadInterfaceMethodSigArray'
+
+// @generated library-cache end
 
 // ⭐ **THE ONE `[static ]name(p0 t0, p1 t1) returns ret` SPELLING**, shared by the interface (expected) and
 // impl (actual) renderers so the two halves of a wrong-signature message cannot drift in format.
@@ -672,6 +729,31 @@ export type IrInterface
 	export static function create(name ByteArray, methods InterfaceMethodSigArray, extendsInterfaces ByteArrayArray, associatedTypeNames ByteArrayArray, declFilePath FilePath) returns IrInterface
 		return Self{name: name, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames, declFilePath: declFilePath}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		cacheWriteInterfaceMethodSigArray(writer, value: self.methods)
+		cacheWriteByteArrayArray(writer, value: self.extendsInterfaces)
+		cacheWriteByteArrayArray(writer, value: self.associatedTypeNames)
+		writer.text(self.declFilePath.toString())
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns IrInterface throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_methods = try cacheReadInterfaceMethodSigArray(reader)
+		let f_extendsInterfaces = try cacheReadByteArrayArray(reader)
+		let f_associatedTypeNames = try cacheReadByteArrayArray(reader)
+		let f_declFilePath = try reader.path()
+
+		return Self{name: f_name, methods: f_methods, extendsInterfaces: f_extendsInterfaces, associatedTypeNames: f_associatedTypeNames, declFilePath: f_declFilePath}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(IrInterface) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'IrInterface'
 
 // ⭐ **WHERE `name` SITS IN A LIST OF DECLARED NAMES** — the compiler's ONE positional scan over one, and the
@@ -878,9 +960,58 @@ end 'declAssociatedBinding'
 
 export typealias IrInterfaceMap = Map with (ByteArray, IrInterface)
 
+// @generated library-cache begin
+export function cacheWriteIrInterfaceMap(writer LibraryCacheWriter, value IrInterfaceMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteIrInterfaceMap'
+
+export function cacheReadIrInterfaceMap(reader LibraryCacheReader) returns IrInterfaceMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = IrInterfaceMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try IrInterface.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadIrInterfaceMap'
+
+// @generated library-cache end
+
 // The per-file artifact contribution form — declaration order, folded into the
 // whole-program `IrInterfaceMap` by `mergeArtifact`.
 export typealias IrInterfaceArray = Array with IrInterface
+
+// @generated library-cache begin
+export function cacheWriteIrInterfaceArray(writer LibraryCacheWriter, value IrInterfaceArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteIrInterfaceArray'
+
+export function cacheReadIrInterfaceArray(reader LibraryCacheReader) returns IrInterfaceArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = IrInterfaceArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try IrInterface.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadIrInterfaceArray'
+
+// @generated library-cache end
 
 // The SHARED EMPTY `with` argument list every conformance that writes no `with` clause holds —
 // which is every conformance in the corpus but the associated-type specs. `InterfaceConformance` binds
@@ -911,9 +1042,54 @@ export type InterfaceConformance
 	export static function withoutBindings(interfaceName ByteArray) returns InterfaceConformance
 		return Self{interfaceName: interfaceName, withArgs: sharedEmptyWithArgs, withArgSpellings: sharedEmptyWithArgs}
 	end 'withoutBindings'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.interfaceName)
+		cacheWriteByteArrayArray(writer, value: self.withArgs)
+		cacheWriteByteArrayArray(writer, value: self.withArgSpellings)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns InterfaceConformance throws LibraryCacheDamage
+		let f_interfaceName = try reader.bytes()
+		let f_withArgs = try cacheReadByteArrayArray(reader)
+		let f_withArgSpellings = try cacheReadByteArrayArray(reader)
+
+		return Self{interfaceName: f_interfaceName, withArgs: f_withArgs, withArgSpellings: f_withArgSpellings}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(InterfaceConformance) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'InterfaceConformance'
 
 export typealias InterfaceConformanceArray = Array with InterfaceConformance
+
+// @generated library-cache begin
+function cacheWriteInterfaceConformanceArray(writer LibraryCacheWriter, value InterfaceConformanceArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteInterfaceConformanceArray'
+
+function cacheReadInterfaceConformanceArray(reader LibraryCacheReader) returns InterfaceConformanceArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = InterfaceConformanceArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try InterfaceConformance.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadInterfaceConformanceArray'
+
+// @generated library-cache end
 
 // A `type X implements I1, I2` conformance declaration. Carries the type NAME token
 // position (line/column/file) so the E3015/E3016 diagnostic lands ON the type name.
@@ -927,9 +1103,58 @@ export type ConformanceDecl
 	export static function create(typeName ByteArray, interfaces InterfaceConformanceArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns ConformanceDecl
 		return Self{typeName: typeName, interfaces: interfaces, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.typeName)
+		cacheWriteInterfaceConformanceArray(writer, value: self.interfaces)
+		writer.unsigned(self.nameLine as CacheUnsigned)
+		writer.unsigned(self.nameColumn as CacheUnsigned)
+		writer.text(self.filePath.toString())
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ConformanceDecl throws LibraryCacheDamage
+		let f_typeName = try reader.bytes()
+		let f_interfaces = try cacheReadInterfaceConformanceArray(reader)
+		let f_nameLine = (try reader.unsigned()) as LineNumber
+		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
+		let f_filePath = try reader.path()
+
+		return Self{typeName: f_typeName, interfaces: f_interfaces, nameLine: f_nameLine, nameColumn: f_nameColumn, filePath: f_filePath}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(ConformanceDecl) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ConformanceDecl'
 
 export typealias ConformanceDeclArray = Array with ConformanceDecl
+
+// @generated library-cache begin
+export function cacheWriteConformanceDeclArray(writer LibraryCacheWriter, value ConformanceDeclArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteConformanceDeclArray'
+
+export function cacheReadConformanceDeclArray(reader LibraryCacheReader) returns ConformanceDeclArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ConformanceDeclArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ConformanceDecl.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadConformanceDeclArray'
+
+// @generated library-cache end
 
 // ⭐ **WHERE A `<Type> from "…"` CONSTRUCTION WAS WRITTEN** — the sugar for `<Type>.init(<literal>)`,
 // which the language allows only for a type declaring `implements InitableFromStringLiteral`.
@@ -959,9 +1184,58 @@ export type LiteralInitSite
 	export static function create(typeName ByteArray, interfaceName ByteArray, nameLine LineNumber, nameColumn ColumnNumber, filePath FilePath) returns LiteralInitSite
 		return Self{typeName: typeName, interfaceName: interfaceName, nameLine: nameLine, nameColumn: nameColumn, filePath: filePath}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.typeName)
+		writer.bytes(self.interfaceName)
+		writer.unsigned(self.nameLine as CacheUnsigned)
+		writer.unsigned(self.nameColumn as CacheUnsigned)
+		writer.text(self.filePath.toString())
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns LiteralInitSite throws LibraryCacheDamage
+		let f_typeName = try reader.bytes()
+		let f_interfaceName = try reader.bytes()
+		let f_nameLine = (try reader.unsigned()) as LineNumber
+		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
+		let f_filePath = try reader.path()
+
+		return Self{typeName: f_typeName, interfaceName: f_interfaceName, nameLine: f_nameLine, nameColumn: f_nameColumn, filePath: f_filePath}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(LiteralInitSite) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'LiteralInitSite'
 
 export typealias LiteralInitSiteArray = Array with LiteralInitSite
+
+// @generated library-cache begin
+export function cacheWriteLiteralInitSiteArray(writer LibraryCacheWriter, value LiteralInitSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteLiteralInitSiteArray'
+
+export function cacheReadLiteralInitSiteArray(reader LibraryCacheReader) returns LiteralInitSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = LiteralInitSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try LiteralInitSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadLiteralInitSiteArray'
+
+// @generated library-cache end
 
 // The outcome of resolving an interface NAME to its definition — a synthesized builtin
 // or a user-declared one, else `notFound` (which `checkConformance` renders as E3015).
@@ -1186,6 +1460,29 @@ end 'CollectedInterfaceMethod'
 export typealias CollectedInterfaceMethodArray = Array with CollectedInterfaceMethod
 
 export typealias InterfaceNameSet = Set with ByteArray
+
+// @generated library-cache begin
+export function cacheWriteInterfaceNameSet(writer LibraryCacheWriter, value InterfaceNameSet)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.bytes(item)
+	end 'eachItem'
+end 'cacheWriteInterfaceNameSet'
+
+export function cacheReadInterfaceNameSet(reader LibraryCacheReader) returns InterfaceNameSet throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = InterfaceNameSet.create()
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.bytes()
+		result.insert(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadInterfaceNameSet'
+
+// @generated library-cache end
 
 // ⭐ **THE INTERFACE AN `interfaceRef` TYPE NAMES — the ONE place its id becomes a name.**
 // That name is what the witness label is built from

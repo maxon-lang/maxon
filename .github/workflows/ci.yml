@@ -65,6 +65,7 @@ on:
       - 'scripts/fetch-vendor.sh'
       - 'scripts/fixpoint.sh'
       - 'scripts/lib/**'
+      - 'scripts/library-cache/**'
       - 'scripts/seed-shim/**'
       - '!.github/**'
       - '.github/workflows/ci.yml'
@@ -113,6 +114,10 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v5
+
+      - name: Library cache codecs
+        if: matrix.target == 'x64-linux'
+        run: python3 scripts/library-cache/generate-codecs.py --check
 
       # The seed is the binary alone; `scripts/fetch-seed.sh` says why and is the one place that fetches it.
       - name: Seed from the last release

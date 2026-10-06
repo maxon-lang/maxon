@@ -9,6 +9,36 @@ export enum GenericArgumentKind
 	enumeration
 end 'GenericArgumentKind'
 
+// @generated library-cache begin
+let CacheCasesGenericArgumentKind = [GenericArgumentKind.integer, GenericArgumentKind.float, GenericArgumentKind.boolean, GenericArgumentKind.string, GenericArgumentKind.character, GenericArgumentKind.rangedAlias, GenericArgumentKind.record, GenericArgumentKind.enumeration]
+
+function cacheReadGenericArgumentKind(reader LibraryCacheReader) returns GenericArgumentKind throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesGenericArgumentKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadGenericArgumentKind'
+
+function cacheTableAgreesGenericArgumentKind() returns bool
+	let declared = GenericArgumentKind.allCases
+
+	if CacheCasesGenericArgumentKind.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesGenericArgumentKind.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesGenericArgumentKind'
+
+// @generated library-cache end
+
 export type GenericFunctionArgument
 	export let kind as GenericArgumentKind
 	export let name as ByteArray
@@ -33,17 +63,151 @@ export type GenericFunctionArgument
 	export function sameAs(other GenericFunctionArgument) returns bool
 		return self.kind == other.kind and self.name.equals(other.name)
 	end 'sameAs'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.kind.ordinal as CacheUnsigned)
+		writer.bytes(self.name)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns GenericFunctionArgument throws LibraryCacheDamage
+		let f_kind = try cacheReadGenericArgumentKind(reader)
+		let f_name = try reader.bytes()
+
+		return Self{kind: f_kind, name: f_name}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(GenericFunctionArgument) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'GenericFunctionArgument'
 
 export typealias GenericFunctionArgumentArray = Array with GenericFunctionArgument
+
+// @generated library-cache begin
+function cacheWriteGenericFunctionArgumentArray(writer LibraryCacheWriter, value GenericFunctionArgumentArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteGenericFunctionArgumentArray'
+
+function cacheReadGenericFunctionArgumentArray(reader LibraryCacheReader) returns GenericFunctionArgumentArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = GenericFunctionArgumentArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try GenericFunctionArgument.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadGenericFunctionArgumentArray'
+
+// @generated library-cache end
 
 export enum GenericParamSlot
 	concrete
 	typeParameter
 end 'GenericParamSlot'
 
+// @generated library-cache begin
+let CacheCasesGenericParamSlot = [GenericParamSlot.concrete, GenericParamSlot.typeParameter]
+
+function cacheReadGenericParamSlot(reader LibraryCacheReader) returns GenericParamSlot throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesGenericParamSlot.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadGenericParamSlot'
+
+function cacheTableAgreesGenericParamSlot() returns bool
+	let declared = GenericParamSlot.allCases
+
+	if CacheCasesGenericParamSlot.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesGenericParamSlot.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesGenericParamSlot'
+
+module function cacheEnumTablesAgreeInCompilerGenericFunctions() returns bool
+	if not cacheTableAgreesGenericArgumentKind() 'disagreesCacheTableAgreesGenericArgumentKind'
+		return false
+	end 'disagreesCacheTableAgreesGenericArgumentKind'
+
+	if not cacheTableAgreesGenericParamSlot() 'disagreesCacheTableAgreesGenericParamSlot'
+		return false
+	end 'disagreesCacheTableAgreesGenericParamSlot'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerGenericFunctions'
+
+// @generated library-cache end
+
 export typealias GenericParamSlotArray = Array with GenericParamSlot
+
+// @generated library-cache begin
+function cacheWriteGenericParamSlotArray(writer LibraryCacheWriter, value GenericParamSlotArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item.ordinal as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteGenericParamSlotArray'
+
+function cacheReadGenericParamSlotArray(reader LibraryCacheReader) returns GenericParamSlotArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = GenericParamSlotArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadGenericParamSlot(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadGenericParamSlotArray'
+
+// @generated library-cache end
+
 export typealias TypeParamIndexArray = Array with ElementIndex
+
+// @generated library-cache begin
+function cacheWriteTypeParamIndexArray(writer LibraryCacheWriter, value TypeParamIndexArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteTypeParamIndexArray'
+
+function cacheReadTypeParamIndexArray(reader LibraryCacheReader) returns TypeParamIndexArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = TypeParamIndexArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ElementIndex
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadTypeParamIndexArray'
+
+// @generated library-cache end
 
 export let ConcreteParamTypeParamIndex = 0 as ElementIndex
 
@@ -96,10 +260,97 @@ export type GenericFunctionTemplate
 
 		return overloadRegistrationName(self.key, suffix: suffix.toByteArray())
 	end 'instanceName'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.key)
+		writer.text(self.declFilePath.toString())
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		cacheWriteByteArrayArray(writer, value: self.typeParamNames)
+		cacheWriteByteArrayArray(writer, value: self.paramNames)
+		cacheWriteGenericParamSlotArray(writer, value: self.paramSlots)
+		cacheWriteTypeParamIndexArray(writer, value: self.paramTypeParams)
+		cacheWriteWhereConstraintArray(writer, value: self.constraints)
+		writer.flag(self.takesReceiver)
+		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns GenericFunctionTemplate throws LibraryCacheDamage
+		let f_key = try reader.bytes()
+		let f_declFilePath = try reader.path()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_typeParamNames = try cacheReadByteArrayArray(reader)
+		let f_paramNames = try cacheReadByteArrayArray(reader)
+		let f_paramSlots = try cacheReadGenericParamSlotArray(reader)
+		let f_paramTypeParams = try cacheReadTypeParamIndexArray(reader)
+		let f_constraints = try cacheReadWhereConstraintArray(reader)
+		let f_takesReceiver = try reader.flag()
+		let f_visibility = try cacheReadVisibility(reader)
+
+		return Self{key: f_key, declFilePath: f_declFilePath, line: f_line, column: f_column, typeParamNames: f_typeParamNames, paramNames: f_paramNames, paramSlots: f_paramSlots, paramTypeParams: f_paramTypeParams, constraints: f_constraints, takesReceiver: f_takesReceiver, visibility: f_visibility}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize88
+		return sizeof(GenericFunctionTemplate) as CacheSize88
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'GenericFunctionTemplate'
 
 export typealias GenericFunctionTemplateArray = Array with GenericFunctionTemplate
+
+// @generated library-cache begin
+function cacheWriteGenericFunctionTemplateArray(writer LibraryCacheWriter, value GenericFunctionTemplateArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteGenericFunctionTemplateArray'
+
+function cacheReadGenericFunctionTemplateArray(reader LibraryCacheReader) returns GenericFunctionTemplateArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = GenericFunctionTemplateArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try GenericFunctionTemplate.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadGenericFunctionTemplateArray'
+
+// @generated library-cache end
+
 export typealias GenericFunctionTemplateMap = Map with (ByteArray, GenericFunctionTemplateArray)
+
+// @generated library-cache begin
+module function cacheWriteGenericFunctionTemplateMap(writer LibraryCacheWriter, value GenericFunctionTemplateMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteGenericFunctionTemplateArray(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteGenericFunctionTemplateMap'
+
+module function cacheReadGenericFunctionTemplateMap(reader LibraryCacheReader) returns GenericFunctionTemplateMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = GenericFunctionTemplateMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadGenericFunctionTemplateArray(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadGenericFunctionTemplateMap'
+
+// @generated library-cache end
 
 let GenericInstanceSuffixHead = "__with"
 
@@ -125,11 +376,110 @@ export type GenericFunctionInstance
 	export static function create(templateKey ByteArray, siteKey ByteArray, arguments GenericFunctionArgumentArray, instanceName ByteArray) returns Self
 		return Self{templateKey: templateKey, siteKey: siteKey, arguments: arguments, instanceName: instanceName}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.templateKey)
+		writer.bytes(self.siteKey)
+		cacheWriteGenericFunctionArgumentArray(writer, value: self.arguments)
+		writer.bytes(self.instanceName)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns GenericFunctionInstance throws LibraryCacheDamage
+		let f_templateKey = try reader.bytes()
+		let f_siteKey = try reader.bytes()
+		let f_arguments = try cacheReadGenericFunctionArgumentArray(reader)
+		let f_instanceName = try reader.bytes()
+
+		return Self{templateKey: f_templateKey, siteKey: f_siteKey, arguments: f_arguments, instanceName: f_instanceName}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(GenericFunctionInstance) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'GenericFunctionInstance'
 
 export typealias GenericFunctionInstanceArray = Array with GenericFunctionInstance
+
+// @generated library-cache begin
+module function cacheWriteGenericFunctionInstanceArray(writer LibraryCacheWriter, value GenericFunctionInstanceArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteGenericFunctionInstanceArray'
+
+module function cacheReadGenericFunctionInstanceArray(reader LibraryCacheReader) returns GenericFunctionInstanceArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = GenericFunctionInstanceArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try GenericFunctionInstance.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadGenericFunctionInstanceArray'
+
+// @generated library-cache end
+
 export typealias GenericFunctionInstanceMap = Map with (ByteArray, GenericFunctionInstance)
+
+// @generated library-cache begin
+module function cacheWriteGenericFunctionInstanceMap(writer LibraryCacheWriter, value GenericFunctionInstanceMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteGenericFunctionInstanceMap'
+
+module function cacheReadGenericFunctionInstanceMap(reader LibraryCacheReader) returns GenericFunctionInstanceMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = GenericFunctionInstanceMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try GenericFunctionInstance.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadGenericFunctionInstanceMap'
+
+// @generated library-cache end
+
 export typealias GenericFunctionInstancesBySite = Map with (ByteArray, GenericFunctionInstanceArray)
+
+// @generated library-cache begin
+module function cacheWriteGenericFunctionInstancesBySite(writer LibraryCacheWriter, value GenericFunctionInstancesBySite)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteGenericFunctionInstanceArray(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteGenericFunctionInstancesBySite'
+
+module function cacheReadGenericFunctionInstancesBySite(reader LibraryCacheReader) returns GenericFunctionInstancesBySite throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = GenericFunctionInstancesBySite.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadGenericFunctionInstanceArray(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadGenericFunctionInstancesBySite'
+
+// @generated library-cache end
 
 export type RequestedGenericInstances
 	export var byName as GenericFunctionInstanceMap

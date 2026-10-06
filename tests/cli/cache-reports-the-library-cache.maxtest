@@ -1,0 +1,44 @@
+let CaseDirName = "cache-reports-front-end-store"
+let ProgramDirName = "app"
+let OutputName = "program"
+
+test 'bare cache reports the library cache and how many entries it holds'
+	requireHeldOutsideCheckout(CaseDirName, check: CacheReportsTheLibraryCache.create())
+end 'bare cache reports the library cache and how many entries it holds'
+
+type CacheReportsTheLibraryCache implements OutsideCheckoutCase
+	static function create() returns CacheReportsTheLibraryCache
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+		_ = try requireLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, which: "the build that fills the library cache")
+
+		let reported = runWithCacheRoot([CacheCommandWord], cacheRoot: cacheRootIn(dir), workingDirectory: dir)
+		let said = "It wrote to stdout: {reported.stdout} and to stderr: {reported.stderr}"
+		try Expect.equal(reported.exitCode(), expected: 0, message: "`maxon {CacheCommandWord}` did not succeed over a cache holding a library cache. {said}")
+
+		var mentions = ListedWordArray.create()
+
+		for line in reported.stdout.split("\n") 'eachLine'
+			let unpathed = line.replace(dir.toString(), with: "")
+
+			if unpathed.contains(LibraryCacheDirName) 'namesTheLibrary'
+				mentions.push(try unpathed.split(LibraryCacheDirName).last() otherwise panic("{CaseDirName}: a split of a string containing its separator has a last part"))
+			end 'namesTheLibrary'
+		end 'eachLine'
+
+		try Expect.equal(mentions.count(), expected: 1, message: "`maxon {CacheCommandWord}` named the library cache on {mentions.count()} line(s) for one root holding one, so its reader cannot see what the library cache costs. {said}")
+
+		let state = try mentions.get(0) otherwise panic("{CaseDirName}: a list holding one line has a first line")
+
+		if let entries = try reportedTally(state) 'statesACount'
+			try Expect.greaterThan(entries, than: 0, message: "`maxon {CacheCommandWord}` reported an empty library cache after a build filled it. {said}")
+			return
+		end 'statesACount'
+
+		try Expect.fail("`maxon {CacheCommandWord}` stated no entry count for the library cache. {said}")
+	end 'requireHeldIn'
+end 'CacheReportsTheLibraryCache'

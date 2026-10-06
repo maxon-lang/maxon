@@ -4,6 +4,30 @@
 // for the compaction liveness bitmaps).
 export typealias BoolArray = Array with bool
 
+// @generated library-cache begin
+module function cacheWriteBoolArray(writer LibraryCacheWriter, value BoolArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.flag(item)
+	end 'eachItem'
+end 'cacheWriteBoolArray'
+
+module function cacheReadBoolArray(reader LibraryCacheReader) returns BoolArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = BoolArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.flag()
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadBoolArray'
+
+// @generated library-cache end
+
 // Visibility tier of a top-level declaration. Stamped by the parser at
 // declaration time; consumed by cross-file name resolution and the unused-export
 // check. `file` is the default (positively widened to `module`/`global`).
@@ -50,6 +74,36 @@ export enum Visibility
 	public
 end 'Visibility'
 
+// @generated library-cache begin
+let CacheCasesVisibility = [Visibility.file, Visibility.module, Visibility.global, Visibility.public]
+
+module function cacheReadVisibility(reader LibraryCacheReader) returns Visibility throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesVisibility.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadVisibility'
+
+function cacheTableAgreesVisibility() returns bool
+	let declared = Visibility.allCases
+
+	if CacheCasesVisibility.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesVisibility.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesVisibility'
+
+// @generated library-cache end
+
 // ⭐ **"IS THIS DECLARATION VISIBLE OUTSIDE ITS DECLARING FILE'S SUBTREE?" — ASKED ONCE.** `global` and
 // `public` are the same visibility (see the header above), so every reader that cares about REACH rather
 // than about the unused-export claim asks here instead of spelling `== global or == public`. That
@@ -93,7 +147,63 @@ export union SpelledFieldName
 	notABareName
 end 'SpelledFieldName'
 
+// @generated library-cache begin
+function cacheWriteSpelledFieldName(writer LibraryCacheWriter, value SpelledFieldName)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		bareName(a0) then cacheWriteSpelledFieldNameBareName(writer, a0: a0)
+		notABareName then break 'payload'
+	end 'payload'
+end 'cacheWriteSpelledFieldName'
+
+function cacheWriteSpelledFieldNameBareName(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteSpelledFieldNameBareName'
+
+function cacheReadSpelledFieldName(reader LibraryCacheReader) returns SpelledFieldName throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadSpelledFieldNameBareName(reader)
+		1 gives SpelledFieldName.notABareName
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadSpelledFieldName'
+
+function cacheReadSpelledFieldNameBareName(reader LibraryCacheReader) returns SpelledFieldName throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return SpelledFieldName.bareName(a0)
+end 'cacheReadSpelledFieldNameBareName'
+
+// @generated library-cache end
+
 export typealias SpelledFieldNameArray = Array with SpelledFieldName
+
+// @generated library-cache begin
+function cacheWriteSpelledFieldNameArray(writer LibraryCacheWriter, value SpelledFieldNameArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		cacheWriteSpelledFieldName(writer, value: item)
+	end 'eachItem'
+end 'cacheWriteSpelledFieldNameArray'
+
+function cacheReadSpelledFieldNameArray(reader LibraryCacheReader) returns SpelledFieldNameArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = SpelledFieldNameArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadSpelledFieldName(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadSpelledFieldNameArray'
+
+// @generated library-cache end
 
 // ⭐⭐ **WHAT JOINS A MODULE DIRECTORY'S SEGMENTS — AND IT IS `/`, NOT `.`, BECAUSE THE JOIN HAS TO BE
 // INVERTIBLE.** `moduleDirectoryContains` is a SEGMENT test, and a segment test on a joined string is
@@ -187,9 +297,52 @@ export type Define
 	export static function create(name String, value String) returns Define
 		return Self{name: name, value: value}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.text(self.name)
+		writer.text(self.value)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns Define throws LibraryCacheDamage
+		let f_name = try reader.text()
+		let f_value = try reader.text()
+
+		return Self{name: f_name, value: f_value}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(Define) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'Define'
 
 export typealias DefineArray = Array with Define
+
+// @generated library-cache begin
+module function cacheWriteDefineArray(writer LibraryCacheWriter, value DefineArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteDefineArray'
+
+module function cacheReadDefineArray(reader LibraryCacheReader) returns DefineArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DefineArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try Define.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDefineArray'
+
+// @generated library-cache end
 
 // One reason a `--define` could not be honoured, carrying the wording as well as the code: the facts a
 // message needs — which declarations a name reached, and where they are — are known only where the
@@ -201,9 +354,52 @@ export type DefineProblem
 	export static function create(code ErrorCode, message String) returns DefineProblem
 		return Self{code: code, message: message}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.code.ordinal as CacheUnsigned)
+		writer.text(self.message)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns DefineProblem throws LibraryCacheDamage
+		let f_code = try cacheReadErrorCode(reader)
+		let f_message = try reader.text()
+
+		return Self{code: f_code, message: f_message}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(DefineProblem) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'DefineProblem'
 
 export typealias DefineProblemArray = Array with DefineProblem
+
+// @generated library-cache begin
+module function cacheWriteDefineProblemArray(writer LibraryCacheWriter, value DefineProblemArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteDefineProblemArray'
+
+module function cacheReadDefineProblemArray(reader LibraryCacheReader) returns DefineProblemArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DefineProblemArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try DefineProblem.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDefineProblemArray'
+
+// @generated library-cache end
 
 // ⭐ **IS `inner` THE SAME MODULE AS `outer`, OR ONE BENEATH IT?** — the whole of what `Visibility.module`
 // means, asked on module directories rather than on `FilePath`s.
@@ -426,6 +622,30 @@ end 'visibilityTierWord'
 // One `Visibility` per struct field, in declaration order. See `StructLayout.fieldVisibility`.
 export typealias VisibilityArray = Array with Visibility
 
+// @generated library-cache begin
+function cacheWriteVisibilityArray(writer LibraryCacheWriter, value VisibilityArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item.ordinal as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteVisibilityArray'
+
+function cacheReadVisibilityArray(reader LibraryCacheReader) returns VisibilityArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = VisibilityArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadVisibility(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadVisibilityArray'
+
+// @generated library-cache end
+
 // The declaring file of a type NO FILE DECLARES — the compiler-synthesized layouts (`StringIndex`,
 // a tuple, `__ManagedFile`, `__ManagedDirectory`, `Ordering`, the builtin error enums).
 // Each is `Visibility.global`, so no tier ever reads this path; it is the same "empty path means the
@@ -443,6 +663,42 @@ export union PayloadBindingSlot
 	unbound
 	inBox(scrutBox ValueId, offset ByteOffset, storage MaxonType)
 end 'PayloadBindingSlot'
+
+// @generated library-cache begin
+function cacheWritePayloadBindingSlot(writer LibraryCacheWriter, value PayloadBindingSlot)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unbound then break 'payload'
+		inBox(a0, a1, a2) then cacheWritePayloadBindingSlotInBox(writer, a0: a0, a1: a1, a2: a2)
+	end 'payload'
+end 'cacheWritePayloadBindingSlot'
+
+function cacheWritePayloadBindingSlotInBox(writer LibraryCacheWriter, a0 ValueId, a1 ByteOffset, a2 MaxonType)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	cacheWriteMaxonType(writer, value: a2)
+end 'cacheWritePayloadBindingSlotInBox'
+
+function cacheReadPayloadBindingSlot(reader LibraryCacheReader) returns PayloadBindingSlot throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives PayloadBindingSlot.unbound
+		1 gives try cacheReadPayloadBindingSlotInBox(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadPayloadBindingSlot'
+
+function cacheReadPayloadBindingSlotInBox(reader LibraryCacheReader) returns PayloadBindingSlot throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ByteOffset
+	let a2 = try cacheReadMaxonType(reader)
+
+	return PayloadBindingSlot.inBox(a0, offset: a1, storage: a2)
+end 'cacheReadPayloadBindingSlotInBox'
+
+// @generated library-cache end
 
 export typealias DebugLocalSlot = int(0 to u64.max) implements ElementIndex
 
@@ -468,6 +724,38 @@ export union CellEpoch
 		end 'epoch'
 	end 'epochValue'
 end 'CellEpoch'
+
+// @generated library-cache begin
+function cacheWriteCellEpoch(writer LibraryCacheWriter, value CellEpoch)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		notACell then break 'payload'
+		current(a0) then cacheWriteCellEpochCurrent(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteCellEpoch'
+
+function cacheWriteCellEpochCurrent(writer LibraryCacheWriter, a0 ValueId)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteCellEpochCurrent'
+
+function cacheReadCellEpoch(reader LibraryCacheReader) returns CellEpoch throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives CellEpoch.notACell
+		1 gives try cacheReadCellEpochCurrent(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadCellEpoch'
+
+function cacheReadCellEpochCurrent(reader LibraryCacheReader) returns CellEpoch throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+
+	return CellEpoch.current(a0)
+end 'cacheReadCellEpochCurrent'
+
+// @generated library-cache end
 
 // VarInfo — one entry in a function's `Scope` symbol table.
 //
@@ -914,9 +1202,101 @@ export type VarInfo
 	export function isLiveNameOf(value ValueId) returns bool
 		return self.boundValue == value and not self.movedFrom
 	end 'isLiveNameOf'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		cacheWriteMaxonType(writer, value: self.varType)
+		writer.flag(self.mutable)
+		writer.unsigned(self.slot as CacheUnsigned)
+		writer.unsigned(self.boundValue as CacheUnsigned)
+		writer.flag(self.debugLocalRecorded)
+		writer.unsigned(self.debugLocalSlot as CacheUnsigned)
+		writer.flag(self.movedFrom)
+		writer.flag(self.partiallyMoved)
+		writer.flag(self.isSelfField)
+		writer.unsigned(self.fieldIndex as CacheUnsigned)
+		cacheWritePayloadBindingSlot(writer, value: self.payload)
+		writer.flag(self.payloadSlotVacated)
+		writer.flag(self.isParameter)
+		writer.unsigned(self.lastUseToken as CacheUnsigned)
+		writer.unsigned(self.lastReadToken as CacheUnsigned)
+		writer.flag(self.namesModuleStorage)
+		writer.flag(self.referenced)
+		writer.flag(self.mutabilityExercised)
+		writer.flag(self.isCellBinding)
+		writer.flag(self.cellCrossesByReference)
+		cacheWriteCellEpoch(writer, value: self.cellEpoch)
+		writer.flag(self.isErrorMatchObligation)
+		writer.unsigned(self.brandId as CacheUnsigned)
+		writer.unsigned(self.awaitingMoveReads as CacheUnsigned)
+		writer.unsigned(self.renumberedIn as CacheUnsigned)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns VarInfo throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_varType = try cacheReadMaxonType(reader)
+		let f_mutable = try reader.flag()
+		let f_slot = (try reader.unsigned()) as VarSlot
+		let f_boundValue = (try reader.unsigned()) as ValueId
+		let f_debugLocalRecorded = try reader.flag()
+		let f_debugLocalSlot = (try reader.unsigned()) as DebugLocalSlot
+		let f_movedFrom = try reader.flag()
+		let f_partiallyMoved = try reader.flag()
+		let f_isSelfField = try reader.flag()
+		let f_fieldIndex = (try reader.boundedUnsigned(0, high: 65535)) as FieldIndex
+		let f_payload = try cacheReadPayloadBindingSlot(reader)
+		let f_payloadSlotVacated = try reader.flag()
+		let f_isParameter = try reader.flag()
+		let f_lastUseToken = (try reader.unsigned()) as ElementIndex
+		let f_lastReadToken = (try reader.unsigned()) as ElementIndex
+		let f_namesModuleStorage = try reader.flag()
+		let f_referenced = try reader.flag()
+		let f_mutabilityExercised = try reader.flag()
+		let f_isCellBinding = try reader.flag()
+		let f_cellCrossesByReference = try reader.flag()
+		let f_cellEpoch = try cacheReadCellEpoch(reader)
+		let f_isErrorMatchObligation = try reader.flag()
+		let f_brandId = (try reader.unsigned()) as TypeNameId
+		let f_awaitingMoveReads = (try reader.unsigned()) as ElementIndex
+		let f_renumberedIn = (try reader.unsigned()) as RenumberingEpoch
+
+		return Self{name: f_name, varType: f_varType, mutable: f_mutable, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, payloadSlotVacated: f_payloadSlotVacated, isParameter: f_isParameter, lastUseToken: f_lastUseToken, lastReadToken: f_lastReadToken, namesModuleStorage: f_namesModuleStorage, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, awaitingMoveReads: f_awaitingMoveReads, renumberedIn: f_renumberedIn}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize208
+		return sizeof(VarInfo) as CacheSize208
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'VarInfo'
 
 export typealias VarInfoMap = Map with (ByteArray, VarInfo)
+
+// @generated library-cache begin
+module function cacheWriteVarInfoMap(writer LibraryCacheWriter, value VarInfoMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteVarInfoMap'
+
+module function cacheReadVarInfoMap(reader LibraryCacheReader) returns VarInfoMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = VarInfoMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try VarInfo.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadVarInfoMap'
+
+// @generated library-cache end
 
 module let NoMoveSiteList = 0 as ElementIndex
 
@@ -936,10 +1316,56 @@ export type AsyncSpawnSite
 	export static function create(text ByteArray, line LineNumber, column ColumnNumber) returns AsyncSpawnSite
 		return Self{text: text, line: line, column: column}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.text)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns AsyncSpawnSite throws LibraryCacheDamage
+		let f_text = try reader.bytes()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{text: f_text, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(AsyncSpawnSite) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'AsyncSpawnSite'
 
 // `asyncCall` op index ⇒ that spawn's quotable text and position. See `Project.asyncSpawnSites`.
 export typealias AsyncSpawnSiteMap = Map with (ElementIndex, AsyncSpawnSite)
+
+// @generated library-cache begin
+module function cacheWriteAsyncSpawnSiteMap(writer LibraryCacheWriter, value AsyncSpawnSiteMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteAsyncSpawnSiteMap'
+
+module function cacheReadAsyncSpawnSiteMap(reader LibraryCacheReader) returns AsyncSpawnSiteMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = AsyncSpawnSiteMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ElementIndex
+		let entry = try AsyncSpawnSite.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadAsyncSpawnSiteMap'
+
+// @generated library-cache end
 
 // ⭐⭐ **WHAT THE ACYCLIC BLOCKING GRAPH NEEDS ABOUT ONE `await` AND CANNOT GET AT ITS OWN TIER.**
 // Whether an `await` blocks on a SERVICE — and on which — is `Parser.awaitedPromiseFacts`' answer, and that
@@ -960,10 +1386,59 @@ export type ServiceAwaitSite
 	export static function create(serviceTypeName ByteArray, line LineNumber, column ColumnNumber, declFilePath FilePath) returns ServiceAwaitSite
 		return Self{serviceTypeName: serviceTypeName, line: line, column: column, declFilePath: declFilePath}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.serviceTypeName)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.text(self.declFilePath.toString())
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ServiceAwaitSite throws LibraryCacheDamage
+		let f_serviceTypeName = try reader.bytes()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_declFilePath = try reader.path()
+
+		return Self{serviceTypeName: f_serviceTypeName, line: f_line, column: f_column, declFilePath: f_declFilePath}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(ServiceAwaitSite) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ServiceAwaitSite'
 
 // `await`/`tryAwait` op index ⇒ the service its reply comes from. See `ServiceAwaitSite`.
 export typealias ServiceAwaitSiteMap = Map with (ElementIndex, ServiceAwaitSite)
+
+// @generated library-cache begin
+module function cacheWriteServiceAwaitSiteMap(writer LibraryCacheWriter, value ServiceAwaitSiteMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteServiceAwaitSiteMap'
+
+module function cacheReadServiceAwaitSiteMap(reader LibraryCacheReader) returns ServiceAwaitSiteMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ServiceAwaitSiteMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ElementIndex
+		let entry = try ServiceAwaitSite.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadServiceAwaitSiteMap'
+
+// @generated library-cache end
+
 export typealias RefusedOverloadCallSet = Set with ElementIndex
 
 // ⭐⭐ **WHAT THE SHARED-GLOBAL RULE NEEDS ABOUT ONE ACCESS TO MODULE STORAGE, AND CANNOT GET AT ITS OWN
@@ -996,6 +1471,31 @@ export type ModuleVarAccessSite
 	export static function create(storageName ByteArray, access ModuleVarAccess, line LineNumber, column ColumnNumber, declFilePath FilePath) returns ModuleVarAccessSite
 		return Self{storageName: storageName, access: access, line: line, column: column, declFilePath: declFilePath}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.storageName)
+		cacheWriteModuleVarAccess(writer, value: self.access)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.text(self.declFilePath.toString())
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ModuleVarAccessSite throws LibraryCacheDamage
+		let f_storageName = try reader.bytes()
+		let f_access = try cacheReadModuleVarAccess(reader)
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_declFilePath = try reader.path()
+
+		return Self{storageName: f_storageName, access: f_access, line: f_line, column: f_column, declFilePath: f_declFilePath}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(ModuleVarAccessSite) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ModuleVarAccessSite'
 
 // ⭐ **ONE RULE, TWO DIRECTIONS.** ⚖ A message may not WRITE a module `var` (its update is a load-add-store
@@ -1006,6 +1506,23 @@ export union ModuleVarAccess
 	read
 	write
 end 'ModuleVarAccess'
+
+// @generated library-cache begin
+function cacheWriteModuleVarAccess(writer LibraryCacheWriter, value ModuleVarAccess)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+end 'cacheWriteModuleVarAccess'
+
+function cacheReadModuleVarAccess(reader LibraryCacheReader) returns ModuleVarAccess throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives ModuleVarAccess.read
+		1 gives ModuleVarAccess.write
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadModuleVarAccess'
+
+// @generated library-cache end
 
 // Who is loading a module slot. A UNION rather than an optional token, because "not this rule's business"
 // is a real answer and an empty token would be a sentinel every reader had to know to test.
@@ -1032,6 +1549,31 @@ end 'ModuleSlotReader'
 // An op index inside the accessing statement ⇒ the module slot it touches. See `ModuleVarAccessSite`.
 export typealias ModuleVarAccessSiteMap = Map with (ElementIndex, ModuleVarAccessSite)
 
+// @generated library-cache begin
+module function cacheWriteModuleVarAccessSiteMap(writer LibraryCacheWriter, value ModuleVarAccessSiteMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteModuleVarAccessSiteMap'
+
+module function cacheReadModuleVarAccessSiteMap(reader LibraryCacheReader) returns ModuleVarAccessSiteMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ModuleVarAccessSiteMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ElementIndex
+		let entry = try ModuleVarAccessSite.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadModuleVarAccessSiteMap'
+
+// @generated library-cache end
+
 export typealias SynthesizedOpFileMap = Map with (ElementIndex, FilePath)
 
 export type RegistryUseSite
@@ -1041,9 +1583,53 @@ export type RegistryUseSite
 	export static function create(key ByteArray, member ByteArray) returns RegistryUseSite
 		return Self{key: key, member: member}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.key)
+		writer.bytes(self.member)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns RegistryUseSite throws LibraryCacheDamage
+		let f_key = try reader.bytes()
+		let f_member = try reader.bytes()
+
+		return Self{key: f_key, member: f_member}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(RegistryUseSite) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'RegistryUseSite'
 
 export typealias RegistryUseSiteMap = Map with (ElementIndex, RegistryUseSite)
+
+// @generated library-cache begin
+function cacheWriteRegistryUseSiteMap(writer LibraryCacheWriter, value RegistryUseSiteMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteRegistryUseSiteMap'
+
+function cacheReadRegistryUseSiteMap(reader LibraryCacheReader) returns RegistryUseSiteMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RegistryUseSiteMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ElementIndex
+		let entry = try RegistryUseSite.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadRegistryUseSiteMap'
+
+// @generated library-cache end
 
 // `unwritten` until a file records its first registry use: most files name no key, and a Map per
 // artifact would be an allocation every parse pays.
@@ -1052,14 +1638,96 @@ export union RegistryUseSiteTable
 	entries(byOp RegistryUseSiteMap)
 end 'RegistryUseSiteTable'
 
+// @generated library-cache begin
+module function cacheWriteRegistryUseSiteTable(writer LibraryCacheWriter, value RegistryUseSiteTable)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unwritten then break 'payload'
+		entries(a0) then cacheWriteRegistryUseSiteTableEntries(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteRegistryUseSiteTable'
+
+function cacheWriteRegistryUseSiteTableEntries(writer LibraryCacheWriter, a0 RegistryUseSiteMap)
+	cacheWriteRegistryUseSiteMap(writer, value: a0)
+end 'cacheWriteRegistryUseSiteTableEntries'
+
+module function cacheReadRegistryUseSiteTable(reader LibraryCacheReader) returns RegistryUseSiteTable throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives RegistryUseSiteTable.unwritten
+		1 gives try cacheReadRegistryUseSiteTableEntries(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadRegistryUseSiteTable'
+
+function cacheReadRegistryUseSiteTableEntries(reader LibraryCacheReader) returns RegistryUseSiteTable throws LibraryCacheDamage
+	let a0 = try cacheReadRegistryUseSiteMap(reader)
+
+	return RegistryUseSiteTable.entries(a0)
+end 'cacheReadRegistryUseSiteTableEntries'
+
+// @generated library-cache end
+
 export let noRegistryUseSites = RegistryUseSiteTable.unwritten
 
 // ⭐ `__mm_alloc` call op index ⇒ the mm-trace TAG that box carries. See `Project.allocTagSites`.
 export typealias AllocTagSiteMap = Map with (ElementIndex, MmTag)
 
+// @generated library-cache begin
+module function cacheWriteAllocTagSiteMap(writer LibraryCacheWriter, value AllocTagSiteMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		writer.unsigned(entry.ordinal as CacheUnsigned)
+	end 'eachEntry'
+end 'cacheWriteAllocTagSiteMap'
+
+module function cacheReadAllocTagSiteMap(reader LibraryCacheReader) returns AllocTagSiteMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = AllocTagSiteMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ElementIndex
+		let entry = try cacheReadMmTag(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadAllocTagSiteMap'
+
+// @generated library-cache end
+
 // ⭐ `__ds_name_id` call op index ⇒ the compile-time NAME that call interns. See
 // `Project.debugStreamNameSites`.
 export typealias DebugStreamNameSiteMap = Map with (ElementIndex, ByteArray)
+
+// @generated library-cache begin
+module function cacheWriteDebugStreamNameSiteMap(writer LibraryCacheWriter, value DebugStreamNameSiteMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		writer.bytes(entry)
+	end 'eachEntry'
+end 'cacheWriteDebugStreamNameSiteMap'
+
+module function cacheReadDebugStreamNameSiteMap(reader LibraryCacheReader) returns DebugStreamNameSiteMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DebugStreamNameSiteMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ElementIndex
+		let entry = try reader.bytes()
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadDebugStreamNameSiteMap'
+
+// @generated library-cache end
 
 // ⭐⭐ **WHICH IMAGE-DATA RECORD A MODULE-LEVEL `let` IS — the three shapes, and the whole of what a
 // materializing site cannot read off its own op.**
@@ -1101,10 +1769,95 @@ export union ImmortalRecordKind
 	containerBox(nodes ImmortalBoxNodeArray, root ElementIndex)
 end 'ImmortalRecordKind'
 
+// @generated library-cache begin
+function cacheWriteImmortalRecordKind(writer LibraryCacheWriter, value ImmortalRecordKind)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		constBlob then break 'payload'
+		emptyContainer(a0) then cacheWriteImmortalRecordKindEmptyContainer(writer, a0: a0)
+		stringTable(a0, a1) then cacheWriteImmortalRecordKindStringTable(writer, a0: a0, a1: a1)
+		containerBox(a0, a1) then cacheWriteImmortalRecordKindContainerBox(writer, a0: a0, a1: a1)
+	end 'payload'
+end 'cacheWriteImmortalRecordKind'
+
+function cacheWriteImmortalRecordKindEmptyContainer(writer LibraryCacheWriter, a0 OwnershipCallee)
+	cacheWriteOwnershipCallee(writer, value: a0)
+end 'cacheWriteImmortalRecordKindEmptyContainer'
+
+function cacheWriteImmortalRecordKindStringTable(writer LibraryCacheWriter, a0 ByteArrayArray, a1 OwnershipCallee)
+	cacheWriteByteArrayArray(writer, value: a0)
+	cacheWriteOwnershipCallee(writer, value: a1)
+end 'cacheWriteImmortalRecordKindStringTable'
+
+function cacheWriteImmortalRecordKindContainerBox(writer LibraryCacheWriter, a0 ImmortalBoxNodeArray, a1 ElementIndex)
+	cacheWriteImmortalBoxNodeArray(writer, value: a0)
+	writer.unsigned(a1 as CacheUnsigned)
+end 'cacheWriteImmortalRecordKindContainerBox'
+
+function cacheReadImmortalRecordKind(reader LibraryCacheReader) returns ImmortalRecordKind throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives ImmortalRecordKind.constBlob
+		1 gives try cacheReadImmortalRecordKindEmptyContainer(reader)
+		2 gives try cacheReadImmortalRecordKindStringTable(reader)
+		3 gives try cacheReadImmortalRecordKindContainerBox(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadImmortalRecordKind'
+
+function cacheReadImmortalRecordKindEmptyContainer(reader LibraryCacheReader) returns ImmortalRecordKind throws LibraryCacheDamage
+	let a0 = try cacheReadOwnershipCallee(reader)
+
+	return ImmortalRecordKind.emptyContainer(a0)
+end 'cacheReadImmortalRecordKindEmptyContainer'
+
+function cacheReadImmortalRecordKindStringTable(reader LibraryCacheReader) returns ImmortalRecordKind throws LibraryCacheDamage
+	let a0 = try cacheReadByteArrayArray(reader)
+	let a1 = try cacheReadOwnershipCallee(reader)
+
+	return ImmortalRecordKind.stringTable(a0, elementDestroy: a1)
+end 'cacheReadImmortalRecordKindStringTable'
+
+function cacheReadImmortalRecordKindContainerBox(reader LibraryCacheReader) returns ImmortalRecordKind throws LibraryCacheDamage
+	let a0 = try cacheReadImmortalBoxNodeArray(reader)
+	let a1 = (try reader.unsigned()) as ElementIndex
+
+	return ImmortalRecordKind.containerBox(a0, root: a1)
+end 'cacheReadImmortalRecordKindContainerBox'
+
+// @generated library-cache end
+
 // ⭐ The `constArrayLiteral` op indices whose record is IMAGE DATA rather than an allocation, each carrying
 // which shape it is — `constBlob` or `emptyContainer`, never `stringTable`. See
 // `Project.immortalConstArraySites`.
 export typealias ImmortalConstArraySiteMap = Map with (ElementIndex, ImmortalRecordKind)
+
+// @generated library-cache begin
+module function cacheWriteImmortalConstArraySiteMap(writer LibraryCacheWriter, value ImmortalConstArraySiteMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		cacheWriteImmortalRecordKind(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteImmortalConstArraySiteMap'
+
+module function cacheReadImmortalConstArraySiteMap(reader LibraryCacheReader) returns ImmortalConstArraySiteMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ImmortalConstArraySiteMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ElementIndex
+		let entry = try cacheReadImmortalRecordKind(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadImmortalConstArraySiteMap'
+
+// @generated library-cache end
 
 // ⭐⭐ **STD** op index ⇒ the compile-time `element_size@24` stamp of the container that call operates on.
 // ⚠ The three maps above are keyed by **MAXON** op indices and are folded by `mergeArtifact`; this one is
@@ -1121,6 +1874,30 @@ export typealias StdOpTrivialElementSiteSet = Set with ElementIndex
 // Both need the binding OBJECT rather than its name — see Scope's header for why a
 // name cannot address a binding a nested block has shadowed.
 export typealias VarInfoArray = Array with VarInfo
+
+// @generated library-cache begin
+module function cacheWriteVarInfoArray(writer LibraryCacheWriter, value VarInfoArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteVarInfoArray'
+
+module function cacheReadVarInfoArray(reader LibraryCacheReader) returns VarInfoArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = VarInfoArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try VarInfo.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadVarInfoArray'
+
+// @generated library-cache end
 
 // ⭐ **WHICH KIND OF DECLARATION AN E3012 CANDIDATE IS — and the only thing that turns on it is the
 // INTERFACE WAIVER.** An implementer is forced to declare every parameter its contract names, so an unused
@@ -1260,6 +2037,38 @@ export union RangedAliasDomain
 	end 'isFullWordPattern'
 end 'RangedAliasDomain'
 
+// @generated library-cache begin
+function cacheWriteRangedAliasDomain(writer LibraryCacheWriter, value RangedAliasDomain)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		quantity then break 'payload'
+		pattern(a0) then cacheWriteRangedAliasDomainPattern(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteRangedAliasDomain'
+
+function cacheWriteRangedAliasDomainPattern(writer LibraryCacheWriter, a0 BitWidth)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteRangedAliasDomainPattern'
+
+function cacheReadRangedAliasDomain(reader LibraryCacheReader) returns RangedAliasDomain throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives RangedAliasDomain.quantity
+		1 gives try cacheReadRangedAliasDomainPattern(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadRangedAliasDomain'
+
+function cacheReadRangedAliasDomainPattern(reader LibraryCacheReader) returns RangedAliasDomain throws LibraryCacheDamage
+	let a0 = (try reader.boundedUnsigned(0, high: 64)) as BitWidth
+
+	return RangedAliasDomain.pattern(a0)
+end 'cacheReadRangedAliasDomainPattern'
+
+// @generated library-cache end
+
 export type RangedTypeAlias
 	export var name as ByteArray
 
@@ -1318,6 +2127,39 @@ export type RangedTypeAlias
 	export function hasBounds(lowBound ParsedInt, highBound ParsedInt) returns bool
 		return self.low == lowBound and self.high == highBound
 	end 'hasBounds'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		cacheWriteMaxonType(writer, value: self.underlying)
+		writer.signed(self.low as CacheSigned)
+		writer.signed(self.high as CacheSigned)
+		writer.text(self.declFilePath.toString())
+		writer.unsigned(self.nameLine as CacheUnsigned)
+		writer.unsigned(self.nameColumn as CacheUnsigned)
+		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
+		cacheWriteRangedAliasDomain(writer, value: self.domain)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns RangedTypeAlias throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_underlying = try cacheReadMaxonType(reader)
+		let f_low = (try reader.signed()) as ParsedInt
+		let f_high = (try reader.signed()) as ParsedInt
+		let f_declFilePath = try reader.path()
+		let f_nameLine = (try reader.unsigned()) as LineNumber
+		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
+		let f_visibility = try cacheReadVisibility(reader)
+		let f_domain = try cacheReadRangedAliasDomain(reader)
+
+		return Self{name: f_name, underlying: f_underlying, low: f_low, high: f_high, declFilePath: f_declFilePath, nameLine: f_nameLine, nameColumn: f_nameColumn, visibility: f_visibility, domain: f_domain}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize72
+		return sizeof(RangedTypeAlias) as CacheSize72
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'RangedTypeAlias'
 
 // The `<declaring file>|<type name>` keys of every declaration a collision was reported for — see
@@ -1325,6 +2167,30 @@ end 'RangedTypeAlias'
 export typealias CollidedTypeNameSet = Set with ByteArray
 
 export typealias RangedTypeAliasArray = Array with RangedTypeAlias
+
+// @generated library-cache begin
+module function cacheWriteRangedTypeAliasArray(writer LibraryCacheWriter, value RangedTypeAliasArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteRangedTypeAliasArray'
+
+module function cacheReadRangedTypeAliasArray(reader LibraryCacheReader) returns RangedTypeAliasArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RangedTypeAliasArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try RangedTypeAlias.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadRangedTypeAliasArray'
+
+// @generated library-cache end
 
 export type AliasImplementsClause
 	export var name as ByteArray
@@ -1338,9 +2204,62 @@ export type AliasImplementsClause
 	export static function create(name ByteArray, parentName ByteArray, visibility Visibility, declFilePath FilePath, isFloat bool, low ParsedInt, high ParsedInt) returns AliasImplementsClause
 		return Self{name: name, parentName: parentName, visibility: visibility, declFilePath: declFilePath, isFloat: isFloat, low: low, high: high}
 	end 'create'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		writer.bytes(self.parentName)
+		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
+		writer.text(self.declFilePath.toString())
+		writer.flag(self.isFloat)
+		writer.signed(self.low as CacheSigned)
+		writer.signed(self.high as CacheSigned)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns AliasImplementsClause throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_parentName = try reader.bytes()
+		let f_visibility = try cacheReadVisibility(reader)
+		let f_declFilePath = try reader.path()
+		let f_isFloat = try reader.flag()
+		let f_low = (try reader.signed()) as ParsedInt
+		let f_high = (try reader.signed()) as ParsedInt
+
+		return Self{name: f_name, parentName: f_parentName, visibility: f_visibility, declFilePath: f_declFilePath, isFloat: f_isFloat, low: f_low, high: f_high}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(AliasImplementsClause) as CacheSize56
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'AliasImplementsClause'
 
 export typealias AliasImplementsClauseArray = Array with AliasImplementsClause
+
+// @generated library-cache begin
+module function cacheWriteAliasImplementsClauseArray(writer LibraryCacheWriter, value AliasImplementsClauseArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteAliasImplementsClauseArray'
+
+module function cacheReadAliasImplementsClauseArray(reader LibraryCacheReader) returns AliasImplementsClauseArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = AliasImplementsClauseArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try AliasImplementsClause.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadAliasImplementsClauseArray'
+
+// @generated library-cache end
 
 export union AliasImplementsVerdict
 	resolved
@@ -1350,6 +2269,46 @@ export union AliasImplementsVerdict
 	primitiveDiffers(own String, parents String)
 end 'AliasImplementsVerdict'
 
+// @generated library-cache begin
+module function cacheWriteAliasImplementsVerdict(writer LibraryCacheWriter, value AliasImplementsVerdict)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		resolved then break 'payload'
+		cycle then break 'payload'
+		notARangedAlias then break 'payload'
+		rangeDoesNotFit then break 'payload'
+		primitiveDiffers(a0, a1) then cacheWriteAliasImplementsVerdictPrimitiveDiffers(writer, a0: a0, a1: a1)
+	end 'payload'
+end 'cacheWriteAliasImplementsVerdict'
+
+function cacheWriteAliasImplementsVerdictPrimitiveDiffers(writer LibraryCacheWriter, a0 String, a1 String)
+	writer.text(a0)
+	writer.text(a1)
+end 'cacheWriteAliasImplementsVerdictPrimitiveDiffers'
+
+module function cacheReadAliasImplementsVerdict(reader LibraryCacheReader) returns AliasImplementsVerdict throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives AliasImplementsVerdict.resolved
+		1 gives AliasImplementsVerdict.cycle
+		2 gives AliasImplementsVerdict.notARangedAlias
+		3 gives AliasImplementsVerdict.rangeDoesNotFit
+		4 gives try cacheReadAliasImplementsVerdictPrimitiveDiffers(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadAliasImplementsVerdict'
+
+function cacheReadAliasImplementsVerdictPrimitiveDiffers(reader LibraryCacheReader) returns AliasImplementsVerdict throws LibraryCacheDamage
+	let a0 = try reader.text()
+	let a1 = try reader.text()
+
+	return AliasImplementsVerdict.primitiveDiffers(a0, parents: a1)
+end 'cacheReadAliasImplementsVerdictPrimitiveDiffers'
+
+// @generated library-cache end
+
 // One source file's path ⇒ the index its first coverage point took in `Project.covPoints`.
 export typealias CovPointBaseMap = Map with (String, CovPointId)
 
@@ -1357,6 +2316,31 @@ export typealias CovPointBaseMap = Map with (String, CovPointId)
 // file's artifact (alongside `funcReturnTypes` / `funcSignatures`); read by
 // TypeResolution to collapse `MaxonType.named` to a primitive.
 export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
+
+// @generated library-cache begin
+module function cacheWriteRangedTypeAliasMap(writer LibraryCacheWriter, value RangedTypeAliasMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteRangedTypeAliasMap'
+
+module function cacheReadRangedTypeAliasMap(reader LibraryCacheReader) returns RangedTypeAliasMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RangedTypeAliasMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try RangedTypeAlias.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadRangedTypeAliasMap'
+
+// @generated library-cache end
 
 // ONE contested name's declarations, keyed by the path of the file that declared each — what a
 // file-scoped lookup probes with the READER's path to find the reader's own.
@@ -1368,6 +2352,31 @@ export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
 // `record`'s same-file test, which must agree or a redeclaration is missed.
 typealias RangedAliasByDeclaringFile = Map with (String, RangedTypeAlias)
 
+// @generated library-cache begin
+function cacheWriteRangedAliasByDeclaringFile(writer LibraryCacheWriter, value RangedAliasByDeclaringFile)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.text(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteRangedAliasByDeclaringFile'
+
+function cacheReadRangedAliasByDeclaringFile(reader LibraryCacheReader) returns RangedAliasByDeclaringFile throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RangedAliasByDeclaringFile.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.text()
+		let entry = try RangedTypeAlias.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadRangedAliasByDeclaringFile'
+
+// @generated library-cache end
+
 // ⭐ THE ONE EMPTY `RangedAliasByDeclaringFile` every uncontested name answers with — so
 // `RangedAliasRegistry.contestedDeclarations` costs one map probe and NO allocation for the names that
 // are not contested, which is nearly every name in any program. NEVER mutated: its only reader iterates.
@@ -1378,6 +2387,31 @@ let sharedEmptyContestedDeclarations = RangedAliasByDeclaringFile.create()
 // why the answer must be a fold over every declaration rather than a probe of one.
 typealias AliasStorageBytesMap = Map with (ByteArray, ByteOffset)
 
+// @generated library-cache begin
+function cacheWriteAliasStorageBytesMap(writer LibraryCacheWriter, value AliasStorageBytesMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		writer.unsigned(entry as CacheUnsigned)
+	end 'eachEntry'
+end 'cacheWriteAliasStorageBytesMap'
+
+function cacheReadAliasStorageBytesMap(reader LibraryCacheReader) returns AliasStorageBytesMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = AliasStorageBytesMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = (try reader.unsigned()) as ByteOffset
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadAliasStorageBytesMap'
+
+// @generated library-cache end
+
 // One name ⇒ the WIDEST sub-byte packed width any file's declaration of it needs, or `byteStrided`
 // if any of them is a byte or wider. The map above's twin, folded by the same single writer in the
 // same call, because they answer one question — "how much room does this name's element need?" — on
@@ -1385,15 +2419,90 @@ typealias AliasStorageBytesMap = Map with (ByteArray, ByteOffset)
 // byte beats every packed width.
 typealias AliasPackedBitsMap = Map with (ByteArray, ElementPacking)
 
+// @generated library-cache begin
+function cacheWriteAliasPackedBitsMap(writer LibraryCacheWriter, value AliasPackedBitsMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		writer.unsigned(entry.ordinal as CacheUnsigned)
+	end 'eachEntry'
+end 'cacheWriteAliasPackedBitsMap'
+
+function cacheReadAliasPackedBitsMap(reader LibraryCacheReader) returns AliasPackedBitsMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = AliasPackedBitsMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadElementPacking(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadAliasPackedBitsMap'
+
+// @generated library-cache end
+
 // The names more than one FILE declares -> every declaration of each, by declaring file. Empty for
 // a program where no name is declared twice, which is nearly every program — see `RangedAliasRegistry`.
 typealias MultiplyDeclaredAliasMap = Map with (ByteArray, RangedAliasByDeclaringFile)
+
+// @generated library-cache begin
+function cacheWriteMultiplyDeclaredAliasMap(writer LibraryCacheWriter, value MultiplyDeclaredAliasMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteRangedAliasByDeclaringFile(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteMultiplyDeclaredAliasMap'
+
+function cacheReadMultiplyDeclaredAliasMap(reader LibraryCacheReader) returns MultiplyDeclaredAliasMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = MultiplyDeclaredAliasMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadRangedAliasByDeclaringFile(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadMultiplyDeclaredAliasMap'
+
+// @generated library-cache end
 
 // The names whose declarations disagree about the RANGE -> every distinct range-qualified spelling
 // of each. A strict SUBSET of `MultiplyDeclaredAliasMap`'s keys, and EMPTY for every program in the
 // corpus — see `RangedAliasRegistry.settleRangeContests` for why that emptiness is what keeps every
 // element name and every mangled symbol where it was.
 typealias RangeContestedAliasMap = Map with (ByteArray, ByteArrayArray)
+
+// @generated library-cache begin
+function cacheWriteRangeContestedAliasMap(writer LibraryCacheWriter, value RangeContestedAliasMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteByteArrayArray(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteRangeContestedAliasMap'
+
+function cacheReadRangeContestedAliasMap(reader LibraryCacheReader) returns RangeContestedAliasMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RangeContestedAliasMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadByteArrayArray(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadRangeContestedAliasMap'
+
+// @generated library-cache end
 
 // ⭐ THE ONE EMPTY contest map every registry is born holding — so a program with no contest, which is every
 // program in the corpus, allocates NO index for a question whose answer is "none". Measured: a real map per
@@ -1665,6 +2774,25 @@ export type ClaimantProvenance
 	function layerOfClaim(claim TypeNameClaim) returns FoldLayer
 		return foldLayerFor(claim.declaredByTheCorpus)
 	end 'layerOfClaim'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteCorpusDeclaringFileSet(writer, value: self.corpusDeclaringFiles)
+		cacheWriteModuleDirectoryByFile(writer, value: self.moduleDirectories)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ClaimantProvenance throws LibraryCacheDamage
+		let f_corpusDeclaringFiles = try cacheReadCorpusDeclaringFileSet(reader)
+		let f_moduleDirectories = try cacheReadModuleDirectoryByFile(reader)
+
+		return Self{corpusDeclaringFiles: f_corpusDeclaringFiles, moduleDirectories: f_moduleDirectories}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ClaimantProvenance) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ClaimantProvenance'
 
 function declarationFoldsLater(declPath String, layer FoldLayer, thanPath String, thanLayer FoldLayer) returns bool
@@ -1680,7 +2808,56 @@ function declarationFoldsLater(declPath String, layer FoldLayer, thanPath String
 end 'declarationFoldsLater'
 
 export typealias CorpusDeclaringFileSet = Set with String
+
+// @generated library-cache begin
+function cacheWriteCorpusDeclaringFileSet(writer LibraryCacheWriter, value CorpusDeclaringFileSet)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.text(item)
+	end 'eachItem'
+end 'cacheWriteCorpusDeclaringFileSet'
+
+function cacheReadCorpusDeclaringFileSet(reader LibraryCacheReader) returns CorpusDeclaringFileSet throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = CorpusDeclaringFileSet.create()
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.text()
+		result.insert(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadCorpusDeclaringFileSet'
+
+// @generated library-cache end
+
 export typealias ModuleDirectoryByFile = Map with (String, String)
+
+// @generated library-cache begin
+module function cacheWriteModuleDirectoryByFile(writer LibraryCacheWriter, value ModuleDirectoryByFile)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.text(key)
+		writer.text(entry)
+	end 'eachEntry'
+end 'cacheWriteModuleDirectoryByFile'
+
+module function cacheReadModuleDirectoryByFile(reader LibraryCacheReader) returns ModuleDirectoryByFile throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ModuleDirectoryByFile.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.text()
+		let entry = try reader.text()
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadModuleDirectoryByFile'
+
+// @generated library-cache end
 
 // The one place a `Visibility` becomes an answer (`ProgramSignatures.isVisibleFrom` asks here too).
 // `global` and `public` must answer identically — see `Visibility`.
@@ -1704,6 +2881,29 @@ export function moduleDirectoryIn(directories ModuleDirectoryByFile, path String
 end 'moduleDirectoryIn'
 
 export typealias UnderlyingContestedAliasSet = Set with ByteArray
+
+// @generated library-cache begin
+function cacheWriteUnderlyingContestedAliasSet(writer LibraryCacheWriter, value UnderlyingContestedAliasSet)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.bytes(item)
+	end 'eachItem'
+end 'cacheWriteUnderlyingContestedAliasSet'
+
+function cacheReadUnderlyingContestedAliasSet(reader LibraryCacheReader) returns UnderlyingContestedAliasSet throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = UnderlyingContestedAliasSet.create()
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.bytes()
+		result.insert(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadUnderlyingContestedAliasSet'
+
+// @generated library-cache end
 
 export type RangedAliasRegistry
 	// Every alias under its BARE name — the fallback, and on its own exactly the pre-existing
@@ -2470,6 +3670,37 @@ export type RangedAliasRegistry
 			declared(alias) then return rangeQualifiedAliasName(name, underlying: alias.underlying, low: alias.low, high: alias.high)
 		end 'resolved'
 	end 'rangeScopedName'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteRangedTypeAliasMap(writer, value: self.byName)
+		cacheWriteMultiplyDeclaredAliasMap(writer, value: self.multiplyDeclared)
+		cacheWriteAliasStorageBytesMap(writer, value: self.storageBytes)
+		cacheWriteAliasPackedBitsMap(writer, value: self.packedBits)
+		self.provenance.cacheWrite(writer)
+		cacheWriteUnderlyingContestedAliasSet(writer, value: self.underlyingContested)
+		cacheWriteRangeContestedAliasMap(writer, value: self.rangeContested)
+		writer.signed(self.exitCodeHigh as CacheSigned)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns RangedAliasRegistry throws LibraryCacheDamage
+		let f_byName = try cacheReadRangedTypeAliasMap(reader)
+		let f_multiplyDeclared = try cacheReadMultiplyDeclaredAliasMap(reader)
+		let f_storageBytes = try cacheReadAliasStorageBytesMap(reader)
+		let f_packedBits = try cacheReadAliasPackedBitsMap(reader)
+		let f_provenance = try ClaimantProvenance.cacheRead(reader)
+		let f_underlyingContested = try cacheReadUnderlyingContestedAliasSet(reader)
+		let f_rangeContested = try cacheReadRangeContestedAliasMap(reader)
+		let f_exitCodeHigh = (try reader.signed()) as ParsedInt
+
+		return Self{byName: f_byName, multiplyDeclared: f_multiplyDeclared, storageBytes: f_storageBytes, packedBits: f_packedBits, provenance: f_provenance, underlyingContested: f_underlyingContested, rangeContested: f_rangeContested, exitCodeHigh: f_exitCodeHigh}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize64
+		return sizeof(RangedAliasRegistry) as CacheSize64
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'RangedAliasRegistry'
 
 // The qualified SPELLING of each claimant, with the declaration each spelling names pushed onto `mints`.
@@ -2584,6 +3815,64 @@ export enum TypeDeclKind
 	tupleAlias
 end 'TypeDeclKind'
 
+// @generated library-cache begin
+let CacheCasesTypeDeclKind = [TypeDeclKind.structType, TypeDeclKind.enumType, TypeDeclKind.unionType, TypeDeclKind.interfaceType, TypeDeclKind.rangedAlias, TypeDeclKind.functionAlias, TypeDeclKind.genericAlias, TypeDeclKind.tupleAlias]
+
+module function cacheReadTypeDeclKind(reader LibraryCacheReader) returns TypeDeclKind throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesTypeDeclKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadTypeDeclKind'
+
+function cacheTableAgreesTypeDeclKind() returns bool
+	let declared = TypeDeclKind.allCases
+
+	if CacheCasesTypeDeclKind.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesTypeDeclKind.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesTypeDeclKind'
+
+module function cacheEnumTablesAgreeInCompilerProject() returns bool
+	if not cacheTableAgreesFunctionTypeDoor() 'disagreesCacheTableAgreesFunctionTypeDoor'
+		return false
+	end 'disagreesCacheTableAgreesFunctionTypeDoor'
+
+	if not cacheTableAgreesDiscardDoor() 'disagreesCacheTableAgreesDiscardDoor'
+		return false
+	end 'disagreesCacheTableAgreesDiscardDoor'
+
+	if not cacheTableAgreesVisibility() 'disagreesCacheTableAgreesVisibility'
+		return false
+	end 'disagreesCacheTableAgreesVisibility'
+
+	if not cacheTableAgreesEnumBacking() 'disagreesCacheTableAgreesEnumBacking'
+		return false
+	end 'disagreesCacheTableAgreesEnumBacking'
+
+	if not cacheTableAgreesEnumBackingLiteralKind() 'disagreesCacheTableAgreesEnumBackingLiteralKind'
+		return false
+	end 'disagreesCacheTableAgreesEnumBackingLiteralKind'
+
+	if not cacheTableAgreesTypeDeclKind() 'disagreesCacheTableAgreesTypeDeclKind'
+		return false
+	end 'disagreesCacheTableAgreesTypeDeclKind'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerProject'
+
+// @generated library-cache end
+
 // The SOURCE KEYWORD that introduced a declaration of this kind — the word a diagnostic must call it
 // by. The ONE place a `TypeDeclKind` is turned into that word (`EnumLayout.kindWord` reads it from
 // here rather than spelling `enum`/`union` a second time). The three alias forms share `typealias`
@@ -2661,9 +3950,56 @@ export type TypeNameClaim
 	export static function create(kind TypeDeclKind, declFilePath FilePath, visibility Visibility, declaredByTheCorpus bool) returns TypeNameClaim
 		return Self{kind: kind, declFilePath: declFilePath, visibility: visibility, declaredByTheCorpus: declaredByTheCorpus}
 	end 'create'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.kind.ordinal as CacheUnsigned)
+		writer.text(self.declFilePath.toString())
+		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
+		writer.flag(self.declaredByTheCorpus)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns TypeNameClaim throws LibraryCacheDamage
+		let f_kind = try cacheReadTypeDeclKind(reader)
+		let f_declFilePath = try reader.path()
+		let f_visibility = try cacheReadVisibility(reader)
+		let f_declaredByTheCorpus = try reader.flag()
+
+		return Self{kind: f_kind, declFilePath: f_declFilePath, visibility: f_visibility, declaredByTheCorpus: f_declaredByTheCorpus}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(TypeNameClaim) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'TypeNameClaim'
 
 export typealias TypeNameClaimArray = Array with TypeNameClaim
+
+// @generated library-cache begin
+module function cacheWriteTypeNameClaimArray(writer LibraryCacheWriter, value TypeNameClaimArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteTypeNameClaimArray'
+
+module function cacheReadTypeNameClaimArray(reader LibraryCacheReader) returns TypeNameClaimArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = TypeNameClaimArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try TypeNameClaim.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadTypeNameClaimArray'
+
+// @generated library-cache end
 
 // ONE declaration that minted a type name, with where it was written. The position is the NAME
 // token's, never the keyword's — a collision blames a declaration at its name, and
@@ -2679,6 +4015,29 @@ export type TypeNameDecl
 	export static function create(name ByteArray, claim TypeNameClaim, nameLine LineNumber, nameColumn ColumnNumber) returns TypeNameDecl
 		return Self{name: name, claim: claim, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		self.claim.cacheWrite(writer)
+		writer.unsigned(self.nameLine as CacheUnsigned)
+		writer.unsigned(self.nameColumn as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns TypeNameDecl throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_claim = try TypeNameClaim.cacheRead(reader)
+		let f_nameLine = (try reader.unsigned()) as LineNumber
+		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
+
+		return Self{name: f_name, claim: f_claim, nameLine: f_nameLine, nameColumn: f_nameColumn}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(TypeNameDecl) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'TypeNameDecl'
 
 // One file's type-name declarations, IN SOURCE ORDER. The order is the point and it is why this is
@@ -2687,6 +4046,30 @@ end 'TypeNameDecl'
 // and `typealias Box` came SECOND is a fact none of them holds. Blaming the wrong one of a pair is
 // exactly the misdiagnosis this rule exists to remove.
 export typealias TypeNameDeclArray = Array with TypeNameDecl
+
+// @generated library-cache begin
+module function cacheWriteTypeNameDeclArray(writer LibraryCacheWriter, value TypeNameDeclArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteTypeNameDeclArray'
+
+module function cacheReadTypeNameDeclArray(reader LibraryCacheReader) returns TypeNameDeclArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = TypeNameDeclArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try TypeNameDecl.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadTypeNameDeclArray'
+
+// @generated library-cache end
 
 export type SignatureTypeDemand
 	export let demandingFunction as ByteArray
@@ -2875,9 +4258,52 @@ export type TypeNameCollision
 	export static function create(decl TypeNameDecl, winner TypeNameDecl) returns TypeNameCollision
 		return Self{decl: decl, winner: winner}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		self.decl.cacheWrite(writer)
+		self.winner.cacheWrite(writer)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns TypeNameCollision throws LibraryCacheDamage
+		let f_decl = try TypeNameDecl.cacheRead(reader)
+		let f_winner = try TypeNameDecl.cacheRead(reader)
+
+		return Self{decl: f_decl, winner: f_winner}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(TypeNameCollision) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'TypeNameCollision'
 
 export typealias TypeNameCollisionArray = Array with TypeNameCollision
+
+// @generated library-cache begin
+module function cacheWriteTypeNameCollisionArray(writer LibraryCacheWriter, value TypeNameCollisionArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteTypeNameCollisionArray'
+
+module function cacheReadTypeNameCollisionArray(reader LibraryCacheReader) returns TypeNameCollisionArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = TypeNameCollisionArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try TypeNameCollision.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadTypeNameCollisionArray'
+
+// @generated library-cache end
 
 // ⭐ **THE TYPE-NAME REGISTRY — the ONE decider of "is this type name already declared?"** (E3006,
 // E3061). Without it, which of a `type Box` and a `typealias Box` a reference meant would be
@@ -3199,6 +4625,35 @@ export type RangeCheckSite
 	export static function create(value ValueId, target RangeCheckSiteTarget, block BlockId, maxonOpPos ElementIndex, line LineNumber, column ColumnNumber) returns RangeCheckSite
 		return Self{value: value, target: target, block: block, maxonOpPos: maxonOpPos, stdOpPos: 0, line: line, column: column}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.value as CacheUnsigned)
+		cacheWriteRangeCheckSiteTarget(writer, value: self.target)
+		writer.unsigned(self.block as CacheUnsigned)
+		writer.unsigned(self.maxonOpPos as CacheUnsigned)
+		writer.unsigned(self.stdOpPos as CacheUnsigned)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns RangeCheckSite throws LibraryCacheDamage
+		let f_value = (try reader.unsigned()) as ValueId
+		let f_target = try cacheReadRangeCheckSiteTarget(reader)
+		let f_block = (try reader.unsigned()) as BlockId
+		let f_maxonOpPos = (try reader.unsigned()) as ElementIndex
+		let f_stdOpPos = (try reader.unsigned()) as ElementIndex
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{value: f_value, target: f_target, block: f_block, maxonOpPos: f_maxonOpPos, stdOpPos: f_stdOpPos, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(RangeCheckSite) as CacheSize56
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'RangeCheckSite'
 
 export type BorrowOperands
@@ -3208,14 +4663,90 @@ export type BorrowOperands
 	export static function create(lhs ValueId, rhs ValueId) returns BorrowOperands
 		return Self{lhs: lhs, rhs: rhs}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.lhs as CacheUnsigned)
+		writer.unsigned(self.rhs as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns BorrowOperands throws LibraryCacheDamage
+		let f_lhs = (try reader.unsigned()) as ValueId
+		let f_rhs = (try reader.unsigned()) as ValueId
+
+		return Self{lhs: f_lhs, rhs: f_rhs}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(BorrowOperands) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'BorrowOperands'
 
 export typealias BorrowOperandsMap = Map with (ValueId, BorrowOperands)
+
+// @generated library-cache begin
+function cacheWriteBorrowOperandsMap(writer LibraryCacheWriter, value BorrowOperandsMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteBorrowOperandsMap'
+
+function cacheReadBorrowOperandsMap(reader LibraryCacheReader) returns BorrowOperandsMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = BorrowOperandsMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ValueId
+		let entry = try BorrowOperands.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadBorrowOperandsMap'
+
+// @generated library-cache end
 
 export union BorrowOperandsColumn
 	unwritten
 	entries(byDifference BorrowOperandsMap)
 end 'BorrowOperandsColumn'
+
+// @generated library-cache begin
+function cacheWriteBorrowOperandsColumn(writer LibraryCacheWriter, value BorrowOperandsColumn)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unwritten then break 'payload'
+		entries(a0) then cacheWriteBorrowOperandsColumnEntries(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteBorrowOperandsColumn'
+
+function cacheWriteBorrowOperandsColumnEntries(writer LibraryCacheWriter, a0 BorrowOperandsMap)
+	cacheWriteBorrowOperandsMap(writer, value: a0)
+end 'cacheWriteBorrowOperandsColumnEntries'
+
+function cacheReadBorrowOperandsColumn(reader LibraryCacheReader) returns BorrowOperandsColumn throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives BorrowOperandsColumn.unwritten
+		1 gives try cacheReadBorrowOperandsColumnEntries(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadBorrowOperandsColumn'
+
+function cacheReadBorrowOperandsColumnEntries(reader LibraryCacheReader) returns BorrowOperandsColumn throws LibraryCacheDamage
+	let a0 = try cacheReadBorrowOperandsMap(reader)
+
+	return BorrowOperandsColumn.entries(a0)
+end 'cacheReadBorrowOperandsColumnEntries'
+
+// @generated library-cache end
 
 export let noBorrowOperands = BorrowOperandsColumn.unwritten
 
@@ -3233,7 +4764,79 @@ export union RangeCheckSiteTarget
 	callArgument(callResult ValueId, argIndex ParamCount, label ByteArray, sourceMayBeNegative bool)
 end 'RangeCheckSiteTarget'
 
+// @generated library-cache begin
+function cacheWriteRangeCheckSiteTarget(writer LibraryCacheWriter, value RangeCheckSiteTarget)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		alias(a0) then cacheWriteRangeCheckSiteTargetAlias(writer, a0: a0)
+		callArgument(a0, a1, a2, a3) then cacheWriteRangeCheckSiteTargetCallArgument(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+	end 'payload'
+end 'cacheWriteRangeCheckSiteTarget'
+
+function cacheWriteRangeCheckSiteTargetAlias(writer LibraryCacheWriter, a0 RangedTypeAlias)
+	a0.cacheWrite(writer)
+end 'cacheWriteRangeCheckSiteTargetAlias'
+
+function cacheWriteRangeCheckSiteTargetCallArgument(writer LibraryCacheWriter, a0 ValueId, a1 ParamCount, a2 ByteArray, a3 bool)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.bytes(a2)
+	writer.flag(a3)
+end 'cacheWriteRangeCheckSiteTargetCallArgument'
+
+function cacheReadRangeCheckSiteTarget(reader LibraryCacheReader) returns RangeCheckSiteTarget throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadRangeCheckSiteTargetAlias(reader)
+		1 gives try cacheReadRangeCheckSiteTargetCallArgument(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadRangeCheckSiteTarget'
+
+function cacheReadRangeCheckSiteTargetAlias(reader LibraryCacheReader) returns RangeCheckSiteTarget throws LibraryCacheDamage
+	let a0 = try RangedTypeAlias.cacheRead(reader)
+
+	return RangeCheckSiteTarget.alias(a0)
+end 'cacheReadRangeCheckSiteTargetAlias'
+
+function cacheReadRangeCheckSiteTargetCallArgument(reader LibraryCacheReader) returns RangeCheckSiteTarget throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ParamCount
+	let a2 = try reader.bytes()
+	let a3 = try reader.flag()
+
+	return RangeCheckSiteTarget.callArgument(a0, argIndex: a1, label: a2, sourceMayBeNegative: a3)
+end 'cacheReadRangeCheckSiteTargetCallArgument'
+
+// @generated library-cache end
+
 export typealias RangeCheckSiteArray = Array with RangeCheckSite
+
+// @generated library-cache begin
+function cacheWriteRangeCheckSiteArray(writer LibraryCacheWriter, value RangeCheckSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteRangeCheckSiteArray'
+
+function cacheReadRangeCheckSiteArray(reader LibraryCacheReader) returns RangeCheckSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RangeCheckSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try RangeCheckSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadRangeCheckSiteArray'
+
+// @generated library-cache end
 
 // ⭐ **THE ONE POSITION WHOSE ALIAS THE PARSER CANNOT NAME.** Every door above holds the DECLARED
 // type with its alias still on it, so it resolves the name on the spot. A direct call argument does
@@ -3272,6 +4875,31 @@ export type RangeCheckArgSite
 	export static function create(value ValueId, parameter ArgSiteParameter, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckArgSite
 		return Self{value: value, parameter: parameter, block: block, line: line, column: column}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.value as CacheUnsigned)
+		cacheWriteArgSiteParameter(writer, value: self.parameter)
+		writer.unsigned(self.block as CacheUnsigned)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns RangeCheckArgSite throws LibraryCacheDamage
+		let f_value = (try reader.unsigned()) as ValueId
+		let f_parameter = try cacheReadArgSiteParameter(reader)
+		let f_block = (try reader.unsigned()) as BlockId
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{value: f_value, parameter: f_parameter, block: f_block, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(RangeCheckArgSite) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'RangeCheckArgSite'
 
 export union ArgSiteParameter
@@ -3311,7 +4939,79 @@ export union ArgSiteParameter
 	end 'retargetedTo'
 end 'ArgSiteParameter'
 
+// @generated library-cache begin
+function cacheWriteArgSiteParameter(writer LibraryCacheWriter, value ArgSiteParameter)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		ofCallee(a0, a1, a2, a3) then cacheWriteArgSiteParameterOfCallee(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		interfaceFormal(a0) then cacheWriteArgSiteParameterInterfaceFormal(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteArgSiteParameter'
+
+function cacheWriteArgSiteParameterOfCallee(writer LibraryCacheWriter, a0 ByteArray, a1 ByteArray, a2 ParamCount, a3 ByteArray)
+	writer.bytes(a0)
+	writer.bytes(a1)
+	writer.unsigned(a2 as CacheUnsigned)
+	writer.bytes(a3)
+end 'cacheWriteArgSiteParameterOfCallee'
+
+function cacheWriteArgSiteParameterInterfaceFormal(writer LibraryCacheWriter, a0 RangedTypeAlias)
+	a0.cacheWrite(writer)
+end 'cacheWriteArgSiteParameterInterfaceFormal'
+
+function cacheReadArgSiteParameter(reader LibraryCacheReader) returns ArgSiteParameter throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadArgSiteParameterOfCallee(reader)
+		1 gives try cacheReadArgSiteParameterInterfaceFormal(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadArgSiteParameter'
+
+function cacheReadArgSiteParameterOfCallee(reader LibraryCacheReader) returns ArgSiteParameter throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = try reader.bytes()
+	let a2 = (try reader.unsigned()) as ParamCount
+	let a3 = try reader.bytes()
+
+	return ArgSiteParameter.ofCallee(a0, callee: a1, argIndex: a2, label: a3)
+end 'cacheReadArgSiteParameterOfCallee'
+
+function cacheReadArgSiteParameterInterfaceFormal(reader LibraryCacheReader) returns ArgSiteParameter throws LibraryCacheDamage
+	let a0 = try RangedTypeAlias.cacheRead(reader)
+
+	return ArgSiteParameter.interfaceFormal(a0)
+end 'cacheReadArgSiteParameterInterfaceFormal'
+
+// @generated library-cache end
+
 export typealias RangeCheckArgSiteArray = Array with RangeCheckArgSite
+
+// @generated library-cache begin
+function cacheWriteRangeCheckArgSiteArray(writer LibraryCacheWriter, value RangeCheckArgSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteRangeCheckArgSiteArray'
+
+function cacheReadRangeCheckArgSiteArray(reader LibraryCacheReader) returns RangeCheckArgSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RangeCheckArgSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try RangeCheckArgSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadRangeCheckArgSiteArray'
+
+// @generated library-cache end
 
 // One `return <expr>` in a function whose declared return type is a ranged alias. The pass guards the
 // `ret` terminator of `block` and reports against the function's `returnAlias`.
@@ -3338,9 +5038,56 @@ export type RangeCheckReturnSite
 	export static function create(value ValueId, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckReturnSite
 		return Self{value: value, block: block, line: line, column: column}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.value as CacheUnsigned)
+		writer.unsigned(self.block as CacheUnsigned)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns RangeCheckReturnSite throws LibraryCacheDamage
+		let f_value = (try reader.unsigned()) as ValueId
+		let f_block = (try reader.unsigned()) as BlockId
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{value: f_value, block: f_block, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(RangeCheckReturnSite) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'RangeCheckReturnSite'
 
 export typealias RangeCheckReturnSiteArray = Array with RangeCheckReturnSite
+
+// @generated library-cache begin
+function cacheWriteRangeCheckReturnSiteArray(writer LibraryCacheWriter, value RangeCheckReturnSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteRangeCheckReturnSiteArray'
+
+function cacheReadRangeCheckReturnSiteArray(reader LibraryCacheReader) returns RangeCheckReturnSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RangeCheckReturnSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try RangeCheckReturnSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadRangeCheckReturnSiteArray'
+
+// @generated library-cache end
 
 // ⭐⭐ **A CLOSED INTEGER INTERVAL A VALUE IS PROVEN TO LIE IN, THAT NOTHING NAMES.** The counter of
 // a `for i in a upto b` is in `[a, b-1]` throughout the loop body, and no `typealias` in the
@@ -3368,6 +5115,25 @@ export type ProvenIntRange
 	export static function create(low ParsedInt, high ParsedInt) returns ProvenIntRange
 		return Self{low: low, high: high}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.signed(self.low as CacheSigned)
+		writer.signed(self.high as CacheSigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ProvenIntRange throws LibraryCacheDamage
+		let f_low = (try reader.signed()) as ParsedInt
+		let f_high = (try reader.signed()) as ParsedInt
+
+		return Self{low: f_low, high: f_high}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ProvenIntRange) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ProvenIntRange'
 
 // ⭐ Per-function map from a value's function-local `ValueId` to the interval above. SPARSE but not rare:
@@ -3378,6 +5144,31 @@ end 'ProvenIntRange'
 // VERBATIM, so the Std tier reads the parser's own numbering with no remap.
 export typealias ProvenIntRangeMap = Map with (ValueId, ProvenIntRange)
 
+// @generated library-cache begin
+function cacheWriteProvenIntRangeMap(writer LibraryCacheWriter, value ProvenIntRangeMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteProvenIntRangeMap'
+
+function cacheReadProvenIntRangeMap(reader LibraryCacheReader) returns ProvenIntRangeMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ProvenIntRangeMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ValueId
+		let entry = try ProvenIntRange.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadProvenIntRangeMap'
+
+// @generated library-cache end
+
 // ⭐ **"NOTHING PROVED AN INTERVAL IN THIS FUNCTION" AS A SPELLED STATE** — `ValueMarkColumn`'s reason, over
 // the interval table. `unwritten` is the answer for a function with no counted loop AND no `.count()`. It rides `FunctionRangeChecks` to `InlineLeaves`, so the state crosses the tier boundary
 // with the column rather than being unwrapped at the border.
@@ -3385,6 +5176,38 @@ export union ProvenIntRangeColumn
 	unwritten
 	entries(proven ProvenIntRangeMap)
 end 'ProvenIntRangeColumn'
+
+// @generated library-cache begin
+function cacheWriteProvenIntRangeColumn(writer LibraryCacheWriter, value ProvenIntRangeColumn)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unwritten then break 'payload'
+		entries(a0) then cacheWriteProvenIntRangeColumnEntries(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteProvenIntRangeColumn'
+
+function cacheWriteProvenIntRangeColumnEntries(writer LibraryCacheWriter, a0 ProvenIntRangeMap)
+	cacheWriteProvenIntRangeMap(writer, value: a0)
+end 'cacheWriteProvenIntRangeColumnEntries'
+
+function cacheReadProvenIntRangeColumn(reader LibraryCacheReader) returns ProvenIntRangeColumn throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives ProvenIntRangeColumn.unwritten
+		1 gives try cacheReadProvenIntRangeColumnEntries(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadProvenIntRangeColumn'
+
+function cacheReadProvenIntRangeColumnEntries(reader LibraryCacheReader) returns ProvenIntRangeColumn throws LibraryCacheDamage
+	let a0 = try cacheReadProvenIntRangeMap(reader)
+
+	return ProvenIntRangeColumn.entries(a0)
+end 'cacheReadProvenIntRangeColumnEntries'
+
+// @generated library-cache end
 
 export let noProvenIntRanges = ProvenIntRangeColumn.unwritten
 
@@ -3426,9 +5249,56 @@ export type RangeCheckParamSite
 	export static function create(index ParamCount, alias RangedTypeAlias, line LineNumber, column ColumnNumber) returns RangeCheckParamSite
 		return Self{index: index, alias: alias, line: line, column: column}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.index as CacheUnsigned)
+		self.alias.cacheWrite(writer)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns RangeCheckParamSite throws LibraryCacheDamage
+		let f_index = (try reader.unsigned()) as ParamCount
+		let f_alias = try RangedTypeAlias.cacheRead(reader)
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{index: f_index, alias: f_alias, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(RangeCheckParamSite) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'RangeCheckParamSite'
 
 export typealias RangeCheckParamSiteArray = Array with RangeCheckParamSite
+
+// @generated library-cache begin
+function cacheWriteRangeCheckParamSiteArray(writer LibraryCacheWriter, value RangeCheckParamSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteRangeCheckParamSiteArray'
+
+function cacheReadRangeCheckParamSiteArray(reader LibraryCacheReader) returns RangeCheckParamSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RangeCheckParamSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try RangeCheckParamSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadRangeCheckParamSiteArray'
+
+// @generated library-cache end
 
 // ⭐⭐ **ONE ENTRY CASCADE `InsertRangeChecks` ACTUALLY EMITTED FOR A NARROWED PARAMETER** — the
 // `RangeCheckParamSite` above says a guard is OWED; this says where the guard IS. Nothing recorded that
@@ -3462,9 +5332,58 @@ module type RangeCheckParamGuard
 	module static function create(index ParamCount, alias RangedTypeAlias, headBlockId BlockId, okBlockId BlockId, ownedBlockIds BlockIdArray) returns RangeCheckParamGuard
 		return Self{index: index, alias: alias, headBlockId: headBlockId, okBlockId: okBlockId, ownedBlockIds: ownedBlockIds}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.index as CacheUnsigned)
+		self.alias.cacheWrite(writer)
+		writer.unsigned(self.headBlockId as CacheUnsigned)
+		writer.unsigned(self.okBlockId as CacheUnsigned)
+		cacheWriteBlockIdArray(writer, value: self.ownedBlockIds)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns RangeCheckParamGuard throws LibraryCacheDamage
+		let f_index = (try reader.unsigned()) as ParamCount
+		let f_alias = try RangedTypeAlias.cacheRead(reader)
+		let f_headBlockId = (try reader.unsigned()) as BlockId
+		let f_okBlockId = (try reader.unsigned()) as BlockId
+		let f_ownedBlockIds = try cacheReadBlockIdArray(reader)
+
+		return Self{index: f_index, alias: f_alias, headBlockId: f_headBlockId, okBlockId: f_okBlockId, ownedBlockIds: f_ownedBlockIds}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(RangeCheckParamGuard) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'RangeCheckParamGuard'
 
 module typealias RangeCheckParamGuardArray = Array with RangeCheckParamGuard
+
+// @generated library-cache begin
+module function cacheWriteRangeCheckParamGuardArray(writer LibraryCacheWriter, value RangeCheckParamGuardArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteRangeCheckParamGuardArray'
+
+module function cacheReadRangeCheckParamGuardArray(reader LibraryCacheReader) returns RangeCheckParamGuardArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = RangeCheckParamGuardArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try RangeCheckParamGuard.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadRangeCheckParamGuardArray'
+
+// @generated library-cache end
 
 // Every range-check site in one function. `filePath` is stamped by `mergeArtifact` (the
 // function's file); `returnAlias` is `undeclared` unless the function returns a ranged alias.
@@ -3524,6 +5443,41 @@ export type FunctionRangeChecks
 
 		throw MapError.keyNotFound
 	end 'paramAliasAt'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		writer.text(self.filePath.toString())
+		cacheWriteRangeCheckSiteArray(writer, value: self.sites)
+		writer.flag(self.positionsResolved)
+		cacheWriteRangeCheckArgSiteArray(writer, value: self.argSites)
+		cacheWriteDeclaredAlias(writer, value: self.returnAlias)
+		cacheWriteRangeCheckReturnSiteArray(writer, value: self.returnSites)
+		cacheWriteRangeCheckParamSiteArray(writer, value: self.paramSites)
+		cacheWriteProvenIntRangeColumn(writer, value: self.provenValueRanges)
+		cacheWriteValueMarkColumn(writer, value: self.writtenNegativeLiterals)
+		cacheWriteBorrowOperandsColumn(writer, value: self.borrowOperands)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns FunctionRangeChecks throws LibraryCacheDamage
+		let f_filePath = try reader.path()
+		let f_sites = try cacheReadRangeCheckSiteArray(reader)
+		let f_positionsResolved = try reader.flag()
+		let f_argSites = try cacheReadRangeCheckArgSiteArray(reader)
+		let f_returnAlias = try cacheReadDeclaredAlias(reader)
+		let f_returnSites = try cacheReadRangeCheckReturnSiteArray(reader)
+		let f_paramSites = try cacheReadRangeCheckParamSiteArray(reader)
+		let f_provenValueRanges = try cacheReadProvenIntRangeColumn(reader)
+		let f_writtenNegativeLiterals = try cacheReadValueMarkColumn(reader)
+		let f_borrowOperands = try cacheReadBorrowOperandsColumn(reader)
+
+		return Self{filePath: f_filePath, sites: f_sites, positionsResolved: f_positionsResolved, argSites: f_argSites, returnAlias: f_returnAlias, returnSites: f_returnSites, paramSites: f_paramSites, provenValueRanges: f_provenValueRanges, writtenNegativeLiterals: f_writtenNegativeLiterals, borrowOperands: f_borrowOperands}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize80
+		return sizeof(FunctionRangeChecks) as CacheSize80
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FunctionRangeChecks'
 
 // Registry: function name -> its range-check sites. Populated by `mergeArtifact` from each
@@ -3661,12 +5615,79 @@ export type FunctionTypeAlias
 
 		return Self{name: self.name, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: remappedAliasSlotIdentity(self.returnIdentity, remap: remap), returnAggregateName: self.returnAggregateName, display: self.display.clone(), paramTypes: params, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility}
 	end 'withInstancesRenumbered'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		writer.unsigned(self.returnTag.ordinal as CacheUnsigned)
+		writer.bytes(self.returnTypeName)
+		cacheWriteAliasSlotIdentity(writer, value: self.returnIdentity)
+		writer.bytes(self.returnAggregateName)
+		cacheWriteFunctionAliasParamArray(writer, value: self.paramTypes)
+		writer.unsigned(self.paramSpelling as CacheUnsigned)
+		cacheWriteFunctionAliasDisplay(writer, value: self.display)
+		writer.text(self.declFilePath.toString())
+		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns FunctionTypeAlias throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_returnTag = try cacheReadValueTypeTag(reader)
+		let f_returnTypeName = try reader.bytes()
+		let f_returnIdentity = try cacheReadAliasSlotIdentity(reader)
+		let f_returnAggregateName = try reader.bytes()
+		let f_paramTypes = try cacheReadFunctionAliasParamArray(reader)
+		let f_paramSpelling = (try reader.unsigned()) as HashDigest
+		let f_display = try cacheReadFunctionAliasDisplay(reader)
+		let f_declFilePath = try reader.path()
+		let f_visibility = try cacheReadVisibility(reader)
+
+		return Self{name: f_name, returnTag: f_returnTag, returnTypeName: f_returnTypeName, returnIdentity: f_returnIdentity, returnAggregateName: f_returnAggregateName, paramTypes: f_paramTypes, paramSpelling: f_paramSpelling, display: f_display, declFilePath: f_declFilePath, visibility: f_visibility}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize80
+		return sizeof(FunctionTypeAlias) as CacheSize80
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FunctionTypeAlias'
 
 export union FunctionAliasDisplay
 	unread
 	spelled(text ByteArray)
 end 'FunctionAliasDisplay'
+
+// @generated library-cache begin
+function cacheWriteFunctionAliasDisplay(writer LibraryCacheWriter, value FunctionAliasDisplay)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unread then break 'payload'
+		spelled(a0) then cacheWriteFunctionAliasDisplaySpelled(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteFunctionAliasDisplay'
+
+function cacheWriteFunctionAliasDisplaySpelled(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteFunctionAliasDisplaySpelled'
+
+function cacheReadFunctionAliasDisplay(reader LibraryCacheReader) returns FunctionAliasDisplay throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives FunctionAliasDisplay.unread
+		1 gives try cacheReadFunctionAliasDisplaySpelled(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadFunctionAliasDisplay'
+
+function cacheReadFunctionAliasDisplaySpelled(reader LibraryCacheReader) returns FunctionAliasDisplay throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return FunctionAliasDisplay.spelled(a0)
+end 'cacheReadFunctionAliasDisplaySpelled'
+
+// @generated library-cache end
 
 // ONE parameter of a function typealias, stored the way the alias's RETURN type is and for the same
 // reason: a function alias travels by NAME through both fold paths and is remapped by neither, so a
@@ -3707,18 +5728,165 @@ export type FunctionAliasParam
 	export static function create(tag ValueTypeTag, typeName ByteArray, identity AliasSlotIdentity, aggregateName ByteArray) returns FunctionAliasParam
 		return Self{tag: tag, typeName: typeName, identity: identity, aggregateName: aggregateName}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.tag.ordinal as CacheUnsigned)
+		writer.bytes(self.typeName)
+		writer.bytes(self.aggregateName)
+		cacheWriteAliasSlotIdentity(writer, value: self.identity)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns FunctionAliasParam throws LibraryCacheDamage
+		let f_tag = try cacheReadValueTypeTag(reader)
+		let f_typeName = try reader.bytes()
+		let f_aggregateName = try reader.bytes()
+		let f_identity = try cacheReadAliasSlotIdentity(reader)
+
+		return Self{tag: f_tag, typeName: f_typeName, aggregateName: f_aggregateName, identity: f_identity}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(FunctionAliasParam) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FunctionAliasParam'
 
 export typealias FunctionAliasParamArray = Array with FunctionAliasParam
 
+// @generated library-cache begin
+function cacheWriteFunctionAliasParamArray(writer LibraryCacheWriter, value FunctionAliasParamArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteFunctionAliasParamArray'
+
+function cacheReadFunctionAliasParamArray(reader LibraryCacheReader) returns FunctionAliasParamArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FunctionAliasParamArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try FunctionAliasParam.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadFunctionAliasParamArray'
+
+// @generated library-cache end
+
 export typealias FunctionTypeAliasArray = Array with FunctionTypeAlias
+
+// @generated library-cache begin
+module function cacheWriteFunctionTypeAliasArray(writer LibraryCacheWriter, value FunctionTypeAliasArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteFunctionTypeAliasArray'
+
+module function cacheReadFunctionTypeAliasArray(reader LibraryCacheReader) returns FunctionTypeAliasArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FunctionTypeAliasArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try FunctionTypeAlias.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadFunctionTypeAliasArray'
+
+// @generated library-cache end
+
 export typealias FunctionTypeAliasMap = Map with (ByteArray, FunctionTypeAlias)
 
+// @generated library-cache begin
+function cacheWriteFunctionTypeAliasMap(writer LibraryCacheWriter, value FunctionTypeAliasMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteFunctionTypeAliasMap'
+
+function cacheReadFunctionTypeAliasMap(reader LibraryCacheReader) returns FunctionTypeAliasMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FunctionTypeAliasMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try FunctionTypeAlias.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadFunctionTypeAliasMap'
+
+// @generated library-cache end
+
 typealias FunctionAliasByDeclaringFile = Map with (String, FunctionTypeAlias)
+
+// @generated library-cache begin
+function cacheWriteFunctionAliasByDeclaringFile(writer LibraryCacheWriter, value FunctionAliasByDeclaringFile)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.text(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteFunctionAliasByDeclaringFile'
+
+function cacheReadFunctionAliasByDeclaringFile(reader LibraryCacheReader) returns FunctionAliasByDeclaringFile throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FunctionAliasByDeclaringFile.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.text()
+		let entry = try FunctionTypeAlias.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadFunctionAliasByDeclaringFile'
+
+// @generated library-cache end
 
 let sharedEmptyFunctionAliasDeclarations = FunctionAliasByDeclaringFile.create()
 
 typealias MultiplyDeclaredFunctionAliasMap = Map with (ByteArray, FunctionAliasByDeclaringFile)
+
+// @generated library-cache begin
+function cacheWriteMultiplyDeclaredFunctionAliasMap(writer LibraryCacheWriter, value MultiplyDeclaredFunctionAliasMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteFunctionAliasByDeclaringFile(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteMultiplyDeclaredFunctionAliasMap'
+
+function cacheReadMultiplyDeclaredFunctionAliasMap(reader LibraryCacheReader) returns MultiplyDeclaredFunctionAliasMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = MultiplyDeclaredFunctionAliasMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadFunctionAliasByDeclaringFile(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadMultiplyDeclaredFunctionAliasMap'
+
+// @generated library-cache end
 
 export function functionAliasShapeKeyOf(name ByteArray, declPath String) returns String
 	return "{String.from(name)}#{declPath}"
@@ -3916,6 +6084,29 @@ export type FunctionAliasRegistry
 		fingerprint.note("shapeScoped", value: self.shapeScoped.count())
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteFunctionTypeAliasMap(writer, value: self.byName)
+		cacheWriteMultiplyDeclaredFunctionAliasMap(writer, value: self.multiplyDeclared)
+		self.provenance.cacheWrite(writer)
+		cacheWriteMultiplyDeclaredFunctionAliasMap(writer, value: self.shapeScoped)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns FunctionAliasRegistry throws LibraryCacheDamage
+		let f_byName = try cacheReadFunctionTypeAliasMap(reader)
+		let f_multiplyDeclared = try cacheReadMultiplyDeclaredFunctionAliasMap(reader)
+		let f_provenance = try ClaimantProvenance.cacheRead(reader)
+		let f_shapeScoped = try cacheReadMultiplyDeclaredFunctionAliasMap(reader)
+
+		return Self{byName: f_byName, multiplyDeclared: f_multiplyDeclared, provenance: f_provenance, shapeScoped: f_shapeScoped}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(FunctionAliasRegistry) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FunctionAliasRegistry'
 
 function holdsShape(spellings HashDigestArray, shape HashDigest) returns bool
@@ -4175,7 +6366,91 @@ export union FieldDefault
 	bareCreateHelper(name ByteArray)
 end 'FieldDefault'
 
+// @generated library-cache begin
+function cacheWriteFieldDefault(writer LibraryCacheWriter, value FieldDefault)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break 'payload'
+		literal(a0, a1, a2) then cacheWriteFieldDefaultLiteral(writer, a0: a0, a1: a1, a2: a2)
+		helper(a0) then cacheWriteFieldDefaultHelper(writer, a0: a0)
+		bareCreateHelper(a0) then cacheWriteFieldDefaultBareCreateHelper(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteFieldDefault'
+
+function cacheWriteFieldDefaultLiteral(writer LibraryCacheWriter, a0 ParsedInt, a1 ValueTypeTag, a2 bool)
+	writer.signed(a0 as CacheSigned)
+	writer.unsigned(a1.ordinal as CacheUnsigned)
+	writer.flag(a2)
+end 'cacheWriteFieldDefaultLiteral'
+
+function cacheWriteFieldDefaultHelper(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteFieldDefaultHelper'
+
+function cacheWriteFieldDefaultBareCreateHelper(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteFieldDefaultBareCreateHelper'
+
+function cacheReadFieldDefault(reader LibraryCacheReader) returns FieldDefault throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives FieldDefault.none
+		1 gives try cacheReadFieldDefaultLiteral(reader)
+		2 gives try cacheReadFieldDefaultHelper(reader)
+		3 gives try cacheReadFieldDefaultBareCreateHelper(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadFieldDefault'
+
+function cacheReadFieldDefaultLiteral(reader LibraryCacheReader) returns FieldDefault throws LibraryCacheDamage
+	let a0 = (try reader.signed()) as ParsedInt
+	let a1 = try cacheReadValueTypeTag(reader)
+	let a2 = try reader.flag()
+
+	return FieldDefault.literal(a0, tag: a1, writtenNegative: a2)
+end 'cacheReadFieldDefaultLiteral'
+
+function cacheReadFieldDefaultHelper(reader LibraryCacheReader) returns FieldDefault throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return FieldDefault.helper(a0)
+end 'cacheReadFieldDefaultHelper'
+
+function cacheReadFieldDefaultBareCreateHelper(reader LibraryCacheReader) returns FieldDefault throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return FieldDefault.bareCreateHelper(a0)
+end 'cacheReadFieldDefaultBareCreateHelper'
+
+// @generated library-cache end
+
 export typealias FieldDefaultArray = Array with FieldDefault
+
+// @generated library-cache begin
+function cacheWriteFieldDefaultArray(writer LibraryCacheWriter, value FieldDefaultArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		cacheWriteFieldDefault(writer, value: item)
+	end 'eachItem'
+end 'cacheWriteFieldDefaultArray'
+
+function cacheReadFieldDefaultArray(reader LibraryCacheReader) returns FieldDefaultArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FieldDefaultArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadFieldDefault(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadFieldDefaultArray'
+
+// @generated library-cache end
 
 // StructLayout — one declared `type T`: what it is called, and its fields IN DECLARATION ORDER.
 //
@@ -4224,9 +6499,54 @@ export type WhereConstraint
 	export static function create(typeParamIndex ElementIndex, interfaceName ByteArray, associatedBindings ByteArrayArray = sharedEmptyDeclaredConformances) returns WhereConstraint
 		return Self{typeParamIndex: typeParamIndex, interfaceName: interfaceName, associatedBindings: associatedBindings}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.typeParamIndex as CacheUnsigned)
+		writer.bytes(self.interfaceName)
+		cacheWriteByteArrayArray(writer, value: self.associatedBindings)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns WhereConstraint throws LibraryCacheDamage
+		let f_typeParamIndex = (try reader.unsigned()) as ElementIndex
+		let f_interfaceName = try reader.bytes()
+		let f_associatedBindings = try cacheReadByteArrayArray(reader)
+
+		return Self{typeParamIndex: f_typeParamIndex, interfaceName: f_interfaceName, associatedBindings: f_associatedBindings}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(WhereConstraint) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'WhereConstraint'
 
 export typealias WhereConstraintArray = Array with WhereConstraint
+
+// @generated library-cache begin
+module function cacheWriteWhereConstraintArray(writer LibraryCacheWriter, value WhereConstraintArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteWhereConstraintArray'
+
+module function cacheReadWhereConstraintArray(reader LibraryCacheReader) returns WhereConstraintArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = WhereConstraintArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try WhereConstraint.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadWhereConstraintArray'
+
+// @generated library-cache end
 
 // Do two constraint lists name the same constraints in the same ORDER? The order is what makes this the
 // right question rather than set equality: the list IS the witness-slot numbering, so two lists agree only
@@ -4327,6 +6647,30 @@ let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 let sharedEmptyMessageMethods = ByteArrayArray.create()
 
 export typealias BitWidthArray = Array with BitWidth
+
+// @generated library-cache begin
+function cacheWriteBitWidthArray(writer LibraryCacheWriter, value BitWidthArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteBitWidthArray'
+
+function cacheReadBitWidthArray(reader LibraryCacheReader) returns BitWidthArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = BitWidthArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.boundedUnsigned(0, high: 64)) as BitWidth
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadBitWidthArray'
+
+// @generated library-cache end
 
 let sharedEmptyInlineBitWidths = BitWidthArray.create()
 
@@ -4926,14 +7270,124 @@ export type StructLayout
 
 		return self.slotBytes
 	end 'sizeBytes'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		cacheWriteByteArrayArray(writer, value: self.fieldNames)
+		cacheWriteMaxonTypeArray(writer, value: self.fieldTypes)
+		cacheWriteBoolArray(writer, value: self.fieldMutable)
+		cacheWriteVisibilityArray(writer, value: self.fieldVisibility)
+		cacheWriteFieldDefaultArray(writer, value: self.fieldDefaults)
+		cacheWriteDeclaredSurfaceArray(writer, value: self.fieldDeclaredSurfaces)
+		cacheWriteByteArrayArray(writer, value: self.fieldDeclaredBrands)
+		cacheWriteSpelledFieldNameArray(writer, value: self.fieldSpelledNames)
+		cacheWriteByteOffsetArray(writer, value: self.fieldOffsets)
+		writer.flag(self.packsInlineIntoAWord)
+		cacheWriteBitWidthArray(writer, value: self.fieldBitWidths)
+		cacheWriteBitWidthArray(writer, value: self.fieldBitOffsets)
+		writer.unsigned(self.slotBytes as CacheUnsigned)
+		cacheWriteByteArrayArray(writer, value: self.typeParamNames)
+		cacheWriteWhereConstraintArray(writer, value: self.whereConstraints)
+		cacheWriteByteArrayArray(writer, value: self.conformsTo)
+		cacheWriteConformanceBindingArray(writer, value: self.conformanceBindings)
+		cacheWriteByteArrayArray(writer, value: self.messageMethodNames)
+		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
+		writer.text(self.declFilePath.toString())
+		writer.unsigned(self.declLine as CacheUnsigned)
+		writer.unsigned(self.declColumn as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns StructLayout throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_fieldNames = try cacheReadByteArrayArray(reader)
+		let f_fieldTypes = try cacheReadMaxonTypeArray(reader)
+		let f_fieldMutable = try cacheReadBoolArray(reader)
+		let f_fieldVisibility = try cacheReadVisibilityArray(reader)
+		let f_fieldDefaults = try cacheReadFieldDefaultArray(reader)
+		let f_fieldDeclaredSurfaces = try cacheReadDeclaredSurfaceArray(reader)
+		let f_fieldDeclaredBrands = try cacheReadByteArrayArray(reader)
+		let f_fieldSpelledNames = try cacheReadSpelledFieldNameArray(reader)
+		let f_fieldOffsets = try cacheReadByteOffsetArray(reader)
+		let f_packsInlineIntoAWord = try reader.flag()
+		let f_fieldBitWidths = try cacheReadBitWidthArray(reader)
+		let f_fieldBitOffsets = try cacheReadBitWidthArray(reader)
+		let f_slotBytes = (try reader.unsigned()) as ByteOffset
+		let f_typeParamNames = try cacheReadByteArrayArray(reader)
+		let f_whereConstraints = try cacheReadWhereConstraintArray(reader)
+		let f_conformsTo = try cacheReadByteArrayArray(reader)
+		let f_conformanceBindings = try cacheReadConformanceBindingArray(reader)
+		let f_messageMethodNames = try cacheReadByteArrayArray(reader)
+		let f_visibility = try cacheReadVisibility(reader)
+		let f_declFilePath = try reader.path()
+		let f_declLine = (try reader.unsigned()) as LineNumber
+		let f_declColumn = (try reader.unsigned()) as ColumnNumber
+
+		return Self{name: f_name, fieldNames: f_fieldNames, fieldTypes: f_fieldTypes, fieldMutable: f_fieldMutable, fieldVisibility: f_fieldVisibility, fieldDefaults: f_fieldDefaults, fieldDeclaredSurfaces: f_fieldDeclaredSurfaces, fieldDeclaredBrands: f_fieldDeclaredBrands, fieldSpelledNames: f_fieldSpelledNames, fieldOffsets: f_fieldOffsets, packsInlineIntoAWord: f_packsInlineIntoAWord, fieldBitWidths: f_fieldBitWidths, fieldBitOffsets: f_fieldBitOffsets, slotBytes: f_slotBytes, typeParamNames: f_typeParamNames, whereConstraints: f_whereConstraints, conformsTo: f_conformsTo, conformanceBindings: f_conformanceBindings, messageMethodNames: f_messageMethodNames, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize184
+		return sizeof(StructLayout) as CacheSize184
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'StructLayout'
 
 export typealias StructLayoutArray = Array with StructLayout
+
+// @generated library-cache begin
+module function cacheWriteStructLayoutArray(writer LibraryCacheWriter, value StructLayoutArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteStructLayoutArray'
+
+module function cacheReadStructLayoutArray(reader LibraryCacheReader) returns StructLayoutArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = StructLayoutArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try StructLayout.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadStructLayoutArray'
+
+// @generated library-cache end
 
 // Registry: struct-type name -> its declaration. The twin of `RangedTypeAliasMap`, filled from
 // each file's artifact by `mergeArtifact` and read by TypeResolution to turn `MaxonType.named` for
 // a declared `type` into `MaxonType.structRef`.
 export typealias StructLayoutMap = Map with (ByteArray, StructLayout)
+
+// @generated library-cache begin
+module function cacheWriteStructLayoutMap(writer LibraryCacheWriter, value StructLayoutMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteStructLayoutMap'
+
+module function cacheReadStructLayoutMap(reader LibraryCacheReader) returns StructLayoutMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = StructLayoutMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try StructLayout.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadStructLayoutMap'
+
+// @generated library-cache end
 
 // --- Union payload fields ---
 
@@ -4962,10 +7416,82 @@ export type PayloadField
 	export static function create(name ByteArray, declaredType MaxonType, declaredSurface DeclaredSurface, declaredBrand ByteArray) returns PayloadField
 		return Self{name: name, declaredType: declaredType, declaredSurface: declaredSurface, declaredBrand: declaredBrand}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		cacheWriteMaxonType(writer, value: self.declaredType)
+		writer.bytes(self.declaredBrand)
+		cacheWriteDeclaredSurface(writer, value: self.declaredSurface)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns PayloadField throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_declaredType = try cacheReadMaxonType(reader)
+		let f_declaredBrand = try reader.bytes()
+		let f_declaredSurface = try cacheReadDeclaredSurface(reader)
+
+		return Self{name: f_name, declaredType: f_declaredType, declaredBrand: f_declaredBrand, declaredSurface: f_declaredSurface}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(PayloadField) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'PayloadField'
 
 export typealias PayloadFieldArray = Array with PayloadField
+
+// @generated library-cache begin
+function cacheWritePayloadFieldArray(writer LibraryCacheWriter, value PayloadFieldArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWritePayloadFieldArray'
+
+function cacheReadPayloadFieldArray(reader LibraryCacheReader) returns PayloadFieldArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = PayloadFieldArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try PayloadField.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadPayloadFieldArray'
+
+// @generated library-cache end
+
 export typealias PayloadFieldArrayArray = Array with PayloadFieldArray
+
+// @generated library-cache begin
+function cacheWritePayloadFieldArrayArray(writer LibraryCacheWriter, value PayloadFieldArrayArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		cacheWritePayloadFieldArray(writer, value: item)
+	end 'eachItem'
+end 'cacheWritePayloadFieldArrayArray'
+
+function cacheReadPayloadFieldArrayArray(reader LibraryCacheReader) returns PayloadFieldArrayArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = PayloadFieldArrayArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadPayloadFieldArray(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadPayloadFieldArrayArray'
+
+// @generated library-cache end
 
 // ⭐⭐ **ONE ENTRY OF A CONSTANT STRUCT BACKING, AS THE DECLARATION COULD KNOW IT** — `value: 1` out of
 // `add = Meta{value: 1}`, or the argument `1` out of `add = Meta.create(1)`.
@@ -5000,6 +7526,29 @@ export type EnumBackingField
 	export static function create(name ByteArray, position FieldIndex, group EnumBackingGroupId, value EnumBackingFieldValue) returns EnumBackingField
 		return Self{name: name, position: position, group: group, value: value}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		writer.unsigned(self.position as CacheUnsigned)
+		writer.unsigned(self.group as CacheUnsigned)
+		cacheWriteEnumBackingFieldValue(writer, value: self.value)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns EnumBackingField throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_position = (try reader.boundedUnsigned(0, high: 65535)) as FieldIndex
+		let f_group = (try reader.boundedUnsigned(0, high: 65536)) as EnumBackingGroupId
+		let f_value = try cacheReadEnumBackingFieldValue(reader)
+
+		return Self{name: f_name, position: f_position, group: f_group, value: f_value}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(EnumBackingField) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'EnumBackingField'
 
 // The index of one entry in a case's flat entry array — `Parser.readEnumBackingEntryInto` pushes them and
@@ -5058,6 +7607,64 @@ export union EnumBackingFieldValue
 	nestedStruct(structName ByteArray)
 end 'EnumBackingFieldValue'
 
+// @generated library-cache begin
+function cacheWriteEnumBackingFieldValue(writer LibraryCacheWriter, value EnumBackingFieldValue)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		literal(a0, a1) then cacheWriteEnumBackingFieldValueLiteral(writer, a0: a0, a1: a1)
+		enumCase(a0, a1) then cacheWriteEnumBackingFieldValueEnumCase(writer, a0: a0, a1: a1)
+		nestedStruct(a0) then cacheWriteEnumBackingFieldValueNestedStruct(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteEnumBackingFieldValue'
+
+function cacheWriteEnumBackingFieldValueLiteral(writer LibraryCacheWriter, a0 ParsedInt, a1 EnumBackingLiteralKind)
+	writer.signed(a0 as CacheSigned)
+	writer.unsigned(a1.ordinal as CacheUnsigned)
+end 'cacheWriteEnumBackingFieldValueLiteral'
+
+function cacheWriteEnumBackingFieldValueEnumCase(writer LibraryCacheWriter, a0 ByteArray, a1 ByteArray)
+	writer.bytes(a0)
+	writer.bytes(a1)
+end 'cacheWriteEnumBackingFieldValueEnumCase'
+
+function cacheWriteEnumBackingFieldValueNestedStruct(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteEnumBackingFieldValueNestedStruct'
+
+function cacheReadEnumBackingFieldValue(reader LibraryCacheReader) returns EnumBackingFieldValue throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadEnumBackingFieldValueLiteral(reader)
+		1 gives try cacheReadEnumBackingFieldValueEnumCase(reader)
+		2 gives try cacheReadEnumBackingFieldValueNestedStruct(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadEnumBackingFieldValue'
+
+function cacheReadEnumBackingFieldValueLiteral(reader LibraryCacheReader) returns EnumBackingFieldValue throws LibraryCacheDamage
+	let a0 = (try reader.signed()) as ParsedInt
+	let a1 = try cacheReadEnumBackingLiteralKind(reader)
+
+	return EnumBackingFieldValue.literal(a0, kind: a1)
+end 'cacheReadEnumBackingFieldValueLiteral'
+
+function cacheReadEnumBackingFieldValueEnumCase(reader LibraryCacheReader) returns EnumBackingFieldValue throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = try reader.bytes()
+
+	return EnumBackingFieldValue.enumCase(a0, caseName: a1)
+end 'cacheReadEnumBackingFieldValueEnumCase'
+
+function cacheReadEnumBackingFieldValueNestedStruct(reader LibraryCacheReader) returns EnumBackingFieldValue throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return EnumBackingFieldValue.nestedStruct(a0)
+end 'cacheReadEnumBackingFieldValueNestedStruct'
+
+// @generated library-cache end
+
 // ⭐ **THE THREE LITERALS A BACKING FIELD MAY BE WRITTEN AS** — the whole of what `readEnumBackingFieldValue`
 // can produce, and therefore the whole of what the door has to answer for. `1` and `1.0` fold to the SAME
 // `ParsedInt` (`floatLiteralBits(0.0)` is 0), so the bits alone cannot tell them apart and this is the fact
@@ -5067,6 +7674,36 @@ export enum EnumBackingLiteralKind
 	floatLiteral
 	booleanLiteral
 end 'EnumBackingLiteralKind'
+
+// @generated library-cache begin
+let CacheCasesEnumBackingLiteralKind = [EnumBackingLiteralKind.integerLiteral, EnumBackingLiteralKind.floatLiteral, EnumBackingLiteralKind.booleanLiteral]
+
+function cacheReadEnumBackingLiteralKind(reader LibraryCacheReader) returns EnumBackingLiteralKind throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesEnumBackingLiteralKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadEnumBackingLiteralKind'
+
+function cacheTableAgreesEnumBackingLiteralKind() returns bool
+	let declared = EnumBackingLiteralKind.allCases
+
+	if CacheCasesEnumBackingLiteralKind.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesEnumBackingLiteralKind.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesEnumBackingLiteralKind'
+
+// @generated library-cache end
 
 // ⭐⭐ **WHAT A BACKING FIELD'S DECLARED TYPE DOES TO THE i64 THE SELECT SUM PRODUCES** — the ONE
 // classification, asked by the DOOR that admits a case (`Parser.checkStructBackedCase`) and by the READ that
@@ -5233,7 +7870,56 @@ function enumBackingDomainTakesANamedValue(domain EnumBackingFieldDomain, wanted
 end 'enumBackingDomainTakesANamedValue'
 
 export typealias EnumBackingFieldArray = Array with EnumBackingField
+
+// @generated library-cache begin
+function cacheWriteEnumBackingFieldArray(writer LibraryCacheWriter, value EnumBackingFieldArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteEnumBackingFieldArray'
+
+function cacheReadEnumBackingFieldArray(reader LibraryCacheReader) returns EnumBackingFieldArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = EnumBackingFieldArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try EnumBackingField.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadEnumBackingFieldArray'
+
+// @generated library-cache end
+
 export typealias EnumBackingFieldArrayArray = Array with EnumBackingFieldArray
+
+// @generated library-cache begin
+function cacheWriteEnumBackingFieldArrayArray(writer LibraryCacheWriter, value EnumBackingFieldArrayArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		cacheWriteEnumBackingFieldArray(writer, value: item)
+	end 'eachItem'
+end 'cacheWriteEnumBackingFieldArrayArray'
+
+function cacheReadEnumBackingFieldArrayArray(reader LibraryCacheReader) returns EnumBackingFieldArrayArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = EnumBackingFieldArrayArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadEnumBackingFieldArray(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadEnumBackingFieldArrayArray'
+
+// @generated library-cache end
 
 // ⭐ **THE ONE EMPTY `EnumBackingFieldArray` EVERY NON-STRUCT-BACKED CASE SHARES.** `addCase` fills this
 // column for EVERY case of EVERY enum in the program, and all but a struct-backed one have nothing to put
@@ -5268,6 +7954,30 @@ export let sharedEmptyDeclaredConformances = ByteArrayArray.create()
 // that wrote no `with` carries `sharedEmptyDeclaredConformances` at its position, which is what keeps the
 // two columns the same length and makes the pairing index arithmetic rather than a search.
 export typealias ConformanceBindingArray = Array with ByteArrayArray
+
+// @generated library-cache begin
+function cacheWriteConformanceBindingArray(writer LibraryCacheWriter, value ConformanceBindingArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		cacheWriteByteArrayArray(writer, value: item)
+	end 'eachItem'
+end 'cacheWriteConformanceBindingArray'
+
+function cacheReadConformanceBindingArray(reader LibraryCacheReader) returns ConformanceBindingArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ConformanceBindingArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadByteArrayArray(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadConformanceBindingArray'
+
+// @generated library-cache end
 
 // The bindings column of a declaration whose `implements` clause writes NO `with` anywhere — and of one
 // that writes no clause at all. Shared for `sharedEmptyDeclaredConformances`' reason, which is the same
@@ -5811,6 +8521,36 @@ export enum EnumBacking
 	structRecord
 end 'EnumBacking'
 
+// @generated library-cache begin
+let CacheCasesEnumBacking = [EnumBacking.unresolved, EnumBacking.integer, EnumBacking.float, EnumBacking.character, EnumBacking.string, EnumBacking.functionRef, EnumBacking.structRecord]
+
+function cacheReadEnumBacking(reader LibraryCacheReader) returns EnumBacking throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesEnumBacking.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadEnumBacking'
+
+function cacheTableAgreesEnumBacking() returns bool
+	let declared = EnumBacking.allCases
+
+	if CacheCasesEnumBacking.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesEnumBacking.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesEnumBacking'
+
+// @generated library-cache end
+
 export union EnumBackingStruct
 	none
 	declared(typeName ByteArray)
@@ -5838,6 +8578,38 @@ export union EnumBackingStruct
 		return not other.isDeclared()
 	end 'sameAs'
 end 'EnumBackingStruct'
+
+// @generated library-cache begin
+function cacheWriteEnumBackingStruct(writer LibraryCacheWriter, value EnumBackingStruct)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break 'payload'
+		declared(a0) then cacheWriteEnumBackingStructDeclared(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteEnumBackingStruct'
+
+function cacheWriteEnumBackingStructDeclared(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteEnumBackingStructDeclared'
+
+function cacheReadEnumBackingStruct(reader LibraryCacheReader) returns EnumBackingStruct throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives EnumBackingStruct.none
+		1 gives try cacheReadEnumBackingStructDeclared(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadEnumBackingStruct'
+
+function cacheReadEnumBackingStructDeclared(reader LibraryCacheReader) returns EnumBackingStruct throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return EnumBackingStruct.declared(a0)
+end 'cacheReadEnumBackingStructDeclared'
+
+// @generated library-cache end
 
 // The word a diagnostic calls each backing. `E3032`'s `expected <established>, got <incoming>` is
 // pinned to these spellings by `specs/enum-full.md`'s two `error.raw-value-type-mismatch` /
@@ -6213,6 +8985,51 @@ export type EnumLayout
 	export function kindWord() returns String
 		return typeDeclKeyword(TypeDeclKind.unionType if self.isUnion else TypeDeclKind.enumType)
 	end 'kindWord'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.name)
+		writer.flag(self.isUnion)
+		cacheWriteByteArrayArray(writer, value: self.caseNames)
+		cacheWriteParsedIntArray(writer, value: self.caseTags)
+		cacheWriteStringArray(writer, value: self.caseRawValues)
+		cacheWritePayloadFieldArrayArray(writer, value: self.casePayloads)
+		cacheWriteByteArrayArray(writer, value: self.conformsTo)
+		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
+		writer.text(self.declFilePath.toString())
+		writer.unsigned(self.declLine as CacheUnsigned)
+		writer.unsigned(self.declColumn as CacheUnsigned)
+		writer.unsigned(self.backing.ordinal as CacheUnsigned)
+		writer.flag(self.declaresRawValues)
+		cacheWriteEnumBackingStruct(writer, value: self.backingStruct)
+		cacheWriteEnumBackingFieldArrayArray(writer, value: self.caseBackingFields)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns EnumLayout throws LibraryCacheDamage
+		let f_name = try reader.bytes()
+		let f_isUnion = try reader.flag()
+		let f_caseNames = try cacheReadByteArrayArray(reader)
+		let f_caseTags = try cacheReadParsedIntArray(reader)
+		let f_caseRawValues = try cacheReadStringArray(reader)
+		let f_casePayloads = try cacheReadPayloadFieldArrayArray(reader)
+		let f_conformsTo = try cacheReadByteArrayArray(reader)
+		let f_visibility = try cacheReadVisibility(reader)
+		let f_declFilePath = try reader.path()
+		let f_declLine = (try reader.unsigned()) as LineNumber
+		let f_declColumn = (try reader.unsigned()) as ColumnNumber
+		let f_backing = try cacheReadEnumBacking(reader)
+		let f_declaresRawValues = try reader.flag()
+		let f_backingStruct = try cacheReadEnumBackingStruct(reader)
+		let f_caseBackingFields = try cacheReadEnumBackingFieldArrayArray(reader)
+
+		return Self{name: f_name, isUnion: f_isUnion, caseNames: f_caseNames, caseTags: f_caseTags, caseRawValues: f_caseRawValues, casePayloads: f_casePayloads, conformsTo: f_conformsTo, visibility: f_visibility, declFilePath: f_declFilePath, declLine: f_declLine, declColumn: f_declColumn, backing: f_backing, declaresRawValues: f_declaresRawValues, backingStruct: f_backingStruct, caseBackingFields: f_caseBackingFields}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize120
+		return sizeof(EnumLayout) as CacheSize120
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'EnumLayout'
 
 // ⭐⭐ **THE CLOSED INTERVAL A DECLARATION'S CASE TAGS OCCUPY, or `noCases`** — and it is a union rather
@@ -6262,10 +9079,59 @@ end 'enumTagSpan'
 
 export typealias EnumLayoutArray = Array with EnumLayout
 
+// @generated library-cache begin
+module function cacheWriteEnumLayoutArray(writer LibraryCacheWriter, value EnumLayoutArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteEnumLayoutArray'
+
+module function cacheReadEnumLayoutArray(reader LibraryCacheReader) returns EnumLayoutArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = EnumLayoutArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try EnumLayout.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadEnumLayoutArray'
+
+// @generated library-cache end
+
 // Registry: enum/union name -> its declaration. The twin of `StructLayoutMap`, filled from each
 // file's artifact by `mergeArtifact` and read by TypeResolution to resolve `MaxonType.named` for a
 // declared `enum`/`union` to its integer representation (an enum value IS its i64 tag).
 export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
+
+// @generated library-cache begin
+module function cacheWriteEnumLayoutMap(writer LibraryCacheWriter, value EnumLayoutMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteEnumLayoutMap'
+
+module function cacheReadEnumLayoutMap(reader LibraryCacheReader) returns EnumLayoutMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = EnumLayoutMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try EnumLayout.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadEnumLayoutMap'
+
+// @generated library-cache end
 
 // ⭐⭐ **`Ordering` AND THE BUILTIN ERROR ENUMS ARE READ FROM THEIR `stdlib/` DECLARATIONS, NOT
 // SYNTHESIZED.** `Ordering` and `IterationError` (`stdlib/Interfaces.maxon`), the three
@@ -6779,6 +9645,31 @@ end 'declarationContestsACompilerOwnedName'
 // read by SemanticCheck to locate `main` and validate its return type.
 export typealias FuncReturnTypeMap = Map with (ByteArray, MaxonReturnType)
 
+// @generated library-cache begin
+module function cacheWriteFuncReturnTypeMap(writer LibraryCacheWriter, value FuncReturnTypeMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteMaxonReturnType(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteFuncReturnTypeMap'
+
+module function cacheReadFuncReturnTypeMap(reader LibraryCacheReader) returns FuncReturnTypeMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = FuncReturnTypeMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadMaxonReturnType(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadFuncReturnTypeMap'
+
+// @generated library-cache end
+
 // One PARAMETER declared at a parameterized existential, and the `Base with Args` instance its
 // declared type named — see `FuncSignature.paramExistentialSites` for why the position rides the
 // entry instead of the column being dense.
@@ -6789,9 +9680,52 @@ export type ParamExistentialSite
 	export static function create(position ParamCount, instance GenericInstanceId) returns Self
 		return Self{position: position, instance: instance}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.position as CacheUnsigned)
+		writer.unsigned(self.instance as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ParamExistentialSite throws LibraryCacheDamage
+		let f_position = (try reader.unsigned()) as ParamCount
+		let f_instance = (try reader.unsigned()) as GenericInstanceId
+
+		return Self{position: f_position, instance: f_instance}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ParamExistentialSite) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'ParamExistentialSite'
 
 export typealias ParamExistentialSiteArray = Array with ParamExistentialSite
+
+// @generated library-cache begin
+function cacheWriteParamExistentialSiteArray(writer LibraryCacheWriter, value ParamExistentialSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteParamExistentialSiteArray'
+
+function cacheReadParamExistentialSiteArray(reader LibraryCacheReader) returns ParamExistentialSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ParamExistentialSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ParamExistentialSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadParamExistentialSiteArray'
+
+// @generated library-cache end
 
 // The COW anchors both existential columns start at, and the answer every reader gets for a slot that claims
 // nothing — which is very nearly every slot. Homed here, beside the type they anchor, because BOTH the parser
@@ -6983,6 +9917,37 @@ export type FuncSignature
 
 		self.returnExistentialSites = returnSites
 	end 'renumberTypeIds'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteByteArrayArray(writer, value: self.paramNames)
+		cacheWriteMaxonTypeArray(writer, value: self.paramTypes)
+		cacheWriteByteArrayArray(writer, value: self.paramAggregateNames)
+		cacheWriteByteArrayArray(writer, value: self.paramDeclaredNames)
+		writer.bytes(self.returnAggregateName)
+		cacheWriteParamExistentialSiteArray(writer, value: self.paramExistentialSites)
+		cacheWriteGenericInstanceIdArray(writer, value: self.returnExistentialSites)
+		cacheWriteWhereConstraintArray(writer, value: self.extensionConstraints)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns FuncSignature throws LibraryCacheDamage
+		let f_paramNames = try cacheReadByteArrayArray(reader)
+		let f_paramTypes = try cacheReadMaxonTypeArray(reader)
+		let f_paramAggregateNames = try cacheReadByteArrayArray(reader)
+		let f_paramDeclaredNames = try cacheReadByteArrayArray(reader)
+		let f_returnAggregateName = try reader.bytes()
+		let f_paramExistentialSites = try cacheReadParamExistentialSiteArray(reader)
+		let f_returnExistentialSites = try cacheReadGenericInstanceIdArray(reader)
+		let f_extensionConstraints = try cacheReadWhereConstraintArray(reader)
+
+		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize64
+		return sizeof(FuncSignature) as CacheSize64
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'FuncSignature'
 
 // Registry: qualified function name -> its parameter signature. Populated by
@@ -7018,6 +9983,31 @@ export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 // arrangement this compiler keeps paying for.)
 export typealias OverloadSetMap = Map with (ByteArray, ByteArrayArray)
 
+// @generated library-cache begin
+function cacheWriteOverloadSetMap(writer LibraryCacheWriter, value OverloadSetMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteByteArrayArray(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteOverloadSetMap'
+
+function cacheReadOverloadSetMap(reader LibraryCacheReader) returns OverloadSetMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = OverloadSetMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadByteArrayArray(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadOverloadSetMap'
+
+// @generated library-cache end
+
 // ⭐ **"THIS FILE OVERLOADS NOTHING" AS A SPELLED STATE** — `Parser`'s columns' reason: a shared empty
 // container seed is IMAGE DATA, so the artifact holds a private clone of it and a test asking whether the
 // field holds the shared record answers false whatever it was seeded with.
@@ -7025,6 +10015,38 @@ export union OverloadSetTable
 	unwritten
 	entries(byBase OverloadSetMap)
 end 'OverloadSetTable'
+
+// @generated library-cache begin
+module function cacheWriteOverloadSetTable(writer LibraryCacheWriter, value OverloadSetTable)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unwritten then break 'payload'
+		entries(a0) then cacheWriteOverloadSetTableEntries(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteOverloadSetTable'
+
+function cacheWriteOverloadSetTableEntries(writer LibraryCacheWriter, a0 OverloadSetMap)
+	cacheWriteOverloadSetMap(writer, value: a0)
+end 'cacheWriteOverloadSetTableEntries'
+
+module function cacheReadOverloadSetTable(reader LibraryCacheReader) returns OverloadSetTable throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives OverloadSetTable.unwritten
+		1 gives try cacheReadOverloadSetTableEntries(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadOverloadSetTable'
+
+function cacheReadOverloadSetTableEntries(reader LibraryCacheReader) returns OverloadSetTable throws LibraryCacheDamage
+	let a0 = try cacheReadOverloadSetMap(reader)
+
+	return OverloadSetTable.entries(a0)
+end 'cacheReadOverloadSetTableEntries'
+
+// @generated library-cache end
 
 export let noOverloadSets = OverloadSetTable.unwritten
 
@@ -7434,9 +10456,58 @@ export type PendingFnMergeCheck
 	export static function create(armNames ByteArrayArray, line LineNumber, column ColumnNumber, filePath FilePath, isTernary bool) returns PendingFnMergeCheck
 		return Self{armNames: armNames, line: line, column: column, filePath: filePath, isTernary: isTernary}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteByteArrayArray(writer, value: self.armNames)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.text(self.filePath.toString())
+		writer.flag(self.isTernary)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns PendingFnMergeCheck throws LibraryCacheDamage
+		let f_armNames = try cacheReadByteArrayArray(reader)
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_filePath = try reader.path()
+		let f_isTernary = try reader.flag()
+
+		return Self{armNames: f_armNames, line: f_line, column: f_column, filePath: f_filePath, isTernary: f_isTernary}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(PendingFnMergeCheck) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'PendingFnMergeCheck'
 
 export typealias PendingFnMergeCheckArray = Array with PendingFnMergeCheck
+
+// @generated library-cache begin
+module function cacheWritePendingFnMergeCheckArray(writer LibraryCacheWriter, value PendingFnMergeCheckArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWritePendingFnMergeCheckArray'
+
+module function cacheReadPendingFnMergeCheckArray(reader LibraryCacheReader) returns PendingFnMergeCheckArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = PendingFnMergeCheckArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try PendingFnMergeCheck.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadPendingFnMergeCheckArray'
+
+// @generated library-cache end
 
 // WHICH DOOR a function VALUE met a declared function TYPE at. The rule is one — the two shapes must
 // agree — so the only thing the whole-program drain needs from the site is which SENTENCE to write and
@@ -7495,6 +10566,36 @@ export enum FunctionTypeDoor
 	global
 	field
 end 'FunctionTypeDoor'
+
+// @generated library-cache begin
+let CacheCasesFunctionTypeDoor = [FunctionTypeDoor.cast, FunctionTypeDoor.returned, FunctionTypeDoor.payload, FunctionTypeDoor.enumCaseBacking, FunctionTypeDoor.containerElement, FunctionTypeDoor.tupleElement, FunctionTypeDoor.variable, FunctionTypeDoor.global, FunctionTypeDoor.field]
+
+function cacheReadFunctionTypeDoor(reader LibraryCacheReader) returns FunctionTypeDoor throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesFunctionTypeDoor.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadFunctionTypeDoor'
+
+function cacheTableAgreesFunctionTypeDoor() returns bool
+	let declared = FunctionTypeDoor.allCases
+
+	if CacheCasesFunctionTypeDoor.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesFunctionTypeDoor.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesFunctionTypeDoor'
+
+// @generated library-cache end
 
 // What an assignment-shaped door calls the place it writes into. Every site that names one — the
 // function-type mismatch below, and `Parser.requireAssignable`'s three verdict arms — renders it from
@@ -7586,14 +10687,99 @@ export type PendingFunctionTypeDoor
 	export static function create(gotName ByteArray, declaredName ByteArray, door FunctionTypeDoor, place FunctionTypeDoorPlace, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingFunctionTypeDoor
 		return Self{gotName: gotName, declaredName: declaredName, door: door, place: place, line: line, column: column, filePath: filePath}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.gotName)
+		writer.bytes(self.declaredName)
+		writer.unsigned(self.door.ordinal as CacheUnsigned)
+		cacheWriteFunctionTypeDoorPlace(writer, value: self.place)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.text(self.filePath.toString())
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns PendingFunctionTypeDoor throws LibraryCacheDamage
+		let f_gotName = try reader.bytes()
+		let f_declaredName = try reader.bytes()
+		let f_door = try cacheReadFunctionTypeDoor(reader)
+		let f_place = try cacheReadFunctionTypeDoorPlace(reader)
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_filePath = try reader.path()
+
+		return Self{gotName: f_gotName, declaredName: f_declaredName, door: f_door, place: f_place, line: f_line, column: f_column, filePath: f_filePath}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(PendingFunctionTypeDoor) as CacheSize56
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'PendingFunctionTypeDoor'
 
 export typealias PendingFunctionTypeDoorArray = Array with PendingFunctionTypeDoor
+
+// @generated library-cache begin
+module function cacheWritePendingFunctionTypeDoorArray(writer LibraryCacheWriter, value PendingFunctionTypeDoorArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWritePendingFunctionTypeDoorArray'
+
+module function cacheReadPendingFunctionTypeDoorArray(reader LibraryCacheReader) returns PendingFunctionTypeDoorArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = PendingFunctionTypeDoorArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try PendingFunctionTypeDoor.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadPendingFunctionTypeDoorArray'
+
+// @generated library-cache end
 
 export union FunctionTypeDoorPlace
 	unnamed
 	named(name ByteArray)
 end 'FunctionTypeDoorPlace'
+
+// @generated library-cache begin
+function cacheWriteFunctionTypeDoorPlace(writer LibraryCacheWriter, value FunctionTypeDoorPlace)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unnamed then break 'payload'
+		named(a0) then cacheWriteFunctionTypeDoorPlaceNamed(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteFunctionTypeDoorPlace'
+
+function cacheWriteFunctionTypeDoorPlaceNamed(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteFunctionTypeDoorPlaceNamed'
+
+function cacheReadFunctionTypeDoorPlace(reader LibraryCacheReader) returns FunctionTypeDoorPlace throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives FunctionTypeDoorPlace.unnamed
+		1 gives try cacheReadFunctionTypeDoorPlaceNamed(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadFunctionTypeDoorPlace'
+
+function cacheReadFunctionTypeDoorPlaceNamed(reader LibraryCacheReader) returns FunctionTypeDoorPlace throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return FunctionTypeDoorPlace.named(a0)
+end 'cacheReadFunctionTypeDoorPlaceNamed'
+
+// @generated library-cache end
 
 // ⭐⭐ **WHICH POSITION TOOK NOTHING, WHICH IS WHAT SEPARATES E3064 FROM E3065.** A pure callee's result may
 // not be dropped in either position; an IMPURE one's may, but only where the author said so — and `_ = f()`
@@ -7603,10 +10789,72 @@ export enum DiscardDoor
 	explicitDiscard
 end 'DiscardDoor'
 
+// @generated library-cache begin
+let CacheCasesDiscardDoor = [DiscardDoor.statement, DiscardDoor.explicitDiscard]
+
+function cacheReadDiscardDoor(reader LibraryCacheReader) returns DiscardDoor throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesDiscardDoor.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadDiscardDoor'
+
+function cacheTableAgreesDiscardDoor() returns bool
+	let declared = DiscardDoor.allCases
+
+	if CacheCasesDiscardDoor.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesDiscardDoor.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesDiscardDoor'
+
+// @generated library-cache end
+
 export union DiscardSubject
 	none
 	runtimeRead(qualifiedName ByteArray)
 end 'DiscardSubject'
+
+// @generated library-cache begin
+function cacheWriteDiscardSubject(writer LibraryCacheWriter, value DiscardSubject)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break 'payload'
+		runtimeRead(a0) then cacheWriteDiscardSubjectRuntimeRead(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteDiscardSubject'
+
+function cacheWriteDiscardSubjectRuntimeRead(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteDiscardSubjectRuntimeRead'
+
+function cacheReadDiscardSubject(reader LibraryCacheReader) returns DiscardSubject throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives DiscardSubject.none
+		1 gives try cacheReadDiscardSubjectRuntimeRead(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDiscardSubject'
+
+function cacheReadDiscardSubjectRuntimeRead(reader LibraryCacheReader) returns DiscardSubject throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return DiscardSubject.runtimeRead(a0)
+end 'cacheReadDiscardSubjectRuntimeRead'
+
+// @generated library-cache end
 
 // ⭐⭐ **A SITE THAT USES NONE OF A CALL'S RESULT, AWAITING THE WHOLE-PROGRAM VERDICT ON WHETHER THE CALLEE
 // HAD ANY OTHER REASON TO RUN (E3064, `specs/tuple-assign.md`).** Recorded rather than checked in place for
@@ -7654,9 +10902,62 @@ export type PendingDiscardedResult
 	export static function createForIntrinsic(callee ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
 		return Self{callee: callee, door: DiscardDoor.statement, calleeIsACompilerIntrinsic: true, subject: DiscardSubject.none, line: line, column: column, filePath: filePath}
 	end 'createForIntrinsic'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.callee)
+		writer.unsigned(self.door.ordinal as CacheUnsigned)
+		writer.flag(self.calleeIsACompilerIntrinsic)
+		cacheWriteDiscardSubject(writer, value: self.subject)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.text(self.filePath.toString())
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns PendingDiscardedResult throws LibraryCacheDamage
+		let f_callee = try reader.bytes()
+		let f_door = try cacheReadDiscardDoor(reader)
+		let f_calleeIsACompilerIntrinsic = try reader.flag()
+		let f_subject = try cacheReadDiscardSubject(reader)
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_filePath = try reader.path()
+
+		return Self{callee: f_callee, door: f_door, calleeIsACompilerIntrinsic: f_calleeIsACompilerIntrinsic, subject: f_subject, line: f_line, column: f_column, filePath: f_filePath}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(PendingDiscardedResult) as CacheSize56
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'PendingDiscardedResult'
 
 export typealias PendingDiscardedResultArray = Array with PendingDiscardedResult
+
+// @generated library-cache begin
+module function cacheWritePendingDiscardedResultArray(writer LibraryCacheWriter, value PendingDiscardedResultArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWritePendingDiscardedResultArray'
+
+module function cacheReadPendingDiscardedResultArray(reader LibraryCacheReader) returns PendingDiscardedResultArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = PendingDiscardedResultArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try PendingDiscardedResult.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadPendingDiscardedResultArray'
+
+// @generated library-cache end
 
 // The outcome of slotting a call's arguments to its callee's parameter positions.
 // `ordered` carries the arg SSA values in DECLARATION order (label reordering applied);
@@ -8523,8 +11824,13 @@ export type CompileSession
 	end 'create'
 
 	export static function printing() returns CompileSession
-		return Self.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.create(), treeLock: TreeLockHold.none())
+		return Self.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.forOneCompile(), treeLock: TreeLockHold.none())
 	end 'printing'
+
+	// For a check whose memo counters assume every memo lives in this process (`verify-warm-rebuild`).
+	export static function printingWithoutLibraryCache() returns CompileSession
+		return Self.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.withoutLibraryCache(), treeLock: TreeLockHold.none())
+	end 'printingWithoutLibraryCache'
 
 	export static function discarding() returns CompileSession
 		return Self.create(DiagnosticSink.discarding(), fileMemos: SharedFileMemoMap.create(), treeLock: TreeLockHold.none())
@@ -8644,14 +11950,14 @@ function shadowRespellingsFor(project Project, path FilePath) returns ShadowResp
 		end 'currentForThisContent'
 	end 'memoized'
 
-	let tokens = try memoizedTokensOf(project, path: path) otherwise return shadowRespellingsGiven(project, path: path, written: WrittenMintSet.create())
+	let spellings = try reservedSpellingsOf(project, path: path, entry: entry) otherwise return shadowRespellingsGiven(project, path: path, written: WrittenMintSet.create())
 	var written = WrittenMintSet.create()
 
-	for tok in tokens 'eachToken'
-		if tok.kind == TokenKind.identifier and project.shadowMints.contains(tok.value) 'theAuthorWroteAMint'
-			written.insert(tok.value)
+	for spelling in spellings 'eachSpelling'
+		if project.shadowMints.contains(spelling) 'theAuthorWroteAMint'
+			written.insert(spelling)
 		end 'theAuthorWroteAMint'
-	end 'eachToken'
+	end 'eachSpelling'
 
 	let respellings = shadowRespellingsGiven(project, path: path, written: written)
 	project.shadowRespellingMemos.upsert(path.toString(), value: ShadowRespellingMemo.create(entry.contentHash, respellings: respellings))

@@ -133,6 +133,38 @@ Everything under `<cache>` is Maxon's, and everything beside it is not — which
 build published while another row ranked first — or while a row that is now unusable still worked — is
 otherwise stranded where nothing looks again.
 
+### The library cache
+
+Every compile reads the whole standard library and runtime. The library cache keeps what those files
+cost — each file's tokens with its `#if` blocks resolved, its parse, and the declarations the library
+makes — so a compile lexes, sweeps and parses the library once per compiler and target, and every later
+compile, in any process, starts from what that one wrote:
+
+```text
+<cache>/library/v<cache format>/<compiler path and target>/<compiler build>/
+├── views-<key>.mxlc            # every library file's tokens with `#if` resolved
+├── baseline-<key>.mxlc         # the library's declarations
+├── core-<key>.mxlc             # the same, less the files that declare generic functions
+└── parses-<key>-<key>.mxlc     # library parses
+```
+
+- **It is always on**, under the same `<cache>` as the run cache: the first usable row of the table
+  above, so `MAXON_RUN_CACHE_ROOT` moves it too. On a host with no usable row, compiles run without it.
+- **A program folds its own declarations on top of the library's.** A program that shadows a library
+  type, declares a name the library uses, or lives inside `stdlib/` has its names settled first: it
+  sweeps the library's declarations itself, from the cached tokens, and its parses of library files are
+  its own.
+- **An entry is checked when it is read.** One that is damaged, was written under another entry format, or
+  holds a number outside the range it is read into is deleted and written again, and the compile goes on
+  as a cold one. Entries are written under a temporary name and renamed into place, so concurrent compiles
+  share the cache safely.
+- **Old entries are removed as new ones are written.** A new build of the compiler replaces the previous
+  build's directory, a directory an older entry format left is removed, each kind keeps its 4 newest
+  entries (16 for parses), and the 16 most recently written compiler directories are kept.
+
+[`maxon cache`](#maxon-cache) counts its entries and `clear` removes it. Under `--log=compiler:debug` each
+compile reports what it did with the cache; see [Logging](#logging).
+
 ### Scripts and the shebang line
 
 A source file whose **first two bytes** are `#!` has that first line ignored, which lets a Maxon
@@ -360,7 +392,8 @@ where the cache is gets the whole roster:
 
 ```
 Cache roots on this host:
-  C:\Users\you\.maxon\cache (in use): 1 build, 451.8 KB
+  C:\Users\you\.maxon\cache (in use): 1 build, 3.2 MB
+    library cache: 4 entries
   C:\Users\you\AppData\Local\maxon: 3 builds, 929.7 KB
   C:\Users\you\AppData\Local\Temp\maxon: empty
 Total: 4 builds, 1.3 MB
@@ -373,8 +406,9 @@ report ends with the sentence [`maxon execute`](#maxon-execute) refuses with, na
 consults — still on stdout, still exit 0, because "none, and here is why" answers the question the report
 was asked. **A build is the executable** — the `.mxdbg` debug sidecar beside it is not one,
 and neither is a build still being written. The size is everything under the directory, **sidecars
-included**, because that is what `clear` gives back. The `Total:` line appears when more than one row
-holds something.
+included**, because that is what `clear` gives back. A row holding [library cache](#the-library-cache)
+entries is followed by a `library cache: <n> entries` line counting them; their bytes are in the row's
+size. The `Total:` line appears when more than one row holds something.
 
 A root that **cannot be read** says so on its own line and the command exits 1, rather than being counted
 as empty: a cache reported as holding nothing while it holds hundreds of builds is an answer you cannot
@@ -383,8 +417,9 @@ act on.
 `clear` removes the compiled programs [`maxon execute`](#maxon-execute) and a path-less
 [`maxon build`](#maxon-build) keep, the directories holding them, the inline snippets the
 [MCP server](/docs/cli/mcp-server/) stages, the programs `debug_start` and `maxon dap-server` build for debugging,
-and the Maxon directory above all of those. The next `run` or path-less `build` compiles from scratch
-and fills the cache again.
+the [library cache](#the-library-cache), and the Maxon directory above all of those. The next `run` or
+path-less `build` compiles from scratch and fills the cache again, and the next compile of any kind
+fills the library cache.
 
 **A debug build a live session is using stays**, with its sidecar and the directories above it, and
 `clear` ends its report with a `Kept <n> files a live debug session is using` line. Each debug build's
@@ -698,7 +733,25 @@ server, the language server — keeps each library file's tokens and parse acros
 producer-mask hits, the files admitted and held, then the parse artifacts held, the parse hits, misses and
 publishes, how many held parses missed because ids they reference moved, and whether this program may
 share library parses at all (`shareable`, or the reason it parses the library cold: `shadowed`,
-`namesOverlap`, `rootInsideStdlib`).
+`namesOverlap`, `rootInsideStdlib`). A view or parse loaded from the [library cache](#the-library-cache)
+counts as a hit here.
+
+**The library cache.** After its front end, every compile prints one line:
+
+```text
+library cache — baseline <loaded|built|unused>, <n> loaded, <n> written, <n> rejected, <n> library file(s) swept, <n> library file(s) parsed
+```
+
+`baseline` says where the library's declarations came from: `loaded` from the cache, `built` by this
+compile (which then wrote them), or `unused` when the program sweeps the library itself. The counts are the
+cache entries this compile loaded, wrote and rejected, then the library files whose declarations it swept
+and the library files it parsed. The lines prefixed `library cache:` say why an entry was rejected or a
+baseline went unused.
+
+**The front-end pool.** `front end: <W> worker(s) over <P> processor(s), <n> file(s), <n> adopted` sizes
+the pool that lexed and parsed the files no memo held. `adopted` counts the copies of the signature index
+handed to workers before they parse: a warm compile of a one-file program adopts at most one. A compiler
+whose runtime keeps that work on the compiling thread prints `front end: serial, in process, <n> file(s)`.
 
 **The census by tag.** [`--census-by-tag`](#maxon-build) adds a third table under the residency one: the
 live heap at each phase boundary broken down by the type each allocation was tagged with. It prints the
@@ -751,11 +804,11 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 
 | Variable | Read by | Effect |
 |----------|---------|--------|
-| `MAXON_RUN_CACHE_ROOT` | `run`, `build` (project target), `cache` | Maxon caches under `<value>/maxon`. Consulted first |
-| `USERPROFILE` | `run`, `build` (project target), `cache` on Windows | Maxon caches under `<value>\.maxon\cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
-| `HOME` | `run`, `build` (project target), `cache` elsewhere | Maxon caches under `<value>/.maxon/cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
-| `LOCALAPPDATA`, then `TEMP` | `run`, `build` (project target), `cache` on Windows | Last resort, under `<value>\maxon`, when the two above name no directory Maxon can create |
-| `TMPDIR` | `run`, `build` (project target), `cache` elsewhere | Last resort, under `<value>/maxon`, when the two above name no directory Maxon can create |
+| `MAXON_RUN_CACHE_ROOT` | `run`, `build` (project target), `cache`, every compile (the [library cache](#the-library-cache)) | Maxon caches under `<value>/maxon`. Consulted first |
+| `USERPROFILE` | `run`, `build` (project target), `cache`, every compile (the [library cache](#the-library-cache)) on Windows | Maxon caches under `<value>\.maxon\cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
+| `HOME` | `run`, `build` (project target), `cache`, every compile (the [library cache](#the-library-cache)) elsewhere | Maxon caches under `<value>/.maxon/cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
+| `LOCALAPPDATA`, then `TEMP` | `run`, `build` (project target), `cache`, every compile (the [library cache](#the-library-cache)) on Windows | Last resort, under `<value>\maxon`, when the two above name no directory Maxon can create |
+| `TMPDIR` | `run`, `build` (project target), `cache`, every compile (the [library cache](#the-library-cache)) elsewhere | Last resort, under `<value>/maxon`, when the two above name no directory Maxon can create |
 | `NO_COLOR`, `TERM` | `test --color=auto` | Set `NO_COLOR`, or `TERM=dumb`, to turn colour off |
 | `MAXON_IMAGE` | `upgrade` | Marks the container image; `upgrade` refuses and names `docker pull` |
 | `MAXON_INSTALL` | `upgrade` (written, not read) | `upgrade` sets it for the install script to the install the running compiler sits in, whatever your shell says |

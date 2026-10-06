@@ -145,6 +145,46 @@ export union MutationSiteWrite
 	throughCall(callee ByteArray, argColumn ParamCount, argLabel ByteArray)
 end 'MutationSiteWrite'
 
+// @generated library-cache begin
+function cacheWriteMutationSiteWrite(writer LibraryCacheWriter, value MutationSiteWrite)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		settledAtTheParse then break 'payload'
+		movedOut then break 'payload'
+		droppedAtBlockEnd then break 'payload'
+		throughCall(a0, a1, a2) then cacheWriteMutationSiteWriteThroughCall(writer, a0: a0, a1: a1, a2: a2)
+	end 'payload'
+end 'cacheWriteMutationSiteWrite'
+
+function cacheWriteMutationSiteWriteThroughCall(writer LibraryCacheWriter, a0 ByteArray, a1 ParamCount, a2 ByteArray)
+	writer.bytes(a0)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.bytes(a2)
+end 'cacheWriteMutationSiteWriteThroughCall'
+
+function cacheReadMutationSiteWrite(reader LibraryCacheReader) returns MutationSiteWrite throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives MutationSiteWrite.settledAtTheParse
+		1 gives MutationSiteWrite.movedOut
+		2 gives MutationSiteWrite.droppedAtBlockEnd
+		3 gives try cacheReadMutationSiteWriteThroughCall(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadMutationSiteWrite'
+
+function cacheReadMutationSiteWriteThroughCall(reader LibraryCacheReader) returns MutationSiteWrite throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = (try reader.unsigned()) as ParamCount
+	let a2 = try reader.bytes()
+
+	return MutationSiteWrite.throughCall(a0, argColumn: a1, argLabel: a2)
+end 'cacheReadMutationSiteWriteThroughCall'
+
+// @generated library-cache end
+
 // The `via '<x>'` text for a mutation that is a REBIND of the source binding rather than a method
 // call on it (`arr = other`, `items = other`, `self.items = other`): the write is named with the
 // operator the user wrote.
@@ -194,9 +234,54 @@ export type PendingBorrow
 	export static function create(subject BorrowSubjectId, borrowValue ValueId, borrowLine LineNumber) returns PendingBorrow
 		return Self{subject: subject, borrowValue: borrowValue, borrowLine: borrowLine}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.subject as CacheUnsigned)
+		writer.unsigned(self.borrowValue as CacheUnsigned)
+		writer.unsigned(self.borrowLine as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns PendingBorrow throws LibraryCacheDamage
+		let f_subject = (try reader.unsigned()) as BorrowSubjectId
+		let f_borrowValue = (try reader.unsigned()) as ValueId
+		let f_borrowLine = (try reader.unsigned()) as LineNumber
+
+		return Self{subject: f_subject, borrowValue: f_borrowValue, borrowLine: f_borrowLine}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(PendingBorrow) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'PendingBorrow'
 
 export typealias PendingBorrowArray = Array with PendingBorrow
+
+// @generated library-cache begin
+function cacheWritePendingBorrowArray(writer LibraryCacheWriter, value PendingBorrowArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWritePendingBorrowArray'
+
+function cacheReadPendingBorrowArray(reader LibraryCacheReader) returns PendingBorrowArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = PendingBorrowArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try PendingBorrow.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadPendingBorrowArray'
+
+// @generated library-cache end
 
 // A length of, or an index into, the pending-claim list. It is one STATEMENT long
 // (`Parser.dropUnclaimedPendingBorrows`) and in practice 0 or 1, but nothing CAPS it — a statement may
@@ -223,9 +308,56 @@ export type BorrowRecord
 	export static function create(subject BorrowSubjectId, borrower VarInfo, activationToken ElementIndex, borrowLine LineNumber) returns BorrowRecord
 		return Self{subject: subject, borrower: borrower, activationToken: activationToken, borrowLine: borrowLine}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.subject as CacheUnsigned)
+		self.borrower.cacheWrite(writer)
+		writer.unsigned(self.activationToken as CacheUnsigned)
+		writer.unsigned(self.borrowLine as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns BorrowRecord throws LibraryCacheDamage
+		let f_subject = (try reader.unsigned()) as BorrowSubjectId
+		let f_borrower = try VarInfo.cacheRead(reader)
+		let f_activationToken = (try reader.unsigned()) as ElementIndex
+		let f_borrowLine = (try reader.unsigned()) as LineNumber
+
+		return Self{subject: f_subject, borrower: f_borrower, activationToken: f_activationToken, borrowLine: f_borrowLine}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize32
+		return sizeof(BorrowRecord) as CacheSize32
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'BorrowRecord'
 
 export typealias BorrowRecordArray = Array with BorrowRecord
+
+// @generated library-cache begin
+function cacheWriteBorrowRecordArray(writer LibraryCacheWriter, value BorrowRecordArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteBorrowRecordArray'
+
+function cacheReadBorrowRecordArray(reader LibraryCacheReader) returns BorrowRecordArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = BorrowRecordArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try BorrowRecord.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadBorrowRecordArray'
+
+// @generated library-cache end
 
 // A write the parser saw go through a borrow subject. Recorded ONLY while the enclosing function
 // already holds at least one completed borrow — a write above every borrow's activation can never
@@ -271,9 +403,62 @@ export type MutationSite
 	export static function createCallArgWrite(subject BorrowSubjectId, subjectName ByteArray, token ElementIndex, line LineNumber, column ColumnNumber, callee ByteArray, argColumn ParamCount, argLabel ByteArray) returns MutationSite
 		return Self{subject: subject, subjectName: subjectName, token: token, line: line, column: column, display: unqualifiedMemberOf(callee), write: MutationSiteWrite.throughCall(callee, argColumn: argColumn, argLabel: argLabel)}
 	end 'createCallArgWrite'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.subject as CacheUnsigned)
+		writer.bytes(self.subjectName)
+		writer.unsigned(self.token as CacheUnsigned)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.bytes(self.display)
+		cacheWriteMutationSiteWrite(writer, value: self.write)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns MutationSite throws LibraryCacheDamage
+		let f_subject = (try reader.unsigned()) as BorrowSubjectId
+		let f_subjectName = try reader.bytes()
+		let f_token = (try reader.unsigned()) as ElementIndex
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_display = try reader.bytes()
+		let f_write = try cacheReadMutationSiteWrite(reader)
+
+		return Self{subject: f_subject, subjectName: f_subjectName, token: f_token, line: f_line, column: f_column, display: f_display, write: f_write}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize56
+		return sizeof(MutationSite) as CacheSize56
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'MutationSite'
 
 export typealias MutationSiteArray = Array with MutationSite
+
+// @generated library-cache begin
+function cacheWriteMutationSiteArray(writer LibraryCacheWriter, value MutationSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteMutationSiteArray'
+
+function cacheReadMutationSiteArray(reader LibraryCacheReader) returns MutationSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = MutationSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try MutationSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadMutationSiteArray'
+
+// @generated library-cache end
 
 // ⭐⭐⭐ **"THE CALLER'S PARAMETER `p` OWNS THE ARRAY THIS CALL'S RECEIVER DENOTES" — the SECOND edge kind
 // the storage column is closed over, and the one without which a retired member's write stops reaching
@@ -319,9 +504,54 @@ export type StorageReachEdge
 	export static function create(callee ByteArray, argColumn ParamCount, callerParams ParamPositionMask) returns StorageReachEdge
 		return Self{callee: callee, argColumn: argColumn, callerParams: callerParams}
 	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.callee)
+		writer.unsigned(self.argColumn as CacheUnsigned)
+		writer.unsigned(self.callerParams as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns StorageReachEdge throws LibraryCacheDamage
+		let f_callee = try reader.bytes()
+		let f_argColumn = (try reader.unsigned()) as ParamCount
+		let f_callerParams = (try reader.unsigned()) as ParamPositionMask
+
+		return Self{callee: f_callee, argColumn: f_argColumn, callerParams: f_callerParams}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(StorageReachEdge) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'StorageReachEdge'
 
 export typealias StorageReachEdgeArray = Array with StorageReachEdge
+
+// @generated library-cache begin
+function cacheWriteStorageReachEdgeArray(writer LibraryCacheWriter, value StorageReachEdgeArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteStorageReachEdgeArray'
+
+function cacheReadStorageReachEdgeArray(reader LibraryCacheReader) returns StorageReachEdgeArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = StorageReachEdgeArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try StorageReachEdge.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadStorageReachEdgeArray'
+
+// @generated library-cache end
 
 // ⭐ **THE PER-FUNCTION BORROW FACTS — written by the PARSER, read HERE.** They ride on `IrFunction`
 // for the reason `writtenParamMask` does: the parser holds the only view in which a binding exists,
@@ -361,6 +591,31 @@ export type BorrowFacts
 			borrow.borrower.renumberTypeIds(remap, epoch: epoch)
 		end 'eachBorrow'
 	end 'renumberBindingTypeIds'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteVarInfoArray(writer, value: self.subjects)
+		cacheWritePendingBorrowArray(writer, value: self.pending)
+		cacheWriteBorrowRecordArray(writer, value: self.borrows)
+		cacheWriteMutationSiteArray(writer, value: self.mutations)
+		cacheWriteStorageReachEdgeArray(writer, value: self.storageReach)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns BorrowFacts throws LibraryCacheDamage
+		let f_subjects = try cacheReadVarInfoArray(reader)
+		let f_pending = try cacheReadPendingBorrowArray(reader)
+		let f_borrows = try cacheReadBorrowRecordArray(reader)
+		let f_mutations = try cacheReadMutationSiteArray(reader)
+		let f_storageReach = try cacheReadStorageReachEdgeArray(reader)
+
+		return Self{subjects: f_subjects, pending: f_pending, borrows: f_borrows, mutations: f_mutations, storageReach: f_storageReach}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(BorrowFacts) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
 end 'BorrowFacts'
 
 // The E3070 wire text, in ONE place. `maxoncstderr` blocks pin every word of it.

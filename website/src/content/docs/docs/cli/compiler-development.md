@@ -40,6 +40,10 @@ program(s); K ran alone`, and lines for skipped and not-run cases. A case whose 
 the block, and the failure shows the first differing line. The Target IR suite lives in its own
 directory, `maxon spec-test ir-specs`.
 
+Every worker starts from the [library cache](/docs/cli/#the-library-cache). After the summary, the run prints
+`library cache: <n> loaded, <n> written, <n> rejected` on stderr: the entries its workers loaded, wrote
+and rejected, summed over the run.
+
 It refuses to start, with exit **2** and nothing run, when the compiler binary is older than the sources
 it was built from, or when another command holds the checkout's [tree lock](/docs/cli/project-structure/#the-tree-lock).
 

@@ -225,6 +225,44 @@ export enum RawIntrinsic
 	splicedAtEverySite
 end 'RawIntrinsic'
 
+// @generated library-cache begin
+let CacheCasesRawIntrinsic = [RawIntrinsic.osTickCountMs, RawIntrinsic.osReadWallClock, RawIntrinsic.osThreadCpuTicks, RawIntrinsic.osCpuCount, RawIntrinsic.osGetPid, RawIntrinsic.osEnterBackgroundPriority, RawIntrinsic.osProcessProbe, RawIntrinsic.osWaitHandle, RawIntrinsic.osCloseHandle, RawIntrinsic.osExit, RawIntrinsic.scratch, RawIntrinsic.schedNumProcsAddr, RawIntrinsic.schedMaxActiveWorkersAddr, RawIntrinsic.slabArenaListAddr, RawIntrinsic.slabArenaMapL1Addr, RawIntrinsic.slabStateAddr, RawIntrinsic.slabSizeToClass8Addr, RawIntrinsic.slabSizeToClass128Addr, RawIntrinsic.slabClassGeomAddr, RawIntrinsic.dsBaseAddr, RawIntrinsic.dsAllocIdAddr, RawIntrinsic.tlsSlotLoad, RawIntrinsic.loadWord, RawIntrinsic.storeWord, RawIntrinsic.loadByte, RawIntrinsic.storeByte, RawIntrinsic.atomicAddWord, RawIntrinsic.atomicCas, RawIntrinsic.memFill, RawIntrinsic.osAllocPages, RawIntrinsic.osReservePages, RawIntrinsic.osCommitPages, RawIntrinsic.osDecommitPages, RawIntrinsic.osFreePages, RawIntrinsic.osLockInit, RawIntrinsic.osLockEnter, RawIntrinsic.osLockLeave, RawIntrinsic.osThreadCreate, RawIntrinsic.schedTlsTebOffsetAddr, RawIntrinsic.schedAllMachinesAddr, RawIntrinsic.schedPreemptExtLockAddr, RawIntrinsic.schedLockAddr, RawIntrinsic.ownFrame, RawIntrinsic.splicedAtEverySite]
+
+module function cacheReadRawIntrinsic(reader LibraryCacheReader) returns RawIntrinsic throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesRawIntrinsic.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadRawIntrinsic'
+
+function cacheTableAgreesRawIntrinsic() returns bool
+	let declared = RawIntrinsic.allCases
+
+	if CacheCasesRawIntrinsic.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesRawIntrinsic.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesRawIntrinsic'
+
+module function cacheEnumTablesAgreeInCompilerRawIntrinsics() returns bool
+	if not cacheTableAgreesRawIntrinsic() 'disagreesCacheTableAgreesRawIntrinsic'
+		return false
+	end 'disagreesCacheTableAgreesRawIntrinsic'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerRawIntrinsics'
+
+// @generated library-cache end
+
 // ⭐ **EVERY ARGUMENT SHAPE A ROW CAN WEAR, ENUMERATED RATHER THAN DERIVED from an arity plus a per-position
 // kind column.** A shape is what the parser's one reader switches on, and an (arity, kinds) pair would let
 // a row state a combination no reader can build.

@@ -730,6 +730,31 @@ end 'requirementTakesType'
 // `Point` declares `implements Digest`. Conformance is DECLARED (nominal), matching `checkConformance`'s model.
 export typealias DeclaredConformanceMap = Map with (ByteArray, InterfaceNameSet)
 
+// @generated library-cache begin
+module function cacheWriteDeclaredConformanceMap(writer LibraryCacheWriter, value DeclaredConformanceMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteInterfaceNameSet(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteDeclaredConformanceMap'
+
+module function cacheReadDeclaredConformanceMap(reader LibraryCacheReader) returns DeclaredConformanceMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DeclaredConformanceMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadInterfaceNameSet(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadDeclaredConformanceMap'
+
+// @generated library-cache end
+
 // ⭐ **WHERE-CONSTRAINT VALIDATION AT INSTANTIATION (E3017).** For every `typealias X = Base with
 // Args` whose base declares `where T is <Interface>` constraints, each concrete argument must
 // conform to (declare `implements`) the interface its parameter is constrained to — else E3017,

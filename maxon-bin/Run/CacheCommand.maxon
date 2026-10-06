@@ -49,6 +49,9 @@ let TotalLabel = "Total:"
 // the directories it is in and a total they cannot add up off the rows at a glance.
 let OneRoot = 1
 
+let LibraryLineLabel = "library cache"
+let EntryWord = "entry"
+let EntriesWord = "entries"
 let BuildWord = "build"
 let FileWord = "file"
 let ByteWord = "byte"
@@ -206,11 +209,13 @@ function reportCache() returns ExitCode
 	var trouble = FirstFailure.create()
 
 	for root in roots 'eachRoot'
-		let census = censusOf(readCacheTree(root))
+		let contents = readCacheTree(root)
+		let census = censusOf(contents)
 		let mark = InUseMark if isRootInUse(root, inUse: inUse) else ""
 
 		trouble.adopt(census.failure)
 		report.append("{RootLineIndent}{root.toString()}{mark}: {rootState(census)}\n")
+		report.append(libraryLine(libraryEntriesIn(contents, library: root.join(LibraryCacheDirName))))
 
 		if census.isEmpty() 'holdsNothing'
 			continue
@@ -235,6 +240,26 @@ function reportCache() returns ExitCode
 
 	return SucceededExit
 end 'reportCache'
+
+function libraryEntriesIn(contents CacheContents, library FilePath) returns CacheTally
+	var entries = 0 as CacheTally
+
+	for entry in contents.entries 'eachEntry'
+		if not entry.isDirectory and entry.path.isInside(library) 'aLibraryEntry'
+			entries = entries + 1
+		end 'aLibraryEntry'
+	end 'eachEntry'
+
+	return entries
+end 'libraryEntriesIn'
+
+function libraryLine(entries CacheTally) returns String
+	if entries == 0 'nothingCached'
+		return ""
+	end 'nothingCached'
+
+	return "{RootLineIndent}{RootLineIndent}{LibraryLineLabel}: {entries} {EntryWord if entries == 1 else EntriesWord}\n"
+end 'libraryLine'
 
 // Appended to the report on stdout, with the command still exiting 0: the reader asked which
 // directory the next run fills, and "none, and here is why" answers that question. Refusing is
@@ -411,6 +436,17 @@ function collectCacheTree(dir FilePath, into CacheContents)
 
 	into.entries.push(CacheEntry.create(dir, isDirectory: true))
 end 'collectCacheTree'
+
+export function discardCacheTree(directory FilePath)
+	for entry in readCacheTree(directory).entries 'eachEntry'
+		if entry.isDirectory 'aDirectory'
+			try Directory.delete(entry.path) otherwise ignore
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry.path) otherwise ignore
+	end 'eachEntry'
+end 'discardCacheTree'
 
 // The walk's entries removed in the order it collected them, which is what lets a directory go: it was
 // collected after everything inside it.

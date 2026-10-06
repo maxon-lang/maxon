@@ -7,7 +7,56 @@ export typealias ColumnNumber = int(0 to u64.max)
 
 // Homed here, next to their element types, because consumers in unrelated IR files need them.
 export typealias LineNumberArray = Array with LineNumber
+
+// @generated library-cache begin
+module function cacheWriteLineNumberArray(writer LibraryCacheWriter, value LineNumberArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteLineNumberArray'
+
+module function cacheReadLineNumberArray(reader LibraryCacheReader) returns LineNumberArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = LineNumberArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as LineNumber
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadLineNumberArray'
+
+// @generated library-cache end
+
 export typealias ColumnNumberArray = Array with ColumnNumber
+
+// @generated library-cache begin
+module function cacheWriteColumnNumberArray(writer LibraryCacheWriter, value ColumnNumberArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteColumnNumberArray'
+
+module function cacheReadColumnNumberArray(reader LibraryCacheReader) returns ColumnNumberArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ColumnNumberArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ColumnNumber
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadColumnNumberArray'
+
+// @generated library-cache end
 
 typealias ByteCursor = ArrayIterator with Byte
 
@@ -294,6 +343,44 @@ export enum TokenKind
 	eof = "end of file"
 end 'TokenKind'
 
+// @generated library-cache begin
+let CacheCasesTokenKind = [TokenKind.function, TokenKind.let, TokenKind.typealias, TokenKind.export, TokenKind.public, TokenKind.if, TokenKind.else, TokenKind.while, TokenKind.for, TokenKind.in, TokenKind.break, TokenKind.continue, TokenKind.return, TokenKind.panic, TokenKind.end, TokenKind.match, TokenKind.then, TokenKind.fallthrough, TokenKind.default, TokenKind.upto, TokenKind.gives, TokenKind.try, TokenKind.otherwise, TokenKind.throw, TokenKind.ignore, TokenKind.async, TokenKind.await, TokenKind.returns, TokenKind.var, TokenKind.type, TokenKind.union, TokenKind.enum, TokenKind.static, TokenKind.interface, TokenKind.extension, TokenKind.extends, TokenKind.implements, TokenKind.uses, TokenKind.with, TokenKind.where, TokenKind.self, TokenKind.selfType, TokenKind.throws, TokenKind.from, TokenKind.to, TokenKind.mod, TokenKind.and, TokenKind.or, TokenKind.not, TokenKind.xor, TokenKind.shl, TokenKind.shr, TokenKind.as, TokenKind.is, TokenKind.sizeof, TokenKind.countof, TokenKind.true, TokenKind.false, TokenKind.int, TokenKind.float, TokenKind.bool, TokenKind.cstring, TokenKind.intLiteral, TokenKind.floatLiteral, TokenKind.charLiteral, TokenKind.stringLiteral, TokenKind.byteStringLiteral, TokenKind.stringInterpStart, TokenKind.stringInterpEnd, TokenKind.stringFormatSpec, TokenKind.identifier, TokenKind.leftParen, TokenKind.rightParen, TokenKind.leftBrace, TokenKind.rightBrace, TokenKind.leftBracket, TokenKind.rightBracket, TokenKind.equals, TokenKind.equalsEquals, TokenKind.bangEquals, TokenKind.lessThan, TokenKind.lessEquals, TokenKind.greaterThan, TokenKind.greaterEquals, TokenKind.plus, TokenKind.minus, TokenKind.star, TokenKind.slash, TokenKind.dot, TokenKind.colon, TokenKind.comma, TokenKind.at, TokenKind.hashIf, TokenKind.hashElse, TokenKind.hashEndif, TokenKind.docComment, TokenKind.newline, TokenKind.eof]
+
+module function cacheReadTokenKind(reader LibraryCacheReader) returns TokenKind throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesTokenKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadTokenKind'
+
+function cacheTableAgreesTokenKind() returns bool
+	let declared = TokenKind.allCases
+
+	if CacheCasesTokenKind.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesTokenKind.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesTokenKind'
+
+module function cacheEnumTablesAgreeInCompilerLexer() returns bool
+	if not cacheTableAgreesTokenKind() 'disagreesCacheTableAgreesTokenKind'
+		return false
+	end 'disagreesCacheTableAgreesTokenKind'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerLexer'
+
+// @generated library-cache end
+
 // ⭐⭐ **WHICH KINDS A PARSER CURSOR STEPS OVER — THE ONE DEFINITION, and it is deliberately not a
 // list of "trivia".** `newline` and `docComment` are here because the GRAMMAR reads neither: a newline
 // separates statements and carries nothing once the separation is recorded, and a doc comment is prose
@@ -528,6 +615,30 @@ let BangTokenText = b"!"
 let BackslashTokenText = b"\\"
 
 export typealias TokenArray = Array with Token
+
+// @generated library-cache begin
+module function cacheWriteTokenArray(writer LibraryCacheWriter, value TokenArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		cacheWriteToken(writer, value: item)
+	end 'eachItem'
+end 'cacheWriteTokenArray'
+
+module function cacheReadTokenArray(reader LibraryCacheReader) returns TokenArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = TokenArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadToken(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadTokenArray'
+
+// @generated library-cache end
 
 // --- Table variables ---
 // Static lookup: byte value -> character class (256 entries, O(1) index)
