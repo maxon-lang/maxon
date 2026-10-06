@@ -316,21 +316,24 @@ export type InlineRangeBuilder
 	end 'extendOrOpen'
 end 'InlineRangeBuilder'
 
-// Hand a finished chunk its function's inline-frame half. The site table travels by reference only when the
-// function holds one: a chunk is built on a pool worker, and retaining the shared empty every parsed function
-// starts with from there would be the cross-thread refcount write `IrFunction.createFromStd` refuses.
-export function carryInlineFrames(chunk FunctionCodeChunk, func IrFunction, ranges InlineRangeBuilder)
-	if func.inlineSites.count() == 0 'nothingSpliced'
+// Hand a finished chunk its inline ranges. Their site table is attached on the main thread after
+// the drain (`attachInlineSites`): a chunk is encoded on a pool worker, whose unit function carries
+// no sites, and the real function's table belongs to the main thread.
+export function carryInlineRanges(chunk FunctionCodeChunk, siteCount ElementIndex, funcName ByteArray, ranges InlineRangeBuilder)
+	if siteCount == 0 'nothingSpliced'
 		if ranges.ranges.count() != 0 'aBlockNamesASite'
-			panic("carryInlineFrames: '{String.from(func.name)}' emitted {ranges.ranges.count()} inline range(s) but records no inline site — a block carries a site its function never recorded")
+			panic("carryInlineRanges: '{String.from(funcName)}' emitted {ranges.ranges.count()} inline range(s) but records no inline site — a block carries a site its function never recorded")
 		end 'aBlockNamesASite'
 
 		return
 	end 'nothingSpliced'
 
-	chunk.inlineSites = func.inlineSites
 	chunk.inlineRanges = ranges.ranges
-end 'carryInlineFrames'
+end 'carryInlineRanges'
+
+export function attachInlineSites(chunk FunctionCodeChunk, func IrFunction)
+	chunk.inlineSites = func.inlineSites
+end 'attachInlineSites'
 
 // The whole program's tables, folded chunk by chunk in `.text` order: every chunk's site indices are
 // rebased past the sites already folded, and its ranges past `funcStart`, so one `parent` or `site`

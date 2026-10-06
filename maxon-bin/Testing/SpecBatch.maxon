@@ -1,7 +1,9 @@
 // A spec's batchable run cases (`placementOf`, `claimedPlacementOf`) compile into the fewest programs
 // whose claims do not conflict (`BatchGroup.admits`): a nominal type name is whole-program
-// (specs/type-name-collision.md), and an extension method declared in two files is E3006. The claims
-// come from one front-end pass per case (`Compiler.claimsOfSources`); source text is read only to
+// (specs/type-name-collision.md), an extension method declared in two files is E3006, and a module
+// `var` in one case beside a `spawn` in another can be E3143, because a closure call reached from a
+// message reaches every address-taken function in the program. The claims come from one front-end
+// pass per case (`Compiler.claimsOfSources`); source text is read only to
 // rewrite `main` and to find unused exports. Each case is staged in a directory of its own so
 // its file-private names stay apart, its `main` becomes an exported `__spec_case_<n>`, and a
 // generated entry runs the cases its `--select=` list names between BEGIN and END markers that
@@ -354,6 +356,8 @@ module type BatchClaim
 	export let aliases as StringArray
 	export let extensionKeys as StringArray
 	export let mentioned as ClaimedNameSet
+	export let holdsModuleVars as bool
+	export let spawnsServices as bool
 
 	module static function of(claims SourceClaims) returns BatchClaim
 		var mentioned = ClaimedNameSet.create()
@@ -362,7 +366,7 @@ module type BatchClaim
 			mentioned.insert(name)
 		end 'eachMention'
 
-		return Self{nominals: claims.declaredNominals, aliases: claims.declaredAliases, extensionKeys: claims.extensionMethodKeys, mentioned: mentioned}
+		return Self{nominals: claims.declaredNominals, aliases: claims.declaredAliases, extensionKeys: claims.extensionMethodKeys, mentioned: mentioned, holdsModuleVars: claims.declaresModuleVars, spawnsServices: claims.spawnsServices}
 	end 'of'
 
 	module function declares(name String) returns bool
@@ -397,6 +401,10 @@ module type BatchClaim
 
 		return false
 	end 'sharesAnExtensionMethodWith'
+
+	module function exposesAModuleVarTo(other BatchClaim) returns bool
+		return self.holdsModuleVars and other.spawnsServices
+	end 'exposesAModuleVarTo'
 end 'BatchClaim'
 
 typealias BatchClaimArray = Array with BatchClaim
@@ -422,7 +430,7 @@ module type BatchGroup
 
 	module function admits(claim BatchClaim) returns bool
 		for held in self.claims 'eachHeld'
-			if claim.sharesAnExtensionMethodWith(held) or claim.meansAnotherCasesName(held) or held.meansAnotherCasesName(claim) 'conflicts'
+			if claim.sharesAnExtensionMethodWith(held) or claim.meansAnotherCasesName(held) or held.meansAnotherCasesName(claim) or claim.exposesAModuleVarTo(held) or held.exposesAModuleVarTo(claim) 'conflicts'
 				return false
 			end 'conflicts'
 		end 'eachHeld'

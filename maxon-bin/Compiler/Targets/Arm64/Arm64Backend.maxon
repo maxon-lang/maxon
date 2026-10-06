@@ -2577,7 +2577,7 @@ end 'arm64EmitStackFree'
 // within its one chunk. `greenThreads` is `RuntimeUsage.usesGt`, read once by the caller rather
 // than re-derived per function; it decides the prologue stack guard and whether every
 // `arm64ImportCall` goes through the system-stack door (`Arm64GtRuntime.DarwinLibcCallName`).
-function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThreads bool, target Target, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns FunctionCodeChunk
+export function emitArm64FunctionChunk(module TargetModule, func IrFunction, frameBytes StackSize, encoding FunctionEncodingFacts, greenThreads bool, target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
@@ -2597,13 +2597,13 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	// resolved after the block loop, when `blockOffsets` holds every block's chunk-local offset.
 	var jumpTables = JumpTablePendingArray.create()
 	var blockOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
-	let guarded = greenThreads and not skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier)
+	let guarded = greenThreads and not encoding.skipsStackGuard
 	var unsafePrefixBytes = 0 as CodeOffset
 	var isFirstBlock = true
 
 	// Hoisted so a build without debug info pays one bool test per op and never reads the span column.
 	let captureSpans = module.spans.armed
-	var lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, spanTable: spanTable)
+	var lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, encoding: encoding)
 	var runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
 	var blockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
@@ -2624,7 +2624,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 		// and relocates it first. The exemption is `skipsGreenThreadStackGuard`, asked of the function's
 		// provenance and never its name.
 		if isFirstBlock and guarded 'guard'
-			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: arm64PrologueFrameBytes(module, block: block), margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
+			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: frameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
 
 			// x64's twin: the guard's bytes are where an asynchronous stop may not land, read off the buffer.
 			unsafePrefixBytes = codeHere(code)
@@ -2662,7 +2662,7 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 
 	// `funcAdrpRelocs` is assigned after the fact so `createWith`'s signature — shared with the x64
 	// runtimes — stays unchanged (only arm64 chunks carry any).
-	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	var chunk = FunctionCodeChunk.createWith(func.name.clone(), code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 	chunk.funcAdrpRelocs = funcAdrpRelocs
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
 
@@ -2670,52 +2670,23 @@ function emitArm64FunctionChunk(module TargetModule, func IrFunction, greenThrea
 	// says why `compilerScaffolding` is asked separately.
 	chunk.asyncPreemptible = guarded
 	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
-	chunk.compilerScaffolding = isRuntimeFunction(func, runtimeTier: runtimeTier)
+	chunk.compilerScaffolding = encoding.compilerScaffolding
 
 	// Gated on `--coverage` rather than on debug info: the two are independent channels, and this one is
 	// empty for an ordinary build because no `covInc` was emitted to fill it. Dropping it would leave every
 	// point ELIMINATED in the sidecar while the binary was faithfully counting.
 	chunk.covPointOffsets = covOffsets
-	carryInlineFrames(chunk, func: func, ranges: inlineRanges)
+	carryInlineRanges(chunk, siteCount: encoding.siteCount, funcName: func.name, ranges: inlineRanges)
 
 	if captureSpans 'debugInfo'
 		chunk.lineRows = lineRows.rows
 		chunk.localRanges = runOffsets.resolve(func, blockStarts: blockOffsets, blockEnds: blockEnds)
-		chunk.frameSize = arm64FunctionFrameBytes(module, func: func)
+		chunk.frameSize = frameBytes
 		chunk.paramCount = func.paramCount
 	end 'debugInfo'
 
 	return chunk
 end 'emitArm64FunctionChunk'
-
-// `func`'s whole frame — everything one call of it puts on the stack, since `bl` pushes nothing — read off the
-// same prologue op the stack guard projects, so the two cannot come to disagree about one function's frame. The
-// sidecar reports it, and `PreemptionDepth.requirePreemptionFitsTheGuardMargin` adds a call tree up from it.
-export function arm64FunctionFrameBytes(module TargetModule, func IrFunction) returns StackSize
-	let entryRef = try func.blockRefs.get(0) otherwise panic("arm64FunctionFrameBytes: '{String.from(func.name)}' has no blocks — every lowered function has an entry block, which the frame pass opens")
-	let entry = try module.blocks.get(entryRef) otherwise panic("arm64FunctionFrameBytes: blockRef from func.blockRefs not in module.blocks")
-
-	return arm64PrologueFrameBytes(module, block: entry)
-end 'arm64FunctionFrameBytes'
-
-// ⭐ **THE FRAME THE GUARD PROJECTS, READ OFF THE PROLOGUE OP RATHER THAN RE-DERIVED.** x64's guard
-// recomputes the number with `x64PrologueFrameOf`, because its prologue is a `push`/`sub` sequence with
-// no single op carrying the total. arm64's IS one op — `insertArm64PrologueAtEntry` prepends
-// `arm64Prologue(frameSize, recordOffset)` at index 0 of the entry block — so the guard reads the very word
-// the prologue will reserve. That is DERIVE rather than CHECK: the two cannot come to disagree, where two
-// derivations of one frame size could.
-//
-// ⚠ Every arm64 function is framed (`Arm64PrologueEpilogue`'s first paragraph — leaves included, because a
-// chain with a hole is not a chain), so the op is always there and its size is never 0. The guard therefore
-// has no "reserves no frame" exemption to make, which is the one arm x64's `emitGuard` needs and this does not.
-function arm64PrologueFrameBytes(module TargetModule, block IrBlock) returns StackSize
-	let opIdx = try block.opRefs.get(0) otherwise panic("arm64PrologueFrameBytes: the entry block of '{String.from(block.label)}' has no ops — `insertArm64PrologueAtEntry` prepends an `arm64Prologue` to every function's entry block, so an empty entry block means the frame pass did not run")
-	let op = try module.ops.get(opIdx) otherwise panic("arm64PrologueFrameBytes: opIdx {opIdx} not in module.ops")
-	return match op 'prologue'
-		arm64Prologue(frameSize, _) gives frameSize
-		default panic("arm64PrologueFrameBytes: the entry block's first op is not an `arm64Prologue` — the green-thread stack guard must project the frame the prologue is about to reserve, and it reads that number off the prologue itself rather than deriving a second one")
-	end 'prologue'
-end 'arm64PrologueFrameBytes'
 
 // Append the entry stub `mrt_start`, to the STILL-EMPTY chunk list so it LEADS `.text` and
 // `LC_MAIN.entryoff = 0` — the opposite placement from x64's
@@ -2975,53 +2946,27 @@ end 'arm64ResolveFuncAdrpRelocs'
 
 // Run the arm64 backend — the arm64 twin of `BackendDispatch.buildX64Backend`. The backend pool and its
 // register allocator are reused as-is (the one-allocator / unified-`TargetOp` design); the
-// ISA-specific stages are the arm64 isel (`StdToArm64Lowering`), frame (`insertArm64PrologueEpilogue`),
-// encoder and link. There is NO module-level `augmentWithRuntime` step (x64's, which prepends
-// `mrt_start` as a module function): the arm64 entry stub calls `_exit` through a GOT import with no
-// TargetOp channel, so it is hand-assembled as a chunk in the encode phase (`appendArm64RuntimeChunks`)
-// and laid out first. `throws CompileError` because register allocation can fail for a real reason
-// (E5001), exactly as the x64 backend does.
+// ISA-specific stages are the arm64 isel (`StdToArm64Lowering`), frame
+// (`insertArm64FrameForFunction`), encoder and link. There is NO module-level `augmentWithRuntime`
+// step (x64's, which prepends `mrt_start` as a module function): the arm64 entry stub calls `_exit`
+// through a GOT import with no TargetOp channel, so it is hand-assembled as a chunk after the pool
+// (`appendArm64RuntimeChunks`) and laid out first. `throws CompileError` because register
+// allocation can fail for a real reason (E5001), exactly as the x64 backend does.
 export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
-	// The x64 driver's shape: isel, edge splitting and allocation per function on one pool
-	// (`BackendPool`), inside the `regalloc` bracket. `target` reaches the ISEL because the three
-	// OS-primitive lowerings differ per OS: macOS routes them through libSystem GOT imports, Linux through
-	// raw `svc #0` (see `arm64OsCallKind`), and the mmap anonymous-mapping flag word is a different number
-	// on each.
-	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
-	var targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt)
-	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
-
-	releaseAllocatedStdModule(project, stdModule: stdModule)
-
-	// The Target-tier CFG cleanup must run HERE — after the allocator's `applyAllocation` and before the
-	// frame pass.
-	// A block whose only op is an `arm64Branch` is genuinely empty only once SSA destruction has placed
-	// (or declined to place) its edge copies; before that it is an edge about to receive moves. The
-	// frame pass then sees the surviving blocks, so a callee-saved register or a `bl` reachable only
-	// from dead code stops being paid for. See `BranchCleanup`'s header.
-	cleanUpBranches(targetModule, project: project)
-
-	let prologueProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prologueEpilogue)
-	insertArm64PrologueEpilogue(targetModule, target: target)
-	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
-
-	// A preemption request is honoured below a guarded function's entry, in frames sized only now.
-	if usage.usesGt 'preemptionDepth'
-		requirePreemptionFitsTheGuardMargin(targetModule, funcNames: funcNames, target: target)
-
-		if targetStopsThreadsForPreemption(target) 'asyncPreemptionDepth'
-			requireAsyncPreemptionFitsItsMargin(targetModule, funcNames: funcNames, target: target)
-		end 'asyncPreemptionDepth'
-	end 'preemptionDepth'
-
-	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
+	// `target` reaches the isel on the pool because the three OS-primitive lowerings differ per OS:
+	// macOS routes them through libSystem GOT imports, Linux through raw `svc #0` (see
+	// `arm64OsCallKind`), and the mmap anonymous-mapping flag word is a different number on each.
 	var chunks = FunctionCodeChunkArray.create()
+	var targetModule = try encodeOnTheBackendPool(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames, chunks: chunks)
+
+	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encodeRuntime)
+	var entryChunks = FunctionCodeChunkArray.create()
 
 	// The entry stub `mrt_start`. It is hand-assembled (its macOS `_exit` GOT call has no TargetOp
-	// channel — see Arm64Runtime) and appended FIRST so it LEADS `.text` and the image's entry offset
-	// is 0, exactly as x64's `mrt_start` leads `.text`. There is NO module-level `augmentWithRuntime`
-	// step here — the stub is a chunk, not a module function, so it cannot be prepended to the module
-	// the way x64's is; it is assembled in the encode phase alongside the user chunks.
+	// channel — see Arm64Runtime) and placed ahead of the pool's chunks so it LEADS `.text` and the
+	// image's entry offset is 0, exactly as x64's `mrt_start` leads `.text`. There is NO module-level
+	// `augmentWithRuntime` step here — the stub is a chunk, not a module function, so it cannot be
+	// prepended to the module the way x64's is.
 	//
 	// ⚠ It is not the WHOLE arm64 runtime: the panic, fault, host-surface and scheduler families appended
 	// below user code are the rest of it.
@@ -3029,11 +2974,9 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// Its by-name calls read `Project.entryStubCalls`, the record the reachability roots and the inliner's
 	// census were built from, so the stub calls exactly what those kept alive.
 	let stub = project.entryStubCalls
-	appendArm64RuntimeChunks(chunks, leakCheck: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, releasesRegistry: stub.releasesRegistry, os: target.os, entryFunction: project.entryFunctionName)
+	appendArm64RuntimeChunks(entryChunks, leakCheck: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, releasesRegistry: stub.releasesRegistry, os: target.os, entryFunction: project.entryFunctionName)
 
-	for func in targetModule.functions 'eachFunc'
-		chunks.push(emitArm64FunctionChunk(targetModule, func: func, greenThreads: usage.usesGt, target: target, runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable))
-	end 'eachFunc'
+	placeChunksAhead(entryChunks, chunks: chunks)
 
 	// The panic runtime lays out ABOVE user code (x64's placement, and for x64's reason: only the entry
 	// stub has to lead `.text`). Its four chunks and the `__symtable` concat appends after them are what
@@ -3063,7 +3006,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 		appendArm64GtRuntimeChunks(chunks, target: target)
 	end 'gtChunks'
 
-	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
+	recordPhase(project, phase: CompilePhase.encodeRuntime, probe: encodeProbe)
 	releaseEncodedTargetModule(project, targetModule: targetModule)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)

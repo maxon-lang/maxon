@@ -1343,3 +1343,262 @@ end 'main'
 sorted within the bound
 ```
 
+
+## Duplicate-heavy inputs
+
+<!-- test: sort-duplicate-heavy-arrays-come-out-sorted -->
+`sort()` on arrays of 100 to 400 elements drawn from 2 to 40 distinct values. The
+stable quicksort that builds driftsort's runs keeps hitting a partition whose pivot
+is the smallest value of its range, so nothing lands in the `< pivot` class; every
+array must still come out ordered and hold the multiset it started with. The
+values come from a fixed linear congruential generator, so every run sorts the
+same 1806 arrays.
+```maxon
+typealias SortKey = int(0 to u32.max)
+typealias Tally = int(0 to u64.max)
+typealias Spread = int(1 to 1000)
+typealias SortKeyArray = Array with SortKey
+typealias SpreadArray = Array with Spread
+
+let ShortestLength = 100
+let LongestLength = 400
+
+function nextSeed(seed Tally) returns Tally
+	return (seed * 1103515245 + 12345) mod 2147483648
+end 'nextSeed'
+
+function main() returns ExitCode
+	var spreads = SpreadArray.create()
+
+	for spread in [2, 3, 4, 8, 16, 40] 'spreads'
+		spreads.push(spread)
+	end 'spreads'
+
+	var seed = 1 as Tally
+	var bad = 0 as Tally
+
+	for spread in spreads 'eachSpread'
+		for n in ShortestLength to LongestLength 'eachLength'
+			var values = SortKeyArray.create()
+			var sum = 0 as Tally
+			var squares = 0 as Tally
+
+			for _ in 0 upto n 'fill'
+				seed = nextSeed(seed)
+				let v = try ((seed shr 16) mod (spread as Tally)) otherwise panic("a spread is never zero")
+				values.push(v as SortKey)
+				sum = sum + v
+				squares = squares + v * v
+			end 'fill'
+
+			values.sort()
+
+			var previous = 0 as SortKey
+			var ordered = values.count() == n
+
+			for v in values 'walk'
+				if v < previous 'outOfOrder'
+					ordered = false
+				end 'outOfOrder'
+
+				previous = v
+				sum = sum - (v as Tally)
+				squares = squares - (v as Tally) * (v as Tally)
+			end 'walk'
+
+			if not ordered or sum != 0 or squares != 0 'broken'
+				bad = bad + 1
+			end 'broken'
+		end 'eachLength'
+	end 'eachSpread'
+
+	print("unsorted arrays: {bad}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+unsorted arrays: 0
+```
+
+<!-- test: sort-duplicate-heavy-arrays-keep-equal-keys-in-arrival-order -->
+The same duplicate-heavy shapes as records sorted by key with `sort(cmp)`. Each
+record carries its arrival position, so a stable sort leaves every run of equal
+keys in ascending arrival order; the arrivals must also all survive the sort.
+```maxon
+typealias SortKey = int(0 to u32.max)
+typealias Tally = int(0 to u64.max)
+typealias Spread = int(1 to 1000)
+typealias SpreadArray = Array with Spread
+
+let ShortestLength = 100
+let LongestLength = 400
+
+type Ticket
+	export var key as SortKey
+	export var arrival as Tally
+
+	static function create(key SortKey, arrival Tally) returns Self
+		return Self{key: key, arrival: arrival}
+	end 'create'
+end 'Ticket'
+
+typealias TicketArray = Array with Ticket
+
+function byKey(a Ticket, b Ticket) returns Ordering
+	return a.key.compare(b.key)
+end 'byKey'
+
+function nextSeed(seed Tally) returns Tally
+	return (seed * 1103515245 + 12345) mod 2147483648
+end 'nextSeed'
+
+function main() returns ExitCode
+	var spreads = SpreadArray.create()
+
+	for spread in [2, 3, 4, 8, 16, 40] 'spreads'
+		spreads.push(spread)
+	end 'spreads'
+
+	var seed = 7 as Tally
+	var unsorted = 0 as Tally
+	var unstable = 0 as Tally
+
+	for spread in spreads 'eachSpread'
+		for n in ShortestLength to LongestLength 'eachLength'
+			var entries = TicketArray.create()
+
+			for arrival in 0 upto n 'fill'
+				seed = nextSeed(seed)
+				let key = try ((seed shr 16) mod (spread as Tally)) otherwise panic("a spread is never zero")
+				entries.push(Ticket.create(key as SortKey, arrival: arrival))
+			end 'fill'
+
+			entries.sort(byKey)
+
+			var ordered = entries.count() == n
+			var stable = true
+			var arrivals = 0 as Tally
+			var previousKey = 0 as SortKey
+			var previousArrival = 0 as Tally
+
+			for (iter, entry) in entries.withIterator() 'walk'
+				if iter.index() > 0 'hasPrevious'
+					if entry.key < previousKey 'outOfOrder'
+						ordered = false
+					end 'outOfOrder' else if entry.key == previousKey and entry.arrival < previousArrival 'reordered'
+						stable = false
+					end 'reordered'
+				end 'hasPrevious'
+
+				previousKey = entry.key
+				previousArrival = entry.arrival
+				arrivals = arrivals + entry.arrival
+			end 'walk'
+
+			if arrivals != n * (n - 1) / 2 'lost'
+				ordered = false
+			end 'lost'
+
+			if not ordered 'countUnsorted'
+				unsorted = unsorted + 1
+			end 'countUnsorted' else if not stable 'countUnstable'
+				unstable = unstable + 1
+			end 'countUnstable'
+		end 'eachLength'
+	end 'eachSpread'
+
+	print("unsorted arrays: {unsorted}\n")
+	print("unstable arrays: {unstable}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+unsorted arrays: 0
+unstable arrays: 0
+```
+
+<!-- test: sort-small-arrays-keep-equal-keys-in-arrival-order -->
+Stability on the short slices the stable sort handles without partitioning:
+records of 2 to 64 elements over three keys, forty arrays of each length, every
+one checked for order and for equal keys left in arrival order.
+```maxon
+typealias SortKey = int(0 to u32.max)
+typealias Tally = int(0 to u64.max)
+
+let LongestLength = 64
+let ArraysPerLength = 40
+let KeySpread = 3
+
+type Ticket
+	export var key as SortKey
+	export var arrival as Tally
+
+	static function create(key SortKey, arrival Tally) returns Self
+		return Self{key: key, arrival: arrival}
+	end 'create'
+end 'Ticket'
+
+typealias TicketArray = Array with Ticket
+
+function byKey(a Ticket, b Ticket) returns Ordering
+	return a.key.compare(b.key)
+end 'byKey'
+
+function nextSeed(seed Tally) returns Tally
+	return (seed * 1103515245 + 12345) mod 2147483648
+end 'nextSeed'
+
+function main() returns ExitCode
+	var seed = 3 as Tally
+	var unstable = 0 as Tally
+
+	for n in 2 to LongestLength 'eachLength'
+		for _ in 0 upto ArraysPerLength 'eachArray'
+			var entries = TicketArray.create()
+
+			for arrival in 0 upto n 'fill'
+				seed = nextSeed(seed)
+				entries.push(Ticket.create(((seed shr 16) mod KeySpread) as SortKey, arrival: arrival))
+			end 'fill'
+
+			entries.sort(byKey)
+
+			var stable = entries.count() == n
+			var previousKey = 0 as SortKey
+			var previousArrival = 0 as Tally
+
+			for (iter, entry) in entries.withIterator() 'walk'
+				if iter.index() > 0 'hasPrevious'
+					if entry.key < previousKey 'outOfOrder'
+						stable = false
+					end 'outOfOrder' else if entry.key == previousKey and entry.arrival < previousArrival 'reordered'
+						stable = false
+					end 'reordered'
+				end 'hasPrevious'
+
+				previousKey = entry.key
+				previousArrival = entry.arrival
+			end 'walk'
+
+			if not stable 'countUnstable'
+				unstable = unstable + 1
+			end 'countUnstable'
+		end 'eachArray'
+	end 'eachLength'
+
+	print("unstable arrays: {unstable}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+unstable arrays: 0
+```

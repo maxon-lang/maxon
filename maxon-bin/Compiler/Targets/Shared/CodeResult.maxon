@@ -404,10 +404,10 @@ export type DebugLineRowBuilder
 	var entering as bool
 	var atBlockStart as bool
 	let branchTargets as BoolArray
-	let spanTable as DebugSpanTable
+	let lines as SpanLineTable
 
-	export static function forFunction(module TargetModule, func IrFunction, armed bool, spanTable DebugSpanTable) returns DebugLineRowBuilder
-		return Self{rows: DebugLineRowArray.create(), last: NoSpanId, lastSite: InlineSiteRef.none, openSite: InlineSiteRef.none, armed: armed, entering: false, atBlockStart: false, branchTargets: lineEntryColumn(module, func: func, spanTable: spanTable) if armed else BoolArray.create(), spanTable: spanTable}
+	export static function forFunction(module TargetModule, func IrFunction, armed bool, encoding FunctionEncodingFacts) returns DebugLineRowBuilder
+		return Self{rows: DebugLineRowArray.create(), last: NoSpanId, lastSite: InlineSiteRef.none, openSite: InlineSiteRef.none, armed: armed, entering: false, atBlockStart: false, branchTargets: lineEntryColumn(module, func: func, encoding: encoding) if armed else BoolArray.create(), lines: encoding.lines}
 	end 'forFunction'
 
 	export function openBlock(blockId BlockId, site InlineSiteRef)
@@ -425,7 +425,7 @@ export type DebugLineRowBuilder
 			return
 		end 'noRowHere'
 
-		let entersTheLine = self.entering if self.atBlockStart else self.last == NoSpanId or not sameSourceLine(self.spanTable, first: self.last, second: spanId)
+		let entersTheLine = self.entering if self.atBlockStart else self.last == NoSpanId or not sameSourceLine(self.lines, first: self.last, second: spanId)
 		self.atBlockStart = false
 
 		if spanId == self.last and sameInlineSite(self.openSite, other: self.lastSite) and not entersTheLine 'theSameStatement'
@@ -713,6 +713,12 @@ export type FunctionCodeChunk
 end 'FunctionCodeChunk'
 
 export typealias FunctionCodeChunkArray = Array with FunctionCodeChunk
+
+export function placeChunksAhead(leading FunctionCodeChunkArray, chunks FunctionCodeChunkArray)
+	for position in 0 upto leading.count() 'eachLeadingChunk'
+		chunks.insert(position, value: try leading.get(position) otherwise panic("placeChunksAhead: leading.get OOB at {position} of {leading.count()}"))
+	end 'eachLeadingChunk'
+end 'placeChunksAhead'
 
 // CodeResult bundles the emitted machine code with the data needed to finish
 // writing an executable and the IR module(s) that produced it. This is the

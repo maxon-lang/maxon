@@ -1,12 +1,14 @@
-// BackendUnit — ONE FUNCTION THROUGH INSTRUCTION SELECTION, CRITICAL-EDGE SPLITTING AND REGISTER
-// ALLOCATION ON A POOL WORKER, and the splice that puts the finished function into the Target module.
+// BackendUnit — ONE FUNCTION THROUGH INSTRUCTION SELECTION, CRITICAL-EDGE SPLITTING, REGISTER
+// ALLOCATION, BRANCH CLEANUP, THE FRAME AND ENCODING ON A POOL WORKER, and the splice that puts the
+// finished function into the Target module.
 //
 // ⭐⭐ **THE UNIT IS THE Std FAN-OUT'S** (`extractUnitModule`): a fresh single-function Std module every
 // record of which the message owns alone. The worker lowers it exactly as the isel lowers the whole
 // program's module — `prepareSkeleton`, the per-function walk, the class column — into a single-function
-// TARGET module, splits that module's critical edges and allocates it, and the reply carries THAT module
-// home. Nothing is copied on the way back: the ops the allocator settled on are the reply's, and
-// `spliceBackendUnit` appends them to the real module by index arithmetic.
+// TARGET module, splits that module's critical edges, allocates it, cleans up its branches, inserts
+// its frame and encodes it, and the reply carries THAT module home beside its chunk. Nothing is
+// copied on the way back: the ops the worker settled on are the reply's, and `spliceBackendUnit`
+// appends them to the real module by index arithmetic.
 //
 // ⛔⛔ **EVERY RECORD REACHABLE FROM A REPLY IS THE REPLY'S ALONE, AND THAT IS A RUN-TIME CONTRACT WITH A
 // LOUD FAILURE.** A reply MOVES: the send walks the whole graph and a record with a second owner aborts
@@ -25,8 +27,8 @@
 
 export typealias BackendUnitBodyArray = Array with BackendUnitBody
 
-// What crosses TO a worker: the function as a single-function Std module, and the two facts the allocator
-// reads off the real function that the unit's own does not carry.
+// What crosses TO a worker: the function as a single-function Std module, and the facts the
+// allocator and the encoder read off the real function that the unit's own does not carry.
 export type BackendUnitBody
 	export var unitModule as StdModule
 
@@ -43,10 +45,127 @@ export type BackendUnitBody
 	// same order.
 	export var debugValues as DebugValueRoster
 
-	export static function extract(module StdModule, func IrFunction) returns BackendUnitBody
-		return Self{unitModule: extractUnitModule(module, func: func), hasAuthor: not func.isCompilerBuilt(), debugValues: DebugValueRoster.of(func)}
+	// The encoder's questions a worker cannot ask: the unit's function carries no inline sites, and
+	// the runtime tier and the span table are the `Project`'s.
+	export var encoding as FunctionEncodingFacts
+
+	export static function extract(module StdModule, func IrFunction, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns BackendUnitBody
+		return Self{unitModule: extractUnitModule(module, func: func), hasAuthor: not func.isCompilerBuilt(), debugValues: DebugValueRoster.of(func), encoding: FunctionEncodingFacts.of(func, blocks: module.blocks, spans: module.spans, runtimeTier: runtimeTier, spanTable: spanTable)}
 	end 'extract'
 end 'BackendUnitBody'
+
+typealias SpanKeyColumn = Array with SpanInternKey
+
+export type SpanLineTable
+	var spans as SpanIdArray
+	var lineKeys as SpanKeyColumn
+
+	export static function empty() returns SpanLineTable
+		return Self{spans: SpanIdArray.create(), lineKeys: SpanKeyColumn.create()}
+	end 'empty'
+
+	export static function covering(wanted SpanIdArray, table DebugSpanTable) returns SpanLineTable
+		var spans = SpanIdArray.create()
+		var lineKeys = SpanKeyColumn.create()
+		wanted.sort()
+
+		for span in wanted 'eachWanted'
+			if spans.count() > 0 and (try spans.get(spans.count() - 1) otherwise panic("SpanLineTable.covering: spans.get OOB at the last of {spans.count()}")) == span 'alreadyHeld'
+				continue
+			end 'alreadyHeld'
+
+			spans.push(span)
+			lineKeys.push(table.lineKeyOf(span))
+		end 'eachWanted'
+
+		return Self{spans: spans, lineKeys: lineKeys}
+	end 'covering'
+
+	export function lineKeyOf(span SpanId) returns SpanInternKey
+		var low = 0 as ElementIndex
+		var high = self.spans.count()
+
+		while low < high 'bisect'
+			let middle = low + ((high - low) shr 1)
+			let held = try self.spans.get(middle) otherwise panic("SpanLineTable.lineKeyOf: spans.get OOB at {middle} of {self.spans.count()}")
+
+			if held == span 'found'
+				return try self.lineKeys.get(middle) otherwise panic("SpanLineTable.lineKeyOf: lineKeys.get OOB at {middle} of {self.lineKeys.count()}")
+			end 'found'
+
+			if held < span 'above'
+				low = middle + 1
+			end 'above' else 'below'
+				high = middle
+			end 'below'
+		end 'bisect'
+
+		panic("SpanLineTable.lineKeyOf: span {span} is not one of the {self.spans.count()} this function's ops and inline sites carry — the table is built from exactly those at extraction, so an op minted past it brought a span nobody recorded")
+	end 'lineKeyOf'
+end 'SpanLineTable'
+
+export type FunctionEncodingFacts
+	export var siteCount as ElementIndex
+	export var siteCallSpans as SpanIdArray
+	export var siteParentKeys as DebugSiteKeyColumn
+	export var lines as SpanLineTable
+	export var compilerScaffolding as bool
+	export var skipsStackGuard as bool
+
+	export static function of(func IrFunction, blocks IrBlockArray, spans DebugSpanColumn, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns FunctionEncodingFacts
+		var siteCallSpans = SpanIdArray.create()
+		var siteParentKeys = DebugSiteKeyColumn.create()
+		var lines = SpanLineTable.empty()
+
+		if spans.armed 'carriesLines'
+			var wanted = SpanIdArray.create()
+			collectOpSpans(func, blocks: blocks, spans: spans, into: wanted)
+			siteCallSpans.reserve(func.inlineSites.count())
+
+			for site in func.inlineSites 'eachSite'
+				siteCallSpans.push(site.callSpan)
+				wanted.push(site.callSpan)
+			end 'eachSite'
+
+			siteParentKeys = siteParentKeysOf(func)
+			lines = SpanLineTable.covering(wanted, table: spanTable)
+		end 'carriesLines'
+
+		return Self{siteCount: func.inlineSites.count(), siteCallSpans: siteCallSpans, siteParentKeys: siteParentKeys, lines: lines, compilerScaffolding: isRuntimeFunction(func, runtimeTier: runtimeTier), skipsStackGuard: skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier)}
+	end 'of'
+
+	export function callerOfSite(index ElementIndex) returns (SpanId, InlineSiteRef)
+		let callSpan = try self.siteCallSpans.get(index) otherwise panic("FunctionEncodingFacts.callerOfSite: inline site {index} is past the {self.siteCallSpans.count()} its function records")
+		let parentKey = try self.siteParentKeys.get(index) otherwise panic("FunctionEncodingFacts.callerOfSite: inline site {index} is past the {self.siteParentKeys.count()} parents its function records")
+
+		return (callSpan, inlineSiteOfKey(parentKey))
+	end 'callerOfSite'
+end 'FunctionEncodingFacts'
+
+function collectOpSpans(func IrFunction, blocks IrBlockArray, spans DebugSpanColumn, into SpanIdArray)
+	var last = NoSpanId
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try blocks.get(blockRef) otherwise panic("collectOpSpans: blockRef {blockRef} is not in the module's blocks")
+
+		for position in 0 upto block.opCountInRunOrder() 'eachOp'
+			let span = spans.at(block.opInRunOrderAt(position))
+
+			if span != NoSpanId and span != last 'aNewRun'
+				into.push(span)
+				last = span
+			end 'aNewRun'
+		end 'eachOp'
+	end 'eachBlock'
+end 'collectOpSpans'
+
+function inlineSiteOfKey(key DebugSiteKey) returns InlineSiteRef
+	if key == FunctionTextSiteKey 'ownText'
+		return InlineSiteRef.none
+	end 'ownText'
+
+	return InlineSiteRef.site((key - DebugSiteKeyBias) as ElementIndex)
+end 'inlineSiteOfKey'
 
 export typealias DebugSiteKey = int(0 to u32.max)
 export typealias DebugSiteKeyColumn = Array with DebugSiteKey
@@ -61,6 +180,18 @@ export function debugSiteKeyOf(site InlineSiteRef) returns DebugSiteKey
 	end 'site'
 end 'debugSiteKeyOf'
 
+function siteParentKeysOf(func IrFunction) returns DebugSiteKeyColumn
+	var parentKeys = DebugSiteKeyColumn.create()
+	parentKeys.reserve(func.inlineSites.count())
+
+	for (iter, site) in func.inlineSites.withIterator() 'eachSite'
+		requireParentRecordedEarlier(site.parent, site: iter.index())
+		parentKeys.push(debugSiteKeyOf(site.parent))
+	end 'eachSite'
+
+	return parentKeys
+end 'siteParentKeysOf'
+
 function requireParentRecordedEarlier(parent InlineSiteRef, site ElementIndex)
 	match parent 'nested'
 		none then return
@@ -70,7 +201,7 @@ end 'requireParentRecordedEarlier'
 
 function requireSiteIndexRecordedEarlier(parent MxdbgIndex, site MxdbgIndex)
 	if not mxdbgNoneOrBelow(parent, none: MxdbgNoInlineSite, bound: site) 'notRecordedBeforeIt'
-		panic("DebugValueRoster: inline site {site} names {parent} as its parent — every site nests under one recorded before it, which is what ends the walk up an inline chain")
+		panic("siteParentKeysOf: inline site {site} names {parent} as its parent — every site nests under one recorded before it, which is what ends the walk up an inline chain")
 	end 'notRecordedBeforeIt'
 end 'requireSiteIndexRecordedEarlier'
 
@@ -81,14 +212,13 @@ export type DebugValueRoster
 
 	export static function of(func IrFunction) returns DebugValueRoster
 		let tally = debugValueTallyOf(func)
-		var valueIds = ValueIdArray.create()
-		var siteKeys = DebugSiteKeyColumn.create()
-		var parentKeys = DebugSiteKeyColumn.create()
 
 		if tally == 0 'nothingNamed'
-			return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: parentKeys}
+			return Self.empty()
 		end 'nothingNamed'
 
+		var valueIds = ValueIdArray.create()
+		var siteKeys = DebugSiteKeyColumn.create()
 		valueIds.reserve(tally)
 		siteKeys.reserve(tally)
 
@@ -101,14 +231,7 @@ export type DebugValueRoster
 			end 'eachValue'
 		end 'eachBinding'
 
-		parentKeys.reserve(func.inlineSites.count())
-
-		for (iter, site) in func.inlineSites.withIterator() 'eachSite'
-			requireParentRecordedEarlier(site.parent, site: iter.index())
-			parentKeys.push(debugSiteKeyOf(site.parent))
-		end 'eachSite'
-
-		return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: parentKeys}
+		return Self{valueIds: valueIds, siteKeys: siteKeys, parentKeys: siteParentKeysOf(func)}
 	end 'of'
 
 	export function siteKeyCount() returns ElementIndex
@@ -128,9 +251,9 @@ export type BackendUnit
 
 	// ⭐ **EVERY RETURN IS `Self{…}` AND THERE IS ONLY ONE**, which is what makes a call to this the
 	// argument of a send (E3138, `SignatureIndex.returnsFreshValue`).
-	export static function extract(module StdModule, func IrFunction, funcIndex ElementIndex) returns BackendUnit
+	export static function extract(module StdModule, func IrFunction, funcIndex ElementIndex, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns BackendUnit
 		var holder = BackendUnitBodyArray.create()
-		holder.push(BackendUnitBody.extract(module, func: func))
+		holder.push(BackendUnitBody.extract(module, func: func, runtimeTier: runtimeTier, spanTable: spanTable))
 		return Self{funcIndex: funcIndex, holder: holder}
 	end 'extract'
 end 'BackendUnit'
@@ -166,10 +289,28 @@ export type BackendUnitLanding
 	// The isel's own bracket, folded into the `isel` row as a breakdown of `regalloc`.
 	export var iselCost as PhaseDelta
 
-	export static function create(rdata RdataRequestArray, counters RegAllocCounters, facts RegAllocFacts, costs PoolPhaseCosts, iselCost PhaseDelta) returns BackendUnitLanding
-		return Self{rdata: rdata, counters: counters, facts: facts, costs: costs, iselCost: iselCost}
+	export var tail as BackendUnitTail
+
+	export static function create(rdata RdataRequestArray, counters RegAllocCounters, facts RegAllocFacts, costs PoolPhaseCosts, iselCost PhaseDelta, tail BackendUnitTail) returns BackendUnitLanding
+		return Self{rdata: rdata, counters: counters, facts: facts, costs: costs, iselCost: iselCost, tail: tail}
 	end 'create'
 end 'BackendUnitLanding'
+
+export typealias StackSizeColumn = Array with StackSize
+
+export type BackendUnitTail
+	export var chunk as FunctionCodeChunk
+
+	// Everything one call of the function puts on the stack below its caller's frame.
+	export var callStackBytes as StackSize
+	export var branchCleanupCost as PhaseDelta
+	export var prologueEpilogueCost as PhaseDelta
+	export var encodeCost as PhaseDelta
+
+	export static function create(chunk FunctionCodeChunk, callStackBytes StackSize, branchCleanupCost PhaseDelta, prologueEpilogueCost PhaseDelta, encodeCost PhaseDelta) returns BackendUnitTail
+		return Self{chunk: chunk, callStackBytes: callStackBytes, branchCleanupCost: branchCleanupCost, prologueEpilogueCost: prologueEpilogueCost, encodeCost: encodeCost}
+	end 'create'
+end 'BackendUnitTail'
 
 // A finished unit as the worker hands it to the reply: the module and the landing, as two values so the
 // reply can be one record literal over both.
@@ -217,7 +358,6 @@ export function spliceBackendUnit(module TargetModule, func IrFunction, unitModu
 	unitModule.spans.requireParallelTo(unitModule.ops.count(), what: "after the backend unit of '{String.from(func.name)}'")
 
 	let opOffset = module.ops.count()
-	resolveDebugRanges(unitModule, unitFunc: unitFunc, opOffset: opOffset)
 	module.appendOps(unitModule)
 	func.blockRefs.clear()
 
@@ -241,10 +381,9 @@ export function spliceBackendUnit(module TargetModule, func IrFunction, unitModu
 	end 'debugLocationsOutOfStep'
 
 	func.debugLocalLocations = unitFunc.debugLocalLocations
-	func.debugLocalRanges = unitFunc.debugLocalRanges
 end 'spliceBackendUnit'
 
-function resolveDebugRanges(unitModule TargetModule, unitFunc IrFunction, opOffset ElementIndex)
+module function resolveDebugRanges(unitModule TargetModule, unitFunc IrFunction)
 	if unitFunc.debugLocalRanges.count() == 0 'noRanges'
 		return
 	end 'noRanges'
@@ -253,11 +392,11 @@ function resolveDebugRanges(unitModule TargetModule, unitFunc IrFunction, opOffs
 
 	for i in 0 upto unitFunc.debugLocalRanges.count() 'eachRange'
 		var range = try unitFunc.debugLocalRanges.get(i) otherwise panic("resolveDebugRanges: debugLocalRanges.get OOB at {i} of {unitFunc.debugLocalRanges.count()}")
-		range.first = splicedOpOf(liveOps, ordinal: range.first, opOffset: opOffset)
-		range.last = splicedOpOf(liveOps, ordinal: range.last, opOffset: opOffset)
+		range.first = opOfOrdinal(liveOps, ordinal: range.first)
+		range.last = opOfOrdinal(liveOps, ordinal: range.last)
 	end 'eachRange'
 end 'resolveDebugRanges'
 
-function splicedOpOf(liveOps OpIndexArray, ordinal DebugOpAnchor, opOffset ElementIndex) returns DebugOpAnchor
-	return ((try liveOps.get(ordinal) otherwise panic("spliceBackendUnit: live-op ordinal {ordinal} is past the {liveOps.count()} ops of the unit the allocator numbered it against")) + opOffset) as DebugOpAnchor
-end 'splicedOpOf'
+function opOfOrdinal(liveOps OpIndexArray, ordinal DebugOpAnchor) returns DebugOpAnchor
+	return (try liveOps.get(ordinal) otherwise panic("resolveDebugRanges: live-op ordinal {ordinal} is past the {liveOps.count()} ops of the unit the allocator numbered it against")) as DebugOpAnchor
+end 'opOfOrdinal'

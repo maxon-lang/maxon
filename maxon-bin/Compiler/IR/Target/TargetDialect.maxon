@@ -419,10 +419,9 @@ export type TargetOpMeta
 end 'TargetOpMeta'
 
 export union TargetOp
-	// Frame setup: reserve `stackSize` bytes of stack (`sub rsp, stackSize`).
-	// The compiler uses a frame-pointer-omitted (rsp-only) frame — no `push rbp` — so
-	// the entry stub's `sub rsp, 0x28` shadow-space reservation IS a `prologue`.
-	// Writes EFLAGS (it is a `sub`). Inserted by `insertPrologueEpilogue` at a function's
+	// Frame setup: reserve `stackSize` bytes of stack (`sub rsp, stackSize`). The entry stub's
+	// shadow-space reservation (`EntryStubFrameBytes`) is one too.
+	// Writes EFLAGS (it is a `sub`). Inserted by `insertFrameForFunction` at a function's
 	// entry block, which also emits the callee-saved `pushReg`s.
 	prologue(stackSize StackSize) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
@@ -640,15 +639,15 @@ export union TargetOp
 	divideReg(divisor TargetVReg, signedness IntegerSignedness) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0x5}
 
 	// Push a physical GPR onto the stack (`push r64`, 50+r, +REX.B for r8–r15). POST-
-	// REGALLOC and physical-only: `insertPrologueEpilogue` emits one per callee-saved
+	// REGALLOC and physical-only: `insertFrameForFunction` emits one per callee-saved
 	// register the coloring actually used, at the function's entry, so the callee-saved
-	// convention holds even though the allocator now colors values into rbx/r12–r15. It
+	// convention holds even though the allocator colors values into rbx/r12–r15. It
 	// carries an `X64Register` directly (never a virtual — it is inserted AFTER coloring,
 	// so it is invisible to liveness/coloring, like `xchgRegReg`). Sets no flags.
 	pushReg(reg X64Register) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// Pop a physical GPR from the stack (`pop r64`, 58+r, +REX.B), the exact mirror of
-	// `pushReg`. `insertPrologueEpilogue` emits one per used callee-saved register before
+	// `pushReg`. `insertFrameForFunction` emits one per used callee-saved register before
 	// each `ret`, in REVERSE push order. Physical-only, post-regalloc. APPENDED after
 	// `pushReg`.
 	popReg(reg X64Register) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}

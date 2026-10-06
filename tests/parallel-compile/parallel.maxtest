@@ -5,12 +5,14 @@ typealias ReportedPoolCount = int(i64.min to i64.max)
 // the two things asked of the corpus itself. The per-contract `test` declarations are the files beside
 // this one, one contract line each.
 //
-// Instruction selection and register allocation run on a pool of worker services, one per processor
-// (`BackendPool`), and its contract has four lines: it REPORTS the pool it built, the executable it
-// emits is BYTE-IDENTICAL whatever the processor count — its `.rdata` section included, which every
-// function's isel registers content into — a register-pressure refusal is RENDERED identically at every
-// count, and the per-function log lines of the Std pool come out in declaration order. Lexing and parsing
-// run on a pool of their own (`FrontEndPool`), which REPORTS the pool it built the same way.
+// Each function's backend job — instruction selection through encoding — runs on a pool of worker
+// services, one per processor (`BackendPool`), and its contract has six lines: it REPORTS the pool
+// it built, the executable it emits is BYTE-IDENTICAL whatever the processor count — its `.rdata`
+// section included, which every function's isel registers content into — a register-pressure
+// refusal is RENDERED identically at every count, the per-function log lines of the Std pool come
+// out in declaration order, the job's branch cleanup, frame and encoding are timed as POOL rows,
+// and two identical compiles report IDENTICAL MEMORY. Lexing and parsing run on a pool of their own
+// (`FrontEndPool`), which REPORTS the pool it built the same way.
 //
 // ⚠ EACH POOL LINE IS SHOWN ONLY BY ITS OWN CATEGORY'S FLAG: the allocator's by `--log=codegen:debug`
 // (`[GEN]`), the front end's by `--log=compiler:debug` (`[CMP]`). `Logger.parseLogOption` raises ONE
@@ -19,8 +21,8 @@ typealias ReportedPoolCount = int(i64.min to i64.max)
 // level is red rather than merely quieter.
 //
 // ⛔ ONE SPAWNING `test` PER FILE, FOR TWO REASONS THAT ARE BOTH STRUCTURAL. A file is what ONE process
-// runs under `TestExecutor.DefaultTestTimeoutMs`, and the four contracts need six compiles
-// between them. And `maxon test` runs its files CONCURRENTLY, so two files staging the same fixture into
+// runs under `TestExecutor.DefaultTestTimeoutMs`, and every contract needs compiles of its own.
+// And `maxon test` runs its files CONCURRENTLY, so two files staging the same fixture into
 // one directory race on it — the flake `test-command/reserved-name-refused.maxtest` measured. Every
 // case therefore stages into a directory named for ITSELF, never for the fixture it stages.
 //
@@ -72,6 +74,9 @@ let PoolLineFilesPosition = 5 as ElementIndex
 let MaxProcsEnvName = "MAXON_MAX_PROCS"
 let SingleProcessor = 1
 
+let RunCacheRootEnvName = "MAXON_RUN_CACHE_ROOT"
+let PrivateRunCacheDirName = "run-cache"
+
 // The phrase every register-pressure refusal carries. A phrase rather than the error number, because a
 // code spelled outside the registry is a copy of the number space; this rots red, not silently.
 export let RegisterPressureRefusalPhrase = "more register(s) than are available"
@@ -96,7 +101,7 @@ let ProjectProductsDirName = ".maxon"
 // The folds a stderr goes through before two runs are compared: CR, the host separator, and the absolute
 // staging path, in that order because the path is matched in its forward-slash form — then the wall time below.
 let CarriageReturn = "\r"
-let LineFeed = "\n"
+export let LineFeed = "\n"
 let PortablePathSeparator = "/"
 let StagingTreeToken = "<TREE>"
 
@@ -113,6 +118,16 @@ typealias ProcessorCount = int(1 to u32.max)
 typealias FunctionTally = int(0 to u64.max)
 
 typealias FixturePathArray = Array with FilePath
+
+let MetricsOptionPrefix = "--metrics="
+let MetricsFileName = "metrics.tsv"
+let MetricsFieldSeparator = "\t"
+let MetricsCommentPrefix = "#"
+export let MetricsKindColumn = "kind"
+let MetricsHeaderOpener = "# kind"
+let MetricsKindColumnPosition = 0 as ElementIndex
+
+typealias MetricsRowArray = Array with MetricsRow
 
 // ============================================================================================
 // THE CORPUS ITSELF
@@ -160,11 +175,13 @@ end 'stagedProgram'
 // Compile the staged program, pinned to one processor or left to the machine. `label` names the run in
 // this file's failure reports and reaches nothing the child does — see `builtExecutable` for why it may
 // not reach the output path. `wholeDirectory` builds the staged tree as ONE project; otherwise only its
-// `main.maxon` is compiled and a sibling source is not part of the build.
+// `main.maxon` is compiled and a sibling source is not part of the build. `privateRunCache` roots
+// the child's run cache at `runCacheDirName` inside the staged tree, so no other build's library
+// cache moves this one's front-end rows.
 //
 // Everything that would stop the build running at all panics rather than failing an assertion: a missing
 // binary or a spawn that never happened is the gate being broken, never the allocator answering wrongly.
-export function spawnBuild(staged FilePath, label String, extraArguments StringArray, singleProcessor bool, wholeDirectory bool = false) returns CollectedOutput
+export function spawnBuild(staged FilePath, label String, extraArguments StringArray, singleProcessor bool, wholeDirectory bool = false, privateRunCache bool = false, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput
 	let binary = testedCompilerPath()
 
 	if not File.exists(binary) 'noBinary'
@@ -186,9 +203,19 @@ export function spawnBuild(staged FilePath, label String, extraArguments StringA
 	config.arguments = arguments
 	config.workingDirectory = staged
 
+	var overrides = EnvMap.create()
+
 	if singleProcessor 'pinned'
-		config.environment = Environment.inheritUpdating([MaxProcsEnvName: "{SingleProcessor}"])
+		overrides.upsert(MaxProcsEnvName, value: "{SingleProcessor}")
 	end 'pinned'
+
+	if privateRunCache 'isolated'
+		overrides.upsert(RunCacheRootEnvName, value: staged.join(runCacheDirName).toString())
+	end 'isolated'
+
+	if overrides.count() > 0 'overridden'
+		config.environment = Environment.inheritUpdating(overrides)
+	end 'overridden'
 
 	return try config.run() otherwise (e) 'spawnFailed'
 		panic("parallel-compile.test: the gate could not run — could not spawn the '{label}' build ({e.displayReason()}). It pins what the allocator reports and what it emits, and a build nothing ran is a claim.")
@@ -418,6 +445,106 @@ function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailu
 	try Expect.isTrue(identical, message: "{second.toString()} first differs from {first.toString()} at byte offset {offset}. The emitted image must not depend on which worker parsed a file or allocated a function, or in what order a pool finished; a difference here is a nondeterminism, not a performance fact.")
 end 'requireIdenticalBytes'
 
+export function builtMetricsTable(staged FilePath, label String, runCacheDirName String = PrivateRunCacheDirName) returns MetricsTable throws TestFailure
+	let metricsPath = staged.join(MetricsFileName)
+
+	var arguments = StringArray.create()
+	arguments.push("{MetricsOptionPrefix}{metricsPath.toString()}")
+
+	let run = spawnBuild(staged, label: label, extraArguments: arguments, singleProcessor: false, privateRunCache: true, runCacheDirName: runCacheDirName)
+	let observedExit = run.exitCode()
+	try Expect.equal(observedExit, expected: 0, message: "the '{label}' build did not compile at the default processor count. It wrote to stderr: {run.stderr}")
+
+	let text = fileText(metricsPath)
+	try File.delete(metricsPath) otherwise panic("parallel-compile.test: the gate could not run — could not clear {metricsPath.toString()}, so the next build's table could not be told from this one's.")
+
+	return metricsTableFrom(text, label: label)
+end 'builtMetricsTable'
+
+function metricsTableFrom(text String, label String) returns MetricsTable
+	var columns = StringArray.create()
+	var rows = MetricsRowArray.create()
+
+	for raw in text.split(LineFeed) 'eachLine'
+		let line = raw.trimEnd()
+
+		if line.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		let fields = line.split(MetricsFieldSeparator)
+
+		if line.startsWith(MetricsCommentPrefix) 'aComment'
+			if line.startsWith("{MetricsHeaderOpener}{MetricsFieldSeparator}") 'theHeader'
+				columns = metricsColumnsFrom(fields)
+			end 'theHeader'
+
+			continue
+		end 'aComment'
+
+		if columns.isEmpty() 'rowBeforeHeader'
+			panic("parallel-compile.test: the gate could not run — the '{label}' build's metrics table carries a row before its `{MetricsHeaderOpener}` header, so its columns cannot be named: {line}")
+		end 'rowBeforeHeader'
+
+		if fields.count() != columns.count() 'malformed'
+			panic("parallel-compile.test: the gate could not run — a row of the '{label}' build's metrics table carries {fields.count()} fields where its header names {columns.count()}: {line}")
+		end 'malformed'
+
+		rows.push(MetricsRow.create(line, fields: fields))
+	end 'eachLine'
+
+	if columns.isEmpty() 'noHeader'
+		panic("parallel-compile.test: the gate could not run — the '{label}' build's metrics table has no `{MetricsHeaderOpener}` header line. It was: {text}")
+	end 'noHeader'
+
+	return MetricsTable.create(columns, rows: rows)
+end 'metricsTableFrom'
+
+function metricsColumnsFrom(headerFields StringArray) returns StringArray
+	var columns = StringArray.create()
+	columns.push(MetricsKindColumn)
+
+	for (iter, heading) in headerFields.withIterator() 'eachHeading'
+		if iter.index() != MetricsKindColumnPosition 'pastTheOpener'
+			columns.push(heading)
+		end 'pastTheOpener'
+	end 'eachHeading'
+
+	return columns
+end 'metricsColumnsFrom'
+
+export type MetricsRow
+	var line as String
+	var fields as StringArray
+
+	static function create(line String, fields StringArray) returns Self
+		return Self{line: line, fields: fields}
+	end 'create'
+
+	export function cell(column ElementIndex) returns String
+		return try self.fields.get(column) otherwise panic("parallel-compile.test: a metrics row was read at column {column}, outside the {self.fields.count()} fields its table's header names: {self.line}")
+	end 'cell'
+end 'MetricsRow'
+
+export type MetricsTable
+	var columns as StringArray
+	export var rows as MetricsRowArray
+
+	static function create(columns StringArray, rows MetricsRowArray) returns Self
+		return Self{columns: columns, rows: rows}
+	end 'create'
+
+	export function column(name String) returns ElementIndex
+		for (iter, heading) in self.columns.withIterator() 'eachColumn'
+			if heading == name 'found'
+				return iter.index()
+			end 'found'
+		end 'eachColumn'
+
+		panic("parallel-compile.test: the gate could not run — the metrics table has no `{name}` column. Its header names: {listedLines(self.columns)}")
+	end 'column'
+end 'MetricsTable'
+
 // ============================================================================================
 // STAGING
 // ============================================================================================
@@ -525,7 +652,7 @@ end 'liveSourcesUnder'
 
 // Entries one per line — empty when there are none, which is what makes the guards an `isEmpty` on the
 // very text a reader has to act on.
-function listedLines(paths StringArray) returns String
+export function listedLines(paths StringArray) returns String
 	var listed = ""
 
 	for path in paths 'eachPath'

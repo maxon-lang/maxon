@@ -139,20 +139,6 @@ export let XmmSaveSlotBytes = SpillSlotBytes
 
 module typealias X64RegisterArray = Array with X64Register
 
-// Insert prologue/epilogue ops for every function in the module.
-export function insertPrologueEpilogue(module TargetModule, target Target)
-	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.codegen).debug("Prologue/epilogue insertion ({targetToString(target)}): {module.funcCount()} function(s)")
-	end 'debugging'
-
-	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		insertFrameForFunction(module, func: try module.functions.get(fnIndex) otherwise panic("insertPrologueEpilogue: fnIndex {fnIndex} is below module.functions.count()"))
-	end 'eachFunc'
-end 'insertPrologueEpilogue'
-
 // Insert a function's frame: establish the frame pointer, push the callee-saved registers
 // its coloring used, reserve its frame (`sub rsp`), and mirror all three on every return.
 //
@@ -162,15 +148,14 @@ end 'insertPrologueEpilogue'
 // `encodePrologue` and `encodeEpilogue` skip a zero-size frame.
 //
 // `colouredPhysicalRegs` is read BEFORE anything is inserted, so it never sees this pass's own pushes.
-function insertFrameForFunction(module TargetModule, func IrFunction)
+// The frame it sized is answered because that scan is the expensive part: the encoder and the
+// preemption walk read the answer rather than scanning again.
+export function insertFrameForFunction(module TargetModule, func IrFunction) returns X64PrologueFrame
 	let coloured = colouredPhysicalRegs(module, func: func)
 	let usedCallee = usedRegsFrom(calleeSavedOrder, coloured: coloured)
 	let usedXmm = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured)
-	let makesCall = functionMakesCall(module, func: func)
-
-	// The SAME `computeFrameBytes` the GT stack guard reaches through `x64PrologueFrameOf` — one formula, two
-	// callers, so the guard's projected rsp and this `sub rsp, N` can never disagree.
-	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count() as RegCount, xmmSaveCount: usedXmm.count() as RegCount)
+	let frame = sizedFrame(func, makesCall: functionMakesCall(module, func: func), pushCount: usedCallee.count(), xmmSaveCount: usedXmm.count())
+	let frameBytes = frame.frameBytes
 
 	// The callee-saved XMM slots sit directly above the allocator's own spill slots, on the same grid.
 	let xmmBaseSlot = func.stackSize / SpillSlotBytes
@@ -178,7 +163,7 @@ function insertFrameForFunction(module TargetModule, func IrFunction)
 	var isFirstBlock = true
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("insertPrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
+		var block = try module.blocks.get(blockRef) otherwise panic("insertFrameForFunction: blockRef from func.blockRefs not in module.blocks")
 
 		if isFirstBlock 'entry'
 			insertPrologueAtEntry(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot as SpillSlot, frameBytes: frameBytes)
@@ -190,6 +175,8 @@ function insertFrameForFunction(module TargetModule, func IrFunction)
 			appendEpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, usedXmm: usedXmm, xmmBaseSlot: xmmBaseSlot as SpillSlot, frameBytes: frameBytes)
 		end 'returnBlock'
 	end 'eachBlock'
+
+	return frame
 end 'insertFrameForFunction'
 
 // What a function's prologue lays below `push rbp`: the callee-saved GPRs its coloring used, and the frame
@@ -197,31 +184,189 @@ end 'insertFrameForFunction'
 export type X64PrologueFrame
 	export var pushCount as RegCount
 	export var frameBytes as StackSize
+	export var makesCall as bool
 
-	export static function create(pushCount RegCount, frameBytes StackSize) returns X64PrologueFrame
-		return Self{pushCount: pushCount, frameBytes: frameBytes}
+	export static function create(pushCount RegCount, frameBytes StackSize, makesCall bool) returns X64PrologueFrame
+		return Self{pushCount: pushCount, frameBytes: frameBytes, makesCall: makesCall}
 	end 'create'
+
+	export function callStackBytes() returns StackSize
+		let wordsBelowTheCall = CallReturnAddressWords + FramePointerPushCount + self.pushCount
+		return (wordsBelowTheCall * StackWordBytes) as StackSize + self.frameBytes
+	end 'callStackBytes'
 end 'X64PrologueFrame'
 
-// ⭐ **THE PROLOGUE's SHAPE, READ OFF THE COLORING ONCE** — the `computeFrameBytes` expression
-// `insertFrameForFunction` uses inline, so the GT stack guard (X64Backend's `emitFunctionChunk`, which projects rsp
-// by `frameBytes`) and the preemption certificate (`x64CallStackBytes`) cannot size one function two ways.
-module function x64PrologueFrameOf(module TargetModule, func IrFunction) returns X64PrologueFrame
-	let makesCall = functionMakesCall(module, func: func)
-	let coloured = colouredPhysicalRegs(module, func: func)
-	let pushCount = usedRegsFrom(calleeSavedOrder, coloured: coloured).count()
-	let xmmSaveCount = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured).count()
-	return X64PrologueFrame.create(pushCount as RegCount, frameBytes: computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount as RegCount, xmmSaveCount: xmmSaveCount as RegCount))
-end 'x64PrologueFrameOf'
+// ⭐ **THE PROLOGUE's SHAPE FROM THE COUNTS OF THE COLORING** — `computeFrameBytes` behind one door, so the GT
+// stack guard (X64Backend's `emitFunctionChunk`, which projects rsp by `frameBytes`), the preemption
+// certificate and the `sub rsp, N` itself cannot size one function two ways.
+function sizedFrame(func IrFunction, makesCall bool, pushCount ElementIndex, xmmSaveCount ElementIndex) returns X64PrologueFrame
+	return X64PrologueFrame.create(pushCount as RegCount, frameBytes: computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount as RegCount, xmmSaveCount: xmmSaveCount as RegCount), makesCall: makesCall)
+end 'sizedFrame'
 
-// Everything one call of `func` puts on the stack below its caller's frame: the return address, the frame pointer
-// and callee-saved pushes, and the frame reserved under them. EXPORTED for
-// `PreemptionDepth.requirePreemptionFitsTheGuardMargin`, which adds a call tree up from these.
-export function x64CallStackBytes(module TargetModule, func IrFunction) returns StackSize
-	let frame = x64PrologueFrameOf(module, func: func)
-	let wordsBelowTheCall = CallReturnAddressWords + FramePointerPushCount + frame.pushCount
-	return (wordsBelowTheCall * StackWordBytes) as StackSize + frame.frameBytes
-end 'x64CallStackBytes'
+// Read off the entry block, not sized from the coloring: the hand-built functions
+// `augmentWithRuntime` prepends do not lay the frame `sizedFrame` derives from their coloring
+// (`mrt_main_entry` reserves 40 with no `push rbp`; the Windows `mrt_start` colours rbx without
+// pushing it), and the encoder's stack guard, spill base and debug frame must match the frame the
+// code lays.
+export function x64PrologueFrameOf(module TargetModule, func IrFunction) returns X64PrologueFrame
+	let entryRef = try func.blockRefs.get(0) otherwise panic("x64PrologueFrameOf: '{String.from(func.name)}' has no entry block — every function the backend encodes has one, and the frame it lays opens there")
+	let entry = try module.blocks.get(entryRef) otherwise panic("x64PrologueFrameOf: blockRef {entryRef} of '{String.from(func.name)}' not in module.blocks")
+	var pushCount = 0 as RegCount
+	var frameBytes = 0 as StackSize
+
+	for opIdx in entry.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("x64PrologueFrameOf: opIdx {opIdx} not in module.ops")
+
+		match op 'frameOp'
+			pushReg(reg) then pushCount = pushCount + (1 if regMaskContains(calleeSavedMask(), regNum: reg.rawValue) else 0)
+			prologue(stackSize) then frameBytes = stackSize
+			epilogue or
+				ret or
+				jmp or
+				jcc or
+				movRegImm or
+				movRegImm32 or
+				movRegReg or
+				movReg32Reg32 or
+				subRegReg or
+				imulRegReg or
+				negReg or
+				cmpRegReg or
+				leaRegRegReg or
+				leaRegRegImm32 or
+				imulRegRegImm32 or
+				cmpRegImm32 or
+				xchgRegReg or
+				callDirect or
+				iatCall or
+				cqo or
+				divideReg or
+				popReg or
+				storeSlotReg or
+				loadRegSlot or
+				andRegReg or
+				orRegReg or
+				xorRegReg or
+				notReg or
+				andRegImm32 or
+				orRegImm32 or
+				xorRegImm32 or
+				shlRegImm8 or
+				sarRegImm8 or
+				shrRegImm8 or
+				shlRegCl or
+				sarRegCl or
+				shrRegCl or
+				setccReg or
+				leaRegGlobal or
+				loadRegBaseDisp or
+				storeBaseDispReg or
+				addsdRegReg or
+				subsdRegReg or
+				mulsdRegReg or
+				divsdRegReg or
+				ucomisdRegReg or
+				movsdRegRip or
+				cvtsi2sdRegReg or
+				cvttsd2siRegReg or
+				sqrtsdRegReg or
+				roundsdRegReg or
+				movqGprXmm or
+				absF64RegReg or
+				leaRegRdata or
+				minMaxSdRegReg or
+				movqXmmGpr or
+				negF64RegReg or
+				arm64Ret or
+				arm64Branch or
+				arm64CondBranch or
+				arm64Cbz or
+				arm64Cbnz or
+				arm64MovImm or
+				arm64Prologue or
+				arm64Epilogue or
+				arm64Add or
+				arm64Sub or
+				arm64Mul or
+				arm64Sdiv or
+				arm64Udiv or
+				arm64Msub or
+				arm64And or
+				arm64Orr or
+				arm64Eor or
+				arm64Lslv or
+				arm64Asrv or
+				arm64Lsrv or
+				arm64Neg or
+				arm64Mvn or
+				arm64AddImm or
+				arm64SubImm or
+				arm64AndImm or
+				arm64OrrImm or
+				arm64EorImm or
+				arm64LslImm or
+				arm64AsrImm or
+				arm64LsrImm or
+				arm64Cmp or
+				arm64CmpImm or
+				arm64Cset or
+				arm64LeaFuncAddr or
+				arm64LeaRdata or
+				arm64LeaGlobal or
+				arm64BranchLink or
+				arm64BranchLinkReg or
+				arm64Fadd or
+				arm64Fsub or
+				arm64Fmul or
+				arm64Fdiv or
+				arm64Fcmp or
+				arm64Scvtf or
+				arm64Fcvtzs or
+				arm64Fsqrt or
+				arm64Frint or
+				arm64Fabs or
+				arm64FpLoadRdata or
+				arm64ImportCall or
+				arm64Syscall or
+				arm64Fcsel or
+				leaRegFunc or
+				callReg or
+				x64Syscall or
+				x64JumpTable or
+				arm64JumpTable or
+				callMem or
+				arm64StoreOutgoingArg or
+				arm64LoadIncomingArg or
+				arm64FmovGprFp or
+				arm64FmovFpGpr or
+				leaRegSlot or
+				x64MemFill or
+				arm64MemFill or
+				x64LockCmpxchg or
+				x64LockXadd or
+				x64LockAdd or
+				x64TebSelfPointer or
+				x64GsLoadRegBase or
+				arm64AtomicCas or
+				arm64AtomicRmw or
+				arm64ThreadPointer or
+				leaRegBaseIndexScale or
+				loadRegBaseIndexScale or
+				storeBaseIndexScaleReg or
+				arm64AddLsl or
+				mulHighReg or
+				arm64Fneg or
+				arm64LoadAcquire or
+				arm64StoreRelease or
+				arm64Mulh or
+				covInc or
+				x64AluBaseDispReg or
+				x64AluBaseDispImm32 then continue
+		end 'frameOp'
+	end 'eachOp'
+
+	return X64PrologueFrame.create(pushCount, frameBytes: frameBytes, makesCall: functionMakesCall(module, func: func))
+end 'x64PrologueFrameOf'
 
 // The bytes to reserve with `sub rsp, N`.
 //   • A CALLER must leave rsp 16-byte aligned AT the call. Entry rsp ≡ 8 (mod 16) — the
@@ -271,8 +416,8 @@ end 'computeFrameBytes'
 // form, matching the design's "slot disp = slotIndex*8 from rsp". This is the SINGLE place
 // the shadow-space-vs-slot ordering is decided; `computeFrameBytes` reserves exactly enough
 // (`stackSize + outgoingArgSize + ShadowSpaceBytes`) for a caller to hold both.
-export function spillSlotBaseDisp(module TargetModule, func IrFunction) returns StackSize
-	if functionMakesCall(module, func: func) 'caller'
+export function spillSlotBaseDisp(frame X64PrologueFrame, func IrFunction) returns StackSize
+	if frame.makesCall 'caller'
 		return ShadowSpaceBytes + func.outgoingArgSize
 	end 'caller'
 

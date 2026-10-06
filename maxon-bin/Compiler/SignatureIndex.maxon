@@ -5416,9 +5416,9 @@ export typealias ParamConsumeInfoArray = Array with ParamConsumeInfo
 // hard E2015 the moment the name is overloaded. MEASURED: a user program declaring a free `swap` that
 // reassigns a parameter fails to compile with *"overloading 'Array.sort'"* — because `stdlib`'s
 // `Array.swap` wears the bare name `swap`, inherits the user's by-reference-ness, and carries it up
-// `compareAndSwap` → `smallSortRange` → the overloaded `Array.sort`. The identical program with the user's
-// function spelled `zzz` compiles. ⇒ **the widening must not cross a boundary the SOURCE SYNTAX already
-// draws**, which is what `ForwardCall` below is.
+// `reverseRange` → `naturalRunLen` → `createRun` → `driftsortRange` → the overloaded `Array.sort`.
+// The identical program with the user's function spelled `zzz` compiles. ⇒ **the widening must not
+// cross a boundary the SOURCE SYNTAX already draws**, which is what `ForwardCall` below is.
 //
 // ⛔ **AND IT IS NOT WHOLLY CLOSED — `Parser.requireOverloadableName` carries the exact residual and the
 // measured program.** Two declarations a SPELLING cannot tell apart still share a node, so a user METHOD
@@ -24512,6 +24512,18 @@ export type ProgramSignatures
 
 		return need
 	end 'programModuleInitNeed'
+
+	export function declaresAUserModuleVar() returns bool
+		for i in 0 upto self.decls.count() 'each'
+			let decl = self.declAt(i)
+
+			if decl.mutable and not decl.declaredByTheCorpus 'anAuthorsVar'
+				return true
+			end 'anAuthorsVar'
+		end 'each'
+
+		return false
+	end 'declaresAUserModuleVar'
 
 	// Read off the initializer's tokens and default-deny: a token not explicitly scalar- or record-shaped
 	// runs code. A member read is scalar only as `.min`/`.max` or an enum or union case, and a comparison

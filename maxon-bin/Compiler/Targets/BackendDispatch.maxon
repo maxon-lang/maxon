@@ -36,8 +36,8 @@ let EntryStubFrameBytes = 0x20
 // trampoline's `call` enters it at rsp ≡ 8 (mod 16) and it pushes nothing, so the odd 8 is its to add.
 let MainThreadEntryFrameBytes = (ShadowSpaceBytes + StackWordBytes) as StackSize
 
-// Run the full backend: Std → Target → register allocation → prologue/epilogue →
-// runtime augmentation → machine-code emission → CodeResult.
+// Run the full backend: per function on the pool, Std → Target → register allocation → branch cleanup →
+// prologue/epilogue → machine-code emission; then runtime augmentation and the link → CodeResult.
 //
 // `throws CompileError` because TWO backend stages can FAIL for a real reason the user must fix, both
 // reported onto `project.diagnostics`: register allocation raises E5001 when a loop needs more registers
@@ -213,16 +213,36 @@ function programStartedGlobals(target Target) returns DataSectionEntryArray
 	return out
 end 'programStartedGlobals'
 
-module function releaseAllocatedStdModule(project Project, stdModule StdModule)
-	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)
+// Every per-function step from instruction selection to machine code, on one pool (`BackendPool`).
+// The `regalloc` bracket is the pool's wall; the `isel`, `branchCleanup`, `prologueEpilogue` and
+// `encode` rows are measured on the workers and folded in as breakdowns of it. `globalData` reaches
+// it because a float constant, a jump table and an abort message are `.rdata` content the lowering
+// is the first to see; concat resolves those labels against the same table.
+module function encodeOnTheBackendPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex, chunks FunctionCodeChunkArray) returns TargetModule throws CompileError
+	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
+	var callStackBytes = StackSizeColumn.create()
+	let targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt, chunks: chunks, callStackBytes: callStackBytes)
+	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
+
+	let releaseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)
 	stdModule.releaseBody()
-	recordPhase(project, phase: CompilePhase.releaseIr, probe: probe)
-end 'releaseAllocatedStdModule'
+	recordPhase(project, phase: CompilePhase.releaseIr, probe: releaseProbe)
+
+	if usage.usesGt 'preemptionDepth'
+		requirePreemptionFitsTheGuardMargin(targetModule, funcNames: funcNames, frames: callStackBytes, target: target)
+
+		if targetStopsThreadsForPreemption(target) 'asyncPreemptionDepth'
+			requireAsyncPreemptionFitsItsMargin(targetModule, funcNames: funcNames, frames: callStackBytes, target: target)
+		end 'asyncPreemptionDepth'
+	end 'preemptionDepth'
+
+	return targetModule
+end 'encodeOnTheBackendPool'
 
 // The span/op parity check lives here because this is the last moment it can be asked: the release below
 // drops the column it reads. It is the whole-module twin of the check the allocator's private module runs,
-// and it sits after the encode because the prologue pass and the runtime band both mint ops once the
-// allocator has handed everything back.
+// and it sits after the encode because the runtime band mints ops once the pool has handed
+// everything back.
 module function releaseEncodedTargetModule(project Project, targetModule TargetModule)
 	targetModule.spans.requireParallelTo(targetModule.ops.count(), what: "after the encode")
 
@@ -263,43 +283,15 @@ function buildWasmBackend(module StdModule, globalData GlobalDataTable, project 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)
 end 'buildWasmBackend'
 
-// The x64 backend: Std → Target → register allocation → prologue/epilogue → runtime augmentation →
-// machine-code emission → CodeResult.
+// The x64 backend: Std → the backend pool (Target code and machine code, per function) → runtime
+// augmentation → the prepended functions' and the hand-assembled runtime's machine code → link →
+// CodeResult.
 function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
-	// Instruction selection, critical-edge splitting and register allocation, per function on one pool
-	// (`BackendPool`). The `regalloc` bracket is the pool's wall; the isel's own cost is measured on the
-	// workers and folded into the `isel` row as a breakdown of it. `globalData` reaches it because a
-	// float constant, a jump table and an abort message are `.rdata` content the lowering is the first to
-	// see; the same table concat resolves those labels against once sections are laid out.
-	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
-	var targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt)
-	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
-
-	releaseAllocatedStdModule(project, stdModule: stdModule)
-
-	// The Target-tier CFG cleanup must run HERE — after the allocator's `applyAllocation` and before the
-	// frame pass.
-	// A block whose only op is a `jmp` is genuinely empty only once SSA destruction has placed (or
-	// declined to place) its edge copies; before that it is an edge about to receive moves. The frame
-	// pass then sees the surviving blocks, so a callee-saved register or a `call` reachable only from
-	// dead code stops being paid for. See `BranchCleanup`'s header.
-	cleanUpBranches(targetModule, project: project)
-
-	let prologueProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prologueEpilogue)
-	insertPrologueEpilogue(targetModule, target: target)
-	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
-
-	// Each depth check reads frames the prologue pass has only now sized, and must run before the
-	// runtime augmentation adds functions the name index does not cover.
-	if usage.usesGt 'preemptionDepth'
-		requirePreemptionFitsTheGuardMargin(targetModule, funcNames: funcNames, target: target)
-
-		if targetStopsThreadsForPreemption(target) 'asyncPreemptionDepth'
-			requireAsyncPreemptionFitsItsMargin(targetModule, funcNames: funcNames, target: target)
-		end 'asyncPreemptionDepth'
-	end 'preemptionDepth'
+	var chunks = FunctionCodeChunkArray.create()
+	var targetModule = try encodeOnTheBackendPool(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames, chunks: chunks)
 
 	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
+	let userFunctionCount = targetModule.funcCount()
 
 	// The stub's by-name calls read `Project.entryStubCalls`, the record the reachability roots and the
 	// inliner's census were built from — never a second spelling of those bits: a stub calling a `__ds_init`
@@ -308,12 +300,20 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	augmentWithRuntime(targetModule, target: target, checkLeaks: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, releasesRegistry: stub.releasesRegistry, entryFunction: project.entryFunctionName)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
-	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	var chunks = FunctionCodeChunkArray.create()
+	// The functions `augmentWithRuntime` prepended lead the module and are the only ones encoded here:
+	// every user function's chunk came home from the pool, and follows them in `.text`.
+	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encodeRuntime)
+	var prependedChunks = FunctionCodeChunkArray.create()
 
-	for func in targetModule.functions 'eachFunc'
-		chunks.push(emitFunctionChunk(targetModule, func: func, usesGt: usage.usesGt, target: target, runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable))
-	end 'eachFunc'
+	for position in 0 upto targetModule.funcCount() - userFunctionCount 'eachPrependedFunc'
+		let func = targetModule.getFunc(position)
+		let encoding = FunctionEncodingFacts.of(func, blocks: targetModule.blocks, spans: targetModule.spans, runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
+		var chunk = emitFunctionChunk(targetModule, func: func, frame: x64PrologueFrameOf(targetModule, func: func), encoding: encoding, usesGt: usage.usesGt, target: target)
+		attachInlineSites(chunk, func: func)
+		prependedChunks.push(chunk)
+	end 'eachPrependedFunc'
+
+	placeChunksAhead(prependedChunks, chunks: chunks)
 
 	// The panic runtime is hand-assembled bytes, not TargetOps, so it joins here rather than in
 	// `augmentWithRuntime`: there is no Std or Target spelling of "read CONTEXT.Rip" or "walk a
@@ -346,7 +346,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 		appendX64GtRuntimeChunks(chunks, target: target)
 	end 'gtChunks'
 
-	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
+	recordPhase(project, phase: CompilePhase.encodeRuntime, probe: encodeProbe)
 	releaseEncodedTargetModule(project, targetModule: targetModule)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
@@ -475,8 +475,9 @@ end 'augmentWithRuntime'
 //   pop rbp            restore the caller's frame pointer
 //   ret                dead (ExitProcess never returns); kept for well-formedness
 //
-// This stub is built AFTER `insertPrologueEpilogue`, so it does not inherit that pass's
-// frame and must lay its own. It builds the SAME frame that pass builds — `push rbp` /
+// The frame pass (`insertFrameForFunction`) runs on the backend pool over user functions only, so
+// this stub does not inherit that pass's frame and must lay its own. It builds the SAME frame that
+// pass builds — `push rbp` /
 // `mov rbp, rsp` through the shared `framePointerSetupOp`, so the chain's defining
 // instruction is spelled in one place — because when `main` runs on the OS stack,
 // `mrt_start` is the frame the chain ENDS at: `main`'s saved rbp points here, and a walk

@@ -34,9 +34,9 @@ let MaxUnguardedTreeFrames = 16 as UnguardedTreeFrames
 
 // Refuse the build when the preemption's whole tree is deeper than the guard margin. Called by both native
 // backends of a green-thread program, after the prologue pass has fixed every frame.
-export function requirePreemptionFitsTheGuardMargin(module TargetModule, funcNames FunctionNameIndex, target Target)
+export function requirePreemptionFitsTheGuardMargin(module TargetModule, funcNames FunctionNameIndex, frames StackSizeColumn, target Target)
 	let arm = preemptArmStackBytes(target)
-	let tree = unguardedTreeBytes(module, funcNames: funcNames, name: GtPreemptName, root: GtPreemptName, target: target, framesLeft: MaxUnguardedTreeFrames)
+	let tree = unguardedTreeBytes(module, funcNames: funcNames, frames: frames, name: GtPreemptName, root: GtPreemptName, target: target, framesLeft: MaxUnguardedTreeFrames)
 	let margin = gtStackGuardMargin(target)
 
 	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
@@ -51,9 +51,9 @@ end 'requirePreemptionFitsTheGuardMargin'
 // Refuse the build when an asynchronous stop's whole cost — the trampoline's own frame and everything
 // `__gt_async_preempt_park` reaches — outgrows the room the safe-point predicate insisted on. Called by the
 // backend of a green-thread program on a lane that stops threads, after the prologue pass.
-export function requireAsyncPreemptionFitsItsMargin(module TargetModule, funcNames FunctionNameIndex, target Target)
+export function requireAsyncPreemptionFitsItsMargin(module TargetModule, funcNames FunctionNameIndex, frames StackSizeColumn, target Target)
 	let trampoline = asyncPreemptTrampolineStackBytes(target)
-	let tree = unguardedTreeBytes(module, funcNames: funcNames, name: AsyncPreemptParkName, root: AsyncPreemptParkName, target: target, framesLeft: MaxUnguardedTreeFrames)
+	let tree = unguardedTreeBytes(module, funcNames: funcNames, frames: frames, name: AsyncPreemptParkName, root: AsyncPreemptParkName, target: target, framesLeft: MaxUnguardedTreeFrames)
 	let margin = gtAsyncPreemptMargin(target)
 
 	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
@@ -82,7 +82,7 @@ function preemptArmStackBytes(target Target) returns StackSize
 end 'preemptArmStackBytes'
 
 // The deepest the tree under `name` reaches below its caller's frame: `name`'s own frame plus its deepest call.
-function unguardedTreeBytes(module TargetModule, funcNames FunctionNameIndex, name ByteArray, root ByteArray, target Target, framesLeft UnguardedTreeFrames) returns StackSize
+function unguardedTreeBytes(module TargetModule, funcNames FunctionNameIndex, frames StackSizeColumn, name ByteArray, root ByteArray, target Target, framesLeft UnguardedTreeFrames) returns StackSize
 	if framesLeft == 0 'tooDeep'
 		panic("PreemptionDepth: the tree under `{String.from(root)}` is more than {MaxUnguardedTreeFrames} frames deep at `{String.from(name)}` — a recursive runtime function has no bound this certificate can state")
 	end 'tooDeep'
@@ -109,19 +109,19 @@ function unguardedTreeBytes(module TargetModule, funcNames FunctionNameIndex, na
 		let block = try module.blocks.get(blockRef) otherwise panic("requirePreemptionFitsTheGuardMargin: blockRef from func.blockRefs not in module.blocks")
 
 		for opIdx in block.opRefs 'eachOp'
-			deepest = deeperOf(deepest, other: unguardedCallBytes(module, funcNames: funcNames, opIdx: opIdx, root: root, target: target, framesLeft: framesBelow))
+			deepest = deeperOf(deepest, other: unguardedCallBytes(module, funcNames: funcNames, frames: frames, opIdx: opIdx, root: root, target: target, framesLeft: framesBelow))
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'terminator'
-			deepest = deeperOf(deepest, other: unguardedCallBytes(module, funcNames: funcNames, opIdx: block.terminatorIndex(), root: root, target: target, framesLeft: framesBelow))
+			deepest = deeperOf(deepest, other: unguardedCallBytes(module, funcNames: funcNames, frames: frames, opIdx: block.terminatorIndex(), root: root, target: target, framesLeft: framesBelow))
 		end 'terminator'
 	end 'eachBlock'
 
-	return callStackBytes(module, func: func, target: target) + deepest
+	return (try frames.get(index) otherwise panic("PreemptionDepth: `{String.from(name)}` is function {index} of the name index, past the {frames.count()} frame(s) the backend pool carried home")) + deepest
 end 'unguardedTreeBytes'
 
 // What the op at `opIdx` adds below its function's frame: nothing unless it is a call.
-function unguardedCallBytes(module TargetModule, funcNames FunctionNameIndex, opIdx ElementIndex, root ByteArray, target Target, framesLeft UnguardedTreeFrames) returns StackSize
+function unguardedCallBytes(module TargetModule, funcNames FunctionNameIndex, frames StackSizeColumn, opIdx ElementIndex, root ByteArray, target Target, framesLeft UnguardedTreeFrames) returns StackSize
 	let op = try module.ops.get(opIdx) otherwise panic("PreemptionDepth: opIdx {opIdx} not in module.ops")
 
 	if not op.rawValue.isCall 'notACall'
@@ -129,7 +129,7 @@ function unguardedCallBytes(module TargetModule, funcNames FunctionNameIndex, op
 	end 'notACall'
 
 	return match callStepOf(op, root: root) 'step'
-		callee(name, below) gives below + unguardedTreeBytes(module, funcNames: funcNames, name: name, root: root, target: target, framesLeft: framesLeft)
+		callee(name, below) gives below + unguardedTreeBytes(module, funcNames: funcNames, frames: frames, name: name, root: root, target: target, framesLeft: framesLeft)
 		fixed(bytes) gives bytes
 	end 'step'
 end 'unguardedCallBytes'
@@ -168,15 +168,6 @@ function linuxThreadCpuStackBytes(target Target) returns StackSize
 		wasm32 panic("linuxThreadCpuStackBytes: there is no wasm32-linux lane")
 	end 'cpu'
 end 'linuxThreadCpuStackBytes'
-
-// Everything one call of `func` puts on the stack below its caller's frame.
-function callStackBytes(module TargetModule, func IrFunction, target Target) returns StackSize
-	return match target.cpu 'cpu'
-		x64 gives x64CallStackBytes(module, func: func)
-		arm64 gives arm64FunctionFrameBytes(module, func: func)
-		wasm32 panic("callStackBytes: wasm32-wasi lays out no native frames")
-	end 'cpu'
-end 'callStackBytes'
 
 function deeperOf(a StackSize, other StackSize) returns StackSize
 	return a if a >= other else other

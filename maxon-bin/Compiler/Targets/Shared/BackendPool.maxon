@@ -1,15 +1,14 @@
-// BackendPool — INSTRUCTION SELECTION, CRITICAL-EDGE SPLITTING AND REGISTER ALLOCATION ON A POOL OF WORKER
-// SERVICES, one per processor: every function goes through all three on one worker, as ONE backend unit.
+// BackendPool — INSTRUCTION SELECTION, CRITICAL-EDGE SPLITTING, REGISTER ALLOCATION, BRANCH
+// CLEANUP, THE FRAME AND ENCODING ON A POOL OF WORKER SERVICES, one per processor: every function
+// goes through all six on one worker, as ONE backend unit.
 //
 // ⚠ A run under `MAXON_MAX_PROCS=1` is THIS pool with one processor in it, not a serial fallback —
 // which is what makes the pinned and the default lane the same code path and their outputs comparable
 // at all.
 //
-// ⭐⭐ **WHY THESE THREE, TOGETHER.** The allocator is the largest pass in the compiler and it is PER
-// FUNCTION; the isel before it is per function too, and the edge split between them adds blocks to one
-// function at a time. Fusing them means a function crosses to a worker ONCE — as a Std unit — and comes
-// home ONCE — as a finished Target function — instead of being extracted, spliced and re-extracted around
-// a serial isel that ran on the main thread between two pools.
+// ⭐⭐ **WHY THESE SIX, TOGETHER.** The allocator is the largest pass in the compiler and it is PER
+// FUNCTION; every step around it is per function too. Fusing them means a function crosses to a
+// worker ONCE — as a Std unit — and comes home ONCE — as a finished Target function and its chunk.
 //
 // ⭐⭐ **WHAT MAKES IT SAFE IS THE UNIT, NOT LOCKING — there is none.** A message MOVES, so a worker is
 // handed a `BackendUnit` nobody else can reach and hands back a `BackendUnitReply` nobody else can reach.
@@ -19,10 +18,11 @@
 // ops and blocks to the module's two arrays, and an index into either reaches no emitted byte
 // (`BackendUnit`'s header) — and everything that is NOT order-independent is done in FUNCTION-INDEX ORDER
 // on this thread after the drain: the `.rdata` registrations every isel made (`RdataRequests` — a jump
-// table's label and every island's offset are minted off ONE counter, in registration order), and
+// table's label and every island's offset are minted off ONE counter, in registration order),
 // `foldFunctionAllocation` (the per-function trace event carries a CUMULATIVE counter, and
-// `RegAllocStats.recordPressure` keeps the FIRST function to reach a maximum). The two byte-identity gates
-// pass on a pool of one (`tests/parallel-compile/byte-identical`, `rdata-order`).
+// `RegAllocStats.recordPressure` keeps the FIRST function to reach a maximum), and the encoded
+// chunks, whose order is `.text`'s. The two byte-identity gates pass on a pool of one
+// (`tests/parallel-compile/byte-identical`, `rdata-order`).
 //
 // ⚠ **THE THREE THINGS A WORKER STRUCTURALLY CANNOT DO** are what shaped the split, and each is a rule
 // with teeth rather than a preference. It may not touch a module `var` — E3143, because a green thread
@@ -44,7 +44,7 @@
 // More than two buys nothing and costs memory: a unit in flight is a full copy of one function's ops, so
 // the queue depth IS the pool's peak memory over the module.
 //
-// `PoolDispatch` applies it to both pools, whose units and splices have the same shape.
+// `PoolDispatch` applies it to every pool.
 let JobsInFlightPerWorker = 2
 
 // A reply cell carrying one finished function. `BackendWorker.run.errors` is the synthesized fusion of
@@ -122,9 +122,9 @@ end 'InFlightSizeBound'
 // ⭐⭐ **THE HALF OF A POOL DRAIN THAT NAMES NO MESSAGE — one record for every drain: this pool's,
 // `StdPassPool`'s and `FrontEndPool`'s.** A drain fills a pipeline of `JobsInFlightPerWorker` jobs
 // per worker longest-first, then serves whichever reply `awaitAny` answers and hands its worker
-// that worker's next job. Everything in that protocol that is not the reply itself lives here: the
-// dispatch order and how far it has been consumed, and for each outstanding reply which job it is
-// for and which worker holds it.
+// the next job its `PoolAssignment` gives it. Everything in that protocol that is not the reply
+// itself lives here: the dispatch order and how far it has been consumed, and for each outstanding
+// reply which job it is for and which worker holds it.
 //
 // ⚠ **THE REPLY ARRAY STAYS WITH THE CALLER, IN THE SAME SLOT ORDER.** A reply's type names the worker's
 // message, which no shared record can be generic over. So a caller pushes its reply exactly when it takes a
@@ -136,6 +136,7 @@ export type PoolDispatch
 	var sizeInDispatchOrder as PoolJobSizeArray
 	var jobCount as PoolSize
 	var workerCount as PoolSize
+	var assignment as PoolAssignment
 	var dispatched as ElementIndex
 	var handedToWorker as PoolSlotArray
 	var positionOfJob as PoolSlotArray
@@ -149,19 +150,19 @@ export type PoolDispatch
 	var sizeBound as InFlightSizeBound
 
 	// One size per job, in job order; the caller has already answered for an empty pool.
-	export static function create(sizes PoolJobSizeArray, workerCount PoolSize) returns PoolDispatch
-		return Self.withBound(sizes, workerCount: workerCount, sizeBound: InFlightSizeBound.unbounded)
+	export static function create(sizes PoolJobSizeArray, workerCount PoolSize, assignment PoolAssignment) returns PoolDispatch
+		return Self.withBound(sizes, workerCount: workerCount, assignment: assignment, sizeBound: InFlightSizeBound.unbounded)
 	end 'create'
 
 	// A job in flight holds a worker's whole intermediate state, which is proportional to the function's op
 	// count — so a count-only pipeline puts the LONGEST functions in flight together, the dispatch order
 	// being longest-first, and the peak is set by the largest functions rather than by the average one. The
 	// budget is what an average-sized job set would occupy at full pipeline depth.
-	export static function boundedByInFlightSize(sizes PoolJobSizeArray, workerCount PoolSize) returns PoolDispatch
-		return Self.withBound(sizes, workerCount: workerCount, sizeBound: InFlightSizeBound.upTo(uniformPipelineSize(sizes, workerCount: workerCount)))
+	export static function boundedByInFlightSize(sizes PoolJobSizeArray, workerCount PoolSize, assignment PoolAssignment) returns PoolDispatch
+		return Self.withBound(sizes, workerCount: workerCount, assignment: assignment, sizeBound: InFlightSizeBound.upTo(uniformPipelineSize(sizes, workerCount: workerCount)))
 	end 'boundedByInFlightSize'
 
-	static function withBound(sizes PoolJobSizeArray, workerCount PoolSize, sizeBound InFlightSizeBound) returns PoolDispatch
+	static function withBound(sizes PoolJobSizeArray, workerCount PoolSize, assignment PoolAssignment, sizeBound InFlightSizeBound) returns PoolDispatch
 		let jobCount = sizes.count() as PoolSize
 		var order = PoolJobArray.create()
 		var sizeInDispatchOrder = PoolJobSizeArray.create()
@@ -180,8 +181,22 @@ export type PoolDispatch
 
 		var arrivedAtPosition = BoolArray.create()
 		arrivedAtPosition.refill(jobCount as ElementIndex, value: false)
-		return Self{handedToWorker: handedToWorker, positionOfJob: positionOfJob, arrivedAtPosition: arrivedAtPosition, settled: 0, order: order, sizeInDispatchOrder: sizeInDispatchOrder, jobCount: jobCount, workerCount: workerCount, dispatched: 0, replyJob: PoolJobArray.create(), replyWorker: PoolSlotArray.create(), replySize: PoolJobSizeArray.create(), outstandingPerWorker: outstandingPerWorker, inFlightSize: 0, sizeBound: sizeBound}
+		let depth = pipelineDepthOf(workerCount, jobCount: jobCount)
+		var replyJob = PoolJobArray.create()
+		replyJob.reserve(depth)
+		var replyWorker = PoolSlotArray.create()
+		replyWorker.reserve(depth)
+		var replySize = PoolJobSizeArray.create()
+		replySize.reserve(depth)
+		return Self{handedToWorker: handedToWorker, positionOfJob: positionOfJob, arrivedAtPosition: arrivedAtPosition, settled: 0, order: order, sizeInDispatchOrder: sizeInDispatchOrder, jobCount: jobCount, workerCount: workerCount, assignment: assignment, dispatched: 0, replyJob: replyJob, replyWorker: replyWorker, replySize: replySize, outstandingPerWorker: outstandingPerWorker, inFlightSize: 0, sizeBound: sizeBound}
 	end 'withBound'
+
+	// The most replies a drain holds at once. The reply columns here and the caller's reply array are
+	// reserved to it: how many are outstanding at a time depends on completion order, so growing them
+	// on demand would make identical compiles report different allocation totals.
+	export function pipelineDepth() returns ElementIndex
+		return pipelineDepthOf(self.workerCount, jobCount: self.jobCount)
+	end 'pipelineDepth'
 
 	// How many jobs the fill hands out before the first await: the pipeline, or every job when there are
 	// fewer.
@@ -191,9 +206,7 @@ export type PoolDispatch
 			upTo(budget) then panic("PoolDispatch.initialInFlight: this dispatch is bounded at {budget} op(s) in flight, which a count-only fill cannot honour — fill it for as long as `fillAdmitsAnother` says so")
 		end 'bound'
 
-		let pipeline = self.workerCount * JobsInFlightPerWorker
-		let inFlight = pipeline if pipeline < self.jobCount else self.jobCount
-		return inFlight as InFlightCount
+		return self.pipelineDepth() as InFlightCount
 	end 'initialInFlight'
 
 	export function fillAdmitsAnother() returns bool
@@ -240,13 +253,16 @@ export type PoolDispatch
 		return try (self.dispatched mod (self.workerCount as ElementIndex)) otherwise panic("PoolDispatch.fillWorker: a pool of no workers never reaches the dispatch loop")
 	end 'fillWorker'
 
-	// Assigned statically, not to whichever worker frees first: a worker keeps scratch of its own, so
-	// a completion-order assignment shows up in the compile's allocation totals and identical compiles
-	// differ.
 	function positionOfNextJobFor(worker ElementIndex) returns ElementIndex
-		let handed = try self.handedToWorker.get(worker) otherwise panic("PoolDispatch.positionOfNextJobFor: worker {worker} is not one of the {self.workerCount} this pool holds")
-		return worker + handed * (self.workerCount as ElementIndex)
+		return match self.assignment 'assignment'
+			staticShare gives worker + self.handedTo(worker) * (self.workerCount as ElementIndex)
+			firstFree gives self.dispatched
+		end 'assignment'
 	end 'positionOfNextJobFor'
+
+	function handedTo(worker ElementIndex) returns ElementIndex
+		return try self.handedToWorker.get(worker) otherwise panic("PoolDispatch.handedTo: worker {worker} is not one of the {self.workerCount} this pool holds")
+	end 'handedTo'
 
 	export function hasUndispatchedFor(worker ElementIndex) returns bool
 		return self.positionOfNextJobFor(worker) < self.jobCount as ElementIndex
@@ -259,8 +275,7 @@ export type PoolDispatch
 		let job = try self.order.get(position) otherwise panic("PoolDispatch.nextJob: the dispatch order holds {self.order.count()} job(s) and slot {position} is past the end — ask `hasUndispatchedFor` first")
 		let size = try self.sizeInDispatchOrder.get(position) otherwise panic("PoolDispatch.nextJob: the size column holds {self.sizeInDispatchOrder.count()} entry(ies) against {self.order.count()} job(s) — one walk fills both")
 		let held = self.outstandingOf(worker)
-		let handed = try self.handedToWorker.get(worker) otherwise panic("PoolDispatch.nextJob: worker {worker} is not one of the {self.workerCount} this pool holds")
-		try self.handedToWorker.set(worker, value: handed + 1) otherwise panic("PoolDispatch.nextJob: handedToWorker.set OOB at worker {worker} below {self.workerCount}")
+		try self.handedToWorker.set(worker, value: self.handedTo(worker) + 1) otherwise panic("PoolDispatch.nextJob: handedToWorker.set OOB at worker {worker} below {self.workerCount}")
 		self.dispatched = self.dispatched + 1
 		self.replyJob.push(job)
 		self.replyWorker.push(worker)
@@ -333,6 +348,16 @@ export enum PoolKind
 	frontEnd
 end 'PoolKind'
 
+// Which worker takes which job. `staticShare` gives worker w dispatch positions w, w + W, …, so
+// what a worker's own scratch grows to depends on the job set alone — a pool whose workers keep
+// scratch across jobs needs it, or identical compiles report different allocation totals.
+// `firstFree` hands the next job to whichever worker frees first, so no worker idles behind
+// another's share; its workers must size every scratch from the job in hand.
+export enum PoolAssignment
+	staticShare
+	firstFree
+end 'PoolAssignment'
+
 // Every worker pool in the compiler is `min(P, jobs)` workers. P is the scheduler's resolved processor
 // count, not the machine's: `MAXON_MAX_PROCS=1` resolves it to one and the pool is then one worker,
 // which is the whole of what pinning does. The job count bounds it because a worker with no job to run
@@ -379,6 +404,11 @@ export type PoolSizing
 	end 'line'
 end 'PoolSizing'
 
+function pipelineDepthOf(workerCount PoolSize, jobCount PoolSize) returns ElementIndex
+	let pipeline = (workerCount as ElementIndex) * JobsInFlightPerWorker
+	return pipeline if pipeline < (jobCount as ElementIndex) else (jobCount as ElementIndex)
+end 'pipelineDepthOf'
+
 function uniformPipelineSize(sizes PoolJobSizeArray, workerCount PoolSize) returns PoolJobSize
 	var total = 0 as PoolJobSize
 
@@ -394,13 +424,10 @@ end 'uniformPipelineSize'
 typealias LongestFirstKey = int(0 to u64.max)
 typealias LongestFirstKeyArray = Array with LongestFirstKey
 
-// The isel of one ISA, as a worker holds it for the whole compile.
 module union UnitLowering
 	x64(lowering StdToX64Lowering)
 	arm64(lowering StdToArm64Lowering)
 end 'UnitLowering'
-
-typealias UnitLoweringArray = Array with UnitLowering
 
 module function unitLoweringFor(target Target, abi CalleeAbiTable, usesGt bool) returns UnitLowering
 	return match target.cpu 'cpu'
@@ -434,13 +461,11 @@ module function lowerAndSplitUnit(lowering UnitLowering, unitModule StdModule, t
 	return lowered
 end 'lowerAndSplitUnit'
 
-// ⭐⭐ **THE WORKER. Its state is the isel of this compile's ISA, and the four per-ISA facts the allocator
-// runs on** — derived once from the two enums it is handed and never re-derived. `OpVariantFacts`
-// especially: every fact in it is a property of the DIALECT (which registers a `callDirect` clobbers,
-// whether a `loadRegSlot` touches a spill slot), so its natural lifetime is the whole compile — rebuilt
-// per message it would re-derive the ~30 cases each function's ops name, on every function the pool sees.
-// The isel's analyses (`CompareFusionCensus`, `ScaledIndexFolds`, `MemoryDestinationFolds`) are scratches the
-// same way: built once, recomputed per unit.
+// ⭐⭐ **THE WORKER. Its state is the four per-ISA facts the allocator runs on** — derived once from
+// the two enums it is handed and never re-derived. `OpVariantFacts` especially: every fact in it is
+// a property of the DIALECT (which registers a `callDirect` clobbers, whether a `loadRegSlot`
+// touches a spill slot), so its natural lifetime is the whole compile — rebuilt per message it
+// would re-derive the ~30 cases each function's ops name, on every function the pool sees.
 //
 // ⚠ **IT IS HANDED `cpu` AND `os`, NOT A `Target`, AND ITS OWN COPY OF THE ABI TABLE.** A `spawn`'s
 // factory arguments are MOVED, and the driver keeps its own `target` and its own table for the rest of
@@ -448,11 +473,14 @@ end 'lowerAndSplitUnit'
 // still holds it, which is E3138 at best and exit 96 at worst. Two enums are scalars and copy; the table
 // is copied per worker (`CalleeAbiTable.copyOf`).
 //
-// ⛔ **THE ISEL IS BUILT ON THE FIRST MESSAGE, NOT AT `spawn`** — `StdPassWorker`'s rule, for its reason.
-// The factory's result is MOVED to the service exactly as an argument is, and the transfer walk requires
-// one owner per record; the isel's scratches reach shared records by design (every `StdValueUseSet` is
-// wired to one module-level empty, and the isel and the worker each hold the ABI table). Built on the
-// worker's own green thread, past every walk, that sharing is what it should be.
+// ⛔ **THE ISEL IS BUILT PER MESSAGE AND NEVER HELD.** Its scratches (`CompareFusionCensus`,
+// `ScaledIndexFolds`, `MemoryDestinationFolds`, …) are refilled per function and keep their
+// capacity, so an isel kept across jobs makes a job's allocations depend on what its worker ran
+// before — and under `PoolAssignment.firstFree` that is timing. Nor can it be built at `spawn`: the
+// factory's result is MOVED to the service exactly as an argument is, and the transfer walk
+// requires one owner per record, while the isel's scratches reach shared records by design (every
+// `StdValueUseSet` is wired to one module-level empty, and the isel and the worker each hold the
+// ABI table).
 //
 // ⚠ **AND THE FOUR IT DERIVES ARE THE DRIVER'S OWN, NOT A SECOND OPINION OF THEM.** `Target` has exactly
 // those two fields, and each of the four comes from the same pure function the driver called — so the
@@ -468,22 +496,15 @@ export type BackendWorker
 	var file as RegisterFile
 	var opFacts as OpVariantFacts
 
-	// Empty until the first message (`lowering`), then the one isel of this compile's ISA.
-	var lowerings as UnitLoweringArray
-
 	static function create(cpu CpuArch, os Os, abi CalleeAbiTable, usesGt bool) returns Self
 		let target = Target.create(cpu, os: os)
-		return Self{target: target, abi: abi, usesGt: usesGt, pool: allocatablePool(target), callerSaved: callerSavedMaskFor(target), file: registerFileFor(target), opFacts: OpVariantFacts.create(), lowerings: UnitLoweringArray.create()}
+		return Self{target: target, abi: abi, usesGt: usesGt, pool: allocatablePool(target), callerSaved: callerSavedMaskFor(target), file: registerFileFor(target), opFacts: OpVariantFacts.create()}
 	end 'create'
 
 	// The isel is handed a `Target` of its own rather than this worker's: the driver's E5001 re-run builds
 	// an isel the same way, and a record two fields hold would be a second owner at a walk.
 	function lowering() returns UnitLowering
-		if self.lowerings.count() == 0 'firstMessage'
-			self.lowerings.push(unitLoweringFor(Target.create(self.target.cpu, os: self.target.os), abi: self.abi, usesGt: self.usesGt))
-		end 'firstMessage'
-
-		return try self.lowerings.get(0) otherwise panic("BackendWorker.lowering: the isel slot is empty after the first message filled it")
+		return unitLoweringFor(Target.create(self.target.cpu, os: self.target.os), abi: self.abi, usesGt: self.usesGt)
 	end 'lowering'
 
 	// The message. It never awaits and never sends, which is what makes the blocking graph E3139 checks
@@ -513,22 +534,82 @@ export type BackendWorker
 		unitFunc.debugLocalLocations = debugLocations
 		unitFunc.debugLocalRanges = debugRanges
 
-		// Asked HERE because this is where the unit stops being appended to: the splitter and SSA
-		// destruction have both run, and both mint ops by pushing onto `ops` directly.
+		// Asked HERE because the splitter and SSA destruction have both run, and both mint ops by pushing
+		// onto `ops` directly.
 		lowered.targetModule.spans.requireParallelTo(lowered.targetModule.ops.count(), what: "after allocation")
 		lowered.targetModule.compactOps()
 
-		return FinishedUnit.create(lowered.targetModule, landing: BackendUnitLanding.create(lowered.rdata, counters: counters, facts: facts, costs: costs, iselCost: iselCost))
+		// Before the tail: the ranges name live-op ordinals of the allocator's layout, which branch
+		// cleanup rearranges, and a range resolved after it lands on the wrong op without a word.
+		resolveDebugRanges(lowered.targetModule, unitFunc: unitFunc)
+
+		let tail = self.finishFunction(lowered.targetModule, func: unitFunc, encoding: body.encoding)
+		lowered.targetModule.spans.requireParallelTo(lowered.targetModule.ops.count(), what: "after the backend tail")
+		lowered.targetModule.compactOps()
+
+		// Resolved into the chunk by `encode`; the compaction above renumbers the ops these name.
+		unitFunc.debugLocalRanges = DebugValueRangeArray.create()
+
+		return FinishedUnit.create(lowered.targetModule, landing: BackendUnitLanding.create(lowered.rdata, counters: counters, facts: facts, costs: costs, iselCost: iselCost, tail: tail))
 	end 'finish'
+
+	// Cleanup before the frame: the frame pass then sees only the surviving blocks, so a callee-saved
+	// register or a call that only unreachable code used is not paid for.
+	function finishFunction(module TargetModule, func IrFunction, encoding FunctionEncodingFacts) returns BackendUnitTail
+		var branchCleanupCost = PhaseDelta.zero()
+		let cleanupProbe = PhaseProbe.beginCounters()
+		cleanUpFunctionBranches(module, func: func)
+		cleanupProbe.elapsedInto(branchCleanupCost)
+
+		var prologueEpilogueCost = PhaseDelta.zero()
+		let frameProbe = PhaseProbe.beginCounters()
+		let frame = self.insertFrame(module, func: func)
+		frameProbe.elapsedInto(prologueEpilogueCost)
+
+		var encodeCost = PhaseDelta.zero()
+		let encodeProbe = PhaseProbe.beginCounters()
+		let chunk = self.encode(module, func: func, frame: frame, encoding: encoding)
+		encodeProbe.elapsedInto(encodeCost)
+
+		return BackendUnitTail.create(chunk, callStackBytes: frame.callStackBytes(), branchCleanupCost: branchCleanupCost, prologueEpilogueCost: prologueEpilogueCost, encodeCost: encodeCost)
+	end 'finishFunction'
+
+	function insertFrame(module TargetModule, func IrFunction) returns UnitFrame
+		return match self.target.cpu 'cpu'
+			x64 gives UnitFrame.x64(insertFrameForFunction(module, func: func))
+			arm64 gives UnitFrame.arm64(insertArm64FrameForFunction(module, func: func))
+			wasm32 panic("BackendWorker.insertFrame: the wasm backend consumes the Std module directly and runs no backend unit (got {targetToString(self.target)})")
+		end 'cpu'
+	end 'insertFrame'
+
+	function encode(module TargetModule, func IrFunction, frame UnitFrame, encoding FunctionEncodingFacts) returns FunctionCodeChunk
+		return match frame 'isa'
+			x64(sized) gives emitFunctionChunk(module, func: func, frame: sized, encoding: encoding, usesGt: self.usesGt, target: self.target)
+			arm64(frameBytes) gives emitArm64FunctionChunk(module, func: func, frameBytes: frameBytes, encoding: encoding, greenThreads: self.usesGt, target: self.target)
+		end 'isa'
+	end 'encode'
 end 'BackendWorker'
 
-// Lower and allocate every function on a worker pool, and hand back the assembled Target module. The one
-// entry both native backends call; `PoolSizing` owns how the pool is sized.
+union UnitFrame
+	x64(frame X64PrologueFrame)
+	arm64(frameBytes StackSize)
+
+	function callStackBytes() returns StackSize
+		return match self 'isa'
+			x64(frame) gives frame.callStackBytes()
+			arm64(frameBytes) gives frameBytes
+		end 'isa'
+	end 'callStackBytes'
+end 'UnitFrame'
+
+// Take every function through the backend unit on a worker pool, and hand back the assembled Target
+// module; `chunks` and `callStackBytes` are filled in function-index order. The one entry both
+// native backends call; `PoolSizing` owns how the pool is sized.
 //
 // `throws CompileError` because a genuine hot-loop overflow is E5001, reported onto `project.diagnostics`.
 // Only USER functions are present here — x64's `mrt_start` is prepended AFTER this pass by
 // `augmentWithRuntime` (it is hand-built in physical registers).
-export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex, usesGt bool) returns TargetModule throws CompileError
+export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex, usesGt bool, chunks FunctionCodeChunkArray, callStackBytes StackSizeColumn) returns TargetModule throws CompileError
 	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
 		compilerLogger(CompilerLogGroup.codegen).debug("Register allocation ({targetToString(target)})")
 	end 'debugging'
@@ -579,7 +660,7 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	// mean the whole pool ran on the M that dispatched it — a correct compile at one processor's speed,
 	// which every other reading here would report as success.
 	let stealsBefore = __Builtins.schedStealCount()
-	let refused = drainTheBackendPool(stdModule, module: module, workers: workers, workerCount: sizing.workerCount as PoolSize, landed: landed, slots: slots)
+	let refused = drainTheBackendPool(stdModule, module: module, workers: workers, workerCount: sizing.workerCount as PoolSize, landed: landed, slots: slots, runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
 	let stealsAfter = __Builtins.schedStealCount()
 
 	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
@@ -592,12 +673,21 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 		try refuseForRegisterPressure(project, stdModule: stdModule, funcIndex: refused, target: target, abi: abi, usesGt: usesGt, pool: pool, callerSaved: callerSaved, file: file)
 	end 'aFunctionDidNotFitTheMachine'
 
+	chunks.reserve(funcCount)
+	callStackBytes.reserve(funcCount)
+
 	for funcIndex in 0 upto funcCount 'foldInIndexOrder'
-		let landing = try landed.get(slots.slotOf(funcIndex)) otherwise panic("lowerAndAllocateOnAWorkerPool: landed.get OOB for function {funcIndex}")
+		var landing = try landed.get(slots.slotOf(funcIndex)) otherwise panic("lowerAndAllocateOnAWorkerPool: landed.get OOB for function {funcIndex}")
 		let func = module.getFunc(funcIndex)
-		performRdataRequests(globalData, module: module, func: func, requests: landing.rdata)
+		performRdataRequests(globalData, module: module, func: func, chunk: landing.tail.chunk, requests: landing.rdata)
+		attachInlineSites(landing.tail.chunk, func: func)
 		foldPoolPhaseDelta(project, phase: CompilePhase.isel, driver: CompilePhase.regalloc, delta: landing.iselCost)
+		foldPoolPhaseDelta(project, phase: CompilePhase.branchCleanup, driver: CompilePhase.regalloc, delta: landing.tail.branchCleanupCost)
+		foldPoolPhaseDelta(project, phase: CompilePhase.prologueEpilogue, driver: CompilePhase.regalloc, delta: landing.tail.prologueEpilogueCost)
+		foldPoolPhaseDelta(project, phase: CompilePhase.encode, driver: CompilePhase.regalloc, delta: landing.tail.encodeCost)
 		foldFunctionAllocation(project, stats: stats, func: func, counters: landing.counters, costs: landing.costs, facts: landing.facts)
+		chunks.push(landing.tail.chunk)
+		callStackBytes.push(landing.tail.callStackBytes)
 	end 'foldInIndexOrder'
 
 	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
@@ -634,16 +724,21 @@ end 'assembleTargetModule'
 // ⚠ **`awaitAny` IS WHAT KEEPS THE POOL BUSY.** Awaiting the promises in dispatch order would idle every
 // worker that finished early behind whichever job is at the head — and the head is, by the longest-first
 // rule below, the biggest job in the module.
-function drainTheBackendPool(stdModule StdModule, module TargetModule, workers BackendWorkerHandleArray, workerCount PoolSize, landed BackendUnitLandingArray, slots LandingSlots) returns ElementIndex
+function drainTheBackendPool(stdModule StdModule, module TargetModule, workers BackendWorkerHandleArray, workerCount PoolSize, landed BackendUnitLandingArray, slots LandingSlots, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns ElementIndex
 	// The sentinel is "one past the last function", spelled in the FUNCTION-INDEX space rather than the
 	// pool's: a refusal of function 0 has to be storable here, and `PoolSize` starts at one.
 	var refused = stdModule.funcCount()
-	var dispatch = PoolDispatch.boundedByInFlightSize(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount)
+
+	// First-free: what a worker keeps across jobs is sized up front (`OpVariantFacts`) and its isel is
+	// built per job, and the small functions at the end of the longest-first order cost what their
+	// size does not predict, so a fixed share leaves one worker running while the rest wait.
+	var dispatch = PoolDispatch.boundedByInFlightSize(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount, assignment: PoolAssignment.firstFree)
 	var replies = BackendReplyArray.create()
+	replies.reserve(dispatch.pipelineDepth())
 	var arrivedUnits = BackendArrivedUnits.create(stdModule.funcCount(), spent: TargetModule.create())
 
 	while dispatch.fillAdmitsAnother() 'fillThePipeline'
-		dispatchOneBackendJob(stdModule, workers: workers, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies)
+		dispatchOneBackendJob(stdModule, workers: workers, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies, runtimeTier: runtimeTier, spanTable: spanTable)
 	end 'fillThePipeline'
 
 	let filled = replies.count()
@@ -671,7 +766,7 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 		end 'notFinished'
 
 		while dispatch.admitsAJobFor(freedWorker) 'handTheFreedWorkerTheNextJob'
-			dispatchOneBackendJob(stdModule, workers: workers, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
+			dispatchOneBackendJob(stdModule, workers: workers, workerSlot: freedWorker, dispatch: dispatch, replies: replies, runtimeTier: runtimeTier, spanTable: spanTable)
 		end 'handTheFreedWorkerTheNextJob'
 
 		spliceSettledUnits(module, dispatch: dispatch, slots: slots, arrivedUnits: arrivedUnits)
@@ -731,10 +826,10 @@ end 'workerGoneMessage'
 // style: a value this frame has taken a second reference to cannot be proven sole at the send, and the
 // only shape the check admits is a call whose every `return` is a record literal (see
 // `BackendUnit.extract`).
-function dispatchOneBackendJob(stdModule StdModule, workers BackendWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies BackendReplyArray)
+function dispatchOneBackendJob(stdModule StdModule, workers BackendWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies BackendReplyArray, runtimeTier FunctionNameSet, spanTable DebugSpanTable)
 	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneBackendJob: workers.get OOB at {workerSlot} below count {workers.count()}")
 	let funcIndex = dispatch.nextJob(workerSlot)
-	replies.push(worker.run(BackendUnit.extract(stdModule, func: stdModule.getFunc(funcIndex), funcIndex: funcIndex)))
+	replies.push(worker.run(BackendUnit.extract(stdModule, func: stdModule.getFunc(funcIndex), funcIndex: funcIndex, runtimeTier: runtimeTier, spanTable: spanTable)))
 end 'dispatchOneBackendJob'
 
 // ⭐⭐ **THE DISPATCH ORDER: LONGEST JOB FIRST (LPT).**

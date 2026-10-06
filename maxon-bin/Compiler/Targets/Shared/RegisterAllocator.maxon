@@ -1154,7 +1154,7 @@ end 'assertRegisterFacts'
 // split and the same core, so it refuses at the same peak. A compile that reaches here is failing, so the
 // second run (and the fresh variant memo it builds) costs nothing anybody will see.
 module function refuseForRegisterPressure(project Project, stdModule StdModule, funcIndex ElementIndex, target Target, abi CalleeAbiTable, usesGt bool, pool RegMask, callerSaved RegMask, file RegisterFile) throws CompileError
-	let body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex))
+	let body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex), runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
 	var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 	var iselCost = PhaseDelta.zero()
 	let lowered = lowerAndSplitUnit(unitLoweringFor(target, abi: abi, usesGt: usesGt), unitModule: body.unitModule, target: target, costs: costs, iselCost: iselCost)

@@ -636,7 +636,8 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   a live-network case left out of a default run and named, an `alone` case run with nothing beside it, a
   run that writes no `fragments/` directory and speaks of no golden, a `TargetIr` pin that fails its case
   when it differs and that `--update-required` replaces or adds, plain run cases that batch into programs
-  by type name and keep their own names, the cases that stay out of it, `--batch=off` running every case
+  by type name and keep their own names, a case declaring a module `var` and a case spawning a service
+  kept in separate programs, the cases that stay out of it, `--batch=off` running every case
   alone, a crash mid-batch attributed to its own case, a batched case's services finishing before its end
   marker, a case that passes alone but fails batched reported as a batching gap, a case marked
   `process: own` running in a program of its own, output outside the case markers failing every case of
@@ -673,7 +674,7 @@ because a comparison against nothing passes. It spawns nothing and runs at the d
 ## `parallel-compile/` — the compiler's worker pools
 
 It gates a COMPILER phase rather than a driver command, and it lives here for the same reason `fmt/` does: what it asserts is what `maxon build`
-REPORTS and EMITS at two processor counts, which a `specs` program cannot observe about
+REPORTS and EMITS at two processor counts or across two identical builds, which a `specs` program cannot observe about
 the compiler that compiled it. `parallel.maxtest` is the shared half; each contract line has
 its own case file — `pool-default`, `pool-pinned`, `byte-identical`, `rdata-order`,
 `pressure-refusal`, and for the front end's pool:
@@ -682,12 +683,19 @@ its own case file — `pool-default`, `pool-pinned`, `byte-identical`, `rdata-or
 - `front-end-pool-default` — at the default it reports min(P, F) workers over P processors, exactly once, F being the most files one drain dispatched
 - `front-end-byte-identical` — a two-file project whose parses mint instances in both files, and one of whose files is folded again with the other's row-set answer, emits the same image at both counts
 
+and for the backend pool's jobs:
+
+- `backend-tail-runs-on-the-pool` — under `--log=compiler:debug` the compile-timings table names `branchCleanup`, `prologueEpilogue` and `encode` as `(pool)` rows: each function's cleanup, frame and encoding run inside its allocation job
+- `identical-compiles-report-identical-memory` — two default-count builds of `uneven-program` (forty tiny functions and four wide ones) report the same allocs, frees, bytes and residency in every `phase` and `regalloc` row of `--metrics`; the builds share a case-private library cache that a third build warms first, because a cold or partly evicted cache moves the front end's rows
+- `identical-cold-compiles-report-identical-memory` — the same comparison between two builds that each start from their own empty library cache
+
 `fixtures/<program>/` holds the programs, each as `<name>.maxon.fixture`. It applies
 rule 1's `.fixture` half only (no `dot-` names), rule 4 (the child runs in its staging directory),
-and departs from rule 5 on rule 5's own terms: the contracts need two compiles each, and `maxon
+and departs from rule 5 on rule 5's own terms: most contracts need more than one compile, and `maxon
 test` runs files concurrently, so every case stages into a directory named for ITSELF under
 `temp/parallel-compile/`. Its expectations are not generated — they are properties (a pinned
-report prefix, byte identity, stderr equality between two runs), each guarded by a positive
+report prefix, byte identity, stderr equality between two runs, equal memory rows between two
+runs), each guarded by a positive
 control so two runs that both failed to build cannot read as agreement.
 
 ## `debug/` — what a binary can be asked about after it is built, and what a debugger can do to it

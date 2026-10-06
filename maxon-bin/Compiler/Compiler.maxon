@@ -242,7 +242,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 		let vacateProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
 		try vacateRunningImage(project, outputPath: outputPath)
 		try discardPreviousOutput(project, outputPath: outputPath)
-		recordPhase(project, phase: CompilePhase.prepareOutput, probe: vacateProbe)
+		recordPhaseWithItsLog(project, phase: CompilePhase.prepareOutput, probe: vacateProbe)
 	end 'vacateForTheWrite'
 
 	let writeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeExe)
@@ -263,7 +263,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 		codeResult.imagePlacement = try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: outputPath, tools: writerTools, rebuildsItself: rebuildsItself)
 	end 'stampTheCounterImage'
 
-	recordPhase(project, phase: CompilePhase.writeExe, probe: writeProbe)
+	recordPhaseWithItsLog(project, phase: CompilePhase.writeExe, probe: writeProbe)
 
 	try requireOutputWritten(project, outputPath: outputPath) otherwise 'notWritten'
 		if rebuildsItself 'putTheCompilerBack'
@@ -280,7 +280,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	if debugInfo 'writeDebugInfo'
 		let debugProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeDebugInfo)
 		writeDebugInfoSidecar(project, codeResult: codeResult, outputPath: outputPath)
-		recordPhase(project, phase: CompilePhase.writeDebugInfo, probe: debugProbe)
+		recordPhaseWithItsLog(project, phase: CompilePhase.writeDebugInfo, probe: debugProbe)
 	end 'writeDebugInfo'
 
 	// ⭐ **THE BRACKET KEEPS THE RENDER, WHICH IS THE COST — the WRITE is the command line's and is
@@ -341,6 +341,13 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	compilerLogger(CompilerLogGroup.compiler).info("Wrote {codeBytes} bytes of code to {outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
 	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks)
 end 'compileMeasured'
+
+// For a bracket whose code logs: the flush keeps the handling of its records inside it (see
+// `flushCompilerLog`).
+function recordPhaseWithItsLog(project Project, phase CompilePhase, probe PhaseProbe)
+	flushCompilerLog()
+	recordPhase(project, phase: phase, probe: probe)
+end 'recordPhaseWithItsLog'
 
 // `maxon.exe` -> `maxon<infix>.exe`; `maxon` -> `maxon<infix>`.
 //

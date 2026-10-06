@@ -451,8 +451,12 @@ end 'foldWorkerReport'
 // (`fillLongestFirstOrder`, which says why that order cannot reach the output).
 function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, workerCount PoolSize, landedOrigins DerivedOriginsArray, slots LandingSlots)
 	var scratch = SpliceScratch.create()
-	var dispatch = PoolDispatch.create(functionOpTallies(module.functions, blocks: module.blocks), workerCount: workerCount)
+
+	// A static share: a worker keeps its step workspaces across the functions it is handed
+	// (`StdPassWorker`), and rebuilding them per function costs more than this pool's tail.
+	var dispatch = PoolDispatch.create(functionOpTallies(module.functions, blocks: module.blocks), workerCount: workerCount, assignment: PoolAssignment.staticShare)
 	var replies = StdPassReplyArray.create()
+	replies.reserve(dispatch.pipelineDepth())
 	var arrivedUnits = StdArrivedUnits.create(module.funcCount(), spent: StdModule.create())
 
 	for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'

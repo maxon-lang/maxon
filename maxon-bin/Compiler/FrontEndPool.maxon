@@ -553,8 +553,11 @@ module type FrontEndPool
 	// ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.** The protocol is
 	// `PoolDispatch`'s, shared with the backend's two pools.
 	function drain(project Project, input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, workerCount PoolSize, outcomes FrontEndOutcomeArray, slots LandingSlots) throws CompileError
-		var dispatch = PoolDispatch.create(sizes, workerCount: workerCount)
+		// A static share: a worker parses into its own copy of the whole signature index, kept across the
+		// files it is handed, and that copy is too costly to rebuild per file.
+		var dispatch = PoolDispatch.create(sizes, workerCount: workerCount, assignment: PoolAssignment.staticShare)
 		var replies = FrontEndReplyPromiseArray.create()
+		replies.reserve(dispatch.pipelineDepth())
 
 		for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
 			self.dispatchJob(input, files: files, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies)

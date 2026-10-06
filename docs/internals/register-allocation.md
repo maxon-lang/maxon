@@ -13,9 +13,9 @@ All files named below are under `maxon-bin/Compiler/Targets/Shared/`.
 ## Pipeline
 
 `BackendPool.lowerAndAllocateOnAWorkerPool` (`BackendPool.maxon`) computes the target's register facts once
-per module and hands each function to a pool worker (`MAXON_MAX_PROCS=1` gives a pool of one, not a separate
-serial path). The worker selects instructions, splits critical edges so every phi copy has an edge block to
-land in, and runs `allocateFunctionCore` (`RegisterAllocator.maxon`):
+per module and hands each function, longest first, to whichever pool worker frees first
+(`MAXON_MAX_PROCS=1` gives a pool of one). The worker selects instructions, splits critical edges so every
+phi copy has an edge block to land in, and runs `allocateFunctionCore` (`RegisterAllocator.maxon`):
 
 1. lay the blocks out in reverse postorder, so layout order is a dominance order;
 2. [liveness](#liveness);
@@ -24,8 +24,9 @@ land in, and runs `allocateFunctionCore` (`RegisterAllocator.maxon`):
 5. fix the frame size — after colouring, because a colouring repair can take more spill slots;
 6. [SSA destruction and rewrite](#ssa-destruction-and-rewrite).
 
-These are also the `RegAllocPhase` rows compile timings are reported under. Back on the main thread, the back
-end cleans up branches and inserts the prologue and epilogue.
+These are also the `RegAllocPhase` rows compile timings are reported under. The same worker then cleans up
+the function's branches (`BranchCleanup.maxon`), inserts its prologue and epilogue, and encodes it to machine
+code. The compiling thread folds every function's results in function-index order once the pool drains.
 
 ## The contract
 

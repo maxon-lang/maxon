@@ -1,5 +1,5 @@
 // Arm64PrologueEpilogue — inserts the arm64 frame setup/teardown after register allocation, the
-// arm64 twin of `X64PrologueEpilogue.insertPrologueEpilogue`.
+// arm64 twin of `X64PrologueEpilogue.insertFrameForFunction`.
 //
 // EVERY function gets a REAL FRAME RECORD: the prologue opens with `stp x29, x30, [sp, #-N]!` +
 // `mov x29, sp`, saving the caller's frame pointer and the return address and pointing x29 at them.
@@ -51,26 +51,12 @@ export let Arm64CalleeSavedGprEnd = 29
 export let Arm64CalleeSavedFpFirst = 8
 export let Arm64CalleeSavedFpEnd = 16
 
-// Insert prologue/epilogue ops for every function in the module.
-export function insertArm64PrologueEpilogue(module TargetModule, target Target)
-	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.codegen).debug("arm64 prologue/epilogue insertion ({targetToString(target)}): {module.funcCount()} function(s)")
-	end 'debugging'
-
-	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
-	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		insertArm64FrameForFunction(module, func: try module.functions.get(fnIndex) otherwise panic("insertArm64PrologueEpilogue: fnIndex {fnIndex} is below module.functions.count()"))
-	end 'eachFunc'
-end 'insertArm64PrologueEpilogue'
-
 // Insert a function's frame: open the frame record, spill the callee-saved registers its coloring
 // used to dedicated slots above the spill area, and mirror both on every `arm64Ret` block.
 //
 // `usedCallee` is read BEFORE anything is inserted, so it reports the COLORING's registers and never
 // this pass's own frame ops.
-function insertArm64FrameForFunction(module TargetModule, func IrFunction)
+export function insertArm64FrameForFunction(module TargetModule, func IrFunction) returns StackSize
 	let usedCallee = arm64UsedCalleeSaved(module, func: func)
 	let spillSlotCount = func.stackSize / SpillSlotBytes
 	let calleeBytes = usedCallee.count() * SpillSlotBytes
@@ -92,7 +78,7 @@ function insertArm64FrameForFunction(module TargetModule, func IrFunction)
 	var isFirstBlock = true
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("insertArm64PrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
+		var block = try module.blocks.get(blockRef) otherwise panic("insertArm64FrameForFunction: blockRef from func.blockRefs not in module.blocks")
 
 		if isFirstBlock 'entry'
 			insertArm64PrologueAtEntry(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount as SpillSlot, frameSize: frameSize, recordOffset: recordOffset)
@@ -104,6 +90,8 @@ function insertArm64FrameForFunction(module TargetModule, func IrFunction)
 			appendArm64EpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount as SpillSlot, frameSize: frameSize, recordOffset: recordOffset)
 		end 'returnBlock'
 	end 'eachBlock'
+
+	return frameSize
 end 'insertArm64FrameForFunction'
 
 // Rewrite every `arm64LoadIncomingArg(dest, slot)` in `func` into the concrete `[x29 + disp]` load it
@@ -331,9 +319,10 @@ end 'resolveArm64IncomingArgs'
 // isel mints spliceable producer/consumer pairs in, and this pass is a splicer.
 //
 // ⚠ THIS MINTS THE ONE x17 PAIR THAT SPANS TWO OPS, AND IT IS SAFE ONLY BECAUSE NOTHING RUNS AFTER IT.
-// `insertArm64PrologueEpilogue` is the LAST IR pass in `buildArm64Backend` — encoding follows it directly
-// — so no later pass can splice anything between the `add` and the load. A new IR pass placed after this
-// one breaks that, and would have to give this fold a register of its own or run before the prologue.
+// `insertArm64FrameForFunction` is the LAST IR pass of a backend job
+// (`BackendWorker.finishFunction`) — encoding follows it directly — so no later pass can splice
+// anything between the `add` and the load. A new IR pass placed after this one breaks that, and
+// would have to give this fold a register of its own or run before the prologue.
 function resolveOneArm64IncomingArg(module TargetModule, opIdx ElementIndex, at ElementIndex, dest TargetVReg, byteOffset StackSize, foldPositions BlockOpPosArray, foldOps OpIndexArray)
 	// ⚠ THE FIT QUESTION AND THE OP MINTED FROM IT MUST BE ASKED AT ONE ACCESS WIDTH, so the width is read
 	// ONCE and both take it. `arm64DispHasScaledForm` is the SAME door the isel asks of a data access, and

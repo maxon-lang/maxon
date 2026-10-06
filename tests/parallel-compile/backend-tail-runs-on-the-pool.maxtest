@@ -1,0 +1,107 @@
+let TimingsTableTitle = "[CMP] DEBUG: compile timings — "
+let TimingsTableRule = "-"
+let PhaseRowIndent = "  "
+let NestedRowIndent = "   "
+let TimingsColumnSeparator = " "
+let TimingsValueColumnCount = 3
+let PoolRowSuffix = " (pool)"
+let PoolControlPhase = "isel"
+let BranchCleanupPhase = "branchCleanup"
+let PrologueEpiloguePhase = "prologueEpilogue"
+let EncodePhase = "encode"
+
+typealias RuleTally = int(0 to u64.max)
+
+test 'the backend tail is timed on the pool'
+	let staged = stagedProgram("pool-program", caseLabel: "backend-tail-runs-on-the-pool")
+
+	var arguments = StringArray.create()
+	arguments.push(CompilerDebugLogFlag)
+	let run = spawnBuild(staged, label: "default-processors", extraArguments: arguments, singleProcessor: false)
+
+	let observedExit = run.exitCode()
+	Expect.equal(observedExit, expected: 0, message: "the pool program did not compile at the default processor count. It wrote to stderr: {run.stderr}")
+
+	let rows = timingsPhaseRows(run.stderr)
+	let control = "{PoolControlPhase}{PoolRowSuffix}"
+	Expect.isTrue(rows.contains(control), message: "the compile-timings table printed by `{CompilerDebugLogFlag}` has no phase row named `{control}`, so this reading cannot tell a pool row from a main-thread one. Its phase rows were:{listedLines(rows)}")
+
+	var missing = StringArray.create()
+
+	for phase in backendTailPhases() 'eachPhase'
+		let expected = "{phase}{PoolRowSuffix}"
+
+		if not rows.contains(expected) 'notOnThePool'
+			missing.push(expected)
+		end 'notOnThePool'
+	end 'eachPhase'
+
+	Expect.isEmpty(listedLines(missing), message: "the compile-timings table has no POOL row for these phases of the backend tail, so they still run on the main thread after the allocator's pool rather than inside each function's pool job:{listedLines(missing)}{LineFeed}Its phase rows were:{listedLines(rows)}")
+end 'the backend tail is timed on the pool'
+
+function backendTailPhases() returns StringArray
+	return [BranchCleanupPhase, PrologueEpiloguePhase, EncodePhase]
+end 'backendTailPhases'
+
+function timingsPhaseRows(stderr String) returns StringArray
+	var rows = StringArray.create()
+	var titleSeen = false
+	var rulesSeen = 0 as RuleTally
+
+	for raw in stderr.split(LineFeed) 'eachLine'
+		let line = raw.trimEnd()
+
+		if not titleSeen 'beforeTheTable'
+			titleSeen = line.startsWith(TimingsTableTitle)
+			continue
+		end 'beforeTheTable'
+
+		if line.startsWith(TimingsTableRule) 'aRule'
+			rulesSeen = rulesSeen + 1
+
+			if rulesSeen > 1 'pastTheRows'
+				break
+			end 'pastTheRows'
+
+			continue
+		end 'aRule'
+
+		if rulesSeen == 0 or not line.startsWith(PhaseRowIndent) or line.startsWith(NestedRowIndent) 'notAPhaseRow'
+			continue
+		end 'notAPhaseRow'
+
+		rows.push(timingsRowName(line))
+	end 'eachLine'
+
+	if rows.isEmpty() 'noTable'
+		panic("parallel-compile.test: the gate could not run — `{CompilerDebugLogFlag}` printed no compile-timings table opening `{TimingsTableTitle}` with phase rows between its rules. It wrote to stderr: {stderr}")
+	end 'noTable'
+
+	return rows
+end 'timingsPhaseRows'
+
+function timingsRowName(line String) returns String
+	var words = StringArray.create()
+
+	for word in line.split(TimingsColumnSeparator) 'eachWord'
+		if not word.isEmpty() 'aWord'
+			words.push(word)
+		end 'aWord'
+	end 'eachWord'
+
+	if words.count() <= TimingsValueColumnCount 'noName'
+		panic("parallel-compile.test: the gate could not run — a compile-timings row carries no phase name ahead of its {TimingsValueColumnCount} value columns: {line}")
+	end 'noName'
+
+	var name = ""
+
+	for position in 0 upto words.count() - TimingsValueColumnCount 'eachNameWord'
+		if position > 0 'notTheFirst'
+			name.append(TimingsColumnSeparator)
+		end 'notTheFirst'
+
+		name.append(try words.get(position) otherwise panic("parallel-compile.test: a word counted inside the row is outside it: {line}"))
+	end 'eachNameWord'
+
+	return name
+end 'timingsRowName'

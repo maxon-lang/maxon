@@ -2788,7 +2788,7 @@ end 'emitUnit'
 // one chunk. `usesGt` is `RuntimeUsage.usesGt`, read once by the caller rather than re-derived per
 // function; it gates the syscall shim on every `iatCall` (`emitGtGatedIatCall`) and the stack guard
 // below.
-export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt bool, target Target, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns FunctionCodeChunk
+export function emitFunctionChunk(module TargetModule, func IrFunction, frame X64PrologueFrame, encoding FunctionEncodingFacts, usesGt bool, target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -2810,28 +2810,21 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	// only on whether the function makes a call — a caller's slots sit ABOVE the Win64
 	// shadow space so a callee never clobbers a spilled value). Every spill/reload adds
 	// `slot * SpillSlotBytes` to it. See spillSlotBaseDisp for the frame-layout rationale.
-	let spillBaseDisp = spillSlotBaseDisp(module, func: func)
+	let spillBaseDisp = spillSlotBaseDisp(frame, func: func)
 
 	// The green-thread stack guard, emitted before `push rbp` in the entry block of a function that
 	// reserves a frame, so a thread whose stack would overflow grows and relocates it first. The
 	// exemption is `skipsGreenThreadStackGuard`, asked of the function's provenance and never its
 	// name; a `__destruct_<T>` cascade is scaffolding and still needs the guard (see that predicate).
-	// The guard is bytes, not a TargetOp, so the printed Target IR omits it. `x64PrologueFrameOf`
-	// allocates a callee-saved scan, so it is asked only of a function that can be guarded.
-	let mightGuard = usesGt and not skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier)
-	var guardFrameBytes = 0 as StackSize
-
-	if mightGuard 'guardFrame'
-		guardFrameBytes = x64PrologueFrameOf(module, func: func).frameBytes
-	end 'guardFrame'
-
-	let emitGuard = mightGuard and guardFrameBytes > 0
+	// The guard is bytes, not a TargetOp, so the printed Target IR omits it.
+	let mightGuard = usesGt and not encoding.skipsStackGuard
+	let emitGuard = mightGuard and frame.frameBytes > 0
 	var unsafePrefixBytes = 0 as CodeOffset
 	var isFirstBlock = true
 
 	// Hoisted so a build without debug info pays one bool test per op and never reads the span column.
 	let captureSpans = module.spans.armed
-	var lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, spanTable: spanTable)
+	var lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, encoding: encoding)
 	var runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
 	var chunkBlockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
@@ -2857,7 +2850,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 		lineRows.openBlock(block.id, site: block.inlineSite)
 
 		if isFirstBlock and emitGuard 'guard'
-			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: guardFrameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
+			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: frame.frameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
 
 			// Everything the guard emitted is where an asynchronous stop may NOT land — see
 			// `FunctionCodeChunk.asyncUnsafePrefixBytes`. Read off the buffer rather than re-derived from the
@@ -2902,7 +2895,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 
 	resolveChunkRel32Fixups(code, labelOffsets: chunkLabelOffsets, rel32Fixups: rel32Fixups)
 
-	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	var chunk = FunctionCodeChunk.createWith(func.name.clone(), code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
 
 	// A function may be stopped where it stands exactly when the stack guard applies to it
@@ -2913,199 +2906,24 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
 
 	// Provenance, not `mightGuard`: a guarded cascade is still scaffolding to the debugger.
-	chunk.compilerScaffolding = isRuntimeFunction(func, runtimeTier: runtimeTier)
+	chunk.compilerScaffolding = encoding.compilerScaffolding
 
 	// Gated on `--coverage` rather than on debug info: the two are independent channels, and this one is
 	// empty for an ordinary build because no `covInc` was emitted to fill it.
 	chunk.covPointOffsets = covOffsets
-	carryInlineFrames(chunk, func: func, ranges: inlineRanges)
+	carryInlineRanges(chunk, siteCount: encoding.siteCount, funcName: func.name, ranges: inlineRanges)
 
 	if captureSpans 'debugInfo'
 		chunk.lineRows = lineRows.rows
 		chunk.localRanges = runOffsets.resolve(func, blockStarts: chunkLabelOffsets, blockEnds: chunkBlockEnds)
-		chunk.frameSize = x64PrologueFrameBytes(module, func: func)
+		chunk.frameSize = frame.frameBytes
 		chunk.paramCount = func.paramCount
 		chunk.spillSlotBase = spillBaseDisp
-		chunk.frameLinkBytes = (x64PrologueFrameOf(module, func: func).pushCount as StackSize) * SpillSlotBytes
+		chunk.frameLinkBytes = (frame.pushCount as StackSize) * SpillSlotBytes
 	end 'debugInfo'
 
 	return chunk
 end 'emitFunctionChunk'
-
-// Read off the prologue op rather than derived a second time as `x64PrologueFrameOf` derives it;
-// this one is only reported, never acted on.
-//
-// It scans the entry block because x64's prologue is prepended in reverse, so the `sub rsp` follows
-// the frame-pointer setup and the callee-saved pushes. No prologue op means 0:
-// `insertPrologueAtEntry` emits none for a function that reserves nothing.
-function x64PrologueFrameBytes(module TargetModule, func IrFunction) returns StackSize
-	let entryRef = try func.blockRefs.get(0) otherwise panic("x64PrologueFrameBytes: '{String.from(func.name)}' has no entry block — every function the backend lowers has one, and a prologue, when there is one, is in it")
-	let entry = try module.blocks.get(entryRef) otherwise panic("x64PrologueFrameBytes: blockRef {entryRef} of '{String.from(func.name)}' not in module.blocks")
-
-	for opIdx in entry.opRefs 'eachOp'
-		let reserved = x64OpFrameBytes(try module.ops.get(opIdx) otherwise panic("x64PrologueFrameBytes: opIdx {opIdx} not in module.ops"))
-
-		if reserved > 0 'thePrologue'
-			return reserved
-		end 'thePrologue'
-	end 'eachOp'
-
-	return 0
-end 'x64PrologueFrameBytes'
-
-// The bytes one op reserves: the `prologue`'s operand, and 0 for everything else. Split out because the
-// scan above needs an answer for every op and `prologue(0)` is never emitted, so 0 says "not it".
-//
-// EXHAUSTIVE by range rather than by `default`, so a variant appended past `arm64Mulh` fails to compile
-// here until it is consciously placed.
-function x64OpFrameBytes(op TargetOp) returns StackSize
-	return match op 'frame'
-		prologue(stackSize) gives stackSize
-		epilogue or
-			ret or
-			jmp or
-			jcc or
-			movRegImm or
-			movRegImm32 or
-			movRegReg or
-			movReg32Reg32 or
-			subRegReg or
-			imulRegReg or
-			negReg or
-			cmpRegReg or
-			leaRegRegReg or
-			leaRegRegImm32 or
-			imulRegRegImm32 or
-			cmpRegImm32 or
-			xchgRegReg or
-			callDirect or
-			iatCall or
-			cqo or
-			divideReg or
-			pushReg or
-			popReg or
-			storeSlotReg or
-			loadRegSlot or
-			andRegReg or
-			orRegReg or
-			xorRegReg or
-			notReg or
-			andRegImm32 or
-			orRegImm32 or
-			xorRegImm32 or
-			shlRegImm8 or
-			sarRegImm8 or
-			shrRegImm8 or
-			shlRegCl or
-			sarRegCl or
-			shrRegCl or
-			setccReg or
-			leaRegGlobal or
-			loadRegBaseDisp or
-			storeBaseDispReg or
-			addsdRegReg or
-			subsdRegReg or
-			mulsdRegReg or
-			divsdRegReg or
-			ucomisdRegReg or
-			movsdRegRip or
-			cvtsi2sdRegReg or
-			cvttsd2siRegReg or
-			sqrtsdRegReg or
-			roundsdRegReg or
-			movqGprXmm or
-			absF64RegReg or
-			leaRegRdata or
-			minMaxSdRegReg or
-			movqXmmGpr or
-			negF64RegReg or
-			arm64Ret or
-			arm64Branch or
-			arm64CondBranch or
-			arm64Cbz or
-			arm64Cbnz or
-			arm64MovImm or
-			arm64Prologue or
-			arm64Epilogue or
-			arm64Add or
-			arm64Sub or
-			arm64Mul or
-			arm64Sdiv or
-			arm64Udiv or
-			arm64Msub or
-			arm64And or
-			arm64Orr or
-			arm64Eor or
-			arm64Lslv or
-			arm64Asrv or
-			arm64Lsrv or
-			arm64Neg or
-			arm64Mvn or
-			arm64AddImm or
-			arm64SubImm or
-			arm64AndImm or
-			arm64OrrImm or
-			arm64EorImm or
-			arm64LslImm or
-			arm64AsrImm or
-			arm64LsrImm or
-			arm64Cmp or
-			arm64CmpImm or
-			arm64Cset or
-			arm64LeaFuncAddr or
-			arm64LeaRdata or
-			arm64LeaGlobal or
-			arm64BranchLink or
-			arm64BranchLinkReg or
-			arm64Fadd or
-			arm64Fsub or
-			arm64Fmul or
-			arm64Fdiv or
-			arm64Fcmp or
-			arm64Scvtf or
-			arm64Fcvtzs or
-			arm64Fsqrt or
-			arm64Frint or
-			arm64Fabs or
-			arm64FpLoadRdata or
-			arm64ImportCall or
-			arm64Syscall or
-			arm64Fcsel or
-			leaRegFunc or
-			callReg or
-			x64Syscall or
-			x64JumpTable or
-			arm64JumpTable or
-			callMem or
-			arm64StoreOutgoingArg or
-			arm64LoadIncomingArg or
-			arm64FmovGprFp or
-			arm64FmovFpGpr or
-			leaRegSlot or
-			x64MemFill or
-			arm64MemFill or
-			x64LockCmpxchg or
-			x64LockXadd or
-			x64LockAdd or
-			x64TebSelfPointer or
-			x64GsLoadRegBase or
-			arm64AtomicCas or
-			arm64AtomicRmw or
-			arm64ThreadPointer or
-			leaRegBaseIndexScale or
-			loadRegBaseIndexScale or
-			storeBaseIndexScaleReg or
-			arm64AddLsl or
-			mulHighReg or
-			arm64Fneg or
-			arm64LoadAcquire or
-			arm64StoreRelease or
-			arm64Mulh or
-			covInc or
-			x64AluBaseDispReg or
-			x64AluBaseDispImm32 gives 0
-	end 'frame'
-end 'x64OpFrameBytes'
 
 // ==========================================================================
 // Concatenation: lay out .text, rebase fixups, resolve intra-module calls

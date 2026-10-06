@@ -153,10 +153,12 @@ files that missed their memo on it. `MAXON_MAX_PROCS=1` gives a pool of one work
   panics.
 - Results are merged in emission order on the compiling thread, so the output is the same whatever order
   the workers finish in. `mergeArtifact` is the only writer of the shared `Project`.
-- Every pool hands each worker a fixed share of the jobs (worker `w` takes dispatch positions `w`,
-  `w + workers`, …) and splices replies in dispatch order, because a worker's own scratch and the arrays a
-  splice grows would otherwise make a compile's allocation totals depend on which worker finished first.
-  Worker handles are released only after the compile's measurement closes.
+- Identical compiles report identical allocation totals whichever worker finishes first. Every pool
+  splices replies in dispatch order, so the arrays a splice grows come out the same. The front-end and Std
+  pools hand each worker a fixed share of the jobs (worker `w` takes dispatch positions `w`,
+  `w + workers`, …), because their workers keep scratch across jobs; the backend pool hands each job to
+  the first free worker, which sizes its scratch from that job alone. Worker handles are released only
+  after the compile's measurement closes.
 
 ## Verification
 

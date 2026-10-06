@@ -16,9 +16,10 @@
 // datapoint. Allocations remain the column where any movement at all is real.
 //
 // ⚠⚠ **A PARALLEL PHASE'S SUB-PHASE ROWS ARE A SUM OVER WORKERS AND CAN EXCEED ITS OWN WALL.** `regalloc`
-// lowers and allocates every function on a pool of worker services (`BackendPool`), each measuring its
-// own brackets on its own green thread, and those figures are summed into the `regalloc` sub-phase rows
-// and the `isel` row. So on a sixteen-processor box the breakdown reads several times the phase above it:
+// takes every function from isel to machine code on a pool of worker services (`BackendPool`), each
+// measuring its own brackets on its own green thread, and those figures are summed into the
+// `regalloc` sub-phase rows and the `isel`, `branchCleanup`, `prologueEpilogue` and `encode` rows.
+// So on a sixteen-processor box the breakdown reads several times the phase above it:
 // that is the pool's work, not a double count, and the multiple is the parallelism. The row under the
 // breakdown says which reading it is (see `PoolRemainder`). The twelve per-function Std pass rows
 // `StdPassPool` folds are sums of the same kind, broken down under `stdFanOut`, and so are the `lex`,
@@ -258,8 +259,8 @@ export enum CompilePhase
 	// breakdown of `regalloc` — the driver phase whose wall the pool runs inside (`BackendPool`).
 	isel
 
-	// The backend pool's driver: the wall every function's isel, edge split and allocation ran inside,
-	// broken down by the `isel` row and the allocator's own sub-phase rows.
+	// The backend pool's driver: the wall every function's backend job ran inside, broken down by the
+	// `isel`, `branchCleanup`, `prologueEpilogue` and `encode` rows and the allocator's sub-phases.
 	regalloc
 	prologueEpilogue
 	runtimeAugment
@@ -367,12 +368,12 @@ export enum CompilePhase
 	// would net off inside one number and neither would be readable.
 	inlineLeaves
 
-	// The Target-tier CFG cleanup (`cleanUpBranches`, EC11): jump elision, conditional inversion,
-	// jump threading and unreachable-block elimination on fully register-allocated ops. APPENDED HERE
-	// rather than beside `regalloc`, between which and `prologueEpilogue` it runs, for this enum's own
-	// reason — the ordinals are the `.metrics.tsv` wire format every trend row ever written is indexed
-	// by, so a member slotted into the middle would re-attribute every historical measurement to the
-	// wrong phase.
+	// The Target-tier CFG cleanup (`cleanUpFunctionBranches`, EC11): jump elision, conditional
+	// inversion, jump threading and unreachable-block elimination on fully register-allocated ops.
+	// APPENDED HERE rather than beside `prologueEpilogue`, which follows it in each backend job, for
+	// this enum's own reason — the ordinals are the `.metrics.tsv` wire format every trend row ever
+	// written is indexed by, so a member slotted into the middle would re-attribute every historical
+	// measurement to the wrong phase.
 	//
 	// Its OWN row rather than a slice of `regalloc`, because it is not register allocation and because
 	// it is the one backend phase whose cost is expected to be paid back by the phases after it —
@@ -540,6 +541,15 @@ export enum CompilePhase
 	frontEndPool
 
 	releaseIr
+
+	// The encoding the main thread does itself: the hand-assembled runtime chunks and the entry functions
+	// `augmentWithRuntime` prepends. APPENDED HERE for this enum's own reason — the ordinals are the
+	// `.metrics.tsv` wire format.
+	//
+	// Its OWN row rather than a slice of `encode`, because on a native lane `encode` is folded from
+	// the backend pool's workers as a breakdown of `regalloc`, and a row that is both that and a
+	// main-thread bracket drops the main-thread part out of the disjoint sum.
+	encodeRuntime
 end 'CompilePhase'
 
 // How a phase's row was measured. A pool row is a sum over worker brackets that ran inside `driver`'s
@@ -731,12 +741,14 @@ end 'CompileTimings'
 
 // WHAT A POOL PHASE'S BREAKDOWN LEAVES OVER - or, on a POOL, what it overlaps by.
 //
-// Two phases run a pool of worker services and are broken down by rows summed over the workers: the
-// register allocator's sub-phases and the `isel` row under `regalloc` (`BackendPool`), and the
-// per-function Std passes under `stdFanOut` (`StdPassPool`). The brackets are disjoint intervals of ONE function's work, and the pool
-// runs several functions inside one wall, so their SUM is the pool's work and is not bounded by the
-// driver phase's wall at all: at sixteen workers it is expected to be several times it, and reading that
-// multiple IS the parallelism the pass bought.
+// Three phases run a pool of worker services and are broken down by rows summed over the workers:
+// the register allocator's sub-phases and the `isel`, `branchCleanup`, `prologueEpilogue` and
+// `encode` rows under `regalloc` (`BackendPool`), the per-function Std passes under `stdFanOut`
+// (`StdPassPool`), and `lex`, `directives` and `parse` under `frontEndPool` (`FrontEndPool`). The
+// brackets are disjoint intervals of ONE job's work, and the pool runs several jobs inside one
+// wall, so their SUM is the pool's work and is not bounded by the driver phase's wall at all: at
+// sixteen workers it is expected to be several times it, and reading that multiple IS the
+// parallelism the pass bought.
 //
 // ⛔ **SO NO OVERLAP CHECK CAN STAND HERE: A SUM ABOVE THE WALL IS THE NORMAL READING.** The defect
 // worth refusing is `splitting` silently containing `liveness` - the failure this whole file exists to

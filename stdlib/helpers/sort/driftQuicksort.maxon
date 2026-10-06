@@ -14,7 +14,7 @@
 // buffer, so it needs only `min(|<|, |>=|) <= sliceLen/2 <= scratchCap` slots —
 // the same budget the merge buffer already guarantees.
 //
-// Loads after mergeSort.maxon (uses MergeScratchArray + smallSortRange) and
+// Loads after mergeSort.maxon (uses MergeScratchArray) and
 // before driftsort.maxon (which calls stableQuicksortRange). See StdlibLoader.
 public extension Array
 	// Stable partition of [lo, hi) around the value at `pivotIndex`. Returns
@@ -170,7 +170,7 @@ public extension Array
 
 	function stableMergeSortRange(lo ElementIndex, hi ElementIndex, scratch MergeScratchArray, scratchCap ElementIndex, cmp SortComparator)
 		if hi - lo <= SmallSortThreshold 'small'
-			self.smallSortRange(lo, hi: hi, cmp: cmp)
+			self.internalInsertionSortRange(lo, hi: hi, cmp: cmp)
 			return
 		end 'small'
 
@@ -180,10 +180,9 @@ public extension Array
 		self.mergeAdaptive(lo, mid: mid, hi: hi, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
 	end 'stableMergeSortRange'
 
-	// Progress is guaranteed: the boundary `p` splits off the `< pivot` class
-	// on the left and the pivot's own equal-group on the right, and the pivot
-	// is drawn from the slice, so the left side shrinks whenever it is
-	// non-empty and the right side shrinks otherwise.
+	// Every iteration shrinks the window or returns: a non-empty `< pivot`
+	// class is split off, and an empty one hands the range to the stable
+	// merge sort.
 	function stableQuicksortWithin(lo ElementIndex, hi ElementIndex, scratch MergeScratchArray, scratchCap ElementIndex, pivotHold MergeScratchArray, cmp SortComparator, partitionsLeft ElementIndex)
 		var curLo = lo
 		var curHi = hi
@@ -201,37 +200,15 @@ public extension Array
 			let pivotIndex = self.choosePivot(curLo, hi: curHi, cmp: cmp)
 			let p = self.stablePartition(curLo, hi: curHi, pivotIndex: pivotIndex, scratch: scratch, pivotHold: pivotHold, cmp: cmp)
 
-			// [curLo, p) is the `< pivot` class; [p, curHi) is `>= pivot`.
-			// If the left class is empty, every element is `>= pivot`; sorting
-			// the right class alone makes progress because the pivot's group is
-			// already in place at the front of it — advance past the leading
-			// equal-to-pivot run to guarantee the window shrinks.
+			// [curLo, p) is the `< pivot` class; [p, curHi) is `>= pivot`, in
+			// original order. An empty left class leaves the pivot's equal group
+			// scattered through the right one, so the partition settled nothing.
 			let leftLen = p - curLo
 			let rightLen = curHi - p
 
 			if leftLen == 0 'allGe'
-				// Skip the leading run of elements equal to the pivot (they are
-				// already in their final relative position) so we don't loop
-				// forever on an all-equal slice.
-				let pv = try managed.get(p) otherwise panic("stableQuicksortRange: get OOB at p")
-				var skip = p
-
-				while skip < curHi 'skipEq'
-					let v = try managed.get(skip) otherwise panic("stableQuicksortRange: get OOB during skipEq")
-
-					if cmp(pv, v) == Ordering.lessThan 'past'
-						break
-					end 'past'
-
-					skip = skip + 1
-				end 'skipEq'
-
-				if skip >= curHi 'doneEqual'
-					return
-				end 'doneEqual'
-
-				curLo = skip
-				continue
+				self.stableMergeSortRange(curLo, hi: curHi, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+				return
 			end 'allGe'
 
 			if leftLen <= rightLen 'leftSmaller'
@@ -243,7 +220,7 @@ public extension Array
 			end 'rightSmaller'
 		end 'loop'
 
-		self.smallSortRange(curLo, hi: curHi, cmp: cmp)
+		self.internalInsertionSortRange(curLo, hi: curHi, cmp: cmp)
 	end 'stableQuicksortWithin'
 
 	module function sortDepthBudget(n ElementIndex) returns ElementIndex

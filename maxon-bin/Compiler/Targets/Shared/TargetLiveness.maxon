@@ -1759,7 +1759,7 @@ end 'collectBlockSuccessorIds'
 // row even when its layout predecessor ended on the same span, because a line's breakpoints are
 // armed at its rows and a loop header armed only where control falls into it stops once rather
 // than on every iteration.
-module function lineEntryColumn(module TargetModule, func IrFunction, spanTable DebugSpanTable) returns BoolArray
+module function lineEntryColumn(module TargetModule, func IrFunction, encoding FunctionEncodingFacts) returns BoolArray
 	var firstSpans = SpanIdArray.create()
 	firstSpans.refill(func.nextBlockId, value: NoSpanId)
 	var blockSites = InlineSiteRefArray.create()
@@ -1778,7 +1778,7 @@ module function lineEntryColumn(module TargetModule, func IrFunction, spanTable 
 		return entered
 	end 'noLineToEnter'
 
-	let ways = LineWays.of(module, func: func, sites: blockSites, spanTable: spanTable)
+	let ways = LineWays.of(module, func: func, sites: blockSites, encoding: encoding)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("lineEntryColumn: blockRef from func.blockRefs not in module.blocks")
@@ -1788,7 +1788,7 @@ module function lineEntryColumn(module TargetModule, func IrFunction, spanTable 
 			let arriving = try firstSpans.get(target) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' branches to block {target}, past the {func.nextBlockId} this function numbers")
 			let targetSite = try blockSites.get(target) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' branches to block {target}, past the {func.nextBlockId} this function numbers")
 
-			if ways.leavesAnotherLine(block.id, func: func, arriving: arriving, targetSite: targetSite) 'fromAnotherLine'
+			if ways.leavesAnotherLine(block.id, arriving: arriving, targetSite: targetSite) 'fromAnotherLine'
 				try entered.set(target, value: true) otherwise panic("lineEntryColumn: block {target} is past the {func.nextBlockId} this function numbers")
 			end 'fromAnotherLine'
 		end 'eachTarget'
@@ -1829,21 +1829,21 @@ type LineWays
 	let predecessors as CsrGraph
 	let sites as InlineSiteRefArray
 	let lineClasses as BlockLineClassArray
-	let spanTable as DebugSpanTable
+	let encoding as FunctionEncodingFacts
 	export let entry as BlockId
 	var frontiers as LineFrontierArray
 	var reachesEntry as BoolArray
 	var classStamps as JoinGenerationArray
 	var joinGeneration as JoinGeneration
 
-	static function of(module TargetModule, func IrFunction, sites InlineSiteRefArray, spanTable DebugSpanTable) returns LineWays
+	static function of(module TargetModule, func IrFunction, sites InlineSiteRefArray, encoding FunctionEncodingFacts) returns LineWays
 		var leaving = CsrColumn.create()
 		var entering = CsrColumn.create()
 		var lineClasses = BlockLineClassArray.create()
 		lineClasses.refill(func.nextBlockId, value: BlockLineClass.positionless)
 		var sourceLineOrdinals = LineClassMap.create()
 		var classIds = LineClassMap.create()
-		let siteSlots = func.inlineSites.count() as LineClassKey + FirstSplicedSiteSlot
+		let siteSlots = encoding.siteCount as LineClassKey + FirstSplicedSiteSlot
 		var successors = BlockIdArray.create()
 		var entry = 0 as BlockId
 		var layout = BlockIdArray.create()
@@ -1855,7 +1855,7 @@ type LineWays
 			let lastSpan = lastSpanOf(module, block: block)
 
 			if lastSpan != NoSpanId 'positioned'
-				let sourceLine = denseOrdinalOf(sourceLineOrdinals, key: spanTable.lineKeyOf(lastSpan) as LineClassKey)
+				let sourceLine = denseOrdinalOf(sourceLineOrdinals, key: encoding.lines.lineKeyOf(lastSpan) as LineClassKey)
 				let lineClass = denseOrdinalOf(classIds, key: lineClassKeyOf(sourceLine, site: block.inlineSite, siteSlots: siteSlots))
 				try lineClasses.set(block.id, value: BlockLineClass.ofLine(lineClass, lastSpan: lastSpan)) otherwise panic("LineWays.of: block {block.id} is past the {func.nextBlockId} this function numbers")
 			end 'positioned'
@@ -1876,7 +1876,7 @@ type LineWays
 		var classStamps = JoinGenerationArray.create()
 		classStamps.refill(classIds.count(), value: 0)
 
-		var ways = Self{successors: buildCsr(leaving, to: entering, nodeCount: func.nextBlockId as CsrIndex), predecessors: buildCsr(entering, to: leaving, nodeCount: func.nextBlockId as CsrIndex), sites: sites, lineClasses: lineClasses, spanTable: spanTable, entry: entry, frontiers: frontiers, reachesEntry: reachesEntry, classStamps: classStamps, joinGeneration: 0}
+		var ways = Self{successors: buildCsr(leaving, to: entering, nodeCount: func.nextBlockId as CsrIndex), predecessors: buildCsr(entering, to: leaving, nodeCount: func.nextBlockId as CsrIndex), sites: sites, lineClasses: lineClasses, encoding: encoding, entry: entry, frontiers: frontiers, reachesEntry: reachesEntry, classStamps: classStamps, joinGeneration: 0}
 		ways.settleFrontiers(func, layout: layout)
 
 		return ways
@@ -2032,9 +2032,9 @@ type LineWays
 		return try self.reachesEntry.get(block) otherwise panic("LineWays.entryReachedThrough: block {block} is past the {self.reachesEntry.count()} this function numbers")
 	end 'entryReachedThrough'
 
-	function leavesAnotherLine(block BlockId, func IrFunction, arriving SpanId, targetSite InlineSiteRef) returns bool
+	function leavesAnotherLine(block BlockId, arriving SpanId, targetSite InlineSiteRef) returns bool
 		if not self.positionless(block) 'itsOwnLastSpan'
-			return self.leftFromAnotherLine(block, func: func, arriving: arriving, targetSite: targetSite)
+			return self.leftFromAnotherLine(block, arriving: arriving, targetSite: targetSite)
 		end 'itsOwnLastSpan'
 
 		if self.entryReachedThrough(block as CsrIndex) 'arrivesFromTheCaller'
@@ -2042,7 +2042,7 @@ type LineWays
 		end 'arrivesFromTheCaller'
 
 		for before in self.frontierOf(block as CsrIndex) 'eachFrontierBlock'
-			if self.leftFromAnotherLine(before, func: func, arriving: arriving, targetSite: targetSite) 'anotherLine'
+			if self.leftFromAnotherLine(before, arriving: arriving, targetSite: targetSite) 'anotherLine'
 				return true
 			end 'anotherLine'
 		end 'eachFrontierBlock'
@@ -2068,10 +2068,10 @@ type LineWays
 		return try self.sites.get(block) otherwise panic("LineWays.siteOf: block {block} is past the {self.sites.count()} this function numbers")
 	end 'siteOf'
 
-	function leftFromAnotherLine(block BlockId, func IrFunction, arriving SpanId, targetSite InlineSiteRef) returns bool
-		let seen = spanSeenFrom(func, span: self.spanLeaving(block), site: self.siteOf(block), frame: targetSite)
+	function leftFromAnotherLine(block BlockId, arriving SpanId, targetSite InlineSiteRef) returns bool
+		let seen = spanSeenFrom(self.encoding, span: self.spanLeaving(block), site: self.siteOf(block), frame: targetSite)
 
-		return seen == NoSpanId or not sameSourceLine(self.spanTable, first: seen, second: arriving)
+		return seen == NoSpanId or not sameSourceLine(self.encoding.lines, first: seen, second: arriving)
 	end 'leftFromAnotherLine'
 end 'LineWays'
 
@@ -2116,27 +2116,21 @@ function collectLineSuccessorIds(module TargetModule, func IrFunction, block IrB
 	end 'fallsIntoTheNextBlock'
 end 'collectLineSuccessorIds'
 
-function spanSeenFrom(func IrFunction, span SpanId, site InlineSiteRef, frame InlineSiteRef) returns SpanId
+function spanSeenFrom(encoding FunctionEncodingFacts, span SpanId, site InlineSiteRef, frame InlineSiteRef) returns SpanId
 	var seen = span
 	var at = site
 
 	while not sameInlineSite(at, other: frame) 'outToTheFrame'
 		match at 'which'
 			none then return seen
-			site(index) then (seen, at) = callerOfSite(func, index: index)
+			site(index) then (seen, at) = encoding.callerOfSite(index)
 		end 'which'
 	end 'outToTheFrame'
 
 	return seen
 end 'spanSeenFrom'
 
-function callerOfSite(func IrFunction, index ElementIndex) returns (SpanId, InlineSiteRef)
-	let spliced = try func.inlineSites.get(index) otherwise panic("callerOfSite: inline site {index} is past the {func.inlineSites.count()} its function records")
-
-	return (spliced.callSpan, spliced.parent)
-end 'callerOfSite'
-
-module function sameSourceLine(spanTable DebugSpanTable, first SpanId, second SpanId) returns bool
+module function sameSourceLine(lines SpanLineTable, first SpanId, second SpanId) returns bool
 	if first == second 'oneSpan'
 		return true
 	end 'oneSpan'
@@ -2145,7 +2139,7 @@ module function sameSourceLine(spanTable DebugSpanTable, first SpanId, second Sp
 		return false
 	end 'nowhere'
 
-	return spanTable.lineKeyOf(first) == spanTable.lineKeyOf(second)
+	return lines.lineKeyOf(first) == lines.lineKeyOf(second)
 end 'sameSourceLine'
 
 function firstSpanOf(module TargetModule, block IrBlock) returns SpanId

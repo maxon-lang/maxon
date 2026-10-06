@@ -1,0 +1,16 @@
+let BatchApartSpecName = "batch-apart"
+
+test 'a case writing a module var and a case running a closure on a message batch into separate programs'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: BatchApartSpecName, testNames: ["batch-apart.sorts-on-a-message", "batch-apart.keeps-a-ledger", "batch-apart.doubles-on-a-message", "batch-apart.keeps-a-tally"], broken: broken)
+	collectMissingSummary(said, expected: batchSummaryLine(4, programs: 2, alone: 0), broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a module-var case and a service case batch apart")
+end 'a case writing a module var and a case running a closure on a message batch into separate programs'

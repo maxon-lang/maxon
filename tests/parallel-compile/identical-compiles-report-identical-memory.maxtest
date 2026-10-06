@@ -1,0 +1,115 @@
+let PhaseRowKind = "phase"
+let RegAllocRowKind = "regalloc"
+let NameColumn = "name"
+let AllocsColumn = "allocs"
+let FreesColumn = "frees"
+let BytesColumn = "bytes"
+let LiveBytesColumn = "livebytes"
+let FreeBytesColumn = "freebytes"
+let CachedFreeBytesColumn = "cachedfreebytes"
+let ParkedBytesColumn = "parkedbytes"
+let CommittedBytesColumn = "committedbytes"
+let UnallocatedCell = "0"
+let ReadingSeparator = " "
+let ReadingValueOpener = "="
+let ReadingPairSeparator = " vs "
+let MissingRowReading = "(no row)"
+
+test 'two identical compiles report identical memory'
+	let staged = stagedProgram("uneven-program", caseLabel: "identical-compiles-report-identical-memory")
+
+	// The first build writes the case's library cache and the two compared ones load it: a build that
+	// writes the cache reports different front-end rows from one that reads it.
+	_ = builtMetricsTable(staged, label: "library-cache warm-up")
+
+	let first = builtMetricsTable(staged, label: "first")
+	let second = builtMetricsTable(staged, label: "second")
+
+	requireIdenticalMemory(first, second: second, kind: "warm")
+end 'two identical compiles report identical memory'
+
+export function requireIdenticalMemory(first MetricsTable, second MetricsTable, kind String) throws TestFailure
+	let firstReadings = memoryReadings(first)
+	let secondReadings = memoryReadings(second)
+
+	try Expect.isTrue(carriesKind(first, kind: PhaseRowKind), message: "the first {kind} build's metrics table carries no `{PhaseRowKind}` row, so there is nothing to compare and two such tables would agree.")
+	try Expect.isTrue(carriesKind(first, kind: RegAllocRowKind), message: "the first {kind} build's metrics table carries no `{RegAllocRowKind}` row, so the allocator's own sub-phases are not compared and two such tables would agree.")
+	try Expect.isTrue(anyAllocationReported(first), message: "every compared row of the first {kind} build's metrics table reports zero allocations, so the two tables would agree whether or not the compiler's memory accounting is deterministic.")
+
+	let differing = differingReadings(firstReadings, second: secondReadings)
+	try Expect.isEmpty(differing, message: "two {kind} compiles of one program, at one processor count, with one command line, reported different memory for these rows (first vs second). A phase's allocation counts and residency must not depend on which worker ran which function, or in what order the pool finished:{differing}")
+end 'requireIdenticalMemory'
+
+function comparedColumns() returns StringArray
+	return [AllocsColumn, FreesColumn, BytesColumn, LiveBytesColumn, FreeBytesColumn, CachedFreeBytesColumn, ParkedBytesColumn, CommittedBytesColumn]
+end 'comparedColumns'
+
+function isComparedKind(kind String) returns bool
+	return kind == PhaseRowKind or kind == RegAllocRowKind
+end 'isComparedKind'
+
+function memoryReadings(table MetricsTable) returns StringArray
+	let kindColumn = table.column(MetricsKindColumn)
+	let nameColumn = table.column(NameColumn)
+
+	var readings = StringArray.create()
+
+	for row in table.rows 'eachRow'
+		let kind = row.cell(kindColumn)
+
+		if not isComparedKind(kind) 'notCompared'
+			continue
+		end 'notCompared'
+
+		var reading = "{kind}{ReadingSeparator}{row.cell(nameColumn)}"
+
+		for heading in comparedColumns() 'eachColumn'
+			reading.append("{ReadingSeparator}{heading}{ReadingValueOpener}{row.cell(table.column(heading))}")
+		end 'eachColumn'
+
+		readings.push(reading)
+	end 'eachRow'
+
+	return readings
+end 'memoryReadings'
+
+function carriesKind(table MetricsTable, kind String) returns bool
+	let kindColumn = table.column(MetricsKindColumn)
+
+	for row in table.rows 'eachRow'
+		if row.cell(kindColumn) == kind 'found'
+			return true
+		end 'found'
+	end 'eachRow'
+
+	return false
+end 'carriesKind'
+
+function anyAllocationReported(table MetricsTable) returns bool
+	let kindColumn = table.column(MetricsKindColumn)
+	let allocsColumn = table.column(AllocsColumn)
+
+	for row in table.rows 'eachRow'
+		if isComparedKind(row.cell(kindColumn)) and row.cell(allocsColumn) != UnallocatedCell 'allocated'
+			return true
+		end 'allocated'
+	end 'eachRow'
+
+	return false
+end 'anyAllocationReported'
+
+function differingReadings(first StringArray, second StringArray) returns String
+	var differing = StringArray.create()
+	let longest = first.count() if first.count() > second.count() else second.count()
+
+	for position in 0 upto longest 'eachPosition'
+		let firstReading = try first.get(position) otherwise MissingRowReading
+		let secondReading = try second.get(position) otherwise MissingRowReading
+
+		if firstReading != secondReading 'differs'
+			differing.push("{firstReading}{ReadingPairSeparator}{secondReading}")
+		end 'differs'
+	end 'eachPosition'
+
+	return listedLines(differing)
+end 'differingReadings'

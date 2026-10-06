@@ -474,13 +474,16 @@ first loads the library from it. After the summary, `spec-test` prints
 
 ### Batched runs
 
-A default run compiles a spec's plain run cases into the fewest programs whose declared names do not
-overlap and runs each program once; `--batch=off` compiles and runs every case on its own. A nominal type
+A default run compiles a spec's plain run cases into the fewest programs whose cases can share a program
+and runs each program once; `--batch=off` compiles and runs every case on its own. A nominal type
 name (`type`, `enum`, `union`, `interface`) is whole-program, and so is an extension method of one
 signature on one type, so two cases declaring the same name land in different programs, and so do a case
 declaring a nominal type and another case that names that word (a `typealias` of it, or the library's own type
-of that name), and a case declaring a `typealias` and another that names the word without declaring it. The
-declared and mentioned names come from the compiler's own front end, one pass per case
+of that name), and a case declaring a `typealias` and another that names the word without declaring it. A
+case declaring a module-level `var` and a case that spawns a service land in different programs too: a
+closure call reached from a service message reaches every function whose address the program takes, so
+[E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143) refuses the pair together while each compiles
+alone. The declared and mentioned names come from the compiler's own front end, one pass per case
 (`Compiler.claimsOfSources`). Each batched case
 sits in its own directory, so its file-private names stay its own, with its `main` renamed to an exported
 `__spec_case_<n>`, and a generated entry runs the cases selected by `--select=`

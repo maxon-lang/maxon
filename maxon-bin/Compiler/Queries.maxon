@@ -276,10 +276,12 @@ export type SourceClaims
 	export let declaredAliases as StringArray
 	export let extensionMethodKeys as StringArray
 	export let shadowedLibraryNames as StringArray
+	export let declaresModuleVars as bool
+	export let spawnsServices as bool
 	export let mentionedNames as StringArray
 
-	export static function create(moduleInit ModuleInitNeed, declaredNominals StringArray, declaredAliases StringArray, extensionMethodKeys StringArray, shadowedLibraryNames StringArray, mentionedNames StringArray) returns SourceClaims
-		return Self{moduleInit: moduleInit, declaredNominals: declaredNominals, declaredAliases: declaredAliases, extensionMethodKeys: extensionMethodKeys, shadowedLibraryNames: shadowedLibraryNames, mentionedNames: mentionedNames}
+	export static function create(moduleInit ModuleInitNeed, declaredNominals StringArray, declaredAliases StringArray, extensionMethodKeys StringArray, shadowedLibraryNames StringArray, declaresModuleVars bool, spawnsServices bool, mentionedNames StringArray) returns SourceClaims
+		return Self{moduleInit: moduleInit, declaredNominals: declaredNominals, declaredAliases: declaredAliases, extensionMethodKeys: extensionMethodKeys, shadowedLibraryNames: shadowedLibraryNames, declaresModuleVars: declaresModuleVars, spawnsServices: spawnsServices, mentionedNames: mentionedNames}
 	end 'create'
 end 'SourceClaims'
 
@@ -361,7 +363,7 @@ export function claimsOfUserFiles(project Project) returns SourceClaims throws C
 	let mentioned = try identifierNamesWritten(project, paths: fold.paths)
 	let shadowed = try namesTheLibraryAlsoDeclares(project, nominals: nominals, aliases: aliases)
 	let extensionKeys = try extensionMethodKeysWritten(project, signatures: fold.signatures)
-	return SourceClaims.create(fold.signatures.programModuleInitNeed(), declaredNominals: nominals, declaredAliases: aliases, extensionMethodKeys: extensionKeys, shadowedLibraryNames: shadowed, mentionedNames: mentioned)
+	return SourceClaims.create(fold.signatures.programModuleInitNeed(), declaredNominals: nominals, declaredAliases: aliases, extensionMethodKeys: extensionKeys, shadowedLibraryNames: shadowed, declaresModuleVars: fold.signatures.declaresAUserModuleVar(), spawnsServices: fold.signatures.serviceSpawnCandidates().count() != 0, mentionedNames: mentioned)
 end 'claimsOfUserFiles'
 
 function identifierNamesWritten(project Project, paths MaxonSourcePathArray) returns StringArray throws CompileError

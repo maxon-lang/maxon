@@ -57,25 +57,6 @@
 // fact rather than an encoding, and the single per-ISA fact — a condition code's complement — is
 // `invertX64Cond` / `invertArm64Cond` beside the enums they read (see `invertedCondBranchOnto`).
 
-// The pass, over every function in the module. Called from `buildX64Backend` and `buildArm64Backend`
-// between `lowerAndAllocateOnAWorkerPool` and the frame pass: the frame pass then sees the SURVIVING blocks, so
-// a callee-saved register or a `call` that only unreachable code used stops being preserved.
-export function cleanUpBranches(module TargetModule, project Project)
-	let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.branchCleanup)
-
-	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.codegen).debug("Branch cleanup: {module.funcCount()} function(s)")
-	end 'debugging'
-
-	// An INDEX loop, not `for … in`: the element is a BORROW of `module`, and the call below is
-	// recorded as writing that same storage — the discipline `insertPrologueEpilogue` states.
-	for fnIndex in 0 upto module.functions.count() 'eachFunc'
-		cleanUpFunctionBranches(module, func: try module.functions.get(fnIndex) otherwise panic("cleanUpBranches: fnIndex {fnIndex} is below module.functions.count()"))
-	end 'eachFunc'
-
-	recordPhase(project, phase: CompilePhase.branchCleanup, probe: probe)
-end 'cleanUpBranches'
-
 // ⭐ THE ORDER OF THE SEVEN IS LOAD-BEARING, in three steps.
 //
 // Threading and reachability both need a CFG, and the CFG is derived FROM THE OPS — a block's second
@@ -85,7 +66,7 @@ end 'cleanUpBranches'
 // the rotation — run while every else-edge is still an op (a block that has lost its terminator falls
 // into its neighbour and could not move), and the elision is last — after which nothing in the
 // compiler builds a CFG for this function again.
-function cleanUpFunctionBranches(module TargetModule, func IrFunction)
+export function cleanUpFunctionBranches(module TargetModule, func IrFunction)
 	// The skeleton read off the ops, exactly as the allocator builds it — this pass derives no CFG of
 	// its own. Locals are LAYOUT positions (`buildFuncTopology` numbers them in `func.blockRefs`
 	// order), which is what makes "the physically next block" answerable as `local + 1`.
@@ -400,11 +381,13 @@ function replaceJumpsWithReturnTails(module TargetModule, topo FuncTopology, ret
 		let savedSpan = module.spans.current
 		module.spans.current = exitSpan
 
+		// Copies, never the tail's own ops: this runs on a pool worker, and two live ops sharing a
+		// managed payload give the reply a record with two owners, which aborts its send (exit 96).
 		for opIdx in tail.bodyOps 'eachBodyOp'
-			module.appendOp(block, op: try module.ops.get(opIdx) otherwise panic("replaceJumpsWithReturnTails: opIdx {opIdx} not in module.ops"))
+			module.appendOp(block, op: (try module.ops.get(opIdx) otherwise panic("replaceJumpsWithReturnTails: opIdx {opIdx} not in module.ops")).clone())
 		end 'eachBodyOp'
 
-		module.setTerminator(block, op: try module.ops.get(tail.terminator) otherwise panic("replaceJumpsWithReturnTails: terminator {tail.terminator} not in module.ops"))
+		module.setTerminator(block, op: (try module.ops.get(tail.terminator) otherwise panic("replaceJumpsWithReturnTails: terminator {tail.terminator} not in module.ops")).clone())
 		module.spans.current = savedSpan
 	end 'eachBlock'
 end 'replaceJumpsWithReturnTails'

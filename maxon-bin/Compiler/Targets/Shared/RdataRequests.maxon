@@ -14,7 +14,8 @@
 // the load op itself and only the island's registration travels. A jump table's and a string blob's
 // labels are counter-minted and cannot be known on a worker, so their ops carry a PLACEHOLDER naming the
 // request's position in the function's log, and `patchRdataLabels` rewrites each one once the real label
-// exists.
+// exists; the chunk the worker encoded carries the same placeholders in its relocations, which
+// `patchChunkRdataLabels` rewrites.
 
 // One registration the isel needed, as the driver performs it.
 export union RdataRequest
@@ -72,13 +73,34 @@ end 'placeholderLabel'
 
 // ⭐ **THE DRIVER'S ONE DOOR: perform one function's requests, then patch its placeholders.** Returns
 // before touching the table or minting the label map for the many functions that requested nothing.
-export function performRdataRequests(globalData GlobalDataTable, module TargetModule, func IrFunction, requests RdataRequestArray)
+export function performRdataRequests(globalData GlobalDataTable, module TargetModule, func IrFunction, chunk FunctionCodeChunk, requests RdataRequestArray)
 	if requests.count() == 0 'nothingRequested'
 		return
 	end 'nothingRequested'
 
-	patchRdataLabels(module, func: func, labels: registerRdataRequests(globalData, requests: requests))
+	let labels = registerRdataRequests(globalData, requests: requests)
+	patchRdataLabels(module, func: func, labels: labels)
+	patchChunkRdataLabels(chunk, labels: labels)
 end 'performRdataRequests'
+
+// A label the map does not hold is already final: a float island's, or one the Std tier wrote.
+function patchChunkRdataLabels(chunk FunctionCodeChunk, labels RdataLabelMap)
+	if labels.count() == 0 'nothingToPatch'
+		return
+	end 'nothingToPatch'
+
+	for i in 0 upto chunk.rdataRelocs.count() 'eachReloc'
+		var reloc = try chunk.rdataRelocs.get(i) otherwise panic("patchChunkRdataLabels: rdataRelocs.get OOB at {i} of {chunk.rdataRelocs.count()}")
+		let registered = try labels.get(reloc.rdataLabel.toByteArray()) otherwise continue
+		reloc.rdataLabel = String.from(registered)
+	end 'eachReloc'
+
+	for i in 0 upto chunk.jumpTableRelocs.count() 'eachTable'
+		var table = try chunk.jumpTableRelocs.get(i) otherwise panic("patchChunkRdataLabels: jumpTableRelocs.get OOB at {i} of {chunk.jumpTableRelocs.count()}")
+		let registered = try labels.get(table.tableLabel.toByteArray()) otherwise continue
+		table.tableLabel = String.from(registered)
+	end 'eachTable'
+end 'patchChunkRdataLabels'
 
 // Perform one function's requests against the table in the order the worker made them, and answer the
 // real label of every placeholder. A float island answers no placeholder — its op already names it.
