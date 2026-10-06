@@ -154,8 +154,9 @@ export function insertFrameForFunction(module TargetModule, func IrFunction) ret
 	let coloured = colouredPhysicalRegs(module, func: func)
 	let usedCallee = usedRegsFrom(calleeSavedOrder, coloured: coloured)
 	let usedXmm = usedRegsFrom(calleeSavedXmmOrder, coloured: coloured)
-	let frame = sizedFrame(func, makesCall: functionMakesCall(module, func: func), pushCount: usedCallee.count(), xmmSaveCount: usedXmm.count())
-	let frameBytes = frame.frameBytes
+	let makesCall = functionMakesCall(module, func: func)
+	let pushCount = usedCallee.count() as RegCount
+	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount, xmmSaveCount: usedXmm.count() as RegCount)
 
 	// The callee-saved XMM slots sit directly above the allocator's own spill slots, on the same grid.
 	let xmmBaseSlot = func.stackSize / SpillSlotBytes
@@ -176,49 +177,44 @@ export function insertFrameForFunction(module TargetModule, func IrFunction) ret
 		end 'returnBlock'
 	end 'eachBlock'
 
-	return frame
+	return X64PrologueFrame.create(pushCount, laysFramePointer: true, frameBytes: frameBytes, makesCall: makesCall)
 end 'insertFrameForFunction'
 
-// What a function's prologue lays below `push rbp`: the callee-saved GPRs its coloring used, and the frame
-// `sub rsp, N` reserves under them.
+// What a function's prologue lays below the return address: `push rbp` when it lays one, the callee-saved
+// GPRs its coloring used, and the frame `sub rsp, N` reserves under them.
 export type X64PrologueFrame
 	export var pushCount as RegCount
+	export var laysFramePointer as bool
 	export var frameBytes as StackSize
 	export var makesCall as bool
 
-	export static function create(pushCount RegCount, frameBytes StackSize, makesCall bool) returns X64PrologueFrame
-		return Self{pushCount: pushCount, frameBytes: frameBytes, makesCall: makesCall}
+	export static function create(pushCount RegCount, laysFramePointer bool, frameBytes StackSize, makesCall bool) returns X64PrologueFrame
+		return Self{pushCount: pushCount, laysFramePointer: laysFramePointer, frameBytes: frameBytes, makesCall: makesCall}
 	end 'create'
 
 	export function callStackBytes() returns StackSize
-		let wordsBelowTheCall = CallReturnAddressWords + FramePointerPushCount + self.pushCount
+		let framePointerWords = FramePointerPushCount if self.laysFramePointer else 0 as RegCount
+		let wordsBelowTheCall = CallReturnAddressWords + framePointerWords + self.pushCount
 		return (wordsBelowTheCall * StackWordBytes) as StackSize + self.frameBytes
 	end 'callStackBytes'
 end 'X64PrologueFrame'
 
-// ⭐ **THE PROLOGUE's SHAPE FROM THE COUNTS OF THE COLORING** — `computeFrameBytes` behind one door, so the GT
-// stack guard (X64Backend's `emitFunctionChunk`, which projects rsp by `frameBytes`), the preemption
-// certificate and the `sub rsp, N` itself cannot size one function two ways.
-function sizedFrame(func IrFunction, makesCall bool, pushCount ElementIndex, xmmSaveCount ElementIndex) returns X64PrologueFrame
-	return X64PrologueFrame.create(pushCount as RegCount, frameBytes: computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount as RegCount, xmmSaveCount: xmmSaveCount as RegCount), makesCall: makesCall)
-end 'sizedFrame'
-
 // Read off the entry block, not sized from the coloring: the hand-built functions
-// `augmentWithRuntime` prepends do not lay the frame `sizedFrame` derives from their coloring
+// `augmentWithRuntime` prepends do not lay the frame `insertFrameForFunction` derives from their coloring
 // (`mrt_main_entry` reserves 40 with no `push rbp`; the Windows `mrt_start` colours rbx without
 // pushing it), and the encoder's stack guard, spill base and debug frame must match the frame the
 // code lays.
 export function x64PrologueFrameOf(module TargetModule, func IrFunction) returns X64PrologueFrame
 	let entryRef = try func.blockRefs.get(0) otherwise panic("x64PrologueFrameOf: '{String.from(func.name)}' has no entry block — every function the backend encodes has one, and the frame it lays opens there")
 	let entry = try module.blocks.get(entryRef) otherwise panic("x64PrologueFrameOf: blockRef {entryRef} of '{String.from(func.name)}' not in module.blocks")
-	var pushCount = 0 as RegCount
+	var pushed = 0 as RegMask
 	var frameBytes = 0 as StackSize
 
 	for opIdx in entry.opRefs 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("x64PrologueFrameOf: opIdx {opIdx} not in module.ops")
 
 		match op 'frameOp'
-			pushReg(reg) then pushCount = pushCount + (1 if regMaskContains(calleeSavedMask(), regNum: reg.rawValue) else 0)
+			pushReg(reg) then pushed = regMaskAdd(pushed, regNum: reg.rawValue)
 			prologue(stackSize) then frameBytes = stackSize
 			epilogue or
 				ret or
@@ -365,7 +361,7 @@ export function x64PrologueFrameOf(module TargetModule, func IrFunction) returns
 		end 'frameOp'
 	end 'eachOp'
 
-	return X64PrologueFrame.create(pushCount, frameBytes: frameBytes, makesCall: functionMakesCall(module, func: func))
+	return X64PrologueFrame.create(regMaskPopcount(pushed and calleeSavedMask()), laysFramePointer: regMaskContains(pushed, regNum: X64Register.rbp.rawValue), frameBytes: frameBytes, makesCall: functionMakesCall(module, func: func))
 end 'x64PrologueFrameOf'
 
 // The bytes to reserve with `sub rsp, N`.

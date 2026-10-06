@@ -22,13 +22,14 @@ export function colouredPhysicalRegs(module TargetModule, func IrFunction) retur
 end 'colouredPhysicalRegs'
 
 // An op's explicit operands plus the registers its `TargetOpMeta` names implicitly: a callee-saved
-// register an op writes without naming it still belongs to the caller. `xchgRegReg`, `pushReg` and
-// `popReg` are the post-colouring ops the operand model refuses, so their registers are read directly.
+// register an op writes without naming it still belongs to the caller. `xchgRegReg` is a post-colouring
+// op the operand model refuses, so its registers are read directly. `pushReg` and `popReg` are laid by
+// the x64 frame pass after this census and by the hand-built prepended functions, which it never scans.
 function colouredOpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 	let explicit = match op 'explicit'
 		xchgRegReg(a, b) gives colouredRegBit(a) or colouredRegBit(b)
-		pushReg(reg) gives regMaskOf(reg)
-		popReg(reg) gives regMaskOf(reg)
+		pushReg or
+			popReg panic("colouredOpPhysicalRegs: a pushReg or popReg reached the census — the x64 frame pass lays pushReg/popReg after it reads a function's coloring, and the prepended runtime functions are never scanned")
 		prologue or
 			epilogue or
 			ret or
