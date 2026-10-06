@@ -219,6 +219,247 @@ end 'main'
 error E2028: <fragment>:26:17: ternary expression type mismatch: true branch is 'Handler' but false branch is 'Callback'
 ```
 
+<!-- test: a-declared-function-merges-with-an-alias-typed-parameter-in-a-ternary -->
+A declared function carries no brand, so it merges with a `UnaryOp` parameter in one conditional, and the
+merged value calls whichever arm the condition chose.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+function triple(n Integer) returns Integer
+	return n * 3
+end 'triple'
+
+function pick(f UnaryOp, flag bool) returns Integer
+	let g = f if flag else triple
+	return g(2)
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(twice, flag: true)} {pick(twice, flag: false)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 6
+```
+
+<!-- test: error.ternary-of-an-alias-typed-parameter-and-a-different-shape -->
+The shapes are still compared when one arm carries no brand: a two-parameter function does not merge with
+a `UnaryOp` parameter.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function triple(n Integer) returns Integer
+	return n * 3
+end 'triple'
+
+function addBoth(a Integer, b Integer) returns Integer
+	return a + b
+end 'addBoth'
+
+function pick(f UnaryOp, flag bool) returns Integer
+	let g = f if flag else addBoth
+	return g(2)
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(triple, flag: true)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2028: <fragment>:14:12: ternary expression type mismatch: true branch is 'fn(Integer) returns Integer' but false branch is 'fn(Integer, Integer) returns Integer'
+```
+
+<!-- test: an-alias-over-a-string-merges-with-a-declared-function -->
+```maxon
+typealias Label = function(label String) returns String
+
+function plain(label String) returns String
+	return label
+end 'plain'
+
+function shout(label String) returns String
+	return "{label}!"
+end 'shout'
+
+function pick(f Label, flag bool) returns String
+	let g = f if flag else plain
+	return g("p")
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(shout, flag: true)} {pick(shout, flag: false)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+p! p
+```
+
+<!-- test: an-alias-over-a-struct-merges-with-a-declared-function -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export let x as Integer
+	export let y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+typealias Measure = function(at Point) returns Integer
+
+function sum(at Point) returns Integer
+	return at.x + at.y
+end 'sum'
+
+function product(at Point) returns Integer
+	return at.x * at.y
+end 'product'
+
+function pick(f Measure, flag bool) returns Integer
+	let g = f if flag else sum
+	return g(Point.create(3, y: 4))
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(product, flag: true)} {pick(product, flag: false)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+12 7
+```
+
+<!-- test: an-alias-over-an-enum-merges-with-a-declared-function -->
+```maxon
+enum Shade
+	light
+	dark
+end 'Shade'
+
+typealias Flip = function(shade Shade) returns Shade
+
+function keep(shade Shade) returns Shade
+	return shade
+end 'keep'
+
+function invert(shade Shade) returns Shade
+	match shade 'k'
+		light then return Shade.dark
+		dark then return Shade.light
+	end 'k'
+end 'invert'
+
+function pick(f Flip, flag bool) returns String
+	let g = f if flag else keep
+	match g(Shade.light) 'k'
+		light then return "light"
+		dark then return "dark"
+	end 'k'
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(invert, flag: true)} {pick(invert, flag: false)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+dark light
+```
+
+<!-- test: an-alias-with-a-nested-alias-parameter-merges-with-a-declared-function -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Step = function(n Integer) returns Integer
+typealias Driver = function(step Step, n Integer) returns Integer
+
+function applyOnce(step Step, n Integer) returns Integer
+	return step(n)
+end 'applyOnce'
+
+function applyTwice(step Step, n Integer) returns Integer
+	return step(step(n))
+end 'applyTwice'
+
+function addOne(n Integer) returns Integer
+	return n + 1
+end 'addOne'
+
+function pick(d Driver, flag bool) returns Integer
+	let g = d if flag else applyOnce
+	return g(addOne, 10)
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(applyTwice, flag: true)} {pick(applyTwice, flag: false)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+12 11
+```
+
+<!-- test: an-alias-from-another-directory-merges-with-a-declared-function -->
+`api.Score` is declared over `api`'s own private `Integer`, and `addOne` over `app`'s: the two arms still
+merge.
+```maxon
+// --- file: api/types.maxon
+typealias Integer = int(i64.min to i64.max)
+export typealias Score = function(n Integer) returns Integer
+
+// --- file: app/main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function addOne(n Integer) returns Integer
+	return n + 1
+end 'addOne'
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+function pick(f api.Score, flag bool) returns Integer
+	let g = f if flag else addOne
+	return g(20)
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(twice, flag: true)} {pick(twice, flag: false)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+40 21
+```
+
 <!-- test: error.nested-alias-position-is-nominal -->
 `Outer` declares its parameter as a `Handler`; `runner` takes a `Callback`. Same shape one level down,
 different name — refused, and the diagnostic names the nested aliases.

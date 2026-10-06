@@ -36212,55 +36212,6 @@ export type Parser
 		return qualified
 	end 'genericAliasKeyFor'
 
-	// ⭐ **RESOLVE A `named` STRUCT REFERENCE TO `structRef` — the parse-time half of what `resolveTypes`
-	// does to a signature.** `parseTypeReference` mints `structRef` SYNTACTICALLY for `Self` and the
-	// enclosing type's own name (they need no registry), but leaves every OTHER type name `named`,
-	// because it runs in the tolerant declaration sweep too — where "is `Vec2` a struct?" has no answer.
-	// This runs in the REAL parse ONLY (`self.signatures` is the complete whole-program index), so it CAN
-	// ask, and it re-tags a `named` that denotes a declared `type` as `structRef` — which is what makes a
-	// struct PARAMETER (`a Vec2`) a struct base for `a.x`, a struct RETURN (`returns Pair`) agree with the
-	// `structRef` a factory hands back, and a struct CALL RESULT (`let p = makePair()`) bind a struct.
-	//
-	// A `named` that denotes a UNION/ENUM stays `named` — a union value carries the `named` tag
-	// (`enumMatchFor` reads it) — and a ranged int ALIAS stays `named` (it IS the integer). `structRef`
-	// (a `Self`/own-name reference) and every non-`named` type pass through untouched, so this is
-	// idempotent and safe to fold over an already-partly-resolved list. `resolveTypes`'s `structRef` arm
-	// then finds the signature already resolved and leaves it, so the two cannot drift.
-	//
-	// The `containsStruct` guard, not `structOf`, for the reason its header states: this is asked of
-	// EVERY `named` parameter and return type, most of them int aliases, and `structOf` would box a
-	// throwaway `DeclaredStruct.undeclared` for each.
-	// ⚠⚠ **`scopeFilePath` IS THE FILE THAT DECLARED THE *SLOT*, WHICH IS NOT ALWAYS THIS PARSER'S FILE.**
-	// A parameter list, a field and a `sizeof` operand are slots of the file being parsed, so those callers
-	// pass `self.filePath`; a CALLEE'S RETURN TYPE is a slot of the file that declared the CALLEE, and an
-	// OVERLOAD CANDIDATE'S PARAMETER a slot of the file that declared the candidate. Reading `self.filePath`
-	// for those two was a silent wrong answer the moment a name could mean two things: **MEASURED**, a
-	// `returns Widget` over `a.maxon`'s file-private ranged alias, called from a third file that declares
-	// neither, was `E3005 Cannot return 'struct' from function declared to return 'int'`, and through a
-	// field read it dereferenced the integer as a record — **exit 139, clean compile**.
-	// `ProgramSignatures.funcReturnDeclFiles`' header states the rule this parameter carries: *"the scope
-	// file is the SLOT's declaring file and never a reader's."*
-	function resolveNamedStruct(t MaxonType, scopeFilePath FilePath) returns MaxonType
-		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
-			return t
-		end 'notNamed'
-
-		let id = typeNameIdOf(t)
-		let name = try self.artifact.typeNames.nameOf(id) otherwise panic("resolveNamedStruct: a `named` type's id is not in this file's interner — `parseTypeReference` interned it from a name in the same table")
-
-		// ⚠ **AND NOT IF AN ALIAS ANSWERS FOR *THIS* FILE.** The struct registry is bare and whole-program,
-		// so once a `type Box` in one file and a `typealias Box` in another may both stand
-		// (`typeNamePairMayCoexist`) this re-tag claimed the name for every file. MEASURED: a user program
-		// declaring `type ParsedInt` made `stdlib/Builtins.maxon`'s own `__int_fromString(…) returns
-		// ParsedInt` a struct return, and its `return result` **E3005 'Cannot return int from function
-		// declared to return struct'** — inside a library file, about a declaration the author never saw.
-		if not self.signatures.containsStructInAnyFile(name) or self.signatures.aliasShadowsNominalFor(name, readerFilePath: scopeFilePath) 'notAStructHere'
-			return t
-		end 'notAStructHere'
-
-		return MaxonType.structRef(id)
-	end 'resolveNamedStruct'
-
 	// ⭐ **RESOLVE A `named` FUNCTION-ALIAS REFERENCE TO `function`** (P1.5-A1) — the read-side twin of
 	// `resolveNamedStruct`, for the types the WHOLE-PROGRAM signature index hands back as `named` because
 	// the SWEEP that recorded them ran before the function alias was known: a call RESULT
@@ -36320,7 +36271,7 @@ export type Parser
 		var resolved = MaxonTypeArray.create()
 
 		for t in types 'each'
-			resolved.push(self.resolveNamedStruct(t, scopeFilePath: self.filePath))
+			resolved.push(resolveNamedStruct(t, typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: self.filePath))
 		end 'each'
 
 		return resolved
@@ -36332,7 +36283,7 @@ export type Parser
 	function resolveNamedStructReturn(rt MaxonReturnType) returns MaxonReturnType
 		return match rt 'r'
 			void gives rt
-			value(inner) gives MaxonReturnType.value(self.resolveNamedStruct(inner, scopeFilePath: self.filePath))
+			value(inner) gives MaxonReturnType.value(resolveNamedStruct(inner, typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: self.filePath))
 		end 'r'
 	end 'resolveNamedStructReturn'
 
@@ -40800,7 +40751,7 @@ export type Parser
 	// has not reached yet would classify differently there. Every caller is inside a `recordSignature`-gated
 	// or real-parse-only path.
 	function erasedAggregateNameOf(t MaxonType) returns ByteArray
-		let resolved = self.resolveNamedStruct(t, scopeFilePath: self.filePath)
+		let resolved = resolveNamedStruct(t, typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: self.filePath)
 		let tag = maxonTypeTag(resolved)
 
 		if tag != ValueTypeTag.named 'survivesResolution'
@@ -63726,7 +63677,7 @@ export type Parser
 	function parseSizeof() returns ValueId throws SourceParseError
 		let sizeofTok = try self.consume(TokenKind.sizeof)
 		try self.consume(TokenKind.leftParen)
-		let operand = self.resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted), scopeFilePath: self.filePath)
+		let operand = resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted), typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: self.filePath)
 		try self.consume(TokenKind.rightParen)
 
 		if maxonTypeTag(operand) == ValueTypeTag.typeParameter 'runtimeSize'
@@ -63864,7 +63815,7 @@ export type Parser
 	function parseCountof() returns ValueId throws SourceParseError
 		let countofTok = try self.consume(TokenKind.countof)
 		try self.consume(TokenKind.leftParen)
-		let operand = self.resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted), scopeFilePath: self.filePath)
+		let operand = resolveNamedStruct(try self.parseTypeReference(BarePrimitiveVoice.admitted), typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: self.filePath)
 		try self.consume(TokenKind.rightParen)
 
 		// ⚠ **A COUNT IS A COORDINATE OF THE INSTANCE, SO ONLY AN INSTANCE CAN HAVE ONE.** A primitive, a
@@ -82803,7 +82754,7 @@ export type Parser
 	// The `baseTok` `structLayoutOfType` names in its diagnostics is the FIELD token here — for a hop, the
 	// field IS what the reader must fix.
 	function structLayoutOfField(baseLayout StructLayout, fieldTok Token, fieldType MaxonType) returns StructLayout throws SourceParseError
-		let resolved = self.resolveNamedStruct(fieldType, scopeFilePath: baseLayout.declFilePath)
+		let resolved = resolveNamedStruct(fieldType, typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: baseLayout.declFilePath)
 		let tag = maxonTypeTag(resolved)
 
 		if not self.tagCarriesStructLayoutHere(tag) 'notAStruct'
@@ -96647,7 +96598,7 @@ export type Parser
 	// overload candidate's PARAMETER (`sweptOverloadArgFit`). Repairing one and not the other is exactly how a
 	// candidate gets scored against a tag its own argument check one pass later never sees.
 	function repairSweptType(swept MaxonType, scopeFilePath FilePath) returns MaxonType
-		return self.canonicalizeSweptTupleName(self.scopeCrossedType(self.resolveNamedAlias(self.resolveFloatAliasType(self.resolveNamedStruct(swept, scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath))
+		return self.canonicalizeSweptTupleName(self.scopeCrossedType(self.resolveNamedAlias(self.resolveFloatAliasType(resolveNamedStruct(swept, typeNames: self.artifact.typeNames, signatures: self.signatures, scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath), scopeFilePath: scopeFilePath))
 	end 'repairSweptType'
 
 	// ⚠ **A SWEPT `structRef` IS THE ONE REPAIRED TAG THAT CAN ARRIVE NON-CANONICAL, AND A TUPLE IS WHERE IT

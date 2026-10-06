@@ -6120,20 +6120,24 @@ function holdsShape(spellings HashDigestArray, shape HashDigest) returns bool
 	return false
 end 'holdsShape'
 
-// ⭐ **THE CALLABLE SHAPE OF A FUNCTION TYPE — RESOLVED.** What a call through a function value
+// ⭐ **THE CALLABLE SHAPE OF A FUNCTION TYPE.** What a call through a function value
 // actually depends on: how many arguments it takes, what each one's concrete type is, and what comes
-// back. Every parameter/return type in it has been through `TypeResolution.resolveType`, so a ranged
-// alias has already collapsed to the `int`/`float` it is — which is exactly the property that makes it
-// the right currency for BOTH consumers: the ABI question the widening asks (`is parameter k a float?`)
-// and the agreement question the doors ask (`may this function value stand in this function-typed
-// place?`) are both questions about the REPRESENTATION, not about which alias name was spelled.
+// back. In the form the doors read, every parameter/return type has been through
+// `TypeResolution.resolveType`, so a ranged alias has already collapsed to the `int`/`float` it is
+// — which is exactly the property that makes it the right currency for BOTH consumers: the ABI
+// question the widening asks (`is parameter k a float?`) and the agreement question the doors ask
+// (`may this function value stand in this function-typed place?`) are both questions about the
+// REPRESENTATION, not about which alias name was spelled.
 //
 // ⚠ **THAT IS A DELIBERATE DIFFERENCE FROM `checkValueMergeSignatures`, WHICH COMPARES NOMINALLY**, and
 // the two are not in conflict — they ask the different questions the coercion-site section of TypeRules
 // draws the line between. A MERGE is symmetric (`unary if c else binary` — are these two values the SAME
 // type?). A DOOR is one-sided (may this value stand HERE?), and there a nominal rule is wrong: a
 // lifted closure's return type is INFERRED, so `function(x Ratio) gives x * 3.0` has return type
-// `float` where the `ScaleFn` it is passed to spells `Ratio`, and that program must compile.
+// `float` where the `ScaleFn` it is passed to spells `Ratio`, and that program must compile. A
+// merge gets its nominal answer from the same comparison asked of parse-time shapes
+// (`TypeResolution.parsedFunctionTypeRegistryOf`), where a ranged alias is still `named`; asked of
+// resolved shapes it would let `fn(Small)` merge with `fn(Integer)`.
 export type FunctionShape
 	export let paramTypes as MaxonTypeArray
 	export let returnType as MaxonReturnType
@@ -6169,11 +6173,11 @@ export type FunctionShape
 	end 'create'
 end 'FunctionShape'
 
-// Registry: FUNCTION-TYPEALIAS name -> its resolved shape. Built once by `TypeResolution.resolveTypes`
-// from `project.functionTypeAliases`, which stores the alias's declared types interner-free and
-// UNRESOLVED. A declared function or lifted closure needs no entry here — its resolved shape is already
-// `funcSignatures` + `funcReturnTypes`, which `resolveTypes` re-syncs — so only aliases are materialized,
-// and a program with none pays nothing.
+// Registry: FUNCTION-TYPEALIAS name -> its shape. Built by `TypeResolution.functionAliasShapesIn`,
+// in one `FunctionAliasShapeForm`, from `project.functionTypeAliases`, which stores the alias's
+// declared types interner-free and UNRESOLVED. A declared function or lifted closure needs no entry
+// here — its shape is already `funcSignatures` + `funcReturnTypes`, which `resolveTypes` re-syncs —
+// so only aliases are materialized, and a program with none pays nothing.
 export typealias FunctionShapeMap = Map with (ByteArray, FunctionShape)
 
 // --- Declared struct types ---

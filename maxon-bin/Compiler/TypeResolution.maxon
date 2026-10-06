@@ -18,7 +18,7 @@
 // invariant). The two hold the same declarations, folded from the same artifacts through the same
 // doors: `upsertDeclaredEnum` is the single write of BOTH enum registries and `createEnumRegistry`
 // seeds both, and the parser has ALREADY been deciding struct-ness from the index for every `named`
-// parameter and return type (`Parser.resolveNamedStruct`), so reading it here makes resolution agree
+// parameter and return type (`resolveNamedStruct`), so reading it here makes resolution agree
 // with the parser rather than merely with itself.
 //
 // A named type resolves through FOUR sources, in order:
@@ -293,7 +293,7 @@ export function maxonTypeOfStoredAliasReturn(alias FunctionTypeAlias, typeNames 
 end 'maxonTypeOfStoredAliasReturn'
 
 // ⭐ **THE PARAMETER TWIN OF THE RETURN DOOR ABOVE, AND THE PAIR IS THE POINT.** It holds the parameter
-// record's column list, which `resolveFunctionAliasShapes` below and `Parser.closureParamOfferAt` both
+// record's column list, which `functionAliasShapesIn` below and `Parser.closureParamOfferAt` both
 // rebuild through, so the parameter half cannot drift from the return half by one reader spelling the columns
 // differently.
 export function maxonTypeOfStoredAliasParam(param FunctionAliasParam, typeNames TypeNameInterner) returns MaxonType
@@ -365,7 +365,7 @@ module function resolveTypes(project Project, module MaxonModule)
 	end 'eachFunc'
 
 	checkStructFieldTypes(project, signatures: signatures)
-	resolveFunctionAliasShapes(project, signatures: signatures)
+	project.functionAliasShapes = functionAliasShapesIn(project, signatures: signatures, form: FunctionAliasShapeForm.resolved)
 end 'resolveTypes'
 
 // ⭐⭐ **THE DEFERRED NAME DIAGNOSTICS — UNUSED TYPEALIASES FIRST, HIDDEN TYPE NAMES SECOND.**
@@ -474,9 +474,14 @@ end 'reportedAtTheDeclaration'
 // ⭐ **THE FOURTH DECLARATION SITE — a FUNCTION TYPEALIAS's parameter and return types.** A
 // `typealias Scaler = function(v Real) returns Real` names two types the three sweeps above never reach:
 // the alias is not a function (so it has no `funcSignatures` entry to re-sync) and its types are stored
-// interner-free (so nothing rewrote them at merge). This resolves them into `project.functionAliasShapes`,
-// which is the form BOTH consumers need — the indirect call's argument widening and the function-type door
-// agreement both ask about the REPRESENTATION, and a `named` alias answers neither until it is erased.
+// interner-free (so nothing rewrote them at merge). The `resolved` form is what
+// `project.functionAliasShapes` holds, the form BOTH its consumers need — the indirect call's
+// argument widening and the function-type door agreement both ask about the REPRESENTATION, and a
+// `named` alias answers neither until it is erased.
+//
+// The `parsed` form is what a value merge compares. It matches `funcSignatures` before
+// `resolveTypes` re-syncs them — struct names re-tagged by `resolveNamedStruct`, a ranged alias or
+// a boxed union still `named` — because a merge compares nominally (see `FunctionShape`).
 //
 // ⚠ **IT RE-INTERNS THE STORED NAMES INTO `project.typeNames`** — the merged interner every id downstream of
 // this pass lives in — because the alias deliberately carries names rather than ids (see FunctionTypeAlias).
@@ -486,11 +491,9 @@ end 'reportedAtTheDeclaration'
 // ⚠ Unlike `checkStructFieldTypes` it VALIDATES NOTHING. An undeclared name in a function alias's signature
 // is already E3011 from the site that USES the alias (a parameter/field/return declared with it resolves
 // through `resolveNamedType` on the way in); reporting it a second time here would double every such
-// diagnostic. `resolveType`'s recovery answer for an unknown name is what lands in the shape, and the
-// pipeline's error gate stops the build before anything reads it.
-function resolveFunctionAliasShapes(project Project, signatures ProgramSignatures)
-	project.functionAliasShapes = FunctionShapeMap.create()
-
+// diagnostic. `resolveType`'s recovery answer for an unknown name is what lands in a resolved
+// shape, and the pipeline's error gate stops the build before anything reads it.
+function functionAliasShapesIn(project Project, signatures ProgramSignatures, form FunctionAliasShapeForm) returns FunctionShapeMap
 	// Keys out first, then the walk — `ConformanceCheck.checkGrantedEnumConformance` states why.
 	var names = ByteArrayArray.create()
 
@@ -498,15 +501,17 @@ function resolveFunctionAliasShapes(project Project, signatures ProgramSignature
 		names.push(name)
 	end 'eachDeclaredAlias'
 
+	var shapes = FunctionShapeMap.create()
+
 	for name in names 'eachAlias'
-		let alias = try project.functionTypeAliases.get(name) otherwise panic("resolveFunctionAliasShapes: '{String.from(name)}' was read out of the alias registry and is no longer in it")
-		var resolvedParams = MaxonTypeArray.create()
+		let alias = try project.functionTypeAliases.get(name) otherwise panic("functionAliasShapesIn: '{String.from(name)}' was read out of the alias registry and is no longer in it")
+		var params = MaxonTypeArray.create()
 		var preErasedNames = ByteArrayArray.create()
 
 		for param in alias.paramTypes 'eachParam'
 			// The reader is the alias's OWN declaring file — a function alias's signature is written there
 			// and nowhere else, so a name it spells means what that file means by it.
-			resolvedParams.push(resolveType(project, signatures: signatures, t: maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames), readerFilePath: alias.declFilePath))
+			params.push(functionAliasSlotIn(project, signatures: signatures, form: form, t: maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames), declFilePath: alias.declFilePath))
 
 			// ⚠ **READ, NOT DERIVED.** Deriving it here classifies one parameter a second time — the
 			// declared-function tier asks `Parser.aggregateNameOf` — and a per-instance ranged alias then
@@ -516,17 +521,81 @@ function resolveFunctionAliasShapes(project Project, signatures ProgramSignature
 			preErasedNames.push(param.aggregateName)
 		end 'eachParam'
 
-		project.functionAliasShapes.upsert(name, value: FunctionShape.create(resolvedParams, returnType: resolveReturnType(project, signatures: signatures, ret: maxonTypeOfStoredAliasReturn(alias, typeNames: project.typeNames), readerFilePath: alias.declFilePath), paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName))
-	end 'eachAlias'
-end 'resolveFunctionAliasShapes'
+		let returnType = match maxonTypeOfStoredAliasReturn(alias, typeNames: project.typeNames) 'storedReturn'
+			void gives MaxonReturnType.void
+			value(inner) gives MaxonReturnType.value(functionAliasSlotIn(project, signatures: signatures, form: form, t: inner, declFilePath: alias.declFilePath))
+		end 'storedReturn'
 
-// ⭐ **THE RESOLVED SHAPE OF THE FUNCTION TYPE A GOVERNING NAME DENOTES — THE ONE LOOKUP.** A function value
+		shapes.upsert(name, value: FunctionShape.create(params, returnType: returnType, paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName))
+	end 'eachAlias'
+
+	return shapes
+end 'functionAliasShapesIn'
+
+enum FunctionAliasShapeForm
+	parsed
+	resolved
+end 'FunctionAliasShapeForm'
+
+function functionAliasSlotIn(project Project, signatures ProgramSignatures, form FunctionAliasShapeForm, t MaxonType, declFilePath FilePath) returns MaxonType
+	return match form 'form'
+		parsed gives resolveNamedStruct(t, typeNames: project.typeNames, signatures: signatures, scopeFilePath: declFilePath)
+		resolved gives resolveType(project, signatures: signatures, t: t, readerFilePath: declFilePath)
+	end 'form'
+end 'functionAliasSlotIn'
+
+// ⭐ **RESOLVE A `named` STRUCT REFERENCE TO `structRef` — the parse-time half of what `resolveTypes`
+// does to a signature.** `parseTypeReference` mints `structRef` SYNTACTICALLY for `Self` and the
+// enclosing type's own name (they need no registry), but leaves every OTHER type name `named`,
+// because it runs in the tolerant declaration sweep too — where "is `Vec2` a struct?" has no answer.
+// Every caller hands this a COMPLETE whole-program index — the real parse's or the merged
+// project's, never the sweep's — so it CAN ask, and it re-tags a `named` that denotes a declared
+// `type` as `structRef` — which is what makes a struct PARAMETER (`a Vec2`) a struct base for
+// `a.x`, a struct RETURN (`returns Pair`) agree with the `structRef` a factory hands back, and a
+// struct CALL RESULT (`let p = makePair()`) bind a struct.
+//
+// A `named` that denotes a UNION/ENUM stays `named` — a union value carries the `named` tag
+// (`enumMatchFor` reads it) — and a ranged int ALIAS stays `named` (it IS the integer). `structRef`
+// (a `Self`/own-name reference) and every non-`named` type pass through untouched, so this is
+// idempotent and safe to fold over an already-partly-resolved list. `resolveTypes`'s `structRef` arm
+// then finds the signature already resolved and leaves it, so the two cannot drift.
+//
+// The `containsStruct` guard, not `structOf`, for the reason its header states: this is asked of
+// EVERY `named` parameter and return type, most of them int aliases, and `structOf` would box a
+// throwaway `DeclaredStruct.undeclared` for each.
+// ⚠⚠ **`scopeFilePath` IS THE FILE THAT DECLARED THE *SLOT*, WHICH IS NOT ALWAYS THE FILE BEING
+// PARSED.** A parameter list, a field and a `sizeof` operand are slots of the file being parsed, so
+// those callers pass its path; a CALLEE'S RETURN TYPE is a slot of the file that declared the
+// CALLEE, and an OVERLOAD CANDIDATE'S PARAMETER a slot of the file that declared the candidate.
+// Passing the parsed file's path for those two is a wrong answer wherever a name means two things:
+// a struct return read as an int (a false E3005), or an int dereferenced as a record at run time.
+// `ProgramSignatures.funcReturnDeclFiles`' header states the rule this parameter carries: *"the scope
+// file is the SLOT's declaring file and never a reader's."*
+module function resolveNamedStruct(t MaxonType, typeNames TypeNameInterner, signatures ProgramSignatures, scopeFilePath FilePath) returns MaxonType
+	if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
+		return t
+	end 'notNamed'
+
+	let id = typeNameIdOf(t)
+
+	if not signatures.containsStructFor(try typeNames.nameOf(id) otherwise panic("resolveNamedStruct: a `named` type's id {id} is not in the interner it was minted from"), readerFilePath: scopeFilePath) 'notAStructHere'
+		return t
+	end 'notAStructHere'
+
+	return MaxonType.structRef(id)
+end 'resolveNamedStruct'
+
+module function parsedFunctionTypeRegistryOf(project Project, signatures ProgramSignatures) returns FunctionTypeRegistry
+	return FunctionTypeRegistry.create(project.funcSignatures, funcReturnTypes: project.funcReturnTypes, aliasShapes: functionAliasShapesIn(project, signatures: signatures, form: FunctionAliasShapeForm.parsed), typeNames: project.typeNames)
+end 'parsedFunctionTypeRegistryOf'
+
+// ⭐ **THE SHAPE OF THE FUNCTION TYPE A GOVERNING NAME DENOTES — THE ONE LOOKUP.** A function value
 // carries its type as `MaxonType.function(id)`, whose id names either the FUNCTION it refers to (a
-// `functionRef`, or a lifted closure) or the function TYPEALIAS a declared place was written with — and
-// "the declared type is authoritative" means those two must reach one answer through one door. A declared
-// function's resolved shape already exists as `funcSignatures` + `funcReturnTypes` (`resolveTypes` re-synced
-// both), so it is assembled on demand rather than duplicated into a third registry; an alias's was
-// materialized by `resolveFunctionAliasShapes` because nothing else holds it.
+// `functionRef`, or a lifted closure) or the function TYPEALIAS a declared place was written with —
+// and "the declared type is authoritative" means those two must reach one answer through one door.
+// A declared function's shape already exists as `funcSignatures` + `funcReturnTypes` (resolved once
+// `resolveTypes` re-syncs both), so it is assembled on demand rather than duplicated into a third
+// registry; an alias's is materialized by `functionAliasShapesIn` because nothing else holds it.
 //
 // The two registries are DISJOINT by construction — `Parser.requireUnreservedName`/`checkTypeSymbolNamespace`
 // keep a type name and a function name from colliding — so the order they are tried in cannot matter.
@@ -564,9 +633,8 @@ end 'functionTypeRegistryOf'
 //
 // It is deliberately NOT `typesAgree`, and the difference is the whole rule: `typesAgree` puts `int` and
 // `float` in one class (`5 + 2.0` must compile), so it would accept `fn(Real) returns Integer` standing in
-// for `fn(Real) returns Real` — the very silent wrong answer this exists to close. Nor is it the NOMINAL
-// display comparison `checkValueMergeSignatures` makes; see FunctionShape for why a door and a merge ask
-// different questions and get different rules.
+// for `fn(Real) returns Real` — the very silent wrong answer this exists to close. A value merge
+// asks it too, of parse-time shapes; FunctionShape states why a door and a merge get different rules.
 export function functionShapesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, readerFilePath FilePath) returns bool
 	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: sharedEmptyFunctionTypePairs, readerFilePath: readerFilePath)
 end 'functionShapesAgree'
@@ -596,7 +664,7 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSigna
 		//
 		// ⚠ **A CONJUNCTION WITH THE TAG RULE RATHER THAN A REPLACEMENT FOR IT, AND THAT IS SAFE BECAUSE THE TWO
 		// ARE DISJOINT BY CONSTRUCTION.** The identity-first/tag-second shape `TypeRules.columnValueMatches` is
-		// written in is the same rule stated for a caller holding ONE side's live type; here both sides are already RESOLVED, so every tag whose identity survives resolution
+		// written in is the same rule stated for a caller holding ONE side's live type; for a door both sides are already RESOLVED, so every tag whose identity survives resolution
 		// (`structRef`, `interfaceRef`, `genericInstance`, `typeParameter`) is compared by id above while carrying
 		// an EMPTY column, and every tag whose identity does not survive arrives as bare `integer` with nothing
 		// for the tag rule to say. At most one of the two halves is informative about a position, so asking both
@@ -698,10 +766,10 @@ function returnedValueType(ret MaxonReturnType) returns MaxonType
 	end 'r'
 end 'returnedValueType'
 
-// Two POST-RESOLUTION types are the same type: the same tag, and — for the tags that still carry an
-// identity after resolution — the same id. Both sides' ids live in `project.typeNames` (a signature's were
-// remapped project-global at merge, an alias shape's were interned there by `resolveFunctionAliasShapes`),
-// so the ids are directly comparable.
+// Two types in one registry's form — both resolved, or both parse-time — are the same type: the
+// same tag, and — for the tags that still carry an identity in that form — the same id. Both sides'
+// ids live in `project.typeNames` (a signature's were remapped project-global at merge, an alias
+// shape's were interned there by `functionAliasShapesIn`), so the ids are directly comparable.
 //
 // Which tags carry an identity is stated as an exhaustive match rather than a list of "interesting" ones,
 // so a tag added to `ValueTypeTag` cannot default into "compare the tag only" and silently let two distinct
@@ -742,8 +810,8 @@ function resolvedTypesMatch(registry FunctionTypeRegistry, signatures ProgramSig
 		character gives false
 
 		// A `named` type and a struct are NOMINAL — two of them share a tag and are still different types.
-		// (`named` should not survive resolution, which erases a ranged alias and a boxed union to
-		// `integer`; comparing its id costs nothing and is the correct answer if one does.)
+		// In a parse-time shape a ranged alias or a boxed union is still `named`, and its id is what
+		// keeps a value merge nominal.
 		named gives true
 		structRef gives true
 
@@ -1255,7 +1323,7 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// throwaway `DeclaredStruct.undeclared` for the COMMON no answer. Resolution answers WHICH TYPE
 	// this name is, and the answer is the id the reference already carries. The fields are the
 	// parser's question, asked of the signature index at the use site.
-	if signatures.containsStructInAnyFile(name) and not signatures.aliasShadowsNominalFor(name, readerFilePath: readerFilePath) 'isStruct'
+	if signatures.containsStructFor(name, readerFilePath: readerFilePath) 'isStruct'
 		return MaxonType.structRef(id)
 	end 'isStruct'
 

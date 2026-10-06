@@ -2505,18 +2505,26 @@ end 'fileRowSetAnswersMoved'
 // Called once per compile from `compileToCodeResult`, deliberately not inside the memoized
 // `queryAllModule`, so a warm rebuild re-reports.
 export function checkValueMergeSignatures(project Project)
+	if project.pendingFnMergeChecks.count() == 0 'nothingToCheck'
+		return
+	end 'nothingToCheck'
+
+	// Built here, not read from `project.functionAliasShapes`: `resolveTypes` fills that after this
+	// runs, so a cold compile finds it empty and a retained project finds the previous compile's.
+	let registry = parsedFunctionTypeRegistryOf(project, signatures: programSignaturesIn(project, asker: "checkValueMergeSignatures"))
+
 	// Index loop, not `for … in`: the element is a BORROW of `project`, and the call below is recorded
 	// as writing that same storage. See `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for checkIndex in 0 upto project.pendingFnMergeChecks.count() 'eachCheck'
-		checkOneValueMergeSignature(project, check: try project.pendingFnMergeChecks.get(checkIndex) otherwise panic("checkValueMergeSignatures: checkIndex {checkIndex} is below project.pendingFnMergeChecks.count()"))
+		checkOneValueMergeSignature(project, registry: registry, check: try project.pendingFnMergeChecks.get(checkIndex) otherwise panic("checkValueMergeSignatures: checkIndex {checkIndex} is below project.pendingFnMergeChecks.count()"))
 	end 'eachCheck'
 end 'checkValueMergeSignatures'
 
-// Compares the FIRST arm's fn-type display against every other arm's, reporting the first mismatch.
+// Compares the FIRST arm's fn-type shape against every other arm's, reporting the first mismatch.
 // An arm whose governing name is not a declared function/closure — a function-typed parameter,
 // field, or call result, whose full type the compiler does not carry on the value — cannot be compared and
 // is REJECTED rather than silently accepted.
-function checkOneValueMergeSignature(project Project, check PendingFnMergeCheck)
+function checkOneValueMergeSignature(project Project, registry FunctionTypeRegistry, check PendingFnMergeCheck)
 	let firstName = try check.armNames.get(0) otherwise panic("checkOneValueMergeSignature: a recorded function-value merge has no arms")
 
 	if not armFnTypeResolvable(project, name: firstName) 'firstUnverifiable'
@@ -2535,7 +2543,7 @@ function checkOneValueMergeSignature(project Project, check PendingFnMergeCheck)
 		end 'otherUnverifiable'
 
 		// A FUNCTION TYPEALIAS IS ITS OWN TYPE, so two BRANDS of one shape do not merge. Asked ahead of the
-		// display comparison, which is a SHAPE question and calls `Handler` and `Callback` equal; the sentence
+		// shape comparison, which calls `Handler` and `Callback` equal; the sentence
 		// names the two aliases, because the shapes it would otherwise print are identical.
 		if programSignaturesIn(project, asker: "checkOneValueMergeSignature").functionBrandsConflict(firstName, gotName: otherName) 'twoBrandsOfOneShape'
 			reportParseError(project, path: check.filePath, error: valueMergeMismatchError(check.isTernary, expectedDisplay: String.from(firstName), gotDisplay: String.from(otherName), line: check.line, column: check.column))
@@ -2544,7 +2552,7 @@ function checkOneValueMergeSignature(project Project, check PendingFnMergeCheck)
 
 		let otherDisplay = armFnTypeDisplay(project, name: otherName)
 
-		if not armFnShapesAgree(project, first: firstName, other: otherName, readerFilePath: check.filePath) 'mismatch'
+		if not armFnShapesAgree(project, registry: registry, first: firstName, other: otherName, readerFilePath: check.filePath) 'mismatch'
 			// The construct→E2028/E3005 noun is decided by the ONE shared mapping
 			// (`valueMergeMismatchError`), the same the parse-time give-type mismatch (#80) uses — so a
 			// whole-program function-signature mismatch and a parse-time give mismatch read identically for
@@ -2556,12 +2564,12 @@ function checkOneValueMergeSignature(project Project, check PendingFnMergeCheck)
 	end 'eachArm'
 end 'checkOneValueMergeSignature'
 
-// Agreement is decided on the RESOLVED shapes, never on the two captions. A caption is a rendering:
-// `armFnTypeDisplay` spells a `named` slot by its interned name (`Integer`) where `formatFunctionShapeDisplay`
-// spells the class word (`int`), so two different types can render alike and two renderings of one type can
-// differ. Comparing captions refuses a merge that is legal and accepts one that is not.
-function armFnShapesAgree(project Project, first ByteArray, other ByteArray, readerFilePath FilePath) returns bool
-	let registry = functionTypeRegistryOf(project)
+// Agreement is decided on the parse-time shapes, never on the two captions. A caption is a
+// rendering: `armFnTypeDisplay` spells a `named` slot by its interned name (`Integer`) where
+// `formatFunctionShapeDisplay` spells the class word (`int`), so two different types can render
+// alike and two renderings of one type can differ. Comparing captions refuses a merge that is legal
+// and accepts one that is not.
+function armFnShapesAgree(project Project, registry FunctionTypeRegistry, first ByteArray, other ByteArray, readerFilePath FilePath) returns bool
 	return functionShapesAgree(registry, signatures: programSignaturesIn(project, asker: "armFnShapesAgree"), declared: requireFunctionShapeOf(registry, name: first, side: "first arm"), got: requireFunctionShapeOf(registry, name: other, side: "arriving arm"), readerFilePath: readerFilePath)
 end 'armFnShapesAgree'
 
