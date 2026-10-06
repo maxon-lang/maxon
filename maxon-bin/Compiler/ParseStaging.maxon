@@ -1293,57 +1293,44 @@ end 'ownedBlames'
 //   4. commit the artifact's registry contributions into `Project` — all but its type-name
 //      declarations, which `commitTypeNameDeclsInPathOrder` commits once every file has merged.
 // `target` is the accumulator module `queryAllModule` builds (and caches); the
-// registries land on `Project`. This is the ONLY writer of `project.typeNames` and
-// `project.opRanges`, and it needs no rollback because nothing is ever written to
-// `Project` speculatively.
+// registries land on `Project`.
 export function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact, signatures ProgramSignatures)
 	signatures.beginMerge()
 	renumberArtifact(project, artifact: artifact, signatures: signatures)
 
-	// `IrModule.merge` relocates the artifact's ops to `target.ops.count()` and up,
-	// so the spans must land at exactly that offset in `project.opRanges` to stay
-	// parallel. Both accumulate by appending in the same source-path order, so the
-	// offsets agree by construction — assert it rather than trust it, because a
-	// silent drift here misattributes every later op's diagnostics by a constant.
 	let opOffset = target.ops.count()
 
+	// A drift here misattributes every later op's diagnostics by a constant, silently.
 	if project.opRanges.count() != opOffset 'spansOutOfStep'
 		panic("mergeArtifact: project.opRanges holds {project.opRanges.count()} spans but the merged module holds {opOffset} ops — the span table drifted out of lockstep with the op array")
 	end 'spansOutOfStep'
 
-	// ⛔⛔ **THE SAME CHECK FOR THE SIDE TABLES A COUNT CANNOT CATCH.** `opRanges` is an ARRAY, so a missed
-	// reset shows up as the drift above; the op-KEYED tables below are maps and arrays nothing indexes
-	// positionally, so a missed reset is silent — the stale key simply names a different op in the next
-	// round's module and carries the previous round's payload with it. Asked ONCE per round, at the first file, which is O(1) and is
-	// where the answer is knowable: a round begins with every one of them emptied or with none of them.
-	if opOffset == 0 'theFirstFileOfARound'
-		requireOpKeyedTableIsEmpty("moduleVarAccessSites", held: project.moduleVarAccessSites.count())
-		requireOpKeyedTableIsEmpty("synthesizedOpFiles", held: project.synthesizedOpFiles.count())
-		requireOpKeyedTableIsEmpty("registryUseSites", held: project.registryUseSites.count())
-		requireOpKeyedTableIsEmpty("serviceAwaitSites", held: project.serviceAwaitSites.count())
-		requireOpKeyedTableIsEmpty("asyncSpawnSites", held: project.asyncSpawnSites.count())
-		requireOpKeyedTableIsEmpty("allocTagSites", held: project.allocTagSites.count())
-		requireOpKeyedTableIsEmpty("debugStreamNameSites", held: project.debugStreamNameSites.count())
-		requireOpKeyedTableIsEmpty("immortalConstArraySites", held: project.immortalConstArraySites.count())
-		requireOpKeyedTableIsEmpty("valueOrigins", held: project.valueOrigins.count())
-		requireOpKeyedTableIsEmpty("deferralSources", held: project.deferralSources.count())
-		requireOpKeyedTableIsEmpty("refusedOverloadCalls", held: project.refusedOverloadCalls.count())
-	end 'theFirstFileOfARound'
-
-	// The function offset for the ValueOrigin fold: `IrModule.merge` appends the
-	// artifact's functions after the existing ones, so its k-th function lands at
-	// `funcOffset + k`. Captured BEFORE the merge, mirroring `opOffset`.
 	let funcOffset = target.funcCount()
 
 	target.merge(artifact.module)
 	project.opRanges.appendFrom(artifact.opRanges)
-	commitCovPoints(project, artifact: artifact)
-	commitParserDiagnosticSites(project, artifact: artifact, opOffset: opOffset)
-	commitAllocTagSites(project, artifact: artifact, opOffset: opOffset)
-	commitDebugStreamNameSites(project, artifact: artifact, opOffset: opOffset)
-	commitImmortalConstArraySites(project, artifact: artifact, opOffset: opOffset)
 	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
 	project.deferralSources.appendFrom(artifact.deferralSources, funcOffset: funcOffset)
+	commitArtifactRegistries(project, artifact: artifact, opOffset: opOffset, funcOffset: funcOffset, signatures: signatures)
+end 'mergeArtifact'
+
+// The registries are rebuilt by running a kept file's commits again rather than restored from a
+// checkpoint: a parse needs the index at its baseline (`ProgramSignatures.openParseBand`), so the
+// index cannot be held mid-merge, and the same commits over the same files keep first-wins and push
+// order exactly a full merge's.
+module function replayMergedArtifact(project Project, artifact FileParseArtifact, before MergeMark, signatures ProgramSignatures)
+	signatures.beginMerge()
+
+	if not adoptedInstanceIds(artifact, signatures: signatures).equals(artifact.instanceIdsInUse) 'adoptionMoved'
+		panic("replayMergedArtifact: the index adopted the mints of {artifact.filePath.toString()} under other ids than the merge that placed its ops gave them — the kept ops would name instances the index no longer holds")
+	end 'adoptionMoved'
+
+	commitArtifactRegistries(project, artifact: artifact, opOffset: before.opCount, funcOffset: before.funcCount, signatures: signatures)
+end 'replayMergedArtifact'
+
+function commitArtifactRegistries(project Project, artifact FileParseArtifact, opOffset ElementIndex, funcOffset ElementIndex, signatures ProgramSignatures)
+	commitCovPoints(project, artifact: artifact)
+	commitOpKeyedSites(project, artifact: artifact, opOffset: opOffset)
 	commitFuncSignatures(project, artifact: artifact)
 	commitOverloadSets(project, artifact: artifact)
 	commitPendingFnMergeChecks(project, artifact: artifact)
@@ -1362,7 +1349,65 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitDeferredNameDiagnostics(project, artifact: artifact)
 	commitDeferredParseErrors(project, artifact: artifact, funcOffset: funcOffset)
 	commitWrittenGenericAliasNames(project, artifact: artifact, signatures: signatures)
-end 'mergeArtifact'
+end 'commitArtifactRegistries'
+
+// Every `Project` table keyed by an op index into the merged module. One missing here escapes
+// `FoldLedger.requireTablesHeld`, and a stale key in it names a different op with nothing to
+// notice.
+module enum OpKeyedTable
+	moduleVarAccessSites
+	synthesizedOpFiles
+	registryUseSites
+	serviceAwaitSites
+	asyncSpawnSites
+	allocTagSites
+	debugStreamNameSites
+	immortalConstArraySites
+	valueOrigins
+	deferralSources
+	refusedOverloadCalls
+end 'OpKeyedTable'
+
+module typealias OpKeyedTableArray = Array with OpKeyedTable
+
+module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
+	return match table 'whichTable'
+		moduleVarAccessSites gives project.moduleVarAccessSites.count()
+		synthesizedOpFiles gives project.synthesizedOpFiles.count()
+		registryUseSites gives project.registryUseSites.count()
+		serviceAwaitSites gives project.serviceAwaitSites.count()
+		asyncSpawnSites gives project.asyncSpawnSites.count()
+		allocTagSites gives project.allocTagSites.count()
+		debugStreamNameSites gives project.debugStreamNameSites.count()
+		immortalConstArraySites gives project.immortalConstArraySites.count()
+		valueOrigins gives project.valueOrigins.count()
+		deferralSources gives project.deferralSources.count()
+		refusedOverloadCalls gives project.refusedOverloadCalls.count()
+	end 'whichTable'
+end 'heldBy'
+
+module type MergeMark
+	module let opCount as ElementIndex
+	let blockCount as ElementIndex
+	module let funcCount as ElementIndex
+	let valueOrigins as ValueOriginMark
+	let deferralSources as ElementIndex
+
+	module static function empty() returns MergeMark
+		return Self{opCount: 0, blockCount: 0, funcCount: 0, valueOrigins: ValueOriginMark.create(0, params: 0, derived: 0), deferralSources: 0}
+	end 'empty'
+
+	module static function of(project Project, target MaxonModule) returns MergeMark
+		return Self{opCount: target.ops.count(), blockCount: target.blocks.count(), funcCount: target.funcCount(), valueOrigins: project.valueOrigins.mark(), deferralSources: project.deferralSources.count()}
+	end 'of'
+
+	module function rollBack(project Project, target MaxonModule)
+		target.truncateTo(self.opCount, blockCount: self.blockCount, functionCount: self.funcCount)
+		project.opRanges.truncate(self.opCount)
+		project.valueOrigins.truncate(self.valueOrigins)
+		project.deferralSources.truncate(self.deferralSources)
+	end 'rollBack'
+end 'MergeMark'
 
 // ⭐⭐ **COUNT AT MERGE, INDEX AT LOWERING** — the two halves of a coverage point's identity, split here
 // because neither end can hold both. The parse is per-file and memoized, so it can only number within its
@@ -1920,15 +1965,16 @@ function commitFunctionTypeAliases(project Project, artifact FileParseArtifact, 
 	end 'each'
 end 'commitFunctionTypeAliases'
 
-// ⭐⭐ **MAKE EVERY TYPE ID THIS ARTIFACT HOLDS THE MERGED PROGRAM'S — NAMES ONCE, INSTANCES ON EVERY MERGE.**
+// ⭐⭐ **MAKE EVERY TYPE ID THIS ARTIFACT HOLDS THE MERGED PROGRAM'S — NAMES ONCE, INSTANCES ON EVERY FOLD.**
 //
 // NAMES are this file's own interner's, folded into `project.typeNames` the first time the artifact is merged:
 // `typeIdsAreProjectGlobal` says it happened, and it stays true because `Queries.resetMergeTargets` never resets
 // that interner.
 //
-// INSTANCES are the rows this file's parse minted, re-adopted by every merge: the index is restored to its
+// INSTANCES are the rows this file's parse minted, re-adopted by every fold: the index is restored to its
 // baseline before each fold, and after an edit elsewhere it is a different index altogether, so a row's id is
-// whatever THIS merge's file order gives it.
+// whatever THIS merge's file order gives it. A file a fold keeps is re-adopted by
+// `replayMergedArtifact`, which must land on the ids its merged ops already carry.
 //
 // ⚠ **A RENUMBERING IS APPLIED IN PLACE, AND ONE RECORD CAN BE REACHED TWICE** (a binding filed in several
 // places), so a renumbering must not move an id it already moved. An instance renumbering is safe when no id it
@@ -2384,72 +2430,32 @@ function commitPendingFunctionTypeDoors(project Project, artifact FileParseArtif
 	end 'each'
 end 'commitPendingFunctionTypeDoors'
 
-// The one sentence the op-keyed tables share, written once so another cannot be added with a
-// differently-worded net that says less. `held` is the table's own count at the first file of a round.
-function requireOpKeyedTableIsEmpty(name String, held ElementIndex)
-	if held != 0 'carriedOver'
-		panic("mergeArtifact: `project.{name}` still holds {held} entries at the first file of a fold round — it is keyed by an OP INDEX into the module being rebuilt, and this round's module starts empty, so every one of those keys now names a different op. Add it to `Queries.resetMergeTargets` beside the other op-keyed tables")
-	end 'carriedOver'
-end 'requireOpKeyedTableIsEmpty'
-
-// Fold this file's FOUR diagnostic side tables — the spawn texts E3073 quotes, the service awaits
-// E3139 seeds its graph from, the module accesses E3143 refuses and the registry uses E3173 refuses
-// — onto the whole-program tables, RE-KEYED by the merge's op offset. That is the same relocation
-// `opRanges` gets by appending in order, spelled out here because a map cannot express it by
-// position; without the offset every file after the first would name the wrong op.
-function commitParserDiagnosticSites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
-	for (opIndex, awaitSite) in artifact.serviceAwaitSites 'eachServiceAwait'
-		project.serviceAwaitSites.upsert(opIndex + opOffset, value: awaitSite)
-	end 'eachServiceAwait'
-
-	for (opIndex, accessSite) in artifact.moduleVarAccessSites 'eachModuleVarAccess'
-		project.moduleVarAccessSites.upsert(opIndex + opOffset, value: accessSite)
-	end 'eachModuleVarAccess'
+// ⚠ The debug-stream names are NOT interned here. The order names take their INDICES in must be the
+// LOWERING's, which walks the merged module once; interning here would give them the merge's file order
+// instead, and the two are the same only while every file is merged before any is lowered — a property of
+// today's pipeline, not a rule.
+function commitOpKeyedSites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
+	project.serviceAwaitSites.upsertRelocated(artifact.serviceAwaitSites, offset: opOffset)
+	project.moduleVarAccessSites.upsertRelocated(artifact.moduleVarAccessSites, offset: opOffset)
 
 	match artifact.registryUseSites 'registryUses'
 		unwritten then break 'registryUses'
-		entries(byOp) then commitRegistryUseSites(project, byOp: byOp, opOffset: opOffset)
+		entries(byOp) then project.registryUseSites.upsertRelocated(byOp, offset: opOffset)
 	end 'registryUses'
 
-	for (opIndex, site) in artifact.asyncSpawnSites 'each'
-		project.asyncSpawnSites.upsert(opIndex + opOffset, value: site)
-	end 'each'
-end 'commitParserDiagnosticSites'
+	project.asyncSpawnSites.upsertRelocated(artifact.asyncSpawnSites, offset: opOffset)
+	project.allocTagSites.upsertRelocated(artifact.allocTagSites, offset: opOffset)
+	project.debugStreamNameSites.upsertRelocated(artifact.debugStreamNameSites, offset: opOffset)
+	project.immortalConstArraySites.upsertRelocated(artifact.immortalConstArraySites, offset: opOffset)
+end 'commitOpKeyedSites'
 
-function commitRegistryUseSites(project Project, byOp RegistryUseSiteMap, opOffset ElementIndex)
-	for (opIndex, registryUse) in byOp 'eachRegistryUse'
-		project.registryUseSites.upsert(opIndex + opOffset, value: registryUse)
-	end 'eachRegistryUse'
-end 'commitRegistryUseSites'
-
-// Fold this file's mm-trace alloc tags onto the whole-program table, RE-KEYED by the merge's op offset —
-// `commitParserDiagnosticSites`' twin, for its stated reason: without the offset every file after the first would
-// tag the wrong allocation.
-function commitAllocTagSites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
-	for (opIndex, tag) in artifact.allocTagSites 'each'
-		project.allocTagSites.upsert(opIndex + opOffset, value: tag)
-	end 'each'
-end 'commitAllocTagSites'
-
-// Fold this file's `__DebugStream.nameId` names onto the whole-program table, RE-KEYED by the merge's op
-// offset — `commitAllocTagSites`' twin, for its stated reason.
-//
-// ⚠ It does NOT intern anything. The order names take their INDICES in must be the LOWERING's, which walks
-// the merged module once; interning here would give them the merge's file order instead, and the two are the
-// same only while every file is merged before any is lowered — a property of today's pipeline, not a rule.
-function commitDebugStreamNameSites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
-	for (opIndex, name) in artifact.debugStreamNameSites 'each'
-		project.debugStreamNameSites.upsert(opIndex + opOffset, value: name)
-	end 'each'
-end 'commitDebugStreamNameSites'
-
-// Fold this file's immortal-record `constArrayLiteral` sites onto the whole-program table, RE-KEYED by the
-// merge's op offset — `commitDebugStreamNameSites`' twin, for its stated reason.
-function commitImmortalConstArraySites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
-	for (opIndex, kind) in artifact.immortalConstArraySites 'each'
-		project.immortalConstArraySites.upsert(opIndex + opOffset, value: kind)
-	end 'each'
-end 'commitImmortalConstArraySites'
+extension Map
+	function upsertRelocated(source Self, offset Key)
+		for (key, value) in source 'eachSite'
+			self.upsert(key + offset, value: value)
+		end 'eachSite'
+	end 'upsertRelocated'
+end 'Map'
 
 // Append this file's recorded discarded-result sites to the whole-program list — the twin of the door and
 // transform commits above, and dedup-free for their reason: each entry is a distinct SITE with its own position.

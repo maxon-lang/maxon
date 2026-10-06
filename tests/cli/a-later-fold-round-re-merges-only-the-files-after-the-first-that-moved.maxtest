@@ -1,0 +1,77 @@
+let ReMergeCaseDirName = "fold-round-re-merge"
+
+let ReMergeLogFlag = "--log=compiler:debug"
+
+let MergeLinePrefix = "[CMP] DEBUG: merge: "
+let FoldsThenReMergedWords = " fold(s), "
+let ReMergedOfWord = " of "
+let ReMergedSuffix = " file(s) re-merged"
+
+let CountsFollowTheFolds = 1
+let MergedCountPart = 0
+let TotalCountPart = 1
+let FirstRoundIndex = 0
+let MinimumFoldRounds = 2
+
+let ReMergeMainFileName = "main.maxon"
+let ReMergeMainSource = "function main() returns ExitCode\n\tlet url = try URL.parse(\"http://example.com:8080/a/b?q=1\") otherwise return 1\n\n\treturn 0 if url.scheme() == \"http\" else 2\nend 'main'\n"
+
+function reMergedCountsOf(line String) returns (ReportedTally, ReportedTally) throws ReportReadingError
+	if not line.endsWith(ReMergedSuffix) 'statesNoReMerge'
+		throw ReportReadingError.statesNoCount
+	end 'statesNoReMerge'
+
+	let counts = try line.split(FoldsThenReMergedWords).get(CountsFollowTheFolds) otherwise throw ReportReadingError.statesNoCount
+	let parts = counts.split(ReMergedOfWord)
+	let merged = try parts.get(MergedCountPart) otherwise throw ReportReadingError.statesNoCount
+	let total = try parts.get(TotalCountPart) otherwise throw ReportReadingError.statesNoCount
+
+	return (try reportedTally(merged), try reportedTally(total))
+end 'reMergedCountsOf'
+
+test 'a later fold round re-merges only the files after the first that moved'
+	requireHeldOutsideCheckout(ReMergeCaseDirName, check: LaterRoundsReMergeASuffix.create())
+end 'a later fold round re-merges only the files after the first that moved'
+
+type LaterRoundsReMergeASuffix implements OutsideCheckoutCase
+	static function create() returns LaterRoundsReMergeASuffix
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		writeStagedFile(dir.join(ReMergeMainFileName), content: ReMergeMainSource)
+
+		let built = runDriver([BuildCommandWord, ReMergeMainFileName, ReMergeLogFlag], workingDirectory: dir)
+		let said = "It wrote to stderr: {built.stderr}"
+
+		try Expect.equal(built.exitCode(), expected: 0, message: "a program calling `URL.parse` did not build under {ReMergeLogFlag}. {said}")
+
+		let lines = linesOpeningIn(built.stderr, prefix: MergeLinePrefix)
+		var seenLines = ""
+
+		for line in lines 'eachSeen'
+			seenLines.append("\n{line}")
+		end 'eachSeen'
+
+		try Expect.isTrue(lines.count() >= MinimumFoldRounds, message: "{ReMergeLogFlag} printed {lines.count()} line(s) starting `{MergeLinePrefix}`, and `URL.parse` reaches bodies in other stdlib files, so the body-demand fixpoint folds the front end at least {MinimumFoldRounds} times and the gate has nothing to read. {said}")
+
+		var notPartial = ""
+
+		for (iter, line) in lines.withIterator() 'eachRound'
+			if iter.index() == FirstRoundIndex 'theFirstRound'
+				continue
+			end 'theFirstRound'
+
+			let (merged, total) = try reMergedCountsOf(line) otherwise 'statesNoReMerge'
+				notPartial.append("\n{line}")
+				continue
+			end 'statesNoReMerge'
+
+			if merged >= total 'reMergedEveryFile'
+				notPartial.append("\n{line}")
+			end 'reMergedEveryFile'
+		end 'eachRound'
+
+		try Expect.isTrue(notPartial.isEmpty(), message: "these fold rounds after the first did not report re-merging fewer than every file:{notPartial}\nThe merge lines seen:{seenLines}")
+	end 'requireHeldIn'
+end 'LaterRoundsReMergeASuffix'

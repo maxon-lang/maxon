@@ -719,10 +719,16 @@ maxon build app.maxon --log=compiler:debug   # per-phase time and memory as a ta
 maxon build app.maxon --log=error            # only errors
 ```
 
-**The type-name table.** `--log=compiler:debug` also prints one line per source file per fold round —
+**The type-name table.** `--log=compiler:debug` also prints one line for each source file a fold merges —
 `typeNames <path>: <N> names, <B> bytes, reserved <RN> names / <RB> bytes, rehashes <H>, regrowths <G>` —
 the names that file interned and the arena bytes they occupy, what its table reserved ahead of them, and
-how many times the table rehashed or had to grow.
+how many times the table rehashed or had to grow. A compile's first fold merges every file; a later fold
+merges only the files from the first one whose parse changed, so a file can report more than once.
+
+**The merge.** The front end folds every file's parse into one module, and folds again each time that
+module reaches a standard-library body the round before left unbuilt. Each of those rounds prints
+`merge: <K> fold(s), <R> of <N> file(s) re-merged` — the folds the round took, and how many of the
+program's `N` files its last fold merged; it kept the other `N − R` from the fold before.
 
 **The shared library memo.** A process that compiles many programs — a `spec-test` worker, the MCP
 server, the language server — keeps each library file's tokens and parse across compiles, and

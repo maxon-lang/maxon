@@ -5,16 +5,13 @@ let WarmRecheckBufferFileName = "b.maxon"
 let WarmRecheckDeclaringSource = "module typealias Percent = int(0 to 100)\n\nmodule function clamp(x Percent) returns Percent\n\treturn x\nend 'clamp'\n"
 let WarmRecheckCleanSource = "function main() returns ExitCode\n\treturn clamp(1)\nend 'main'\n"
 let WarmRecheckBrokenSource = "function main() returns ExitCode\n\treturn clamp(101)\nend 'main'\n"
-let WarmRecheckEditedVersion = 2 as DocumentVersion
 
 test 'a warm recheck after an unsaved edit publishes what a cold check of the saved text does'
 	let warmRoot = stagedProjectDiagnosticsRoot(WarmRecheckDirName)
 	writeCorpusFile(warmRoot, fileName: WarmRecheckDeclaringFileName, content: WarmRecheckDeclaringSource)
 	writeCorpusFile(warmRoot, fileName: WarmRecheckBufferFileName, content: WarmRecheckCleanSource)
 
-	var client = LspClient.start()
-	let warm = collectWarmRecheck(client, root: warmRoot)
-	client.release()
+	let warm = probeProjectCheckAcrossAnEdit(warmRoot, fileName: WarmRecheckBufferFileName, content: WarmRecheckCleanSource, diskEdits: CorpusDiskEditArray.create(), editedContent: WarmRecheckBrokenSource)
 
 	discardOutsideCheckoutDir(warmRoot)
 
@@ -41,29 +38,6 @@ test 'a warm recheck after an unsaved edit publishes what a cold check of the sa
 		try Expect.equal(renderedItem(warmItem), expected: renderedItem(coldItem), message: "item {i} differs between the warm recheck and the cold check of the same text.")
 	end 'eachItem'
 end 'a warm recheck after an unsaved edit publishes what a cold check of the saved text does'
-
-function collectWarmRecheck(client LspClient, root FilePath) returns ProjectDiagnosticsProbeArray
-	var probes = ProjectDiagnosticsProbeArray.create()
-	let uri = fileUriOf(root.join(WarmRecheckBufferFileName))
-
-	try 'session'
-		_ = client.initializeAtRoot(root)
-		client.initialized()
-		client.openDocument(uri, content: WarmRecheckCleanSource)
-		probes.push(ProjectDiagnosticsProbe.published(client.awaitProjectCheckPublish(uri).items))
-
-		client.changeDocument(uri, content: WarmRecheckBrokenSource, version: WarmRecheckEditedVersion)
-		probes.push(ProjectDiagnosticsProbe.published(client.awaitProjectCheckPublish(uri).items))
-	end 'session' otherwise (e) 'failed'
-		match e 'reason'
-			transportFailed or
-				malformedResponse or
-				serverRefused then probes.push(ProjectDiagnosticsProbe.broke(e.explained()))
-		end 'reason'
-	end 'failed'
-
-	return probes
-end 'collectWarmRecheck'
 
 function renderedItem(item PublishedDiagnostic) returns String
 	return "[{item.code.describe()} at {item.range.startLine}:{item.range.startCharacter}-{item.range.endLine}:{item.range.endCharacter} — {item.message}]"

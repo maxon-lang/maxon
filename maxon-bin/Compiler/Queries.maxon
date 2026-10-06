@@ -2012,23 +2012,20 @@ function foldTheFrontEnd(project Project, pool FrontEndPool) returns MaxonModule
 	// previous round's reachability walk demanded. See `StdlibSource.growStdlibBodyDemand` for why it
 	// terminates.
 	//
-	// ⚠ A round re-folds EVERY file rather than patching the previous module: `mergeArtifact`'s
-	// registries are first-wins and push-append, and its `opRanges`/`valueOrigins` are parallel to the
-	// module's op array by offset, so splicing one file's newly-built bodies into a merged module
-	// would have to re-derive every one of those — precisely what re-folding does. The re-fold is
-	// cheap because every parse it asks for is a memo hit except the files whose demand actually
-	// moved.
-	var merged = try foldEveryFileIntoAModule(project, pool: pool)
+	// ⚠ A round re-merges every file from the first one whose parse moved, rather than splicing that
+	// file's newly-built bodies into the module: `mergeArtifact`'s registries are first-wins and
+	// push-append, and its `opRanges`/`valueOrigins` are parallel to the module's op array by offset,
+	// so only a suffix can be dropped and merged again (`FoldLedger`). Every parse it asks for is a
+	// memo hit except the files whose demand actually moved.
+	var merged = MaxonModule.create()
+	var ledger = FoldLedger.create()
+	try foldEveryFileInto(project, pool: pool, merged: merged, ledger: ledger)
 
 	while try frontEndMustFoldAgain(project, module: merged) 'demandGrew'
-		// Released before the next round rather than left to the reassignment below, which drops it only
-		// after the replacement is fully built — two whole-program modules alive at once, at the peak.
-		merged.releaseWholly()
-
 		// Nothing is invalidated here, and that is the point: only the files whose bodies this round
 		// newly demanded have a moved parse key, so a round costs one re-parse of the files that changed
 		// plus a fold, not a re-parse of the whole cone.
-		merged = try foldEveryFileIntoAModule(project, pool: pool)
+		try foldEveryFileInto(project, pool: pool, merged: merged, ledger: ledger)
 	end 'demandGrew'
 
 	return merged
@@ -2087,10 +2084,12 @@ function noteDefaultKeysNamedBy(module MaxonModule, func IrFunction, into Defaul
 	end 'eachBlock'
 end 'noteDefaultKeysNamedBy'
 
-// One round of the merge: every file's artifact folded into a fresh module, with the registries
+// One round of the merge: every file's artifact folded into `merged`, with the registries
 // `mergeArtifact` builds reset first. Artifacts are the source of truth for those registries, so a
 // miss rebuilds them from scratch and a warm re-run never double-commits — which is what makes a
-// second round of the body-demand fixpoint above safe to run over the same project.
+// second round of the body-demand fixpoint above safe to run over the same project. The files
+// `ledger` keeps from the fold before are replayed into the registries, not merged again
+// (`foldVerdict`).
 //
 // ⭐ **EVERY FILE IS PARSED BEFORE ANY IS MERGED**, against the signature index restored to its settled
 // baseline: a merge writes the index, and a parse reads only what every parse reads. Once every file is merged
@@ -2098,9 +2097,9 @@ end 'noteDefaultKeysNamedBy'
 // something the whole program disagrees with is filed the whole program's answer and the round is folded again,
 // its parse now keyed on that answer (`ProgramSignatures.rowSetAnswersThatMoved`).
 //
-// `merge` is probed around `mergeArtifact`, the path order and the type-name commit ALONE: the parses run
-// before them, so the fold's cost never absorbs the parse's.
-function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns MaxonModule throws CompileError
+// `merge` is probed around `mergeArtifact`, the replay, the path order and the type-name commit
+// ALONE: the parses run before them, so the fold's cost never absorbs the parse's.
+function foldEveryFileInto(project Project, pool FrontEndPool, merged MaxonModule, ledger FoldLedger) throws CompileError
 	// ⭐ **THIS TERMINATES WITH NO BOUND OF ITS OWN.** A fold that is not the last either files or drops a generic
 	// type in `InstantiatedByAParse` — each name at most once (`noteMoved`) — which settles a new index and drops
 	// every override, or, against one index, stands an answer for a (file, question) pair no earlier fold stood
@@ -2109,7 +2108,6 @@ function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns Ma
 	project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
 	var moved = InstantiatedTypeNameSet.create()
 	var folds = 1 as FoldCount
-	var merged = MaxonModule.create()
 
 	let pathOrderProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
 	let pathOrder = sourceFilesInPathOrder(project.db.sourcePaths)
@@ -2117,7 +2115,7 @@ function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns Ma
 	recordPhase(project, phase: CompilePhase.merge, probe: pathOrderProbe)
 
 	while true 'untilTheFoldStands'
-		match try foldVerdict(project, pool: pool, signatures: signatures, into: merged, moved: moved, pathOrder: pathOrder, emissionOrder: emissionOrder) 'verdict'
+		match try foldVerdict(project, pool: pool, signatures: signatures, into: merged, ledger: ledger, moved: moved, pathOrder: pathOrder, emissionOrder: emissionOrder) 'verdict'
 			stands then break 'untilTheFoldStands'
 			answersMoved or
 				indexMoved then folds = folds + 1
@@ -2126,18 +2124,14 @@ function foldEveryFileIntoAModule(project Project, pool FrontEndPool) returns Ma
 		// A new index when the one before it was settled without a type this fold filed; the same one otherwise.
 		signatures = try queryProgramSignatures(project)
 		project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
-		merged.releaseWholly()
-		merged = MaxonModule.create()
 	end 'untilTheFoldStands'
 
 	publishStandingParses(project)
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.compiler).debug("merge: {folds} fold(s) of {project.db.sourcePaths.count()} file(s)")
+		compilerLogger(CompilerLogGroup.compiler).debug("merge: {folds} fold(s), {ledger.reMerged} of {project.db.sourcePaths.count()} file(s) re-merged")
 	end 'debugging'
-
-	return merged
-end 'foldEveryFileIntoAModule'
+end 'foldEveryFileInto'
 
 let EmissionPathSeparator = "/"
 
@@ -2237,6 +2231,103 @@ end 'sourceFilesInEmissionOrder'
 
 typealias FoldCount = int(1 to u64.max)
 
+typealias MergeMarkArray = Array with MergeMark
+
+typealias TableHeldColumn = Array with ElementIndex
+
+union FoldedIndex
+	none
+	against(held ProgramSignatures)
+
+	function isThe(signatures ProgramSignatures) returns bool
+		return match self 'folded'
+			none gives false
+			against(held) gives held is signatures
+		end 'folded'
+	end 'isThe'
+end 'FoldedIndex'
+
+function artifactInEmissionOrder(artifacts FileParseArtifactArray, emissionOrder EmissionSlotArray, position ElementIndex) returns FileParseArtifact
+	let slot = try emissionOrder.get(position) otherwise panic("artifactInEmissionOrder: emissionOrder.get OOB at {position} below count {emissionOrder.count()}")
+	return try artifacts.get(slot.position) otherwise panic("artifactInEmissionOrder: artifacts.get OOB at {slot.position} below count {artifacts.count()}")
+end 'artifactInEmissionOrder'
+
+type FoldLedger
+	var foldedAgainst as FoldedIndex
+	var artifacts as FileParseArtifactArray
+	var marks as MergeMarkArray
+	let tables as OpKeyedTableArray
+	var tablesHeld as TableHeldColumn
+	module var reMerged as ElementIndex
+
+	static function create() returns FoldLedger
+		return Self{foldedAgainst: FoldedIndex.none, artifacts: FileParseArtifactArray.create(), marks: MergeMarkArray.create(), tables: OpKeyedTable.allCases, tablesHeld: TableHeldColumn.create(), reMerged: 0}
+	end 'create'
+
+	// Sound only against the index the kept files were merged under: a memo hit hands back the same
+	// artifact object, already renumbered into that index's instance ids, and the module holds the ops
+	// that merge copied out of it.
+	function keptPrefix(signatures ProgramSignatures, parsed FileParseArtifactArray, emissionOrder EmissionSlotArray) returns ElementIndex
+		if not self.foldedAgainst.isThe(signatures) 'anotherIndex'
+			return 0
+		end 'anotherIndex'
+
+		var kept = 0 as ElementIndex
+
+		while kept < self.artifacts.count() and kept < emissionOrder.count() 'eachMergedArtifact'
+			let merged = try self.artifacts.get(kept) otherwise panic("FoldLedger.keptPrefix: artifacts.get OOB at {kept} below count {self.artifacts.count()}")
+
+			if artifactInEmissionOrder(parsed, emissionOrder: emissionOrder, position: kept) is not merged 'thisOneMoved'
+				break
+			end 'thisOneMoved'
+
+			kept = kept + 1
+		end 'eachMergedArtifact'
+
+		return kept
+	end 'keptPrefix'
+
+	function resumeAfter(kept ElementIndex, signatures ProgramSignatures, fileCount ElementIndex)
+		self.artifacts.truncate(kept)
+		self.marks.truncate(kept)
+		self.tablesHeld.truncate(kept * self.tables.count())
+		self.foldedAgainst = FoldedIndex.against(signatures)
+		self.reMerged = fileCount - kept
+	end 'resumeAfter'
+
+	function markBefore(position ElementIndex) returns MergeMark
+		if position == 0 'nothingMergedYet'
+			return MergeMark.empty()
+		end 'nothingMergedYet'
+
+		return try self.marks.get(position - 1) otherwise panic("FoldLedger.markBefore: marks.get OOB at {position - 1} below count {self.marks.count()}")
+	end 'markBefore'
+
+	function record(artifact FileParseArtifact, after MergeMark, project Project)
+		self.artifacts.push(artifact)
+		self.marks.push(after)
+
+		for table in self.tables 'eachTable'
+			self.tablesHeld.push(heldBy(table, project: project))
+		end 'eachTable'
+	end 'record'
+
+	function requireTablesHeld(project Project, kept ElementIndex)
+		for (position, table) in self.tables.withIterator() 'eachTable'
+			let held = heldBy(table, project: project)
+			var expected = 0 as ElementIndex
+
+			if kept > 0 'somethingWasMerged'
+				expected = try self.tablesHeld.get((kept - 1) * self.tables.count() + position.index()) otherwise panic("FoldLedger.requireTablesHeld: tablesHeld.get OOB at row {kept - 1} column {position.index()} below count {self.tablesHeld.count()}")
+			end 'somethingWasMerged'
+
+			if held != expected 'movedFromTheCheckpoint'
+				panic("FoldLedger.requireTablesHeld: `project.{table.name}` holds {held} entries where the fold's checkpoint says {expected} — it is keyed by an OP INDEX into the module being folded, so a key past the checkpoint now names a different op. Add it to `Queries.resetMergeTargets`, or to the rollback, beside the other op-keyed tables")
+			end 'movedFromTheCheckpoint'
+		end 'eachTable'
+	end 'requireTablesHeld'
+end 'FoldLedger'
+
 // What one fold found: nothing to redo, a file's row-set answers to redo it with, or an index to settle again.
 enum FoldVerdict
 	stands
@@ -2251,19 +2342,32 @@ end 'FoldVerdict'
 // the next fold does not run, and a refusal may be one a store without its descriptor earned; the fold's own
 // diagnostics are withdrawn with it, and the next fold reports afresh. A row a merge holds is an instance the
 // program really mints whether or not every file merged, so the type is filed either way.
-function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, moved InstantiatedTypeNameSet, pathOrder SourceFileInPathOrderArray, emissionOrder EmissionSlotArray) returns FoldVerdict throws CompileError
+function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, ledger FoldLedger, moved InstantiatedTypeNameSet, pathOrder SourceFileInPathOrderArray, emissionOrder EmissionSlotArray) returns FoldVerdict throws CompileError
 	let diagnosticsBeforeTheFold = project.diagnostics.count()
 	resetMergeTargets(project, signatures: signatures)
 	signatures.restoreBaseline()
 
 	var artifacts = try pool.parseEveryFile(project, signatures: signatures)
 
-	for entry in emissionOrder 'eachArtifactInEmissionOrder'
+	let kept = ledger.keptPrefix(signatures, parsed: artifacts, emissionOrder: emissionOrder)
+	let replayProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
+	ledger.resumeAfter(kept, signatures: signatures, fileCount: emissionOrder.count())
+	ledger.markBefore(kept).rollBack(project, target: into)
+
+	for position in 0 upto kept 'eachKeptArtifact'
+		replayMergedArtifact(project, artifact: artifactInEmissionOrder(artifacts, emissionOrder: emissionOrder, position: position), before: ledger.markBefore(position), signatures: signatures)
+	end 'eachKeptArtifact'
+
+	ledger.requireTablesHeld(project, kept: kept)
+	recordPhase(project, phase: CompilePhase.merge, probe: replayProbe)
+
+	for position in kept upto emissionOrder.count() 'eachArtifactInEmissionOrder'
 		try requireStillWanted(project)
-		var artifact = try artifacts.get(entry.position) otherwise panic("foldVerdict: artifacts.get OOB at {entry.position} below count {artifacts.count()}")
+		var artifact = artifactInEmissionOrder(artifacts, emissionOrder: emissionOrder, position: position)
 		logTypeNameTable(artifact)
 		let mergeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
 		mergeArtifact(project, target: into, artifact: artifact, signatures: signatures)
+		ledger.record(artifact, after: MergeMark.of(project, target: into), project: project)
 		recordPhase(project, phase: CompilePhase.merge, probe: mergeProbe)
 	end 'eachArtifactInEmissionOrder'
 
@@ -2790,10 +2894,6 @@ end 'hashEventSourceOf'
 // compiler reaches one BY NAME, which is the tier's defining property — so the demand for a runtime file
 // can never grow, every one of its bodies would be skipped, and each would ship as the bare `retVoid`
 // `Parser.skipUnreachedFunctionBody` leaves behind. A silent wrong answer, not a missing feature.
-//
-// ⚠ It is a SET LOOKUP and reads no artifact, which is what lets `queryAllModule` drop the parse
-// memos between rounds: `growStdlibBodyDemand` records the answer while the artifacts still exist,
-// and this reads it back after they are gone.
 function buildsBodiesFor(project Project, path FilePath, isStdlibSource bool) returns bool
 	if not isStdlibSource 'notTheLazyTier'
 		return true
@@ -2860,6 +2960,8 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.typeNameDecls = TypeNameRegistry.create()
 	project.rangeChecks = RangeCheckPlanMap.create()
 	project.structTypes = StructLayoutMap.create()
+	project.enumTypes = createEnumRegistry()
+	project.functionTypeAliases = FunctionTypeAliasMap.create()
 
 	// ⛔ `project.typeNames` is deliberately NOT reset, the one registry here that must not be. Every
 	// other line in this function drops a table the coming fold rebuilds from the artifacts, but
@@ -2871,24 +2973,18 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	//
 	// ⚠ It is a NAME TABLE, so keeping it across a rebuild is not carrying stale state: ids are only
 	// ever handed out, never reused, and a name that no source still spells is simply never looked up.
-	// Must reset with the others: `mergeArtifact` appends spans to this table and asserts its count
-	// tracks the merged module's op count, which is rebuilt from empty on every miss.
-	project.opRanges = SourceRangeTable.create()
 
-	// The coverage fold's two targets, reset together for `opRanges`' reason: a round of the body-demand
-	// fixpoint re-folds every file, so both would double and every base would name another file's block.
+	// The coverage fold's two targets, reset together: every fold commits every file's coverage again,
+	// merged or replayed, so both would double and every base would name another file's block.
 	project.covPoints = CovPointTable.create()
 	project.covPointBases = CovPointBaseMap.create()
 
-	// ⚠ Every table `mergeArtifact` keys by an op INDEX must reset here: a round of the body-demand
-	// fixpoint folds every file into a fresh module, so a file whose stdlib bodies grew shifts every
-	// later file's `opOffset` — a key from the previous round would then name a different op, in a
-	// different function, carrying the previous round's payload, with nothing to notice because a map
-	// has no count to be out of step with.
-	//
-	// `valueOrigins` is the one that DOUBLES rather than merely mis-keying: `ValueOriginTable.record`
-	// pushes and `lookup` is a first-match linear scan, so a stale row does not lose to the fresh one
-	// — it wins.
+	// ⚠ Every op-keyed MAP `mergeArtifact` fills must reset here, and the replay refills the kept
+	// files' keys; the op-keyed arrays are truncated to the kept files instead
+	// (`MergeMark.rollBack`). A file whose stdlib bodies grew shifts every later file's `opOffset`, so
+	// a key from the previous fold would name a different op, in a different function, carrying the
+	// previous fold's payload. `OpKeyedTable` is the roster `FoldLedger.requireTablesHeld` checks both
+	// against.
 	project.moduleVarAccessSites = ModuleVarAccessSiteMap.create()
 	project.synthesizedOpFiles = SynthesizedOpFileMap.create()
 	project.registryUseSites = RegistryUseSiteMap.create()
@@ -2897,8 +2993,6 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.allocTagSites = AllocTagSiteMap.create()
 	project.debugStreamNameSites = DebugStreamNameSiteMap.create()
 	project.immortalConstArraySites = ImmortalConstArraySiteMap.create()
-	project.valueOrigins = ValueOriginTable.create()
-	project.deferralSources = DeferralSourceTable.create()
 	project.refusedOverloadCalls = RefusedOverloadCallSet.create()
 end 'resetMergeTargets'
 

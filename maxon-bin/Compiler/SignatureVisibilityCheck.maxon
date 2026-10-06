@@ -62,6 +62,10 @@ function namesTheEnclosingType(enclosing EnclosingType, name ByteArray) returns 
 end 'namesTheEnclosingType'
 
 module function checkSignatureVisibility(project Project, module MaxonModule, signatures ProgramSignatures)
+	// A warm project checks again, and a demand left by a signature its sources no longer declare
+	// would still excuse an E3092.
+	project.signatureTypeDemands = SignatureTypeDemandArray.create()
+
 	for func in module.functions 'eachFunc'
 		checkDeclaredSignature(project, signatures: signatures, func: func)
 	end 'eachFunc'

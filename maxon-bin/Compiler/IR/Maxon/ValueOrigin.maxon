@@ -353,6 +353,15 @@ export type ParamOriginTable
 		end 'each'
 	end 'appendFrom'
 
+	function truncate(count ElementIndex)
+		self.funcIndices.truncate(count)
+		self.valueIds.truncate(count)
+		self.startBytes.truncate(count)
+		self.endBytes.truncate(count)
+		self.lines.truncate(count)
+		self.columns.truncate(count)
+	end 'truncate'
+
 	// The `ValueOriginTable.remapFunctionIndices` half for parameter spans — see that header for WHY a
 	// renumbering has to reach these rows at all, and for the in-place compaction rationale (allocates
 	// nothing; byte-identical to a rebuild). Same rule: a row whose function was dropped goes, and a
@@ -770,6 +779,21 @@ export type ValueOriginTable
 		end 'eachDerived'
 	end 'appendFrom'
 
+	export function mark() returns ValueOriginMark
+		return ValueOriginMark.create(self.funcIndices.count(), params: self.paramOrigins.count(), derived: self.derivedFuncIndices.count())
+	end 'mark'
+
+	export function truncate(to ValueOriginMark)
+		self.funcIndices.truncate(to.rows)
+		self.valueIds.truncate(to.rows)
+		self.opIndices.truncate(to.rows)
+		self.paramOrigins.truncate(to.params)
+		self.derivedFuncIndices.truncate(to.derived)
+		self.derivedFirstIds.truncate(to.derived)
+		self.derivedEndIds.truncate(to.derived)
+		self.derivedSourceIds.truncate(to.derived)
+	end 'truncate'
+
 	// @generated library-cache begin
 	export function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteFuncIndexArray(writer, value: self.funcIndices)
@@ -801,6 +825,16 @@ export type ValueOriginTable
 
 	// @generated library-cache end
 end 'ValueOriginTable'
+
+export type ValueOriginMark
+	module let rows as ElementIndex
+	module let params as ElementIndex
+	module let derived as ElementIndex
+
+	export static function create(rows ElementIndex, params ElementIndex, derived ElementIndex) returns ValueOriginMark
+		return Self{rows: rows, params: params, derived: derived}
+	end 'create'
+end 'ValueOriginMark'
 
 // ⭐ **THE DERIVED ROWS ONE FUNCTION'S PASSES FILE OFF THE MAIN THREAD** (`ValueOriginTable.recordDerived`
 // for one function), carried home by the unit that ran them and folded into the project's table in
@@ -1149,6 +1183,14 @@ export type DeferralSourceTable
 			self.record(f + funcOffset, valueId: v, sourceFuncIndex: sourceFunc + funcOffset, sourceId: sourceId, chainCalls: source.chainCallsAt(i))
 		end 'each'
 	end 'appendFrom'
+
+	export function truncate(count ElementIndex)
+		self.funcIndices.truncate(count)
+		self.valueIds.truncate(count)
+		self.sourceFuncIndices.truncate(count)
+		self.sourceIds.truncate(count)
+		self.chainCallKinds.truncate(count)
+	end 'truncate'
 
 	// @generated library-cache begin
 	export function cacheWrite(writer LibraryCacheWriter)

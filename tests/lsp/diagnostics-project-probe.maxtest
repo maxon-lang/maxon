@@ -127,15 +127,15 @@ function brokenProjectDiagnosticsPair(detail String) returns ProjectDiagnosticsP
 	return probes
 end 'brokenProjectDiagnosticsPair'
 
-export function probeProjectCheckAcrossDiskEdits(root FilePath, fileName String, content String, diskEdits CorpusDiskEditArray) returns ProjectDiagnosticsProbeArray
+export function probeProjectCheckAcrossAnEdit(root FilePath, fileName String, content String, diskEdits CorpusDiskEditArray, editedContent String) returns ProjectDiagnosticsProbeArray
 	var client = LspClient.start()
-	let probes = collectProjectCheckAcrossDiskEdits(client, root: root, uri: fileUriOf(root.join(fileName)), content: content, diskEdits: diskEdits)
+	let probes = collectProjectCheckAcrossAnEdit(client, root: root, uri: fileUriOf(root.join(fileName)), content: content, diskEdits: diskEdits, editedContent: editedContent)
 	client.release()
 
 	return probes
-end 'probeProjectCheckAcrossDiskEdits'
+end 'probeProjectCheckAcrossAnEdit'
 
-function collectProjectCheckAcrossDiskEdits(client LspClient, root FilePath, uri String, content String, diskEdits CorpusDiskEditArray) returns ProjectDiagnosticsProbeArray
+function collectProjectCheckAcrossAnEdit(client LspClient, root FilePath, uri String, content String, diskEdits CorpusDiskEditArray, editedContent String) returns ProjectDiagnosticsProbeArray
 	var probes = ProjectDiagnosticsProbeArray.create()
 
 	try 'session'
@@ -146,7 +146,7 @@ function collectProjectCheckAcrossDiskEdits(client LspClient, root FilePath, uri
 
 		applyCorpusDiskEdits(diskEdits)
 
-		client.changeDocument(uri, content: content, version: ProjectDiagnosticsEditedVersion)
+		client.changeDocument(uri, content: editedContent, version: ProjectDiagnosticsEditedVersion)
 		probes.push(ProjectDiagnosticsProbe.published(client.awaitProjectCheckPublish(uri).items))
 	end 'session' otherwise (e) 'failed'
 		match e 'reason'
@@ -157,7 +157,7 @@ function collectProjectCheckAcrossDiskEdits(client LspClient, root FilePath, uri
 	end 'failed'
 
 	return probes
-end 'collectProjectCheckAcrossDiskEdits'
+end 'collectProjectCheckAcrossAnEdit'
 
 export function projectDiagnosticsPublish(probes ProjectDiagnosticsProbeArray, index ProjectPublishIndex) returns ProjectDiagnosticsProbe throws TestFailure
 	return try probes.get(index as ElementIndex) otherwise 'missing'

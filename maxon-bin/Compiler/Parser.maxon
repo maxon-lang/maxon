@@ -33632,8 +33632,8 @@ export type Parser
 	// ⚠ The entry block still needs a terminator or the module is malformed, and `retVoid` is what it gets
 	// whatever the declared return type is. That is sound ONLY because a skipped body is by construction one
 	// no path from `main` reaches: `queryAllModule`'s fixpoint demands every body the reachability walk
-	// touches, and `requireEveryReachedStdlibBodyWasBuilt` turns a disagreement into a panic rather than
-	// letting a `retVoid` stand in for a value the program would have read.
+	// touches, and `DeadFunctionElimination.requireUnreachableLibraryStayedDead` turns a disagreement
+	// into a panic rather than letting a `retVoid` stand in for a value the program would have read.
 	function skipUnreachedFunctionBody(entry IrBlock, nameTok Token)
 		self.advanceToOwnBlockEnd()
 		self.artifact.emitTerminator(entry, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
@@ -68826,7 +68826,7 @@ export type Parser
 		// ⭐ **A GENERIC NO INSTANCE OF WHICH EXISTS HAS NO `T` TO REFERENCE, AND THIS IS THE PREDICATE THE
 		// RESERVATION READ** (`genericTypeIsInstantiated`, asked here of the value's own token). Both answer over
 		// the whole program's instances: a type only a parse instantiates is found by the fold and the index the
-		// reservation reads is settled again with it (`Queries.foldEveryFileIntoAModule`).
+		// reservation reads is settled again with it (`Queries.foldEveryFileInto`).
 		//
 		// ⚠ **IT IS DELIBERATELY *NOT* "IS SOME INSTANTIATION MANAGED".** The reservation is settled before any
 		// body is parsed and so cannot see a CONCRETE instantiation at all — see `genericTypeIsInstantiated`.

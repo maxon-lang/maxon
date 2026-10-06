@@ -1,0 +1,25 @@
+let ReplacedUnionDirName = "diagnostics-project-replaced-union"
+let ReplacedUnionColdDirName = "diagnostics-project-replaced-union-cold"
+let ReplacedUnionFileName = "shapes.maxon"
+let ReplacedUnionSavedSource = "typealias Radius = int(0 to 100)\n\ntype Holder\n\tlet radius as Radius\n\n\tstatic function create(radius Radius) returns Holder\n\t\treturn Self\{radius: radius\}\n\tend 'create'\n\n\tfunction radiusOf() returns Radius\n\t\treturn self.radius\n\tend 'radiusOf'\nend 'Holder'\n\nunion Shape\n\tcircle(holder Holder)\n\tempty\nend 'Shape'\n\nfunction main() returns ExitCode\n\tlet shape = Shape.circle(Holder.create(3))\n\n\tmatch shape 'inspect'\n\t\tcircle(holder) then return holder.radiusOf()\n\t\tempty then return 0\n\tend 'inspect'\nend 'main'\n"
+let ReplacedUnionEditedSource = "typealias Radius = int(0 to 100)\n\ntype Shape\n\tlet radius as Radius\n\n\tstatic function create(radius Radius) returns Shape\n\t\treturn Self\{radius: radius\}\n\tend 'create'\n\n\tfunction radiusOf() returns Radius\n\t\treturn self.radius\n\tend 'radiusOf'\nend 'Shape'\n\ntype Holder\n\tlet shape as Shape\n\n\tstatic function create(shape Shape) returns Holder\n\t\treturn Self\{shape: shape\}\n\tend 'create'\n\n\tfunction radiusOf() returns Radius\n\t\treturn self.shape.radiusOf()\n\tend 'radiusOf'\nend 'Holder'\n\nfunction main() returns ExitCode\n\treturn Holder.create(Shape.create(3)).radiusOf()\nend 'main'\n"
+
+test 'a union replaced by a type of its name leaves no cycle behind in a warm recheck'
+	let warmRoot = stagedProjectDiagnosticsRoot(ReplacedUnionDirName)
+	writeCorpusFile(warmRoot, fileName: ReplacedUnionFileName, content: ReplacedUnionSavedSource)
+
+	let warm = probeProjectCheckAcrossAnEdit(warmRoot, fileName: ReplacedUnionFileName, content: ReplacedUnionSavedSource, diskEdits: CorpusDiskEditArray.create(), editedContent: ReplacedUnionEditedSource)
+
+	discardOutsideCheckoutDir(warmRoot)
+
+	let coldRoot = stagedProjectDiagnosticsRoot(ReplacedUnionColdDirName)
+	writeCorpusFile(coldRoot, fileName: ReplacedUnionFileName, content: ReplacedUnionEditedSource)
+
+	let cold = probeProjectCheckDiagnostics(coldRoot, fileName: ReplacedUnionFileName, content: ReplacedUnionEditedSource, edits: StringArray.create())
+
+	discardOutsideCheckoutDir(coldRoot)
+
+	expectNoProjectDiagnostics(projectDiagnosticsPublish(warm, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding `union Shape` with a `Holder` payload, exactly the disk's bytes, and a `maxon build` of it exits 0. This publish is the CONTROL: it is the check that files `Shape` as a union in the held project.")
+	expectNoProjectDiagnostics(cold, note: "a cold session opened the edited text saved on disk: `type Shape` with no `union Shape`, and a `Holder` holding a `Shape`. This is the CONTROL for the publish below.")
+	expectNoProjectDiagnostics(projectDiagnosticsPublish(warm, index: ProjectDiagnosticsAfterTheEdit), note: "the unsaved `didChange` removed `union Shape` and declared `type Shape` in its place, which `Holder` now holds. A cold check of that text publishes nothing, so anything published here was read off the held project's previous check: a `union Shape` still filed there, whose `Holder` payload closes a cycle through `Holder.shape`.")
+end 'a union replaced by a type of its name leaves no cycle behind in a warm recheck'

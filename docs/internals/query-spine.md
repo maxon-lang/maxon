@@ -74,6 +74,22 @@ then runtime) and its path relative to that tier's namespace anchor, compared co
 one program compiles to the same bytes on every host. An author file outside the project root keys by its
 resolved path.
 
+## The body-demand fixpoint
+
+A standard-library file's function bodies are built once the program reaches one of its functions; until
+then its parse skips them. Whether a parse builds bodies is part of its key, so `queryAllModule` folds to a
+fixpoint (`Queries.foldTheFrontEnd`). The first round merges every file with every library body skipped. A
+reachability walk over the merged module then marks each library file a reached function lives in, and the
+next round re-parses those files with their bodies, so the walk sees one call level deeper. The demand only
+grows and is bounded by the library's functions, so the rounds end. A `runtime/` file's bodies are always
+built.
+
+Each fold keeps the merge of every file before the first one, in emission order, whose parse changed: an
+unchanged parse is a memo hit on the same artifact, so that part of the module already holds its ops. The
+fold truncates the module and the tables parallel to its ops to that point, then merges the rest. The
+registries the merge fills are rebuilt by replaying the kept files' commits, so their first-wins and append
+order match a full merge. A fold against a different signature index merges every file.
+
 ## Whole-program queries under per-file ones
 
 Every `queryParseOps` validates the signature index before validating itself, so a whole-program query that
@@ -152,7 +168,7 @@ files that missed their memo on it. `MAXON_MAX_PROCS=1` gives a pool of one work
 - A worker parses against a private copy of the settled signature index; a write a parse has not declared
   panics.
 - Results are merged in emission order on the compiling thread, so the output is the same whatever order
-  the workers finish in. `mergeArtifact` is the only writer of the shared `Project`.
+  the workers finish in. The shared `Project` is written on the compiling thread alone.
 - Identical compiles report identical allocation totals whichever worker finishes first. Every pool
   splices replies in dispatch order, so the arrays a splice grows come out the same. The front-end and Std
   pools hand each worker a fixed share of the jobs (worker `w` takes dispatch positions `w`,

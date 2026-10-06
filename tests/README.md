@@ -357,6 +357,7 @@ tests/
     run-beside-only-an-old-tasks-maxon-is-refused.maxtest   a directory holding a `tasks.maxon` and no `.maxtasks` has no tasks
     census-by-tag-reports-a-table.maxtest                   `--census-by-tag` prints the residency census's per-tag table, and nothing prints it without the flag
     interner-presize-never-regrows.maxtest                  every source file's type-name interner reports itself under `--log=compiler:debug`, and none of them regrew
+    a-later-fold-round-re-merges-only-the-files-after-the-first-that-moved.maxtest   a program calling `URL.parse` folds the front end at least twice under `--log=compiler:debug`, and every round after the first reports `R of N file(s) re-merged` with R below N
     wasm-build-without-tools-is-an-error-not-a-panic.maxtest        an install-shaped copy outside the checkout, with no `vendor/`: exit 1 naming `wasm-tools`, no panic
     wasm-build-reports-the-module-size.maxtest              a wasm32-wasi build's `Wrote N bytes of code` has N > 0
     build-refuses-a-runtime-tier-file-by-name.maxtest       `build runtime/<file>` exits 1 with an error naming the runtime tier, ahead of any diagnostic inside the file
