@@ -269,7 +269,7 @@ comparison — is the single decision that makes the program fast, and it is fou
 will need just avoids the copies.
 </TourStep>
 
-<TourStep from={419} to={444}>
+<TourStep from={419} to={443}>
 **This is the type that becomes a service, and it is an ordinary type.**
 
 `export` on a method means something sharper here than on a field: it marks the **message API** —
@@ -278,7 +278,11 @@ is not, so it is an ordinary method that only code holding the value itself can 
 uses both: the parallel path sends `sortLines`, and the one-worker path calls `sortRows` directly on
 a plain `Sorter` that no thread ever hears about.
 
-The `.clone()` on line 433 is the ownership rule made visible. A reply crosses a thread boundary, so
+A service's state crosses to the worker's thread whole, and a function value does not cross: a closure
+owns what it captures. So `Sorter` holds the `SortSettings` — four scalars — and `sortRows` builds the
+key maker and the comparator from them where the sort runs.
+
+The `.clone()` on line 432 is the ownership rule made visible. A reply crosses a thread boundary, so
 what it carries must be owned by nobody else — `rows` still holds those strings, so the reply gets
 copies. Maxon tracks that statically: without the clone, this program does not compile. See the
 [memory model](/docs/language/memory-model/).
@@ -286,7 +290,7 @@ copies. Maxon tracks that statically: without the clone, this program does not c
 
 ## Reading the input
 
-<TourStep from={446} to={481}>
+<TourStep from={445} to={480}>
 `File.readText` throws `FileReadError`; `readLines` turns that into its own `ReadError`, because the
 caller's concern is "this file could not be read", not which layer noticed.
 
@@ -298,7 +302,7 @@ has to get right once.
 to check and forget.
 </TourStep>
 
-<TourStep from={483} to={508}>
+<TourStep from={482} to={507}>
 **`async` starts a coroutine.** `async readLines(path)` returns immediately with a
 `Promise with (LineArray, ReadError)` — the answer, or the failure, later. Starting one per file lets
 the waiting overlap: while the operating system fetches the first file, the second request is already
@@ -316,13 +320,13 @@ overlapping *waiting*; they do not use a second processor. That is what the next
 
 ## Using the processors
 
-<TourStep from={510} to={535}>
+<TourStep from={509} to={534}>
 **`spawn` turns a type into a service running on its own green thread**, scheduled across the
 machine's processors. `spawn Sorter.create(settings.clone())` runs the factory *over there* and hands
 back a `Sorter.handle`.
 
-Each worker therefore builds its own `KeyMaker` and its own comparator from the settings it was
-given. Nothing is shared: a service owns its state outright, which is what makes plain, unlocked
+Each worker therefore keeps its own copy of the settings and builds its own `KeyMaker` and its own
+comparator from them. Nothing is shared: a service owns its state outright, which is what makes plain, unlocked
 reference counting safe inside it.
 
 Then the chunks. Each worker gets a **contiguous** slice — contiguous rather than every N-th line,
@@ -337,7 +341,7 @@ is written where it happens, rather than hidden inside a helper.
 `sorter.sortLines(chunk)` does not block. It posts the message and hands back a promise.
 </TourStep>
 
-<TourStep from={537} to={554}>
+<TourStep from={536} to={553}>
 The replies come back **in the order they were sent**, not the order the workers finished — which is
 what makes the output deterministic. The same input gives the same bytes at one worker or at
 sixty-four.
@@ -351,10 +355,10 @@ merge. Then every worker is shut down explicitly, because a service outlives the
 spawned it until someone says otherwise.
 </TourStep>
 
-<TourStep from={556} to={583}>
+<TourStep from={555} to={582}>
 The merge, and the reason the program contains one at all. Sorting a worker's own rows is
-`rows.sort(self.compare)` — the standard library's stable sort, called from inside a service message,
-on the service's own field. Combining rows that are **already ordered** is a different job, and there
+`rows.sort(self.settings.comparator())` — the standard library's stable sort, called from inside a
+service message, with the comparator the service's own settings give. Combining rows that are **already ordered** is a different job, and there
 is no library call for it, so `mergedPair` is the one piece of sorting machinery this program writes
 for itself.
 
@@ -364,7 +368,7 @@ merge stays **stable**, exactly as the sort feeding it is. Reversing that compar
 output that is still sorted and no longer reproducible.
 </TourStep>
 
-<TourStep from={585} to={624}>
+<TourStep from={584} to={623}>
 The cross-worker merge: `mergedPair` again, now applied in **rounds**. Twelve chunks become six, then
 three, then two, then one. Merging them one after another into a growing array would copy the early
 rows once per chunk; halving the list copies each row `log₂ k` times instead.
@@ -377,7 +381,7 @@ who runs it.
 
 ## Finishing
 
-<TourStep from={626} to={675}>
+<TourStep from={625} to={674}>
 `-u` is a pass over the sorted rows that keeps the first of each run of equal keys. It asks the same
 comparator the sort used, so "equal" means exactly what it meant a moment ago.
 
@@ -389,7 +393,7 @@ the enum. The two options that take a value are printed beside it, with their bo
 same constants that enforce them.
 </TourStep>
 
-<TourStep from={677} to={702}>
+<TourStep from={676} to={701}>
 `main` returns an `ExitCode`, and `Outcome.troubled` *is* one, because the enum's raw values are the
 exit codes.
 

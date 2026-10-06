@@ -52,7 +52,7 @@ leaving it off is a compile error. The most common form supplies a fallback:
 
 ```maxon
 typealias Guests = Array with String
-typealias Seat = int(0 to 9)
+typealias Seat = int(0 to 9) implements ElementIndex
 
 function guestAt(guests Guests, seat Seat) returns String
 	return try guests.get(seat) otherwise "empty"
@@ -69,7 +69,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-Seat 5 is past the end of the list, so the read fails and `otherwise` supplies `"empty"`: the
+Every `typealias` is its own type, and an array is indexed by the standard library's `ElementIndex`, so
+`Seat` says `implements ElementIndex` to be accepted as an index. Seat 5 is past the end of the list, so the read fails and `otherwise` supplies `"empty"`: the
 program prints `seat 1: Grace`, then `seat 5: empty`. Because the fallible result has no "null" to
 leak, there is no missed-null-check bug to write.
 

@@ -417,11 +417,10 @@ function rowsFrom(lines LineArray, maker KeyMaker) returns RowArray
 end 'rowsFrom'
 
 type Sorter
-	var maker as KeyMaker
-	var compare as RowComparator
+	var settings as SortSettings
 
 	static function create(settings SortSettings) returns Self
-		return Self{maker: settings.keyMaker(), compare: settings.comparator()}
+		return Self{settings: settings}
 	end 'create'
 
 	export function sortLines(lines LineArray) returns LineArray
@@ -437,8 +436,8 @@ type Sorter
 	end 'sortLines'
 
 	function sortRows(lines LineArray) returns RowArray
-		var rows = rowsFrom(lines, maker: self.maker)
-		rows.sort(self.compare)
+		var rows = rowsFrom(lines, maker: self.settings.keyMaker())
+		rows.sort(self.settings.comparator())
 		return rows
 	end 'sortRows'
 end 'Sorter'

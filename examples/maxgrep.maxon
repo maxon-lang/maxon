@@ -10,7 +10,6 @@ typealias NameSet = Set with String
 typealias PieceArray = Array with Piece
 typealias LineMatchArray = Array with LineMatch
 typealias ByteMembership = Vector with 256 bool
-typealias ByteFold = function(Byte) returns Byte
 typealias WalkPromise = Promise with (PathArray, WalkError)
 typealias WalkPromiseArray = Array with WalkPromise
 typealias SearcherArray = Array with Searcher.handle
@@ -252,12 +251,24 @@ extension int
 	end 'asciiLowered'
 end 'int'
 
+enum ByteFold
+	exact
+	asciiCase
+
+	function apply(b Byte) returns Byte
+		return match self 'fold'
+			exact gives b
+			asciiCase gives b.asciiLowered()
+		end 'fold'
+	end 'apply'
+end 'ByteFold'
+
 function byteFold(ignoreCase bool) returns ByteFold
 	if ignoreCase 'foldCase'
-		return function(b Byte) gives b.asciiLowered()
+		return ByteFold.asciiCase
 	end 'foldCase'
 
-	return function(b Byte) gives b
+	return ByteFold.exact
 end 'byteFold'
 
 function byteAt(bytes ByteArray, position BufferPos) returns Byte
@@ -289,7 +300,7 @@ function readAtom(source ByteArray, at BufferPos, fold ByteFold) returns (Atom, 
 	end 'symbol'
 
 	let (value, next) = try readByte(source, at: at)
-	return (Atom.literal(fold(value)), next)
+	return (Atom.literal(fold.apply(value)), next)
 end 'readAtom'
 
 function readClass(source ByteArray, at BufferPos, fold ByteFold) returns (Atom, BufferPos) throws PatternError
@@ -320,7 +331,7 @@ function readClass(source ByteArray, at BufferPos, fold ByteFold) returns (Atom,
 		end 'backwards'
 
 		for member in first to last 'eachByte'
-			try members.set(fold(member) as ElementIndex, value: true) otherwise panic("readClass: a byte indexes a table of every byte")
+			try members.set(fold.apply(member) as ElementIndex, value: true) otherwise panic("readClass: a byte indexes a table of every byte")
 		end 'eachByte'
 
 		named = true
@@ -358,7 +369,7 @@ type FixedMatcher implements Matcher
 		var needle = ByteArray.create()
 
 		for b in patternText.bytes() 'eachByte'
-			needle.push(fold(b))
+			needle.push(fold.apply(b))
 		end 'eachByte'
 
 		return Self{needle: needle, fold: fold}
@@ -382,7 +393,7 @@ type FixedMatcher implements Matcher
 
 	function matchesAt(text ByteArray, start BufferPos) returns bool
 		for (position, expected) in self.needle.withIterator() 'eachByte'
-			if self.fold(byteAt(text, position: start + position.index() as BufferPos)) != expected 'differs'
+			if self.fold.apply(byteAt(text, position: start + position.index() as BufferPos)) != expected 'differs'
 				return false
 			end 'differs'
 		end 'eachByte'
@@ -475,7 +486,7 @@ type RegexMatcher implements Matcher
 			return false
 		end 'pastLine'
 
-		let subject = self.fold(byteAt(text, position: at))
+		let subject = self.fold.apply(byteAt(text, position: at))
 
 		return match atom 'kind'
 			literal(value) gives subject == value

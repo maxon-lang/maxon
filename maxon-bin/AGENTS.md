@@ -281,8 +281,8 @@ facts worth knowing before you get there:
   ```
   ⚠ **CI runs six of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/spec-harness`, `tests/ladders`, `tests/build-manifest` and
   `tests/cli` — plus `tests/debug`,
-  `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `/land`'s battery runs `fmt`, `spec-harness` and
-  `ladders` beside the suite and the self-compile. Every other corpus runs only when someone names it.
+  `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `/land`'s battery runs `fmt`, `spec-harness`,
+  `ladders` and `examples` beside the suite and the self-compile. Every other corpus runs only when someone names it.
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
   pins what the tool DOES rather than what its author expected. Re-run the generator after changing
