@@ -447,11 +447,9 @@ reader qualifies with `dir.` and there is still only one thing that could mean.
 ⚠ **THE REFUSAL'S SENTENCE NAMES A MINTED KEY.** Two files of one directory declaring one
 free-function name are an OVERLOAD SET (`cross-file-overload-set.md`), so every one of these
 declarations is registered under its parameter-type spelling — and these two spell the same
-parameters (none), claim the same `pick#`, and collide there. The name E3006 quotes is therefore one
-NEITHER declaration wrote, which is the property `ParseStaging.duplicateFunctionMessage` sorts on: a
-minted name earns the sentence that explains where it came from, because told only
-`Duplicate function 'pick#'` an author would search for a string that appears nowhere in their
-source.
+parameters (none), claim the same registration, and collide there. E3006 names the member in source
+form, `'pick()'`, and `ParseStaging.duplicateFunctionMessage` adds the sentence that explains where the
+collision comes from.
 ```maxon
 // --- file: dir/a.maxon
 export typealias Integer = int(0 to 125)
@@ -471,7 +469,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: dir/specs/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.maxon:10:17: duplicate definition of function 'pick#' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: dir/specs/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.maxon:10:17: duplicate definition of function 'pick()' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 
@@ -503,7 +501,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.maxon:10:17: duplicate definition of function 'pick#' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: specs/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.maxon:10:17: duplicate definition of function 'pick()' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 

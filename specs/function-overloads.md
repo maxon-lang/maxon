@@ -313,7 +313,34 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/function-overloads/error.overload-redeclared-with-the-same-parameters.maxon:12:10: duplicate definition of function 'pick#bool' — 'pick' has more than one declaration in this program, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: specs/function-overloads/error.overload-redeclared-with-the-same-parameters.maxon:12:10: duplicate definition of function 'pick(bool)' — 'pick' has more than one declaration in this program, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+```
+
+<!-- test: error.a-label-distinguished-overload-redeclared-names-its-labels -->
+Two overloads that share their parameter types are told apart by their labels, so the third declaration,
+repeating the second's labels, collides — and the message names the member with its labels and types.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function slice(start Integer, endIndex Integer) returns Integer
+	return endIndex - start
+end 'slice'
+
+function slice(start Integer, length Integer) returns Integer
+	return start + length
+end 'slice'
+
+function slice(start Integer, length Integer) returns Integer
+	return start * length
+end 'slice'
+
+function main() returns ExitCode
+	print("{slice(10, endIndex: 32)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3006: specs/function-overloads/error.a-label-distinguished-overload-redeclared-names-its-labels.maxon:12:10: duplicate definition of function 'slice(start Integer, length Integer)' — 'slice' has more than one declaration in this program, so every one of those declarations is registered under its parameter types and labels, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 <!-- test: method-type-disambiguation -->

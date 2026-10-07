@@ -80,7 +80,7 @@ end 'main'
 error E3006: <fragment>:19:11: Duplicate function 'Box.getValue'
 ```
 
-<!-- test: error.a-duplicate-static-member-names-the-minted-spelling -->
+<!-- test: error.a-duplicate-static-member-is-named-in-source-form -->
 ### Two STATIC members claim the minted name, which the sentence has to explain
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -111,10 +111,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:15:18: duplicate definition of function 'Box.getValue#__static' — 'Box.getValue' names both a `static` member and an instance member, so the static is registered under a spelling of its own — and more than one `static` declaration of it claims that spelling. Give the statics distinct parameter types, or distinct names
+error E3006: <fragment>:15:18: duplicate definition of function 'Box.getValue()' — 'Box.getValue' names both a `static` member and an instance member, so the static is registered under a spelling of its own — and more than one `static` declaration of it claims that spelling. Give the statics distinct parameter types, or distinct names
 ```
 
-<!-- test: error.a-duplicate-static-overload-names-the-suffixed-spelling -->
+<!-- test: error.a-duplicate-static-overload-is-named-in-source-form -->
 ### The statics are an overload set of their own, so the collision is one suffix further down
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -149,7 +149,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:19:18: duplicate definition of function 'Box.getValue#__static#Integer' — 'Box.getValue' names both a `static` member and an instance member, so the static is registered under a spelling of its own — and more than one `static` declaration of it claims that spelling. Give the statics distinct parameter types, or distinct names
+error E3006: <fragment>:19:18: duplicate definition of function 'Box.getValue(Integer)' — 'Box.getValue' names both a `static` member and an instance member, so the static is registered under a spelling of its own — and more than one `static` declaration of it claims that spelling. Give the statics distinct parameter types, or distinct names
 ```
 
 <!-- test: both-members-run-and-their-answers-differ -->

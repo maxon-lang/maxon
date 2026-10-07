@@ -10484,16 +10484,84 @@ export typealias WitnessSlotImplMap = Map with (ByteArray, ByteArray)
 // already registered.
 let OverloadNameSeparator = "#"
 
-export function registrationNameDisplay(name ByteArray, signatures ProgramSignatures) returns String
-	var shown = StringArray.create()
-	var isFunctionName = true
+let OverloadParameterListSeparator = ", "
 
+// In the reserved `__` space for `StaticMemberNameSuffix`'s reason: no type or parameter name can render
+// it, so `registrationNameDisplay` can read every part after it as a label and every part before as a type.
+let OverloadLabelsMarker = "__labels"
+
+export function labelDistinguishedSuffix(typeSuffix ByteArray, labelSuffix ByteArray) returns ByteArray
+	return overloadSuffixPart(overloadSuffixPart(String.from(typeSuffix), part: OverloadLabelsMarker), part: String.from(labelSuffix)).toByteArray()
+end 'labelDistinguishedSuffix'
+
+export function registrationNameCarriesLabels(name ByteArray) returns bool
 	for part in String.from(name).split(OverloadNameSeparator) 'eachPart'
-		shown.push(part if isFunctionName else signatures.aliasIdentityDisplay(part.toByteArray()))
-		isFunctionName = false
+		if part == OverloadLabelsMarker 'labelsMarker'
+			return true
+		end 'labelsMarker'
 	end 'eachPart'
 
-	return joinedWith(shown, separator: OverloadNameSeparator)
+	return false
+end 'registrationNameCarriesLabels'
+
+function isParameterSpelling(part String) returns bool
+	if part.isEmpty() or part == StaticMemberNameSuffix 'markerOrNothing'
+		return false
+	end 'markerOrNothing'
+
+	// A digit-led part is `Parser.unclaimedRegistrationName`'s ordinal; no type or label begins with one.
+	let first = try part.toByteArray().get(0) otherwise panic("isParameterSpelling: get(0) on a part whose emptiness was just tested")
+	return not isDigit(first)
+end 'isParameterSpelling'
+
+export function registrationNameDisplay(name ByteArray, signatures ProgramSignatures) returns String
+	let base = String.from(overloadRegistrationBaseName(name))
+	let parts = String.from(name).split(OverloadNameSeparator)
+
+	if parts.count() == 1 'notAnOverloadMember'
+		return base
+	end 'notAnOverloadMember'
+
+	var types = StringArray.create()
+	var labels = StringArray.create()
+	var readingLabels = false
+
+	for i in 1 upto parts.count() 'eachSuffixPart'
+		let part = try parts.get(i) otherwise panic("registrationNameDisplay: parts.get OOB at {i} inside its own count()")
+
+		if part == OverloadLabelsMarker 'labelsBegin'
+			readingLabels = true
+			continue
+		end 'labelsBegin'
+
+		if not isParameterSpelling(part) 'notAParameter'
+			continue
+		end 'notAParameter'
+
+		if readingLabels 'aLabel'
+			labels.push(part)
+		end 'aLabel' else 'aType'
+			types.push(signatures.aliasIdentityDisplay(part.toByteArray()))
+		end 'aType'
+	end 'eachSuffixPart'
+
+	if labels.count() == 0 'distinguishedByType'
+		return "{base}({joinedWith(types, separator: OverloadParameterListSeparator)})"
+	end 'distinguishedByType'
+
+	if labels.count() != types.count() 'unpairedLabels'
+		panic("registrationNameDisplay: '{String.from(name)}' carries {labels.count()} labels beside {types.count()} types — `labelDistinguishedSuffix` writes one of each per parameter")
+	end 'unpairedLabels'
+
+	var declared = StringArray.create()
+
+	for i in 0 upto types.count() 'eachDeclaredParameter'
+		let label = try labels.get(i) otherwise panic("registrationNameDisplay: labels.get OOB at {i} inside its own count()")
+		let typeText = try types.get(i) otherwise panic("registrationNameDisplay: types.get OOB at {i} inside its own count()")
+		declared.push("{label} {typeText}")
+	end 'eachDeclaredParameter'
+
+	return "{base}({joinedWith(declared, separator: OverloadParameterListSeparator)})"
 end 'registrationNameDisplay'
 
 // Join a bare name and one already-rendered suffix into a registration name. THE one producer; the
@@ -10509,8 +10577,9 @@ end 'overloadRegistrationName'
 // A name carrying no separator comes back UNCHANGED, which is the answer and not a fallback: an unmangled
 // registration name IS its own bare name. `bareMethodName` takes the same shape one join over.
 //
-// ⚠ Two callers, wanting it for opposite reasons. `ParseStaging.duplicateFunctionMessage` is a DIAGNOSTIC
-// that must say what the author wrote, the name it explains being one no declaration spells;
+// ⚠ Callers want it for opposite reasons. A DIAGNOSTIC (`registrationNameDisplay`,
+// `ParseStaging.duplicateFunctionMessage`) must say what the author wrote, the name it explains being one no
+// declaration spells;
 // `SemanticCheck.WitnessDispatchTargets.create` needs the base because an overload's registration name
 // answers no interface requirement. Kept beside the join for the reason every inverse in this file is: the
 // separator has one speller.
@@ -10520,9 +10589,10 @@ export function overloadRegistrationBaseName(registered ByteArray) returns ByteA
 end 'overloadRegistrationBaseName'
 
 // ⭐ **THE SUFFIX THAT MARKS A CONTESTED `static` MEMBER, AND WHY IT IS IN THE RESERVED SPACE.** A suffix part
-// is otherwise a TYPE name or a PARAMETER name (`Parser.overloadTypeSuffix` / `overloadLabelSuffix`), and
-// `Parser.requireUnreservedName` refuses a declaration of either under the `__` prefix (E2051) — so no legal
-// overload set can render this one and contend for the key it makes. Declared ahead of its join for
+// is otherwise a TYPE name, a PARAMETER name (`Parser.overloadTypeSuffix` / `overloadLabelSuffix`), an
+// ordinal or `OverloadLabelsMarker`, and `Parser.requireUnreservedName` refuses a declared type or
+// parameter name under the `__` prefix (E2051) — so no legal overload set can render this one and contend
+// for the key it makes. Declared ahead of its join for
 // `OverloadNameSeparator`'s reason: the constant is the fact, and a reader who finds it wants the rule here.
 let StaticMemberNameSuffix = "__static"
 

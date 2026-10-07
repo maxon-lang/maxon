@@ -184,10 +184,9 @@ ok!
 overload set: they render the same suffix, claim one registration name and collide at the merge — the
 refusal falls out of the mint rather than out of a second check written beside it.
 
-⚠ The name the message quotes is one **neither declaration wrote**, because a contested name is registered
-under its suffix and never bare. That is the same shape a contested `extension` method has, and it earns the
-same extra sentence: told only `'pick#String'`, an author would search for a string that appears nowhere in
-their source.
+⚠ A contested name is registered under its parameter types, never bare. The message names the member in
+source form, `'pick(String)'`, and earns the same extra sentence a contested `extension` method does, saying
+where the collision comes from.
 ```maxon
 // --- file: a.maxon
 function pick(s String) returns String
@@ -209,7 +208,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:12:10: duplicate definition of function 'pick#String' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: <fragment>:12:10: duplicate definition of function 'pick(String)' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 <!-- test: two-files-each-overload-on-their-own-private-alias-of-one-spelling -->
@@ -338,7 +337,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:17:2: function 'pick#Count' is not exported
+error E3008: <fragment>:17:2: function 'pick(Count)' is not exported
 ```
 
 <!-- test: error.a-member-over-a-generic-instance-the-caller-cannot-name-is-refused-in-source-form -->
@@ -366,7 +365,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: <fragment>:18:2: function 'pick#Counts' is not exported
+error E3008: <fragment>:18:2: function 'pick(Counts)' is not exported
 ```
 
 <!-- test: error.a-generic-member-the-caller-cannot-name-is-refused -->

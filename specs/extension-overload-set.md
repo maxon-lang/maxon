@@ -348,10 +348,9 @@ MUST NOT BE SILENTLY ACCEPTED.** They render the same parameter-type suffix, so 
 registration name and collide at the merge — the refusal falls out of the mint rather than out of a
 second check written beside it.
 
-⚠ The name the message quotes is one **neither declaration wrote**, because a contested name is
-registered under its suffix and never bare. That is the same shape a free function contested across
-directories has, and it earns the same extra sentence: told only `'Five.pick#bool'`, an author would
-search for a string that appears nowhere in their source.
+⚠ A contested name is registered under its parameter types, never bare. The message names the member
+in source form, `'Five.pick(bool)'`, and earns the same extra sentence a free function contested across
+directories does, saying where the collision comes from.
 
 ⚠ Both declarations return `bool`, and that is not incidental: an overload set whose members disagree on
 their return type is a SEPARATE, pre-existing boundary (`SemanticCheck.reportOverloadReturnDisagreement`),
@@ -397,7 +396,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:27:18: duplicate definition of function 'Five.pick#bool' — 'Five.pick' is declared by an `extension` in more than one FILE, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: <fragment>:27:18: duplicate definition of function 'Five.pick(bool)' — 'Five.pick' is declared by an `extension` in more than one FILE, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 <!-- test: error.one-signature-declared-by-two-extensions-in-the-OTHER-fold-order -->
@@ -452,7 +451,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:27:18: duplicate definition of function 'Five.pick#bool' — 'Five.pick' is declared by an `extension` in more than one FILE, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: <fragment>:27:18: duplicate definition of function 'Five.pick(bool)' — 'Five.pick' is declared by an `extension` in more than one FILE, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 <!-- test: an-overload-set-on-a-generic-types-extension-resolves-at-the-instance -->

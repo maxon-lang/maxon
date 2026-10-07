@@ -25205,7 +25205,7 @@ export type Parser
 	end 'declarationRoleOf'
 
 	// ⭐⭐ **THE REGISTRATION NAME A DECLARATION CLAIMS — bare for the first of its name, MANGLED for a
-	// later overload of it** (D7). Every registry this function's declaration reaches is keyed by what this
+	// later overload of it**. Every registry this function's declaration reaches is keyed by what this
 	// returns (`funcSignatures`, `funcReturnTypes`, `rangeChecks`, the `IrFunction` itself, and so the
 	// emitted symbol), which is exactly why it is decided HERE — before `IrFunction.create` — rather than at
 	// the merge: a name chosen later would have to be re-keyed through all of them, and a lifted closure
@@ -25222,13 +25222,15 @@ export type Parser
 	//   2. **the TYPE suffix** (`process#String`) — the name is claimed and the parameter TYPES differ.
 	//      Types first, because that is what "overloading" means: the suffix then survives a parameter
 	//      RENAME, so renaming a parameter cannot silently move a symbol.
-	//   3. **the LABEL suffix** (`create#label`) — the types collide, so only the labels can tell the two
-	//      apart. This is the `slice(start, endIndex)` / `slice(start, length)` case, the one `/specs`
+	//   3. **the TYPE suffix, `__labels` and the LABEL suffix**
+	//      (`slice#Integer#Integer#__labels#start#length`) — the types collide, so only the labels can tell
+	//      the two apart. The types stay in the name so a diagnostic can print the declared parameter list
+	//      (`registrationNameDisplay`). This is the `slice(start, endIndex)` / `slice(start, length)` case, the one `/specs`
 	//      documents under "disambiguation by parameter names". Two overloads that reach here are
 	//      indistinguishable at a POSITIONAL call, which the resolver reports as E3007 — a call-site
 	//      fact and not a declaration-site one, so both are registered rather than refused.
-	//   4. **BOTH suffixes already claimed** ⇒ this is a genuine REDECLARATION. It keeps the bare name, so
-	//      it collides in `commitFuncSignatures` and earns the E3006 it always did.
+	//   4. **BOTH suffixes already claimed** ⇒ this is a genuine REDECLARATION. It takes the incumbent's
+	//      registration name, so it collides in `commitFuncSignatures` and earns E3006.
 	//
 	// ⚠ **UNIQUENESS IS ESTABLISHED BY CONSTRUCTION, NOT BY AN INJECTIVITY ARGUMENT.** A suffix is built
 	// from names, and however carefully it joins them there is always a pathological program whose label
@@ -25243,11 +25245,11 @@ export type Parser
 	//
 	//   • **an `extension` METHOD** — `Parser.foldExtensionDeclarationInto` visits every `extension` in the
 	//     program, so `ProgramSignatures.contestedExtensionMethods` can say that a `<Conformer>.<method>` is
-	//     declared by extensions in more than one FILE (X-contains).
+	//     declared by extensions in more than one FILE.
 	//   • **a FREE FUNCTION** — the declaration sweep visits every `function` in the program, so
 	//     `ProgramSignatures.isCrossFileOverloadedFreeFunction` can say that a registration base is declared
 	//     by more than one FILE OF ONE DIRECTORY. (More than one DIRECTORY is a different rule and a
-	//     different name: each such declaration is registered under its directory-qualified spelling, N1c.)
+	//     different name: each such declaration is registered under its directory-qualified spelling.)
 	//
 	// ⚠ **BOTH ANSWER ABOUT FILES AND NEITHER ABOUT PARAMETERS**, which is what keeps the mint below the one
 	// place a signature decides a name: a contested base sends EVERY declaration of it down the suffix
@@ -25258,15 +25260,15 @@ export type Parser
 	// ⚠⚠ **WHEN THE NAME IS CONTESTED, NOBODY KEEPS THE BARE SPELLING — INCLUDING THE FIRST DECLARATION.**
 	// That is the whole of why the refusal below still works. Two declarations whose parameters differ mint
 	// DIFFERENT suffixes and are two live overloads; two whose parameters agree mint the SAME suffix, claim
-	// one registration name and collide in `commitFuncSignatures` — the E3006 a genuine redeclaration has
-	// always earned, established by CONSTRUCTION rather than by a second cross-file check written beside this
+	// one registration name and collide in `commitFuncSignatures` — the E3006 a genuine redeclaration
+	// earns, established by CONSTRUCTION rather than by a second cross-file check written beside this
 	// one and free to disagree with it. Letting the first claimant keep the bare name would leave that pair
 	// as two live functions under two names, and the only thing left to notice it would be an E3007 at a call
 	// site — silent for a method nobody calls.
 	//
 	// It is the construction `freeFunctionRegistrationName` already takes for a free function contested
 	// across DIRECTORIES, where neither claimant keeps the bare name either, and it costs the same thing:
-	// the quoted name in a duplicate diagnostic is one no declaration wrote, which `duplicateFunctionMessage`
+	// the name a duplicate collides on is one no declaration wrote, which `duplicateFunctionMessage`
 	// answers for.
 	//
 	// ⚠ The bare name remains the overload set's KEY (`OverloadSetMap`) and the callee a call op carries, so
@@ -25302,13 +25304,11 @@ export type Parser
 		let contested = self.signatures.isContestedExtensionMethod(base) or self.namesACrossFileOverloadedFreeFunction(nameTok)
 
 		if not contested and not self.fileClaimsFuncName(registrationBase) 'firstOfThisName'
-			// ✅ **A PAIR MEMBER USED TO BE PUT THROUGH THE OVERLOAD REFUSALS HERE, AND W75 RETIRED THAT.** The
-			// four facts those refusals are about — a consume set, a by-reference column, a parameter default
-			// and a `throws` clause — were filed by the sweep under the ONE name the two members share, so
-			// neither key could read its own. They are now filed per registration key
-			// (`ProgramSignatures.sweepRegistrationKey`), which leaves a pair with nothing shared to be
-			// ambiguous about: a pair member is the FIRST of its own base and takes it outright, exactly as any
-			// other first declaration of a name does.
+			// A static/instance pair member skips the overload refusals: the four facts they are about — a
+			// consume set, a by-reference column, a parameter default and a `throws` clause — are filed per
+			// registration key (`ProgramSignatures.sweepRegistrationKey`), which leaves a pair with nothing
+			// shared to be ambiguous about. A pair member is the FIRST of its own base and takes it outright,
+			// exactly as any other first declaration of a name does.
 			self.claimFuncName(registrationBase)
 			return registrationBase
 		end 'firstOfThisName'
@@ -25323,7 +25323,7 @@ export type Parser
 			newSignature then break 'redeclaration'
 		end 'redeclaration'
 
-		let suffix = labelSuffix if overloadMembersHoldTypeSuffix(members, typeSuffix: typeSuffix) else typeSuffix
+		let suffix = labelDistinguishedSuffix(typeSuffix, labelSuffix: labelSuffix) if overloadMembersHoldTypeSuffix(members, typeSuffix: typeSuffix) else typeSuffix
 		let registered = self.unclaimedRegistrationName(registrationBase, suffix: suffix)
 		self.claimFuncName(registered)
 		members.push(OverloadMember.create(registered, typeSuffix: typeSuffix, labelSuffix: labelSuffix))
@@ -36569,7 +36569,7 @@ export type Parser
 	// scope, where `enclosingType` is empty and the key it would build cannot exist. `namesInnerAliasHere`
 	// would be the stricter test and is the wrong one HERE: it consults the body walk's live alias set, which
 	// a DECLARATION position (a parameter, a return clause) is read outside of.
-	// ⚠⚠ **THE ALIAS REGISTRIES ARE READ IN THE REAL PARSE ONLY, ON `allFilesFolded` (W49) — the gate
+	// ⚠⚠ **THE ALIAS REGISTRIES ARE READ IN THE REAL PARSE ONLY, ON `allFilesFolded` — the gate
 	// `parseTypeReference`'s own alias arms sit behind, arriving here for the same two reasons.**
 	//   1. **UNGATED, THE ANSWER WOULD BE A PROPERTY OF THE DISK.** Both sets are written by
 	//      `recordGenericAlias`, which `foldFile` calls when a file's token walk ENDS — so during the sweep an
@@ -36676,13 +36676,13 @@ export type Parser
 		return qualified
 	end 'genericAliasKeyFor'
 
-	// ⭐ **RESOLVE A `named` FUNCTION-ALIAS REFERENCE TO `function`** (P1.5-A1) — the read-side twin of
+	// ⭐ **RESOLVE A `named` FUNCTION-ALIAS REFERENCE TO `function`** — the read-side twin of
 	// `resolveNamedStruct`, for the types the WHOLE-PROGRAM signature index hands back as `named` because
 	// the SWEEP that recorded them ran before the function alias was known: a call RESULT
 	// (`returnTypeOf` → `let f = pickDouble()`) and a struct-FIELD read (`fieldTypeOf` → `let f = h.op`).
 	// `parseTypeReference` already re-tags a PARAMETER/return/annotation directly (the sweep is complete
 	// by the real parse), so this catches only the sweep-sourced types. A `named` that is neither a function
-	// alias (`function`) NOR a generic-instance alias (`genericInstance(gid)`, P1.6-B2 — `returns StrBox`, so
+	// alias (`function`) NOR a generic-instance alias (`genericInstance(gid)` — `returns StrBox`, so
 	// `let b = make()` binds a real generic instance with its type-arg managed drop, not an opaque `named` a
 	// field access rejects) NOR a TUPLE alias (`structRef`), and every non-`named` type, pass through
 	// untouched. The SWEEP records a return type before the index knows its aliases, so all three arrive here

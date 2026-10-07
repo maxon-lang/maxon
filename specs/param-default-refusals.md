@@ -379,7 +379,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:10:17: duplicate definition of function 'f#Integer' — 'f' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+error E3006: <fragment>:10:17: duplicate definition of function 'f(Integer)' — 'f' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 <!-- test: error-param-default-trailing-tokens -->

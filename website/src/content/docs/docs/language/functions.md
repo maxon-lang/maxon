@@ -169,6 +169,9 @@ end 'main'
 - Declaring the same overload twice, with the same parameter names and types, is a duplicate
   definition (**E3006**). Overloads with the same parameter types but different parameter names are
   separate declarations; a call whose labels cannot tell them apart is **E3007**.
+- Where a diagnostic tells overloads of one name apart, it names each by its parameter types,
+  `pick(String)`, adding the parameter names where only those differ:
+  `slice(start Integer, length Integer)`.
 - A type may declare a `static` method and an instance method with the same name and parameters:
   `Type.name()` calls the static one and `value.name()` the instance one.
 
