@@ -1734,6 +1734,8 @@ module function reportCompileError(e CompileError, sink DiagnosticSink = Diagnos
 		stdlibNotFound then sink.emit("error: could not locate the stdlib/ directory (every compile loads stdlib source)")
 		runtimeNotFound then sink.emit("error: could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)")
 		runtimeTierIsNotAProgram(r) then sink.emit("error: {r} is in the runtime/ tier, which every program compiles; it is not a program of its own. Build a program that uses it")
+		runtimeIrNameAbsent(name) then sink.emit("error: this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the pin would pin nothing, and neither would {EmitIrRuntimeFlagPrefix}{name} render anything. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, and an unreached stdlib body is eliminated")
+		runtimeIrNameIsProgramFunction(name, declaredIn) then sink.emit("error: '{name}' is the PROGRAM's own function — it is parsed from {declaredIn}, which is not the library, and the IR already renders it, so naming it in {EmitIrRuntimeFlagPrefix} (or a ```RequiredRuntime block) pins nothing new")
 		compileError or
 			abandoned then break 'report'
 	end 'report'

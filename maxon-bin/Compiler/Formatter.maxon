@@ -543,8 +543,8 @@ end 'producesValue'
 //
 // ⚠ `stringInterpStart`, `stringInterpEnd` and `stringFormatSpec` are deliberately absent, and their
 // absence is structural rather than an omission: all three live INSIDE an interpolated literal, whose
-// whole span this formatter emits from the raw source in one piece (see `interpolatedLiteralOpensAt`),
-// so none of them is ever the token before a `{`.
+// whole span this formatter emits from the raw source in one piece (see
+// `interpolatedLiteralLastFragment`), so none of them is ever the token before a `{`.
 function nonWordToken(kind TokenKind) returns bool
 	return kind == TokenKind.leftParen or kind == TokenKind.rightParen or kind == TokenKind.leftBracket or kind == TokenKind.rightBracket or kind == TokenKind.leftBrace or kind == TokenKind.rightBrace or kind == TokenKind.comma or kind == TokenKind.dot or kind == TokenKind.at or kind == TokenKind.colon or kind == TokenKind.plus or kind == TokenKind.minus or kind == TokenKind.star or kind == TokenKind.slash or kind == TokenKind.equals or kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals or kind == TokenKind.lessThan or kind == TokenKind.lessEquals or kind == TokenKind.greaterThan or kind == TokenKind.greaterEquals or kind == TokenKind.newline or kind == TokenKind.eof or kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.charLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.docComment
 end 'nonWordToken'
@@ -648,7 +648,7 @@ type FormatState
 	let tokens as TokenArray
 
 	// The source bytes, for the one construct re-emitted from raw source rather than from tokens: an
-	// interpolated string literal. See `interpolatedLiteralOpensAt`.
+	// interpolated string literal. See `interpolatedLiteralLastFragment`.
 	let source as ByteArray
 	let comments as SourceCommentMap
 
@@ -914,13 +914,12 @@ type FormatState
 			let prose = String.from(tok.value).trimEnd()
 			self.out.append("///" if prose.isEmpty() else "/// ")
 			self.out.append(prose)
-		end 'docComment' else if self.interpolatedLiteralOpensAt(index) 'interpolatedString'
+		end 'docComment' else if let last = try interpolatedLiteralLastFragment(tokens, first: index) 'interpolatedString'
 			// ⚠ An interpolated string is re-emitted from the RAW SOURCE, in one piece, because
 			// interpolations are PRE-LEXED into the main stream —
 			//   stringLiteral("a ") stringInterpStart <expr tokens> stringInterpEnd stringLiteral(" b")
 			// — and **the `{` and `}` are not tokens at all**. Emitting token by token would lose both braces
 			// AND silently reformat the interior: `"{ x+1 }"` would come back as `"{x + 1}"`.
-			let last = self.lastInterpolationFragment(index)
 			self.out.append("\"{self.sourceSpanBetween(index, last: last)}\"")
 			self.noteEmittedAt(tok.line)
 
@@ -1535,63 +1534,6 @@ type FormatState
 	end 'closerIsOnAnotherLine'
 
 	// --- Interpolated string literals ---
-
-	// Does the literal at `index` carry interpolations? A plain `"…"` is ONE `stringLiteral` and is
-	// re-quoted from its own value; an interpolated one is a run of fragments and is sliced out of the
-	// source.
-	function interpolatedLiteralOpensAt(index ElementIndex) returns bool
-		return self.kindAt(index) == TokenKind.stringLiteral and self.kindAt(index + 1) == TokenKind.stringInterpStart
-	end 'interpolatedLiteralOpensAt'
-
-	// The index of the literal's FINAL fragment. Nesting is counted, because `"{f("{y}")}"` is legal and
-	// the inner literal's own markers must not be mistaken for the outer one's.
-	function lastInterpolationFragment(index ElementIndex) returns ElementIndex
-		var last = index
-
-		// The caller has established that `index + 1` opens an interpolation.
-		var at = index + 1
-
-		while at < tokens.count() 'eachSegment'
-			var depth = 0
-
-			while at < tokens.count() 'oneInterpolation'
-				let kind = self.kindAt(at)
-
-				if kind == TokenKind.stringInterpStart 'opens'
-					depth = depth + 1
-				end 'opens' else if kind == TokenKind.stringInterpEnd 'closes'
-					depth = depth - 1
-
-					if depth == 0 'thisOneClosed'
-						break
-					end 'thisOneClosed'
-				end 'closes'
-
-				at = at + 1
-			end 'oneInterpolation'
-
-			// The fragment after a depth-zero close belongs to this literal. A stream that ends before
-			// one arrives cannot reach here — the lexer would have thrown and `format` returned the
-			// source — so the walk simply stops.
-			at = at + 1
-
-			if self.kindAt(at) != TokenKind.stringLiteral 'noClosingFragment'
-				break
-			end 'noClosingFragment'
-
-			last = at
-
-			// Only another interpolation continues the literal. Anything else ends it, which is what
-			// keeps two adjacent string literals from being absorbed into one span.
-			if self.kindAt(at + 1) != TokenKind.stringInterpStart 'literalEnds'
-				break
-			end 'literalEnds'
-
-			at = at + 1
-		end 'eachSegment'
-
-		return last
-	end 'lastInterpolationFragment'
 
 	// The raw source between the first fragment's start and the last fragment's end — everything between
 	// the literal's own quotes, braces and all. Addressed by BYTE offset: `String.slice` is

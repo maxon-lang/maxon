@@ -150,7 +150,13 @@ end 'main'
 
 `clone()` comes from the `Cloneable` interface (`function clone() returns Self`). The compiler generates it
 for any type whose fields are all cloneable; primitives, `String`, and collections of cloneable elements are
-cloneable. Declare `clone()` yourself for custom behaviour, or when a field's type is not cloneable.
+cloneable. A generic type's instance clones per instance — a `Map`, a `Set`, a declared `Box with String` —
+copying what its type arguments hold. Declare `clone()` yourself for custom behaviour, or for a type holding
+an uncloneable field.
+
+A copy of anything that is or holds a promise is **E3141**: a `clone()`, or an array's `slice` or `append`,
+reaching a promise through a field, a union payload, a generic instance or an array element. A promise owns a
+green thread exactly one owner may reclaim; `await` it and copy a value holding its result.
 
 A field declared at an [interface](/docs/language/composite-types/#interfaces) type is cloneable when **every** conformer of that interface
 in the program is — the copy runs the conformer the value actually holds, which is not known until the

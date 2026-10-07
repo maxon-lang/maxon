@@ -1,0 +1,22 @@
+let CaseDirName = "an-emit-ir-runtime-name-the-program-lacks-is-refused"
+let MainFileName = "main.maxon"
+let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
+let UnknownRuntimeName = "noSuchRuntimeFunction"
+let PanicMarker = "panic at"
+let StackTraceMarker = "Stack trace:"
+
+test 'an --emit-ir-runtime= name the program does not contain is refused, not a panic'
+	let dir = freshCaseDir(CaseDirName)
+	let source = dir.join(MainFileName)
+	writeStagedFile(source, content: MainSource)
+
+	let option = "{EmitIrRuntimeOptionPrefix}{UnknownRuntimeName}"
+	let build = runDriver([BuildCommandWord, source.toString(), option], workingDirectory: dir)
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	Expect.equal(build.exitCode(), expected: 1, message: "`maxon {BuildCommandWord} main.maxon {option}` did not exit 1. {said}")
+	Expect.contains(build.stderr, needle: UnknownRuntimeName, message: "the refusal does not name the `{EmitIrRuntimeOptionPrefix}` value it refused. {said}")
+	Expect.isFalse(build.stderr.contains(PanicMarker), message: "the refusal is a panic rather than an error. {said}")
+	Expect.isFalse(build.stderr.contains(StackTraceMarker), message: "the refusal carries a stack trace. {said}")
+end 'an --emit-ir-runtime= name the program does not contain is refused, not a panic'

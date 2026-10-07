@@ -130,7 +130,11 @@ end 'main'
   within or hold a module-level `let`'s record (**E3166**, at the `var`'s declaration, naming the call). What
   a call hands back is followed through further calls, witness dispatches and calls through function values;
   a record built fresh from numbers read out of a `let` is legal. The same fact refuses a write, inside a
-  function, through a record a call handed back out of a `let` (**E3159**).
+  function, through a record a call handed back out of a `let` — through its `otherwise` fallback, a ternary
+  or `match` arm — at a field write (**E3159**) and at a method that writes its receiver (**E3019**).
+- A field of a module-level `let` is that `let`'s own storage: a `var` made from it (`var m = H.index`) and
+  written through is **E3078**, as one made from a field of a local `let` is. Read it through a `let`, or bind
+  a `clone()`.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](/docs/language/async/#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](/docs/cli/error-codes/#e3173--registryreachedfromglobalinitializer): the

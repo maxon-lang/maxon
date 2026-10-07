@@ -7771,12 +7771,18 @@ enum GraphCascadePurpose
 	// Lets a function value through, which no transfer may do: asked only to word a refused transfer —
 	// would the graph walk if not for its function values?
 	transferWalkPastFunctionValues
+
+	// `deepClone` that also refuses any green thread it reaches: asked only of a source-level copy.
+	// Kept apart because `deepClone` also gates cloner synthesis program-wide, and refusing a promise
+	// there would refuse unrelated types that merely reach the same classifier.
+	sourceClone
 end 'GraphCascadePurpose'
 
 function purposeCrossesAFunctionValue(purpose GraphCascadePurpose) returns bool
 	return match purpose 'purpose'
 		deepClone or
-			transferWalkPastFunctionValues gives true
+			transferWalkPastFunctionValues or
+			sourceClone gives true
 		transferWalk gives false
 	end 'purpose'
 end 'purposeCrossesAFunctionValue'
@@ -7785,9 +7791,31 @@ function purposeWalksThroughAWitness(purpose GraphCascadePurpose) returns bool
 	return match purpose 'purpose'
 		transferWalk or
 			transferWalkPastFunctionValues gives true
-		deepClone gives false
+		deepClone or
+			sourceClone gives false
 	end 'purpose'
 end 'purposeWalksThroughAWitness'
+
+function purposeRefusesAGreenThread(purpose GraphCascadePurpose) returns bool
+	return match purpose 'purpose'
+		sourceClone gives true
+		deepClone or
+			transferWalk or
+			transferWalkPastFunctionValues gives false
+	end 'purpose'
+end 'purposeRefusesAGreenThread'
+
+module enum SourceCloneVerdict
+	cloneable
+	holdsAGreenThread
+	holdsAnUncloneable
+end 'SourceCloneVerdict'
+
+// Asked only once the `sourceClone` walk has refused: the two walks differ only in refusing a green
+// thread, so a type `deepClone` accepts was refused for one.
+function refusedSourceCloneVerdict(deepCloneable bool) returns SourceCloneVerdict
+	return SourceCloneVerdict.holdsAGreenThread if deepCloneable else SourceCloneVerdict.holdsAnUncloneable
+end 'refusedSourceCloneVerdict'
 
 // A conformer's strategy as the word a witness table holds for `action`. `asElement: true` upstream means a
 // type the action serves always answers `direct`, so an entry taking an element walk is an invariant break;
@@ -23948,6 +23976,44 @@ export type ProgramSignatures
 		return try decl.dataLabel.label() otherwise panic("ProgramSignatures.dataLabelOf: top-level '{String.from(decl.name)}' has no .data label — `assignDataLabels` labels every STORED decl in the arena, and it runs inside `evaluateInitializers`")
 	end 'dataLabelOf'
 
+	export function addImagedModuleLetKinds(into HeldRecordKinds)
+		for i in 0 upto self.decls.count() 'eachDecl'
+			let kind = try self.imagedRecordKindOf(self.declAt(i)) otherwise continue
+			into.kinds.insert(kind)
+		end 'eachDecl'
+	end 'addImagedModuleLetKinds'
+
+	export function nameIsAnImagedRecordLet(name ByteArray, readerFilePath FilePath) returns bool
+		match self.constantDeclFor(name, readerFilePath: readerFilePath) 'lookup'
+			found(index) then return self.declIsAnImagedRecord(self.declAt(index))
+			notFound then return false
+		end 'lookup'
+	end 'nameIsAnImagedRecordLet'
+
+	function declIsAnImagedRecord(decl TopLevelDecl) returns bool
+		_ = try self.imagedRecordKindOf(decl) otherwise return false
+		return true
+	end 'declIsAnImagedRecord'
+
+	function imagedRecordKindOf(decl TopLevelDecl) returns ByteArray throws AbsentError
+		if decl.mutable or decl.hasStorage 'notAnImage'
+			throw AbsentError.absent
+		end 'notAnImage'
+
+		match decl.outcome 'shape'
+			arrayValue or
+				containerValue then return self.mangleGenericInstance(genericInstanceIdOf(self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
+			factoryValue(calls, root, _) then return self.constStructTypeName(calls, root: root, declName: decl.name)
+			boxedUnionValue(typeName, _) then return typeName
+			pending or
+				evaluating or
+				value or
+				failed or
+				poisoned or
+				managedValue then throw AbsentError.absent
+		end 'shape'
+	end 'imagedRecordKindOf'
+
 	// The `.data` labels of the `let`-declared globals that have a slot: module storage no write reaches, which
 	// `StorageProvenance` asks of a `globalAddr` — an op that names its slot by label alone.
 	export function immutableGlobalDataLabels() returns GlobalDataLabelSet
@@ -26502,6 +26568,17 @@ export type ProgramSignatures
 		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label) otherwise return DeclaredArrayInstance.none
 		return self.arrayInstanceOfDeclaredType(param.declared, interner: self.typeNames, readerFilePath: param.declFilePath)
 	end 'arrayInstanceDeclaredAtParam'
+
+	export function arrayInstanceDeclaredAtParamOfReceiver(callee ByteArray, sourceIndex ParamCount, label ByteArray, receiver GenericInstanceId, readerFilePath FilePath) returns DeclaredArrayInstance
+		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label) otherwise return DeclaredArrayInstance.none
+		let substituted = self.substituteThroughInstanceInterned(param.declared, id: receiver, interner: self.typeNames)
+
+		if maxonTypesDenoteSame(substituted, b: param.declared) 'theReceiverFixesNothing'
+			return self.arrayInstanceOfDeclaredType(param.declared, interner: self.typeNames, readerFilePath: param.declFilePath)
+		end 'theReceiverFixesNothing'
+
+		return self.arrayInstanceOfDeclaredType(substituted, interner: self.typeNames, readerFilePath: readerFilePath)
+	end 'arrayInstanceDeclaredAtParamOfReceiver'
 
 	export function tupleTypeNameDeclaredAtParam(callee ByteArray, sourceIndex ParamCount, label ByteArray) returns ByteArray throws AbsentError
 		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label)
@@ -40076,7 +40153,33 @@ export type ProgramSignatures
 		return self.typeSupportsDeepClone(self.containerElementType(id), visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
 	end 'arrayElementSupportsDeepClone'
 
-	// ⭐ **CAN A DECLARED STRUCT BE DEEP-CLONED — the front-end gate for a SOURCE-LEVEL `p.clone()`?**
+	module function sourceCloneVerdictOfInstance(id GenericInstanceId) returns SourceCloneVerdict
+		let instance = MaxonType.genericInstance(id)
+
+		if self.typeSupportsDeepClone(instance, visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'cloneable'
+			return SourceCloneVerdict.cloneable
+		end 'cloneable'
+
+		return refusedSourceCloneVerdict(self.typeSupportsDeepClone(instance, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone))
+	end 'sourceCloneVerdictOfInstance'
+
+	module function sourceCloneVerdictOfAggregate(name ByteArray) returns SourceCloneVerdict
+		if self.aggregateNameSupportsDeepClone(name, visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'cloneable'
+			return SourceCloneVerdict.cloneable
+		end 'cloneable'
+
+		return refusedSourceCloneVerdict(self.aggregateSupportsDeepClone(name))
+	end 'sourceCloneVerdictOfAggregate'
+
+	module function sourceCloneVerdictOfArrayElement(id GenericInstanceId) returns SourceCloneVerdict
+		if self.typeSupportsDeepClone(self.containerElementType(id), visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'cloneable'
+			return SourceCloneVerdict.cloneable
+		end 'cloneable'
+
+		return refusedSourceCloneVerdict(self.arrayElementSupportsDeepClone(id))
+	end 'sourceCloneVerdictOfArrayElement'
+
+	// ⭐ **CAN A DECLARED STRUCT BE DEEP-CLONED?**
 	// `arrayElementSupportsDeepClone`'s twin, and it exists for that one's exact reason: the gate and
 	// `synthesizeStructCascade` must agree, or the synthesizer meets an `unsupported` field on a program the
 	// front end accepted and PANICS — a compiler crash on valid-looking input (see `managedNameCascadeStrategy`,
@@ -40086,8 +40189,9 @@ export type ProgramSignatures
 	// the ids in a parser artifact's interner are not this index's — the mispairing this file's
 	// `unionHasManagedPayload` header calls unrepresentable when the question is asked by name. A STRUCT and a
 	// UNION reach it alike, which is why it is named for the aggregate and not for one of them: both source
-	// `.clone()` doors (`Parser.emitSynthesizedStructClone`, `Parser.emitSynthesizedUnionClone`) gate on this
-	// one answer, and `aggregateNameSupportsDeepClone` below routes each to its own field/payload walk.
+	// `.clone()` doors (`Parser.emitSynthesizedStructClone`, `Parser.emitSynthesizedUnionClone`) gate on the
+	// same walk through `sourceCloneVerdictOfAggregate`, and `aggregateNameSupportsDeepClone` below routes
+	// each to its own field/payload walk.
 	//
 	// ⚠ **IT GOES THROUGH `aggregateNameSupportsDeepClone`, WHICH IS THE WHOLE OF WHAT THE TWIN DOES ONCE IT
 	// HOLDS A NAME.** Calling the field walk directly skips the compiler-owned arm, which leaves this gate and
@@ -40639,10 +40743,11 @@ export type ProgramSignatures
 		end 'restsASlot'
 	end 'recordRestsAnOpaqueSlot'
 
-	// Recursively: can a value of `type` be deep-cloned? A scalar owns no heap (nothing to clone); a String is a
-	// `direct` leaf; a struct/union is clonable iff every managed field/payload is; a trivial-element Array is a
-	// `direct` leaf; a managed-element Array or chain is clonable iff its element is; a non-Array generic
-	// instance (`Box with String`) is clonable iff every one of its SUBSTITUTED fields is. `visited`
+	// Recursively: can a value of `type` be deep-cloned? A scalar owns no heap (nothing to clone), and a promise
+	// is such a leaf to every purpose but `sourceClone`, which refuses it; a String is a `direct` leaf; a
+	// struct/union is clonable iff every field/payload owing a drop is; an Array or chain is clonable iff its
+	// element is; a non-Array generic instance (`Box with String`) is clonable iff every one of its
+	// SUBSTITUTED fields is. `visited`
 	// holds every name already in flight — aggregate, generic-alias and mangled-instance alike — and breaks a
 	// recursive type (`type Node { var next as Node }`, `typealias Cyc = Array with Cyc`). See
 	// `cloneWalkMayDescendInto`, the one door all three arms mark through.
@@ -40661,7 +40766,7 @@ export type ProgramSignatures
 		let tag = maxonTypeTag(type)
 
 		if not self.typeIsManaged(type, from: self.typeNames) 'trivialLeaf'
-			return true
+			return not purposeRefusesAGreenThread(purpose) or not self.typeIsAGreenThreadHandle(type, from: self.typeNames)
 		end 'trivialLeaf'
 
 		if tagIsByteRecord(tag) 'byteRecord'
@@ -40800,7 +40905,7 @@ export type ProgramSignatures
 		end 'union'
 	end 'aggregateNameSupportsDeepClone'
 
-	// An ELEMENT-BEARING RECORD instance recurses into its element (a trivial one is a clonable leaf; a managed
+	// An ELEMENT-BEARING RECORD instance recurses into its element (a trivial one is a leaf; a managed
 	// one must itself be deep-cloneable); any other instance (`Box with String`) walks its own SUBSTITUTED
 	// fields, exactly as a declared struct walks its declared ones.
 	//
@@ -40822,7 +40927,7 @@ export type ProgramSignatures
 			// The gate half of `elementRecordCascadeStrategy`'s refusal — see
 			// `containerOpaqueElementCanBeManaged` for the measurement and
 			// `elementRecordCascadeStrategy` for why the two move together or not at all.
-			return not self.containerOpaqueElementCanBeManaged(id)
+			return self.typeSupportsDeepClone(self.containerElementType(id), visited: visited, purpose: purpose) and not self.containerOpaqueElementCanBeManaged(id)
 		end 'trivialElement'
 
 		// A managed-element record clones its elements through `<containerClone>(field, funcAddr(elementClone))`
@@ -40869,13 +40974,15 @@ export type ProgramSignatures
 		end 'alreadyInFlight'
 
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
-			if not self.genericInstanceFieldIsManaged(id, index: i) 'scalar'
+			// The SUBSTITUTED type, which is what the synthesized body clones — `genericInstanceFieldDropCallee`
+			// reads the same column for the same reason: the gate and the emitter must classify one type.
+			let fieldType = self.substituteInstanceFieldType(id, index: i)
+
+			if not self.typeOwesDrop(fieldType, from: self.typeNames) 'scalar'
 				continue
 			end 'scalar'
 
-			// The SUBSTITUTED type, which is what the synthesized body clones — `genericInstanceFieldDropCallee`
-			// reads the same column for the same reason: the gate and the emitter must classify one type.
-			if not self.typeSupportsDeepClone(self.substituteInstanceFieldType(id, index: i), visited: visited, purpose: purpose) 'unsupportedField'
+			if not self.typeSupportsDeepClone(fieldType, visited: visited, purpose: purpose) 'unsupportedField'
 				return false
 			end 'unsupportedField'
 		end 'eachField'
@@ -40899,7 +41006,7 @@ export type ProgramSignatures
 		let layout = self.structLayoutOf(structName)
 
 		for i in 0 upto layout.fieldCount() 'eachField'
-			if not self.structFieldIsManaged(structName, index: i) 'scalar'
+			if not self.structFieldOwesDrop(structName, index: i) 'scalar'
 				continue
 			end 'scalar'
 
@@ -40920,7 +41027,9 @@ export type ProgramSignatures
 			for fi in 0 upto payloads.count() 'eachField'
 				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.unionPayloadsSupportDeepClone: payloadsAt count disagrees with get at {fi}")
 
-				if not payloadClassIsManaged(classifyUnionPayload(self, typeNames: self.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
+				let payloadClass = classifyUnionPayload(self, typeNames: self.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)
+
+				if not payloadClassIsManaged(payloadClass) and not payloadClassIsAGreenThread(payloadClass) 'scalar'
 					continue
 				end 'scalar'
 
@@ -43203,6 +43312,7 @@ type IndexJournal
 			deepClone then self.deepCloneNames.push(name)
 			transferWalk then self.transferWalkNames.push(name)
 			transferWalkPastFunctionValues then panic("IndexJournal.noteCascadeAnswer: the walk past function values names the obstacle of a refused transfer and is never memoized")
+			sourceClone then panic("IndexJournal.noteCascadeAnswer: a source `.clone()` gate is asked once per receiver and is never memoized")
 		end 'purpose'
 	end 'noteCascadeAnswer'
 

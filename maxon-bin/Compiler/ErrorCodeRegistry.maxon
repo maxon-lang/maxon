@@ -508,7 +508,8 @@ export enum ErrorCode
 	// the one write that is not a parameter mutation, so `let acc = …` then `acc.add(10)` stands. A value — one a
 	// `var` holds included — is refused while an immutable binding is read after the call whose record it may be
 	// (`grow(pass(a))`, `pass(a).push(9)`), that borrows it out of the same mutable storage, or that may be the same
-	// record by another road. Make the binding a `var`, or pass a `clone()`. Asked by name by the Maxon-tier mutation
+	// record by another road — a module-level `let`'s record a call hands back through an `otherwise` fallback or a
+	// ternary arm included. Make the binding a `var`, or pass a `clone()`. Asked by name by the Maxon-tier mutation
 	// check and, of a value, by `StorageProvenance`. Inside a closure, a captured name the closure holds as its
 	// own copy is refused at a parameter the callee writes too: the write could not reach the binding the author
 	// named.
@@ -775,11 +776,12 @@ export enum ErrorCode
 
 	// A mutable name would reach a record an immutable name still reads. `var b = a` or `b = a` from a `let` that is
 	// not its record's sole reference — an alias, a borrow of an element, a module-level `let` — while `a` is read
-	// after it; `var b = a.field` always; and `var b = f(a)`, or any value no name spells that may be or lie within
-	// the record of an immutable name read afterwards — a `return` hands back a reference rather than a copy — when
-	// `b` goes on to write that record. A `let` that is its record's sole reference moves instead (E3102). Keep `b`
-	// immutable (`let`), or bind an independent copy made with `clone()`; a value type (int/float/bool/byte) and a
-	// function value are copies and are allowed. Asked of a source the parser can name
+	// after it; `var b = a.field` always, a module-level `let`'s field (`var m = H.index`) included; and
+	// `var b = f(a)`, or any value no name spells that may be or lie within the record of an immutable name read
+	// afterwards — a `return` hands back a reference rather than a copy — when `b` goes on to write that record.
+	// A `let` that is its record's sole reference moves instead (E3102). Keep `b` immutable (`let`), or bind an
+	// independent copy made with `clone()`; a value type (int/float/bool/byte) and a function value are copies
+	// and are allowed. Asked of a source the parser can name
 	// (`Parser.requireMutableBindingSource`) and, once every body is parsed, of the rest
 	// (`StorageProvenance.checkMoveSites`, `checkMutableBindingSites`).
 	semanticVarFromImmutable = "E3078"
@@ -1594,6 +1596,10 @@ export enum ErrorCode
 	// a parameter. Only a string LITERAL this frame wrote is promoted to a fresh owned copy at the send.
 	// The cure for those two is `.clone()`, which is explicit precisely because it is O(n) and the language
 	// makes costs visible; or restructuring so the value is freshly built at the send.
+	// A `spawn`'s factory argument that the factory keeps moves into the service's state on the same terms,
+	// so a borrowed one -- a parameter, a field, an element, a module-level `let`'s record, a borrowed
+	// `String` -- is refused, naming the argument and the `spawn`. A field read off a temporary built in the
+	// factory call's own argument list crosses, because the `spawn` releases that temporary.
 	// The THIRD is about what the record HOLDS rather than about the record: SOLENESS IS NOT TRANSITIVE.
 	// A box this frame owns alone may point at a record a second owner holds too, because every co-owning
 	// store (a struct-field or union-payload move-in of a borrow, a consuming call, a container push) takes
@@ -1684,6 +1690,10 @@ export enum ErrorCode
 	// move-out (`pop`, `remove`), whose result the caller owns outright.
 	// It is NOT about the promise being un-awaitable: every one of these reads yields a perfectly good
 	// promise. It is about there being no way to say which slot stopped owning it.
+	// A COPY is refused for the same reason: a `clone()`, or an array's `slice` or `append`, of anything that
+	// is or holds a promise -- through a struct field, a union payload, a generic instance (`Map`, `Set`, a
+	// declared `Box with T`) or an array element -- would give two owners one thread. `await` the promise and
+	// copy a value holding its result.
 	semanticPromiseCannotBeBorrowed = "E3141"
 
 	// A promise is USED after it was consumed. A promise owns a green thread, and a green thread has
@@ -1884,7 +1894,9 @@ export enum ErrorCode
 	// still reaches, whichever was declared first — a `let` whose record it may be, a `let` of an immutable record it
 	// may lie within, a live `let` that borrows it out of the same mutable storage, or one that may be the same
 	// record by another road: `let p = box.item` followed by `box.item.x = 99`, or `let a = …` stored into `box.item`
-	// and then `box.item.x = 99`. A method writing a receiver that may be the `let`'s own record is E3019 instead. A
+	// and then `box.item.x = 99`. A module-level `let`'s record that a call hands back — an `otherwise` fallback, a
+	// ternary or `match` arm — is refused at a field write the same way. A method writing a receiver that may be
+	// the `let`'s own record is E3019 instead. A
 	// record is reachable through immutable names or through mutable paths, never both at once. Finish with the `let`
 	// first, or write an independent copy made with `clone()`. Decided by `StorageProvenance.checkWriteThroughSites`
 	// and `checkReceiverWrites`.

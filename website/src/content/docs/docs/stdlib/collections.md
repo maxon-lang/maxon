@@ -45,7 +45,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 |--------|---------|-------------|
 | `Array.create()` | `Array` | An empty array. |
 | `[a, b, c]` | `Array` | A literal; its element type is inferred from context or from the first element. |
-| `clone()` | `Array` | A second array over the same elements. Storage is shared copy-on-write and separates on the first write to either. An element that is a record holding a field at an interface type is copied through that field's conformer; an element held at an interface type itself is not supported (an element slot is one machine word). |
+| `clone()` | `Array` | A second array over the same elements. Storage is shared copy-on-write and separates on the first write to either. An element that is a record holding a field at an interface type is copied through that field's conformer; an element held at an interface type itself is refused (an element slot is one machine word). A copy of an element that is or holds a promise is E3141, here and at `slice` and `append`. |
 | `Array.from(source Iterable)` | `Array` | Collect every element of an iterable, called through an alias (`ScoreArray.from(range)`). The iterable must bind `Element` to the alias's own element (E3127). |
 | `Array.init(managed)` | `Array` | Wrap raw compiler-managed storage; used by the compiler and the library. |
 | `managed` | field | The array's raw storage, for `appendMemory` and library code. |
@@ -188,6 +188,7 @@ order, which is unspecified. The table resizes when it is three-quarters full.
 | `remove(key Key)` | `bool` | Remove the entry; true when the key was present. |
 | `count()` | `int(0 to 4611686018427387904)` | Number of entries. |
 | `getCapacity()` | table capacity | Total slots in the table: `0` for a map from `create()` until its first insert, `16` after that for a small map. |
+| `clone()` | `Map` | An independent copy of every key and value; writing either map leaves the other unchanged. A map whose values are or hold promises is E3141. |
 | `createIterator()` | `MapIterator` | Throws `IterationError.exhausted` when empty. |
 
 `MapIterator` implements `Iterator with (Key, Value)`: `current()` and `advance()`.
@@ -239,6 +240,7 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 | `remove(element Element)` | `bool` | Remove; true when the element was present. |
 | `count()` | `int(0 to 4611686018427387904)` | Number of elements. |
 | `getCapacity()` | table capacity | Total slots in the table. |
+| `clone()` | `Set` | An independent copy of every element; changing either set leaves the other unchanged. |
 | `createIterator()` | `SetIterator` | Throws `IterationError.exhausted` when empty. |
 
 `SetIterator` implements `Iterator with Element`: `current()` and `advance()`.

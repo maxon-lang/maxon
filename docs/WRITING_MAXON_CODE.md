@@ -133,6 +133,9 @@ connect(host: "localhost", port: 8080, timeout: 5000)
 connect("localhost", port: 8080, timeout: 5000)
 ```
 
+A [builtin](#builtin-functions) such as `min` or `max` is the exception: it has no declaration to name a
+parameter, so all of its arguments are positional and naming one is **E2067**.
+
 ### 7. `main` MUST return `ExitCode` and MUST NOT throw
 
 ```maxon
@@ -908,9 +911,9 @@ ceil(x)      // round toward positive infinity
 round(x)     // round to nearest (banker's rounding)
 trunc(x)     // truncate toward zero, returns int
 
-// Two-argument (second arg is named)
-min(a, b: b)   // minimum of two values
-max(a, b: b)   // maximum of two values
+// Two-argument (both positional: naming a builtin's argument is E2067)
+min(a, b)      // minimum of two values
+max(a, b)      // maximum of two values
 
 // Compile-time
 sizeof(TypeName)   // size of a type in bytes (compile-time constant)

@@ -283,10 +283,15 @@ end 'main'
 either side could write, because the two green threads may run at the same time on different processors:
 
 - A `let` or `var`, a temporary or a literal argument is **moved** into the service; reading the sender's
-  variable afterwards is **E3102**. Factory arguments and replies are moved too. The handler owns what it was
-  sent, so it may keep it or write it.
-- A value the sender does not solely own — held in a container, borrowed from a parameter — is **E3138**;
-  send a `.clone()`.
+  variable afterwards is **E3102**. Replies are moved too, and so is every argument a `spawn`'s factory keeps
+  in the service's state. The handler owns what it was sent, so it may keep it or write it.
+- A value with an owner besides the sender — held in a container, borrowed from a parameter — is **E3138**;
+  send a `.clone()`. A factory argument the factory keeps follows the same rule: one borrowed from a
+  parameter, a field, an element or a module-level `let`'s record, or a borrowed `String`, is **E3138**, and
+  a field read off a temporary built inside the factory call's own argument list crosses, because the `spawn`
+  releases that temporary.
+- A `spawn` of a factory declared more than once, whose declarations keep an argument differently, is
+  **E2015**; give the factories distinct names.
 - A parameter type that cannot cross at all — a promise, a function value, an opaque type parameter — is
   **E3135**. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
   service the reply is judged at the `spawn` that fixes `T`, and a `returns T` message that hands back the

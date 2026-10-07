@@ -1141,6 +1141,101 @@ end 'main'
 error E3019: <fragment>:7:4: cannot pass 'b' to function that mutates parameter 'self' (in main)
 ```
 
+<!-- test: error.top-level-let-field-map-var-alias -->
+A FIELD of a `let` whose record `__module_init` builds is that `let`'s own storage: `H.index` is the `let`'s
+map, so a `var` made from it and written through is refused as one made from a field of a local `let` is.
+```maxon
+typealias Key = int(0 to 1000)
+typealias Items = Array with Key
+typealias ItemIndex = Map with (Key, Items)
+
+type Holder
+	export let index as ItemIndex
+
+	static function create() returns Self
+		var index = ItemIndex.create()
+		index.upsert(1, value: [7])
+		return Self{index: index}
+	end 'create'
+end 'Holder'
+
+let H = Holder.create()
+
+function main() returns ExitCode
+	var m = H.index
+	m.upsert(2, value: [9])
+	return H.index.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:19:6: cannot assign a value, which may share storage with a field of an immutable variable, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: top-level-let-field-accessor-read-only -->
+An accessor may hand that field back, and a caller that only reads it compiles and runs.
+```maxon
+typealias Key = int(0 to 1000)
+typealias Items = Array with Key
+typealias ItemIndex = Map with (Key, Items)
+
+type Holder
+	export let index as ItemIndex
+
+	static function create() returns Self
+		var index = ItemIndex.create()
+		index.upsert(1, value: [7])
+		return Self{index: index}
+	end 'create'
+end 'Holder'
+
+let H = Holder.create()
+
+function index() returns ItemIndex
+	return H.index
+end 'index'
+
+function main() returns ExitCode
+	let found = index()
+	return found.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: error.top-level-let-field-accessor-result-write -->
+Writing through what the accessor handed back is refused as the write through the field read in place is.
+```maxon
+typealias Key = int(0 to 1000)
+typealias Items = Array with Key
+typealias ItemIndex = Map with (Key, Items)
+
+type Holder
+	export let index as ItemIndex
+
+	static function create() returns Self
+		var index = ItemIndex.create()
+		index.upsert(1, value: [7])
+		return Self{index: index}
+	end 'create'
+end 'Holder'
+
+let H = Holder.create()
+
+function index() returns ItemIndex
+	return H.index
+end 'index'
+
+function main() returns ExitCode
+	var m = index()
+	m.upsert(2, value: [9])
+	return H.index.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:24:4: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'self' (in main)
+```
+
 <!-- test: error.top-level-let-array-ternary-alias -->
 And through a value MERGE, which is the door that costs one extra keyword. The mark that refuses the two
 above rides the VALUE, and a merge mints a NEW value — so the phi has to inherit it, or `var pick = A if c
@@ -1184,6 +1279,34 @@ end 'main'
 ```
 ```maxoncstderr
 error E3019: <fragment>:16:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: error.top-level-let-array-handed-back-as-a-map-miss-fallback -->
+And through a call whose `otherwise` fallback is the `let` array: `pick` hands back `Empty`'s own record
+whenever the lookup misses, so the push through `mine` is refused as the direct alias is.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Items = Array with Count
+typealias ItemIndex = Map with (Count, Items)
+
+let Empty = Items.create()
+
+function pick(index ItemIndex, k Count) returns Items
+	return try index.get(k) otherwise Empty
+end 'pick'
+
+function main() returns ExitCode
+	var index = ItemIndex.create()
+	var stored = Items.create()
+	stored.push(7)
+	index.upsert(1, value: stored)
+	var mine = pick(index, k: 9)
+	mine.push(3)
+	return Empty.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:18:7: cannot pass 'mine' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: top-level-array-merge-of-mutable-globals-shares -->
@@ -2554,6 +2677,43 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3159: <fragment>:31:2: cannot write through 'b', which may be the record of a module-level `let` a call handed back; use clone()
+```
+
+<!-- test: error.a-local-var-may-not-write-through-a-lets-record-a-map-miss-hands-back -->
+`pick` hands back `a`'s own record whenever the lookup misses, through its `otherwise` fallback.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias BoxIndex = Map with (Integer, Box)
+
+let a = Box.create(7)
+
+function pick(index BoxIndex, k Integer) returns Box
+	return try index.get(k) otherwise a
+end 'pick'
+
+function show() returns Integer
+	return a.n
+end 'show'
+
+function main() returns ExitCode
+	var index = BoxIndex.create()
+	index.upsert(1, value: Box.create(1))
+	var b = pick(index, k: 9)
+	b.n = 9
+	print("a={show()} b={b.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3159: <fragment>:26:2: cannot write through 'b', which may be the record of a module-level `let` a call handed back; use clone()
 ```
 
 <!-- test: a-var-initializer-may-take-a-number-read-through-a-nested-call -->

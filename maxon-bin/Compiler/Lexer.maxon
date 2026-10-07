@@ -410,6 +410,50 @@ module function tokenKindClosesABracket(kind TokenKind) returns bool
 	return kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace
 end 'tokenKindClosesABracket'
 
+module function interpolatedLiteralLastFragment(tokens TokenArray, first ElementIndex) returns ElementIndex throws AbsentError
+	if tokenKindAt(tokens, index: first) != TokenKind.stringLiteral or tokenKindAt(tokens, index: first + 1) != TokenKind.stringInterpStart 'notAnInterpolatedLiteral'
+		throw AbsentError.absent
+	end 'notAnInterpolatedLiteral'
+
+	var last = first
+
+	while tokenKindAt(tokens, index: last + 1) == TokenKind.stringInterpStart 'eachHole'
+		var depth = 0
+		var at = last + 1
+
+		while true 'toTheHoleEnd'
+			let kind = tokenKindAt(tokens, index: at)
+
+			if kind == TokenKind.stringInterpStart 'opens'
+				depth = depth + 1
+			end 'opens' else if kind == TokenKind.stringInterpEnd 'closes'
+				depth = depth - 1
+			end 'closes' else if kind == TokenKind.eof 'unclosed'
+				throw AbsentError.absent
+			end 'unclosed'
+
+			if depth == 0 'holeEnded'
+				break
+			end 'holeEnded'
+
+			at = at + 1
+		end 'toTheHoleEnd'
+
+		if tokenKindAt(tokens, index: at + 1) != TokenKind.stringLiteral 'noClosingFragment'
+			throw AbsentError.absent
+		end 'noClosingFragment'
+
+		last = at + 1
+	end 'eachHole'
+
+	return last
+end 'interpolatedLiteralLastFragment'
+
+function tokenKindAt(tokens TokenArray, index ElementIndex) returns TokenKind
+	let tok = try tokens.get(index) otherwise return TokenKind.eof
+	return tok.kind
+end 'tokenKindAt'
+
 export type Token
 	export let kind as TokenKind
 

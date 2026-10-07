@@ -365,6 +365,7 @@ tests/
     cache-clear-keeps-a-live-debug-sessions-build.maxtest   `cache clear` keeps the debug build of a session still running, and says so
     help-lists-every-mcp-server-option.maxtest              `help mcp-server` lists every option the parser accepts
     an-empty-option-value-is-refused.maxtest                an option stated with an empty value (`--output=`) is refused as an invalid option value
+    an-emit-ir-runtime-name-the-program-lacks-is-refused.maxtest   `--emit-ir-runtime=` naming a function the program does not contain exits 1 naming it, with no panic and no stack trace
     an-empty-word-is-refused.maxtest                        an empty positional argument is refused as a word that names nothing
     monitor-refuses-an-empty-filter.maxtest                 `monitor --filter=` is refused, never read as every family
     cache-reports-the-library-cache.maxtest                 bare `cache` reports the library cache under its root, with its entry count

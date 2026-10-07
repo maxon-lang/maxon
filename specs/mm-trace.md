@@ -611,6 +611,50 @@ mm_free ArrayRecord #3
 mm_free Facts #1
 ```
 
+<!-- test: module-let-empty-array-as-a-map-miss-fallback-allocates-nothing -->
+A module-scope `let` empty array handed out as a map lookup's `otherwise` fallback is the image record itself,
+so a miss costs nothing and the block is EMPTY. A copy of the fallback per miss would cost, for each of the
+eight misses below:
+
+    mm_alloc ArrayRecord #1 size=48
+    mm_decref ArrayRecord #1 rc=0
+    mm_free ArrayRecord #1
+<!-- MmTrace -->
+```maxon
+typealias Key = int(0 to 1000)
+typealias Items = Array with Key
+typealias ItemIndex = Map with (Key, Items)
+
+let EmptyItems = Items.create()
+let NoItems = ItemIndex.create()
+let Misses = 8 as Key
+
+function main() returns ExitCode
+	var found = 0 as Key
+
+	for k in 0 upto Misses 'probe'
+		let items = try NoItems.get(k) otherwise EmptyItems
+		found = found + (items.count() as Key)
+	end 'probe'
+
+	if found != 0 'aMissFoundItems'
+		return 1
+	end 'aMissFoundItems'
+
+	print("every miss read the empty fallback\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+every miss read the empty fallback
+```
+```mm-trace
+
+```
+
 <!-- test: a-cloned-service-handle-box-carries-its-tag -->
 <!-- procs: 1 -->
 ⭐⭐ **THE ONE `__mm_alloc` A Std-TIER BODY ASKS FOR WITH NO TYPE TO NAME, AND THE TAG IS WHAT SAYS THE

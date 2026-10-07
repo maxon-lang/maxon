@@ -2591,7 +2591,11 @@ end 'main'
   within or hold a module-level `let`'s record (**E3166**, at the `var`'s declaration, naming the call). What
   a call hands back is followed through further calls, witness dispatches and calls through function values;
   a record built fresh from numbers read out of a `let` is legal. The same fact refuses a write, inside a
-  function, through a record a call handed back out of a `let` (**E3159**).
+  function, through a record a call handed back out of a `let` — through its `otherwise` fallback, a ternary
+  or `match` arm — at a field write (**E3159**) and at a method that writes its receiver (**E3019**).
+- A field of a module-level `let` is that `let`'s own storage: a `var` made from it (`var m = H.index`) and
+  written through is **E3078**, as one made from a field of a local `let` is. Read it through a `let`, or bind
+  a `clone()`.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3173): the
@@ -4587,10 +4591,15 @@ end 'main'
 either side could write, because the two green threads may run at the same time on different processors:
 
 - A `let` or `var`, a temporary or a literal argument is **moved** into the service; reading the sender's
-  variable afterwards is **E3102**. Factory arguments and replies are moved too. The handler owns what it was
-  sent, so it may keep it or write it.
-- A value the sender does not solely own — held in a container, borrowed from a parameter — is **E3138**;
-  send a `.clone()`.
+  variable afterwards is **E3102**. Replies are moved too, and so is every argument a `spawn`'s factory keeps
+  in the service's state. The handler owns what it was sent, so it may keep it or write it.
+- A value with an owner besides the sender — held in a container, borrowed from a parameter — is **E3138**;
+  send a `.clone()`. A factory argument the factory keeps follows the same rule: one borrowed from a
+  parameter, a field, an element or a module-level `let`'s record, or a borrowed `String`, is **E3138**, and
+  a field read off a temporary built inside the factory call's own argument list crosses, because the `spawn`
+  releases that temporary.
+- A `spawn` of a factory declared more than once, whose declarations keep an argument differently, is
+  **E2015**; give the factories distinct names.
 - A parameter type that cannot cross at all — a promise, a function value, an opaque type parameter — is
   **E3135**. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
   service the reply is judged at the `spawn` that fixes `T`, and a `returns T` message that hands back the
@@ -5158,7 +5167,13 @@ end 'main'
 
 `clone()` comes from the `Cloneable` interface (`function clone() returns Self`). The compiler generates it
 for any type whose fields are all cloneable; primitives, `String`, and collections of cloneable elements are
-cloneable. Declare `clone()` yourself for custom behaviour, or when a field's type is not cloneable.
+cloneable. A generic type's instance clones per instance — a `Map`, a `Set`, a declared `Box with String` —
+copying what its type arguments hold. Declare `clone()` yourself for custom behaviour, or for a type holding
+an uncloneable field.
+
+A copy of anything that is or holds a promise is **E3141**: a `clone()`, or an array's `slice` or `append`,
+reaching a promise through a field, a union payload, a generic instance or an array element. A promise owns a
+green thread exactly one owner may reclaim; `await` it and copy a value holding its result.
 
 A field declared at an [interface](#interfaces) type is cloneable when **every** conformer of that interface
 in the program is — the copy runs the conformer the value actually holds, which is not known until the

@@ -138,7 +138,119 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:11:16: Unsupported: `clone` on `Promise`, which is a GENERIC type — a clone must be minted per INSTANCE (a `Promise with String` and a `Promise with int` copy different things), and this compiler mints one per declared type only, so the copy would alias the type parameter's value instead of cloning it. Write a `clone` method on `Promise` that rebuilds it.
+error E3141: <fragment>:11:16: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Promise with int(-9223372036854775808 to 9223372036854775807)` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
+```
+
+<!-- test: promise-typing.error.clone-a-map-of-promises -->
+The same refusal one container deep: a `Map` whose values are promises would hand each thread to two maps.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias Pending = Map with (Integer, IntPromise)
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var pending = Pending.create()
+		pending.upsert(1, value: async plain())
+		let copy = pending.clone()
+		return copy.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:14:22: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Pending` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
+```
+
+<!-- test: promise-typing.error.clone-a-record-holding-an-array-of-promises -->
+And through a record whose field is an array of promises.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+type Batch
+	export let pending as IntPromiseArray
+
+	static function create(pending IntPromiseArray) returns Self
+		return Self{pending: pending}
+	end 'create'
+end 'Batch'
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var pending = IntPromiseArray.create()
+		pending.push(async plain())
+		let batch = Batch.create(pending)
+		let copy = batch.clone()
+		return copy.pending.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:23:20: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Batch` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
+```
+
+<!-- test: promise-typing.error.append-an-array-of-promises -->
+`append` copies every element of its argument, so an array of promises appended to another would leave each
+thread with two arrays to reclaim it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var first = IntPromiseArray.create()
+		var second = IntPromiseArray.create()
+		second.push(async plain())
+		first.append(second)
+		return first.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:15:9: a promise cannot be borrowed through 'append': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. an element of this array is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
+```
+
+<!-- test: promise-typing.error.clone-an-array-of-records-holding-a-promise -->
+And through an array whose element is a record holding a promise: the array's copy reaches the promise
+only through the element type.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias JobArray = Array with Job
+
+type Job
+	export var pending as IntPromise
+
+	static function create(pending IntPromise) returns Self
+		return Self{pending: pending}
+	end 'create'
+end 'Job'
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var jobs = JobArray.create()
+		jobs.push(Job.create(async plain()))
+		let copy = jobs.clone()
+		return copy.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:22:19: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `JobArray` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
 ```
 
 <!-- test: promise-typing.inner-is-the-one-unwrap -->

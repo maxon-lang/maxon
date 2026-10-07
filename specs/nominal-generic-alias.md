@@ -808,3 +808,58 @@ end 'main'
 ```exitcode
 73
 ```
+
+<!-- test: a-type-parameter-slot-of-a-concrete-instance-adopts-a-literal -->
+### A method of a concrete instance names the slot its type parameter stands for
+`Map.upsert`'s `value` is declared `Value`, which `ItemIndex` fixes to `Items`, so a literal written there is
+built as an `Items`; and an `otherwise` literal is built as the `Items` the lookup it falls back from hands
+back.
+```maxon
+typealias Key = int(0 to 1000)
+typealias Items = Array with Key
+typealias ItemIndex = Map with (Key, Items)
+
+function main() returns ExitCode
+	var index = ItemIndex.create()
+	index.upsert(500, value: [1, 2])
+	let found = try index.get(500) otherwise [0]
+	print("{index.count()} {found.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: a-clone-of-a-declared-generics-instance-is-a-record-of-its-own -->
+### A clone of an instance copies what its type argument fixes
+`b.clone()` on a `Box with String` copies the `String` the instance holds, so writing the copy's field leaves
+the source's unchanged.
+```maxon
+type Box uses T
+	export var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+typealias Label = Box with String
+
+function main() returns ExitCode
+	let original = Label.create("first")
+	var copy = original.clone()
+	copy.item = "second"
+	print("{original.item} {copy.item}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first second
+```

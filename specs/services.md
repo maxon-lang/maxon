@@ -4176,6 +4176,95 @@ typealias Integer = int(i64.min to i64.max)
 service read 10 bytes, sender wrote payload 42!
 ```
 
+<!-- test: borrow.a-record-clone-bound-to-a-let-or-a-var-is-sent-while-the-sender-keeps-its-source -->
+A `.clone()` of a record holding an array of records and a map, bound to a `let` or a `var` before the send,
+is a graph of its own exactly as the same clone written inside the call is, so the send moves it. The second
+copy's map is empty.
+```maxon
+type Leaf
+	export let name as String
+	export let weight as Integer
+
+	static function create(name String, weight Integer) returns Self
+		return Self{name: name, weight: weight}
+	end 'create'
+end 'Leaf'
+
+typealias Leaves = Array with Leaf
+typealias LeafIndex = Map with (String, Leaf)
+
+type Shelf
+	export let leaves as Leaves
+	export let byName as LeafIndex
+
+	static function create(leaves Leaves, byName LeafIndex) returns Self
+		return Self{leaves: leaves, byName: byName}
+	end 'create'
+
+	function weight() returns Integer
+		var sum = 0 as Integer
+
+		for leaf in self.leaves 'eachLeaf'
+			sum = sum + leaf.weight * (leaf.name.byteLength() as Integer)
+		end 'eachLeaf'
+
+		for (key, leaf) in self.byName 'eachEntry'
+			sum = sum + leaf.weight * (key.byteLength() as Integer)
+		end 'eachEntry'
+
+		return sum
+	end 'weight'
+end 'Shelf'
+
+type Keeper
+	let shelf as Shelf
+
+	static function create(shelf Shelf) returns Self
+		return Self{shelf: shelf}
+	end 'create'
+
+	export function weight() returns Integer
+		return self.shelf.weight()
+	end 'weight'
+end 'Keeper'
+
+function shelf(indexed bool) returns Shelf
+	var leaves = Leaves.create()
+	var byName = LeafIndex.create()
+	leaves.push(Leaf.create("a", weight: 1))
+	leaves.push(Leaf.create("bb", weight: 2))
+
+	if indexed 'index'
+		byName.upsert("ccc", value: Leaf.create("c", weight: 4))
+	end 'index'
+
+	return Shelf.create(leaves, byName: byName)
+end 'shelf'
+
+function main() returns ExitCode
+	let original = shelf(true)
+	let copy = original.clone()
+	let first = spawn Keeper.create(copy)
+	let firstSaw = try await first.weight() otherwise 0
+	print("let copy: service {firstSaw}, sender {original.weight()}\n")
+
+	let unindexed = shelf(false)
+	var moved = unindexed.clone()
+	let second = spawn Keeper.create(moved)
+	let secondSaw = try await second.weight() otherwise 0
+	print("var copy: service {secondSaw}, sender {unindexed.weight()}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+let copy: service 17, sender 17
+var copy: service 5, sender 5
+```
+
 <!-- test: borrow.abort.a-let-string-whose-bytes-the-sender-still-views-aborts -->
 A `toByteArray()` view of an owned `String` counts the String's own record, because its bytes are inline. The
 send's walk finds that owner outside the sent graph and aborts
@@ -6109,6 +6198,49 @@ error E3137: <fragment>:10:3: `Store.echo` returns a value this frame does not s
 note: <fragment>:15:10: the `spawn` that makes `Store` a service
 ```
 
+<!-- test: a-reply-a-method-of-the-state-builds-fresh-crosses -->
+A method called on the service's state that returns a `String` it builds itself hands back a value no one else
+holds, so the handler may return it.
+```maxon
+type Shelf
+	export let count as Integer
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
+
+	function describe() returns String
+		return "shelf of {self.count}"
+	end 'describe'
+end 'Shelf'
+
+type Keeper
+	let shelf as Shelf
+
+	static function create(shelf Shelf) returns Self
+		return Self{shelf: shelf}
+	end 'create'
+
+	export function describe() returns String
+		return self.shelf.describe()
+	end 'describe'
+end 'Keeper'
+
+function main() returns ExitCode
+	let k = spawn Keeper.create(Shelf.create(4))
+	let text = try await k.describe() otherwise "gone"
+	print("{text}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+shelf of 4
+```
+
 <!-- test: error.two-services-that-await-each-other-are-refused -->
 <!-- unsupported-targets: wasm32-wasi -->
 Mutual reentrancy is made unrepresentable rather than diagnosed at run time.
@@ -7777,6 +7909,53 @@ end 'main'
 error E2015: <fragment>:21:20: Unsupported: `spawn Box.create(…)` — `Box` is generic and `create` is declared 2 times, so its type arguments cannot be read off the call: which overload the arguments resolve to is settled after this point, and the parameter list they must be matched against is that overload's. Give the factories distinct names, or spawn a type whose factory is declared once
 ```
 
+<!-- test: error.a-spawn-of-factories-that-keep-an-argument-differently-is-refused -->
+A `spawn` moves every argument its factory keeps. One `create` keeps its argument and the other only reads it,
+and which of the two the call binds is settled after the argument has to be moved or left alone.
+```maxon
+type Shelf
+	export let count as Integer
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Shelf'
+
+type Label
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Label'
+
+type Keeper
+	let shelf as Shelf
+
+	static function create(shelf Shelf) returns Self
+		return Self{shelf: shelf}
+	end 'create'
+
+	static function create(shelf Label) returns Self
+		return Self{shelf: Shelf.create(shelf.text.byteLength() as Integer)}
+	end 'create'
+
+	export function count() returns Integer
+		return self.shelf.count
+	end 'count'
+end 'Keeper'
+
+function main() returns ExitCode
+	let shelf = Shelf.create(4)
+	let k = spawn Keeper.create(shelf)
+	return (try await k.count() otherwise 0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E2015: <fragment>:36:23: Unsupported: `spawn Keeper.create(…)` — `Keeper.create` is declared 2 times and they do not all keep argument 1 alike. A `spawn` MOVES every argument its factory keeps into the service, and which declaration this call binds is settled after this point, so there is no one move to make. Give the factories distinct names
+```
+
 <!-- test: error.a-value-sent-through-a-parameter-is-refused -->
 ⭐⭐ **THE `String` HALF OF `error.a-borrowed-parameter-may-not-be-sent`, AND THE CASE THAT KEEPS THE RULE
 UNIFORM.** `buf` arrived as a borrowed parameter and the caller still holds it — the identical fact the
@@ -8157,7 +8336,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:17:15: Unsupported: `clone` on `Promise`, which is a GENERIC type — a clone must be minted per INSTANCE (a `Promise with String` and a `Promise with int` copy different things), and this compiler mints one per declared type only, so the copy would alias the type parameter's value instead of cloning it. Write a `clone` method on `Promise` that rebuilds it.
+error E3141: <fragment>:17:15: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Promise with (int(-9223372036854775808 to 9223372036854775807), ServiceError)` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
 ```
 
 <!-- test: a-reply-inner-is-the-one-unwrap -->
@@ -8900,6 +9079,188 @@ end 'main'
 ```
 ```maxoncstderr
 error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```
+
+<!-- test: error.spawn-factory-argument-borrowed-from-a-parameter-refused -->
+`start` borrows `shelf` from `main`, and `create` keeps it in the service's state, so the state the `spawn`
+moves would share `shelf` with `main` across two green threads.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Shelf
+	export var count as Tally
+
+	static function create(count Tally) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Shelf'
+
+type Keeper
+	var shelf as Shelf
+
+	static function create(shelf Shelf) returns Self
+		return Self{shelf: shelf}
+	end 'create'
+
+	export function count() returns Tally
+		return self.shelf.count
+	end 'count'
+end 'Keeper'
+
+function start(shelf Shelf) returns Tally
+	let k = spawn Keeper.create(shelf)
+	let n = try await k.count() otherwise panic("the keeper is running")
+	k.shutdown()
+	return n
+end 'start'
+
+function main() returns ExitCode
+	let shelf = Shelf.create(3)
+	let n = start(shelf)
+	print("{n} {shelf.count}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:25:30: argument `shelf` of `spawn Keeper.create(…)` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```
+
+<!-- test: error.spawn-factory-argument-read-off-an-earlier-statements-temporary-refused -->
+`settings` was read out of a temporary `Holder` one statement before the `spawn`, so that `Holder` lives to the
+end of `main` and still holds `settings` while the service runs. Only a temporary built inside the factory's
+own argument list is released at the `spawn`.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Settings
+	export var doubled as bool
+
+	static function create(doubled bool) returns Self
+		return Self{doubled: doubled}
+	end 'create'
+end 'Settings'
+
+type Holder
+	export let settings as Settings
+
+	static function create(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'create'
+end 'Holder'
+
+type Surveyor
+	var settings as Settings
+
+	static function create(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * 2 if self.settings.doubled else n
+	end 'measure'
+end 'Surveyor'
+
+function main() returns ExitCode
+	let settings = Holder.create(Settings.create(true)).settings
+	let surveyor = spawn Surveyor.create(settings)
+	let total = try await surveyor.measure(21) otherwise panic("the surveyor is running")
+	print("{total}\n")
+	surveyor.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:34:39: argument `settings` of `spawn Surveyor.create(…)` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```
+
+<!-- test: error.spawn-factory-string-argument-borrowed-from-a-parameter-refused -->
+The `String` half of `error.spawn-factory-argument-borrowed-from-a-parameter-refused`: a borrowed `String` is
+refused like any other borrow rather than copied, exactly as at a send.
+```maxon
+type Greeter
+	var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	export function greet() returns String
+		return "hello {self.name}"
+	end 'greet'
+end 'Greeter'
+
+function start(name String) returns String
+	let g = spawn Greeter.create(name)
+	let text = try await g.greet() otherwise panic("the greeter is running")
+	g.shutdown()
+	return text
+end 'start'
+
+function main() returns ExitCode
+	print("{start("ada")}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:15:31: argument `name` of `spawn Greeter.create(…)` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```
+
+<!-- test: services.a-spawn-factory-argument-read-two-fields-off-a-temporary-starts-once -->
+A factory argument read two fields deep out of a temporary built in the factory's own argument list: the
+`Outer` is released at the `spawn`, and with it the `Holder` it held, so the `Settings` has the service as its
+one owner.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Settings
+	export var doubled as bool
+
+	static function create(doubled bool) returns Self
+		return Self{doubled: doubled}
+	end 'create'
+end 'Settings'
+
+type Holder
+	export var settings as Settings
+
+	static function create(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'create'
+end 'Holder'
+
+type Outer
+	export var holder as Holder
+
+	static function create(holder Holder) returns Self
+		return Self{holder: holder}
+	end 'create'
+end 'Outer'
+
+type Surveyor
+	var settings as Settings
+
+	static function create(settings Settings) returns Self
+		return Self{settings: settings}
+	end 'create'
+
+	export function measure(n Tally) returns Tally
+		return n * 2 if self.settings.doubled else n
+	end 'measure'
+end 'Surveyor'
+
+function main() returns ExitCode
+	let surveyor = spawn Surveyor.create(Outer.create(Holder.create(Settings.create(true))).holder.settings)
+	let total = try await surveyor.measure(21) otherwise panic("the surveyor is running")
+	print("{total}\n")
+	surveyor.shutdown()
+	return 0
+end 'main'
+```
+```stdout
+42
+```
+```exitcode
+0
 ```
 
 <!-- test: error.reply-forwarded-through-a-local-named-like-a-type-refused -->

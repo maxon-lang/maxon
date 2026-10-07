@@ -1,0 +1,228 @@
+type ImageRetain
+	export let result as ValueId
+	export let source as ValueId
+
+	static function create(result ValueId, source ValueId) returns Self
+		return Self{result: result, source: source}
+	end 'create'
+end 'ImageRetain'
+
+typealias ImageRetainArray = Array with ImageRetain
+
+type ValueFlow
+	export let feeder as ValueId
+	export let carrier as ValueId
+
+	static function create(feeder ValueId, carrier ValueId) returns Self
+		return Self{feeder: feeder, carrier: carrier}
+	end 'create'
+end 'ValueFlow'
+
+typealias ValueFlowArray = Array with ValueFlow
+
+// `__managed_retain` of an rdata image record hands back a writable copy, because image memory is
+// read-only. A copy whose every use, through block arguments included, is a decref or a length load
+// is never written, so the image itself serves (`__managed_decref` skips an immortal record); any
+// other use keeps the copy.
+export function elideImageRetains(project Project, module StdModule)
+	var liveOps = OpIndexArray.create()
+	var call = StdCallOperands.create()
+
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		elideInFunction(project, module: module, func: module.getFunc(funcIndex), liveOps: liveOps, call: call)
+	end 'eachFunc'
+end 'elideImageRetains'
+
+function elideInFunction(project Project, module StdModule, func IrFunction, liveOps OpIndexArray, call StdCallOperands)
+	module.collectLiveOpIndices(func, into: liveOps)
+	let retains = recordRetainsIn(module, liveOps: liveOps, call: call)
+
+	if retains.isEmpty() 'noRecordIsRetained'
+		return
+	end 'noRecordIsRetained'
+
+	let defs = StdValueDefs.build(module, func: func)
+	let images = imageRetainsAmong(project, module: module, retains: retains, defs: defs)
+
+	if images.isEmpty() 'noImageIsRetained'
+		return
+	end 'noImageIsRetained'
+
+	let bound = defs.valueBound()
+	let flows = valueFlowsOf(module, func: func)
+	var tracked = BoolArray.create()
+	tracked.growFilled(bound, value: false)
+	var escaped = BoolArray.create()
+	escaped.growFilled(bound, value: false)
+
+	for image in images 'eachSeed'
+		markValue(tracked, v: image.result)
+	end 'eachSeed'
+
+	spreadForward(flows, tracked: tracked)
+	markEscapes(module, liveOps: liveOps, call: call, tracked: tracked, escaped: escaped)
+	spreadBackward(flows, tracked: tracked, escaped: escaped)
+	applyElisions(module, func: func, bound: bound, images: images, escaped: escaped)
+end 'elideInFunction'
+
+function recordRetainsIn(module StdModule, liveOps OpIndexArray, call StdCallOperands) returns ImageRetainArray
+	var retains = ImageRetainArray.create()
+
+	for opIdx in liveOps 'eachOp'
+		classifyCallOperands(module.getOp(opIdx), call: call)
+
+		if not isOneArgumentCallTo(call, callee: ManagedRetainName) 'notARecordRetain'
+			continue
+		end 'notARecordRetain'
+
+		retains.push(ImageRetain.create(call.resultId, source: call.firstArg))
+	end 'eachOp'
+
+	return retains
+end 'recordRetainsIn'
+
+function imageRetainsAmong(project Project, module StdModule, retains ImageRetainArray, defs StdValueDefs) returns ImageRetainArray
+	var images = ImageRetainArray.create()
+
+	for retain in retains 'eachRetain'
+		if not defs.isDefinedByAnOp(retain.source) 'notDefinedByAnOp'
+			continue
+		end 'notDefinedByAnOp'
+
+		let definer = module.getOp(defs.definingOp(retain.source))
+
+		if stdOpLabelKindOf(definer) != StdOpLabelKind.rdata 'notAnRdataAddress'
+			continue
+		end 'notAnRdataAddress'
+
+		if project.globalData.payloadKindOf(String.from(stdOpLabel(definer))) == RdataPayloadKind.byteArrayRecord 'anImmortalRecord'
+			images.push(retain)
+		end 'anImmortalRecord'
+	end 'eachRetain'
+
+	return images
+end 'imageRetainsAmong'
+
+function valueFlowsOf(module StdModule, func IrFunction) returns ValueFlowArray
+	var flows = ValueFlowArray.create()
+	let positionById = module.blockIndexById(func)
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = module.getBlock(blockRef)
+
+		for edge in block.branchEdges 'eachEdge'
+			let position = try positionById.get(edge.targetBlockId) otherwise panic("valueFlowsOf: an edge names block {edge.targetBlockId}, which the function does not hold")
+			let target = module.blockAtPosition(func, position: position)
+
+			for (iter, feeder) in edge.argIds.withIterator() 'eachArg'
+				let slot = try target.blockArgs.get(iter.index()) otherwise panic("valueFlowsOf: an edge passes argument {iter.index()} to block {edge.targetBlockId}, which declares {target.blockArgs.count()}")
+				flows.push(ValueFlow.create(feeder, carrier: slot.valueId))
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+
+	return flows
+end 'valueFlowsOf'
+
+function spreadForward(flows ValueFlowArray, tracked BoolArray)
+	var grew = true
+
+	while grew 'untilSettled'
+		grew = false
+
+		for flow in flows 'eachFlow'
+			if isMarked(tracked, v: flow.feeder) and not isMarked(tracked, v: flow.carrier) 'carriedOn'
+				markValue(tracked, v: flow.carrier)
+				grew = true
+			end 'carriedOn'
+		end 'eachFlow'
+	end 'untilSettled'
+end 'spreadForward'
+
+function spreadBackward(flows ValueFlowArray, tracked BoolArray, escaped BoolArray)
+	var grew = true
+
+	while grew 'untilSettled'
+		grew = false
+
+		for flow in flows 'eachFlow'
+			if isMarked(tracked, v: flow.feeder) and isMarked(escaped, v: flow.carrier) and not isMarked(escaped, v: flow.feeder) 'carrierEscapes'
+				markValue(escaped, v: flow.feeder)
+				grew = true
+			end 'carrierEscapes'
+		end 'eachFlow'
+	end 'untilSettled'
+end 'spreadBackward'
+
+function markEscapes(module StdModule, liveOps OpIndexArray, call StdCallOperands, tracked BoolArray, escaped BoolArray)
+	var load = StdLoadOperands.create()
+	var reads = StdValueUseSet.createRecordingIds()
+
+	for opIdx in liveOps 'eachOp'
+		let op = module.getOp(opIdx)
+
+		if opOnlyDropsOrMeasures(op, call: call, load: load, tracked: tracked) 'admitted'
+			continue
+		end 'admitted'
+
+		reads.clear()
+		collectStdOpUses(op, referenced: reads)
+
+		for position in 0 upto reads.insertedIdCount() 'eachUse'
+			let used = reads.insertedIdAt(position)
+
+			if isMarked(tracked, v: used) 'escapes'
+				markValue(escaped, v: used)
+			end 'escapes'
+		end 'eachUse'
+	end 'eachOp'
+end 'markEscapes'
+
+function opOnlyDropsOrMeasures(op StdOp, call StdCallOperands, load StdLoadOperands, tracked BoolArray) returns bool
+	classifyCallOperands(op, call: call)
+
+	if isOneArgumentCallTo(call, callee: ManagedDecrefName) 'aDrop'
+		return isMarked(tracked, v: call.firstArg)
+	end 'aDrop'
+
+	classifyLoadOperands(op, load: load)
+	return load.isLoad() and load.offset == ManagedRecordLengthOffset and isMarked(tracked, v: load.addrId)
+end 'opOnlyDropsOrMeasures'
+
+function isOneArgumentCallTo(call StdCallOperands, callee ByteArray) returns bool
+	return call.namesACallee() and not call.throwsToAFlag() and call.argCount == 1 and call.callee.equals(callee)
+end 'isOneArgumentCallTo'
+
+function applyElisions(module StdModule, func IrFunction, bound ValueId, images ImageRetainArray, escaped BoolArray)
+	var subst = ValueIdArray.create()
+
+	for id in 0 upto bound 'identity'
+		subst.push(id as ValueId)
+	end 'identity'
+
+	var elided = StdValueUseSet.create()
+
+	for image in images 'eachImage'
+		if isMarked(escaped, v: image.result) 'kept'
+			continue
+		end 'kept'
+
+		try subst.set(image.result, value: image.source) otherwise panic("applyElisions: subst.set OOB at {image.result} of the {bound} values the function defines")
+		elided.insert(image.result)
+	end 'eachImage'
+
+	if elided.isEmpty() 'nothingProvable'
+		return
+	end 'nothingProvable'
+
+	substituteValuesInFunc(module, func: func, subst: subst)
+	removeOpsDefining(module, func: func, doomed: elided)
+end 'applyElisions'
+
+function isMarked(column BoolArray, v ValueId) returns bool
+	return try column.get(v) otherwise panic("isMarked: value {v} is outside the {column.count()} the function defines")
+end 'isMarked'
+
+function markValue(column BoolArray, v ValueId)
+	try column.set(v, value: true) otherwise panic("markValue: value {v} is outside the {column.count()} the function defines")
+end 'markValue'

@@ -1384,3 +1384,39 @@ end 'main'
 ```exitcode
 7
 ```
+
+## A clone is a map of its own
+
+`m.clone()` copies every key and value, so writing the copy leaves the map it was taken from unchanged.
+
+<!-- test: clone.writing-the-copy-leaves-the-source-unchanged -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Stock = Map with (String, Integer)
+
+function main() returns ExitCode
+	var original = Stock.create()
+	original.upsert("apples", value: 3)
+	original.upsert("pears", value: 5)
+
+	var copy = original.clone()
+	copy.upsert("apples", value: 30)
+	copy.upsert("plums", value: 7)
+	_ = copy.remove("pears")
+
+	let apples = try original.get("apples") otherwise 0
+	let pears = try original.get("pears") otherwise 0
+	let copiedApples = try copy.get("apples") otherwise 0
+	let copiedPlums = try copy.get("plums") otherwise 0
+	print("original {original.count()}: apples {apples}, pears {pears}, plums {original.contains("plums")}\n")
+	print("copy {copy.count()}: apples {copiedApples}, plums {copiedPlums}, pears {copy.contains("pears")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original 2: apples 3, pears 5, plums false
+copy 2: apples 30, plums 7, pears false
+```

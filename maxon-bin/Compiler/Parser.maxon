@@ -9280,6 +9280,11 @@ function occupantRootProof(exclusivity CellOccupantExclusivity) returns Transfer
 	end 'exclusivity'
 end 'occupantRootProof'
 
+function serviceArgumentRefusal(blame String, borrowed bool, sourceClause String, at SourceRange) returns SourceParseError
+	let message = serviceBorrowedTransferMessage(blame, sourceClause: sourceClause) if borrowed else sharedTransferMessage(blame, sourceClause: sourceClause, lesson: ServiceTransferLesson)
+	return SourceParseError.serviceArgumentNotUnique(message, line: at.line, column: at.column)
+end 'serviceArgumentRefusal'
+
 function registryNotSolelyOwnedError(key ByteArray, anchor Token) returns SourceParseError
 	return SourceParseError.registryRefused(ErrorCode.registryPublishedValueNotSolelyOwned, explanation: "the value published to `{String.from(key)}` is not solely owned here — publish a `.clone()`", line: anchor.line, column: anchor.column, note: DiagnosticNote.none)
 end 'registryNotSolelyOwnedError'
@@ -16944,6 +16949,7 @@ type FunctionBodyState
 	// stayed flat at x1.99. It allocates almost nothing (the list's own geometric growth, +21 allocations at
 	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
 	export var immutableGlobalReads as ValueMarkColumn
+	export var temporaryFieldReads as ValueMarkColumn
 	export var immortalFunctionValues as ValueMarkColumn
 
 	// ⭐ **THE MERGE ARMS' E3019 BLAME, CARRIED ONTO THE RESULT PHI** (see `MergeBlameMap`). Written at the
@@ -17455,6 +17461,7 @@ type FunctionBodyState
 			stringBytesViewOps: noStringBytesViewOps,
 			foldedIndexCallSites: noFoldedIndexCallSites,
 			immutableGlobalReads: noValueMarks,
+			temporaryFieldReads: noValueMarks,
 			immortalFunctionValues: noValueMarks,
 			mergeImmutableBlame: noMergeBlames,
 			rebindableSlotReads: noValueMarks,
@@ -20935,9 +20942,18 @@ export type Parser
 		return self.noteFreshValueShape(valueStart, forwards: forwards, forwardHeads: forwardHeads, forwardHeadsAt: forwardHeadsAt)
 	end 'noteFreshReturnShape'
 
-	// The shapes that are fresh where they are written — the record literal and the forwarding call above — asked
-	// of a `return`'s value and of the value a returned local is bound to.
+	function valueIsOneInterpolatedString(valueStart ElementIndex) returns bool
+		let last = try interpolatedLiteralLastFragment(self.tokens, first: valueStart) otherwise return false
+		return self.kindAt((last + 1) as ElementIndex) == TokenKind.newline
+	end 'valueIsOneInterpolatedString'
+
+	// The shapes that are fresh where they are written — one interpolated String, the record literal and the
+	// forwarding call above — asked of a `return`'s value and of the value a returned local is bound to.
 	function noteFreshValueShape(valueStart ElementIndex, forwards FreshReturnForwardArray, forwardHeads ByteArrayArray, forwardHeadsAt TokenIndexArray) returns bool
+		if self.valueIsOneInterpolatedString(valueStart) 'aMintedString'
+			return true
+		end 'aMintedString'
+
 		let tryWrapped = self.kindAt(valueStart) == TokenKind.try
 		let callStart = (valueStart + 1) as ElementIndex if tryWrapped else valueStart
 
@@ -60523,12 +60539,21 @@ export type Parser
 
 		// ⭐⭐ **THE FACTORY IS CALLED DIRECTLY, THROUGH THE ORDINARY STATIC-CALL DOOR.** `spawn Calc.create(…)`
 		// is `Calc.create(…)` plus a transfer: the arguments, the labels, the defaults, the overload
-		// resolution and the diagnostics are all the ordinary call's, and only what happens to the RESULT is
-		// this reader's. `notMinted` because both halves of the name are the author's own bytes;
-		// `inferInstanceOf` because a generic target's type arguments exist nowhere but this argument list.
+		// resolution and the diagnostics are all the ordinary call's, and only what happens to the RESULT and
+		// to an argument the factory keeps is this reader's — `spawned` makes the call move a kept argument
+		// into the state, or refuse it borrowed (`transferConsumedColumn`). `notMinted` because both halves of
+		// the name are the author's own bytes; `inferInstanceOf` because a generic target's type arguments
+		// exist nowhere but this argument list.
 		let factoryTempFloor = self.bodyState.pendingTempDrops.count()
 		let factoryOwnedFloor = self.bodyState.ownedBindings.count()
-		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted, inferInstanceOf: FactoryInference.of(typeTok.value), refuseUninferred: true)
+
+		// A field read off a temporary crosses as a kept argument only because
+		// `releaseHandOffBuildTemps` below releases that temporary with the spawn — so the marks are
+		// cleared to those this argument list makes, and an enclosing `spawn`'s are restored after it.
+		let outerTemporaryFieldReads = self.bodyState.temporaryFieldReads
+		self.bodyState.temporaryFieldReads = noValueMarks
+		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted, inferInstanceOf: FactoryInference.of(typeTok.value), spawned: true)
+		self.bodyState.temporaryFieldReads = outerTemporaryFieldReads
 		let instance = self.serviceStateInstanceOf(state)
 
 		// The deferred half, asked only where something was deferred: a monomorphic service has no type
@@ -69576,7 +69601,7 @@ export type Parser
 		// ⚠ **A MISS KEEPS THE SUPPLIED ANSWER.** An inference that cannot fix every parameter hands
 		// `constructed` back untouched, so this road adds information and never a refusal; the `spawn` road is
 		// the only one that turns a miss into a diagnostic, because there the instantiation is the whole point.
-		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: mint, inferInstanceOf: self.bareGenericFactoryBase(constructed, typeTok: typeTok), refuseUninferred: false)
+		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: mint, inferInstanceOf: self.bareGenericFactoryBase(constructed, typeTok: typeTok), spawned: false)
 
 		match constructed 'constructed'
 			none then break 'constructed'
@@ -69904,7 +69929,7 @@ export type Parser
 	//
 	// `constructorInstanceOf`'s third road, and deliberately not an arm of it: that door answers from the
 	// BASE NAME alone and is asked before any argument exists.
-	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf FactoryInference, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token, refuseUninferred bool) returns ConstructorInstance throws SourceParseError
+	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf FactoryInference, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token, spawned bool) returns ConstructorInstance throws SourceParseError
 		let base = try inferInstanceOf.baseName() otherwise return supplied
 
 		let params = self.signatures.structTypeParamsOf(base)
@@ -69928,7 +69953,7 @@ export type Parser
 		let decls = self.signatures.overloadedDeclsOf(callee)
 
 		if decls.count() > 1 'anOverloadedFactory'
-			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theFactoryIsOverloaded(decls.count() as FieldIndex), typeName: base, callee: callee, anchor: anchor, refuseUninferred: refuseUninferred)
+			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theFactoryIsOverloaded(decls.count() as FieldIndex), typeName: base, callee: callee, anchor: anchor, spawned: spawned)
 		end 'anOverloadedFactory'
 
 		let decl = serviceFirstDeclOf(decls, key: callee)
@@ -69943,7 +69968,7 @@ export type Parser
 				// ⭐ **A MISS IS A REFUSAL ONLY AT A `spawn`.** There the instantiation is the whole point and
 				// nothing else can supply it; at an ORDINARY static call the value keeps the base `structRef`
 				// it has always had, so this road adds information and never a new refusal.
-				absent then return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.noParameterFixesIt(paramName), typeName: base, callee: callee, anchor: anchor, refuseUninferred: refuseUninferred)
+				absent then return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.noParameterFixesIt(paramName), typeName: base, callee: callee, anchor: anchor, spawned: spawned)
 			end 'argument'
 		end 'eachTypeParam'
 
@@ -69957,7 +69982,7 @@ export type Parser
 		// one shape `ServiceLoop` cannot build a loop for: `receiverLayoutSource` would forward a descriptor
 		// the synthesized body has no slot for. Refused here rather than aborting the compiler two tiers down.
 		if not self.signatures.argsAreFullyConcrete(typeArgs) 'stillOpaque'
-			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theArgumentsAreStillOpaque, typeName: base, callee: callee, anchor: anchor, refuseUninferred: refuseUninferred)
+			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theArgumentsAreStillOpaque, typeName: base, callee: callee, anchor: anchor, spawned: spawned)
 		end 'stillOpaque'
 
 		let gid = self.signatures.internGenericInstanceOf(base, args: typeArgs)
@@ -69982,8 +70007,8 @@ export type Parser
 	// ⭐ **WHAT AN INFERENCE THAT FIXED NOTHING ANSWERS — ONE HOME, because both misses answer identically on
 	// the ordinary road and differ only in the sentence the `spawn` road raises.** The reason travels as a
 	// verdict rather than a rendered sentence so the ordinary road builds no String it will not use.
-	function uninferredFactoryInstance(supplied ConstructorInstance, reason UninferredFactoryReason, typeName ByteArray, callee ByteArray, anchor Token, refuseUninferred bool) returns ConstructorInstance throws SourceParseError
-		if not refuseUninferred 'anOrdinaryStaticCall'
+	function uninferredFactoryInstance(supplied ConstructorInstance, reason UninferredFactoryReason, typeName ByteArray, callee ByteArray, anchor Token, spawned bool) returns ConstructorInstance throws SourceParseError
+		if not spawned 'anOrdinaryStaticCall'
 			return supplied
 		end 'anOrdinaryStaticCall'
 
@@ -70595,16 +70620,15 @@ export type Parser
 		// Asked AHEAD of the builtin dispatchers, and gated so it can only ever catch what they would
 		// REFUSE: `memberBelongsToTheCorpus` is consulted only for a name the roster does not carry, so
 		// every arm below keeps every member it already served and the order rule in this header is untouched.
-		// What changes is the fall-through — `Character.toString()` was *"the compiler provides
-		// bytes/byteLength/asciiValue; that list IS the surface"* (76 failures the moment the module was
-		// listed) and is now an ordinary call to an ordinary declared function.
+		// What it decides is the fall-through: `Character.toString()` is an ordinary call to an ordinary
+		// declared function.
 		//
 		// ⇒ **THIS IS HOW THE SYNTHESIZED SURFACE RETIRES, ONE MEMBER AT A TIME AND MEASURABLY**: strike a
 		// name from `stringSurfaceMemberNames`, and the corpus body behind it takes over here with no other
 		// edit. See `memberBelongsToTheCorpus`, which serves the `StringIndex` surface as well as the two
 		// byte records.
 		if self.memberBelongsToTheCorpus(recv) 'corpusMethod'
-			self.noteArrayCopyDemand(recv)
+			try self.admitArrayCopy(recv)
 			return try self.dispatchMethodOnBase(func, base: try self.structBaseOfReceiver(recv), baseTok: recv.anchor, resultUsed: resultUsed)
 		end 'corpusMethod'
 
@@ -71322,10 +71346,9 @@ export type Parser
 		//
 		// ⚠ **IT IS PLACED BELOW THE TWO GUARDS, NOT ABOVE THEM, AND THAT IS THE POINT.** Each of them calls
 		// itself *"the ONE door every struct method call passes through"*, and a return above them would have
-		// made both claims false — quietly, since neither has anything to say about a synthesized clone today
-		// (both are about a generic receiver, which `requireStructCloneSupported` now refuses outright). An
-		// invariant that holds only because the exception happens to be inert is the shape this file keeps
-		// paying for, so the arm sits where the claims stay literally true.
+		// made both claims false — quietly, since neither has anything to say about a synthesized clone
+		// today. An invariant that holds only because the exception happens to be inert is the shape this
+		// file keeps paying for, so the arm sits where the claims stay literally true.
 		try self.requireWitnessSourceForForwarding(base, callee: callee, memberTok: memberTok)
 		try self.requireMethodNotWithheldByConstraint(base.layout.name, callee: callee, receiver: base.box, memberTok: memberTok)
 
@@ -71406,8 +71429,14 @@ export type Parser
 	function readFieldMember(base StructBase, index FieldIndex, baseTok Token, memberTok Token) returns ValueId throws SourceParseError
 		self.advance()
 		try self.requireFieldTierReachable(base.layout, index: index, fieldTok: memberTok)
-		self.keepFieldSourceAliveForItsRead(base, index: index)
-		return self.emitFieldLoad(base.box, layout: base.layout, index: index, range: SourceRange.between(baseTok, last: memberTok))
+		let borrowsATemporary = self.keepFieldSourceAliveForItsRead(base, index: index)
+		let value = self.emitFieldLoad(base.box, layout: base.layout, index: index, range: SourceRange.between(baseTok, last: memberTok))
+
+		if borrowsATemporary or valueIsMarked(self.bodyState.temporaryFieldReads, value: base.box) 'aProjectionOfATemporary'
+			self.bodyState.temporaryFieldReads = withValueMarked(self.bodyState.temporaryFieldReads, value: value)
+		end 'aProjectionOfATemporary'
+
+		return value
 	end 'readFieldMember'
 
 	// Everything an author may spell on a `<T>.handle`, in the order the questions can be asked, and
@@ -71886,17 +71915,26 @@ export type Parser
 	// result a value of its own rather than a second name for the receiver's.
 	//
 	// The result is stamped `structRef` + the receiver's own layout name, which is the same pair
-	// `emitStructLiteral` mints: a clone of a `Point` IS a `Point`, so `b.x` and `b.equals(a)` resolve
-	// against the one nominal identity.
+	// `emitStructLiteral` mints, and a generic receiver's clone with the receiver's own instance: a clone
+	// of a `Point` IS a `Point`, so `b.x` and `b.equals(a)` resolve against the one nominal identity.
 	//
 	// ⚠ The cloneability refusal comes BEFORE the tokens are consumed and before anything is emitted — a
 	// rejected program must leave no ops behind (`emitShift`'s rule).
 	function emitSynthesizedStructClone(base StructBase, memberTok Token, baseTok Token) returns ValueId throws SourceParseError
-		try self.requireStructCloneSupported(base.layout, memberTok: memberTok)
+		let range = SourceRange.between(baseTok, last: memberTok)
+
+		// Asked of the layout, not the receiver's tag: `self.clone()` inside `Box`'s own body has a
+		// `structRef` receiver, and the declared-type cloner would blit its `T` word unretained.
+		if base.layout.typeParamCount() > 0 'aGenericBase'
+			let instance = try self.cloneableInstanceOf(base, memberTok: memberTok)
+			self.advance()
+			try self.consumeEmptyArgList()
+			return self.emitOwnedRuntimeResult(self.signatures.genericInstanceBoxCloneCallee(instance), args: singletonArgs(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: range)
+		end 'aGenericBase'
+
+		try self.requireStructCloneVerdict(self.signatures.sourceCloneVerdictOfAggregate(base.layout.name), typeName: base.layout.name, display: String.from(base.layout.name), memberTok: memberTok)
 		self.advance()
 		try self.consumeEmptyArgList()
-
-		let range = SourceRange.between(baseTok, last: memberTok)
 
 		if self.signatures.layoutPacksInlineIntoAWord(base.layout) 'theCopyISTheWord'
 			return self.emitRetaggedCastValue(base.box, targetType: MaxonType.structRef(self.artifact.typeNames.intern(base.layout.name)), range: range)
@@ -71950,104 +71988,45 @@ export type Parser
 		return self.emitOwnedRuntimeResult(clonerSymbol(layout.name), args: singletonArgs(recv.value), resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: SourceRange.between(recv.anchor, last: memberTok))
 	end 'emitSynthesizedUnionClone'
 
-	// `requireStructCloneSupported`'s union twin, with the same two clauses in the same order and for the same
-	// reasons — a payload nothing can deep-clone would meet an `unsupported` strategy inside
-	// `MmRuntime.emitUnionManagedCaseChain` and PANIC, and a promise payload is invisible to the walk that
-	// answers the first clause.
 	function requireUnionCloneSupported(layout EnumLayout, memberTok Token) throws SourceParseError
-		try self.requireUnionHoldsNoGreenThread(layout, memberTok: memberTok)
+		let verdict = self.signatures.sourceCloneVerdictOfAggregate(layout.name)
 
-		if self.signatures.aggregateSupportsDeepClone(layout.name) 'cloneable'
+		if verdict == SourceCloneVerdict.cloneable 'cloneable'
 			return
 		end 'cloneable'
 
+		try self.requireCloneCopiesNoGreenThread(verdict, subject: "`{String.from(layout.name)}`", memberTok: memberTok)
 		try self.refuseCloneOfAnUncloneableConformer(self.signatures.uncloneableExistentialIn(layout.name), memberTok: memberTok)
 
 		throw SourceParseError.unsupported("`clone` on `{String.from(layout.name)}`, which carries a payload this compiler cannot deep-clone: an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all, or a type that owns one. String, struct, boxed-union, enum, `Array`, `Vector`, `List` and declared-generic instance payloads ARE supported.", line: memberTok.line, column: memberTok.column)
 	end 'requireUnionCloneSupported'
 
-	// ⛔ **A UNION CARRYING A PROMISE IS NOT CLONEABLE, AND `aggregateSupportsDeepClone` CANNOT SEE IT** — that
-	// walk skips every payload `payloadClassIsManaged` calls false, and a green thread is one: it is not a box.
-	// A copy would hand two owners one thread, which is the double reclaim `await`'s linearity exists to make
-	// unrepresentable. `requireStructHoldsNoGreenThread` states the identical rule one aggregate over, and this
-	// is asked at the concrete receiver for its reason: the shared walk also gates cloner SYNTHESIS
-	// program-wide, so widening it would refuse unrelated types that merely reach the same classifier.
-	function requireUnionHoldsNoGreenThread(layout EnumLayout, memberTok Token) throws SourceParseError
-		for caseIndex in 0 upto layout.caseCount() 'eachCase'
-			let payloads = layout.payloadsAt(caseIndex)
+	function requireCloneCopiesNoGreenThread(verdict SourceCloneVerdict, subject String, memberTok Token) throws SourceParseError
+		if verdict == SourceCloneVerdict.holdsAGreenThread 'aGreenThreadIsCopied'
+			throw SourceParseError.promiseCannotBeBorrowed(String.from(memberTok.value), cure: "{subject} is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT", line: memberTok.line, column: memberTok.column)
+		end 'aGreenThreadIsCopied'
+	end 'requireCloneCopiesNoGreenThread'
 
-			for i in 0 upto payloads.count() 'eachPayload'
-				let field = try payloads.get(i) otherwise panic("requireUnionHoldsNoGreenThread: payloadsAt returned fewer fields than its own count at {i}")
-				let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
+	function cloneableInstanceOf(base StructBase, memberTok Token) returns GenericInstanceId throws SourceParseError
+		if self.tagOf(base.box) != ValueTypeTag.genericInstance 'noInstanceInHand'
+			throw SourceParseError.unsupported("`clone` on `{String.from(base.layout.name)}`, which is a GENERIC type read where its type parameters name no instance — a clone is minted per INSTANCE (a `{String.from(base.layout.name)} with String` and a `{String.from(base.layout.name)} with int` copy different things), so it is written where the instance is known. Clone the value at a site that names its instance, or write a `clone` method on `{String.from(base.layout.name)}` that rebuilds it.", line: memberTok.line, column: memberTok.column)
+		end 'noInstanceInHand'
 
-				if payloadClassIsAGreenThread(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)) 'aGreenThreadPayload'
-					throw SourceParseError.promiseCannotBeBorrowed(String.from(b"clone"), cure: "`{String.from(layout.name)}` carries a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and clone a value holding its RESULT", line: memberTok.line, column: memberTok.column)
-				end 'aGreenThreadPayload'
-			end 'eachPayload'
-		end 'eachCase'
-	end 'requireUnionHoldsNoGreenThread'
+		let instance = self.valueInstanceId(base.box)
+		try self.requireStructCloneVerdict(self.signatures.sourceCloneVerdictOfInstance(instance), typeName: base.layout.name, display: self.valueDisplayTypeName(base.box), memberTok: memberTok)
+		return instance
+	end 'cloneableInstanceOf'
 
-	// ⛔ **THE TWO REASONS A SYNTHESIZED CLONE CANNOT BE EMITTED, AND IN BOTH THE ALTERNATIVE IS A WRONG
-	// ANSWER RATHER THAN A MISSING ONE.** One question — *may this receiver be cloned here?* — with two
-	// clauses, so the emit below has one gate to satisfy.
-	//
-	// ⛔⛔ **CLAUSE 1: A GENERIC BASE. MEASURED, AND IT IS THE DEFECT THIS FUNCTION EXISTS FOR.** A user
-	// generic (`type Box uses T`) is NOT intercepted by the container arms in `dispatchMethodOnReceiver` —
-	// only `Array`/`Set`/`Map`/`List`/`Vector` are — so a `Box with String` receiver reaches
-	// `dispatchMethodOnBase`, where `structLayoutOfType` hands back the BASE layout. Everything downstream
-	// then agreed on the wrong answer, which is why nothing panicked:
-	//
-	//   • the field walk PASSES, because `typeIsManaged` is false for a `typeParameter`-tagged field, so the
-	//     `T` slot is not examined at all;
-	//   • the result was stamped `structRef` + the BARE BASE name — MEASURED: `a is b` reported
-	//     *"got 'StringBox' and 'Box'"*, two names for what the author wrote as one type, and every later
-	//     member dispatch would resolve against that same wrong identity;
-	//   • `synthesizeStructCascade` skips the very same field, so the fresh box is blitted with the `T` word
-	//     ALIASED AND NOT RETAINED — at `String`, a second owner of a record with one refcount.
-	//
-	// ⇒ It is refused until a cloner is minted PER INSTANCE, which is the same slice the field-side refusal
-	// below already advertises for a `Box with T` FIELD. The question is asked of the LAYOUT rather than of
-	// the receiver's tag on purpose: `self.clone()` inside `Box`'s own body has a `structRef` receiver and is
-	// just as unclonable, because what is missing is the instance, not the pointer.
-	//
-	// ⛔ **CLAUSE 2: A FIELD NOTHING CAN DEEP-CLONE.** `synthesizeStructCascade` walks the same fields and
-	// calls `emitCloneCall`, which PANICS on an `unsupported` strategy — so the gate and the strategy must
-	// admit the same set, which is exactly what `ProgramSignatures.aggregateSupportsDeepClone` is (it and
-	// `managedFieldCascadeStrategy` are read off one walk). `requireArrayElementCopyable` is this clause's twin
-	// one container out, down to the E2015 it reports.
-	// See the call site for why this is asked at the receiver rather than folded into `aggregateSupportsDeepClone`.
-	function requireStructHoldsNoGreenThread(layout StructLayout, memberTok Token) throws SourceParseError
-		for i in 0 upto layout.fieldCount() 'eachField'
-			if self.signatures.structFieldOwesDrop(layout.name, index: i) and not self.signatures.structFieldIsManaged(layout.name, index: i) 'aGreenThreadField'
-				throw SourceParseError.promiseCannotBeBorrowed(String.from(b"clone"), cure: "`{String.from(layout.name)}` holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and clone a record holding its RESULT", line: memberTok.line, column: memberTok.column)
-			end 'aGreenThreadField'
-		end 'eachField'
-	end 'requireStructHoldsNoGreenThread'
-
-	function requireStructCloneSupported(layout StructLayout, memberTok Token) throws SourceParseError
-		if layout.typeParamCount() > 0 'genericBase'
-			throw SourceParseError.unsupported("`clone` on `{String.from(layout.name)}`, which is a GENERIC type — a clone must be minted per INSTANCE (a `{String.from(layout.name)} with String` and a `{String.from(layout.name)} with int` copy different things), and this compiler mints one per declared type only, so the copy would alias the type parameter's value instead of cloning it. Write a `clone` method on `{String.from(layout.name)}` that rebuilds it.", line: memberTok.line, column: memberTok.column)
-		end 'genericBase'
-
-		// ⛔⛔ **A STRUCT HOLDING A PROMISE IS NOT CLONEABLE, AND `aggregateSupportsDeepClone` CANNOT SEE IT.** That
-		// walk asks `structFieldIsManaged`, the narrow "is this an `__mm` box" — correctly `false` for a
-		// promise — so a promise field reads as a TRIVIAL word and the synthesized cloner blits it. MEASURED:
-		// `h.clone()` on a `Holder{p as IntPromise}` compiled and produced two Holders naming ONE green
-		// thread, which is the double reclaim `await`'s linearity exists to make unrepresentable, and it
-		// silently contradicted the rule `promise-typing.error.clone-a-promise` had just pinned for a bare
-		// promise. Asked HERE, at the concrete receiver, rather than by widening `aggregateSupportsDeepClone`:
-		// that walk's answer also gates cloner SYNTHESIS program-wide, and widening it would refuse the clone
-		// of every unrelated type that merely reaches the same classifier.
-		try self.requireStructHoldsNoGreenThread(layout, memberTok: memberTok)
-
-		if self.signatures.aggregateSupportsDeepClone(layout.name) 'cloneable'
+	function requireStructCloneVerdict(verdict SourceCloneVerdict, typeName ByteArray, display String, memberTok Token) throws SourceParseError
+		if verdict == SourceCloneVerdict.cloneable 'cloneable'
 			return
 		end 'cloneable'
 
-		try self.refuseCloneOfAnUncloneableConformer(self.signatures.uncloneableExistentialIn(layout.name), memberTok: memberTok)
+		try self.requireCloneCopiesNoGreenThread(verdict, subject: "`{display}`", memberTok: memberTok)
+		try self.refuseCloneOfAnUncloneableConformer(self.signatures.uncloneableExistentialIn(typeName), memberTok: memberTok)
 
-		throw SourceParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all, or a type that owns one, including one held INSIDE a struct field. String, struct, boxed-union, enum, `Array`, `Vector`, `List` (managed elements included), declared-generic instance (`Box with String`) and interface-typed fields ARE supported.", line: memberTok.line, column: memberTok.column)
-	end 'requireStructCloneSupported'
+		throw SourceParseError.unsupported("`clone` on `{display}`, which owns a field this compiler cannot deep-clone: an OS handle (`__ManagedFile`/`__ManagedDirectory`/`__ManagedSocket`), which cannot be duplicated at all, or a type that owns one, including one held INSIDE a struct field. String, struct, boxed-union, enum, `Array`, `Vector`, `List` (managed elements included), declared-generic instance (`Box with String`) and interface-typed fields ARE supported.", line: memberTok.line, column: memberTok.column)
+	end 'requireStructCloneVerdict'
 
 	// The one conformer-naming refusal the four clone gates share, each asking it AHEAD of its own general
 	// wording so the named reason wins where there is one. `none` is not "cloneable" — it is "not this", and
@@ -72150,33 +72129,26 @@ export type Parser
 	// `trackOwnedTemp` enrolled it, the statement's pending drops freed it — so any result that outlived the
 	// statement was a pointer into freed memory.
 	//
-	// **Unguarded, all four managed field kinds fault:**
-	//   • `let s = Box.make("hello").name`          — String field:  **0xC0000005**, no diagnostic anywhere
-	//   • `let o = Box.make().ops` then `o.get(0)`  — Array field:   **0xC0000005**, no diagnostic anywhere
-	//   • `let i = Outer.make(Inner.make(3)).inner` — struct field:  exit **0x3F3F3F3F** — the freed-memory
-	//     fill byte read back as user data. A WRONG ANSWER with no crash at all, which is the one of the
-	//     four that a suite full of exit codes would never have noticed.
-	//   • `let s = makePair().1`                    — tuple element: **0xC0000005** (a tuple is a synthesized
-	//     struct, so it needs no arm of its own — that is the point of it being one)
+	// Unguarded, every managed field kind reads freed memory: a String field
+	// (`Box.make("hello").name`), an Array field, a struct field, and a tuple element (a tuple is a
+	// synthesized struct, so it needs no arm of its own). The struct field reads the freed-memory fill byte
+	// back as user data, a wrong answer with no crash at all.
 	//
-	// ⭐⭐ **IT USED TO REFUSE, AND THE REFUSAL'S OWN MESSAGE NAMED THE RUNG THAT WOULD LIFT IT** — *"keeping a
-	// temporary alive for a borrow taken out of it is the ownership rung's"*. ⚖ That is A3h, and the USER
-	// RULING of 2026-08-01 is EXTEND THE TEMPORARY'S LIFETIME, so the refusal is gone and the box is promoted
-	// to a scope-lifetime binding instead (`giveTemporaryScopeLifetime`). It is the SAME promotion, through the
-	// SAME door, that a container an ELEMENT borrow came out of now gets: the two were one fact refused in one
-	// place and miscompiled in the other, which is exactly why they must not have two cures.
+	// ⚖ The box is promoted to a scope-lifetime binding (`giveTemporaryScopeLifetime`) — the user ruling is
+	// to extend the temporary's lifetime. It is the SAME promotion, through the SAME door, that a container
+	// an ELEMENT borrow came out of gets, so the two cannot come to have two cures.
 	//
 	// A SCALAR field is COPIED, not borrowed, so it is untouched — which is exactly what keeps
 	// `postfix.field-read-on-a-call-result` (`Leaf.make(4).tally`) paying nothing, and what makes the gate the
 	// managed classifier and not the temporary.
-	function keepFieldSourceAliveForItsRead(base StructBase, index FieldIndex)
+	function keepFieldSourceAliveForItsRead(base StructBase, index FieldIndex) returns bool
 		// A box owned by a NAME — a local, a parameter, `self`, a captured env slot — or a borrow of one
 		// already outlives the statement, and the read is the ordinary borrow every field chain already is.
 		// Only an UNCONSUMED owned temporary needs promoting, which `giveTemporaryScopeLifetime` asks for
 		// itself; this early return is the COST gate, keeping the managed classification below off the hot
 		// path of every field read in a program.
 		if not self.pendingTempsContain(base.box) 'boxOutlivesTheStatement'
-			return
+			return false
 		end 'boxOutlivesTheStatement'
 
 		// ⭐ **BOTH ARMS ARE THE DOOR THE BOX'S OWN DESTRUCTOR DECIDES THIS FIELD'S DROP THROUGH.** A generic
@@ -72199,10 +72171,11 @@ export type Parser
 		let borrowsManagedHeap = self.signatures.genericInstanceFieldIsManaged(self.valueInstanceId(base.box), index: index) if self.tagOf(base.box) == ValueTypeTag.genericInstance else self.signatures.structFieldIsManaged(base.layout.name, index: index)
 
 		if not borrowsManagedHeap 'scalarFieldIsCopiedNotBorrowed'
-			return
+			return false
 		end 'scalarFieldIsCopiedNotBorrowed'
 
 		self.giveTemporaryScopeLifetime(base.box, name: BorrowSourceBindingName)
+		return true
 	end 'keepFieldSourceAliveForItsRead'
 
 	// ⭐ **THE CONCRETE INSTANCE A METHOD'S RECEIVER SUPPLIES TO THE CALLER-SIDE CONSUME (P1.7 slice 3b-iii).**
@@ -74658,19 +74631,34 @@ export type Parser
 	// took must not outlive its argument, which is `cellArgumentToken`'s discipline; and the lookup
 	// behind it walks the callee's declarations, while every argument of every call in the program
 	// passes this line.
-	function stateLiteralTargetForArgument(target CallArgTarget, sourceIndex ParamCount, label ByteArray, valueStart ElementIndex)
-		self.stateArrayLiteralTargetAt(self.arrayTargetForArgument(target, sourceIndex: sourceIndex, label: label, valueStart: valueStart), tokenIndex: valueStart)
+	function stateLiteralTargetForArgument(target CallArgTarget, sourceIndex ParamCount, label ByteArray, valueStart ElementIndex, args ValueIdArray, receiverArgs ParamCount)
+		self.stateArrayLiteralTargetAt(self.arrayTargetForArgument(target, sourceIndex: sourceIndex, label: label, valueStart: valueStart, args: args, receiverArgs: receiverArgs), tokenIndex: valueStart)
 		self.stateTupleLiteralTargetAt(self.tupleTargetForArgument(target, sourceIndex: sourceIndex, label: label, valueStart: valueStart), tokenIndex: valueStart)
 	end 'stateLiteralTargetForArgument'
 
-	function arrayTargetForArgument(target CallArgTarget, sourceIndex ParamCount, label ByteArray, valueStart ElementIndex) returns DeclaredArrayInstance
+	function arrayTargetForArgument(target CallArgTarget, sourceIndex ParamCount, label ByteArray, valueStart ElementIndex, args ValueIdArray, receiverArgs ParamCount) returns DeclaredArrayInstance
 		if self.kindAt(valueStart) != TokenKind.leftBracket 'noLiteralToType'
 			return DeclaredArrayInstance.none
 		end 'noLiteralToType'
 
 		let callee = try target.declaredName() otherwise return DeclaredArrayInstance.none
-		return self.signatures.arrayInstanceDeclaredAtParam(callee, sourceIndex: sourceIndex, label: label)
+		let receiver = try self.callReceiverInstance(args, receiverArgs: receiverArgs) otherwise return self.signatures.arrayInstanceDeclaredAtParam(callee, sourceIndex: sourceIndex, label: label)
+		return self.signatures.arrayInstanceDeclaredAtParamOfReceiver(callee, sourceIndex: sourceIndex, label: label, receiver: receiver, readerFilePath: self.filePath)
 	end 'arrayTargetForArgument'
+
+	function callReceiverInstance(args ValueIdArray, receiverArgs ParamCount) returns GenericInstanceId throws AbsentError
+		if receiverArgs == 0 'noReceiver'
+			throw AbsentError.absent
+		end 'noReceiver'
+
+		let receiver = try args.get(0) otherwise panic("callReceiverInstance: a call with a prepended receiver holds it at argument 0")
+
+		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'notAConcreteInstance'
+			throw AbsentError.absent
+		end 'notAConcreteInstance'
+
+		return self.valueInstanceId(receiver)
+	end 'callReceiverInstance'
 
 	function tupleTargetForArgument(target CallArgTarget, sourceIndex ParamCount, label ByteArray, valueStart ElementIndex) returns DeclaredTupleTarget
 		if self.kindAt(valueStart) != TokenKind.leftParen 'noLiteralToType'
@@ -74840,17 +74828,8 @@ export type Parser
 
 	// A slot declared in a shared generic body, read through this call's receiver when it has one.
 	function slotTypeThroughCallReceiver(declared MaxonType, args ValueIdArray, receiverArgs ParamCount, scopeFilePath FilePath) returns MaxonType
-		if receiverArgs == 0 'noReceiver'
-			return declared
-		end 'noReceiver'
-
-		let receiver = try args.get(0) otherwise panic("slotTypeThroughCallReceiver: a call with a prepended receiver holds it at argument 0")
-
-		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'notAConcreteInstance'
-			return declared
-		end 'notAConcreteInstance'
-
-		return self.functionSlotThroughInstance(declared, gid: self.valueInstanceId(receiver), scopeFilePath: scopeFilePath)
+		let receiver = try self.callReceiverInstance(args, receiverArgs: receiverArgs) otherwise return declared
+		return self.functionSlotThroughInstance(declared, gid: receiver, scopeFilePath: scopeFilePath)
 	end 'slotTypeThroughCallReceiver'
 
 	// Does `t` name, at any depth of its type arguments, a type parameter the enclosing declaration does not
@@ -76212,7 +76191,7 @@ export type Parser
 		match form 'f'
 			stringLiteral then return try self.parseStringLiteral(func)
 			charLiteral then return try self.parseCharLiteral()
-			arrayLiteral then self.stateLiteralTargetForArgument(CallArgTarget.callee(callee), sourceIndex: 0, label: EmptySourceText, valueStart: self.pos)
+			arrayLiteral then self.stateLiteralTargetForArgument(CallArgTarget.callee(callee), sourceIndex: 0, label: EmptySourceText, valueStart: self.pos, args: ValueIdArray.create(), receiverArgs: 0)
 		end 'f'
 
 		return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
@@ -78962,17 +78941,25 @@ export type Parser
 		end 'eachArgument'
 	end 'refuseASizedContainersRecordEscapingIntoACall'
 
-	function noteArrayCopyDemand(recv MethodReceiver)
+	function admitArrayCopy(recv MethodReceiver) throws SourceParseError
 		if not self.signatures.isArrayInstanceAt(recv.tag, nameId: recv.nameId) 'notAnArray'
 			return
 		end 'notAnArray'
 
-		let member = self.current().value
+		let member = self.current()
 
-		if member.equals(CloneMethodName) or member.equals(SliceMethod) 'aCopyingMember'
-			self.signatures.noteArrayCopyDemanded(recv.nameId as GenericInstanceId)
-		end 'aCopyingMember'
-	end 'noteArrayCopyDemand'
+		if not member.value.equals(CloneMethodName) and not member.value.equals(SliceMethod) 'notACopyingMember'
+			return
+		end 'notACopyingMember'
+
+		let instance = recv.nameId as GenericInstanceId
+
+		if not self.signatures.containerElementIsOpaque(instance) 'aConcreteElement'
+			try self.requireCloneCopiesNoGreenThread(self.signatures.sourceCloneVerdictOfInstance(instance), subject: "`{self.valueDisplayTypeName(recv.value)}`", memberTok: member)
+		end 'aConcreteElement'
+
+		self.signatures.noteArrayCopyDemanded(instance)
+	end 'admitArrayCopy'
 
 	// ⭐⭐⭐ **DOES THE CORPUS DECLARE THIS MEMBER? — THE DOOR THAT MAKES A LISTED `stdlib/String.maxon` MEAN
 	// SOMETHING (W17).** A roster is the compiler's statement of what its SYNTHESIZED surface serves; it was the whole
@@ -81345,17 +81332,17 @@ export type Parser
 		return SourceParseError.builtinArgumentType(String.from(appendArgParamName(methodTok.value)), expected: self.valueDisplayTypeName(arr), got: self.valueDisplayTypeName(other), line: methodTok.line, column: methodTok.column)
 	end 'appendArgMismatch'
 
-	// ⭐ **THE COPY GATE for `slice`/`clone`/`append` on a CONCRETE-element array.** A TRIVIAL element
-	// passes (its copy is a correct byte blit / COW view). A CONCRETE MANAGED element (String / struct
-	// / boxed union) now passes too — its copy is a per-element DEEP CLONE (`arrayElementCloneValue`
-	// stamps the element's `funcAddr(__clone_<E>)` into the `_managed` runtime call). What still
+	// ⭐ **THE COPY GATE for `slice`/`clone`/`append` on a CONCRETE-element array.** An element that owes no
+	// drop passes (its copy is a correct byte blit / COW view). A CONCRETE MANAGED element (String / struct
+	// / boxed union) passes too — its copy is a per-element DEEP CLONE (`arrayElementCloneValue`
+	// stamps the element's `funcAddr(__clone_<E>)` into the `_managed` runtime call). What
 	// REJECTS (E2015) is a managed element whose nested type NOTHING can clone: a base-struct-less
 	// generic instance with no runtime copy of its own (a cursor — a DECLARED generic's instance has its
 	// per-instance cloner, and the managed buffer and the chain their runtime walks), an OS handle, or an
-	// existential.
+	// existential. An element that is or holds a promise is E3141: a copy would give two owners one thread.
 	//
-	// ⭐ **A CONTAINER WHOSE OWN ELEMENTS ARE MANAGED (an array-of-managed-arrays, a `List with String`) WAS ON
-	// THAT LIST UNTIL G18 AND IS NOT NOW.** Its copy is a 2-argument
+	// ⭐ **A CONTAINER WHOSE OWN ELEMENTS ARE MANAGED (an array-of-managed-arrays, a `List with String`)
+	// PASSES.** Its copy is a 2-argument
 	// `<containerClone>(box, funcAddr(elementClone))`, which `callIndirect(fn, elem)` cannot reach — an ARITY
 	// bound on the entry point, never an impossibility — and a per-instance one-argument thunk closes it
 	// (`SignatureIndex.managedElementRecordCopy`).
@@ -81363,11 +81350,14 @@ export type Parser
 	// An OPAQUE-`T` element (a generic body) is routed to `requireOpaqueArrayCopyable`
 	// by `requireArrayCopyMethodSupported` instead, so only CONCRETE elements reach here.
 	function requireArrayElementCopyable(giid GenericInstanceId, methodTok Token) throws SourceParseError
-		if not self.signatures.containerElementIsManaged(giid) 'trivial'
+		if not self.signatures.containerElementOwesDrop(giid) 'trivial'
 			return
 		end 'trivial'
 
-		if not self.signatures.arrayElementSupportsDeepClone(giid) 'unsupportedNested'
+		let verdict = self.signatures.sourceCloneVerdictOfArrayElement(giid)
+
+		if verdict != SourceCloneVerdict.cloneable 'unsupportedNested'
+			try self.requireCloneCopiesNoGreenThread(verdict, subject: "an element of this array", memberTok: methodTok)
 			try self.refuseCloneOfAnUncloneableConformer(self.signatures.uncloneableExistentialInElementOf(giid), memberTok: methodTok)
 
 			throw SourceParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this compiler cannot deep-clone — an OS handle, or an ELEMENT that is itself held at an interface type. String / struct / boxed-union / declared-generic-instance / container elements, including nested String, struct, union, Array, Vector, chain, instance and interface-typed fields and a managed-element container of any depth, ARE supported.", line: methodTok.line, column: methodTok.column)
@@ -82611,11 +82601,11 @@ export type Parser
 		throw SourceParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
 	end 'resolveFieldChain'
 
-	// Resolve a field chain whose base is a top-level managed global. Split out so the arm above stays one
-	// line and the synthetic binding is built once — `VarInfo.createValueBinding` is the same constructor
-	// `dispatchOnManagedReceiver` uses, and the two must not come to describe one global differently.
+	// An immutable slot's base is marked as a bare read of it is, so a field read through it into a
+	// `var` (`var m = H.index`) is E3078 rather than a second, writable name for the `let`'s record.
 	function resolveGlobalFieldChain(baseTok Token, label ByteArray, valueType MaxonType, mutable bool) returns FieldChainStep throws SourceParseError
-		return try self.resolveValueFieldChain(baseTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok), reader: self.moduleSlotReaderOf(baseTok, mutable: mutable)), valueType: valueType, mutable: mutable)
+		let loaded = self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok), reader: self.moduleSlotReaderOf(baseTok, mutable: mutable))
+		return try self.resolveValueFieldChain(baseTok, value: loaded if mutable else self.recordImmutableSlotRead(baseTok, value: loaded), valueType: valueType, mutable: mutable)
 	end 'resolveGlobalFieldChain'
 
 	// ⭐ **THE CHAIN ITSELF, FROM A BASE THIS FRAME ALREADY HOLDS** — a `.data` slot's occupant above, and an
@@ -85813,10 +85803,9 @@ export type Parser
 
 		// ⭐ **THE WRITABLE ARM IS NOT "NOTHING TO RECORD" (W41).** A `var` global's slot is rebindable
 		// storage exactly as a `var` field is, and `emitCheckedGlobalStore` decrefs the old occupant on the
-		// way past — so `let old = G` + `G = fresh` dangles for the identical reason and died with the
-		// identical 0xC0000005 (the oracle prints `sum 3`). The two arms now carry the two halves of one
-		// question — can this slot be REBOUND — and the answer feeds the binding promotion rather than the
-		// aliasing refusal. See `rebindableSlotReads`.
+		// way past — so `let old = G` + `G = fresh` dangles for the identical reason. The two arms carry the
+		// two halves of one question — can this slot be REBOUND — and the answer feeds the binding promotion
+		// rather than the aliasing refusal. See `rebindableSlotReads`.
 		if mutable 'writableSlot'
 			if self.valueIsManagedHeap(value) 'managedOccupant'
 				self.markRebindableSlotRead(value)
@@ -85825,9 +85814,13 @@ export type Parser
 			return value
 		end 'writableSlot'
 
+		return self.recordImmutableSlotRead(tok, value: value)
+	end 'recordGlobalReadValue'
+
+	function recordImmutableSlotRead(tok Token, value ValueId) returns ValueId
 		self.markImmutableGlobalRead(value)
 		return self.recordModuleLetRoot(value, name: tok.value, image: false)
-	end 'recordGlobalReadValue'
+	end 'recordImmutableSlotRead'
 
 	// ⭐ **THE ONE WRITER OF `immutableGlobalReads`** — the read that mints a mark and the merge that
 	// PROPAGATES one both come through here (P1.7 slice 2b), so the install-on-first-mark is stated once.
@@ -90239,7 +90232,7 @@ export type Parser
 	// `spelling` is threaded straight through to `emitCall`'s reserved-space door and read nowhere else:
 	// every caller but ONE hands it the author's own bytes, and the exception is the primitive-static mint
 	// (`parseQualifiedCall`). See `CalleeMint`.
-	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, refuseUninferred bool = false) returns ValueId throws SourceParseError
+	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, spawned bool = false) returns ValueId throws SourceParseError
 		// The callee's final name token may be a KEYWORD (D8) — `FilePath.from(path)`, `c.to()`, `from(41)`.
 		// The `callee` bytes the caller passed were read off this very token, so refusing it here would have
 		// refused every call to a name the declaration now accepts.
@@ -91274,7 +91267,7 @@ export type Parser
 			end 'text'
 		end 'debugStreamMember'
 
-		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint, inferInstanceOf: inferInstanceOf, refuseUninferred: refuseUninferred, places: places)
+		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance, mint: mint, inferInstanceOf: inferInstanceOf, spawned: spawned, places: places)
 	end 'parseCallNamed'
 
 	// ⭐ **THE ONE `__DebugStream` MEMBER THAT ANSWERS A VALUE — the SOURCE-LEVEL half of the run-time gate.**
@@ -92564,7 +92557,7 @@ export type Parser
 				// an array literal built at the wrong element type is a record at the wrong stride rather than a
 				// value a later coercion could fix. `argIndex` is the SOURCE position, which is the alignment
 				// `OverloadedDecl.paramNames` carries — a prepended receiver fills no source parameter.
-				self.stateLiteralTargetForArgument(target, sourceIndex: argIndex, label: label, valueStart: valueStart)
+				self.stateLiteralTargetForArgument(target, sourceIndex: argIndex, label: label, valueStart: valueStart, args: args, receiverArgs: receiverArgs as ParamCount)
 				let offersAClosure = self.stateClosureParamOfferForArgument(target, sourceIndex: argIndex, label: label, valueStart: valueStart, args: args, receiverArgs: receiverArgs as ParamCount)
 
 				// ⚠ The blame name is CLEARED before the argument is parsed — by `parseValueExpression` itself,
@@ -93024,7 +93017,7 @@ export type Parser
 	//
 	// `spelling` says whether those callee bytes are the AUTHOR'S or the COMPILER'S, which is the one
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
-	function emitCall(writtenCallee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, refuseUninferred bool = false, places PlaceArgumentArray = noPlaceArguments) returns ValueId throws SourceParseError
+	function emitCall(writtenCallee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, spawned bool = false, places PlaceArgumentArray = noPlaceArguments) returns ValueId throws SourceParseError
 		let callee = try self.genericInstanceCallee(writtenCallee, anchor: anchor, args: args, argLabels: argLabels)
 		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, mint: mint, signatures: self.signatures)
 
@@ -93066,7 +93059,7 @@ export type Parser
 		// ⭐ **A FACTORY CALL ON A BARE GENERIC BASE HAS ITS INSTANCE FIXED BY ITS ARGUMENTS**, and this is the
 		// first line at which they are all in hand — the fill above included, so a DEFAULTED argument fixes a
 		// type parameter exactly as a written one does. Every other caller gets back what it supplied.
-		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, refuseUninferred: refuseUninferred)
+		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, spawned: spawned)
 		try self.requireBareGenericSubjectIsBound(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
 		try self.requireADescriptorToComposeFrom(callee, args: args, constructed: constructed, anchor: anchor)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
@@ -93134,7 +93127,7 @@ export type Parser
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
 		// emitted so a refused call emits nothing.
-		let transfers = try self.applyCallerConsume(callee, declarations: declarations, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructed, callResult: result)
+		let transfers = try self.applyCallerConsume(callee, declarations: declarations, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructed, callResult: result, spawned: spawned)
 		self.recordDeferredArgumentBindings(placeBindings.pending, transfers: transfers, callResult: result)
 
 		// ⭐ An INFERRED instance is stamped on the result for the reason `retypeGenericAliasConstructorResult`
@@ -95201,11 +95194,11 @@ export type Parser
 	// (poisoned if it is a live binding, drained if a temporary), a borrowed struct/union is refused
 	// (E2015) and a scalar is inert, and a promise moves at every position the callee takes. The
 	// common callee `borrowsAll`, so this is one `match`.
-	function applyCallerConsume(callee ByteArray, declarations DeclarationFactsArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, callResult ValueId) returns PendingArgumentBindingArray throws SourceParseError
+	function applyCallerConsume(callee ByteArray, declarations DeclarationFactsArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, callResult ValueId, spawned bool) returns PendingArgumentBindingArray throws SourceParseError
 		if declarations.count() < 2 'oneDeclarationDecides'
 			match self.consumeOfTheOneDeclaration(callee, declarations: declarations) 'c'
 				borrowsAll then break 'c'
-				consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
+				consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, spawned: spawned, callee: callee)
 			end 'c'
 
 			return noPendingArgumentBindings
@@ -95242,9 +95235,13 @@ export type Parser
 			let asPromise = self.takesAsAPromise(first, column: column, label: label, argValue: argValue)
 
 			if takingSites.count() == declarations.count() and self.everyTakerTakesAlike(takers, asPromise: asPromise, column: column, label: label, argValue: argValue) 'everyDeclarationTakesItAlike'
-				try self.transferConsumedColumn(first, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned)
+				try self.transferConsumedColumn(first, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned, spawned: spawned, callee: callee)
 				continue
 			end 'everyDeclarationTakesItAlike'
+
+			if spawned 'aSpawnCannotMoveConditionally'
+				throw SourceParseError.unsupported("`spawn {String.from(callee)}(…)` — `{String.from(callee)}` is declared {declarations.count()} times and they do not all keep argument {column + 1} alike. A `spawn` MOVES every argument its factory keeps into the service, and which declaration this call binds is settled after this point, so there is no one move to make. Give the factories distinct names", line: anchor.line, column: anchor.column)
+			end 'aSpawnCannotMoveConditionally'
 
 			try self.transferTakenColumn(self.anyTakerTakesAsAPromise(takers, column: column, label: label, argValue: argValue), column: column, label: label, takingSites: takingSites, args: args, argRanges: argRanges, anchor: anchor, consumedOwned: consumedOwned, transfers: transfers, callResult: callResult)
 		end 'eachArg'
@@ -95308,7 +95305,7 @@ export type Parser
 			return self.coOwnBorrowedOpaque(argValue, range: SourceRange.ofToken(anchor))
 		end 'anOpaqueBinding'
 
-		return self.transferConsumedArg(argValue, anchor: anchor)
+		return self.transferConsumedArg(argValue, anchor: anchor, spawned: false)
 	end 'transferOnHandoff'
 
 	function handPromiseOnHandoff(promise ValueId, anchor Token, handoff ArgumentHandoff)
@@ -95364,15 +95361,15 @@ export type Parser
 		return noTakingDeclaration
 	end 'consumeFactsTakeArgument'
 
-	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws SourceParseError
+	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, spawned bool, callee ByteArray) throws SourceParseError
 		var consumedOwned = ValueIdArray.create()
 
 		for column in 0 upto args.count() as ParamCount 'eachArg'
-			try self.transferConsumedColumn(info, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned)
+			try self.transferConsumedColumn(info, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned, spawned: spawned, callee: callee)
 		end 'eachArg'
 	end 'transferConsumedArgs'
 
-	function transferConsumedColumn(info ParamConsumeInfo, column ParamCount, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, consumedOwned ValueIdArray) throws SourceParseError
+	function transferConsumedColumn(info ParamConsumeInfo, column ParamCount, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, consumedOwned ValueIdArray, spawned bool, callee ByteArray) throws SourceParseError
 		let label = try argLabels.get(column) otherwise panic("transferConsumedColumn: argLabels.get OOB at {column} — args and argLabels are pushed in lockstep")
 		let position = try argSlotPosition(info.paramNames, argIndex: column, label: label) otherwise return
 		let argValue = try args.get(column) otherwise panic("transferConsumedColumn: args.get OOB at {column}")
@@ -95393,9 +95390,22 @@ export type Parser
 
 		let range = try argRanges.get(column) otherwise panic("transferConsumedColumn: argRanges.get OOB at {column} — args and argRanges are pushed in lockstep")
 		try self.requireConsumedArgumentStillOwned(argValue, consumedOwned: consumedOwned, range: range)
-		let transferred = self.transferConsumedArg(argValue, anchor: anchor)
+
+		if spawned 'aServicesState'
+			try self.requireSpawnedArgumentIsOneThisFrameOwns(argValue, blame: serviceFactoryArgumentBlame(callee, paramName: try info.paramNames.get(position) otherwise panic("transferConsumedColumn: paramNames.get OOB at {position}")), range: range)
+		end 'aServicesState'
+
+		let transferred = self.transferConsumedArg(argValue, anchor: anchor, spawned: spawned)
 		try args.set(column, value: transferred) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
 	end 'transferConsumedColumn'
+
+	function requireSpawnedArgumentIsOneThisFrameOwns(argValue ValueId, blame String, range SourceRange) throws SourceParseError
+		if not self.valueIsManagedHeap(argValue) or self.valueIsOwnedHeap(argValue) or self.valueIsAMintedStringLiteral(argValue) or valueIsMarked(self.bodyState.temporaryFieldReads, value: argValue) 'crossesAsItIs'
+			return
+		end 'crossesAsItIs'
+
+		throw serviceArgumentRefusal(blame, borrowed: true, sourceClause: self.transferSourceClause(argValue), at: range)
+	end 'requireSpawnedArgumentIsOneThisFrameOwns'
 
 	// The declared name of the owning binding a consumed argument value came from — the source name the
 	// cross-argument double-consume diagnostic (`transferConsumedArgs`' E3102) reports. A value passed at TWO
@@ -95553,9 +95563,9 @@ export type Parser
 
 	// Hand one consumed argument to the callee, returning the value the call must actually carry. A
 	// SCALAR argument owns no heap and the consume is inert (returns itself). An OWNED CONCRETE managed value
-	// held by a live BINDING is CO-OWNED (the 2026-08-12 durable-sink ruling — the binding stays live and keeps
-	// its own scope-exit drop); an owned TEMPORARY is ADOPTED, drained from the statement's pending drops
-	// because the callee owns it now. Both go through the shared sink door
+	// held by a live BINDING is CO-OWNED (the durable-sink ruling — the binding stays live and keeps its own
+	// scope-exit drop), except a `spawn`'s, which is moved; an owned TEMPORARY is ADOPTED, drained from the
+	// statement's pending drops because the callee owns it now. Both go through the shared sink door
 	// (`storeOwnedValueIntoDurableSink`), which is where that split and its ruling live. A BORROWED
 	// STRING (a long rdata literal, or a borrowed String parameter/field) has a cheap owning copy, so it is
 	// PROMOTED into a fresh owned record the callee can move into its field — exactly as a DIRECT struct-field /
@@ -95564,7 +95574,7 @@ export type Parser
 	// (`coOwnBorrowedForConsume`) — the transitive-consume case, and what it is answered with. Its RESULT
 	// replaces the argument too: an existential's reference is taken through the witness, and a byte-record
 	// conformer's protocol there is the same COPY the concrete arm above takes.
-	function transferConsumedArg(argValue ValueId, anchor Token) returns ValueId
+	function transferConsumedArg(argValue ValueId, anchor Token, spawned bool) returns ValueId
 		// ⭐ AN OPAQUE OWNED type-parameter binding forwarded to a consuming sibling feed position (P1.7 slice
 		// 3b-v): the callee takes ownership, so MOVE it — poison the source binding so a second use is E3102 and
 		// this frame does not drop it too. Its `typeParameter` tag fails `valueIsManagedHeap` below (opaque here),
@@ -95572,20 +95582,13 @@ export type Parser
 		// the value passes through unchanged, poisoned in place. Reached only for `isOpaqueOwnedFeedArg` positions.
 		if self.valueIsOpaqueOwned(argValue) 'opaqueOwned'
 			// ⭐⭐ **INSIDE A LOOP THE FRAME TAKES A NEW REFERENCE INSTEAD OF GIVING UP ITS OWN — W58's RULE,
-			// AT THE DOOR AN ORDINARY CONSUMING CALL COMES THROUGH (ARRG).** It was written only into
-			// `moveElementIntoContainer`, whose header states the whole argument (N iterations take N
-			// references; a `movedFrom` bit set once at the store's TEXT cannot say "moved on iteration 3,
-			// live on iteration 4"; and a loop that never runs leaks the caller's reference outright). That
-			// argument is about the LOOP and the SINK's obligation, not about which door emitted the store —
-			// so a sibling call that consumes its opaque argument owes exactly the same discharge, and had
-			// only the refusal.
-			//
-			// ⛔ **MEASURED, on a program with no `Array` mutator in it at all**: `Bag.fill(n, v)` whose loop
-			// body calls the consuming sibling `store(v)` was refused *"moving a value declared outside this
-			// loop from inside the loop body"*, while the identical loop writing `items.set(n, value: v)`
-			// compiled — one rule, two answers, decided by which arm happened to serve the statement. It is
-			// also what leaves `stdlib/Array.maxon`'s `set` unreachable from a shared body: served by the
-			// corpus, `Bag.fillTo`'s store IS this door.
+			// AT THE DOOR AN ORDINARY CONSUMING CALL COMES THROUGH.** `moveElementIntoContainer`'s header
+			// states the whole argument (N iterations take N references; a `movedFrom` bit set once at the
+			// store's TEXT cannot say "moved on iteration 3, live on iteration 4"; and a loop that never runs
+			// leaks the caller's reference outright). That argument is about the LOOP and the SINK's
+			// obligation, not about which door emitted the store — so a sibling call that consumes its opaque
+			// argument owes exactly the same discharge. Served by the corpus, `stdlib/Array.maxon`'s `set`
+			// called from a shared body (`Bag.fillTo`'s store) comes through this door.
 			//
 			// The decision is `moveOfValueEscapesLoop`, read by both doors so they cannot settle on different
 			// bindings (see `liveOwnerIndexOf`), and the reference is `coOwnBorrowedOpaque`, emitted by both
@@ -95612,14 +95615,20 @@ export type Parser
 			return self.coOwnBorrowedForConsume(argValue, range: SourceRange.ofToken(anchor))
 		end 'borrowedManaged'
 
-		// ⭐⭐ **A CONSUMING ARGUMENT IS A DURABLE SINK, SO IT CO-OWNS RATHER THAN MOVING (⚖ user ruling,
-		// 2026-08-12).** The callee stores what it is handed, which is exactly the obligation the DIRECT store
+		// A `spawn`'s factory stores the argument in a state another green thread runs on, so it is
+		// MOVED: a binding left co-owning it is a second owner, and the spawn's soleness walk aborts
+		// on it (exit 96).
+		if spawned and self.ownedValueLeavesThisFrame(argValue) 'movedIntoTheServiceState'
+			self.moveOwnedValueOut(self.bodyFunction(), value: argValue, door: ServiceStateMoveDisplay, range: SourceRange.ofToken(anchor))
+			return argValue
+		end 'movedIntoTheServiceState'
+
+		// ⭐⭐ **A CONSUMING ARGUMENT IS A DURABLE SINK, SO IT CO-OWNS RATHER THAN MOVING (⚖ user ruling).**
+		// The callee stores what it is handed, which is exactly the obligation the DIRECT store
 		// door discharges one frame in — so both go through the ONE sink door
 		// (`storeOwnedValueIntoDurableSink`, which carries the ruling and the live-binding-vs-temporary split).
 		// Two spellings of one sink would be the shape this file keeps naming: `self.saved = chunk` legal and
-		// `store(chunk)` an E3102, decided by which door happened to serve the statement. Its owned-set scan is
-		// the same one `poisonMoveSource` ran here unconditionally, so the widening costs no lookup that was not
-		// already paid.
+		// `store(chunk)` an E3102, decided by which door happened to serve the statement.
 		return self.storeOwnedValueIntoDurableSink(argValue, isString: tagIsByteRecord(self.tagOf(argValue)), range: SourceRange.ofToken(anchor))
 	end 'transferConsumedArg'
 
@@ -95779,7 +95788,7 @@ export type Parser
 
 		match plan.take 'take'
 			copied then return value
-			aReferenceOfItsOwn then return self.transferConsumedArg(value, anchor: argument.anchor)
+			aReferenceOfItsOwn then return self.transferConsumedArg(value, anchor: argument.anchor, spawned: false)
 			anOpaqueReference then return self.coOwnBorrowedOpaque(value, range: SourceRange.ofToken(argument.anchor))
 			promotedLiteral then return self.handOverPromotedLiteral(value, door: argument.door, anchor: argument.anchor)
 			cellOccupant(read, exclusivity) then return self.handCellOccupantOver(func, read: read, exclusivity: exclusivity, argument: argument)
@@ -95919,7 +95928,7 @@ export type Parser
 		let sourceClause = self.transferSourceClause(value)
 
 		return match door 'door'
-			message(blame) gives SourceParseError.serviceArgumentNotUnique(sharedTransferMessage(blame, sourceClause: sourceClause, lesson: ServiceTransferLesson), line: anchor.line, column: anchor.column)
+			message(blame) gives serviceArgumentRefusal(blame, borrowed: false, sourceClause: sourceClause, at: SourceRange.ofToken(anchor))
 			publish(key) gives registryNotSolelyOwnedError(key, anchor: anchor)
 			coroutine gives SourceParseError.serviceArgumentNotUnique(uncountedAliasMessage(handOffDoorBlame(door), sourceClause: sourceClause, lesson: CoroutineTransferLesson), line: anchor.line, column: anchor.column)
 			closureCapture panic("handOffRefusal: a closure capture is handed over one name at a time and takes every value it is given — `handOffTakeOf` answers it a move, a reference or a copy, and never a refusal")
@@ -95928,7 +95937,7 @@ export type Parser
 
 	function borrowedHandOffRefusal(door ThreadHandOffDoor, value ValueId, anchor Token) returns SourceParseError
 		match door 'door'
-			message(blame) then return SourceParseError.serviceArgumentNotUnique(serviceBorrowedTransferMessage(blame, sourceClause: self.transferSourceClause(value)), line: anchor.line, column: anchor.column)
+			message(blame) then return serviceArgumentRefusal(blame, borrowed: true, sourceClause: self.transferSourceClause(value), at: SourceRange.ofToken(anchor))
 			publish(key) then return registryNotSolelyOwnedError(key, anchor: anchor)
 			coroutine or
 				closureCapture then panic("borrowedHandOffRefusal: a door that stays on this green thread takes a reference of its own to a borrowed value, so it never refuses one")

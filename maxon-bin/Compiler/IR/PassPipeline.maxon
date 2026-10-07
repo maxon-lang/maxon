@@ -101,6 +101,7 @@ export union PassKind
 	// `isUnsupportedInInlineBody` would otherwise refuse a callee for).
 	inlineLeaves
 	noteFoldedRecords
+	elideImageRetains
 
 	// Phase 3.5: Std → Std machine-form rewrites.
 	//
@@ -304,6 +305,7 @@ function classifyPass(pass PassKind) returns PassClassification
 		// contains, and a caller cannot be judged without every callee it names in view.
 		inlineLeaves gives PassClassification.wholeModule
 		noteFoldedRecords gives PassClassification.wholeModule
+		elideImageRetains gives PassClassification.wholeModule
 		pruneDeadBlockArgs gives PassClassification.perFunction
 		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstants gives PassClassification.perFunction
@@ -413,7 +415,8 @@ module function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		insertRangeChecks gives CompilePhase.insertRangeChecks
 		inlineManagedPrimitives gives CompilePhase.inlineManagedPrimitives
 		inlineLeaves or
-			noteFoldedRecords gives CompilePhase.inlineLeaves
+			noteFoldedRecords or
+			elideImageRetains gives CompilePhase.inlineLeaves
 		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
 		foldConstants gives CompilePhase.foldConstants
@@ -445,6 +448,7 @@ function passKindToString(pass PassKind) returns String
 		inlineManagedPrimitives gives "inlineManagedPrimitives"
 		inlineLeaves gives "inlineLeaves"
 		noteFoldedRecords gives "noteFoldedRecords"
+		elideImageRetains gives "elideImageRetains"
 		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
 		foldConstants gives "foldConstants"
@@ -528,6 +532,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.inlineManagedPrimitives)
 	passes.push(PassKind.inlineLeaves)
 	passes.push(PassKind.noteFoldedRecords)
+	passes.push(PassKind.elideImageRetains)
 
 	var members = StdFanOutStepArray.create()
 	members.push(StdFanOutStep.pruneDeadBlockArgs)
@@ -809,6 +814,7 @@ export type PassPipeline
 			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule)
 			inlineLeaves then inlineLeaves(self.project, module: self.stdModule, round: SpliceRound.everyCaller)
 			noteFoldedRecords then noteFoldedRecords(self.stdModule)
+			elideImageRetains then elideImageRetains(self.project, module: self.stdModule)
 
 			// Over the whole module, which is everything that EXISTS at this point: the runtime band is
 			// appended below the pipeline, and `Compiler.compileToCodeResult` runs `strengthReduceDivision`
