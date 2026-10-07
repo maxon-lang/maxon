@@ -436,6 +436,7 @@ tests/
     msort.maxtest                           byte order on the key, a stable sort, the flags, `--key=N`, `--jobs=N` and the failing exit code
     multifile.maxtest                       the directory builds as one project and exits 5
     nbody.maxtest                           the published n=1000 energies, exit 0
+    wc.maxtest                              lines, words and bytes per file and in total, the column flags, and the failing exit code
     spectral-norm.maxtest                   the published n=100 norm, exit 0
     homepage-hero.maxtest                   website/src/pages/index.astro's hero prints `listening on 8080`, exit 0
     readme-hero.maxtest                     README.md's first program prints `listening on 8080`, exit 0

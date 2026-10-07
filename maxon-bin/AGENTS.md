@@ -311,10 +311,8 @@ descend into a nested checkout or an agent worktree.
 
 ⛔ **A SUBTREE THAT IS NOT A CHECKOUT NEEDS A `.maxonignore`, AND `website/` IS THE ONE THAT DOES.**
 The `.git` rule protects a sibling repository, not a directory of this one — so without the marker a
-root `fmt` rewrites `website/src/examples/*.maxon` in place and walks every directory under
-`node_modules/`. MEASURED: remove `website/.maxonignore`, mis-format one of those files, run `fmt`,
-and it is silently reformatted. The marker is a FLAG whose contents are never read, and both walks
-honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
+root `fmt` walks every directory under `website/node_modules/`. The marker is a FLAG whose contents are
+never read, and both walks honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
 
 ⚠ **THE FORMATTER ENGINE'S GATE IS `tests/fmt/engine-cases.maxtest`, NOT `spec-test`.** It formats
 the 30 sources in `tests/fmt/engine-cases/` (4 of them unlexable) with the real `maxon fmt`, twice, and

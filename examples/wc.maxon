@@ -1,0 +1,252 @@
+typealias Tally = int(0 to u64.max)
+typealias WorkerCount = int(1 to 64)
+
+typealias PathArray = Array with FilePath
+typealias FlagArray = Array with Flag
+typealias Column = function(Counts) returns Tally
+typealias ColumnArray = Array with Column
+typealias CounterArray = Array with Counter.handle
+typealias CountPromise = Promise with (FileCount, ServiceError)
+typealias CountPromiseArray = Array with CountPromise
+
+let programPathArgument = 0
+let mostWorkers = 64
+
+enum Outcome
+	counted = 0
+	troubled = 1
+end 'Outcome'
+
+enum Whitespace
+	tab = 0x09
+	lineFeed = 0x0A
+	carriageReturn = 0x0D
+	space = 0x20
+end 'Whitespace'
+
+enum Flag
+	lines = "-l"
+	words = "-w"
+	bytes = "-c"
+
+	function summary() returns String
+		return match self 'describe'
+			lines gives "count lines"
+			words gives "count words"
+			bytes gives "count bytes"
+		end 'describe'
+	end 'summary'
+
+	function column() returns Column
+		return match self 'pick'
+			lines gives function(counts Counts) gives counts.lines
+			words gives function(counts Counts) gives counts.words
+			bytes gives function(counts Counts) gives counts.bytes
+		end 'pick'
+	end 'column'
+end 'Flag'
+
+enum UsageError implements Error
+	unknownFlag
+	noFiles
+	invalidPath
+
+	function message() returns String
+		return match self 'describe'
+			unknownFlag gives "unknown flag"
+			noFiles gives "name at least one FILE"
+			invalidPath gives "a FILE holds a character this system forbids in paths"
+		end 'describe'
+	end 'message'
+end 'UsageError'
+
+type Options
+	export var paths as PathArray = PathArray.create()
+	export var columns as ColumnArray = ColumnArray.create()
+
+	static function parse(args StringArray) returns Options throws UsageError
+		var options = Self{}
+		var chosen = FlagArray.create()
+
+		for (argument, text) in args.withIterator() 'eachArgument'
+			if argument.index() == programPathArgument 'programPath'
+				continue
+			end 'programPath'
+
+			if text.startsWith("-") 'aFlag'
+				chosen.push(try Flag.fromRawValue(text) otherwise throw UsageError.unknownFlag)
+			end 'aFlag' else 'aFile'
+				options.paths.push(try FilePath.from(text) otherwise throw UsageError.invalidPath)
+			end 'aFile'
+		end 'eachArgument'
+
+		if options.paths.isEmpty() 'nothingToCount'
+			throw UsageError.noFiles
+		end 'nothingToCount'
+
+		for flag in Flag.allCases 'eachColumn'
+			if chosen.isEmpty() or chosen.contains(flag) 'shown'
+				options.columns.push(flag.column())
+			end 'shown'
+		end 'eachColumn'
+
+		return options
+	end 'parse'
+end 'Options'
+
+extension int
+	function isWhitespace() returns bool
+		return self == Whitespace.space or (self >= Whitespace.tab and self <= Whitespace.carriageReturn)
+	end 'isWhitespace'
+end 'int'
+
+type Counts
+	export var lines as Tally = 0
+	export var words as Tally = 0
+	export var bytes as Tally = 0
+
+	static function zero() returns Self
+		return Self{}
+	end 'zero'
+
+	static function of(content ByteArray) returns Self
+		var counts = Self{bytes: content.count() as Tally}
+		var inWord = false
+
+		for b in content 'eachByte'
+			if b == Whitespace.lineFeed 'lineEnds'
+				counts.lines = counts.lines + 1
+			end 'lineEnds'
+
+			if not b.isWhitespace() and not inWord 'wordStarts'
+				counts.words = counts.words + 1
+			end 'wordStarts'
+
+			inWord = not b.isWhitespace()
+		end 'eachByte'
+
+		return counts
+	end 'of'
+
+	function add(other Counts)
+		self.lines = self.lines + other.lines
+		self.words = self.words + other.words
+		self.bytes = self.bytes + other.bytes
+	end 'add'
+end 'Counts'
+
+union FileCount
+	counted(counts Counts)
+	unreadable
+end 'FileCount'
+
+type Counter
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function count(path FilePath) returns FileCount
+		let content = try File.readBinary(path) otherwise return FileCount.unreadable
+		return FileCount.counted(Counts.of(content))
+	end 'count'
+end 'Counter'
+
+type Report
+	var columns as ColumnArray
+	var total as Counts = Counts.zero()
+	export var troubled = false
+
+	static function create(columns ColumnArray) returns Self
+		return Self{columns: columns}
+	end 'create'
+
+	function record(result FileCount, label String)
+		match result 'outcome'
+			counted(counts) then self.addCounts(counts, label: label)
+			unreadable then self.addFailure(label)
+		end 'outcome'
+	end 'record'
+
+	function addCounts(counts Counts, label String)
+		self.total.add(counts)
+		printRow(counts, label: label)
+	end 'addCounts'
+
+	function addFailure(label String)
+		printError("wc: {label}: cannot read\n")
+		self.troubled = true
+	end 'addFailure'
+
+	function printRow(counts Counts, label String)
+		var row = StringBuilder.create()
+
+		for column in self.columns 'eachColumn'
+			row.append("{column(counts):8}")
+		end 'eachColumn'
+
+		print("{row.build()} {label}\n")
+	end 'printRow'
+
+	function printTotal()
+		printRow(self.total, label: "total")
+	end 'printTotal'
+end 'Report'
+
+function workersFor(files PathArray) returns WorkerCount
+	let processors = Scheduler.processorCount() as ElementIndex
+	let wanted = processors if processors < files.count() else files.count()
+	return mostWorkers if wanted > mostWorkers else wanted as WorkerCount
+end 'workersFor'
+
+function countFiles(paths PathArray, report Report)
+	let workerCount = workersFor(paths)
+	var counters = CounterArray.create()
+
+	for _ in 0 upto workerCount 'spawnWorkers'
+		counters.push(spawn Counter.create())
+	end 'spawnWorkers'
+
+	var replies = CountPromiseArray.create()
+	var nextWorker = 0
+
+	for path in paths 'sendFiles'
+		var counter = try counters.get(nextWorker) otherwise panic("countFiles: nextWorker stays below the worker count")
+		replies.push(counter.count(path.clone()))
+		nextWorker = (nextWorker + 1) mod workerCount
+	end 'sendFiles'
+
+	for (file, reply) in replies.withIterator() 'receiveCounts'
+		let path = try paths.get(file.index()) otherwise panic("countFiles: one reply per file")
+		report.record(try await reply otherwise FileCount.unreadable, label: "{path}")
+	end 'receiveCounts'
+
+	for counter in counters 'shutDown'
+		counter.shutdown()
+	end 'shutDown'
+end 'countFiles'
+
+function printUsage(problem UsageError)
+	printError("wc: {problem.message()}\n\n")
+	printError("usage: wc [flags] FILE...\n")
+	printError("Counts the lines, words and bytes of every FILE, and their total.\n\n")
+
+	for flag in Flag.allCases 'eachFlag'
+		printError("  {flag.rawValue}\t{flag.summary()}\n")
+	end 'eachFlag'
+end 'printUsage'
+
+function main() returns ExitCode
+	let options = try Options.parse(CommandLine.args()) otherwise (problem) 'badUsage'
+		printUsage(problem)
+		return Outcome.troubled
+	end 'badUsage'
+
+	var report = Report.create(options.columns)
+	countFiles(options.paths, report: report)
+
+	if options.paths.count() > 1 'severalFiles'
+		report.printTotal()
+	end 'severalFiles'
+
+	return Outcome.troubled if report.troubled else Outcome.counted
+end 'main'

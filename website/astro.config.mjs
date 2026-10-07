@@ -135,7 +135,10 @@ export default defineConfig({
   // Tailwind v4 is a Vite plugin, not an Astro integration. Base styles are pulled in
   // by `@import 'tailwindcss'` in src/styles/global.css, which only the marketing
   // layout loads — Starlight's docs keep their own reset.
+  // The example programs are imported from the repository's examples/, outside this
+  // project, which the dev server refuses to serve unless the parent is allowed.
   vite: {
     plugins: [tailwindcss()],
+    server: { fs: { allow: ['..'] } },
   },
 });

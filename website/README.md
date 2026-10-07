@@ -64,8 +64,8 @@ The reference pages — `cli/`, `language/`, `stdlib/`, `spec/` and `best-practi
 when they drift. Never edit a generated page's body: edit its source and re-run the sync. Only each
 page's front matter is written here.
 
-The syntax grammar (`src/grammars/maxon.tmLanguage.json`) and the example programs (`src/examples/`) are
-still copied by hand, and the `getting-started/`, `contributing`, `about` and `changelog` pages are
+The example programs are imported from the repository's `examples/`. The syntax grammar
+(`src/grammars/maxon.tmLanguage.json`) is copied by hand, and the `getting-started/`, `contributing`, `about` and `changelog` pages are
 written for this site.
 
 [MAINTAINING.md](MAINTAINING.md#content-sync--the-reference-pages-are-generated) has the source map (what

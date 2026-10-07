@@ -1,0 +1,33 @@
+let WcExample = "wc.maxon"
+
+// The expected counts are read off these texts and `wc`'s documented rules, never captured from a run.
+// A double space, a tab, an empty line, leading blanks and no final line feed: each one is a way to
+// miscount words or lines that a plainer fixture would let through.
+let WcProseText = "the quick  brown\tfox\njumps over\n\n  the lazy dog"
+
+// Each `\r` is a byte and whitespace, so it adds to the byte count and to neither of the others.
+let WcCrlfText = "one\r\ntwo three\r\n"
+
+test 'wc counts its fixture the way wc documents'
+	requireExampleBuild(WcExample)
+
+	_ = stageExampleFile(WcExample, relativePath: "data/prose.txt", content: WcProseText)
+	_ = stageExampleFile(WcExample, relativePath: "data/crlf.txt", content: WcCrlfText)
+
+	let sep = FilePath.separator()
+	let prose = "data{sep}prose.txt"
+	let crlf = "data{sep}crlf.txt"
+
+	requireAnswer(runBuiltExample(WcExample, arguments: [prose]), stdout: "       3       9      47 {prose}\n", exitCode: 0)
+
+	requireAnswer(runBuiltExample(WcExample, arguments: ["-w", "-l", prose]), stdout: "       3       9 {prose}\n", exitCode: 0)
+
+	let both = "       3       9      47 {prose}\n       2       3      16 {crlf}\n       5      12      63 total\n"
+	requireAnswer(runBuiltExample(WcExample, arguments: [prose, crlf]), stdout: both, exitCode: 0)
+
+	requireAnswer(runBuiltExample(WcExample, arguments: ["-c", prose, "data/nope.txt", crlf]), stdout: "      47 {prose}\n      16 {crlf}\n      63 total\n", exitCode: 1)
+
+	requireAnswer(runBuiltExample(WcExample, arguments: ["-z", prose]), stdout: "", exitCode: 1)
+
+	requireAnswer(runBuiltExample(WcExample, arguments: ["-l"]), stdout: "", exitCode: 1)
+end 'wc counts its fixture the way wc documents'

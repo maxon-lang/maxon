@@ -361,9 +361,8 @@ stdlib API; a runtime environment variable; target support; LSP, VS Code or MCP 
 5. **Regenerate: `node website/scripts/sync-docs.mjs`.** The regenerated pages are committed with the
    source. The sync fails closed and names every problem; fix them here rather than leaving them for
    the caller's gate.
-6. **The manual copies nothing checks**, when the change touches them: `examples/*.maxon` →
-   `website/src/examples/`, and `vscode-extension/syntaxes/maxon.tmLanguage.json` →
-   `website/src/grammars/`. `MAINTAINING.md` lists the install-script fan-out.
+6. **The manual copy nothing checks**, when the change touches it:
+   `vscode-extension/syntaxes/maxon.tmLanguage.json` → `website/src/grammars/`. `MAINTAINING.md` lists the install-script fan-out.
 7. ⛔ **DOCS STATE WHAT THE SOFTWARE DOES — NOT WHAT IT USED TO DO, AND NOT WHAT IT DOESN'T DO** (user
    ruling). No history: "no longer", "as before", "instead of <what it did>", "used to", "now". No
    negatives: "never shows", "does not pop up", "is not reported", "sends neither", "rather than X".

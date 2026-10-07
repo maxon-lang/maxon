@@ -24,3 +24,9 @@ argument only when the fresh-return summary proves it, and that summary treats `
 returned local as possibly handing out a second reference. `line.clone()` is what gives each chunk
 sole ownership of its strings, which is what a send requires.
 
+## wc.maxon
+
+The source of the website tour: `website/src/content/docs/docs/getting-started/tour.mdx` quotes it by
+line range through `TourStep`. An edit that shifts lines silently changes which code a step shows —
+the site build fails only on a range past the end — so re-range the tour with it. It carries no
+comments, because the tour says so.

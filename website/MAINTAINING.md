@@ -152,10 +152,9 @@ This is the one map of where the site's documentation comes from.
 | The install scripts | `public/install.sh` / `public/install.ps1`, and the pages listed under [Install and build instructions](#install-and-build-instructions-follow-the-scripts-and-the-repository) |
 | The syntax grammar | `vscode-extension/syntaxes/maxon.tmLanguage.json`, then copy it to `src/grammars/maxon.tmLanguage.json` **by hand** |
 | How a part of the compiler works inside | its page in `docs/internals/`, which the site reads directly — see [Shared pages](#shared-pages-docsinternals) |
-| An example program | `examples/*.maxon`, then copy it to `src/examples/` **by hand** |
+| An example program | `examples/*.maxon`, which the Examples page and the tour import directly — re-range the tour's `TourStep`s when `examples/wc.maxon`'s lines move |
 
-The grammar and the example programs are still manual copies: nothing checks them against their
-sources. The `getting-started/`, `contributing`, `about` and `changelog` pages are written for this site
+The grammar is a manual copy: nothing checks it against its source. The `getting-started/`, `contributing`, `about` and `changelog` pages are written for this site
 and have no upstream source.
 
 **The doc-coverage gates catch what a source is missing**, and run with `maxon test`, not with the site:
