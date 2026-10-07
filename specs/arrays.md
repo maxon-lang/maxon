@@ -2504,7 +2504,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:4: argument type mismatch for 'other': expected 'Array_int', got 'int'
+error E3005: <fragment>:4:4: argument type mismatch for 'other': expected 'Array with int', got 'int'
 ```
 
 <!-- test: error.append-wider-element-array-refuses-a-narrower-one -->

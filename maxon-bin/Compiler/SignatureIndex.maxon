@@ -57,6 +57,8 @@
 
 let TypeArgumentSeparator = ", "
 
+let WrittenInstanceMarker = " with "
+
 let LiftedFunctionNameSeparator = "$"
 
 function liftedFunctionHost(segments StringArray, name ByteArray) returns ByteArray
@@ -10910,6 +10912,7 @@ enum InstanceArgSpelling
 	asRange
 	asWritten
 end 'InstanceArgSpelling'
+
 union MeantGenericDeclaration
 	declaredIn(declPath String)
 	unresolved
@@ -21967,19 +21970,25 @@ export type ProgramSignatures
 
 	function writtenInstanceTextOver(stem String, args StringArray) returns ByteArray
 		var out = "{stem} with "
+		let parenthesized = args.count() != 1 or self.soleArgIsAnInstance(args)
 
-		if args.count() != 1 'moreThanOneArgumentIsParenthesized'
+		if parenthesized 'openTheParen'
 			out.append("(")
-		end 'moreThanOneArgumentIsParenthesized'
+		end 'openTheParen'
 
 		out.append(joinedWith(args, separator: TypeArgumentSeparator))
 
-		if args.count() != 1 'closeTheParen'
+		if parenthesized 'closeTheParen'
 			out.append(")")
 		end 'closeTheParen'
 
 		return out.toByteArray()
 	end 'writtenInstanceTextOver'
+
+	function soleArgIsAnInstance(args StringArray) returns bool
+		let sole = try args.get(0) otherwise panic("ProgramSignatures.soleArgIsAnInstance: get(0) on an argument list whose count was just read as one")
+		return sole.contains(WrittenInstanceMarker)
+	end 'soleArgIsAnInstance'
 
 	// ONE argument of the walk above. Three answers, and only the first is this rung's: an argument that IS
 	// one of the declaring interface's associated types becomes whatever the conformance bound that name to;
@@ -37258,47 +37267,12 @@ export type ProgramSignatures
 	// two aliases legitimately spell one type — and a value one of them BRANDS prints that brand instead
 	// (`Parser.valueDisplayTypeName`).
 	export function instanceDisplayName(id GenericInstanceId) returns ByteArray
-		return try self.settled.instanceDisplayNames.get(id) otherwise self.unaliasedInstanceName(id)
+		return try self.settled.instanceDisplayNames.get(id) otherwise self.renderedInstanceWith(id, spelling: InstanceArgSpelling.asRange)
 	end 'instanceDisplayName'
-
-	function instanceArgsCarryAMint(id GenericInstanceId) returns bool
-		for arg in self.genericInstances.instanceArgs(id) 'eachArg'
-			if maxonTypeTag(arg) == ValueTypeTag.genericInstance and self.instanceArgsCarryAMint(genericInstanceIdOf(arg)) 'aNestedMint'
-				return true
-			end 'aNestedMint'
-
-			if maxonTypeTag(arg) == ValueTypeTag.named and self.nameIsAnInternalSpelling(self.nameOfId(typeNameIdOf(arg))) 'aMintedLeaf'
-				return true
-			end 'aMintedLeaf'
-		end 'eachArg'
-
-		return false
-	end 'instanceArgsCarryAMint'
 
 	function nameIsAnInternalSpelling(name ByteArray) returns bool
 		return isMintName(name) or name.equals(SynthesizedByteElementName)
 	end 'nameIsAnInternalSpelling'
-
-	// What an instance is called when NO alias was recorded for it. Normally the `Base_Arg` mangling, which is
-	// at least searchable: some file declares `Byte`, so `Array_Byte` leads a reader somewhere.
-	//
-	// ⭐ **A PROMISE IS THE ONE INSTANCE THAT IS ROUTINELY MINTED BY THE COMPILER RATHER THAN WRITTEN BY AN
-	// AUTHOR**, so the usual reasoning inverts: `async plain()` interns `Promise with Integer` whether or not
-	// any file wrote a `typealias` for it, and when none did, the mangling `Promise_Integer` is a name that
-	// appears in NO source file and cannot be searched for — the exact failure `renderedInstanceWith`'s
-	// header describes for a merged instance. Rendering it the way the source WOULD write it is both true and
-	// findable. An author who did declare an alias still sees the alias, because that lookup comes first.
-	//
-	// ⭐ **A DECLARATION VIEW IS RENDERED THE SAME WAY, for the same reason**, and so is an instance whose
-	// argument carries a mint. A declaration view's mangling carries a type parameter as the token digest
-	// (`Cell_T28fe889e854d6824`), which no source spells; `Cell with T` is what the declaration wrote.
-	function unaliasedInstanceName(id GenericInstanceId) returns ByteArray
-		if self.instanceIsPromiseHandle(id) or self.instanceIsBuiltOnATypeParameter(id) or self.instanceArgsCarryAMint(id) 'writtenAsSourceWouldWriteIt'
-			return self.renderedInstanceWith(id, spelling: InstanceArgSpelling.asRange)
-		end 'writtenAsSourceWouldWriteIt'
-
-		return self.canonicalInstanceName(id)
-	end 'unaliasedInstanceName'
 
 	// An instance no alias spells, written the way the SOURCE would write it: `Array with int(0 to 255)`.
 	//

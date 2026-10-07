@@ -674,7 +674,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:19: argument type mismatch for 'managed': expected '__ManagedMemory with Integer', got 'Array_int'
+error E3005: <fragment>:7:19: argument type mismatch for 'managed': expected '__ManagedMemory with Integer', got 'Array with int'
 ```
 
 <!-- test: error.an-unknown-array-static -->

@@ -581,7 +581,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:5:18: argument type mismatch for 'managed': expected '__ManagedMemory', got 'Array_int'
+error E3005: <fragment>:5:18: argument type mismatch for 'managed': expected '__ManagedMemory', got 'Array with int'
 ```
 
 <!-- test: managed-file.a-file-held-open-for-reading-can-be-rewritten-and-deleted -->
