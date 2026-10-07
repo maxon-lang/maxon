@@ -1,0 +1,202 @@
+module typealias GolfTally = int(0 to 1000000)
+typealias GolfTallyArray = Array with GolfTally
+typealias GolfLabelMap = Map with (String, ElementIndex)
+typealias GolfShapeArray = Array with GolfShape
+
+enum GolfColor
+	red
+	green
+	blue
+	amber
+	violet
+end 'GolfColor'
+
+enum GolfPhase
+	idle = 10
+	warming = 20
+	running = 30
+	cooling = 40
+end 'GolfPhase'
+
+union GolfShape
+	circle(radius GolfTally)
+	square(side GolfTally)
+	strip(width GolfTally, height GolfTally)
+	empty
+end 'GolfShape'
+
+type GolfBox uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create(first Element) returns Self
+		var items = Items.create()
+		items.push(first)
+		return Self{items: items}
+	end 'create'
+
+	function add(item Element)
+		items.push(item)
+	end 'add'
+
+	function size() returns GolfTally
+		return items.count()
+	end 'size'
+end 'GolfBox'
+
+typealias GolfTextBox = GolfBox with String
+typealias GolfTallyBox = GolfBox with GolfTally
+
+type GolfRecord
+	var label as String
+	var weight as GolfTally
+	var color as GolfColor
+	var samples as GolfTallyArray
+
+	static function create(label String, weight GolfTally, color GolfColor) returns Self
+		var samples = GolfTallyArray.create()
+		samples.push(weight)
+		return Self{label: label, weight: weight, color: color, samples: samples}
+	end 'create'
+
+	function sample(value GolfTally)
+		samples.push(value mod 1000)
+	end 'sample'
+
+	function total() returns GolfTally
+		var sum = 0 as GolfTally
+
+		for value in samples 'eachSample'
+			sum = (sum + value) mod 100000
+		end 'eachSample'
+
+		return sum
+	end 'total'
+
+	function isWarm() returns bool
+		return match color 'warmth'
+			red or
+				amber gives true
+			green or
+				blue or
+				violet gives false
+		end 'warmth'
+	end 'isWarm'
+
+	function heft() returns GolfTally
+		return weight
+	end 'heft'
+
+	function describe() returns String
+		return "{label}:{weight}:{total()}"
+	end 'describe'
+end 'GolfRecord'
+
+typealias GolfRecordArray = Array with GolfRecord
+
+type GolfLedger
+	var records as GolfRecordArray
+	var index as GolfLabelMap
+
+	static function create() returns Self
+		return Self{records: GolfRecordArray.create(), index: GolfLabelMap.create()}
+	end 'create'
+
+	function enter(record GolfRecord)
+		index.upsert(record.describe(), value: records.count())
+		records.push(record)
+	end 'enter'
+
+	function warmCount() returns GolfTally
+		var warm = 0 as GolfTally
+
+		for record in records 'eachRecord'
+			if record.isWarm() 'warm'
+				warm = warm + 1
+			end 'warm'
+		end 'eachRecord'
+
+		return warm
+	end 'warmCount'
+
+	function heaviest() returns GolfTally
+		var heaviest = 0 as GolfTally
+
+		for record in records 'eachRecord'
+			let heft = record.heft()
+			heaviest = heft if heft > heaviest else heaviest
+		end 'eachRecord'
+
+		return heaviest
+	end 'heaviest'
+end 'GolfLedger'
+
+function golfArea(shape GolfShape) returns GolfTally
+	return match shape 'area'
+		circle(radius) gives (radius * radius * 3) mod 100000
+		square(side) gives (side * side) mod 100000
+		strip(width, height) gives (width * height) mod 100000
+		empty gives 0
+	end 'area'
+end 'golfArea'
+
+function golfPhaseWeight(phase GolfPhase) returns GolfTally
+	return match phase 'weight'
+		idle gives 1
+		warming gives 2
+		running gives 3
+		cooling gives 4
+	end 'weight'
+end 'golfPhaseWeight'
+
+function golfShapes(seed GolfTally) returns GolfTally
+	var shapes = GolfShapeArray.create()
+	shapes.push(GolfShape.circle(seed mod 50))
+	shapes.push(GolfShape.square(seed mod 40))
+	shapes.push(GolfShape.strip(seed mod 30, height: seed mod 20))
+	shapes.push(GolfShape.empty)
+
+	var total = 0 as GolfTally
+
+	for shape in shapes 'eachShape'
+		total = (total + golfArea(shape)) mod 100000
+	end 'eachShape'
+
+	return total
+end 'golfShapes'
+
+function golfBoxes(seed GolfTally) returns GolfTally
+	var text = GolfTextBox.create("first {seed}")
+	text.add("second {seed}")
+
+	var tallies = GolfTallyBox.create(seed mod 100)
+	tallies.add(seed mod 7)
+	tallies.add(seed mod 11)
+
+	return text.size() + tallies.size()
+end 'golfBoxes'
+
+function golfLedger(seed GolfTally) returns GolfTally
+	var ledger = GolfLedger.create()
+
+	for color in GolfColor.allCases 'eachColor'
+		var record = GolfRecord.create("{color.name} {seed}", weight: (seed + color.ordinal) mod 1000, color: color)
+		record.sample(seed mod 13)
+		ledger.enter(record)
+	end 'eachColor'
+
+	return ledger.warmCount() + ledger.heaviest()
+end 'golfLedger'
+
+module function golfScore(seed GolfTally) returns GolfTally
+	var score = 0 as GolfTally
+
+	for phase in GolfPhase.allCases 'eachPhase'
+		score = (score + golfPhaseWeight(phase)) mod 100000
+	end 'eachPhase'
+
+	score = (score + golfShapes(seed)) mod 100000
+	score = (score + golfBoxes(seed)) mod 100000
+	return (score + golfLedger(seed)) mod 100000
+end 'golfScore'

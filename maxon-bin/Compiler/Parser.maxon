@@ -63107,7 +63107,7 @@ export type Parser
 	// (`BuiltinConformanceRuntime.installBuiltinConformanceRuntime`), so the producer and the consumer of
 	// this tag cannot come to number the cases differently.
 	function emitOrderingVerdict(orderingResult ValueId, op MaxonCmpOp, opTok Token) returns ValueId
-		let ordering = requireCorpusDeclaredEnum(self.signatures.enumTypes, typeName: OrderingTypeName, reader: "the `<`/`>`/`<=`/`>=` lowering")
+		let ordering = requireCorpusDeclaredEnum(self.signatures.settled.enumTypes, typeName: OrderingTypeName, reader: "the `<`/`>`/`<=`/`>=` lowering")
 		let lessThanTag = ordering.tagOfCase(OrderingLessThanCaseName)
 		let greaterThanTag = ordering.tagOfCase(OrderingGreaterThanCaseName)
 
@@ -85172,12 +85172,11 @@ export type Parser
 	// forward reference.
 	//
 	// ⚠ **IT IS THE SECOND STATEMENT OF "WHAT A `named` TYPE DENOTES", AND `TypeResolution.
-	// resolveNamedType` IS THE FIRST.** That is not a duplication this rung introduced — it is the
-	// standing shape of the two registries (see `ProgramSignatures.structTypes`): the sweep answers
-	// the PARSER, the project registry answers the AUTHORITY, and the alias half has been written in
-	// both places since ranged typealiases landed. What is new is that a slot's type has to be
-	// resolved at PARSE time at all, and that is forced by the op: `resolveTypes` never rewrites an
-	// op's type, so the parser is the last tier that can make it concrete.
+	// resolveNamedType` IS THE FIRST.** That is the standing shape of the two registries (see
+	// `SettledDeclarations.structLayouts`): the sweep answers the PARSER, the project registry answers
+	// the AUTHORITY, and the alias half is written in both places. What forces a slot's type to be
+	// resolved at PARSE time is the op: `resolveTypes` never rewrites an op's type, so the parser is
+	// the last tier that can make it concrete.
 	// ⭐⭐ **THE CASCADE ITSELF LIVES IN `SignatureIndex` (W116), BECAUSE A SECOND FAMILY OF ASKER ARRIVED
 	// WITHOUT A PARSER.** A top-level `static var origin = Pair{a: 1}` resolves its box's slot widths on the
 	// INDEX side — `SynthesizedFunction` holds neither an interner nor the alias registry — and a slot stored

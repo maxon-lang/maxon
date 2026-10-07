@@ -29,8 +29,10 @@ SKIPPED_FIELDS = {
     ("ProgramSignatures", "baseline"): "IndexBaseline.unsettled()",
     ("ProgramSignatures", "journal"): "IndexJournal.create()",
     ("ProgramSignatures", "rowSetLog"): "RowSetLog.closed()",
-    ("ProgramSignatures", "genericInstanceNameMarker"): "genericInstanceNameMarker()",
-    ("ProgramSignatures", "declTokenStreams"): "DeclTokenStreamMap.create()",
+    ("ProgramSignatures", "mintedTupleLayouts"): "StructLayoutArray.create()",
+    ("ProgramSignatures", "published"): "SettledCellArray.create()",
+    ("SettledDeclarations", "genericInstanceNameMarker"): "genericInstanceNameMarker()",
+    ("SettledDeclarations", "declTokenStreams"): "DeclTokenStreamMap.create()",
 }
 
 ROOTS = [

@@ -4,12 +4,14 @@
 // makes the pinned and the default lane one code path and their outputs comparable at all. A binary whose runtime
 // cannot move what a worker answers (`RuntimeMovesSharedRecords`) does the same worker's work on this thread.
 //
-// ⭐⭐ **WHAT MAKES A PARSE SAFE ON A WORKER IS A PRIVATE INDEX.** A parse reads the whole program's signature
-// index and writes into it while it runs (`ProgramSignatures.openParseBand`), so every worker holds its own copy
-// of the settled baseline, moved in by `adopt`, and hands what the parse wrote back inside the artifact; the
-// fingerprint guard (`requireAtBaseline`) checks after every parse that the copy is at its baseline again.
-// Everything else a message carries — a file's bytes, its resolved tokens, its job and its row-set answers — is
-// a copy the send moves, so nothing a worker reaches is reachable from any other thread.
+// ⭐⭐ **WHAT MAKES A PARSE SAFE ON A WORKER IS A PRIVATE INDEX.** A parse reads the whole program's
+// signature index and writes into it while it runs (`ProgramSignatures.openParseBand`), so every
+// worker holds its own copy of the part of the settled baseline a parse writes, cloned by `adopt`
+// on the worker's own thread, and hands what the parse wrote back inside the artifact; the
+// fingerprint guard (`requireAtBaseline`) checks after every parse that the copy is at its baseline
+// again. The rest, `SettledDeclarations`, is one frozen record every worker reads. Everything else
+// a message carries — a file's bytes, its resolved tokens, its job and its row-set answers — is a
+// copy the send moves, so nothing else a worker reaches is reachable from any other thread.
 //
 // ⛔ **AND THE ARTIFACT HOLDS NO RECORD THE WORKER'S INDEX HOLDS.** The reply moves, so a record both held would
 // abort it (exit 96) — and would leave two threads stepping one count. The artifact's own doors take the copies
@@ -45,8 +47,10 @@ typealias FrontEndWorkArray = Array with FrontEndWork
 typealias FrontEndOutcomeArray = Array with FrontEndOutcome
 typealias ParseQueryArray = Array with ParseQuery
 
-// At most one index: the baseline a pool's workers hold copies of, or a worker's own copy of it.
+// At most one index: the baseline a pool's workers parse against, or a worker's own index adopted
+// from it.
 typealias HeldIndexArray = Array with ProgramSignatures
+typealias WorkerHandoffArray = Array with WorkerHandoff
 typealias LiveKeysRevisionArray = Array with LiveKeysRevision
 
 // The rows a worker measures, by the ordinal its costs are indexed with.
@@ -168,8 +172,8 @@ type FrontEndWorker
 		return FrontEndReply.create(self.state.ran(job))
 	end 'run'
 
-	export function adopt(index ProgramSignatures)
-		self.state.hold(index)
+	export function adopt(declarations SettledDeclarationsCell, template IndexTemplateCell)
+		self.state.hold(ProgramSignatures.adopting(declarations, template: template))
 	end 'adopt'
 
 	export function adoptLiveKeys(keys LiveDefaultKeys)
@@ -209,7 +213,6 @@ type FrontEndWorkerState
 
 	// The index every later parse reads, replacing any this worker held.
 	function hold(index ProgramSignatures)
-		index.shareModuleDirectoriesWithProvenance()
 		self.ownIndex.clear()
 		self.ownIndex.push(index)
 	end 'hold'
@@ -268,6 +271,22 @@ union FrontEndDrainInput
 	parsing(queries ParseQueryArray)
 end 'FrontEndDrainInput'
 
+type WorkerHandoff
+	export let declarations as SettledDeclarationsCell
+	export let template as IndexTemplateCell
+
+	// The revision the template's live keys are at. A fold after `holdBaseline` moves the baseline
+	// past it, so a worker adopting later starts here and `refreshLiveKeys` brings it up to date;
+	// starting it at the baseline's revision would leave it parsing with stale keys.
+	export let liveKeysRevision as LiveKeysRevision
+
+	static function of(signatures ProgramSignatures, os Os) returns WorkerHandoff
+		let declarations = signatures.publishedDeclarations()
+		let template = signatures.workerTemplate(os)
+		return Self{declarations: declarations, template: template, liveKeysRevision: signatures.liveKeysRevision()}
+	end 'of'
+end 'WorkerHandoff'
+
 // The driver, for one front end. The pool is sized by the most files one drain dispatched; `PoolSizing` owns
 // the rule.
 module type FrontEndPool
@@ -292,6 +311,9 @@ module type FrontEndPool
 	// The main thread's index the workers' copies are taken from — empty until the first parse is dispatched.
 	var baseline as HeldIndexArray
 
+	// At most one: `baseline`'s, and none when the front end runs in process.
+	var handoffs as WorkerHandoffArray
+
 	// By worker slot: whether that worker holds a copy of `baseline`.
 	var adopted as BoolArray
 	var adoptions as ElementIndex
@@ -303,7 +325,7 @@ module type FrontEndPool
 	var parsed as bool
 
 	module static function create() returns FrontEndPool
-		return Self{workers: FrontEndWorkerHandleArray.create(), inProcess: FrontEndWorkerStateArray.create(), mostFilesDispatched: 0, baseline: HeldIndexArray.create(), adopted: BoolArray.create(), adoptions: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(), lexed: false, parsed: false}
+		return Self{workers: FrontEndWorkerHandleArray.create(), inProcess: FrontEndWorkerStateArray.create(), mostFilesDispatched: 0, baseline: HeldIndexArray.create(), handoffs: WorkerHandoffArray.create(), adopted: BoolArray.create(), adoptions: 0, baselineRevision: 0, heldRevisions: LiveKeysRevisionArray.create(), lexed: false, parsed: false}
 	end 'create'
 
 	// ⭐ **EVERY FILE WHOSE RESOLVED STREAM NO MEMO HOLDS, LEXED AND FILTERED ON THE WORKERS**, then landed through
@@ -364,7 +386,7 @@ module type FrontEndPool
 		end 'everyParseIsMemoized'
 
 		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.frontEndPool)
-		self.holdBaseline(signatures)
+		self.holdBaseline(signatures, os: project.target.os)
 		try requireStillWanted(project)
 		self.parsed = true
 		try self.drainEveryJob(project, input: FrontEndDrainInput.parsing(queries), files: files, sizes: sizes, outcomes: outcomes, slots: slots)
@@ -396,11 +418,11 @@ module type FrontEndPool
 			end 'theReportedPoolIsNotTheOneThatRan'
 
 			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-				compilerLogger(CompilerLogGroup.compiler).debug("{sizing.line(PoolKind.frontEnd)}, {self.adoptions} adopted")
+				logCompilerDebugSettled("{sizing.line(PoolKind.frontEnd)}, {self.adoptions} adopted")
 			end 'debugging'
 		end 'onTheWorkers' else 'inProcess'
 			if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-				compilerLogger(CompilerLogGroup.compiler).debug("front end: serial, in process, {filesDispatched} file(s) — this binary's runtime cannot move a shared-record graph")
+				logCompilerDebugSettled("front end: serial, in process, {filesDispatched} file(s) — this binary's runtime cannot move a shared-record graph")
 			end 'debugging'
 		end 'inProcess'
 
@@ -418,6 +440,7 @@ module type FrontEndPool
 		self.workers = FrontEndWorkerHandleArray.create()
 		self.inProcess.clear()
 		self.baseline.clear()
+		self.handoffs.clear()
 		self.adopted.clear()
 		self.heldRevisions.clear()
 		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
@@ -436,7 +459,10 @@ module type FrontEndPool
 
 	// Parse against `signatures` from now on. A worker already holding a copy of this very index keeps it, so the
 	// folds that follow against the same index copy nothing but the live keys (`refreshLiveKeys`).
-	function holdBaseline(signatures ProgramSignatures)
+	//
+	// The handoff is taken while `signatures` is at its settled baseline: the fold restores it before
+	// it parses, and a drain writes nothing into it.
+	function holdBaseline(signatures ProgramSignatures, os Os)
 		if let held = try self.baseline.get(0) 'held'
 			if held is signatures 'theSameIndex'
 				self.baselineRevision = signatures.liveKeysRevision()
@@ -445,17 +471,18 @@ module type FrontEndPool
 		end 'held'
 
 		self.baseline.clear()
+		self.handoffs.clear()
 		self.baseline.push(signatures)
 		self.baselineRevision = signatures.liveKeysRevision()
 		self.adopted.refill(self.workers.count(), value: false)
+
+		if FrontEndPool.RuntimeMovesSharedRecords 'onTheWorkers'
+			self.handoffs.push(WorkerHandoff.of(signatures, os: os))
+		end 'onTheWorkers'
 	end 'holdBaseline'
 
-	// ⭐ **A WORKER IS HANDED ITS COPY JUST BEFORE ITS FIRST PARSE, NOT ALL OF THEM UP FRONT.** A copy is taken on
-	// this thread, one worker after another, so copying ahead of the first dispatch would hold the longest file —
-	// which the dispatch hands out first and which bounds the whole drain — until every copy had been taken.
-	//
-	// Copied while the main thread's index is at its settled baseline: the fold restores it before it parses, and a
-	// drain writes nothing into it.
+	// The worker clones its index on its own thread (`FrontEndWorker.adopt`); this thread hands over
+	// two handles, so no worker's first parse waits behind another worker's copy.
 	function requireAdopted(workerSlot ElementIndex)
 		let holdsTheBaseline = try self.adopted.get(workerSlot) otherwise panic("FrontEndPool.requireAdopted: adopted.get OOB at {workerSlot} below count {self.adopted.count()}")
 
@@ -464,19 +491,16 @@ module type FrontEndPool
 			return
 		end 'alreadyAdopted'
 
-		let signatures = self.baselineIndex()
+		let handoff = try self.handoffs.get(0) otherwise panic("FrontEndPool.requireAdopted: a worker was handed the baseline before `holdBaseline` published its declarations and copied what a parse writes")
 		var worker = self.workerAt(workerSlot)
 
-		// Dropped before the copy is taken: `clone()` is the compiler's synthesized deep clone, which copies a
-		// field's columns rather than calling any `clone` the field's type declares, so every name this thread
-		// has materialized would otherwise be copied into every worker. The cache refills on demand.
-		signatures.releaseTypeNameViews()
-
-		// A TEMPORARY, so the send moves it: the copy is the worker's alone.
-		worker.adopt(signatures.clone())
+		// Temporaries, so the send moves them: the handles are the worker's alone, and the declarations
+		// they name are shared.
+		worker.adopt(handoff.declarations.clone(), template: handoff.template.clone())
 		self.adoptions = self.adoptions + 1
 		try self.adopted.set(workerSlot, value: true) otherwise panic("FrontEndPool.requireAdopted: adopted.set OOB at {workerSlot} below count {self.adopted.count()}")
-		try self.heldRevisions.set(workerSlot, value: self.baselineRevision) otherwise panic("FrontEndPool.requireAdopted: heldRevisions.set OOB at {workerSlot} below count {self.heldRevisions.count()}")
+		try self.heldRevisions.set(workerSlot, value: handoff.liveKeysRevision) otherwise panic("FrontEndPool.requireAdopted: heldRevisions.set OOB at {workerSlot} below count {self.heldRevisions.count()}")
+		self.refreshLiveKeys(workerSlot)
 	end 'requireAdopted'
 
 	// A fold moves the live keys without re-sweeping the index, so a worker takes them as a small
@@ -553,8 +577,8 @@ module type FrontEndPool
 	// ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.** The protocol is
 	// `PoolDispatch`'s, shared with the backend's two pools.
 	function drain(project Project, input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, workerCount PoolSize, outcomes FrontEndOutcomeArray, slots LandingSlots) throws CompileError
-		// A static share: a worker parses into its own copy of the whole signature index, kept across the
-		// files it is handed, and that copy is too costly to rebuild per file.
+		// A static share: a worker parses into its own copy of what a parse writes in the signature
+		// index, kept across the files it is handed, and that copy is too costly to rebuild per file.
 		var dispatch = PoolDispatch.create(sizes, workerCount: workerCount, assignment: PoolAssignment.staticShare)
 		var replies = FrontEndReplyPromiseArray.create()
 		replies.reserve(dispatch.pipelineDepth())

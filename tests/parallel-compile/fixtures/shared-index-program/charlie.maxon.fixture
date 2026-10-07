@@ -1,0 +1,202 @@
+module typealias CharlieTally = int(0 to 1000000)
+typealias CharlieTallyArray = Array with CharlieTally
+typealias CharlieLabelMap = Map with (String, ElementIndex)
+typealias CharlieShapeArray = Array with CharlieShape
+
+enum CharlieColor
+	red
+	green
+	blue
+	amber
+	violet
+end 'CharlieColor'
+
+enum CharliePhase
+	idle = 10
+	warming = 20
+	running = 30
+	cooling = 40
+end 'CharliePhase'
+
+union CharlieShape
+	circle(radius CharlieTally)
+	square(side CharlieTally)
+	strip(width CharlieTally, height CharlieTally)
+	empty
+end 'CharlieShape'
+
+type CharlieBox uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create(first Element) returns Self
+		var items = Items.create()
+		items.push(first)
+		return Self{items: items}
+	end 'create'
+
+	function add(item Element)
+		items.push(item)
+	end 'add'
+
+	function size() returns CharlieTally
+		return items.count()
+	end 'size'
+end 'CharlieBox'
+
+typealias CharlieTextBox = CharlieBox with String
+typealias CharlieTallyBox = CharlieBox with CharlieTally
+
+type CharlieRecord
+	var label as String
+	var weight as CharlieTally
+	var color as CharlieColor
+	var samples as CharlieTallyArray
+
+	static function create(label String, weight CharlieTally, color CharlieColor) returns Self
+		var samples = CharlieTallyArray.create()
+		samples.push(weight)
+		return Self{label: label, weight: weight, color: color, samples: samples}
+	end 'create'
+
+	function sample(value CharlieTally)
+		samples.push(value mod 1000)
+	end 'sample'
+
+	function total() returns CharlieTally
+		var sum = 0 as CharlieTally
+
+		for value in samples 'eachSample'
+			sum = (sum + value) mod 100000
+		end 'eachSample'
+
+		return sum
+	end 'total'
+
+	function isWarm() returns bool
+		return match color 'warmth'
+			red or
+				amber gives true
+			green or
+				blue or
+				violet gives false
+		end 'warmth'
+	end 'isWarm'
+
+	function heft() returns CharlieTally
+		return weight
+	end 'heft'
+
+	function describe() returns String
+		return "{label}:{weight}:{total()}"
+	end 'describe'
+end 'CharlieRecord'
+
+typealias CharlieRecordArray = Array with CharlieRecord
+
+type CharlieLedger
+	var records as CharlieRecordArray
+	var index as CharlieLabelMap
+
+	static function create() returns Self
+		return Self{records: CharlieRecordArray.create(), index: CharlieLabelMap.create()}
+	end 'create'
+
+	function enter(record CharlieRecord)
+		index.upsert(record.describe(), value: records.count())
+		records.push(record)
+	end 'enter'
+
+	function warmCount() returns CharlieTally
+		var warm = 0 as CharlieTally
+
+		for record in records 'eachRecord'
+			if record.isWarm() 'warm'
+				warm = warm + 1
+			end 'warm'
+		end 'eachRecord'
+
+		return warm
+	end 'warmCount'
+
+	function heaviest() returns CharlieTally
+		var heaviest = 0 as CharlieTally
+
+		for record in records 'eachRecord'
+			let heft = record.heft()
+			heaviest = heft if heft > heaviest else heaviest
+		end 'eachRecord'
+
+		return heaviest
+	end 'heaviest'
+end 'CharlieLedger'
+
+function charlieArea(shape CharlieShape) returns CharlieTally
+	return match shape 'area'
+		circle(radius) gives (radius * radius * 3) mod 100000
+		square(side) gives (side * side) mod 100000
+		strip(width, height) gives (width * height) mod 100000
+		empty gives 0
+	end 'area'
+end 'charlieArea'
+
+function charliePhaseWeight(phase CharliePhase) returns CharlieTally
+	return match phase 'weight'
+		idle gives 1
+		warming gives 2
+		running gives 3
+		cooling gives 4
+	end 'weight'
+end 'charliePhaseWeight'
+
+function charlieShapes(seed CharlieTally) returns CharlieTally
+	var shapes = CharlieShapeArray.create()
+	shapes.push(CharlieShape.circle(seed mod 50))
+	shapes.push(CharlieShape.square(seed mod 40))
+	shapes.push(CharlieShape.strip(seed mod 30, height: seed mod 20))
+	shapes.push(CharlieShape.empty)
+
+	var total = 0 as CharlieTally
+
+	for shape in shapes 'eachShape'
+		total = (total + charlieArea(shape)) mod 100000
+	end 'eachShape'
+
+	return total
+end 'charlieShapes'
+
+function charlieBoxes(seed CharlieTally) returns CharlieTally
+	var text = CharlieTextBox.create("first {seed}")
+	text.add("second {seed}")
+
+	var tallies = CharlieTallyBox.create(seed mod 100)
+	tallies.add(seed mod 7)
+	tallies.add(seed mod 11)
+
+	return text.size() + tallies.size()
+end 'charlieBoxes'
+
+function charlieLedger(seed CharlieTally) returns CharlieTally
+	var ledger = CharlieLedger.create()
+
+	for color in CharlieColor.allCases 'eachColor'
+		var record = CharlieRecord.create("{color.name} {seed}", weight: (seed + color.ordinal) mod 1000, color: color)
+		record.sample(seed mod 13)
+		ledger.enter(record)
+	end 'eachColor'
+
+	return ledger.warmCount() + ledger.heaviest()
+end 'charlieLedger'
+
+module function charlieScore(seed CharlieTally) returns CharlieTally
+	var score = 0 as CharlieTally
+
+	for phase in CharliePhase.allCases 'eachPhase'
+		score = (score + charliePhaseWeight(phase)) mod 100000
+	end 'eachPhase'
+
+	score = (score + charlieShapes(seed)) mod 100000
+	score = (score + charlieBoxes(seed)) mod 100000
+	return (score + charlieLedger(seed)) mod 100000
+end 'charlieScore'

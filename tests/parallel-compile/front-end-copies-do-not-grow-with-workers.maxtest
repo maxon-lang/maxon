@@ -1,0 +1,41 @@
+let FrontEndPoolPhaseName = "frontEndPool"
+let PooledProcessors = 4 as ProcessorCount
+let MinimumPooledAdoptions = 3 as ReportedPoolCount
+let MeasuredIndexCopyAllocations = 126973 as ReportedPoolCount
+let IndexCopyShareDivisor = 4 as ReportedPoolCount
+let WarmUpLabel = "library-cache warm-up"
+let OneProcessorLabel = "one processor"
+let PooledLabel = "four processors"
+
+test 'the front end does not copy the whole signature index per worker'
+	let staged = stagedProgram("shared-index-program", caseLabel: "front-end-copies-do-not-grow-with-workers")
+
+	var arguments = StringArray.create()
+	arguments.push(CompilerDebugLogFlag)
+
+	_ = meteredBuild(staged, label: WarmUpLabel, extraArguments: arguments, processors: ProcessorPin.pinned(PooledProcessors), wholeDirectory: true)
+	_ = metricsTableOf(staged, label: WarmUpLabel)
+
+	let single = meteredBuild(staged, label: OneProcessorLabel, extraArguments: arguments, processors: ProcessorPin.pinned(SingleProcessor), wholeDirectory: true)
+	let singleAllocations = frontEndPoolAllocations(metricsTableOf(staged, label: OneProcessorLabel))
+	let singleAdoptions = frontEndAdoptions(single)
+
+	let pooled = meteredBuild(staged, label: PooledLabel, extraArguments: arguments, processors: ProcessorPin.pinned(PooledProcessors), wholeDirectory: true)
+	let pooledAllocations = frontEndPoolAllocations(metricsTableOf(staged, label: PooledLabel))
+	let pooledAdoptions = frontEndAdoptions(pooled)
+
+	Expect.atLeast(pooledAdoptions, than: MinimumPooledAdoptions, message: "under MAXON_MAX_PROCS={PooledProcessors} the front end reported {pooledAdoptions} worker(s) adopting the signature index, so its parse drain did not spread the fixture's similar-sized files over several workers and the growth below measures nothing. One processor reported {singleAdoptions}.")
+	Expect.greaterThan(pooledAdoptions, than: singleAdoptions, message: "the front end reported {pooledAdoptions} adoption(s) at {PooledProcessors} processors and {singleAdoptions} at one, so there is no extra worker to price.")
+
+	let growth = pooledAllocations - singleAllocations
+	let extraAdoptions = pooledAdoptions - singleAdoptions
+	let perAdoption = try (growth / extraAdoptions) otherwise panic("parallel-compile.test: the adoption counts were found to differ above")
+	let bound = MeasuredIndexCopyAllocations / IndexCopyShareDivisor
+
+	Expect.lessThan(growth, than: bound, message: "the `{PhaseRowKind} {FrontEndPoolPhaseName}` row allocated {pooledAllocations} times with {pooledAdoptions} worker(s) adopting the index under MAXON_MAX_PROCS={PooledProcessors}, and {singleAllocations} times with {singleAdoptions} under one processor: {growth} more, {perAdoption} per extra adopting worker. A whole copy of this fixture's signature index measured {MeasuredIndexCopyAllocations} allocations, and the growth across every extra worker must stay under {bound}, 1/{IndexCopyShareDivisor} of one copy — each worker shares the settled declarations and copies only what a parse writes.")
+end 'the front end does not copy the whole signature index per worker'
+
+function frontEndPoolAllocations(table MetricsTable) returns ReportedPoolCount
+	let cell = table.cellOf(PhaseRowKind, name: FrontEndPoolPhaseName, column: AllocsColumn)
+	return try int.fromString(cell) otherwise panic("parallel-compile.test: the `{PhaseRowKind} {FrontEndPoolPhaseName}` row holds '{cell}' where an allocation count belongs.")
+end 'frontEndPoolAllocations'

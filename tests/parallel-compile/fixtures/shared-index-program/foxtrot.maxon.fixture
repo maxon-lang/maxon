@@ -1,0 +1,202 @@
+module typealias FoxtrotTally = int(0 to 1000000)
+typealias FoxtrotTallyArray = Array with FoxtrotTally
+typealias FoxtrotLabelMap = Map with (String, ElementIndex)
+typealias FoxtrotShapeArray = Array with FoxtrotShape
+
+enum FoxtrotColor
+	red
+	green
+	blue
+	amber
+	violet
+end 'FoxtrotColor'
+
+enum FoxtrotPhase
+	idle = 10
+	warming = 20
+	running = 30
+	cooling = 40
+end 'FoxtrotPhase'
+
+union FoxtrotShape
+	circle(radius FoxtrotTally)
+	square(side FoxtrotTally)
+	strip(width FoxtrotTally, height FoxtrotTally)
+	empty
+end 'FoxtrotShape'
+
+type FoxtrotBox uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	static function create(first Element) returns Self
+		var items = Items.create()
+		items.push(first)
+		return Self{items: items}
+	end 'create'
+
+	function add(item Element)
+		items.push(item)
+	end 'add'
+
+	function size() returns FoxtrotTally
+		return items.count()
+	end 'size'
+end 'FoxtrotBox'
+
+typealias FoxtrotTextBox = FoxtrotBox with String
+typealias FoxtrotTallyBox = FoxtrotBox with FoxtrotTally
+
+type FoxtrotRecord
+	var label as String
+	var weight as FoxtrotTally
+	var color as FoxtrotColor
+	var samples as FoxtrotTallyArray
+
+	static function create(label String, weight FoxtrotTally, color FoxtrotColor) returns Self
+		var samples = FoxtrotTallyArray.create()
+		samples.push(weight)
+		return Self{label: label, weight: weight, color: color, samples: samples}
+	end 'create'
+
+	function sample(value FoxtrotTally)
+		samples.push(value mod 1000)
+	end 'sample'
+
+	function total() returns FoxtrotTally
+		var sum = 0 as FoxtrotTally
+
+		for value in samples 'eachSample'
+			sum = (sum + value) mod 100000
+		end 'eachSample'
+
+		return sum
+	end 'total'
+
+	function isWarm() returns bool
+		return match color 'warmth'
+			red or
+				amber gives true
+			green or
+				blue or
+				violet gives false
+		end 'warmth'
+	end 'isWarm'
+
+	function heft() returns FoxtrotTally
+		return weight
+	end 'heft'
+
+	function describe() returns String
+		return "{label}:{weight}:{total()}"
+	end 'describe'
+end 'FoxtrotRecord'
+
+typealias FoxtrotRecordArray = Array with FoxtrotRecord
+
+type FoxtrotLedger
+	var records as FoxtrotRecordArray
+	var index as FoxtrotLabelMap
+
+	static function create() returns Self
+		return Self{records: FoxtrotRecordArray.create(), index: FoxtrotLabelMap.create()}
+	end 'create'
+
+	function enter(record FoxtrotRecord)
+		index.upsert(record.describe(), value: records.count())
+		records.push(record)
+	end 'enter'
+
+	function warmCount() returns FoxtrotTally
+		var warm = 0 as FoxtrotTally
+
+		for record in records 'eachRecord'
+			if record.isWarm() 'warm'
+				warm = warm + 1
+			end 'warm'
+		end 'eachRecord'
+
+		return warm
+	end 'warmCount'
+
+	function heaviest() returns FoxtrotTally
+		var heaviest = 0 as FoxtrotTally
+
+		for record in records 'eachRecord'
+			let heft = record.heft()
+			heaviest = heft if heft > heaviest else heaviest
+		end 'eachRecord'
+
+		return heaviest
+	end 'heaviest'
+end 'FoxtrotLedger'
+
+function foxtrotArea(shape FoxtrotShape) returns FoxtrotTally
+	return match shape 'area'
+		circle(radius) gives (radius * radius * 3) mod 100000
+		square(side) gives (side * side) mod 100000
+		strip(width, height) gives (width * height) mod 100000
+		empty gives 0
+	end 'area'
+end 'foxtrotArea'
+
+function foxtrotPhaseWeight(phase FoxtrotPhase) returns FoxtrotTally
+	return match phase 'weight'
+		idle gives 1
+		warming gives 2
+		running gives 3
+		cooling gives 4
+	end 'weight'
+end 'foxtrotPhaseWeight'
+
+function foxtrotShapes(seed FoxtrotTally) returns FoxtrotTally
+	var shapes = FoxtrotShapeArray.create()
+	shapes.push(FoxtrotShape.circle(seed mod 50))
+	shapes.push(FoxtrotShape.square(seed mod 40))
+	shapes.push(FoxtrotShape.strip(seed mod 30, height: seed mod 20))
+	shapes.push(FoxtrotShape.empty)
+
+	var total = 0 as FoxtrotTally
+
+	for shape in shapes 'eachShape'
+		total = (total + foxtrotArea(shape)) mod 100000
+	end 'eachShape'
+
+	return total
+end 'foxtrotShapes'
+
+function foxtrotBoxes(seed FoxtrotTally) returns FoxtrotTally
+	var text = FoxtrotTextBox.create("first {seed}")
+	text.add("second {seed}")
+
+	var tallies = FoxtrotTallyBox.create(seed mod 100)
+	tallies.add(seed mod 7)
+	tallies.add(seed mod 11)
+
+	return text.size() + tallies.size()
+end 'foxtrotBoxes'
+
+function foxtrotLedger(seed FoxtrotTally) returns FoxtrotTally
+	var ledger = FoxtrotLedger.create()
+
+	for color in FoxtrotColor.allCases 'eachColor'
+		var record = FoxtrotRecord.create("{color.name} {seed}", weight: (seed + color.ordinal) mod 1000, color: color)
+		record.sample(seed mod 13)
+		ledger.enter(record)
+	end 'eachColor'
+
+	return ledger.warmCount() + ledger.heaviest()
+end 'foxtrotLedger'
+
+module function foxtrotScore(seed FoxtrotTally) returns FoxtrotTally
+	var score = 0 as FoxtrotTally
+
+	for phase in FoxtrotPhase.allCases 'eachPhase'
+		score = (score + foxtrotPhaseWeight(phase)) mod 100000
+	end 'eachPhase'
+
+	score = (score + foxtrotShapes(seed)) mod 100000
+	score = (score + foxtrotBoxes(seed)) mod 100000
+	return (score + foxtrotLedger(seed)) mod 100000
+end 'foxtrotScore'

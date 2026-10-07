@@ -1,4 +1,4 @@
-typealias ReportedPoolCount = int(i64.min to i64.max)
+export typealias ReportedPoolCount = int(i64.min to i64.max)
 
 // parallel.maxtest — the shared half of the compiler's PARALLEL-POOL gate: how a fixture program is
 // staged, how the compiler is spawned at it with the processor count pinned or left to the machine, and
@@ -61,18 +61,21 @@ let FrontEndPoolLinePrefix = "[CMP] DEBUG: front end: "
 let PoolLineWorkersWord = "worker(s) over"
 let PoolLineProcessorsWord = "processor(s), "
 
-// Where the three counts sit among a front-end pool line's space-separated words:
-// `<workers> worker(s) over <processors> processor(s), <files> file(s)`.
+// Where the four counts sit among a front-end pool line's space-separated words:
+// `<workers> worker(s) over <processors> processor(s), <files> file(s), <adopted> adopted`.
 let PoolLineWordSeparator = " "
 let PoolLineWorkersPosition = 0 as ElementIndex
 let PoolLineProcessorsPosition = 3 as ElementIndex
 let PoolLineFilesPosition = 5 as ElementIndex
+let PoolLineAdoptedPosition = 7 as ElementIndex
+let PoolLineAdoptedWordPosition = 8 as ElementIndex
+let PoolLineAdoptedWord = "adopted"
 
 // The scheduler's processor-count marker. Spelled here rather than read from `SchedRuntime.MaxProcsEnvName`
 // because a test project cannot import the compiler. It cannot rot silently: a marker the scheduler stops
 // reading leaves the pinned case reporting the machine's count, which is red.
 let MaxProcsEnvName = "MAXON_MAX_PROCS"
-let SingleProcessor = 1
+export let SingleProcessor = 1
 
 let RunCacheRootEnvName = "MAXON_RUN_CACHE_ROOT"
 let PrivateRunCacheDirName = "run-cache"
@@ -112,7 +115,12 @@ let CompileTimeToken = "<TIME>"
 
 // A processor count as the scheduler resolves one. Its floor is carried in by a guard rather than by the
 // runtime's clamp, which nothing here proves.
-typealias ProcessorCount = int(1 to u32.max)
+export typealias ProcessorCount = int(1 to u32.max)
+
+export union ProcessorPin
+	machine
+	pinned(count ProcessorCount)
+end 'ProcessorPin'
 
 // How many declarations a staged program holds.
 typealias FunctionTally = int(0 to u64.max)
@@ -124,6 +132,9 @@ let MetricsFileName = "metrics.tsv"
 let MetricsFieldSeparator = "\t"
 let MetricsCommentPrefix = "#"
 export let MetricsKindColumn = "kind"
+export let NameColumn = "name"
+export let AllocsColumn = "allocs"
+export let PhaseRowKind = "phase"
 let MetricsHeaderOpener = "# kind"
 let MetricsKindColumnPosition = 0 as ElementIndex
 
@@ -172,7 +183,7 @@ export function stagedProgram(fixtureName String, caseLabel String) returns File
 	return staged
 end 'stagedProgram'
 
-// Compile the staged program, pinned to one processor or left to the machine. `label` names the run in
+// Compile the staged program, pinned to a processor count or left to the machine. `label` names the run in
 // this file's failure reports and reaches nothing the child does — see `builtExecutable` for why it may
 // not reach the output path. `wholeDirectory` builds the staged tree as ONE project; otherwise only its
 // `main.maxon` is compiled and a sibling source is not part of the build. `privateRunCache` roots
@@ -181,7 +192,7 @@ end 'stagedProgram'
 //
 // Everything that would stop the build running at all panics rather than failing an assertion: a missing
 // binary or a spawn that never happened is the gate being broken, never the allocator answering wrongly.
-export function spawnBuild(staged FilePath, label String, extraArguments StringArray, singleProcessor bool, wholeDirectory bool = false, privateRunCache bool = false, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput
+export function spawnBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool = false, privateRunCache bool = false, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput
 	let binary = testedCompilerPath()
 
 	if not File.exists(binary) 'noBinary'
@@ -205,9 +216,10 @@ export function spawnBuild(staged FilePath, label String, extraArguments StringA
 
 	var overrides = EnvMap.create()
 
-	if singleProcessor 'pinned'
-		overrides.upsert(MaxProcsEnvName, value: "{SingleProcessor}")
-	end 'pinned'
+	match processors 'pin'
+		machine then break 'pin'
+		pinned(count) then overrides.upsert(MaxProcsEnvName, value: "{count}")
+	end 'pin'
 
 	if privateRunCache 'isolated'
 		overrides.upsert(RunCacheRootEnvName, value: staged.join(runCacheDirName).toString())
@@ -316,6 +328,18 @@ function frontEndPoolLine(run CollectedOutput) returns String
 	return (try afterPrefix.split(LineFeed).get(0) otherwise panic("parallel-compile.test: splitting a string always yields its first piece")).trim()
 end 'frontEndPoolLine'
 
+export function frontEndAdoptions(run CollectedOutput) returns ReportedPoolCount
+	let line = frontEndPoolLine(run)
+	let words = line.split(PoolLineWordSeparator)
+	let word = try words.get(PoolLineAdoptedWordPosition) otherwise panic("parallel-compile.test: the front end's pool line ends before its `{PoolLineAdoptedWord}` count. It wrote: {line}")
+
+	if word != PoolLineAdoptedWord 'notTheAdoptedCount'
+		panic("parallel-compile.test: the front end's pool line holds '{word}' where `{PoolLineAdoptedWord}` belongs. It wrote: {line}")
+	end 'notTheAdoptedCount'
+
+	return reportedCount(words, position: PoolLineAdoptedPosition, line: line)
+end 'frontEndAdoptions'
+
 function reportedCount(words StringArray, position ElementIndex, line String) returns ReportedPoolCount
 	let word = try words.get(position) otherwise panic("parallel-compile.test: the front end's pool line has no word at position {position}. It wrote: {line}")
 	return try int.fromString(word) otherwise panic("parallel-compile.test: the front end's pool line holds '{word}' where a count belongs. It wrote: {line}")
@@ -400,13 +424,13 @@ end 'withoutCompileTime'
 export function requireIdenticalImagesAcrossProcessorCounts(staged FilePath, programName String, wholeDirectory bool = false) throws TestFailure
 	let noArguments = StringArray.create()
 
-	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: noArguments, singleProcessor: true, wholeDirectory: wholeDirectory)
+	let pinnedRun = spawnBuild(staged, label: "single-processor", extraArguments: noArguments, processors: ProcessorPin.pinned(SingleProcessor), wholeDirectory: wholeDirectory)
 	let pinnedExit = pinnedRun.exitCode()
 	try Expect.equal(pinnedExit, expected: 0, message: "the {programName} did not compile pinned to one processor. It wrote to stderr: {pinnedRun.stderr}")
 
 	let pinnedImage = retainImage(staged)
 
-	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: noArguments, singleProcessor: false, wholeDirectory: wholeDirectory)
+	let defaultRun = spawnBuild(staged, label: "default-processors", extraArguments: noArguments, processors: ProcessorPin.machine, wholeDirectory: wholeDirectory)
 	let defaultExit = defaultRun.exitCode()
 	try Expect.equal(defaultExit, expected: 0, message: "the {programName} did not compile at the default processor count. It wrote to stderr: {defaultRun.stderr}")
 
@@ -446,20 +470,32 @@ function requireIdenticalBytes(first FilePath, second FilePath) throws TestFailu
 end 'requireIdenticalBytes'
 
 export function builtMetricsTable(staged FilePath, label String, runCacheDirName String = PrivateRunCacheDirName) returns MetricsTable throws TestFailure
-	let metricsPath = staged.join(MetricsFileName)
+	_ = try meteredBuild(staged, label: label, extraArguments: StringArray.create(), processors: ProcessorPin.machine, wholeDirectory: false, runCacheDirName: runCacheDirName)
+	return metricsTableOf(staged, label: label)
+end 'builtMetricsTable'
 
+export function meteredBuild(staged FilePath, label String, extraArguments StringArray, processors ProcessorPin, wholeDirectory bool, runCacheDirName String = PrivateRunCacheDirName) returns CollectedOutput throws TestFailure
 	var arguments = StringArray.create()
-	arguments.push("{MetricsOptionPrefix}{metricsPath.toString()}")
+	arguments.push("{MetricsOptionPrefix}{staged.join(MetricsFileName).toString()}")
 
-	let run = spawnBuild(staged, label: label, extraArguments: arguments, singleProcessor: false, privateRunCache: true, runCacheDirName: runCacheDirName)
+	for extra in extraArguments 'eachExtra'
+		arguments.push(extra)
+	end 'eachExtra'
+
+	let run = spawnBuild(staged, label: label, extraArguments: arguments, processors: processors, wholeDirectory: wholeDirectory, privateRunCache: true, runCacheDirName: runCacheDirName)
 	let observedExit = run.exitCode()
-	try Expect.equal(observedExit, expected: 0, message: "the '{label}' build did not compile at the default processor count. It wrote to stderr: {run.stderr}")
+	try Expect.equal(observedExit, expected: 0, message: "the '{label}' build did not compile. It wrote to stderr: {run.stderr}")
 
+	return run
+end 'meteredBuild'
+
+export function metricsTableOf(staged FilePath, label String) returns MetricsTable
+	let metricsPath = staged.join(MetricsFileName)
 	let text = fileText(metricsPath)
 	try File.delete(metricsPath) otherwise panic("parallel-compile.test: the gate could not run — could not clear {metricsPath.toString()}, so the next build's table could not be told from this one's.")
 
 	return metricsTableFrom(text, label: label)
-end 'builtMetricsTable'
+end 'metricsTableOf'
 
 function metricsTableFrom(text String, label String) returns MetricsTable
 	var columns = StringArray.create()
@@ -543,6 +579,20 @@ export type MetricsTable
 
 		panic("parallel-compile.test: the gate could not run — the metrics table has no `{name}` column. Its header names: {listedLines(self.columns)}")
 	end 'column'
+
+	export function cellOf(kind String, name String, column String) returns String
+		let kindColumn = self.column(MetricsKindColumn)
+		let nameColumn = self.column(NameColumn)
+		let valueColumn = self.column(column)
+
+		for row in self.rows 'eachRow'
+			if row.cell(kindColumn) == kind and row.cell(nameColumn) == name 'found'
+				return row.cell(valueColumn)
+			end 'found'
+		end 'eachRow'
+
+		panic("parallel-compile.test: the gate could not run — the metrics table has no `{kind}` row named `{name}`.")
+	end 'cellOf'
 end 'MetricsTable'
 
 // ============================================================================================

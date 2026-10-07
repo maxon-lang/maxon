@@ -165,8 +165,9 @@ process.
 `queryAllModule` opens a pool of workers for its duration (`FrontEndPool.maxon`) and lexes and parses the
 files that missed their memo on it. `MAXON_MAX_PROCS=1` gives a pool of one worker, not a separate path.
 
-- A worker parses against a private copy of the settled signature index; a write a parse has not declared
-  panics.
+- A worker parses against its own copy of the part of the settled signature index a parse writes, and
+  reads the settled declarations from one frozen copy every worker shares. The worker makes its copy on
+  its own thread. A write a parse has not declared panics.
 - Results are merged in emission order on the compiling thread, so the output is the same whatever order
   the workers finish in. The shared `Project` is written on the compiling thread alone.
 - Identical compiles report identical allocation totals whichever worker finishes first. Every pool

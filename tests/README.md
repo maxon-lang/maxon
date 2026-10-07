@@ -684,6 +684,7 @@ its own case file — `pool-default`, `pool-pinned`, `byte-identical`, `rdata-or
 - `front-end-pool-pinned` — under `MAXON_MAX_PROCS=1` the front end reports one worker over one processor
 - `front-end-pool-default` — at the default it reports min(P, F) workers over P processors, exactly once, F being the most files one drain dispatched
 - `front-end-byte-identical` — a two-file project whose parses mint instances in both files, and one of whose files is folded again with the other's row-set answer, emits the same image at both counts
+- `front-end-copies-do-not-grow-with-workers` — `shared-index-program` (seven similar-sized files beside a short `main`) built with a warmed case-private library cache under `MAXON_MAX_PROCS=1` and `=4`: the four-processor front end must report at least three workers adopting the signature index, and its `phase frontEndPool` allocations may exceed the one-processor build's by less than a quarter of the 126,973 allocations one whole copy of the fixture's signature index costs
 
 and for the backend pool's jobs:
 

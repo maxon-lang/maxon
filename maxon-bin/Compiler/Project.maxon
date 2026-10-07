@@ -7369,31 +7369,6 @@ end 'cacheReadStructLayoutArray'
 // a declared `type` into `MaxonType.structRef`.
 export typealias StructLayoutMap = Map with (ByteArray, StructLayout)
 
-// @generated library-cache begin
-module function cacheWriteStructLayoutMap(writer LibraryCacheWriter, value StructLayoutMap)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for (key, entry) in value 'eachEntry'
-		writer.bytes(key)
-		entry.cacheWrite(writer)
-	end 'eachEntry'
-end 'cacheWriteStructLayoutMap'
-
-module function cacheReadStructLayoutMap(reader LibraryCacheReader) returns StructLayoutMap throws LibraryCacheDamage
-	let count = try reader.count()
-	var result = StructLayoutMap.create()
-
-	for _ in 0 upto count 'eachEntry'
-		let key = try reader.bytes()
-		let entry = try StructLayout.cacheRead(reader)
-		result.upsert(key, value: entry)
-	end 'eachEntry'
-
-	return result
-end 'cacheReadStructLayoutMap'
-
-// @generated library-cache end
-
 // --- Union payload fields ---
 
 // One PAYLOAD FIELD of a `union`/`enum` case — `circle(radius Integer)` declares one named

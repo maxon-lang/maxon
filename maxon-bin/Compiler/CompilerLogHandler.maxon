@@ -88,6 +88,11 @@ module function flushCompilerLog()
 	try await CompilerLogRoute.current().handler.flush() otherwise panic("flushCompilerLog: the compiler's log handler stopped answering")
 end 'flushCompilerLog'
 
+module function logCompilerDebugSettled(message String)
+	compilerLogger(CompilerLogGroup.compiler).debug(message)
+	flushCompilerLog()
+end 'logCompilerDebugSettled'
+
 function recordGroupOf(record LogRecord) returns CompilerLogGroup
 	let bound = try record.attrs.get(0) otherwise panic("CompilerLogHandler: a record carrying no attrs reached the compiler's handler — `compilerLogger` binds its group marker under the record's group on every compiler logger")
 

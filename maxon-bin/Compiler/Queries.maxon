@@ -313,7 +313,7 @@ function extensionMethodKeysWritten(project Project, signatures ProgramSignature
 		seen.insert(key)
 	end 'eachFoldedKey'
 
-	for site in signatures.extensionDeclSites 'eachExtensionSite'
+	for site in signatures.settled.extensionDeclSites 'eachExtensionSite'
 		var reader = try siteFileReader(project, signatures: signatures, path: site.path, buildsBodies: false)
 		var written = ByteArrayArray.create()
 		reader.methodKeysOfAnUndeclaredExtension(site, into: written)
@@ -735,7 +735,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 
 	// Only now can a swept `named` be told from a declared `type`: the sweep resolves `returns Self`
 	// (and `returns <its own type's name>`) to a `structRef` from the tokens alone, but a foreign name
-	// must stay bare because `structTypes` is still filling while it reads. Before
+	// must stay bare because `structLayouts` is still filling while it reads. Before
 	// `evaluateInitializers` is the only place to settle it, because the constant evaluator copies a
 	// factory's declared return type into the declaration's outcome and a re-tag after this line
 	// cannot reach the copy.
@@ -755,8 +755,8 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// ⛔ **STRICTLY BEFORE THE FOLD, AND STRICTLY AFTER THE SWEEP.** Binding a define needs every
 	// declaration to exist — that is what makes two claimants for one name visible rather than one — and
 	// the fold is what would otherwise read the initializer this replaces.
-	signatures.defines = project.defines
-	signatures.defineProblems = signatures.resolveDefines()
+	signatures.settled.defines = project.defines
+	signatures.settled.defineProblems = signatures.resolveDefines()
 	signatures.evaluateInitializers(project.readerAnchors)
 
 	// Every declared `interface`'s requirements, for the same "the whole program is known now" reason.
@@ -830,7 +830,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	let holding = sharedMemoEntryCount(project)
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.compiler).debug("shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding, {sharedParseEntryCount(project)} parse artifact(s) held, {project.db.sharedParseHits} parse hit(s), {project.db.sharedParseMisses} parse miss(es), {project.db.sharedParsePublishes} parse publish(es), {project.db.sharedParseDrifts} parse(s) whose referenced ids moved, library parses {signatures.libraryParseSharing.name}")
+		logCompilerDebugSettled("shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding, {sharedParseEntryCount(project)} parse artifact(s) held, {project.db.sharedParseHits} parse hit(s), {project.db.sharedParseMisses} parse miss(es), {project.db.sharedParsePublishes} parse publish(es), {project.db.sharedParseDrifts} parse(s) whose referenced ids moved, library parses {signatures.libraryParseSharing.name}")
 	end 'debugging'
 
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: signatureMemoKey(project), computed: true)
@@ -1556,7 +1556,7 @@ end 'tokenIsAMemberSpelling'
 // each — so the grouping is a WALK and not a map: an inner loop consumes the run of sites sharing a
 // path.
 function foldInterfaceDeclarations(project Project, signatures ProgramSignatures) throws CompileError
-	let sites = signatures.interfaceDeclSites
+	let sites = signatures.settled.interfaceDeclSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
@@ -1600,7 +1600,7 @@ end 'foldExtensionDeclarations'
 // and the OOB sentences are written once: two copies of this loop would be two chances for the
 // passes to disagree about which sites they visit.
 function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures, namesOnly bool) throws CompileError
-	let sites = signatures.extensionDeclSites
+	let sites = signatures.settled.extensionDeclSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
@@ -1658,7 +1658,7 @@ end 'siteFileReader'
 // witness and a per-site closure across the compiler's hottest fold. What can be shared is: one
 // reader constructor (`siteFileReader`) and one reader per file.
 function foldConformanceClauses(project Project, signatures ProgramSignatures) throws CompileError
-	let sites = signatures.conformanceClauseSites
+	let sites = signatures.settled.conformanceClauseSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
@@ -1701,7 +1701,7 @@ end 'foldConformanceClauses'
 // two stretches of the array. That costs at most a second `Parser` for that file and cannot change
 // the answer: the fixpoint is solved over the union, and the union is a set.
 function foldDescriptorNeeds(project Project, signatures ProgramSignatures) throws CompileError
-	let sites = signatures.descriptorScanSites
+	let sites = signatures.settled.descriptorScanSites
 
 	if sites.count() == 0 'noGenericTypeInThisProgram'
 		return
@@ -1958,7 +1958,7 @@ function finishLibraryCache(project Project)
 	let tally = project.db.libraryTally
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.compiler).debug("library cache — baseline {project.db.libraryBaseline.name}, {tally.loaded} loaded, {tally.written} written, {tally.rejected} rejected, {tally.swept} library file(s) swept, {tally.parsed} library file(s) parsed")
+		logCompilerDebugSettled("library cache — baseline {project.db.libraryBaseline.name}, {tally.loaded} loaded, {tally.written} written, {tally.rejected} rejected, {tally.swept} library file(s) swept, {tally.parsed} library file(s) parsed")
 	end 'debugging'
 
 	project.session.fileMemos.library.totals.add(tally)
@@ -2129,7 +2129,7 @@ function foldEveryFileInto(project Project, pool FrontEndPool, merged MaxonModul
 	publishStandingParses(project)
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.compiler).debug("merge: {folds} fold(s), {ledger.reMerged} of {project.db.sourcePaths.count()} file(s) re-merged")
+		logCompilerDebugSettled("merge: {folds} fold(s), {ledger.reMerged} of {project.db.sourcePaths.count()} file(s) re-merged")
 	end 'debugging'
 end 'foldEveryFileInto'
 
@@ -2454,7 +2454,7 @@ end 'genericInstancesRequestedBy'
 function logTypeNameTable(artifact FileParseArtifact)
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
 		let names = artifact.typeNames
-		compilerLogger(CompilerLogGroup.compiler).debug("typeNames {artifact.filePath.toString()}: {names.count()} names, {names.arenaByteCount()} bytes, reserved {names.reservedNameCount()} names / {names.reservedArenaByteCount()} bytes, rehashes {names.rehashes()}, regrowths {names.regrowths()}")
+		logCompilerDebugSettled("typeNames {artifact.filePath.toString()}: {names.count()} names, {names.arenaByteCount()} bytes, reserved {names.reservedNameCount()} names / {names.reservedArenaByteCount()} bytes, rehashes {names.rehashes()}, regrowths {names.regrowths()}")
 	end 'debugging'
 end 'logTypeNameTable'
 
@@ -2961,7 +2961,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	// Re-aimed at the SAME target the project was created with — a reset must not be a second chance
 	// to pick a platform for the builtin `ExitCode`'s range.
 	project.typeAliases = RangedAliasRegistry.create(project.target.os)
-	project.typeAliases.provenance.shareModuleDirectories(signatures.fileModuleDirectories)
+	project.typeAliases.provenance.shareModuleDirectories(signatures.settled.fileModuleDirectories)
 
 	// FIRST-WINS, so it must reset: a warm rebuild that re-merged the same files would find every name
 	// already claimed by its own declaration and report the whole program as duplicates.
