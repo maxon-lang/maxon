@@ -1,0 +1,21 @@
+let CaseDirName = "build-rebuild-compiles-an-up-to-date-output"
+let OutputStem = "program"
+let RebuildReason = "--rebuild was requested"
+
+test 'a build given --rebuild compiles an up-to-date program, and the next plain build is up to date'
+	requireHeldOutsideCheckout(CaseDirName, check: RebuildCompilesAnUpToDateOutput.create())
+end 'a build given --rebuild compiles an up-to-date program, and the next plain build is up to date'
+
+type RebuildCompilesAnUpToDateOutput implements OutsideCheckoutCase
+	static function create() returns RebuildCompilesAnUpToDateOutput
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: [RebuildFlag]), reason: RebuildReason, which: "a build with `{RebuildFlag}`")
+		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "a plain build after the `{RebuildFlag}` build")
+	end 'requireHeldIn'
+end 'RebuildCompilesAnUpToDateOutput'

@@ -266,7 +266,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3176: <fragment>:3:11: the extension member `FilePath.stem` has the name of `FilePath`'s own instance member, which would hide it — rename one
-note: stdlib/FilePath.maxon:372:18: `FilePath`'s own `stem`
+note: stdlib/FilePath.maxon:378:18: `FilePath`'s own `stem`
 ```
 
 <!-- test: same-name-methods.with-params -->

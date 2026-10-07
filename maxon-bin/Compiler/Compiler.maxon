@@ -60,7 +60,7 @@ end 'StatedText'
 //
 // A file/IO error (`fileNotFound` / `noSourceFiles` / `readError`) propagates from here UNCHANGED —
 // `compileToProduct`'s drain owns that reason.
-export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride StatedText = StatedText.unstated, emitIr bool = false, metrics StatedText = StatedText.unstated, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create(), session CompileSession = CompileSession.printing()) returns FilePath throws CompileError
+export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride StatedText = StatedText.unstated, emitIr bool = false, metrics StatedText = StatedText.unstated, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, productVersion VersionComponentArray = VersionComponentArray.create(), defines DefineArray = DefineArray.create(), session CompileSession = CompileSession.printing()) returns CompileProduct throws CompileError
 	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metrics: metrics, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, productVersion: productVersion, defines: defines, session: session)
 
 	match product.irText 'emitIr'
@@ -68,7 +68,7 @@ export function compile(inputPaths MaxonSourcePathArray, target Target, outputOv
 		rendered(text) then writeTargetIr(text, outputPath: product.outputPath)
 	end 'emitIr'
 
-	return product.outputPath
+	return product
 end 'compile'
 
 // ⭐⭐ **WHAT ONE COMPILE PRODUCED, HANDED BACK AS VALUES RATHER THAN PUBLISHED TO THE FILESYSTEM.**
@@ -95,8 +95,10 @@ export type CompileProduct
 	export let totalNanos as DurationNanos
 	export let totalCpuTicks as CpuTicks
 
-	export static function create(outputPath FilePath, irText TargetIrText, codeBytes CodeByteCount, totalNanos DurationNanos, totalCpuTicks CpuTicks) returns CompileProduct
-		return Self{outputPath: outputPath, irText: irText, codeBytes: codeBytes, totalNanos: totalNanos, totalCpuTicks: totalCpuTicks}
+	export let sidecar as SidecarOutcome
+
+	export static function create(outputPath FilePath, irText TargetIrText, codeBytes CodeByteCount, totalNanos DurationNanos, totalCpuTicks CpuTicks, sidecar SidecarOutcome) returns CompileProduct
+		return Self{outputPath: outputPath, irText: irText, codeBytes: codeBytes, totalNanos: totalNanos, totalCpuTicks: totalCpuTicks, sidecar: sidecar}
 	end 'create'
 end 'CompileProduct'
 
@@ -218,7 +220,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// reads the SOURCES, and a phase that absorbs a neighbour's cost is the defect CompileTimings'
 	// header is about.
 	let outputProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
-	let outputPath = try resolveOutputPath(project, inputPaths: inputPaths, outputOverride: outputOverride)
+	let outputPath = try resolveOutputPath(project.target, inputPaths: inputPaths, outputOverride: outputOverride)
 	recordCoverageDataPath(project, outputPath: outputPath)
 	try ensureOutputDirectory(project, outputPath: outputPath)
 
@@ -307,9 +309,11 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// build-id is the fold of the very bytes just published, and a driver recomputes it from the binary
 	// before trusting a single row. Written past `requireOutputWritten` so a build that produced no
 	// executable also leaves no sidecar claiming to describe one.
+	var sidecar = SidecarOutcome.notOwed
+
 	if debugInfo 'writeDebugInfo'
 		let debugProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeDebugInfo)
-		writeDebugInfoSidecar(project, codeResult: codeResult, outputPath: outputPath)
+		sidecar = writeDebugInfoSidecar(project, codeResult: codeResult, outputPath: outputPath)
 		recordPhaseWithItsLog(project, phase: CompilePhase.writeDebugInfo, probe: debugProbe)
 	end 'writeDebugInfo'
 
@@ -342,7 +346,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	end 'metrics'
 
 	compilerLogger(CompilerLogGroup.compiler).info("Wrote {codeBytes} bytes of code to {outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
-	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks)
+	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks, sidecar: sidecar)
 end 'compileMeasured'
 
 // For a bracket whose code logs: the flush keeps the handling of its records inside it (see
@@ -373,7 +377,7 @@ function siblingImagePath(outputPath FilePath, infix String) returns FilePath
 end 'siblingImagePath'
 
 // `maxon build` at the root of this repo names an output that IS the running binary.
-function outputIsRunningImage(outputPath FilePath) returns bool
+export function outputIsRunningImage(outputPath FilePath) returns bool
 	let running = try Process.executablePath() otherwise 'noIntrospection'
 		// A host that will not say what it is running cannot be asked this question. A self-rebuild on
 		// such a host is refused with E6002 by `discardPreviousOutput`, which cannot delete a running image.
@@ -474,7 +478,7 @@ function isRetiredImageName(name String, stem String, ext String) returns bool
 	let stamped = name.replaceFirst(prefix, with: "")
 	let tail = stamped.trimStart(asciiDecimalDigits())
 
-	return tail.byteLength() < stamped.byteLength() and (tail == ext or tail == "{ext}{MxdbgSidecarExtension}")
+	return tail.byteLength() < stamped.byteLength() and isImageSuffixOrItsSidecar(tail, image: ext)
 end 'isRetiredImageName'
 
 export function asciiDecimalDigits() returns CharacterSet
@@ -495,13 +499,8 @@ end 'refuseUnvacatedImage'
 // correct compiler must not be failed because a sidecar could not be moved, and the recovery this
 // backup exists for is running the binary, which needs no `.mxdbg` at all.
 function moveDebugSidecar(binary FilePath, to FilePath)
-	let fromSidecar = try FilePath.from("{binary.toString()}{MxdbgSidecarExtension}") otherwise 'unnameable'
-		return
-	end 'unnameable'
-
-	let toSidecar = try FilePath.from("{to.toString()}{MxdbgSidecarExtension}") otherwise 'unnameableTo'
-		return
-	end 'unnameableTo'
+	let fromSidecar = sidecarPathOf(binary)
+	let toSidecar = sidecarPathOf(to)
 
 	// A stale sidecar at the destination is this move's to replace — and if it cannot be removed,
 	// leaving it would be the very mispairing this function exists to prevent, so the old one goes
@@ -1733,7 +1732,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// time a conformer is added, because a roster at a CALL SITE has no test between it and the original:
 	// nothing fails when it drifts, it simply starts lying to the next reader. A pointer at the owner cannot
 	// go stale, so this is one.
-	installBuiltinConformanceRuntime(pipeline.stdModule, globalData: project.globalData, ordering: orderingEnum, arrayConformerName: signatures.arrayRecordDeclaredName())
+	installBuiltinConformanceRuntime(pipeline.stdModule, globalData: project.globalData, ordering: orderingEnum)
 
 	recordPhase(project, phase: CompilePhase.installRuntime, probe: runtimeInstallProbe)
 
@@ -1921,20 +1920,30 @@ end 'reportBindingHygieneDiagnostics'
 // form the spec runner uses to state a case's file order while rooting the project at the case's
 // own directory.
 function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection SourceSelection) throws CompileError
-	for path in paths 'eachNamed'
-		if File.exists(path) 'isFile'
-			try loadOneSourceFile(project, path: path)
-		end 'isFile' else if Directory.exists(path) 'isDir'
-			try loadSourceDirectory(project, dir: path, selection: selection)
-		end 'isDir' else 'notFound'
-			throw CompileError.fileNotFound(path)
-		end 'notFound'
-	end 'eachNamed'
+	for path in try namedSourceFiles(paths, selection: selection) 'eachSource'
+		try loadOneSourceFile(project, path: path)
+	end 'eachSource'
 
 	if project.db.sourcePaths.count() == 0 'noFiles'
 		throw CompileError.noSourceFiles(project.rootPath)
 	end 'noFiles'
 end 'loadSourceFiles'
+
+export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly) returns MaxonSourcePathArray throws CompileError
+	var files = MaxonSourcePathArray.create()
+
+	for path in paths 'eachNamed'
+		if File.exists(path) 'isFile'
+			files.push(path)
+		end 'isFile' else if Directory.exists(path) 'isDir'
+			_ = try collectMaxonSources(path, into: files, selection: selection)
+		end 'isDir' else 'notFound'
+			throw CompileError.fileNotFound(path)
+		end 'notFound'
+	end 'eachNamed'
+
+	return files
+end 'namedSourceFiles'
 
 // ⭐⭐ **THE PROJECT ROOT OF A BUILD THAT NAMED SEVERAL PATHS — the ONE directory every one of them
 // lies under.** It is what `Project.rootPath` becomes, and through it what
@@ -1996,19 +2005,9 @@ export function commonAncestorOf(paths MaxonSourcePathArray) returns FilePath th
 	return first
 end 'commonAncestorOf'
 
-// Load every Maxon source file under `dir`, as `selection` defines "source file".
-function loadSourceDirectory(project Project, dir FilePath, selection SourceSelection) throws CompileError
-	var paths = MaxonSourcePathArray.create()
-	_ = try collectMaxonSources(dir, into: paths, selection: selection)
-
-	for path in paths 'each'
-		try loadOneSourceFile(project, path: path)
-	end 'each'
-end 'loadSourceDirectory'
-
 // What counts as a Maxon source file under a directory, asked in one place: every file `selection`
 // admits beneath `dir`, minus every subtree a `.maxonignore` marker excludes. The user's own root
-// (`loadSourceDirectory`), the library tiers (`StdlibLoader.loadLibraryRoot`) and the editor's
+// (`namedSourceFiles`), the library tiers (`StdlibLoader.loadLibraryRoot`) and the editor's
 // project sweep all walk through it, because two copies of the answer can come to disagree about
 // which files a build contains.
 //
@@ -2531,8 +2530,8 @@ let IrFileExtension = ".ir"
 //
 // ⚠ An override that already carries the target's extension is used as it is, so `--output=stage2.exe`
 // and `--output=stage2` name one file rather than `stage2.exe.exe`.
-function resolveOutputPath(project Project, inputPaths MaxonSourcePathArray, outputOverride StatedText) returns FilePath throws CompileError
-	let ext = executableExtension(project.target.os)
+export function resolveOutputPath(target Target, inputPaths MaxonSourcePathArray, outputOverride StatedText) returns FilePath throws CompileError
+	let ext = executableExtension(target.os)
 
 	if let stated = try outputOverride.text() 'hasOverride'
 		let outputPath = stated if stated.endsWith(ext) else "{stated}{ext}"
@@ -2540,7 +2539,7 @@ function resolveOutputPath(project Project, inputPaths MaxonSourcePathArray, out
 		return try FilePath.from(outputPath) otherwise throw CompileError.invalidOutputPath(stated)
 	end 'hasOverride'
 
-	let named = try inputPaths.get(0) otherwise panic("resolveOutputPath: `loadProject` has already refused an empty path list")
+	let named = try inputPaths.get(0) otherwise panic("resolveOutputPath: the callers have already refused an empty path list")
 
 	if not Directory.isDirectory(named) 'aFile'
 		return named.changeExtension(ext)

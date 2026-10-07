@@ -2702,6 +2702,418 @@ end 'main'
 error E2015: specs/where-clauses/where-clauses.error.static-without-self-return-cannot-dispatch.maxon:13:12: Unsupported: calling 'digest' (which dispatches through the type's `where` constraints) on a value of the enclosing type, from a `static function` that carries no witness tables of its own to forward — a static sources them from the instance it RETURNS, so declare this one `returns Self` and call the method on the result, or make it an instance method
 ```
 
+### Error: a static that does NOT return `Self` cannot dispatch on a type-parameter value
+
+<!-- test: where-clauses.error.static-hashing-a-type-parameter-value-cannot-dispatch -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	static function hashOf(v T) returns HashValue
+		return v.hash()
+	end 'hashOf'
+end 'Holder'
+
+typealias H = Holder with Integer
+
+function main() returns ExitCode
+	let value = 41 as Integer
+	print("{H.hashOf(value) == value.hash()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/where-clauses/where-clauses.error.static-hashing-a-type-parameter-value-cannot-dispatch.maxon:8:12: Unsupported: calling 'hash' (which dispatches through the type's `where` constraints) on a value of a type parameter, from a `static function` that carries no witness tables of its own to dispatch through — a static sources them from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method, or take the operation as a function parameter
+```
+
+### Error: a static that does NOT return `Self` cannot dispatch on an array of the type parameter
+
+<!-- test: where-clauses.error.static-hashing-an-array-of-the-type-parameter-cannot-dispatch -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	export typealias Items = Array with T
+
+	var v as T
+
+	static function digestAll(items Items) returns HashValue
+		return items.hash()
+	end 'digestAll'
+end 'Holder'
+
+typealias H = Holder with Val
+typealias ValArray = Array with Val
+
+function main() returns ExitCode
+	var items = ValArray.create()
+	items.push(41)
+	print("{H.digestAll(items)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/where-clauses/where-clauses.error.static-hashing-an-array-of-the-type-parameter-cannot-dispatch.maxon:10:16: Unsupported: calling 'hash' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter, from a `static function` that carries no witness tables of its own to dispatch through — a static sources them from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method, or take the operation as a function parameter
+```
+
+### Error: an array of an unconstrained type parameter is not `Hashable`
+
+<!-- test: where-clauses.error.an-unconstrained-type-parameter-array-is-not-hashable -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Box uses T
+	export typealias Items = Array with T
+
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function digest() returns HashValue
+		return items.hash()
+	end 'digest'
+end 'Box'
+
+typealias B = Box with Val
+
+function main() returns ExitCode
+	let box = B.create()
+	print("{box.digest()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E4006: specs/where-clauses/where-clauses.error.an-unconstrained-type-parameter-array-is-not-hashable.maxon:14:16: Type 'Array' has no field named 'hash' ('hash' is available as a conditional extension where Element is Hashable and Equatable, but 'T' does not implement 'Hashable')
+```
+
+### Error: a closure in an instance method hashing a type-parameter array
+
+<!-- test: where-clauses.error.a-closure-in-an-instance-method-hashing-a-type-parameter-array -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	export typealias Items = Array with T
+
+	var items as Items
+
+	static function create(items Items) returns Self
+		return Self{items: items}
+	end 'create'
+
+	function digest() returns HashValue
+		let compute = function() gives items.hash()
+		return compute()
+	end 'digest'
+end 'Holder'
+
+typealias H = Holder with Val
+typealias ValArray = Array with Val
+
+function main() returns ExitCode
+	var items = ValArray.create()
+	items.push(41)
+	let holder = H.create(items)
+	print("{holder.digest()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/where-clauses/where-clauses.error.a-closure-in-an-instance-method-hashing-a-type-parameter-array.maxon:14:40: Unsupported: a closure that calls 'hash' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter — a closure inherits a witness table through its environment only for a direct dispatch on a type-parameter value, so it has none to hand on to a callee. Make the call in the method that builds the closure and let the closure use the result, or take the operation as a function parameter
+```
+
+### Error: a static calling an overloaded extension method on a type-parameter instance
+
+<!-- test: where-clauses.error.a-static-calling-an-overloaded-extension-method-on-a-type-parameter-instance -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Box uses Item
+	export var item as Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Box'
+
+extension Box
+	function describe() returns HashValue
+		return 0
+	end 'describe'
+end 'Box'
+
+extension Box where Item is Hashable
+	function describe(salt HashValue) returns HashValue
+		return item.hash() + salt
+	end 'describe'
+end 'Box'
+
+type Owner uses T where T is Hashable and Equatable
+	export typealias Boxed = Box with T
+
+	var v as T
+
+	static function measure(b Boxed) returns HashValue
+		return b.describe(1)
+	end 'measure'
+end 'Owner'
+
+typealias O = Owner with Val
+typealias ValBox = Box with Val
+
+function main() returns ExitCode
+	print("{O.measure(ValBox.create(5))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/where-clauses/where-clauses.error.a-static-calling-an-overloaded-extension-method-on-a-type-parameter-instance.maxon:30:12: Unsupported: calling 'describe' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter, from a `static function` that carries no witness tables of its own to dispatch through — a static sources them from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method, or take the operation as a function parameter
+```
+
+### A static may call an instance method that hashes a concrete field
+
+<!-- test: where-clauses.static-calls-an-instance-method-that-hashes-a-concrete-field -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+type Labelled uses T
+	var item as T
+	var label as String
+	static function create(item T, label String) returns Self
+		return Self{item: item, label: label}
+	end 'create'
+	function hasLabel(text String) returns bool
+		let wanted = label
+		return wanted.equals(text)
+	end 'hasLabel'
+	function labelHash() returns HashValue
+		return label.hash()
+	end 'labelHash'
+	static function labelled(held Self, text String) returns bool
+		return held.hasLabel(text)
+	end 'labelled'
+	static function hashOfLabel(held Self) returns HashValue
+		return held.labelHash()
+	end 'hashOfLabel'
+end 'Labelled'
+typealias IntLabelled = Labelled with Val
+function main() returns ExitCode
+	let l = IntLabelled.create(7, label: "seven")
+	print("{IntLabelled.labelled(l, text: "seven")}\n")
+	print("{IntLabelled.hashOfLabel(l) == "seven".hash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+true
+```
+
+### A static may call an instance method that forwards to a hashing sibling
+
+<!-- test: where-clauses.static-calls-an-instance-method-that-forwards-to-a-hashing-sibling -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+type Labelled uses T
+	var item as T
+	var label as String
+	static function create(item T, label String) returns Self
+		return Self{item: item, label: label}
+	end 'create'
+	function labelHash() returns HashValue
+		return label.hash()
+	end 'labelHash'
+	function doubledLabelHash() returns HashValue
+		return self.labelHash()
+	end 'doubledLabelHash'
+	static function hashOfLabel(held Self) returns HashValue
+		return held.doubledLabelHash()
+	end 'hashOfLabel'
+end 'Labelled'
+typealias IntLabelled = Labelled with Val
+function main() returns ExitCode
+	let l = IntLabelled.create(7, label: "seven")
+	print("{IntLabelled.hashOfLabel(l) == "seven".hash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+### Error: a static that does NOT return `Self` cannot call a descriptor-carrying method on a run instance
+
+<!-- test: where-clauses.error.a-static-calls-a-descriptor-method-on-a-run-instance -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Outer uses E where E is Hashable and Equatable
+	export typealias Items = Array with E
+
+	var e as E
+
+	static function create(e E) returns Self
+		return Self{e: e}
+	end 'create'
+
+	function tally() returns HashValue
+		var items = Items.create()
+		items.push(e)
+		if items.count() == 1 'one'
+			return e.hash() + 1
+		end 'one'
+		return 0
+	end 'tally'
+end 'Outer'
+
+type Runner uses D where D is Hashable and Equatable
+	export typealias OuterD = Outer with D
+
+	var d as D
+
+	static function run(o OuterD) returns HashValue
+		return o.tally()
+	end 'run'
+end 'Runner'
+
+typealias R = Runner with Val
+typealias ValOuter = Outer with Val
+
+function main() returns ExitCode
+	print("{R.run(ValOuter.create(41))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/where-clauses/where-clauses.error.a-static-calls-a-descriptor-method-on-a-run-instance.maxon:28:18: Unsupported: calling 'tally' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method
+```
+
+### Error: a static that does NOT return `Self` cannot call a method that reads its layout through a blind edge
+
+<!-- test: where-clauses.error.a-static-calls-a-method-that-reads-its-layout-through-a-blind-edge -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Box uses T
+	export typealias Items = Array with T
+
+	var items as Items
+
+	static function create(items Items) returns Self
+		return Self{items: items}
+	end 'create'
+
+	function copyCount() returns Val
+		let local = items
+		let c = try local.slice(0, endIndex: local.count()) otherwise return 0
+		return c.count()
+	end 'copyCount'
+
+	static function countOf(held Self) returns Val
+		return held.copyCount()
+	end 'countOf'
+end 'Box'
+
+typealias ValBox = Box with Val
+typealias ValArray = Array with Val
+
+function main() returns ExitCode
+	var items = ValArray.create()
+	items.push(4)
+	print("{ValBox.countOf(ValBox.create(items))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/where-clauses/where-clauses.error.a-static-calls-a-method-that-reads-its-layout-through-a-blind-edge.maxon:19:18: Unsupported: calling 'copyCount' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method
+```
+
+### Error: a static that does NOT return `Self` cannot call a method that forwards to a layout reader
+
+<!-- test: where-clauses.error.a-static-calls-a-method-that-forwards-to-a-layout-reader -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Box uses T
+	export typealias Items = Array with T
+
+	var items as Items
+
+	static function create(items Items) returns Self
+		return Self{items: items}
+	end 'create'
+
+	function copyCount() returns Val
+		let local = items
+		let c = try local.slice(0, endIndex: local.count()) otherwise return 0
+		return c.count()
+	end 'copyCount'
+
+	function viaSibling() returns Val
+		return self.copyCount()
+	end 'viaSibling'
+
+	static function countOf(held Self) returns Val
+		return held.viaSibling()
+	end 'countOf'
+end 'Box'
+
+typealias ValBox = Box with Val
+typealias ValArray = Array with Val
+
+function main() returns ExitCode
+	var items = ValArray.create()
+	items.push(4)
+	print("{ValBox.countOf(ValBox.create(items))}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/where-clauses/where-clauses.error.a-static-calls-a-method-that-forwards-to-a-layout-reader.maxon:23:18: Unsupported: calling 'viaSibling' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method
+```
+
+### A static's local named like a field compares as its own type
+
+<!-- test: where-clauses.a-static-local-named-like-a-field-compares-as-its-own-type -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	export typealias Items = Array with T
+	var items as Items
+	static function create(items Items) returns Self
+		return Self{items: items}
+	end 'create'
+	static function same(a Val, b Val) returns bool
+		let items = a
+		let other = b
+		return items == other
+	end 'same'
+end 'Holder'
+
+typealias H = Holder with Val
+
+function main() returns ExitCode
+	print("{H.same(3, b: 3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
 ### An INTERFACE EXTENSION's method over a constrained conformer reserves that conformer's witnesses
 
 An extension method is monomorphized for ONE conformer, so it carries that conformer's witness block

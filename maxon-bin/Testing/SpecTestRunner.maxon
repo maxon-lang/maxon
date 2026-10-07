@@ -3733,7 +3733,7 @@ end 'guestCompilerPath'
 // line names the source that forced it, because the verdict is holding exactly that fact.
 function buildGuestCompiler(harnessExe FilePath, projectRoot FilePath, guestExe FilePath, effectiveTarget Target, because String) returns GuestCompiler
 	let targetKey = targetToString(effectiveTarget)
-	printError("building the {targetKey} compiler that will run this suite ({because}) — a few minutes\n")
+	printError("building the {targetKey} compiler that will run this suite ({because}) — a few minutes, unless the build finds it up to date\n")
 
 	var argv = StringArray.create()
 	argv.push(BuildSubcommandName)
@@ -4791,9 +4791,7 @@ function checkDebugInfoSidecar(debugInfo bool, exePath FilePath, effectiveTarget
 		return TestOutcome.pass
 	end 'noSidecarExpected'
 
-	let sidecarPath = try FilePath.from(sidecarPathOf(exePath)) otherwise 'badPath'
-		return TestOutcome.fail("could not spell the .mxdbg sidecar path beside {exePath}")
-	end 'badPath'
+	let sidecarPath = sidecarPathOf(exePath)
 
 	let image = try File.readBinary(sidecarPath) otherwise 'unreadable'
 		return TestOutcome.fail("a `<!-- DebugInfo -->` case built no readable .mxdbg sidecar at {sidecarPath}. It is written by default and leaves the executable byte-identical, so a build that produced none leaves the whole debug-info path unmeasured on this lane")

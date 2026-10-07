@@ -15,6 +15,7 @@ module let RungsOption = "rungs"
 module let RepeatOption = "repeat"
 module let FilterOption = "filter"
 module let TargetOption = "target"
+module let RebuildOption = "rebuild"
 module let LogOption = "log"
 module let NoteOption = "note"
 module let EmitCorpusOption = "emitCorpus"
@@ -148,7 +149,11 @@ end 'snippetSourceOf'
 
 function discardSnippet(source FilePath)
 	let slot = discardRunSlotOf(source, entryFunction: MainFunctionName)
-	let stemName = pathWithoutSuffix(source, suffix: SnippetExtension).filename()
+	let stem = pathWithoutSuffix(source, suffix: SnippetExtension)
+	let stemName = stem.filename()
+
+	discardBuildRecordsNamed(stem)
+
 	let directory = try source.parent() otherwise panic("discardSnippet: {source.path} was staged inside the snippet directory")
 	let entries = try Directory.list(directory) otherwise (e) 'unlisted'
 		printError("maxon: could not list {directory.path} to delete what a snippet call staged there ({e.name}); the next server's sweep removes it once its owner has ended\n")
@@ -292,6 +297,10 @@ module function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args O
 	if getOptionalBoolArg(reqDoc, args: args, key: "emitIr", defaultVal: false) 'hasIr'
 		argv.push(EmitIrFlag)
 	end 'hasIr'
+
+	if getOptionalBoolArg(reqDoc, args: args, key: RebuildOption, defaultVal: false) 'rebuilds'
+		argv.push(RebuildFlag)
+	end 'rebuilds'
 
 	return target.answeredWith(runAndReport(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: BuildSubcommandName))
 end 'executeBuildToolWithin'

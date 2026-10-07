@@ -4086,3 +4086,184 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:24:10: argument type mismatch for 'v': expected 'type parameter', got 'Label': one body serves every instantiation, so a concrete type named here is claimed of every 'with' in the program — true of at most one of them. Pass a value of the parameter's own type, or make the call from a concrete instantiation, where the type argument is known
 ```
+
+<!-- test: error.a-nested-datatype-is-refused-rather-than-instantiated-forever -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Pair uses A, B
+	export var a as A
+	export var b as B
+
+	static function create(a A, b B) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+type Nest uses T
+	export typealias Doubled = Pair with (T, T)
+	export typealias Deeper = Nest with Doubled
+
+	export var v as T
+	var deeper as Deeper
+
+	static function create(v T, deeper Deeper) returns Self
+		return Self{v: v, deeper: deeper}
+	end 'create'
+end 'Nest'
+
+typealias ValNest = Nest with Val
+
+function peek(n ValNest) returns Val
+	return n.v
+end 'peek'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3184: <fragment>:18:16: field 'deeper' of generic type 'Nest' is declared 'Nest.Deeper', which holds 'Nest' again over a type built from its own type parameters: instantiating it would nest without end. Declare the field over the type's own parameters, or remove the recursion
+```
+
+<!-- test: error.a-wrong-arity-instance-inside-a-field-reports-the-arity-error -->
+```maxon
+type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+type Box uses V
+	export var v as V
+end 'Box'
+type Cell uses U
+	typealias PairU = Pair with U
+	export var p as PairU
+end 'Cell'
+type Holder uses T
+	typealias BoxT = Box with T
+	typealias CellBox = Cell with BoxT
+	export var c as CellBox
+end 'Holder'
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2056: <fragment>:10:20: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
+```
+
+<!-- test: a-nested-datatype-through-a-function-typed-field-compiles -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Pair uses A, B
+	export var a as A
+	export var b as B
+
+	static function create(a A, b B) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+type Nest uses T
+	export typealias Doubled = Pair with (T, T)
+	export typealias Deeper = Nest with Doubled
+	export typealias Grow = function(Deeper) returns Val
+
+	export var v as T
+	var f as Grow
+
+	static function create(v T, f Grow) returns Self
+		return Self{v: v, f: f}
+	end 'create'
+end 'Nest'
+
+typealias ValNest = Nest with Val
+
+function peek(n ValNest) returns Val
+	return n.v
+end 'peek'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.mutually-recursive-generics-growing-through-another-base -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Pair uses L, R
+	export var l as L
+	export var r as R
+end 'Pair'
+
+type A uses T
+	export typealias Doubled = Pair with (T, T)
+	export typealias Next = B with Doubled
+
+	export var v as T
+	export var next as Next
+end 'A'
+
+type B uses U
+	export typealias Back = A with U
+
+	export var back as Back
+end 'B'
+
+typealias ValA = A with Val
+
+function peek(n ValA) returns Val
+	return n.v
+end 'peek'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3184: <fragment>:14:21: field 'next' of generic type 'A' is declared 'A.Next', which holds 'A' again over a type built from its own type parameters: instantiating it would nest without end. Declare the field over the type's own parameters, or remove the recursion
+```
+
+<!-- test: error.mutually-recursive-generics-growing-through-another-base-across-files -->
+```maxon
+// --- file: grows.maxon
+export typealias Val = int(i64.min to i64.max)
+
+export type Pair uses L, R
+	export var l as L
+	export var r as R
+end 'Pair'
+
+export type A uses T
+	export typealias Doubled = Pair with (T, T)
+	export typealias Next = B with Doubled
+
+	export var v as T
+	export var next as Next
+end 'A'
+
+// --- file: main.maxon
+export type B uses U
+	export typealias Back = A with U
+
+	export var back as Back
+end 'B'
+
+typealias ValA = A with Val
+
+function peek(n ValA) returns Val
+	return n.v
+end 'peek'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3184: <fragment>:15:21: field 'next' of generic type 'A' is declared 'A.Next', which holds 'A' again over a type built from its own type parameters: instantiating it would nest without end. Declare the field over the type's own parameters, or remove the recursion
+```

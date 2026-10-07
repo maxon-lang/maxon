@@ -1,0 +1,330 @@
+// ⭐ **THE FORMAT IS A DIRECTORY, `<root>/maxon/<cache>/v<n>/`, SO A SUPERSEDED ONE CAN BE FOUND.** A key is a
+// hash, so a slot of an older format sits under a name no run computes; only the directory above it says
+// which format it belongs to. Short, because every slot path spends from Windows' 260-character budget.
+module let CacheFormatPrefix = "v"
+
+// A format directory's name split at the prefix: nothing before it, and the number after it.
+let FormatNameParts = 2
+let FormatNumberPart = 1
+
+export typealias CacheFormatNumber = int(1 to u32.max)
+
+// ⭐⭐ **EVERY ROOT IS INSIDE A DIRECTORY ONLY ITS OWNER MAY WRITE, WHICH IS WHY A HOST NAMING NONE OF
+// THEM IS REFUSED BY NAME ON BOTH LANES.** A cache under a world-writable directory belongs to every user
+// of the host at once: two users' builds collide in it, and a local attacker can own the root — or plant a
+// directory symlink inside it — before its first use. So the whole roster is directories a variable this
+// process was GIVEN names, and a host naming none is told which one to set rather than sent to a directory
+// anybody can write.
+#if os(Windows)
+	// Where a Windows user's own files are, and the two host scratch areas that stand in when it names
+	// nothing.
+	let HomeDirectoryVariable = "USERPROFILE"
+	let WindowsCacheRootVariable = "LOCALAPPDATA"
+	let WindowsTempVariable = "TEMP"
+#else
+	let HomeDirectoryVariable = "HOME"
+	let PosixTempVariable = "TMPDIR"
+#endif
+
+// `<scratch area>/maxon/run/<format>/<one directory per program>` — under a directory of this compiler's
+// own, so a shared temp area is not littered with slot names that say nothing about what put them there.
+let CacheVendorDirName = "maxon"
+module let CacheCommandDirName = "run"
+
+// ⭐ **`<home>/.maxon` IS THE INSTALL SCRIPT'S OWN DEFAULT INSTALL ROOT** (`website/public/install.sh`,
+// `install.ps1`), so under a home directory the cache sits beside the `bin/` and `stdlib/` it belongs to
+// rather than in a second directory of Maxon's elsewhere on the machine.
+let MaxonUserDirName = ".maxon"
+let UserCacheDirName = "cache"
+
+// How `cacheRootChain` spells the value of a variable, and what separates two places in it.
+let VariableOpenMark = "<"
+let VariableCloseMark = ">"
+let ChainSeparator = ", then "
+
+// What an in-flight file carries between its name and its extension.
+//
+// ⛔ **NOTHING PUBLISHED CAN END IN THE PENDING MARKER**, which is what keeps a half-written file out of
+// every hit test: a published name ends in its key's hex digits or its own extension, and `p` is not one.
+let PendingWriterSeparator = "."
+module let PendingBuildMarker = ".tmp"
+
+// Manifest fields are tab-separated and one fact per line, because a path may contain a space.
+module let ManifestFieldSeparator = "\t"
+module let ManifestLineSeparator = "\n"
+
+module typealias CompileInputArray = Array with FilePath
+
+typealias CacheRootCandidateArray = Array with CacheRootCandidate
+export typealias CacheRootArray = Array with FilePath
+
+// ⛔ **ONE ARM CARRYING THE SENTENCE.** Every cause — no writable root, an unreadable source, a compiler
+// that cannot name itself — is the SAME fact to the caller (there is no cache to build in) and a DIFFERENT
+// sentence to the reader, so the arm is the fact and the payload is the sentence.
+export union RunCacheError implements Error
+	unavailable(reason String)
+
+	export function sentence() returns String
+		return match self 'why'
+			unavailable(reason) gives reason
+		end 'why'
+	end 'sentence'
+end 'RunCacheError'
+
+export function pendingSpellingOf(published String) returns String
+	return "{published}{PendingWriterSeparator}{__Builtins.currentProcessId()}{PendingBuildMarker}"
+end 'pendingSpellingOf'
+
+module function leftoverOwnerOf(name String) returns LeftoverOwner
+	if not name.endsWith(PendingBuildMarker) 'notPending'
+		return LeftoverOwner.notOwned
+	end 'notPending'
+
+	let withoutMarker = name.slice(name.startIndex(), length: name.count() - PendingBuildMarker.count())
+	let separator = try withoutMarker.findLast(PendingWriterSeparator) otherwise return LeftoverOwner.notOwned
+	let ownerStarts = try withoutMarker.indexAfter(separator) otherwise return LeftoverOwner.notOwned
+
+	return ownerProcessNamed(withoutMarker.slice(ownerStarts, endIndex: withoutMarker.endIndex()))
+end 'leftoverOwnerOf'
+
+// One manifest line: a label and its fields. Everything a key or a record is computed over comes through
+// here, so no caller assembles a separator of its own.
+module function manifestLine(label String, fields StringArray) returns String
+	var line = ""
+	line.append(label)
+
+	for field in fields 'eachField'
+		line.append("{ManifestFieldSeparator}{field}")
+	end 'eachField'
+
+	line.append(ManifestLineSeparator)
+
+	return line
+end 'manifestLine'
+
+// One place this host may keep Maxon's cache: a variable naming a directory, and the path under that
+// directory that is Maxon's own. A roster of variable NAMES alone could not express `<home>/.maxon/cache`,
+// which is nothing any variable holds.
+type CacheRootCandidate
+	export let variable as String
+	export let suffix as FilePath
+
+	static function create(variable String, suffix FilePath) returns CacheRootCandidate
+		return Self{variable: variable, suffix: suffix}
+	end 'create'
+end 'CacheRootCandidate'
+
+// The cache directories this host consults, in order. The override comes first so a caller whose home or
+// temp area is unwritable — or a test that must not touch the developer's cache — can name another without
+// this having to guess.
+//
+// ⭐ **THE USER'S OWN MAXON DIRECTORY OUTRANKS THE HOST'S SCRATCH AREA**, because the cache belongs beside
+// the install it was built by rather than in an area the host may sweep between two runs of one program.
+function cacheRootCandidates() returns CacheRootCandidateArray
+	let vendorDir = FilePath.empty().join(CacheVendorDirName)
+	let userCacheDir = FilePath.empty().join(MaxonUserDirName).join(UserCacheDirName)
+
+	var candidates = CacheRootCandidateArray.create()
+	candidates.push(CacheRootCandidate.create(RunCacheRootVariable, suffix: vendorDir))
+
+	#if os(Windows)
+		candidates.push(CacheRootCandidate.create(HomeDirectoryVariable, suffix: userCacheDir))
+		candidates.push(CacheRootCandidate.create(WindowsCacheRootVariable, suffix: vendorDir))
+		candidates.push(CacheRootCandidate.create(WindowsTempVariable, suffix: vendorDir))
+	#else
+		candidates.push(CacheRootCandidate.create(HomeDirectoryVariable, suffix: userCacheDir))
+		candidates.push(CacheRootCandidate.create(PosixTempVariable, suffix: vendorDir))
+	#endif
+
+	return candidates
+end 'cacheRootCandidates'
+
+// Every root stays on the roster, including one no run can use. A build published while a different
+// variable ranked highest, or while a root that is now unusable still worked, is still on disk and
+// `maxon cache clear` is the only thing that reaches it — so filtering the roster by what a run
+// can create would hide exactly the disk a reader needs to reclaim.
+//
+// One entry per directory however many variables name it: `TEMP` and `TMPDIR` routinely hold one
+// path, and a caller acting per entry would act on that directory twice.
+export function hostCacheRoots() returns CacheRootArray throws RunCacheError
+	var roots = CacheRootArray.create()
+
+	for candidate in cacheRootCandidates() 'eachCandidate'
+		let spelled = try Process.environmentVariable(candidate.variable) otherwise continue
+
+		if spelled.isEmpty() 'namesNowhere'
+			continue
+		end 'namesNowhere'
+
+		let named = try FilePath.from(spelled) otherwise continue
+		noteRoot(roots, root: named.join(candidate.suffix))
+	end 'eachCandidate'
+
+	if roots.isEmpty() 'noneNamed'
+		throw RunCacheError.unavailable(noCacheRootMessage())
+	end 'noneNamed'
+
+	return roots
+end 'hostCacheRoots'
+
+// Windows folds a path's case and POSIX does not, which `FilePath.equals` answers for the host.
+function noteRoot(roots CacheRootArray, root FilePath)
+	for seen in roots 'eachSeen'
+		if seen.equals(root) 'alreadyNamed'
+			return
+		end 'alreadyNamed'
+	end 'eachSeen'
+
+	roots.push(root)
+end 'noteRoot'
+
+// The run cache keeps compiled programs under this directory and the MCP server stages inline
+// snippets under it, so everything below it is Maxon's and everything beside it is somebody
+// else's — which is what lets `maxon cache clear` know where to stop. A second derivation of it is
+// a second answer to that.
+export function hostCacheRoot() returns FilePath throws RunCacheError
+	let roots = try hostCacheRoots()
+
+	match cacheRootARunUses(roots) 'decided'
+		usable(directory) then return directory
+		noneUsable then throw RunCacheError.unavailable(noCacheRootMessage())
+	end 'decided'
+end 'hostCacheRoot'
+
+module union CacheRootInUse
+	usable(directory FilePath)
+	noneUsable
+end 'CacheRootInUse'
+
+// Creating the root is the probe because it is the only question stdlib answers: `Directory.create`
+// folds a path that is a file, a permission, a full disk and a lost race into one bare `false`. It
+// is also exactly what the next run does, and nothing more.
+//
+// It answers true for a directory that already exists, so a root that exists and cannot be written
+// under passes here, and the run fails later in `slotDirectory` about that one directory. Closing
+// that needs a write probe on every run.
+module function cacheRootARunUses(roots CacheRootArray) returns CacheRootInUse
+	for root in roots 'eachRoot'
+		if Directory.create(root) 'created'
+			return CacheRootInUse.usable(root)
+		end 'created'
+	end 'eachRoot'
+
+	return CacheRootInUse.noneUsable
+end 'cacheRootARunUses'
+
+// The refusal names the variables THIS host consults, read off the same roster that consulted them: a
+// sentence naming a variable nothing reads sends its reader to set something that changes nothing.
+module function noCacheRootMessage() returns String
+	var named = ""
+
+	for candidate in cacheRootCandidates() 'eachCandidate'
+		named = candidate.variable if named.isEmpty() else "{named}, {candidate.variable}"
+	end 'eachCandidate'
+
+	return "no directory to keep compiled programs in: none of {named} names one this compiler can create. Set {RunCacheRootVariable} to a writable directory."
+end 'noCacheRootMessage'
+
+// Where a reader is told to look for the cache, read off the same roster that decides it. `export`
+// because the command reference prints it, and a reference naming a place the code does not consult
+// sends its reader to the wrong directory.
+export function cacheRootChain() returns String
+	var chain = ""
+
+	for candidate in cacheRootCandidates() 'eachCandidate'
+		let place = "{VariableOpenMark}{candidate.variable}{VariableCloseMark}{FilePath.separator()}{candidate.suffix.toString()}"
+		chain = place if chain.isEmpty() else "{chain}{ChainSeparator}{place}"
+	end 'eachCandidate'
+
+	return chain
+end 'cacheRootChain'
+
+export function cacheFormatDirectoryName(format CacheFormatNumber) returns String
+	return "{CacheFormatPrefix}{format}"
+end 'cacheFormatDirectoryName'
+
+// A prefixed name that is not the prefix and a number was written by no driver, and is left alone.
+export function isOlderCacheFormatName(name String, than CacheFormatNumber) returns bool
+	let parts = name.split(CacheFormatPrefix)
+
+	if not name.startsWith(CacheFormatPrefix) or parts.count() != FormatNameParts 'notAFormatName'
+		return false
+	end 'notAFormatName'
+
+	let digits = try parts.get(FormatNumberPart) otherwise panic("isOlderCacheFormatName: the count is {FormatNameParts} on the line above")
+	let format = try int.fromString(digits) otherwise return false
+
+	return format < (than as ParsedInt)
+end 'isOlderCacheFormatName'
+
+export function discardOlderFormats(formats FilePath, than CacheFormatNumber)
+	let formatDirectories = try Directory.list(formats) otherwise return
+
+	for directory in formatDirectories 'eachFormat'
+		if isOlderCacheFormatName(directory.filename(), than: than) 'olderFormat'
+			discardCacheTree(directory)
+		end 'olderFormat'
+	end 'eachFormat'
+end 'discardOlderFormats'
+
+export function publishAtomically(dir FilePath, name String, bytes ByteArray) throws RunCacheError
+	let published = dir.join(name)
+	let pending = try writePending(dir, name: name, bytes: bytes)
+
+	try File.rename(pending, to: published) otherwise 'notPublished'
+		try File.delete(pending) otherwise ignore
+		throw RunCacheError.unavailable("{pending.toString()} could not be renamed to {published.toString()}")
+	end 'notPublished'
+end 'publishAtomically'
+
+function writePending(dir FilePath, name String, bytes ByteArray) returns FilePath throws RunCacheError
+	let pending = dir.join(pendingSpellingOf(name))
+
+	try File.writeBinary(pending, content: bytes) otherwise 'firstAttemptFailed'
+		_ = Directory.create(dir)
+
+		try File.writeBinary(pending, content: bytes) otherwise 'secondAttemptFailed'
+			try File.delete(pending) otherwise ignore
+			throw RunCacheError.unavailable("{pending.toString()} could not be written")
+		end 'secondAttemptFailed'
+	end 'firstAttemptFailed'
+
+	return pending
+end 'writePending'
+
+type EntryStamp
+	export let path as FilePath
+	export let modifiedTime as Timestamp
+
+	static function create(path FilePath, modifiedTime Timestamp) returns EntryStamp
+		return Self{path: path, modifiedTime: modifiedTime}
+	end 'create'
+end 'EntryStamp'
+
+typealias EntryStampArray = Array with EntryStamp
+
+export typealias AdmitsCacheEntry = function(FilePath) returns bool
+
+export function discardAllButNewestIn(dir FilePath, kept ElementIndex, admits AdmitsCacheEntry)
+	let listed = try Directory.list(dir) otherwise return
+	var stamps = EntryStampArray.create()
+
+	for path in listed 'eachEntry'
+		if admits(path) 'admitted'
+			stamps.push(EntryStamp.create(path, modifiedTime: (try File.info(path) otherwise continue).modifiedTime))
+		end 'admitted'
+	end 'eachEntry'
+
+	stamps.sort(function(left EntryStamp, right EntryStamp) gives right.modifiedTime.compare(left.modifiedTime))
+
+	for position in kept upto stamps.count() 'eachSuperseded'
+		let path = (try stamps.get(position) otherwise panic("discardAllButNewestIn: stamps.get OOB at {position} below count {stamps.count()}")).path
+
+		if Directory.isDirectory(path) 'aDirectory'
+			discardCacheTree(path)
+			continue
+		end 'aDirectory'
+
+		try File.delete(path) otherwise ignore
+	end 'eachSuperseded'
+end 'discardAllButNewestIn'

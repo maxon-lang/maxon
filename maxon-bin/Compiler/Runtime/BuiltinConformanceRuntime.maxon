@@ -89,7 +89,7 @@
 
 // The low-32-bit mask EVERY builtin hasher folds its result through — `HashValue` is `int(0 to u32.max)`,
 // so a hash is the low 32 bits. The one place the mask is spelled (it IS `HashValue`'s width, one fact);
-// `returnLow32Masked` is the one place the final truncation is spelled.
+// `emitLow32Masked` is the one place the truncation is spelled.
 let HashLow32Mask = 0xFFFFFFFF
 
 // How far `float.hash` shifts a float's bit pattern to bring its high half down onto its low half.
@@ -104,15 +104,15 @@ let FloatHashHalfShift = 32
 // against. Merging them would make the parser export a numeric constant down into the runtime layer, and
 // `Arm64Backend.Arm64WordSignBit` is a third same-valued constant that declines the same merge for the
 // same reason.
-let NegativeZeroBits = i64.min as ParsedInt
+export let NegativeZeroBits = i64.min as ParsedInt
 
 // What `-0.0` hashes to: `+0.0`'s fold, which is zero because every bit of `+0.0` is.
-let ZeroFloatHash = 0 as ParsedInt
+export let ZeroFloatHash = 0 as ParsedInt
 
 // djb2 over `String`'s bytes: `h = Djb2Seed`, then `h = h * Djb2Multiplier + b` per byte. The two magic
 // numbers of the algorithm, named rather than bare so the loop reads as djb2. `""` -> `5381`, `"abc"` ->
 // `193485963`, `"hi"` -> `5863446`.
-let Djb2Seed = 5381
+export let Djb2Seed = 5381
 let Djb2Multiplier = 33
 
 // ⭐ **THE WITNESS-TABLE SLOT OF A BUILTIN PROTOCOL'S SOLE METHOD.** `Hashable` declares only `hash`,
@@ -167,17 +167,7 @@ end 'emitEquatableWitnessEquals'
 // them. Each impl NAME is `qualifiedMethodName(<conformer>, <method>)`, the SAME
 // construction `ensureWitnessTable` names its reloc target by, so the built function, the reloc, and the
 // dispatch cannot disagree on the symbol.
-//
-// ⭐⭐ **`arrayConformerName` IS THE ONE SYMBOL HALF THIS FILE CANNOT SPELL.** Five of the six
-// conformers are compiler-owned spellings — three keywords and two names no declaration may take — so their
-// impl symbols are joined from constants here. The SIXTH is the corpus's array record, whose name the
-// program's own `BuiltinArrayLiteral` declaration chooses (`ProgramSignatures.arrayRecordDeclaredName`), and
-// it was joined from the constant `b"Array"` while the witness slots that REFERENCE those symbols are
-// stamped with `conformerNameOfType`'s discovered answer. The two agreed only because `stdlib/Array.maxon`
-// declares the record as `Array`; under any other spelling the walk below would look for a symbol the module
-// never names and the referenced one would go unbuilt — a link failure, or worse a silently absent
-// conformance. Threaded in, the reference and the definition are one join of one name.
-export function installBuiltinConformanceRuntime(module StdModule, globalData GlobalDataTable, ordering EnumLayout, arrayConformerName ByteArray)
+export function installBuiltinConformanceRuntime(module StdModule, globalData GlobalDataTable, ordering EnumLayout)
 	// The candidate list the reference walk matches against, built from the very `ByteArray`s the builders
 	// are installed under — one join per symbol, so the name the walk looks for and the name the function
 	// carries cannot be two joins that happen to agree.
@@ -207,8 +197,6 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	let charHash = candidateImplName(impls, conformerName: CharacterConformerName, methodName: HashMethodName)
 	let charEquals = candidateImplName(impls, conformerName: CharacterConformerName, methodName: EqualsMethodName)
 	let charCompare = candidateImplName(impls, conformerName: CharacterConformerName, methodName: CompareMethodName)
-	let arrayHash = candidateImplName(impls, conformerName: arrayConformerName, methodName: HashMethodName)
-	let arrayEquals = candidateImplName(impls, conformerName: arrayConformerName, methodName: EqualsMethodName)
 
 	// ⭐ ASKED ONCE, BEFORE THE FIRST INSTALL — which is what makes the answers independent of the order
 	// they are acted on in. A scan run BETWEEN installs would see the ops of the impls this very function
@@ -289,24 +277,6 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	if referenced.contains(charCompare) 'charCompare'
 		buildByteRecordCompare(module, name: charCompare, ordering: ordering)
 	end 'charCompare'
-
-	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER, AND ITS TWO BODIES ARE `ManagedMemoryRuntime`'s (array-hashable)** — that
-	// file owns the 48-byte record and the packed-aware byte extent, exactly as `StringRuntime` owns
-	// `buildStrEq`'s. It joins by the same rule as every impl here: one symbol per (conformer, method), built
-	// iff the emitted module names it.
-	//
-	// ⭐ **AND IT IS THE `__str_eq` / `String.equals` ARRANGEMENT, NOT A THIRD SHAPE.** The very same graphs
-	// are ALSO installed under `__managed_hash`/`__managed_eq` by `installManagedMemoryRuntime`, which is what the DIRECT
-	// `arr.hash()` / `a == b` dispatch calls; the witness-visible pair is these. Two symbols, one builder
-	// each — see `ManagedMemoryRuntime.ManagedHashName` for why the direct door may not name `Array.<method>` the way the
-	// `String` and `int` doors name theirs.
-	if referenced.contains(arrayHash) 'arrayHash'
-		buildArrayHash(module, name: arrayHash)
-	end 'arrayHash'
-
-	if referenced.contains(arrayEquals) 'arrayEquals'
-		buildArrayEquals(module, name: arrayEquals)
-	end 'arrayEquals'
 end 'installBuiltinConformanceRuntime'
 
 // Mint one impl's symbol and enrol it as a candidate in ONE act — see the installer for the drift this
@@ -583,6 +553,13 @@ function buildIntHash(module StdModule, name ByteArray)
 	module.functions.push(func)
 end 'buildIntHash'
 
+export function emitFloatBitsFold(module StdModule, block IrBlock, bits ValueId, ids ValueMinter) returns ValueId
+	let halfShift = emitConst(module, block: block, value: FloatHashHalfShift, ids: ids)
+	let highHalf = emitBin(module, block: block, a: bits, b: halfShift, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let folded = emitBin(module, block: block, a: bits, b: highHalf, opcode: StdBinOpcode.bitXor, ids: ids)
+	return emitLow32Masked(module, block: block, value: folded, ids: ids)
+end 'emitFloatBitsFold'
+
 // ⭐⭐ `float.hash(self) -> HashValue` — `stdlib/PrimitiveExtensions.maxon`'s body, arm for arm: `-0.0`
 // answers 0, and every other value folds its whole IEEE-754 pattern, `(bits xor (bits shr 32)) and
 // 0xFFFFFFFF`, so the sign, the exponent and the top of the mantissa all reach the hash.
@@ -628,26 +605,26 @@ function buildFloatHash(module StdModule, name ByteArray)
 	emitConstReturn(module, block: negativeZero, value: ZeroFloatHash, ids: ids)
 
 	// `shrLogical` rather than `shr`: the two differ only in the high word, which the final mask discards.
-	let halfShift = emitConst(module, block: fold, value: FloatHashHalfShift, ids: ids)
-	let highHalf = emitBin(module, block: fold, a: bits, b: halfShift, opcode: StdBinOpcode.shrLogical, ids: ids)
-	let folded = emitBin(module, block: fold, a: bits, b: highHalf, opcode: StdBinOpcode.bitXor, ids: ids)
-	returnLow32Masked(module, block: fold, value: folded, ids: ids)
+	module.setTerminator(fold, op: StdOp.ret(emitFloatBitsFold(module, block: fold, bits: bits, ids: ids)))
 
 	module.functions.push(func)
 end 'buildFloatHash'
 
-// ⭐ **`return value & 0xFFFFFFFF` — the tail EVERY builtin hasher ends on, written once.** `int`, `float`
-// and `String` each narrow their accumulated i64 to `HashValue`'s width here, so a hash that ever has to
-// leave differently — a widened `HashValue`, a range assertion on the way out — is changed at one site.
-//
-// `block` is the block the value is live in and becomes the returning block, which is why the caller
-// passes it rather than this minting one: `int.hash` ends in its entry, `float.hash` in its fold block,
-// `String.hash` in its loop exit.
-function returnLow32Masked(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
-	let mask = emitConst(module, block: block, value: HashLow32Mask, ids: ids)
-	let masked = emitBin(module, block: block, a: value, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	module.setTerminator(block, op: StdOp.ret(masked))
+// `block` is the block the value is live in and becomes the returning block, which is why the
+// caller passes it rather than this minting one: `int.hash` ends in its entry, `String.hash` and
+// the array hashes in their loop exit.
+export function returnLow32Masked(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
+	module.setTerminator(block, op: StdOp.ret(emitLow32Masked(module, block: block, value: value, ids: ids)))
 end 'returnLow32Masked'
+
+// ⭐ **`value & 0xFFFFFFFF` — the narrowing EVERY builtin hasher ends on, written once.** `int`,
+// `float`, `String` and the array hashes each narrow their accumulated i64 to `HashValue`'s width
+// here, so a hash that ever has to leave differently — a widened `HashValue`, a range assertion on
+// the way out — is changed at one site.
+function emitLow32Masked(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
+	let mask = emitConst(module, block: block, value: HashLow32Mask, ids: ids)
+	return emitBin(module, block: block, a: value, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitLow32Masked'
 
 // The two-operand Std function every builtin `equals`/`compare` impl is: two parameters of its OWN operand
 // type, returning the type the INTERFACE METHOD it implements declares. ONE place where the declared ABI and
@@ -990,21 +967,27 @@ function buildStrHash(module StdModule, name ByteArray)
 	module.functions.push(func)
 end 'buildStrHash'
 
+export function emitDjb2Step(module StdModule, block IrBlock, h ValueId, value ValueId, ids ValueMinter) returns ValueId
+	let mult = emitConst(module, block: block, value: Djb2Multiplier, ids: ids)
+	let hScaled = emitBin(module, block: block, a: h, b: mult, opcode: StdBinOpcode.mul, ids: ids)
+	return emitBin(module, block: block, a: hScaled, b: value, opcode: StdBinOpcode.add, ids: ids)
+end 'emitDjb2Step'
+
 // ⭐⭐ **THE WHOLE OF A djb2 BYTE HASH — the loop AND the masked return.** `h = 5381`, then `h = h * 33 + b`
 // over `buffer[0..len)`, then `return h & 0xFFFFFFFF`. Emitted off `cur`, which it terminates into a fresh
 // header; the exit block is its own.
 //
-// ⚠ **IT OWNS THE TAIL RATHER THAN HANDING THE ACCUMULATOR BACK, AND THAT IS A CODEGEN FACT RATHER THAN A
-// STYLE ONE.** Block creation ORDER is emission order, which decides layout and therefore register
-// assignment. Returning `(done, h)` for the caller to finish would make the caller mint `done` — before the
-// loop's own two blocks, inverting the order `buildStrHash` emits in. MEASURED: that inversion alone moved
-// `String.hash`'s register allocation in **42 committed fragments**, for a body computing the identical
-// djb2. Owning the tail costs nothing, because BOTH callers' tails are the same line.
+// ⚠ **IT OWNS THE TAIL RATHER THAN HANDING THE ACCUMULATOR BACK, AND THAT IS A CODEGEN FACT RATHER
+// THAN A STYLE ONE.** Block creation ORDER is emission order, which decides layout and therefore
+// register assignment. Returning `(done, h)` for the caller to finish would make the caller mint
+// `done` — before the loop's own two blocks, inverting the order `buildStrHash` emits in and moving
+// `String.hash`'s register allocation for a body computing the identical djb2.
 //
-// ⚠ **SHARED FOR `emitByteRangeCompareLoop`'s REASON, one protocol over.** `String.hash`, `Character.hash`
-// and `Array.hash` all fold raw bytes with djb2, and the algorithm is a CONTRACT between them and every
-// container that hashes their values: a widened read or a changed multiplier reaching one and not another
-// would leave two conformers hashing the same bytes differently, with nothing failing to compile.
+// ⚠ **SHARED FOR `emitByteRangeCompareLoop`'s REASON, one protocol over.** `String.hash` and
+// `Character.hash` both fold raw bytes with djb2, and the algorithm is a CONTRACT between them and
+// every container that hashes their values: a widened read or a changed multiplier reaching one and
+// not another would leave two conformers hashing the same bytes differently, with nothing failing
+// to compile.
 //
 // The loop carries `[i, h]` as the header's two phis — the `emitByteRangeCompareLoop` shape with an
 // accumulator added. `len == 0` folds nothing and yields the bare seed (`""` -> 5381). Both `argType`s are
@@ -1015,10 +998,9 @@ end 'buildStrHash'
 // multiply/add wrap mod 2^64 and `(x mod 2^64) mod 2^32 == x mod 2^32`, so one mask at the end is the same
 // low-32 djb2 as a mask every round, over a range of any length.
 //
-// ⚠ The three block LABELS are the ones `buildStrHash` carried before the extraction, and they are kept
-// deliberately: a label is emitted into every `jmp` the rendered Target IR shows, so renaming them
-// would rewrite that IR to say nothing about the code.
-export function emitDjb2HashOverByteRange(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, len ValueId, ids ValueMinter)
+// ⚠ The three block LABELS are emitted into every `jmp` the rendered Target IR shows, so renaming
+// them rewrites that IR while the code stays the same.
+function emitDjb2HashOverByteRange(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, len ValueId, ids ValueMinter)
 	var header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
@@ -1041,9 +1023,7 @@ export function emitDjb2HashOverByteRange(module StdModule, func IrFunction, cur
 	// body: `h = h * 33 + buffer[i]`; `i = i + 1`; back-edge. `i`/`h` are the header phis (header dominates
 	// body), so they are read directly.
 	let curByte = emitLoadByteIndexed(module, block: body, base: buffer, index: i, ids: ids)
-	let mult = emitConst(module, block: body, value: Djb2Multiplier, ids: ids)
-	let hScaled = emitBin(module, block: body, a: h, b: mult, opcode: StdBinOpcode.mul, ids: ids)
-	let hNext = emitBin(module, block: body, a: hScaled, b: curByte, opcode: StdBinOpcode.add, ids: ids)
+	let hNext = emitDjb2Step(module, block: body, h: h, value: curByte, ids: ids)
 	let one = emitConst(module, block: body, value: 1, ids: ids)
 	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(body, op: StdOp.branch(header.id))

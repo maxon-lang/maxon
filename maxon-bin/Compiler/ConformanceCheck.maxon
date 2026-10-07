@@ -1211,6 +1211,16 @@ export function receiverMeetsExtensionConstraints(signatures ProgramSignatures, 
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("receiverMeetsExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
 
+		let argument = signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
+
+		if maxonTypeTag(argument) == ValueTypeTag.typeParameter 'anOpaqueArgument'
+			if not opaqueParamPromises(signatures, token: typeParamIdOf(argument), interfaceName: constraint.interfaceName) 'unpromised'
+				return ExtensionConstraintOnReceiver.unmet(constraint.interfaceName, argDisplayName: signatures.instanceArgDisplayName(gid, position: constraint.typeParamIndex))
+			end 'unpromised'
+
+			continue
+		end 'anOpaqueArgument'
+
 		// The CANONICAL conformer name is what the conformance answer and the `__witness_<conformer>.*`
 		// label are both filed under (`conformerTypeArgName`); the MESSAGE prints the source spelling, which
 		// is `checkOneInstantiation`'s split applied at the other end of the same mechanism.
@@ -1282,6 +1292,13 @@ module function opaqueParamDischarge(signatures ProgramSignatures, interfaces Ir
 
 	return OpaqueConstraintDischarge.unsatisfied
 end 'opaqueParamDischarge'
+
+module function opaqueParamPromises(signatures ProgramSignatures, token TypeParamId, interfaceName ByteArray) returns bool
+	return match opaqueParamDischarge(signatures, interfaces: signatures.interfaceMap(), token: token, interfaceName: interfaceName) 'discharge'
+		slot gives true
+		unsatisfied gives false
+	end 'discharge'
+end 'opaqueParamPromises'
 
 // ⭐⭐ **WHAT A CONSTRAINED TYPE PARAMETER'S OWN `where` CLAUSE CLAIMS AT `interfaceName`'s ASSOCIATED
 // POSITIONS (G19)** — the constrained-parameter twin of `IrFunction.valueExistentialInstances`, which answers

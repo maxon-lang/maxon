@@ -219,12 +219,14 @@ build. Once the compile succeeds, the compiler renames its running image to `max
 (`maxon.previous.exe` on Windows) and writes the new binary into the empty slot. If an older
 `maxon.previous` is itself still running, for example an editor's language server, it is renamed aside to
 `maxon.retired-<stamp>` and deleted by a later rebuild. A **failed** build leaves the running compiler in
-place.
+place. Such a build always compiles: every build of the compiler changes the compiler identity a
+[build record](/docs/cli/#up-to-date) would be checked against.
 
 ### Building again with the written program
 
 A build that states `rebuild_with_output` (`Build.build(…, rebuildWithOutput: true)`) is repeated by
-the program it writes. Once the compile succeeds, the driver releases the build's lock, prints
+the program it writes. Once the build succeeds, whether it compiled or found its output
+[up to date](/docs/cli/#up-to-date), the driver releases the build's locks, prints
 
 ```text
 Repeating this build with the program it just wrote, <absolute path of the output>
@@ -319,3 +321,23 @@ leftover `.maxon-tree.lock.claim.probe-*`, `.maxon-tree.lock.claim.removing-*` a
 
 A holder that finds its lock taken over by another command says so, stops refreshing the lock, and leaves
 it to the new holder.
+
+## The build lock
+
+Two builds of one output would overwrite each other's executable and [build record](/docs/cli/#up-to-date), so
+every `maxon build` — `--output=` builds included — locks its **output** before it decides whether the
+output is up to date, and holds the lock until the build record is written. The lock is
+`<cache>/build/locks/<key>.lock`, `<key>` being the hash of the output's path the build record is named by,
+with its claim file `<key>.lock.claim` beside it, so a build takes it only where a cache root is usable.
+
+It works as [the tree lock](#the-tree-lock) does: the same record, claim file, refresh, takeover and
+leftover files. A build that finds it held prints the same report and exits **2**, headed:
+
+```text
+error: app.exe is BUSY — another maxon command holds its build lock, and two builds of one output corrupt each other's output and build record. Nothing was run.
+```
+
+The lock is released before a [`rebuild_with_output`](#building-again-with-the-written-program) second
+stage starts, since that stage builds the same output. If the `build/locks/` directory is removed while a
+build is creating its claim file there, the build creates the directory again once; removed a second time,
+the build stops with `error: the build lock for <output> could not be taken — …` and exits **2**.

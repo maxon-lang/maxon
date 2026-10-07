@@ -1,0 +1,53 @@
+let CaseDirName = "build-a-library-edit-recompiles"
+let OutputStem = "program"
+let EditedStdlibFile = "stdlib/Sleep.maxon"
+let EditedRuntimeFile = "runtime/Clock.maxon"
+let EditedUnicodeTable = "stdlib/helpers/string/ucd_supp.bin"
+let UnicodeTableFileName = "ucd_supp.bin"
+let AppendedLine = "\n// appended by build-a-library-edit-recompiles\n"
+
+test 'an edit to a standard library or runtime file the compiler reads compiles the program again'
+	requireHeldInAnInstallOutsideCheckout(CaseDirName, check: LibraryEditRecompiles.create())
+end 'an edit to a standard library or runtime file the compiler reads compiles the program again'
+
+type LibraryEditRecompiles implements OutsideCheckoutCase
+	static function create() returns LibraryEditRecompiles
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let compiler = installedCompilerIn(dir)
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create(), binary: compiler), which: "the first build under an empty cache root")
+
+		let stdlibFile = appendedTo(dir, relative: EditedStdlibFile)
+		waitPastTheModificationOf(stdlibFile, probeIn: dir)
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create(), binary: compiler), reason: ModifiedInputReason, which: "a build after `{EditedStdlibFile}` was edited")
+		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create(), binary: compiler), which: "a second build after `{EditedStdlibFile}` was edited")
+
+		let runtimeFile = appendedTo(dir, relative: EditedRuntimeFile)
+		waitPastTheModificationOf(runtimeFile, probeIn: dir)
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create(), binary: compiler), reason: ModifiedInputReason, which: "a build after `{EditedRuntimeFile}` was edited")
+		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create(), binary: compiler), which: "a second build after `{EditedRuntimeFile}` was edited")
+
+		rewriteWithItsOwnBytes(dir, relative: EditedUnicodeTable)
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create(), binary: compiler), reason: "{UnicodeTableFileName} {ModifiedInputReason}", which: "a build after `{EditedUnicodeTable}` was rewritten with the bytes it held")
+	end 'requireHeldIn'
+end 'LibraryEditRecompiles'
+
+function rewriteWithItsOwnBytes(dir FilePath, relative String)
+	let spelled = try FilePath.from(relative) otherwise panic("{CaseDirName}: the gate could not run - '{relative}' is not a spellable path")
+	let file = spelled.resolve(dir)
+	let bytes = try File.readBinary(file) otherwise panic("{CaseDirName}: the gate could not run - could not read {file.toString()}.")
+
+	try File.writeBinary(file, content: bytes) otherwise panic("{CaseDirName}: the gate could not run - could not write {file.toString()}.")
+end 'rewriteWithItsOwnBytes'
+
+function appendedTo(dir FilePath, relative String) returns FilePath
+	let spelled = try FilePath.from(relative) otherwise panic("{CaseDirName}: the gate could not run - '{relative}' is not a spellable path")
+	let file = spelled.resolve(dir)
+	let text = try File.readText(file) otherwise panic("{CaseDirName}: the gate could not run - could not read {file.toString()}.")
+	writeStagedFile(file, content: "{text}{AppendedLine}")
+
+	return file
+end 'appendedTo'

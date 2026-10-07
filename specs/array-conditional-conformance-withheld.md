@@ -30,15 +30,12 @@ row), and three doors consume its verdict:
   instantiation, and it names the constraint the argument failed.
 
 A copy of the walk at any one of those doors is a silent wrong answer in either direction: `a == b` refused
-while the same array is still stamped with `__witness_Array.*` and admitted as a key, or the reverse.
+while the same array is still given a `Hashable` witness table and admitted as a key, or the reverse.
 Neither is a compile error and neither shows up as a failing test, which is why the cases below hold all
 three doors to one clause.
 
-⛔ **AND THE CLAUSE IS NOT THE WHOLE STORY AT A MANAGED ELEMENT.** `Array with String` SATISFIES this clause
-and is still not a usable hash key on this compiler, because one shared `__witness_Array.*` table serves
-every element type and `Array.hash`/`Array.equals` therefore compare the buffer's RAW BYTES
-(`array-hashable.md`'s own Documentation says so; E3128's registry entry states the premise). What stands
-in that program's way is in `error.a-map-key-array-is-refused-for-its-element` below.
+An array whose element satisfies the clause is a key whatever that element is — `Array with String`
+included — because `hash` and `equals` work element by element (`array-hashable.md`).
 
 ## Tests
 
@@ -205,10 +202,10 @@ all. An OS handle behind ONE user struct gives both: `Array with Handle` is unco
 substitution, and `Handle` takes the extension-declared `Sizer` the suppression is about.
 
 ⚠ **`extension Handle implements Sizer` IS THE MECHANISM `Array`'s OWN `Hashable`/`Equatable` ARE DECLARED
-WITH** (`stdlib/Array.maxon:668`): a conformance in `project.conformances` and not in
-`StructLayout.conformsTo`. `Sizer` rather than `Hashable` because `Hashable` is ALSO granted intrinsically
-to an array (`isIntrinsicBuiltinConformance`'s row), which would hide the divergence behind an answer both
-indexes agree on.
+WITH** (`stdlib/Array.maxon`'s `extension Array implements Hashable, Equatable`): a conformance in
+`project.conformances` and not in `StructLayout.conformsTo`. `Sizer` rather than `Hashable` because
+`Hashable` is ALSO granted intrinsically to an array (`isIntrinsicBuiltinConformance`'s row), which would
+hide the divergence behind an answer both indexes agree on.
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Integer = int(i64.min to i64.max)
@@ -291,17 +288,9 @@ constrained twice; `OpaqueArr` discharges neither, so `checkOneInstantiation` re
 reduces to a conformer name nothing claims (`instanceConformerName`'s conditional `Array` arm), and
 the sibling `E4006` cases above state it in full.
 
-⛔⛔ **A KEY THAT SATISFIES THE CLAUSE AT A MANAGED ELEMENT IS STILL REFUSED, ON PURPOSE.**
-`typealias StrArrMap = Map with (Array with String, Val)` IS constraint-satisfying, and the copy gate leaves
-it refused, because admitting it would be a WRONG answer: without the gate the program compiles, and then two
-arrays each holding `"a"` answer `equals` **false**, so `m.contains(probe)` misses a key the map holds. That
-is `array-hashable.md`'s documented design working as
-designed — one shared `__witness_Array.*` table serves every element type, so `Array.hash`/`Array.equals`
-compare the buffer's RAW BYTES, which for a managed element are heap pointers (E3128's own doc states the
-premise). ⇒ the compiler's `Array` satisfies the `Hashable` CONSTRAINT and not the `Hashable` SEMANTICS at a managed
-element, and `Map with (Array with String, …)` is unserved until that is cured. The copy gate is standing in
-the right doorway for the wrong reason; removing it without curing the conformance would trade a compile
-error for a `Map` whose keys silently never match.
+⭐ **A KEY THAT SATISFIES THE CLAUSE IS SERVED WHATEVER ITS ELEMENT.** `Map with (Array with String, Val)` is
+`array-hashable`'s `string-array-map-key`, running: two arrays each holding equal strings are equal and
+hash equal, because both members work element by element.
 ```maxon
 typealias Val = int(i64.min to i64.max)
 

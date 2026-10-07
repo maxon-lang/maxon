@@ -1,0 +1,26 @@
+let CaseDirName = "build-a-case-renamed-source-recompiles"
+let OutputStem = "program"
+let RenamedFileName = "Main.maxon"
+let SourceAddedReason = "source added"
+
+test 'a build after a source was renamed only by case is compiled again'
+	requireHeldOutsideCheckout(CaseDirName, check: CaseRenamedSourceRecompiles.create())
+end 'a build after a source was renamed only by case is compiled again'
+
+type CaseRenamedSourceRecompiles implements OutsideCheckoutCase
+	static function create() returns CaseRenamedSourceRecompiles
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+
+		let original = stagedProgramSource(dir, name: SettledProgramDirName)
+		let renamed = dir.join(SettledProgramDirName).join(RenamedFileName)
+
+		try File.rename(original, to: renamed) otherwise panic("{CaseDirName}: the gate could not run - could not rename {original.toString()} to {renamed.toString()}.")
+
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: SourceAddedReason, which: "a build after `main.maxon` was renamed `{RenamedFileName}`")
+	end 'requireHeldIn'
+end 'CaseRenamedSourceRecompiles'

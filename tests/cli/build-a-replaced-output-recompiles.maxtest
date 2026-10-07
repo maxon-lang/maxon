@@ -1,0 +1,37 @@
+let CaseDirName = "build-a-replaced-output-recompiles"
+let OutputStem = "program"
+let ReplacementContent = "not the program the last compile wrote\n"
+let OutputMissingReason = "the output is missing"
+let OutputReplacedReason = "the output was replaced since it was written"
+let SidecarMissingReason = "the debug-info sidecar is missing"
+
+test 'a build whose output or debug-info sidecar is missing or replaced is compiled again'
+	requireHeldOutsideCheckout(CaseDirName, check: ReplacedOutputRecompiles.create())
+end 'a build whose output or debug-info sidecar is missing or replaced is compiled again'
+
+type ReplacedOutputRecompiles implements OutsideCheckoutCase
+	static function create() returns ReplacedOutputRecompiles
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let executable = dir.join("{OutputStem}{executableSuffix()}")
+		let sidecar = dir.join("{OutputStem}{executableSuffix()}{SidecarSuffix}")
+
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+
+		deleteBuilt(executable)
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: OutputMissingReason, which: "a build after its executable was deleted")
+
+		writeStagedFile(executable, content: ReplacementContent)
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: OutputReplacedReason, which: "a build after its executable was overwritten")
+
+		deleteBuilt(sidecar)
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: SidecarMissingReason, which: "a build after its debug-info sidecar was deleted")
+	end 'requireHeldIn'
+end 'ReplacedOutputRecompiles'
+
+function deleteBuilt(path FilePath)
+	try File.delete(path) otherwise panic("{CaseDirName}: the gate could not run - could not delete {path.toString()}, which the last build wrote.")
+end 'deleteBuilt'

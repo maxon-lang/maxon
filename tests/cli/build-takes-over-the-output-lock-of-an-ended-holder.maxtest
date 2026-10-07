@@ -1,0 +1,30 @@
+let CaseDirName = "build-takes-over-the-output-lock-of-an-ended-holder"
+let OutputStem = "program"
+let RebuildReason = "--rebuild was requested"
+
+test 'a build takes over the lock an ended process left on its output, compiles, and keeps its record'
+	requireHeldOutsideCheckout(CaseDirName, check: EndedHolderLockIsTakenOver.create())
+end 'a build takes over the lock an ended process left on its output, compiles, and keeps its record'
+
+type EndedHolderLockIsTakenOver implements OutsideCheckoutCase
+	static function create() returns EndedHolderLockIsTakenOver
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+
+		let record = try soleBuildRecordIn(dir)
+
+		plantLockOfAnEndedHolder(outputLockOf(record))
+
+		let taken = runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: [RebuildFlag])
+
+		try requireCompiled(taken, reason: RebuildReason, which: "a build with `{RebuildFlag}` of an output whose lock an ended process left")
+		try Expect.contains(taken.stderr, needle: OutputLockEndedHolderWording, message: "a build that took over the lock of an ended process did not say so. It wrote to stderr: {taken.stderr}")
+		try Expect.isFalse(File.exists(outputLockOf(record)), message: "a build left its output's lock behind when it ended.")
+
+		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the build after one that took over the lock and compiled")
+	end 'requireHeldIn'
+end 'EndedHolderLockIsTakenOver'

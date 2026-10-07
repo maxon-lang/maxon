@@ -288,7 +288,7 @@
 	// ⚠ The build-id refusal deliberately names the FACT and not the two ids: they are a build-machine detail
 	// a reader can do nothing with, and printing them would make every refusal transcript machine-specific.
 	function profileSubjectWithSidecar(binary FilePath, placement ProfilePlacement) returns ProfileSubject
-		let sidecarPath = try FilePath.from("{binary.toString()}{MxdbgSidecarExtension}") otherwise return ProfileSubject.refused("'{binary.toString()}' has no spellable sidecar path")
+		let sidecarPath = sidecarPathOf(binary)
 
 		if not File.exists(sidecarPath) 'noSidecar'
 			return ProfileSubject.refused("no debug-info sidecar at {reportPathDisplay(sidecarPath)} — a profile needs it to name the code its samples land in. The sidecar is written by default and leaves the executable byte-identical, so a binary that has none was built {NoDebugInfoFlag}: rebuild it without that flag.")

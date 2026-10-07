@@ -467,6 +467,26 @@ function filesystemNowIn(dir FilePath) returns Timestamp
 	return info.modifiedTime
 end 'filesystemNowIn'
 
+typealias ClockPollTally = int(0 to 100)
+
+let ClockPollMs = 100 as Milliseconds
+let ClockPollLimit = 100 as ClockPollTally
+
+export function waitPastWhatWasStaged(staged FilePath)
+	let dir = caseRootOf(staged)
+	let stagedAt = filesystemNowIn(dir)
+
+	for _ in 0 upto ClockPollLimit 'eachPoll'
+		if filesystemNowIn(dir) > stagedAt 'passed'
+			return
+		end 'passed'
+
+		sleep(ClockPollMs)
+	end 'eachPoll'
+
+	panic("build-manifest tests: the gate could not run — the filesystem clock under {dir.toString()} did not pass {stagedAt} within {ClockPollLimit} polls {ClockPollMs} ms apart.")
+end 'waitPastWhatWasStaged'
+
 export function treeLockClaimOf(staged FilePath) returns FilePath
 	return caseRootOf(staged).join("{TreeLockFileName}{TreeLockClaimSuffix}")
 end 'treeLockClaimOf'

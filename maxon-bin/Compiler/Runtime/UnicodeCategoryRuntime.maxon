@@ -89,8 +89,10 @@ export function installUnicodeCategoryRuntime(module StdModule, globalData Globa
 		return
 	end 'noCategoryLookup'
 
-	_ = globalData.registerRdataConstantLabeled(ucdLabel(UcdBmpStem), bytes: try ucdTableBytes(stdlibDir, stem: UcdBmpStem), kind: RdataPayloadKind.unicodeTable)
-	_ = globalData.registerRdataConstantLabeled(ucdLabel(UcdSuppStem), bytes: try ucdTableBytes(stdlibDir, stem: UcdSuppStem), kind: RdataPayloadKind.unicodeTable)
+	for stem in ucdTableStems() 'eachTable'
+		_ = globalData.registerRdataConstantLabeled(ucdLabel(stem), bytes: try ucdTableBytes(stdlibDir, stem: stem), kind: RdataPayloadKind.unicodeTable)
+	end 'eachTable'
+
 	buildUcdTableLoads(module)
 end 'installUnicodeCategoryRuntime'
 
@@ -105,9 +107,29 @@ end 'ucdLabel'
 // `project.stdlibDir` for the reason `StdlibLoader` joins off it — that directory's spelling is owned in
 // one place.
 function ucdTableBytes(stdlibDir FilePath, stem String) returns ByteArray throws CompileError
-	let path = stdlibDir.join("{UcdTableDir}/{stem}{UcdTableExtension}")
+	let path = ucdTablePath(stdlibDir, stem: stem)
 	return try File.readBinary(path) otherwise throw CompileError.fileNotFound(path)
 end 'ucdTableBytes'
+
+function ucdTablePath(stdlibDir FilePath, stem String) returns FilePath
+	return stdlibDir.join("{UcdTableDir}/{stem}{UcdTableExtension}")
+end 'ucdTablePath'
+
+// The embedding and `ucdTablePaths` both read this list, so every table the compiler embeds is one the
+// run cache key and the build record cover.
+function ucdTableStems() returns StringArray
+	return [UcdBmpStem, UcdSuppStem]
+end 'ucdTableStems'
+
+export function ucdTablePaths(stdlibDir FilePath) returns FilePathArray
+	var paths = FilePathArray.create()
+
+	for stem in ucdTableStems() 'eachTable'
+		paths.push(ucdTablePath(stdlibDir, stem: stem))
+	end 'eachTable'
+
+	return paths
+end 'ucdTablePaths'
 
 // ⭐ **`__ucd_bmp_at(offset)` AND `__ucd_supp_at(index)` — the two RAW TABLE READS, as callable leaves.**
 // They are what `__Builtins.ucdByteAt`/`ucdI64At` lower to (`Parser.parseUcdTableLoad`), and they exist

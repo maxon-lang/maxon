@@ -1408,32 +1408,6 @@ export function witnessCandidatesNeedReceiverFilter(candidates WitnessDispatchTa
 	return false
 end 'witnessCandidatesNeedReceiverFilter'
 
-// Do two interface methods declare the SAME formals — the same rendered types, in the same order (and so,
-// by construction, the same arity)? Both sides are `InterfaceMethodSig.paramTypeNames`, which are rendered
-// by ONE renderer (`Parser.renderInterfaceTypeName`) that spells the enclosing interface `Self` either way,
-// so a byte comparison is exact and no canonicalization is owed.
-//
-// ⚠ NOT `ConformanceCheck.signatureMatches`, and the two must not be merged: that one asks whether an IMPL
-// satisfies an interface method, so it substitutes `Self` for the conformer's own name and collapses ranged
-// aliases to their underlying primitive. This one asks whether one INTERFACE method is another — both sides
-// already in the interface's own vocabulary, where `Self` means `Self`.
-function interfaceFormalsMatch(a ByteArrayArray, b ByteArrayArray) returns bool
-	if a.count() != b.count() 'arityDiffers'
-		return false
-	end 'arityDiffers'
-
-	for i in 0 upto a.count() 'eachFormal'
-		let left = try a.get(i) otherwise panic("interfaceFormalsMatch: a.get OOB at {i} below count {a.count()}")
-		let right = try b.get(i) otherwise panic("interfaceFormalsMatch: b.get OOB at {i} below count {b.count()}")
-
-		if not left.equals(right) 'differs'
-			return false
-		end 'differs'
-	end 'eachFormal'
-
-	return true
-end 'interfaceFormalsMatch'
-
 // One requirement of an interface paired with the interface that DECLARED it — the source interface, so a
 // method inherited via `extends` can be tagged `(from BaseInterface)` in a missing-method report and so a
 // witness slot's relocation names the member filed under THAT interface's key
@@ -1695,9 +1669,9 @@ end 'collectParentInterfaces'
 // `throws` and its FORMALS have to agree too, and each of the three is a MEASURED silent wrong answer when
 // it is not asked (see `Parser.requireOperatorWitness`, which owns the E3005 a miss becomes).
 //
-// It lives beside `interfaceFormalsMatch`, the comparison it is mostly made of, and takes no `self`: a
-// `Parser` member that both tested the shape and threw the reject could not be the FILTER a candidate list
-// is narrowed by, only a verdict on whichever candidate a name search happened to reach first.
+// It takes no `self`: a `Parser` member that both tested the shape and threw the reject could not
+// be the FILTER a candidate list is narrowed by, only a verdict on whichever candidate a name
+// search happened to reach first.
 //
 // ⚠⚠ **THE RECEIVER KIND IS THE FOURTH TEST, AND LEAVING IT OUT IS A SILENT WRONG ANSWER TOO.** A
 // `static equals(other Self) returns bool` agrees with the protocol on all three of the tests above and is
@@ -1715,7 +1689,7 @@ end 'collectParentInterfaces'
 // reason: every clause compares the candidate against the FETCHED protocol, so the protocol stays the one
 // place a requirement's shape is stated.
 export function witnessTargetIsProtocol(target WitnessDispatchTarget, want InterfaceMethodSig) returns bool
-	return target.returnTypeName.equals(want.returnTypeName) and target.isStatic == want.isStatic and not throwsClauseIsThrowing(target.throwsClause) and interfaceFormalsMatch(target.paramTypeNames, b: want.paramTypeNames)
+	return target.returnTypeName.equals(want.returnTypeName) and target.isStatic == want.isStatic and not throwsClauseIsThrowing(target.throwsClause) and target.paramTypeNames.equals(want.paramTypeNames)
 end 'witnessTargetIsProtocol'
 
 // A nullary interface method (`hash()`, `toString()`, `clone()`). Every SYNTHESIZED protocol method is

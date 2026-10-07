@@ -26,8 +26,7 @@ error E3017: Type 'IntWrapper' does not satisfy constraint 'Named' required by t
 ⇒ **An instance of a DECLARED generic reduces to its base**, because under dictionary-passing the
 conformance is a property of the DECLARATION and its impls are ONE shared body: `Wrapper.label` is
 compiled once over an opaque layout, and every instantiation dispatches into that one symbol. So one
-`__witness_Wrapper.Named` table answers for all of them, exactly as one `__witness_Array.*` pair
-answers for every array.
+`__witness_Wrapper.Named` table answers for all of them.
 
 ⚠ **The reduction lives on BOTH doors.** A type argument arrives
 either as a resolved `genericInstance` (`Holder with (Wrapper with Integer)`) or as the NAME of a

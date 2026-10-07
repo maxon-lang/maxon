@@ -74,7 +74,7 @@ end 'locateStdlibDir'
 //
 // ⚠ It takes the `stdlib/` rather than locating one, because every caller is already holding the
 // directory whose sibling it wants — `Compiler.runtimeDirFor` the compile's own (which may be a STAGED
-// copy), `RunCache.stdlibSources` the one it just walked. A no-argument twin would re-run the walk-up
+// copy), `RunCache.libraryInputs` the one it just walked. A no-argument twin would re-run the walk-up
 // and, handed a staged stdlib, silently answer about the checkout instead.
 export function runtimeDirBeside(stdlibDir FilePath) returns FilePath throws CompileError
 	let checkoutRoot = try stdlibDir.parent() otherwise throw CompileError.runtimeNotFound
@@ -156,6 +156,61 @@ typealias StdlibNodeByName = Map with (ByteArray, CsrIndex)
 // The service types whose loop handlers the walk has credited, so a type spawned at many sites pays for its
 // handler roster once rather than once per `spawn`.
 typealias CreditedServiceSet = Set with ByteArray
+typealias ConstrainedOwnerSet = Set with ByteArray
+typealias InstancesByBaseMap = Map with (ByteArray, InstanceBucket)
+
+type InstanceBucket
+	export var ids as GenericInstanceIdArray
+
+	static function create() returns Self
+		return Self{ids: GenericInstanceIdArray.create()}
+	end 'create'
+end 'InstanceBucket'
+
+type ConstrainedOwnerLedger
+	export var seen as ConstrainedOwnerSet
+	export var pending as ByteArrayArray
+	export let instancesByBase as InstancesByBaseMap
+
+	static function over(signatures ProgramSignatures) returns Self
+		var instancesByBase = InstancesByBaseMap.create()
+
+		for instance in 0 upto signatures.genericInstanceCount() 'eachInstance'
+			let baseName = signatures.genericInstanceBaseName(instance)
+
+			if signatures.structWhereConstraints(baseName).isEmpty() 'unconstrained'
+				continue
+			end 'unconstrained'
+
+			if let known = try instancesByBase.get(baseName) 'baseAlreadyIndexed'
+				known.ids.push(instance)
+				continue
+			end 'baseAlreadyIndexed'
+
+			let first = InstanceBucket.create()
+			first.ids.push(instance)
+			instancesByBase.upsert(baseName.clone(), value: first)
+		end 'eachInstance'
+
+		return Self{seen: ConstrainedOwnerSet.create(), pending: ByteArrayArray.create(), instancesByBase: instancesByBase}
+	end 'over'
+
+	function noteOwnerOf(funcName ByteArray)
+		match splitQualifiedName(funcName) 'owner'
+			notQualified then break 'owner'
+			parts(typeName, _) then self.noteOwner(typeName)
+		end 'owner'
+	end 'noteOwnerOf'
+
+	function noteOwner(typeName ByteArray)
+		if not self.instancesByBase.contains(typeName) or self.seen.contains(typeName) 'nothingToCredit'
+			return
+		end 'nothingToCredit'
+
+		self.seen.insert(typeName.clone())
+		self.pending.push(typeName.clone())
+	end 'noteOwner'
+end 'ConstrainedOwnerLedger'
 
 // ⭐ THE FACTS ABOUT LIBRARY SOURCE A COMPILE DERIVES, from ONE walk of the merged module. They are one
 // object rather than separate `Project` fields because they are one derivation over one call graph:
@@ -793,6 +848,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	var witnessInterfaceOrder = ByteArrayArray.create()
 	var interfacesSeeded = 0 as FieldIndex
 	var creditedServices = CreditedServiceSet.create()
+	var ownerLedger = ConstrainedOwnerLedger.over(signatures)
 
 	// The interfaces `__module_init` widens into, which it names from no function this walk can reach.
 	for interfaceName in initWitnessInterfaces 'eachInitializerWidening'
@@ -800,11 +856,13 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	end 'eachInitializerWidening'
 
 	while true 'seedRounds'
-		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder, creditedServices: creditedServices)
+		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder, creditedServices: creditedServices, ownerLedger: ownerLedger)
 
-		if interfacesSeeded == witnessInterfaceOrder.count() as FieldIndex 'noInterfaceLeftToSeed'
+		markConstraintArgumentImpls(ownerLedger, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+
+		if interfacesSeeded == witnessInterfaceOrder.count() as FieldIndex and worklist.count() == 0 'nothingLeftToSeedOrDrain'
 			break
-		end 'noInterfaceLeftToSeed'
+		end 'nothingLeftToSeedOrDrain'
 
 		while interfacesSeeded < witnessInterfaceOrder.count() as FieldIndex 'eachNewlyNamedInterface'
 			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded as ElementIndex) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
@@ -934,13 +992,14 @@ end 'recordEnumWitnessCredit'
 // second copy of the drain is a second place for a marking to be added to one side only.
 // ⚠ **EVERY REACHED FUNCTION IS ASKED, WITH NO SKIP ONCE AN ANSWER IS KNOWN**: the interface a later
 // function names is one the seed still owes. The ask is a qualified-name split and a handful of map lookups.
-function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder ByteArrayArray, creditedServices CreditedServiceSet)
+function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder ByteArrayArray, creditedServices CreditedServiceSet, ownerLedger ConstrainedOwnerLedger)
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
 		markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names)
 		markMaxonCallees(module, project: project, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names, creditedServices: creditedServices)
 		collectWitnessPositionInterfaces(func, project: project, signatures: signatures, funcSignatures: project.funcSignatures, into: witnessInterfaces, order: witnessInterfaceOrder)
+		ownerLedger.noteOwnerOf(func.name)
 	end 'walk'
 end 'drainReachableWorklist'
 
@@ -1013,7 +1072,7 @@ end 'drainReachableWorklist'
 //     evidence is the function's own `IrFunction.existentialFieldStores`, which the parser records beside the
 //     `existentialWitness` op it emits.
 //   • A `where` CONSTRAINT the method carries: `appendWitnessArgs` materializes one table per constraint at
-//     every call to it. Asked through `witnessConstraintsOfMethod` — `LowerMaxonToStd.witnessParamCountForCallee`'s
+//     every call to it. Asked through `witnessConstraintsOfMethod` — `ProgramSignatures.witnessParamCountForCallee`'s
 //     own source — so the list this gate tests and the list that pass fills are one answer, and a conditional
 //     TYPE EXTENSION's extra constraints (which no `structWhereConstraints` read would see) are covered by
 //     construction.
@@ -1436,6 +1495,25 @@ function markEveryDeclaredWitnessImplOf(typeName ByteArray, project Project, sig
 		markWitnessImplsOfConformer(typeName, interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachInterface'
 end 'markEveryDeclaredWitnessImplOf'
+
+// Credit the impls of every conformer a reached constrained type's instances bind a `where`
+// constraint to. Lowering names those conformances' witness tables — at a call site, or stamped
+// into a layout descriptor — a DATA edge dead-function elimination follows, so a walk that missed
+// them would call live library code dead and `requireUnreachableLibraryStayedDead` panics.
+function markConstraintArgumentImpls(ledger ConstrainedOwnerLedger, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	for owner in ledger.pending 'eachNewlyReachedOwner'
+		let instances = try ledger.instancesByBase.get(owner) otherwise panic("markConstraintArgumentImpls: '{String.from(owner)}' was filed because the index holds instances of it")
+
+		for instance in instances.ids 'eachInstance'
+			for constraint in signatures.structWhereConstraints(owner) 'eachConstraint'
+				let conformer = signatures.conformerTypeArgName(instance, position: constraint.typeParamIndex).toByteArray()
+				markWitnessImplsOfConformer(conformer, interfaceName: constraint.interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+			end 'eachConstraint'
+		end 'eachInstance'
+	end 'eachNewlyReachedOwner'
+
+	ledger.pending = ByteArrayArray.create()
+end 'markConstraintArgumentImpls'
 
 // Credit every requirement implementation `typeName`'s witness tables can name. A type that declares no
 // conformance has no table and nothing to credit, which is almost every type in almost every program.

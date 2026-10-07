@@ -159,6 +159,9 @@ if ! lock_output; then
 	exit 2
 fi
 
+# Unedited, the locked rebuild is up to date: it writes nothing and never meets E6002.
+touch "$SRC"
+
 # ---- CHECK 2: the locked rebuild fails, with E6002 ----------------------------------------------
 "$MAXON" build "$SRC" --output="$LOCK_DIR/prog" > "$WORK/build-locked.log" 2>&1
 LOCKED_STATUS=$?
@@ -215,10 +218,10 @@ unlock_output
 "$MAXON" build "$SRC" --output="$LOCK_DIR/prog" > "$WORK/build-unlocked.log" 2>&1
 UNLOCKED_STATUS=$?
 
-if [ "$UNLOCKED_STATUS" -eq 0 ] && ! grep -q 'error E6002' "$WORK/build-unlocked.log"; then
-	pass "CHECK 7: with the lock removed the same build succeeds and emits no E6002"
+if [ "$UNLOCKED_STATUS" -eq 0 ] && ! grep -q 'error E6002' "$WORK/build-unlocked.log" && grep -q 'Compiled ->' "$WORK/build-unlocked.log"; then
+	pass "CHECK 7: with the lock removed the same build compiles, succeeds and emits no E6002"
 else
-	fail "CHECK 7: the unlocked rebuild exited $UNLOCKED_STATUS — E6002 is firing on builds it should not, so CHECKS 2-6 prove nothing"
+	fail "CHECK 7: the unlocked rebuild exited $UNLOCKED_STATUS, or did not compile, or emitted E6002 — E6002 is firing on builds it should not, or the control never compiled, so CHECKS 2-6 prove nothing"
 fi
 
 printf '\n'

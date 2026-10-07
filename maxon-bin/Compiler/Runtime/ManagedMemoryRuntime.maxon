@@ -541,24 +541,12 @@ export let ManagedIncrefName = b"__managed_incref"
 export let ManagedSliceOpaqueName = b"__managed_slice_opaque"
 export let ManagedAppendOpaqueName = b"__managed_append_opaque"
 
-// ⭐⭐ **`Array`'s OWN `Hashable`/`Equatable` CONFORMANCE, AS THE TWO SYMBOLS THE *DIRECT* DOOR CALLS
-// (array-hashable).** `arr.hash()`, `a.equals(b)` and the `==`/`!=` operator all lower to these; the
-// WITNESS door (a `Map`/`Set` key, a `where T is Hashable` slot) names `Array.hash`/`Array.equals` instead,
-// and `BuiltinConformanceRuntime` installs the SAME graphs under those symbols. One builder each, two
-// names — `buildStrEq`'s arrangement (`__str_eq` beside `String.equals`) for the identical reason.
-//
-// ⚠⚠ **AND THE REASON THE DIRECT DOOR MAY NOT SIMPLY NAME `Array.hash` — WHICH IS WHERE `Array` PARTS
-// COMPANY WITH `int` AND `String` — IS THAT `Array` IS NOT A RESERVED TYPE NAME.** `int`/`float`/`bool` are
-// keywords and `String`/`Character` are refused to user declarations
-// (`TypeResolution.isCompilerOwnedTypeName`), so `isBuiltinConformanceImplName` can admit those four
-// qualifiers and let `MmRuntime.isCompilerInternalCallee` skip the user-function checks for anything under
-// them. `Array` cannot join that list: `specs/generic-types.md` DECLARES `type Array uses T`, and a
-// plain `type Array` with its own `hash()` compiles and runs today (MEASURED: a static factory plus
-// `a.hash()` returns 7) — so `Array.hash` is a symbol a user program can legitimately own, and admitting
-// the qualifier would silently disable E3004, arity and argument-type checking on that user's call.
-// A `__`-prefixed name is owned by the compiler with no reservation needed, which is exactly what the
-// direct door requires.
-let ManagedHashName = b"__managed_hash"
+// ⭐⭐ **THE NATIVE `hash`/`equals` OF `Array` (array-hashable).** A direct call, the `==`/`!=`
+// operator and a witness slot all name these in place of `stdlib/Array.maxon`'s element-wise
+// bodies, for an instance whose element `ProgramSignatures.arrayBitwiseKind` admits; see the
+// section above `buildArrayHash`.
+export let ManagedHashName = b"__managed_hash"
+export let ManagedFloatHashName = b"__managed_hash_float"
 export let ManagedEqName = b"__managed_eq"
 
 // ⭐⭐ **THE `__ManagedMemory` MEMBERS.** `__ManagedMemory` IS an `Array with Byte`
@@ -1251,7 +1239,8 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildManagedRetain(module)
 	buildManagedIncref(module)
 	buildManagedAppend(module)
-	buildArrayHash(module, name: ManagedHashName)
+	buildArrayHash(module, name: ManagedHashName, element: ArrayHashElement.integerValue)
+	buildArrayHash(module, name: ManagedFloatHashName, element: ArrayHashElement.floatBits)
 	buildArrayEquals(module, name: ManagedEqName)
 	buildManagedDecref(module)
 
@@ -4329,75 +4318,116 @@ function buildManagedAppend(module StdModule)
 	module.functions.push(func)
 end 'buildManagedAppend'
 
-// --- `Array`'s `Hashable`/`Equatable` conformance (array-hashable) ---
+// --- `Array`'s native `hash`/`equals` (array-hashable) ---
 //
-// ⭐⭐ **THE ELEMENT'S OWN CONFORMANCE NEVER REACHES EITHER BODY, AND THAT IS THE DESIGN RATHER THAN A
-// SHORTCUT.** The conformance is a BYTE-LEVEL one over the backing buffer
-// (`stdlib/Array.maxon:630-664`), and `/specs/array-hashable.md` documents it in so many words ("the raw
-// bytes of the array's managed memory using the djb2 algorithm"; "identical backing memory"). So `where
-// Element is Hashable and Equatable` is an AVAILABILITY clause — it decides whether the method EXISTS on a
-// receiver, never what it computes — and there is no element witness to thread, no per-instance impl to
-// synthesize and no dictionary to pass. ⇒ ONE pair of `.text` symbols answers for every array in the
-// program, which is exactly what lets every conforming instance reduce to the single conformer `Array`
-// (`ProgramSignatures.conformerNameOfType`).
-//
-// ⚠ **THE ELEMENT'S OWN `Equatable` QUESTION IS NOT THIS SURFACE'S AND NEVER WAS.** *"Is this ELEMENT
-// equal to that one?"* belongs to the corpus `Array.contains` (`stdlib/Array.maxon:529`'s
-// `where Element is Equatable` extension), which carries the element's witness as a dictionary parameter of
-// its own; these ask *"are these two ARRAYS equal?"*, which is the array's own question and takes nothing.
-//
-// ⚠ **A MANAGED ELEMENT IS THEREFORE HASHED AND COMPARED AS ITS SLOT, i.e. BY POINTER** — two
-// `Array with String` holding separately-built equal strings are NOT equal. It is what "identical backing
-// memory" means for a
-// slot that holds an address, and since `hash` and `equals` read the same bytes the pair stays
-// self-consistent, so a hash table keyed on one is correct.
+// ⚠⚠ **EACH MUST GIVE EXACTLY THE ANSWER OF `stdlib/Array.maxon`'s ELEMENT-WISE BODY FOR EVERY
+// INSTANCE IT SERVES.** A generic body handed the same array runs the stdlib body, so a
+// disagreement is one array with two hashes, and a hash table holding it misses
+// (`array-hashable/a-generic-body-hashes-an-array-as-concrete-code-does`). `__managed_eq`'s byte
+// compare is that answer only for an element whose equality is its bits
+// (`ProgramSignatures.arrayEqualityIsBitwise`).
 
 // ⭐⭐ **HOW MANY BYTES OF `arr`'s ELEMENT BUFFER ARE ITS CONTENT** — `length@8` elements at
 // `element_size@24`, through the packed-aware `emitElementByteLen` rather than a multiply, because the
 // stamp is SIGNED and a negative one times a count is a wrapped size (see the SUB-BYTE section above).
-// Both impls open on it, which is what keeps the bytes `hash` folds and the bytes `equals` compares one
-// extent.
 //
-// ⚠⚠ **A SUB-BYTE-PACKED RUN'S LAST BYTE IS ROUNDED UP AND ITS PADDING BITS ARE READ, AND THAT IS SOUND
-// BECAUSE EVERY SHRINK PATH ZEROES WHAT IT VACATES — MEASURED, not assumed.** An `Array with int(0 to 3)`
-// holding `[1, 2, 3]` reads byte 0 as **57** by every route that can reach that content: three pushes; four
-// pushes then `pop`; four then `clear` and three more; four then `resize(3)` and three `set`s; and four
-// then `remove`. So two logically equal packed arrays have byte-identical buffers however they were built,
-// and masking the tail would be a branch guarding a state the runtime does not produce. ⇒ **A shrink path
-// that stops zeroing its vacated bits breaks `Array.equals` silently** — it would call two equal arrays
-// unequal, with `hash` following it consistently (so a hash table stays correct and only the ANSWER is
-// wrong). The remedy then is to mask the final byte down to `totalBits mod 8` bits, here, in this one place.
+// ⚠⚠ **A SUB-BYTE-PACKED RUN'S LAST BYTE IS ROUNDED UP AND ITS PADDING BITS ARE READ, AND THAT IS
+// SOUND BECAUSE EVERY SHRINK PATH ZEROES WHAT IT VACATES** — `pop`, `clear`, `resize` and `remove`
+// alike, so two logically equal packed arrays have byte-identical buffers however they were built,
+// and masking the tail would be a branch guarding a state the runtime does not produce. ⇒ **A
+// shrink path that stops zeroing its vacated bits breaks `__managed_eq` silently** — it would call
+// two equal arrays unequal. The remedy then is to mask the final byte down to `totalBits mod 8`
+// bits, here, in this one place.
 function emitRecordContentByteLen(module StdModule, block IrBlock, arr ValueId, count ValueId, ids ValueMinter) returns ValueId
 	return emitElementByteLen(module, block: block, count: count, es: emitLoadField(module, block: block, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids), ids: ids)
 end 'emitRecordContentByteLen'
 
-// `<name>(arr) -> HashValue` — djb2 over the element buffer's content bytes, which is
-// `stdlib/Array.maxon:633-646`'s body. The fold and its low-32 tail are `emitDjb2HashOverByteRange`, shared
-// with `String.hash`/`Character.hash` — so an array and a string hashing the same bytes cannot come to
-// disagree. Everything this builder owns is WHERE the bytes are.
-//
-// ⚠ It BORROWS `arr`: it reads `buffer@0`/`length@8`/`element_size@24` and walks bytes, freeing nothing —
-// `buildStrHash`'s contract, so a hashed array neither double-frees nor leaks.
-export function buildArrayHash(module StdModule, name ByteArray)
+enum ArrayHashElement
+	integerValue
+	floatBits
+end 'ArrayHashElement'
+
+function emitArrayHashStepTail(module StdModule, block IrBlock, header IrBlock, i ValueId, h ValueId, term ValueId, ids ValueMinter)
+	let hNext = emitDjb2Step(module, block: block, h: h, value: term, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let iNext = emitBin(module, block: block, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(block, op: StdOp.branch(header.id))
+	block.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: hNext)))
+end 'emitArrayHashStepTail'
+
+// An element's term is `float.hash`'s value for it, `-0.0` arm included (`buildFloatHash`): `[0.0]`
+// and `[-0.0]` are equal arrays and must hash equal.
+function emitFloatElementHashStep(module StdModule, func IrFunction, fold IrBlock, header IrBlock, i ValueId, h ValueId, bits ValueId, ids ValueMinter)
+	var negativeZero = module.addBlock(func, label: b"negzero", heat: BlockHeat.normal)
+	var folded = module.addBlock(func, label: b"floatfold", heat: BlockHeat.normal)
+	var step = module.addBlock(func, label: b"step", heat: BlockHeat.normal)
+
+	let term = ids.mint()
+	step.blockArgs.push(IrBlockArg.create(term, argType: StdType.i64))
+
+	let negativeZeroBits = emitConst(module, block: fold, value: NegativeZeroBits, ids: ids)
+	let isNegativeZero = emitCmp(module, block: fold, a: bits, b: negativeZeroBits, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(fold, op: StdOp.condBranch(isNegativeZero, thenBlockId: negativeZero.id, elseBlockId: folded.id))
+
+	let zeroTerm = emitConst(module, block: negativeZero, value: ZeroFloatHash, ids: ids)
+	module.setTerminator(negativeZero, op: StdOp.branch(step.id))
+	negativeZero.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(zeroTerm)))
+
+	let foldedTerm = emitFloatBitsFold(module, block: folded, bits: bits, ids: ids)
+	module.setTerminator(folded, op: StdOp.branch(step.id))
+	folded.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(foldedTerm)))
+
+	emitArrayHashStepTail(module, block: step, header: header, i: i, h: h, term: term, ids: ids)
+end 'emitFloatElementHashStep'
+
+// The stdlib body's fold — `h = (h * 33 + element.hash()) and 0xFFFFFFFF` from `5381` — masked once
+// at the end instead, which keeps the same low 32 bits (`emitDjb2HashOverByteRange` states why). An
+// integer element's term is its loaded slot, which equals its own `hash` mod 2^32 only for an
+// element that loads as its value (`ProgramSignatures.elementLoadsAsItsValue`).
+function buildArrayHash(module StdModule, name ByteArray, element ArrayHashElement)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
+	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
+	var fold = module.addBlock(func, label: b"fold", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
 
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let count = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let byteLen = emitRecordContentByteLen(module, block: entry, arr: arr, count: count, ids: ids)
-	emitDjb2HashOverByteRange(module, func: func, cur: entry, buffer: buffer, len: byteLen, ids: ids)
+	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+	let hSeed = emitConst(module, block: entry, value: Djb2Seed, ids: ids)
+	let iSeed = emitConst(module, block: entry, value: 0, ids: ids)
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	let h = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(h, argType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iSeed, second: hSeed)))
+
+	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let loaded = emitLoadElemAt(module, func: func, cur: body, exit: fold, buffer: buffer, index: i, es: es, ids: ids)
+
+	match element 'kind'
+		integerValue then emitArrayHashStepTail(module, block: fold, header: header, i: i, h: h, term: loaded, ids: ids)
+		floatBits then emitFloatElementHashStep(module, func: func, fold: fold, header: header, i: i, h: h, bits: loaded, ids: ids)
+	end 'kind'
+
+	returnLow32Masked(module, block: done, value: h, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrayHash'
 
-// `<name>(a, b) -> bool` — equal LENGTHS, then equal BYTES: `stdlib/Array.maxon:643-663`'s body, and
-// `__str_eq`'s shape one record over. It reuses that record's byte loop (`emitByteRangeCompareLoop`) for
-// the reason that emitter is shared at all.
+// `<name>(a, b) -> bool` — equal LENGTHS, then equal BYTES: `__str_eq`'s shape one record over. It
+// reuses that record's byte loop (`emitByteRangeCompareLoop`) for the reason that emitter is shared
+// at all.
 //
 // ⭐ **THE BYTE EXTENT IS DERIVED FROM THE RECEIVER ALONE, and the length gate is what makes that
 // sufficient.** `Equatable.equals` declares `other Self`, so both operands are the same `Array with E`
@@ -4406,7 +4436,7 @@ end 'buildArrayHash'
 // free to disagree only if the two were NOT one type — which is the very thing `Self` states.
 //
 // ⚠ Both operands are BORROWED, exactly as `buildStrEq`'s are.
-export function buildArrayEquals(module StdModule, name ByteArray)
+function buildArrayEquals(module StdModule, name ByteArray)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(BoolConformerName)), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 

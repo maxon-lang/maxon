@@ -1,0 +1,28 @@
+let CaseDirName = "build-a-removed-source-recompiles"
+let OutputStem = "program"
+let SecondFileName = "helper.maxon"
+let SecondSource = "function unusedHelper() returns ExitCode\n\treturn 0\nend 'unusedHelper'\n"
+let SourceRemovedReason = "source removed: "
+
+test 'a build after one of its sources was removed is compiled again'
+	requireHeldOutsideCheckout(CaseDirName, check: RemovedSourceRecompiles.create())
+end 'a build after one of its sources was removed is compiled again'
+
+type RemovedSourceRecompiles implements OutsideCheckoutCase
+	static function create() returns RemovedSourceRecompiles
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+
+		let second = dir.join(SettledProgramDirName).join(SecondFileName)
+		writeStagedFile(second, content: SecondSource)
+		waitPastTheModificationOf(second, probeIn: dir)
+
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build of the two-file program")
+
+		try File.delete(second) otherwise panic("{CaseDirName}: the gate could not run - could not delete {second.toString()}.")
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: SourceRemovedReason, which: "a build after {SecondFileName} was removed")
+	end 'requireHeldIn'
+end 'RemovedSourceRecompiles'

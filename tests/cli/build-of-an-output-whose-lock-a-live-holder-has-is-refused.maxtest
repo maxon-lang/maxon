@@ -1,0 +1,48 @@
+let CaseDirName = "build-of-an-output-whose-lock-a-live-holder-has-is-refused"
+let OutputStem = "program"
+let EmitIrFlag = "--emit-ir"
+let CompiledReportWording = "Compiled ->"
+let UpToDateReportWording = "Up to date ->"
+
+test 'a build of an output whose lock a live process holds is refused, whatever the build asks for, and leaves the record'
+	requireHeldOutsideCheckout(CaseDirName, check: LiveHolderRefusesEveryBuild.create())
+end 'a build of an output whose lock a live process holds is refused, whatever the build asks for, and leaves the record'
+
+type LiveHolderRefusesEveryBuild implements OutsideCheckoutCase
+	static function create() returns LiveHolderRefusesEveryBuild
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+
+		let record = try soleBuildRecordIn(dir)
+
+		let lock = outputLockOf(record)
+
+		plantLockOfALiveHolder(lock)
+		let planted = plantedLockText(lock)
+
+		try requireRefusedWhileHeld(dir, options: ListedWordArray.create(), which: "a plain build")
+		try requireRefusedWhileHeld(dir, options: [RebuildFlag], which: "a build with `{RebuildFlag}`")
+		try requireRefusedWhileHeld(dir, options: [EmitIrFlag], which: "a build with `{EmitIrFlag}`")
+		try Expect.equal(plantedLockText(lock), expected: planted, message: "a refused build rewrote or removed the lock a live process holds.")
+
+		removePlantedLock(lock)
+
+		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the build after the lock was released, which the refused builds must not have disturbed")
+	end 'requireHeldIn'
+end 'LiveHolderRefusesEveryBuild'
+
+function requireRefusedWhileHeld(dir FilePath, options ListedWordArray, which String) throws TestFailure
+	let build = runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: options)
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	try Expect.equal(build.exitCode(), expected: NothingRanExitCode, message: "{which} of an output whose lock a live process holds did not exit {NothingRanExitCode}. {said}")
+	try Expect.contains(build.stderr, needle: OutputLockBusyWording, message: "{which} of an output whose lock a live process holds did not say it holds its build lock. {said}")
+	try Expect.contains(build.stderr, needle: OutputLockHolderRunningWording, message: "{which} of an output whose lock a live process holds did not say the holder is running. {said}")
+	try Expect.contains(build.stderr, needle: OutputStem, message: "{which} of an output whose lock a live process holds did not name the output. {said}")
+	try Expect.isFalse(build.stdout.contains(CompiledReportWording), message: "{which} compiled although the output's lock is held. {said}")
+	try Expect.isFalse(build.stdout.contains(UpToDateReportWording), message: "{which} reported the output up to date although the output's lock is held. {said}")
+end 'requireRefusedWhileHeld'

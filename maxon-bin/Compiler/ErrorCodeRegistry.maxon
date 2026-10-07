@@ -1401,12 +1401,11 @@ export enum ErrorCode
 	// hidden dictionary parameters its declaration reserves -- its type parameter's layout descriptor
 	// (`sizeof(T)`, an opaque `Array` build, a borrowed `T` returned or stored), or the witness table of a
 	// `where` constraint it dispatches through.
-	// A generic conformer shares ONE witness table across every instantiation: `Array with Int` and
-	// `Array with String` both reduce to the conformer `Array` and both dispatch through
-	// `__witness_Array.Hashable` (`ProgramSignatures.conformerNameOfType`). That reduction is what lets one
-	// compiled impl and one table serve every element type, and its premise is that the impls are
-	// INDEPENDENT of the type argument -- `Array.hash`/`Array.equals` hash and compare the backing buffer's
-	// raw bytes and never touch an element.
+	// A generic conformer whose impls need no dictionary shares ONE witness table across every
+	// instantiation: every instance reduces to the one conformer name
+	// (`ProgramSignatures.conformerNameOfType`) and dispatches through
+	// `__witness_<Conformer>.<Interface>`. One compiled impl and one table serve every instantiation
+	// only while the impls are INDEPENDENT of the type argument.
 	// A dispatch through such a table therefore has no instantiation to take a dictionary from: the caller
 	// holds a table address and a slot index, and the two conformers sharing the slot disagree about what
 	// the dictionary would even say. The adapter that adjusts the impl's arity for the slot
@@ -1425,9 +1424,9 @@ export enum ErrorCode
 	// `witnessTableInstanceFor` reduces a non-concrete instance to the shared table and the shared table's
 	// adapter then hands the impl a null dictionary -- the right refusal about the TABLE, asked one mechanism
 	// away from the call the author wrote, since the question a witness ARGUMENT poses is whether the CALLEE
-	// reads it. `LowerMaxonToStd.materializeWitnessArg` passes a zero for such an argument and
-	// `requireCalleeIgnoresParametricWitness` proves nothing reads it, refusing with E3132 where something
-	// does.
+	// reads it. `LowerMaxonToStd.parametricWitnessArg` loads such an argument's table from the calling
+	// frame's layout descriptor, or passes a zero that `requireCalleeIgnoresParametricWitness` proves
+	// nothing reads, refusing with E3132 where something does.
 	semanticSharedConformanceReadsDictionary = "E3128"
 
 	// A match arm's payload bindings are not a one-to-one map between names and payload slots, or an
@@ -1495,14 +1494,18 @@ export enum ErrorCode
 	// re-brands the container and moves no element.
 	castTargetIsAContainer = "E3131"
 
-	// A call passes the hidden witness table for one of the callee's `where` constraints, the type argument
-	// at that constraint is a generic instance written over the CALLING body's own type parameters, the
-	// conformance behind it has impls that carry a hidden dictionary -- and the callee READS that witness
+	// A call passes the hidden witness table for one of the callee's `where` constraints, the type
+	// argument at that constraint is a generic instance written over the CALLING body's own type
+	// parameters, the conformance behind it has impls that carry a hidden dictionary, the calling
+	// function has no layout descriptor to take the table from -- and the callee READS that witness
 	// parameter.
-	// Such an instance has no table. A witness table is `.rdata`, and the slots of a dictionary-carrying
-	// conformance point at adapters that must supply the instantiation's layout descriptor, its fixed element
-	// count and its own constraint witnesses; for `ArrayIterator with Element` inside a body still generic in
-	// `Element` every one of those is a run-time fact of the ENCLOSING FRAME, and no static blob can carry it.
+	// Such an instance has no static table. A witness table is `.rdata`, and the slots of a
+	// dictionary-carrying conformance point at adapters that must supply the instantiation's layout
+	// descriptor, its fixed element count and its own constraint witnesses; for `ArrayIterator with
+	// Element` inside a body still generic in `Element` every one of those is a run-time fact of the
+	// ENCLOSING FRAME, and no static blob can carry it. A method of the enclosing type that carries
+	// its layout descriptor takes the table from that descriptor, which is minted for the concrete
+	// instance and holds the table for it.
 	// E3128 is the same wall one mechanism down, reached from the table rather than from the argument.
 	// Where the callee never READS the parameter the call passes a zero and this check is what makes that
 	// sound rather than a guess -- exactly as `LowerMaxonToStd.appendNullAdapterDictionary` passes a null
@@ -2118,6 +2121,14 @@ export enum ErrorCode
 	// the closure somewhere the captured record does not reach, or capture the value the closure needs
 	// rather than the record holding it.
 	closureStoredIntoWhatItCaptures = "E3183"
+
+	// A field of a generic type holds that same type again over a type built from its own type
+	// parameters, directly or through the fields of other generic types: `var deeper as Nest with
+	// (Pair with (T, T))` inside `type Nest uses T`. `Nest with int` then holds a `Nest with (Pair
+	// with (int, int))`, which holds one over a larger pair still, so the instances the program needs
+	// never end. Reported at the field's type. Declare the field over the type's own parameters (`Nest
+	// with T`), or remove the recursion.
+	genericTypeGrowsWithoutBound = "E3184"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

@@ -142,7 +142,8 @@ case-insensitive on Windows, byte-exact elsewhere.
 | `isRelative()` | `bool` | Not absolute. |
 | `isInside(dir FilePath)` | `bool` | The path equals `dir` or lies beneath it, compared by whole components (`/foo/bar` is not inside `/foo/ba`). |
 | `startsWith(prefix FilePath)` | `bool` | Component-wise prefix test. |
-| `equals(other FilePath)`, `hash()` | | Host filesystem semantics. |
+| `equals(other FilePath)`, `hash()` | | Host filesystem semantics: they compare `comparisonSpelling()`. |
+| `comparisonSpelling()` | `String` | The path as the host compares paths: lower-cased on Windows, as written on macOS and Linux. `equals`, `hash` and `isInside` compare this spelling, so it is the one to key a map or a digest by. |
 
 ```maxon
 enum FilePathError implements Error

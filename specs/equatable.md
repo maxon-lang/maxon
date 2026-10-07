@@ -282,3 +282,54 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: a-generic-body-compares-user-generic-structs-whose-equals-needs-a-descriptor -->
+A generic body's `==` on two values of a user generic struct calls that struct's own `equals`, including
+one that needs its instance's layout descriptor.
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Cell uses T implements Equatable
+	export typealias Items = Array with T
+
+	export var n as Val
+
+	static function create(n Val) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function equals(other Self) returns bool
+		let scratch = Items.create()
+		return n == other.n and scratch.count() == 0
+	end 'equals'
+end 'Cell'
+
+type Holder uses T
+	export typealias C = Cell with T
+
+	var a as C
+	var b as C
+
+	static function create(a C, b C) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+
+	function same() returns bool
+		return a == b
+	end 'same'
+end 'Holder'
+
+typealias ValCell = Cell with Val
+typealias H = Holder with Val
+
+function main() returns ExitCode
+	print("{H.create(ValCell.create(3), b: ValCell.create(3)).same()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```

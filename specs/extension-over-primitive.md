@@ -210,6 +210,71 @@ end 'main'
 direct=77 witness=77
 ```
 
+<!-- test: a-declared-element-hash-is-what-an-array-hashes-with -->
+An array's `hash` folds each element's own `hash`, so a declared `int.hash` reaches it on the direct call
+and inside a `where T is Hashable` body alike: `5381 * 33 + 77` is `177650`.
+```maxon
+extension int implements Hashable
+	function hash() returns HashValue
+		return 77
+	end 'hash'
+end 'int'
+
+typealias Val = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	export typealias Items = Array with T
+	var tag as Val
+	static function create(tag Val) returns Self
+		return Self{tag: tag}
+	end 'create'
+	function digest(items Items) returns HashValue
+		return items.hash()
+	end 'digest'
+end 'Holder'
+
+typealias H = Holder with Val
+typealias ValArray = Array with Val
+
+function main() returns ExitCode
+	var xs = ValArray.create()
+	xs.push(5)
+	let holder = H.create(0)
+	print("direct={xs.hash()} generic={holder.digest(xs)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+direct=177650 generic=177650
+```
+
+<!-- test: a-declared-element-equals-is-what-arrays-compare-with -->
+An array's `equals` compares each element pair through the element's own `equals`, so a declared
+`int.equals` that answers `true` for every pair makes `[1]` equal `[2]`, through the method and the operator.
+```maxon
+extension int implements Equatable
+	function equals(other Self) returns bool
+		return other < 0 or other >= 0
+	end 'equals'
+end 'int'
+
+function main() returns ExitCode
+	print("{[1] == [2]}\n")
+	print("{[1].equals([2])}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+true
+```
+
 <!-- test: a-declared-conformance-supplies-a-protocol-the-primitive-lacks -->
 ⭐⭐ **A DECLARATION DOES NOT MERELY *BEAT* THE SYNTHESIZED SURFACE — IT CAN EXTEND IT.**
 `bool` has no intrinsic `Hashable` at all: `IrInterface.isIntrinsicBuiltinConformance` grants it

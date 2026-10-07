@@ -1,6 +1,6 @@
 // The raw values are the line prefixes `tests/parallel-compile` and `tests/cli` pin byte for byte;
 // the declaration order is the category number the DebugStream ring carries.
-module enum CompilerLogGroup
+export enum CompilerLogGroup
 	compiler = "CMP"
 	lexer = "LEX"
 	parser = "PAR"
@@ -104,7 +104,7 @@ function recordGroupOf(record LogRecord) returns CompilerLogGroup
 	return try CompilerLogGroup.fromName(groupName) otherwise panic("CompilerLogHandler: '{groupName}' names no compiler log group")
 end 'recordGroupOf'
 
-module function compilerLogger(group CompilerLogGroup) returns Logger
+export function compilerLogger(group CompilerLogGroup) returns Logger
 	var bound = LogAttrArray.create()
 	bound.push(LogAttr.int(GroupAttrKey, value: group.ordinal as LogInteger))
 	return Log.default().withGroup(group.name).withAttrs(bound)
@@ -113,6 +113,16 @@ end 'compilerLogger'
 module function compilerLogEnabled(group CompilerLogGroup, level LogLevel) returns bool
 	return level.rank >= Log.groupLevel(group.name).rank
 end 'compilerLogEnabled'
+
+export function compilerLogShowsDetail() returns bool
+	for group in CompilerLogGroup.allCases 'eachGroup'
+		if compilerLogEnabled(group, level: LogLevel.debug) 'showsDetail'
+			return true
+		end 'showsDetail'
+	end 'eachGroup'
+
+	return false
+end 'compilerLogShowsDetail'
 
 module function ringLogLevelOf(level LogLevel) returns RingLogLevel
 	if level.rank <= LogLevel.trace.rank 'trace'

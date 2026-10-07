@@ -1,0 +1,19 @@
+let CaseDirName = "cache-clear-keeps-a-fresh-claim"
+let ClaimName = "planted-output.lock.claim"
+
+test 'cache clear keeps the fresh claim file of a lock a build is still creating, and the directory the locks live in'
+	let dir = freshCaseDir(CaseDirName)
+	let locks = buildLocksDirIn(dir)
+
+	try Expect.isTrue(Directory.create(locks), message: "the gate could not run - {locks.toString()} could not be created")
+
+	let claim = locks.join(ClaimName)
+	try File.writeText(claim, content: ClaimName) otherwise panic("{CaseDirName}: the gate could not run - could not plant {claim.toString()}.")
+
+	let cleared = runWithCacheRoot([CacheCommandWord, CacheClearVerb], cacheRoot: cacheRootIn(dir), workingDirectory: dir)
+	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
+
+	try Expect.equal(cleared.exitCode(), expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` must succeed beside a build that is creating a lock. {said}")
+	try Expect.isTrue(File.exists(claim), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {claim.toString()}, the claim file a build created moments ago and has not yet written its lock behind. {said}")
+	try Expect.isTrue(Directory.isDirectory(locks), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {locks.toString()}, the directory a build creates its lock in. {said}")
+end 'cache clear keeps the fresh claim file of a lock a build is still creating, and the directory the locks live in'

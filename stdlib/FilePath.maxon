@@ -216,12 +216,18 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		#endif
 	end 'canonicalForCompare'
 
+	/// This path as the host compares paths: lower-cased on Windows, as written on POSIX.
+	/// `equals`, `hash` and `isInside` compare this spelling.
+	public function comparisonSpelling() returns String
+		return canonicalForCompare(path)
+	end 'comparisonSpelling'
+
 	// --- Equatable ---
 
 	/// Path equality matching the host filesystem's semantics:
 	/// case-insensitive on Windows, exact byte match on POSIX.
 	public function equals(other FilePath) returns bool
-		return canonicalForCompare(path) == canonicalForCompare(other.path)
+		return comparisonSpelling() == other.comparisonSpelling()
 	end 'equals'
 
 	// --- Hashable ---
@@ -230,7 +236,7 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	/// so map lookups find an entry inserted with `C:\foo` when
 	/// queried with `c:\Foo`.
 	public function hash() returns HashValue
-		return canonicalForCompare(path).hash()
+		return comparisonSpelling().hash()
 	end 'hash'
 
 	// --- Containment test ---
@@ -252,8 +258,8 @@ public type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			return false
 		end 'emptyDir'
 
-		let needle = "{dirStr}{pathSeparator}"
-		return canonicalForCompare(path).startsWith(canonicalForCompare(needle))
+		let needle = "{dir.comparisonSpelling()}{pathSeparator}"
+		return comparisonSpelling().startsWith(needle)
 	end 'isInside'
 
 	// --- Query ---

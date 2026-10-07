@@ -75,6 +75,7 @@ typealias CacheSizeInUnits = float(f64.min to f64.max)
 
 typealias CacheEntryArray = Array with CacheEntry
 typealias CachePathSet = Set with String
+typealias CacheLockUseMap = Map with (String, LockUse)
 
 // ⭐ **THE FIRST THING THAT WENT WRONG, KEPT WHOLE.** A walk reporting the last one names an empty parent
 // directory whose real cause was a file several levels down. One record because a read and a removal fail
@@ -155,17 +156,75 @@ end 'CacheCensus'
 type CacheRemoval
 	export var files as CacheTally
 	export var kept as CacheTally
+	export var keptLocks as CacheTally
 	export var keptUnder as CachePathSet
+	export var lockUses as CacheLockUseMap
 	export var failure as FirstFailure
 
 	static function create() returns CacheRemoval
-		return Self{files: 0, kept: 0, keptUnder: CachePathSet.create(), failure: FirstFailure.create()}
+		return Self{files: 0, kept: 0, keptLocks: 0, keptUnder: CachePathSet.create(), lockUses: CacheLockUseMap.create(), failure: FirstFailure.create()}
 	end 'create'
 
 	function keep(path FilePath)
 		self.kept = self.kept + 1
 		self.noteEnclosingDirectories(path)
 	end 'keep'
+
+	function keepLock(path FilePath)
+		self.keptLocks = self.keptLocks + 1
+		self.noteEnclosingDirectories(path)
+	end 'keepLock'
+
+	function settleLockEntry(entry FilePath, lock FilePath) returns bool
+		match self.useOfLock(lock) 'use'
+			inUse then return self.keepLockEntry(entry)
+			unjudged then return self.leaveUnjudged(entry)
+			unremovable then return self.leaveUnremovable(entry)
+			unused then return self.settleUnusedLockEntry(entry, lock: lock)
+		end 'use'
+	end 'settleLockEntry'
+
+	function settleUnusedLockEntry(entry FilePath, lock FilePath) returns bool
+		if not File.exists(entry) 'removedUnderItsClaim'
+			self.files = self.files + 1
+			return true
+		end 'removedUnderItsClaim'
+
+		if entry == lock or isLockClaimFile(entry) 'aNewHoldersFile'
+			return self.keepLockEntry(entry)
+		end 'aNewHoldersFile'
+
+		return false
+	end 'settleUnusedLockEntry'
+
+	function keepLockEntry(entry FilePath) returns bool
+		self.keepLock(entry)
+		return true
+	end 'keepLockEntry'
+
+	function useOfLock(lock FilePath) returns LockUse
+		let key = lock.toString()
+
+		if let known = try self.lockUses.get(key) 'alreadyDecided'
+			return known
+		end 'alreadyDecided'
+
+		let decided = discardLockUnlessInUse(lock)
+		self.lockUses.upsert(key, value: decided)
+		return decided
+	end 'useOfLock'
+
+	function leaveUnjudged(path FilePath) returns bool
+		self.failure.note("could not tell whether a build is using {path.toString()}, so it was not removed")
+		self.noteEnclosingDirectories(path)
+		return true
+	end 'leaveUnjudged'
+
+	function leaveUnremovable(path FilePath) returns bool
+		self.failure.note("could not remove {path.toString()}, which no build is using")
+		self.noteEnclosingDirectories(path)
+		return true
+	end 'leaveUnremovable'
 
 	function noteEnclosingDirectories(path FilePath)
 		let enclosing = try path.parent() otherwise return
@@ -345,6 +404,10 @@ function clearCache() returns ExitCode
 		print("Kept {counted(removal.kept, word: FileWord)} a live debug session is using\n")
 	end 'someSessionIsLive'
 
+	if removal.keptLocks > 0 'someBuildIsLive'
+		print("Kept {counted(removal.keptLocks, word: FileWord)} a live build is using\n")
+	end 'someBuildIsLive'
+
 	return SucceededExit
 end 'clearCache'
 
@@ -460,6 +523,13 @@ function removeContents(contents CacheContents, removal CacheRemoval)
 			continue
 		end 'holdsALiveSessionsBuild'
 
+		// Kept even when empty: a build creating its claim file in it at this moment would find its
+		// directory gone.
+		if entry.isDirectory and isBuildLocksDirectory(entry.path) 'theLocksDirectoryStays'
+			removal.noteEnclosingDirectories(entry.path)
+			continue
+		end 'theLocksDirectoryStays'
+
 		if entry.isDirectory 'aDirectory'
 			try Directory.delete(entry.path) otherwise (e) 'notRemoved'
 				removal.failure.note("could not remove {entry.path.toString()}: {deleteRefusal(e)}")
@@ -472,6 +542,12 @@ function removeContents(contents CacheContents, removal CacheRemoval)
 			removal.keep(entry.path)
 			continue
 		end 'aLiveSessionsBuild'
+
+		if let lock = try buildLockBelonging(entry.path) 'aBuildLocksFile'
+			if removal.settleLockEntry(entry.path, lock: lock) 'settledWithTheLock'
+				continue
+			end 'settledWithTheLock'
+		end 'aBuildLocksFile'
 
 		try File.delete(entry.path) otherwise 'notDeleted'
 			removal.failure.note("could not remove {entry.path.toString()}")

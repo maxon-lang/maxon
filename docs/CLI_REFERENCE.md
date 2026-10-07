@@ -89,8 +89,9 @@ built from changes:
 └── hello-<key>.exe.mxdbg   # its debug-info sidecar
 ```
 
-- **The key is a content hash**, never a modification time. It covers every source file of the program
-  and every standard-library source the build compiles, each hashed by its bytes, plus the compiler's
+- **The key is a content hash**, never a modification time. It covers every source file of the program,
+  every standard-library and runtime source the build compiles and the Unicode tables the compiler
+  embeds, each hashed by its bytes, plus the compiler's
   identity (its path, size, modification time and target). Editing any of them rebuilds; nothing else
   does.
 - **The key is the file name.** A cache hit is that file existing, so two runs of one program cannot
@@ -313,6 +314,7 @@ uses it.
 | `--emit-ir` | Also write the lowered Target IR beside the executable, as `<output>.ir`. It shows the functions from the program's own source. |
 | `--emit-ir-runtime=<a>,<b>` | Also render these compiler-emitted or standard-library functions in that IR. Implies `--emit-ir`. A value naming no function in the program, or naming one of the program's own functions (which `--emit-ir` already shows), is refused: the build exits 1 and writes no executable. |
 | `--no-debug-info` | Do not write the `<output>.mxdbg` debug-info sidecar. It is written by default, and the executable is byte-identical either way. See [Debugging and Profiling](#debugging-and-profiling). |
+| `--rebuild` | Compile even when the output is up to date. The compile still writes its build record, so the next build without `--rebuild` can be up to date again. See [Up to date](#up-to-date). |
 | `--coverage` | Instrument for code coverage: the binary counts each statement and branch arm it executes and writes the counts to `<output>.mxcov` as it exits. This changes the emitted code, so it is a separate build from the one you ship. Read the counts with `maxon coverage`. Needs the debug-info sidecar, so `--no-debug-info` beside it is refused. |
 | `--debugstream` | Emit the shared-memory debug-stream producer that `maxon monitor` reads, with the memory manager's events. Also enables the `__DebugStream` builtin; without the flag its calls emit nothing. Refused on a target without shared memory and an uptime clock. |
 | `--async-trace` | Write the green-thread trace to stderr as the program runs: one line per spawn, sleep, I/O wait, resume and await. See [Debugging and Profiling](#debugging-and-profiling). |
@@ -325,8 +327,9 @@ uses it.
 that machinery is emitted.
 
 A build prints the compiler's version and an early-preview warning to stdout, then
-`Compiled -> <path>` on success, and exits 0. Progress lines (`[CMP] INFO: Wrote … bytes of code to …`)
-go to stderr; `--log=error` silences them. A compile error prints its diagnostics to stderr and exits 1.
+`Compiled -> <path>` when it compiled or `Up to date -> <path>` when its output was already current (see
+[Up to date](#up-to-date)), and exits 0. Progress lines (`[CMP] INFO: Wrote … bytes of code to …`) go to
+stderr; `--log=error` silences them. A compile error prints its diagnostics to stderr and exits 1.
 
 A build of a project target has one more line, between the two: whether it compiled the `.maxproj`
 runner or reused the cached one. That compile is silent apart from that line — see
@@ -341,6 +344,64 @@ maxon build my-app                            # the .maxproj file's target my_ap
 maxon build app.maxon --target=wasm32-wasi
 maxon build app.maxon --define=Version=1.4.2
 ```
+
+#### Up to date
+
+A build whose output is current skips the compile: it prints `Up to date -> <path>` and exits 0, leaving
+the output and its sidecar as they are. A build that compiles first says why, in one line on stderr
+(`--log=error` silences it):
+
+```text
+[CMP] INFO: compiling app.exe: src/main.maxon was modified at or after the last compile started
+```
+
+Each compile leaves a **build record** under the cache root, at `<cache>/build/v1/<key>.mxbr`, where
+`<cache>` is the first usable row of the table under [The run cache](#the-run-cache) and `<key>` a hash
+of the output's path. It records:
+
+- every source of the program, every standard-library and runtime source, and the Unicode tables the
+  compiler embeds, each with its modification time — and on `wasm32-wasi`, `vendor/wasm-tools` and the
+  files under `vendor/wasi-wit`;
+- the target, whether the debug-info sidecar is written, `--coverage`, `--debugstream`, `--async-trace`,
+  the product version, and every define;
+- the compiler's path, size and modification time;
+- the size and modification time of the output and of its `.mxdbg` sidecar, and the time the compile
+  started, read from the cache root's filesystem.
+
+The output is up to date when all of these match the build at hand and every recorded file was last
+modified before that compile started. A file modified in the same second the compile started counts as
+changed, and so does a file restored with an older modification time. An up-to-date build leaves a
+`--coverage` binary's `.mxcov` counters where they are, since they belong to that same binary.
+
+The reason a compiling build gives is one of these:
+
+| Reason | When |
+|--------|------|
+| `no record of a previous build` | The first build of this output, or the first since its record was removed |
+| `<path> was modified at or after the last compile started` | A recorded file changed |
+| `source added: <path>`, `source removed: <path>` | The program or the library gained or lost a file; `tool added:` and `tool removed:` for the `wasm32-wasi` tools |
+| `option <name> changed: <old> -> <new>` | `<name>` is `target`, `debugInfo`, `coverage`, `debugStream`, `asyncTrace` or `version` |
+| `define <name> added`, `define <name> removed`, `define <name> changed: <old> -> <new>` | A `--define` or a described build's define differs |
+| `the compiler changed: <old> -> <new>` | A different compiler, or a rebuilt one, runs the build |
+| `the output is missing`, `the output was replaced since it was written` | The output is gone or differs from what the compile wrote; the same for `the debug-info sidecar` |
+| `--rebuild was requested` | [`--rebuild`](#maxon-build) was given |
+| `<flag> observes the compile` | See below |
+| `the output is the running compiler` | See [Rebuilding a running compiler](#rebuilding-a-running-compiler) |
+| `no build record can be kept: <why>` | See below |
+| `the build record is unreadable: <why>` | The record is damaged or of another format |
+
+**These builds always compile, and remove the output's build record:**
+
+- a build **observing the compile** — `--emit-ir`, `--emit-ir-runtime=`, `--metrics=`, `--census-by-tag`,
+  `--allocations-by-tag`, or `--log=` at `debug` or `trace` for any category — because what it asked for is
+  produced by the compile itself;
+- a build whose output is the compiler running it;
+- a build with **no record to keep**: no usable cache root, or an input that cannot be listed or read. It
+  says `no build record can be kept: <why>` and otherwise builds and exits as usual;
+- a build whose debug-info sidecar could not be written, so the next build compiles again.
+
+`--rebuild` compiles whatever the record says and writes a fresh record. Builds of one output take turns
+under its [build lock](#the-build-lock).
 
 #### Defines
 
@@ -414,9 +475,16 @@ act on.
 `clear` removes the compiled programs [`maxon execute`](#maxon-execute) and a path-less
 [`maxon build`](#maxon-build) keep, the directories holding them, the inline snippets the
 [MCP server](#mcp-server) stages, the programs `debug_start` and `maxon dap-server` build for debugging,
-the [library cache](#the-library-cache), and the Maxon directory above all of those. The next `run` or
-path-less `build` compiles from scratch and fills the cache again, and the next compile of any kind
-fills the library cache.
+the [library cache](#the-library-cache), the [build records](#up-to-date) `maxon build` keeps, and the
+Maxon directory above all of those. The next `run` or path-less `build` compiles from scratch and fills
+the cache again, the next compile of any kind fills the library cache, and the next `build` of each output
+compiles and records it again.
+
+**A [build lock](#the-build-lock) a live build holds stays**, with its claim file and the directories
+above it, and `clear` ends its report with a `Kept <n> files a live build is using` line. Each lock is
+judged and removed while `clear` holds its claim file, so a build starting meanwhile waits for it. The
+`build/locks/` directory stays, empty or not. A lock `clear` cannot judge, or cannot remove, is reported
+as the first thing that stayed, and the command exits 1.
 
 **A debug build a live session is using stays**, with its sidecar and the directories above it, and
 `clear` ends its report with a `Kept <n> files a live debug session is using` line. Each debug build's
@@ -793,7 +861,7 @@ maxon build app.maxon --log=compiler:debug --allocations-by-tag=regalloc   # one
 |------|---------|
 | `0` | Success |
 | `1` | The command ran and failed: a compile error, a failing check, a command line it cannot act on |
-| `2` | Nothing ran: the tree is not in a state to work on (another command holds its [tree lock](#project-structure), or a compiler binary is older than its sources), or a `maxon test` run could not happen |
+| `2` | Nothing ran: the tree is not in a state to work on (another command holds its [tree lock](#the-tree-lock) or the output's [build lock](#the-build-lock), or a compiler binary is older than its sources), or a `maxon test` run could not happen |
 | `101` | A program's leak check found an allocation still held at exit. The program reports it, not the driver; `maxon test` reports it as `LEAKED`. |
 
 Some commands forward another process's exit code instead: [`maxon execute`](#maxon-execute) returns the
@@ -807,11 +875,11 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 
 | Variable | Read by | Effect |
 |----------|---------|--------|
-| `MAXON_RUN_CACHE_ROOT` | `run`, `build` (project target), `cache`, every compile (the [library cache](#the-library-cache)) | Maxon caches under `<value>/maxon`. Consulted first |
-| `USERPROFILE` | `run`, `build` (project target), `cache`, every compile (the [library cache](#the-library-cache)) on Windows | Maxon caches under `<value>\.maxon\cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
-| `HOME` | `run`, `build` (project target), `cache`, every compile (the [library cache](#the-library-cache)) elsewhere | Maxon caches under `<value>/.maxon/cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
-| `LOCALAPPDATA`, then `TEMP` | `run`, `build` (project target), `cache`, every compile (the [library cache](#the-library-cache)) on Windows | Last resort, under `<value>\maxon`, when the two above name no directory Maxon can create |
-| `TMPDIR` | `run`, `build` (project target), `cache`, every compile (the [library cache](#the-library-cache)) elsewhere | Last resort, under `<value>/maxon`, when the two above name no directory Maxon can create |
+| `MAXON_RUN_CACHE_ROOT` | `run`, `build`, `cache`, every compile (the [library cache](#the-library-cache)) | Maxon caches under `<value>/maxon`. Consulted first |
+| `USERPROFILE` | `run`, `build`, `cache`, every compile (the [library cache](#the-library-cache)) on Windows | Maxon caches under `<value>\.maxon\cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
+| `HOME` | `run`, `build`, `cache`, every compile (the [library cache](#the-library-cache)) elsewhere | Maxon caches under `<value>/.maxon/cache` when `MAXON_RUN_CACHE_ROOT` is unset or cannot be created |
+| `LOCALAPPDATA`, then `TEMP` | `run`, `build`, `cache`, every compile (the [library cache](#the-library-cache)) on Windows | Last resort, under `<value>\maxon`, when the two above name no directory Maxon can create |
+| `TMPDIR` | `run`, `build`, `cache`, every compile (the [library cache](#the-library-cache)) elsewhere | Last resort, under `<value>/maxon`, when the two above name no directory Maxon can create |
 | `NO_COLOR`, `TERM` | `test --color=auto` | Set `NO_COLOR`, or `TERM=dumb`, to turn colour off |
 | `MAXON_IMAGE` | `upgrade` | Marks the container image; `upgrade` refuses and names `docker pull` |
 | `MAXON_INSTALL` | `upgrade` (written, not read) | `upgrade` sets it for the install script to the install the running compiler sits in, whatever your shell says |
@@ -1044,12 +1112,14 @@ build. Once the compile succeeds, the compiler renames its running image to `max
 (`maxon.previous.exe` on Windows) and writes the new binary into the empty slot. If an older
 `maxon.previous` is itself still running, for example an editor's language server, it is renamed aside to
 `maxon.retired-<stamp>` and deleted by a later rebuild. A **failed** build leaves the running compiler in
-place.
+place. Such a build always compiles: every build of the compiler changes the compiler identity a
+[build record](#up-to-date) would be checked against.
 
 #### Building again with the written program
 
 A build that states `rebuild_with_output` (`Build.build(…, rebuildWithOutput: true)`) is repeated by
-the program it writes. Once the compile succeeds, the driver releases the build's lock, prints
+the program it writes. Once the build succeeds, whether it compiled or found its output
+[up to date](#up-to-date), the driver releases the build's locks, prints
 
 ```text
 Repeating this build with the program it just wrote, <absolute path of the output>
@@ -1145,6 +1215,26 @@ leftover `.maxon-tree.lock.claim.probe-*`, `.maxon-tree.lock.claim.removing-*` a
 A holder that finds its lock taken over by another command says so, stops refreshing the lock, and leaves
 it to the new holder.
 
+### The build lock
+
+Two builds of one output would overwrite each other's executable and [build record](#up-to-date), so
+every `maxon build` — `--output=` builds included — locks its **output** before it decides whether the
+output is up to date, and holds the lock until the build record is written. The lock is
+`<cache>/build/locks/<key>.lock`, `<key>` being the hash of the output's path the build record is named by,
+with its claim file `<key>.lock.claim` beside it, so a build takes it only where a cache root is usable.
+
+It works as [the tree lock](#the-tree-lock) does: the same record, claim file, refresh, takeover and
+leftover files. A build that finds it held prints the same report and exits **2**, headed:
+
+```text
+error: app.exe is BUSY — another maxon command holds its build lock, and two builds of one output corrupt each other's output and build record. Nothing was run.
+```
+
+The lock is released before a [`rebuild_with_output`](#building-again-with-the-written-program) second
+stage starts, since that stage builds the same output. If the `build/locks/` directory is removed while a
+build is creating its claim file there, the build creates the directory again once; removed a second time,
+the build stops with `error: the build lock for <output> could not be taken — …` and exits **2**.
+
 ## Debugging and Profiling
 
 Maxon has an **interactive debugger on every native target** — `maxon debug <exe>`: breakpoints, stepping,
@@ -1158,10 +1248,11 @@ The examples below use output from real runs; addresses, counts and timings vary
 
 ### The `.mxdbg` debug-info sidecar
 
-Every `maxon build` writes a sidecar named after the full output file, beside it, unless you pass
-`--no-debug-info` or the described build sets `debugInfo: false`:
+Every compile `maxon build` performs writes a sidecar named after the full output file, beside it, unless
+you pass `--no-debug-info` or the described build sets `debugInfo: false`:
 
 ```text
+[CMP] INFO: compiling app.exe: no record of a previous build
 [CMP] INFO: Wrote 35598 bytes of debug info to app.exe.mxdbg
 [CMP] INFO: Wrote 103992 bytes of code to app.exe (compiled in 0.3 s)
 Compiled -> app.exe
@@ -2322,6 +2413,7 @@ Compiles a source file, a directory, a project target or an inline snippet, as `
 | `output` | string | Output executable path (`--output=<path>`) |
 | `target` | string | A target triple such as `wasm32-wasi`, passed as `--target=` when it is one of the five; any other value names a target of the `.maxproj` file, each `_` written `-` |
 | `emitIr` | boolean | Also write the Target IR (`--emit-ir`) |
+| `rebuild` | boolean | Compile even when the output is up to date (`--rebuild`); see [Up to date](#up-to-date) |
 | `timeoutSeconds` | number | Seconds the build may take (default 600); see [Arguments and answers](#arguments-and-answers) |
 
 #### `execute`

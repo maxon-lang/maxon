@@ -576,7 +576,8 @@ Output: `[hi] [abc]` and `true true`.
 
 `Array` is a growable, contiguous, generic sequence. Declare a concrete type with `typealias`, or write a
 literal: `[1, 2, 3]`. `Array` implements `Iterable` and `Cloneable`; it is also `Hashable` and `Equatable`
-when its element is.
+when its element is. `equals` (and `==`) compares two arrays element by element through the element's own
+`equals`, and `hash()` folds every element's own `hash()`, so equal arrays hash equal.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -1226,7 +1227,8 @@ case-insensitive on Windows, byte-exact elsewhere.
 | `isRelative()` | `bool` | Not absolute. |
 | `isInside(dir FilePath)` | `bool` | The path equals `dir` or lies beneath it, compared by whole components (`/foo/bar` is not inside `/foo/ba`). |
 | `startsWith(prefix FilePath)` | `bool` | Component-wise prefix test. |
-| `equals(other FilePath)`, `hash()` | | Host filesystem semantics. |
+| `equals(other FilePath)`, `hash()` | | Host filesystem semantics: they compare `comparisonSpelling()`. |
+| `comparisonSpelling()` | `String` | The path as the host compares paths: lower-cased on Windows, as written on macOS and Linux. `equals`, `hash` and `isInside` compare this spelling, so it is the one to key a map or a digest by. |
 
 ```maxon
 enum FilePathError implements Error

@@ -1,0 +1,21 @@
+let CaseDirName = "build-whose-sidecar-could-not-be-written-keeps-no-record"
+let OutputStem = "program"
+
+test 'a build that could not write its debug-info sidecar keeps no record, so the next build compiles'
+	requireHeldOutsideCheckout(CaseDirName, check: UnwrittenSidecarKeepsNoRecord.create())
+end 'a build that could not write its debug-info sidecar keeps no record, so the next build compiles'
+
+type UnwrittenSidecarKeepsNoRecord implements OutsideCheckoutCase
+	static function create() returns UnwrittenSidecarKeepsNoRecord
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+
+		_ = createdStagedDirectory(dir.join("{OutputStem}{executableSuffix()}{SidecarSuffix}"))
+
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build, with a directory where its sidecar goes")
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: FirstBuildReason, which: "the build after one whose sidecar could not be written")
+	end 'requireHeldIn'
+end 'UnwrittenSidecarKeepsNoRecord'

@@ -1719,6 +1719,7 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 	// `ProgramSignatures.fixedElementCountNeeds` for why they are two slots and not one.
 	var countSeeds = DescriptorNeedMap.create()
 	var selfCallees = SelfCalleesMap.create()
+	var blindCallees = SelfCalleesMap.create()
 	var countCallees = SelfCalleesMap.create()
 
 	var i = 0 as ElementIndex
@@ -1737,7 +1738,7 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 				break
 			end 'nextFile'
 
-			reader.scanDescriptorNeedsInto(site, methodNames: methodNames, directSeeds: directSeeds, countSeeds: countSeeds, selfCallees: selfCallees, countCallees: countCallees)
+			reader.scanDescriptorNeedsInto(site, methodNames: methodNames, directSeeds: directSeeds, countSeeds: countSeeds, selfCallees: selfCallees, blindCallees: blindCallees, countCallees: countCallees)
 			i = i + 1
 		end 'eachSiteInFile'
 	end 'eachFile'
@@ -1745,9 +1746,41 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 	// Two solves, over two graphs and two seed columns, through ONE solver: the shape of the fixpoint
 	// is the same (reverse reachability from a seeded set over a call graph), and only its input
 	// differs.
-	signatures.recordDescriptorNeeds(solveDescriptorNeeds(methodNames, directSeeds: directSeeds, selfCallees: selfCallees))
-	signatures.recordFixedElementCountNeeds(solveDescriptorNeeds(methodNames, directSeeds: countSeeds, selfCallees: countCallees))
+	let layout = solveDescriptorNeeds(methodNames, directSeeds: directSeeds, firmColumns: singleColumn(selfCallees), blindColumns: singleColumn(blindCallees))
+	let sourceable = withoutSourcelessStatics(layout, signatures: signatures)
+	signatures.recordDescriptorNeeds(sourceable.needing, speculative: sourceable.speculative)
+	logCompilerDebugSettled("descriptor needs: {sourceable.needing.count()} layout-needing method(s), {sourceable.speculative.count()} speculative")
+	signatures.recordFixedElementCountNeeds(solveDescriptorNeeds(methodNames, directSeeds: countSeeds, firmColumns: singleColumn(countCallees), blindColumns: SelfCalleesMapArray.create()).needing)
 end 'foldDescriptorNeeds'
+
+function singleColumn(column SelfCalleesMap) returns SelfCalleesMapArray
+	var columns = SelfCalleesMapArray.create()
+	columns.push(column)
+	return columns
+end 'singleColumn'
+
+// A speculative need is dropped from a static that cannot source a descriptor: reserving one would
+// be `Parser.staticLayoutRefusal`'s refusal of a program whose need was only a guess.
+function withoutSourcelessStatics(solution DescriptorNeedSolution, signatures ProgramSignatures) returns DescriptorNeedSolution
+	var needing = DescriptorNeedNameSet.create()
+	var speculative = DescriptorNeedNameSet.create()
+
+	for name in solution.needing 'eachName'
+		if not solution.speculative.contains(name) 'aFirmNeed'
+			needing.insert(name)
+			continue
+		end 'aFirmNeed'
+
+		if signatures.cannotSourceALayoutDescriptor(name) 'nothingToReserveItWith'
+			continue
+		end 'nothingToReserveItWith'
+
+		needing.insert(name)
+		speculative.insert(name)
+	end 'eachName'
+
+	return DescriptorNeedSolution.create(needing, speculative: speculative)
+end 'withoutSourcelessStatics'
 
 // A file's parse as a compile asks for it: the memo's artifact, or everything a parse of the file reads beside
 // the settled index, and the key its artifact is stamped with.
@@ -3426,6 +3459,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 
 		// The OPERATOR half of the existential-identity rule; its METHOD half is the `unsupported` arm
 		// `Parser.requireWitnessSelfArgs` throws, and both messages end in the same shared sentence.
+		genericInstanceNotComparable(op, typeName, orderingOp, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: genericInstanceComparisonMessage(op, typeName: typeName, orderingOp: orderingOp), line: line, column: column, filePath: path)
 		existentialNotComparable(op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot compare values held at an interface type using '{op}': {ExistentialPairUnprovableReason}, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares", line: line, column: column, filePath: path)
 
 		// ⚠ The E3068 sentence is pinned byte-for-byte only in its NON-NEGATED form —
@@ -3564,6 +3598,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		genericConstraintNotSatisfied(typeName, interfaceName, paramName, functionName, line, column) gives Diagnostic.create(ErrorCode.semanticWhereConstraintViolation, message: "Type '{typeName}' does not satisfy constraint '{interfaceName}' required by type parameter '{paramName}' of '{functionName}'", line: line, column: column, filePath: path)
 		genericCallAmbiguous(functionName, candidates, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{functionName}': {candidates} generic declarations infer a type for this call", line: line, column: column, filePath: path)
 		genericArgumentKindUnsupported(functionName, paramName, typeName, line, column) gives Diagnostic.create(ErrorCode.genericArgumentKindUnsupported, message: "type parameter '{paramName}' of '{functionName}' cannot be '{typeName}': a generic function's type parameter is inferred as a number, `String`, `bool`, `Character`, a typealias, a record or an enum", line: line, column: column, filePath: path)
+		genericTypeGrowsWithoutBound(ownerName, fieldName, typeName, line, column) gives Diagnostic.create(ErrorCode.genericTypeGrowsWithoutBound, message: "field '{fieldName}' of generic type '{ownerName}' is declared '{typeName}', which holds '{ownerName}' again over a type built from its own type parameters: instantiating it would nest without end. Declare the field over the type's own parameters, or remove the recursion", line: line, column: column, filePath: path)
 		illegalBitWidth(width, line, column) gives Diagnostic.create(ErrorCode.semanticIllegalBitWidth, message: "'bits({width})' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold", line: line, column: column, filePath: path)
 		barePrimitiveType(spelling, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: barePrimitiveTypeMessage(spelling), line: line, column: column, filePath: path)
 		barePrimitiveCastTarget(spelling, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: barePrimitiveCastMessage(spelling), line: line, column: column, filePath: path)

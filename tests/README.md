@@ -135,6 +135,8 @@ tests/
     maxproj-two-in-one-directory-refused.maxtest              two `.maxproj` files in one directory are refused, naming both
     maxproj-nested-below-another-project-refused.maxtest      a `.maxproj` below the project root is refused by the outer build (E2074)
     maxproj-built-from-inside-a-nested-project-refused.maxtest   a bare `build` inside that nested project is refused too, naming both project files
+    manifest-unchanged-target-is-up-to-date.maxtest           a second path-less `build` of an unchanged target reuses the runner, says `Up to date ->` and compiles nothing
+    manifest-up-to-date-target-still-runs-a-pending-second-stage.maxtest   an up-to-date target that asks to rebuild with its output still runs that second stage
     fixtures/<project>/app.maxproj.fixture  main.maxon.fixture   stored names only, subdirectories included - see rule 1
   debug/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds, the event reader
@@ -322,7 +324,7 @@ tests/
     coverage-byte-identical.maxtest         instrumentation reaches the flagged build and no other
     fixtures/states/main.maxon.fixture      stored name only - see rule 1
   cli/
-    CliHarness.maxon                        the shared half: the spawn, a staged copy of the compiler, writing a staged file, reading a roster off a listing, reading and forging library cache lines and entries, reading a cell of a build's `--metrics=` table, and the error-path drop family
+    CliHarness.maxon                        the shared half: the spawn, a staged copy of the compiler, writing a staged file, reading a roster off a listing, reading and forging library cache lines and entries, reading a cell of a build's `--metrics=` table, the error-path drop family, the recorded build and its compiled / up-to-date readers, and the wait past the filesystem clock
     no-arguments.maxtest                    `maxon` alone answers, SHORT, sorted, and exits 0
     help-reference.maxtest                  the reference leads with the short list, then what it hides
     help-per-command.maxtest                every documented command answers `help <command>` for itself
@@ -363,6 +365,8 @@ tests/
     build-refuses-a-runtime-tier-file-by-name.maxtest       `build runtime/<file>` exits 1 with an error naming the runtime tier, ahead of any diagnostic inside the file
     cache-does-not-count-a-staged-snippet.maxtest           a snippet the MCP server staged under the cache root is left out of bare `cache`'s build count
     cache-clear-keeps-a-live-debug-sessions-build.maxtest   `cache clear` keeps the debug build of a session still running, and says so
+    cache-clear-keeps-a-live-build-lock.maxtest             `cache clear` keeps the lock of an output a running build holds, removes an ended holder's lock and claim, keeps the locks directory, and says so
+    cache-clear-keeps-a-claim-a-build-is-still-creating-a-lock-behind.maxtest   `cache clear` keeps the fresh claim file of a lock a build is still creating, and the directory the locks live in
     help-lists-every-mcp-server-option.maxtest              `help mcp-server` lists every option the parser accepts
     an-empty-option-value-is-refused.maxtest                an option stated with an empty value (`--output=`) is refused as an invalid option value
     an-emit-ir-runtime-name-the-program-lacks-is-refused.maxtest   `--emit-ir-runtime=` naming a function the program does not contain exits 1 naming it, with no panic and no stack trace
@@ -385,6 +389,23 @@ tests/
     error-path-drops-grow-linearly-with-propagating-trys.maxtest   a function of 16, 32 and 64 owned bindings, each bound by a propagating `try`, compiles to code that grows linearly in the bindings
     error-path-drops-grow-linearly-with-throws.maxtest             the same with a guarded `throw` after each binding
     error-path-drops-grow-linearly-with-early-returns.maxtest      the same with a guarded early `return` after each binding
+    build-unchanged-is-up-to-date.maxtest                   a second build of an unchanged program says `Up to date ->`, compiles nothing and leaves the executable as it was
+    build-unchanged-wasm-is-up-to-date.maxtest              the same for a wasm32-wasi build
+    build-an-edit-in-the-same-second-recompiles.maxtest     a source edited in the second its last compile started is compiled again, and the program runs the edit
+    build-a-removed-source-recompiles.maxtest               removing one source of a directory program compiles it again, naming the source removed
+    build-a-changed-define-recompiles.maxtest               a `--define=` the last compile was not given compiles the program again, naming the define
+    build-a-changed-option-recompiles.maxtest               `--no-debug-info` and another `--target=` each compile the program again, naming the option
+    build-a-library-edit-recompiles.maxtest                 an edit to a stdlib or runtime file, or a rewrite of a Unicode table under stdlib/, that an install-shaped compiler reads compiles the program again
+    build-a-replaced-output-recompiles.maxtest              a deleted or overwritten executable, and a deleted sidecar, each compile the program again, naming which
+    build-rebuild-compiles-an-up-to-date-output.maxtest     `--rebuild` compiles an up-to-date program, and the next plain build is up to date
+    build-an-observed-compile-is-never-skipped.maxtest      `--emit-ir`, `--metrics=`, `--census-by-tag`, `--allocations-by-tag` and `--log=compiler:debug` always compile and keep no record
+    build-without-a-cache-root-compiles-and-says-so.maxtest every build with no usable cache root compiles, saying no build record can be kept
+    build-whose-sidecar-could-not-be-written-keeps-no-record.maxtest   a build whose `.mxdbg` could not be written exits 0, keeps no record, and the next build compiles
+    build-of-an-output-whose-lock-a-live-holder-has-is-refused.maxtest   a build of an output whose build lock a live process holds, plain or with `--rebuild` or `--emit-ir`, exits 2 naming the output and leaves the lock and the record alone
+    build-takes-over-the-output-lock-of-an-ended-holder.maxtest   a lock an ended process left on an output is taken over, said so, and the build compiles, records and releases it
+    build-a-case-renamed-source-recompiles.maxtest          a source renamed only by case is compiled again, naming `source added` (it discriminates on Windows only)
+    execute-a-unicode-table-edit-recompiles.maxtest         an install-shaped `maxon execute` of a program is compiled again after a Unicode table the compiler embeds in it changed
+    build-of-a-missing-source-reports-it-once.maxtest       a build of a source that does not exist says `file not found` once, with a non-zero exit
   profile/
     ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
     profile-hot-ordering.maxtest            the busier function ranks first in every section
@@ -492,6 +513,7 @@ tests/
     run-spec-test-filter-union.maxtest           `run_spec_test` given a filter array runs the union of the specs those filters name
     an-empty-string-argument-is-refused-by-name.maxtest      an empty string given to an argument is refused by name, never read as absent
     execute-passes-an-empty-argument-through.maxtest      `execute` hands an empty program argument to the program
+    build-rebuild-compiles-an-up-to-date-output.maxtest  `build` given `rebuild: true` compiles a program its last call left up to date
   docs/
     stdlib-reference-documents-every-public-api.maxtest      docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`
 ```

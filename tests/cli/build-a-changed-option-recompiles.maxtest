@@ -1,0 +1,28 @@
+let CaseDirName = "build-a-changed-option-recompiles"
+let OutputStem = "program"
+let CrossOutputFileName = "prog.exe"
+let NoDebugInfoFlag = "--no-debug-info"
+let WindowsTargetOption = "--target=x64-windows"
+let LinuxTargetOption = "--target=x64-linux"
+let DebugInfoChangedReason = "option debugInfo changed"
+let TargetChangedReason = "option target changed"
+
+test 'a build whose options differ from the last compile is compiled again'
+	requireHeldOutsideCheckout(CaseDirName, check: ChangedOptionRecompiles.create())
+end 'a build whose options differ from the last compile is compiled again'
+
+type ChangedOptionRecompiles implements OutsideCheckoutCase
+	static function create() returns ChangedOptionRecompiles
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: [NoDebugInfoFlag]), reason: DebugInfoChangedReason, which: "a build with `{NoDebugInfoFlag}`")
+
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: CrossOutputFileName, options: [WindowsTargetOption]), which: "a build with `{WindowsTargetOption}` into {CrossOutputFileName}")
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: CrossOutputFileName, options: [LinuxTargetOption]), reason: TargetChangedReason, which: "a build with `{LinuxTargetOption}` into the same {CrossOutputFileName}")
+	end 'requireHeldIn'
+end 'ChangedOptionRecompiles'

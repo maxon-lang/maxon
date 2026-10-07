@@ -1,0 +1,23 @@
+let CaseDirName = "build-of-a-missing-source-reports-it-once"
+let OutputStem = "program"
+let MissingProgramName = "no-such-program.maxon"
+let FileNotFoundSentence = "file not found"
+
+test 'a build of a source that does not exist reports it exactly once'
+	requireHeldOutsideCheckout(CaseDirName, check: MissingSourceIsReportedOnce.create())
+end 'a build of a source that does not exist reports it exactly once'
+
+type MissingSourceIsReportedOnce implements OutsideCheckoutCase
+	static function create() returns MissingSourceIsReportedOnce
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let build = runRecordedBuild(dir, program: MissingProgramName, output: OutputStem, options: ListedWordArray.create())
+		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+		let times = "{build.stdout}{build.stderr}".split(FileNotFoundSentence).count() - 1
+
+		try Expect.notEqual(build.exitCode(), expected: 0, message: "a build of a source that does not exist succeeded. {said}")
+		try Expect.equal(times, expected: 1, message: "a build of a source that does not exist said `{FileNotFoundSentence}` {times} times, where the compile's own error is the one report. {said}")
+	end 'requireHeldIn'
+end 'MissingSourceIsReportedOnce'

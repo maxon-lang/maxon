@@ -140,6 +140,7 @@ Compiles a source file, a directory, a project target or an inline snippet, as `
 | `output` | string | Output executable path (`--output=<path>`) |
 | `target` | string | A target triple such as `wasm32-wasi`, passed as `--target=` when it is one of the five; any other value names a target of the `.maxproj` file, each `_` written `-` |
 | `emitIr` | boolean | Also write the Target IR (`--emit-ir`) |
+| `rebuild` | boolean | Compile even when the output is up to date (`--rebuild`); see [Up to date](/docs/cli/#up-to-date) |
 | `timeoutSeconds` | number | Seconds the build may take (default 600); see [Arguments and answers](#arguments-and-answers) |
 
 ### `execute`

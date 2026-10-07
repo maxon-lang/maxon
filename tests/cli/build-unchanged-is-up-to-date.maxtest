@@ -1,0 +1,16 @@
+let CaseDirName = "build-unchanged-is-up-to-date"
+let OutputStem = "program"
+
+test 'a build whose inputs are unchanged since the last compile is up to date and writes nothing'
+	requireHeldOutsideCheckout(CaseDirName, check: UnchangedBuildIsUpToDate.create())
+end 'a build whose inputs are unchanged since the last compile is up to date and writes nothing'
+
+type UnchangedBuildIsUpToDate implements OutsideCheckoutCase
+	static function create() returns UnchangedBuildIsUpToDate
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		try requireASecondBuildIsUpToDate(dir, output: "{OutputStem}{executableSuffix()}", options: ListedWordArray.create())
+	end 'requireHeldIn'
+end 'UnchangedBuildIsUpToDate'

@@ -521,12 +521,15 @@ end 'main'
 ```
 
 <!-- test: associated-binding.a-parametric-constraint-argument-is-a-zero-nothing-reads -->
-⭐⭐ **THE WITNESS A SHARED BODY CANNOT NAME, AND THE PROOF THAT NOTHING NEEDED IT.** `Outer.tally` builds
-`Holder with (Box with E)` while `E` is still its own type parameter, so the `where S is Sized` witness it
-owes is a table for `Box with E` — an instance whose adapter would have to name a layout descriptor only the
-running frame holds. There is no such table, so the call passes a ZERO and the compiler PROVES the callee
-reads none of it (`Holder.create` is a bare `Self` literal; `Holder.tag` returns a constant). This is the
-shape `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` is, without the stdlib.
+⭐⭐ **THE WITNESS A SHARED BODY CANNOT NAME STATICALLY.** `Outer.tally` builds `Holder with (Box with E)`
+while `E` is still its own type parameter, so the `where S is Sized` witness it owes is a table for
+`Box with E` — an instance whose adapter names a layout descriptor only the running frame holds, so no
+static table exists to pass. `tally` carries `Outer`'s layout descriptor, and the table travels in it: the
+descriptor minted for `Outer with Leaf` holds `Box with Leaf`'s table, and the call loads it from there. A
+frame with no descriptor passes a ZERO instead, and the compiler PROVES the callee reads none of it
+(`Holder.create` is a bare `Self` literal; `Holder.tag` returns a constant) — the fallback this case's id
+names. This is the shape `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` is, without the
+stdlib.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -602,11 +605,11 @@ end 'main'
 12
 ```
 
-<!-- test: error.a-parametric-constraint-argument-the-callee-reads -->
-⭐⭐ **AND WHERE THE CALLEE DOES READ IT, THE ZERO IS REFUSED RATHER THAN SHIPPED.** The same program with
-`twice()` — which dispatches `self.s.size()` through the very witness — in place of `tag()`. A null table is
-a wild indirect call at the first dispatch, so the proof is the whole difference between the two cases: the
-test is USE, not read-of-a-particular-kind.
+<!-- test: associated-binding.a-parametric-constraint-argument-the-callee-reads -->
+⭐⭐ **AND WHERE THE CALLEE DOES READ IT, THE CALLER SUPPLIES THE TABLE.** The same program with
+`twice()` — which dispatches `self.s.size()` through the very witness — in place of `tag()`. The witness
+table for `Box with E` travels in the caller's layout descriptor, so `twice()` dispatches through the
+instance's own table: `(7 + 1) * 2 + 7` is 23.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -675,6 +678,250 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```exitcode
+0
+```
+```stdout
+23
+```
+
+<!-- test: associated-binding.a-shared-table-serves-a-generic-conformer-from-a-static -->
+A static whose owner is unconstrained calls a constrained method on an instance over a generic conformer
+whose impls need no dictionary; the conformer's one shared table serves the call.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Tagged uses T implements Equatable
+	var tag as Integer
+	var v as T
+	static function create(tag Integer, v T) returns Self
+		return Self{tag: tag, v: v}
+	end 'create'
+	function equals(other Self) returns bool
+		return self.tag == other.tag
+	end 'equals'
+end 'Tagged'
+type Holder uses S where S is Equatable
+	var s as S
+	static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+	function same(other S) returns bool
+		return self.s.equals(other)
+	end 'same'
+end 'Holder'
+type Outer uses E
+	typealias TagE = Tagged with E
+	typealias Inner = Holder with TagE
+	var e as E
+	static function check(h Inner, x TagE) returns bool
+		return h.same(x)
+	end 'check'
+end 'Outer'
+typealias IntOuter = Outer with Integer
+typealias IntTagged = Tagged with Integer
+typealias IntHolder = Holder with IntTagged
+function main() returns ExitCode
+	let h = IntHolder.create(IntTagged.create(1, v: 5))
+	print("{IntOuter.check(h, x: IntTagged.create(1, v: 9))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+<!-- test: associated-binding.error.a-static-whose-callee-reads-a-parametric-witness -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Integer
+end 'Sized'
+
+type Leaf implements Sized
+	var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function size() returns Integer
+		return self.n
+	end 'size'
+end 'Leaf'
+
+type Box uses T implements Sized where T is Sized
+	var t as T
+
+	static function create(t T) returns Self
+		return Self{t: t}
+	end 'create'
+
+	function size() returns Integer
+		return self.t.size() + 1
+	end 'size'
+end 'Box'
+
+type Holder uses S where S is Sized
+	var s as S
+
+	static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+
+	function twice() returns Integer
+		return self.s.size() * 2
+	end 'twice'
+
+	function tag() returns Integer
+		return 5
+	end 'tag'
+end 'Holder'
+
+type Outer uses E where E is Sized
+	typealias BoxE = Box with E
+	typealias Inner = Holder with BoxE
+	var e as E
+
+	static function create(e E) returns Self
+		return Self{e: e}
+	end 'create'
+
+	static function tally(b BoxE) returns Integer
+		return Inner.create(b).twice()
+	end 'tally'
+end 'Outer'
+
+typealias LeafOuter = Outer with Leaf
+typealias LeafBox = Box with Leaf
+
+function main() returns ExitCode
+	print("{LeafOuter.tally(LeafBox.create(Leaf.create(7)))}\n")
+	return 0
+end 'main'
+```
 ```maxoncstderr
-error E3132: <fragment>:57:11: 'Outer.tally' calls 'Holder.twice', whose `where` constraint requires a witness table for `Box` conforming to `Sized` at a generic instance written over this body's OWN type parameters — and 'Holder.twice' READS that witness. A conformance whose impls carry a hidden dictionary is given a table PER INSTANCE, whose slots supply that instantiation's layout descriptor; an instance that is still parametric names a descriptor the enclosing frame only holds at run time, so no static table exists to pass. Reach the constrained method through a concrete instance, or make the conformance's impls independent of their type argument
+error E3132: <fragment>:57:18: 'Outer.tally' calls 'Holder.twice', whose `where` constraint requires a witness table for `Box` conforming to `Sized` at a generic instance written over this body's OWN type parameters — and 'Holder.twice' READS that witness. A conformance whose impls carry a hidden dictionary is given a table PER INSTANCE, whose slots supply that instantiation's layout descriptor; an instance that is still parametric names a descriptor the enclosing frame only holds at run time, so no static table exists to pass. Reach the constrained method through a concrete instance, or make the conformance's impls independent of their type argument
+```
+
+<!-- test: associated-binding.a-conformance-reading-its-layout-through-a-blind-edge-is-served-per-instance -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+type Bag uses T implements Equatable
+	export typealias Items = Array with T
+	var items as Items
+	static function create(items Items) returns Self
+		return Self{items: items}
+	end 'create'
+	function equals(other Self) returns bool
+		let copy = try other.items.slice(0, endIndex: other.items.count()) otherwise return false
+		return copy.count() == items.count()
+	end 'equals'
+end 'Bag'
+type Keeper uses A where A is Equatable
+	var n as Val
+	static function create(n Val) returns Self
+		return Self{n: n}
+	end 'create'
+	function touch() returns Val
+		return n
+	end 'touch'
+end 'Keeper'
+type Outer uses U
+	export typealias Bagged = Bag with U
+	export typealias Kept = Keeper with Bagged
+	var kept as Kept
+	static function create(kept Kept) returns Self
+		return Self{kept: kept}
+	end 'create'
+	function poke() returns Val
+		return kept.touch()
+	end 'poke'
+end 'Outer'
+typealias VBag = Bag with Val
+typealias VKeeper = Keeper with VBag
+typealias O = Outer with Val
+function main() returns ExitCode
+	print("{O.create(VKeeper.create(1)).poke()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: associated-binding.mutually-recursive-conformers-filing-witness-entries-terminate -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Val
+end 'Sized'
+
+type Keeper uses A where A is Sized
+	var n as Val
+
+	static function create(n Val) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function touch() returns Val
+		return n
+	end 'touch'
+end 'Keeper'
+
+type Ping uses T implements Sized
+	export typealias Wrapped = Array with T
+	export typealias Back = Pong with Wrapped
+	export typealias Keep = Keeper with Back
+
+	var keep as Keep
+
+	static function create(keep Keep) returns Self
+		return Self{keep: keep}
+	end 'create'
+
+	function size() returns Val
+		return sizeof(T) + self.keep.touch()
+	end 'size'
+end 'Ping'
+
+type Pong uses U implements Sized
+	export typealias Wrapped = Array with U
+	export typealias Back = Ping with Wrapped
+	export typealias Keep = Keeper with Back
+
+	var keep as Keep
+
+	static function create(keep Keep) returns Self
+		return Self{keep: keep}
+	end 'create'
+
+	function size() returns Val
+		return sizeof(U) + self.keep.touch()
+	end 'size'
+end 'Pong'
+
+typealias ValArray = Array with Val
+typealias ValArrayPong = Pong with ValArray
+typealias ValPingKeeper = Keeper with ValArrayPong
+typealias ValPing = Ping with Val
+
+function main() returns ExitCode
+	let p = ValPing.create(ValPingKeeper.create(1))
+	print("{p.size()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9
 ```

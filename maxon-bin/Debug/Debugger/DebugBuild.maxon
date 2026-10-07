@@ -133,7 +133,7 @@ function debugBuildOwnerOf(name String) returns LeftoverOwner
 	let trailing = serialAndExtension.trimStart(asciiDecimalDigits())
 	let image = hostExecutableExtension()
 
-	if trailing.byteLength() == serialAndExtension.byteLength() or not (trailing == image or trailing == "{image}{MxdbgSidecarExtension}") 'notOurExtension'
+	if trailing.byteLength() == serialAndExtension.byteLength() or not isImageSuffixOrItsSidecar(trailing, image: image) 'notOurExtension'
 		return LeftoverOwner.notOwned
 	end 'notOurExtension'
 
@@ -143,10 +143,6 @@ function debugBuildOwnerOf(name String) returns LeftoverOwner
 
 	return ownerProcessNamed(owner)
 end 'debugBuildOwnerOf'
-
-function sidecarOf(image FilePath) returns FilePath
-	return try FilePath.from(sidecarPathOf(image)) otherwise panic("sidecarOf: {image.path} with a suffix appended is a spellable path")
-end 'sidecarOf'
 
 function buildForDebugging(source FilePath, compiler FilePath, output FilePath, traced bool, timeoutMs DurationMs) returns DebugBuildOutcome
 	var argv = StringArray.create()
@@ -193,10 +189,11 @@ export function unfinishedChildReason(failure SubprocessError, doing String) ret
 end 'unfinishedChildReason'
 
 function discardBuiltImage(program FilePath)
+	discardBuildRecordOf(program)
 	removeOwnedFile(program)
 
 	if not File.exists(program) 'theImageIsGone'
-		removeOwnedFile(sidecarOf(program))
+		removeOwnedFile(sidecarPathOf(program))
 	end 'theImageIsGone'
 end 'discardBuiltImage'
 

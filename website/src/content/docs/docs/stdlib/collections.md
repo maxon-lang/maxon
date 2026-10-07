@@ -9,7 +9,8 @@ sidebar:
 
 `Array` is a growable, contiguous, generic sequence. Declare a concrete type with `typealias`, or write a
 literal: `[1, 2, 3]`. `Array` implements `Iterable` and `Cloneable`; it is also `Hashable` and `Equatable`
-when its element is.
+when its element is. `equals` (and `==`) compares two arrays element by element through the element's own
+`equals`, and `hash()` folds every element's own `hash()`, so equal arrays hash equal.
 
 ```maxon
 typealias Score = int(i64.min to i64.max)

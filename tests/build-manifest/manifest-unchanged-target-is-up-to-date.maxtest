@@ -1,0 +1,20 @@
+let CaseDirName = "manifest-unchanged-target-is-up-to-date"
+let UsedTheCachedRunner = "Used the cached build runner"
+let UpToDateLinePrefix = "Up to date -> "
+let WroteCodeWording = "bytes of code to"
+
+test 'a path-less build of a target whose inputs are unchanged is up to date'
+	let staged = stagedProject(CaseDirName, fixture: DefaultFixtureName)
+	waitPastWhatWasStaged(staged)
+
+	let cold = spawnManifestBuild(staged, options: StringArray.create())
+	Expect.equal(cold.exitCode(), expected: 0, message: "the first `maxon build` over the staged manifest failed. It wrote to stdout: {cold.stdout} and to stderr: {cold.stderr}")
+
+	let warm = spawnManifestBuild(staged, options: StringArray.create())
+	let said = "It wrote to stdout: {warm.stdout} and to stderr: {warm.stderr}"
+
+	Expect.equal(warm.exitCode(), expected: 0, message: "the second `maxon build` over the staged manifest failed. {said}")
+	Expect.contains(warm.stdout, needle: UsedTheCachedRunner, message: "the second `maxon build` did not use the build runner the first one published. {said}")
+	Expect.contains(warm.stdout, needle: UpToDateLinePrefix, message: "the second `maxon build` of a target nothing had changed for did not say `{UpToDateLinePrefix}<path>`. {said}")
+	Expect.isFalse(warm.stderr.contains(WroteCodeWording), message: "the second `maxon build` of a target nothing had changed for compiled it. {said}")
+end 'a path-less build of a target whose inputs are unchanged is up to date'

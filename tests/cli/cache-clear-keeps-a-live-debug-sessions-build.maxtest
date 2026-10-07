@@ -11,20 +11,6 @@ function plantedName(owner OwnerId) returns String
 	return "{PlantedStem}-{owner}-{MintedAt}-1{executableSuffix()}"
 end 'plantedName'
 
-function endedProcessId() returns OwnerId
-	#if os(Windows)
-		let exe = Executable.name("cmd")
-		let argv = ["/c", "exit", "0"]
-	#else
-		let exe = Executable.path(try FilePath.from("/bin/sh") otherwise panic("cache clear live-build test: /bin/sh is a spellable path"))
-		let argv = ["-c", "exit 0"]
-	#endif
-
-	let finished = try Subprocess.run(exe, arguments: argv) otherwise panic("cache clear live-build test: could not run a child to learn an ended process's id")
-
-	return finished.pid
-end 'endedProcessId'
-
 test 'cache clear keeps the debug build of a session that is still running, and says so'
 	let dir = freshCaseDir(CaseDirName)
 	let cacheRoot = cacheRootIn(dir)
@@ -35,7 +21,7 @@ test 'cache clear keeps the debug build of a session that is still running, and 
 
 	let live = builds.join(plantedName(__Builtins.currentProcessId()))
 	let liveSidecar = builds.join("{plantedName(__Builtins.currentProcessId())}{SidecarSuffix}")
-	let ended = builds.join(plantedName(endedProcessId()))
+	let ended = builds.join(plantedName(endedVersionRunProcessId() as OwnerId))
 
 	try File.writeText(live, content: PlantedBytes)
 	try File.writeText(liveSidecar, content: PlantedBytes)

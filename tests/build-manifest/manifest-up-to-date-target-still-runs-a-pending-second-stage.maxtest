@@ -1,0 +1,24 @@
+let CaseDirName = "manifest-up-to-date-target-still-runs-a-pending-second-stage"
+let SecondStageVariable = "MAXON_SECOND_STAGE"
+let SecondStageValue = "1"
+let UpToDateLinePrefix = "Up to date -> "
+let RanExitCode = 7
+
+test 'an up-to-date target that asks to rebuild with its output still runs that second stage'
+	let staged = stagedProject(CaseDirName, fixture: RebuildWithOutputFixtureName)
+	let marker = staged.join(RebuildWithOutputMarkerFileName)
+	waitPastWhatWasStaged(staged)
+
+	let first = spawnManifestBuild(staged, options: StringArray.create(), environment: [SecondStageVariable: SecondStageValue])
+	let firstSaid = "It wrote to stdout: {first.stdout} and to stderr: {first.stderr}"
+
+	Expect.equal(first.exitCode(), expected: 0, message: "`maxon build` with {SecondStageVariable} already set did not exit with the build's own success. {firstSaid}")
+	Expect.isFalse(File.exists(marker), message: "`maxon build` with {SecondStageVariable} already set ran the program it wrote. {firstSaid}")
+
+	let second = spawnManifestBuild(staged, options: StringArray.create())
+	let said = "It wrote to stdout: {second.stdout} and to stderr: {second.stderr}"
+
+	Expect.contains(second.stdout, needle: UpToDateLinePrefix, message: "a second `maxon build` of a target nothing had changed for did not say `{UpToDateLinePrefix}<path>`. {said}")
+	Expect.equal(second.exitCode(), expected: RanExitCode, message: "a second `maxon build` that found its target up to date did not exit with what the second stage's program returned. {said}")
+	Expect.isTrue(File.exists(marker), message: "a second `maxon build` that found its target up to date did not run the second stage its manifest asks for. {said}")
+end 'an up-to-date target that asks to rebuild with its output still runs that second stage'

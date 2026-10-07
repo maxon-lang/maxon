@@ -1,8 +1,5 @@
 let CaseDirName = "cache-says-so-when-no-root-can-be-created"
 
-// Numbered, never named after the variable each blocks — `variablesUnnamedIn` owns the reason.
-let BlockingFilePrefix = "a-file-where-a-directory-would-go-"
-
 let InUseWords = "in use"
 
 let Succeeded = 0
@@ -10,20 +7,14 @@ let Succeeded = 0
 test 'bare cache says so when no candidate root can be created, and names every variable it consulted'
 	let dir = freshCaseDir(CaseDirName)
 
-	var naming = EnvMap.create()
+	var naming = rosterWithEveryCandidateBlocked(dir)
 	var blockedPaths = ListedWordArray.create()
-	var blockedSoFar = 0
 
-	for variable in confinableCacheVariables() 'eachCandidate'
-		let blocked = dir.join("{BlockingFilePrefix}{blockedSoFar}")
-		blockCacheRootAt(blocked)
-
-		naming.upsert(variable, value: blocked.toString())
-		blockedPaths.push(blocked.toString())
-		blockedSoFar = blockedSoFar + 1
+	for (_, blocked) in naming 'eachCandidate'
+		blockedPaths.push(blocked)
 	end 'eachCandidate'
 
-	let override = dir.join("{BlockingFilePrefix}{blockedSoFar}")
+	let override = blockedRootFileIn(dir, ordinal: confinableCacheVariables().count())
 	blockCacheRootAt(override)
 
 	naming.upsert(CacheRootVariable, value: override.toString())

@@ -1925,3 +1925,106 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:8:16: argument type mismatch for 'index': expected 'ElementIndex', got 'String'
 ```
+
+<!-- test: a-user-array-keeps-its-own-hash-and-equals -->
+A program's own `type Array` that declares `hash` and `equals` is served by them, method and operator alike.
+```maxon
+typealias Num = int(0 to 1000)
+type Array uses Element implements BuiltinArrayLiteral, Equatable, Hashable
+	export typealias ElementMemory = __ManagedMemory with Element
+	export var managed as ElementMemory
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+	static function create() returns Self
+		return Self{}
+	end 'create'
+	function hash() returns HashValue
+		return 7
+	end 'hash'
+	function equals(other Self) returns bool
+		return other.count() >= 0
+	end 'equals'
+end 'Array'
+typealias NumArray = Array with Num
+function main() returns ExitCode
+	var a = NumArray.create()
+	a.push(9 as Num)
+	let b = NumArray.create()
+	print("{a.hash()} {a.equals(b)} {a == b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 true true
+```
+
+<!-- test: a-library-string-array-key-beside-a-user-array -->
+A library `StringArray` is a working `Map` key in a program that declares its own `type Array`.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	export typealias ElementMemory = __ManagedMemory with Element
+	export var managed as ElementMemory
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+typealias Integer = int(i64.min to i64.max)
+typealias Index = Map with (StringArray, Integer)
+function main() returns ExitCode
+	var m = Index.create()
+	try m.insert("a,b".split(","), value: 7) otherwise ignore
+	let found = try m.get("a,b".split(",")) otherwise 0
+	print("{found}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: a-library-string-array-key-is-not-hashed-by-a-user-array -->
+The library `StringArray` key hashes and compares through the library's own conformance, never through
+the `hash` and `equals` a program's own `type Array` declares.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral, Hashable, Equatable
+	export typealias ElementMemory = __ManagedMemory with Element
+	export var managed as ElementMemory
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+	static function create() returns Self
+		return Self{}
+	end 'create'
+	function hash() returns HashValue
+		return 7
+	end 'hash'
+	function equals(other Self) returns bool
+		return other.count() >= 0
+	end 'equals'
+end 'Array'
+typealias Integer = int(i64.min to i64.max)
+typealias Index = Map with (StringArray, Integer)
+function main() returns ExitCode
+	var m = Index.create()
+	try m.insert("a,b".split(","), value: 7) otherwise ignore
+	let found = try m.get("c,d".split(",")) otherwise 0
+	print("{found}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```

@@ -3427,12 +3427,12 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 			// are owned by the interface rather than by any conformer — which is exactly the owner guard
 			// `ProgramSignatures.substituteThroughInstance` applies, and `witnessFormalDeclaredType` has already
 			// answered `opaque` for them one line up.
-			declared(paramType, preErasedAggregate) then checkWitnessArgument(project, func: func, signatures: signatures, interfaceName: slot.sourceInterfaceName, formalName: formalName, paramType: paramType, preErasedAggregate: preErasedAggregate, param: ArgumentParameter.named(witnessFormalName(requirement, position: j)), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: witnessReceiver, callRange: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance)
+			declared(paramType, preErasedAggregate) then checkWitnessArgument(project, func: func, signatures: signatures, interfaceName: slot.sourceInterfaceName, formalName: formalName, paramType: paramType, preErasedAggregate: preErasedAggregate, param: ArgumentParameter.named(witnessFormalName(requirement, position: j)), position: j, argId: try args.get(j + WitnessReceiverArgCount) otherwise panic("checkWitnessArgTypes: args.get OOB at {j + WitnessReceiverArgCount} below count {args.count()} — a dispatch reaching here has the receiver plus one actual per formal"), callInstanceSubject: CallSubject.heldBy(witnessReceiver), callRange: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance)
 		end 'formal'
 	end 'eachFormal'
 end 'checkWitnessArgTypes'
 
-function checkWitnessArgument(project Project, func IrFunction, signatures ProgramSignatures, interfaceName ByteArray, formalName ByteArray, paramType MaxonType, preErasedAggregate ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject ValueId, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
+function checkWitnessArgument(project Project, func IrFunction, signatures ProgramSignatures, interfaceName ByteArray, formalName ByteArray, paramType MaxonType, preErasedAggregate ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer)
 	if argumentIsRefused(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: formalName, param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: false) 'thisArgumentWasRefused'
 		return
 	end 'thisArgumentWasRefused'
@@ -3449,7 +3449,7 @@ end 'checkWitnessArgument'
 // functions, so a returned flag is six places to remember and one place to silently forget — where
 // the record that a diagnostic exists cannot be forgotten by a new report site. It is
 // `Queries.foldOneFileInto`'s own before/after idiom.
-function argumentIsRefused(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject ValueId, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool) returns bool
+function argumentIsRefused(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool) returns bool
 	let reportedBefore = project.diagnostics.count()
 	checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, param: param, position: position, argId: argId, callInstanceSubject: callInstanceSubject, paramExistentialSites: paramExistentialSites, callRange: callRange, filePath: filePath, provenance: provenance, overloadRefused: overloadRefused)
 	return project.diagnostics.count() > reportedBefore
@@ -4161,7 +4161,7 @@ function checkIndirectCallArgs(project Project, func IrFunction, opIndex Element
 		// ⚠ The CALLEE is this call's own subject, and it is a function VALUE — never `genericInstance`-tagged —
 		// so the shape substitution declines. That is the right answer as well as an honest one: an indirect
 		// call's declared shape is the function TYPE's own, written in no generic body's declaration view.
-		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i), declaredParamName: EmptySourceText, param: ArgumentParameter.unnamed, position: i, argId: argId, callInstanceSubject: callee, paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance, overloadRefused: false)
+		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i), declaredParamName: EmptySourceText, param: ArgumentParameter.unnamed, position: i, argId: argId, callInstanceSubject: CallSubject.heldBy(callee), paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance, overloadRefused: false)
 	end 'eachArg'
 end 'checkIndirectCallArgs'
 
@@ -5776,10 +5776,33 @@ function checkResolvedExtensionConstraints(project Project, func IrFunction, cal
 	var signatures = programSignaturesIn(project, asker: "checkResolvedExtensionConstraints")
 
 	match receiverMeetsExtensionConstraints(signatures, gid: gid as GenericInstanceId, constraints: constraints) 'constraint'
-		met then break 'constraint'
+		met then reportOpaqueReceiverWithoutTables(project, signatures: signatures, func: func, callee: callee, constraints: constraints, gid: gid as GenericInstanceId, callRange: callRange, filePath: filePath)
 		unmet(interfaceName, argDisplayName) then reportConditionalExtensionWithheld(project, signatures: signatures, callee: callee, constraints: constraints, interfaceName: interfaceName, argDisplayName: argDisplayName, callRange: callRange, filePath: filePath)
 	end 'constraint'
 end 'checkResolvedExtensionConstraints'
+
+// The deferred twin of `Parser.requireTablesToForwardOpaqueArguments`, on the member overload
+// resolution chose.
+function reportOpaqueReceiverWithoutTables(project Project, signatures ProgramSignatures, func IrFunction, callee ByteArray, constraints WhereConstraintArray, gid GenericInstanceId, callRange SourceRange, filePath FilePath)
+	let holder = tableHolderOf(project, signatures: signatures, func: func)
+
+	if holder == TableHolder.carriesTables or not signatures.constraintsNameABareTypeParameter(callee, extensionConstraints: constraints, gid: gid) 'nothingToForwardOrSomewhereToForwardFrom'
+		return
+	end 'nothingToForwardOrSomewhereToForwardFrom'
+
+	let arrival = arrivalWhenWithoutTables(holder, outsideAClosure: NoWitnessTablesArrival.dispatchedOnAnInstanceOverATypeParameter)
+
+	match splitQualifiedName(overloadRegistrationBaseName(callee)) 'q'
+		parts(_, member) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: {noWitnessTablesSentence(member, arrival: arrival)}", line: callRange.line, column: callRange.column, filePath: filePath)
+		notQualified then panic("reportOpaqueReceiverWithoutTables: '{String.from(callee)}' carries extension constraints but is not a qualified method name — `Parser.noteTypeExtensionWitnessConstraints` files them under `<Conformer>.<member>` only")
+	end 'q'
+end 'reportOpaqueReceiverWithoutTables'
+
+function tableHolderOf(project Project, signatures ProgramSignatures, func IrFunction) returns TableHolder
+	let liftedClosure = isLiftedClosureName(func.name)
+	let callerSignature = try project.funcSignatures.get(func.name) otherwise return deriveTableHolder(liftedClosure, carriedTables: 0)
+	return deriveTableHolder(liftedClosure, carriedTables: signatures.witnessParamCountForCallee(func.name, sig: callerSignature))
+end 'tableHolderOf'
 
 // The refusal itself, split out so the arm above stays one line: the callee is a
 // `<Conformer>.<member>` (the fold files constraints under no other shape), possibly wearing an overload
@@ -5954,13 +5977,14 @@ function checkTypeParameterArgs(project Project, func IrFunction, result ValueId
 	// Spelled as a silent `return` it would delete THIS ENTIRE CHECK for the call, restoring in silence the
 	// wild free this check exists to refuse; a green suite could never show it, because the check that
 	// vanished is the one that reports.
-	let tag = try func.valueTags.get(subject) otherwise panic("checkTypeParameterArgs: value v{subject} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
-	let subjectNameId = try func.valueNameIds.get(subject) otherwise panic("checkTypeParameterArgs: value v{subject} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
-
-	if tag == ValueTypeTag.genericInstance 'aConcreteInstance'
-		checkTypeParameterArgsAt(project, func: func, gid: subjectNameId as GenericInstanceId, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath, provenance: provenance)
+	if let instance = try callInstanceOf(func, subject: subject) 'aConcreteInstance'
+		checkTypeParameterArgsAt(project, func: func, gid: instance, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath, provenance: provenance)
 		return
 	end 'aConcreteInstance'
+
+	let subjectId = subjectValue(subject)
+	let tag = try func.valueTags.get(subjectId) otherwise panic("checkTypeParameterArgs: value v{subjectId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
+	let subjectNameId = try func.valueNameIds.get(subjectId) otherwise panic("checkTypeParameterArgs: value v{subjectId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 
 	// ⚠ **A `structRef` RECEIVER, AND ONLY A RECEIVER.** It is a value of the base itself — no `with` has
 	// reached it — so an opaque formal of THAT declaration is unbound at this call and its argument can be
@@ -6188,19 +6212,59 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 	end 'eachArg'
 end 'checkTypeParameterArgsAt'
 
-// ⭐ **WHICH VALUE CARRIES THE INSTANCE a call into a shared generic body is made at.** Two shapes carry
-// it, and they are asked in the order that makes a METHOD's answer its receiver's: an instance method's
-// receiver IS the instance, whereas its result may be an unrelated type (`get() returns T`), while a static
-// factory has no receiver and its RESULT is the instance it built (`retypeGenericAliasConstructorResult`).
-// Returns a `ValueId` rather than an instance-or-none union so the answer allocates nothing; the caller
-// reads the tag to find out whether it is an instance at all.
-function callInstanceSubject(sig FuncSignature, result ValueId, argIds ValueIdArray) returns ValueId
+union CallSubject
+	heldBy(value ValueId)
+	builtBy(result ValueId)
+end 'CallSubject'
+
+// ⭐ **WHICH VALUE CARRIES THE INSTANCE a call into a shared generic body is made at.** Two shapes
+// carry it, and they are asked in the order that makes a METHOD's answer its receiver's: an
+// instance method's receiver IS the instance (`heldBy`), whereas its result may be an unrelated
+// type (`get() returns T`), while a receiverless static has only its RESULT (`builtBy`) — the
+// instance it built (`retypeGenericAliasConstructorResult`), or, for a static returning another
+// type, the instance its call was made through (`IrFunction.valueCallInstances`), which only this
+// arm reads.
+function callInstanceSubject(sig FuncSignature, result ValueId, argIds ValueIdArray) returns CallSubject
 	if sig.takesReceiver() and argIds.count() > 0 'method'
-		return try argIds.get(0) otherwise panic("callInstanceSubject: argIds.count() > 0 but get(0) failed")
+		return CallSubject.heldBy(try argIds.get(0) otherwise panic("callInstanceSubject: argIds.count() > 0 but get(0) failed"))
 	end 'method'
 
-	return result
+	if sig.takesReceiver() 'receiverlessMethod'
+		return CallSubject.heldBy(result)
+	end 'receiverlessMethod'
+
+	return CallSubject.builtBy(result)
 end 'callInstanceSubject'
+
+function subjectValue(subject CallSubject) returns ValueId
+	return match subject 'subject'
+		heldBy(value) gives value
+		builtBy(result) gives result
+	end 'subject'
+end 'subjectValue'
+
+function callInstanceOf(func IrFunction, subject CallSubject) returns GenericInstanceId throws AbsentError
+	match subject 'subject'
+		heldBy(value) then return try instanceTypingValue(func, value: value)
+		builtBy(result) then return try instanceBuiltByStaticCall(func, result: result)
+	end 'subject'
+end 'callInstanceOf'
+
+function instanceBuiltByStaticCall(func IrFunction, result ValueId) returns GenericInstanceId throws AbsentError
+	if let recorded = try func.valueCallInstances.get(result) 'aStaticCalledThroughAnInstance'
+		return recorded
+	end 'aStaticCalledThroughAnInstance'
+
+	return try instanceTypingValue(func, value: result)
+end 'instanceBuiltByStaticCall'
+
+function instanceTypingValue(func IrFunction, value ValueId) returns GenericInstanceId throws AbsentError
+	if (try func.valueTags.get(value) otherwise panic("instanceTypingValue: value v{value} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")) != ValueTypeTag.genericInstance 'notAnInstance'
+		throw AbsentError.absent
+	end 'notAnInstance'
+
+	return (try func.valueNameIds.get(value) otherwise panic("instanceTypingValue: genericInstance value v{value} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep")) as GenericInstanceId
+end 'instanceTypingValue'
 
 // ⭐ **THE PER-INSTANCE ARGUMENT CHECK (E3005).** A method whose parameter is a bare inner alias
 // (`setTag(t Idx)`) wants that parameter QUALIFIED to the concrete receiver's instance
@@ -6470,7 +6534,7 @@ end 'reportIrreparableSuppliedDefault'
 // The subject's tag is read per parameter rather than hoisted for `argParamLabel`'s reason — a dense array
 // read is cheaper than threading a second value through, and the overwhelmingly common call (no instance
 // subject at all) leaves after it.
-function paramTypeThroughCallInstance(project Project, func IrFunction, subject ValueId, paramType MaxonType) returns MaxonType
+function paramTypeThroughCallInstance(project Project, func IrFunction, subject CallSubject, paramType MaxonType) returns MaxonType
 	let paramTag = maxonTypeTag(paramType)
 
 	if paramTag == ValueTypeTag.typeParameter 'ownedByTheSubstitutedCheck'
@@ -6481,17 +6545,12 @@ function paramTypeThroughCallInstance(project Project, func IrFunction, subject 
 		return paramType
 	end 'carriesNoDeclarationView'
 
-	let subjectTag = try func.valueTags.get(subject) otherwise panic("paramTypeThroughCallInstance: value v{subject} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
-
-	if subjectTag != ValueTypeTag.genericInstance 'notACallThroughAConcreteInstance'
-		return paramType
-	end 'notACallThroughAConcreteInstance'
+	let gid = try callInstanceOf(func, subject: subject) otherwise return paramType
 
 	// ⚠ `var`, because the substitution INTERNS the instance it produces — `Array with T` under `T -> Num` is a
 	// type the program may never spell, and the identity it is compared by has to exist. Same reason
 	// `checkTypeParameterArgsAt` binds the index that way for the compiled-name memo.
 	var signatures = programSignaturesIn(project, asker: "paramTypeThroughCallInstance")
-	let gid = (try func.valueNameIds.get(subject) otherwise panic("paramTypeThroughCallInstance: genericInstance value v{subject} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep")) as GenericInstanceId
 
 	if paramTag == ValueTypeTag.structRef 'maybeSelf'
 		return slotThroughCallInstance(project, signatures: signatures, slotType: paramType, gid: gid)
@@ -6529,40 +6588,35 @@ end 'paramTypeThroughCallInstance'
 //
 // Returns the shape UNCHANGED — the same object — when nothing moved, the early-return contract every
 // substitution in this compiler keeps, so the overwhelmingly common non-generic call allocates nothing.
-function functionShapeThroughCallInstance(project Project, func IrFunction, subject ValueId, shape FunctionShape) returns FunctionShape
-	let subjectTag = try func.valueTags.get(subject) otherwise panic("functionShapeThroughCallInstance: value v{subject} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
-
-	if subjectTag != ValueTypeTag.genericInstance 'notACallThroughAConcreteInstance'
-		return shape
-	end 'notACallThroughAConcreteInstance'
+function functionShapeThroughCallInstance(project Project, func IrFunction, subject CallSubject, shape FunctionShape) returns FunctionShape
+	let gid = try callInstanceOf(func, subject: subject) otherwise return shape
 
 	// ⚠ `var` for `paramTypeThroughCallInstance`'s reason — the substitution INTERNS the instance and the tuple
 	// it produces, so the identity the comparison is about has to exist by the time it is compared.
 	var signatures = programSignaturesIn(project, asker: "functionShapeThroughCallInstance")
-	let gid = try func.valueNameIds.get(subject) otherwise panic("functionShapeThroughCallInstance: genericInstance value v{subject} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep")
 	var substituted = MaxonTypeArray.create()
 	var identities = ByteArrayArray.create()
 	var moved = false
 
 	for i in 0 upto shape.paramTypes.count() 'eachParam'
 		let paramType = try shape.paramTypes.get(i) otherwise panic("functionShapeThroughCallInstance: paramTypes.get OOB at {i} — the count was just read from the same array")
-		let next = resolvedSlotThroughCallInstance(project, signatures: signatures, slotType: paramType, gid: gid as GenericInstanceId)
+		let next = resolvedSlotThroughCallInstance(project, signatures: signatures, slotType: paramType, gid: gid)
 
 		if not maxonTypesDenoteSame(next, b: paramType) 'paramMoved'
 			moved = true
 		end 'paramMoved'
 
 		substituted.push(next)
-		identities.push(substitutedSlotIdentity(project, signatures: signatures, slotType: paramType, gid: gid as GenericInstanceId, carried: shapeParamIdentity(shape, index: i)))
+		identities.push(substitutedSlotIdentity(project, signatures: signatures, slotType: paramType, gid: gid, carried: shapeParamIdentity(shape, index: i)))
 	end 'eachParam'
 
-	let returnType = returnTypeThroughCallInstance(project, signatures: signatures, returnType: shape.returnType, gid: gid as GenericInstanceId)
+	let returnType = returnTypeThroughCallInstance(project, signatures: signatures, returnType: shape.returnType, gid: gid)
 
 	if not moved and maxonReturnTypesDenoteSame(returnType, b: shape.returnType) 'theInstanceFixesNothingHere'
 		return shape
 	end 'theInstanceFixesNothingHere'
 
-	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: identities, returnAggregateName: returnSlotIdentityThroughCallInstance(project, signatures: signatures, shape: shape, gid: gid as GenericInstanceId))
+	return FunctionShape.create(substituted, returnType: returnType, paramAggregateNames: identities, returnAggregateName: returnSlotIdentityThroughCallInstance(project, signatures: signatures, shape: shape, gid: gid))
 end 'functionShapeThroughCallInstance'
 
 // ⭐⭐ **THE IDENTITY OF A SLOT THE INSTANCE JUST FILLED IN — `Parser.erasedAggregateNameOf`'s RULE stated for
@@ -7017,15 +7071,9 @@ end 'fileScopedConformerBinding'
 // Returns the site UNSUBSTITUTED when the subject is not a concrete instance — a free function's call, or a
 // self-call inside the shared body. That is not a silent pass: an argument still opaque afterwards is what
 // `existentialSiteClaimAgainst` refuses as `unresolvable`.
-function existentialSiteThroughCallInstance(signatures ProgramSignatures, func IrFunction, subject ValueId, siteInstance GenericInstanceId) returns GenericInstanceId
-	let subjectTag = try func.valueTags.get(subject) otherwise panic("existentialSiteThroughCallInstance: value v{subject} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
-
-	if subjectTag != ValueTypeTag.genericInstance 'notACallThroughAConcreteInstance'
-		return siteInstance
-	end 'notACallThroughAConcreteInstance'
-
-	let subjectGid = try func.valueNameIds.get(subject) otherwise panic("existentialSiteThroughCallInstance: genericInstance value v{subject} of function '{String.from(func.name)}' has no recorded GenericInstanceId — the two type columns are minted in lockstep")
-	let substituted = signatures.substituteThroughInstance(MaxonType.genericInstance(siteInstance), id: subjectGid as GenericInstanceId)
+function existentialSiteThroughCallInstance(signatures ProgramSignatures, func IrFunction, subject CallSubject, siteInstance GenericInstanceId) returns GenericInstanceId
+	let subjectGid = try callInstanceOf(func, subject: subject) otherwise return siteInstance
+	let substituted = signatures.substituteThroughInstance(MaxonType.genericInstance(siteInstance), id: subjectGid)
 
 	// The substitution re-interns and hands back a `genericInstance`, or the SAME instance when no argument
 	// moved. A different tag would mean it had rewritten an existential's identity into something else, which
@@ -7070,7 +7118,7 @@ end 'returnExistentialSitesOfFunc'
 // whose signature actually recorded a claim for this parameter — `paramExistentialSiteAt` throws for every
 // other parameter of every other function, which is nearly all of them, so the shared empty column costs one
 // failed scan of an empty list.
-function checkExistentialSiteClaimAtArgument(project Project, func IrFunction, paramExistentialSites ParamExistentialSiteArray, position ParamCount, argTag ValueTypeTag, argNameId TypeNameId, interfaceName ByteArray, param ArgumentParameter, callInstanceSubject ValueId, callRange SourceRange, filePath FilePath)
+function checkExistentialSiteClaimAtArgument(project Project, func IrFunction, paramExistentialSites ParamExistentialSiteArray, position ParamCount, argTag ValueTypeTag, argNameId TypeNameId, interfaceName ByteArray, param ArgumentParameter, callInstanceSubject CallSubject, callRange SourceRange, filePath FilePath)
 	let declaredSite = try paramExistentialSiteAt(paramExistentialSites, position: position) otherwise return
 	var signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtArgument")
 
@@ -7404,7 +7452,7 @@ end 'existentialStoreMismatchSubject'
 function checkExistentialSiteClaimAtFieldStore(project Project, func IrFunction, store ExistentialFieldStore, valueTag ValueTypeTag, valueNameId TypeNameId)
 	let declaredSite = try store.claims.get(0) otherwise return
 	var signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtFieldStore")
-	let site = existentialSiteThroughCallInstance(signatures, func: func, subject: store.subject, siteInstance: declaredSite)
+	let site = existentialSiteThroughCallInstance(signatures, func: func, subject: CallSubject.heldBy(store.subject), siteInstance: declaredSite)
 	let place = existentialStoreWideningPlace(store)
 
 	if valueTag != ValueTypeTag.interfaceRef 'aConcreteConformer'
@@ -7459,7 +7507,7 @@ end 'existentialStoreWideningPlace'
 // which is their honest answer rather than a stand-in — an interface REQUIREMENT's formals are the
 // interface's own spelling, and a function TYPE names its parameters' declarations nowhere at all
 // (the same gap `declaredParamName` has at those two sites).
-function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject ValueId, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool)
+function checkOneArgType(project Project, func IrFunction, paramType MaxonType, preErasedAggregate ByteArray, declaredParamName ByteArray, param ArgumentParameter, position ParamCount, argId ValueId, callInstanceSubject CallSubject, paramExistentialSites ParamExistentialSiteArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool)
 	let argTag = try func.valueTags.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 	let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkOneArgType: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
 	let paramTag = maxonTypeTag(paramType)

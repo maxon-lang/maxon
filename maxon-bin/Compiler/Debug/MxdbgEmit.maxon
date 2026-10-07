@@ -14,17 +14,23 @@
 // only, which is why its ids run one behind (`sidecarFileIdOf`).
 let MxdbgFirstSourceFileId = 1 as DebugFileId
 
-export function writeDebugInfoSidecar(project Project, codeResult CodeResult, outputPath FilePath)
+export enum SidecarOutcome
+	notOwed
+	written
+	failed
+end 'SidecarOutcome'
+
+export function writeDebugInfoSidecar(project Project, codeResult CodeResult, outputPath FilePath) returns SidecarOutcome
 	// The wasm lane emits a whole core module rather than a `.text` image and builds no function chunks,
 	// so there is nothing for a `.text`-offset-keyed table to describe. Skipped rather than written empty:
 	// a sidecar naming no function is one a driver would refuse anyway, at a step further from the reason.
 	if codeResult.debugFunctions.count() == 0 'nothingToDescribe'
-		return
+		return SidecarOutcome.notOwed
 	end 'nothingToDescribe'
 
 	var signatures = try queryProgramSignatures(project) otherwise 'noSignatures'
 		compilerLogger(CompilerLogGroup.compiler).error("Could not read the program's signatures, so no debug-info sidecar was written beside {outputPath}")
-		return
+		return SidecarOutcome.failed
 	end 'noSignatures'
 
 	var writer = MxdbgWriter.create()
@@ -92,17 +98,16 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	// two numbers for one build.
 	let image = writer.build(codeBuildId(codeResult.code), targetTriple: targetToString(project.target), sourceRoot: Directory.currentPath().toString())
 
-	let sidecarPath = try FilePath.from(sidecarPathOf(outputPath)) otherwise 'badPath'
-		compilerLogger(CompilerLogGroup.compiler).error("Could not spell the debug-info sidecar path for {outputPath}")
-		return
-	end 'badPath'
+	let sidecarPath = sidecarPathOf(outputPath)
 
 	try File.writeBinary(sidecarPath, content: image) otherwise 'writeErr'
 		compilerLogger(CompilerLogGroup.compiler).error("Failed to write the debug-info sidecar to {sidecarPath}")
-		return
+		return SidecarOutcome.failed
 	end 'writeErr'
 
 	compilerLogger(CompilerLogGroup.compiler).info("Wrote {image.count()} bytes of debug info to {sidecarPath}")
+
+	return SidecarOutcome.written
 end 'writeDebugInfoSidecar'
 
 // ⭐⭐ Nothing in a built image names a data symbol, so the sidecar is the only channel the two tables a
@@ -743,18 +748,26 @@ export function codeBuildId(code ByteArray) returns HashDigest
 end 'codeBuildId'
 
 // The sidecar beside `outputPath`: the WHOLE output name with the suffix appended, extension and all
-// (`foo.exe` -> `foo.exe.mxdbg`). Spelled once here because three readers need it — this writer, the
-// `debug` command that finds a sidecar from a binary, and `discardPreviousOutput`, which clears a stale
-// one ahead of every build.
-export function sidecarPathOf(outputPath FilePath) returns String
-	return "{outputPath.toString()}{MxdbgSidecarExtension}"
+// (`foo.exe` -> `foo.exe.mxdbg`). `sidecarNameOf` is the one spelling of that rule: the name is all that
+// links a binary to its sidecar.
+export function sidecarPathOf(outputPath FilePath) returns FilePath
+	let name = sidecarNameOf(outputPath.filename())
+	let directory = try outputPath.parent() otherwise return FilePath.empty().join(name)
+
+	return directory.join(name)
 end 'sidecarPathOf'
 
-// Remove the sidecar beside `outputPath`. Two callers clear one: `Compiler.discardPreviousOutput` ahead of
-// every build, and the spec runner beside the executable it staged. Written here, with the path rule it
-// depends on, rather than twice — and it is a REMOVAL, so an unspellable path is simply nothing to remove.
-export function discardDebugInfoSidecar(outputPath FilePath)
-	let sidecarPath = try FilePath.from(sidecarPathOf(outputPath)) otherwise return
+export function sidecarNameOf(imageName String) returns String
+	return "{imageName}{MxdbgSidecarExtension}"
+end 'sidecarNameOf'
 
-	try File.delete(sidecarPath) otherwise ignore
+export function isImageSuffixOrItsSidecar(suffix String, image String) returns bool
+	return suffix == image or suffix == sidecarNameOf(image)
+end 'isImageSuffixOrItsSidecar'
+
+// Remove the sidecar beside `outputPath`. Two callers clear one: `Compiler.discardPreviousOutput` ahead of
+// every compile, and the spec runner beside the executable it staged. Written here, with the path rule it
+// depends on, rather than twice.
+export function discardDebugInfoSidecar(outputPath FilePath)
+	try File.delete(sidecarPathOf(outputPath)) otherwise ignore
 end 'discardDebugInfoSidecar'

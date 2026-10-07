@@ -24,6 +24,8 @@ let WroteCodeWording = "bytes of code to"
 // A text holding ONE occurrence of a needle splits into two parts. The caller's own build is that one.
 let OneOccurrenceSplitsInto = 2
 
+let RebuildFlag = "--rebuild"
+
 test 'a path-less build names the build runner once and compiles it silently'
 	let staged = stagedProject(CaseDirName, fixture: DefaultFixtureName)
 
@@ -35,7 +37,7 @@ test 'a path-less build names the build runner once and compiles it silently'
 	Expect.isFalse(cold.stdout.contains(UsedTheCachedRunner), message: "the first `maxon build` over a cache holding nothing claimed it used a cached build runner. {coldSaid}")
 	Expect.equal(cold.stderr.split(WroteCodeWording).count(), expected: OneOccurrenceSplitsInto, message: "a cold `maxon build` logged a compile other than the one it was asked for: the build runner's own compile is scaffolding and owes the caller one line, not a second build's worth of output. {coldSaid}")
 
-	let warm = spawnManifestBuild(staged, options: StringArray.create())
+	let warm = spawnManifestBuild(staged, options: [RebuildFlag])
 	let warmSaid = "It wrote to stdout: {warm.stdout} and to stderr: {warm.stderr}"
 
 	Expect.equal(warm.exitCode(), expected: 0, message: "the second `maxon build` over the staged manifest failed. {warmSaid}")

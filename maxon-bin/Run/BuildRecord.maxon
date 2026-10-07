@@ -1,0 +1,728 @@
+let BuildRecordFormat = 1 as CacheFormatNumber
+let BuildCommandDirName = "build"
+let BuildRecordExtension = ".mxbr"
+let MostBuildRecords = 256 as ElementIndex
+
+let AbsentStamp = "absent"
+let UnreadableStamp = "unreadable"
+let StampSeparator = " "
+let VersionComponentSeparator = "."
+let ReasonFieldSeparator = " "
+
+let SoleLineCount = 1
+let FirstField = 0 as ElementIndex
+let SecondField = 1 as ElementIndex
+let LabelField = 0 as ElementIndex
+let FirstFieldAfterTheLabel = 1 as ElementIndex
+
+// A define's value may hold a tab or a newline, which would split its field or its line; escaped, every
+// field reads back as it was written.
+let FieldEscape = "%"
+let EscapedFieldEscape = "%25"
+let EscapedLineSeparator = "%0A"
+let EscapedFieldSeparator = "%09"
+
+let BuildLocksDirName = "locks"
+let SourcesUnlistableReason = "the program's sources could not be listed"
+
+typealias NamedValueArray = Array with NamedValue
+typealias NamedValueMap = Map with (String, String)
+typealias RecordedPathSet = Set with String
+typealias RecordedInputArray = Array with RecordedInput
+typealias FieldLineArray = Array with StringArray
+typealias RecordLineArray = Array with RecordLine
+
+enum RecordLabel
+	format
+	output
+	compiler
+	option
+	define
+	program
+	library
+	tool
+	started
+	file
+end 'RecordLabel'
+
+enum RecordOption
+	target
+	debugInfo
+	coverage
+	debugStream
+	asyncTrace
+	version
+end 'RecordOption'
+
+enum RecordedFile
+	output
+	sidecar
+end 'RecordedFile'
+
+enum RecordCheck
+	output
+	compiler
+	options
+	defines
+	programs
+	libraries
+	tools
+	files
+end 'RecordCheck'
+
+type RecordedInput
+	export let path as FilePath
+	export let modifiedTime as Timestamp
+
+	static function create(path FilePath, modifiedTime Timestamp) returns RecordedInput
+		return Self{path: path, modifiedTime: modifiedTime}
+	end 'create'
+end 'RecordedInput'
+
+type NamedValue
+	export let name as String
+	export let value as String
+
+	static function create(name String, value String) returns NamedValue
+		return Self{name: name, value: value}
+	end 'create'
+end 'NamedValue'
+
+type RecordLine
+	export let label as RecordLabel
+	export let fields as StringArray
+
+	static function create(label RecordLabel, fields StringArray) returns RecordLine
+		return Self{label: label, fields: fields}
+	end 'create'
+end 'RecordLine'
+
+export union Freshness
+	upToDate
+	stale(reason String)
+end 'Freshness'
+
+export union PendingBuildRecord
+	recordable(record BuildRecord)
+	unrecordable(reason String)
+end 'PendingBuildRecord'
+
+export type BuildRecordRequest
+	export let output as FilePath
+	export let target as Target
+	export let inputPaths as MaxonSourcePathArray
+	export let debugInfo as bool
+	export let coverage as bool
+	export let debugStream as bool
+	export let asyncTrace as bool
+	export let productVersion as VersionComponentArray
+	export let defines as DefineArray
+
+	export static function create(output FilePath, target Target, inputPaths MaxonSourcePathArray, debugInfo bool, coverage bool, debugStream bool, asyncTrace bool, productVersion VersionComponentArray, defines DefineArray) returns BuildRecordRequest
+		return Self{output: output, target: target, inputPaths: inputPaths, debugInfo: debugInfo, coverage: coverage, debugStream: debugStream, asyncTrace: asyncTrace, productVersion: productVersion, defines: defines}
+	end 'create'
+end 'BuildRecordRequest'
+
+export type BuildRecord
+	export let path as FilePath
+	export let output as FilePath
+	export let compiler as StringArray
+	export let options as NamedValueArray
+	export let defines as NamedValueArray
+	export let programs as RecordedInputArray
+	export let libraries as RecordedInputArray
+	export let tools as RecordedInputArray
+
+	static function create(path FilePath, output FilePath, compiler StringArray, options NamedValueArray, defines NamedValueArray, programs RecordedInputArray, libraries RecordedInputArray, tools RecordedInputArray) returns BuildRecord
+		return Self{path: path, output: output, compiler: compiler, options: options, defines: defines, programs: programs, libraries: libraries, tools: tools}
+	end 'create'
+end 'BuildRecord'
+
+type StoredRecord
+	export let build as BuildRecord
+	export let started as Timestamp
+	export let files as NamedValueArray
+
+	static function create(build BuildRecord, started Timestamp, files NamedValueArray) returns StoredRecord
+		return Self{build: build, started: started, files: files}
+	end 'create'
+end 'StoredRecord'
+
+function recordDirectoryIn(root FilePath) returns FilePath
+	return root.join(BuildCommandDirName).join(cacheFormatDirectoryName(BuildRecordFormat))
+end 'recordDirectoryIn'
+
+function recordDirectoryOf(recordPath FilePath) returns FilePath
+	return try recordPath.parent() otherwise panic("recordDirectoryOf: {recordPath.toString()} was named inside the build record directory")
+end 'recordDirectoryOf'
+
+// Beside the format directories, never inside one: `discardOlderFormats` deletes a superseded format's
+// whole tree, and a live build's lock must outlive a format change.
+function locksDirectoryIn(root FilePath) returns FilePath
+	return root.join(BuildCommandDirName).join(BuildLocksDirName)
+end 'locksDirectoryIn'
+
+// Over the host's comparison spelling, so two spellings of one file share one record and one lock.
+function outputKeyOf(anchored FilePath) returns String
+	return hexOfLeadingBytes(sha256(anchored.comparisonSpelling().toByteArray()), count: CacheNameDigestBytes)
+end 'outputKeyOf'
+
+export function recordLockPathOf(output FilePath) returns FilePath throws RunCacheError
+	let directory = locksDirectoryIn(try hostCacheRoot())
+
+	if not Directory.create(directory) 'unusable'
+		throw RunCacheError.unavailable("could not create {directory.toString()}, where build locks are kept")
+	end 'unusable'
+
+	return directory.join("{outputKeyOf(anchoredOutputOf(output))}{OutputLockSuffix}")
+end 'recordLockPathOf'
+
+export function isBuildLocksDirectory(path FilePath) returns bool
+	let builds = try path.parent() otherwise return false
+
+	return path.filename() == BuildLocksDirName and builds.filename() == BuildCommandDirName
+end 'isBuildLocksDirectory'
+
+export function buildLockBelonging(path FilePath) returns FilePath throws AbsentError
+	let directory = try path.parent() otherwise throw AbsentError.absent
+
+	if not isBuildLocksDirectory(directory) 'notALockFile'
+		throw AbsentError.absent
+	end 'notALockFile'
+
+	let key = try path.filename().split(OutputLockSuffix).get(0) otherwise panic("buildLockBelonging: a split answers at least one piece")
+
+	return directory.join("{key}{OutputLockSuffix}")
+end 'buildLockBelonging'
+
+function anchoredOutputOf(output FilePath) returns FilePath
+	return output.anchoredAt(Directory.currentPath())
+end 'anchoredOutputOf'
+
+function recordPathOf(anchored FilePath) returns FilePath throws RunCacheError
+	return recordDirectoryIn(try hostCacheRoot()).join("{outputKeyOf(anchored)}{BuildRecordExtension}")
+end 'recordPathOf'
+
+export function buildRecordOf(request BuildRecordRequest) returns PendingBuildRecord
+	let output = anchoredOutputOf(request.output)
+
+	let path = try recordPathOf(output) otherwise (e) 'noPlaceToKeepIt'
+		return PendingBuildRecord.unrecordable(e.sentence())
+	end 'noPlaceToKeepIt'
+
+	let described = try describedBuild(path, output: output, request: request) otherwise (e) 'notDescribable'
+		return PendingBuildRecord.unrecordable(e.sentence())
+	end 'notDescribable'
+
+	return PendingBuildRecord.recordable(described)
+end 'buildRecordOf'
+
+function describedBuild(path FilePath, output FilePath, request BuildRecordRequest) returns BuildRecord throws RunCacheError
+	let base = Directory.currentPath()
+	let identity = try compilerIdentity(request.target)
+
+	return BuildRecord.create(path, output: output, compiler: identity.imageFields(), options: optionsOf(request), defines: definesOf(request), programs: try stampedInputs(base, paths: try programSources(request.inputPaths) otherwise throw RunCacheError.unavailable(SourcesUnlistableReason)), libraries: try stampedInputs(base, paths: try libraryInputs()), tools: try stampedInputs(base, paths: try toolsOf(request.target)))
+end 'describedBuild'
+
+function stampedInputs(base FilePath, paths CompileInputArray) returns RecordedInputArray throws RunCacheError
+	var stamped = RecordedInputArray.create()
+
+	for path in paths 'eachPath'
+		let anchored = path.anchoredAt(base)
+		let info = try File.info(anchored) otherwise throw RunCacheError.unavailable("could not read the modification time of {anchored.toString()}")
+
+		stamped.push(RecordedInput.create(anchored, modifiedTime: info.modifiedTime))
+	end 'eachPath'
+
+	return stamped
+end 'stampedInputs'
+
+function optionsOf(request BuildRecordRequest) returns NamedValueArray
+	var options = NamedValueArray.create()
+	options.push(NamedValue.create(RecordOption.target.name, value: targetToString(request.target)))
+	options.push(NamedValue.create(RecordOption.debugInfo.name, value: "{request.debugInfo}"))
+	options.push(NamedValue.create(RecordOption.coverage.name, value: "{request.coverage}"))
+	options.push(NamedValue.create(RecordOption.debugStream.name, value: "{request.debugStream}"))
+	options.push(NamedValue.create(RecordOption.asyncTrace.name, value: "{request.asyncTrace}"))
+	options.push(NamedValue.create(RecordOption.version.name, value: versionText(request.productVersion)))
+
+	return options
+end 'optionsOf'
+
+function definesOf(request BuildRecordRequest) returns NamedValueArray
+	var defines = NamedValueArray.create()
+
+	for define in request.defines 'eachDefine'
+		defines.push(NamedValue.create(define.name, value: define.value))
+	end 'eachDefine'
+
+	return defines
+end 'definesOf'
+
+function versionText(version VersionComponentArray) returns String
+	var components = StringArray.create()
+
+	for component in version 'eachComponent'
+		components.push("{component}")
+	end 'eachComponent'
+
+	return joinedWith(components, separator: VersionComponentSeparator)
+end 'versionText'
+
+function toolsOf(target Target) returns CompileInputArray throws RunCacheError
+	let located = try locateExecutableWriterTools(target) otherwise (e) 'notLocated'
+		throw RunCacheError.unavailable(wasmComponentProblem(e))
+	end 'notLocated'
+
+	var files = CompileInputArray.create()
+
+	match located 'tools'
+		noTools then return files
+		wasmComponent(found) then try collectToolFiles(found, into: files)
+	end 'tools'
+
+	return files
+end 'toolsOf'
+
+function collectToolFiles(tools WasmComponentTools, into CompileInputArray) throws RunCacheError
+	into.push(tools.wasmTools)
+
+	try collectFilesBeneath(tools.witDir, into: into)
+end 'collectToolFiles'
+
+function collectFilesBeneath(dir FilePath, into CompileInputArray) throws RunCacheError
+	let entries = try Directory.list(dir) otherwise throw RunCacheError.unavailable("could not list {dir.toString()}, which a build for this target reads")
+
+	for entry in entries 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			try collectFilesBeneath(entry, into: into)
+			continue
+		end 'aDirectory'
+
+		into.push(entry)
+	end 'eachEntry'
+end 'collectFilesBeneath'
+
+export function freshnessOf(current BuildRecord) returns Freshness
+	if not File.exists(current.path) 'neverRecorded'
+		return Freshness.stale("no record of a previous build")
+	end 'neverRecorded'
+
+	let stored = try readBuildRecord(current.path) otherwise (e) 'unreadable'
+		return Freshness.stale("the build record is unreadable: {e.sentence()}")
+	end 'unreadable'
+
+	for check in RecordCheck.allCases 'eachCheck'
+		if let reason = try changeFor(check, current: current, stored: stored).text() 'changed'
+			return Freshness.stale(reason)
+		end 'changed'
+	end 'eachCheck'
+
+	return Freshness.upToDate
+end 'freshnessOf'
+
+function changeFor(check RecordCheck, current BuildRecord, stored StoredRecord) returns StatedText
+	return match check 'which'
+		output gives outputChange(current, stored: stored.build)
+		compiler gives compilerChange(current, stored: stored.build)
+		options gives firstNamedChange(RecordLabel.option, current: current.options, stored: stored.build.options)
+		defines gives firstNamedChange(RecordLabel.define, current: current.defines, stored: stored.build.defines)
+		programs gives inputListChange(RecordLabel.program, current: current.programs, stored: stored.build.programs, started: stored.started)
+		libraries gives inputListChange(RecordLabel.library, current: current.libraries, stored: stored.build.libraries, started: stored.started)
+		tools gives inputListChange(RecordLabel.tool, current: current.tools, stored: stored.build.tools, started: stored.started)
+		files gives fileChange(current, stored: stored)
+	end 'which'
+end 'changeFor'
+
+function outputChange(current BuildRecord, stored BuildRecord) returns StatedText
+	if current.output.equals(stored.output) 'sameOutput'
+		return StatedText.unstated
+	end 'sameOutput'
+
+	return StatedText.stated("the build record is for {stored.output.toString()}")
+end 'outputChange'
+
+function compilerChange(current BuildRecord, stored BuildRecord) returns StatedText
+	if current.compiler.equals(stored.compiler) 'sameCompiler'
+		return StatedText.unstated
+	end 'sameCompiler'
+
+	return StatedText.stated("the compiler changed: {joinedWith(stored.compiler, separator: ReasonFieldSeparator)} -> {joinedWith(current.compiler, separator: ReasonFieldSeparator)}")
+end 'compilerChange'
+
+function valuesByName(entries NamedValueArray) returns NamedValueMap
+	var byName = NamedValueMap.create()
+
+	for entry in entries 'eachEntry'
+		byName.upsert(entry.name, value: entry.value)
+	end 'eachEntry'
+
+	return byName
+end 'valuesByName'
+
+function firstNamedChange(label RecordLabel, current NamedValueArray, stored NamedValueArray) returns StatedText
+	let currentByName = valuesByName(current)
+	let storedByName = valuesByName(stored)
+
+	for entry in current 'eachCurrent'
+		let now = try currentByName.get(entry.name) otherwise panic("firstNamedChange: {entry.name} was just entered into the map built from this array")
+
+		if let was = try storedByName.get(entry.name) 'recorded'
+			if was != now 'changed'
+				return StatedText.stated("{label.name} {entry.name} changed: {was} -> {now}")
+			end 'changed'
+		end 'recorded' else 'unrecorded'
+			return StatedText.stated("{label.name} {entry.name} added")
+		end 'unrecorded'
+	end 'eachCurrent'
+
+	for entry in stored 'eachStored'
+		if not currentByName.contains(entry.name) 'dropped'
+			return StatedText.stated("{label.name} {entry.name} removed")
+		end 'dropped'
+	end 'eachStored'
+
+	return StatedText.unstated
+end 'firstNamedChange'
+
+function pathSetOf(inputs RecordedInputArray) returns RecordedPathSet
+	var spelled = RecordedPathSet.create()
+
+	for input in inputs 'eachInput'
+		spelled.insert(input.path.toString())
+	end 'eachInput'
+
+	return spelled
+end 'pathSetOf'
+
+function pathNounOf(label RecordLabel) returns String
+	return match label 'which'
+		program or
+			library gives "source"
+		tool gives "tool"
+		default panic("pathNounOf: {label.name} lists no paths")
+	end 'which'
+end 'pathNounOf'
+
+function inputListChange(label RecordLabel, current RecordedInputArray, stored RecordedInputArray, started Timestamp) returns StatedText
+	if sameSequence(current, other: stored) 'unchanged'
+		return modifiedInputChange(current, stored: stored, started: started)
+	end 'unchanged'
+
+	let noun = pathNounOf(label)
+	let currentSet = pathSetOf(current)
+	let storedSet = pathSetOf(stored)
+
+	for input in current 'eachCurrent'
+		if not storedSet.contains(input.path.toString()) 'added'
+			return StatedText.stated("{noun} added: {input.path.toString()}")
+		end 'added'
+	end 'eachCurrent'
+
+	for input in stored 'eachStored'
+		if not currentSet.contains(input.path.toString()) 'removed'
+			return StatedText.stated("{noun} removed: {input.path.toString()}")
+		end 'removed'
+	end 'eachStored'
+
+	return StatedText.stated("the {label.name} lines are in another order")
+end 'inputListChange'
+
+function sameSequence(inputs RecordedInputArray, other RecordedInputArray) returns bool
+	if inputs.count() != other.count() 'differentCounts'
+		return false
+	end 'differentCounts'
+
+	for (iter, input) in inputs.withIterator() 'eachInput'
+		let recorded = try other.get(iter.index()) otherwise panic("sameSequence: index {iter.index()} is below the count both arrays share")
+
+		if input.path.toString() != recorded.path.toString() 'differs'
+			return false
+		end 'differs'
+	end 'eachInput'
+
+	return true
+end 'sameSequence'
+
+function stampOf(path FilePath) returns String
+	let info = try File.info(path) otherwise (e) 'noInfo'
+		return AbsentStamp if e == FileInfoError.notFound else UnreadableStamp
+	end 'noInfo'
+
+	return "{info.size}{StampSeparator}{info.modifiedTime}"
+end 'stampOf'
+
+function currentFilesOf(record BuildRecord) returns NamedValueArray
+	var files = NamedValueArray.create()
+	files.push(NamedValue.create(RecordedFile.output.name, value: stampOf(record.output)))
+	files.push(NamedValue.create(RecordedFile.sidecar.name, value: stampOf(sidecarPathOf(record.output))))
+
+	return files
+end 'currentFilesOf'
+
+function describedFile(file RecordedFile) returns String
+	return match file 'which'
+		output gives "the output"
+		sidecar gives "the debug-info sidecar"
+	end 'which'
+end 'describedFile'
+
+function fileChange(current BuildRecord, stored StoredRecord) returns StatedText
+	let now = valuesByName(currentFilesOf(current))
+	let recorded = valuesByName(stored.files)
+
+	for file in RecordedFile.allCases 'eachFile'
+		let found = try now.get(file.name) otherwise panic("fileChange: {file.name} was just entered into the map built from the current files")
+		let wasWritten = try recorded.get(file.name) otherwise return StatedText.stated("the build record names no stamp for {describedFile(file)}")
+
+		if found == UnreadableStamp 'unreadable'
+			return StatedText.stated("{describedFile(file)} could not be read")
+		end 'unreadable'
+
+		if found == wasWritten 'unchanged'
+			continue
+		end 'unchanged'
+
+		if found == AbsentStamp 'gone'
+			return StatedText.stated("{describedFile(file)} is missing")
+		end 'gone'
+
+		return StatedText.stated("{describedFile(file)} was replaced since it was written")
+	end 'eachFile'
+
+	return StatedText.unstated
+end 'fileChange'
+
+function modifiedInputChange(current RecordedInputArray, stored RecordedInputArray, started Timestamp) returns StatedText
+	for (iter, input) in current.withIterator() 'eachInput'
+		let was = try stored.get(iter.index()) otherwise panic("modifiedInputChange: the path lists were compared equal, so index {iter.index()} is below both counts")
+
+		// Any differing time is stale, an older one included: a file restored from a backup goes back in
+		// time. A recorded time at or after `started` is stale too: an mtime is whole seconds, so a later
+		// edit within that same second leaves it unchanged.
+		if input.modifiedTime != was.modifiedTime or was.modifiedTime >= started 'modified'
+			return StatedText.stated("{input.path.toString()} was modified at or after the last compile started")
+		end 'modified'
+	end 'eachInput'
+
+	return StatedText.unstated
+end 'modifiedInputChange'
+
+function needsEscaping(field String) returns bool
+	return field.contains(FieldEscape) or field.contains(ManifestFieldSeparator) or field.contains(ManifestLineSeparator)
+end 'needsEscaping'
+
+function encodedField(field String) returns String
+	if not needsEscaping(field) 'plain'
+		return field
+	end 'plain'
+
+	return field.replace(FieldEscape, with: EscapedFieldEscape).replace(ManifestLineSeparator, with: EscapedLineSeparator).replace(ManifestFieldSeparator, with: EscapedFieldSeparator)
+end 'encodedField'
+
+function decodedField(field String) returns String
+	if not field.contains(FieldEscape) 'plain'
+		return field
+	end 'plain'
+
+	return field.replace(EscapedFieldSeparator, with: ManifestFieldSeparator).replace(EscapedLineSeparator, with: ManifestLineSeparator).replace(EscapedFieldEscape, with: FieldEscape)
+end 'decodedField'
+
+function recordLine(label RecordLabel, fields StringArray) returns String
+	var encoded = StringArray.create()
+
+	for field in fields 'eachField'
+		encoded.push(encodedField(field))
+	end 'eachField'
+
+	return manifestLine(label.name, fields: encoded)
+end 'recordLine'
+
+function namedLines(label RecordLabel, entries NamedValueArray) returns String
+	var lines = ""
+
+	for entry in entries 'eachEntry'
+		lines.append(recordLine(label, fields: [entry.name, entry.value]))
+	end 'eachEntry'
+
+	return lines
+end 'namedLines'
+
+function inputLines(label RecordLabel, inputs RecordedInputArray) returns String
+	var lines = ""
+
+	for input in inputs 'eachInput'
+		lines.append(recordLine(label, fields: [input.path.toString(), "{input.modifiedTime}"]))
+	end 'eachInput'
+
+	return lines
+end 'inputLines'
+
+function recordText(record BuildRecord, started Timestamp, files NamedValueArray) returns String
+	var text = ""
+	text.append(recordLine(RecordLabel.format, fields: [cacheFormatDirectoryName(BuildRecordFormat)]))
+	text.append(recordLine(RecordLabel.output, fields: [record.output.toString()]))
+	text.append(recordLine(RecordLabel.compiler, fields: record.compiler))
+	text.append(namedLines(RecordLabel.option, entries: record.options))
+	text.append(namedLines(RecordLabel.define, entries: record.defines))
+	text.append(inputLines(RecordLabel.program, inputs: record.programs))
+	text.append(inputLines(RecordLabel.library, inputs: record.libraries))
+	text.append(inputLines(RecordLabel.tool, inputs: record.tools))
+	text.append(recordLine(RecordLabel.started, fields: ["{started}"]))
+	text.append(namedLines(RecordLabel.file, entries: files))
+
+	return text
+end 'recordText'
+
+function recordLinesIn(text String) returns RecordLineArray throws RunCacheError
+	var lines = RecordLineArray.create()
+
+	for line in text.split(ManifestLineSeparator) 'eachLine'
+		if line.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		var fields = StringArray.create()
+
+		for piece in line.split(ManifestFieldSeparator) 'eachPiece'
+			fields.push(decodedField(piece))
+		end 'eachPiece'
+
+		let spelled = try fields.get(LabelField) otherwise panic("recordLinesIn: a split answers at least one piece")
+		let label = try RecordLabel.fromName(spelled) otherwise throw RunCacheError.unavailable("a line is labelled `{spelled}`, which names nothing a record holds")
+		let rest = try fields.slice(FirstFieldAfterTheLabel, endIndex: fields.count()) otherwise panic("recordLinesIn: a split answers at least one piece, so the fields after the label start within the array")
+
+		lines.push(RecordLine.create(label, fields: rest))
+	end 'eachLine'
+
+	return lines
+end 'recordLinesIn'
+
+function fieldLinesOf(lines RecordLineArray, label RecordLabel) returns FieldLineArray
+	var matching = FieldLineArray.create()
+
+	for line in lines 'eachLine'
+		if line.label == label 'thisLabel'
+			matching.push(line.fields)
+		end 'thisLabel'
+	end 'eachLine'
+
+	return matching
+end 'fieldLinesOf'
+
+function soleFieldsOf(lines RecordLineArray, label RecordLabel) returns StringArray throws RunCacheError
+	let matching = fieldLinesOf(lines, label: label)
+
+	if matching.count() != SoleLineCount 'notOne'
+		throw RunCacheError.unavailable("it has {matching.count()} `{label.name}` lines, where it has one")
+	end 'notOne'
+
+	return try matching.get(FirstField) otherwise panic("soleFieldsOf: a list of {SoleLineCount} line has a first")
+end 'soleFieldsOf'
+
+function namedValuesOf(lines RecordLineArray, label RecordLabel) returns NamedValueArray throws RunCacheError
+	var values = NamedValueArray.create()
+
+	for fields in fieldLinesOf(lines, label: label) 'eachLine'
+		values.push(try namedValueOf(fields))
+	end 'eachLine'
+
+	return values
+end 'namedValuesOf'
+
+function recordedInputsOf(lines RecordLineArray, label RecordLabel) returns RecordedInputArray throws RunCacheError
+	var inputs = RecordedInputArray.create()
+
+	for fields in fieldLinesOf(lines, label: label) 'eachLine'
+		let named = try namedValueOf(fields)
+
+		inputs.push(RecordedInput.create(try pathOf(named.name), modifiedTime: try timestampOf(named.value)))
+	end 'eachLine'
+
+	return inputs
+end 'recordedInputsOf'
+
+function readBuildRecord(path FilePath) returns StoredRecord throws RunCacheError
+	let text = try File.readText(path) otherwise throw RunCacheError.unavailable("{path.toString()} could not be read")
+	let lines = try recordLinesIn(text)
+
+	try requireFormat(try soleFieldsOf(lines, label: RecordLabel.format))
+
+	let output = try pathOf(try fieldAt(try soleFieldsOf(lines, label: RecordLabel.output), index: FirstField))
+	let build = BuildRecord.create(path, output: output, compiler: try soleFieldsOf(lines, label: RecordLabel.compiler), options: try namedValuesOf(lines, label: RecordLabel.option), defines: try namedValuesOf(lines, label: RecordLabel.define), programs: try recordedInputsOf(lines, label: RecordLabel.program), libraries: try recordedInputsOf(lines, label: RecordLabel.library), tools: try recordedInputsOf(lines, label: RecordLabel.tool))
+	let started = try timestampOf(try fieldAt(try soleFieldsOf(lines, label: RecordLabel.started), index: FirstField))
+
+	return StoredRecord.create(build, started: started, files: try namedValuesOf(lines, label: RecordLabel.file))
+end 'readBuildRecord'
+
+function fieldAt(fields StringArray, index ElementIndex) returns String throws RunCacheError
+	return try fields.get(index) otherwise throw RunCacheError.unavailable("a line is missing its field {index}")
+end 'fieldAt'
+
+function namedValueOf(fields StringArray) returns NamedValue throws RunCacheError
+	return NamedValue.create(try fieldAt(fields, index: FirstField), value: try fieldAt(fields, index: SecondField))
+end 'namedValueOf'
+
+function pathOf(spelled String) returns FilePath throws RunCacheError
+	return try FilePath.from(spelled) otherwise throw RunCacheError.unavailable("`{spelled}` is not a path")
+end 'pathOf'
+
+function timestampOf(spelled String) returns Timestamp throws RunCacheError
+	let parsed = try int.fromString(spelled) otherwise throw RunCacheError.unavailable("`{spelled}` is not a number")
+
+	if parsed < 0 'beforeTheEpoch'
+		throw RunCacheError.unavailable("`{spelled}` is before the epoch")
+	end 'beforeTheEpoch'
+
+	return parsed as Timestamp
+end 'timestampOf'
+
+function requireFormat(fields StringArray) throws RunCacheError
+	let spelled = try fieldAt(fields, index: FirstField)
+
+	if spelled != cacheFormatDirectoryName(BuildRecordFormat) 'anotherFormat'
+		throw RunCacheError.unavailable("it is of format `{spelled}`")
+	end 'anotherFormat'
+end 'requireFormat'
+
+// `started` is read off the cache root's filesystem clock, because what it is compared with are mtimes a
+// filesystem stamped. An input on a filesystem whose clock is skewed from that one can still slip a
+// same-second edit past the comparison.
+export function beginBuildRecord(record BuildRecord) returns Timestamp throws RunCacheError
+	return (try filesystemSecondsBeside(try recordLockPathOf(record.output))) as Timestamp
+end 'beginBuildRecord'
+
+export function publishBuildRecord(record BuildRecord, started Timestamp)
+	let bytes = recordText(record, started: started, files: currentFilesOf(record)).toByteArray()
+
+	try publishAtomically(recordDirectoryOf(record.path), name: record.path.filename(), bytes: bytes) otherwise (e) 'notPublished'
+		compilerLogger(CompilerLogGroup.compiler).debug("no build record was kept for {record.output.toString()}: {e.sentence()}")
+		return
+	end 'notPublished'
+
+	keepRecordsTidy(recordDirectoryOf(record.path))
+end 'publishBuildRecord'
+
+export function discardBuildRecordOf(output FilePath)
+	let path = try recordPathOf(anchoredOutputOf(output)) otherwise return
+
+	try File.delete(path) otherwise ignore
+end 'discardBuildRecordOf'
+
+export function discardBuildRecordsNamed(stem FilePath)
+	for os in Os.allCases 'eachTarget'
+		discardBuildRecordOf(try FilePath.from("{stem.toString()}{executableExtension(os)}") otherwise panic("discardBuildRecordsNamed: {stem.toString()} with an executable extension appended is a spellable path"))
+	end 'eachTarget'
+end 'discardBuildRecordsNamed'
+
+function keepRecordsTidy(directory FilePath)
+	discardAllButNewestIn(directory, kept: MostBuildRecords, admits: function(entry) gives entry.filename().endsWith(BuildRecordExtension))
+	sweepLeftoversOfEndedOwners(directory, livenessOf: leftoverLivenessOf, keyOf: function(entry) gives entry, discardKeyed: removeOwnedFile)
+
+	let formats = try directory.parent() otherwise panic("keepRecordsTidy: {directory.toString()} sits inside the build directory")
+	discardOlderFormats(formats, than: BuildRecordFormat)
+end 'keepRecordsTidy'
+
+function leftoverLivenessOf(name String) returns OwnerLiveness
+	return livenessOfOwner(leftoverOwnerOf(name))
+end 'leftoverLivenessOf'

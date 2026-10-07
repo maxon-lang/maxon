@@ -1,0 +1,22 @@
+let CaseDirName = "build-a-changed-define-recompiles"
+let OutputStem = "program"
+let DefinableSource = "let Banner = \"plain\"\n\nfunction main() returns ExitCode\n\tprint(\"\{Banner\}\\n\")\n\treturn 0\nend 'main'\n"
+let DefineOption = "--define=Banner=defined"
+let DefineAddedReason = "define Banner added"
+
+test 'a build given a define the last compile was not given is compiled again'
+	requireHeldOutsideCheckout(CaseDirName, check: ChangedDefineRecompiles.create())
+end 'a build given a define the last compile was not given is compiled again'
+
+type ChangedDefineRecompiles implements OutsideCheckoutCase
+	static function create() returns ChangedDefineRecompiles
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageSettledProgram(dir, name: SettledProgramDirName, source: DefinableSource)
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build, without a define")
+
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: [DefineOption]), reason: DefineAddedReason, which: "a build with `{DefineOption}`")
+	end 'requireHeldIn'
+end 'ChangedDefineRecompiles'

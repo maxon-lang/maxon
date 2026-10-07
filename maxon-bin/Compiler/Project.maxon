@@ -3428,6 +3428,11 @@ export type RangedAliasRegistry
 		return self.byName.contains(name)
 	end 'containsInAnyFile'
 
+	export function declaredAsFloatInAnyFile(name ByteArray) returns bool
+		let any = try self.byName.get(name) otherwise return false
+		return tagIsFloat(maxonTypeTag(any.underlying)) or self.underlyingContested.contains(name)
+	end 'declaredAsFloatInAnyFile'
+
 	// ⭐ **THE STORAGE WIDTH THAT HOLDS EVERY FILE'S DECLARATION OF `name` — the other file-less door, and
 	// the one range question a file-less reader IS allowed to ask.**
 	//
@@ -6989,6 +6994,15 @@ end 'cacheReadBitWidthArray'
 
 let sharedEmptyInlineBitWidths = BitWidthArray.create()
 
+export union EqualityOperand
+	unknown
+	noEdge
+	arrayOverParameters
+	structOverParameters(base ByteArray)
+end 'EqualityOperand'
+
+export typealias EqualityOperandArray = Array with EqualityOperand
+
 export type StructLayout
 	export var name as ByteArray
 
@@ -10209,7 +10223,7 @@ export type FuncSignature
 	// `where Element is Equatable` extension AND by `stdlib/Interfaces.maxon`'s unconditional
 	// `extension Iterable`, so its members register as `Array.contains#type parameter`,
 	// `Array.contains#struct` and `Array.contains#Array.ElementPredicate` and NOBODY keeps the bare spelling.
-	// The bare-keyed map then answered the SUPPLY side (`LowerMaxonToStd.witnessParamCountForCallee`) with
+	// The bare-keyed map then answered the SUPPLY side (`ProgramSignatures.witnessParamCountForCallee`) with
 	// nothing at all while the body reserved a slot from its lexical clause — **MEASURED: the caller passed 3
 	// arguments where the callee read 4, `bindImplicitParams` computed the layout descriptor's id as
 	// `paramCount - witnessCount - 1` and landed on the WITNESS slot, and `[10].contains(10)` segfaulted

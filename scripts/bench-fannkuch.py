@@ -41,6 +41,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IS_WINDOWS = os.name == "nt"
 EXE = ".exe" if IS_WINDOWS else ""
+SIDECAR_SUFFIX = ".mxdbg"
 SLOT_COMPILER = os.path.join(REPO, "maxon-bin", ".maxon", "maxon" + EXE)
 SEED_COMPILER = os.path.join(REPO, ".bootstrap", "maxon" + EXE)
 DEFAULT_SOURCE = os.path.join(REPO, "examples", "fannkuch-redux.maxon")
@@ -278,6 +279,10 @@ def time_self_compile(arm):
     """Wall time of this arm's compiler compiling the tree's own compiler sources into a scratch stem."""
     stem = os.path.join(arm["dir"], "selfcompile", "maxon")
     os.makedirs(os.path.dirname(stem), exist_ok=True)
+    # A build that finds its output up to date compiles nothing, and the timing would measure that.
+    for leftover in (stem + EXE, stem + EXE + SIDECAR_SUFFIX):
+        if os.path.exists(leftover):
+            os.remove(leftover)
     start = time.perf_counter()
     r = run([arm["compiler"], "build", SELF_COMPILE_SOURCE, f"--output={stem}"], cwd=REPO)
     ms = (time.perf_counter() - start) * 1000.0

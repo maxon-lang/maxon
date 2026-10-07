@@ -616,36 +616,36 @@ public extension Array
 	end 'sortUnstable'
 end 'Array'
 
+// The compiler's native `__managed_hash` (`ManagedMemoryRuntime.buildArrayHash`) computes this same
+// fold, and the two must agree for every array both can hash.
+let arrayHashSeed = 5381
+let arrayHashMultiplier = 33
+let arrayHashMask = 0xFFFFFFFF
+
 // Conditional conformance: Array implements Hashable and Equatable when Element does
-// Uses raw byte-level hashing (djb2) over the managed memory buffer
 public extension Array implements Hashable, Equatable where Element is Hashable and Equatable
 	public function hash() returns HashValue
-		let byteLen = managed.length() * managed.elementSize()
-		var h = 5381
+		var h = arrayHashSeed
 
-		for i in 0 upto byteLen 'hash_loop'
-			let b = try managed.byteAt(i) otherwise panic("Array.hash: byteAt OOB — i < byteLen invariant")
-			h = h * 33 + b
-		end 'hash_loop'
+		for item in self 'eachElement'
+			h = (h * arrayHashMultiplier + item.hash()) and arrayHashMask
+		end 'eachElement'
 
-		return h and 0xFFFFFFFF
+		return h
 	end 'hash'
 
 	public function equals(other Self) returns bool
-		let selfLen = managed.length()
-		let otherLen = other.managed.length()
+		let length = count()
 
-		if selfLen != otherLen 'len'
+		if length != other.count() 'len'
 			return false
 		end 'len'
 
-		let byteLen = selfLen * managed.elementSize()
+		for i in 0 upto length 'cmp'
+			let ours = try get(i) otherwise panic("Array.equals: get OOB — i < length invariant")
+			let theirs = try other.get(i) otherwise panic("Array.equals: get OOB — i < length invariant")
 
-		for i in 0 upto byteLen 'cmp'
-			let ab = try managed.byteAt(i) otherwise panic("Array.equals: byteAt OOB — i < byteLen invariant")
-			let bb = try other.managed.byteAt(i) otherwise panic("Array.equals: byteAt OOB — i < byteLen invariant")
-
-			if ab != bb 'ne'
+			if ours != theirs 'ne'
 				return false
 			end 'ne'
 		end 'cmp'

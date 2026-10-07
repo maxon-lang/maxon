@@ -1,0 +1,17 @@
+let CaseDirName = "build-without-a-cache-root-compiles-and-says-so"
+let ProgramFileName = "main.maxon"
+let OutputStem = "program"
+
+test 'a build with no usable cache root compiles every time, and says it can keep no record'
+	let dir = freshCaseDir(CaseDirName)
+	let naming = rosterWithEveryCandidateBlocked(dir)
+
+	let program = dir.join(ProgramFileName)
+	writeStagedFile(program, content: TrivialProgramSource)
+	waitPastTheModificationOf(program, probeIn: dir)
+
+	let arguments = [BuildCommandWord, program.toString(), "{OutputOptionPrefix}{dir.join(OutputStem).toString()}"]
+
+	requireCompiled(runWithCacheRoots(arguments, naming: naming, workingDirectory: dir), reason: NoBuildRecordReason, which: "the first build with every candidate cache root named at a regular file")
+	requireCompiled(runWithCacheRoots(arguments, naming: naming, workingDirectory: dir), reason: NoBuildRecordReason, which: "the second build with every candidate cache root named at a regular file")
+end 'a build with no usable cache root compiles every time, and says it can keep no record'

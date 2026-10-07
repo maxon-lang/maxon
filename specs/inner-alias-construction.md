@@ -607,6 +607,43 @@ end 'main'
 4
 ```
 
+### A static factory's result is checked as its own type
+
+<!-- test: a-static-factory-result-is-checked-as-its-own-type -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var t as T
+	static function create(t T) returns Self
+		return Self{t: t}
+	end 'create'
+	function wrapAgain(u T) returns Self
+		return Self{t: u}
+	end 'wrapAgain'
+end 'Box'
+type Pair uses A, B
+	export typealias BoxB = Box with B
+	var a as A
+	var b as B
+	static function boxOf(n Integer) returns IntBox
+		return IntBox.create(n)
+	end 'boxOf'
+end 'Pair'
+typealias IntBox = Box with Integer
+typealias P = Pair with (String, String)
+function main() returns ExitCode
+	let box = P.boxOf(4)
+	print("{box.wrapAgain(5).t}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
 ### ⚖ An inner alias SHADOWING ANOTHER type's name wins at the STATIC door too, as at the TYPE door
 
 One precedence at every door, so that the doors cannot disagree.

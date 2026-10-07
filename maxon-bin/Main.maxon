@@ -127,6 +127,7 @@ module let TargetFlagPrefix = "--target="
 module let WorkersFlagPrefix = "--workers="
 
 module let LogFlagPrefix = "--log="
+let DetailLoggingName = "detail logging"
 
 // The selection half of every `spec-test` command line the compiler builds: the two re-emitters
 // (`SpecWorkerPool.spawnNoWait` and `SpecTestRunner.spawnGuestSuite`), which must answer for
@@ -190,6 +191,12 @@ let AllocationsByTagFlagPrefix = "--allocations-by-tag="
 //
 // Only `build` acts on it; every other command keeps the compiler's own default (off).
 module let NoDebugInfoFlag = "--no-debug-info"
+
+module let RebuildFlag = "--rebuild"
+
+let CompiledReportPrefix = "Compiled -> "
+let UpToDateReportPrefix = "Up to date -> "
+let NoBuildRecordReason = "no build record can be kept"
 
 module let DumpInfoOption = "--dump-info"
 module let SymbolizeOption = "--symbolize"
@@ -755,6 +762,8 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 
 	let outcome = buildAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: manifestWantsDebugInfo and args.debugInfo, productVersion: productVersion, defines: defines)
 
+	// An up-to-date output is repeated too: a second stage builds its own running image and keeps no
+	// record, so a record that still matches means the second stage never ran over this output.
 	return match outcome 'outcome'
 		built(written) gives repeatedWithOutput(written, target: target) if rebuildWithOutput else SucceededExit
 		failed(code) gives code
@@ -785,7 +794,8 @@ function refuseDelegatedWith(key String, manifest FilePath) returns ExitCode
 	return OwnFailureExit
 end 'refuseDelegatedWith'
 
-// Called after `buildAndReport` has released the tree lock, which the second stage takes again.
+// Called after `buildAndReport` has released the tree lock and the output's build lock, which the second
+// stage takes again.
 // The second stage's manifest can ask again (a compiler built from uncommitted sources stamps its
 // builder's commit), so `SecondStageVariable` is what ends the repetition.
 function repeatedWithOutput(written FilePath, target Target) returns ExitCode
@@ -1068,10 +1078,103 @@ function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args Max
 		return BuildOutcome.failed(lockExit)
 	end 'busyTree'
 
-	let outcome = compileAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines, session: session)
+	let job = BuildJob.create(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines)
+	let outcome = buildUnlessUpToDate(job, session: session)
 	session.treeLock.release()
 	return outcome
 end 'buildAndReport'
+
+type BuildJob
+	export let inputPaths as MaxonSourcePathArray
+	export let target as Target
+	export let args as MaxonArgs
+	export let outputOverride as StatedText
+	export let debugInfo as bool
+	export let productVersion as VersionComponentArray
+	export let defines as DefineArray
+
+	static function create(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride StatedText, debugInfo bool, productVersion VersionComponentArray, defines DefineArray) returns BuildJob
+		return Self{inputPaths: inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines}
+	end 'create'
+
+	function recordRequestFor(output FilePath) returns BuildRecordRequest
+		return BuildRecordRequest.create(output, target: self.target, inputPaths: self.inputPaths, debugInfo: self.debugInfo, coverage: self.args.coverage, debugStream: self.args.debugStream, asyncTrace: self.args.asyncTrace, productVersion: self.productVersion, defines: self.defines)
+	end 'recordRequestFor'
+
+	function firstInputPath() returns FilePath
+		return try self.inputPaths.get(0) otherwise panic("BuildJob.firstInputPath: a build names at least one path")
+	end 'firstInputPath'
+end 'BuildJob'
+
+union RecordKeeping
+	keeps(record BuildRecord, started Timestamp)
+	keepsNone
+end 'RecordKeeping'
+
+// Separate from `buildAndReport` so the locks have one release: Maxon has no `defer`.
+function buildUnlessUpToDate(job BuildJob, session CompileSession) returns BuildOutcome
+	let output = try resolveOutputPath(job.target, inputPaths: job.inputPaths, outputOverride: job.outputOverride) otherwise 'unresolvable'
+		return compileAndReport(job, subject: job.firstInputPath(), reason: "{NoBuildRecordReason}: the output path cannot be resolved", keeping: RecordKeeping.keepsNone, session: session)
+	end 'unresolvable'
+
+	// Held from before the freshness check until the record is published, so one build's check never
+	// reads a record another build of this output is about to replace.
+	let lockExit = acquireBuildOutputLock(output, into: session.treeLock)
+
+	if not exitSucceeded(lockExit) 'outputBusy'
+		return BuildOutcome.failed(lockExit)
+	end 'outputBusy'
+
+	if let flag = try job.args.observedCompileFlag().text() 'observed'
+		return compileWithoutRecord(job, output: output, reason: "{flag} observes the compile", session: session)
+	end 'observed'
+
+	if outputIsRunningImage(output) 'rebuildsTheCompiler'
+		return compileWithoutRecord(job, output: output, reason: "the output is the running compiler", session: session)
+	end 'rebuildsTheCompiler'
+
+	match buildRecordOf(job.recordRequestFor(output)) 'recordability'
+		unrecordable(why) then return compileWithoutRecord(job, output: output, reason: "{NoBuildRecordReason}: {why}", session: session)
+		recordable(record) then return buildKeepingRecord(job, record: record, output: output, session: session)
+	end 'recordability'
+end 'buildUnlessUpToDate'
+
+function buildKeepingRecord(job BuildJob, record BuildRecord, output FilePath, session CompileSession) returns BuildOutcome
+	let freshness = Freshness.stale("{RebuildFlag} was requested") if job.args.rebuildRequested else freshnessOf(record)
+
+	match freshness 'freshness'
+		upToDate then break 'freshness'
+		stale(reason) then return compileRecording(job, record: record, output: output, reason: reason, session: session)
+	end 'freshness'
+
+	print("{UpToDateReportPrefix}{output}\n")
+
+	return BuildOutcome.built(output)
+end 'buildKeepingRecord'
+
+function compileRecording(job BuildJob, record BuildRecord, output FilePath, reason String, session CompileSession) returns BuildOutcome
+	// Before the compile touches the output, so a compile that fails leaves no record claiming it is up to
+	// date.
+	try File.delete(record.path) otherwise ignore
+
+	let started = try beginBuildRecord(record) otherwise (e) 'notBegun'
+		return compileAndReport(job, subject: output, reason: "{NoBuildRecordReason}: {e.sentence()}", keeping: RecordKeeping.keepsNone, session: session)
+	end 'notBegun'
+
+	return compileAndReport(job, subject: output, reason: reason, keeping: RecordKeeping.keeps(record, started: started), session: session)
+end 'compileRecording'
+
+function compileWithoutRecord(job BuildJob, output FilePath, reason String, session CompileSession) returns BuildOutcome
+	discardBuildRecordOf(output)
+
+	return compileAndReport(job, subject: output, reason: reason, keeping: RecordKeeping.keepsNone, session: session)
+end 'compileWithoutRecord'
+
+function acquireBuildOutputLock(output FilePath, into TreeLockHold) returns ExitCode
+	let lockPath = try recordLockPathOf(output) otherwise return SucceededExit
+
+	return acquireOutputLock(lockPath, output: output, into: into)
+end 'acquireBuildOutputLock'
 
 // `debugInfo` is the build's effective setting, which a manifest can turn off.
 //
@@ -1132,16 +1235,31 @@ function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride St
 	return acquireTreeLock(root, into: into)
 end 'acquireBuildTreeLock'
 
-// Separate from `buildAndReport` so the tree lock has one release: Maxon has no `defer`.
-function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs, outputOverride StatedText, debugInfo bool, productVersion VersionComponentArray, defines DefineArray, session CompileSession) returns BuildOutcome
-	let outputPath = try compile(inputPaths, target: target, outputOverride: outputOverride, emitIr: args.emitIr, metrics: args.metrics, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream, debugInfo: debugInfo, coverage: args.coverage, censusByTag: args.censusByTag, censusPhase: args.censusPhase, allocationsByTag: args.allocationsByTag, allocationsPhase: args.allocationsPhase, productVersion: productVersion, defines: defines, session: session) otherwise (e) 'compileErr'
+function compileAndReport(job BuildJob, subject FilePath, reason String, keeping RecordKeeping, session CompileSession) returns BuildOutcome
+	compilerLogger(CompilerLogGroup.compiler).info("compiling {subject}: {reason}")
+
+	let product = try compile(job.inputPaths, target: job.target, outputOverride: job.outputOverride, emitIr: job.args.emitIr, metrics: job.args.metrics, runtimeIrNames: job.args.runtimeIrNames, asyncTrace: job.args.asyncTrace, debugStream: job.args.debugStream, debugInfo: job.debugInfo, coverage: job.args.coverage, censusByTag: job.args.censusByTag, censusPhase: job.args.censusPhase, allocationsByTag: job.args.allocationsByTag, allocationsPhase: job.args.allocationsPhase, productVersion: job.productVersion, defines: job.defines, session: session) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'compileErr'
 
-	print("Compiled -> {outputPath}\n")
-	return BuildOutcome.built(outputPath)
+	// A record kept over a failed sidecar would stamp it absent, and every later build would find that
+	// absence up to date and never write it.
+	if product.sidecar != SidecarOutcome.failed 'sidecarSettled'
+		publishRecord(keeping)
+	end 'sidecarSettled'
+
+	print("{CompiledReportPrefix}{product.outputPath}\n")
+
+	return BuildOutcome.built(product.outputPath)
 end 'compileAndReport'
+
+function publishRecord(keeping RecordKeeping)
+	match keeping 'keeping'
+		keepsNone then return
+		keeps(record, started) then publishBuildRecord(record, started: started)
+	end 'keeping'
+end 'publishRecord'
 
 union BuildOutcome
 	built(output FilePath)
@@ -1719,27 +1837,48 @@ end 'commandWordsOf'
 // `DiagnosticSink` terminates each line, so no arm carries its own newline.
 module function reportCompileError(e CompileError, sink DiagnosticSink = DiagnosticSink.printing())
 	match e 'report'
-		fileNotFound(p) then sink.emit("error: file not found: {p}")
-		directoryNotFound(p) then sink.emit("error: directory not found: {p}")
-		noSourceFiles(r) then sink.emit("error: no source files under {r}")
+		nestedProjectFile(outer, nested) then sink.emit(nestedProjectFileDiagnostic(outer, nested: nested).render())
+		compileError or
+			abandoned then break 'report'
+		fileNotFound or
+			directoryNotFound or
+			noSourceFiles or
+			readError or
+			noCommonRoot or
+			twoDriverFiles or
+			unnamedDirectory or
+			invalidOutputPath or
+			stdlibNotFound or
+			runtimeNotFound or
+			runtimeTierIsNotAProgram or
+			runtimeIrNameAbsent or
+			runtimeIrNameIsProgramFunction then sink.emit("error: {driverErrorSentence(e)}")
+	end 'report'
+end 'reportCompileError'
+
+module function driverErrorSentence(e CompileError) returns String
+	return match e 'sentence'
+		fileNotFound(p) gives "file not found: {p}"
+		directoryNotFound(p) gives "directory not found: {p}"
+		noSourceFiles(r) gives "no source files under {r}"
 
 		// Not "share no directory": two top-level directories on one drive share the drive root, which a
 		// `FilePath` cannot hold (see `Compiler.commonAncestorOf`).
-		noCommonRoot(first, other) then sink.emit("error: {first} and {other} have no common directory this build can be rooted at. Name a directory they are both under as one of the paths, or build them separately")
-		twoDriverFiles(first, second) then sink.emit("error: {first} and {second} are both in one directory, which holds one {driverFileKindOf(first)} file at most. Merge them into one, or move one into a directory of its own")
-		nestedProjectFile(outer, nested) then sink.emit(nestedProjectFileDiagnostic(outer, nested: nested).render())
-		unnamedDirectory(d) then sink.emit("error: {d} has no name for its executable to take. Name the output with {OutputFlagPrefix}<path>")
-		invalidOutputPath(spelling) then sink.emit("error: {OutputFlagPrefix}{spelling} is not a valid path")
-		readError(p) then sink.emit("error: could not read {p}")
-		stdlibNotFound then sink.emit("error: could not locate the stdlib/ directory (every compile loads stdlib source)")
-		runtimeNotFound then sink.emit("error: could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)")
-		runtimeTierIsNotAProgram(r) then sink.emit("error: {r} is in the runtime/ tier, which every program compiles; it is not a program of its own. Build a program that uses it")
-		runtimeIrNameAbsent(name) then sink.emit("error: this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the pin would pin nothing, and neither would {EmitIrRuntimeFlagPrefix}{name} render anything. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, and an unreached stdlib body is eliminated")
-		runtimeIrNameIsProgramFunction(name, declaredIn) then sink.emit("error: '{name}' is the PROGRAM's own function — it is parsed from {declaredIn}, which is not the library, and the IR already renders it, so naming it in {EmitIrRuntimeFlagPrefix} (or a ```RequiredRuntime block) pins nothing new")
+		noCommonRoot(first, other) gives "{first} and {other} have no common directory this build can be rooted at. Name a directory they are both under as one of the paths, or build them separately"
+		twoDriverFiles(first, second) gives "{first} and {second} are both in one directory, which holds one {driverFileKindOf(first)} file at most. Merge them into one, or move one into a directory of its own"
+		nestedProjectFile(outer, nested) gives nestedProjectFileDiagnostic(outer, nested: nested).message
+		unnamedDirectory(d) gives "{d} has no name for its executable to take. Name the output with {OutputFlagPrefix}<path>"
+		invalidOutputPath(spelling) gives "{OutputFlagPrefix}{spelling} is not a valid path"
+		readError(p) gives "could not read {p}"
+		stdlibNotFound gives "could not locate the stdlib/ directory (every compile loads stdlib source)"
+		runtimeNotFound gives "could not locate the runtime/ directory beside stdlib/ (every compile loads runtime source)"
+		runtimeTierIsNotAProgram(r) gives "{r} is in the runtime/ tier, which every program compiles; it is not a program of its own. Build a program that uses it"
+		runtimeIrNameAbsent(name) gives "this program contains nothing named '{name}' — no IR body and no hand-assembled chunk — so a ```RequiredRuntime block naming it would render nothing and the pin would pin nothing, and neither would {EmitIrRuntimeFlagPrefix}{name} render anything. Check the spelling, or pick a program that contains it: the emitted runtime is installed on demand, and an unreached stdlib body is eliminated"
+		runtimeIrNameIsProgramFunction(name, declaredIn) gives "'{name}' is the PROGRAM's own function — it is parsed from {declaredIn}, which is not the library, and the IR already renders it, so naming it in {EmitIrRuntimeFlagPrefix} (or a ```RequiredRuntime block) pins nothing new"
 		compileError or
-			abandoned then break 'report'
-	end 'report'
-end 'reportCompileError'
+			abandoned panic("driverErrorSentence: a compile that raised {e.name} has no sentence of its own: its diagnostics were already emitted")
+	end 'sentence'
+end 'driverErrorSentence'
 
 function driverFileKindOf(driverFile FilePath) returns String
 	let name = driverFile.filename()
@@ -2020,6 +2159,7 @@ enum HelpOption
 	emitIrRuntime
 	target
 	noDebugInfo
+	rebuild
 	debugBatch
 	debugCommands
 	debugComplete
@@ -2121,6 +2261,7 @@ function optionReference(option HelpOption) returns OptionReference
 		debugTargetEnv gives OptionReference.create("{TargetEnvOptionPrefix}NAME=VALUE", description: "Set NAME in the DEBUGGED program's environment, repeatable; everything past the first `=` is the value. The program otherwise inherits this driver's environment.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.prefixed(TargetEnvOptionPrefix)])
 		debugTrace gives OptionReference.create(DebugTraceOption, description: "Create the DebugStream ring `{MonitorCommandName}` reads and name it to the debugged program, so the `trace` command can print the events it committed before a stop. The program must have been built with {DebugStreamFlag}; without it `trace` says so rather than printing an empty list.", commands: [MaxonCommand.debug], arrivals: [OptionArrival.exactly(DebugTraceOption)])
 		noDebugInfo gives OptionReference.create(NoDebugInfoFlag, description: "Do NOT write the <output>.mxdbg debug-info sidecar. It is written BY DEFAULT, and the executable is byte-identical either way: the sidecar never decides which instructions are emitted, so the binary you debug is the binary you shipped.", commands: [MaxonCommand.build, MaxonCommand.run, MaxonCommand.test], arrivals: [OptionArrival.exactly(NoDebugInfoFlag)])
+		rebuild gives OptionReference.create(RebuildFlag, description: "Compile even when the output is up to date. The compile still writes its build record, so the next build without {RebuildFlag} can be up to date again.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(RebuildFlag)])
 		coverageInstrumentation gives OptionReference.create(CoverageFlag, description: "Instrument for code coverage: the binary counts each statement and branch arm it executes and writes them to <output>{MxcovDataExtension} as it exits. It CHANGES the emitted code, so it is a separate build; read it back with `{CoverageCommandName}`. It requires the debug-info sidecar, which carries what each counter counts.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(CoverageFlag)])
 		asyncTrace gives OptionReference.create(AsyncTraceFlag, description: "Write the green-thread trace to stderr as the program runs: one line per spawn, io_yield, io_resume and await. Opt-in per build: a build without it emits no trace calls at all.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(AsyncTraceFlag)])
 		debugStream gives OptionReference.create(DebugStreamFlag, description: "Emit the DebugStream producer that `{MonitorCommandName}` reads: the memory manager writes its events into a shared-memory ring. Opt-in per build: a build without it is unchanged. Refused on a target that cannot provide one.", commands: [MaxonCommand.build, MaxonCommand.run], arrivals: [OptionArrival.exactly(DebugStreamFlag)])
@@ -2454,6 +2595,8 @@ export type MaxonArgs
 	// Read only by `build`, which refuses it without `debugInfo` or on a target with no file surface.
 	export var coverage as bool
 
+	export var rebuildRequested as bool
+
 	// Empty is the ordinary build, not a sentinel. Implies `emitIr` (see `parse`).
 	export var runtimeIrNames as RuntimeFunctionNameArray
 
@@ -2544,7 +2687,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	module static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(), filterPatterns: FilterPatternArray.create(), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(), refusedOptions: OptionRefusalArray.create(), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
@@ -2580,6 +2723,30 @@ export type MaxonArgs
 
 		return StatedText.stated(value)
 	end 'statedValueOf'
+
+	function observedCompileFlag() returns StatedText
+		if self.emitIr 'emitsIr'
+			return StatedText.stated(EmitIrFlag if self.runtimeIrNames.isEmpty() else EmitIrRuntimeFlagPrefix)
+		end 'emitsIr'
+
+		if self.metrics.isStated() 'measures'
+			return StatedText.stated(MetricsFlagPrefix)
+		end 'measures'
+
+		if self.censusByTag 'censuses'
+			return StatedText.stated(CensusByTagFlag)
+		end 'censuses'
+
+		if self.allocationsByTag 'tallies'
+			return StatedText.stated(AllocationsByTagFlag)
+		end 'tallies'
+
+		if compilerLogShowsDetail() 'logsDetail'
+			return StatedText.stated(LogFlagPrefix if self.logOverridden else DetailLoggingName)
+		end 'logsDetail'
+
+		return StatedText.unstated
+	end 'observedCompileFlag'
 
 	function hasAnEmptyWord() returns bool
 		let wordCount = self.paths.count()
@@ -2709,7 +2876,9 @@ export type MaxonArgs
 				parsed.debugInfo = false
 			end 'noDebugInfoFlag' else if arg == CoverageFlag 'coverageFlag'
 				parsed.coverage = true
-			end 'coverageFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
+			end 'coverageFlag' else if arg == RebuildFlag 'rebuildFlag'
+				parsed.rebuildRequested = true
+			end 'rebuildFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
 				// Not swallowed by `--emit-ir`'s arm, which tests `==`.
 				//
 				// Checked on the parsed names, not the raw value: `--emit-ir-runtime=,` carries a non-empty

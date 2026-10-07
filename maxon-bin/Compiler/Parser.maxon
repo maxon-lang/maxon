@@ -1438,6 +1438,8 @@ export union SourceParseError implements Error
 	// corpus happens to exercise.
 	existentialNotComparable(op String, line LineNumber, column ColumnNumber)
 
+	genericInstanceNotComparable(op String, typeName String, orderingOp bool, line LineNumber, column ColumnNumber)
+
 	// ORDERING (`<`/`>`/`<=`/`>=`) is applied to two `String`s. Renders as **E3005**, positioned at the
 	// operator. `op` is the operator's spelling, from the same `comparisonOpSpelling` the two arms above read.
 	//
@@ -1792,6 +1794,8 @@ export union SourceParseError implements Error
 	genericCallAmbiguous(functionName String, candidates ElementIndex, line LineNumber, column ColumnNumber)
 
 	genericArgumentKindUnsupported(functionName String, paramName String, typeName String, line LineNumber, column ColumnNumber)
+
+	genericTypeGrowsWithoutBound(ownerName String, fieldName String, typeName String, line LineNumber, column ColumnNumber)
 
 	// ⭐ **`bits(n)` WITH A WIDTH THE LANGUAGE DOES NOT HAVE.** Renders as **E3146**, positioned at the
 	// width. The legal set is `isLegalBitWidth`'s, and the message names it, because the rule is not
@@ -2374,6 +2378,72 @@ end 'borrowSubjectBlameName'
 // through that door.
 let DestructureTempPrefix = "__destructure_"
 
+function equalityOperandCannotDispatch(operand EqualityOperand) returns bool
+	return match operand 'operand'
+		noEdge gives true
+		unknown or
+			arrayOverParameters or
+			structOverParameters gives false
+	end 'operand'
+end 'equalityOperandCannotDispatch'
+
+function equalityOperandIsKnown(operand EqualityOperand) returns bool
+	return match operand 'operand'
+		arrayOverParameters or
+			structOverParameters gives true
+		unknown or
+			noEdge gives false
+	end 'operand'
+end 'equalityOperandIsKnown'
+
+module function deriveTableHolder(liftedClosure bool, carriedTables ParamCount) returns TableHolder
+	if liftedClosure 'inAClosure'
+		return TableHolder.liftedClosure
+	end 'inAClosure'
+
+	return TableHolder.carriesTables if carriedTables != 0 else TableHolder.declaredWithoutTables
+end 'deriveTableHolder'
+
+module enum TableHolder
+	carriesTables
+	declaredWithoutTables
+	liftedClosure
+end 'TableHolder'
+
+module function arrivalWhenWithoutTables(holder TableHolder, outsideAClosure NoWitnessTablesArrival) returns NoWitnessTablesArrival
+	return match holder 'holder'
+		carriesTables panic("arrivalWhenWithoutTables: asked of a holder that carries witness tables")
+		declaredWithoutTables gives outsideAClosure
+		liftedClosure gives NoWitnessTablesArrival.forwardedFromAClosure
+	end 'holder'
+end 'arrivalWhenWithoutTables'
+
+module enum NoWitnessTablesArrival
+	forwardedToACallee
+	dispatchedOnATypeParameter
+	dispatchedOnAnInstanceOverATypeParameter
+	dispatchedInAClosure
+	forwardedFromAClosure
+end 'NoWitnessTablesArrival'
+
+let NoWitnessTablesDispatchRemedy = ", or make it an instance method, or take the operation as a function parameter"
+
+module function noWitnessTablesSentence(methodName ByteArray, arrival NoWitnessTablesArrival) returns String
+	return match arrival 'arrival'
+		forwardedToACallee gives noWitnessTablesCallSentence(methodName, receiver: "the enclosing type", verb: "forward", remedy: " and call the method on the result, or make it an instance method")
+		dispatchedOnATypeParameter gives noWitnessTablesCallSentence(methodName, receiver: "a type parameter", verb: "dispatch through", remedy: NoWitnessTablesDispatchRemedy)
+		dispatchedOnAnInstanceOverATypeParameter gives noWitnessTablesCallSentence(methodName, receiver: "a generic type over a type parameter", verb: "dispatch through", remedy: NoWitnessTablesDispatchRemedy)
+		dispatchedInAClosure gives NoWitnessTablesClosureSentence
+		forwardedFromAClosure gives "a closure that calls '{String.from(methodName)}' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter — a closure inherits a witness table through its environment only for a direct dispatch on a type-parameter value, so it has none to hand on to a callee. Make the call in the method that builds the closure and let the closure use the result, or take the operation as a function parameter"
+	end 'arrival'
+end 'noWitnessTablesSentence'
+
+function noWitnessTablesCallSentence(methodName ByteArray, receiver String, verb String, remedy String) returns String
+	return "calling '{String.from(methodName)}' (which dispatches through the type's `where` constraints) on a value of {receiver}, from a `static function` that carries no witness tables of its own to {verb} — a static sources them from the instance it RETURNS, so declare this one `returns Self`{remedy}"
+end 'noWitnessTablesCallSentence'
+
+let NoWitnessTablesClosureSentence = "a closure that dispatches through the type's `where` constraints, written inside a `static function` (or a field-default helper) that carries no witness tables of its own — the closure inherits its table through its environment from the function that built it, and a static has no receiver to source one from. Write the closure in an instance method, or take the operation as a function parameter"
+
 // The empty `ParamPositionMask` — this function writes none of its parameters, which is the overwhelmingly
 // common answer and the initial value of every function's mask.
 export let NoParamPositions = 0 as ParamPositionMask
@@ -2709,6 +2779,13 @@ union ValueExistentialInstanceColumn
 end 'ValueExistentialInstanceColumn'
 
 let noValueExistentialInstances = ValueExistentialInstanceColumn.unwritten
+
+union ValueCallInstanceColumn
+	unwritten
+	entries(byValue ValueCallInstanceMap)
+end 'ValueCallInstanceColumn'
+
+let noValueCallInstances = ValueCallInstanceColumn.unwritten
 
 typealias ValueExistentialScopeMap = Map with (ValueId, FilePath)
 
@@ -5886,6 +5963,53 @@ let sharedEmptyNestedInstanceCallees = ByteArrayArray.create()
 // it is. Empty for every region that chains no call, which is every region in the corpus today.
 let sharedEmptySizedContainerSelfCallees = ByteArrayArray.create()
 
+let sharedEmptyBlindCallees = ByteArrayArray.create()
+
+enum ScanRegion
+	typeMemberMethod
+	typeStaticMethod
+	interfaceExtensionMethod
+	fieldDefault
+end 'ScanRegion'
+
+type ParamReceiverTracker
+	export var parameters as ByteArrayArray
+	export var rebound as ByteArrayArray
+	export var operandNames as ByteArrayArray
+	export var operandBeliefs as EqualityOperandArray
+	export var deferredReceivers as ByteArrayArray
+	export var deferredCallees as ByteArrayArray
+	export let headEnd as ElementIndex
+	export let fieldsAreUnshadowed as bool
+
+	static function create(headEnd ElementIndex, fieldsAreUnshadowed bool) returns ParamReceiverTracker
+		return Self{parameters: ByteArrayArray.create(), rebound: ByteArrayArray.create(), operandNames: ByteArrayArray.create(), operandBeliefs: EqualityOperandArray.create(), deferredReceivers: ByteArrayArray.create(), deferredCallees: ByteArrayArray.create(), headEnd: headEnd, fieldsAreUnshadowed: fieldsAreUnshadowed}
+	end 'create'
+
+	function declares(name ByteArray) returns bool
+		return namesInclude(self.parameters, name: name)
+	end 'declares'
+
+	function reboundTo(name ByteArray) returns bool
+		return namesInclude(self.rebound, name: name)
+	end 'reboundTo'
+
+	function noteOperand(name ByteArray, belief EqualityOperand)
+		self.operandNames.push(name)
+		self.operandBeliefs.push(belief)
+	end 'noteOperand'
+
+	function operandBeliefOf(name ByteArray) returns EqualityOperand throws AbsentError
+		for i in 0 upto self.operandNames.count() 'eachName'
+			if (try self.operandNames.get(i) otherwise panic("operandBeliefOf: operandNames.get({i}) below count")).equals(name) 'found'
+				return try self.operandBeliefs.get(i) otherwise panic("operandBeliefOf: operandBeliefs.get({i}) — the two columns are pushed in one act")
+			end 'found'
+		end 'eachName'
+
+		throw AbsentError.absent
+	end 'operandBeliefOf'
+end 'ParamReceiverTracker'
+
 // ⭐ **DOES `name` WEAR `typeName`'S QUALIFIER — i.e. is it `qualifiedMethodName(typeName, <anything>)`?**
 // The join's INVERSE, and deliberately allocation-free: its caller
 // (`IrInterface.isBuiltinConformanceImplName` → `MmRuntime.isCompilerInternalCallee`) is asked of EVERY
@@ -5972,6 +6096,14 @@ function qualifiedMemberIs(callee ByteArray, member ByteArray) returns bool
 
 	return true
 end 'qualifiedMemberIs'
+
+export function qualifiedNameIs(callee ByteArray, typeName ByteArray, member ByteArray) returns bool
+	if callee.count() != typeName.count() + MethodNameSeparatorBytes.count() + member.count() 'notThisLength'
+		return false
+	end 'notThisLength'
+
+	return isQualifiedUnderTypeName(callee, typeName: typeName) and qualifiedMemberIs(callee, member: member)
+end 'qualifiedNameIs'
 
 function isQualifiedUnderTypeName(name ByteArray, typeName ByteArray) returns bool
 	if name.count() <= typeName.count() 'noRoomForAMethod'
@@ -14188,6 +14320,10 @@ function tokenIsLiteralKind(kind TokenKind) returns bool
 	return kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.charLiteral or kind == TokenKind.byteStringLiteral
 end 'tokenIsLiteralKind'
 
+function tokenIsLiteralOrBooleanKind(kind TokenKind) returns bool
+	return tokenIsLiteralKind(kind) or kind == TokenKind.true or kind == TokenKind.false
+end 'tokenIsLiteralOrBooleanKind'
+
 // Does `kind` spell an enum/union case's raw value DIRECTLY — a string or a character literal? THE one
 // list, because three doors must agree on it: the case-NAME reader (which admits such a literal where a
 // name goes), the implicit-backing arm that recognizes it there, and the explicit `= <literal>` arm. Taught
@@ -15557,7 +15693,7 @@ typealias SeenPatternValues = Set with ParsedInt
 // signature without reporting a duplicate), and this header asserted they could not. Read as a guarantee it
 // licensed the plain `upsert` that made the LAST declaration the whole answer — see the merge at the fill
 // site for the compiler abort that cost.
-export function solveDescriptorNeeds(methodNames ByteArrayArray, directSeeds DescriptorNeedMap, selfCallees SelfCalleesMap) returns DescriptorNeedNameSet
+module function solveDescriptorNeeds(methodNames ByteArrayArray, directSeeds DescriptorNeedMap, firmColumns SelfCalleesMapArray, blindColumns SelfCalleesMapArray) returns DescriptorNeedSolution
 	let methodCount = methodNames.count()
 
 	// Dense index per qualified method name, so the self-call graph reverses into the CSR's dense key space
@@ -15568,24 +15704,6 @@ export function solveDescriptorNeeds(methodNames ByteArrayArray, directSeeds Des
 		nameToIndex.upsert(try methodNames.get(i) otherwise panic("solveDescriptorNeeds: methodNames.get({i}) OOB below count {methodCount}"), value: i)
 	end 'index'
 
-	// The REVERSED self-call edges: a forward edge (caller `i` -> sibling callee `c`) is recorded as
-	// `c -> i`, so a BFS from a needing method reaches the siblings that call it. A self-call to a name that
-	// is not a method of that type is not a real edge and is dropped. `buildCsr` counting-sorts these into
-	// the reverse adjacency (`callersOf`) in O(edges + methods).
-	var edgeCallee = CsrColumn.create()
-	var edgeCaller = CsrColumn.create()
-
-	for i in 0 upto methodCount 'edges'
-		for calleeName in calleesOf(methodNames, selfCallees: selfCallees, callerIndex: i) 'edge'
-			if let c = try nameToIndex.get(calleeName) 'realEdge'
-				edgeCallee.push(c)
-				edgeCaller.push(i)
-			end 'realEdge'
-		end 'edge'
-	end 'edges'
-
-	let callersOf = buildCsr(edgeCallee, to: edgeCaller, nodeCount: methodCount as CsrIndex)
-
 	// Seed each method's direct-need bit, then mark every method that REACHES a needing one over the
 	// reversed self-call edges.
 	var seeds = BoolArray.create()
@@ -15594,23 +15712,70 @@ export function solveDescriptorNeeds(methodNames ByteArrayArray, directSeeds Des
 		seeds.push(try directSeeds.get(try methodNames.get(i) otherwise panic("methodNames.get({i}) in seed")) otherwise false)
 	end 'seed'
 
-	let needs = reverseReachabilityMark(callersOf, seeds: seeds)
+	let firmNeeds = namesReachingASeed(methodNames, nameToIndex: nameToIndex, seeds: seeds, columns: firmColumns)
+	var allColumns = SelfCalleesMapArray.create()
+	allColumns.append(firmColumns)
+	allColumns.append(blindColumns)
+	let allNeeds = firmNeeds if blindColumns.isEmpty() else namesReachingASeed(methodNames, nameToIndex: nameToIndex, seeds: seeds, columns: allColumns)
 
 	// The MEMBERS are the answer, so a method that does not need a descriptor contributes nothing at all —
 	// which is what lets `functionNeedsLayoutDescriptor` read membership rather than a bool that could be
 	// absent for two different reasons.
 	var needing = DescriptorNeedNameSet.create()
+	var speculative = DescriptorNeedNameSet.create()
 
 	for i in 0 upto methodCount 'publish'
-		let carriesOne = try needs.get(i) otherwise panic("solveDescriptorNeeds: needs.get({i}) in publish")
+		let carriesOne = try allNeeds.get(i) otherwise panic("solveDescriptorNeeds: allNeeds.get({i}) in publish")
 
-		if carriesOne 'reserves'
-			needing.insert(try methodNames.get(i) otherwise panic("solveDescriptorNeeds: methodNames.get({i}) in publish"))
-		end 'reserves'
+		if not carriesOne 'reservesNothing'
+			continue
+		end 'reservesNothing'
+
+		let name = try methodNames.get(i) otherwise panic("solveDescriptorNeeds: methodNames.get({i}) in publish")
+		needing.insert(name)
+
+		if not (try firmNeeds.get(i) otherwise panic("solveDescriptorNeeds: firmNeeds.get({i}) in publish")) 'onlyReceiverBlindEdgesReachIt'
+			speculative.insert(name)
+		end 'onlyReceiverBlindEdgesReachIt'
 	end 'publish'
 
-	return needing
+	return DescriptorNeedSolution.create(needing, speculative: speculative)
 end 'solveDescriptorNeeds'
+
+module typealias SelfCalleesMapArray = Array with SelfCalleesMap
+
+typealias NamedSlotIndexArray = Array with ElementIndex
+
+export type DescriptorNeedSolution
+	export let needing as DescriptorNeedNameSet
+	export let speculative as DescriptorNeedNameSet
+
+	export static function create(needing DescriptorNeedNameSet, speculative DescriptorNeedNameSet) returns DescriptorNeedSolution
+		return Self{needing: needing, speculative: speculative}
+	end 'create'
+end 'DescriptorNeedSolution'
+
+// The REVERSED self-call edges: a forward edge (caller `i` -> sibling callee `c`) is recorded as `c -> i`,
+// so a BFS from a needing method reaches the siblings that call it. A self-call to a name that is not a
+// method of that type is not a real edge and is dropped. `buildCsr` counting-sorts these into the reverse
+// adjacency (`callersOf`) in O(edges + methods).
+function namesReachingASeed(methodNames ByteArrayArray, nameToIndex MethodIndexMap, seeds BoolArray, columns SelfCalleesMapArray) returns BoolArray
+	var edgeCallee = CsrColumn.create()
+	var edgeCaller = CsrColumn.create()
+
+	for column in columns 'eachColumn'
+		for i in 0 upto methodNames.count() 'edges'
+			for calleeName in calleesOf(methodNames, selfCallees: column, callerIndex: i) 'edge'
+				if let c = try nameToIndex.get(calleeName) 'realEdge'
+					edgeCallee.push(c)
+					edgeCaller.push(i)
+				end 'realEdge'
+			end 'edge'
+		end 'edges'
+	end 'eachColumn'
+
+	return reverseReachabilityMark(buildCsr(edgeCallee, to: edgeCaller, nodeCount: methodNames.count() as CsrIndex), seeds: seeds)
+end 'namesReachingASeed'
 
 // The sibling methods `methodNames[callerIndex]` calls on `self` — the forward self-call edges out of one
 // method. A thin read-only view onto `selfCallees` shared by the descriptor-need fixpoint's two CSR passes
@@ -16855,6 +17020,7 @@ type FunctionBodyState
 	// sibling value columns, and for their reason: its keys are ids in THIS function's SSA space.
 	export var valueExistentialInstance as ValueExistentialInstanceColumn
 	export var valueExistentialScope as ValueExistentialScopeColumn
+	export var valueCallInstance as ValueCallInstanceColumn
 
 	// Every store this function makes into an interface-typed field (`ExistentialFieldStore`), started at the
 	// shared empty and replaced on the first write, and swapped across a closure body for its sibling's reason.
@@ -17427,6 +17593,7 @@ type FunctionBodyState
 			valueBrandIds: TypeNameIdArray.create(),
 			valueExistentialInstance: noValueExistentialInstances,
 			valueExistentialScope: noValueExistentialScopes,
+			valueCallInstance: noValueCallInstances,
 			existentialFieldStores: sharedEmptyExistentialFieldStores,
 			valueDeclaredAlias: noValueDeclaredAliases,
 			literalCasts: noLiteralCasts,
@@ -21621,7 +21788,7 @@ export type Parser
 	// The same framework `scanBodyFacts` uses (`opensBlockAt` / `closesBlockAt`) delimits each method body;
 	// a named `function <ident>` opens one (a closure is `function(` — no name, no `end`). Peek-only: the
 	// cursor is positioned from the site and the `Parser` this runs on parses nothing.
-	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, countSeeds DescriptorNeedMap, selfCallees SelfCalleesMap, countCallees SelfCalleesMap)
+	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, countSeeds DescriptorNeedMap, selfCallees SelfCalleesMap, blindCallees SelfCalleesMap, countCallees SelfCalleesMap)
 		// The type scope the seeds are read against: `sizeofOperandIsTypeParamAt` needs the `uses` list, and
 		// `opaqueContainerConstructionAt` / `opaqueFieldReassignAt` key on `enclosingType`. Taken from the
 		// whole-program layout rather than re-read from a header, so an EXTENSION body — which has no `uses`
@@ -21653,7 +21820,7 @@ export type Parser
 			// `functionDeclarationAt` so a KEYWORD-named method (D8) is a method here too.
 			if self.functionDeclarationAt(q) 'method'
 				let qualified = qualifiedMethodName(site.typeName, methodName: self.tokenAt(q + 1).value)
-				let scan = self.scanOneMethodDescriptorSignals(q + 2, edgeScratch: edgeScratch)
+				let scan = self.scanOneMethodDescriptorSignals(q + 2, edgeScratch: edgeScratch, region: self.scanRegionOfMethodAt(q, inAnInterfaceExtension: site.bodyIsAnInterfaceExtension))
 
 				// ⭐ A method that DROPS a consumed opaque CALLEE-STORAGE feed parameter needs the descriptor too
 				// — the runtime `__drop_type_param` reads the instance's `destroyFunc@40`. That
@@ -21915,6 +22082,7 @@ export type Parser
 
 				var directlyNeeded = writesAnOpaqueCell or scan.direct or dropsFeed or movesOutContainerElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or closureHandsBackABorrow or adoptsOpaqueResult or forwardsBorrowedOpaqueToAFeed or feedsAParameterThroughAResolvedCall or storesBorrowedOpaqueElement or walksAnOwnedOpaqueElement
 				var edges = self.descriptorEdgesFor(site.typeName, scan: scan, isStatic: self.functionDeclIsStatic(q))
+				var blindEdges = self.descriptorBlindEdgesFor(scan, isStatic: self.functionDeclIsStatic(q))
 				var countEdges = self.fixedElementCountEdgesFor(site.typeName, scan: scan)
 
 				// ⭐ A `Self{…}` CALLS this type's field-default helpers, so it is a call edge like any other
@@ -21928,12 +22096,14 @@ export type Parser
 					directlyNeeded = directlyNeeded or (try directSeeds.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' is a seeded key by `contains` and absent by `get`"))
 					readsACount = readsACount or (try countSeeds.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' is a seeded key by `contains` and absent from the count column — the two seed columns are written in one act"))
 					edges.append(try selfCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no self-callee row — the two columns are written in one act"))
+					blindEdges = mergedCountEdges(blindEdges, previous: try blindCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no blind-callee row — the edge columns are written in one act"))
 					countEdges = mergedCountEdges(countEdges, previous: try countCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no count-callee row — the two edge columns are written in one act"))
 				end 'aSecondDeclarationWearingThisName'
 
 				directSeeds.upsert(qualified, value: directlyNeeded)
 				countSeeds.upsert(qualified, value: readsACount)
 				selfCallees.upsert(qualified, value: edges)
+				blindCallees.upsert(qualified, value: blindEdges)
 				countCallees.upsert(qualified, value: countEdges)
 
 				// Once per NAME, not once per declaration: `solveDescriptorNeeds` indexes the graph by this
@@ -21957,7 +22127,7 @@ export type Parser
 			// runs. It is a NODE of this same fixpoint rather than a rule of its own, so a default that
 			// merely CALLS something needing one is covered by the same transitive closure.
 			if self.structFieldKeywordAt(q) 'field'
-				q = self.recordFieldDefaultDescriptorNeeds(q, typeName: site.typeName, methodNames: methodNames, directSeeds: directSeeds, countSeeds: countSeeds, selfCallees: selfCallees, countCallees: countCallees, edgeScratch: edgeScratch)
+				q = self.recordFieldDefaultDescriptorNeeds(q, typeName: site.typeName, methodNames: methodNames, directSeeds: directSeeds, countSeeds: countSeeds, selfCallees: selfCallees, blindCallees: blindCallees, countCallees: countCallees, edgeScratch: edgeScratch)
 				continue
 			end 'field'
 
@@ -21994,7 +22164,7 @@ export type Parser
 	// (`= 7`) mints no helper at all (`FieldDefault.literal`), and scanning one finds nothing, so the two doors
 	// need no shared verdict: an entry keyed on a helper name no layout carries is dropped by the fixpoint's own
 	// name→index filter.
-	function recordFieldDefaultDescriptorNeeds(q ElementIndex, typeName ByteArray, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, countSeeds DescriptorNeedMap, selfCallees SelfCalleesMap, countCallees SelfCalleesMap, edgeScratch DescriptorEdgeScratch) returns ElementIndex
+	function recordFieldDefaultDescriptorNeeds(q ElementIndex, typeName ByteArray, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, countSeeds DescriptorNeedMap, selfCallees SelfCalleesMap, blindCallees SelfCalleesMap, countCallees SelfCalleesMap, edgeScratch DescriptorEdgeScratch) returns ElementIndex
 		let afterModifier = self.pastVisibilityModifier(q)
 		let fieldName = self.tokenAt(afterModifier + 1).value
 
@@ -22024,6 +22194,7 @@ export type Parser
 		let edges = self.descriptorEdgesFor(typeName, scan: scan, isStatic: false)
 
 		selfCallees.upsert(helperName, value: edges)
+		blindCallees.upsert(helperName, value: self.descriptorBlindEdgesFor(scan, isStatic: false))
 		methodNames.push(helperName)
 		return regionEnd
 	end 'recordFieldDefaultDescriptorNeeds'
@@ -22073,31 +22244,15 @@ export type Parser
 	function descriptorEdgesFor(typeName ByteArray, scan MethodDescriptorScan, isStatic bool) returns ByteArrayArray
 		var edges = self.qualifiedSelfCallees(typeName, callees: scan.callees)
 
-		// ⭐⭐ **THE CROSS-TYPE EDGES (ARRG)** — already qualified, because they name a method of ANOTHER
-		// type. Gated exactly as `adoptsOpaqueResult` is and for its reasons: a NON-generic enclosing type has
-		// no descriptor to forward, and a STATIC has no receiver to source one from
-		// (`staticLayoutNeedsSelfReturn` refuses one that needs it, with a position). Without both gates this
-		// edge would reserve a parameter whose only supply is `forwardCallerLayout`'s panic.
-		if not self.enclosingTypeParams.isEmpty() and not isStatic 'aGenericInstanceMethod'
-			edges.append(scan.corpusContainerCallees)
-
-			// ⭐ The sized container's CHAINED self-call edges ride the SAME gate for the SAME reason —
-			// the receiver is inferred rather than resolved, and a static that reserves a dictionary it cannot
-			// source is a refusal on a program that compiles. See the arm that records them.
-			edges.append(scan.sizedContainerSelfCallees)
-
-			// ⭐⭐ **AND THE CALLS THE `for … in self` ITSELF MAKES (found at review — W159's other half).**
-			// W159 read this loop shape to SEED the per-trip drop and stopped there, but the very fact it
-			// rests on — the loop's `createIterator()`/`current()`/`advance()` are emitted by the parser and
-			// appear in NO token — hides the CALL EDGES just as completely as it hides the drop. While no
-			// cursor entry point needed a descriptor the omission was inert; W161 ended that, because
-			// `<InnerAlias>.create()` inside a `createIterator()` now reserves one. **MEASURED at review**: a
-			// `type Bag uses Element` whose `createIterator` returns a `BagIter with Element` built through an
-			// inner alias took `panic at LowerMaxonToStd.maxon:2199: forwardCallerLayout: caller 'Bag.walk'
-			// has no layout descriptor to forward to 'Bag.createIterator'`.
-			//
-			// They are EDGES and not a seed, so they cost nothing where the entry points need nothing — which
-			// is every corpus conformer today.
+		// Gated as `adoptsOpaqueResult` is and for its reasons: a NON-generic enclosing type has no
+		// descriptor to forward, and a STATIC has no receiver to source one from
+		// (`staticLayoutNeedsSelfReturn` refuses one that needs it, with a position).
+		if self.holdsAnInstanceToForwardFrom(isStatic) 'aGenericInstanceMethod'
+			// ⭐⭐ **THE CALLS A `for … in self` MAKES.** The loop's
+			// `createIterator()`/`current()`/`advance()` are emitted by the parser and appear in NO token,
+			// so they are drawn here; without them a cursor entry point that needs a descriptor leaves its
+			// caller with none to forward. They are EDGES and not a seed, so they cost nothing where the
+			// entry points need nothing.
 			if scan.walksReceiverAsACursor 'anEmittedCursorWalk'
 				self.appendCursorProtocolCallees(edges, base: typeName)
 			end 'anEmittedCursorWalk'
@@ -22112,13 +22267,33 @@ export type Parser
 		return edges
 	end 'descriptorEdgesFor'
 
+	// ⭐⭐ **THE RECEIVER-BLIND EDGES (ARRG)** — the corpus-container calls (an `==`/`!=` on an operand
+	// the scan cannot type among them) and the sized container's chained self-calls, whose receiver is
+	// inferred from a member name rather than resolved. A need only these reach is SPECULATIVE
+	// (`SettledDeclarations.speculativeDescriptorNeeds`). Gated as `descriptorEdgesFor`'s cursor edges
+	// are.
+	function descriptorBlindEdgesFor(scan MethodDescriptorScan, isStatic bool) returns ByteArrayArray
+		if not self.holdsAnInstanceToForwardFrom(isStatic) or (scan.corpusContainerCallees.count() == 0 and scan.sizedContainerSelfCallees.count() == 0) 'nothingReceiverBlind'
+			return sharedEmptyBlindCallees
+		end 'nothingReceiverBlind'
+
+		var edges = ByteArrayArray.create()
+		edges.append(scan.corpusContainerCallees)
+		edges.append(scan.sizedContainerSelfCallees)
+		return edges
+	end 'descriptorBlindEdgesFor'
+
+	function holdsAnInstanceToForwardFrom(isStatic bool) returns bool
+		return not self.enclosingTypeParams.isEmpty() and not isStatic
+	end 'holdsAnInstanceToForwardFrom'
+
 	// ⭐⭐⭐ **THE COUNT COLUMN'S EDGES ARE *NOT* THE DESCRIPTOR'S, AND "TWO SEEDS AND ONE EDGE SET" WAS
 	// MEASURED WRONG THE FIRST TIME A `Vector` MEMBER RETIRED (W190 step 2).** `foldDescriptorNeeds` solved
 	// both columns over `selfCallees` on the stated ground that a count and a descriptor *"propagate along
 	// exactly the same self-call edges"*. They do not, and the difference is the direction each may err in:
 	//
 	//   • **AN OVER-RESERVED DESCRIPTOR COSTS ONE IGNORED PARAMETER** — every cross-type and receiver-blind
-	//     edge in `descriptorEdgesFor` is licensed by that, in so many words.
+	//     edge in `descriptorEdgesFor` and `descriptorBlindEdgesFor` is licensed by that.
 	//   • **AN OVER-RESERVED COUNT REFUSES A LEGAL PROGRAM.** The slot's supply is the CALLER's, and a caller
 	//     holding an instance that states no count has nothing to give: it meets
 	//     `requireFixedElementCountSourceForForwarding`. **MEASURED, the moment the cross-type corpus edge
@@ -22149,8 +22324,16 @@ export type Parser
 	// the FIELD-DEFAULT door (`scanFieldDefaultDescriptorSignals`, whose region is a line rather than a block)
 	// reads its tokens through the very same signal walk: the two regions differ in how they END and in nothing
 	// else, and a signal added for one would otherwise have to be added twice.
-	function scanOneMethodDescriptorSignals(bodyStart ElementIndex, edgeScratch DescriptorEdgeScratch) returns MethodDescriptorScan
-		return self.scanDescriptorSignalsIn(bodyStart, regionEnd: self.methodBodyEndFrom(bodyStart), edges: edgeScratch)
+	function scanRegionOfMethodAt(functionTok ElementIndex, inAnInterfaceExtension bool) returns ScanRegion
+		if inAnInterfaceExtension 'anExtensionMethod'
+			return ScanRegion.interfaceExtensionMethod
+		end 'anExtensionMethod'
+
+		return ScanRegion.typeStaticMethod if self.functionDeclIsStatic(functionTok) else ScanRegion.typeMemberMethod
+	end 'scanRegionOfMethodAt'
+
+	function scanOneMethodDescriptorSignals(bodyStart ElementIndex, edgeScratch DescriptorEdgeScratch, region ScanRegion) returns MethodDescriptorScan
+		return self.scanDescriptorSignalsIn(bodyStart, regionEnd: self.methodBodyEndFrom(bodyStart), edges: edgeScratch, region: region)
 	end 'scanOneMethodDescriptorSignals'
 
 	// The token index just past the `end` that closes the method body opening at `bodyStart`. `depth` starts at
@@ -22207,7 +22390,7 @@ export type Parser
 	// construction. `hasControlFlow` and `reassignsOpaqueField` come back false from a one-line nullary
 	// expression, which is the truth about it rather than an omission: it opens no block and has no `self`.
 	function scanFieldDefaultDescriptorSignals(start ElementIndex, regionEnd ElementIndex, edgeScratch DescriptorEdgeScratch) returns MethodDescriptorScan
-		return self.scanDescriptorSignalsIn(start, regionEnd: regionEnd, edges: edgeScratch)
+		return self.scanDescriptorSignalsIn(start, regionEnd: regionEnd, edges: edgeScratch, region: ScanRegion.fieldDefault)
 	end 'scanFieldDefaultDescriptorSignals'
 
 	// The signal walk itself, over `[start, regionEnd)`. ALSO records `hasControlFlow` (P1.7 slice 3b-v): the
@@ -22218,7 +22401,7 @@ export type Parser
 	// (`maskHasParam`'s `ParamPositionMask`, whose two accessors these mirror): a bare `1 shl 7` in a `match`
 	// arm is a fact nothing can check. See the mask's declaration inside the function for why the flags are
 	// not separate `var bool`s.
-	function scanDescriptorSignalsIn(start ElementIndex, regionEnd ElementIndex, edges DescriptorEdgeScratch) returns MethodDescriptorScan
+	function scanDescriptorSignalsIn(start ElementIndex, regionEnd ElementIndex, edges DescriptorEdgeScratch, region ScanRegion) returns MethodDescriptorScan
 		// ⭐⭐ **THE ANSWERS THIS WALK COLLECTS TRAVEL AS ONE MASK — E5001's OWN CURE, NOT A STYLE CHOICE.** A
 		// `var bool` per answer, set inside the token loop below and read only after it, would be a value live
 		// across the loop that the allocator owes a register for the whole body, and that pressure is an E5001
@@ -22260,10 +22443,15 @@ export type Parser
 		// The open `(`/`[`/`{` groups enclosing the cursor, each carrying whether a comma directly inside it
 		// would be a TUPLE's separator rather than an argument list's. See the comma arm below.
 		var groupIsTuplePosition = BoolArray.create()
+		var tracker = ParamReceiverTracker.create(self.parameterHeadEnd(start, region: region), fieldsAreUnshadowed: region == ScanRegion.typeMemberMethod)
 		var q = start
 
 		while q < regionEnd 'walk'
 			let kind = self.kindAt(q)
+
+			if kind == TokenKind.identifier 'anIdentifier'
+				self.trackTypeParamParameter(tracker, at: q)
+			end 'anIdentifier'
 
 			if kind == TokenKind.sizeof and self.sizeofOperandIsTypeParamAt(q) 'directSizeof'
 				signals = maskWithSignal(signals, signal: ScanSignalDirect)
@@ -22480,16 +22668,14 @@ export type Parser
 			// seed because whether the callee needs a descriptor is the fixpoint's own answer, not this scan's.
 			// A body with no corpus call — nearly every body there is — keeps the shared anchor
 			// (`edgeColumnSnapshot`) and allocates nothing for this arm.
-			if kind == TokenKind.dot and self.memberCallFollows(q) and self.corpusServesArrayMember(self.tokenAt(q + 1).value) and not self.receiverBeforeDotIsANestedInstance(q, locals: nestedInstanceLocals, localInstances: nestedInstanceLocalInstances) 'aCorpusContainerCall'
+			if kind == TokenKind.dot and self.memberCallFollows(q) and self.corpusServesArrayMember(self.tokenAt(q + 1).value) and not self.receiverBeforeDotIsANestedInstance(q, locals: nestedInstanceLocals, localInstances: nestedInstanceLocalInstances) and not (tracker.fieldsAreUnshadowed and self.operandBeforeIsATypeParameterField(q)) 'aCorpusContainerCall'
 				// ONE edge per `Array` DECLARATION that serves the name (ARR2) — normally one, and two only
 				// while a user program's own `type Array` has the corpus declaration in the reserved space. The
 				// gate above says SOME declaration serves it; the callee name has to say WHICH, because that is
 				// what the fixpoint indexes by.
-				for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
-					if self.corpusArrayDeclarationServes(declaration, member: self.tokenAt(q + 1).value) 'thisDeclarationServesIt'
-						edges.corpusContainerCallees.push(qualifiedMethodName(declaration, methodName: self.tokenAt(q + 1).value))
-					end 'thisDeclarationServesIt'
-				end 'eachArrayDeclaration'
+				for callee in self.corpusCalleesServing(self.tokenAt(q + 1).value) 'eachServingDeclaration'
+					self.recordCorpusContainerEdge(edges, tracker: tracker, boundary: q, callee: callee)
+				end 'eachServingDeclaration'
 			end 'aCorpusContainerCall'
 
 			// ⭐⭐ **A CALL ON A NESTED PARAMETERISED INSTANCE, AND THE BINDING THAT CARRIES ONE (W161)** — an
@@ -22516,6 +22702,10 @@ export type Parser
 					signals = maskWithSignal(signals, signal: ScanSignalFeedsAResolvedInstanceParameter)
 				end 'feedsAParameterOfTheCaller'
 			end 'aNestedInstanceCall'
+
+			if kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals 'anEqualityBetweenValues'
+				self.recordEqualityEdges(edges, operand: self.equalityOperand(q, tracker: tracker))
+			end 'anEqualityBetweenValues'
 
 			// ⭐⭐ **A `for … in self` IS AN EMITTED `current()` CALL, AND NO TOKEN SPELLS IT (W159).** See
 			// `forStatementWalksBareReceiverAt` for why the source must be the BARE receiver and why every
@@ -22587,6 +22777,8 @@ export type Parser
 
 			q = q + 1
 		end 'walk'
+
+		self.settleDeferredCorpusEdges(edges, tracker: tracker)
 
 		return MethodDescriptorScan.create(maskHasSignal(signals, signal: ScanSignalDirect), callees: callees, hasControlFlow: maskHasSignal(signals, signal: ScanSignalHasControlFlow), hasContainerMoveOut: maskHasSignal(signals, signal: ScanSignalHasContainerMoveOut), reassignsOpaqueField: maskHasSignal(signals, signal: ScanSignalReassignsOpaqueField), hasArrayCopy: maskHasSignal(signals, signal: ScanSignalHasArrayCopy), constructsSelfLiteral: maskHasSignal(signals, signal: ScanSignalConstructsSelfLiteral), buildsRecord: maskHasSignal(signals, signal: ScanSignalBuildsRecord), buildsRecordOtherThanSelf: maskHasSignal(signals, signal: ScanSignalBuildsRecordOtherThanSelf), adoptsOpaqueCallResult: maskHasSignal(signals, signal: ScanSignalAdoptsOpaqueCallResult), forwardsToATypeParamFeed: maskHasSignal(signals, signal: ScanSignalForwardsToATypeParamFeed), storesContainerElement: maskHasSignal(signals, signal: ScanSignalStoresContainerElement), walksReceiverAsACursor: maskHasSignal(signals, signal: ScanSignalWalksReceiverAsACursor), feedsAResolvedInstanceParameter: maskHasSignal(signals, signal: ScanSignalFeedsAResolvedInstanceParameter), closureHandsBackAName: maskHasSignal(signals, signal: ScanSignalClosureHandsBackAName), corpusContainerCallees: edgeColumnSnapshot(edges.corpusContainerCallees, anchor: sharedEmptyCorpusContainerCallees), nestedInstanceCallees: edgeColumnSnapshot(edges.nestedInstanceCallees, anchor: sharedEmptyNestedInstanceCallees), readsFixedElementCount: maskHasSignal(signals, signal: ScanSignalReadsFixedElementCount), sizedContainerSelfCallees: edgeColumnSnapshot(edges.sizedContainerSelfCallees, anchor: sharedEmptySizedContainerSelfCallees), endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
@@ -22715,6 +22907,121 @@ export type Parser
 		return try self.nestedInstanceOfNameAt(q, locals: locals, localInstances: localInstances)
 	end 'nestedInstanceReceiverAt'
 
+	function corpusCalleesServing(member ByteArray) returns ByteArrayArray
+		var callees = ByteArrayArray.create()
+
+		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
+			if self.corpusArrayDeclarationServes(declaration, member: member) 'thisDeclarationServesIt'
+				callees.push(qualifiedMethodName(declaration, methodName: member))
+			end 'thisDeclarationServesIt'
+		end 'eachArrayDeclaration'
+
+		return callees
+	end 'corpusCalleesServing'
+
+	// An `==`/`!=` between two instances is an emitted `equals` call no token spells, so its edge is
+	// drawn here: firm for an operand the scan types as an instance over the type's parameters,
+	// receiver-blind for one it cannot type.
+	function recordEqualityEdges(edges DescriptorEdgeScratch, operand EqualityOperand)
+		match operand 'operand'
+			noEdge then return
+			structOverParameters(base) then edges.nestedInstanceCallees.push(qualifiedMethodName(base, methodName: EqualsMethodName))
+			arrayOverParameters then self.recordCorpusEqualityEdges(edges, firm: true)
+			unknown then self.recordCorpusEqualityEdges(edges, firm: false)
+		end 'operand'
+	end 'recordEqualityEdges'
+
+	function recordCorpusEqualityEdges(edges DescriptorEdgeScratch, firm bool)
+		for callee in self.corpusCalleesServing(EqualsMethodName) 'eachServingDeclaration'
+			if firm 'knownToBeAnArray'
+				edges.nestedInstanceCallees.push(callee)
+			end 'knownToBeAnArray' else 'mightBeAnArray'
+				edges.corpusContainerCallees.push(callee)
+			end 'mightBeAnArray'
+		end 'eachServingDeclaration'
+	end 'recordCorpusEqualityEdges'
+
+	function equalityOperand(operator ElementIndex, tracker ParamReceiverTracker) returns EqualityOperand
+		let left = self.leftOperand(operator, tracker: tracker)
+		let right = self.rightOperand(operator, tracker: tracker)
+
+		if equalityOperandCannotDispatch(left) or equalityOperandCannotDispatch(right) 'oneSideCannotNeedTheLayout'
+			return EqualityOperand.noEdge
+		end 'oneSideCannotNeedTheLayout'
+
+		if equalityOperandIsKnown(left) 'theLeftIsKnown'
+			return left
+		end 'theLeftIsKnown'
+
+		return right
+	end 'equalityOperand'
+
+	function leftOperand(operator ElementIndex, tracker ParamReceiverTracker) returns EqualityOperand
+		if operator == 0 'noOperand'
+			return EqualityOperand.unknown
+		end 'noOperand'
+
+		let at = (operator - 1) as ElementIndex
+		let kind = self.kindAt(at)
+
+		if tokenIsLiteralOrBooleanKind(kind) 'aLiteral'
+			return EqualityOperand.noEdge
+		end 'aLiteral'
+
+		if kind != TokenKind.identifier 'notAName'
+			return EqualityOperand.unknown
+		end 'notAName'
+
+		if at >= 1 and self.kindAt((at - 1) as ElementIndex) == TokenKind.dot 'aMemberSpelling'
+			return self.fieldOperand(at) if at >= 2 and self.kindAt((at - 2) as ElementIndex) == TokenKind.self else EqualityOperand.unknown
+		end 'aMemberSpelling'
+
+		return self.nameOperand(at, tracker: tracker)
+	end 'leftOperand'
+
+	function rightOperand(operator ElementIndex, tracker ParamReceiverTracker) returns EqualityOperand
+		let at = (operator + 1) as ElementIndex
+		let kind = self.kindAt(at)
+
+		if tokenIsLiteralOrBooleanKind(kind) or (kind == TokenKind.minus and tokenIsLiteralKind(self.kindAt((at + 1) as ElementIndex))) 'aLiteral'
+			return EqualityOperand.noEdge
+		end 'aLiteral'
+
+		if kind == TokenKind.self and self.kindAt((at + 1) as ElementIndex) == TokenKind.dot and self.kindAt((at + 2) as ElementIndex) == TokenKind.identifier and not self.operandChainContinuesAt((at + 3) as ElementIndex) 'aSelfField'
+			return self.fieldOperand((at + 2) as ElementIndex)
+		end 'aSelfField'
+
+		if kind != TokenKind.identifier or self.operandChainContinuesAt((at + 1) as ElementIndex) 'notABareName'
+			return EqualityOperand.unknown
+		end 'notABareName'
+
+		return self.nameOperand(at, tracker: tracker)
+	end 'rightOperand'
+
+	function operandChainContinuesAt(index ElementIndex) returns bool
+		let kind = self.kindAt(index)
+		return kind == TokenKind.dot or kind == TokenKind.leftParen or kind == TokenKind.leftBracket
+	end 'operandChainContinuesAt'
+
+	function nameOperand(at ElementIndex, tracker ParamReceiverTracker) returns EqualityOperand
+		let name = self.tokenAt(at).value
+
+		if tracker.declares(name) 'aTypeParameterValue'
+			return EqualityOperand.noEdge
+		end 'aTypeParameterValue'
+
+		if let declared = try tracker.operandBeliefOf(name) 'aParameter'
+			return declared
+		end 'aParameter'
+
+		return self.fieldOperand(at) if tracker.fieldsAreUnshadowed else EqualityOperand.unknown
+	end 'nameOperand'
+
+	function fieldOperand(at ElementIndex) returns EqualityOperand
+		let typeName = try self.enclosingType.typeName() otherwise return EqualityOperand.unknown
+		return self.signatures.fieldEqualityOperand(typeName, fieldName: self.tokenAt(at).value)
+	end 'fieldOperand'
+
 	function receiverBeforeDotIsANestedInstance(dot ElementIndex, locals ByteArrayArray, localInstances GenericInstanceIdArray) returns bool
 		if dot == 0 'noReceiver'
 			return false
@@ -22723,6 +23030,102 @@ export type Parser
 		_ = try self.nestedInstanceReceiverAt((dot - 1) as ElementIndex, locals: locals, localInstances: localInstances) otherwise return false
 		return true
 	end 'receiverBeforeDotIsANestedInstance'
+
+	function parameterHeadEnd(start ElementIndex, region ScanRegion) returns ElementIndex
+		if region == ScanRegion.fieldDefault or self.kindAt(start) != TokenKind.leftParen 'noParameterList'
+			return start
+		end 'noParameterList'
+
+		return self.matchingRightParenOf(start)
+	end 'parameterHeadEnd'
+
+	function trackTypeParamParameter(tracker ParamReceiverTracker, at ElementIndex)
+		if at < tracker.headEnd 'inTheParameterList'
+			self.noteTypeParamParameter(tracker, at: at)
+			return
+		end 'inTheParameterList'
+
+		if tracker.parameters.isEmpty() or self.kindAt((at + 1) as ElementIndex) == TokenKind.dot 'nothingRebound'
+			return
+		end 'nothingRebound'
+
+		let name = self.tokenAt(at).value
+
+		if tracker.declares(name) 'aParameterNameUsedBeyondAReceiver'
+			tracker.rebound.push(name)
+		end 'aParameterNameUsedBeyondAReceiver'
+	end 'trackTypeParamParameter'
+
+	function noteTypeParamParameter(tracker ParamReceiverTracker, at ElementIndex)
+		if at == 0 or self.kindAt((at + 1) as ElementIndex) != TokenKind.identifier 'notANamedTypeAfterIt'
+			return
+		end 'notANamedTypeAfterIt'
+
+		let before = self.kindAt((at - 1) as ElementIndex)
+
+		if before != TokenKind.leftParen and before != TokenKind.comma 'notAParameterHead'
+			return
+		end 'notAParameterHead'
+
+		let typeTok = self.tokenAt((at + 1) as ElementIndex)
+
+		if namesInclude(self.enclosingTypeParams, name: typeTok.value) 'aBareTypeParameter'
+			tracker.parameters.push(self.tokenAt(at).value)
+			return
+		end 'aBareTypeParameter'
+
+		tracker.noteOperand(self.tokenAt(at).value, belief: self.aliasEqualityOperand(typeTok.value))
+	end 'noteTypeParamParameter'
+
+	function aliasEqualityOperand(typeName ByteArray) returns EqualityOperand
+		let inner = joinQualifiedName(try self.enclosingType.typeName() otherwise return EqualityOperand.noEdge, member: typeName)
+
+		if not self.signatures.isAliasOfFormFor(inner, readerFilePath: self.filePath, wanted: FormAliasKind.generic) 'notAnInnerInstanceAlias'
+			return EqualityOperand.noEdge
+		end 'notAnInnerInstanceAlias'
+
+		return self.signatures.instanceEqualityOperand(self.signatures.genericAliasInstanceFrom(inner, readerFilePath: self.filePath))
+	end 'aliasEqualityOperand'
+
+	function recordCorpusContainerEdge(edges DescriptorEdgeScratch, tracker ParamReceiverTracker, boundary ElementIndex, callee ByteArray)
+		if boundary == 0 or boundary <= tracker.headEnd 'noReceiverToName'
+			edges.corpusContainerCallees.push(callee)
+			return
+		end 'noReceiverToName'
+
+		let receiverAt = (boundary - 1) as ElementIndex
+
+		if self.kindAt(receiverAt) == TokenKind.identifier and self.nameOpensAReceiverChainAt(receiverAt) and tracker.declares(self.tokenAt(receiverAt).value) 'aTypeParameterParameter'
+			tracker.deferredReceivers.push(self.tokenAt(receiverAt).value)
+			tracker.deferredCallees.push(callee)
+			return
+		end 'aTypeParameterParameter'
+
+		edges.corpusContainerCallees.push(callee)
+	end 'recordCorpusContainerEdge'
+
+	function settleDeferredCorpusEdges(edges DescriptorEdgeScratch, tracker ParamReceiverTracker)
+		for i in 0 upto tracker.deferredReceivers.count() 'eachDeferred'
+			if tracker.reboundTo(try tracker.deferredReceivers.get(i) otherwise panic("settleDeferredCorpusEdges: deferredReceivers.get({i}) below count")) 'notAPlainParameterAfterAll'
+				edges.corpusContainerCallees.push(try tracker.deferredCallees.get(i) otherwise panic("settleDeferredCorpusEdges: deferredCallees.get({i}) — the two columns are pushed in one act"))
+			end 'notAPlainParameterAfterAll'
+		end 'eachDeferred'
+	end 'settleDeferredCorpusEdges'
+
+	function operandBeforeIsATypeParameterField(boundary ElementIndex) returns bool
+		if boundary == 0 'noReceiver'
+			return false
+		end 'noReceiver'
+
+		let nameAt = (boundary - 1) as ElementIndex
+
+		if self.kindAt(nameAt) != TokenKind.identifier or not self.nameOpensAReceiverChainAt(nameAt) 'notAFieldSpelling'
+			return false
+		end 'notAFieldSpelling'
+
+		let typeName = try self.enclosingType.typeName() otherwise return false
+		return self.signatures.fieldIsABareTypeParameter(typeName, fieldName: self.tokenAt(nameAt).value)
+	end 'operandBeforeIsATypeParameterField'
 
 	// Is the name at `q` the RECEIVER's own spelling — a bare local, field or alias, or the field of a
 	// `self.<field>.<method>(`? Any deeper chain (`a.b.c()`) names a value produced by an expression this
@@ -26870,6 +27273,14 @@ export type Parser
 	// outside the TYPE, in the same file — `type B` reading `type A`'s unexported field is E3014 — so
 	// dropping it silently accepts a program the language rejects. `specs/export-var-fields.md`'s two
 	// `error.unexported-field-*` cases read it.
+	function requireFieldTypeIsFinite(ownerName ByteArray, fieldName ByteArray, anchor Token) throws SourceParseError
+		if not self.signatures.allFilesFolded or not self.signatures.fieldTypeGrowsItsOwner(ownerName, fieldName: fieldName) 'nothingGrows'
+			return
+		end 'nothingGrows'
+
+		throw SourceParseError.genericTypeGrowsWithoutBound(String.from(ownerName), fieldName: String.from(fieldName), typeName: self.signatures.declaredFieldTypeDisplayName(ownerName, fieldName: fieldName), line: anchor.line, column: anchor.column)
+	end 'requireFieldTypeIsFinite'
+
 	function readStructFieldInto(layout StructLayout) throws SourceParseError
 		let visibility = try self.consumeOptionalVisibility()
 
@@ -26938,7 +27349,9 @@ export type Parser
 		// FIELD now carves out two slots for it (`Project.fieldSlotCount`), so it is the one declared place
 		// with somewhere to put both halves. The annotation's first token went with the call — nothing else
 		// anchored a diagnostic on it.
+		let fieldTypeTok = self.current()
 		let fieldType = try self.parseTypeReference(BarePrimitiveVoice.asAType)
+		try self.requireFieldTypeIsFinite(layout.name, fieldName: nameTok.value, anchor: fieldTypeTok)
 
 		if not self.at(TokenKind.equals) 'noDefault'
 			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.none, declaredSurface: declaredSurface, declaredBrand: declaredBrand, spelledName: spelledName)
@@ -32632,6 +33045,7 @@ export type Parser
 		var nameTok = self.current()
 		var sourceName = EmptySourceText
 		var sweptOwnerName = EmptySourceText
+		var parameterListStart = self.pos
 
 		if isTest 'aTestHead'
 			nameTok = try self.readTestDeclarationHead()
@@ -32723,6 +33137,7 @@ export type Parser
 				paramTypeStarts.push(self.pos)
 			end 'receiverParam'
 
+			parameterListStart = self.pos
 			try self.consume(TokenKind.leftParen)
 			sweptOwnerName = try self.genericInstanceName.ownedInstanceName() otherwise self.signatures.memberRegistrationKey(sourceName, takesReceiver: takesReceiver)
 			try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.declaredFunction(sweptOwnerName), paramTypeOffer: noClosureParamOffer)
@@ -32893,7 +33308,7 @@ export type Parser
 		// asks whether `__self` is in scope, which no static can answer yes to, while this asks whether the
 		// call site has anything to source the answer FROM — and a `returns Self` static does.
 		if (needsLayoutParam or needsCountParam) and not takesReceiver and not self.returnsEnclosingType(returnType) 'staticLayoutNeedsSelfReturn'
-			throw SourceParseError.unsupported("a `static function` that needs the enclosing instance's dictionary — it constructs an opaque type-parameter `Array` (`ElementArray.create()`), reads `sizeof` of the type parameter, or reads `countof` of the sized container's own `Self` — must return `Self` so the caller can source it from the instance the static builds; a static returning any other type has no source (build the array, read the size or read the count through an instance method on `self`, or return `Self`)", line: nameTok.line, column: nameTok.column)
+			throw self.staticLayoutRefusal(nameTok, needsCount: needsCountParam, parameterListStart: parameterListStart)
 		end 'staticLayoutNeedsSelfReturn'
 
 		// ⭐ **THE ONE DECLARATION SHAPE `self.<field> = …` MEANS ANYTHING IN.** A `static function` of a
@@ -36031,7 +36446,7 @@ export type Parser
 	// `Self{…}` and calls a key-hashing method on it — is what a `takesReceiver` gate leaves `Map.init`
 	// carrying 0 witness parameters and asked to forward slot 0, which is a panic in `forwardCallerWitness`.
 	//
-	// ⚠ **THE SUPPLY SIDE IS `LowerMaxonToStd.witnessParamCountForCallee`, AND BOTH ASK ONE DOOR**
+	// ⚠ **THE SUPPLY SIDE IS `ProgramSignatures.witnessParamCountForCallee`, AND BOTH ASK ONE DOOR**
 	// (`ProgramSignatures.calleeReturnsItsDeclaringType`). A witness-slot count is ABI: a reservation and a
 	// supply that disagree is an argument-register mismatch nothing downstream can notice
 	// (`witnessConstraintsOfMethod`'s header records what two such disagreements cost), so the `Self`-return
@@ -39862,6 +40277,11 @@ export type Parser
 		match self.bodyState.valueExistentialInstance 'function'
 			unwritten then break 'function'
 			entries(byValue) then func.valueExistentialInstances = byValue
+		end 'function'
+
+		match self.bodyState.valueCallInstance 'function'
+			unwritten then break 'function'
+			entries(byValue) then func.valueCallInstances = byValue
 		end 'function'
 
 		match self.bodyState.literalCastArguments 'function'
@@ -62743,6 +63163,11 @@ export type Parser
 			throw SourceParseError.existentialNotComparable(comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
 		end 'existentialComparison'
 
+		if leftTag == ValueTypeTag.genericInstance and rightTag == ValueTypeTag.genericInstance 'genericInstanceComparison'
+			try self.requireSameInstanceToCompare(lhs, rhs: rhs, opTok: opTok)
+			throw SourceParseError.genericInstanceNotComparable(comparisonOpSpelling(op), typeName: String.from(self.signatures.instanceDisplayName(self.valueInstanceId(lhs))), orderingOp: not comparisonIsEquality(op), line: opTok.line, column: opTok.column)
+		end 'genericInstanceComparison'
+
 		// ⭐⭐ **A FLOAT-BACKED ENUM IS COMPARED AS ITS NUMBER — EXCEPT WHERE THE COMPARISON IS AN IDENTITY
 		// TEST (A4o).** Everything else here is exact for an enum already, because an enum value IS its i64
 		// tag; this is the one question the tag cannot answer, and it splits by operator:
@@ -62942,30 +63367,57 @@ export type Parser
 		return self.valueNameId(lhs) == self.valueNameId(rhs)
 	end 'valuesNameOneType'
 
-	// Is this an `==`/`!=` between two values of ONE user struct that declares an `equals` method? The gate in
-	// front of the dispatch below, and every clause is load-bearing:
+	// Is this an `==`/`!=` between two values of ONE user struct, or of ONE instance of a user
+	// generic, that declares an `equals` method? The gate in front of the dispatch below, and every
+	// clause is load-bearing:
 	//
 	//   • EQUALITY ONLY — the four ordering operators have no `equals` reading (see the call site).
-	//   • BOTH operands `structRef`, and of the SAME struct — spelled as one property, exactly as the
-	//     byte-record and `StringIndex` arms above spell theirs, so a later edit cannot widen one side alone
-	//     into a compare of one type's box against another's.
-	//   • the struct DECLARES the method, asked of the WHOLE-PROGRAM index (`declaresCallee`) rather than of
-	//     this file — `equals` may be declared in any file, including the one using it, which is
-	//     `materializeStructToStringPart`'s reason for asking the same question the same way. A struct with
-	//     no `equals` falls through to the existing E3005, unchanged.
+	//   • BOTH operands of the SAME type — spelled as one property, exactly as the byte-record and
+	//     `StringIndex` arms above spell theirs, so a later edit cannot widen one side alone into a
+	//     compare of one type's box against another's. An `Array` is `arrayEqualityOperands`'.
+	//   • the type DECLARES the method, asked of the WHOLE-PROGRAM index (`declaresCallee`) rather
+	//     than of this file — `equals` may be declared in any file, including the one using it, which is
+	//     `materializeStructToStringPart`'s reason for asking the same question the same way. A struct
+	//     with no `equals` falls through to E3005, and so does a generic instance with none
+	//     (`genericInstanceNotComparable`).
 	function structComparisonOperands(lhs ValueId, rhs ValueId, op MaxonCmpOp) returns bool
-		// The TAG clause is this gate's own — it is what makes the rule about STRUCTS — and the agreement is
-		// the shared `valuesNameOneType`, which supplies the other side's tag and the declared name together.
-		if not (self.tagOf(lhs) == ValueTypeTag.structRef and self.valuesNameOneType(lhs, rhs: rhs)) 'notOneStructsPair'
+		// The agreement is the shared `valuesNameOneType`, which supplies the other side's tag and the
+		// declared name together; the TAG clauses below are this gate's own.
+		if not self.valuesNameOneType(lhs, rhs: rhs) 'notOneTypesPair'
 			return false
-		end 'notOneStructsPair'
+		end 'notOneTypesPair'
 
-		return self.signatures.declaresCallee(qualifiedMethodName(self.internedName(self.valueNameId(lhs)), methodName: structComparisonMethodName(op)))
+		let tag = self.tagOf(lhs)
+
+		if tag == ValueTypeTag.structRef 'aStruct'
+			return self.signatures.declaresCallee(qualifiedMethodName(self.comparedStructName(lhs), methodName: structComparisonMethodName(op)))
+		end 'aStruct'
+
+		if tag == ValueTypeTag.genericInstance and not self.signatures.isArrayInstance(self.valueInstanceId(lhs)) 'aUserGenericInstance'
+			return self.signatures.declaresCallee(qualifiedMethodName(self.comparedStructName(lhs), methodName: structComparisonMethodName(op)))
+		end 'aUserGenericInstance'
+
+		return false
 	end 'structComparisonOperands'
 
-	// `a == b` / `a != b` on one user struct, as the ORDINARY instance call `a.equals(b)` — same callee key,
-	// same argument slotting, same `bool` result, so nothing downstream learns that an operator produced it.
-	// The receiver is argument 0, which is the whole of the compiler's method-dispatch convention (`parseCallNamed`).
+	function comparedStructName(value ValueId) returns ByteArray
+		let tag = self.tagOf(value)
+
+		if tag == ValueTypeTag.structRef 'aStruct'
+			return self.internedName(self.valueNameId(value))
+		end 'aStruct'
+
+		if tag == ValueTypeTag.genericInstance 'aGenericInstance'
+			return self.signatures.genericInstanceBaseName(self.valueInstanceId(value))
+		end 'aGenericInstance'
+
+		panic("Parser.comparedStructName: a {typeTagName(tag)} value is neither a struct nor a generic instance")
+	end 'comparedStructName'
+
+	// `a == b` / `a != b` on one user struct or user generic instance, as the ORDINARY instance call
+	// `a.equals(b)` — same callee key, same argument slotting, same `bool` result, so nothing
+	// downstream learns that an operator produced it. The receiver is argument 0, which is the whole
+	// of the compiler's method-dispatch convention (`parseCallNamed`).
 	//
 	// ⚠⚠ **AND THAT `bool` RESULT IS CHECKED HERE, NOT ASSUMED — it was asserted by this comment and by
 	// nothing else** (BATCH2 slice 3 review). See `structEqualsResultNotBool`: the WITNESS form of this same
@@ -62983,7 +63435,7 @@ export type Parser
 	// `NoImmutableArgNames`) are the honest ones here — every argument shares the operator's own span,
 	// because that IS where each came from.
 	function emitStructComparisonCall(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws SourceParseError
-		let structName = self.internedName(self.valueNameId(lhs))
+		let structName = self.comparedStructName(lhs)
 		let methodName = structComparisonMethodName(op)
 		try self.requireImplicitMethodReachable(structName, methodName: methodName, anchor: opTok)
 		let callee = qualifiedMethodName(structName, methodName: methodName)
@@ -63037,22 +63489,23 @@ export type Parser
 		return self.signatures.isArrayInstance(self.valueInstanceId(lhs))
 	end 'arrayEqualityOperands'
 
-	// `a == b` / `a != b` on one `Array` instance, as the byte-compare `a.equals(b)` lowers to — the SAME
-	// `__managed_eq` entry the method door emits, so the operator and the method cannot answer differently.
+	// `a == b` / `a != b` on one `Array` instance, as `a.equals(b)` — `__managed_eq` for an element
+	// `arrayEqualityIsBitwise` admits, the element-wise `Array.equals` otherwise.
 	//
 	// ⚠ **THE AVAILABILITY RULE IS THE METHOD'S, ASKED AT THE OPERATOR'S SPAN.** `==` on an array means
 	// `Array.equals`, which exists only where the element satisfies the conditional conformance — so an
 	// array of a non-conforming element is E4006 here, naming `equals` and the clause, rather than the
 	// pointer compare.
 	//
-	// ⚠ Both operands are BORROWED (`__managed_eq` reads two records and frees nothing), so each stays whatever
-	// pending temporary the climber made it and drops at statement end, AFTER the compare —
-	// `emitBuiltinConformanceCall`'s contract for a managed receiver.
+	// ⚠ Both operands are BORROWED (neither `__managed_eq` nor `Array.equals` frees one), so each
+	// stays whatever pending temporary the climber made it and drops at statement end, AFTER the
+	// compare — `emitBuiltinConformanceCall`'s contract for a managed receiver.
 	function emitArrayEqualityCall(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws SourceParseError
-		try self.requireArrayConformanceAvailable(self.valueInstanceId(lhs), methodName: EqualsMethodName, anchor: opTok)
+		let instance = self.valueInstanceId(lhs)
+		try self.requireArrayConformanceAvailable(instance, methodName: EqualsMethodName, anchor: opTok)
 
 		let range = SourceRange.ofToken(opTok)
-		let equal = self.emitRuntimeCall(ManagedEqName, args: pairArgs(lhs, second: rhs), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		let equal = try self.emitArrayEquals(lhs, rhs: rhs, instance: instance, opTok: opTok)
 
 		return match op 'op'
 			eq gives equal
@@ -63066,6 +63519,35 @@ export type Parser
 				ge panic("emitArrayEqualityCall: reached with the ordering operator {comparisonOpSpelling(op)}, which `arrayEqualityOperands` refuses")
 		end 'op'
 	end 'emitArrayEqualityCall'
+
+	function emitArrayEquals(lhs ValueId, rhs ValueId, instance GenericInstanceId, opTok Token) returns ValueId throws SourceParseError
+		let range = SourceRange.ofToken(opTok)
+
+		if self.signatures.arrayEqualityIsBitwise(instance) 'theBytesAreTheContent'
+			return self.emitRuntimeCall(ManagedEqName, args: pairArgs(lhs, second: rhs), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'theBytesAreTheContent'
+
+		try self.requireALayoutToCompareAnOpaqueArray(instance, anchor: opTok)
+
+		var args = pairArgs(lhs, second: rhs)
+		return try self.emitCall(qualifiedMethodName(self.signatures.genericInstanceBaseName(instance), methodName: EqualsMethodName), anchor: opTok, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, rparenTok: opTok, resultUsed: true, constructorInstance: ConstructorInstance.instance(instance), mint: CalleeMint.resolvedTypeQualifier)
+	end 'emitArrayEquals'
+
+	function requireSameInstanceToCompare(lhs ValueId, rhs ValueId, opTok Token) throws SourceParseError
+		if self.valueInstanceId(lhs) == self.valueInstanceId(rhs) 'oneInstance'
+			return
+		end 'oneInstance'
+
+		throw SourceParseError.comparisonTypeMismatch(String.from(self.signatures.instanceDisplayName(self.valueInstanceId(lhs))), right: String.from(self.signatures.instanceDisplayName(self.valueInstanceId(rhs))), line: opTok.line, column: opTok.column)
+	end 'requireSameInstanceToCompare'
+
+	function requireALayoutToCompareAnOpaqueArray(instance GenericInstanceId, anchor Token) throws SourceParseError
+		if self.signatures.instanceArgsAreFullyConcrete(instance) or self.bodyState.carriesLayoutParam() 'nothingToForwardOrSomewhereToForwardFrom'
+			return
+		end 'nothingToForwardOrSomewhereToForwardFrom'
+
+		throw SourceParseError.unsupported("comparing two values of a generic type over a type parameter with `==` or `!=` (which calls 'equals', and 'equals' reads the type parameter's layout descriptor) from a function that carries no layout descriptor of its own to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method", line: anchor.line, column: anchor.column)
+	end 'requireALayoutToCompareAnOpaqueArray'
 
 	// The one place the comparison operators are split into equality and ordering, because both
 	// readers derive a consequence from it: a struct's own `equals` dispatch has no ordering reading
@@ -63339,8 +63821,8 @@ export type Parser
 	// feeds, a program constraining a parameter by BOTH a real protocol and a look-alike picks the real one
 	// instead of being refused by whichever the author wrote first. The reject stays here, in
 	// `requireOperatorWitness`'s empty arm, where "nothing here is the protocol" is the same fact as "no
-	// constraint declares it"; the shape TEST lives in `IrInterface.witnessTargetIsProtocol`, beside
-	// `interfaceFormalsMatch`, because it reads no `self`.
+	// constraint declares it"; the shape TEST lives in `IrInterface.witnessTargetIsProtocol`, because it
+	// reads no `self`.
 
 	// ⭐ **REJECT ANY NON-`Self` VALUE SUPPLIED FOR A `Self`-TYPED WITNESS-METHOD ARGUMENT.** A
 	// witness-dispatched method whose formal is `Self` (`Equatable.equals`'s and `Comparable.compare`'s `other
@@ -64326,6 +64808,22 @@ export type Parser
 		self.bodyState.valueExistentialInstance = ValueExistentialInstanceColumn.entries(fresh)
 		return fresh
 	end 'valueExistentialInstancesForWrite'
+
+	function recordValueCallInstance(result ValueId, instance GenericInstanceId)
+		var byValue = self.valueCallInstancesForWrite()
+		byValue.upsert(result, value: instance)
+	end 'recordValueCallInstance'
+
+	function valueCallInstancesForWrite() returns ValueCallInstanceMap
+		match self.bodyState.valueCallInstance 'state'
+			unwritten then break 'state'
+			entries(byValue) then return byValue
+		end 'state'
+
+		let fresh = ValueCallInstanceMap.create()
+		self.bodyState.valueCallInstance = ValueCallInstanceColumn.entries(fresh)
+		return fresh
+	end 'valueCallInstancesForWrite'
 
 	// The instance `value`'s declared existential type named, if one did.
 	function existentialInstanceOfValue(value ValueId) returns GenericInstanceId throws MapError
@@ -70228,13 +70726,10 @@ export type Parser
 		// ⚠ The guards below are the ones this fact needs, and they are NOT the retype's: the value must BE an
 		// instance and it must be THIS one. A result that is some other base's struct is not described by
 		// this alias and must not be stamped with its name.
-		if self.tagOf(result) != ValueTypeTag.genericInstance 'notAnInstanceValue'
+		if self.tagOf(result) != ValueTypeTag.genericInstance or self.valueNameId(result) != gid as TypeNameId 'notTheInstanceBuilt'
+			self.recordValueCallInstance(result, instance: gid)
 			return
-		end 'notAnInstanceValue'
-
-		if self.valueNameId(result) != gid as TypeNameId 'aDifferentInstance'
-			return
-		end 'aDifferentInstance'
+		end 'notTheInstanceBuilt'
 
 		// ⭐ Carry the FACTORY's alias onto the result as its BRAND, so a later `w.getTag()` / `w.setTag(…)` on
 		// this value can re-qualify an inner-alias return/parameter to `WrapperA.Idx`, and so an `A.create(4)`
@@ -72268,7 +72763,17 @@ export type Parser
 			met then break 'constraint'
 			unmet(interfaceName, argDisplayName) then throw SourceParseError.conditionalExtensionWithheld(String.from(typeName), methodName: String.from(memberTok.value), clause: clause, unmetInterfaceName: String.from(interfaceName), bindingName: String.from(argDisplayName), line: memberTok.line, column: memberTok.column)
 		end 'constraint'
+
+		try self.requireTablesToForwardOpaqueArguments(self.valueInstanceId(receiver), callee: callee, extensionConstraints: constraints, methodName: memberTok.value, anchor: memberTok)
 	end 'requireReceiverSatisfiesExtensionConstraints'
+
+	function requireTablesToForwardOpaqueArguments(instance GenericInstanceId, callee ByteArray, extensionConstraints WhereConstraintArray, methodName ByteArray, anchor Token) throws SourceParseError
+		if self.emittingFunctionCarriesWitnessParams() or not self.signatures.constraintsNameABareTypeParameter(callee, extensionConstraints: extensionConstraints, gid: instance) 'nothingToForwardOrSomewhereToForwardFrom'
+			return
+		end 'nothingToForwardOrSomewhereToForwardFrom'
+
+		throw self.noWitnessTablesRefusal(methodName, arrival: arrivalWhenWithoutTables(self.emittingFunctionTableHolder(), outsideAClosure: NoWitnessTablesArrival.dispatchedOnAnInstanceOverATypeParameter), anchor: anchor)
+	end 'requireTablesToForwardOpaqueArguments'
 
 	// ⚠⚠ **A MANAGED FIELD READ OUT OF A TEMPORARY HOLDS THAT TEMPORARY TO THE SCOPE'S EXIT — the read is a
 	// BORROW, and the box that owns what it borrows would otherwise die at the end of THIS statement.**
@@ -72516,7 +73021,9 @@ export type Parser
 			return
 		end 'notEnclosingType'
 
-		if self.signatures.functionNeedsLayoutDescriptor(qualifiedMethodName(self.enclosingTypeName(), methodName: memberTok.value)) 'reject'
+		let callee = qualifiedMethodName(self.enclosingTypeName(), methodName: memberTok.value)
+
+		if self.signatures.functionNeedsLayoutDescriptor(callee) and not self.signatures.functionLayoutNeedIsSpeculative(callee) 'reject'
 			throw SourceParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads sizeof of the type parameter) on a value of the enclosing type, from a function that carries no layout descriptor of its own to forward — reach it through `self`, through a local bound to a `Self\{…}`, or through a concrete instance instead", line: memberTok.line, column: memberTok.column)
 		end 'reject'
 	end 'requireSelfForDescriptorForwarding'
@@ -72603,8 +73110,46 @@ export type Parser
 			return
 		end 'calleeDispatchesNothing'
 
-		throw SourceParseError.unsupported("calling '{String.from(memberTok.value)}' (which dispatches through the type's `where` constraints) on a value of the enclosing type, from a `static function` that carries no witness tables of its own to forward — a static sources them from the instance it RETURNS, so declare this one `returns Self` and call the method on the result, or make it an instance method", line: memberTok.line, column: memberTok.column)
+		throw self.noWitnessTablesRefusal(memberTok.value, arrival: arrivalWhenWithoutTables(self.emittingFunctionTableHolder(), outsideAClosure: NoWitnessTablesArrival.forwardedToACallee), anchor: memberTok)
 	end 'requireWitnessSourceForForwarding'
+
+	function staticLayoutRefusal(nameTok Token, needsCount bool, parameterListStart ElementIndex) returns SourceParseError
+		let scan = self.scanOneMethodDescriptorSignals(parameterListStart, edgeScratch: DescriptorEdgeScratch.create(), region: ScanRegion.typeStaticMethod)
+
+		if not needsCount and not scan.direct 'maybeAnEdgeIsTheCause'
+			if let callee = try self.layoutReadingCalleeOf(scan) 'namesTheCallee'
+				return SourceParseError.unsupported("calling '{String.from(unqualifiedMemberName(callee))}' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method", line: nameTok.line, column: nameTok.column)
+			end 'namesTheCallee'
+		end 'maybeAnEdgeIsTheCause'
+
+		return SourceParseError.unsupported("a `static function` that needs the enclosing instance's dictionary — it constructs an opaque type-parameter `Array` (`ElementArray.create()`), reads `sizeof` of the type parameter, or reads `countof` of the sized container's own `Self` — must return `Self` so the caller can source it from the instance the static builds; a static returning any other type has no source (build the array, read the size or read the count through an instance method on `self`, or return `Self`)", line: nameTok.line, column: nameTok.column)
+	end 'staticLayoutRefusal'
+
+	function layoutReadingCalleeOf(scan MethodDescriptorScan) returns ByteArray throws AbsentError
+		for callee in scan.callees 'eachSelfCallee'
+			let qualified = qualifiedMethodName(self.enclosingTypeName(), methodName: callee)
+
+			if self.signatures.functionNeedsLayoutDescriptor(qualified) 'itReadsTheLayout'
+				return qualified
+			end 'itReadsTheLayout'
+		end 'eachSelfCallee'
+
+		for callee in scan.nestedInstanceCallees 'eachNestedCallee'
+			if self.signatures.functionNeedsLayoutDescriptor(callee) 'nestedReadsTheLayout'
+				return callee.clone()
+			end 'nestedReadsTheLayout'
+		end 'eachNestedCallee'
+
+		throw AbsentError.absent
+	end 'layoutReadingCalleeOf'
+
+	function emittingFunctionTableHolder() returns TableHolder
+		return deriveTableHolder(not self.closureEnclosingFrames.isEmpty(), carriedTables: self.declaringWitnessParamCount)
+	end 'emittingFunctionTableHolder'
+
+	function noWitnessTablesRefusal(methodName ByteArray, arrival NoWitnessTablesArrival, anchor Token) returns SourceParseError
+		return SourceParseError.unsupported(noWitnessTablesSentence(methodName, arrival: arrival), line: anchor.line, column: anchor.column)
+	end 'noWitnessTablesRefusal'
 
 	// ⭐ **A METHOD CALL ON A CAPTURED STRUCT RECEIVER (P1.5-A2b-2).** `b.doubled()` where `b` is an enclosing
 	// struct captured by the closure. The receiver box is READ OUT OF THE ENV (`emitCaptureRead` — a borrowed
@@ -72955,30 +73500,26 @@ export type Parser
 	end 'emitMaterializedFill'
 
 	// ⭐⭐ **DOES THIS RECEIVER'S ELEMENT SATISFY THE `where` CLAUSE OF `Array`'s OWN CONDITIONAL
-	// CONFORMANCE? — the WITHHOLDING rule, and it is the SAME question, the same predicate and the same
-	// diagnostic a user's own conditional extension gets.** `ConformanceCheck.typeConformsTo` over
-	// `sweptConformanceIndex` is what `requireReceiverSatisfiesExtensionConstraints` asks of a declared type's
-	// extension methods; the only difference here is that `Array`'s conformance is not read from a file — the compiler
-	// loads no `stdlib/Array.maxon` — so the clause is stated by an interface list instead of parsed. E4006 is
-	// therefore the same sentence a reader gets from a `where` clause they wrote themselves.
+	// CONFORMANCE? — the WITHHOLDING rule, and it is the SAME question, the same predicate and the
+	// same diagnostic a user's own conditional extension gets.** `ConformanceCheck.typeConformsTo`
+	// over `sweptConformanceIndex` is what `requireReceiverSatisfiesExtensionConstraints` asks of a
+	// declared type's extension methods; the only difference here is that the clause is stated by an
+	// interface list instead of parsed. E4006 is therefore the same sentence a reader gets from a
+	// `where` clause they wrote themselves.
 	//
 	// ⭐ **THE CLAUSE IS READ FROM `isIntrinsicBuiltinConformance` RATHER THAN TRANSCRIBED** (see that
 	// predicate's `Array` arm): `where Element is Hashable and Equatable` is the SAME two protocols `Array`
 	// conditionally supplies, so the sentence a reader is given and the row that decides it are one fact.
 	//
-	// ⚠ **IT IS DOWN TO A SINGLE CALLER — THE `==`/`!=` OPERATOR — AND EVERY METHOD THAT USED TO SHARE IT
-	// RETIRED TO THE CORPUS.** `arr.hash()` and `a.equals(b)` went to `stdlib/Array.maxon:632`'s extension at
-	// X-array-retire and `arr.contains(x)` to `:534`'s at ARR3b; each states its clause in the language and
-	// withholds itself. The operator has no declaration to withhold it, which is exactly why this survives
-	// them — and it is why the interface list is no longer a PARAMETER: there is one clause left to ask about,
-	// so a caller can no longer name a different one. (The hash-table KEY gate reads the same row but does NOT
-	// come through here: it refuses a key rather than a method, so it wants the verdict's payload and not this
-	// throw. See `requireArrayKeyElementConforms`.)
+	// ⚠ **ITS ONE CALLER IS THE `==`/`!=` OPERATOR.** `arr.hash()`, `a.equals(b)` and
+	// `arr.contains(x)` are `stdlib/Array.maxon` extensions, each stating its clause in the language
+	// and withholding itself. The operator has no declaration to withhold it, which is why this exists
+	// — and why the interface list is not a PARAMETER: there is one clause to ask about, so a caller
+	// cannot name a different one.
 	//
-	// ⚠ **AN OPAQUE `T` ELEMENT IS REFUSED, AND THE REASON IS A STRIDE AND NOT A CONFORMANCE.** `Array with T`
-	// is opaque, so `element_size@24` — which `__managed_hash`/`__managed_eq` read to bound their byte walk — is not
-	// known here. Answering E4006 instead would claim the element does not conform, which is not what is
-	// known: nothing here knows what it binds to.
+	// ⚠ **AN OPAQUE `T` ELEMENT SATISFIES THE CLAUSE WHEN `T`'s OWN `where` CLAUSE PROMISES IT**
+	// (`arrayElementConstraintCheck`), and the comparison then dispatches through `T`'s witness
+	// tables, which the emitting function must carry (`requireTablesToForwardOpaqueArguments`).
 	//
 	// ⚠ **THE METHOD NAME AND THE POSITION ARE TWO PARAMETERS, because the OPERATOR door has one and not the
 	// other.** `a == b` fails this rule as `Array.equals` — that is the method whose availability was
@@ -72987,14 +73528,13 @@ export type Parser
 	function requireArrayConformanceAvailable(giid GenericInstanceId, methodName ByteArray, anchor Token) throws SourceParseError
 		let interfaces = self.signatures.arrayConformanceProtocolNames()
 
-		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
-			throw SourceParseError.unsupported("'{String.from(self.signatures.arrayRecordDeclaredName())}.{String.from(methodName)}' is a conditional extension method ({arrayWhereClause(interfaces)}), and this array's element type is not known here — it is the enclosing generic's own type parameter, and a compiler-owned `{String.from(methodName)}` cannot be given the element facts it needs from this body. Call it on an array of a concrete element type", line: anchor.line, column: anchor.column)
-		end 'opaqueElement'
-
 		match self.signatures.arrayElementConstraintCheck(giid, clauseInterfaces: interfaces) 'clause'
-			satisfied then return
+			satisfied then break 'clause'
 			unmet(unmetInterfaceName, bindingName) then throw SourceParseError.conditionalExtensionWithheld(String.from(self.signatures.arrayRecordDeclaredName()), methodName: String.from(methodName), clause: arrayWhereClause(interfaces), unmetInterfaceName: String.from(unmetInterfaceName), bindingName: String.from(bindingName), line: anchor.line, column: anchor.column)
 		end 'clause'
+
+		let callee = qualifiedMethodName(self.signatures.genericInstanceBaseName(giid), methodName: methodName)
+		try self.requireTablesToForwardOpaqueArguments(giid, callee: callee, extensionConstraints: self.signatures.extensionMethodConstraintsOf(callee), methodName: methodName, anchor: anchor)
 	end 'requireArrayConformanceAvailable'
 
 	// ⭐ **A `Character`'S BUILTIN METHODS (P1.8 slice B)** — the `dispatchStringMethod` twin, and a
@@ -74037,58 +74577,6 @@ export type Parser
 	// Resolve the method name against the conformer's INTRINSIC conformances and emit the call. The cursor
 	// sits on the method NAME. A name no intrinsic conformance supplies is a clean positioned reject — never
 	// a route to a `<type>.<method>` symbol nothing installs.
-	// ⭐⭐⭐ **THE RESIDUE OF THE `stdlib/PrimitiveExtensions.maxon` RETIREMENT — THE MEMBERS WHOSE ANSWER THE
-	// COMPILER DECIDES FROM A COORDINATE OF THE RECEIVER THE CORPUS BODY CANNOT STATE (W188).** `ARR4`'s
-	// framing, one surface over: **a roster is the RESIDUE of what could not retire**, so this list is a
-	// finding rather than a policy, and every entry owes the measurement that put it there.
-	//
-	// ⛔⛔ **`int.toString` IS ON IT BECAUSE THE CORPUS BODY IS A SILENT WRONG ANSWER FOR AN UNSIGNED
-	// RECEIVER — MEASURED, NOT ARGUED.** `stdlib/PrimitiveExtensions.maxon:21-23` is `return "{self}"`, and
-	// `self` there is declared `int`, which in this language is the WHOLE of `i64` and therefore SIGNED
-	// (`specs/x8`: no ranged type is not no constraint). the compiler's rule is the opposite one —
-	// *"signedness is a property of the value's DECLARED type, read once by the compiler and handed to the
-	// renderer"* (`specs/string-interpolation.md`) — and the declared type at the CALL is the caller's
-	// `int(0 to u64.max)`, a coordinate the corpus parameter erases. With the module listed and this roster
-	// empty, `string-interpolation/unsigned-decimal-tostring` printed **`[-1]` where it pins
-	// `[18446744073709551615]`**, and `1 shl 63` came back `[-9223372036854775808]`.
-	// ⚠ **The ORACLE prints `[-1]` too** (measured, same program), so this is not the compiler catching up — it is
-	// the compiler's own deliberate divergence, and it lives in the renderer the corpus cannot reach.
-	//
-	// ⭐ **IT IS THE `Vector` SIZE STORY ONE AXIS OVER, WHICH IS WHY BOTH RETIREMENTS FILE A RESIDUE.** There,
-	// a declaration's own `Self` states no COUNT while every value has one; here, a declaration's own `self`
-	// states no RANGE while every receiver has one. A member whose answer needs the coordinate cannot retire
-	// until the coordinate travels.
-	//
-	// ⚠ **`hash`, `equals`, `compare` AND `clone` ARE DELIBERATELY ABSENT**: each is a pure function of the
-	// receiver's BITS, which is exactly what the corpus body has, and each is measurably live off the
-	// declaration (the differing-declarations control moves `42.hash()` to `142`). `float.toString` and
-	// `bool.toString` are absent for the same reason — neither renderer reads a range.
-	function primitiveMembersTheCompilerRetains(typeName ByteArray) returns ByteArrayArray
-		var names = ByteArrayArray.create()
-
-		if typeName.equals(IntConformerName) 'theRangedPrimitive'
-			names.push(ToStringMethodName)
-		end 'theRangedPrimitive'
-
-		return names
-	end 'primitiveMembersTheCompilerRetains'
-
-	// ⚠ **A ROSTER ENTRY BINDS THE CORPUS'S DECLARATION AND NEVER A USER'S**, which is the whole of why the
-	// provenance test is here and not left implied. `W133`'s ordering rule — *a declared body beats every arm
-	// below, or the author's body never runs* — is unchanged for a user program: a file that writes its own
-	// `extension int implements Stringable` takes the name off the corpus entirely
-	// (`ProgramSignatures.noteExtensionPublishedMethod`), and this test then answers `false` for it, so the
-	// call reaches that declaration exactly as it did before the module was listed.
-	// (`extension-over-primitive/a-declared-tostring-beats-the-inline-lowering` is that case, and it is RED
-	// without the second clause.)
-	function compilerOutranksTheCorpusOn(typeName ByteArray, member ByteArray, callee ByteArray) returns bool
-		if not namesInclude(self.primitiveMembersTheCompilerRetains(typeName), name: member) 'notOnTheResidueRoster'
-			return false
-		end 'notOnTheResidueRoster'
-
-		return self.signatures.extensionMethodPublishedByStdlib(callee) and not self.signatures.stdlibExtensionMethodIsBeatenByUser(callee)
-	end 'compilerOutranksTheCorpusOn'
-
 	function dispatchBuiltinConformanceMethod(func IrFunction, recv MethodReceiver, conformer BuiltinConformer, resultUsed bool) returns ValueId throws SourceParseError
 		let typeName = builtinConformerName(conformer)
 
@@ -74118,7 +74606,7 @@ export type Parser
 		let methodTok = self.current()
 		let declaredCallee = qualifiedMethodName(typeName, methodName: methodTok.value)
 
-		if self.signatures.declaresCallee(declaredCallee) and not self.compilerOutranksTheCorpusOn(typeName, member: methodTok.value, callee: declaredCallee) 'theProgramDeclaresItsOwn'
+		if self.signatures.declaredMemberBeatsTheCompiler(typeName, member: methodTok.value) 'theProgramDeclaresItsOwn'
 			// `resolvedTypeQualifier`: the author wrote the MEMBER and a receiver, and no token at this call
 			// site spells the type — `dispatchMethodOnBase`'s mint, for its reason. `ConstructorInstance.none`
 			// because a primitive has no box for a constructor to have built.
@@ -75857,7 +76345,7 @@ export type Parser
 	//     instance only for a `Self`-returning static (`ProgramSignatures.calleeReturnsItsDeclaringType`, whose
 	//     header states both sides of that ABI). A `create()` returning anything else would have its result
 	//     minted as a record the callee never built — a wrong answer at run time and a decref of it at exit.
-	//     Asked through the SAME predicate `LowerMaxonToStd.witnessParamCountForCallee` sizes the hidden block
+	//     Asked through the SAME predicate `ProgramSignatures.witnessParamCountForCallee` sizes the hidden block
 	//     by, so the gate and the ABI cannot disagree about which statics are constructors.
 	//
 	// ⚠ **ARITY IS DELIBERATELY NOT HERE — IT IS `SemanticCheck.validateCall`'s, for every top-level
@@ -78143,6 +78631,14 @@ export type Parser
 
 			let iface = try self.requireInterfaceForParse(constraint.interfaceName, methodTok: errorTok)
 
+			if i as ParamCount >= self.declaringWitnessParamCount 'noTableToDispatchThrough'
+				if self.interfaceRequiresReceiverMethod(iface, methodName: methodName) 'dispatchHasNoTable'
+					throw self.noWitnessTablesRefusal(methodName, arrival: NoWitnessTablesArrival.dispatchedOnATypeParameter if self.closureEnclosingFrames.isEmpty() else NoWitnessTablesArrival.dispatchedInAClosure, anchor: errorTok)
+				end 'dispatchHasNoTable'
+
+				continue
+			end 'noTableToDispatchThrough'
+
 			// ⚠ The witness is resolved for EVERY constraint on this receiver, ahead of knowing which one
 			// declares `methodName` — a constraint that declares none contributes no candidate, and inside a
 			// closure it has already claimed an env slot and emitted a load nothing reads. That costs one
@@ -78150,7 +78646,7 @@ export type Parser
 			// dispatched, and it buys the property this file spends most on: ONE candidate builder, reached
 			// identically by both receiver kinds (see `appendInterfaceDispatchCandidates`). Splitting the
 			// witness out to resolve it lazily would give the constraint route its own copy of the slot walk.
-			self.appendInterfaceDispatchCandidates(candidates, iface: iface, witness: try self.witnessValueForConstraint(i, anchor: errorTok), methodName: methodName)
+			self.appendInterfaceDispatchCandidates(candidates, iface: iface, witness: self.witnessValueForConstraint(i, anchor: errorTok), methodName: methodName)
 		end 'eachConstraint'
 
 		return candidates
@@ -78181,17 +78677,13 @@ export type Parser
 	// is no env chain to walk). Each level captures from its own IMMEDIATE enclosing context, so a witness
 	// reaches depth 2 as a capture of a capture, and every hop is a hop the existing env machinery already
 	// makes. `fillInheritedWitnessCaptures` re-enters here, one context out, to close each one.
-	//
-	// The refusal is the shape `requireWitnessSourceForForwarding` refuses one door over, for its reason: a
-	// `static function` (or a synthesized default helper) reserves no witness parameters, so there is no table
-	// anywhere in the chain for the closure to inherit.
-	function witnessValueForConstraint(constraintIndex WitnessSlotIndex, anchor Token) returns ValueId throws SourceParseError
+	function witnessValueForConstraint(constraintIndex WitnessSlotIndex, anchor Token) returns ValueId
 		if self.closureEnclosingFrames.isEmpty() 'theDeclaringFunctionsOwnBody'
 			return self.witnessParamValueId(constraintIndex)
 		end 'theDeclaringFunctionsOwnBody'
 
 		if constraintIndex as ParamCount >= self.declaringWitnessParamCount 'nothingToInherit'
-			throw SourceParseError.unsupported("a closure that dispatches through the type's `where` constraints, written inside a `static function` (or a field-default helper) that carries no witness tables of its own — the closure inherits its table through its environment from the function that built it, and a static has no receiver to source one from. Write the closure in an instance method, or take the operation as a function parameter", line: anchor.line, column: anchor.column)
+			panic("witnessValueForConstraint: a closure asked for constraint {constraintIndex}'s table, and the function that built it declares {self.declaringWitnessParamCount} witness parameter(s) — `findWitnessDispatchCandidates` refuses a dispatch past them before it asks, and an inherited capture was filed by an earlier successful ask")
 		end 'nothingToInherit'
 
 		let slot = self.inheritedWitnessSlotFor(constraintIndex)
@@ -78234,9 +78726,9 @@ export type Parser
 	// closure it claims a slot in the ENCLOSING closure's environment and emits that closure's own load, which
 	// this same routine then fills one level further out. The recursion terminates at the declaring function,
 	// which is the only context with no environment above it.
-	function fillInheritedWitnessCaptures(inherited InheritedWitnessCaptureArray, capturedValues CapturedValueArray, anchor Token) throws SourceParseError
+	function fillInheritedWitnessCaptures(inherited InheritedWitnessCaptureArray, capturedValues CapturedValueArray, anchor Token)
 		for entry in inherited 'eachInheritedWitness'
-			let enclosingWitness = try self.witnessValueForConstraint(entry.constraintIndex, anchor: anchor)
+			let enclosingWitness = self.witnessValueForConstraint(entry.constraintIndex, anchor: anchor)
 			try capturedValues.set(entry.slot, value: CapturedValue.filled(enclosingWitness)) otherwise panic("fillInheritedWitnessCaptures: env slot {entry.slot} is past the {capturedValues.count()} capture(s) this closure collected — every slot here came from `captureSlotFor`, which fills all three columns in lockstep")
 		end 'eachInheritedWitness'
 	end 'fillInheritedWitnessCaptures'
@@ -78246,7 +78738,7 @@ export type Parser
 	// is being parsed: the closure's ABI has no room for them (see `witnessValueForConstraint`), so it carries
 	// none however constrained its author was. The one door for "may I forward my own witness slots".
 	function emittingFunctionCarriesWitnessParams() returns bool
-		return self.declaringWitnessParamCount != 0 and self.closureEnclosingFrames.isEmpty()
+		return self.emittingFunctionTableHolder() == TableHolder.carriesTables
 	end 'emittingFunctionCarriesWitnessParams'
 
 	// ⭐ **THE HIDDEN WITNESS PARAMETER THAT CARRIES CONSTRAINT `constraintIndex`'s TABLE.**
@@ -78269,6 +78761,30 @@ export type Parser
 		return self.declaringWitnessParamBase + (constraintIndex as ValueId)
 	end 'witnessParamValueId'
 
+	function witnessSlotIndicesNamed(slots CollectedInterfaceMethodArray, methodName ByteArray) returns NamedSlotIndexArray
+		var named = NamedSlotIndexArray.create()
+
+		for slotIndex in 0 upto slots.count() 'eachSlot'
+			if (try slots.get(slotIndex) otherwise panic("witnessSlotIndicesNamed: slots.get OOB at {slotIndex} below count {slots.count()}")).method.name.equals(methodName) 'named'
+				named.push(slotIndex)
+			end 'named'
+		end 'eachSlot'
+
+		return named
+	end 'witnessSlotIndicesNamed'
+
+	function interfaceRequiresReceiverMethod(iface IrInterface, methodName ByteArray) returns bool
+		let slots = self.witnessSlotsOf(iface)
+
+		for slotIndex in self.witnessSlotIndicesNamed(slots, methodName: methodName) 'eachNamedSlot'
+			if not (try slots.get(slotIndex) otherwise panic("interfaceRequiresReceiverMethod: slots.get OOB at {slotIndex} below count {slots.count()}")).method.isStatic 'takesAReceiver'
+				return true
+			end 'takesAReceiver'
+		end 'eachNamedSlot'
+
+		return false
+	end 'interfaceRequiresReceiverMethod'
+
 	// ⭐ **EVERY REQUIREMENT OF `iface` (TRANSITIVELY) NAMED `methodName`, AS A DISPATCH TARGET THROUGH
 	// `witness`** — the per-interface half of the search above, shared by both receiver kinds so a candidate is
 	// built in exactly one place whichever route reached it. `witnessSlotsOf` is the memoized transitive
@@ -78289,18 +78805,14 @@ export type Parser
 		// the same store `recordInterfaceDeclaration` fills, so a miss is a compiler defect.
 		let interfaceDeclIndex = try self.signatures.interfaceDeclIndexOf(iface.name) otherwise panic("appendInterfaceDispatchCandidates: interface '{String.from(iface.name)}' resolved out of `interfaceMap()` but has no declaration-order index — the two are filled in one act by `recordInterfaceDeclaration`")
 
-		for slotIndex in 0 upto slots.count() 'eachSlot'
+		for slotIndex in self.witnessSlotIndicesNamed(slots, methodName: methodName) 'eachSlot'
 			let slot = try slots.get(slotIndex) otherwise panic("appendInterfaceDispatchCandidates: slots.get OOB at {slotIndex} below count {slots.count()}")
-
-			if not slot.method.name.equals(methodName) 'otherMethod'
-				continue
-			end 'otherMethod'
 
 			if witnessCandidateAlreadyCollected(candidates, declaringInterfaceName: slot.sourceInterfaceName, methodName: methodName) 'reachedByAnEarlierConstraint'
 				continue
 			end 'reachedByAnEarlierConstraint'
 
-			candidates.push(WitnessDispatchTarget.create(witness, methodIndex: slotIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: slot.method.returnTypeName, paramTypeNames: slot.method.paramTypeNames, throwsClause: slot.method.throwsClause, methodName: methodName, paramNames: slot.method.paramNames, declaringInterfaceName: slot.sourceInterfaceName, isStatic: slot.method.isStatic))
+			candidates.push(WitnessDispatchTarget.create(witness, methodIndex: slotIndex as WitnessMethodIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: slot.method.returnTypeName, paramTypeNames: slot.method.paramTypeNames, throwsClause: slot.method.throwsClause, methodName: methodName, paramNames: slot.method.paramNames, declaringInterfaceName: slot.sourceInterfaceName, isStatic: slot.method.isStatic))
 		end 'eachSlot'
 	end 'appendInterfaceDispatchCandidates'
 
@@ -86966,7 +87478,7 @@ export type Parser
 		// ⭐ **THE INHERITED WITNESSES ARE FILLED FIRST, AND THE ORDER IS LOAD-BEARING (W58):** one hop out,
 		// closing a hop EMITS a load into the block `buildClosureEnv` is about to append its stores to, so
 		// the load has to be there before the store that reads it.
-		try self.fillInheritedWitnessCaptures(inheritedWitnessSnapshot, capturedValues: capturedValuesSnapshot, anchor: functionTok)
+		self.fillInheritedWitnessCaptures(inheritedWitnessSnapshot, capturedValues: capturedValuesSnapshot, anchor: functionTok)
 		self.fillHiddenWordCapture(captureNamesSnapshot, capturedValues: capturedValuesSnapshot, word: ClosureHiddenWord.descriptor, anchor: functionTok)
 		self.fillHiddenWordCapture(captureNamesSnapshot, capturedValues: capturedValuesSnapshot, word: ClosureHiddenWord.fixedElementCount, anchor: functionTok)
 

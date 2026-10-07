@@ -504,7 +504,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 | **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs. The exception is emitted runtime: when the slot was built with `MAXON_SECOND_STAGE=1` since the change, run `maxon run build` again now, without it, before the suite rows — it builds twice |
 | **Full `run_spec_test`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
-| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land-selfcompile` | exit 0, about a minute. Output discarded; only the exit code matters |
+| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land-selfcompile --rebuild` | exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
 | **The tree corpora** — `./maxon-bin/.maxon/maxon test` on `tests/fmt`, `tests/spec-harness`, `tests/ladders` and `tests/examples` | each `0 fail`, and read each count. These are the formatter's engine corpus, the spec harness's own refusals and gates, the ladder index, and every program under `examples/` plus the snippets the website teaches, compiled and run against their known answers — tree-level gates `spec-test` does not run. CI runs all four on every lane |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
 | **Seed shims** — every `scripts/seed-shim/*.patch` passes `git apply --check`, in sorted order; if the tree has any, `scripts/build-from-seed.sh` in a throwaway clone at a short path exits 0 | A shim's context lines are source text, so §6's comment edits can break one, and CI builds from the released seed. Regenerate a patch that no longer applies, then re-run the seed build |
@@ -557,8 +557,8 @@ not the tree you would push: **rebase and RE-RUN §8** before pushing again.
 > **The push ends the change.** Do not watch, poll or schedule a check on the CI run; report and stop.
 > CI hosts the four native targets on their own architecture, runs the two-stage seed build and
 > `scripts/fixpoint.sh`, none of which your battery does, so a lane can still go red after you have
-> reported — that is why the report names every lane your battery did not run. (wasm32-wasi is the
-> reverse: only your battery runs it.) When a red lane is reported to you, it is yours to fix whether or not
+> reported — that is why the report names every lane your battery did not run. CI also runs the
+> wasm32-wasi suite, on its x64-linux lane. When a red lane is reported to you, it is yours to fix whether or not
 > you caused it (AGENTS.md), in its own commit, reproduced on that platform's own host — never on the
 > cross lane that missed it.
 

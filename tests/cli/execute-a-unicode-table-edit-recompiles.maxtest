@@ -1,0 +1,64 @@
+let CaseDirName = "execute-a-unicode-table-edit-recompiles"
+let ProgramDirName = "app"
+let TrimmingProgramSource = "function main() returns ExitCode\n\tlet trimmed = \"  x  \".trim()\n\treturn 3 if trimmed == \"x\" else 4\nend 'main'\n"
+let TrimmedExitCode = 3
+let EditedUnicodeTable = "stdlib/helpers/string/ucd_bmp.bin"
+let RunCacheDirName = "run"
+
+test 'a program run again after a Unicode table it compiled in changed is compiled again'
+	requireHeldInAnInstallOutsideCheckout(CaseDirName, check: UnicodeTableEditRecompilesAnExecutedProgram.create())
+end 'a program run again after a Unicode table it compiled in changed is compiled again'
+
+type UnicodeTableEditRecompilesAnExecutedProgram implements OutsideCheckoutCase
+	static function create() returns UnicodeTableEditRecompilesAnExecutedProgram
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let compiler = installedCompilerIn(dir)
+
+		stageProgram(dir, name: ProgramDirName, source: TrimmingProgramSource)
+		let program = stagedProgramSource(dir, name: ProgramDirName)
+
+		let first = executedBy(compiler, program: program, dir: dir)
+		try Expect.equal(first.exitCode(), expected: TrimmedExitCode, message: "the first `maxon execute` did not run the program. It wrote to stdout: {first.stdout} and to stderr: {first.stderr}")
+
+		let staleName = try singleSlotNameIn(dir)
+
+		flipTheLastByteOf(dir.join(EditedUnicodeTable))
+
+		let second = executedBy(compiler, program: program, dir: dir)
+		try Expect.equal(second.exitCode(), expected: TrimmedExitCode, message: "the `maxon execute` after the table was edited did not run the program. It wrote to stdout: {second.stdout} and to stderr: {second.stderr}")
+
+		let freshName = try singleSlotNameIn(dir)
+		try Expect.notEqual(freshName, expected: staleName, message: "the cached build's NAME did not change when `{EditedUnicodeTable}` did, so a table the compiler embeds in the program is an input the key is blind to and every later run is served the build made from the old one.")
+	end 'requireHeldIn'
+end 'UnicodeTableEditRecompilesAnExecutedProgram'
+
+function executedBy(compiler FilePath, program FilePath, dir FilePath) returns CollectedOutput
+	return runWithCacheRoot([ExecuteCommandWord, program.toString()], cacheRoot: cacheRootIn(dir), workingDirectory: dir, binary: compiler)
+end 'executedBy'
+
+function singleSlotNameIn(dir FilePath) returns String throws TestFailure
+	var names = ListedWordArray.create()
+
+	for file in filesUnder(cacheRootIn(dir).join(CacheVendorDirName).join(RunCacheDirName)) 'eachCachedFile'
+		if not file.filename().endsWith(SidecarSuffix) 'notASidecar'
+			names.push(file.filename())
+		end 'notASidecar'
+	end 'eachCachedFile'
+
+	try Expect.equal(names.count(), expected: 1, message: "the run cache holds {names.count()} builds ({listed(names)}), where one program run twice leaves exactly one.")
+
+	return try names.get(0) otherwise panic("{CaseDirName}: a list holding one name has a first")
+end 'singleSlotNameIn'
+
+function flipTheLastByteOf(file FilePath)
+	var bytes = try File.readBinary(file) otherwise panic("{CaseDirName}: the gate could not run - could not read {file.toString()}.")
+	let last = bytes.count() - 1
+	let was = try bytes.get(last) otherwise panic("{CaseDirName}: the gate could not run - {file.toString()} is empty.")
+	let flipped = (1 as Byte) if was == 0 else (0 as Byte)
+
+	try bytes.set(last, value: flipped) otherwise panic("{CaseDirName}: the gate could not run - {file.toString()} has no last byte.")
+	try File.writeBinary(file, content: bytes) otherwise panic("{CaseDirName}: the gate could not run - could not write {file.toString()}.")
+end 'flipTheLastByteOf'

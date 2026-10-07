@@ -1,0 +1,41 @@
+let CaseDirName = "build-an-observed-compile-is-never-skipped"
+let OutputStem = "program"
+let EmitIrFlag = "--emit-ir"
+let IrSuffix = ".ir"
+let MetricsFileName = "m.tsv"
+let CensusByTagFlag = "--census-by-tag"
+let AllocationsByTagFlag = "--allocations-by-tag"
+let ObservedCompileReason = "observes the compile"
+
+test 'a build that observes its own compile always compiles, and keeps no record'
+	requireHeldOutsideCheckout(CaseDirName, check: ObservedCompileIsNeverSkipped.create())
+end 'a build that observes its own compile always compiles, and keeps no record'
+
+type ObservedCompileIsNeverSkipped implements OutsideCheckoutCase
+	static function create() returns ObservedCompileIsNeverSkipped
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+
+		let ir = dir.join("{OutputStem}{IrSuffix}")
+		try requireObserved(dir, option: EmitIrFlag)
+		try Expect.isTrue(File.exists(ir), message: "a build with `{EmitIrFlag}` wrote no {ir.toString()}.")
+
+		let metrics = dir.join(MetricsFileName)
+		try requireObserved(dir, option: "{MetricsOptionPrefix}{metrics.toString()}")
+		try Expect.isTrue(File.exists(metrics), message: "a build with `{MetricsOptionPrefix}` wrote no {metrics.toString()}.")
+
+		try requireObserved(dir, option: CensusByTagFlag)
+		try requireObserved(dir, option: AllocationsByTagFlag)
+		try requireObserved(dir, option: CompilerDebugLogFlag)
+
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: FirstBuildReason, which: "a plain build after the observed builds")
+	end 'requireHeldIn'
+end 'ObservedCompileIsNeverSkipped'
+
+function requireObserved(dir FilePath, option String) throws TestFailure
+	try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: [option]), reason: ObservedCompileReason, which: "a build with `{option}`")
+end 'requireObserved'

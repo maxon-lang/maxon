@@ -1,0 +1,35 @@
+let CaseDirName = "cache-clear-keeps-live-build-locks"
+let LiveLockName = "planted-live-output.lock"
+let EndedLockName = "planted-ended-output.lock"
+let ClaimSuffix = ".claim"
+let KeptReport = "a live build is using"
+let StaleClaimAgeMs = 11000 as Milliseconds
+
+test 'cache clear keeps the build lock of an output a live build is using, removes an ended one, and says so'
+	let dir = freshCaseDir(CaseDirName)
+	let locks = buildLocksDirIn(dir)
+
+	try Expect.isTrue(Directory.create(locks), message: "the gate could not run - {locks.toString()} could not be created")
+
+	let live = locks.join(LiveLockName)
+	let liveClaim = locks.join("{LiveLockName}{ClaimSuffix}")
+	let ended = locks.join(EndedLockName)
+	let endedClaim = locks.join("{EndedLockName}{ClaimSuffix}")
+
+	plantLockOfALiveHolder(live)
+	plantLockOfAnEndedHolder(ended)
+	try File.writeText(liveClaim, content: LiveLockName) otherwise panic("{CaseDirName}: the gate could not run - could not plant {liveClaim.toString()}.")
+	try File.writeText(endedClaim, content: EndedLockName) otherwise panic("{CaseDirName}: the gate could not run - could not plant {endedClaim.toString()}.")
+
+	sleep(StaleClaimAgeMs)
+
+	let cleared = runWithCacheRoot([CacheCommandWord, CacheClearVerb], cacheRoot: cacheRootIn(dir), workingDirectory: dir)
+	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
+
+	try Expect.equal(cleared.exitCode(), expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` must succeed when the only thing it leaves is a live build's lock. {said}")
+	try Expect.isTrue(File.exists(live), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {live.toString()}, the lock of an output a running build is writing, which would let a second build into it. {said}")
+	try Expect.isFalse(File.exists(ended), message: "`maxon {CacheCommandWord} {CacheClearVerb}` kept {ended.toString()}, whose holder has ended. {said}")
+	try Expect.isFalse(File.exists(endedClaim), message: "`maxon {CacheCommandWord} {CacheClearVerb}` kept {endedClaim.toString()}, beside a lock whose holder has ended. {said}")
+	try Expect.isTrue(Directory.isDirectory(locks), message: "`maxon {CacheCommandWord} {CacheClearVerb}` removed {locks.toString()} itself, so a build creating a lock after the census would find no directory. {said}")
+	try Expect.contains(cleared.stdout, needle: KeptReport, message: "`maxon {CacheCommandWord} {CacheClearVerb}` kept a build lock without saying so. {said}")
+end 'cache clear keeps the build lock of an output a live build is using, removes an ended one, and says so'

@@ -62,17 +62,6 @@ let MostLibraryLineages = 16 as ElementIndex
 export let MostEntriesOfAKind = 4 as ElementIndex
 export let MostParsePacks = 16 as ElementIndex
 
-type EntryStamp
-	export let path as FilePath
-	export let modifiedTime as Timestamp
-
-	static function create(path FilePath, modifiedTime Timestamp) returns EntryStamp
-		return Self{path: path, modifiedTime: modifiedTime}
-	end 'create'
-end 'EntryStamp'
-
-typealias EntryStampArray = Array with EntryStamp
-
 type HeldBaseline
 	export let key as HashDigest
 	export let kind as LibraryEntryKind
@@ -264,35 +253,16 @@ export type LibraryCache
 
 	export function trimEntries(target Target, kind LibraryEntryKind, kept String, most ElementIndex)
 		let entries = try self.entriesFor(target) otherwise return
-		let listed = try Directory.list(entries) otherwise return
 		let prefix = "{libraryEntryPrefix(kind)}{LibraryEntryNameSeparator}"
-		var stamps = EntryStampArray.create()
 
-		for path in listed 'eachEntry'
-			let name = path.filename()
-
-			if name.startsWith(prefix) and name.endsWith(LibraryEntryExtension) and name != kept 'anotherOfThisKind'
-				stamps.push(EntryStamp.create(path, modifiedTime: (try File.info(path) otherwise continue).modifiedTime))
-			end 'anotherOfThisKind'
-		end 'eachEntry'
-
-		discardAllButNewest(stamps, kept: most - 1)
+		discardAllButNewestIn(entries, kept: most - 1, admits: function(path) gives path.filename().startsWith(prefix) and path.filename().endsWith(LibraryEntryExtension) and path.filename() != kept)
 	end 'trimEntries'
 
 	export function write(target Target, name String, image ByteArray, tally LibraryCacheTally) returns bool
 		let entries = try self.entriesFor(target) otherwise return false
-		let published = entries.join(name)
-		let pending = entries.join(pendingSpellingOf(name))
 
-		if not pendingWritten(entries, pending: pending, image: image) 'notWritten'
-			noteLibraryCacheTrouble("{pending.toString()} could not be written")
-			try File.delete(pending) otherwise ignore
-			return false
-		end 'notWritten'
-
-		try File.rename(pending, to: published) otherwise 'notPublished'
-			noteLibraryCacheTrouble("{pending.toString()} could not be renamed to {published.toString()}")
-			try File.delete(pending) otherwise ignore
+		try publishAtomically(entries, name: name, bytes: image) otherwise (e) 'notPublished'
+			noteLibraryCacheTrouble(e.sentence())
 			return false
 		end 'notPublished'
 
@@ -302,15 +272,6 @@ export type LibraryCache
 		return true
 	end 'write'
 end 'LibraryCache'
-
-function pendingWritten(entries FilePath, pending FilePath, image ByteArray) returns bool
-	try File.writeBinary(pending, content: image) otherwise 'firstAttemptFailed'
-		_ = Directory.create(entries)
-		try File.writeBinary(pending, content: image) otherwise return false
-	end 'firstAttemptFailed'
-
-	return true
-end 'pendingWritten'
 
 function libraryEntryPrefix(kind LibraryEntryKind) returns String
 	return match kind 'prefix'
@@ -367,13 +328,7 @@ function resolvedLibraryDirectory(target Target) returns LibraryCacheDirectory
 end 'resolvedLibraryDirectory'
 
 function discardSupersededLibraryCaches(formats FilePath, lineage FilePath, current FilePath)
-	let formatDirectories = try Directory.list(formats) otherwise return
-
-	for directory in formatDirectories 'eachFormat'
-		if isOlderCacheFormatName(directory.filename(), than: LibraryCacheFormat) 'olderFormat'
-			discardCacheTree(directory)
-		end 'olderFormat'
-	end 'eachFormat'
+	discardOlderFormats(formats, than: LibraryCacheFormat)
 
 	if let builds = try Directory.list(lineage) 'buildsListed'
 		for build in builds 'eachBuild'
@@ -388,32 +343,9 @@ end 'discardSupersededLibraryCaches'
 
 function discardStaleLineages(current FilePath)
 	let lineages = try current.parent() otherwise return
-	let listed = try Directory.list(lineages) otherwise return
-	var stamps = EntryStampArray.create()
 
-	for lineage in listed 'eachLineage'
-		if not lineage.equals(current) 'anotherCompiler'
-			stamps.push(EntryStamp.create(lineage, modifiedTime: (try File.info(lineage) otherwise continue).modifiedTime))
-		end 'anotherCompiler'
-	end 'eachLineage'
-
-	discardAllButNewest(stamps, kept: MostLibraryLineages - 1)
+	discardAllButNewestIn(lineages, kept: MostLibraryLineages - 1, admits: function(lineage) gives not lineage.equals(current))
 end 'discardStaleLineages'
-
-function discardAllButNewest(stamps EntryStampArray, kept ElementIndex)
-	stamps.sort(function(left EntryStamp, right EntryStamp) gives right.modifiedTime.compare(left.modifiedTime))
-
-	for position in kept upto stamps.count() 'eachSuperseded'
-		let path = (try stamps.get(position) otherwise panic("discardAllButNewest: stamps.get OOB at {position} below count {stamps.count()}")).path
-
-		if Directory.isDirectory(path) 'aDirectory'
-			discardCacheTree(path)
-			continue
-		end 'aDirectory'
-
-		try File.delete(path) otherwise ignore
-	end 'eachSuperseded'
-end 'discardAllButNewest'
 
 module function noteLibraryCacheTrouble(message String)
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'

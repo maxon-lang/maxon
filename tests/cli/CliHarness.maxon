@@ -503,17 +503,36 @@ end 'fallThroughCacheRoot'
 // ⭐ **EVERY ROOT THE DRIVER CONSULTS IS ONE A VARIABLE NAMES, WHICH IS WHAT MAKES THE CONFINEMENT
 // COMPLETE**: a child here can reach no cache directory outside the case's own tree, so no case can count
 // or remove anything of the developer's.
-export function runWithCacheRoots(arguments ListedWordArray, naming EnvMap, workingDirectory FilePath) returns CollectedOutput
-	return runDriver(arguments, environment: confinedCacheEnvironment(workingDirectory, naming: naming), workingDirectory: workingDirectory)
+export function runWithCacheRoots(arguments ListedWordArray, naming EnvMap, workingDirectory FilePath, binary FilePath = testedCompilerPath()) returns CollectedOutput
+	return runDriver(arguments, binary: binary, environment: confinedCacheEnvironment(workingDirectory, naming: naming), workingDirectory: workingDirectory)
 end 'runWithCacheRoots'
 
 // One driver run whose cache is confined to `cacheRoot`.
-export function runWithCacheRoot(arguments ListedWordArray, cacheRoot FilePath, workingDirectory FilePath) returns CollectedOutput
+export function runWithCacheRoot(arguments ListedWordArray, cacheRoot FilePath, workingDirectory FilePath, binary FilePath = testedCompilerPath()) returns CollectedOutput
 	var naming = EnvMap.create()
 	naming.upsert(CacheRootVariable, value: cacheRoot.toString())
 
-	return runWithCacheRoots(arguments, naming: naming, workingDirectory: workingDirectory)
+	return runWithCacheRoots(arguments, naming: naming, workingDirectory: workingDirectory, binary: binary)
 end 'runWithCacheRoot'
+
+let BlockedRootOrdinalSeparator = "-"
+
+export function blockedRootFileIn(dir FilePath, ordinal ElementIndex) returns FilePath
+	return dir.join("{BlockedRootFileName}{BlockedRootOrdinalSeparator}{ordinal}")
+end 'blockedRootFileIn'
+
+export function rosterWithEveryCandidateBlocked(dir FilePath) returns EnvMap
+	var naming = EnvMap.create()
+
+	for (iter, variable) in confinableCacheVariables().withIterator() 'eachCandidate'
+		let blocked = blockedRootFileIn(dir, ordinal: iter.index())
+		blockCacheRootAt(blocked)
+
+		naming.upsert(variable, value: blocked.toString())
+	end 'eachCandidate'
+
+	return naming
+end 'rosterWithEveryCandidateBlocked'
 
 // ⛔ **`Environment.inheritUpdating` CANNOT REMOVE A VARIABLE**, so the whole environment is assembled
 // here — which is also what lets a case run a child that sees no cache override at all.
@@ -1215,26 +1234,258 @@ export type LibraryCacheReport
 end 'LibraryCacheReport'
 
 export function stageProgram(dir FilePath, name String, source String)
-	writeStagedFile(createdStagedDirectory(dir.join(name)).join(StagedProgramFileName), content: source)
+	_ = createdStagedDirectory(dir.join(name))
+	writeStagedFile(stagedProgramSource(dir, name: name), content: source)
 end 'stageProgram'
+
+export function stagedProgramSource(dir FilePath, name String) returns FilePath
+	return dir.join(name).join(StagedProgramFileName)
+end 'stagedProgramSource'
+
+export function stageSettledProgram(dir FilePath, name String, source String)
+	stageProgram(dir, name: name, source: source)
+	waitPastTheModificationOf(stagedProgramSource(dir, name: name), probeIn: dir)
+end 'stageSettledProgram'
 
 export function libraryCacheDirIn(dir FilePath) returns FilePath
 	return cacheRootIn(dir).join(CacheVendorDirName).join(LibraryCacheDirName)
 end 'libraryCacheDirIn'
 
 export function runLibraryCacheBuild(dir FilePath, program String, output String, options ListedWordArray) returns CollectedOutput
+	var logged = ListedWordArray.create()
+	logged.push(CompilerDebugLogFlag)
+
+	for option in options 'eachOption'
+		logged.push(option)
+	end 'eachOption'
+
+	return runRecordedBuild(dir, program: program, output: output, options: logged)
+end 'runLibraryCacheBuild'
+
+export let RebuildFlag = "--rebuild"
+export let FirstBuildReason = "no record of a previous build"
+export let ModifiedInputReason = "was modified at or after the last compile started"
+export let NoBuildRecordReason = "no build record can be kept"
+
+let CompiledLinePrefix = "Compiled -> "
+let UpToDateLinePrefix = "Up to date -> "
+let CompilingReasonLinePrefix = "[CMP] INFO: compiling "
+let WroteCodeWording = "bytes of code to"
+
+typealias ClockPollTally = int(0 to 100)
+
+let ClockProbeFileName = "filesystem-clock-probe"
+let ClockProbeContent = "written to read the filesystem's clock\n"
+let ClockPollMs = 100 as Milliseconds
+let ClockPollLimit = 100 as ClockPollTally
+
+export let SettledProgramDirName = "app"
+
+export function runRecordedBuild(dir FilePath, program String, output String, options ListedWordArray, binary FilePath = testedCompilerPath()) returns CollectedOutput
 	var arguments = ListedWordArray.create()
 	arguments.push(BuildCommandWord)
 	arguments.push(program)
-	arguments.push(CompilerDebugLogFlag)
 	arguments.push("{OutputOptionPrefix}{dir.join(output).toString()}")
 
 	for option in options 'eachOption'
 		arguments.push(option)
 	end 'eachOption'
 
-	return runWithCacheRoot(arguments, cacheRoot: cacheRootIn(dir), workingDirectory: dir)
-end 'runLibraryCacheBuild'
+	return runWithCacheRoot(arguments, cacheRoot: cacheRootIn(dir), workingDirectory: dir, binary: binary)
+end 'runRecordedBuild'
+
+export function requireBuilt(build CollectedOutput, which String) throws TestFailure
+	try Expect.equal(build.exitCode(), expected: 0, message: "{which} did not succeed. It wrote to stdout: {build.stdout} and to stderr: {build.stderr}")
+end 'requireBuilt'
+
+export function requireCompiled(build CollectedOutput, reason String, which String) throws TestFailure
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	try requireBuilt(build, which: which)
+	try Expect.contains(build.stdout, needle: CompiledLinePrefix, message: "{which} did not say `{CompiledLinePrefix}<path>`, and it was meant to compile. {said}")
+	try Expect.isFalse(build.stdout.contains(UpToDateLinePrefix), message: "{which} said `{UpToDateLinePrefix}<path>`, and it was meant to compile. {said}")
+
+	let compiling = linesOpeningIn(build.stderr, prefix: CompilingReasonLinePrefix)
+	try Expect.equal(compiling.count(), expected: 1, message: "{which} logged {compiling.count()} line(s) opening `{CompilingReasonLinePrefix}`, where every build that compiles logs exactly one, naming why. {said}")
+
+	let line = try compiling.get(0) otherwise panic("CliHarness: a list holding one line has a first line")
+	try Expect.contains(line, needle: reason, message: "{which} compiled for another reason than `{reason}`. It logged: {line}")
+	try Expect.contains(build.stderr, needle: WroteCodeWording, message: "{which} logged no `{WroteCodeWording}` line, so nothing says it wrote what it compiled. {said}")
+end 'requireCompiled'
+
+export function requireUpToDate(build CollectedOutput, which String) throws TestFailure
+	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+	try requireBuilt(build, which: which)
+	try Expect.contains(build.stdout, needle: UpToDateLinePrefix, message: "{which} did not say `{UpToDateLinePrefix}<path>`, and nothing it reads had changed since the last compile. {said}")
+	try Expect.isFalse(build.stdout.contains(CompiledLinePrefix), message: "{which} said `{CompiledLinePrefix}<path>`, and nothing it reads had changed since the last compile. {said}")
+	try Expect.isFalse(build.stderr.contains(WroteCodeWording), message: "{which} logged a `{WroteCodeWording}` line, so it compiled a program that was up to date. {said}")
+	try Expect.isFalse(build.stderr.contains(CompilingReasonLinePrefix), message: "{which} logged a reason to compile a program that was up to date. {said}")
+end 'requireUpToDate'
+
+let BuildRecordDirName = "build"
+let BuildRecordExtension = ".mxbr"
+
+export function soleBuildRecordIn(dir FilePath) returns FilePath throws TestFailure
+	var records = PathArray.create()
+
+	for file in filesUnder(cacheRootIn(dir).join(CacheVendorDirName).join(BuildRecordDirName)) 'eachCachedFile'
+		if file.filename().endsWith(BuildRecordExtension) 'aRecord'
+			records.push(file)
+		end 'aRecord'
+	end 'eachCachedFile'
+
+	try Expect.equal(records.count(), expected: 1, message: "the first build under an empty cache root left {records.count()} build records, where one output has one.")
+
+	return try records.get(0) otherwise panic("CliHarness: a list holding one record has a first")
+end 'soleBuildRecordIn'
+
+export let NothingRanExitCode = 2
+export let OutputLockBusyWording = "holds its build lock"
+export let OutputLockHolderRunningWording = "is running"
+export let OutputLockEndedHolderWording = "has ended without releasing it"
+
+let OutputLockSuffix = ".lock"
+let BuildLocksDirName = "locks"
+let OutputLockToken = "cli-output-lock"
+let HostIdentitySeparator = "/"
+
+#if os(Windows)
+	let HostNameVariable = "COMPUTERNAME"
+	let HostOsName = "windows"
+#endif
+
+#if os(Linux)
+	let KernelHostNamePath = "/proc/sys/kernel/hostname"
+	let MachineIdPath = "/etc/machine-id"
+	let DbusMachineIdPath = "/var/lib/dbus/machine-id"
+	let HostOsName = "linux"
+#endif
+
+#if os(Macos)
+	let HostOsName = "macos"
+#endif
+
+export function buildLocksDirIn(dir FilePath) returns FilePath
+	return cacheRootIn(dir).join(CacheVendorDirName).join(BuildRecordDirName).join(BuildLocksDirName)
+end 'buildLocksDirIn'
+
+export function outputLockOf(record FilePath) returns FilePath
+	let directory = try record.parent() otherwise panic("CliHarness: the gate could not run - {record.toString()} has no directory the build records sit in.")
+	let builds = try directory.parent() otherwise panic("CliHarness: the gate could not run - {directory.toString()} has no directory the build locks sit beside it in.")
+
+	return builds.join(BuildLocksDirName).join("{record.stem()}{OutputLockSuffix}")
+end 'outputLockOf'
+
+export function plantLockOfALiveHolder(lock FilePath)
+	plantOutputLock(lock, content: lockRecordOf(__Builtins.currentProcessId(), host: thisLockHostIdentity()))
+end 'plantLockOfALiveHolder'
+
+export function plantLockOfAnEndedHolder(lock FilePath)
+	plantOutputLock(lock, content: lockRecordOf(endedVersionRunProcessId(), host: thisLockHostIdentity()))
+end 'plantLockOfAnEndedHolder'
+
+export function plantedLockText(lock FilePath) returns String
+	return try File.readText(lock) otherwise panic("CliHarness: the gate could not run - could not read {lock.toString()}.")
+end 'plantedLockText'
+
+export function removePlantedLock(lock FilePath)
+	try File.delete(lock) otherwise panic("CliHarness: the gate could not run - could not delete {lock.toString()}, which a case planted.")
+end 'removePlantedLock'
+
+function plantOutputLock(lock FilePath, content String)
+	let locks = try lock.parent() otherwise panic("CliHarness: the gate could not run - {lock.toString()} has no directory.")
+
+	_ = Directory.create(locks)
+
+	try File.writeText(lock, content: content) otherwise panic("CliHarness: the gate could not run - could not plant {lock.toString()}.")
+end 'plantOutputLock'
+
+function lockRecordOf(pid Pid, host String) returns String
+	return "pid={pid}\ntoken={OutputLockToken}\nhost={host}\n"
+end 'lockRecordOf'
+
+export function endedVersionRunProcessId() returns Pid
+	return runDriver([VersionCommandWord]).pid
+end 'endedVersionRunProcessId'
+
+function thisLockHostIdentity() returns String
+	#if os(Windows)
+		let hostName = try Process.environmentVariable(HostNameVariable) otherwise panic("CliHarness: the gate could not run - {HostNameVariable} is not set, so this host names itself nowhere the driver reads.")
+		return hostIdentityOf([hostName, String.init(__Builtins.processNamespace())])
+	#endif
+
+	#if os(Linux)
+		return hostIdentityOf([firstNamedIn([KernelHostNamePath]), firstNamedIn([MachineIdPath, DbusMachineIdPath]), String.init(__Builtins.processNamespace())])
+	#endif
+
+	#if os(Macos)
+		return hostIdentityOf([String.init(__Builtins.processNamespace())])
+	#endif
+end 'thisLockHostIdentity'
+
+#if os(Linux)
+	function firstNamedIn(locations ListedWordArray) returns String
+		for location in locations 'eachLocation'
+			let path = try FilePath.from(location) otherwise panic("CliHarness: '{location}' is not a valid path")
+			let text = try File.readText(path) otherwise continue
+
+			if not text.trim().isEmpty() 'named'
+				return text
+			end 'named'
+		end 'eachLocation'
+
+		panic("CliHarness: the gate could not run - this host names itself in none of {locations.count()} places the driver reads.")
+	end 'firstNamedIn'
+#endif
+
+function hostIdentityOf(parts ListedWordArray) returns String
+	var identity = HostOsName
+
+	for part in parts 'eachPart'
+		identity.append("{HostIdentitySeparator}{part.trim()}")
+	end 'eachPart'
+
+	return identity
+end 'hostIdentityOf'
+
+export function requireASecondBuildIsUpToDate(dir FilePath, output String, options ListedWordArray) throws TestFailure
+	stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+
+	try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: output, options: options), reason: FirstBuildReason, which: "the first build under an empty cache root")
+
+	let written = dir.join(output)
+	waitPastTheModificationOf(written, probeIn: dir)
+	let before = fileInfoOf(written)
+
+	try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: output, options: options), which: "a second build of the unchanged program")
+
+	let after = fileInfoOf(written)
+	try Expect.equal(after.size, expected: before.size, message: "a build that reported the program up to date changed the size of {written.toString()}.")
+	try Expect.equal(after.modifiedTime, expected: before.modifiedTime, message: "a build that reported the program up to date rewrote {written.toString()}.")
+end 'requireASecondBuildIsUpToDate'
+
+function fileInfoOf(path FilePath) returns FileInfo
+	return try File.info(path) otherwise panic("CliHarness: the gate could not run - could not read the metadata of {path.toString()}.")
+end 'fileInfoOf'
+
+export function waitPastTheModificationOf(file FilePath, probeIn FilePath)
+	let modified = fileInfoOf(file).modifiedTime
+	let probe = probeIn.join(ClockProbeFileName)
+
+	for _ in 0 upto ClockPollLimit 'eachPoll'
+		writeStagedFile(probe, content: ClockProbeContent)
+
+		if fileInfoOf(probe).modifiedTime > modified 'passed'
+			try File.delete(probe) otherwise panic("CliHarness: the gate could not run - could not delete {probe.toString()}.")
+			return
+		end 'passed'
+
+		sleep(ClockPollMs)
+	end 'eachPoll'
+
+	panic("CliHarness: the gate could not run - the filesystem clock under {probeIn.toString()} did not pass the modification time of {file.toString()} within {ClockPollLimit} polls {ClockPollMs} ms apart.")
+end 'waitPastTheModificationOf'
 
 export function requireLibraryCacheBuild(dir FilePath, program String, output String, which String) returns CollectedOutput throws TestFailure
 	let built = runLibraryCacheBuild(dir, program: program, output: output, options: ListedWordArray.create())

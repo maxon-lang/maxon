@@ -1179,8 +1179,11 @@ end 'main'
 ### Equality and Copying
 
 - `a == b` and `a != b` on two records call the type's own `equals(other)` method, which must return `bool`.
-  Declaring `implements Equatable` is not required. A type with no `equals` cannot be compared: **E3005**
-  (`cannot compare struct with struct`). Ordering (`<`) on records is refused the same way.
+  Two values of one generic instance (`Box with Score`) compare the same way, through the generic type's
+  `equals`. Declaring `implements Equatable` is not required. A type with no `equals` cannot be compared:
+  **E3005** (`cannot compare struct with struct`). Ordering (`<`) on records is refused the same way.
+- `a == b` on two arrays of one type compares them element by element, through the element's own `equals`.
+  It needs an element that is `Hashable` and `Equatable` (**E4006** otherwise).
 - `a is b` asks whether two names refer to the **same record**
   (see [Reference Identity](#reference-identity-operators)).
 - A type whose fields are all cloneable gets `clone()` automatically, producing an independent deep copy

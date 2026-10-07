@@ -1,0 +1,25 @@
+let CaseDirName = "build-an-edit-in-the-same-second-recompiles"
+let OutputStem = "program"
+let EditedSource = "function main() returns ExitCode\n\treturn 43\nend 'main'\n"
+let EditedExitCode = 43
+
+test 'a source edited in the second its last compile started is compiled again'
+	requireHeldOutsideCheckout(CaseDirName, check: SameSecondEditRecompiles.create())
+end 'a source edited in the second its last compile started is compiled again'
+
+type SameSecondEditRecompiles implements OutsideCheckoutCase
+	static function create() returns SameSecondEditRecompiles
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+
+		writeStagedFile(stagedProgramSource(dir, name: SettledProgramDirName), content: EditedSource)
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: ModifiedInputReason, which: "a build after the source was edited")
+
+		let ran = runDriver(ListedWordArray.create(), binary: dir.join("{OutputStem}{executableSuffix()}"), workingDirectory: dir)
+		try Expect.equal(ran.exitCode(), expected: EditedExitCode, message: "the program built after its source was edited does not run the edited source. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
+	end 'requireHeldIn'
+end 'SameSecondEditRecompiles'

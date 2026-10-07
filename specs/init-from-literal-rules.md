@@ -146,6 +146,29 @@ end 'main'
 error E3005: <fragment>:15:7: type mismatch: 'cannot compare struct with struct'
 ```
 
+<!-- test: error.comparing-two-generic-instances-without-equals-is-refused -->
+```maxon
+typealias Count = int(0 to 100)
+
+type Box uses T
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+function main() returns ExitCode
+	print("{IntBox.create(1) == IntBox.create(1)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:27: cannot compare two values of 'IntBox' with '==': 'IntBox' declares no 'equals', so the comparison would be answered by the two values' addresses; declare 'equals', or compare the contents explicitly
+```
+
 <!-- test: error.struct-ordering-is-not-an-equals-dispatch -->
 ```maxon
 typealias Count = int(0 to 100)
