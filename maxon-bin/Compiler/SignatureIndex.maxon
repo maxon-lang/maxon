@@ -15464,28 +15464,17 @@ end 'sourceSpelledAliasText'
 // allocation. The exact inverse of every mint (`rangeQualifiedAliasName`, `shapeQualifiedAliasName`,
 // `instanceQualifiedAliasName`), so a mint and the strip cannot come to disagree about where a name divides.
 //
-// ⚠ **IT DIVIDES AT THE FIRST `$`, NOT THE LAST, AND THE TWO STOPPED AGREEING WHEN THE MINTS NESTED.**
-// A generic alias's qualifier is an instance's canonical name, which CONTAINS a range qualifier whenever its
+// ⚠ **IT DIVIDES AT THE FIRST `$`, NOT THE LAST.** A generic alias's qualifier is an instance's canonical name, which CONTAINS a range qualifier whenever its
 // element is a contested one — `Bytes$Array_Byte$0_255`. Splitting at the last `$` hands that back as
 // `Bytes$Array_Byte`, a name no source line holds and no registry answers for. `$` is unspellable in an
 // identifier, so every `$` in a name begins the compiler's own bookkeeping and the SOURCE spelling is
 // everything before the first one — one rule, whatever depth the mints reach.
 //
-// **ITS READERS WANT THE SAME THING FOR TWO REASONS, AND THAT IS WHY THERE IS ONE FUNCTION** (no count is
-// written down: a count is a copy of a list that lives elsewhere, and this one had already gone stale once,
-// at the rung that gave the diagnostics a shared speller):
+// **ITS READERS WANT THE SAME THING FOR TWO REASONS, AND THAT IS WHY THERE IS ONE FUNCTION:**
 //
 //   • A name ROSTER (`isByteElementName`) asks about `Byte`, and must go on getting a yes after the
 //     element it names has been qualified — without the roster learning anything about ranges.
 //   • A DIAGNOSTIC quotes a typealias back at the author, and a mint is a name NO SOURCE LINE HOLDS.
-//     ⛔ MEASURED without this door, on a program declaring `typealias Byte =
-//     int(0 to 1000)`: the compile-time narrowing said `Value 2000 is outside the range of
-//     'Byte$0_1000' (int(0 to 1000))` and the runtime guard panicked `value outside typealias
-//     'Byte$0_1000'` — quoting a declaration the program does not contain, with the real bounds printed
-//     in the very same sentence, so the suffix carried nothing but the compiler's bookkeeping. Worse, it
-//     was INCONSISTENT with itself: the identical alias guarding a plain PARAMETER printed the bare
-//     `Byte`, because only a generic instance's element is ever qualified. One alias, two spellings,
-//     decided by which slot the value happened to flow into.
 export function sourceSpelledAliasName(name ByteArray) returns ByteArray
 	let split = try firstSeparatorIndex(name, separator: CompilerQualifiedAliasSeparatorByte) otherwise return name
 
@@ -26826,13 +26815,10 @@ export type ProgramSignatures
 	// governs the casts written in it even where another file declares that name more widely.
 	// ⛔⛔ **AND IT IS KIND-GATED, WHICH `RangedAliasRegistry.lookup` BENEATH IT CANNOT BE.** That door is
 	// reader-aware about the RANGE — whose `int(0 to 10)` does this file mean — and knows nothing of a name
-	// two KINDS hold, so its `byName` fallback handed a file that means an `enum` another file's ALIAS.
-	// MEASURED: `typealias Level = float(0.0 to 5.0)` in one file against `export enum Level` in another
-	// refused the ENUM file's own `returns Level` with `Cannot return 'Level' from function declared to
-	// return 'float'` — inside a file about a declaration its author never saw, which is the original defect
-	// of this whole change, one registry over.
+	// two KINDS hold, so its `byName` fallback would hand a file that means an `enum` another file's ALIAS,
+	// and refuse that file's own `returns Level` against a declaration its author never saw.
 	//
-	// ⭐ **THE GATE IS HERE AND NOT AT THE NINE CALL SITES**, because this is the complete site: every one of
+	// ⭐ **THE GATE IS HERE AND NOT AT THE CALL SITES**, because this is the complete site: every one of
 	// them already passes a reader, so a caller cannot reach the registry without going through this
 	// question. `readerMeansKind` is an empty-map probe in every program that contests nothing.
 	export function aliasOf(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
@@ -28001,22 +27987,19 @@ export type ProgramSignatures
 		end 'index'
 	end 'crossKindScopedAliasNames'
 
-	// ⭐ **IS `name` HELD BY MORE THAN ONE KIND OF DECLARATION?** The allocation-free gate every
-	// reader-aware door below opens with — one `Map.contains` on a map that is EMPTY in every program in
-	// the corpus, so a compiler that contests nothing pays exactly that and never reaches the cascade.
-	// ⭐⭐ **THE INTERFACE REGISTRY'S READER-AWARE DOOR — the member of the family that had none.** Every
-	// other registry gained one; `interfaces` was reached only through `interfaceMap()`/`isInterfaceName`,
-	// which are whole-program by construction, so each of the two TYPE-POSITION doors had to remember the
-	// contest for itself. This is where that is remembered once.
+	// ⭐⭐ **THE INTERFACE REGISTRY'S READER-AWARE DOOR.** `interfaceMap()`/`isInterfaceName` are
+	// whole-program by construction, so the TYPE-POSITION doors ask the contest here rather than each
+	// remembering it for itself.
 	//
 	// ⚠ It is `isInterfaceName`, not `lookupInterface`: this answers a membership question asked of every
 	// type annotation in the program, and a union return is heap-boxed even for its `notFound` case (see
-	// `Parser.parseTypeReference`, which measured +24,396 allocations at the ladder's rung 5).
+	// `Parser.parseTypeReference`).
 	export function containsInterfaceFor(name ByteArray, readerFilePath FilePath) returns bool
 		return isInterfaceName(self.settled.interfaces, name: name) and not self.aliasShadowsNominalFor(name, readerFilePath: readerFilePath)
 	end 'containsInterfaceFor'
 
-	// Do several KINDS of declaration hold `name`? A column nothing has contested answers without hashing.
+	// Do several KINDS of declaration hold `name`? The allocation-free gate the reader-aware doors open with:
+	// a column nothing has contested answers without hashing.
 	export function crossKindContested(name ByteArray) returns bool
 		return self.writtenNameIsContestedAcrossKinds(name) and not self.settled.aliasFamiliesBesideNominals.contains(name)
 	end 'crossKindContested'
@@ -34578,12 +34561,6 @@ export type ProgramSignatures
 	// belongs to the same file the outer one does — and every other tag passes through: only a `named` leaf
 	// can name an alias at all (a struct, a tuple and an opaque type parameter carry no range and no instance,
 	// and a primitive carries no name).
-	//
-	// **THE THREE LEAF RULES ARE DISJOINT, WHICH IS WHY ASKING ALL THREE IS NOT A PRECEDENCE DECISION.** A
-	// name is a RANGED alias, a GENERIC-INSTANCE alias or a TUPLE alias and never two of them —
-	// `readTypeAliasDeclaration` reads one form per declaration, and a name two declarations claim in
-	// different forms is a duplicate the type-name registry refuses — so whichever one answers, the others
-	// would have handed the argument back unchanged.
 	function fileScopedArg(arg MaxonType, filePath FilePath) returns MaxonType
 		let tag = maxonTypeTag(arg)
 
@@ -34664,18 +34641,15 @@ export type ProgramSignatures
 	//
 	// **THE THREE STEPS ARE THREE DIFFERENT PROBLEMS, AND ONLY THE FIRST IS A REGISTRY QUESTION:**
 	//
-	//   1. **The CONTEST** (`settleRangeContests`) — which names have declarations that disagree, and the
-	//      minted declaration each distinct range gets. Everything below reads its answer.
+	//   1. **The CONTEST** (`settleRangeContests`) — which names take a per-declaration identity or have
+	//      declarations that disagree about the range, and the mint each gets. Everything below reads its
+	//      answer.
 	//   2. **THE ORDERING HAZARD** — `recordGenericAlias` runs DURING the sweep, so `typealias ByteArray =
 	//      Array with Byte` was interned with the BARE element before any contest could be known. Repairing
 	//      that is `rekeyScopedGenericAliases`', which runs after BOTH contests are settled because it
 	//      applies both scopings; see there.
 	//   3. **The PARSE MUST NOT WRITE.** Every (instance, reader environment) pair is interned here, so
 	//      `fileScopedInstance` is a pure lookup from every parallel per-file parse.
-	//
-	// ⚠ **ON EVERY PROGRAM IN THE CORPUS THIS IS A NO-OP AFTER STEP 1**, and step 1 is one walk of a map
-	// that is EMPTY unless two files declare one name. That is not an optimization — it is the proof that
-	// nothing this rung does can move the emitted code.
 	export function settleRangeScopedInstances()
 		self.settled.typeAliases.settleRangeContests(self.crossKindScopedAliasNames())
 

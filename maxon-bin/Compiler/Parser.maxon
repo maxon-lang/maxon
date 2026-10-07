@@ -35704,38 +35704,29 @@ export type Parser
 			end 'innerAlias'
 
 			// ⭐⭐ **THE PER-FILE ALIAS REGISTRIES ARE READ IN THE REAL PARSE ONLY, AND `allFilesFolded` IS WHAT
-			// MAKES THAT TRUE RATHER THAN MERELY CLAIMED (A3e).** Both arms below ask a registry the declaration
+			// MAKES THAT TRUE RATHER THAN MERELY CLAIMED.** Both arms below ask a registry the declaration
 			// SWEEP is still filling, and the sweep reaches both: `foldDeclaredSignaturesInto` parses no BODY,
 			// but it reads declared TYPES — a struct field, a return clause, a generic alias's arguments —
 			// through this very routine, holding the `ProgramSignatures` it is filling (`Queries.foldOneFileInto`).
 			//
-			// ⚠ **THE ANSWER WAS THEREFORE A PROPERTY OF THE DISK, NOT OF THE PROGRAM.** Both registries are
-			// written by `foldFile`, which runs when a file's whole token walk ENDS — so an alias declared in
-			// the file being swept always reads as undeclared (the arm's original comment), but one declared in
-			// a file the walk reached EARLIER is already registered. The walk's order is the filesystem's and
-			// the loader deliberately does not sort it (`StdlibLoader`'s header, user ruling 2026-07-24).
+			// ⚠ **UNGATED, THE ANSWER WOULD BE A PROPERTY OF THE DISK, NOT OF THE PROGRAM.** Both registries
+			// are written by `foldFile`, which runs when a file's whole token walk ENDS — so an alias declared
+			// in the file being swept reads as undeclared, but one declared in a file the walk reached EARLIER
+			// is already registered. The walk's order is the filesystem's and the loader deliberately does not
+			// sort it (`StdlibLoader`'s header).
 			//
 			// ⇒ Gated, the sweep answers from the TOKENS ALONE and records the same bare `named` whatever the
-			// walk's order — which is the answer the SAME-FILE case already had, so the gate deletes the
-			// cross-file exception rather than introducing a new path. A swept `named` is exactly what the READ
-			// doors exist to repair (`ProgramSignatures.declaredSlotType` for a field / array element / tuple
-			// element, `resolveNamedAlias` for a call result), and repairing it is now the only route rather
-			// than one of two that happened to agree.
-			//
-			// ⚠ **MEASURED, A3e** — the same two-file program staged in both walk orders, compiled with the
-			// same output path and compared BYTE FOR BYTE: a generic alias and a function alias at a struct
-			// field, a method return and a free return were already byte-identical, so what the gate removes is
-			// a structural coincidence rather than a wrong answer. It is a coincidence that had already been
-			// spent once: this arm's comment asserted the sweep never reached it and that a generic alias is
-			// "never a swept value type", and both halves were false.
+			// walk's order. A swept `named` is exactly what the READ doors exist to repair
+			// (`ProgramSignatures.declaredSlotType` for a field / array element / tuple element,
+			// `resolveNamedAlias` for a call result), and they are the only route that repairs it.
 			//
 			// ⚠ **THE TUPLE-ALIAS ARM BELOW IS DELIBERATELY OUTSIDE THIS GATE — the asymmetry is in WHEN the
-			// registry is written, and it is measured.** `recordTupleAlias` writes DURING the walk, not at
+			// registry is written.** `recordTupleAlias` writes DURING the walk, not at
 			// `foldFile`, so for a tuple alias the sweep's RESOLVED answer is the common case and the bare
 			// `named` is the rare cross-file one. Gating it would move every `Array with <a tuple alias>` onto
-			// that rare spelling, and a generic instance's stored ARGUMENT is read RAW by seven index doors
-			// (element size, mangled name, canonical name, owned-ness, the instantiation-kind gates) — measured,
-			// it changed the emitted element size in `tuples/value-tuple-escaping-into-array-stays-heap` and
+			// that rare spelling, and a generic instance's stored ARGUMENT is read RAW by the index doors
+			// (element size, mangled name, canonical name, owned-ness, the instantiation-kind gates), so gating
+			// it changes the emitted element size in `tuples/value-tuple-escaping-into-array-stays-heap` and
 			// the answer of `tuples/array-of-managed-element-tuples-drops-each`. Its cross-file order dependence
 			// is real and is fixed at the READ doors instead; see `ProgramSignatures.declaredSlotType`.
 			//
@@ -36165,25 +36156,24 @@ export type Parser
 	// a DECLARATION position (a parameter, a return clause) is read outside of.
 	// ⚠⚠ **THE ALIAS REGISTRIES ARE READ IN THE REAL PARSE ONLY, ON `allFilesFolded` (W49) — the gate
 	// `parseTypeReference`'s own alias arms sit behind, arriving here for the same two reasons.**
-	//   1. **IT WAS A PROPERTY OF THE DISK.** Both sets are written by `recordGenericAlias`, which `foldFile`
-	//      calls when a file's token walk ENDS — so during the sweep an alias declared in the file being swept
-	//      always read as absent while one declared in a file the walk reached EARLIER did not, and the SWEEP's
-	//      answer is the one the whole-program column stores.
-	//   2. **AND THE STORED ANSWER IS NOW REDUNDANT FOR AN ALIAS, WHICH IS WHAT MAKES THE GATE FREE.** A2m's
-	//      warning against suppressing the root here was measured BEFORE A3e gated `parseTypeReference` on
-	//      `allFilesFolded`; since that gate, a swept alias-typed position keeps its bare `named` in EVERY file
-	//      order, so `ProgramSignatures.derivedAliasSurfaceBits` answers for it at the read door in every
-	//      order. What the sweep stores for an alias could therefore only ever AGREE with the derivation or be
-	//      WRONG — and it was wrong, because it read a whole-program set for a FILE-SCOPED name.
+	//   1. **UNGATED, THE ANSWER WOULD BE A PROPERTY OF THE DISK.** Both sets are written by
+	//      `recordGenericAlias`, which `foldFile` calls when a file's token walk ENDS — so during the sweep an
+	//      alias declared in the file being swept reads as absent while one declared in a file the walk
+	//      reached EARLIER does not, and the SWEEP's answer is the one the whole-program column stores.
+	//   2. **AND THE STORED ANSWER IS REDUNDANT FOR AN ALIAS, WHICH IS WHAT MAKES THE GATE FREE.** Because
+	//      `parseTypeReference` is gated on `allFilesFolded` too, a swept alias-typed position keeps its bare
+	//      `named` in EVERY file order, so `ProgramSignatures.derivedAliasSurfaceBits` answers for it at the
+	//      read door in every order. What the sweep would store for an alias could only ever AGREE with the
+	//      derivation or be WRONG, because it reads a whole-program set for a FILE-SCOPED name.
 	// ⇒ The sweep answers from the TOKENS ALONE (the reserved spelling, which is a token fact and needs no
 	// registry), and the doors only the real parse reaches — a PARAMETER, a static call — ask the registries
 	// where they are complete and can be scoped.
 	//
 	// ⚠ **AND THE READ IS SCOPED TO THIS FILE.** A plain `typealias` is file-local, so two files may each
 	// declare `B` and mean different things; these sets are keyed by the bare name with no file in the key.
-	// MEASURED in both file orders: with `typealias B = __ManagedMemory with Byte` in one file and
-	// `typealias B = Array with Int` in another, the second file's own `B` wore the BUFFER's surface — its
-	// parameter refused `count`, and its `B.create()` routed to the buffer's two-argument static.
+	// With `typealias B = __ManagedMemory with Byte` in one file and `typealias B = Array with Int` in
+	// another, an unscoped read would give the second file's own `B` the BUFFER's surface — its parameter
+	// refusing `count`, and its `B.create()` routing to the buffer's two-argument static.
 	function spellingDenotesBufferSurface(spelling ByteArray) returns bool
 		if spelling.equals(ManagedMemoryTypeName) 'spelledTheReservedNameItself'
 			return true
@@ -36279,10 +36269,10 @@ export type Parser
 	// by the real parse), so this catches only the sweep-sourced types. A `named` that is neither a function
 	// alias (`function`) NOR a generic-instance alias (`genericInstance(gid)`, P1.6-B2 — `returns StrBox`, so
 	// `let b = make()` binds a real generic instance with its type-arg managed drop, not an opaque `named` a
-	// field access rejects) NOR a TUPLE alias (`structRef`, A3e), and every non-`named` type, pass through
+	// field access rejects) NOR a TUPLE alias (`structRef`), and every non-`named` type, pass through
 	// untouched. The SWEEP records a return type before the index knows its aliases, so all three arrive here
-	// `named`; a name is a struct, a float alias, a function alias, a generic alias, a tuple alias or a ranged
-	// int — NEVER two — so ONE `nameOf` decides which, idempotent and foldable alongside
+	// `named`. Two files may hold one name in different kinds, so `denotedAliasForm` decides which form the
+	// name denotes for `scopeFilePath`, idempotent and foldable alongside
 	// `resolveNamedStruct`/`resolveFloatAliasType`.
 	// `scopeFilePath` is `resolveNamedStruct`'s, for its reason — this is the same repair one registry over.
 	function resolveNamedAlias(t MaxonType, scopeFilePath FilePath) returns MaxonType
