@@ -116,7 +116,6 @@ new
 Multi-file version: accessing global struct fields inside an untaken if branch must not corrupt function parameters across file boundaries. The exported aliases use names that don't clash with stdlib (which itself exports `ByteArray` from `stdlib/File.maxon`) — bare cross-file references to a name with multiple visible declarations would otherwise raise E3063.
 ```maxon
 // --- file: api/0-Types.maxon
-typealias Byte = int(0 to u8.max)
 export typealias EntryBytes = Array with Byte
 public typealias EntryCount = int(0 to u64.max)
 

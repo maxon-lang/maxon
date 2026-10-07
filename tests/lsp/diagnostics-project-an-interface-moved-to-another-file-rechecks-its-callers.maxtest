@@ -6,6 +6,11 @@ let MovedInterfaceBufferFileName = "c.maxon"
 let MovedInterfaceNarrowItem = "module typealias Item = int(0 to 3)\n"
 let MovedInterfaceWideItem = "module typealias Item = int(0 to 100)\n"
 let MovedInterfaceDeclaration = "\nmodule interface Store\n\tfunction put(item Item) returns Item\nend 'Store'\n"
+let MovedInterfaceWideDeclaration = "\nmodule interface Store\n\tfunction put(item wide.Item) returns wide.Item\nend 'Store'\n"
+let MovedInterfaceNarrowUserFileName = "e.maxon"
+let MovedInterfaceWideUserFileName = "d.maxon"
+let MovedInterfaceNarrowUser = "function narrow(x Item) returns Item\n\treturn x\nend 'narrow'\n"
+let MovedInterfaceWideUser = "function widen(x wide.Item) returns wide.Item\n\treturn x\nend 'widen'\n"
 let MovedInterfaceBufferSource = "function stock(store Store)\n\t_ = store.put(50)\nend 'stock'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let MovedInterfaceCode = "E3005"
 let MovedInterfaceMessage = "Value 50 is outside the range of 'Item' (int(0 to 3))"
@@ -17,10 +22,12 @@ test 'moving an interface to a file whose formal is wider clears the range error
 	writeCorpusFile(root, fileName: MovedInterfaceFirstFileName, content: "{MovedInterfaceNarrowItem}{MovedInterfaceDeclaration}")
 	writeCorpusFile(wide, fileName: MovedInterfaceSecondFileName, content: MovedInterfaceWideItem)
 	writeCorpusFile(wide, fileName: MovedInterfaceBufferFileName, content: MovedInterfaceBufferSource)
+	writeCorpusFile(root, fileName: MovedInterfaceNarrowUserFileName, content: MovedInterfaceNarrowUser)
+	writeCorpusFile(wide, fileName: MovedInterfaceWideUserFileName, content: MovedInterfaceWideUser)
 
 	var move = CorpusDiskEditArray.create()
 	move.push(CorpusDiskEdit.wrote(root, fileName: MovedInterfaceFirstFileName, content: MovedInterfaceNarrowItem))
-	move.push(CorpusDiskEdit.wrote(wide, fileName: MovedInterfaceSecondFileName, content: "{MovedInterfaceWideItem}{MovedInterfaceDeclaration}"))
+	move.push(CorpusDiskEdit.wrote(wide, fileName: MovedInterfaceSecondFileName, content: "{MovedInterfaceWideItem}{MovedInterfaceWideDeclaration}"))
 
 	let probes = probeProjectCheckAcrossAnEdit(root, fileName: "{MovedInterfaceWideDirName}/{MovedInterfaceBufferFileName}", content: MovedInterfaceBufferSource, diskEdits: move, editedContent: MovedInterfaceBufferSource)
 

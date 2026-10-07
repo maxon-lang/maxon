@@ -517,7 +517,7 @@ project has been parsed.
 ```maxon
 // --- file: aaa_alias.maxon
 module extension Sorter
-	typealias Comparator = function(Element, Element) returns Element
+	module typealias Comparator = function(Element, Element) returns Element
 end 'Sorter'
 
 // --- file: zzz_consumer.maxon

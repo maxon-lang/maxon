@@ -602,7 +602,7 @@ and it is pinned so the two directions cannot come apart.
 export typealias Num = int(0 to 200)
 
 export type Holder
-	typealias Idx = int(0 to 100)
+	export typealias Idx = int(0 to 100)
 
 	export var v as Num
 

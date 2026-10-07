@@ -136,7 +136,9 @@ view's `count()` a `BytePos`.
 
 The inner typealiases a library type's `public` members name are `public` as well and can be written
 qualified: `Array.ElementIterator`, `Array.ElementMemory`, `Map.Entry`, `List.ListIter`, `Set.SetIter`,
-`Vector.VectorIter` and the like.
+`Vector.VectorIter` and the like. The others are `Array.ElementIterable`, `Array.ArrayIter`, `Array.ElementArray`,
+`HttpHeaders.CaseInsensitiveHeaders`, `Iterable.WithIterSelf`, `List.EManagedList`,
+`Map.IterKeyArray`, `Map.IterValueArray`, `Map.IterStateArray`, `Set.IterElementArray` and `String.ByteMemory`.
 
 ### Target support
 
