@@ -56,11 +56,14 @@ typealias LoopHead = int(0 to 1000) implements BlockId          // range fits th
 ```
 An ancestor narrows to a subtype only by cast; two subtypes of one parent are different types. Arithmetic
 over two subtypes lands in a destination either operand's alias satisfies; elsewhere it is their nearest
-common ancestor. `Array` indexes, `count()` included, are `ElementIndex`.
+common ancestor. `Array` indexes are `ElementIndex`; `count()` is a `Count`, which implements `ElementIndex`.
+
+Every typealias declaration is its own type — two files declaring one name over one range included — and
+`as` converts between them.
 
 Storage in arrays and globals uses the smallest fitting integer width (u8/i8, u16/i16, u32/i32, or i64). All arithmetic uses 64-bit operations regardless of storage type.
 
-Standard library aliases: `ExitCode`, `HashValue`, `Codepoint`, `NetworkPort`. Each module also defines its own domain-specific numeric aliases (e.g. `String.ByteCount`, `String.GraphemeCount`, `Math.Real`) — declare a local typealias for your own domain rather than reusing a generic `Count`/`Index`.
+Standard library aliases: `ExitCode`, `HashValue`, `Codepoint`, `NetworkPort`, `Count`. Each module also defines its own domain-specific numeric aliases (e.g. `String`'s `BytePos` and `GraphemeIndex`, `Math`'s `Real`) — declare a local typealias for your own domain.
 
 ## Literals
 
@@ -350,7 +353,7 @@ export var sharedCounter = 0                    // visible everywhere
 module var featureState = 0                     // visible to this directory subtree
 ```
 
-When two directories both expose the same bare name, a third file's unqualified reference is ambiguous: **E3095** for functions, **E3063** for a type name of any kind (typealias, type, enum, union, interface). A type name the standard library also declares is ambiguous the same way, unless the reading file declares it itself. Qualify to disambiguate: `api.format(...)`, `lib.fmt.Score`, `export.Score` for the project root, `stdlib.Score` for the library. Two nameable type declarations of one name in one directory are refused at the declaration (**E3061** for two typealiases, **E3006** otherwise). A directory that cannot be written as a qualifier is **E3182**. A type that is not visible hides its members too: reaching a field or method through a value of it is **E3008**.
+When two directories both expose the same bare name, an unqualified reference is ambiguous: **E3095** for functions, **E3063** for a type name of any kind (typealias, type, enum, union, interface) — in every file, a file declaring one of them included, where the fix is to rename its own. A project declaration of a name the standard library also declares is what the bare name means, and the library's is `stdlib.Score`. Qualify to disambiguate: `api.format(...)`, `lib.fmt.Score`, `export.Score` for the project root. Two nameable type declarations of one name in one directory are refused at the declaration (**E3061** for two typealiases, **E3006** otherwise). A directory that cannot be written as a qualifier is **E3182**. A type that is not visible hides its members too: reaching a field or method through a value of it is **E3008**.
 
 ## Conditional Compilation
 ```maxon
@@ -586,7 +589,8 @@ type Map uses Key, Value where Key is Hashable           // single constraint
 type Pair uses A, B where A is Hashable and Equatable    // multiple interfaces with 'and'
 type Multi uses A, B where A is Hashable, B is Cloneable // multiple params with ','
 
-// Per-instance typealiases: ranged aliases inside generics are distinct per instantiation
+// Per-instance typealiases: ranged aliases inside generics are distinct per instantiation.
+// An inner typealias takes its own modifier; unmarked, it is private to its file.
 type Pool uses T
 	export typealias Idx = int(0 to u64.max)
 	export function get(index Idx) returns T

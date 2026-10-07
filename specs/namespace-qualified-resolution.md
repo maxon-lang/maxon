@@ -26,13 +26,18 @@ DISCRIMINATE:
   answer at the qualified spelling exactly as they answer at the bare one;
 - a bare name declared as a free function in several directories means the one declaration the caller
   may name — a declaration it cannot see never counts toward ambiguity, and two visible ones are E3095;
-- a bare TYPE name means the reading file's own declaration when it has one, and otherwise the one
-  declaration it may name; two visible ones — from two directories, or a directory and the standard
-  library — are E3063, whose candidate list names each by its qualified spelling;
+- a bare TYPE name means the one AUTHOR declaration the reading file may name; two visible author
+  declarations are E3063 in every file, including a file that declares one of them, whose remedy is to rename
+  its own. The candidate list names each by its qualified spelling. The standard library's declarations never
+  count toward that ambiguity: beside one, a visible author declaration is what the bare name means;
+- a typealias's identity is its DECLARATION: two aliases of one spelling declared in two places are two
+  types even over one range, so a value of one reaches the other (an operator, an argument, a return, a
+  store, an `if` or `match` join) only through a cast, and E3005 otherwise;
 - so that each qualified spelling names exactly one declaration, a directory holds at most one
   NAMEABLE (`export`, `public` or `module`) declaration of a type name: a second one in another file of the
   same directory is refused at its declaration, E3061 for two aliases and E3006 otherwise. A file-private
-  alias beside it is legal and means itself in its own file;
+  alias beside it is legal, and is no second meaning for any other file; in its own file the bare name is
+  ambiguous;
 - a `Type.method` reading of the same tokens always wins, so a directory may be named after a type
   without moving a single call;
 - the CALL position and the TYPE position read one and the same namespace, segment for segment — a
@@ -59,8 +64,6 @@ export function shout()
 end 'shout'
 
 // --- file: lib/top.maxon
-export typealias Integer = int(0 to 125)
-
 export function twice(v Integer) returns Integer
 	return v + v
 end 'twice'
@@ -105,9 +108,9 @@ end 'main'
 
 <!-- test: error.qualified-alias-out-of-its-own-range -->
 The same two declarations, with a value that fits the WIDER one written against the narrower
-qualified name. The refusal quotes the qualified spelling the author wrote and the bounds of the
-declaration in that directory — proof that the qualifier selected a declaration rather than merely
-being accepted as a name.
+qualified name, then widened to `api.Score`. The refusal quotes the qualified spelling the author wrote
+and the bounds of the declaration in that directory — proof that the qualifier selected a declaration
+rather than merely being accepted as a name.
 ```maxon
 // --- file: api/types.maxon
 export typealias Score = int(0 to 100)
@@ -118,7 +121,7 @@ export typealias Score = int(0 to 10)
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let b = 50 as legacy.Score
-	return b
+	return b as api.Score
 end 'main'
 ```
 ```maxoncstderr
@@ -127,7 +130,7 @@ error E3005: app/specs/namespace-qualified-resolution/error.qualified-alias-out-
 
 <!-- test: error.a-qualified-alias-beside-a-same-named-type-takes-its-own-declarations-range -->
 An alias whose name another directory's type also holds is still selected by its qualifier: `stdlib.Byte` is
-the library's `0 to 255` even in a file whose own `Byte` is wider.
+the library's `0 to 255` even in a file whose own alias of that primitive is wider.
 ```maxon
 // --- file: a/t.maxon
 export type Byte
@@ -139,12 +142,12 @@ export type Byte
 end 'Byte'
 
 // --- file: app/main.maxon
-typealias Byte = int(0 to 1000)
+typealias WideByte = int(0 to 1000)
 
 function main() returns ExitCode
-	let wide = 300 as Byte
+	let wide = 300 as WideByte
 	let narrow = 300 as stdlib.Byte
-	return (wide - narrow) as ExitCode + a.Byte.make().v
+	return (wide - (narrow as WideByte)) as ExitCode + a.Byte.make().v
 end 'main'
 ```
 ```maxoncstderr
@@ -195,8 +198,6 @@ public function make() returns Integer
 end 'make'
 
 // --- file: app/main.maxon
-export typealias Integer = int(0 to 125)
-
 public type Point
 	export var x as Integer
 
@@ -386,8 +387,6 @@ export function pick() returns Integer
 end 'pick'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick() returns Integer
 	return 5
 end 'pick'
@@ -422,8 +421,6 @@ export function localCaller() returns Integer
 end 'localCaller'
 
 // --- file: beta/b.maxon
-public typealias Integer = int(0 to 125)
-
 public function pick() returns Integer
 	return 5
 end 'pick'
@@ -575,8 +572,6 @@ export function pick(n Integer = 3) returns Integer
 end 'pick'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick(n Integer = 5) returns Integer
 	return n
 end 'pick'
@@ -609,8 +604,6 @@ export function pick() returns Integer
 end 'pick'
 
 // --- file: beta/y.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick() returns Integer
 	return 5
 end 'pick'
@@ -640,15 +633,11 @@ export function pick() returns Integer
 end 'pick'
 
 // --- file: beta/f.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick() returns Integer
 	return 2
 end 'pick'
 
 // --- file: gamma/f.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick() returns Integer
 	return 4
 end 'pick'
@@ -678,8 +667,6 @@ public function pick() returns Integer
 end 'pick'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick() returns Integer
 	return 5
 end 'pick'
@@ -744,8 +731,6 @@ export function useAlpha() returns Integer
 end 'useAlpha'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(0 to 125)
-
 export function helper() returns Integer
 	return 7
 end 'helper'
@@ -779,8 +764,6 @@ export function useAlpha() returns Integer
 end 'useAlpha'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(0 to 125)
-
 export function helper(s String) returns Integer
 	return s.byteLength() as Integer
 end 'helper'
@@ -826,8 +809,6 @@ private one would be refused at the cast rather than merely answer differently; 
 reachable with each call reaching its own declaration.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(0 to 125)
-
 function helper(raw Integer) returns bool
 	return raw > 3
 end 'helper'
@@ -871,8 +852,6 @@ export function helper(raw Integer) returns Integer
 end 'helper'
 
 // --- file: zeta/a.maxon
-typealias Integer = int(0 to 125)
-
 function helper(raw Integer) returns bool
 	return raw > 3
 end 'helper'
@@ -901,9 +880,7 @@ true 8
 The same pair with identical signatures: `b/`'s exported `larger` returns the smaller argument, so `a 7 main 2` is only reachable with each call reaching its own declaration.
 ```maxon
 // --- file: a/a.maxon
-typealias Count = int(0 to 100)
-
-function larger(a Count, b Count) returns Count
+function larger(a Tally, b Tally) returns Tally
 	if a > b 'first'
 		return a
 	end 'first'
@@ -916,9 +893,9 @@ export function runA()
 end 'runA'
 
 // --- file: b/b.maxon
-export typealias Count = int(0 to 100)
+export typealias Tally = int(0 to 100)
 
-export function larger(a Count, b Count) returns Count
+export function larger(a Tally, b Tally) returns Tally
 	if a > b 'first'
 		return b
 	end 'first'
@@ -958,8 +935,6 @@ public function useRoot() returns Integer
 end 'useRoot'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(0 to 125)
-
 export function helper() returns Integer
 	return 7
 end 'helper'
@@ -990,8 +965,6 @@ export function useOther() returns Integer
 end 'useOther'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(0 to 125)
-
 export function helper() returns Integer
 	return 7
 end 'helper'
@@ -1011,8 +984,6 @@ A bare name READ as a function value answers the same question a bare call does:
 the file may name, here beta's, whose return type the value's calls carry.
 ```maxon
 // --- file: alpha/a.maxon
-typealias Integer = int(0 to 125)
-
 function helper(raw Integer) returns bool
 	return raw > 3
 end 'helper'
@@ -1057,8 +1028,6 @@ export function helper(raw Integer) returns Integer
 end 'helper'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(0 to 125)
-
 export function helper(raw Integer) returns Integer
 	return raw + 7
 end 'helper'
@@ -1070,7 +1039,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: app/<fragment>:18:10: Ambiguous bare function name 'helper' used as a value: more than one visible declaration matches it. Qualify it as one of: alpha.helper, beta.helper
+error E3095: app/<fragment>:16:10: Ambiguous bare function name 'helper' used as a value: more than one visible declaration matches it. Qualify it as one of: alpha.helper, beta.helper
 ```
 
 
@@ -1086,8 +1055,6 @@ export function helper(raw Integer) returns Integer
 end 'helper'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(0 to 125)
-
 export function helper(raw Integer) returns Integer
 	return raw + 7
 end 'helper'
@@ -1136,8 +1103,6 @@ export function risky(raw Integer) returns Integer
 end 'risky'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(0 to 125)
-
 export enum Oops implements Error
 	bad
 end 'Oops'
@@ -1157,7 +1122,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3101: app/<fragment>:26:10: Cannot use throwing function 'beta.risky' as a value: it throws 'Oops', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.
+error E3101: app/<fragment>:24:10: Cannot use throwing function 'beta.risky' as a value: it throws 'Oops', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.
 ```
 
 
@@ -1178,15 +1143,11 @@ public function useRoot() returns Integer
 end 'useRoot'
 
 // --- file: alpha/f.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick() returns Integer
 	return 2
 end 'pick'
 
 // --- file: zulu/f.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick() returns Integer
 	return 4
 end 'pick'
@@ -1197,7 +1158,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: app/<fragment>:29:10: Ambiguous bare-name call to 'pick': more than one visible declaration matches it. Qualify it as one of: alpha.pick, zulu.pick
+error E3095: app/<fragment>:25:10: Ambiguous bare-name call to 'pick': more than one visible declaration matches it. Qualify it as one of: alpha.pick, zulu.pick
 ```
 
 
@@ -1491,8 +1452,6 @@ export function pick() returns Integer
 end 'pick'
 
 // --- file: mid/f.maxon
-export typealias Integer = int(0 to 125)
-
 function pick() returns Integer
 	return 2
 end 'pick'
@@ -1502,8 +1461,6 @@ export function useMid() returns Integer
 end 'useMid'
 
 // --- file: zulu/f.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick() returns Integer
 	return 4
 end 'pick'
@@ -1514,7 +1471,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: app/<fragment>:29:10: Ambiguous bare-name call to 'pick': more than one visible declaration matches it. Qualify it as one of: alpha.pick, zulu.pick
+error E3095: app/<fragment>:25:10: Ambiguous bare-name call to 'pick': more than one visible declaration matches it. Qualify it as one of: alpha.pick, zulu.pick
 ```
 
 
@@ -1541,8 +1498,6 @@ file is compiled first or sorts first: `Point/` precedes `app/` in path byte ord
 `app/main.maxon` is still not the one named.
 ```maxon
 // --- file: app/main.maxon
-typealias Integer = int(0 to 125)
-
 export type Point
 	export var x as Integer
 
@@ -1564,14 +1519,12 @@ export function create() returns Integer
 end 'create'
 
 // --- file: other/o.maxon
-export typealias Integer = int(0 to 125)
-
 export function create() returns Integer
 	return 5
 end 'create'
 ```
 ```maxoncstderr
-error E3006: Point/specs/namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type.maxon:21:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+error E3006: Point/specs/namespace-qualified-resolution/error.contested-free-function-in-a-directory-named-after-a-type.maxon:19:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
 ```
 
 
@@ -1588,8 +1541,6 @@ export function create() returns Integer
 end 'create'
 
 // --- file: app/main.maxon
-typealias Integer = int(0 to 125)
-
 export type Point
 	export var x as Integer
 
@@ -1604,8 +1555,6 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: other/o.maxon
-export typealias Integer = int(0 to 125)
-
 export function create() returns Integer
 	return 5
 end 'create'
@@ -1642,21 +1591,17 @@ function main() returns ExitCode
 end 'main'
 
 // --- file: Point/p.maxon
-export typealias Integer = int(0 to 125)
-
 export function create() returns Integer
 	return 3
 end 'create'
 
 // --- file: other/o.maxon
-export typealias Integer = int(0 to 125)
-
 export function create() returns Integer
 	return 5
 end 'create'
 ```
 ```maxoncstderr
-error E3006: Point/specs/namespace-qualified-resolution/error.contested-free-function-collides-with-a-fieldless-method.maxon:20:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
+error E3006: Point/specs/namespace-qualified-resolution/error.contested-free-function-collides-with-a-fieldless-method.maxon:18:17: duplicate definition of function 'Point.create' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function
 ```
 
 
@@ -1667,8 +1612,6 @@ and its `helper` is still contested with `other/`'s — but `type Point` declare
 static-call door, the directory's `helper` through the namespace door, in one expression. 9*10+3.
 ```maxon
 // --- file: Point/p.maxon
-export typealias Integer = int(0 to 125)
-
 export function helper() returns Integer
 	return 3
 end 'helper'
@@ -1681,8 +1624,6 @@ public function helper() returns Integer
 end 'helper'
 
 // --- file: app/main.maxon
-export typealias Integer = int(0 to 125)
-
 public type Point
 	export var x as Integer
 
@@ -1713,8 +1654,6 @@ export function helper() returns Integer
 end 'helper'
 
 // --- file: app/main.maxon
-export typealias Integer = int(0 to 125)
-
 public type Point
 	export var x as Integer
 
@@ -1748,15 +1687,11 @@ export function pick() returns Integer
 end 'pick'
 
 // --- file: alpha/f.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick() returns Integer
 	return 2
 end 'pick'
 
 // --- file: mid/f.maxon
-export typealias Integer = int(0 to 125)
-
 export function pick() returns Integer
 	return 4
 end 'pick'
@@ -1767,7 +1702,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: app/specs/namespace-qualified-resolution/error.three-way-ambiguous-bare-call.maxon:25:9: Ambiguous bare-name call to 'pick': more than one visible declaration matches it. Qualify it as one of: alpha.pick, mid.pick, zulu.pick
+error E3095: app/specs/namespace-qualified-resolution/error.three-way-ambiguous-bare-call.maxon:21:9: Ambiguous bare-name call to 'pick': more than one visible declaration matches it. Qualify it as one of: alpha.pick, mid.pick, zulu.pick
 ```
 
 
@@ -1864,8 +1799,6 @@ export typealias Integer = int(i64.min to i64.max)
 export function pick() returns Integer
 	return 5
 end 'pick'
-
-export typealias Integer = int(i64.min to i64.max)
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let v = try pick() otherwise 0
@@ -1873,7 +1806,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: app/<fragment>:20:10: try requires a throwing function: 'pick' does not throw'
+error E3055: app/<fragment>:18:10: try requires a throwing function: 'pick' does not throw'
 ```
 
 
@@ -1933,8 +1866,6 @@ export typealias Integer = int(i64.min to i64.max)
 export function pick() returns Integer
 	return 5
 end 'pick'
-
-export typealias Integer = int(i64.min to i64.max)
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let v = try beta.pick() otherwise 0
@@ -1942,7 +1873,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: app/specs/namespace-qualified-resolution/error.contested-free-function-throws-is-not-inherited.maxon:20:10: try requires a throwing function: 'beta.pick' does not throw'
+error E3055: app/specs/namespace-qualified-resolution/error.contested-free-function-throws-is-not-inherited.maxon:18:10: try requires a throwing function: 'beta.pick' does not throw'
 ```
 
 
@@ -1967,9 +1898,9 @@ declaration, while `__file__`/`__line__` prove the two skipped slots still answe
 `app/main.maxon` when main calls, each directory's own file when the sibling inside it does.
 ```maxon
 // --- file: alpha/a.maxon
-export typealias Severity = int(0 to 9)
+export typealias AlphaSeverity = int(0 to 9)
 
-export function note(tag String, level Severity = 3, file String = __file__, at SourceLineNumber = __line__) returns SourceLineNumber
+export function note(tag String, level AlphaSeverity = 3, file String = __file__, at SourceLineNumber = __line__) returns SourceLineNumber
 	print("{tag} lvl={level} {file}:{at}\n")
 	return at
 end 'note'
@@ -1979,9 +1910,9 @@ export function fromAlpha() returns SourceLineNumber
 end 'fromAlpha'
 
 // --- file: beta/b.maxon
-export typealias Severity = int(0 to 9)
+export typealias BetaSeverity = int(0 to 9)
 
-export function note(tag String, level Severity = 5, file String = __file__, at SourceLineNumber = __line__) returns SourceLineNumber
+export function note(tag String, level BetaSeverity = 5, file String = __file__, at SourceLineNumber = __line__) returns SourceLineNumber
 	print("{tag} lvl={level} {file}:{at}\n")
 	return at
 end 'note'
@@ -2021,16 +1952,13 @@ nominal rule of `nominal-function-alias.md` applies to them exactly as it does t
 these are writable.
 ```maxon
 // --- file: api/types.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 export typealias Score = function(n Integer) returns Integer
 
 // --- file: legacy/types.maxon
-typealias Integer = int(i64.min to i64.max)
 export typealias Score = function(n Integer) returns Integer
 
 // --- file: app/main.maxon
-typealias Integer = int(i64.min to i64.max)
-
 function addOne(n Integer) returns Integer
 	return n + 1
 end 'addOne'
@@ -2050,7 +1978,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: app/<fragment>:27:10: argument type mismatch for 'f': expected 'api.Score', got 'legacy.Score'
+error E3005: app/<fragment>:24:10: argument type mismatch for 'f': expected 'api.Score', got 'legacy.Score'
 ```
 
 <!-- test: two-directories-export-one-alias-over-two-primitives-and-both-stand -->
@@ -2110,9 +2038,10 @@ end 'main'
 error E3061: api/<fragment>:6:18: Duplicate typealias 'Score'
 ```
 
-<!-- test: a-file-private-and-an-exported-alias-in-one-directory-coexist -->
-A file-private alias is reachable from its own file alone, so it is no second meaning for anyone else and the
-pair in one directory is legal.
+<!-- test: error.a-file-private-alias-beside-its-directorys-exported-one-is-ambiguous-in-its-own-file -->
+A file-private alias is reachable from its own file alone, so it is no second meaning for any other file — but
+its own file sees both declarations, and its bare `Score` is ambiguous there. The remedy is to rename the
+file-private alias.
 ```maxon
 // --- file: api/a.maxon
 typealias Score = int(0 to 10)
@@ -2130,24 +2059,24 @@ function main() returns ExitCode
 	return (s + (small() as Score)) as ExitCode
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3063: api/<fragment>:6:14: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, or rename this file's own declaration
 ```
 
-<!-- test: error.a-root-export-beside-the-librarys-alias-names-the-root-as-export -->
-A ROOT declaration's qualified spelling is `export.X`: the root namespace has no directory name, and `export`
-is a reserved word, so no directory can ever be spelled as a qualifier head with it.
+<!-- test: a-root-export-beside-the-librarys-alias-is-what-the-bare-name-means -->
+The standard library never takes part in ambiguity: beside the library's `Byte`, the bare `Byte` is the root's
+alias, whose range admits 500.
 ```maxon
 // --- file: wide.maxon
-export typealias Byte = int(0 to 1000)
+module typealias Byte = int(0 to 1000)
 // --- file: app/main.maxon
 function main() returns ExitCode
-	let b = 5 as Byte
-	return b
+	let b = 500 as Byte
+	return (b - 458) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3063: app/<fragment>:6:15: Ambiguous type name 'Byte': more than one visible declaration matches it. Qualify it as one of: export.Byte, stdlib.Byte
+```exitcode
+42
 ```
 
 <!-- test: the-root-namespace-is-named-by-export -->
@@ -2187,7 +2116,8 @@ end 'take'
 function main() returns ExitCode
 	let f = export.pick
 	export.shout()
-	return take(export.Point.make()) + (export.pick() as ExitCode) + (f() as ExitCode) + (widen(500 as export.Byte) as ExitCode)
+	let b = 500 as export.Byte
+	return take(export.Point.make()) + (export.pick() as ExitCode) + (f() as ExitCode) + (widen(b) as ExitCode)
 end 'main'
 ```
 ```exitcode
@@ -2233,10 +2163,10 @@ error E3182: Directory 'runtime' cannot be a namespace: 'runtime' already names 
 ```
 
 
-<!-- test: a-qualified-type-reaches-its-declaration-past-the-readers-own-alias -->
-A file's own declaration wins its bare name, and the qualified spelling still reaches the other directory's
-declaration: `a.Foo` is the struct in every position — a parameter type, a static call's base and the field
-read through the parameter — while `Foo` written bare in the same file is the file's own ranged alias.
+<!-- test: error.a-files-own-alias-beside-another-directorys-type-is-ambiguous-bare -->
+A file's own declaration does not win its bare name: the file also sees `a.Foo`, so `Foo` written bare is
+ambiguous there even though the file declares one of the two. The qualified spellings stay legal; the remedy in
+the declaring file is to rename its alias.
 ```maxon
 // --- file: a/foo.maxon
 export type Foo
@@ -2259,13 +2189,44 @@ function main() returns ExitCode
 	return take(a.Foo.make()) + (local as ExitCode)
 end 'main'
 ```
+```maxoncstderr
+error E3063: app/<fragment>:19:19: Ambiguous type name 'Foo': more than one visible declaration matches it. Qualify it as one of: a.Foo, or rename this file's own declaration
+```
+
+<!-- test: a-qualified-type-reaches-its-declaration-past-the-readers-own-alias -->
+The qualified spelling reaches the other directory's declaration in a file that also declares a ranged alias of
+its own: `a.Foo` is the struct in every position — a parameter type, a static call's base and the field read
+through the parameter — while the file's alias, renamed to `LocalFoo` so its bare name is not ambiguous, is a
+ranged integer.
+```maxon
+// --- file: a/foo.maxon
+export type Foo
+	export let v as ExitCode
+
+	export static function make() returns Foo
+		return Foo{v: 42}
+	end 'make'
+end 'Foo'
+
+// --- file: app/main.maxon
+typealias LocalFoo = int(0 to 10)
+
+function take(f a.Foo) returns ExitCode
+	return f.v
+end 'take'
+
+function main() returns ExitCode
+	let local = 3 as LocalFoo
+	return take(a.Foo.make()) + (local as ExitCode)
+end 'main'
+```
 ```exitcode
 45
 ```
 
 <!-- test: export-qualified-type-reaches-the-roots-declaration-past-the-readers-own-alias -->
-The same rule through the root qualifier: `export.Foo` is the root module's struct, not the reading file's own
-alias of that name.
+The same rule through the root qualifier: `export.Foo` is the root module's struct in a parameter type and a
+static call's base, beside the reading file's own ranged alias.
 ```maxon
 // --- file: r.maxon
 module type Foo
@@ -2277,14 +2238,14 @@ module type Foo
 end 'Foo'
 
 // --- file: app/main.maxon
-typealias Foo = int(0 to 10)
+typealias LocalFoo = int(0 to 10)
 
 function take(f export.Foo) returns ExitCode
 	return f.v
 end 'take'
 
 function main() returns ExitCode
-	let local = 3 as Foo
+	let local = 3 as LocalFoo
 	return take(export.Foo.make()) + (local as ExitCode)
 end 'main'
 ```
@@ -2293,8 +2254,8 @@ end 'main'
 ```
 
 <!-- test: a-qualified-enum-keeps-its-identity-where-the-files-own-alias-takes-its-name -->
-A file's own typealias takes the bare name, and the qualified spelling still reaches the enum: the value
-`a.Color.red` is the enum's, so `rawValue` reads it, while `Color` written bare in the same file is the alias.
+The qualified spelling reaches the enum in a file that declares a ranged alias of its own: the value
+`a.Color.red` is the enum's, so `rawValue` reads it.
 ```maxon
 // --- file: a/c.maxon
 export enum Color
@@ -2303,10 +2264,10 @@ export enum Color
 end 'Color'
 
 // --- file: app/main.maxon
-typealias Color = int(0 to 10)
+typealias LocalColor = int(0 to 10)
 
 function main() returns ExitCode
-	let local = 3 as Color
+	let local = 3 as LocalColor
 	let d = a.Color.red
 	return (d.rawValue - 38 + local) as ExitCode
 end 'main'
@@ -2365,14 +2326,14 @@ export type Score
 end 'Score'
 
 // --- file: app/main.maxon
-typealias Score = int(0 to 10)
+typealias LocalScore = int(0 to 10)
 
 function scaled(by ExitCode, api ExitCode) returns ExitCode
 	return by + api
 end 'scaled'
 
 function main() returns ExitCode
-	let local = 4 as Score
+	let local = 4 as LocalScore
 	let base = scaled(1, api: 2)
 	return base + api.Score.make().v + (local as ExitCode)
 end 'main'
@@ -2453,8 +2414,8 @@ error E3182: Directory 'my-dir' cannot be a namespace: 'my-dir' is not a name. R
 ```
 
 <!-- test: an-enum-returned-into-a-file-whose-own-alias-takes-its-name-stays-the-enum -->
-A value keeps the type it was declared with when it crosses into a file whose own typealias shares the enum's
-name: `a.pick()` hands back the enum, so its `rawValue` reads and it passes back to `a.rank` as the enum.
+A value keeps the type it was declared with when it crosses into a file that declares a ranged alias of its own:
+`a.pick()` hands back the enum, so its `rawValue` reads and it passes back to `a.rank` as the enum.
 ```maxon
 // --- file: a/c.maxon
 export enum Color
@@ -2471,10 +2432,10 @@ export function rank(c Color) returns ExitCode
 end 'rank'
 
 // --- file: app/main.maxon
-typealias Color = int(0 to 10)
+typealias LocalColor = int(0 to 10)
 
 function main() returns ExitCode
-	let local = 3 as Color
+	let local = 3 as LocalColor
 	let c = a.pick()
 	return (c.rawValue - 38 + local) as ExitCode + a.rank(c) - 41
 end 'main'
@@ -2485,7 +2446,7 @@ end 'main'
 
 <!-- test: a-union-keeps-its-identity-where-the-files-own-alias-takes-its-name -->
 The union twin: a parameter typed `a.Shape`, a value returned by `a.longest()` and the case `a.Shape.dot` are
-all the union, matched on its cases, in a file whose own `Shape` is a ranged alias.
+all the union, matched on its cases, in a file that declares a ranged alias of its own.
 ```maxon
 // --- file: a/s.maxon
 export union Shape
@@ -2498,7 +2459,7 @@ export function longest() returns Shape
 end 'longest'
 
 // --- file: app/main.maxon
-typealias Shape = int(0 to 10)
+typealias LocalShape = int(0 to 10)
 
 function measure(s a.Shape) returns ExitCode
 	match s 'kind'
@@ -2508,7 +2469,7 @@ function measure(s a.Shape) returns ExitCode
 end 'measure'
 
 function main() returns ExitCode
-	let local = 2 as Shape
+	let local = 2 as LocalShape
 	return measure(a.longest()) + measure(a.Shape.dot) + (local as ExitCode)
 end 'main'
 ```
@@ -2539,7 +2500,8 @@ end 'main'
 
 <!-- test: an-authors-alias-reached-bare-and-qualified-beside-another-directorys-is-one-type -->
 Two directories declare `Score`, and only one of them is visible to `a/t.maxon`, so that file's bare `Score` and
-its `a.Score` name one declaration and are one type.
+its `a.Score` name one declaration and are one type. `b`'s module alias is read only inside `b`, where `a`'s
+exported alias is visible too, so it is read there as `b.Score`.
 ```maxon
 // --- file: a/s.maxon
 export typealias Score = int(0 to 100)
@@ -2554,13 +2516,19 @@ end 'mix'
 // --- file: b/s.maxon
 module typealias Score = int(0 to 10)
 
+// --- file: b/t.maxon
+export function tally() returns ExitCode
+	let z = 3 as b.Score
+	return z as ExitCode
+end 'tally'
+
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return a.mix()
+	return (a.mix() + b.tally()) as ExitCode
 end 'main'
 ```
 ```exitcode
-11
+14
 ```
 
 <!-- test: an-authors-enum-beside-the-librarys-element-index-leaves-the-alias-one-type -->

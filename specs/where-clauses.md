@@ -1323,14 +1323,14 @@ Three placements of the interface read give three answers on this one program:
 
 | placement | result |
 |---|---|
-| reading the interface out of the REAL PARSE's `artifact.interfaces` | `E3011 … Unknown type 'Array_Integer'` |
-| the read after `allFilesFolded`, before `deriveInstanceNames` (the placement in use) | `E3011 … Unknown type 'Array_Integer'`, byte-identical |
+| reading the interface out of the REAL PARSE's `artifact.interfaces` | `E3011 … Unknown type 'IntArray'` |
+| the read after `allFilesFolded`, before `deriveInstanceNames` (the placement in use) | `E3011 … Unknown type 'IntArray'`, byte-identical |
 | the read moved INTO the per-file sweep | **COMPILES, exit 42** |
 
 The third row is the trap, and it is why this case exists: it looks like an improvement and is not. An
 incomplete index makes `signatures.isGenericAlias` answer "no", so the requirement's return type renders as
-the RAW ALIAS `IntArray` — which happens to resolve — while the real parse renders the same type as the
-canonical `Array_Integer`. Two spellings of one type inside one index is a false-ACCEPT shape, and the
+the RAW ALIAS `IntArray` — which happens to resolve — while the real parse renders the same type as its
+canonical instance name. Two spellings of one type inside one index is a false-ACCEPT shape, and the
 accept it buys here is an accident, not a fix.
 
 ⚠ **AND THE REST OF THE SUITE CANNOT SEE THAT.** With the recording moved into the per-file sweep the rest
@@ -1381,7 +1381,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/where-clauses/where-clauses.error.witness-return-generic-instance.maxon:28:17: Unknown type 'Array_Integer'
+error E3011: specs/where-clauses/where-clauses.error.witness-return-generic-instance.maxon:28:17: Unknown type 'IntArray'
 ```
 
 <!-- test: where-clauses.constraint-interface-generic-alias-formal -->

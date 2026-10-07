@@ -2583,13 +2583,11 @@ end 'main'
 
 ### Error: a call argument is checked against the CALLEE's declaration of the alias
 
-Two files each declare `Limit`, over different ranges — which
-`crossfile-alias-same-underlying-different-range-still-legal` establishes is legal. A parameter's range
-is the one visible where the FUNCTION was written, so `narrow(500)` is refused against `lib.maxon`'s
-`int(0 to 10)` even though the file that wrote the call has a `Limit` that would admit it. The
-diagnostic still points at the line that wrote the argument: the range comes from one file and the
-error belongs to the other, and conflating them reported a caller's line and column against the
-callee's path.
+A parameter's range is the one its FUNCTION was declared with, so `narrow(500)` is refused against
+`lib.maxon`'s `int(0 to 10)` even though the file that wrote the call has a wider alias of its own that
+would admit it. The diagnostic still points at the line that wrote the argument: the range comes from one
+file and the error belongs to the other, and conflating them reported a caller's line and column against
+the callee's path.
 
 <!-- test: error.crossfile-call-argument-uses-callee-range -->
 ```maxon
@@ -2601,9 +2599,9 @@ export function narrow(x Limit) returns Limit
 end 'narrow'
 
 // --- file: main.maxon
-typealias Limit = int(0 to 1000)
+typealias Ceiling = int(0 to 1000)
 
-function wide(x Limit) returns Limit
+function wide(x Ceiling) returns Ceiling
 	return x
 end 'wide'
 
@@ -3535,26 +3533,16 @@ Stack trace:
   in mrt_start
 ```
 
-## A RANGED ALIAS'S TYPE IDENTITY IS ITS RANGE, NOT ITS NAME (R-1)
+## A RANGED ALIAS'S TYPE IDENTITY IS ITS DECLARATION, NOT ITS RANGE
 
-⭐⭐ **TWO RANGED ALIASES OVER ONE RANGE ARE ONE TYPE, SO THEIR GENERIC INSTANCES ARE ONE INSTANCE.**
-`typealias DenseInt = int(0 to u64.max)` and `typealias RegCount = int(0 to
-u64.max)` differ only in what the author called them, so `Array with DenseInt` and `Array with RegCount`
-name one type. The VALUES are not in question, so calling them two types would refuse sound
-programs.
+⭐⭐ **TWO RANGED ALIASES OVER ONE RANGE ARE TWO TYPES, SO THEIR GENERIC INSTANCES ARE TWO INSTANCES.**
+`typealias DenseInt = int(0 to u64.max)` and `typealias RegCount = int(0 to u64.max)` are two declarations,
+so `Array with DenseInt` and `Array with RegCount` name two types. Two aliases over DIFFERENT ranges are two
+types for the same reason: the element alias's declaration decides, and the range never enters into it.
 
-⚠ **THE RULE IS THE RANGE, AND THE CONTROL BELOW IS WHAT SAYS SO.** A generic's ranged
-element is part of its type: two aliases over DIFFERENT ranges are two types and
-are refused. R-1 narrows that rule to what it was always meant to say -- the RANGE is part of the
-type, and the NAME is not. Without the control this section would be indistinguishable from having deleted
-the rule outright.
-
-⚠ **A COMPILER-RESERVED ELEMENT IS NEVER IDENTIFIED THIS WAY, and it is unspellable in source so it
-cannot be pinned here.** `__ManagedByte` carries a byte's range and is minted expressly to be a DIFFERENT
-instance from the user-visible `Byte`, because the admission between them is one-way (see
-`SignatureIndex.byteBufferBoundaryAdmits`). `RangedAliasRegistry.identifiableRangeName` excludes the `__`
-prefix for that reason; `array-hashable/byte-array-hash` is the case that fails without the
-exclusion.
+⚠ **THE COMPILER-RESERVED ELEMENT IS ITS OWN INSTANCE TOO, and it is unspellable in source so it cannot be
+pinned here.** `__ManagedByte` carries a byte's range and is a DIFFERENT instance from the user-visible
+`Byte`; the admission between them is one-way (`ProgramSignatures.byteBufferBoundaryAdmits`).
 
 <!-- test: error.two-aliases-over-one-range-are-two-instances -->
 Two ranged aliases over one range are two element types, so the containers over them are two instances: a
@@ -3642,20 +3630,9 @@ error E3005: specs/ranged-typealias/error.a-diagnostic-names-the-alias-the-site-
 
 <!-- test: error.a-call-results-type-is-named-by-its-callees-returns-clause -->
 ### A CALL RESULT is named by the alias its callee's `returns` clause wrote
-⭐⭐ **THE OTHER HALF OF THE PROVENANCE, AND THE ONE the compiler's OWN SOURCE NEEDED.** The case above stamps a value
-built by a factory; this one arrives from a plain call, and its only spelling is the one the CALLEE's signature
-wrote. `filledColumn(…) returns DenseColumn` in `Targets/Shared/TargetLiveness.maxon` hands back a gid every
-`Array` over an `int(0 to u64.max)` element shares, and without this the diagnostic at
-`RegisterAllocator.maxon:93` could only fall back to the element RANGE.
-
-⚠ **THIS PARAGRAPH NAMES THE SET AND NOT A MEMBER**, because membership moves whenever an alias's range
-does. Several distinct alias names collapse onto one `Array` instance whenever their element ranges
-agree, and it is that mechanism, not a census of its members, that this test pins.
-
-⚠ **THE SPELLING IS CAPTURED AS THE TOKEN'S TEXT AND NOTHING IS ASKED ABOUT IT AT CAPTURE TIME.** Whether the
-name is a generic alias is a WHOLE-PROGRAM question and the capture runs inside the declaration sweep that
-answers it — asking there is R-1's own first mistake one layer up. `recordCallResultInstanceAlias` asks at parse
-time, with the index complete.
+⭐⭐ **THE OTHER HALF OF THE PROVENANCE.** The case above builds its value through a factory; this one
+arrives from a plain call, and its only spelling is the one the CALLEE's `returns` clause wrote, so the
+diagnostic names `OtherCol`.
 
 ⚠ `returns Array with Integer` writes no alias and is left EMPTY rather than being stamped with the base name —
 `Array` names no instance, and a value stamped with it would file a per-instance question under a name no

@@ -681,7 +681,7 @@ export union SourceParseError implements Error
 	// same anchor `assignToImmutable` uses, because it is the same statement failing for the
 	// other reason a binding can refuse a value. See `parseAssignment` for why this one check
 	// is what makes every merge phi's type honest.
-	assignTypeMismatch(place String, got String, expected String, line LineNumber, column ColumnNumber)
+	assignTypeMismatch(place String, got String, gotNote String, expected String, expectedNote String, line LineNumber, column ColumnNumber)
 
 	// ⭐ **THE SENTENCE A DECLARED SLOT REACHED THROUGH AN ARGUMENT LIST REFUSES A VALUE IN** — a union
 	// case's payload slot (`Paint.tint(Shade.light)`). It names NEITHER a variable nor a parameter,
@@ -709,7 +709,7 @@ export union SourceParseError implements Error
 	// (`return flag` from a function declared `returns Integer`). Renders as E3005 — `Cannot return
 	// 'bool' from function declared to return 'int'` — positioned at the `return`. The declared type
 	// prints as its RESOLVED primitive (see TypeRules' typeTagName).
-	returnTypeMismatch(got String, expected String, line LineNumber, column ColumnNumber)
+	returnTypeMismatch(got String, gotNote String, expected String, expectedNote String, line LineNumber, column ColumnNumber)
 
 	// P1.5-A1: a FUNCTION VALUE stored into a NON-function place (`slot = dbl` where `slot` holds an
 	// int). Renders as E3005 with the spec's exact text — "cannot assign a value of type 'function' to
@@ -1785,7 +1785,7 @@ export union SourceParseError implements Error
 
 	genericTypeParameterNotInferable(paramName String, functionName String, line LineNumber, column ColumnNumber)
 
-	genericArgumentsHaveNoCommonType(functionName String, paramName String, first String, second String, line LineNumber, column ColumnNumber)
+	genericArgumentsHaveNoCommonType(functionName String, paramName String, first String, firstNote String, second String, secondNote String, line LineNumber, column ColumnNumber)
 
 	genericConstraintNotSatisfied(typeName String, interfaceName String, paramName String, functionName String, line LineNumber, column ColumnNumber)
 
@@ -1989,8 +1989,6 @@ export union SourceParseError implements Error
 	registryRefused(code ErrorCode, explanation String, line LineNumber, column ColumnNumber, note DiagnosticNote)
 	extensionMemberHidesOwnMember(explanation String, line LineNumber, column ColumnNumber, note DiagnosticNote)
 end 'SourceParseError'
-
-export typealias ParseErrorArray = Array with SourceParseError
 
 export type DeferredParseError
 	export let error as SourceParseError
@@ -2500,7 +2498,7 @@ type EnumBackingFieldStep
 	end 'create'
 end 'EnumBackingFieldStep'
 
-export typealias EnumBackingFieldStepArray = Array with EnumBackingFieldStep
+typealias EnumBackingFieldStepArray = Array with EnumBackingFieldStep
 
 // ⭐⭐ **WHAT A `.rawValue.<field>[.<field>…]` CHAIN RESOLVED TO — the ONE scalar leaf it names, plus the
 // path that reaches it.** Minted by `Parser.resolveEnumBackingLeaf`, which is the only thing that may build
@@ -2822,7 +2820,7 @@ export let noDeferredDiagnostics = DeferredDiagnosticRoster.unwritten
 // ⚠ **TWO columns wear this type**, not one: the layout descriptor's (P1.6-B1) and the fixed element
 // count's (W190). They are seeded independently and solved independently over ONE edge set — see
 // `Queries.foldDescriptorNeeds` — so the alias names the SHAPE of a seed column rather than either slot.
-module typealias DescriptorNeedMap = Map with (ByteArray, bool)
+export typealias DescriptorNeedMap = Map with (ByteArray, bool)
 
 // The enclosing type's bare-method-name -> "does it take a receiver?" map (#65 implicit-self resolution).
 // A bare call `foo(…)` inside a method of the type resolves to the sibling method `foo`; the flag decides
@@ -2832,7 +2830,7 @@ typealias SiblingReceiverMap = Map with (ByteArray, bool)
 
 // A generic method's QUALIFIED name -> the siblings it calls on `self`, qualified to the same type
 // (P1.6-B1) — the self-call edges the descriptor-need fixpoint (`solveDescriptorNeeds`) propagates over.
-module typealias SelfCalleesMap = Map with (ByteArray, ByteArrayArray)
+export typealias SelfCalleesMap = Map with (ByteArray, ByteArrayArray)
 
 // A generic method's qualified name -> its dense index in the program's generic-method list (P1.6-B1). The
 // descriptor-need
@@ -3998,7 +3996,7 @@ type ForwardFeedEdge
 	end 'create'
 end 'ForwardFeedEdge'
 
-export typealias ForwardFeedEdgeArray = Array with ForwardFeedEdge
+typealias ForwardFeedEdgeArray = Array with ForwardFeedEdge
 
 // ⭐ **ONE BARE TYPE-PARAMETER ARGUMENT found in a call's argument list** — the CALL-ALIGNED parameter position
 // it references, and the token it sits at (which `argLabelBefore` reads its label from). The two feed scans
@@ -4016,7 +4014,7 @@ type BareTypeParamArg
 	end 'create'
 end 'BareTypeParamArg'
 
-export typealias BareTypeParamArgArray = Array with BareTypeParamArg
+typealias BareTypeParamArgArray = Array with BareTypeParamArg
 
 // ⭐ **ONE GENERIC METHOD's FEED SIGNALS for the transitive array-feed fixpoint (P1.7 slice 3b-iv)** — its
 // parameter names and type-parameter positions, the DIRECT array-mutator feeds its body performs
@@ -4042,26 +4040,8 @@ type MethodFeedScan
 	end 'create'
 end 'MethodFeedScan'
 
-export typealias MethodFeedScanArray = Array with MethodFeedScan
+typealias MethodFeedScanArray = Array with MethodFeedScan
 
-// The prefix Maxon RESERVES for compiler-internal names — every symbol the compiler emits
-// (`__mm_alloc`, `__print_string`, `__destruct_String`, the `__discard_*` parser temporaries, and
-// `__self` above) starts with it. `requireUnreservedName` forbids a USER DECLARATION from taking it.
-//
-// It is the same value `MmRuntime.CompilerInternalPrefix` tests a CALLEE against, and deliberately so:
-// the two are the two ends of one fact. That predicate skips a `__`-named callee's user-function
-// checks on the promise that no user `__` name exists — a promise ONLY this reservation can keep. The
-// value is duplicated across the two modules rather than shared because they answer opposite questions
-// at opposite tiers (a parser reading USER TOKENS; a lowering reading EMITTED CALLEES) and a runtime
-// module owning the parser's reservation, or the reverse, would be the worse coupling. The language
-// rule that `__` is reserved is what binds them, not a shared symbol.
-let ReservedNamePrefix = b"__"
-
-// ⭐ **WHICH NAMESPACE A DECLARED NAME ENTERS — the one thing `requireUnreservedName`'s two reservations
-// answer differently.** The `__` prefix is refused in both; the RECEIVER's name is refused in one only,
-// because shadowing is the whole reason that reservation exists and only one of these namespaces can
-// shadow anything. It is a scalar and not a bool for the reason `NamePosition` is one: the caller states
-// what its declaration IS, and the rule over that is this door's alone.
 // ⭐ **WHICH KEYWORD OPENED THE DECLARATION `parseFunction` IS READING.** The two share their whole BODY —
 // the per-function reset block, the parameter binding, the body parse, the close, the registration — and
 // differ only in their HEAD (what is consumed before the body) and in whether the closing `end` label is
@@ -4218,6 +4198,11 @@ function anchorTokenSpanning(range SourceRange) returns Token
 	return Token.create(TokenKind.identifier, line: range.line, column: range.column, startByte: range.startByte, endByte: range.endByte)
 end 'anchorTokenSpanning'
 
+// ⭐ **WHICH NAMESPACE A DECLARED NAME ENTERS — the one thing `requireUnreservedName`'s two reservations
+// answer differently.** The `__` prefix is refused in both; the RECEIVER's name is refused in one only,
+// because shadowing is the whole reason that reservation exists and only one of these namespaces can
+// shadow anything. It is a scalar and not a bool for the reason `NamePosition` is one: the caller states
+// what its declaration IS, and the rule over that is this door's alone.
 enum DeclaredNameNamespace
 	// A local, a parameter, a field, a function, a type — everything reached by writing the bare name,
 	// which is exactly how an instance method's implicit `self` is reached. A binding here would shadow it.
@@ -5545,7 +5530,7 @@ let PrimitiveStaticSeparatorBytes = b"_"
 // `MethodNameSeparator`'s reason: the mint and the "is it declared?" probe that gates it must ask about the
 // same bytes, or the parser would rewrite to a name it never checked for.
 function primitiveStaticCallee(typeName ByteArray, methodName ByteArray) returns ByteArray
-	return "{String.from(ReservedNamePrefix)}{String.from(typeName)}{PrimitiveStaticNameSeparator}{String.from(methodName)}".toByteArray()
+	return "{String.from(ReservedTypeNamePrefix)}{String.from(typeName)}{PrimitiveStaticNameSeparator}{String.from(methodName)}".toByteArray()
 end 'primitiveStaticCallee'
 
 // ⭐⭐ **THE INVERSE OF THE MINT — `__int_fromString` → `int.fromString`, which is the NOUN every diagnostic
@@ -5565,7 +5550,7 @@ end 'primitiveStaticCallee'
 // compiler panics here, naming both, instead of quoting a plausible wrong name at an author.
 export function primitiveStaticSourceSpelling(callee ByteArray) returns ByteArray
 	let separator = try PrimitiveStaticSeparatorBytes.get(0) otherwise panic("primitiveStaticSourceSpelling: PrimitiveStaticSeparatorBytes is a one-byte literal")
-	let head = try callee.slice(ReservedNamePrefix.count(), endIndex: callee.count()) otherwise panic("primitiveStaticSourceSpelling: '{String.from(callee)}' is shorter than the reserved prefix, so `primitiveStaticCallee` cannot have minted it")
+	let head = try callee.slice(ReservedTypeNamePrefix.count(), endIndex: callee.count()) otherwise panic("primitiveStaticSourceSpelling: '{String.from(callee)}' is shorter than the reserved prefix, so `primitiveStaticCallee` cannot have minted it")
 
 	var split = head.count()
 
@@ -9344,20 +9329,20 @@ end 'witnessArgAnchor'
 // conformance diagnostics already print a requirement with. A second format here would mean the same
 // requirement described two ways depending on which pass complained about it. Both callers are FAILURE
 // paths, so the interpolations cost a compiling program nothing.
-function renderWitnessRequirement(target WitnessDispatchTarget) returns String
-	return "{String.from(target.declaringInterfaceName)}.{assembleMethodSignature(target.methodName, paramNames: target.paramNames, paramTypes: target.paramTypeNames, returnType: target.returnTypeName, isStatic: target.isStatic)}"
+function renderWitnessRequirement(target WitnessDispatchTarget, signatures ProgramSignatures) returns String
+	return "{String.from(target.declaringInterfaceName)}.{assembleMethodSignature(target.methodName, paramNames: target.paramNames, paramTypes: target.paramTypeNames, returnType: target.returnTypeName, isStatic: target.isStatic, signatures: signatures)}"
 end 'renderWitnessRequirement'
 
 // Every candidate, rendered and joined through `appendCommaSeparated` — the ONE `", "` a diagnostic's list
 // is punctuated with — for the "no requirement of that name takes N arguments" reject, which offers the menu
 // instead of blaming one of them (R10c). A rendered requirement always carries at least `name() returns T`,
 // so it meets that joiner's non-empty-item requirement.
-function renderWitnessRequirements(candidates WitnessDispatchTargetArray) returns String
+function renderWitnessRequirements(candidates WitnessDispatchTargetArray, signatures ProgramSignatures) returns String
 	var rendered = ""
 
 	for i in 0 upto candidates.count() 'eachCandidate'
 		let candidate = try candidates.get(i) otherwise panic("renderWitnessRequirements: candidates.get OOB at {i} below count {candidates.count()}")
-		rendered = appendCommaSeparated(rendered, item: renderWitnessRequirement(candidate))
+		rendered = appendCommaSeparated(rendered, item: renderWitnessRequirement(candidate, signatures: signatures))
 	end 'eachCandidate'
 
 	return rendered
@@ -17687,8 +17672,6 @@ end 'BlockExtents'
 // once per token array.
 export typealias BlockExtentsByPath = Map with (String, BlockExtents)
 
-typealias SettledBareAliasMap = Map with (ByteArray, BareAliasMeaning)
-
 union DeclaredTupleTarget
 	none
 	layout(name ByteArray)
@@ -17777,8 +17760,6 @@ export type Parser
 	var qualifiedTypeBase as QualifiedTypeBase
 	let qualifiedNominalAt as QualifiedNominalSpellingMap
 	var settledTypeNames as SettledTypeNameMap
-	var settledBareRangedAliases as SettledBareAliasMap
-	var settledBareFunctionAliases as SettledBareAliasMap
 
 	// The first break of a combined error's match obligation found where nothing may throw — a drop site or a
 	// join — held until the handler's end refuses it (`requireNoHeldErrorMatchRefusal`).
@@ -18694,8 +18675,6 @@ export type Parser
 			tokens: prepared.tokens,
 			qualifiedNominalAt: prepared.qualifiedNominalAt,
 			settledTypeNames: SettledTypeNameMap.create(),
-			settledBareRangedAliases: SettledBareAliasMap.create(),
-			settledBareFunctionAliases: SettledBareAliasMap.create(),
 			pos: 0,
 			filePath: job.path,
 			namespace: job.namespace,
@@ -19429,7 +19408,7 @@ export type Parser
 			return self.qualifiedTypeBaseName()
 		end 'aQualifiedAliasHead'
 
-		return self.current().value
+		return self.typeNameIdentityAt(self.pos, name: self.current().value)
 	end 'constructionHeadName'
 
 	function qualifiedTypeHeadAt(index ElementIndex, form TypeNameHeadForm) returns bool
@@ -25131,7 +25110,9 @@ export type Parser
 	//
 	// `maxonTypeName` is the renderer, not a mangling of its own — so the suffix reads as the source
 	// wrote it (`process#String`, `lookup#Registry#bool`) and a ranged alias keeps its own name here,
-	// PRE- resolution, where `Integer` and `int` are still two spellings. Two overloads written with
+	// PRE- resolution, where `Integer` and `int` are still two spellings. A generic instance renders its
+	// canonical name instead, which carries each element's declaration identity: one spelling written
+	// against two declarations is two parameter types and two overloads. Two overloads written with
 	// two spellings of one underlying type therefore both register, and the resolver reports the pair
 	// as ambiguous at the call (E3007) rather than at the declaration. Flattening the alias and
 	// reporting E3006 at the DECLARATION refuses the same program under another code at another site;
@@ -25141,7 +25122,7 @@ export type Parser
 
 		for i in firstUserParamIndex(takesReceiver) upto paramTypes.count() as ParamCount 'eachParam'
 			let paramType = try paramTypes.get(i as ElementIndex) otherwise panic("overloadTypeSuffix: paramTypes.get OOB at {i} inside its own count()")
-			rendered = overloadSuffixPart(rendered, part: maxonTypeName(paramType, typeNames: self.artifact.typeNames))
+			rendered = overloadSuffixPart(rendered, part: String.from(self.signatures.canonicalInstanceName(genericInstanceIdOf(paramType))) if maxonTypeTag(paramType) == ValueTypeTag.genericInstance else maxonTypeName(paramType, typeNames: self.artifact.typeNames))
 		end 'eachParam'
 
 		return rendered.toByteArray()
@@ -26932,7 +26913,7 @@ export type Parser
 
 			// Shape 2 has no annotation at all, so no spelling can name the buffer alias (A2j); the type
 			// comes from a LITERAL, and no literal produces a `__ManagedMemory`.
-			layout.addField(nameTok.value, declaredType: constantValueTypeIn(inferred.tag, typeName: inferred.typeName, into: self.artifact.typeNames), mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag, writtenNegative: inferred.writtenNegative), declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.notABareName)
+			layout.addField(nameTok.value, declaredType: constantValueTypeIn(inferred.tag, typeName: inferred.typeName, into: self.artifact.typeNames), mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(inferred.payload, tag: inferred.tag, writtenNegative: inferred.writtenNegative), declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
 			return
 		end 'typeFromLiteral'
 
@@ -27461,8 +27442,24 @@ export type Parser
 		end 'notTheReportingWalk'
 
 		var names = self.usedTypeNamesForWrite()
-		insertOwnedName(names, name: name)
+		insertOwnedName(names, name: self.innerAliasKeyOrName(name))
 	end 'recordTypeNameUse'
+
+	function requireInnerAliasNameable(qualifiedInner ByteArray, written ByteArray, anchor Token) throws SourceParseError
+		if not self.signatures.allFilesFolded 'theSweepHoldsNoDeclarationYet'
+			return
+		end 'theSweepHoldsNoDeclarationYet'
+
+		try self.requireTypeNameVerdictNameable(typeNameVerdictOf(self.signatures.innerAliasHidingFrom(qualifiedInner, readerFilePath: self.filePath), noun: written, anchor: anchor))
+	end 'requireInnerAliasNameable'
+
+	function innerAliasKeyOrName(name ByteArray) returns ByteArray
+		if self.namesInnerAliasHere(name) or self.namesThisBodysNestedFunctionAlias(name) 'aBodysInnerAlias'
+			return joinQualifiedName(self.enclosingTypeName(), member: name)
+		end 'aBodysInnerAlias'
+
+		return name
+	end 'innerAliasKeyOrName'
 
 	// Recorded under the name as WRITTEN: the unused-alias check (E3062) asks about that name, not
 	// about the family the base resolved to.
@@ -27480,9 +27477,17 @@ export type Parser
 	function recordQualifiedTypeNameUse(name ByteArray)
 		match splitQualifiedName(name) 'member'
 			notQualified then self.recordWrittenTypeName(name)
-			parts(_, member) then self.recordWrittenTypeName(member)
+			parts(_, member) then self.recordQualifiedAndMemberTypeName(name, member: member)
 		end 'member'
 	end 'recordQualifiedTypeNameUse'
+
+	function recordQualifiedAndMemberTypeName(qualified ByteArray, member ByteArray)
+		if not self.signatures.namesAnInnerAliasOfAnyForm(qualified) 'aDirectoryQualifiedMember'
+			self.recordWrittenTypeName(member)
+		end 'aDirectoryQualifiedMember'
+
+		self.recordWrittenTypeName(qualified)
+	end 'recordQualifiedAndMemberTypeName'
 
 	// ⭐ **A TYPE THIS FILE REACHED INTO — `recordTypeNameUse`'s twin for the fact a written name cannot
 	// carry.** Two call sites, one per family of reach and each stating its own rule: `requireFieldAccessible`
@@ -27656,7 +27661,7 @@ export type Parser
 		end 'aServiceKey'
 
 		if not self.signatures.containsStructFor(declaration.key, readerFilePath: self.filePath) 'namesNoType'
-			throw SourceParseError.unknownTypeName(String.from(declaration.key), line: keyTok.line, column: keyTok.column)
+			throw SourceParseError.unknownTypeName(self.signatures.aliasIdentityDisplay(declaration.key), line: keyTok.line, column: keyTok.column)
 		end 'namesNoType'
 
 		try self.requireShareableRegistryValue(declaration.key, anchor: keyTok)
@@ -27723,7 +27728,7 @@ export type Parser
 	function registryValueLayout(typeName ByteArray, anchor Token) returns StructLayout throws SourceParseError
 		match self.signatures.structFor(typeName, readerFilePath: self.filePath) 'declared'
 			declared(found) then return found
-			undeclared then throw SourceParseError.unknownTypeName(String.from(typeName), line: anchor.line, column: anchor.column)
+			undeclared then throw SourceParseError.unknownTypeName(self.signatures.aliasIdentityDisplay(typeName), line: anchor.line, column: anchor.column)
 		end 'declared'
 	end 'registryValueLayout'
 
@@ -27759,7 +27764,7 @@ export type Parser
 		self.publishExistentialInstances(initializer)
 		self.fileDeferredProvenance(initializer)
 		self.publishDebugLocals(initializer)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(declaredReturn), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), returnType: declaredReturn, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true, role: FunctionDeclarationRole.ordinary)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(declaredReturn), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints, writtenTypeNames: sharedEmptyWrittenTypeNames), returnType: declaredReturn, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true, role: FunctionDeclarationRole.ordinary)
 		self.commitRangeChecks(name)
 	end 'parseDefaultInitializer'
 
@@ -28139,11 +28144,11 @@ export type Parser
 	// is the declaration that gates most of the corpus.
 	//
 	// It emits NO op: an alias is a DECLARATION, and its whole effect is the registry entry its caller
-	// records, which TypeResolution substitutes for every `MaxonType.named` use of the name. The NAME is
-	// nonetheless the type — two aliases over one range are two types, and `as` is the door between them
+	// records, which TypeResolution substitutes for every `MaxonType.named` use of the name. The DECLARATION
+	// is nonetheless the type — two aliases over one range are two types, and `as` is the door between them
 	// — because the identity is read off the value and signature columns BEFORE that substitution
-	// (`ProgramSignatures.rangedAliasIdentityOf`). A use in a type position needs no parser change at all
-	// (`parseTypeReference` already interns a bare identifier).
+	// (`ProgramSignatures.rangedIdentityOfSpelling`). A use in a type position interns that identity
+	// (`parseTypeReference`).
 	//
 	// It READS and PUSHES into the caller's arrays, because it has two callers that collect differently:
 	// the real parse files the alias in this file's artifact arrays, and the whole-program declaration
@@ -29479,7 +29484,7 @@ export type Parser
 		let nameId = typeNameIdOf(argType)
 		let name = self.internedName(nameId)
 		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId, readerFilePath: self.filePath) otherwise 'undeclared'
-			self.recordArtifactDiagnostic(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name)), range: SourceRange.ofToken(argTok))
+			self.recordArtifactDiagnostic(ErrorCode.unknownType, message: unknownTypeMessage(self.signatures.aliasIdentityDisplay(name)), range: SourceRange.ofToken(argTok))
 			return
 		end 'undeclared'
 
@@ -29505,7 +29510,7 @@ export type Parser
 		if tagIsFloat(maxonTypeTag(denoted)) and not inlineElement 'floatAliasArg'
 			// Named by the ALIAS the source wrote, not by `float`: a reader told "cannot use 'float'" about a
 			// line that says `Real` would have to work out which of its aliases is meant.
-			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(String.from(name)), range: SourceRange.ofToken(argTok))
+			self.recordArtifactDiagnostic(ErrorCode.genericFloatTypeArg, message: floatTypeArgMessage(self.signatures.aliasIdentityDisplay(name)), range: SourceRange.ofToken(argTok))
 			return
 		end 'floatAliasArg'
 	end 'checkGenericArgType'
@@ -29646,15 +29651,15 @@ export type Parser
 
 	// Parse `function(paramTypes) [returns T]` on a typealias RHS (P1.5-A1), the cursor sitting on
 	// `function`. The whole declared SIGNATURE is stored INTERNER-FREE (a tag + a name per parameter and for
-	// the return) so it rides the no-remap fold, plus the `#81` `fn(…) returns …` DISPLAY STRING built from
-	// the same parameter list. An absent `returns` clause is a void function type.
+	// the return) so it rides the no-remap fold, plus the type names the author wrote, which E3167 and the
+	// unused-export audit judge. An absent `returns` clause is a void function type.
 	//
 	// ⚠ **ONLY THE REAL PARSE MAY VETO OR CLASSIFY, and that is a property of the SWEEP rather than an
 	// optimization.** `parseTypeReference` answers a type spelling differently during the whole-program token
 	// sweep — `isFunctionAlias`/`isGenericAlias` consult the very registries the sweep is still building, so a
 	// parameter spelled with a function or generic alias reads back as a bare `named` there. The sweep and the
 	// nested-alias reader therefore pass `recordSignature: false`: their copy carries every slot's tag and
-	// identity columns as the sweep read them, and no storability refusal, aggregate name or display string.
+	// identity columns as the sweep read them, and no storability refusal or aggregate name.
 	// Whole-program consumers read the real parse's copy in `project.functionTypeAliases`; a reader of the
 	// sweep's copy repairs its `named` leaves from `declFilePath`.
 	function readFunctionTypeAlias(nameTok Token, recordSignature bool, visibility Visibility) returns FunctionTypeAlias throws SourceParseError
@@ -29672,12 +29677,14 @@ export type Parser
 		// UNCONDITIONALLY, outside every `recordSignature` gate below, because the SWEEP's copy is the only one
 		// the whole-program index ever receives and the hash is the only thing this is for.
 		var paramSpelling = Hasher.empty()
+		var writtenNames = ByteArrayArray.create()
+		var writtenEnds = WrittenTypeNameEnds.create()
 
 		if not self.at(TokenKind.rightParen) 'params'
 			while true 'paramLoop'
 				let paramAnchor = self.tokenAt(self.pos)
 				let paramStart = self.pos
-				let paramType = try self.readFunctionTypeParam()
+				let paramType = try self.readFunctionTypeParam(writtenNames)
 
 				// ⛔⛔ **THE BOUNDARY IS FOLDED HERE AND IT IS THE WHOLE ARITY.** Without it the digest is a flat
 				// fold of token texts in which the GROUPING — the only thing the separator means — is absent:
@@ -29710,6 +29717,7 @@ export type Parser
 				// literal written at a parameter of this type takes its parameter types from it
 				// (`Parser.closureParamOfferAt`), repairing the tolerant `named` leaves from `declFilePath`.
 				declaredParams.push(self.storedFunctionAliasParam(paramType, aggregateName: paramAggregateName))
+				writtenEnds.push(writtenNames.count())
 
 				if not self.at(TokenKind.comma) 'endParams'
 					break
@@ -29729,6 +29737,7 @@ export type Parser
 
 		if self.at(TokenKind.returns) 'hasReturn'
 			let returnsTok = try self.consume(TokenKind.returns)
+			self.appendAuditedTypeNamesHere(writtenNames)
 			let returnType = try self.parseTypeReference(BarePrimitiveVoice.admitted)
 
 			if recordSignature 'realParse'
@@ -29767,13 +29776,9 @@ export type Parser
 			returnForDisplay = MaxonReturnType.value(returnType)
 		end 'hasReturn'
 
-		var display = FunctionAliasDisplay.unread
-
-		if recordSignature 'display'
-			display = FunctionAliasDisplay.spelled(formatFnTypeDisplay(paramTypes, returnType: returnForDisplay, typeNames: self.artifact.typeNames, signatures: self.signatures).toByteArray())
-		end 'display'
-
-		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, returnIdentity: returnIdentity, returnAggregateName: returnAggregateName, display: display, paramTypes: declaredParams, paramSpelling: paramSpelling, declFilePath: self.filePath, visibility: visibility)
+		writtenEnds.push(writtenNames.count())
+		let written = sharedEmptyWrittenTypeNames if writtenNames.isEmpty() else WrittenTypeNames.create(writtenNames, ends: writtenEnds)
+		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, returnIdentity: returnIdentity, returnAggregateName: returnAggregateName, paramTypes: declaredParams, paramSpelling: paramSpelling, declFilePath: self.filePath, visibility: visibility, written: written)
 	end 'readFunctionTypeAlias'
 
 	// ⭐ **THE TOKENS BETWEEN TWO CURSOR POSITIONS, FOLDED INTO A DIGEST — a fact about the SOURCE and about
@@ -29812,16 +29817,29 @@ export type Parser
 	end 'mixWrittenTokens'
 
 	// One parameter of a function-type signature — an optional NAME followed by its type, or a bare type,
-	// returning the parameter's TYPE (the #81 display needs it; the NAME is documentation only, discarded).
+	// returning the parameter's TYPE (the stored parameter needs it; the NAME is documentation only, discarded).
 	// A `name Type` param is one where an identifier is followed by another type-starting token
 	// (`function(x Score)`); otherwise the token IS the type (`function(Integer)`, `function(Integer, Integer)`).
-	function readFunctionTypeParam() returns MaxonType throws SourceParseError
+	function readFunctionTypeParam(writtenNames ByteArrayArray) returns MaxonType throws SourceParseError
 		if self.at(TokenKind.identifier) and self.peekStartsType() 'namedParam'
 			try self.consume(TokenKind.identifier)
 		end 'namedParam'
 
+		self.appendAuditedTypeNamesHere(writtenNames)
 		return try self.parseTypeReference(BarePrimitiveVoice.admitted)
 	end 'readFunctionTypeParam'
+
+	function isLibrarySource() returns bool
+		return self.isStdlibSource or self.isRuntimeSource
+	end 'isLibrarySource'
+
+	function appendAuditedTypeNamesHere(names ByteArrayArray)
+		if self.isLibrarySource() 'aLibraryFilesOwnSpelling'
+			return
+		end 'aLibraryFilesOwnSpelling'
+
+		self.appendWrittenTypeNamesAt(self.pos, ownTypeParams: ByteArrayArray.create(), into: names)
+	end 'appendAuditedTypeNamesHere'
 
 	// True when the token ONE past the cursor can BEGIN a type reference — an identifier (a named type
 	// or `String`), the `int`/`bool`/`float` keywords, or `Self`. Used to tell a function-type param's
@@ -30698,6 +30716,8 @@ export type Parser
 		end 'existentialParam'
 
 		let returnTok = self.tokenAt(self.pos)
+		let returnTypeStart = self.returnTypeTokenIndex()
+		let hasReturnType = self.at(TokenKind.returns)
 		let returnType = try self.parseOptionalReturnType()
 
 		// The RETURN half, noted the same way and refused through the SAME `returnType` arm a declared
@@ -30717,7 +30737,8 @@ export type Parser
 		// the impl's throw-path primary (0) came back as a real answer.
 		let throwsClause = try self.parseOptionalThrowsClause()
 
-		return InterfaceMethodSig.create(nameTok.value, paramNames: paramNames, paramTypeNames: self.renderInterfaceParamTypes(paramTypes, paramTypeStarts: paramTypeStarts, interfaceName: interfaceName), returnTypeName: self.renderInterfaceReturnType(returnType, interfaceName: interfaceName), isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: interfaceParamBufferSpellings(paramSurfaces), nameLine: nameTok.line, nameColumn: nameTok.column)
+		let written = self.writtenSignatureTypeNames(true, paramNames: paramNames, paramTypeStarts: paramTypeStarts, returnTypeStart: returnTypeStart, hasReturnType: hasReturnType, ownTypeParams: ByteArrayArray.create())
+		return InterfaceMethodSig.create(nameTok.value, paramNames: paramNames, paramTypeNames: self.renderInterfaceParamTypes(paramTypes, paramTypeStarts: paramTypeStarts, interfaceName: interfaceName), returnTypeName: self.renderInterfaceReturnType(returnType, interfaceName: interfaceName), isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: interfaceParamBufferSpellings(paramSurfaces), nameLine: nameTok.line, nameColumn: nameTok.column, written: written)
 	end 'parseInterfaceMethod'
 
 	// Render each of an interface method's parameter types to its source string, parallel to `paramTypes`.
@@ -30749,11 +30770,22 @@ export type Parser
 		for i in 0 upto paramTypes.count() 'each'
 			let paramType = try paramTypes.get(i) otherwise panic("renderInterfaceParamTypes: paramTypes.get OOB at {i}")
 			let brand = self.declaredParamBrand(paramTypeStarts, position: i, resolved: paramType)
-			out.push(brand if not brand.isEmpty() else self.renderInterfaceTypeName(paramType, interfaceName: interfaceName))
+			out.push(brand if not brand.isEmpty() else self.renderInterfaceParamType(paramType, typeStart: paramTypeStartAt(paramTypeStarts, position: i), interfaceName: interfaceName))
 		end 'each'
 
 		return out
 	end 'renderInterfaceParamTypes'
+
+	function renderInterfaceParamType(paramType MaxonType, typeStart ElementIndex, interfaceName ByteArray) returns ByteArray
+		if maxonTypeTag(paramType) != ValueTypeTag.genericInstance 'notAnInstance'
+			return self.renderInterfaceTypeName(paramType, interfaceName: interfaceName)
+		end 'notAnInstance'
+
+		match self.writtenTypeNameAt(typeStart) 'qualified'
+			named(name) then return name if containsQualifier(name) else self.renderInterfaceTypeName(paramType, interfaceName: interfaceName)
+			unnamed then return self.renderInterfaceTypeName(paramType, interfaceName: interfaceName)
+		end 'qualified'
+	end 'renderInterfaceParamType'
 
 	// Render an interface method's RETURN to its source string — `void` for no `returns`, else the type.
 	function renderInterfaceReturnType(returnType MaxonReturnType, interfaceName ByteArray) returns ByteArray
@@ -31796,7 +31828,7 @@ export type Parser
 			return domain
 		end 'suits'
 
-		throw SourceParseError.unsupported("the constant written for field '{fieldName}' of the `{String.from(struct.name)}` backing, which is declared `{maxonTypeName(fieldType, typeNames: self.artifact.typeNames)}` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`", line: caseTok.line, column: caseTok.column)
+		throw SourceParseError.unsupported("the constant written for field '{fieldName}' of the `{String.from(struct.name)}` backing, which is declared `{maxonTypeDisplayName(fieldType, typeNames: self.artifact.typeNames, signatures: self.signatures)}` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`", line: caseTok.line, column: caseTok.column)
 	end 'requireEnumBackingFieldValueSuitsField'
 
 	// The domain gate, spelled as a `throws` so both askers can use it — the door below (once per declared
@@ -32408,8 +32440,9 @@ export type Parser
 
 		// A NESTED (inner) typealias (P1.6-C) — `export typealias Idx = int(0 to u64.max)`. The
 		// `export` (visibility) is already consumed above; a nested typealias takes no `static`. Its
-		// visibility is inert for the per-instance forms at this rung (an inner alias erases to `integer`, so
-		// it names no cross-file value).
+		// visibility is its OWN modifier, as any member's is: unmarked is file-private, and another file
+		// naming a file-private inner alias is E3008 (`requireInnerAliasNameable`). An interface's inner alias
+		// takes the interface's visibility instead.
 		if self.at(TokenKind.typealias) 'nestedTypeAlias'
 			if isStatic 'staticInnerAlias'
 				let tok = self.current()
@@ -32583,6 +32616,7 @@ export type Parser
 		// `with` arguments of a parameterized-interface type are still readable at, erased by the same call and
 		// read by the same `bindParameters`.
 		var paramTypeStarts = TokenIndexArray.create()
+		var ownTypeParams = ByteArrayArray.create()
 
 		// The height BEFORE any list is read, so `claimDefaultHelpersForRegistrationName` below can tell this
 		// declaration's own captures from every earlier one's — see there, and `DefaultHelperOwner`. Read
@@ -32695,7 +32729,7 @@ export type Parser
 			try self.consume(TokenKind.rightParen)
 
 			if self.at(TokenKind.uses) 'aTypeParameterList'
-				_ = try self.readFunctionTypeParams()
+				ownTypeParams = try self.readFunctionTypeParams()
 			end 'aTypeParameterList'
 		end 'aFunctionHead'
 
@@ -32740,6 +32774,8 @@ export type Parser
 		end 'anInstanceWhereClause'
 
 		try self.requireDeclarationHeaderLineEnd()
+
+		let signatureTypeNames = self.writtenSignatureTypeNames(visibility != Visibility.file, paramNames: paramNames, paramTypeStarts: paramTypeStarts, returnTypeStart: returnTypeStart, hasReturnType: not returnSpelling.isEmpty(), ownTypeParams: ownTypeParams)
 
 		// After the whole head, so a malformed head is reported by the parse's own positioned error
 		// rather than as a compiler bug.
@@ -33072,7 +33108,7 @@ export type Parser
 		self.publishExistentialInstances(func)
 		self.fileDeferredProvenance(func)
 		self.publishDebugLocals(func)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints), returnType: returnType, nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath, synthesized: false, role: self.declarationRoleOf(nameTok))
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints, writtenTypeNames: signatureTypeNames), returnType: returnType, nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath, synthesized: false, role: self.declarationRoleOf(nameTok))
 		self.commitRangeChecks(name)
 	end 'parseFunction'
 
@@ -34113,12 +34149,12 @@ export type Parser
 	end 'declaredExistentialInstanceAt'
 
 	function existentialClaimOf(aliasName ByteArray, readerFilePath FilePath) returns ExistentialClaim throws AbsentError
-		if not self.signatures.isGenericAliasFor(aliasName, readerFilePath: readerFilePath) 'namesNoInstance'
+		if not self.signatures.isAliasOfFormFor(aliasName, readerFilePath: readerFilePath, wanted: FormAliasKind.generic) 'namesNoInstance'
 			throw AbsentError.absent
 		end 'namesNoInstance'
 
 		match self.signatures.scopedGenericAliasDecl(aliasName, readerFilePath: readerFilePath) 'declared'
-			undeclared then panic("existentialClaimOf: '{String.from(aliasName)}' is a generic alias as '{readerFilePath.toString()}' reads it, yet no declaration of it is held — `isGenericAliasFor` and `scopedGenericAliasDecl` read one registry")
+			undeclared then panic("existentialClaimOf: '{String.from(aliasName)}' is a generic alias as '{readerFilePath.toString()}' reads it, yet no declaration of it is held — `isAliasOfFormFor` and `scopedGenericAliasDecl` read one registry")
 			declared(decl) then return ExistentialClaim.create(self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: readerFilePath), scopeFilePath: decl.filePath)
 		end 'declared'
 	end 'existentialClaimOf'
@@ -34129,7 +34165,7 @@ export type Parser
 		if let declaringType = try declaringTypeOf(callee) 'aMethod'
 			let nested = joinQualifiedName(declaringType, member: aliasName)
 
-			if self.signatures.isGenericAliasFor(nested, readerFilePath: declFilePath) 'anInnerAliasOfTheDeclaringType'
+			if self.signatures.isAliasOfFormFor(nested, readerFilePath: declFilePath, wanted: FormAliasKind.generic) 'anInnerAliasOfTheDeclaringType'
 				return try self.existentialClaimOf(nested, readerFilePath: declFilePath)
 			end 'anInnerAliasOfTheDeclaringType'
 		end 'aMethod'
@@ -34635,7 +34671,7 @@ export type Parser
 		self.publishExistentialInstances(helper)
 		self.fileDeferredProvenance(helper)
 		self.publishDebugLocals(helper)
-		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), returnType: returnType, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true, role: FunctionDeclarationRole.ordinary)
+		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints, writtenTypeNames: sharedEmptyWrittenTypeNames), returnType: returnType, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true, role: FunctionDeclarationRole.ordinary)
 		self.commitRangeChecks(helperName)
 	end 'parseDefaultHelperBody'
 
@@ -35538,6 +35574,7 @@ export type Parser
 				end 'aQualifiedNominal'
 
 				self.recordQualifiedTypeNameUse(qualified)
+				try self.requireInnerAliasNameable(qualified, written: qualified, anchor: tok)
 
 				// ⭐⭐ **A DIRECTORY-QUALIFIED FUNCTION TYPEALIAS IS A `function` PLACE, exactly as the bare
 				// spelling of it is** — the arm far below, applied to the mirror
@@ -35552,9 +35589,13 @@ export type Parser
 
 					match declared 'declared'
 						none then break 'declared'
-						one(kind, declFilePath, name, _) then return self.namespaceQualifiedType(qualified, kind: kind, declFilePath: declFilePath, name: name)
+						one(kind, declFilePath, name, _) then return self.namespaceQualifiedType(kind, declFilePath: declFilePath, name: name)
 					end 'declared'
 				end 'theWholeProgramIsKnown'
+
+				if self.signatures.allFilesFolded and self.signatures.isGenericAliasInAnyFile(qualified) 'aQualifiedInnerGenericAlias'
+					return self.genericAliasDenotedType(qualified, readerFilePath: self.filePath)
+				end 'aQualifiedInnerGenericAlias'
 
 				return MaxonType.named(self.artifact.typeNames.intern(qualified))
 			end 'qualifiedMember'
@@ -35643,6 +35684,10 @@ export type Parser
 			if self.namesInnerAliasHere(name) 'innerAlias'
 				let qualifiedInner = joinQualifiedName(self.enclosingTypeName(), member: name)
 
+				if name.equals(tok.value) and not self.namesAnEnclosingInnerAlias(name) 'aMemberAnotherBodyDeclaredAndTheAuthorWrote'
+					try self.requireInnerAliasNameable(qualifiedInner, written: name, anchor: tok)
+				end 'aMemberAnotherBodyDeclaredAndTheAuthorWrote'
+
 				if self.signatures.allFilesFolded and self.signatures.isGenericAliasInAnyFile(qualifiedInner) 'genericInnerAlias'
 					return self.genericAliasDenotedType(qualifiedInner, readerFilePath: self.filePath)
 				end 'genericInnerAlias'
@@ -35697,20 +35742,18 @@ export type Parser
 			// ⚠ Every OTHER reader of these registries runs in the real parse only — a call base, a cast
 			// target, an instantiation check — so it needs no gate; a gate there would assert something that
 			// cannot be false.
-			// ⭐⭐ **AMBIGUITY IS DECIDED BEFORE THE FORM ARMS, AND IT USED TO BE DECIDED AFTER THEM (N1c).**
-			// While a cross-FORM pair of one name was a declaration error, no ambiguous name could reach a
-			// form arm and "the last arm is where a bare ranged-alias name lands" was a complete statement.
-			// Once two files may export one name in two FORMS (`typeNamePairMayCoexist`), the function-alias
-			// arm below CLAIMED such a name and returned — so `50 as Score`, with a ranged `api.Score` and a
-			// function `legacy.Score` both in scope, was **E3009 `Cannot cast from int to function`** instead
-			// of the E3063 that names both candidates. The question is "could this reference mean more than
-			// one declaration", which is prior to what any one of them denotes.
+			// ⭐⭐ **AMBIGUITY IS DECIDED BEFORE THE FORM ARMS.** Two files may export one name in two FORMS
+			// (`typeNamePairMayCoexist`), and the function-alias arm below would CLAIM such a name and return —
+			// so `50 as Score`, with a ranged `api.Score` and a function `legacy.Score` both in scope, would be
+			// **E3009 `Cannot cast from int to function`** instead of the E3063 that names both candidates. The
+			// question is "could this reference mean more than one declaration", which is prior to what any one
+			// of them denotes.
 			if self.namesThisBodysNestedFunctionAlias(name) 'thisBodysOwnFunctionAlias'
 				return self.functionAliasType(joinQualifiedName(self.enclosingTypeName(), member: name), readerFilePath: self.filePath)
 			end 'thisBodysOwnFunctionAlias'
 
 			try self.requireUnambiguousTypeName(name, anchor: tok)
-			let identity = self.signatures.writtenTypeNameIdentity(name, readerFilePath: self.filePath)
+			let identity = self.signatures.bareWrittenKey(name, readerFilePath: self.filePath)
 
 			// ⭐⭐ **AN `interface` NAME IN A TYPE POSITION IS AN EXISTENTIAL (P1.7a-existentials slice 1)** —
 			// `function useIt(b Backend)`, `let t as Tagged`, `returns Producer`. It resolves to
@@ -35753,12 +35796,12 @@ export type Parser
 				// It resolves to `genericInstance(giid)`, the read-side twin of the function-alias arm below —
 				// or, over an `interface` base, to the EXISTENTIAL that instance denotes. `instanceDenotedType`
 				// is the one place that split is made; the arm ABOVE is the bare-name half of the same fact.
-				// The reader-aware form probes (`isGenericAliasFor` and its two twins below) rather than the bare
+				// The reader-aware form probes (`isAliasOfFormFor` and `isFunctionAliasFor`) rather than the bare
 				// ones: two files may declare one name in two alias FORMS, and each means its own. The QUALIFIED
 				// spellings above and inside the function arm stay bare, and that is structural rather than an
 				// omission — a nominal type name is an identifier and holds no `.`, so `Wrapper.Idx` can be
 				// claimed by no second kind and can never be contested.
-				if self.signatures.isGenericAliasFor(identity, readerFilePath: self.filePath) 'genericAlias'
+				if self.signatures.isAliasOfFormFor(identity, readerFilePath: self.filePath, wanted: FormAliasKind.generic) 'genericAlias'
 					return self.genericAliasDenotedType(identity, readerFilePath: self.filePath)
 				end 'genericAlias'
 
@@ -35774,7 +35817,7 @@ export type Parser
 			// THROUGH to the tuple's own `structRef`, minting no identity of its own, which is what makes a
 			// `Pair`-typed slot and a `(Num, Num)`-typed one the same type. `tupleAliasTarget` canonicalizes,
 			// so a target the SWEEP registered under the source spelling answers under the canonical one.
-			if self.signatures.isTupleAliasFor(identity, readerFilePath: self.filePath) and self.tupleAliasMeaningIsSettled(identity) 'tupleAlias'
+			if self.signatures.isAliasOfFormFor(identity, readerFilePath: self.filePath, wanted: FormAliasKind.tuple) and self.tupleAliasMeaningIsSettled(identity) 'tupleAlias'
 				return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetFrom(identity, readerFilePath: self.filePath)))
 			end 'tupleAlias'
 
@@ -35797,7 +35840,7 @@ export type Parser
 				end 'scoped'
 			end 'insideATypeParameterScope'
 
-			return MaxonType.named(self.artifact.typeNames.intern(identity))
+			return MaxonType.named(self.artifact.typeNames.intern(self.signatures.declaredIdentityOfSpelling(identity, declFilePath: self.filePath)))
 		end 'named'
 
 		// ⭐⭐ **THE RANGED-TYPEALIAS RULE'S ONE DOOR.** `int` and `float` name a DOMAIN and no RANGE, and every
@@ -38259,7 +38302,9 @@ export type Parser
 		let declaredBrand = self.internedName(binding.brandId)
 
 		if self.signatures.aggregatesConflict(declaredAggregate, expectedTag: declaredTag, expectedNameId: typeNameIdOf(binding.varType), expectedBrand: declaredBrand, got: assignedAggregate, gotTag: valueTag, gotNameId: self.valueNameId(value), gotBrand: self.brandOf(value), readerFilePath: self.filePath) 'aggregateReassignMismatch'
-			try self.refuseUnlessDeferred(SourceParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.variable, name: nameTok.value, owner: SlotOwner.unowned), got: self.valueDisplayTypeName(value), expected: self.brandedDisplayTypeName(declaredTag, nameId: typeNameIdOf(binding.varType), brand: declaredBrand), line: nameTok.line, column: nameTok.column), value: value)
+			let declaredShown = self.brandedDisplayTypeName(declaredTag, nameId: typeNameIdOf(binding.varType), brand: declaredBrand)
+			let paired = self.pairedDisplays(value, declaredTag: declaredTag, declaredNameId: typeNameIdOf(binding.varType), declaredBrand: declaredBrand, declaredIdentity: declaredAggregate, declaredShown: declaredShown)
+			try self.refuseUnlessDeferred(SourceParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.variable, name: nameTok.value, owner: SlotOwner.unowned), got: paired.got, gotNote: paired.gotNote, expected: paired.declared, expectedNote: paired.declaredNote, line: nameTok.line, column: nameTok.column), value: value)
 			return
 		end 'aggregateReassignMismatch'
 
@@ -39187,7 +39232,7 @@ export type Parser
 	end 'fileMayUseReservedNames'
 
 	// What a user may not declare, in one place. Two reservations, both raised as E2051 at the
-	// declared name — the token the user has to change: a name starting with `ReservedNamePrefix`, and
+	// declared name — the token the user has to change: a name starting with `ReservedTypeNamePrefix`, and
 	// the implicit receiver's own name, `self` (`ReceiverSourceSpelling`; see `bindsInto` for the one
 	// namespace it is legal in).
 	//
@@ -39242,12 +39287,7 @@ export type Parser
 		// two exemptions below are linear scans (`isMintedStdlibShadowName`'s also allocates): asked
 		// first, they would cost `sites × renames` at every stdlib declaration. The scale ladder cannot
 		// see a regression here, because its corpus contests no name.
-		//
-		// ⚠ The early-out is correct for any mint prefix: it does not assume
-		// `SignatureIndex.ReservedTypeNamePrefix` equals `ReservedNamePrefix`. A name that fails this
-		// test is one this door was never going to refuse, so the exemptions only ever matter on the
-		// reserved side.
-		if not bytesStartWith(declaredName, prefix: ReservedNamePrefix) 'notReserved'
+		if not isCompilerReservedName(declaredName) 'notReserved'
 			return
 		end 'notReserved'
 
@@ -39475,7 +39515,7 @@ export type Parser
 	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, placeOwner SlotOwner, voice SlotMismatchVoice) throws SourceParseError
 		match checkDeclaredType(value, declared: declared) 'declared'
 			ok then break 'declared'
-			mismatch then throw self.slotMismatchError(voice, placeDoor: door, placeName: nameTok.value, placeOwner: placeOwner, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: typeTagName(value), gotTag: value, resolvedExpected: typeTagName(declared), declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
+			mismatch then throw self.slotMismatchError(voice, placeDoor: door, placeName: nameTok.value, placeOwner: placeOwner, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: typeTagName(value), gotNote: "", gotTag: value, resolvedExpected: typeTagName(declared), expectedNote: "", declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
 			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(typeTagName(value), targetType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 
 			// A FUNCTION VALUE into a NON-function place (P1.5-A1) — the spec's specific E3005 ("cannot
@@ -39517,28 +39557,29 @@ export type Parser
 	// argument voice, documented there rather than restated here — which is why `gotTag` is threaded down: the
 	// probe's answer depends on what the OTHER half of the sentence turned out to be. A place whose declaration
 	// spelling was recorded (`placeSpelling`) prints that spelling in every voice (`declaredPlaceDisplay`).
-	function slotMismatchError(voice SlotMismatchVoice, placeDoor FunctionTypeDoor, placeName ByteArray, placeOwner SlotOwner, placeBrand ByteArray, placeSpelling ByteArray, got String, gotTag ValueTypeTag, resolvedExpected String, declared ValueTypeTag, declaredNameId TypeNameId, line LineNumber, column ColumnNumber) returns SourceParseError
-		let slotDisplay = self.declaredPlaceDisplay(placeSpelling, brand: placeBrand, tag: declared, nameId: declaredNameId, gotTag: gotTag)
-		let assignedDisplay = resolvedExpected if placeSpelling.isEmpty() else slotDisplay
+	function slotMismatchError(voice SlotMismatchVoice, placeDoor FunctionTypeDoor, placeName ByteArray, placeOwner SlotOwner, placeBrand ByteArray, placeSpelling ByteArray, got String, gotNote String, gotTag ValueTypeTag, resolvedExpected String, expectedNote String, declared ValueTypeTag, declaredNameId TypeNameId, line LineNumber, column ColumnNumber) returns SourceParseError
+		let placeDisplay = self.declaredPlaceDisplay(placeSpelling, brand: placeBrand, tag: declared, nameId: declaredNameId, gotTag: gotTag)
+		let slotDisplay = "{placeDisplay}{expectedNote}"
+		let gotDisplay = "{got}{gotNote}"
 		return match voice 'v'
-			assignedPlace gives SourceParseError.assignTypeMismatch(assignedPlacePhrase(placeDoor, name: placeName, owner: placeOwner), got: got, expected: assignedDisplay, line: line, column: column)
-			containerElementArgument gives SourceParseError.builtinArgumentType(String.from(ArrayValueLabel), expected: slotDisplay, got: got, line: line, column: column)
+			assignedPlace gives SourceParseError.assignTypeMismatch(assignedPlacePhrase(placeDoor, name: placeName, owner: placeOwner), got: got, gotNote: gotNote, expected: resolvedExpected if placeSpelling.isEmpty() else placeDisplay, expectedNote: expectedNote, line: line, column: column)
+			containerElementArgument gives SourceParseError.builtinArgumentType(String.from(ArrayValueLabel), expected: slotDisplay, got: gotDisplay, line: line, column: column)
 
 			// The payload voice quotes no name at all (there is none to quote) and spells the EXPECTED side
 			// through `declaredSlotDisplayName`, the same probe the argument voice makes — which is what puts
 			// `enum-full.md`'s `expected Integer` (a ranged alias) and `union-cases.md`'s `expected Color` (an
 			// enum) under one rule instead of two.
-			payloadArgument gives SourceParseError.typeMismatchExpectedGot(slotDisplay, got: got, line: line, column: column)
+			payloadArgument gives SourceParseError.typeMismatchExpectedGot(slotDisplay, got: gotDisplay, line: line, column: column)
 
 			// The argument sentence one voice up, quoting the slot's OWN name — which for a request union's
 			// payload is the message parameter the author declared. See `SlotMismatchVoice.messageArgument`.
-			messageArgument gives SourceParseError.builtinArgumentType(String.from(placeName), expected: slotDisplay, got: got, line: line, column: column)
+			messageArgument gives SourceParseError.builtinArgumentType(String.from(placeName), expected: slotDisplay, got: gotDisplay, line: line, column: column)
 		end 'v'
 	end 'slotMismatchError'
 
 	function declaredPlaceDisplay(spelling ByteArray, brand ByteArray, tag ValueTypeTag, nameId TypeNameId, gotTag ValueTypeTag) returns String
 		if spelling.isEmpty() and not brand.isEmpty() 'aBrandWithNoRecordedSpelling'
-			return String.from(brand)
+			return self.signatures.aliasIdentityDisplay(brand)
 		end 'aBrandWithNoRecordedSpelling'
 
 		return self.declaredSpellingDisplay(spelling, tag: tag, nameId: nameId, gotTag: gotTag)
@@ -39551,7 +39592,7 @@ export type Parser
 			return self.declaredSlotDisplayName(tag, nameId: nameId, gotTag: gotTag)
 		end 'noSpellingToQuote'
 
-		return String.from(spelling)
+		return self.signatures.aliasIdentityDisplay(spelling)
 	end 'declaredSpellingDisplay'
 
 	// ⭐ **HOW A DECLARED SLOT'S TYPE IS SPELLED WHERE THE SENTENCE NAMES WHAT WAS *EXPECTED* — the parser's
@@ -39699,7 +39740,7 @@ export type Parser
 	end 'internedName'
 
 	function functionAliasType(name ByteArray, readerFilePath FilePath) returns MaxonType
-		return MaxonType.function(self.artifact.typeNames.intern(self.signatures.functionAliasScopedName(name, readerFilePath: readerFilePath)))
+		return MaxonType.function(self.artifact.typeNames.intern(self.signatures.declaredIdentityOfSpelling(name, declFilePath: readerFilePath)))
 	end 'functionAliasType'
 
 	// The interned type-name id of an SSA value, read straight from the dense `valueNameIds` column —
@@ -39709,13 +39750,17 @@ export type Parser
 		return try self.bodyState.valueNameIds.get(value) otherwise panic("Parser.valueNameId: value v{value} has no recorded type name — the two type columns fell out of lockstep")
 	end 'valueNameId'
 
-	// Stamp the brand `value` wears — the generic-instance alias it was declared, built or read under. An
-	// EMPTY brand stamps nothing: a value with no statically-known alias DECAYS into any brand of its
+	// Stamp the brand `value` wears — the generic-instance alias it was declared, built or read under, or the
+	// buffer view of one (`bufferViewBrandOver`). An EMPTY brand stamps nothing: a value with no statically-known alias DECAYS into any brand of its
 	// instance, and its per-instance `Idx` results and arguments lose their per-instance identity.
 	function brandValue(value ValueId, brand ByteArray)
 		if brand.isEmpty() 'noBrand'
 			return
 		end 'noBrand'
+
+		if isCompilerReservedName(brand) and not isBufferViewBrand(brand) 'anUnknownCompilerMint'
+			panic("brandValue: '{String.from(brand)}' is a compiler-reserved brand and the buffer view is the only one the compiler mints — an author cannot spell a name that starts with `__`")
+		end 'anUnknownCompilerMint'
 
 		try self.bodyState.valueBrandIds.set(value, value: self.artifact.typeNames.intern(brand)) otherwise panic("brandValue: v{value} has no brand slot — every SSA value is minted through mintValue, which seeds the column")
 	end 'brandValue'
@@ -40169,14 +40214,14 @@ export type Parser
 	// unnamed — so `p + i` over two aliases adopted the right-hand one instead of being refused.
 	function operandAliasName(value ValueId) returns ByteArray
 		if let recorded = try self.castAliasOf(value) 'aCastNamedIt'
-			return self.signatures.rangedAliasIdentityOf(self.internedName(recorded), readerFilePath: self.filePath)
+			return self.signatures.rangedIdentityOfSpelling(self.internedName(recorded), readerFilePath: self.filePath)
 		end 'aCastNamedIt'
 
 		if self.tagOf(value) != ValueTypeTag.named 'carriesNoName'
 			return EmptySourceText
 		end 'carriesNoName'
 
-		return self.signatures.rangedAliasIdentityOf(self.valueTypeName(value), readerFilePath: self.filePath)
+		return self.signatures.rangedIdentityOfSpelling(self.valueTypeName(value), readerFilePath: self.filePath)
 	end 'operandAliasName'
 
 	// The half of `operandAliasName` a NEGATION may keep: an alias whose own range admits a negative. An
@@ -40213,7 +40258,7 @@ export type Parser
 		let ancestor = self.signatures.nearestCommonAliasAncestor(members, readerFilePath: self.filePath)
 
 		if ancestor.isEmpty() 'noCommonAncestor'
-			throw SourceParseError.operandAliasMismatch(opName, left: sourceSpelledAliasText(self.operandAliasOf(lhs).identity), right: sourceSpelledAliasText(self.operandAliasOf(rhs).identity), line: opTok.line, column: opTok.column)
+			throw SourceParseError.operandAliasMismatch(opName, left: self.signatures.aliasIdentityDisplay(self.operandAliasOf(lhs).identity), right: self.signatures.aliasIdentityDisplay(self.operandAliasOf(rhs).identity), line: opTok.line, column: opTok.column)
 		end 'noCommonAncestor'
 
 		return OperandAlias.mixed(operandAliasSetBrand(members), ancestor: ancestor)
@@ -40544,6 +40589,77 @@ export type Parser
 		return spelled.build().toByteArray()
 	end 'typeSpellingAt'
 
+	function writtenSignatureTypeNames(audited bool, paramNames ByteArrayArray, paramTypeStarts TokenIndexArray, returnTypeStart ElementIndex, hasReturnType bool, ownTypeParams ByteArrayArray) returns WrittenTypeNames
+		if not audited or self.isLibrarySource() 'aSignatureNoAuthorAudits'
+			return sharedEmptyWrittenTypeNames
+		end 'aSignatureNoAuthorAudits'
+
+		var names = ByteArrayArray.create()
+		var ends = WrittenTypeNameEnds.create()
+
+		for position in 0 upto paramNames.count() 'eachParam'
+			if not (try paramNames.get(position) otherwise panic("writtenSignatureTypeNames: paramNames.get OOB at {position} inside its own `upto` bound")).equals(SelfParamName) 'aWrittenParameterType'
+				self.appendWrittenTypeNamesAt(paramTypeStartAt(paramTypeStarts, position: position), ownTypeParams: ownTypeParams, into: names)
+			end 'aWrittenParameterType'
+
+			ends.push(names.count())
+		end 'eachParam'
+
+		if hasReturnType 'aReturnClause'
+			self.appendWrittenTypeNamesAt(returnTypeStart, ownTypeParams: ownTypeParams, into: names)
+		end 'aReturnClause'
+
+		ends.push(names.count())
+		return WrittenTypeNames.create(names, ends: ends)
+	end 'writtenSignatureTypeNames'
+
+	function appendWrittenTypeNamesAt(start ElementIndex, ownTypeParams ByteArrayArray, into ByteArrayArray)
+		var depth = 0 as TypeSpellingDepth
+		var rangeDepth = 0 as TypeSpellingDepth
+		var q = start
+
+		while not self.typeSpellingEndsAt(q, depth: depth, first: start) 'eachToken'
+			let kind = self.kindAt(q)
+
+			if kind == TokenKind.leftParen 'opens'
+				depth = depth + 1
+
+				if rangeDepth == 0 and q > start and keywordIsARangedPrimitive(self.tokenAt((q - 1) as ElementIndex)) 'aRangesBounds'
+					rangeDepth = depth
+				end 'aRangesBounds'
+			end 'opens' else if kind == TokenKind.rightParen 'closes'
+				if depth == rangeDepth 'theRangeCloses'
+					rangeDepth = 0
+				end 'theRangeCloses'
+
+				depth = depth - 1
+			end 'closes'
+
+			if kind != TokenKind.identifier or rangeDepth != 0 'notAWrittenTypeName'
+				q = q + 1
+				continue
+			end 'notAWrittenTypeName'
+
+			let dots = self.dottedChainLengthAt(q)
+
+			if dots > 0 'aQualifiedName'
+				into.push(self.assembleDottedChainAt(q, dots: dots))
+			end 'aQualifiedName' else 'aBareName'
+				self.appendBareTypeName(self.tokenAt(q).value, ownTypeParams: ownTypeParams, into: into)
+			end 'aBareName'
+
+			q = q + dots * TokensPerQualifierSegment + 1
+		end 'eachToken'
+	end 'appendWrittenTypeNamesAt'
+
+	function appendBareTypeName(name ByteArray, ownTypeParams ByteArrayArray, into ByteArrayArray)
+		if namesInclude(self.enclosingTypeParams, name: name) or namesInclude(ownTypeParams, name: name) 'aTypeParameterInScope'
+			return
+		end 'aTypeParameterInScope'
+
+		into.push(self.innerAliasKeyOrName(name).clone())
+	end 'appendBareTypeName'
+
 	function typeSpellingEndsAt(q ElementIndex, depth TypeSpellingDepth, first ElementIndex) returns bool
 		let kind = self.kindAt(q)
 
@@ -40562,17 +40678,37 @@ export type Parser
 		return kind == TokenKind.comma or kind == TokenKind.rightParen or kind == TokenKind.equals or kind == TokenKind.throws or kind == TokenKind.charLiteral or kind == TokenKind.gives or kind == TokenKind.where
 	end 'typeSpellingEndsAt'
 
-	// The bare identifier a type position was written as, or `notABareName` when it was spelled any other
+	// The bare identifier a type position was written as, or `unnamed` when it was spelled any other
 	// way — a primitive keyword, an inline instance (`Array with Integer`), a dotted name. A spelling is read at the
 	// declaration and judged by its reader (`declaredBrand`), because the sweep that records a field or a
 	// payload runs before the alias registry can say what the name denotes.
 	function spelledTypeNameAt(index ElementIndex) returns SpelledFieldName
 		if self.kindAt(index) != TokenKind.identifier or self.typeSpellingContinuesPast(index) 'notABareName'
-			return SpelledFieldName.notABareName
+			return SpelledFieldName.unnamed
 		end 'notABareName'
 
-		return SpelledFieldName.bareName(self.tokenAt(index).value)
+		return SpelledFieldName.named(self.tokenAt(index).value)
 	end 'spelledTypeNameAt'
+
+	function writtenTypeNameAt(index ElementIndex) returns SpelledFieldName
+		let bare = self.spelledTypeNameAt(index)
+
+		match bare 'bare'
+			named then return bare
+			unnamed then return self.spelledQualifiedNameAt(index)
+		end 'bare'
+	end 'writtenTypeNameAt'
+
+	function spelledQualifiedNameAt(index ElementIndex) returns SpelledFieldName
+		let dots = self.dottedChainLengthAt(index)
+		let last = index + ((dots * TokensPerQualifierSegment) as ElementIndex)
+
+		if dots == 0 or self.kindAt(last) != TokenKind.identifier or self.typeSpellingContinuesPast(last) 'notAQualifiedName'
+			return SpelledFieldName.unnamed
+		end 'notAQualifiedName'
+
+		return SpelledFieldName.named(self.assembleDottedChainAt(index, dots: dots))
+	end 'spelledQualifiedNameAt'
 
 	function typeSpellingContinuesPast(nameAt ElementIndex) returns bool
 		let next = self.kindAt(nameAt + 1)
@@ -40590,10 +40726,27 @@ export type Parser
 		return self.brandOfSpelling(spelled)
 	end 'declaredBrand'
 
+	function declaredParamSpelling(paramTypeStarts TokenIndexArray, position ElementIndex, resolved MaxonType) returns ByteArray
+		let brand = self.declaredParamBrand(paramTypeStarts, position: position, resolved: resolved)
+
+		if not brand.isEmpty() 'aBrandedParameter'
+			return brand
+		end 'aBrandedParameter'
+
+		if self.isLibrarySource() 'aLibraryFilesOwnSpelling'
+			return EmptySourceText
+		end 'aLibraryFilesOwnSpelling'
+
+		match self.writtenTypeNameAt(paramTypeStartAt(paramTypeStarts, position: position)) 'spelling'
+			named(name) then return name if isCompilerReservedName(name) else EmptySourceText
+			unnamed then return EmptySourceText
+		end 'spelling'
+	end 'declaredParamSpelling'
+
 	function declaredParamBrand(paramTypeStarts TokenIndexArray, position ElementIndex, resolved MaxonType) returns ByteArray
-		match self.spelledTypeNameAt(paramTypeStartAt(paramTypeStarts, position: position)) 'spelling'
-			bareName(name) then return self.declaredBrand(name, resolved: resolved)
-			notABareName then return EmptySourceText
+		match self.writtenTypeNameAt(paramTypeStartAt(paramTypeStarts, position: position)) 'spelling'
+			named(name) then return self.declaredBrand(name, resolved: resolved)
+			unnamed then return EmptySourceText
 		end 'spelling'
 	end 'declaredParamBrand'
 
@@ -40601,19 +40754,25 @@ export type Parser
 	// with Integer` at file scope names a type an author can write at every door — a parameter, a cast target,
 	// a field. An alias declared INSIDE a type body (`typealias EManagedList = __ManagedList with Element`, in
 	// `List` and again in `ListIterator`) is a spelling of the shared body's instantiation over that type's
-	// own parameters, registered under a qualified name (`List.EManagedList`) that no source position outside
-	// the type can write — there is no cast to it and no parameter spelled with it — so a value branded with
-	// it could never be re-branded, and two types' spellings of one instance would be two types with no door
-	// between them. `containsQualifier` is the test: the registry holds inner aliases qualified.
+	// own parameters, so two types' spellings of one instance would be two types with no door between them
+	// if either branded. The body's bare spelling is refused here and the qualified one (`List.EManagedList`)
+	// by `instanceBrandOfSpelling`.
+	//
+	// Two file-scope declarations of one name over ONE instance are two types, so each declaration's mint
+	// brands (`genericAliasMintIsABrand`).
 	//
 	// A COMPILER-RESERVED spelling (`__ManagedMemory`, the buffer surface of a byte array) brands nothing
 	// either: it is a surface the compiler registers over an author's instance, not a type the author declared.
 	function brandOfSpelling(spelled ByteArray) returns ByteArray
-		if containsQualifier(spelled) or self.namesInnerAliasHere(spelled) or bytesStartWith(spelled, prefix: ReservedNamePrefix) 'notAnAuthorsAlias'
+		if self.signatures.genericAliasMintIsABrand(spelled) 'aDeclarationsOwnMint'
+			return spelled
+		end 'aDeclarationsOwnMint'
+
+		if self.namesInnerAliasHere(spelled) or isCompilerReservedName(spelled) 'notAnAuthorsAlias'
 			return EmptySourceText
 		end 'notAnAuthorsAlias'
 
-		return self.signatures.instanceBrandOfSpelling(spelled) if self.signatures.isGenericAliasFor(spelled, readerFilePath: self.filePath) else EmptySourceText
+		return self.signatures.genericBrandOfWritten(spelled, readerFilePath: self.filePath)
 	end 'brandOfSpelling'
 
 	// The brand an ELEMENT read out of instance `giid` wears — the alias the instantiation spelled its one
@@ -40822,7 +40981,7 @@ export type Parser
 			end 'erasedByResolution' else if tag == ValueTypeTag.genericInstance 'aBrandedInstance'
 				// The BRAND the parameter was declared under, read off the same token `bindParameters` reads
 				// for the callee's own slot; empty for an inline-spelled instance.
-				names.push(self.declaredParamBrand(paramTypeStarts, position: i, resolved: pt))
+				names.push(self.declaredParamSpelling(paramTypeStarts, position: i, resolved: pt))
 			end 'aBrandedInstance' else if tag == ValueTypeTag.structRef and not isReceiver and isTupleTypeName(self.internedName(typeNameIdOf(pt))) 'aWrittenTupleType'
 				names.push(self.typeSpellingAt(paramTypeStartAt(paramTypeStarts, position: i)))
 			end 'aWrittenTupleType' else 'keepsItsOwnTag'
@@ -41169,7 +41328,7 @@ export type Parser
 		// where `checkDeclaredType(named, named)` agrees because `ValueTypeTag.named` is overloaded.
 		match checkDeclaredType(retTag, declared: declaredTag) 'declared'
 			ok then break 'declared'
-			mismatch then throw SourceParseError.returnTypeMismatch(typeTagName(retTag), expected: self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId, gotTag: retTag), line: anchor.line, column: anchor.column)
+			mismatch then throw SourceParseError.returnTypeMismatch(typeTagName(retTag), gotNote: "", expected: self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId, gotTag: retTag), expectedNote: "", line: anchor.line, column: anchor.column)
 			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(typeTagName(retTag), targetType: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
 
 			// A FUNCTION VALUE returned where a NON-function type is declared (P1.5-A1) — the spec's
@@ -41272,16 +41431,19 @@ export type Parser
 		end 'theValueIsOfTheDeclaredType'
 
 		let sourceIsBareLocal = self.rhsWasBareLocalReference(retStart)
+		let returnBrand = self.declaredBrand(self.bodyState.functionReturnSpelling, resolved: declaredType)
 
 		if self.castIsARebrand(value, targetType: declaredType) 'twoBrandsOfOneInstance'
-			return self.rebrandValue(value, targetType: declaredType, brand: self.declaredBrand(self.bodyState.functionReturnSpelling, resolved: declaredType), sourceIsBareLocal: sourceIsBareLocal, opTok: anchor)
+			return self.rebrandValue(value, targetType: declaredType, brand: returnBrand, sourceIsBareLocal: sourceIsBareLocal, opTok: anchor)
 		end 'twoBrandsOfOneInstance'
 
 		if self.signatures.conflictIsBetweenNamedScalars(declaredReturnName, got: returnedName) 'twoNamesOverOneScalar'
 			return try self.convertValueToDeclaredType(value, sourceTag: retTag, targetType: declaredType, targetAlias: self.declaredAliasOfType(declaredType), opTok: anchor, sourceIsBareLocal: sourceIsBareLocal, mustCarryTargetType: false)
 		end 'twoNamesOverOneScalar'
 
-		try self.refuseUnlessDeferred(SourceParseError.returnTypeMismatch(self.valueDisplayTypeName(value), expected: self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId, gotTag: retTag), line: anchor.line, column: anchor.column), value: value)
+		let declaredShown = self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId, gotTag: retTag)
+		let paired = self.pairedDisplays(value, declaredTag: declaredTag, declaredNameId: declaredNameId, declaredBrand: returnBrand, declaredIdentity: declaredReturnName, declaredShown: declaredShown)
+		try self.refuseUnlessDeferred(SourceParseError.returnTypeMismatch(paired.got, gotNote: paired.gotNote, expected: paired.declared, expectedNote: paired.declaredNote, line: anchor.line, column: anchor.column), value: value)
 		return value
 	end 'admitReturnedAggregate'
 
@@ -43358,7 +43520,7 @@ export type Parser
 			return
 		end 'inRange'
 
-		throw SourceParseError.otherwiseOutsideRangedReturn(value, aliasName: String.from(alias.name), low: alias.low, high: alias.high, domain: alias.domain, line: tryTok.line, column: tryTok.column)
+		throw SourceParseError.otherwiseOutsideRangedReturn(value, aliasName: self.signatures.aliasIdentityDisplay(alias.name), low: alias.low, high: alias.high, domain: alias.domain, line: tryTok.line, column: tryTok.column)
 	end 'requireOtherwiseLiteralInRange'
 
 	// `otherwise (e) 'label' … end 'label'` — bind the caught error, then parse the labelled handler block.
@@ -47445,7 +47607,7 @@ export type Parser
 	// source value is the only thing that knows.
 	function carryDeclaredSurface(promoted ValueId, from ValueId)
 		if self.valueIsBufferSurface(from) 'sourceDenotesTheBuffer'
-			self.markBufferSurface(promoted)
+			self.markBufferSurface(promoted, origin: self.brandOf(from))
 		end 'sourceDenotesTheBuffer'
 
 		// ⚠ ONE ARM PER CARRIER, not an `else if` off the arm above, even though the sized answer implies the
@@ -47453,7 +47615,7 @@ export type Parser
 		// coupling the "every site handles ALL of them" obligation exists to keep out. The redundant insert
 		// costs a hash on a set the promotion has already detached.
 		if self.valueIsASizedContainersBuffer(from) 'sourceIsASizedContainersOwnRecord'
-			self.markSizedContainerBuffer(promoted)
+			self.markSizedContainerBuffer(promoted, origin: self.brandOf(from))
 		end 'sourceIsASizedContainersOwnRecord'
 
 		if self.valueElementIsBufferSurface(from) 'sourceHoldsBuffers'
@@ -51175,7 +51337,7 @@ export type Parser
 			// The SAME sentence the written call gets, from the same door, at the one arity this filter selected
 			// on — which is also the arity the loop calls with, so the two are `ProtocolMethodArity` and not two
 			// literals that could drift apart.
-			ambiguous(first, second) then throw SourceParseError.ambiguousWitnessDispatch(String.from(methodName), provider: self.witnessDispatchProviderPhrase(receiver), argCount: ProtocolMethodArity, first: renderWitnessRequirement(first), second: renderWitnessRequirement(second), line: anchor.line, column: anchor.column)
+			ambiguous(first, second) then throw SourceParseError.ambiguousWitnessDispatch(String.from(methodName), provider: self.witnessDispatchProviderPhrase(receiver), argCount: ProtocolMethodArity, first: renderWitnessRequirement(first, signatures: self.signatures), second: renderWitnessRequirement(second, signatures: self.signatures), line: anchor.line, column: anchor.column)
 		end 'pick'
 	end 'witnessProtocolTarget'
 
@@ -55451,7 +55613,10 @@ export type Parser
 			displayArm = try reachingArms.get(1) otherwise panic("valueMergeGiveMismatch: a ternary merge has no second (false) arm")
 		end 'ternaryFalseArm'
 
-		return valueMergeMismatchError(construct == MergeConstruct.ternary, expectedDisplay: self.valueDisplayTypeName(self.giveValueOf(firstArm.give)), gotDisplay: self.valueDisplayTypeName(self.giveValueOf(displayArm.give)), line: matchTok.line, column: matchTok.column)
+		let firstGive = self.giveValueOf(firstArm.give)
+		let gotGive = self.giveValueOf(displayArm.give)
+		let paired = self.pairedDisplays(gotGive, declaredTag: self.tagOf(firstGive), declaredNameId: self.valueNameId(firstGive), declaredBrand: self.brandOf(firstGive), declaredIdentity: self.aggregateNameOf(self.tagOf(firstGive), nameId: self.valueNameId(firstGive)), declaredShown: self.valueDisplayTypeName(firstGive))
+		return valueMergeMismatchError(construct == MergeConstruct.ternary, expectedDisplay: self.valueDisplayTypeName(firstGive), gotDisplay: self.valueDisplayTypeName(gotGive), line: matchTok.line, column: matchTok.column, expectedNote: paired.declaredNote, gotNote: paired.gotNote)
 	end 'valueMergeGiveMismatch'
 
 	// The `gives` value an expression arm carries. Only ever asked of an expression-match arm that REACHES
@@ -55717,11 +55882,11 @@ export type Parser
 	function propagateBufferSurfaceToPhi(phi ValueId, gives ValueIdArray)
 		for give in gives 'eachGive'
 			if self.valueIsASizedContainersBuffer(give) 'aSizedContainersOwnRecord'
-				self.markSizedContainerBuffer(phi)
+				self.markSizedContainerBuffer(phi, origin: self.brandOf(phi))
 			end 'aSizedContainersOwnRecord'
 
 			if self.valueIsBufferSurface(give) 'aBuffer'
-				self.markBufferSurface(phi)
+				self.markBufferSurface(phi, origin: self.brandOf(phi))
 			end 'aBuffer'
 
 			if self.valueElementIsBufferSurface(give) 'holdsBuffers'
@@ -60143,8 +60308,8 @@ export type Parser
 
 		let candidates = self.signatures.ambiguousAliasCandidates(name, readerFilePath: self.filePath)
 
-		if candidates.count() > 0 'severalMeanings'
-			throw ambiguousTypeNameRefusal(name, candidates: candidates, anchor: anchor)
+		if candidates.isAmbiguous() 'severalMeanings'
+			throw ambiguousTypeNameRefusal(name, candidates: candidates.names, ownDeclarationUnqualifiable: candidates.ownDeclarationUnqualifiable, anchor: anchor)
 		end 'severalMeanings'
 
 		let hiding = self.signatures.typeNameHidingFrom(name, readerFilePath: self.filePath)
@@ -60155,7 +60320,7 @@ export type Parser
 	function qualifiedTypeDeclarationAt(qualified ByteArray, anchor Token) returns NameableQualifiedType throws SourceParseError
 		match self.signatures.namespaceDeclarationOf(qualified, readerFilePath: self.filePath) 'declared'
 			none then break 'declared'
-			several(candidates) then throw ambiguousTypeNameRefusal(qualified, candidates: candidates, anchor: anchor)
+			several(candidates) then throw ambiguousTypeNameRefusal(qualified, candidates: candidates, ownDeclarationUnqualifiable: false, anchor: anchor)
 			one(kind, declFilePath, name) then return NameableQualifiedType.one(kind, declFilePath: declFilePath, name: name, verdict: TypeNameVerdict.nameable)
 		end 'declared'
 
@@ -60174,10 +60339,10 @@ export type Parser
 		return self.signatures.isFunctionAliasInAnyFile(joinQualifiedName(typeName, member: name))
 	end 'namesThisBodysNestedFunctionAlias'
 
-	function namespaceQualifiedType(qualified ByteArray, kind TypeDeclKind, declFilePath FilePath, name ByteArray) returns MaxonType
+	function namespaceQualifiedType(kind TypeDeclKind, declFilePath FilePath, name ByteArray) returns MaxonType
 		match kind 'kind'
-			rangedAlias then return MaxonType.named(self.artifact.typeNames.intern(self.qualifiedAliasIdentity(qualified, name: name, kind: kind, declFilePath: declFilePath)))
-			functionAlias then return self.functionAliasType(self.qualifiedAliasIdentity(qualified, name: name, kind: kind, declFilePath: declFilePath), readerFilePath: self.filePath)
+			rangedAlias then return MaxonType.named(self.artifact.typeNames.intern(self.signatures.declarationIdentityOf(name, kind: kind, declFilePath: declFilePath)))
+			functionAlias then return MaxonType.function(self.artifact.typeNames.intern(self.signatures.declarationIdentityOf(name, kind: kind, declFilePath: declFilePath)))
 			genericAlias then return self.genericAliasDenotedType(self.signatures.aliasFamilyIdentity(name), readerFilePath: declFilePath)
 			tupleAlias then return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetFrom(self.signatures.aliasFamilyIdentity(name), readerFilePath: declFilePath)))
 			structType or
@@ -60219,7 +60384,7 @@ export type Parser
 			return name
 		end 'aCollapsedQualifiedNominal'
 
-		return self.signatures.writtenTypeNameIdentity(name, readerFilePath: self.filePath)
+		return self.signatures.bareWrittenKey(name, readerFilePath: self.filePath)
 	end 'typeNameIdentityAt'
 
 	function typeNameReaderAt(index ElementIndex, name ByteArray) returns FilePath
@@ -60286,41 +60451,12 @@ export type Parser
 		self.pos = typeIndex
 	end 'enterQualifiedTypeBase'
 
-	function qualifiedAliasIdentity(qualified ByteArray, name ByteArray, kind TypeDeclKind, declFilePath FilePath) returns ByteArray
-		return self.signatures.qualifiedAliasIdentity(qualified, name: name, kind: kind, declFilePath: declFilePath, readerFilePath: self.filePath, bare: self.settledBareAliasMeaning(name, kind: kind))
-	end 'qualifiedAliasIdentity'
-
-	function settledBareAliasMeaning(name ByteArray, kind TypeDeclKind) returns BareAliasMeaning
-		var settled = self.settledBareAliasesOf(kind)
-
-		if let meaning = try settled.get(name) 'settledInThisFile'
-			return meaning
-		end 'settledInThisFile'
-
-		let meaning = self.signatures.bareAliasMeaning(name, kind: kind, readerFilePath: self.filePath)
-		settled.upsert(name, value: meaning)
-		return meaning
-	end 'settledBareAliasMeaning'
-
-	function settledBareAliasesOf(kind TypeDeclKind) returns SettledBareAliasMap
-		match kind 'kind'
-			rangedAlias then return self.settledBareRangedAliases
-			functionAlias then return self.settledBareFunctionAliases
-			structType or
-				enumType or
-				unionType or
-				interfaceType or
-				genericAlias or
-				tupleAlias then panic("Parser.settledBareAliasesOf: a {kind.name} carries no name identity — only a ranged or function alias is asked")
-		end 'kind'
-	end 'settledBareAliasesOf'
-
 	function namespaceQualifiedBaseName(qualified ByteArray, kind TypeDeclKind, declFilePath FilePath, name ByteArray) returns ByteArray
 		match kind 'kind'
 			rangedAlias or
-				functionAlias then return self.qualifiedAliasIdentity(qualified, name: name, kind: kind, declFilePath: declFilePath)
+				functionAlias then return self.signatures.declarationIdentityOf(name, kind: kind, declFilePath: declFilePath)
 			genericAlias or
-				tupleAlias then return aliasFamilyMint(name) if self.signatures.isAliasFamilyBesideANominal(name) else qualified
+				tupleAlias then return qualified
 			structType or
 				enumType or
 				unionType or
@@ -61083,15 +61219,15 @@ export type Parser
 		end 't'
 	end 'reportUnneededCastFrom'
 
-	// Is `xs as Ys` a cast between two brands of ONE generic instance? Then nothing converts. Compared on the
-	// CANONICAL name, which is what `aggregateNameOf` compares: `Box with N0` and `Box with (Box with S0)`
+	// Is `xs as Ys` a cast between two brands of ONE generic instance, or between two instances whose elements
+	// are same-named declarations of one layout? Then nothing converts. Compared on the CANONICAL name, which is what `aggregateNameOf` compares: `Box with N0` and `Box with (Box with S0)`
 	// are one instance under two gids, as `both-spellings-agree-at-the-comparison` pins.
 	function castIsARebrand(value ValueId, targetType MaxonType) returns bool
 		if maxonTypeTag(targetType) != ValueTypeTag.genericInstance or self.tagOf(value) != ValueTypeTag.genericInstance 'notTwoInstances'
 			return false
 		end 'notTwoInstances'
 
-		return self.signatures.canonicalInstanceName(self.valueInstanceId(value)).equals(self.signatures.canonicalInstanceName(genericInstanceIdOf(targetType)))
+		return self.signatures.canonicalInstanceName(self.valueInstanceId(value)).equals(self.signatures.canonicalInstanceName(genericInstanceIdOf(targetType))) or self.signatures.instancesDifferOnlyByElementDeclaration(self.valueInstanceId(value), target: genericInstanceIdOf(targetType), readerFilePath: self.filePath)
 	end 'castIsARebrand'
 
 	// A `typealias` IS ITS OWN TYPE AND `as` IS THE ONE DOOR BETWEEN TWO OF THEM. Two function aliases govern
@@ -61139,19 +61275,18 @@ export type Parser
 		end 'anImmortalRecord'
 	end 'carryImmortalFunctionMark'
 
-	// The verdict and the words. Every `typealias` names its own type, so the ONLY cast that says nothing is
-	// one naming the value's OWN alias: a cast between two names is the single door between two types and
-	// carries the program's meaning whichever way the two ranges lie. The message names the ALIASES the
-	// program wrote — not the erased primitives `typeTagName` prints for E3009.
+	// The verdict and the words. Every `typealias` declaration is its own type, so the ONLY cast that says
+	// nothing is one naming the value's OWN declaration: a cast between two declarations is the single door
+	// between two types and carries the program's meaning whichever way the two ranges lie. The message
+	// names the ALIASES the program wrote — not the erased primitives `typeTagName` prints for E3009.
 	//
-	// ⚠ **BOTH NAMES SPELL THROUGH `sourceSpelledAliasName`, for the reason `literalOutOfRangeMessage`
-	// states and this site did not (X6 review).** A RANGE-CONTESTED name reaches here wearing the
-	// compiler's mint, and "the alias is quoted as SOURCE spells it" is a property of the DIAGNOSTIC
-	// vocabulary, not of one diagnostic — two E-codes naming one alias two ways is the same fact written
-	// twice. MEASURED before the fix, from `bytearray-element-size`'s narrow `Byte`: **`unneeded cast:
-	// 'Byte$0_200' already fits in 'ExitCode'`**, which names no line the author wrote.
+	// ⚠ **BOTH NAMES SPELL THROUGH `sourceSpelledAliasText`, for the reason `literalOutOfRangeMessage`
+	// states.** A RANGE-CONTESTED name reaches here wearing the compiler's mint (`Byte$0_200`), which names
+	// no line the author wrote, and "the alias is quoted as SOURCE spells it" is a property of the
+	// DIAGNOSTIC vocabulary, not of one diagnostic — two E-codes naming one alias two ways is the same fact
+	// written twice.
 	function reportUnneededCastBetween(source RangedTypeAlias, target RangedTypeAlias, asTok Token)
-		if not source.isTheSameDeclarationAs(target) and not self.signatures.aliasWidensTo(self.signatures.rangedAliasIdentityOf(source.name, readerFilePath: self.filePath), ancestor: self.signatures.rangedAliasIdentityOf(target.name, readerFilePath: self.filePath), readerFilePath: self.filePath) 'aDoorBetweenTwoTypes'
+		if not source.isTheSameDeclarationAs(target) and not self.signatures.aliasWidensTo(self.signatures.rangedIdentityOfSpelling(source.name, readerFilePath: source.declFilePath), ancestor: self.signatures.rangedIdentityOfSpelling(target.name, readerFilePath: target.declFilePath), readerFilePath: self.filePath) 'aDoorBetweenTwoTypes'
 			return
 		end 'aDoorBetweenTwoTypes'
 
@@ -61202,7 +61337,7 @@ export type Parser
 	// `int`. Resolved HERE, at the one door both cast spellings ask, so neither can skip it.
 	function denotedCastTargetTag(name ByteArray, id TypeNameId, asTok Token) returns ValueTypeTag throws SourceParseError
 		let denoted = try denotedNamedType(self.signatures, name: name, id: id, readerFilePath: self.filePath) otherwise 'undeclared'
-			throw SourceParseError.unknownTypeName(String.from(name), line: asTok.line, column: asTok.column)
+			throw SourceParseError.unknownTypeName(self.signatures.aliasIdentityDisplay(name), line: asTok.line, column: asTok.column)
 		end 'undeclared'
 
 		return self.floatResolvedTagOfNameFrom(maxonTypeTag(denoted), name: name, scopeFilePath: self.filePath)
@@ -63162,7 +63297,7 @@ export type Parser
 			// two DISTINCT conformers' impls, so "they are both `Equatable`" does not make them interchangeable
 			// — the operator would silently take whichever was written first. Same reject as the `.method()`
 			// form's, for the same reason.
-			ambiguous(first, second) then throw SourceParseError.ambiguousWitnessDispatch(String.from(method.name), provider: self.witnessDispatchProviderPhrase(receiver), argCount: method.paramTypeNames.count() as ParamCount, first: renderWitnessRequirement(first), second: renderWitnessRequirement(second), line: opTok.line, column: opTok.column)
+			ambiguous(first, second) then throw SourceParseError.ambiguousWitnessDispatch(String.from(method.name), provider: self.witnessDispatchProviderPhrase(receiver), argCount: method.paramTypeNames.count() as ParamCount, first: renderWitnessRequirement(first, signatures: self.signatures), second: renderWitnessRequirement(second, signatures: self.signatures), line: opTok.line, column: opTok.column)
 		end 'pick'
 	end 'requireOperatorWitness'
 
@@ -64759,13 +64894,15 @@ export type Parser
 	// instance — a bare `named(Array)` would trip the generics machinery. Enrolled as an owned temp so a
 	// scope-exit / statement-end drop (`__managed_decref`) frees the record (the rdata buffer is left alone).
 	// A module-level CONSTANT's read reaches the same emitter with the other storage class — see
-	// `ByteStringRecordStorage`.
+	// `ByteStringRecordStorage`. Its `Byte` is the one the file's bare `Byte` names
+	// (`ProgramSignatures.internArrayByteInstance`), so an ambiguous bare `Byte` refuses the literal (E3063).
 	//
 	// A codepoint above 0xFF (`b"Ā"`, a `\uNNNN` naming one, an emoji) has no single-byte encoding and
 	// is REJECTED with E1004 rather than silently Latin-1 best-fit-transliterated away. Use `\xNN` to
 	// embed an exact raw byte.
 	function parseByteStringLiteral() returns ValueId throws SourceParseError
 		let tok = try self.consume(TokenKind.byteStringLiteral)
+		try self.requireUnambiguousTypeName(ByteElementTypeName, anchor: tok)
 		let bytes = try decodeByteStringLiteral(tok.value, tok: tok)
 		return try self.emitByteStringLiteralValue(bytes, storage: ByteStringRecordStorage.ownedTemporary, range: SourceRange.ofToken(tok))
 	end 'parseByteStringLiteral'
@@ -64893,7 +65030,7 @@ export type Parser
 			// A byte read out of a `b"…"` blob is a 0-255 number the source never spelled with a sign, so no
 			// written-negative mark can exist for it and `false` is the fact rather than a default.
 			if not literalInRange(value as ParsedInt, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: false) 'outsideTheElementsRange'
-				throw SourceParseError.byteStringByteOutOfRange(value as ParsedInt, offset: i as ParsedInt, aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, domain: alias.domain, line: line, column: column)
+				throw SourceParseError.byteStringByteOutOfRange(value as ParsedInt, offset: i as ParsedInt, aliasName: self.signatures.aliasIdentityDisplay(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, domain: alias.domain, line: line, column: column)
 			end 'outsideTheElementsRange'
 
 			i = i + 1
@@ -66249,7 +66386,7 @@ export type Parser
 			// answers `got 'struct'` for the very struct the arm below answers `got 'Other'` for — one door,
 			// two sentences, sixty lines apart in `specs/arrays.md`. The sentence is `expected 'String', got
 			// 'Item'`.
-			let mismatch = self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(wantTag), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
+			let mismatch = self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: self.valueDisplayTypeName(value), gotNote: "", gotTag: got, resolvedExpected: typeTagName(wantTag), expectedNote: "", declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
 
 			try self.refuseUnlessDeferred(mismatch, value: value)
 			return
@@ -66321,7 +66458,9 @@ export type Parser
 		let gotName = self.aggregateNameOf(got, nameId: self.valueNameId(value))
 
 		if self.signatures.aggregatesConflict(wantName, expectedTag: wantTag, expectedNameId: typeNameIdOf(storage), expectedBrand: placeBrand, got: gotName, gotTag: got, gotNameId: self.valueNameId(value), gotBrand: self.brandOf(value), readerFilePath: self.filePath) 'nameMismatch'
-			throw self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: self.brandedDisplayTypeName(wantTag, nameId: typeNameIdOf(storage), brand: placeBrand), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
+			let wantShown = self.brandedDisplayTypeName(wantTag, nameId: typeNameIdOf(storage), brand: placeBrand)
+			let paired = self.pairedDisplays(value, declaredTag: wantTag, declaredNameId: typeNameIdOf(storage), declaredBrand: placeBrand, declaredIdentity: wantName, declaredShown: wantShown)
+			throw self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, placeBrand: placeBrand, placeSpelling: placeSpelling, got: paired.got, gotNote: paired.gotNote, gotTag: got, resolvedExpected: paired.declared, expectedNote: paired.declaredNote, declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
 		end 'nameMismatch'
 	end 'requireSlotAggregateIdentity'
 
@@ -69170,7 +69309,7 @@ export type Parser
 
 		match checkDeclaredType(got, declared: declaredTag) 'declared'
 			ok then break 'declared'
-			mismatch then throw self.slotMismatchError(voice, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(declaredTag), declared: declaredTag, declaredNameId: typeNameIdOf(declared), line: argTok.line, column: argTok.column)
+			mismatch then throw self.slotMismatchError(voice, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.valueDisplayTypeName(value), gotNote: "", gotTag: got, resolvedExpected: typeTagName(declaredTag), expectedNote: "", declared: declaredTag, declaredNameId: typeNameIdOf(declared), line: argTok.line, column: argTok.column)
 			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: argTok.line, column: argTok.column)
 
 			// A FUNCTION VALUE into a scalar union PAYLOAD whose declared type is NOT a function — the same
@@ -69457,7 +69596,7 @@ export type Parser
 		// the identical failure one category over: `typealias IntPair = Pair with ExitCode` then
 		// `IntPair.create(9)`, refused for a field access on `unknown`. Two rosters of "which containers
 		// does this compiler own", and two keys for one alias, are the same duplication in two columns.
-		if self.signatures.isGenericAliasFor(aliasName, readerFilePath: self.filePath) 'containerAliasStatic'
+		if self.signatures.isAliasOfFormFor(aliasName, readerFilePath: self.filePath, wanted: FormAliasKind.generic) 'containerAliasStatic'
 			let aliasGiid = self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.filePath)
 
 			if self.signatures.instanceBaseIsSharedValue(aliasGiid) 'sharedValueStatic'
@@ -69909,7 +70048,7 @@ export type Parser
 	// parameters. See `bareGenericInstanceInScope` for the binding rule and for why the caller-side gate is
 	// spelled here.
 	function constructorInstanceOf(baseName ByteArray) returns ConstructorInstance
-		if self.signatures.isGenericAliasFor(baseName, readerFilePath: self.filePath) 'genericAlias'
+		if self.signatures.isAliasOfFormFor(baseName, readerFilePath: self.filePath, wanted: FormAliasKind.generic) 'genericAlias'
 			return ConstructorInstance.instance(self.signatures.genericAliasInstanceFrom(baseName, readerFilePath: self.filePath))
 		end 'genericAlias'
 
@@ -71250,7 +71389,7 @@ export type Parser
 		// `parseQualifiedCall` does resolve.
 		let baseName = self.genericAliasKeyFor(written)
 
-		if self.signatures.containsEnumFor(baseName, readerFilePath: self.filePath) or self.signatures.isGenericAliasFor(baseName, readerFilePath: self.filePath) 'enumOrGenericAlias'
+		if self.signatures.containsEnumFor(baseName, readerFilePath: self.filePath) or self.signatures.isAliasOfFormFor(baseName, readerFilePath: self.filePath, wanted: FormAliasKind.generic) 'enumOrGenericAlias'
 			return true
 		end 'enumOrGenericAlias'
 
@@ -72260,7 +72399,7 @@ export type Parser
 			return
 		end 'declarationViewReturn'
 
-		let receiverAlias = self.brandOf(receiver)
+		let receiverAlias = brandBeneathBufferView(self.brandOf(receiver))
 
 		// ⭐⭐ **A `Self` RETURN IS FIXED BY THE RECEIVER'S *INSTANCE*, AND THE ALIAS IS ONLY A SPELLING IT MAY
 		// ALSO CARRY — so this arm sits ABOVE the alias gate.** Below it, an aliasless receiver DECAYS its
@@ -73286,7 +73425,7 @@ export type Parser
 	// cannot make either of them honest about a record neither describes.
 	function emitOwnedManagedMemoryResult(callee ByteArray, args ValueIdArray, range SourceRange) returns ValueId
 		let result = self.emitOwnedRuntimeResult(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance() as TypeNameId, range: range)
-		self.markBufferSurface(result)
+		self.markBufferSurface(result, origin: EmptySourceText)
 		return result
 	end 'emitOwnedManagedMemoryResult'
 
@@ -73463,7 +73602,7 @@ export type Parser
 		let args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryCountParamName, secondParam: ManagedMemoryElementSizeParamName, methodTok: methodTok)
 		let elementSize = try args.get(1) otherwise panic("parseManagedMemoryStaticCall: the two-int arg list returned fewer than two values")
 		let created = self.emitOwnedRuntimeResult(ManagedMemCreateName, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: (try self.requireManagedMemoryElementSize(elementSize, argStart: elementSizeStart) as TypeNameId), range: range)
-		self.markBufferSurface(created)
+		self.markBufferSurface(created, origin: EmptySourceText)
 		return created
 	end 'parseManagedMemoryStaticCall'
 
@@ -73554,6 +73693,14 @@ export type Parser
 	function valueIsByteArray(value ValueId) returns bool
 		return self.signatures.isBytePackedArrayInstance(self.tagOf(value), nameId: self.valueNameId(value))
 	end 'valueIsByteArray'
+
+	function pairedDisplays(value ValueId, declaredTag ValueTypeTag, declaredNameId TypeNameId, declaredBrand ByteArray, declaredIdentity ByteArray, declaredShown String) returns PairedDisplays
+		let gotShown = self.valueDisplayTypeName(value)
+		let gotIdentity = self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))
+		let gotNote = self.signatures.contestedTypeNote(self.tagOf(value), nameId: self.valueNameId(value), brand: self.brandOf(value), identity: gotIdentity, shown: gotShown, otherShown: declaredShown)
+		let declaredNote = self.signatures.contestedTypeNote(declaredTag, nameId: declaredNameId, brand: declaredBrand, identity: declaredIdentity, shown: declaredShown, otherShown: gotShown)
+		return PairedDisplays.create(self.signatures.tupleDisplayNoted(gotShown, identity: gotIdentity, otherShown: declaredShown, otherIdentity: declaredIdentity), gotNote: gotNote, declared: self.signatures.tupleDisplayNoted(declaredShown, identity: declaredIdentity, otherShown: gotShown, otherIdentity: gotIdentity), declaredNote: declaredNote)
+	end 'pairedDisplays'
 
 	// How a value's type is SPELLED in a diagnostic — its tag, resolved through the DISPLAY name behind it.
 	// EVERY parser diagnostic that names a VALUE's type reads it (the builtin-argument rules, the assignment
@@ -74516,7 +74663,7 @@ export type Parser
 	//     it sees what the stride cannot.
 	//
 	// ⛔⛔ **THE IDENTITY HALF WAS MISSING, AND THE TWO ANSWERS DIVERGE FOR EVERY 8-BYTE RANGED ALIAS.**
-	// `int(0 to i64.max)` — stdlib's own `ElementIndex`, `FileSize`, `DurationMs`, `Utf8ByteCount` — occupies a
+	// `int(0 to i64.max)` — stdlib's own `ElementIndex`, `FileSize`, `DurationMs`, `Count` — occupies a
 	// machine word exactly as a bare `int` does, so the storage question alone answered NO, the element kept
 	// its `integer` tag, and `requireArrayLiteralElementMatches` then re-derived `Array with integer` and
 	// reported three identical integer literals as **`E2015 mixed element types`** where the oracle prints 6.
@@ -75931,7 +76078,12 @@ export type Parser
 	function consumeConstructionHead() returns Token throws SourceParseError
 		let head = try self.readTypeNameHead(TypeNameHeadForm.construction)
 		self.recordTypeNameVerdict(head.verdict)
-		return head.token
+
+		if head.identity.equals(head.token.value) 'writtenNameIsItsIdentity'
+			return head.token
+		end 'writtenNameIsItsIdentity'
+
+		return Token.create(TokenKind.identifier, line: head.token.line, column: head.token.column, value: head.identity, startByte: head.token.startByte, endByte: head.token.endByte)
 	end 'consumeConstructionHead'
 
 	function readTypeNameHead(form TypeNameHeadForm) returns TypeNameHead throws SourceParseError
@@ -75979,7 +76131,7 @@ export type Parser
 	end 'recordWrittenTypeName'
 
 	function namesContainerInstanceAlias(name ByteArray, container FromHeadContainer) returns bool
-		if not self.signatures.isGenericAliasFor(name, readerFilePath: self.filePath) 'notAGenericAlias'
+		if not self.signatures.isAliasOfFormFor(name, readerFilePath: self.filePath, wanted: FormAliasKind.generic) 'notAGenericAlias'
 			return false
 		end 'notAGenericAlias'
 
@@ -78213,7 +78365,7 @@ export type Parser
 
 		match pickSoleWitnessCandidate(matching) 'pick'
 			one(target) then return target
-			ambiguous(first, second) then throw SourceParseError.ambiguousWitnessDispatch(String.from(methodTok.value), provider: self.witnessDispatchProviderPhrase(receiver), argCount: argCount, first: renderWitnessRequirement(first), second: renderWitnessRequirement(second), line: methodTok.line, column: methodTok.column)
+			ambiguous(first, second) then throw SourceParseError.ambiguousWitnessDispatch(String.from(methodTok.value), provider: self.witnessDispatchProviderPhrase(receiver), argCount: argCount, first: renderWitnessRequirement(first, signatures: self.signatures), second: renderWitnessRequirement(second, signatures: self.signatures), line: methodTok.line, column: methodTok.column)
 			none then break 'pick'
 		end 'pick'
 
@@ -78225,7 +78377,7 @@ export type Parser
 			return try candidates.get(0) otherwise panic("pickWitnessDispatchByArity: candidates.count() is 1 but get(0) failed")
 		end 'soleCandidate'
 
-		throw SourceParseError.noWitnessRequirementOfArity(String.from(methodTok.value), provider: self.witnessDispatchProviderPhrase(receiver), argCount: argCount, available: renderWitnessRequirements(candidates), line: methodTok.line, column: methodTok.column)
+		throw SourceParseError.noWitnessRequirementOfArity(String.from(methodTok.value), provider: self.witnessDispatchProviderPhrase(receiver), argCount: argCount, available: renderWitnessRequirements(candidates, signatures: self.signatures), line: methodTok.line, column: methodTok.column)
 	end 'pickWitnessDispatchByArity'
 
 	// The throwing form for the witness-dispatch caller, which cannot proceed without the declaration. The
@@ -79281,7 +79433,7 @@ export type Parser
 		// the declaration cannot tell the record from a view of it. The ESCAPE rule
 		// (`refuseASizedContainersRecordEscaping`) covers it instead, keeping the record where the mark still
 		// exists rather than trying to recognise it where the mark does not.
-		self.markSizedContainerBuffer(surface)
+		self.markSizedContainerBuffer(surface, origin: self.brandOf(surface))
 
 		self.retypeValue(surface, valueType: MaxonType.genericInstance(self.bufferSurfaceInstanceOf(box, layout: layout)))
 		return surface
@@ -79348,13 +79500,15 @@ export type Parser
 	end 'bufferSurfaceInstanceOf'
 
 	function bufferSurfaceOf(arr ValueId, range SourceRange) returns ValueId
+		let origin = self.brandOf(arr)
+
 		if self.pendingTempsContain(arr) 'statementAlreadyOwnsIt'
-			self.markBufferSurface(arr)
+			self.markBufferSurface(arr, origin: origin)
 			return arr
 		end 'statementAlreadyOwnsIt'
 
 		let buffer = self.coOwnAggregateAsTemp(arr, range: range)
-		self.markBufferSurface(buffer)
+		self.markBufferSurface(buffer, origin: origin)
 		return buffer
 	end 'bufferSurfaceOf'
 
@@ -81166,7 +81320,7 @@ export type Parser
 	// the container in every arm regardless of where the ABI happens to put it.
 	function markElementReadSurface(result ValueId, container ValueId)
 		if self.valueElementIsBufferSurface(container) 'containerHoldsBuffers'
-			self.markBufferSurface(result)
+			self.markBufferSurface(result, origin: self.brandOf(result))
 		end 'containerHoldsBuffers'
 	end 'markElementReadSurface'
 
@@ -81242,7 +81396,7 @@ export type Parser
 		let endIndex = try self.parseExpression(func, block: self.bodyState.currentBlock)
 		try self.consume(TokenKind.rightParen)
 		let sliced = self.emitArraySliceCall(giid, arr: arr, start: start, endIndex: endIndex, range: range)
-		self.markBufferSurface(sliced)
+		self.markBufferSurface(sliced, origin: self.brandOf(sliced))
 
 		// And a slice of an array OF buffers is an array of buffers — the same rule one container out, which is
 		// why the two live side by side rather than in one test: a value can be either, and never both.
@@ -81882,7 +82036,7 @@ export type Parser
 	end 'mintArrayCountResult'
 
 	function requireArgumentFitsDeclaredAlias(value ValueId, alias RangedTypeAlias, paramName ByteArray, anchor Token) throws SourceParseError
-		let expected = self.signatures.rangedAliasIdentityOf(alias.name, readerFilePath: alias.declFilePath)
+		let expected = self.signatures.rangedIdentityOfSpelling(alias.name, readerFilePath: alias.declFilePath)
 		let gotTag = self.tagOf(value)
 		let gotNameId = self.valueNameId(value)
 
@@ -84430,7 +84584,7 @@ export type Parser
 		// cascade ERASES — every arm returns `exitCode`, `structRef`, `integer` or a ranged alias's
 		// `int`/`float` underlying, and an arm that handed the `named` REFERENCE back would put this routine
 		// (and `denotedCastTargetTag`, which reads a tag off the same call) into an unbounded resolve.
-		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId, readerFilePath: self.filePath) otherwise throw SourceParseError.unknownTypeName(String.from(name), line: tok.line, column: tok.column)
+		let denoted = try denotedNamedType(self.signatures, name: name, id: nameId, readerFilePath: self.filePath) otherwise throw SourceParseError.unknownTypeName(self.signatures.aliasIdentityDisplay(name), line: tok.line, column: tok.column)
 
 		if maxonTypeTag(denoted) == ValueTypeTag.named 'cascadeDidNotErase'
 			panic("requireDeclaredBaseTypeName: `denotedNamedType` answered `named` for '{String.from(name)}' — every arm of its cascade erases to a concrete type or throws, so a `named` answer means a new arm hands its own input back")
@@ -84616,7 +84770,7 @@ export type Parser
 			// same value, so this is a spelling removed and not a behaviour changed; what it buys is that a second
 			// byte-record instance can never be taught to two of the three doors and missed at the third.
 			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.bufferSurfaceInstanceOf(box, layout: layout) as TypeNameId, range: range)
-			self.markBufferSurface(view)
+			self.markBufferSurface(view, origin: EmptySourceText)
 			return view
 		end 'inlineManagedIsTheReceiver'
 
@@ -84899,11 +85053,9 @@ export type Parser
 			params.push(self.storedFunctionAliasParam(paramType, aggregateName: self.erasedAggregateNameOf(paramType).clone()))
 		end 'eachParam'
 
-		let display = FunctionAliasDisplay.spelled(formatFnTypeDisplay(paramTypes, returnType: returnType, typeNames: self.artifact.typeNames, signatures: self.signatures).toByteArray())
-
 		match returnType 'returned'
-			void then return FunctionTypeAlias.create(viewName, returnTag: ValueTypeTag.void, returnTypeName: EmptySourceText, returnIdentity: AliasSlotIdentity.nameOnly, returnAggregateName: EmptySourceText, display: display, paramTypes: params, paramSpelling: alias.paramSpelling, declFilePath: alias.declFilePath.clone(), visibility: alias.visibility)
-			value(inner) then return FunctionTypeAlias.create(viewName, returnTag: maxonTypeTag(inner), returnTypeName: self.functionAliasTypeName(inner), returnIdentity: functionAliasSlotIdentity(inner), returnAggregateName: self.erasedAggregateNameOf(inner).clone(), display: display, paramTypes: params, paramSpelling: alias.paramSpelling, declFilePath: alias.declFilePath.clone(), visibility: alias.visibility)
+			void then return FunctionTypeAlias.create(viewName, returnTag: ValueTypeTag.void, returnTypeName: EmptySourceText, returnIdentity: AliasSlotIdentity.nameOnly, returnAggregateName: EmptySourceText, paramTypes: params, paramSpelling: alias.paramSpelling, declFilePath: alias.declFilePath.clone(), visibility: alias.visibility, written: alias.written)
+			value(inner) then return FunctionTypeAlias.create(viewName, returnTag: maxonTypeTag(inner), returnTypeName: self.functionAliasTypeName(inner), returnIdentity: functionAliasSlotIdentity(inner), returnAggregateName: self.erasedAggregateNameOf(inner).clone(), paramTypes: params, paramSpelling: alias.paramSpelling, declFilePath: alias.declFilePath.clone(), visibility: alias.visibility, written: alias.written)
 		end 'returned'
 	end 'instanceViewAlias'
 
@@ -85898,48 +86050,26 @@ export type Parser
 	end 'markRebindableSlotRead'
 
 	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues` (R4.4)** — `markImmutableGlobalRead`'s twin, through the
-	// same install door discipline (`ValueMarkColumn`).
+	// same install door discipline (`ValueMarkColumn`). Its callers are the producers of a buffer VALUE and
+	// `markDeclaredSurface` below; read them off `grep -n 'self.markBufferSurface('`, never off a list here.
+	// ⚠ The CHAINED `.managed` (`arr.managed.setLength(2)`) mints NO value to mark, and it passes the surface
+	// along the dispatch instead (`viaManagedField`). Only the VALUE form has a value to mark, and it mints
+	// one for exactly that reason.
 	//
-	// Its EIGHT call sites in SEVEN functions, DERIVED by grepping `self.markBufferSurface(` rather than
-	// remembered — the six producers of a buffer VALUE:
-	//   • `__ManagedMemory.create` (`parseManagedMemoryStaticCall`);
-	//   • a `slice` taken THROUGH the buffer surface (`parseArraySlice`);
-	//   • `__ManagedDirectory.filename`/`currentPath` (`emitOwnedManagedMemoryResult`, R4.3);
-	//   • a FUSED WRAPPER's inline `managed` read (`emitFieldLoad`) — which since W49 wave 7 is what serves
-	//     the corpus's own `String.addressableBytes()`, whose entire body is `return managed`;
-	//   • an ELEMENT read out of an array whose elements are buffers (`markElementReadSurface`, A2m) —
-	//     the one producer that reads a DIFFERENT column (`bufferSurfaceElements`) to decide;
-	//   • `arr.managed` in VALUE position (`bufferSurfaceOf`, BATCH2 slice 6), which is TWO call sites in
-	//     one function because its two ownership arms mark two different values;
-	// — plus `markDeclaredSurface` below, whose own header carries ITS list (eight call sites in six
-	// functions, and NOT all of them a declared type any more: three of them read the receiver's INSTANCE
-	// ARGUMENT, which no declaration in the callee's file spells at all).
-	// ⚠⚠ **THIS SENTENCE HAS NOW BEEN WRONG FIVE TIMES, AND THE FIFTH WAS THE FIRST WHERE THE *NUMBER* WAS
-	// RIGHT AND THE *LIST* WAS NOT** — TWO while there were three, THREE while there were four, FIVE while
-	// there were six (`markElementReadSurface` had never been counted), SIX while there were eight, and then
-	// EIGHT while there were NINE: `emitFieldLoad` had been minting and marking a view since W17 and was
-	// never listed, while `dispatchStringMethod`'s `addressableBytes` arm was listed until wave 7 retired it.
-	// The two errors cancelled in the count and not in the list, so a reader checking the total would have
-	// been reassured by it. **Count them, do not copy this sentence — and read the NAMES off the grep too**;
-	// and count CALL SITES, not producers: `bufferSurfaceOf` is one producer with two of them.
-	// ⚠ The CHAINED `.managed` (`arr.managed.setLength(2)`) is still the producer that mints NO value to mark
-	// — D11b measured it as one — and it passes the surface along the dispatch instead (`viaManagedField`).
-	// Only the VALUE form has a value to mark, and it mints one for exactly that reason.
+	// The value is also branded the VIEW of `origin`, the alias the buffer was taken from
+	// (`bufferViewBrandOver`), so a diagnostic can tell two views of one instance apart.
 	//
 	// ⚠⚠ **THE MARK IS A FACT ABOUT A `ValueId`, SO IT DOES NOT SURVIVE TYPE ERASURE — AND A *DECLARED*
-	// SPELLING IS THEREFORE AN ENTRANCE A SWEEP OVER VALUE PRODUCERS STRUCTURALLY CANNOT SEE.** That is the
-	// generalisable lesson of A2j, and it is why D11b's enumeration missed it. `__ManagedMemory` is registered
-	// as a generic ALIAS of `Array with Byte` (`ProgramSignatures.registerManagedFileType`, whose own note
-	// calls it "reaches the ordinary `Array` paths with nothing special-cased"), so a parameter, a struct field
-	// or a return type SPELLED `__ManagedMemory` resolves to a type indistinguishable from `ByteArray`.
-	// MEASURED on the tree before A2j: inside `function f(m __ManagedMemory)`, `m.push(7)`/`m.count()`
-	// compiled, linked and RAN, while `m.length()` — the buffer roster's FIRST member — was refused as an
-	// unknown `Array` method. The roster, exactly inverted, at all three spellings.
-	// ⇒ Each of the three now carries a *declared-as-the-buffer-alias* bit from its declaration site to the
-	// site that binds the value, and marks it here. There is no second surface mechanism: this mark stays the
-	// one authority, and `dispatchArrayMethod` needed no change for it.
-	function markBufferSurface(value ValueId)
+	// SPELLING IS THEREFORE AN ENTRANCE A SWEEP OVER VALUE PRODUCERS STRUCTURALLY CANNOT SEE.**
+	// `__ManagedMemory` is registered as a generic ALIAS of `Array with Byte`
+	// (`ProgramSignatures.registerManagedFileType`), so a parameter, a struct field or a return type SPELLED
+	// `__ManagedMemory` resolves to a type indistinguishable from `ByteArray`: unmarked, `m.length()` — the
+	// buffer roster's FIRST member — would be refused on it while `m.push(7)` compiled. ⇒ Each of the three
+	// carries a *declared-as-the-buffer-alias* bit from its declaration site to the site that binds the
+	// value, and marks it here. There is no second surface mechanism: this mark is the one authority.
+	function markBufferSurface(value ValueId, origin ByteArray)
 		self.bodyState.bufferSurfaceValues = withValueMarked(self.bodyState.bufferSurfaceValues, value: value)
+		self.brandValue(value, brand: bufferViewBrandOver(origin))
 	end 'markBufferSurface'
 
 	// ⭐ `markBufferSurface`'s inverse — the value no longer denotes a buffer because the record it denoted no
@@ -85996,9 +86126,9 @@ export type Parser
 	// `markDeclaredSurface` or through `bufferSurfaceOf` a line earlier — so this line adds nothing to any
 	// path that exists; it is what makes the invariant a property of the DOOR instead of a rule each caller
 	// remembers, which is the same argument `ValueMarkColumn`'s doors make one level down. ⚠ **DELIBERATELY NOT
-	// A CALL-SITE LIST**: `markBufferSurface`'s header records that exact sentence being wrong five times.
-	function markSizedContainerBuffer(value ValueId)
-		self.markBufferSurface(value)
+	// A CALL-SITE LIST**, for `markBufferSurface`'s reason.
+	function markSizedContainerBuffer(value ValueId, origin ByteArray)
+		self.markBufferSurface(value, origin: origin)
 		self.bodyState.sizedContainerBufferValues = withValueMarked(self.bodyState.sizedContainerBufferValues, value: value)
 	end 'markSizedContainerBuffer'
 
@@ -86314,7 +86444,7 @@ export type Parser
 	// See `slotSurfaceThroughReceiver`.
 	function markDeclaredSurface(value ValueId, declared DeclaredSurface)
 		if surfaceIsBuffer(declared) 'declaredTheAlias'
-			self.markBufferSurface(value)
+			self.markBufferSurface(value, origin: self.brandOf(value))
 		end 'declaredTheAlias'
 
 		if surfaceElementIsBuffer(declared) 'declaredAnArrayOfBuffers'
@@ -86805,7 +86935,7 @@ export type Parser
 		// closure's parameters ARE spelled (`function(t IntTaker) gives …`) and carry the same `paramTypeStarts`
 		// every declared function's do, while its return type is INFERRED from the body and names no token for
 		// `declaredExistentialInstanceAt` to read.
-		let signature = FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints)
+		let signature = FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints, writtenTypeNames: sharedEmptyWrittenTypeNames)
 		self.publishLiftedBody(lifted, returnType: returnType, signature: signature, anchor: functionTok, synthesized: false)
 		self.closureShapes.upsert(closureName, value: FunctionValueShape.create(signature.paramTypes, returnType: returnType, scopeFilePath: self.filePath))
 
@@ -87154,7 +87284,7 @@ export type Parser
 
 		var paramNames = ByteArrayArray.create()
 		paramNames.push(ClosureEnvDropParamName)
-		self.publishLiftedBody(drop, returnType: MaxonReturnType.void, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: EmptySourceText, paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), anchor: anchor, synthesized: true)
+		self.publishLiftedBody(drop, returnType: MaxonReturnType.void, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: EmptySourceText, paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints, writtenTypeNames: sharedEmptyWrittenTypeNames), anchor: anchor, synthesized: true)
 		self.fileDeferredProvenance(drop)
 
 		self.bodyState = savedBody
@@ -87407,7 +87537,7 @@ export type Parser
 		// ranged alias and a generic alias live in different registries, so `IntArray.` can only be this
 		// form — and claiming the whole shape is what lets the arm below say what a container's static
 		// surface IS, rather than leaving `ItemArray.push` to the bound reader's nonsense message.
-		if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.dot and self.signatures.isGenericAliasFor(self.current().value, readerFilePath: self.filePath) 'containerFactoryInitializer'
+		if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.dot and self.signatures.isAliasOfFormFor(self.current().value, readerFilePath: self.filePath, wanted: FormAliasKind.generic) 'containerFactoryInitializer'
 			return try self.evalConstContainerCreate()
 		end 'containerFactoryInitializer'
 
@@ -88642,7 +88772,7 @@ export type Parser
 		match self.signatures.constStructFieldCheck(layout, index: index, value: value, calls: calls, declName: layout.name, elementFilePath: layout.declFilePath) 'verdict'
 			agrees then break 'verdict'
 			widensToFloat then return self.constWidenedToFloat(value)
-			mismatch(got, expected) then throw ConstEvalError.defective(SourceParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.field, name: self.fieldNameAt(layout, index: index), owner: SlotOwner.declaredBy(layout.name)), got: got, expected: expected, line: fieldTok.line, column: fieldTok.column))
+			mismatch(got, expected) then throw ConstEvalError.defective(SourceParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.field, name: self.fieldNameAt(layout, index: index), owner: SlotOwner.declaredBy(layout.name)), got: got, gotNote: "", expected: expected, expectedNote: "", line: fieldTok.line, column: fieldTok.column))
 		end 'verdict'
 
 		try self.requireConstFieldValueInRange(layout, index: index, value: value, fieldTok: fieldTok)
@@ -88831,7 +88961,7 @@ export type Parser
 			throw ConstEvalError.defective(SourceParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — its elements are `{String.from(ManagedMemoryTypeName)}` buffers, and a global is re-loaded at every use, so an element read out of it would carry the `{String.from(self.signatures.arrayRecordDeclaredName())}` surface instead. Declare an array of buffers inside a function", line: aliasTok.line, column: aliasTok.column))
 		end 'elementsAreBuffers'
 
-		return ConstFoldedValue.containerCreate(giid, brand: aliasTok.value, elements: sharedEmptyConstArrayElements)
+		return ConstFoldedValue.containerCreate(giid, brand: self.brandOfSpelling(aliasTok.value), elements: sharedEmptyConstArrayElements)
 	end 'evalConstContainerCreate'
 
 	// ⭐⭐ **`CharSet from ['a', 'e', 'i', 'o', 'u']` AS A TOP-LEVEL INITIALIZER** (spec-port `lazy-static`) —
@@ -88903,13 +89033,13 @@ export type Parser
 		// A BARE `Set from […]` mints its instance from the elements, and a top-level element list cannot
 		// supply one: the members are folded, not emitted, so there is no value whose type could be read back.
 		// The alias form is the only one that STATES the instance, which is what this arm needs.
-		if not self.signatures.isGenericAliasFor(aliasTok.value, readerFilePath: self.filePath) 'noInstanceStated'
+		if not self.signatures.isAliasOfFormFor(aliasTok.value, readerFilePath: self.filePath, wanted: FormAliasKind.generic) 'noInstanceStated'
 			throw ConstEvalError.defective(SourceParseError.unsupported("`{String.from(aliasTok.value)} from […]` as a top-level initializer — a global set is declared through a generic-instance alias, which is what states the key type its members are checked against (`typealias {String.from(CharacterMemberSetAliasName)} = {String.from(SetBuiltinBaseName)} with Character`). A bare `{String.from(SetBuiltinBaseName)} from […]` infers its instance from the elements, which a folded member list cannot supply", line: aliasTok.line, column: aliasTok.column))
 		end 'noInstanceStated'
 
 		let giid = self.signatures.genericAliasInstanceFrom(aliasTok.value, readerFilePath: self.filePath)
 
-		return ConstFoldedValue.containerCreate(giid, brand: aliasTok.value, elements: try self.evalConstSetMembers(stack, giid: giid, aliasTok: aliasTok))
+		return ConstFoldedValue.containerCreate(giid, brand: self.brandOfSpelling(aliasTok.value), elements: try self.evalConstSetMembers(stack, giid: giid, aliasTok: aliasTok))
 	end 'evalConstSetFrom'
 
 	// The `[…]` half — one member per element, each held to the SET'S OWN KEY TYPE. The bracket walk is the
@@ -89537,7 +89667,7 @@ export type Parser
 			return
 		end 'notCheckable'
 
-		match self.signatures.aliasOf(targetTok.value, readerFilePath: self.filePath) 'a'
+		match self.signatures.declaredAliasOfSpelling(targetTok.value, readerFilePath: self.filePath) 'a'
 			undeclared then break 'a'
 			declared(alias) then try self.reportConstCastIfOutOfRange(value, alias: alias, anchor: asTok)
 		end 'a'
@@ -89566,7 +89696,7 @@ export type Parser
 			return
 		end 'inRange'
 
-		throw ConstEvalError.defective(SourceParseError.constantCastOutOfRange(value.payload, aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, domain: alias.domain, line: anchor.line, column: anchor.column))
+		throw ConstEvalError.defective(SourceParseError.constantCastOutOfRange(value.payload, aliasName: self.signatures.aliasIdentityDisplay(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, domain: alias.domain, line: anchor.line, column: anchor.column))
 	end 'reportConstCastIfOutOfRange'
 
 	// Consume `kind` in the constant evaluator, wrapping a mismatch as a `ConstEvalError`.
@@ -89742,7 +89872,7 @@ export type Parser
 		// FIRST whether the head is one of them costs one comparison and makes the misreading unreachable:
 		// everything else gets a sentence naming the real gap, which is that a constant initializer cannot
 		// reach a member of a user type.
-		if self.peekKind() == TokenKind.dot and isSizedTypeName(tok.value) 'qualifiedBound'
+		if self.peekKind() == TokenKind.dot and (isSizedTypeName(tok.value) or self.signatures.writtenNameMeansARangedAlias(tok.value, readerFilePath: self.filePath)) 'qualifiedBound'
 			let bound = try self.parseTypeQualifiedBound(false) otherwise (err) 'badBound'
 				throw ConstEvalError.defective(err)
 			end 'badBound'
@@ -93313,7 +93443,7 @@ export type Parser
 				return false
 			end 'differs'
 
-			if self.tagOf(arg) == ValueTypeTag.named and not self.signatures.rangedAliasIdentityOf(self.internedName(self.valueNameId(arg)), readerFilePath: self.filePath).equals(self.signatures.rangedAliasIdentityOf(self.internedName(typeNameIdOf(paramType)), readerFilePath: decl.declFilePath)) 'anotherAlias'
+			if self.tagOf(arg) == ValueTypeTag.named and not self.signatures.rangedIdentityOfSpelling(self.internedName(self.valueNameId(arg)), readerFilePath: self.filePath).equals(self.signatures.rangedIdentityOfSpelling(self.internedName(typeNameIdOf(paramType)), readerFilePath: decl.declFilePath)) 'anotherAlias'
 				return false
 			end 'anotherAlias'
 		end 'eachArgument'
@@ -93357,7 +93487,7 @@ export type Parser
 				end 'anotherDeclarationMayServe'
 
 				let paramName = try template.typeParamNames.get(constraint.typeParamIndex) otherwise panic("inferGenericInstance: typeParamNames.get OOB at {constraint.typeParamIndex}")
-				throw SourceParseError.genericConstraintNotSatisfied(genericArgumentDisplay(argument), interfaceName: String.from(constraint.interfaceName), paramName: String.from(paramName), functionName: functionName, line: anchor.line, column: anchor.column)
+				throw SourceParseError.genericConstraintNotSatisfied(genericArgumentDisplay(argument, signatures: self.signatures), interfaceName: String.from(constraint.interfaceName), paramName: String.from(paramName), functionName: functionName, line: anchor.line, column: anchor.column)
 			end 'violates'
 		end 'eachConstraint'
 
@@ -93416,7 +93546,7 @@ export type Parser
 			return try self.refuseGenericArguments(firstAlias, second: secondAlias, functionName: functionName, paramName: paramName, anchor: anchor, refuse: refuse)
 		end 'noCommonAncestor'
 
-		return GenericUnification.agreed(GenericFunctionArgument.create(GenericArgumentKind.rangedAlias, name: self.signatures.rangeScopedAliasName(ancestor, readerFilePath: self.filePath)))
+		return GenericUnification.agreed(GenericFunctionArgument.create(GenericArgumentKind.rangedAlias, name: self.signatures.rangeScopedDeclaredName(ancestor, readerFilePath: self.filePath)))
 	end 'unifyGenericArguments'
 
 	function refuseGenericArguments(first GenericFunctionArgument, second GenericFunctionArgument, functionName String, paramName String, anchor Token, refuse bool) returns GenericUnification throws SourceParseError
@@ -93424,8 +93554,23 @@ export type Parser
 			return GenericUnification.disagreed
 		end 'anotherDeclarationMayServe'
 
-		throw SourceParseError.genericArgumentsHaveNoCommonType(functionName, paramName: paramName, first: genericArgumentDisplay(first), second: genericArgumentDisplay(second), line: anchor.line, column: anchor.column)
+		let firstShown = genericArgumentDisplay(first, signatures: self.signatures)
+		let secondShown = genericArgumentDisplay(second, signatures: self.signatures)
+		throw SourceParseError.genericArgumentsHaveNoCommonType(functionName, paramName: paramName, first: firstShown, firstNote: self.noteOfAlikeArgument(first, shown: firstShown, otherShown: secondShown), second: secondShown, secondNote: self.noteOfAlikeArgument(second, shown: secondShown, otherShown: firstShown), line: anchor.line, column: anchor.column)
 	end 'refuseGenericArguments'
+
+	function noteOfAlikeArgument(argument GenericFunctionArgument, shown String, otherShown String) returns String
+		match argument.kind 'kind'
+			rangedAlias then return self.signatures.declaredInNote(argument.name, shown: shown, otherShown: otherShown)
+			integer or
+				float or
+				boolean or
+				string or
+				character or
+				record or
+				enumeration then return ""
+		end 'kind'
+	end 'noteOfAlikeArgument'
 
 	function genericArgumentOf(value ValueId, functionName String, paramName String, anchor Token) returns GenericFunctionArgument throws SourceParseError
 		let tag = self.tagOf(value)
@@ -93464,13 +93609,13 @@ export type Parser
 			undeclared then break 'enumeration'
 		end 'enumeration'
 
-		let identity = self.signatures.rangedAliasIdentityOf(name, readerFilePath: self.filePath)
+		let identity = self.signatures.rangedIdentityOfSpelling(name, readerFilePath: self.filePath)
 
 		if identity.isEmpty() 'notARangedAlias'
 			return plain
 		end 'notARangedAlias'
 
-		return GenericFunctionArgument.create(GenericArgumentKind.rangedAlias, name: self.signatures.rangeScopedAliasName(identity, readerFilePath: self.filePath))
+		return GenericFunctionArgument.create(GenericArgumentKind.rangedAlias, name: self.signatures.rangeScopedDeclaredName(identity, readerFilePath: self.filePath))
 	end 'numericGenericArgumentOf'
 
 	function genericNumericClassOf(argument GenericFunctionArgument) returns GenericArgumentKind
@@ -96713,9 +96858,9 @@ export type Parser
 
 		let name = self.internedName(typeNameIdOf(repaired))
 
-		let slotRange = self.signatures.rangeScopedAliasName(name, readerFilePath: scopeFilePath)
+		let slotRange = self.signatures.rangeScopedDeclaredName(name, readerFilePath: scopeFilePath)
 
-		if not slotRange.equals(self.signatures.rangeScopedAliasName(name, readerFilePath: self.filePath)) 'theTwoFilesMeanTwoRanges'
+		if not slotRange.equals(self.signatures.rangeScopedDeclaredName(name, readerFilePath: self.filePath)) 'theTwoFilesMeanTwoRanges'
 			return MaxonType.named(self.artifact.typeNames.intern(slotRange))
 		end 'theTwoFilesMeanTwoRanges'
 
@@ -96859,7 +97004,7 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		self.anchorCalleeReadOutOfASlot(callee, range: SourceRange.ofToken(anchor))
 
-		var args = try self.parseIndirectCallArgs(func)
+		var args = try self.parseIndirectCallArgs(func, callee: callee)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 		self.widenFunctionValueArgs(callee, args: args, anchor: anchor, rparenTok: rparenTok)
@@ -96893,7 +97038,7 @@ export type Parser
 	// TYPE has no parameter names, so `indirectCall` carries no `argLabels`/`argRanges`; see MaxonDialect).
 	// `parseValueExpression` (the climber plus a trailing ternary), not `parseExpression`, for
 	// `parseCallArgs`' reason: an argument is parsed inside an expression that already seeded `currentBlock`.
-	function parseIndirectCallArgs(func IrFunction) returns ValueIdArray throws SourceParseError
+	function parseIndirectCallArgs(func IrFunction, callee ValueId) returns ValueIdArray throws SourceParseError
 		var args = ValueIdArray.create()
 
 		if self.at(TokenKind.rightParen) 'noArgs'
@@ -96901,6 +97046,7 @@ export type Parser
 		end 'noArgs'
 
 		while true 'argLoop'
+			self.stateLiteralTargetForIndirectArgument(callee, position: args.count(), valueStart: self.pos)
 			args.push(try self.parseValueExpression(func))
 
 			if not self.at(TokenKind.comma) 'endArgs'
@@ -96912,6 +97058,26 @@ export type Parser
 
 		return args
 	end 'parseIndirectCallArgs'
+
+	function stateLiteralTargetForIndirectArgument(callee ValueId, position ElementIndex, valueStart ElementIndex)
+		let opening = self.kindAt(valueStart)
+
+		if opening != TokenKind.leftBracket and opening != TokenKind.leftParen 'noLiteralToType'
+			return
+		end 'noLiteralToType'
+
+		let shape = self.functionValueShape(callee)
+		let param = try shape.paramTypes.get(position) otherwise return
+
+		if opening == TokenKind.leftBracket 'anArrayLiteral'
+			self.stateArrayLiteralTargetAt(self.signatures.arrayInstanceOfDeclaredType(param, interner: self.artifact.typeNames, readerFilePath: shape.scopeFilePath), tokenIndex: valueStart)
+			return
+		end 'anArrayLiteral'
+
+		if maxonTypeTag(param) == ValueTypeTag.structRef 'aRecordParameter'
+			self.stateTupleLiteralTargetAt(tupleTargetNamed(self.internedName(typeNameIdOf(param))), tokenIndex: valueStart)
+		end 'aRecordParameter'
+	end 'stateLiteralTargetForIndirectArgument'
 
 	// Mint the SSA value an indirect call defines, typed from the CALLEE FUNCTION VALUE's return type —
 	// the mirror of `mintDeclaredCallResult` for a direct call. Here the return type is recovered from the
@@ -99264,7 +99430,7 @@ export type Parser
 				return tok
 			end 'aQualifiedNominal'
 
-			let identity = self.signatures.writtenTypeNameIdentity(tok.value, readerFilePath: self.filePath)
+			let identity = self.signatures.bareWrittenKey(tok.value, readerFilePath: self.filePath)
 
 			if identity.equals(tok.value) 'itsWrittenNameIsItsIdentity'
 				return tok
@@ -99441,8 +99607,10 @@ function callArgumentLabel(argLabels ByteArrayArray, argIndex ParamCount) return
 	return try argLabels.get(argIndex) otherwise panic("callArgumentLabel: argLabels.get OOB at {argIndex} of {argLabels.count()} — a call's label list is empty or one per argument")
 end 'callArgumentLabel'
 
-function ambiguousTypeNameRefusal(name ByteArray, candidates StringArray, anchor Token) returns SourceParseError
-	return SourceParseError.ambiguousTypeAlias(String.from(name), candidates: joinedWith(candidates, separator: CandidateListSeparator), line: anchor.line, column: anchor.column)
+function ambiguousTypeNameRefusal(name ByteArray, candidates StringArray, ownDeclarationUnqualifiable bool, anchor Token) returns SourceParseError
+	let listed = joinedWith(candidates, separator: CandidateListSeparator)
+	let advised = RenameOwnDeclarationAdvice if listed.isEmpty() else "{listed}{CandidateListSeparator}{RenameOwnDeclarationAdvice}"
+	return SourceParseError.ambiguousTypeAlias(String.from(name), candidates: advised if ownDeclarationUnqualifiable else listed, line: anchor.line, column: anchor.column)
 end 'ambiguousTypeNameRefusal'
 
 function requireBuiltinArity(args ValueIdArray, builtinName ByteArray, arity ParamCount, calleeTok Token) throws SourceParseError
@@ -99450,3 +99618,14 @@ function requireBuiltinArity(args ValueIdArray, builtinName ByteArray, arity Par
 		throw SourceParseError.builtinArity(String.from(builtinName), expected: arity, got: args.count() as ParamCount, line: calleeTok.line, column: calleeTok.column)
 	end 'arity'
 end 'requireBuiltinArity'
+
+type PairedDisplays
+	module let got as String
+	module let gotNote as String
+	module let declared as String
+	module let declaredNote as String
+
+	static function create(got String, gotNote String, declared String, declaredNote String) returns PairedDisplays
+		return Self{got: got, gotNote: gotNote, declared: declared, declaredNote: declaredNote}
+	end 'create'
+end 'PairedDisplays'

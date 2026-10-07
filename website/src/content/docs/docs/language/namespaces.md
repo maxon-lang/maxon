@@ -37,8 +37,10 @@ the whole program's, so a second declaration of it anywhere is **E3006** (see
 
 The same modifiers apply to members inside a type. An unmarked field is private to the type: reading or
 writing it anywhere else is **E3014**. An unmarked method or static member is private to the file, like a
-top-level declaration: calling it from another file is **E3008**. At most one modifier may be written;
-combining two is **E2001** (`'export' and 'public' cannot be combined`).
+top-level declaration: calling it from another file is **E3008**. A typealias declared inside a type body
+carries its own modifier the same way: unmarked, it is private to the file, and naming it from another file —
+bare or as `Holder.Inner` — is **E3008**. A typealias inside an `interface` has the interface's visibility.
+At most one modifier may be written; combining two is **E2001** (`'export' and 'public' cannot be combined`).
 
 **A type hides its members.** Where a type is not visible, nothing of it is: naming it is **E3008**
 (**E3088** for a `module` type), and so is reaching a member through a value of it — a value an exported
@@ -54,8 +56,10 @@ be able to name what the call takes and gives back, so every type its parameters
 *(none)* < `module` < `export` < `public`: `public` outranks `export`, so a `public` function may not name an
 `export` type. The check is structural — a generic instance's base type and each of its type arguments, a
 tuple's elements, and a function typealias's parameter and return types are all asked; a type parameter and a
-primitive name no declaration and are asked nothing. A member is held to its own modifier rather than its
-type's, and an interface's members are held to the interface's. A [service](/docs/language/async/#services--spawn)'s message is
+primitive name no declaration and are asked nothing. A typealias the signature names is walked through, each
+name on its right-hand side read as the alias's own file means it, and a type body's inner typealias is held
+to its own modifier before its right-hand side is walked. A member is held to its own modifier, whatever its
+type's, and an interface's members — its requirements' types included — are held to the interface's. A [service](/docs/language/async/#services--spawn)'s message is
 held to the narrower of its own modifier and its service type's. Naming a narrower type is
 [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction); the fix is to raise the type to the function's
 tier, or to narrow the function.
@@ -84,7 +88,9 @@ declaring directory it suggests `module` (**E3093**). These checks run on every 
 compiles, a one-file program included. The entry point, every target a `.maxproj` file declares and every
 task a `.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported or `module` signature names is exempt while that function is itself
 referenced from another file: the signature requires the wider tier, so dropping the modifier would only
-trade E3092 for [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction).
+trade E3092 for [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction). Every typealias form —
+ranged, function, generic-instance and tuple — is audited, and a use credits exactly the declaration it
+means, a use reached only through a called function's signature included.
 
 ## `public`
 
@@ -157,18 +163,23 @@ is resolved from the file that declares the enum, whichever file reads the case;
 single declaration is reported in that file.
 
 **A type name** — a typealias of any form, a type, an enum, a union or an interface — that reaches more than
-one declaration is ambiguous, **E3063**, unless the referring file declares the name itself: a file's own
-declaration always wins its bare name in that file. The standard library counts as one candidate and each
-project declaration as another, so a project's `export typealias StringArray` makes a bare `StringArray`
-ambiguous in every other file that sees both. The message lists the spellings that resolve it, a
-declaration at the project root as `export.Name`:
+one project declaration is ambiguous, **E3063**, in every file, a file that declares one of them included.
+The message lists the spellings that resolve it, a declaration at the project root as `export.Name`:
 
 ```text
-error E3063: app/main.maxon:7:11: Ambiguous type name 'StringArray': more than one visible declaration matches it. Qualify it as one of: lib.StringArray, stdlib.StringArray
+error E3063: app/main.maxon:7:11: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, lib.Score
 ```
 
-The standard library's own files see only the library's declarations, and a type the compiler supplies — a
-byte-string literal's element type, for one — is always the library's.
+In a file whose own declaration is file-private, the message ends `, or rename this file's own declaration`:
+renaming is the remedy in the declaring file, and other files qualify.
+
+Only project declarations take part. A project declaration of a library name is what the bare name means in
+every project file, so a project's `export typealias StringArray` is the one a bare
+`StringArray` names, and the library's stays reachable as `stdlib.StringArray`. The standard library's own
+files see only the library's declarations. A `b"…"` literal's element is the type the file's bare `Byte`
+names when that is an integer alias — the file's own, else the one project alias it sees, else the
+library's; a `type Byte` leaves the literal on the library's, and an ambiguous bare `Byte` refuses the
+literal with **E3063**.
 
 **A function name** that reaches several declarations resolves to one at the project root, or in an
 enclosing directory, over one in a nested directory, and to a project function over a standard-library one.
@@ -195,8 +206,9 @@ coexist — a typealias in one and a type in another included — and a file-pri
 anything, since only its own file can name it. A type, enum, union or interface name is the whole program's:
 two of them sharing a name are **E3006** wherever they sit and whatever their modifiers.
 
-Every typealias a `public` standard-library signature names is itself `public`, so a value can always be cast
-to the alias a library signature asks for (`x as ElementIndex`). A standard-library typealias with no modifier
+Every typealias a `public` standard-library signature names is itself `public` — an inner one such as
+`Array.ElementIterator` included — so a value can always be cast to the alias a library signature asks for
+(`x as ElementIndex`). A standard-library typealias with no modifier
 is private to its declaring file exactly as anyone's is — `Math.maxon`'s `SeriesTermLimit` is one — and
 naming it from another file is **E3008**.
 

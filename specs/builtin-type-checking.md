@@ -156,7 +156,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:17: '__Builtins.subprocessResolveOnPath' requires a cstring, but its argument is ByteArray
+error E3005: <fragment>:6:17: '__Builtins.subprocessResolveOnPath' requires a cstring, but its argument is __ManagedMemory with Byte
 ```
 
 <!-- test: builtin-type-checking.error-subprocess-resolve-on-path-int -->

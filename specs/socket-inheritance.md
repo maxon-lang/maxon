@@ -23,8 +23,6 @@ The server accepts a connection, spawns a child that lives for three seconds, th
 socket. The client, reading to the end of the connection, must see that end well inside the child's
 lifetime: a child holding a copy of the accepted socket would keep the connection open until it exits.
 ```maxon
-typealias StringArray = Array with String
-
 let ChildLifetimeMs = 3000
 let PromptEndMs = 1500
 
@@ -81,8 +79,6 @@ answers. The server spawns a child that lives for three seconds and signals the 
 socket; the server, reading to the end of the connection, must see that end well inside the child's
 lifetime.
 ```maxon
-typealias StringArray = Array with String
-
 let ChildLifetimeMs = 3000
 let PromptEndMs = 1500
 

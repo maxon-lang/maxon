@@ -48,7 +48,8 @@ let done = false       // bool
 
 The standard library declares a few aliases every file can use, among them `ExitCode`, `Byte`
 (`int(0 to u8.max)`), `ByteArray` (`Array with Byte`), `Codepoint` (`int(0 to 1114111)`), `HashValue`
-(`int(0 to u32.max)`), `SourceLineNumber` and `Real` (`float(f64.min to f64.max)`).
+(`int(0 to u32.max)`), `Count` (what a collection's `count()` returns), `SourceLineNumber` and `Real`
+(`float(f64.min to f64.max)`).
 [Ranged Type Aliases](/docs/language/ranged-typealiases/) covers declaring your own.
 
 ## Integers
@@ -239,7 +240,7 @@ end 'main'
 | `bool` ↔ number, `String` → number, struct ↔ anything | **E3009** |
 | a value to its own alias (`b as Byte` when `b` is a `Byte`) | **E3010** `unneeded cast` |
 | a literal to the alias its destination declares (`open(8080 as Port)` for a `Port` parameter) | **E3010** `unneeded cast: the literal 8080 already fits in 'Port'` — see [Construction](/docs/language/ranged-typealiases/#construction) |
-| one container instance to a different one | **E3131** |
+| one container instance to a different one | **E3131**, unless the elements are same-named declarations of one layout, which re-brands the container |
 
 ### Floats to Integers
 

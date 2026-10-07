@@ -1944,6 +1944,95 @@ end 'main'
 31
 ```
 
+<!-- test: a-conformer-binding-spelled-qualified-agrees-with-the-bare-declaration -->
+The same agreement across two spellings. `A`, inside `alpha/`, binds `Element` to `Integer` bare; `B`, in
+`beta/`, binds it to `alpha.Integer`. Both name `alpha/`'s one declaration, so the two conformers bind one
+type and the dispatch in `useIt` is compiled for both. `(5 + 10) + (6 + 10)`.
+```maxon
+// --- file: alpha/ifc.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+export type A implements Taker with Integer
+	let base as Integer
+
+	export function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	export static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'A'
+
+// --- file: beta/impl.maxon
+export type B implements Taker with alpha.Integer
+	let base as alpha.Integer
+
+	export function take(e alpha.Integer) returns alpha.Integer
+		return base + e
+	end 'take'
+
+	export static function create(base alpha.Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'B'
+
+// --- file: main.maxon
+function useIt(t Taker) returns Integer
+	return t.take(10)
+end 'useIt'
+
+function main() returns ExitCode
+	return (useIt(A.create(5)) + useIt(B.create(6))) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: a-written-binding-spelled-qualified-matches-its-conformers -->
+A use site's binding spelled through the declaring directory. `A`, inside `alpha/`, binds `Element` to
+`Integer` bare; `main.maxon` writes the claim as `Taker with alpha.Integer`. Both name one declaration, so the
+claim is the binding the conformer holds. `20 + 11`.
+```maxon
+// --- file: alpha/ifc.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+export interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+export type A implements Taker with Integer
+	let base as Integer
+
+	export function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	export static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'A'
+
+// --- file: main.maxon
+typealias IntTaker = Taker with alpha.Integer
+
+function useIt(t IntTaker, c alpha.Integer) returns alpha.Integer
+	return t.take(c)
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(A.create(20), c: 11) as ExitCode
+end 'main'
+```
+```exitcode
+31
+```
+
 <!-- test: associated-types.conformers-disagree-but-nothing-dispatches -->
 ⭐⭐ **THE DISPATCH GATE, AND WITHOUT IT E3119 REFUSES A CORRECT PROGRAM.** Two conformers bind
 `Element` to `float` and to `Integer` — the disagreement the case two above refuses — but every call
@@ -2653,10 +2742,10 @@ end 'main'
 ```
 
 <!-- test: an-instance-alias-written-in-another-file-types-the-result-by-that-file -->
-An interface instance written in the interface's file keeps that file's `Level` when a file with its own `Level` calls through it.
+An interface instance written in the interface's file keeps that file's `Level` when a file with its own `Level` calls through it. Both aliases are file-private, so each file sees one `Level`.
 ```maxon
 // --- file: a.maxon
-export typealias Level = int(0 to 100)
+typealias Level = int(0 to 100)
 
 export interface Cursor uses Element
 	function current() returns Element
@@ -2669,7 +2758,7 @@ export type Tick implements Cursor with Level
 		return Self{v: 50}
 	end 'create'
 
-	export function current() returns Level
+	function current() returns Level
 		return self.v
 	end 'current'
 end 'Tick'
@@ -4035,7 +4124,7 @@ rendered as the unresolved name `Holder.ElementArray`, against a conformer's own
 resolved instance, compares a name against a type and refuses EVERY conformer:
 
 ```
-E3016 … - absorb(value Array_T779624e88745be2b) returns void (expected absorb(value Holder.ElementArray) returns void)
+E3016 … - absorb(value Array with Element) returns void (expected absorb(value Holder.ElementArray) returns void)
 ```
 
 ⛔ **NAME-MATCHING THE ALIAS WOULD MAKE THE SPELLING LOAD-BEARING**: `stdlib/Set.maxon` and `stdlib/List.maxon`
@@ -4322,5 +4411,5 @@ end 'main'
 ```
 ```maxoncstderr
 error E3016: <fragment>:12:6: Partial interface implementation: type 'Crate' has 1 method(s) with wrong signature:
-  - absorb(value OtherStore) returns void (expected absorb(value Array_Num) returns void)
+  - absorb(value OtherStore) returns void (expected absorb(value Array with Num) returns void)
 ```

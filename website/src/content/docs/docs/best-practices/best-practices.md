@@ -42,7 +42,9 @@ typealias VisitCount = int(0 to u64.max)        // non-negative
 typealias FrameDelta = int(i64.min to i64.max)  // signed
 ```
 
-Avoid generic names like `Count` or `Index` — they tell a reader nothing the field name doesn't already say. Pick names that carry domain information.
+Give your own aliases names that carry domain information; a generic name like `Index` tells a reader nothing the field name does not already say. For the size of a collection, use the standard library's `Count`, which is what `count()` returns.
+
+When one of your aliases shares a name with a standard-library alias, use the library's where it fits, and otherwise rename yours. Both declarations are legal — yours is what the bare name means and the library's is `stdlib.Name` — but they are two types, and every value crossing between them needs a cast.
 
 ### Create Type Aliases for Collections Early
 

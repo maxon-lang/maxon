@@ -143,8 +143,8 @@ export function visibilityModifierSpelling(word VisibilityModifierWord) returns 
 end 'visibilityModifierSpelling'
 
 export union SpelledFieldName
-	bareName(name ByteArray)
-	notABareName
+	named(name ByteArray)
+	unnamed
 end 'SpelledFieldName'
 
 // @generated library-cache begin
@@ -152,30 +152,30 @@ function cacheWriteSpelledFieldName(writer LibraryCacheWriter, value SpelledFiel
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		bareName(a0) then cacheWriteSpelledFieldNameBareName(writer, a0: a0)
-		notABareName then break 'payload'
+		named(a0) then cacheWriteSpelledFieldNameNamed(writer, a0: a0)
+		unnamed then break 'payload'
 	end 'payload'
 end 'cacheWriteSpelledFieldName'
 
-function cacheWriteSpelledFieldNameBareName(writer LibraryCacheWriter, a0 ByteArray)
+function cacheWriteSpelledFieldNameNamed(writer LibraryCacheWriter, a0 ByteArray)
 	writer.bytes(a0)
-end 'cacheWriteSpelledFieldNameBareName'
+end 'cacheWriteSpelledFieldNameNamed'
 
 function cacheReadSpelledFieldName(reader LibraryCacheReader) returns SpelledFieldName throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
-		0 gives try cacheReadSpelledFieldNameBareName(reader)
-		1 gives SpelledFieldName.notABareName
+		0 gives try cacheReadSpelledFieldNameNamed(reader)
+		1 gives SpelledFieldName.unnamed
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadSpelledFieldName'
 
-function cacheReadSpelledFieldNameBareName(reader LibraryCacheReader) returns SpelledFieldName throws LibraryCacheDamage
+function cacheReadSpelledFieldNameNamed(reader LibraryCacheReader) returns SpelledFieldName throws LibraryCacheDamage
 	let a0 = try reader.bytes()
 
-	return SpelledFieldName.bareName(a0)
-end 'cacheReadSpelledFieldNameBareName'
+	return SpelledFieldName.named(a0)
+end 'cacheReadSpelledFieldNameNamed'
 
 // @generated library-cache end
 
@@ -224,10 +224,7 @@ end 'cacheReadSpelledFieldNameArray'
 // file or directory name may not contain. So the join is injective and the segment test is sound. The
 // `.`-joined spelling the language shows a user is DERIVED from this one
 // (`namespaceForModuleDirectory`) and is never what a visibility question is asked on.
-// ⚠ Exported for `ProgramSignatures.projectRelativeFileDisplay` — a file's display is its module
-// directory joined to its file name, so the joiner it uses IS this one, and a literal `/` there would be a
-// second speller of the character this whole header is an argument about.
-export let ModuleDirectorySeparator = "/"
+let ModuleDirectorySeparator = "/"
 
 // The one spelling that has to be rewritten: `FilePath` normalizes to the PLATFORM separator on
 // construction, so a Windows host hands back `feature\sub` where a POSIX host hands back `feature/sub`,
@@ -449,16 +446,16 @@ function libraryMeaningAfter(sofar MeaningsReached) returns MeaningsReached
 	match sofar 'sofar'
 		none or
 			theLibrarys then return MeaningsReached.theLibrarys
-		oneAuthors or
-			several then return MeaningsReached.several
+		oneAuthors then return MeaningsReached.oneAuthors
+		several then return MeaningsReached.several
 	end 'sofar'
 end 'libraryMeaningAfter'
 
 function authorMeaningAfter(sofar MeaningsReached) returns MeaningsReached
 	match sofar 'sofar'
-		none then return MeaningsReached.oneAuthors
-		theLibrarys or
-			oneAuthors or
+		none or
+			theLibrarys then return MeaningsReached.oneAuthors
+		oneAuthors or
 			several then return MeaningsReached.several
 	end 'sofar'
 end 'authorMeaningAfter'
@@ -543,7 +540,7 @@ end 'insertCandidateName'
 // ⚠ The per-comparison `toByteArray()` is affordable only because every reader is rare.
 // `insertCandidateName` orders an ambiguity message's candidates and
 // `TypeCycleCheck.typeDeclEarlier` breaks the cross-file tie between two cyclic declarations, both
-// on a build already failing; `declarationFoldsLater` breaks a tie between two declarations of one
+// on a build already failing; `foldsLaterThan` breaks a tie between two declarations of one
 // type name, on programs that compile. A reader asked once per reference would need a cheaper
 // comparison.
 export function stringBytesPrecede(earlier String, later String) returns bool
@@ -568,6 +565,8 @@ end 'stringBytesPrecede'
 // Joins the candidate trailer every ambiguity message ends with: the diagnostics say the identical
 // sentence about different kinds of declaration.
 module let CandidateListSeparator = ", "
+
+module let RenameOwnDeclarationAdvice = "or rename this file's own declaration"
 
 // ⭐ THE ONE EMPTY `StringArray` every UNAMBIGUOUS name answers with — so the common path allocates
 // nothing. NEVER mutated: the only writer builds a fresh array.
@@ -1996,10 +1995,10 @@ export typealias UnusedBindingCandidateArray = Array with UnusedBindingCandidate
 // position. A DECLARATION, not an op: it contributes a registry entry, and
 // TypeResolution collapses every `MaxonType.named(Score)` to the primitive below.
 //
-// TWO ALIASES OVER THE SAME RANGE ARE TWO TYPES — the NAME is the type, so an `Age`
+// TWO ALIASES OVER THE SAME RANGE ARE TWO TYPES — the DECLARATION is the type, so an `Age`
 // never reaches a `Year` slot unless the author writes `as`. Resolution still erases
 // the name to `underlying`; the identity survives in the value column and in the
-// pre-erasure signature columns (`ProgramSignatures.rangedAliasIdentityOf` is the one
+// pre-erasure signature columns (`ProgramSignatures.rangedIdentityOfSpelling` is the one
 // door that spells it). The BOUNDS are a separate fact and are carried because they
 // ARE the alias's definition: they are what a narrowing conversion is checked against,
 // and a name is never a proof that a value lies inside them.
@@ -2035,6 +2034,27 @@ export union RangedAliasDomain
 			pattern(width) gives width == FullWordBitWidth
 		end 'domain'
 	end 'isFullWordPattern'
+
+	export function qualifierPrefix() returns String
+		return match self 'domain'
+			quantity gives ""
+			pattern(width) gives "b{width}_"
+		end 'domain'
+	end 'qualifierPrefix'
+
+	export function isTheSameDomainAs(other RangedAliasDomain) returns bool
+		return match self 'domain'
+			quantity gives not other.isPattern()
+			pattern(width) gives other.isPatternOfWidth(width)
+		end 'domain'
+	end 'isTheSameDomainAs'
+
+	function isPatternOfWidth(width BitWidth) returns bool
+		return match self 'domain'
+			quantity gives false
+			pattern(own) gives own == width
+		end 'domain'
+	end 'isPatternOfWidth'
 end 'RangedAliasDomain'
 
 // @generated library-cache begin
@@ -2114,19 +2134,12 @@ export type RangedTypeAlias
 			return false
 		end 'twoNames'
 
-		// A range-contested name arrives under its mint (`Byte$0_200`), and within one file the mint and
-		// the bare name resolve to one declaration, so the bounds are what tell the contest's members
-		// apart.
-		if spelled.count() != self.name.count() or spelled.count() != other.name.count() 'aRangeMint'
-			return self.hasBounds(other.low, highBound: other.high)
-		end 'aRangeMint'
-
 		return self.declFilePath == other.declFilePath and self.nameLine == other.nameLine and self.nameColumn == other.nameColumn
 	end 'isTheSameDeclarationAs'
 
-	export function hasBounds(lowBound ParsedInt, highBound ParsedInt) returns bool
-		return self.low == lowBound and self.high == highBound
-	end 'hasBounds'
+	export function hasSameRangeAs(other RangedTypeAlias) returns bool
+		return self.low == other.low and self.high == other.high and maxonTypeTag(self.underlying) == maxonTypeTag(other.underlying) and self.domain.isTheSameDomainAs(other.domain)
+	end 'hasSameRangeAs'
 
 	// @generated library-cache begin
 	module function cacheWrite(writer LibraryCacheWriter)
@@ -2350,7 +2363,7 @@ end 'cacheReadRangedTypeAliasMap'
 // STRING PER PROBE — which is the entire cost this structure exists to remove. `FilePath.equals`
 // allocates two. The String key also keeps ONE notion of "the same file" between this map and
 // `record`'s same-file test, which must agree or a redeclaration is missed.
-typealias RangedAliasByDeclaringFile = Map with (String, RangedTypeAlias)
+export typealias RangedAliasByDeclaringFile = Map with (String, RangedTypeAlias)
 
 // @generated library-cache begin
 function cacheWriteRangedAliasByDeclaringFile(writer LibraryCacheWriter, value RangedAliasByDeclaringFile)
@@ -2473,6 +2486,62 @@ end 'cacheReadMultiplyDeclaredAliasMap'
 
 // @generated library-cache end
 
+typealias DeclarationIdentityMap = Map with (ByteArray, MintByDeclaringFile)
+
+// @generated library-cache begin
+function cacheWriteDeclarationIdentityMap(writer LibraryCacheWriter, value DeclarationIdentityMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		cacheWriteMintByDeclaringFile(writer, value: entry)
+	end 'eachEntry'
+end 'cacheWriteDeclarationIdentityMap'
+
+function cacheReadDeclarationIdentityMap(reader LibraryCacheReader) returns DeclarationIdentityMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = DeclarationIdentityMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try cacheReadMintByDeclaringFile(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadDeclarationIdentityMap'
+
+// @generated library-cache end
+
+export typealias MintByDeclaringFile = Map with (String, ByteArray)
+
+// @generated library-cache begin
+module function cacheWriteMintByDeclaringFile(writer LibraryCacheWriter, value MintByDeclaringFile)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.text(key)
+		writer.bytes(entry)
+	end 'eachEntry'
+end 'cacheWriteMintByDeclaringFile'
+
+module function cacheReadMintByDeclaringFile(reader LibraryCacheReader) returns MintByDeclaringFile throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = MintByDeclaringFile.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.text()
+		let entry = try reader.bytes()
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadMintByDeclaringFile'
+
+// @generated library-cache end
+
+typealias SharersBySpelling = Map with (ByteArray, StringArray)
+
 // The names whose declarations disagree about the RANGE -> every distinct range-qualified spelling
 // of each. A strict SUBSET of `MultiplyDeclaredAliasMap`'s keys, and EMPTY for every program in the
 // corpus — see `RangedAliasRegistry.settleRangeContests` for why that emptiness is what keeps every
@@ -2509,6 +2578,8 @@ end 'cacheReadRangeContestedAliasMap'
 // registry cost a FLAT ~432 allocations per compile in `phase:load`, paid by every build. Copy-on-write off
 // this handle at the single writer (`settleRangeContests`); NEVER mutated.
 let sharedEmptyRangeContests = RangeContestedAliasMap.create()
+
+let sharedEmptyDeclarationIdentities = DeclarationIdentityMap.create()
 
 // ⭐ **THE RANGED-ALIAS REGISTRY — file-scoped resolution.** Two files may each declare `Limit` over
 // a different range (`specs/duplicate-typealias.md`), and each file's uses must be checked against
@@ -2618,28 +2689,30 @@ end 'builtinExitCodeAlias'
 typealias ScopedAliasTier = int(0 to 3)
 
 let ScopedAliasTierHiddenFromTheReader = 0 as ScopedAliasTier
-let ScopedAliasTierSomeAuthors = 1 as ScopedAliasTier
-let ScopedAliasTierTheLibrarys = 2 as ScopedAliasTier
+let ScopedAliasTierTheLibrarys = 1 as ScopedAliasTier
+let ScopedAliasTierSomeAuthors = 2 as ScopedAliasTier
 let ScopedAliasTierReadersOwnFile = 3 as ScopedAliasTier
 
 // How near a claimant of a contested type name is to the file reading it — the tier half of
 // `ClaimantProvenance.rankedClaimIn`, the ONE ranking behind every scoped type-name door.
 //
-// ⚠ **THE LIBRARY OUTRANKS ANOTHER AUTHOR'S FILE FOR EVERY READER, THE LIBRARY'S OWN FILES INCLUDED.** A
-// file that declares no `Byte` of its own means the library's, not a sibling user file's, which
-// `specs/bytearray-element-size.md`'s `readers-own-byte-decides-the-literal-not-the-whole-program-fold`
-// pins: the element width a literal is folded at follows this answer.
+// ⚠ **ANOTHER AUTHOR'S FILE OUTRANKS THE LIBRARY FOR AN AUTHOR READER, AND IS HIDDEN FROM A LIBRARY
+// READER.** An author's declaration of a library name is what that name means to every author file,
+// while the library's own files keep meaning the library's. A file that declares no `Byte` of its own
+// means a sibling user file's, which `specs/bytearray-element-size.md`'s
+// `error.a-byte-string-literal-takes-the-sibling-files-wide-byte-it-names-bare` pins: the element width a
+// literal is folded at follows this answer.
 //
-// ⛔ **A TIE IN TIER GOES TO THE DECLARATION THAT FOLDS LATER** (`declarationFoldsLater`): the later
-// layer — supplied, then authors, then library, the sweep's order — and within one layer the
-// byte-wise later path. A tie broken any other way would read a hash map's bucket order, which is
-// no fact about the program.
-function scopedAliasTier(declPath String, readerPath String, declaredByTheCorpus bool, visibleToReader bool) returns ScopedAliasTier
+// ⛔ **A TIE IN TIER GOES TO THE DECLARATION THAT FOLDS LATER** (`foldsLaterThan`): the later layer —
+// authors, then library, the sweep's order — and within one layer the byte-wise later project-relative
+// path (`ClaimantProvenance.foldKeyOf`). A tie broken any other way would read a hash map's bucket order,
+// which is no fact about the program.
+function scopedAliasTier(declPath String, readerPath String, declaredByTheCorpus bool, readerIsTheCorpus bool, visibleToReader bool) returns ScopedAliasTier
 	if declPath.equals(readerPath) 'theReadersOwnDeclaration'
 		return ScopedAliasTierReadersOwnFile
 	end 'theReadersOwnDeclaration'
 
-	if not visibleToReader 'hiddenFromThisReader'
+	if not visibleToReader or (readerIsTheCorpus and not declaredByTheCorpus) 'hiddenFromThisReader'
 		return ScopedAliasTierHiddenFromTheReader
 	end 'hiddenFromThisReader'
 
@@ -2657,21 +2730,19 @@ end 'foldLayerFor'
 
 type ClaimantRanking
 	var bestTier as ScopedAliasTier
-	var bestPath as String
-	var bestLayer as FoldLayer
+	var bestPosition as FoldPosition
 
-	static function seededWith(tier ScopedAliasTier, path String, layer FoldLayer) returns ClaimantRanking
-		return Self{bestTier: tier, bestPath: path, bestLayer: layer}
+	static function seededWith(tier ScopedAliasTier, position FoldPosition) returns ClaimantRanking
+		return Self{bestTier: tier, bestPosition: position}
 	end 'seededWith'
 
-	function admits(tier ScopedAliasTier, path String, layer FoldLayer) returns bool
-		if not self.isOutrankedBy(tier, path: path, layer: layer) 'theBestSoFarStands'
+	function admits(tier ScopedAliasTier, position FoldPosition) returns bool
+		if not self.isOutrankedBy(tier, position: position) 'theBestSoFarStands'
 			return false
 		end 'theBestSoFarStands'
 
 		self.bestTier = tier
-		self.bestPath = path
-		self.bestLayer = layer
+		self.bestPosition = position
 		return true
 	end 'admits'
 
@@ -2679,12 +2750,12 @@ type ClaimantRanking
 		return self.bestTier == ScopedAliasTierHiddenFromTheReader
 	end 'winnerIsHiddenFromTheReader'
 
-	function isOutrankedBy(tier ScopedAliasTier, path String, layer FoldLayer) returns bool
+	function isOutrankedBy(tier ScopedAliasTier, position FoldPosition) returns bool
 		if tier != self.bestTier 'differentTiers'
 			return tier > self.bestTier
 		end 'differentTiers'
 
-		return declarationFoldsLater(path, layer: layer, thanPath: self.bestPath, thanLayer: self.bestLayer)
+		return foldsLaterThan(position, than: self.bestPosition)
 	end 'isOutrankedBy'
 end 'ClaimantRanking'
 
@@ -2698,40 +2769,93 @@ export type RankedClaimPosition
 end 'RankedClaimPosition'
 
 export type ClaimantProvenance
-	var corpusDeclaringFiles as CorpusDeclaringFileSet
 	var moduleDirectories as ModuleDirectoryByFile
+	var libraryFiles as LibraryFilePathSet
 
 	export static function create() returns ClaimantProvenance
-		return Self{corpusDeclaringFiles: CorpusDeclaringFileSet.create(), moduleDirectories: ModuleDirectoryByFile.create()}
+		return Self{moduleDirectories: ModuleDirectoryByFile.create(), libraryFiles: LibraryFilePathSet.create()}
 	end 'create'
 
 	export function noteFingerprint(fingerprint IndexFingerprint)
-		fingerprint.note("corpusDeclaringFiles", value: self.corpusDeclaringFiles.count())
+		fingerprint.note("libraryFiles", value: self.libraryFiles.count())
 		fingerprint.note("moduleDirectories", value: self.moduleDirectories.count())
 	end 'noteFingerprint'
 
-	// The layer arrives from the caller rather than being derived from the path here:
-	// `ProgramSignatures.declaredByTheCorpus` is the one answer, and a second derivation would rank a
-	// claimant on a layer every other provenance reader disagrees with.
-	export function noteDeclaringLayer(declFilePath FilePath, declaredByTheCorpus bool)
-		if not declaredByTheCorpus 'anAuthorsOwnFile'
-			return
-		end 'anAuthorsOwnFile'
-
-		self.corpusDeclaringFiles.insert(declFilePath.toString())
-	end 'noteDeclaringLayer'
-
 	export function declaresInTheCorpus(declPath String) returns bool
-		return self.corpusDeclaringFiles.contains(declPath)
+		return declaredInTheCorpus(self.libraryFiles, declPath: declPath)
 	end 'declaresInTheCorpus'
 
-	export function shareModuleDirectories(directories ModuleDirectoryByFile)
+	export function shareFilePartition(directories ModuleDirectoryByFile, libraryPaths LibraryFilePathSet)
 		self.moduleDirectories = directories
-	end 'shareModuleDirectories'
+		self.libraryFiles = libraryPaths
+	end 'shareFilePartition'
 
 	export function foldLayerOf(declPath String) returns FoldLayer
 		return foldLayerFor(self.declaresInTheCorpus(declPath))
 	end 'foldLayerOf'
+
+	module function foldPositionOf(declPath String) returns FoldPosition
+		return FoldPosition.create(declPath, key: self.foldKeyOf(declPath), layer: self.foldLayerOf(declPath))
+	end 'foldPositionOf'
+
+	function foldKeyOf(declPath String) returns String
+		if declPath.equals(CompilerOwnedDeclFilePath.toString()) 'theCompilersOwnDeclaration'
+			return declPath
+		end 'theCompilersOwnDeclaration'
+
+		return projectRelativeDisplay(moduleDirectoryIn(self.moduleDirectories, path: declPath), path: try FilePath.from(declPath) otherwise panic("ClaimantProvenance.foldKeyOf: '{declPath}' is a declaring-file path and is not a path"))
+	end 'foldKeyOf'
+
+	export function foldsLater(declPath String, thanPath String) returns bool
+		return foldsLaterThan(self.foldPositionOf(declPath), than: self.foldPositionOf(thanPath))
+	end 'foldsLater'
+
+	export function anAuthorDeclaresAny(declPaths StringArray) returns bool
+		for declPath in declPaths 'eachDeclaringFile'
+			if not self.declaresInTheCorpus(declPath) 'anAuthorsFile'
+				return true
+			end 'anAuthorsFile'
+		end 'eachDeclaringFile'
+
+		return false
+	end 'anAuthorDeclaresAny'
+
+	export function ordinalMints(spellings MintByDeclaringFile) returns MintByDeclaringFile
+		var sharersOfSpelling = SharersBySpelling.create()
+
+		for (declPath, spelling) in spellings 'eachDeclaration'
+			if not sharersOfSpelling.contains(spelling) 'firstDeclarationOfThisSpelling'
+				sharersOfSpelling.upsert(spelling, value: StringArray.create())
+			end 'firstDeclarationOfThisSpelling'
+
+			var sharers = try sharersOfSpelling.get(spelling) otherwise panic("ClaimantProvenance.ordinalMints: the spelling of '{declPath}' was just seeded into the sharer map and is not there")
+			sharers.push(declPath)
+		end 'eachDeclaration'
+
+		var minted = MintByDeclaringFile.create()
+
+		for (declPath, spelling) in spellings 'eachMint'
+			minted.upsert(declPath, value: self.ordinalMintName(spelling, sharers: try sharersOfSpelling.get(spelling) otherwise panic("ClaimantProvenance.ordinalMints: the spelling of '{declPath}' was grouped in the pass above"), declPath: declPath))
+		end 'eachMint'
+
+		return minted
+	end 'ordinalMints'
+
+	function ordinalMintName(spelling ByteArray, sharers StringArray, declPath String) returns ByteArray
+		if sharers.count() < 2 'theSpellingAloneNamesIt'
+			return spelling
+		end 'theSpellingAloneNamesIt'
+
+		var place = 1 as ElementIndex
+
+		for other in sharers 'eachSharer'
+			if self.foldsLater(declPath, thanPath: other) 'foldsAfterAnotherSharer'
+				place = place + 1
+			end 'foldsAfterAnotherSharer'
+		end 'eachSharer'
+
+		return ordinalMintSpelling(spelling, place: place)
+	end 'ordinalMintName'
 
 	export function claimOf(kind TypeDeclKind, declFilePath FilePath, visibility Visibility) returns TypeNameClaim
 		return TypeNameClaim.create(kind, declFilePath: declFilePath, visibility: visibility, declaredByTheCorpus: self.declaresInTheCorpus(declFilePath.toString()))
@@ -2753,13 +2877,13 @@ export type ClaimantProvenance
 	export function rankedClaimIn(claims TypeNameClaimArray, readerPath String) returns RankedClaimPosition
 		let seedAt = claims.count() - 1
 		let seed = try claims.get(seedAt) otherwise panic("ClaimantProvenance.rankedClaimIn: a name's claims are ranked only once at least one declaration holds it")
-		var ranking = ClaimantRanking.seededWith(self.tierOfClaim(seed, readerPath: readerPath), path: seed.declFilePath.toString(), layer: self.layerOfClaim(seed))
+		var ranking = ClaimantRanking.seededWith(self.tierOfClaim(seed, readerPath: readerPath), position: self.foldPositionOf(seed.declFilePath.toString()))
 		var bestAt = seedAt
 
 		for at in 0 upto claims.count() 'eachClaim'
 			let claim = try claims.get(at) otherwise panic("ClaimantProvenance.rankedClaimIn: claims.get OOB at {at} inside its own count()")
 
-			if ranking.admits(self.tierOfClaim(claim, readerPath: readerPath), path: claim.declFilePath.toString(), layer: self.layerOfClaim(claim)) 'nearerThanTheBestSoFar'
+			if ranking.admits(self.tierOfClaim(claim, readerPath: readerPath), position: self.foldPositionOf(claim.declFilePath.toString())) 'nearerThanTheBestSoFar'
 				bestAt = at
 			end 'nearerThanTheBestSoFar'
 		end 'eachClaim'
@@ -2768,24 +2892,20 @@ export type ClaimantProvenance
 	end 'rankedClaimIn'
 
 	function tierOfClaim(claim TypeNameClaim, readerPath String) returns ScopedAliasTier
-		return scopedAliasTier(claim.declFilePath.toString(), readerPath: readerPath, declaredByTheCorpus: claim.declaredByTheCorpus, visibleToReader: self.claimIsVisibleFrom(claim, readerPath: readerPath))
+		return scopedAliasTier(claim.declFilePath.toString(), readerPath: readerPath, declaredByTheCorpus: claim.declaredByTheCorpus, readerIsTheCorpus: self.declaresInTheCorpus(readerPath), visibleToReader: self.claimIsVisibleFrom(claim, readerPath: readerPath))
 	end 'tierOfClaim'
-
-	function layerOfClaim(claim TypeNameClaim) returns FoldLayer
-		return foldLayerFor(claim.declaredByTheCorpus)
-	end 'layerOfClaim'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteCorpusDeclaringFileSet(writer, value: self.corpusDeclaringFiles)
 		cacheWriteModuleDirectoryByFile(writer, value: self.moduleDirectories)
+		cacheWriteLibraryFilePathSet(writer, value: self.libraryFiles)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ClaimantProvenance throws LibraryCacheDamage
-		let f_corpusDeclaringFiles = try cacheReadCorpusDeclaringFileSet(reader)
 		let f_moduleDirectories = try cacheReadModuleDirectoryByFile(reader)
+		let f_libraryFiles = try cacheReadLibraryFilePathSet(reader)
 
-		return Self{corpusDeclaringFiles: f_corpusDeclaringFiles, moduleDirectories: f_moduleDirectories}
+		return Self{moduleDirectories: f_moduleDirectories, libraryFiles: f_libraryFiles}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize16
@@ -2795,32 +2915,88 @@ export type ClaimantProvenance
 	// @generated library-cache end
 end 'ClaimantProvenance'
 
-function declarationFoldsLater(declPath String, layer FoldLayer, thanPath String, thanLayer FoldLayer) returns bool
-	if declPath.equals(thanPath) 'oneDeclaringFile'
+type FoldRankedAlias
+	module let position as FoldPosition
+	module let alias as RangedTypeAlias
+
+	static function create(position FoldPosition, alias RangedTypeAlias) returns FoldRankedAlias
+		return Self{position: position, alias: alias}
+	end 'create'
+end 'FoldRankedAlias'
+
+typealias FoldRankedAliasArray = Array with FoldRankedAlias
+
+function foldRankOrdering(left FoldRankedAlias, right FoldRankedAlias) returns Ordering
+	if foldsLaterThan(left.position, than: right.position) 'leftFoldsAfter'
+		return Ordering.greaterThan
+	end 'leftFoldsAfter'
+
+	return Ordering.lessThan if foldsLaterThan(right.position, than: left.position) else Ordering.equalTo
+end 'foldRankOrdering'
+
+module typealias DeclaringFilePathSet = Set with String
+
+function admitEnvironment(environments FilePathArray, seen DeclaringFilePathSet, path FilePath)
+	if seen.contains(path.toString()) 'alreadyAnEnvironment'
+		return
+	end 'alreadyAnEnvironment'
+
+	seen.insert(path.toString())
+	environments.push(path)
+end 'admitEnvironment'
+
+module type FoldPosition
+	module let path as String
+	module let key as String
+	module let layer as FoldLayer
+
+	static function create(path String, key String, layer FoldLayer) returns FoldPosition
+		return Self{path: path, key: key, layer: layer}
+	end 'create'
+end 'FoldPosition'
+
+function foldsLaterThan(position FoldPosition, than FoldPosition) returns bool
+	if position.layer != than.layer 'differentLayers'
+		return position.layer > than.layer
+	end 'differentLayers'
+
+	if position.path.equals(than.path) 'oneDeclaringFile'
 		return false
 	end 'oneDeclaringFile'
 
-	if layer != thanLayer 'differentLayers'
-		return layer > thanLayer
-	end 'differentLayers'
+	if position.key.equals(than.key) 'oneKeyTwoFiles'
+		return stringBytesPrecede(than.path, later: position.path)
+	end 'oneKeyTwoFiles'
 
-	return stringBytesPrecede(thanPath, later: declPath)
-end 'declarationFoldsLater'
+	return stringBytesPrecede(than.key, later: position.key)
+end 'foldsLaterThan'
 
-export typealias CorpusDeclaringFileSet = Set with String
+module function declaredInTheCorpus(libraryFiles LibraryFilePathSet, declPath String) returns bool
+	return declPath.equals(CompilerOwnedDeclFilePath.toString()) or libraryFiles.contains(declPath)
+end 'declaredInTheCorpus'
+
+export function projectRelativeDisplay(moduleDirectory String, path FilePath) returns String
+	if moduleDirectory.isEmpty() 'aRootFile'
+		return path.filename()
+	end 'aRootFile'
+
+	return "{moduleDirectory}{ModuleDirectorySeparator}{path.filename()}"
+end 'projectRelativeDisplay'
+
+export typealias LibraryFilePathSet = Set with String
 
 // @generated library-cache begin
-function cacheWriteCorpusDeclaringFileSet(writer LibraryCacheWriter, value CorpusDeclaringFileSet)
+module function cacheWriteLibraryFilePathSet(writer LibraryCacheWriter, value LibraryFilePathSet)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
 		writer.text(item)
 	end 'eachItem'
-end 'cacheWriteCorpusDeclaringFileSet'
+end 'cacheWriteLibraryFilePathSet'
 
-function cacheReadCorpusDeclaringFileSet(reader LibraryCacheReader) returns CorpusDeclaringFileSet throws LibraryCacheDamage
+module function cacheReadLibraryFilePathSet(reader LibraryCacheReader) returns LibraryFilePathSet throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = CorpusDeclaringFileSet.create()
+	var result = LibraryFilePathSet.create()
 
 	for _ in 0 upto count 'eachItem'
 		let item = try reader.text()
@@ -2828,7 +3004,7 @@ function cacheReadCorpusDeclaringFileSet(reader LibraryCacheReader) returns Corp
 	end 'eachItem'
 
 	return result
-end 'cacheReadCorpusDeclaringFileSet'
+end 'cacheReadLibraryFilePathSet'
 
 // @generated library-cache end
 
@@ -2945,6 +3121,8 @@ export type RangedAliasRegistry
 	// (`settleRangeContests`). Empty until then, and empty forever in a program with no contest.
 	var rangeContested as RangeContestedAliasMap
 
+	var identities as DeclarationIdentityMap
+
 	// ⭐⭐ **THE BUILTIN `ExitCode`'S HIGH BOUND, RESOLVED FROM THE COMPILE TARGET'S OS ONCE, HERE.**
 	// `lookup` is handed a name and a reader's path and nothing else — no project, no target —
 	// so the platform fact cannot be derived at the moment it is needed. It is derived at CONSTRUCTION,
@@ -2962,7 +3140,7 @@ export type RangedAliasRegistry
 	export static function create(os Os) returns RangedAliasRegistry
 		let exitCodeHigh = exitCodeAliasHigh(os)
 		requireExitCodeRangeFitsItsWidth(exitCodeHigh)
-		return Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), provenance: ClaimantProvenance.create(), underlyingContested: UnderlyingContestedAliasSet.create(), rangeContested: sharedEmptyRangeContests, exitCodeHigh: exitCodeHigh}
+		return Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), provenance: ClaimantProvenance.create(), underlyingContested: UnderlyingContestedAliasSet.create(), rangeContested: sharedEmptyRangeContests, identities: sharedEmptyDeclarationIdentities, exitCodeHigh: exitCodeHigh}
 	end 'create'
 
 	export function noteFingerprint(fingerprint IndexFingerprint, group String)
@@ -2974,13 +3152,13 @@ export type RangedAliasRegistry
 		self.provenance.noteFingerprint(fingerprint)
 		fingerprint.note("underlyingContested", value: self.underlyingContested.count())
 		fingerprint.note("rangeContested", value: self.rangeContested.count())
+		fingerprint.note("identities", value: self.identities.count())
 		fingerprint.closeGroup()
 	end 'noteFingerprint'
 
 	// File one declaration. Declarations of one name over different primitives are legal; they only mark
 	// the name `underlyingContested`.
-	export function record(alias RangedTypeAlias, declaredByTheCorpus bool)
-		self.provenance.noteDeclaringLayer(alias.declFilePath, declaredByTheCorpus: declaredByTheCorpus)
+	export function record(alias RangedTypeAlias)
 		self.widenElementWidthFor(alias)
 
 		// The FIRST declaration of a name — which, in a program where nothing is redeclared, is every
@@ -3059,9 +3237,9 @@ export type RangedAliasRegistry
 	//
 	// ⭐⭐ **A FILE THAT NAMES A CONTESTED ALIAS AND DECLARES NONE OF IT RESOLVES THROUGH THE RANKING**
 	// (`ClaimantProvenance.rankedClaimIn`), never through the last-wins `byName` door: a declaration
-	// the reader may not name ranks below every one it may, and the library outranks another author's
-	// file, so a user's `typealias Codepoint = int(0 to 100)` never decides what a stdlib function's
-	// `Codepoint` accepts. Pinned by `specs/typealias-file-scope.md`'s
+	// the reader may not name ranks below every one it may, and a library file never means an author's
+	// declaration, so a user's `typealias Codepoint = int(0 to 100)` never decides what a stdlib
+	// function's `Codepoint` accepts. Pinned by `specs/typealias-file-scope.md`'s
 	// `third-file-resolves-to-the-nameable-declaration`. Two candidates the reader may both name are
 	// E3063's question (`ProgramSignatures.ambiguousAliasCandidates`).
 	//
@@ -3145,9 +3323,8 @@ export type RangedAliasRegistry
 	end 'multiplyDeclaredNames'
 
 	// ⭐⭐ **DOES *ANY* DECLARATION — OR THE BUILTIN — MAKE `name` A RANGED TYPEALIAS?** The
-	// allocation-free existence probe the nominal identity door rests on: a `typealias` names its own
-	// type, so the identity is the name, and what has to be settled is only whether the name denotes a
-	// ranged alias at all.
+	// allocation-free existence probe the nominal identity door rests on: whether the name denotes a ranged
+	// alias at all. Which declaration's identity it carries is `ProgramSignatures.rangedIdentityOfSpelling`'s.
 	//
 	// ⚠ **IT MUST NOT BOX.** `aggregateNameOf` asks it at every coercion site in the program, and
 	// `lookup`'s `DeclaredAlias` is a heap union — one allocation per ask would land on `phase:parse`.
@@ -3161,11 +3338,19 @@ export type RangedAliasRegistry
 	// the reader's own claimant's range-qualified spelling, which `sourceSpelledAliasName` un-mints for
 	// display exactly as a contested element's does. Paid only by a cross-kind contested name.
 	export function crossKindIdentityOf(name ByteArray, readerFilePath FilePath) returns ByteArray
-		match self.lookup(name, readerFilePath: readerFilePath) 'resolved'
-			undeclared then return EmptySourceText
-			declared(alias) then return rangeQualifiedAliasName(name, underlying: alias.underlying, low: alias.low, high: alias.high)
-		end 'resolved'
+		return try self.rangeMintOfReadersDeclaration(name, readerFilePath: readerFilePath) otherwise EmptySourceText
 	end 'crossKindIdentityOf'
+
+	function rangeMintOfReadersDeclaration(name ByteArray, readerFilePath FilePath) returns ByteArray throws AbsentError
+		match self.lookup(name, readerFilePath: readerFilePath) 'resolved'
+			undeclared then throw AbsentError.absent
+			declared(alias) then return rangeQualifiedAliasName(name, alias: alias)
+		end 'resolved'
+	end 'rangeMintOfReadersDeclaration'
+
+	export function fitsTheBuiltinExitCode(alias RangedTypeAlias) returns bool
+		return maxonTypeTag(alias.underlying) == ValueTypeTag.integer and not alias.domain.isPattern() and alias.low >= ExitCodeAliasLow and alias.low <= alias.high and alias.high <= self.exitCodeHigh
+	end 'fitsTheBuiltinExitCode'
 
 	// ⭐ **THE DECLARATION `byName` HOLDS — no scoping, and NO BUILTIN FALLBACK.** It is deliberately not
 	// `lookup`, whose job is to answer what a READER means and which therefore synthesizes the builtin
@@ -3227,10 +3412,10 @@ export type RangedAliasRegistry
 		end 'resolved'
 	end 'underlyingFor'
 
-	// The range as SOURCE spells it -- `int(0 to 255)`. A name whose declarations disagree about the range has
-	// no one range to be shown as, so a contested name is refused.
+	// The range as SOURCE spells it -- `int(0 to 255)`. A name whose declarations disagree about the range, or
+	// whose declarations are each their own type, has no one range to be shown as, so it is refused.
 	export function uncontestedRangeSourceSpelling(name ByteArray) returns ByteArray throws MapError
-		if self.rangeContested.contains(name) 'itsDeclarationsDisagreeAboutTheRange'
+		if self.rangeContested.contains(name) or self.nameTakesAnIdentity(name) 'itsDeclarationsDisagreeAboutTheRange'
 			throw MapError.keyNotFound
 		end 'itsDeclarationsDisagreeAboutTheRange'
 
@@ -3263,11 +3448,10 @@ export type RangedAliasRegistry
 	// ⚠ **THE FOLD IS NOT OPTIONAL, because a generic instance is interned on the NAME.**
 	// `Array with Small` is ONE instance however many files declare `Small`, so its `element_size@24` is
 	// ONE number — a record created in one file is pushed, appended, read and dropped in another, and they
-	// must stride identically. A bare `byName` probe would answer with whichever file merged LAST:
-	// `stdlib/helpers/string/`'s `Utf16UnitCount` pair (`utf16.maxon`'s `int(1 to 2)`, `views.maxon`'s
-	// `int(0 to u64.max)`) would stride 1 or 8 by load order, and on the 1 the file that meant 8 would
-	// truncate silently. That is the same order-dependent wrong answer file scoping was added to kill,
-	// one door along.
+	// must stride identically. A bare `byName` probe would answer with whichever file merged LAST: two
+	// files declaring one name as `int(1 to 2)` and `int(0 to u64.max)` would stride 1 or 8 by
+	// load order, and on the 1 the file that meant 8 would truncate silently — the order-dependent wrong
+	// answer file scoping exists to kill, one door along.
 	//
 	// A name only ONE file declares — nearly every name — cost exactly one probe to fold and costs exactly
 	// one probe to read. `throws` is `Map.get`'s own channel: a name no file declares is not a ranged
@@ -3441,7 +3625,9 @@ export type RangedAliasRegistry
 	//
 	// ⇒ a name whose declarations disagree about the range gets one MINTED declaration per distinct range —
 	// `Byte$0_255` beside `Byte$0_1000` — and an instance's element is spelled with the mint its READER
-	// resolves to (`rangeScopedName`).
+	// resolves to (`rangeScopedName`). Where an author's declaration takes part, each declaration is its
+	// own type and gets its own mint, two over one range included (`mintsOfDeclarations`); the range walk
+	// skips such a name.
 	//
 	// ⭐ **THE MINT IS AN ORDINARY REGISTRY DECLARATION, AND THAT IS THE WHOLE DESIGN.** Every door this
 	// registry already has then answers for the qualified name with no new code and no special case: the
@@ -3461,14 +3647,14 @@ export type RangedAliasRegistry
 	// spelling each declaration to compare STRINGS would allocate a `ByteArray` per declaration of
 	// every multiply-declared name, every one of them thrown away in a program that contests nothing.
 	//
-	// ⚠⚠ **THE CONTEST MAP IS PUBLISHED LAST, AFTER THE MINTS IT GUARDS ARE IN THE REGISTRY.**
-	// `anyRangeContest()` — hence `fileScopedInstance`, hence every qualified element name in the compiler —
-	// is exactly the test `self.rangeContested.count() > 0`. The moment that answers true, a reader may ask
-	// for `Byte$0_1000`, and a `Byte$0_1000` the registry does not hold answers the WIDTH FALLBACK
-	// (`undeclaredNamedElementSlot`), which — since `isByteElementName` asks about the BASE name —
-	// hands a 2-byte element a ONE-BYTE stride with no diagnostic. Building into a LOCAL and assigning at the
-	// end makes "the mints exist before anything can name them" a property of the code rather than of the
-	// fact that nothing currently runs between the two loops.
+	// ⚠⚠ **THE CONTEST MAPS ARE PUBLISHED LAST, AFTER THE MINTS THEY GUARD ARE IN THE REGISTRY.**
+	// `anyRangeContest()` — hence `fileScopedInstance`, hence every qualified element name in the
+	// compiler — is exactly the test that one of the two published maps is non-empty. The moment that
+	// answers true, a reader may ask for `Byte$0_1000`, and a `Byte$0_1000` the registry does not hold
+	// answers the WIDTH FALLBACK (`undeclaredNamedElementSlot`), which — since `isByteElementName` asks
+	// about the BASE name — hands a 2-byte element a ONE-BYTE stride with no diagnostic. Building into a
+	// LOCAL and assigning at the end makes "the mints exist before anything can name them" a property of
+	// the code rather than of the fact that nothing currently runs between the loops.
 	//
 	// ⭐⭐ **`alsoScope` IS EVERY NAME A SECOND *KIND* OF DECLARATION ALSO HOLDS** — the cross-KIND contest's
 	// names (`ProgramSignatures.crossKindScopedAliasNames`), scoped through exactly this mechanism and not a
@@ -3484,6 +3670,17 @@ export type RangedAliasRegistry
 	// container's element must be pinned to. The `< 2` test therefore belongs to the range walk alone.
 	export function settleRangeContests(alsoScope ByteArrayArray)
 		var mints = RangedTypeAliasArray.create()
+		var declarationIdentities = DeclarationIdentityMap.create()
+
+		for (name, _) in self.multiplyDeclared 'eachNameWhoseDeclarationsMayMeet'
+			let claimants = self.declarationClaimants(name)
+
+			if not self.nameTakesDeclarationIdentities(claimants) 'noReaderCanNameTwoOfThem'
+				continue
+			end 'noReaderCanNameTwoOfThem'
+
+			declarationIdentities.upsert(name, value: mintsOfDeclarations(name, claimants: claimants, mints: mints, provenance: self.provenance))
+		end 'eachNameWhoseDeclarationsMayMeet'
 
 		// ⚠ **BUILT OWNED, AND THE SHARED EMPTY HANDLE IS WHAT THE FIELD KEEPS WHEN NOTHING IS CONTESTED.**
 		// Starting AS `sharedEmptyRangeContests` and copying on write at the first contest, guarded by an
@@ -3494,6 +3691,10 @@ export type RangedAliasRegistry
 		var settled = RangeContestedAliasMap.create()
 
 		for (name, _) in self.multiplyDeclared 'eachMultiplyDeclaredName'
+			if declarationIdentities.contains(name) 'itsDeclarationsAreEachTheirOwnType'
+				continue
+			end 'itsDeclarationsAreEachTheirOwnType'
+
 			let claimants = self.distinctRangeClaimants(name)
 
 			if claimants.count() < 2 'everyDeclarationAgreesAboutTheRange'
@@ -3507,7 +3708,7 @@ export type RangedAliasRegistry
 		// already scoped, so a name that is both range-contested AND kind-contested keeps the range walk's
 		// spellings: those are one per RANGE, which is the finer split of the two and subsumes this one.
 		for name in alsoScope 'eachKindContestedName'
-			if settled.contains(name) 'theRangeContestAlreadyScopedIt'
+			if settled.contains(name) or declarationIdentities.contains(name) 'theRangeContestAlreadyScopedIt'
 				continue
 			end 'theRangeContestAlreadyScopedIt'
 
@@ -3523,7 +3724,7 @@ export type RangedAliasRegistry
 		// ⚠ RECORDED BEFORE THE PUBLISH BELOW, and separately from the walk above because `record` writes
 		// `multiplyDeclared` — the very map that walk iterates.
 		for mint in mints 'eachMint'
-			self.record(mint, declaredByTheCorpus: self.provenance.declaresInTheCorpus(mint.declFilePath.toString()))
+			self.record(mint)
 		end 'eachMint'
 
 		// The PUBLISH. Guarded on `count()` so an uncontested program never reassigns the field at all — it
@@ -3531,14 +3732,22 @@ export type RangedAliasRegistry
 		if settled.count() > 0 'someNameIsContested'
 			self.rangeContested = settled
 		end 'someNameIsContested'
+
+		if declarationIdentities.count() > 0 'someNamesDeclarationsMeet'
+			self.identities = declarationIdentities
+		end 'someNamesDeclarationsMeet'
 	end 'settleRangeContests'
 
-	// ⭐ **DOES ANY NAME IN THIS PROGRAM HAVE DECLARATIONS THAT DISAGREE ABOUT THE RANGE?** The ONE bool
-	// every scoping door short-circuits on, so an uncontested program — the whole corpus, and the compiler's
-	// own source — pays a single map-emptiness test and nothing else, and no interned element name and
-	// no mangled symbol can move.
+	export function namesAContestedRange(name ByteArray) returns bool
+		return self.rangeContested.contains(name) or self.identities.contains(name)
+	end 'namesAContestedRange'
+
+	// ⭐ **DOES ANY NAME IN THIS PROGRAM HAVE DECLARATIONS THAT DISAGREE ABOUT THE RANGE, OR THAT ARE EACH
+	// THEIR OWN TYPE?** The ONE bool every scoping door short-circuits on, so an uncontested program — the
+	// whole corpus, and the compiler's own source — pays a map-emptiness test and nothing else, and no
+	// interned element name and no mangled symbol can move.
 	export function anyRangeContest() returns bool
-		return self.rangeContested.count() > 0
+		return self.rangeContested.count() > 0 or self.identities.count() > 0
 	end 'anyRangeContest'
 
 	// ⭐⭐ **EVERY DISTINCT READING ENVIRONMENT A RANGE-CONTESTED PROGRAM HAS** — one path per file that
@@ -3553,18 +3762,26 @@ export type RangedAliasRegistry
 	//
 	// ⚠ **IT READS `distinctRangeClaimants`, NOT `contestedDeclarations`, AND THE DIFFERENCE IS THE WHOLE
 	// CROSS-KIND HALF.** A name only one file declares as a ranged alias holds NO entry in
-	// `multiplyDeclared` — so asking that map directly yielded no environment at all for a KIND-contested
-	// name, and the one file whose container had to be scoped (`stdlib/Builtins.maxon`) was never an
-	// environment. The claimant walk answers for both halves off one rule.
+	// `multiplyDeclared` — so asking that map directly would yield no environment at all for a
+	// KIND-contested name, and the one file whose container has to be scoped (`stdlib/Builtins.maxon`)
+	// would never be an environment. The claimant walk answers for both halves off one rule.
 	export function rangeContestEnvironments() returns FilePathArray
 		var environments = FilePathArray.create()
+		var seen = DeclaringFilePathSet.create()
 		environments.push(CompilerOwnedDeclFilePath)
+		seen.insert(CompilerOwnedDeclFilePath.toString())
 
 		for (name, _) in self.rangeContested 'eachContestedName'
 			for claimant in self.distinctRangeClaimants(name) 'eachDeclaration'
-				environments.push(claimant.declFilePath)
+				admitEnvironment(environments, seen: seen, path: claimant.declFilePath)
 			end 'eachDeclaration'
 		end 'eachContestedName'
+
+		for (name, _) in self.identities 'eachNameWithADeclarationIdentity'
+			for claimant in self.declarationClaimants(name) 'eachDeclarationOfIt'
+				admitEnvironment(environments, seen: seen, path: claimant.declFilePath)
+			end 'eachDeclarationOfIt'
+		end 'eachNameWithADeclarationIdentity'
 
 		return environments
 	end 'rangeContestEnvironments'
@@ -3584,7 +3801,7 @@ export type RangedAliasRegistry
 		let byFile = self.contestedDeclarations(name)
 
 		for (_, alias) in byFile 'eachDeclaringFile'
-			if not holdsRange(claimants, underlying: alias.underlying, low: alias.low, high: alias.high) 'aRangeNoEarlierDeclarationClaimed'
+			if not holdsRange(claimants, alias: alias) 'aRangeNoEarlierDeclarationClaimed'
 				claimants.push(alias)
 			end 'aRangeNoEarlierDeclarationClaimed'
 		end 'eachDeclaringFile'
@@ -3613,27 +3830,33 @@ export type RangedAliasRegistry
 			self.admitRangeRepresentative(representatives, alias: alias)
 		end 'eachDeclaringFile'
 
+		return self.inFoldOrder(representatives)
+	end 'rangeRepresentativesInFoldOrder'
+
+	function inFoldOrder(aliases RangedTypeAliasArray) returns RangedTypeAliasArray
+		var ranked = FoldRankedAliasArray.create()
+
+		for alias in aliases 'eachAlias'
+			let declPath = alias.declFilePath.toString()
+			ranked.push(FoldRankedAlias.create(self.provenance.foldPositionOf(declPath), alias: alias))
+		end 'eachAlias'
+
+		ranked.sort(function(left FoldRankedAlias, right FoldRankedAlias) gives foldRankOrdering(left, right: right))
 		var ordered = RangedTypeAliasArray.create()
 
-		for representative in representatives 'eachDistinctRange'
-			var at = 0 as ElementIndex
-
-			while at < ordered.count() and self.aliasFoldsLater(representative, than: try ordered.get(at) otherwise panic("RangedAliasRegistry.rangeRepresentativesInFoldOrder: get OOB at {at} inside its own count()")) 'findPosition'
-				at = at + 1
-			end 'findPosition'
-
-			ordered.insert(at, value: representative)
-		end 'eachDistinctRange'
+		for entry in ranked 'eachRanked'
+			ordered.push(entry.alias)
+		end 'eachRanked'
 
 		return ordered
-	end 'rangeRepresentativesInFoldOrder'
+	end 'inFoldOrder'
 
 	function admitRangeRepresentative(representatives RangedTypeAliasArray, alias RangedTypeAlias)
 		for at in 0 upto representatives.count() 'eachHeldRange'
 			let held = try representatives.get(at) otherwise panic("RangedAliasRegistry.admitRangeRepresentative: get OOB at {at} inside its own count()")
 
-			if held.hasBounds(alias.low, highBound: alias.high) and maxonTypeTag(held.underlying) == maxonTypeTag(alias.underlying) 'theSameRange'
-				if self.aliasFoldsLater(held, than: alias) 'foldsEarlierThanTheHeldOne'
+			if held.hasSameRangeAs(alias) 'theSameRange'
+				if self.provenance.foldsLater(held.declFilePath.toString(), thanPath: alias.declFilePath.toString()) 'foldsEarlierThanTheHeldOne'
 					try representatives.set(at, value: alias) otherwise panic("RangedAliasRegistry.admitRangeRepresentative: set OOB at {at} inside its own count()")
 				end 'foldsEarlierThanTheHeldOne'
 
@@ -3644,11 +3867,87 @@ export type RangedAliasRegistry
 		representatives.push(alias)
 	end 'admitRangeRepresentative'
 
-	function aliasFoldsLater(alias RangedTypeAlias, than RangedTypeAlias) returns bool
-		let declPath = alias.declFilePath.toString()
-		let thanPath = than.declFilePath.toString()
-		return declarationFoldsLater(declPath, layer: self.provenance.foldLayerOf(declPath), thanPath: thanPath, thanLayer: self.provenance.foldLayerOf(thanPath))
-	end 'aliasFoldsLater'
+	export function anyIdentityContest() returns bool
+		return self.identities.count() > 0
+	end 'anyIdentityContest'
+
+	export function hasIdentityContest(name ByteArray) returns bool
+		return self.identities.contains(name)
+	end 'hasIdentityContest'
+
+	export function nameTakesAnIdentity(name ByteArray) returns bool
+		let base = sourceSpelledAliasName(name)
+		let byFile = try self.identities.get(base) otherwise return false
+
+		if not isMintName(name) 'aBareName'
+			return true
+		end 'aBareName'
+
+		for (_, identity) in byFile 'eachIdentity'
+			if identity.equals(name) 'oneOfItsIdentities'
+				return true
+			end 'oneOfItsIdentities'
+		end 'eachIdentity'
+
+		return false
+	end 'nameTakesAnIdentity'
+
+	export function identityOfDeclaration(name ByteArray, alias RangedTypeAlias) returns ByteArray
+		let byFile = try self.identities.get(name) otherwise panic("RangedAliasRegistry.identityOfDeclaration: '{String.from(name)}' has no declaration identities, and only a name whose declarations meet has one apiece")
+		return try byFile.get(alias.declFilePath.toString()) otherwise panic("RangedAliasRegistry.identityOfDeclaration: '{String.from(name)}' resolved to a declaration in '{alias.declFilePath.toString()}', which holds no identity — `settleRangeContests` gives every declaring file of a contested name one")
+	end 'identityOfDeclaration'
+
+	export function identityOfName(base ByteArray, name ByteArray, readerFilePath FilePath) returns ByteArray
+		if not isMintName(name) 'aBareName'
+			match self.lookup(base, readerFilePath: readerFilePath) 'resolved'
+				undeclared then panic("RangedAliasRegistry.identityOfName: '{String.from(base)}' is contested and resolves to no declaration from '{readerFilePath.toString()}'")
+				declared(alias) then return self.identityOfDeclaration(base, alias: alias)
+			end 'resolved'
+		end 'aBareName'
+
+		let byFile = try self.identities.get(base) otherwise panic("RangedAliasRegistry.identityOfName: '{String.from(base)}' has no declaration identities")
+
+		for (_, identity) in byFile 'eachIdentity'
+			if identity.equals(name) 'alreadyAnIdentity'
+				return name
+			end 'alreadyAnIdentity'
+		end 'eachIdentity'
+
+		panic("RangedAliasRegistry.identityOfName: '{String.from(name)}' is no declaration's identity of '{String.from(base)}'")
+	end 'identityOfName'
+
+	function declarationClaimants(name ByteArray) returns RangedTypeAliasArray
+		var claimants = RangedTypeAliasArray.create()
+		let byFile = self.contestedDeclarations(name)
+
+		if byFile.count() == 0 'oneFileDeclaresIt'
+			if let sole = try self.byName.get(name) 'theSoleDeclaration'
+				claimants.push(sole)
+			end 'theSoleDeclaration'
+
+			return claimants
+		end 'oneFileDeclaresIt'
+
+		for (_, alias) in byFile 'eachDeclaringFile'
+			claimants.push(alias)
+		end 'eachDeclaringFile'
+
+		return self.inFoldOrder(claimants)
+	end 'declarationClaimants'
+
+	function nameTakesDeclarationIdentities(claimants RangedTypeAliasArray) returns bool
+		if claimants.count() < 2 'oneDeclarationIsNeverContested'
+			return false
+		end 'oneDeclarationIsNeverContested'
+
+		var declPaths = StringArray.create()
+
+		for held in claimants 'eachDeclaration'
+			declPaths.push(held.declFilePath.toString())
+		end 'eachDeclaration'
+
+		return self.provenance.anAuthorDeclaresAny(declPaths)
+	end 'nameTakesDeclarationIdentities'
 
 	// ⭐⭐ **WHAT `name` IS CALLED AS A GENERIC-INSTANCE ELEMENT WHEN READ FROM `readerFilePath`** — the
 	// bare name for every name in an uncontested program, and the reader's OWN claimant's mint for a
@@ -3658,17 +3957,15 @@ export type RangedAliasRegistry
 	// decided in exactly one place. Deriving the element spelling from that answer is what keeps
 	// "which `Byte` does this file mean?" and "which `Array with Byte` does it build?" one question.
 	export function rangeScopedName(name ByteArray, readerFilePath FilePath) returns ByteArray
+		if self.nameTakesAnIdentity(name) 'everyDeclarationIsItsOwnElement'
+			return self.identityOfName(sourceSpelledAliasName(name), name: name, readerFilePath: readerFilePath)
+		end 'everyDeclarationIsItsOwnElement'
+
 		if not self.rangeContested.contains(name) 'everyDeclarationAgreesAboutTheRange'
 			return name
 		end 'everyDeclarationAgreesAboutTheRange'
 
-		match self.lookup(name, readerFilePath: readerFilePath) 'resolved'
-			// Unreachable while `rangeContested` is derived from `multiplyDeclared`, whose every entry is a
-			// declaration `lookup` can find — but stated rather than assumed, because a contested name with
-			// no declaration would mean the two indexes had come apart.
-			undeclared then panic("RangedAliasRegistry.rangeScopedName: '{String.from(name)}' is range-contested but resolves to no declaration from '{readerFilePath.toString()}'")
-			declared(alias) then return rangeQualifiedAliasName(name, underlying: alias.underlying, low: alias.low, high: alias.high)
-		end 'resolved'
+		return try self.rangeMintOfReadersDeclaration(name, readerFilePath: readerFilePath) otherwise panic("RangedAliasRegistry.rangeScopedName: '{String.from(name)}' is range-contested but resolves to no declaration from '{readerFilePath.toString()}' — `rangeContested` is derived from `multiplyDeclared`, whose every entry is a declaration `lookup` can find")
 	end 'rangeScopedName'
 
 	// @generated library-cache begin
@@ -3680,6 +3977,7 @@ export type RangedAliasRegistry
 		self.provenance.cacheWrite(writer)
 		cacheWriteUnderlyingContestedAliasSet(writer, value: self.underlyingContested)
 		cacheWriteRangeContestedAliasMap(writer, value: self.rangeContested)
+		cacheWriteDeclarationIdentityMap(writer, value: self.identities)
 		writer.signed(self.exitCodeHigh as CacheSigned)
 	end 'cacheWrite'
 
@@ -3691,13 +3989,14 @@ export type RangedAliasRegistry
 		let f_provenance = try ClaimantProvenance.cacheRead(reader)
 		let f_underlyingContested = try cacheReadUnderlyingContestedAliasSet(reader)
 		let f_rangeContested = try cacheReadRangeContestedAliasMap(reader)
+		let f_identities = try cacheReadDeclarationIdentityMap(reader)
 		let f_exitCodeHigh = (try reader.signed()) as ParsedInt
 
-		return Self{byName: f_byName, multiplyDeclared: f_multiplyDeclared, storageBytes: f_storageBytes, packedBits: f_packedBits, provenance: f_provenance, underlyingContested: f_underlyingContested, rangeContested: f_rangeContested, exitCodeHigh: f_exitCodeHigh}
+		return Self{byName: f_byName, multiplyDeclared: f_multiplyDeclared, storageBytes: f_storageBytes, packedBits: f_packedBits, provenance: f_provenance, underlyingContested: f_underlyingContested, rangeContested: f_rangeContested, identities: f_identities, exitCodeHigh: f_exitCodeHigh}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize64
-		return sizeof(RangedAliasRegistry) as CacheSize64
+	static function cacheLayoutBytes() returns CacheSize72
+		return sizeof(RangedAliasRegistry) as CacheSize72
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -3707,42 +4006,58 @@ end 'RangedAliasRegistry'
 // Both halves of `settleRangeContests` build their entry through it, so a range-scoped element and a
 // kind-scoped one are spelled and registered by one act — a second speller would be a mint no reader can
 // find (see that function's ⚠⚠ note on publishing the map last).
+//
+// ⚠ **ITS MINTS ARE `public`, WHERE THE CLAIMANT MAY BE `file`.** A range mint is compiler-supplied,
+// exactly like the builtin `ExitCode`, and its NAME is unspellable in source
+// (`CompilerQualifiedAliasSeparator`), so no reader can be admitted or refused by the tier anyway.
 function scopedSpellingsOf(name ByteArray, claimants RangedTypeAliasArray, mints RangedTypeAliasArray) returns ByteArrayArray
 	var spellings = ByteArrayArray.create()
 
 	for claimant in claimants 'eachDistinctRange'
-		let spelling = rangeQualifiedAliasName(name, underlying: claimant.underlying, low: claimant.low, high: claimant.high)
+		let spelling = rangeQualifiedAliasName(name, alias: claimant)
 		spellings.push(spelling)
-		mints.push(rangeQualifiedMint(claimant, spelling: spelling))
+		mints.push(mintedDeclaration(claimant, spelling: spelling, visibility: Visibility.public))
 	end 'eachDistinctRange'
 
 	return spellings
 end 'scopedSpellingsOf'
 
-// One MINTED declaration of a contested name's range — the same `underlying`, bounds and declaring
-// file as the claimant it qualifies, under the qualified spelling.
-//
-// ⚠ **ITS TIER IS `public`, WHERE THE CLAIMANT'S MAY BE `file`.** A mint is compiler-supplied,
-// exactly like the builtin `ExitCode`, and its NAME is unspellable in source
-// (`CompilerQualifiedAliasSeparator`), so no reader can be admitted or refused by the tier anyway.
-function rangeQualifiedMint(claimant RangedTypeAlias, spelling ByteArray) returns RangedTypeAlias
-	return RangedTypeAlias.create(spelling, underlying: claimant.underlying, low: claimant.low, high: claimant.high, visibility: Visibility.public, declFilePath: claimant.declFilePath, nameLine: claimant.nameLine, nameColumn: claimant.nameColumn, domain: claimant.domain.clone())
-end 'rangeQualifiedMint'
+// One MINTED declaration of a contested name — the same `underlying`, bounds and declaring file as the
+// claimant it qualifies, under the qualified spelling.
+function mintedDeclaration(claimant RangedTypeAlias, spelling ByteArray, visibility Visibility) returns RangedTypeAlias
+	return RangedTypeAlias.create(spelling, underlying: claimant.underlying, low: claimant.low, high: claimant.high, visibility: visibility, declFilePath: claimant.declFilePath, nameLine: claimant.nameLine, nameColumn: claimant.nameColumn, domain: claimant.domain)
+end 'mintedDeclaration'
 
 // Has an earlier claimant already taken this RANGE? A LINEAR scan and not a set, because the list holds one
 // entry per DISTINCT range of one name — one for nearly every name in any program, two or three where there
 // is a contest at all — and a `Set` would cost an allocation per multiply-declared name to spare a
 // comparison of two. It compares the BOUNDS and never a rendered name, which is what keeps the uncontested
 // walk allocation-free (see `settleRangeContests`).
-function holdsRange(claimants RangedTypeAliasArray, underlying MaxonType, low ParsedInt, high ParsedInt) returns bool
+function holdsRange(claimants RangedTypeAliasArray, alias RangedTypeAlias) returns bool
 	for held in claimants 'each'
-		if held.hasBounds(low, highBound: high) and maxonTypeTag(held.underlying) == maxonTypeTag(underlying) 'alreadyClaimed'
+		if held.hasSameRangeAs(alias) 'alreadyClaimed'
 			return true
 		end 'alreadyClaimed'
 	end 'each'
 
 	return false
 end 'holdsRange'
+
+function mintsOfDeclarations(name ByteArray, claimants RangedTypeAliasArray, mints RangedTypeAliasArray, provenance ClaimantProvenance) returns MintByDeclaringFile
+	var spellings = MintByDeclaringFile.create()
+
+	for claimant in claimants 'eachDeclaration'
+		spellings.upsert(claimant.declFilePath.toString(), value: rangeQualifiedAliasName(name, alias: claimant))
+	end 'eachDeclaration'
+
+	let byFile = provenance.ordinalMints(spellings)
+
+	for claimant in claimants 'eachMint'
+		mints.push(mintedDeclaration(claimant, spelling: try byFile.get(claimant.declFilePath.toString()) otherwise panic("mintsOfDeclarations: '{claimant.declFilePath.toString()}' was minted in the pass above"), visibility: claimant.visibility))
+	end 'eachMint'
+
+	return byFile
+end 'mintsOfDeclarations'
 
 // ⭐ **DOES `low to high` CONTAIN EVERY BYTE VALUE, 0 THROUGH `u8.max`?**
 // `holdsEveryByteInEveryFile`'s per-declaration test, spelled apart from it because it is a statement about
@@ -4075,9 +4390,10 @@ export type SignatureTypeDemand
 	export let demandingFunction as ByteArray
 	export let demandingTier as Visibility
 	export let typeName as ByteArray
+	export let declFilePath as FilePath
 
-	export static function create(demandingFunction ByteArray, demandingTier Visibility, typeName ByteArray) returns SignatureTypeDemand
-		return Self{demandingFunction: demandingFunction, demandingTier: demandingTier, typeName: typeName}
+	export static function create(demandingFunction ByteArray, demandingTier Visibility, typeName ByteArray, declFilePath FilePath) returns SignatureTypeDemand
+		return Self{demandingFunction: demandingFunction, demandingTier: demandingTier, typeName: typeName, declFilePath: declFilePath}
 	end 'create'
 end 'SignatureTypeDemand'
 
@@ -5563,18 +5879,6 @@ export type FunctionTypeAlias
 	// `maxonTypeOfStoredAliasReturn`'s column list for that reason.
 	export let paramSpelling as HashDigest
 
-	// ⭐ **THE `fn(P1, P2) returns R` DISPLAY STRING.** The full canonical signature — parameter types
-	// included — computed at parse (where the param types are still in hand, with THIS file's
-	// interner, so a `named` alias reads as `Integer`) and stored as plain bytes; `unread` on a copy
-	// read without its signature (`Parser.readFunctionTypeAlias`'s `recordSignature`). It is what lets
-	// a function-value merge whose arm is a function-TYPED PARAMETER (`f UnaryOp`) be
-	// signature-compared: The compiler carries no full function type on a value, and the return type
-	// alone cannot tell `fn(Integer)` from `fn(Integer, Integer)`. Interner-free, so it rides the
-	// no-remap alias fold exactly as the return type does; the whole-program merge check
-	// (`checkValueMergeSignatures`) compares it by NAME against a declared function's display built
-	// the same way.
-	export let display as FunctionAliasDisplay
-
 	// ⭐ **WHERE IT WAS DECLARED, AND AT WHAT TIER — the `RangedTypeAlias` twin, and read for that twin's
 	// question**: which of two same-named declarations a given file may mean. This registry is keyed by the
 	// bare name and answers for the whole program, so without these a file whose own `Handler` is a ranged
@@ -5586,9 +5890,10 @@ export type FunctionTypeAlias
 	// carries everything through unchanged, for the reason stated there.
 	export let declFilePath as FilePath
 	export let visibility as Visibility
+	export let written as WrittenTypeNames
 
-	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnIdentity AliasSlotIdentity, returnAggregateName ByteArray, display FunctionAliasDisplay, paramTypes FunctionAliasParamArray, paramSpelling HashDigest, declFilePath FilePath, visibility Visibility) returns FunctionTypeAlias
-		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnIdentity: returnIdentity, returnAggregateName: returnAggregateName, display: display, paramTypes: paramTypes, paramSpelling: paramSpelling, declFilePath: declFilePath, visibility: visibility}
+	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, returnIdentity AliasSlotIdentity, returnAggregateName ByteArray, paramTypes FunctionAliasParamArray, paramSpelling HashDigest, declFilePath FilePath, visibility Visibility, written WrittenTypeNames) returns FunctionTypeAlias
+		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, returnIdentity: returnIdentity, returnAggregateName: returnAggregateName, paramTypes: paramTypes, paramSpelling: paramSpelling, declFilePath: declFilePath, visibility: visibility, written: written}
 	end 'create'
 
 	// ⭐⭐ **THE SAME DECLARATION UNDER A SECOND KEY.** Two callers mint one, and they are two SCOPES
@@ -5603,7 +5908,7 @@ export type FunctionTypeAlias
 	// between the two copies of ONE fold. A rebuild through `create` with anything defaulted would make the
 	// qualified copy answer a different shape from the bare one for the same written declaration.
 	export function underName(qualifiedName ByteArray) returns FunctionTypeAlias
-		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: self.returnIdentity.clone(), returnAggregateName: self.returnAggregateName, display: self.display.clone(), paramTypes: self.paramTypes, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility}
+		return Self{name: qualifiedName, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: self.returnIdentity.clone(), returnAggregateName: self.returnAggregateName, paramTypes: self.paramTypes, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written}
 	end 'underName'
 
 	// The same declaration with its instance ids renumbered — `underName`'s carry-everything rule, for its reason.
@@ -5614,7 +5919,7 @@ export type FunctionTypeAlias
 			params.push(FunctionAliasParam.create(param.tag, typeName: param.typeName, identity: remappedAliasSlotIdentity(param.identity, remap: remap), aggregateName: param.aggregateName))
 		end 'eachParam'
 
-		return Self{name: self.name, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: remappedAliasSlotIdentity(self.returnIdentity, remap: remap), returnAggregateName: self.returnAggregateName, display: self.display.clone(), paramTypes: params, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility}
+		return Self{name: self.name, returnTag: self.returnTag, returnTypeName: self.returnTypeName, returnIdentity: remappedAliasSlotIdentity(self.returnIdentity, remap: remap), returnAggregateName: self.returnAggregateName, paramTypes: params, paramSpelling: self.paramSpelling, declFilePath: self.declFilePath, visibility: self.visibility, written: self.written}
 	end 'withInstancesRenumbered'
 
 	// @generated library-cache begin
@@ -5626,9 +5931,9 @@ export type FunctionTypeAlias
 		writer.bytes(self.returnAggregateName)
 		cacheWriteFunctionAliasParamArray(writer, value: self.paramTypes)
 		writer.unsigned(self.paramSpelling as CacheUnsigned)
-		cacheWriteFunctionAliasDisplay(writer, value: self.display)
 		writer.text(self.declFilePath.toString())
 		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
+		self.written.cacheWrite(writer)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns FunctionTypeAlias throws LibraryCacheDamage
@@ -5639,11 +5944,11 @@ export type FunctionTypeAlias
 		let f_returnAggregateName = try reader.bytes()
 		let f_paramTypes = try cacheReadFunctionAliasParamArray(reader)
 		let f_paramSpelling = (try reader.unsigned()) as HashDigest
-		let f_display = try cacheReadFunctionAliasDisplay(reader)
 		let f_declFilePath = try reader.path()
 		let f_visibility = try cacheReadVisibility(reader)
+		let f_written = try WrittenTypeNames.cacheRead(reader)
 
-		return Self{name: f_name, returnTag: f_returnTag, returnTypeName: f_returnTypeName, returnIdentity: f_returnIdentity, returnAggregateName: f_returnAggregateName, paramTypes: f_paramTypes, paramSpelling: f_paramSpelling, display: f_display, declFilePath: f_declFilePath, visibility: f_visibility}
+		return Self{name: f_name, returnTag: f_returnTag, returnTypeName: f_returnTypeName, returnIdentity: f_returnIdentity, returnAggregateName: f_returnAggregateName, paramTypes: f_paramTypes, paramSpelling: f_paramSpelling, declFilePath: f_declFilePath, visibility: f_visibility, written: f_written}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize80
@@ -5652,43 +5957,6 @@ export type FunctionTypeAlias
 
 	// @generated library-cache end
 end 'FunctionTypeAlias'
-
-export union FunctionAliasDisplay
-	unread
-	spelled(text ByteArray)
-end 'FunctionAliasDisplay'
-
-// @generated library-cache begin
-function cacheWriteFunctionAliasDisplay(writer LibraryCacheWriter, value FunctionAliasDisplay)
-	writer.unsigned(value.ordinal as CacheUnsigned)
-
-	match value 'payload'
-		unread then break 'payload'
-		spelled(a0) then cacheWriteFunctionAliasDisplaySpelled(writer, a0: a0)
-	end 'payload'
-end 'cacheWriteFunctionAliasDisplay'
-
-function cacheWriteFunctionAliasDisplaySpelled(writer LibraryCacheWriter, a0 ByteArray)
-	writer.bytes(a0)
-end 'cacheWriteFunctionAliasDisplaySpelled'
-
-function cacheReadFunctionAliasDisplay(reader LibraryCacheReader) returns FunctionAliasDisplay throws LibraryCacheDamage
-	let tag = try reader.unsigned()
-
-	return match tag 'case'
-		0 gives FunctionAliasDisplay.unread
-		1 gives try cacheReadFunctionAliasDisplaySpelled(reader)
-		default throws LibraryCacheDamage.unknownTag(tag)
-	end 'case'
-end 'cacheReadFunctionAliasDisplay'
-
-function cacheReadFunctionAliasDisplaySpelled(reader LibraryCacheReader) returns FunctionAliasDisplay throws LibraryCacheDamage
-	let a0 = try reader.bytes()
-
-	return FunctionAliasDisplay.spelled(a0)
-end 'cacheReadFunctionAliasDisplaySpelled'
-
-// @generated library-cache end
 
 // ONE parameter of a function typealias, stored the way the alias's RETURN type is and for the same
 // reason: a function alias travels by NAME through both fold paths and is remapped by neither, so a
@@ -5833,7 +6101,7 @@ end 'cacheReadFunctionTypeAliasMap'
 
 // @generated library-cache end
 
-typealias FunctionAliasByDeclaringFile = Map with (String, FunctionTypeAlias)
+export typealias FunctionAliasByDeclaringFile = Map with (String, FunctionTypeAlias)
 
 // @generated library-cache begin
 function cacheWriteFunctionAliasByDeclaringFile(writer LibraryCacheWriter, value FunctionAliasByDeclaringFile)
@@ -5859,6 +6127,8 @@ function cacheReadFunctionAliasByDeclaringFile(reader LibraryCacheReader) return
 end 'cacheReadFunctionAliasByDeclaringFile'
 
 // @generated library-cache end
+
+typealias ShapeKeySet = Set with HashDigest
 
 let sharedEmptyFunctionAliasDeclarations = FunctionAliasByDeclaringFile.create()
 
@@ -5894,7 +6164,6 @@ export function functionAliasShapeKeyOf(name ByteArray, declPath String) returns
 end 'functionAliasShapeKeyOf'
 
 export typealias FunctionAliasShapeKeyMap = Map with (String, HashDigest)
-typealias HashDigestArray = Array with HashDigest
 
 // Every function typealias in the program, on `RangedAliasRegistry`'s model and for its reason: two
 // files may each declare one name, so a whole-program name key alone hands one file the other's
@@ -5905,8 +6174,9 @@ export type FunctionAliasRegistry
 
 	export var provenance as ClaimantProvenance
 
-	// The per-(name, declaring file) MINT of every name whose declarations disagree about the shape, so
-	// `shapeScopedName` is a map read rather than a re-derivation at each of the name-resolution doors.
+	// The per-(name, declaring file) MINT of every name whose declarations disagree about the shape, or
+	// are each their own type because an author's takes part, so `shapeScopedName` is a map read rather
+	// than a re-derivation at each of the name-resolution doors.
 	var shapeScoped as MultiplyDeclaredFunctionAliasMap
 
 	export static function create() returns FunctionAliasRegistry
@@ -5917,8 +6187,7 @@ export type FunctionAliasRegistry
 		return self.byName.contains(name)
 	end 'contains'
 
-	export function record(alias FunctionTypeAlias, declaredByTheCorpus bool)
-		self.provenance.noteDeclaringLayer(alias.declFilePath, declaredByTheCorpus: declaredByTheCorpus)
+	export function record(alias FunctionTypeAlias)
 		let sole = try self.byName.get(alias.name) otherwise 'firstDeclarationOfThisName'
 			self.byName.upsert(alias.name, value: alias)
 			return
@@ -5992,16 +6261,21 @@ export type FunctionAliasRegistry
 		return names
 	end 'declaredNames'
 
+	export function namesAContestedShape(name ByteArray) returns bool
+		return self.shapeScoped.contains(name)
+	end 'namesAContestedShape'
+
 	export function anyShapeContest() returns bool
 		return self.shapeScoped.count() > 0
 	end 'anyShapeContest'
 
 	export function shapeContestEnvironments() returns FilePathArray
 		var environments = FilePathArray.create()
+		var seen = DeclaringFilePathSet.create()
 
 		for (_, byFile) in self.shapeScoped 'eachContestedName'
 			for (_, mint) in byFile 'eachDeclaringFile'
-				environments.push(mint.declFilePath)
+				admitEnvironment(environments, seen: seen, path: mint.declFilePath)
 			end 'eachDeclaringFile'
 		end 'eachContestedName'
 
@@ -6018,38 +6292,92 @@ export type FunctionAliasRegistry
 		return names
 	end 'multiplyDeclaredNames'
 
-	export function settleShapeContests(keys FunctionAliasShapeKeyMap)
+	function anAuthorDeclares(byFile FunctionAliasByDeclaringFile) returns bool
+		var declPaths = StringArray.create()
+
+		for (declPath, _) in byFile 'eachDeclaringFile'
+			declPaths.push(declPath)
+		end 'eachDeclaringFile'
+
+		return self.provenance.anAuthorDeclaresAny(declPaths)
+	end 'anAuthorDeclares'
+
+	function shapeKeyOf(keys FunctionAliasShapeKeyMap, name ByteArray, declPath String) returns HashDigest
+		return try keys.get(functionAliasShapeKeyOf(name, declPath: declPath)) otherwise panic("FunctionAliasRegistry.shapeKeyOf: no shape key for '{String.from(name)}' declared in '{declPath}' — `ProgramSignatures.settleFunctionAliasShapeContests` keys every declaration of every multiply-declared name before handing the table over")
+	end 'shapeKeyOf'
+
+	export function declarationsOf(name ByteArray) returns FunctionAliasByDeclaringFile
+		if let byFile = try self.multiplyDeclared.get(name) 'severalFilesDeclareIt'
+			return byFile
+		end 'severalFilesDeclareIt'
+
+		var sole = FunctionAliasByDeclaringFile.create()
+
+		if let alias = try self.byName.get(name) 'oneFileDeclaresIt'
+			sole.upsert(alias.declFilePath.toString(), value: alias)
+		end 'oneFileDeclaresIt'
+
+		return sole
+	end 'declarationsOf'
+
+	export function shapeContestNames(otherFormNames ByteArrayArray) returns ByteArrayArray
+		var names = self.multiplyDeclaredNames()
+
+		for name in otherFormNames 'eachNameAnotherFormHolds'
+			if self.byName.contains(name) and not self.multiplyDeclared.contains(name) 'aSoleFunctionAliasBesideAnotherForm'
+				names.push(name)
+			end 'aSoleFunctionAliasBesideAnotherForm'
+		end 'eachNameAnotherFormHolds'
+
+		return names
+	end 'shapeContestNames'
+
+	export function settleShapeContests(keys FunctionAliasShapeKeyMap, names ByteArrayArray)
 		var scoped = MultiplyDeclaredFunctionAliasMap.create()
 
-		for name in self.multiplyDeclaredNames() 'eachMultiplyDeclaredName'
-			var mintByFile = FunctionAliasByDeclaringFile.create()
-			var spellings = HashDigestArray.create()
+		for name in names 'eachContestedName'
+			let byFile = self.declarationsOf(name)
+			var spellings = MintByDeclaringFile.create()
+			var shapes = ShapeKeySet.create()
 
-			for (declPath, alias) in self.contestedDeclarations(name) 'eachDeclaringFile'
-				let key = try keys.get(functionAliasShapeKeyOf(name, declPath: declPath)) otherwise panic("FunctionAliasRegistry.settleShapeContests: no shape key for '{String.from(name)}' declared in '{declPath}' — `ProgramSignatures.settleFunctionAliasShapeContests` keys every declaration of every multiply-declared name before handing the table over")
-
-				if not holdsShape(spellings, shape: key) 'aShapeNoEarlierDeclarationClaimed'
-					spellings.push(key)
-				end 'aShapeNoEarlierDeclarationClaimed'
-
-				mintByFile.upsert(declPath, value: alias.underName(shapeQualifiedAliasName(name, shape: key)))
+			for (declPath, _) in byFile 'eachDeclaringFile'
+				let key = self.shapeKeyOf(keys, name: name, declPath: declPath)
+				shapes.insert(key)
+				spellings.upsert(declPath, value: shapeQualifiedAliasName(name, shape: key))
 			end 'eachDeclaringFile'
 
-			if spellings.count() < 2 'everyDeclarationAgreesAboutTheShape'
+			let anAuthorTakesPart = self.anAuthorDeclares(byFile)
+
+			if not anAuthorTakesPart and shapes.count() == 1 'theLibraryAgreesAboutTheShape'
 				continue
-			end 'everyDeclarationAgreesAboutTheShape'
+			end 'theLibraryAgreesAboutTheShape'
+
+			let mints = self.shapeMintNames(spellings, anAuthorTakesPart: anAuthorTakesPart)
+			var mintByFile = FunctionAliasByDeclaringFile.create()
+
+			for (declPath, alias) in byFile 'eachMintedDeclaration'
+				mintByFile.upsert(declPath, value: alias.underName(try mints.get(declPath) otherwise panic("FunctionAliasRegistry.settleShapeContests: '{declPath}' was spelled in the pass above")))
+			end 'eachMintedDeclaration'
 
 			scoped.upsert(name, value: mintByFile)
-		end 'eachMultiplyDeclaredName'
+		end 'eachContestedName'
 
 		self.shapeScoped = scoped
 
 		for (_, byFile) in self.shapeScoped 'eachContestedName'
 			for (_, mint) in byFile 'eachDeclaringFile'
-				self.record(mint, declaredByTheCorpus: self.provenance.declaresInTheCorpus(mint.declFilePath.toString()))
+				self.record(mint)
 			end 'eachDeclaringFile'
 		end 'eachContestedName'
 	end 'settleShapeContests'
+
+	function shapeMintNames(spellings MintByDeclaringFile, anAuthorTakesPart bool) returns MintByDeclaringFile
+		if anAuthorTakesPart 'everyDeclarationIsItsOwnType'
+			return self.provenance.ordinalMints(spellings)
+		end 'everyDeclarationIsItsOwnType'
+
+		return spellings
+	end 'shapeMintNames'
 
 	export function shapeScopedDeclaringFiles(mintName ByteArray) returns FilePathArray
 		var files = FilePathArray.create()
@@ -6109,16 +6437,6 @@ export type FunctionAliasRegistry
 
 	// @generated library-cache end
 end 'FunctionAliasRegistry'
-
-function holdsShape(spellings HashDigestArray, shape HashDigest) returns bool
-	for held in spellings 'each'
-		if held == shape 'alreadyClaimed'
-			return true
-		end 'alreadyClaimed'
-	end 'each'
-
-	return false
-end 'holdsShape'
 
 // ⭐ **THE CALLABLE SHAPE OF A FUNCTION TYPE.** What a call through a function value
 // actually depends on: how many arguments it takes, what each one's concrete type is, and what comes
@@ -7122,6 +7440,10 @@ export type StructLayout
 		self.rebuildSlotGeometry()
 	end 'retypeField'
 
+	export function rebrandField(index FieldIndex, declaredBrand ByteArray)
+		try self.fieldDeclaredBrands.set(index, value: declaredBrand) otherwise panic("StructLayout.rebrandField: fieldDeclaredBrands.set OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — the caller walks `0 upto fieldCount()`")
+	end 'rebrandField'
+
 	export function settleInlinePacking(bitWidths BitWidthArray)
 		if bitWidths.count() != self.fieldTypes.count() 'notOneWidthPerField'
 			panic("StructLayout.settleInlinePacking: `type {String.from(self.name)}` declares {self.fieldCount()} field(s) and the width column holds a different number — the two are read by one `FieldIndex`, so a short column answers with a neighbour's width")
@@ -7956,6 +8278,32 @@ function cacheReadConformanceBindingArray(reader LibraryCacheReader) returns Con
 
 	return result
 end 'cacheReadConformanceBindingArray'
+
+// @generated library-cache end
+
+export typealias WrittenTypeNameEnds = Array with ElementIndex
+
+// @generated library-cache begin
+function cacheWriteWrittenTypeNameEnds(writer LibraryCacheWriter, value WrittenTypeNameEnds)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteWrittenTypeNameEnds'
+
+function cacheReadWrittenTypeNameEnds(reader LibraryCacheReader) returns WrittenTypeNameEnds throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = WrittenTypeNameEnds.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ElementIndex
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadWrittenTypeNameEnds'
 
 // @generated library-cache end
 
@@ -9713,6 +10061,7 @@ end 'cacheReadParamExistentialSiteArray'
 // honest empty column) name them. Never mutated: a writer builds a fresh array and returns it whole.
 export let sharedEmptyParamExistentialSites = ParamExistentialSiteArray.create()
 export let sharedEmptyReturnExistentialSites = GenericInstanceIdArray.create()
+export let sharedEmptyWrittenTypeNames = WrittenTypeNames.create(ByteArrayArray.create(), ends: WrittenTypeNameEnds.create())
 
 // The `Base with Args` instance parameter `position` was declared at, or `MapError.keyNotFound` for a parameter
 // that named no generic alias — which is every parameter of almost every function, and is why the column is
@@ -9728,6 +10077,61 @@ export function paramExistentialSiteAt(sites ParamExistentialSiteArray, position
 	throw MapError.keyNotFound
 end 'paramExistentialSiteAt'
 
+// Where a method's receiver sits in its parameter list — the position `parseTypeMember` binds `__self` at,
+// named so the rules that treat the receiver differently from every other parameter read as the one fact they
+// share rather than as a repeated `0`.
+export let ReceiverParamPosition = 0 as ParamCount
+
+// The type names a signature WROTE, in its declaring file's spelling — what E3167 and the unused-export
+// audit judge. Empty for a library file's signature and for a file-private function's.
+export type WrittenTypeNames
+	export let names as ByteArrayArray
+	export let ends as WrittenTypeNameEnds
+
+	export static function create(names ByteArrayArray, ends WrittenTypeNameEnds) returns WrittenTypeNames
+		return Self{names: names, ends: ends}
+	end 'create'
+
+	export function beginOf(position ElementIndex) returns ElementIndex
+		if position == 0 or self.ends.isEmpty() 'noNamesBeforeIt'
+			return 0
+		end 'noNamesBeforeIt'
+
+		return try self.ends.get(position - 1) otherwise panic("WrittenTypeNames.beginOf: ends.get OOB at {position - 1} — the column holds one end per parameter and one for the return")
+	end 'beginOf'
+
+	export function endOf(position ElementIndex) returns ElementIndex
+		if self.ends.isEmpty() 'aSignatureNoAuthorAudits'
+			return 0
+		end 'aSignatureNoAuthorAudits'
+
+		return try self.ends.get(position) otherwise panic("WrittenTypeNames.endOf: ends.get OOB at {position} — the column holds one end per parameter and one for the return")
+	end 'endOf'
+
+	export function nameAt(index ElementIndex) returns ByteArray
+		return try self.names.get(index) otherwise panic("WrittenTypeNames.nameAt: names.get OOB at {index} — the ends column bounds every position's names")
+	end 'nameAt'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteByteArrayArray(writer, value: self.names)
+		cacheWriteWrittenTypeNameEnds(writer, value: self.ends)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns WrittenTypeNames throws LibraryCacheDamage
+		let f_names = try cacheReadByteArrayArray(reader)
+		let f_ends = try cacheReadWrittenTypeNameEnds(reader)
+
+		return Self{names: f_names, ends: f_ends}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(WrittenTypeNames) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'WrittenTypeNames'
+
 // A function's parameter signature: the declared parameter NAMES (in declaration
 // order) and their source-level TYPES (parallel, same order). The parse-staging
 // registry the call machinery needs — the return-type registry above answers "what
@@ -9735,12 +10139,6 @@ end 'paramExistentialSiteAt'
 // Param NAMES are the load-bearing field: a call reorders its labelled arguments
 // (`add(2, b: 3)`) to the callee's declaration order by matching each `name:` label
 // to the parameter position holding that name. Param TYPES back arity/type checking.
-
-// Where a method's receiver sits in its parameter list — the position `parseTypeMember` binds `__self` at,
-// named so the rules that treat the receiver differently from every other parameter read as the one fact they
-// share rather than as a repeated `0`.
-export let ReceiverParamPosition = 0 as ParamCount
-
 export type FuncSignature
 	export var paramNames as ByteArrayArray
 	export var paramTypes as MaxonTypeArray
@@ -9836,8 +10234,10 @@ export type FuncSignature
 	// needs no remap and `syncResolvedSignature` carries it through untouched.
 	export var extensionConstraints as WhereConstraintArray
 
-	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray, paramDeclaredNames ByteArrayArray, returnAggregateName ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray) returns FuncSignature
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints}
+	export var writtenTypeNames as WrittenTypeNames
+
+	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray, paramDeclaredNames ByteArrayArray, returnAggregateName ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames) returns FuncSignature
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames}
 	end 'create'
 
 	// The declared parameter count — the arity a call must match.
@@ -9908,6 +10308,7 @@ export type FuncSignature
 		cacheWriteParamExistentialSiteArray(writer, value: self.paramExistentialSites)
 		cacheWriteGenericInstanceIdArray(writer, value: self.returnExistentialSites)
 		cacheWriteWhereConstraintArray(writer, value: self.extensionConstraints)
+		self.writtenTypeNames.cacheWrite(writer)
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns FuncSignature throws LibraryCacheDamage
@@ -9919,12 +10320,13 @@ export type FuncSignature
 		let f_paramExistentialSites = try cacheReadParamExistentialSiteArray(reader)
 		let f_returnExistentialSites = try cacheReadGenericInstanceIdArray(reader)
 		let f_extensionConstraints = try cacheReadWhereConstraintArray(reader)
+		let f_writtenTypeNames = try WrittenTypeNames.cacheRead(reader)
 
-		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints}
+		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize64
-		return sizeof(FuncSignature) as CacheSize64
+	static function cacheLayoutBytes() returns CacheSize72
+		return sizeof(FuncSignature) as CacheSize72
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -10075,6 +10477,18 @@ export typealias WitnessSlotImplMap = Map with (ByteArray, ByteArray)
 // than by that argument: `Parser.overloadRegistrationNameFor` will not hand back a name this file has
 // already registered.
 let OverloadNameSeparator = "#"
+
+export function registrationNameDisplay(name ByteArray, signatures ProgramSignatures) returns String
+	var shown = StringArray.create()
+	var isFunctionName = true
+
+	for part in String.from(name).split(OverloadNameSeparator) 'eachPart'
+		shown.push(part if isFunctionName else signatures.aliasIdentityDisplay(part.toByteArray()))
+		isFunctionName = false
+	end 'eachPart'
+
+	return joinedWith(shown, separator: OverloadNameSeparator)
+end 'registrationNameDisplay'
 
 // Join a bare name and one already-rendered suffix into a registration name. THE one producer; the
 // separator has no second speller.
@@ -11958,8 +12372,13 @@ end 'textAsItsReaderSpellsIt'
 
 module function aliasSpelledForReader(project Project, alias RangedTypeAlias, readerFilePath FilePath) returns String
 	let base = aliasBaseName(alias.name)
+	let signatures = programSignaturesIn(project, asker: "aliasSpelledForReader")
 
-	if base.equals(sourceSpelledAliasName(alias.name)) or not isStdlibSourceFile(project, path: alias.declFilePath) or isStdlibSourceFile(project, path: readerFilePath) 'theBareNameIsTheReadersSpelling'
+	if isMintName(alias.name) 'aMintNamesItsDeclaration'
+		return signatures.contestedDeclarationSpelling(base, declFilePath: alias.declFilePath)
+	end 'aMintNamesItsDeclaration'
+
+	if base.equals(sourceSpelledAliasName(alias.name)) or not signatures.declaredInTheStdlib(alias.declFilePath) or signatures.declaredInTheStdlib(readerFilePath) 'theBareNameIsTheReadersSpelling'
 		return String.from(base)
 	end 'theBareNameIsTheReadersSpelling'
 

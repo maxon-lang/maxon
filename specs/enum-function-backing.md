@@ -227,8 +227,6 @@ export function viaEnum() returns Integer
 end 'viaEnum'
 
 // --- file: beta/ops.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export function doubleFn(x Integer) returns Integer
 	return x * 2
 end 'doubleFn'
@@ -260,8 +258,6 @@ export function doubleFn(x Integer) returns Integer
 end 'doubleFn'
 
 // --- file: beta/ops.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export function doubleFn(x Integer) returns Integer
 	return x * 2
 end 'doubleFn'
@@ -278,7 +274,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: api/<fragment>:18:13: Ambiguous bare function name 'doubleFn' backing an enum case: more than one visible declaration matches it. Qualify it as one of: alpha.doubleFn, beta.doubleFn
+error E3095: api/<fragment>:16:13: Ambiguous bare function name 'doubleFn' backing an enum case: more than one visible declaration matches it. Qualify it as one of: alpha.doubleFn, beta.doubleFn
 ```
 
 <!-- test: function-backing.error.contested-name-with-different-results-is-called-from-another-file -->
@@ -294,8 +290,6 @@ export function doubleFn(x Integer) returns Integer
 end 'doubleFn'
 
 // --- file: beta/ops.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export function doubleFn(x Integer) returns String
 	return "{x}"
 end 'doubleFn'
@@ -312,7 +306,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: api/<fragment>:18:13: Ambiguous bare function name 'doubleFn' backing an enum case: more than one visible declaration matches it. Qualify it as one of: alpha.doubleFn, beta.doubleFn
+error E3095: api/<fragment>:16:13: Ambiguous bare function name 'doubleFn' backing an enum case: more than one visible declaration matches it. Qualify it as one of: alpha.doubleFn, beta.doubleFn
 ```
 
 <!-- test: function-backing.error.undeclared-name-is-called-from-another-file -->
@@ -350,8 +344,6 @@ export function doubleFn(x Integer) returns Integer
 end 'doubleFn'
 
 // --- file: beta/ops.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export function doubleFn(x Integer) returns Integer
 	return x * 2
 end 'doubleFn'
@@ -389,8 +381,6 @@ export function viaAlpha() returns Integer
 end 'viaAlpha'
 
 // --- file: beta/ops.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export enum OpError implements Error
 	overflow
 end 'OpError'
@@ -415,7 +405,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3101: api/<fragment>:30:2: Cannot use throwing function 'doubleFn' as a value: it throws 'OpError', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.
+error E3101: api/<fragment>:28:2: Cannot use throwing function 'doubleFn' as a value: it throws 'OpError', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.
 ```
 
 <!-- test: function-backing.error.a-type-method-does-not-back-a-case -->

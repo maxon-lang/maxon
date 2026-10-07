@@ -21,15 +21,13 @@ module union LspSubject
 end 'LspSubject'
 
 module function lspCursorFollowsAMemberAccess(tokens TokenArray, offset ByteOffset) returns bool
-	return receiverIndexBefore(tokens, offset: offset) < tokens.count()
+	try receiverIndexBefore(tokens, offset: offset) otherwise return false
+
+	return true
 end 'lspCursorFollowsAMemberAccess'
 
 module function lspSubjectAt(text String, tokens TokenArray, keywords KeywordTable, offset ByteOffset, corpus LspCorpus) returns LspSubject
-	let receiver = receiverIndexBefore(tokens, offset: offset)
-
-	if receiver >= tokens.count() 'noReceiver'
-		return LspSubject.nothingNamed
-	end 'noReceiver'
+	let receiver = try receiverIndexBefore(tokens, offset: offset) otherwise return LspSubject.nothingNamed
 
 	return lspSubjectOfReceiver(text, tokens: tokens, keywords: keywords, receiver: receiver, corpus: corpus)
 end 'lspSubjectAt'
@@ -111,12 +109,9 @@ end 'lspBlockDirectlyHoldsLine'
 // which for `p.toString().` is the `)` rather than a name. Otherwise the cursor must sit at the END of
 // that name, the partial member of `arr.pu`; a cursor anywhere else has left the name behind, and
 // answering there offers a member list on a blank line or at an argument position.
-//
-// `tokens.count()` is the answer for "no receiver". It is not a sentinel inside the index domain: it is
-// one past the last index, which no token has.
-function receiverIndexBefore(tokens TokenArray, offset ByteOffset) returns ElementIndex
-	let total = tokens.count()
-	var candidate = total
+function receiverIndexBefore(tokens TokenArray, offset ByteOffset) returns ElementIndex throws AbsentError
+	var candidate = 0 as ElementIndex
+	var anyTokenBefore = false
 
 	for (position, token) in tokens.withIterator() 'eachToken'
 		if token.endByte <= token.startByte or token.endByte > offset 'notBeforeTheCursor'
@@ -124,42 +119,42 @@ function receiverIndexBefore(tokens TokenArray, offset ByteOffset) returns Eleme
 		end 'notBeforeTheCursor'
 
 		candidate = position.index()
+		anyTokenBefore = true
 	end 'eachToken'
 
-	if candidate >= total 'nothingBefore'
-		return total
+	if not anyTokenBefore 'nothingBefore'
+		throw AbsentError.absent
 	end 'nothingBefore'
 
-	let opened = openingDotAfter(tokens, candidate: candidate)
-
-	if opened < total 'aMemberAccessJustOpened'
+	if let opened = try openingDotAfter(tokens, candidate: candidate) 'aMemberAccessJustOpened'
 		return opened - 1
 	end 'aMemberAccessJustOpened'
 
 	if candidate < TokensBetweenAReceiverAndItsMember 'noReceiverCouldPrecedeIt'
-		return total
+		throw AbsentError.absent
 	end 'noReceiverCouldPrecedeIt'
 
 	let partial = lspTokenAt(tokens, index: candidate)
 
 	if partial.endByte != offset 'theCursorLeftThatNameBehind'
-		return total
+		throw AbsentError.absent
 	end 'theCursorLeftThatNameBehind'
 
 	if not tokenCanBeAName(partial) 'notAPartialMemberName'
-		return total
+		throw AbsentError.absent
 	end 'notAPartialMemberName'
 
 	if lspTokenAt(tokens, index: candidate - 1).kind != TokenKind.dot 'notAMemberAccess'
-		return total
+		throw AbsentError.absent
 	end 'notAMemberAccess'
 
 	return candidate - TokensBetweenAReceiverAndItsMember
 end 'receiverIndexBefore'
 
-function openingDotAfter(tokens TokenArray, candidate ElementIndex) returns ElementIndex
+function openingDotAfter(tokens TokenArray, candidate ElementIndex) returns ElementIndex throws AbsentError
 	let total = tokens.count()
-	var found = total
+	var found = 0 as ElementIndex
+	var dotSeen = false
 	var index = candidate + 1
 
 	while index < total 'eachToken'
@@ -171,10 +166,15 @@ function openingDotAfter(tokens TokenArray, candidate ElementIndex) returns Elem
 
 		if token.kind == TokenKind.dot 'aMemberAccess'
 			found = index
+			dotSeen = true
 		end 'aMemberAccess'
 
 		index = index + 1
 	end 'eachToken'
+
+	if not dotSeen 'noDot'
+		throw AbsentError.absent
+	end 'noDot'
 
 	return found
 end 'openingDotAfter'

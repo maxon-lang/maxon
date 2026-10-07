@@ -97,9 +97,11 @@ typealias Integer = int(i64.min to i64.max)
 function add(a Integer, b Integer) returns Integer
 ```
 
-Use stdlib aliases when appropriate: `ExitCode`, `HashValue`, `Codepoint`, `Byte`, `ByteArray`,
+Use stdlib aliases when appropriate: `ExitCode`, `HashValue`, `Codepoint`, `Byte`, `ByteArray`, `Count`,
 `FileSize`, `Timestamp`, `NetworkPort`, `Real` — that is the whole list, so an example that uses
-`Integer` declares it in the same file. For per-domain quantities (counts, indices, byte offsets, math values), declare a typealias local to your file with a name that describes the *purpose* (`Tally`, `BytePos`, `Coord`) rather than reusing a generic `Count`/`Index`.
+`Integer` declares it in the same file. `Count` is what a collection's `count()` returns. For per-domain quantities (tallies, indices, byte offsets, math values), declare a typealias local to your file with a name that describes the *purpose* (`Tally`, `BytePos`, `Coord`).
+
+An alias of your own that shares a stdlib alias's name is a second type, and every value crossing between the two needs a cast: use the stdlib alias where it fits, and otherwise give yours a different name. Every typealias declaration is its own type, so two files declaring one name over one range declare two types too.
 
 Wide ranges like `int(0 to u64.max)` are fine when no concrete upper bound exists (line numbers, array indices, etc.). Use tight ranges only for concrete domain limits (`Port = int(0 to 65535)`).
 

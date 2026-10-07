@@ -80,9 +80,10 @@ type TrackedDecl
 	export var nameColumn as ColumnNumber
 	export var sawOutsideFile as bool
 	export var sawOutsideModule as bool
+	export var isAlias as bool
 
-	static function create(kind TrackedDeclKind, key ByteArray, displayName String, noun String, visibility Visibility, declFile AuditedFile, nameLine LineNumber, nameColumn ColumnNumber) returns TrackedDecl
-		return Self{kind: kind, key: key, displayName: displayName, noun: noun, visibility: visibility, declFile: declFile, nameLine: nameLine, nameColumn: nameColumn, sawOutsideFile: false, sawOutsideModule: false}
+	static function create(kind TrackedDeclKind, key ByteArray, displayName String, noun String, visibility Visibility, declFile AuditedFile, nameLine LineNumber, nameColumn ColumnNumber, isAlias bool) returns TrackedDecl
+		return Self{kind: kind, key: key, displayName: displayName, noun: noun, visibility: visibility, declFile: declFile, nameLine: nameLine, nameColumn: nameColumn, sawOutsideFile: false, sawOutsideModule: false, isAlias: isAlias}
 	end 'create'
 end 'TrackedDecl'
 
@@ -131,6 +132,9 @@ typealias CreditedTypeNameKeySet = Set with CreditedTypeNameKey
 typealias CreditedTypeNameIdMap = Map with (ByteArray, CreditedTypeNameId)
 
 let AuditedFileKeyShift = 32 as CreditedTypeNameKey
+let CreditedNameFieldBits = 22 as CreditedTypeNameKey
+let CreditedFileFieldBits = 21 as CreditedTypeNameKey
+let CreditedReadInReaderShift = 43 as CreditedTypeNameKey
 
 type AuditedFile
 	export let index as ElementIndex
@@ -188,9 +192,10 @@ type TrackedDecls
 	var files as AuditedFileMap
 	var creditedTypeNameIds as CreditedTypeNameIdMap
 	var creditedTypeNames as CreditedTypeNameKeySet
+	var creditedNominalNames as CreditedTypeNameKeySet
 
 	static function create(libraryFiles LibrarySourcePathSet, globalLabels GlobalLabelIndexMap) returns TrackedDecls
-		return Self{entries: TrackedDeclArray.create(), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create(), libraryFiles: libraryFiles, globalLabels: globalLabels, files: AuditedFileMap.create(), creditedTypeNameIds: CreditedTypeNameIdMap.create(), creditedTypeNames: CreditedTypeNameKeySet.create()}
+		return Self{entries: TrackedDeclArray.create(), functionIndex: TrackedDeclIndexMap.create(), typeIndex: TrackedDeclIndexMap.create(), bindingIndex: TrackedDeclIndexMap.create(), libraryFiles: libraryFiles, globalLabels: globalLabels, files: AuditedFileMap.create(), creditedTypeNameIds: CreditedTypeNameIdMap.create(), creditedTypeNames: CreditedTypeNameKeySet.create(), creditedNominalNames: CreditedTypeNameKeySet.create()}
 	end 'create'
 
 	function fileOf(path FilePath, signatures ProgramSignatures) returns AuditedFile
@@ -205,17 +210,46 @@ type TrackedDecls
 		return file
 	end 'fileOf'
 
-	// Whether `reader` is credited with `name` for the first time — see `CreditedTypeNameKey`.
-	function creditsTypeNameFirst(name ByteArray, reader AuditedFile) returns bool
-		var nameId = self.creditedTypeNameIds.count() as CreditedTypeNameId
+	// Whether `reader` is credited with `name`, as `denotation` reads it, for the first time — see
+	// `CreditedTypeNameKey`.
+	function creditsTypeNameFirst(name ByteArray, denotation Denotation, reader AuditedFile) returns bool
+		let nameId = self.creditedIdOf(name)
 
+		match denotation 'denotation'
+			nominal then return self.creditsNominalFirst(nameId, reader: reader)
+			readIn(file) then return self.creditsReadInFirst(nameId, file: file, reader: reader)
+		end 'denotation'
+	end 'creditsTypeNameFirst'
+
+	function creditedIdOf(name ByteArray) returns CreditedTypeNameId
 		if let known = try self.creditedTypeNameIds.get(name) 'known'
-			nameId = known
-		end 'known' else 'unseen'
-			self.creditedTypeNameIds.upsert(name, value: nameId)
-		end 'unseen'
+			return known
+		end 'known'
 
+		let fresh = self.creditedTypeNameIds.count() as CreditedTypeNameId
+		self.creditedTypeNameIds.upsert(name, value: fresh)
+		return fresh
+	end 'creditedIdOf'
+
+	function creditsNominalFirst(nameId CreditedTypeNameId, reader AuditedFile) returns bool
 		let key = ((reader.index as CreditedTypeNameKey) shl AuditedFileKeyShift) or (nameId as CreditedTypeNameKey)
+
+		if self.creditedNominalNames.contains(key) 'alreadyCredited'
+			return false
+		end 'alreadyCredited'
+
+		self.creditedNominalNames.insert(key)
+		return true
+	end 'creditsNominalFirst'
+
+	function creditsReadInFirst(nameId CreditedTypeNameId, file AuditedFile, reader AuditedFile) returns bool
+		let fileLimit = (1 as CreditedTypeNameKey) shl CreditedFileFieldBits
+
+		if (reader.index as CreditedTypeNameKey) >= fileLimit or (file.index as CreditedTypeNameKey) >= fileLimit or (nameId as CreditedTypeNameKey) >= ((1 as CreditedTypeNameKey) shl CreditedNameFieldBits) 'aFieldOverflowsItsBits'
+			panic("TrackedDecls.creditsReadInFirst: reader {reader.index}, denoting file {file.index} and name {nameId} must fit {CreditedFileFieldBits}, {CreditedFileFieldBits} and {CreditedNameFieldBits} bits — a wider program needs a wider key")
+		end 'aFieldOverflowsItsBits'
+
+		let key = ((reader.index as CreditedTypeNameKey) shl CreditedReadInReaderShift) or ((file.index as CreditedTypeNameKey) shl CreditedNameFieldBits) or (nameId as CreditedTypeNameKey)
 
 		if self.creditedTypeNames.contains(key) 'alreadyCredited'
 			return false
@@ -223,7 +257,7 @@ type TrackedDecls
 
 		self.creditedTypeNames.insert(key)
 		return true
-	end 'creditsTypeNameFirst'
+	end 'creditsReadInFirst'
 
 	function add(decl TrackedDecl)
 		let at = self.entries.count()
@@ -351,7 +385,7 @@ end 'tierIsAudited'
 // a finding about one is a finding about the compiler.
 module function isSynthesizedName(name ByteArray) returns bool
 	let text = String.from(name)
-	return text.startsWith("__") or text.contains("$closure_") or text.contains(".unionCases")
+	return isCompilerReservedName(name) or text.contains("$closure_") or text.contains(".unionCases")
 end 'isSynthesizedName'
 
 // The functions nothing in the source calls. The entry is `Project.entryFunctionName` rather than
@@ -408,7 +442,7 @@ function seedFunctions(module MaxonModule, signatures ProgramSignatures, entryPo
 		// IR carries. `diagnosticCalleeSpelling` is the door every other visibility diagnostic already
 		// spells a callee through — including the guard against re-qualifying a name that is already
 		// qualified (`alpha.alpha.pick`), which a second copy of the join here would have got wrong.
-		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedFunction, key: func.name, displayName: String.from(signatures.diagnosticCalleeSpelling(func.name)), noun: "function", visibility: func.visibility, declFile: tracked.fileOf(func.sourceFilePath, signatures: signatures), nameLine: func.nameLine, nameColumn: func.nameColumn))
+		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedFunction, key: func.name, displayName: String.from(signatures.diagnosticCalleeSpelling(func.name)), noun: "function", visibility: func.visibility, declFile: tracked.fileOf(func.sourceFilePath, signatures: signatures), nameLine: func.nameLine, nameColumn: func.nameColumn, isAlias: false))
 	end 'eachFunc'
 
 	for template in signatures.genericTemplateRoster() 'eachTemplate'
@@ -416,7 +450,7 @@ function seedFunctions(module MaxonModule, signatures ProgramSignatures, entryPo
 			continue
 		end 'notAudited'
 
-		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedFunction, key: template.key, displayName: String.from(signatures.diagnosticCalleeSpelling(template.key)), noun: "function", visibility: template.visibility, declFile: tracked.fileOf(template.declFilePath, signatures: signatures), nameLine: template.line, nameColumn: template.column))
+		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedFunction, key: template.key, displayName: String.from(signatures.diagnosticCalleeSpelling(template.key)), noun: "function", visibility: template.visibility, declFile: tracked.fileOf(template.declFilePath, signatures: signatures), nameLine: template.line, nameColumn: template.column, isAlias: false))
 	end 'eachTemplate'
 end 'seedFunctions'
 
@@ -456,7 +490,7 @@ function seedOneTypeName(signatures ProgramSignatures, decl TypeNameDecl, tracke
 		return
 	end 'narrowEnoughAlready'
 
-	tracked.add(TrackedDecl.create(TrackedDeclKind.trackedType, key: decl.name, displayName: String.from(decl.name), noun: typeDeclNoun(decl.claim.kind), visibility: visibility, declFile: tracked.fileOf(decl.claim.declFilePath, signatures: signatures), nameLine: decl.nameLine, nameColumn: decl.nameColumn))
+	tracked.add(TrackedDecl.create(TrackedDeclKind.trackedType, key: decl.name, displayName: String.from(decl.name), noun: typeDeclNoun(decl.claim.kind), visibility: visibility, declFile: tracked.fileOf(decl.claim.declFilePath, signatures: signatures), nameLine: decl.nameLine, nameColumn: decl.nameColumn, isAlias: isTypeAliasDecl(decl.claim.kind)))
 end 'seedOneTypeName'
 
 // ⭐ **WHICH TIERS THIS AUDIT TRACKS — and it is deliberately NOT the same question as "what tier was
@@ -465,20 +499,19 @@ end 'seedOneTypeName'
 // written, not a sentinel and not a claim about the source.
 //
 // ⚠ **SO IT MAY NOT BE REPLACED WHOLESALE BY `decl.claim.visibility`**, which is the EFFECTIVE tier for
-// every kind (see `TypeNameClaim.visibility`). The one arm where the two ask the same question is the
-// ranged alias, and that arm now reads the claim rather than re-deriving it through `aliasOf` — the two
-// answered identically by construction (own-file lookup returns this very declaration), which is exactly
-// what made the second derivation a copy rather than a check.
+// every kind (see `TypeNameClaim.visibility`). The arms where the two ask the same question are the
+// typealiases of every form, and those read the claim: an own-file lookup would return this very
+// declaration, so a second derivation would be a copy rather than a check.
 function declaredTypeVisibility(signatures ProgramSignatures, decl TypeNameDecl) returns Visibility
 	match decl.claim.kind 'kind'
 		structType then return declaredStructVisibility(signatures, name: decl.name, declFilePath: decl.claim.declFilePath)
 		enumType then return declaredEnumVisibility(signatures, name: decl.name, declFilePath: decl.claim.declFilePath)
 		unionType then return declaredEnumVisibility(signatures, name: decl.name, declFilePath: decl.claim.declFilePath)
 		interfaceType then return Visibility.file
-		rangedAlias then return decl.claim.visibility
-		functionAlias then return Visibility.file
-		genericAlias then return Visibility.file
-		tupleAlias then return Visibility.file
+		rangedAlias or
+			functionAlias or
+			genericAlias or
+			tupleAlias then return decl.claim.visibility
 	end 'kind'
 end 'declaredTypeVisibility'
 
@@ -523,7 +556,7 @@ function seedBindings(signatures ProgramSignatures, tracked TrackedDecls)
 			continue
 		end 'compilerOwned'
 
-		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedBinding, key: decl.name, displayName: String.from(decl.name), noun: "variable" if decl.mutable else "constant", visibility: decl.visibility, declFile: tracked.fileOf(decl.declFilePath, signatures: signatures), nameLine: decl.nameLine, nameColumn: decl.nameColumn))
+		tracked.add(TrackedDecl.create(TrackedDeclKind.trackedBinding, key: decl.name, displayName: String.from(decl.name), noun: "variable" if decl.mutable else "constant", visibility: decl.visibility, declFile: tracked.fileOf(decl.declFilePath, signatures: signatures), nameLine: decl.nameLine, nameColumn: decl.nameColumn, isAlias: false))
 	end 'eachDecl'
 end 'seedBindings'
 
@@ -579,11 +612,11 @@ end 'collectReferences'
 // type. `ProgramSignatures.indexTypeNames` exists for exactly that.
 function noteSignatureTypes(func IrFunction, signatures ProgramSignatures, tracked TrackedDecls, moduleTypeNames TypeNameInterner, reader AuditedFile)
 	for paramType in func.maxonParamTypes 'eachParam'
-		noteComponentType(signatures, tracked: tracked, type: paramType, typeNames: moduleTypeNames, reader: reader)
+		noteComponentType(signatures, tracked: tracked, type: paramType, typeNames: moduleTypeNames, denotedBy: reader, reader: reader)
 	end 'eachParam'
 
 	match func.maxonReturnType 'ret'
-		value(returned) then noteComponentType(signatures, tracked: tracked, type: returned, typeNames: moduleTypeNames, reader: reader)
+		value(returned) then noteComponentType(signatures, tracked: tracked, type: returned, typeNames: moduleTypeNames, denotedBy: reader, reader: reader)
 		void then break 'ret'
 	end 'ret'
 
@@ -624,7 +657,7 @@ end 'noteBodyReferences'
 // and `throwsClauseName` already answers "is there one?" by throwing rather than by a second predicate.
 function noteThrowsType(func IrFunction, signatures ProgramSignatures, tracked TrackedDecls, reader AuditedFile)
 	let errorName = try throwsClauseName(func.throwsTypeName) otherwise return
-	noteTypeName(signatures, tracked: tracked, name: errorName.toByteArray(), reader: reader)
+	noteTypeNameDenoting(signatures, tracked: tracked, name: errorName.toByteArray(), denotation: Denotation.readIn(reader), reader: reader)
 end 'noteThrowsType'
 
 // ⭐⭐ **CALLING A FUNCTION USES ITS DECLARED ERROR TYPE, AND THE CALLER'S FILE IS WHERE THAT USE HAPPENS.**
@@ -641,7 +674,7 @@ end 'noteThrowsType'
 // receives a union value and never opens it.
 function noteCalleeSignature(signatures ProgramSignatures, tracked TrackedDecls, callee ByteArray, reader AuditedFile)
 	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return
-	noteTypeName(signatures, tracked: tracked, name: errorName.toByteArray(), reader: reader)
+	noteTypeNameDenoting(signatures, tracked: tracked, name: errorName.toByteArray(), denotation: Denotation.readIn(reader), reader: reader)
 end 'noteCalleeSignature'
 
 function noteOpReferences(signatures ProgramSignatures, tracked TrackedDecls, op MaxonOp, reader AuditedFile)
@@ -700,8 +733,8 @@ function collectFileTypeReferences(project Project, signatures ProgramSignatures
 	for path in userFiles 'eachFile'
 		let artifact = try queryParseOps(project, path: path)
 		let reader = tracked.fileOf(path, signatures: signatures)
-		noteEveryTypeName(signatures, tracked: tracked, roster: artifact.usedTypeNames, reader: reader)
-		noteEveryTypeName(signatures, tracked: tracked, roster: artifact.memberAccessedTypeNames, reader: reader)
+		noteEveryTypeName(signatures, tracked: tracked, roster: artifact.usedTypeNames, denotation: Denotation.readIn(reader), reader: reader)
+		noteEveryTypeName(signatures, tracked: tracked, roster: artifact.memberAccessedTypeNames, denotation: Denotation.nominal, reader: reader)
 	end 'eachFile'
 end 'collectFileTypeReferences'
 
@@ -709,16 +742,16 @@ end 'collectFileTypeReferences'
 // in what a reference to one of their names does, so the crediting is written once.
 // A walk that recorded nothing has no roster to walk — a `match` arm may not open a `for`, so the state is
 // unwrapped here and the loop stays one function down.
-function noteEveryTypeName(signatures ProgramSignatures, tracked TrackedDecls, roster UsedTypeNameRoster, reader AuditedFile)
+function noteEveryTypeName(signatures ProgramSignatures, tracked TrackedDecls, roster UsedTypeNameRoster, denotation Denotation, reader AuditedFile)
 	match roster 'walk'
 		unwritten then break 'walk'
-		entries(names) then noteEachTypeName(signatures, tracked: tracked, names: names, reader: reader)
+		entries(names) then noteEachTypeName(signatures, tracked: tracked, names: names, denotation: denotation, reader: reader)
 	end 'walk'
 end 'noteEveryTypeName'
 
-function noteEachTypeName(signatures ProgramSignatures, tracked TrackedDecls, names UsedTypeNameSet, reader AuditedFile)
+function noteEachTypeName(signatures ProgramSignatures, tracked TrackedDecls, names UsedTypeNameSet, denotation Denotation, reader AuditedFile)
 	for name in names 'eachName'
-		noteTypeName(signatures, tracked: tracked, name: name, reader: reader)
+		noteTypeNameDenoting(signatures, tracked: tracked, name: name, denotation: denotation, reader: reader)
 	end 'eachName'
 end 'noteEachTypeName'
 
@@ -727,7 +760,8 @@ end 'noteEachTypeName'
 function noteConstInitializerTypeNames(signatures ProgramSignatures, tracked TrackedDecls)
 	for i in 0 upto signatures.constInitializerTypeSiteCount() 'eachSite'
 		let site = signatures.constInitializerTypeSiteAt(i)
-		noteTypeName(signatures, tracked: tracked, name: site.name, reader: tracked.fileOf(site.readerFilePath, signatures: signatures))
+		let reader = tracked.fileOf(site.readerFilePath, signatures: signatures)
+		noteTypeNameDenoting(signatures, tracked: tracked, name: site.name, denotation: Denotation.readIn(reader), reader: reader)
 	end 'eachSite'
 end 'noteConstInitializerTypeNames'
 
@@ -747,7 +781,7 @@ function noteFunctionName(signatures ProgramSignatures, tracked TrackedDecls, na
 	let declared = signatures.declaredNameOf(name)
 
 	if let claimants = try tracked.functionIndex.get(declared) 'tracked'
-		noteEveryClaimant(signatures, tracked: tracked, name: declared, claimants: claimants, reader: reader)
+		noteEveryClaimant(signatures, tracked: tracked, name: declared, meant: WrittenAliasFile.unspecified, denotation: Denotation.readIn(reader), claimants: claimants, reader: reader)
 	end 'tracked'
 end 'noteFunctionName'
 
@@ -760,15 +794,38 @@ end 'noteFunctionName'
 function noteQualifiedOwner(signatures ProgramSignatures, tracked TrackedDecls, callee ByteArray, reader AuditedFile)
 	match splitQualifiedName(callee) 'split'
 		notQualified then return
-		parts(owner, _) then noteTypeName(signatures, tracked: tracked, name: owner, reader: reader)
+		parts(owner, _) then noteTypeNameDenoting(signatures, tracked: tracked, name: owner, denotation: Denotation.readIn(reader), reader: reader)
 	end 'split'
 end 'noteQualifiedOwner'
 
+function declaringFileOfDenoted(signatures ProgramSignatures, name ByteArray, denotation Denotation) returns WrittenAliasFile
+	return match denotation 'denotation'
+		nominal gives signatures.declaringFileOfIdentity(name)
+		readIn(file) gives signatures.declaringFileOfWrittenAlias(name, readerFilePath: file.path)
+	end 'denotation'
+end 'declaringFileOfDenoted'
+
+function denotingFileOf(denotation Denotation, reader AuditedFile) returns FilePath
+	return match denotation 'denotation'
+		nominal gives reader.path
+		readIn(file) gives file.path
+	end 'denotation'
+end 'denotingFileOf'
+
+function meaningFileOf(meant WrittenAliasFile, denotation Denotation, reader AuditedFile) returns FilePath
+	match meant 'meant'
+		declaredIn(declFilePath) then return declFilePath
+		nothingMeant or
+			unspecified then return denotingFileOf(denotation, reader: reader)
+	end 'meant'
+end 'meaningFileOf'
+
 // ⭐⭐ **USING A TYPE USES THE TYPES IT IS MADE OF, AND WITHOUT THAT THE CHECK REPORTS A WRONG ANSWER.**
 // A file can depend on a type without ever writing its name: `let c = Gate.make().c` names `Gate` and
-// consumes a `Color`, and `try f() otherwise …` catches a `Woe` its file never spells.
-function noteTypeName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile)
-	if not tracked.creditsTypeNameFirst(name, reader: reader) 'alreadyCredited'
+// consumes a `Color`, and `try f() otherwise …` catches a `Woe` its file never spells. A component is read
+// in the file that declared the type holding it, which is the file whose meaning of its spelling counts.
+function noteTypeNameDenoting(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, denotation Denotation, reader AuditedFile)
+	if not tracked.creditsTypeNameFirst(name, denotation: denotation, reader: reader) 'alreadyCredited'
 		return
 	end 'alreadyCredited'
 
@@ -777,18 +834,45 @@ function noteTypeName(signatures ProgramSignatures, tracked TrackedDecls, name B
 		return
 	end 'writtenQualified'
 
-	if let claimants = try tracked.typeIndex.get(name) 'tracked'
-		noteEveryClaimant(signatures, tracked: tracked, name: name, claimants: claimants, reader: reader)
+	if signatures.namesAnInnerAliasOfAnyForm(name) 'anInnerAlias'
+		noteInnerAlias(signatures, tracked: tracked, name: name, denotation: denotation, reader: reader)
+		return
+	end 'anInnerAlias'
+
+	let source = signatures.writtenAliasBase(name)
+	let meant = declaringFileOfDenoted(signatures, name: name, denotation: denotation)
+
+	if let claimants = try tracked.typeIndex.get(source) 'tracked'
+		noteEveryClaimant(signatures, tracked: tracked, name: source, meant: meant, denotation: denotation, claimants: claimants, reader: reader)
 	end 'tracked'
 
 	// A type this pass does not TRACK is still walked through: a file-private struct may hold a field of
 	// an exported type, and a reader that reaches the one reaches the other.
-	noteStructFieldTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: reader.path)
-	noteEnumPayloadTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: reader.path)
-end 'noteTypeName'
+	let meaningFile = meaningFileOf(meant, denotation: denotation, reader: reader)
+	noteStructFieldTypes(signatures, tracked: tracked, name: source, reader: reader, meaningFile: meaningFile)
+	noteEnumPayloadTypes(signatures, tracked: tracked, name: source, reader: reader, meaningFile: meaningFile)
+end 'noteTypeNameDenoting'
+
+function noteInnerAlias(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, denotation Denotation, reader AuditedFile)
+	match splitQualifiedName(name) 'split'
+		notQualified then return
+		parts(owner, _) then noteTypeNameDenoting(signatures, tracked: tracked, name: owner, denotation: denotation, reader: reader)
+	end 'split'
+
+	if let instance = try signatures.innerAliasInstanceOf(name) 'aGenericInnerAlias'
+		noteInstanceArgs(signatures, tracked: tracked, id: instance, denotedBy: declaringAuditedFile(signatures, tracked: tracked, declFilePath: innerAliasDeclFile(signatures, name: name, reader: reader), fallback: reader), reader: reader)
+	end 'aGenericInnerAlias'
+end 'noteInnerAlias'
+
+function innerAliasDeclFile(signatures ProgramSignatures, name ByteArray, reader AuditedFile) returns FilePath
+	match signatures.declaredTypeNameIn(name, readerFilePath: reader.path) 'declaration'
+		undeclared then panic("innerAliasDeclFile: '{String.from(name)}' carries a generic instance and names no declaration")
+		declared(_, _, declFilePath) then return declFilePath
+	end 'declaration'
+end 'innerAliasDeclFile'
 
 function noteQualifiedNominal(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile)
-	let contested = signatures.crossKindContested(name)
+	let contested = signatures.writtenNameIsContestedAcrossKinds(name)
 	let meaningFile = signatures.qualifiedNominalMeaningFile(name, readerFilePath: reader.path)
 
 	if let claimants = try tracked.typeIndex.get(name) 'tracked'
@@ -803,31 +887,39 @@ function noteQualifiedNominal(signatures ProgramSignatures, tracked TrackedDecls
 	noteEnumPayloadTypes(signatures, tracked: tracked, name: name, reader: reader, meaningFile: meaningFile)
 end 'noteQualifiedNominal'
 
+function declaringAuditedFile(signatures ProgramSignatures, tracked TrackedDecls, declFilePath FilePath, fallback AuditedFile) returns AuditedFile
+	if declFilePath.equals(CompilerOwnedDeclFilePath) or declFilePath.toString().isEmpty() 'aLayoutNoFileDeclared'
+		return fallback
+	end 'aLayoutNoFileDeclared'
+
+	return tracked.fileOf(declFilePath, signatures: signatures)
+end 'declaringAuditedFile'
+
 function noteStructFieldTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile, meaningFile FilePath)
 	match signatures.structFor(name, readerFilePath: meaningFile) 'lookup'
 		undeclared then return
 
 		// A layout the SIGNATURE INDEX built, so its field-type ids are the index's own — see
 		// `noteSignatureTypes` for what resolving them anywhere else costs.
-		declared(layout) then noteComponentTypes(signatures, tracked: tracked, types: layout.fieldTypes, typeNames: signatures.indexTypeNames(), reader: reader)
+		declared(layout) then noteComponentTypes(signatures, tracked: tracked, types: layout.fieldTypes, typeNames: signatures.indexTypeNames(), denotedBy: declaringAuditedFile(signatures, tracked: tracked, declFilePath: layout.declFilePath, fallback: reader), reader: reader)
 	end 'lookup'
 end 'noteStructFieldTypes'
 
 function noteEnumPayloadTypes(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile, meaningFile FilePath)
 	match signatures.enumFor(name, readerFilePath: meaningFile) 'lookup'
 		undeclared then return
-		declared(layout) then noteEveryPayloadType(signatures, tracked: tracked, layout: layout, reader: reader)
+		declared(layout) then noteEveryPayloadType(signatures, tracked: tracked, layout: layout, denotedBy: declaringAuditedFile(signatures, tracked: tracked, declFilePath: layout.declFilePath, fallback: reader), reader: reader)
 	end 'lookup'
 end 'noteEnumPayloadTypes'
 
-function noteEveryPayloadType(signatures ProgramSignatures, tracked TrackedDecls, layout EnumLayout, reader AuditedFile)
+function noteEveryPayloadType(signatures ProgramSignatures, tracked TrackedDecls, layout EnumLayout, denotedBy AuditedFile, reader AuditedFile)
 	// ⭐⭐ **A STRUCT-BACKED UNION'S BACKING IS A TYPE IT IS MADE OF, AND IT IS THE ONE A READER NEVER
 	// SPELLS.** `op.rawValue.isMemory` reaches `TargetOpMeta` through `TargetOp` and names it nowhere, so
 	// the reader file's `usedTypeNames` cannot carry it and this walk is the only route left. Exactly the
 	// argument the payload loop below makes — *"using a type uses the types it is made of"* — for the half
 	// of an enum layout that is not a payload.
 	if let backingStructName = try layout.backingStruct.typeName() 'structBacked'
-		noteTypeName(signatures, tracked: tracked, name: backingStructName, reader: reader)
+		noteTypeNameDenoting(signatures, tracked: tracked, name: backingStructName, denotation: Denotation.readIn(denotedBy), reader: reader)
 	end 'structBacked'
 
 	// The index's own layout again — `noteStructFieldTypes`' interner, for its reason. Taken once rather
@@ -836,14 +928,14 @@ function noteEveryPayloadType(signatures ProgramSignatures, tracked TrackedDecls
 
 	for payloadFields in layout.casePayloads 'eachCase'
 		for field in payloadFields 'eachField'
-			noteComponentType(signatures, tracked: tracked, type: field.declaredType, typeNames: payloadTypeNames, reader: reader)
+			noteComponentType(signatures, tracked: tracked, type: field.declaredType, typeNames: payloadTypeNames, denotedBy: denotedBy, reader: reader)
 		end 'eachField'
 	end 'eachCase'
 end 'noteEveryPayloadType'
 
-function noteComponentTypes(signatures ProgramSignatures, tracked TrackedDecls, types MaxonTypeArray, typeNames TypeNameInterner, reader AuditedFile)
+function noteComponentTypes(signatures ProgramSignatures, tracked TrackedDecls, types MaxonTypeArray, typeNames TypeNameInterner, denotedBy AuditedFile, reader AuditedFile)
 	for fieldType in types 'eachField'
-		noteComponentType(signatures, tracked: tracked, type: fieldType, typeNames: typeNames, reader: reader)
+		noteComponentType(signatures, tracked: tracked, type: fieldType, typeNames: typeNames, denotedBy: denotedBy, reader: reader)
 	end 'eachField'
 end 'noteComponentTypes'
 
@@ -864,13 +956,13 @@ end 'noteComponentTypes'
 // (The two id-space arms below are unaffected: a `typeParameter`'s digest and a `GenericInstanceId` are
 // whole-program payloads, interner-independent by construction — `remapMaxonType` passes both through a
 // merge unchanged for exactly that reason.)
-function noteComponentType(signatures ProgramSignatures, tracked TrackedDecls, type MaxonType, typeNames TypeNameInterner, reader AuditedFile)
+function noteComponentType(signatures ProgramSignatures, tracked TrackedDecls, type MaxonType, typeNames TypeNameInterner, denotedBy AuditedFile, reader AuditedFile)
 	match type 'type'
-		named(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, reader: reader)
-		structRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, reader: reader)
-		interfaceRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, reader: reader)
-		function(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, reader: reader)
-		genericInstance(id) then noteInstanceArgs(signatures, tracked: tracked, id: id, reader: reader)
+		named(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, denotation: Denotation.readIn(denotedBy), reader: reader)
+		structRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, denotation: Denotation.nominal, reader: reader)
+		interfaceRef(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, denotation: Denotation.nominal, reader: reader)
+		function(id) then noteComponentTypeName(signatures, tracked: tracked, nameId: id, typeNames: typeNames, denotation: Denotation.readIn(denotedBy), reader: reader)
+		genericInstance(id) then noteInstanceArgs(signatures, tracked: tracked, id: id, denotedBy: denotedBy, reader: reader)
 
 		// A type PARAMETER's id is a digest, not a name, and the parameter itself names no declaration.
 		typeParameter then return
@@ -888,28 +980,28 @@ end 'noteComponentType'
 // ⚠ **A SUBSTITUTED INSTANCE ARGUMENT IS INTERNED IN THE INDEX**, whichever space the instance reference
 // itself arrived from — `ProgramSignatures.indexSpaceTypeName` is the door that says so. So this hop
 // RE-STATES the interner rather than forwarding its caller's.
-function noteInstanceArgs(signatures ProgramSignatures, tracked TrackedDecls, id GenericInstanceId, reader AuditedFile)
+function noteInstanceArgs(signatures ProgramSignatures, tracked TrackedDecls, id GenericInstanceId, denotedBy AuditedFile, reader AuditedFile)
 	let argTypeNames = signatures.indexTypeNames()
 
 	for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArg'
-		noteComponentType(signatures, tracked: tracked, type: signatures.substitutedInstanceArg(id, position: position), typeNames: argTypeNames, reader: reader)
+		noteComponentType(signatures, tracked: tracked, type: signatures.substitutedInstanceArg(id, position: position), typeNames: argTypeNames, denotedBy: denotedBy, reader: reader)
 	end 'eachArg'
 end 'noteInstanceArgs'
 
-function noteComponentTypeName(signatures ProgramSignatures, tracked TrackedDecls, nameId TypeNameId, typeNames TypeNameInterner, reader AuditedFile)
+function noteComponentTypeName(signatures ProgramSignatures, tracked TrackedDecls, nameId TypeNameId, typeNames TypeNameInterner, denotation Denotation, reader AuditedFile)
 	if nameId == UnnamedTypeId 'namesNothing'
 		return
 	end 'namesNothing'
 
 	let componentName = try typeNames.nameOf(nameId) otherwise return
-	noteTypeName(signatures, tracked: tracked, name: componentName, reader: reader)
+	noteTypeNameDenoting(signatures, tracked: tracked, name: componentName, denotation: denotation, reader: reader)
 end 'noteComponentTypeName'
 
 function noteBindingName(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, reader AuditedFile)
 	noteQualifiedOwner(signatures, tracked: tracked, callee: name, reader: reader)
 
 	if let claimants = try tracked.bindingIndex.get(name) 'tracked'
-		noteEveryClaimant(signatures, tracked: tracked, name: name, claimants: claimants, reader: reader)
+		noteEveryClaimant(signatures, tracked: tracked, name: name, meant: WrittenAliasFile.unspecified, denotation: Denotation.readIn(reader), claimants: claimants, reader: reader)
 	end 'tracked'
 end 'noteBindingName'
 
@@ -975,7 +1067,8 @@ end 'noteRead'
 
 typealias DemandedTierMap = Map with (ByteArray, Visibility)
 
-// The widest tier any REACHED signature demands of each type name. A demand is `checkSignatureVisibility`'s
+// The widest tier any REACHED signature demands of each type DECLARATION, keyed by name and declaring file
+// so two declarations of one name are demanded apart. A demand is `checkSignatureVisibility`'s
 // record that some function's signature names the type and so needs it at the tier E3167 judges that
 // function at; it is reached when the demanding function is itself referenced from outside the type's
 // declaring file, since a function nothing outside reaches is an `export` the author may drop, and
@@ -988,7 +1081,9 @@ function reachedSignatureDemands(project Project, tracked TrackedDecls) returns 
 	var demanded = DemandedTierMap.create()
 
 	for demand in project.signatureTypeDemands 'eachDemand'
-		if tierIsAtLeastAsVisible(try demanded.get(demand.typeName) otherwise Visibility.file, floor: demand.demandingTier) 'aWiderDemandIsAlreadyHeld'
+		let key = fileScopedDeclKey(demand.typeName, declFilePath: demand.declFilePath)
+
+		if tierIsAtLeastAsVisible(try demanded.get(key) otherwise Visibility.file, floor: demand.demandingTier) 'aWiderDemandIsAlreadyHeld'
 			continue
 		end 'aWiderDemandIsAlreadyHeld'
 
@@ -996,7 +1091,7 @@ function reachedSignatureDemands(project Project, tracked TrackedDecls) returns 
 			continue
 		end 'itsDemanderIsReachedInItsOwnFileAlone'
 
-		demanded.upsert(demand.typeName, value: demand.demandingTier)
+		demanded.upsert(key, value: demand.demandingTier)
 	end 'eachDemand'
 
 	return demanded
@@ -1062,7 +1157,7 @@ function demandedTierOf(decl TrackedDecl, demanded DemandedTierMap) returns Visi
 		return Visibility.file
 	end 'onlyATypeIsNamedByASignature'
 
-	return try demanded.get(decl.key) otherwise Visibility.file
+	return try demanded.get(fileScopedDeclKey(decl.key, declFilePath: decl.declFile.path)) otherwise Visibility.file
 end 'demandedTierOf'
 
 function emitOne(project Project, decl TrackedDecl, demandedTier Visibility)
@@ -1129,6 +1224,13 @@ function noteEveryInitializerCallee(signatures ProgramSignatures, tracked Tracke
 	end 'eachCallee'
 end 'noteEveryInitializerCallee'
 
+// How a credited name is read: `nominal` names its declaration by itself, and `readIn` is a spelling whose
+// declaration is the one that file means by it.
+union Denotation
+	nominal
+	readIn(file AuditedFile)
+end 'Denotation'
+
 // Every declaration wearing the referenced name — see `TrackedDeclIndexMap` for why there can be more
 // than one and why crediting all of them is the safe direction.
 //
@@ -1139,17 +1241,33 @@ end 'noteEveryInitializerCallee'
 // file's spelling: a file-private alias in `a.maxon` named like `b.maxon`'s `export union Container` would
 // have its OWN uses counted as references to that union, silencing a true E3092.
 //
-// ⚠ It is the CONTEST that is asked and not visibility: a name only one kind holds is credited
-// unconditionally, which is every name in every program in the corpus.
-function noteEveryClaimant(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, claimants TrackedDeclIndexArray, reader AuditedFile)
-	if signatures.writtenNameMeansARangedAliasHere(name, readerFilePath: reader.path) 'thisReaderMeansTheAlias'
-		return
-	end 'thisReaderMeansTheAlias'
+// ⚠ A use that names ONE declaration — a mint or a qualified spelling (`WrittenAliasFile.declaredIn`) —
+// credits that declaration alone, and a bare spelling its file could not have written credits none.
+// Otherwise it is the CONTEST that is asked and not visibility: a name only one kind holds is credited
+// unconditionally.
+function noteEveryClaimant(signatures ProgramSignatures, tracked TrackedDecls, name ByteArray, meant WrittenAliasFile, denotation Denotation, claimants TrackedDeclIndexArray, reader AuditedFile)
+	let contested = signatures.writtenNameIsContestedAcrossKinds(name)
+	let readerMeansTheAlias = match denotation 'denotation'
+		nominal gives false
+		readIn(file) gives signatures.writtenNameMeansAnAliasHere(name, readerFilePath: file.path)
+	end 'denotation'
 
 	for at in claimants 'eachClaimant'
+		if not claimantIsTheOneMeant(tracked.at(at), meant: meant, kindsContested: contested, readerMeansTheAlias: readerMeansTheAlias) 'anotherDeclarationOfTheName'
+			continue
+		end 'anotherDeclarationOfTheName'
+
 		noteRead(tracked, index: at, reader: reader)
 	end 'eachClaimant'
 end 'noteEveryClaimant'
+
+function claimantIsTheOneMeant(claimant TrackedDecl, meant WrittenAliasFile, kindsContested bool, readerMeansTheAlias bool) returns bool
+	return match meant 'meant'
+		declaredIn(declFilePath) gives claimant.declFile.path.equals(declFilePath)
+		nothingMeant gives false
+		unspecified gives not kindsContested or claimant.isAlias == readerMeansTheAlias
+	end 'meant'
+end 'claimantIsTheOneMeant'
 
 // ⭐ **REFERENCING A BINDING USES ITS TYPE** — see `ProgramSignatures.globalSlotType` for the measurement.
 // The slot type is walked with the same transitive rules a field type is, so naming `db` reaches
@@ -1160,6 +1278,6 @@ function noteSlotType(signatures ProgramSignatures, tracked TrackedDecls, index 
 
 		// `globalSlotType` ADOPTS the slot's type into the index's own interner — that is the whole reason
 		// it exists as its own door rather than taking a table — so the walk is told exactly that.
-		found(_, valueType, _, _) then noteComponentType(signatures, tracked: tracked, type: valueType, typeNames: signatures.indexTypeNames(), reader: reader)
+		found(_, valueType, _, _) then noteComponentType(signatures, tracked: tracked, type: valueType, typeNames: signatures.indexTypeNames(), denotedBy: reader, reader: reader)
 	end 'slot'
 end 'noteSlotType'

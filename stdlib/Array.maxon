@@ -21,6 +21,10 @@ end 'ArrayError'
 // coordinate, which `BufferCoordinate` states, rather than one this alias has to restate.
 public typealias ElementIndex = int(0 to u64.max)
 
+/// How many elements a collection holds. A count goes wherever an `ElementIndex` is taken; an
+/// `ElementIndex` goes where a `Count` is declared only by cast.
+public typealias Count = int(0 to u64.max) implements ElementIndex
+
 // ⚠ **WHAT `__ManagedMemory.capacity()` REPORTS IS NOT AN `ElementIndex`, AND IT NEVER WAS.** A buffer this
 // record does not OWN — a literal's static image, or another record's buffer this one is a view of —
 // answers a NEGATIVE FLAG rather than a number of slots. `specs/arrays.md`'s
@@ -33,7 +37,7 @@ public typealias ElementIndex = int(0 to u64.max)
 public typealias ReportedCapacity = int(i64.min to i64.max)
 
 public type Array uses Element implements BuiltinArrayLiteral, Iterable with (Element, ArrayIter), Cloneable
-	typealias ElementMemory = __ManagedMemory with Element
+	public typealias ElementMemory = __ManagedMemory with Element
 
 	public var managed as ElementMemory  // Compiler-managed opaque array storage
 
@@ -50,8 +54,8 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	// Static Constructors
 	// =========================================================================
 
-	typealias ElementIterator = Iterator with Element
-	typealias ElementIterable = Iterable with (Element, ElementIterator)
+	public typealias ElementIterator = Iterator with Element
+	public typealias ElementIterable = Iterable with (Element, ElementIterator)
 
 	/// Create an empty array
 	public static function create() returns Self
@@ -84,7 +88,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	end 'clone'
 
 	/// Get the number of elements in the array
-	public function count() returns ElementIndex
+	public function count() returns Count
 		return managed.length()
 	end 'count'
 
@@ -457,7 +461,7 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	// Iterable Interface
 	// =========================================================================
 
-	typealias ArrayIter = ArrayIterator with Element
+	public typealias ArrayIter = ArrayIterator with Element
 
 	/// Create a fresh iterator positioned at the first element.
 	/// Throws IterationError.exhausted if the array is empty.
@@ -477,7 +481,7 @@ end 'Array'
 /// navigation (advance/retreat/peek) throws IterationError. advanceBy/retreatBy
 /// come from the Iterator/BidirectionalIterator extension methods.
 public type ArrayIterator uses Element implements BidirectionalIterator with Element
-	typealias ElementMemory = __ManagedMemory with Element
+	public typealias ElementMemory = __ManagedMemory with Element
 	typealias RawCursor = __ManagedMemoryCursor with Element
 
 	var raw as RawCursor
@@ -522,7 +526,7 @@ end 'ArrayIterator'
 
 // Conditional extension: contains is only available when Element is Equatable
 public extension Array where Element is Equatable
-	typealias ElementArray = Array with Element
+	public typealias ElementArray = Array with Element
 
 	public function contains(element Element) returns bool
 		for item in self 'scan'

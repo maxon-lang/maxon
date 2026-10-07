@@ -48,10 +48,11 @@ under its parameter-type spelling — and so does the first of them:
 - two declarations whose parameters are the **same** mint the **same** suffix and collide, which is the
   `E3006` a genuine redeclaration earns.
 
-"The same parameters" means the same source SPELLING, which is the same thing every overload key in this
-compiler means by it. Two overloads written at two spellings of one underlying type are two
-registrations: two root-level files each declaring `export function f(a Integer = 1)` /
-`f(a Count = 1)` are answered with `E3007` at the call.
+"The same parameters" means the same parameter DECLARATIONS: a parameter's type is the declaration its
+name resolves to, which is what every overload key in this compiler means by it. Two aliases of one
+underlying type are two declarations, so overloads written over them are two registrations: two root-level
+files each declaring `export function f(a Integer = 1)` / `f(a Count = 1)` are answered with `E3007` at the
+call. One name written in two files over two file-private declarations is two types as well.
 
 ### A call reads the return type of the overload it MEANS
 
@@ -179,7 +180,7 @@ ok!
 
 
 <!-- test: error.one-signature-declared-by-two-files-of-one-directory -->
-⛔ **THE NEGATIVE CONTROL.** Two files declaring one name with the SAME parameter spelling are not an
+⛔ **THE NEGATIVE CONTROL.** Two files declaring one name with the SAME parameter types are not an
 overload set: they render the same suffix, claim one registration name and collide at the merge — the
 refusal falls out of the mint rather than out of a second check written beside it.
 
@@ -211,10 +212,44 @@ end 'main'
 error E3006: <fragment>:12:10: duplicate definition of function 'pick#String' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
+<!-- test: two-files-each-overload-on-their-own-private-alias-of-one-spelling -->
+One spelling is not one type. Each file's `Limit` is its own file-private declaration, so the two `f`s take
+two different parameter types: two overloads, each called from its own file.
+```maxon
+// --- file: a.maxon
+typealias Limit = int(0 to 9)
+
+function f(x Limit) returns Limit
+	return x + 1
+end 'f'
+
+export function useA() returns ExitCode
+	return f(2) as ExitCode
+end 'useA'
+
+// --- file: main.maxon
+typealias Limit = int(0 to 9)
+
+function f(x Limit) returns Limit
+	return x * 2
+end 'f'
+
+function main() returns ExitCode
+	print("{useA()} {f(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 8
+```
+
 <!-- test: error.two-spellings-of-one-type-are-ambiguous-at-the-call -->
-Two overloads written at two SPELLINGS of one underlying type both register — the suffix is the source
-spelling, pre-resolution — so the program is refused at the CALL, which cannot tell them apart, rather than
-at the declaration.
+Two overloads written at two ALIASES of one underlying type both register — each parameter is identified by
+the alias declaration it names, not by the type underneath — so the program is refused at the CALL, which
+cannot tell them apart, rather than at the declaration.
 
 ⛔ **AND IT MUST EARN EXACTLY ONE DIAGNOSTIC.** A contested set has no member under the bare name, so an op
 left naming it would reach `SemanticCheck.validateCall` and be reported **`E3004: call to undefined function
@@ -304,6 +339,94 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: <fragment>:17:2: function 'pick#Count' is not exported
+```
+
+<!-- test: error.a-member-over-a-generic-instance-the-caller-cannot-name-is-refused-in-source-form -->
+The same refusal when the hidden member's parameter is a generic instance over an alias the file contests
+with the library's `Count`. The refusal names the member by the alias its declaration wrote.
+```maxon
+// --- file: a.maxon
+typealias Count = int(0 to 100)
+typealias Counts = Array with Count
+
+function pick(c Counts)
+	print("c{c.count()}\n")
+end 'pick'
+
+// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pick(pair (Integer, Integer)) returns String
+	return "p{pair.0}"
+end 'pick'
+
+function main() returns ExitCode
+	pick([7])
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:18:2: function 'pick#Counts' is not exported
+```
+
+<!-- test: error.a-generic-member-the-caller-cannot-name-is-refused -->
+The hidden member is itself generic, and the refusal names it as its declaration spells it.
+```maxon
+// --- file: a.maxon
+function pick(n T) uses T
+	print("n{n}\n")
+end 'pick'
+
+// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pick(pair (Integer, Integer)) returns String
+	return "p{pair.0}"
+end 'pick'
+
+function main() returns ExitCode
+	pick(7)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:15:2: function 'pick' is not exported
+```
+
+<!-- test: a-member-the-caller-cannot-name-does-not-refuse-a-call-a-nameable-member-serves -->
+Visibility filters the set before scoring. `a.maxon`'s file-private `pick` takes exactly the argument's
+`Count` and would outscore `main.maxon`'s `pick`, which takes it widened to `Integer` (`Count` implements
+`Integer`), but `main.maxon` cannot name it, so its call means its own `pick`. It prints `1007 5`, exit 0.
+```maxon
+// --- file: types.maxon
+export typealias Integer = int(0 to 100000)
+export typealias Count = int(0 to 100) implements Integer
+
+// --- file: a.maxon
+function pick(n Count) returns Count
+	return n
+end 'pick'
+
+export function viaA(n Count) returns Count
+	return pick(n)
+end 'viaA'
+
+// --- file: main.maxon
+function pick(n Integer) returns Integer
+	return n + 1000
+end 'pick'
+
+function main() returns ExitCode
+	let c = 7 as Count
+	print("{pick(c)} {viaA(5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1007 5
 ```
 
 ### A parameter type the decider does not read
@@ -404,26 +527,23 @@ end 'main'
 
 <!-- test: a-contested-generic-alias-return-in-an-overload-set-resolves-in-the-callee-file -->
 ⛔⛔ **THE PER-DECLARATION RETURN TYPE IS A SECOND COPY OF A FACT THREE WHOLE-PROGRAM PASSES RE-DECIDE, AND
-THIS IS THE ONE OF THEM THE READ DOOR CANNOT REPRODUCE.** `typealias-file-scope.md`'s
-`contested-generic-alias-in-a-cross-file-return-type` is this program with `makeBag` declared ONCE: `Bag` is
-spelled by two files over two different elements, so it is CONTESTED, and the whole-program rewrite resolves
-a recorded return type in the file that declared the FUNCTION. Give `makeBag` an overload that disagrees
-with it about what it returns and the parse-time decider takes over the typing of the call — from a copy the
-rewrite must reach too, or `Bag` resolves in the CALLER's scope: the bug the rewrite exists to correct,
-reintroduced one table over.
+THIS IS THE ONE OF THEM THE READ DOOR CANNOT REPRODUCE.** `ByteArray` means two things here: `adef.maxon`
+declares none and reads the library's `Array with Byte`, while `cmain.maxon` declares its own over `String`,
+which is what the bare name means in that file. The whole-program rewrite resolves a recorded return type in
+the file that declared the FUNCTION. Give `makeBag` an overload that disagrees with it about what it returns
+and the parse-time decider takes over the typing of the call — from a copy the rewrite must reach too, or
+`ByteArray` resolves in the CALLER's scope: the bug the rewrite exists to correct, reintroduced one table
+over.
 
-`theirs.get(1)` is an `int` only if `Bag` meant `adef.maxon`'s `Array with Num`; had it resolved against
-`cmain.maxon` the value would be a `String` and the arithmetic would not compile. The three rewrites walk
+`theirs.get(1)` is an `int` only if `ByteArray` meant the library's `Array with Byte`; had it resolved
+against `cmain.maxon` the value would be a `String` and the cast would not compile. The three rewrites walk
 `overloadedDecls` in the same act and under the same rule — and against each declaration's OWN file, which is
 strictly better than the one `funcReturnDeclFiles` keeps per key, since that column is last-wins and an
 overload set may span two files.
 ```maxon
 // --- file: adef.maxon
-export typealias Num = int(0 to 125)
-export typealias Bag = Array with Num
-
-export function makeBag() returns Bag
-	var b = Bag.create()
+export function makeBag() returns ByteArray
+	var b = ByteArray.create()
 	b.push(4)
 	b.push(9)
 	return b
@@ -434,13 +554,13 @@ public function makeBag(tag String) returns String
 end 'makeBag'
 
 // --- file: cmain.maxon
-typealias Bag = Array with String
+typealias ByteArray = Array with String
 
 function main() returns ExitCode
-	var mine = Bag.create()
+	var mine = ByteArray.create()
 	mine.push("x")
 	var theirs = makeBag()
-	return ((try theirs.get(1) otherwise 0) * 10 + (mine.count() as Num)) as ExitCode
+	return ((try theirs.get(1) otherwise 0) as ExitCode) * 10 + (mine.count() as ExitCode)
 end 'main'
 ```
 ```exitcode

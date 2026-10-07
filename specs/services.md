@@ -287,7 +287,6 @@ end 'Runner'
 function main() returns ExitCode
 	return Runner.create().start() as ExitCode
 end 'main'
-typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 1

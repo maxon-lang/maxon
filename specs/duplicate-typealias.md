@@ -13,23 +13,21 @@ Multiple files may independently define the same non-exported typealias
 (e.g. `typealias MyInt = int(0 to 100)`). Because the aliases are not
 exported, they are file-local and must not interfere with each other.
 
-The rule covers the FUNCTION form (`typealias Step = function(…) returns …`) too. Two files
-declaring a private `Step` over different shapes have two types, and each file's declarations mean
-its own — a value of one file's `Step` does not satisfy a door declared with the other's. What a
-slot's spelling MEANS in the declaring file decides, not how it is spelled: two files that write
-the identical `function(Tally) returns Tally` over two different `Tally` ranges still have two
-shapes, and two files that agree share one.
+An alias's identity is its DECLARATION. Two declarations of one name are two types whatever they
+denote — the same range, or the same function, tuple or generic shape — and a value of one does not
+flow into a slot declared with the other unless it is cast. The rule covers the FUNCTION form
+(`typealias Step = function(…) returns …`) exactly as it covers the ranged one.
 
-A contested alias is always quoted by the name its author wrote. Where both sides of a refusal
-print the same bare name, the message adds a note in parentheses: the shape where the two shapes
-differ, otherwise the declaring files.
+An alias is always quoted by the name its author wrote, and by its directory where the reader sees
+both declarations (`alpha.Tallies`).
 
 A file-private alias never reaches another file THROUGH A SIGNATURE: a function visible outside its own
-file may only name types at least as visible as itself (E3167, `specs/signature-type-visibility.md`). So a
-program that carries a contested name ACROSS a boundary exports the declaration the DOOR is written with,
-and the file on the other side keeps its own private one — which is what the refusal cases below do. Every
-runnable case keeps BOTH declarations private and reaches each file's own meaning through a door that names
-neither.
+file may only name types at least as visible as itself (E3167, `specs/signature-type-visibility.md`). And a
+file that declares a private alias while it sees another file's EXPORTED declaration of the same name sees
+two declarations, so its own does not win: the bare name is E3063 in the declaring file too, and the remedy
+there is to rename the private alias. So every runnable case keeps BOTH declarations private and reaches
+each file's own meaning through a door that names neither, and the refusal cases show the E3063 a private
+alias beside a visible export earns in its own file.
 
 ## Tests
 
@@ -145,7 +143,7 @@ end 'main'
 ```
 
 <!-- test: non-exported-same-name-function-alias-same-shape -->
-Two files that AGREE about the shape are not split. A name is scoped per declaring file only where the declarations disagree, so `Step` here is one type and one brand.
+Two files that AGREE about the shape still declare two types, because an alias's identity is its declaration. Nothing crosses here — each file's door takes its own `Step` — so the program runs.
 ```maxon
 // --- file: a.maxon
 typealias Tally = int(0 to 1000)
@@ -180,6 +178,135 @@ end 'main'
 ```
 ```exitcode
 9
+```
+
+<!-- test: error.two-file-private-function-aliases-of-one-shape-are-two-types -->
+The same two agreeing declarations, and this time a value crosses. `Holder.op` is `pkg/lib.maxon`'s `Step` because that is where the field is written; read in `pkg/main.maxon` and handed to a parameter declared with `pkg/main.maxon`'s own `Step`, it meets a different declaration of the same shape, and is refused.
+```maxon
+// --- file: pkg/lib.maxon
+export typealias Integer = int(i64.min to i64.max)
+typealias Step = function(Integer) returns Integer
+
+export type Holder
+	export var op as Step
+
+	export static function make() returns Holder
+		return Holder{op: function(n Integer) gives n + 1}
+	end 'make'
+end 'Holder'
+
+// --- file: pkg/main.maxon
+typealias Step = function(Integer) returns Integer
+
+function apply(step Step) returns Integer
+	return step(4)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(Holder.make().op) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: pkg/<fragment>:22:9: argument type mismatch for 'step': expected 'Step' (declared in pkg/main.maxon), got 'Step' (declared in pkg/lib.maxon)
+```
+
+<!-- test: error.two-file-private-generic-aliases-of-one-instance-are-two-types -->
+The GENERIC form: both files declare `Bag` over the same instance, `Array with Integer`. The value crosses through `Holder.items` exactly as above and is refused at the parameter declared with the reader's own `Bag`.
+```maxon
+// --- file: pkg/lib.maxon
+export typealias Integer = int(i64.min to i64.max)
+typealias Bag = Array with Integer
+
+export type Holder
+	export var items as Bag
+
+	export static function make() returns Holder
+		var b = Bag.create()
+		b.push(3)
+		return Holder{items: b}
+	end 'make'
+end 'Holder'
+
+// --- file: pkg/main.maxon
+typealias Bag = Array with Integer
+
+function size(b Bag) returns ExitCode
+	return b.count() as ExitCode
+end 'size'
+
+function main() returns ExitCode
+	return size(Holder.make().items)
+end 'main'
+```
+```maxoncstderr
+error E3005: pkg/<fragment>:24:9: argument type mismatch for 'b': expected 'Bag' (declared in pkg/main.maxon), got 'Bag' (declared in pkg/lib.maxon)
+```
+
+<!-- test: error.an-element-read-from-another-files-same-instance-alias-is-not-this-files -->
+One level down: `Holder.rows` is a `Rows`, an `Array with Bag` of `pkg/lib.maxon`'s `Bag`, so an element read out of it is that file's `Bag`, and `pkg/main.maxon`'s parameter, declared with its own `Bag` over the same instance, refuses it.
+```maxon
+// --- file: pkg/lib.maxon
+export typealias Integer = int(i64.min to i64.max)
+typealias Bag = Array with Integer
+typealias Rows = Array with Bag
+
+export type Holder
+	export var rows as Rows
+
+	export static function make() returns Holder
+		var b = Bag.create()
+		b.push(3)
+		var rows = Rows.create()
+		rows.push(b)
+		return Holder{rows: rows}
+	end 'make'
+end 'Holder'
+
+// --- file: pkg/main.maxon
+typealias Bag = Array with Integer
+
+function size(b Bag) returns ExitCode
+	return b.count() as ExitCode
+end 'size'
+
+function main() returns ExitCode
+	let holder = Holder.make()
+	let first = try holder.rows.get(0) otherwise panic("no row")
+	return size(first)
+end 'main'
+```
+```maxoncstderr
+error E3005: pkg/<fragment>:29:9: argument type mismatch for 'b': expected 'Bag' (declared in pkg/main.maxon), got 'Bag' (declared in pkg/lib.maxon)
+```
+
+<!-- test: error.two-file-private-exit-code-aliases-are-two-types -->
+`ExitCode` is no exception: each file's own declaration is its own type, whatever the name, so
+`pkg/lib.maxon`'s value does not reach `pkg/main.maxon`'s parameter.
+```maxon
+// --- file: pkg/lib.maxon
+typealias ExitCode = int(0 to 125)
+
+export type Holder
+	export var code as ExitCode
+
+	export static function make() returns Holder
+		return Holder{code: 7}
+	end 'make'
+end 'Holder'
+
+// --- file: pkg/main.maxon
+typealias ExitCode = int(0 to 125)
+
+function settle(c ExitCode) returns ExitCode
+	return c
+end 'settle'
+
+function main() returns ExitCode
+	return settle(Holder.make().code)
+end 'main'
+```
+```maxoncstderr
+error E3005: pkg/<fragment>:21:9: argument type mismatch for 'c': expected 'ExitCode' (declared in pkg/main.maxon), got 'ExitCode' (declared in pkg/lib.maxon)
 ```
 
 <!-- test: non-exported-same-name-function-alias-inside-a-generic-instance -->
@@ -272,7 +399,7 @@ error E3005: <fragment>:17:9: argument type mismatch for 'f': expected 'Other', 
 ```
 
 <!-- test: non-exported-same-name-function-alias-over-same-spelled-slots -->
-Both files spell `Step` identically — `function(Tally) returns Tally` — and the shapes still differ, because each file's `Tally` is its own range. What a slot's spelling MEANS in the declaring file is what decides, never the characters.
+Both files spell `Step` identically — `function(Tally) returns Tally` — over their own `Tally`, which ranges differently. Each file's `Step` is its own declaration, and each file's closure is checked against its own file's `Tally`.
 ```maxon
 // --- file: a.maxon
 typealias Tally = int(0 to 1000)
@@ -314,7 +441,7 @@ end 'main'
 ```
 
 <!-- test: non-exported-same-name-function-alias-nested-in-another-alias -->
-A contested alias in a SLOT contests its container: `Outer` takes a `Step`, and the two files disagree about `Step`, so `Outer` is split as well. Splitting `Step` alone would leave one `Outer` accepting either file's closure.
+An alias in a SLOT of another: `Outer` takes a `Step`, and each file's `Outer` is built over that file's own `Step`, so neither file's `Outer` accepts the other file's closure.
 ```maxon
 // --- file: a.maxon
 typealias Tally = int(0 to 1000)
@@ -407,12 +534,10 @@ end 'main'
 2 go!
 ```
 
-<!-- test: error.two-shapes-of-one-contested-name-are-told-apart-by-their-files -->
-When one file passes its own `Step` where another's is declared, both sides print the bare name `Step` — so the message carries a note. The SHAPES differ here, and the shape is what a reader needs, so the note is the shape.
-
-⚠ The DOOR is `b.maxon`'s, so `b.maxon` exports its `Step` and `a.maxon` keeps its own private one: a door another file calls may not be written with a file-private type (E3167). The contest is the same one — two files, one name, two shapes — and the message is what this case is about.
+<!-- test: error.a-private-function-alias-beside-a-visible-export-is-ambiguous-in-its-own-file -->
+`alpha/a.maxon` declares a private `Step` and sees `beta/b.maxon`'s exported `Step`: two declarations of the name, and the declaring file's own does not win. The bare `Step` is E3063 in `alpha/a.maxon` itself, at its first read; the remedy there is to rename the private alias.
 ```maxon
-// --- file: a.maxon
+// --- file: alpha/a.maxon
 typealias Tally = int(0 to 1000)
 typealias Step = function(Tally) returns Tally
 
@@ -424,7 +549,7 @@ export function goA() returns String
 	return foldB("go", step: pick())
 end 'goA'
 
-// --- file: b.maxon
+// --- file: beta/b.maxon
 export typealias Step = function(String) returns String
 
 export function foldB(label String, step Step) returns String
@@ -438,7 +563,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:9: argument type mismatch for 'step': expected 'Step' (fn(String) returns String), got 'Step' (fn(int) returns int)
+error E3063: alpha/<fragment>:6:25: Ambiguous type name 'Step': more than one visible declaration matches it. Qualify it as one of: beta.Step, or rename this file's own declaration
 ```
 
 <!-- test: non-exported-same-name-function-alias-over-a-tuple-slot -->
@@ -529,24 +654,21 @@ end 'main'
 701 4
 ```
 
-<!-- test: error.two-ranges-of-one-contested-name-are-told-apart-by-their-files -->
-The other tier of the same note. Here the two `Step`s render the SAME shape text — the difference is `Tally`'s range, which the rendering erases — so the note names the declaring files instead. The file is a provenance note beside the name and never part of it.
-
-⚠ `b.maxon` owns the door and exports its `Tally` and `Step`; `a.maxon`'s pair stays private. Both declarations still render the same shape text, which is what makes the note name the files.
+<!-- test: error.a-private-ranged-alias-beside-a-visible-export-is-ambiguous-in-its-own-file -->
+The RANGED form of the same rule. `alpha/a.maxon`'s private `Tally` and `beta/b.maxon`'s exported `Tally` are two declarations `alpha/a.maxon` sees, so its first bare `Tally` is E3063 in its own file.
 ```maxon
-// --- file: a.maxon
+// --- file: alpha/a.maxon
 typealias Tally = int(0 to 1000)
-typealias Step = function(Tally) returns Tally
 
-function pick() returns Step
-	return function(n Tally) gives n + 1
-end 'pick'
+function bump(n Tally) returns Tally
+	return n + 1
+end 'bump'
 
 export function goA() returns ExitCode
-	return foldB(2, step: pick()) as ExitCode
+	return foldB(2, step: bump) as ExitCode
 end 'goA'
 
-// --- file: b.maxon
+// --- file: beta/b.maxon
 export typealias Tally = int(0 to 5)
 export typealias Step = function(Tally) returns Tally
 
@@ -561,7 +683,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:9: argument type mismatch for 'step': expected 'Step' (declared in b.maxon), got 'Step' (declared in a.maxon)
+error E3063: alpha/<fragment>:5:17: Ambiguous type name 'Tally': more than one visible declaration matches it. Qualify it as one of: beta.Tally, or rename this file's own declaration
 ```
 
 <!-- test: non-exported-same-name-function-alias-over-generic-slots-of-two-bases -->
@@ -610,12 +732,10 @@ end 'main'
 701 4
 ```
 
-<!-- test: error.two-bases-of-one-contested-generic-alias-are-told-apart-by-their-files -->
-The provenance note is not a function-alias rule: a contested GENERIC alias earns it on the same terms. Both `Tallies` print bare, the two files sit in one namespace, so the declaring files are what separates them.
-
-⚠ The door is `countA`, so `a.maxon` exports `Tallies` and its element; `b.maxon` keeps its own private `Tallies` over `List` and passes it. One name, two bases, two files.
+<!-- test: error.a-private-generic-alias-beside-a-visible-export-is-ambiguous-in-its-own-file -->
+The GENERIC form of the same rule. `beta/b.maxon` keeps a private `Tallies` over `List` while it sees `alpha/a.maxon`'s exported `Tallies` over `Array`, so its first bare `Tallies` is E3063 in its own file.
 ```maxon
-// --- file: a.maxon
+// --- file: alpha/a.maxon
 export typealias Integer = int(i64.min to i64.max)
 export typealias Tallies = Array with Integer
 
@@ -623,8 +743,7 @@ export function countA(xs Tallies) returns Integer
 	return xs.count()
 end 'countA'
 
-// --- file: b.maxon
-typealias Integer = int(i64.min to i64.max)
+// --- file: beta/b.maxon
 typealias Tallies = List with Integer
 
 export function goB() returns ExitCode
@@ -640,29 +759,28 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:17:9: argument type mismatch for 'xs': expected 'Tallies' (declared in a.maxon), got 'Tallies' (declared in b.maxon)
+error E3063: beta/<fragment>:14:11: Ambiguous type name 'Tallies': more than one visible declaration matches it. Qualify it as one of: alpha.Tallies, or rename this file's own declaration
 ```
 
 <!-- test: error.two-functions-over-a-contested-generic-alias-do-not-merge -->
 A ternary whose two arms are functions over a contested `Tallies`. The two arms do not merge — agreement is decided on the resolved shapes — and each caption names its `Tallies` by its directory, `alpha.Tallies` and `beta.Tallies`, the spellings a reader that sees both must write.
 
-⚠ Both files hand a function VALUE across, so both export their `Tallies` and its element — two exported declarations of one name in two directories, which is legal whatever their ranges, and still two instances.
+⚠ Both files hand a function VALUE across, so both export their `Tallies` — two exported declarations of one name in two directories, which is legal, and still two instances. Each declaring file sees both, so it names its own through its directory as well; the element aliases and `Integer` have one declaration each.
 ```maxon
 // --- file: alpha/a.maxon
 export typealias Integer = int(i64.min to i64.max)
 export typealias Tally = int(0 to 1000)
 export typealias Tallies = Array with Tally
 
-export function sizeA(t Tallies) returns Integer
+export function sizeA(t alpha.Tallies) returns Integer
 	return t.count()
 end 'sizeA'
 
 // --- file: beta/b.maxon
-export typealias Integer = int(i64.min to i64.max)
-export typealias Tally = int(0 to 5)
-export typealias Tallies = Array with Tally
+export typealias Tiny = int(0 to 5)
+export typealias Tallies = Array with Tiny
 
-export function sizeB(t Tallies) returns Integer
+export function sizeB(t beta.Tallies) returns Integer
 	return t.count()
 end 'sizeB'
 
@@ -675,5 +793,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2028: <fragment>:23:16: ternary expression type mismatch: true branch is 'fn(alpha.Tallies) returns Integer' but false branch is 'fn(beta.Tallies) returns Integer'
+error E2028: <fragment>:22:16: ternary expression type mismatch: true branch is 'fn(alpha.Tallies) returns Integer' but false branch is 'fn(beta.Tallies) returns Integer'
 ```

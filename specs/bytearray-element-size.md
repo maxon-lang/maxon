@@ -525,17 +525,17 @@ error E3005: specs/bytearray-element-size/byte-string-global-refused-when-a-byte
 
 <!-- test: readers-own-byte-decides-which-literal-bytes-fit -->
 ### A byte legal under ONE file's `Byte` stays legal there while a sibling file's is narrower
-The exact analogue of `readers-own-byte-decides-the-literal-not-the-whole-program-fold` for the RANGE half
-of the rule: `wide.maxon`'s literal is checked against `wide.maxon`'s `int(0 to u8.max)`, and `main.maxon`'s
-against its own `int(0 to 100)`. A whole-program fold over both declarations — or a check that read the
-declaring file of whichever `Byte` was recorded last — gets one of the two wrong.
+The RANGE half of the rule that the reading file's `Byte` decides: `wide.maxon`'s literal is checked against `wide.maxon`'s `int(0 to u8.max)`, and `main.maxon`'s
+against its own `int(0 to 100)`. Both declarations are file-private, so each file sees exactly one `Byte`.
+A whole-program fold over both declarations — or a check that read the declaring file of whichever `Byte`
+was recorded last — gets one of the two wrong.
 ```maxon
 // --- file: wide.maxon
-export typealias Byte = int(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
-export function anyByte(b Byte) returns Integer
+export function anyByte(b Integer) returns Integer
 	var a = b"\xdf"
-	return (try a.get(0) otherwise 0) - b
+	return (try a.get(0) otherwise 0) - (b as Byte)
 end 'anyByte'
 
 export typealias Integer = int(i64.min to i64.max)
@@ -548,9 +548,8 @@ end 'narrow'
 
 function main() returns ExitCode
 	var mine = b"\x41"
-	return anyByte(narrow(try mine.get(0) otherwise 0) as Byte) as ExitCode
+	return anyByte(narrow(try mine.get(0) otherwise 0)) as ExitCode
 end 'main'
-typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 158
@@ -561,11 +560,11 @@ typealias Integer = int(i64.min to i64.max)
 The half that proves the case above is not simply a lost refusal. One program, two files, two answers.
 ```maxon
 // --- file: wide.maxon
-export typealias Byte = int(0 to u8.max)
+typealias Byte = int(0 to u8.max)
 
-export function anyByte(b Byte) returns Integer
+export function anyByte(b Integer) returns Integer
 	var a = b"\xdf"
-	return (try a.get(0) otherwise 0) - b
+	return (try a.get(0) otherwise 0) - (b as Byte)
 end 'anyByte'
 
 export typealias Integer = int(i64.min to i64.max)
@@ -578,9 +577,8 @@ end 'narrow'
 
 function main() returns ExitCode
 	var mine = b"\xdf"
-	return anyByte(narrow(try mine.get(0) otherwise 0) as Byte) as ExitCode
+	return anyByte(narrow(try mine.get(0) otherwise 0)) as ExitCode
 end 'main'
-typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3005: <fragment>:19:13: byte 223 at offset 0 of a `b"…"` byte-string literal is outside the range of 'Byte' (int(0 to 100))
@@ -676,12 +674,11 @@ over that range are ONE claimant between them: the element keeps its bare name, 
 `Array_Byte`, and no emitted symbol moves. The last two cases below pin both directions of that.
 
 ⚠ **THE MINT IS THE INSTANCE'S IDENTITY; IT IS NOT WHAT AN E3005 *SAYS* (user ruling).** A diagnostic
-names a type by the `typealias` the AUTHOR declared for it (`ProgramSignatures.instanceDisplayName`), so
-the two cases below read `expected 'Bytes', got 'ByteArray'` rather than
+never shows an internal spelling. It names a type by its declaration (`SignatureIndex.instanceDisplayName`),
+so the two cases below read `expected 'Bytes', got 'ByteArray'` rather than
 `expected 'Array_Byte$0_1000', got 'Array_Byte$0_255'` — two spellings a person wrote, naming the same two
 instances the mint names. What they pin is the point: whether
-the program holds ONE element type or TWO. The mint is quoted only where no source line names the instance
-at all, which is the `Array___ManagedByte` and `Array_Byte$0_1000` halves further down.
+the program holds ONE element type or TWO.
 
 <!-- test: wide-byte-program-that-never-mentions-file-still-runs -->
 ### A wide `Byte` does not break a program that never touches the stdlib's byte buffers
@@ -841,30 +838,39 @@ not chosen.
 
 <!-- test: error.a-contested-alias-is-qualified-by-its-namespace -->
 ### Claimants in different modules: the NAMESPACE is the qualifier
-`api/lib.maxon` and `app/main.maxon` each declare `Bytes` over their own `Byte`, and those are two
-element types. The namespaces `api` and `app` are distinct, so they are what an author recognizes and
-what the refusal quotes.
+`api/lib.maxon` and `app/main.maxon` each declare a file-private `Bytes` over their own `Byte`, and those
+are two element types. Neither file sees the other's declaration, so the value crosses through a FIELD,
+which `Holder.items` types by its declaring file. The namespaces `api` and `app` are distinct, so they are
+what an author recognizes and what the refusal quotes.
 ```maxon
 // --- file: api/lib.maxon
-export typealias Byte = int(0 to 1000)
-export typealias Bytes = Array with Byte
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
 
-export function takesWide(b Bytes) returns ExitCode
-	return b.count() as ExitCode
-end 'takesWide'
+export type Holder
+	export var items as Bytes
+
+	export static function make() returns Holder
+		var b = Bytes.create()
+		b.push(300)
+		return Holder{items: b}
+	end 'make'
+end 'Holder'
 
 // --- file: app/main.maxon
 typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
+function takesNarrow(b Bytes) returns ExitCode
+	return b.count() as ExitCode
+end 'takesNarrow'
+
 function main() returns ExitCode
-	var mine = Bytes.create()
-	mine.push(65)
-	return takesWide(mine as Bytes)
+	return takesNarrow(Holder.make().items)
 end 'main'
 ```
 ```maxoncstderr
-error E3005: app/<fragment>:17:9: argument type mismatch for 'b': expected 'api.Bytes', got 'app.Bytes'
+error E3005: app/<fragment>:25:9: argument type mismatch for 'b': expected 'app.Bytes', got 'api.Bytes'
 ```
 
 <!-- test: error.a-contested-alias-in-one-module-is-qualified-by-its-file -->
@@ -878,76 +884,78 @@ normalizes every staged file's name to the `<fragment>` token and keeps only its
 (`FragmentPathMapping`), so a spelling built from both claimants' paths reads `'pkg/<fragment>.Bytes'`
 on both sides whatever the compiler emitted.
 
-⚠ **THE WRONG ARGUMENT HERE IS AN `int`, NOT THE OTHER CLAIMANT, AND THAT IS WHAT MAKES THE CASE
-PINNABLE.** Quoting ONE side against an `int` keeps the whole tier observable: the bare name alone
-would read `expected 'Bytes'`, and the namespace tier would read `expected 'pkg.Bytes'`. Both fail this expectation.
+Both declarations are file-private, which is what lets two files of one directory hold one name, and
+the value crosses through `Holder.items` exactly as in the case above. The bare name alone would read
+`expected 'Bytes', got 'Bytes'`, and the namespace tier would read `'pkg.Bytes'` on both sides. Both fail
+this expectation.
 ```maxon
 // --- file: pkg/lib.maxon
-export typealias Byte = int(0 to 1000)
-export typealias Bytes = Array with Byte
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
 
-export function takesWide(b Bytes) returns ExitCode
-	return b.count() as ExitCode
-end 'takesWide'
+export type Holder
+	export var items as Bytes
+
+	export static function make() returns Holder
+		var b = Bytes.create()
+		b.push(300)
+		return Holder{items: b}
+	end 'make'
+end 'Holder'
 
 // --- file: pkg/main.maxon
 typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
+function takesNarrow(b Bytes) returns ExitCode
+	return b.count() as ExitCode
+end 'takesNarrow'
+
 function main() returns ExitCode
-	var mine = Bytes.create()
-	mine.push(65)
-	return takesWide(7) + mine.count() as ExitCode
+	return takesNarrow(Holder.make().items)
 end 'main'
 ```
 ```maxoncstderr
-error E3005: pkg/<fragment>:17:9: argument type mismatch for 'b': expected 'Bytes' (declared in pkg/lib.maxon), got 'int'
+error E3005: pkg/<fragment>:25:9: argument type mismatch for 'b': expected 'Bytes' (declared in pkg/main.maxon), got 'Bytes' (declared in pkg/lib.maxon)
 ```
 
 <!-- test: error.a-returned-bytes-answers-to-the-declaring-file-not-the-caller -->
-### A RETURNED `Bytes` is the callee's, not the caller's
-⛔ **WITHOUT THIS REFUSAL THE PROGRAM COMPILES AND RUNS, AND ITS ANSWER IS WRONG.** `wide.maxon` builds
-an `Array with int(0 to 1000)` (two-byte stride) holding **300**; read through a parameter declared over
-`main.maxon`'s OWN `int(0 to u8.max)` (one-byte stride) it would come back as **44** — the low byte — on a
-program the whole element-identity family exists to refuse. Both other directions of the same contest
-are refused (`a-byte-two-files-disagree-about-is-two-types`, and the two cases above), so what this pins
-is not the RULE but the return door.
+### A RETURNED `ByteArray` is the callee's, not the caller's
+⛔ **WITHOUT THIS REFUSAL THE PROGRAM COMPILES AND RUNS, AND ITS ANSWER IS WRONG.** `toByteArray()` builds
+the library's byte-PACKED `ByteArray` (one-byte stride) holding `A`; read through a parameter declared over
+`main.maxon`'s OWN `ByteArray`, an `Array with int(0 to 1000)` (two-byte stride), it would read two bytes
+per element — on a program the whole element-identity family exists to refuse. Both other directions of
+the same contest are refused (`a-byte-two-files-disagree-about-is-two-types`, and the two cases above), so
+what this pins is not the RULE but the return door.
 
-The declaration sweep records `returns Bytes` before any generic alias is interned, so it stores a
-bare `named("Bytes")`, which the CALLER's parse would resolve as ITS file means
+The callee is the library because no two AUTHOR declarations of one name can meet at a return: a function
+another file calls has a return type at least as visible as itself, so the caller would see both
+declarations, and that bare name is ambiguous. The library's `ByteArray` never takes part in that
+ambiguity, so the caller's own `ByteArray` is what its bare name means.
+
+The declaration sweep records `returns ByteArray` before any generic alias is interned, so it stores a
+bare `named("ByteArray")`, which the CALLER's parse would resolve as ITS file means
 (`Parser.resolveNamedAlias` asks `genericAliasInstanceFrom(name, readerFilePath: self.filePath)`).
 `resolveRecordedGenericAliasTypes` re-resolves every recorded declared type against its own declaring
 file — a struct FIELD, a union PAYLOAD, and a return type, which is a slot of the declaring FUNCTION
 (`rewriteRecordedReturnTypes`); the rule is *the scope file is the SLOT's declaring file and never a
 reader's*.
-The two files sit in different modules so the refusal spells both sides apart — the runner normalizes a
-staged file's NAME away but keeps its directory, so a same-directory pair would read `<fragment>.Bytes`
-on both sides and say nothing about which instance won.
+The caller sits in a module of its own so the refusal spells both sides apart.
 ```maxon
-// --- file: api/wide.maxon
-export typealias Byte = int(0 to 1000)
-export typealias Bytes = Array with Byte
-
-export function makeWide() returns Bytes
-	var b = Bytes.create()
-	b.push(300)
-	return b
-end 'makeWide'
-
 // --- file: app/main.maxon
-typealias Byte = int(0 to u8.max)
-typealias Bytes = Array with Byte
+typealias Byte = int(0 to 1000)
+typealias ByteArray = Array with Byte
 
-function takesNarrow(b Bytes) returns ExitCode
+function takesWide(b ByteArray) returns ExitCode
 	return try b.get(0) otherwise 0
-end 'takesNarrow'
+end 'takesWide'
 
 function main() returns ExitCode
-	return takesNarrow(makeWide())
+	return takesWide("A".toByteArray())
 end 'main'
 ```
 ```maxoncstderr
-error E3005: app/<fragment>:21:9: argument type mismatch for 'b': expected 'app.Bytes', got 'api.Bytes'
+error E3005: app/<fragment>:11:9: argument type mismatch for 'b': expected 'app.ByteArray', got 'stdlib.ByteArray'
 ```
 
 ### ⚠ THE READER'S OWN `Byte` DECIDES, AND THE MINT IS NEVER QUOTED BACK AT THE AUTHOR
@@ -962,13 +970,11 @@ that would go quiet if `Parser.requireByteStringBlobFitsItsElement` ever stopped
 `ProgramSignatures.internArrayByteInstance(readerFilePath)`. The RANGE half of that rule has the same
 exposure and its own pair — `readers-own-byte-decides-which-literal-bytes-fit` and its twin, above.
 
-<!-- test: readers-own-byte-decides-the-literal-not-the-whole-program-fold -->
-### A `b"…"` in a file with no `Byte` of its own stays packed while a SIBLING file is wide
-`main.maxon` declares no `Byte`, and its literal's element is the library's `int(0 to u8.max)` — a
-compiler-synthesized read, never ambiguous — so the literal is legal. Its own cast names the library's
-`Byte` as `stdlib.Byte`, because `wide.maxon`'s export reaches `main.maxon` too. Under a whole-program fold `wide.maxon`'s `int(0 to 1000)` would widen the one shared
-`Array with Byte` to stride 2 and this program would be E2015 — the exact "adding a declaration
-breaks a file that never mentions it" failure the scoping exists to end, in its smallest form.
+<!-- test: error.a-byte-string-literal-takes-the-sibling-files-wide-byte-it-names-bare -->
+### A `b"…"` in a file with no `Byte` of its own takes the `Byte` its bare name reaches
+`main.maxon` declares no `Byte`, and the one author declaration it sees is `wide.maxon`'s exported
+`int(0 to 1000)`. That is what its bare `Byte` means, so it is its literal's element too, and a 2-byte
+`Byte` refuses a byte-packed literal exactly as it does in the file that declares it.
 ```maxon
 // --- file: wide.maxon
 export typealias Byte = int(0 to 1000)
@@ -982,11 +988,11 @@ export typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
 	var a = b"hi"
 	let n = try a.get(0) otherwise 0
-	return (n - (widen(56) as stdlib.Byte)) as ExitCode
+	return (n - (widen(56) as Byte)) as ExitCode
 end 'main'
 ```
-```exitcode
-48
+```maxoncstderr
+error E2015: <fragment>:12:10: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 2-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 2 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`
 ```
 
 <!-- test: the-wide-files-own-byte-literal-is-still-refused -->
@@ -1047,7 +1053,6 @@ function main() returns ExitCode
 	let h = Holder.ofText("ab")
 	return (h.first() - widen(50)) as ExitCode
 end 'main'
-typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 47
@@ -1093,27 +1098,23 @@ function main() returns ExitCode
 	let h = Holder.of(c.bytes())
 	return (h.first() - widen(50)) as ExitCode
 end 'main'
-typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3005: <fragment>:25:17: argument type mismatch for 'b': expected 'ByteArray', got 'Array_Byte$0_1000'
+error E3005: <fragment>:25:17: argument type mismatch for 'b': expected '__ManagedMemory with stdlib.Byte', got 'Array with Byte'
 ```
 
-### The MINT is an internal spelling, and a diagnostic quotes it only when nothing else can tell two types apart
+### The MINT is an internal spelling, and no diagnostic quotes it
 
 `Byte$0_255` is the compiler's name for ONE declaration of `Byte`; it is unspellable in source
-(`SignatureIndex.RangeQualifiedAliasSeparator`) and no author ever wrote it. **A TYPE-IDENTITY message
-prefers the `typealias` the author DID write** (user ruling — `ProgramSignatures.instanceDisplayName`),
-which is why the case above reads `expected 'ByteArray'`: `stdlib/File.maxon` declares
-`public typealias ByteArray = Array with Byte` over the instance the parameter is typed at, and that is a
-name the program contains. The `got` half has no such name — `c.bytes()` mints
-`Array with Byte$0_1000` and no line of either file declares an alias for it — so the mint stands there,
-and it must: the bare spelling would read `expected 'Array_Byte', got 'Array_Byte'`, a refusal with no
-content. **That is the whole rule: an author's spelling where one exists, the mint where none does, and
-never a message whose two halves are the same string.**
-A RANGE message quotes the mint in neither case: it quotes a `typealias` back at the author, and its
-bounds are printed in the same sentence, so the suffix would carry nothing the reader had not already
-been told.
+(`SignatureIndex.RangeQualifiedAliasSeparator`) and no author ever wrote it. **A diagnostic never shows an
+internal spelling** (user ruling — `SignatureIndex.instanceDisplayName`). It names a type by its
+declaration: the library's as `stdlib.X`, another directory's author declaration as `dir.X`, a root
+author declaration bare, and a type no alias names is spelled from its parts, so the buffer `c.bytes()`
+hands back reads as a container over the reading file's `Byte`. Only when those qualifiers cannot tell
+the two sides apart does each side add `(declared in <file>)`. **That is the whole rule: a type is named
+by its declaration, and never by a message whose two halves are the same string.**
+A RANGE message quotes a `typealias` back at the author, and its bounds are printed in the same
+sentence, so a suffix would carry nothing the reader had not already been told.
 
 ⛔ **A RANGE MESSAGE STRIPS THE SUFFIX (`SignatureIndex.sourceSpelledAliasName`).** Quoting the mint —
 `Value 2000 is outside the range of 'Byte$0_1000' (int(0 to 1000))` — would name a declaration the program
@@ -1187,9 +1188,8 @@ call accepts the moment it crossed that site. What each door would say if it com
 * a struct-literal field store — `E3005 cannot assign 'Array___ManagedByte' to variable 'Holder.mem' of type 'Array_Byte'`
 * a generic type-parameter argument — `E3005 argument type mismatch for 'item': expected 'Bytes', got 'Array___ManagedByte'`
 
-⚠ The DECLARED side of each is spelled with the mint for brevity; a real refusal names the `typealias`
-its program wrote. The `got` side is exact — a compiler-synthesized buffer has no declaration to quote,
-so its canonical mint IS its display name.
+⚠ Both sides are spelled with the internal names for brevity; a real refusal names each type by its
+declaration, and a compiler-synthesized buffer, which has no declaration of its own, by its parts.
 
 The door is asked ONCE — `aggregatesConflict` takes the (tag, nameId) pair beside each side's aggregate name and folds the byte boundary in, so a site cannot
 ask the identity question without asking the boundary one. Overload SCORING is the eighth site, it carries
@@ -1304,7 +1304,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Bytes', got 'Array___ManagedByte'
+error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Bytes', got 'Array with stdlib.Byte'
 ```
 
 ### ⛔ THE EIGHTH SITE — OVERLOAD SCORING — DOES HAVE A DISTINGUISHING CASE
@@ -1446,10 +1446,9 @@ error E3005: <fragment>:11:16: argument type mismatch for 'b': expected 'Bytes',
 
 <!-- test: a-byte-view-is-accepted-at-the-canonical-byte -->
 ### The canonical `Byte` holds every byte, so the view is untouched
-⚠ This case passes for TWO reasons, and both are worth having: `Byte = int(0 to u8.max)` is the corpus's own canonical `Byte`, so `Bytes` and
-`stdlib/String.maxon`'s `ByteArray` intern to ONE `GenericInstanceId` (`genericInstances.intern` is keyed
-on `(typeNameId, args)` program-wide) and the argument is accepted nominally — as well as holding every
-byte, which is what the case was written to say.
+This file's `Byte` has the library's range, so it holds every byte and the view needs no refusal. It is
+still this file's own declaration, so `Bytes` and `stdlib/String.maxon`'s `ByteArray` are two types: the
+`as Bytes` cast makes the conversion, and without it the argument is refused (the case below).
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
@@ -1464,6 +1463,124 @@ end 'main'
 ```
 ```exitcode
 97
+```
+
+<!-- test: error.a-library-byte-array-is-not-an-authors-byte-array -->
+### Equal ranges do not make the library's `ByteArray` the author's `Bytes`
+The author's `Byte` has exactly the library's range, but it is the author's declaration, so `Array with
+Byte` here is an instance over a different element type from the library's `ByteArray`. Without the cast
+the case above writes, the argument is refused.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function takes(b Bytes) returns ExitCode
+	return (try b.get(0) otherwise 0)
+end 'takes'
+
+function main() returns ExitCode
+	return takes("hi".toByteArray())
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:9: argument type mismatch for 'b': expected 'Bytes', got 'ByteArray'
+```
+
+<!-- test: error.an-authors-byte-array-is-not-a-library-byte-array-parameter -->
+The other direction: the author's `Bytes` handed to a library parameter declared `ByteArray`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(104)
+	let s = String.from(b)
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:17: argument type mismatch for 'bytes': expected 'ByteArray', got 'Bytes'
+```
+
+<!-- test: error.an-element-of-a-library-byte-array-is-not-an-authors-byte -->
+An element read from the library's `ByteArray` is the library's `Byte`, whatever `Byte` the reader declares.
+```maxon
+typealias Byte = int(0 to u8.max)
+
+function takeByte(b Byte) returns ExitCode
+	return b as ExitCode
+end 'takeByte'
+
+function main() returns ExitCode
+	var a = "hi".toByteArray()
+	let n = try a.get(0) otherwise 0
+	return takeByte(n)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Byte', got 'stdlib.Byte'
+```
+
+<!-- test: error.a-bits-byte-and-the-librarys-int-byte-are-two-types -->
+The same door with the author's `Byte` spelled as a raw pattern, `bits(8)`. Its value set is the library
+`Byte`'s, but an alias's identity is its declaration, so the library's element does not reach it.
+```maxon
+typealias Byte = bits(8)
+
+function takeByte(b Byte) returns ExitCode
+	return b as ExitCode
+end 'takeByte'
+
+function main() returns ExitCode
+	var a = "hi".toByteArray()
+	let n = try a.get(0) otherwise 0
+	return takeByte(n)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:9: argument type mismatch for 'b': expected 'Byte', got 'stdlib.Byte'
+```
+
+<!-- test: error.a-library-byte-array-is-not-an-authors-byte-array-field -->
+A struct field declared with the author's `Bytes` refuses the library's `ByteArray`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+type Holder
+	export var items as Bytes
+
+	static function create() returns Self
+		return Self{items: "hi".toByteArray()}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.items.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:15: cannot assign a value of type 'ByteArray' to field 'items' of 'Holder', which holds 'Bytes'
+```
+
+<!-- test: error.a-library-byte-array-is-not-assignable-to-an-authors-byte-array-variable -->
+A variable that holds the author's `Bytes` refuses the library's `ByteArray`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(1)
+	b = "hi".toByteArray()
+	return b.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:2: cannot assign a value of type 'ByteArray' to variable 'b', which holds 'Bytes'
 ```
 
 <!-- test: a-wide-byte-still-materializes-a-byte-view -->
@@ -1723,7 +1840,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:13:4: argument type mismatch for 'other': expected 'Bytes', got 'Array___ManagedByte'
+error E3005: <fragment>:13:4: argument type mismatch for 'other': expected 'Bytes', got 'Array with stdlib.Byte'
 ```
 
 <!-- test: a-byte-that-holds-every-byte-still-appends-a-synthesized-buffer -->
@@ -2126,13 +2243,13 @@ end 'main'
 0
 ```
 
-<!-- test: error.an-authors-bare-byte-beside-a-sibling-export-is-ambiguous -->
-The twin of `readers-own-byte-decides-the-literal-not-the-whole-program-fold` with the author's own cast left
-bare: `wide.maxon`'s export and the library's `Byte` both reach `main.maxon`, so the cast must be qualified.
-The `b"hi"` literal in the same file is compiler-synthesized and is not ambiguous.
+<!-- test: a-bare-byte-means-the-sibling-export-and-so-does-the-literal -->
+The library's `Byte` never takes part in an ambiguity, so the bare `Byte` means `sibling.maxon`'s export,
+and so does the `b"hi"` literal's element. The export fits one byte, so the literal is legal, and `-` meets
+one declaration on both sides: `104 - 56`.
 ```maxon
-// --- file: wide.maxon
-export typealias Byte = int(0 to 1000)
+// --- file: sibling.maxon
+export typealias Byte = int(0 to 200)
 
 export function widen(b Byte) returns Integer
 	return b
@@ -2146,13 +2263,61 @@ function main() returns ExitCode
 	return (n - (widen(56) as Byte)) as ExitCode
 end 'main'
 ```
+```exitcode
+48
+```
+
+<!-- test: a-byte-string-literal-adopts-the-sibling-module-byte-the-file-names-bare -->
+`main.maxon` declares no `Byte`; its bare `Byte` is `types.maxon`'s `module` one, and so is the element of
+its `b"hi"`. The literal therefore reaches a parameter `main.maxon` declares as an `Array with Byte`.
+```maxon
+// --- file: types.maxon
+module typealias Byte = int(0 to 255)
+
+// --- file: main.maxon
+typealias Bytes = Array with Byte
+
+function describe(xs Bytes) returns ExitCode
+	let h = try xs.get(0) otherwise 0
+	print("{h} {xs.count()}\n")
+	return 0
+end 'describe'
+
+function main() returns ExitCode
+	let a = b"hi"
+	return describe(a)
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+104 2
+```
+
+<!-- test: error.a-byte-string-element-is-named-bare-when-nothing-contests-byte -->
+Nothing in this program declares `Byte`, so the library's is the only one and the message names it bare.
+```maxon
+typealias Small = int(0 to 200)
+
+function takeSmall(s Small) returns ExitCode
+	return s as ExitCode
+end 'takeSmall'
+
+function main() returns ExitCode
+	let a = b"hi"
+	let n = try a.get(0) otherwise 0
+	return takeSmall(n)
+end 'main'
+```
 ```maxoncstderr
-error E3063: <fragment>:14:28: Ambiguous type name 'Byte': more than one visible declaration matches it. Qualify it as one of: export.Byte, stdlib.Byte
+error E3005: <fragment>:11:9: argument type mismatch for 's': expected 'Small', got 'Byte'
 ```
 
 <!-- test: a-byte-string-literal-beside-an-authors-type-named-byte -->
-A byte-string literal's element type is a read the compiler makes for itself, so it is never refused as
-ambiguous — and it means the library's `Byte`, not a `type Byte` some directory of the program declares.
+A `b"…"` literal's element follows the file's bare `Byte` only when that names an integer alias. Here the
+bare `Byte` names a nominal `type Byte`, which cannot be a byte element, so the literal's element is the
+library's `Byte`.
 ```maxon
 // --- file: a/byte.maxon
 export type Byte
@@ -2172,4 +2337,27 @@ end 'main'
 ```
 ```exitcode
 5
+```
+
+<!-- test: error.a-byte-string-literal-under-an-ambiguous-bare-byte-is-ambiguous -->
+`main.maxon` declares no `Byte` and sees two exported author declarations of it, so its bare `Byte` is
+ambiguous, and the `b"hi"` literal, whose element is what that bare name means, is ambiguous with it.
+```maxon
+// --- file: alpha/byte.maxon
+export typealias Byte = int(0 to 255)
+
+// --- file: beta/byte.maxon
+export typealias Byte = int(0 to 200)
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let low = 1 as alpha.Byte
+	let high = 2 as beta.Byte
+	var bytes = b"hi"
+	let h = try bytes.get(0) otherwise 0
+	return (h as ExitCode) - 100 + (low as ExitCode) + (high as ExitCode)
+end 'main'
+```
+```maxoncstderr
+error E3063: app/<fragment>:12:14: Ambiguous type name 'Byte': more than one visible declaration matches it. Qualify it as one of: alpha.Byte, beta.Byte
 ```

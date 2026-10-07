@@ -341,6 +341,125 @@ end 'main'
 error E3167: api/<fragment>:6:11: public function 'api.Sized.size' names file-private typealias 'Count' in its return type
 ```
 
+<!-- test: error.a-narrower-generic-alias-in-an-interface-requirement-return-is-refused -->
+A generic alias is a declaration like a ranged one, and a requirement's return type is asked like a
+function's. `Tallies` is file-private and `Stocked` is `export`, so whatever can name `Stocked` must be able to
+name what `items` returns.
+```maxon
+// --- file: api/lib.maxon
+typealias Tallies = Array with ExitCode
+
+export interface Stocked
+	function items() returns Tallies
+end 'Stocked'
+
+type Shelf implements Stocked
+	function items() returns Tallies
+		var xs = Tallies.create()
+		xs.push(7)
+		return xs
+	end 'items'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Shelf'
+
+export function stock() returns ExitCode
+	let s = Shelf.create()
+	return s.items().count() as ExitCode
+end 'stock'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return stock()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:6:11: exported function 'api.Stocked.items' names file-private typealias 'Tallies' in its return type
+```
+
+<!-- test: error.a-narrower-alias-as-an-instance-argument-in-an-interface-requirement-is-refused -->
+The structural walk reaches a requirement's parameters too. `Secrets` is `export`, but the element it carries
+is the file-private `Secret`, and a conformer's caller hands `keep` an array of them.
+```maxon
+// --- file: api/lib.maxon
+typealias Secret = int(0 to 9)
+export typealias Secrets = Array with Secret
+
+export interface Keeper
+	function keep(xs Secrets) returns ExitCode
+end 'Keeper'
+
+type Vault implements Keeper
+	function keep(xs Secrets) returns ExitCode
+		return xs.count() as ExitCode
+	end 'keep'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Vault'
+
+export function hold() returns ExitCode
+	var xs = Secrets.create()
+	xs.push(4)
+	return Vault.create().keep(xs)
+end 'hold'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return hold()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:7:11: exported function 'api.Keeper.keep' names file-private typealias 'Secret' in the type of parameter 'xs'
+```
+
+<!-- test: error.an-interface-inner-alias-over-a-file-private-type-is-refused -->
+An alias declared inside an interface body is as visible as its right-hand side, not as its interface.
+`ElementArray` sits inside the `export` interface `Keeper`, but it carries the file-private `Foo`, and a
+conformer's caller hands `keep` an array of them.
+```maxon
+// --- file: api/lib.maxon
+typealias Foo = int(0 to 9)
+
+export interface Keeper
+	typealias ElementArray = Array with Foo
+	function keep(xs ElementArray) returns ExitCode
+end 'Keeper'
+
+type Vault implements Keeper
+	typealias ElementArray = Array with Foo
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	static function sample() returns ElementArray
+		var xs = ElementArray.create()
+		xs.push(4)
+		return xs
+	end 'sample'
+
+	function keep(xs ElementArray) returns ExitCode
+		return xs.count() as ExitCode
+	end 'keep'
+end 'Vault'
+
+export function hold() returns ExitCode
+	return Vault.create().keep(Vault.sample())
+end 'hold'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return hold()
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:7:11: exported function 'api.Keeper.keep' names file-private typealias 'Foo' in the type of parameter 'xs'
+```
+
 <!-- test: error.a-stdlib-internal-alias-is-not-nameable-from-user-code -->
 ⭐⭐ **THE LIBRARY IS HELD TO THE SAME RULE, AND THIS IS WHAT THAT COSTS USER CODE.**
 `stdlib/Math.maxon:8` writes `typealias SeriesTermLimit = int(2 to 64)` with no modifier; its one
@@ -461,6 +580,214 @@ end 'main'
 11
 ```
 
+<!-- test: a-type-parameter-named-like-a-file-private-type-is-not-judged -->
+Inside `Bag`, `Item` is `Bag`'s type parameter, whatever else in the file holds the name. The file-private
+`type Item` beside it is a different declaration, and `first` names only the parameter, so nothing is asked.
+```maxon
+// --- file: api/lib.maxon
+type Item
+	export let n as ExitCode
+
+	static function create(n ExitCode) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Item'
+
+export type Bag uses Item
+	export var held as Item
+
+	export static function create(held Item) returns Self
+		return Self{held: held}
+	end 'create'
+
+	export function first() returns Item
+		return self.held
+	end 'first'
+end 'Bag'
+
+export function seed() returns ExitCode
+	return Item.create(4).n
+end 'seed'
+
+// --- file: app/main.maxon
+typealias Tally = int(0 to 100)
+typealias TallyBag = Bag with Tally
+
+function main() returns ExitCode
+	let b = TallyBag.create(7)
+	return (b.first() as ExitCode) + seed()
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: a-public-function-naming-a-family-alias-beside-an-export-interface-is-judged-by-the-alias -->
+`lib/` exports an interface `X` and `digits.maxon` declares a `public typealias X` of its own: two
+declarations of one name. `f` names the alias, which is `public` like `f`, so the interface's narrower tier
+is never asked. The root's own declaration is spelled `export.X`, because `digits.maxon` sees `lib/`'s too.
+```maxon
+// --- file: lib/shape.maxon
+export interface X
+	function size() returns ExitCode
+end 'X'
+
+// --- file: digits.maxon
+public typealias X = int(0 to 9)
+
+public function f(v export.X) returns ExitCode
+	return v as ExitCode
+end 'f'
+
+// --- file: app/main.maxon
+function sizeOf(s lib.X) returns ExitCode
+	return s.size()
+end 'sizeOf'
+
+function main() returns ExitCode
+	return f(7)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-function-naming-an-alias-beside-an-invisible-interface-of-its-name-is-judged-by-the-alias -->
+`lib/`'s interface `X` is `module`, so the root cannot see it and its bare `X` means its own `public` alias.
+`f` names that alias, at `f`'s own tier; the interface is never asked.
+```maxon
+// --- file: lib/shape.maxon
+module interface X
+	function size() returns ExitCode
+end 'X'
+
+// --- file: lib/use.maxon
+function sizeOf(s lib.X) returns ExitCode
+	return s.size()
+end 'sizeOf'
+
+export function libCode() returns ExitCode
+	return 2
+end 'libCode'
+
+// --- file: digits.maxon
+public typealias X = int(0 to 9)
+
+public function f(v X) returns ExitCode
+	return v as ExitCode
+end 'f'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let n = f(7) + libCode()
+	print("{n}\n")
+	return n
+end 'main'
+```
+```exitcode
+9
+```
+```stdout
+9
+```
+
+<!-- test: an-inner-alias-in-an-exported-method-is-not-judged-as-the-files-same-named-alias -->
+Inside `Wrapper`, a bare `Idx` means `Wrapper`'s own alias, whatever the file declares under the same name.
+`at` names that inner alias, which is `export` like `at` and whose right-hand side is a range naming no
+declaration, so `at` is legal and the file-private `Idx` beside it is never asked. `7` is outside the file's
+`Idx` and inside the inner one.
+```maxon
+// --- file: api/lib.maxon
+typealias Idx = int(0 to 3)
+
+export type Wrapper
+	export typealias Idx = int(0 to 9)
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+
+	export function at(i Idx) returns ExitCode
+		return i as ExitCode
+	end 'at'
+end 'Wrapper'
+
+export function base() returns ExitCode
+	let n = 2 as Idx
+	return n as ExitCode
+end 'base'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let n = Wrapper.make().at(7) + base()
+	print("{n}\n")
+	return n
+end 'main'
+```
+```exitcode
+9
+```
+```stdout
+9
+```
+
+<!-- test: error.an-unmarked-inner-alias-in-an-exported-signature-is-refused -->
+A type's inner alias carries its own modifier like any other member, and an unmarked one is file-private
+however visible its type is. `Idx` sits inside the `export` type `Wrapper` with no modifier, so the
+`export` method `at` names a file-private alias.
+```maxon
+// --- file: api/lib.maxon
+export type Wrapper
+	typealias Idx = int(0 to 9)
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+
+	export function at(i Idx) returns ExitCode
+		return i as ExitCode
+	end 'at'
+end 'Wrapper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Wrapper.make().at(7)
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:10:18: exported function 'api.Wrapper.at' names file-private typealias 'Idx' in the type of parameter 'i'
+```
+
+<!-- test: error.an-extension-in-another-file-naming-a-file-private-inner-alias-is-refused -->
+An extension written in another file names the type's unmarked inner alias `Arr`, which is private to the
+file declaring `Wrapper`, so `api/more.maxon` cannot name it at all, and the `export` method `f` could not
+hand it to a caller either.
+```maxon
+// --- file: api/lib.maxon
+export type Wrapper
+	typealias Arr = Array with ExitCode
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Wrapper'
+
+// --- file: api/more.maxon
+export extension Wrapper
+	export function f(xs Arr) returns ExitCode
+		return xs.count() as ExitCode
+	end 'f'
+end 'Wrapper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return Wrapper.make().f([4])
+end 'main'
+```
+```maxoncstderr
+error E3008: api/<fragment>:13:23: typealias 'Arr' is not exported
+```
+
 <!-- test: equal-tiers-are-legal -->
 Equal is enough at every tier — the rule asks "at least as visible", not "wider". Both pairs are here
 in one program so that a check written as a strict comparison fails on both.
@@ -535,9 +862,7 @@ it.
 export typealias Tally = int(0 to 1000)
 export typealias ByteArray = Array with Tally
 
-export function widest() returns Tally
-	var xs = ByteArray.create()
-	xs.push(900)
+export function widest(xs ByteArray) returns Tally
 	var top = 0
 
 	for x in xs 'each'
@@ -550,8 +875,10 @@ end 'widest'
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let digest = sha256("hi".toByteArray())
+	var tallies = api.ByteArray.create()
+	tallies.push(900)
 
-	return ((widest() - 900) + (digest.count() as Tally)) as ExitCode
+	return ((widest(tallies) - 900) + (digest.count() as Tally)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -592,39 +919,151 @@ error E3093: pkg/<fragment>:3:13: exported type 'Item' is only referenced inside
 ```
 
 <!-- test: error.a-contested-generic-alias-is-judged-by-the-readers-own-declaration -->
-⚠ **THE TIER IS THE READER'S DECLARATION'S, NOT THE FIRST ONE FILED UNDER THE NAME.** Two files
-declare `TallyBag`; `alpha/lib.maxon` exports its own and `pkg/lib.maxon` keeps its own file-private.
-`pkg.apply` is `export` and its `Handler` is spelled over `pkg/lib.maxon`'s `TallyBag`, so that is the
-declaration it is held against — a door that answered with whichever declaration was filed first would
-read `alpha`'s `export` tier and refuse nothing.
+⚠ **THE TIER IS THE READER'S DECLARATION'S, NOT THE FIRST ONE FILED UNDER THE NAME.** The library declares a
+`public` `StringArray`, and `pkg/lib.maxon` keeps a file-private one of its own, which is what its bare
+`StringArray` means because the library takes no part in ambiguity. `pkg.apply` is `export` and its `Handler`
+is spelled over `pkg/lib.maxon`'s `StringArray`, so that is the declaration it is held against — a door that
+answered with the library's declaration would read its `public` tier and refuse nothing, as it refuses nothing
+for `alpha.count`, whose `StringArray` IS the library's.
 ```maxon
 // --- file: alpha/lib.maxon
 export typealias Tally = int(0 to 100)
-export typealias TallyBag = Array with Tally
 
-export function count(b TallyBag) returns Tally
+export function count(b StringArray) returns Tally
 	return b.count() as Tally
 end 'count'
 
 // --- file: pkg/lib.maxon
-typealias TallyBag = Array with Tally
+typealias StringArray = Array with Tally
 
-export typealias Handler = function(TallyBag) returns Tally
+export typealias Handler = function(StringArray) returns Tally
 
-export function apply(h Handler, b TallyBag) returns Tally
+export function apply(h Handler, b StringArray) returns Tally
 	return h(b)
 end 'apply'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var b = TallyBag.create()
-	b.push(7)
+	var b = StringArray.create()
+	b.push("x")
 
-	return (count(b) + apply(function(x TallyBag) gives x.count() as Tally, b: b)) as ExitCode
+	return count(b) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: pkg/<fragment>:15:17: exported function 'pkg.apply' names file-private typealias 'TallyBag' in the type of parameter 'h'
+error E3167: pkg/<fragment>:14:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'h'
+error E3167: pkg/<fragment>:14:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'b'
+```
+
+<!-- test: error.an-alias-walked-from-another-file-judges-its-components-in-its-own-file -->
+⚠ **AN ALIAS'S COMPONENTS MEAN WHAT THEY MEAN WHERE THE ALIAS IS WRITTEN.** `Handler` is declared in
+`pkg/lib.maxon`, whose bare `StringArray` is its own file-private alias. `pkg/use.maxon` declares no
+`StringArray`, so there the bare name would mean the library's `public` one. `apply` is written in
+`pkg/use.maxon`, but the `StringArray` it reaches through `Handler` is `pkg/lib.maxon`'s, and that is the
+declaration it is held against.
+```maxon
+// --- file: pkg/lib.maxon
+typealias StringArray = Array with ExitCode
+
+export typealias Handler = function(StringArray) returns ExitCode
+
+// --- file: pkg/use.maxon
+export function apply(h Handler) returns ExitCode
+	return h([7])
+end 'apply'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return apply(function(xs) gives xs.count() as ExitCode)
+end 'main'
+```
+```maxoncstderr
+error E3167: pkg/<fragment>:8:17: exported function 'pkg.apply' names file-private typealias 'StringArray' in the type of parameter 'h'
+```
+
+<!-- test: error.a-function-alias-over-a-file-private-instance-element-is-refused -->
+A function alias's parameter that is a generic alias is asked like any other component. `Cb` is `export`,
+and its parameter `Secrets` is file-private, so `f` names a file-private alias. The walk stops at the first
+narrower declaration it reaches, so `Secret` inside `Secrets` is not reported as well.
+```maxon
+// --- file: api/lib.maxon
+typealias Secret = int(0 to 9)
+typealias Secrets = Array with Secret
+
+export typealias Cb = function(Secrets) returns ExitCode
+
+export function f(cb Cb) returns ExitCode
+	var xs = Secrets.create()
+	xs.push(4)
+	return cb(xs)
+end 'f'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return f(function(xs) gives xs.count() as ExitCode)
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:8:17: exported function 'api.f' names file-private typealias 'Secrets' in the type of parameter 'cb'
+```
+
+<!-- test: an-alias-walked-from-another-file-is-not-judged-by-the-readers-same-named-alias -->
+`Cb` is declared in `a/idx.maxon`, whose `Idx` is `module`. `b/f.maxon` cannot see that `Idx` and declares a
+file-private `Idx` of its own. `f` is `module` and reaches `Cb`'s `Idx`, which is `a/`'s `module` alias, so the
+tiers are equal and `f` is legal; `b/f.maxon`'s file-private `Idx` is never asked. `7` is outside `b/f.maxon`'s
+`Idx` and inside `a/`'s.
+```maxon
+// --- file: a/idx.maxon
+module typealias Idx = int(0 to 9)
+
+export typealias Cb = function(Idx) returns ExitCode
+
+// --- file: a/more.maxon
+export function seed() returns ExitCode
+	let i = 1 as Idx
+	return i as ExitCode
+end 'seed'
+
+// --- file: b/f.maxon
+typealias Idx = int(0 to 3)
+
+module function f(cb Cb) returns ExitCode
+	let k = 2 as Idx
+	return cb(7) + (k as ExitCode)
+end 'f'
+
+// --- file: b/run.maxon
+export function run() returns ExitCode
+	return f(function(i) gives i as ExitCode)
+end 'run'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return run() + seed()
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: error.a-file-private-tuple-alias-in-an-exported-signature-is-refused -->
+A tuple alias is a declaration like any other alias form. The tuple it stands for names no declaration, but
+the ALIAS does, and the parameter is written with the alias, so the alias's own tier is asked.
+```maxon
+// --- file: api/lib.maxon
+typealias Pair = (ExitCode, ExitCode)
+
+export function first(p Pair) returns ExitCode
+	return p.0
+end 'first'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return first((7, 1))
+end 'main'
+```
+```maxoncstderr
+error E3167: api/<fragment>:5:17: exported function 'api.first' names file-private typealias 'Pair' in the type of parameter 'p'
 ```
 
 ## A service MESSAGE is judged at its service type's tier
@@ -730,8 +1169,8 @@ error E3167: api/<fragment>:20:18: exported function 'api.Worker.run' names file
 ```
 
 <!-- test: error.a-contested-function-alias-is-named-as-written -->
-Two directories declare `Op` over two shapes, so each declaration is held under a name of its own inside the
-compiler. The refusal still names `Op`, which is what the author wrote.
+Two directories declare a file-private `Op` over two shapes, so each declaration is held under a name of its
+own inside the compiler. The refusal still names `Op`, which is what the author wrote.
 ```maxon
 // --- file: aaa/a.maxon
 export typealias Small = int(0 to 1000)
@@ -742,15 +1181,19 @@ export function twice(f Op) returns Small
 end 'twice'
 
 // --- file: zzz/z.maxon
-export typealias Op = function(ExitCode) returns ExitCode
+typealias Op = function(ExitCode) returns ExitCode
 
-export function once(f Op) returns ExitCode
+function applyOp(f Op) returns ExitCode
 	return f(1)
+end 'applyOp'
+
+export function once() returns ExitCode
+	return applyOp(function(x) gives x)
 end 'once'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	return (aaa.twice(function(x) gives x + 1) as ExitCode) + zzz.once(function(x) gives x)
+	return (aaa.twice(function(x) gives x + 1) as ExitCode) + zzz.once()
 end 'main'
 ```
 ```maxoncstderr

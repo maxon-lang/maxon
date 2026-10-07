@@ -65,7 +65,8 @@ but may lie outside `Score`'s range, so every range guard on it still fires.
 **`ExitCode` is an alias like any other.** `x as ExitCode` is legal for any alias-typed `x` and, where the
 alias provably fits, emits no guard and is not E3010; `main`'s `return` converts the same way without it.
 
-**Cross-file.** The same alias name over the same range in two files is ONE type.
+**Cross-file.** A typealias is its DECLARATION: the same name over the same range in two files is two
+types, and a value crosses from one to the other only through `as` (`specs/typealias-file-scope.md`).
 
 ## Tests
 
@@ -171,7 +172,7 @@ error E3005: <fragment>:9:7: argument type mismatch for 'newLength': expected 'E
 ```
 
 <!-- test: error.array-count-into-another-alias -->
-`count()` answers an `ElementIndex`, which is not the parameter's alias.
+`count()` answers a `Count`, which is not the parameter's alias.
 ```maxon
 typealias Narrow = int(0 to 1000)
 typealias NarrowArray = Array with Narrow
@@ -189,10 +190,28 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:10: argument type mismatch for 'n': expected 'Narrow', got 'ElementIndex'
+error E3005: <fragment>:12:10: argument type mismatch for 'n': expected 'Narrow', got 'Count'
 ```
 
-<!-- test: error.array-count-cast-to-element-index-is-unneeded -->
+<!-- test: error.array-count-cast-to-count-is-unneeded -->
+```maxon
+typealias Narrow = int(0 to 1000)
+typealias NarrowArray = Array with Narrow
+
+function main() returns ExitCode
+	var arr = NarrowArray.create()
+	arr.push(4)
+	let n = arr.count() as Count
+	print("{n}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:8:22: unneeded cast: 'Count' already fits in 'Count'
+```
+
+<!-- test: error.array-count-cast-to-element-index-is-an-ancestor-cast -->
+`Count` implements `ElementIndex`, so a cast to its ancestor is unneeded.
 ```maxon
 typealias Narrow = int(0 to 1000)
 typealias NarrowArray = Array with Narrow
@@ -206,7 +225,128 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: <fragment>:8:22: unneeded cast: 'ElementIndex' already fits in 'ElementIndex'
+error E3010: <fragment>:8:22: unneeded cast: 'Count' already fits in 'ElementIndex'
+```
+
+<!-- test: every-collection-count-is-a-count -->
+Every collection's `count()` is a `Count`, so each goes to a `Count` parameter with no cast.
+```maxon
+typealias Narrow = int(0 to 1000)
+typealias NarrowArray = Array with Narrow
+
+function takesCount(n Count) returns Count
+	return n
+end 'takesCount'
+
+function main() returns ExitCode
+	var arr = NarrowArray.create()
+	arr.push(4)
+	let list = List from [10, 20]
+	let map = [1: 10, 2: 20, 3: 30]
+	let set = Set from [5, 6, 7, 8]
+	let vec = Vector from [1, 2, 3, 4, 5]
+	let text = "a😀b"
+	print("{takesCount(arr.count())} {takesCount(list.count())} {takesCount(map.count())} {takesCount(set.count())} {takesCount(vec.count())} {takesCount(text.codepoints().count())} {takesCount(text.utf16().count())}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2 3 4 5 3 4
+```
+```exitcode
+0
+```
+
+<!-- test: a-json-array-length-is-a-count -->
+`Json.arrayLength` answers a `Count`, so it goes to a `Count` parameter with no cast.
+```maxon
+function takesCount(n Count) returns Count
+	return n
+end 'takesCount'
+
+function main() returns ExitCode
+	let doc = try Json.parse("[1, 2, 3]") otherwise return 1
+	let length = try doc.arrayLength(doc.root) otherwise return 2
+	print("{takesCount(length)}\n")
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+```exitcode
+0
+```
+
+<!-- test: error.an-element-index-is-not-a-count -->
+A position is an `ElementIndex`, and an `ElementIndex` is not a `Count`.
+```maxon
+typealias Narrow = int(0 to 1000)
+typealias NarrowArray = Array with Narrow
+
+function takesCount(n Count) returns Count
+	return n
+end 'takesCount'
+
+function main() returns ExitCode
+	var arr = NarrowArray.create()
+	arr.push(4)
+
+	for (position, _) in arr.withIterator() 'eachElement'
+		print("{takesCount(position.index())}\n")
+	end 'eachElement'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:11: argument type mismatch for 'n': expected 'Count', got 'ElementIndex'
+```
+
+<!-- test: a-codepoint-count-compares-with-an-array-count -->
+Two `Count` subtypes compare through their common ancestor with no cast.
+```maxon
+typealias Narrow = int(0 to 1000)
+typealias NarrowArray = Array with Narrow
+
+function main() returns ExitCode
+	var arr = NarrowArray.create()
+	arr.push(4)
+	arr.push(9)
+	let text = "a😀"
+	if text.codepoints().count() == arr.count() 'oneCodepointPerElement'
+		print("same\n")
+		return 0
+	end 'oneCodepointPerElement'
+	print("different\n")
+	return 1
+end 'main'
+```
+```stdout
+same
+```
+```exitcode
+0
+```
+
+<!-- test: a-processor-count-compares-with-an-array-count -->
+<!-- unsupported-targets: wasm32-wasi -->
+A processor count and an array count are both `Count`s, so they compare with no cast.
+```maxon
+typealias Narrow = int(0 to 1000)
+typealias NarrowArray = Array with Narrow
+
+function main() returns ExitCode
+	let arr = NarrowArray.create()
+	let procs = Scheduler.processorCount()
+	if arr.count() < procs and procs > arr.count() 'moreProcessorsThanElements'
+		return 7
+	end 'moreProcessorsThanElements'
+	return 2
+end 'main'
+```
+```exitcode
+7
 ```
 
 <!-- test: an-alias-of-element-index-indexes-an-array -->
@@ -1862,42 +2002,34 @@ end 'main'
 31 1992
 ```
 
-<!-- test: same-name-and-range-across-three-files-is-one-type -->
-Three files each declare `MyInt = int(0 to 1000)`; a value made under one declaration passes through the
-other two with no cast.
+<!-- test: error.same-name-and-range-across-three-files-is-three-types -->
+Declarations of `MyInt = int(0 to 1000)` in different files are different types however many there are.
+`alpha/` and `beta/` each export one and name their own through their directory, because each sees the
+other's export too; `main.maxon` declares none, since a third of its own would leave its bare `MyInt`
+ambiguous. `alpha.doubleIt`'s result does not pass to `beta.tripleIt`: the crossing is refused.
 ```maxon
 // --- file: alpha/a.maxon
 export typealias MyInt = int(0 to 1000)
 
-export function doubleIt(x MyInt) returns MyInt
+export function doubleIt(x alpha.MyInt) returns alpha.MyInt
 	return x + x
 end 'doubleIt'
 
 // --- file: beta/b.maxon
 export typealias MyInt = int(0 to 1000)
 
-export function tripleIt(x MyInt) returns MyInt
+export function tripleIt(x beta.MyInt) returns beta.MyInt
 	return x + x + x
 end 'tripleIt'
 
 // --- file: main.maxon
-typealias MyInt = int(0 to 1000)
-
-function halveIt(x MyInt) returns MyInt
-	return x / 2
-end 'halveIt'
-
 function main() returns ExitCode
-	let r = halveIt(tripleIt(doubleIt(4)))
-	print("{r}")
+	print("{tripleIt(doubleIt(4))}")
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-12
+```maxoncstderr
+error E3005: <fragment>:18:10: argument type mismatch for 'x': expected 'beta.MyInt', got 'alpha.MyInt'
 ```
 
 ### `as` — the one door, both ways, and what it costs

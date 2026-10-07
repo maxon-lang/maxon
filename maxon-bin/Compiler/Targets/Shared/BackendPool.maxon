@@ -367,18 +367,11 @@ end 'PoolAssignment'
 // no jobs still logs its line, and each consumer casts to `PoolSize` past its own `> 0` guard.
 export type PoolSizing
 	export var workerCount as ElementIndex
-	var processors as ElementIndex
+	var processors as SchedulerProcessorCount
 	var jobCount as ElementIndex
 
 	export static function forJobs(jobCount ElementIndex) returns PoolSizing
-		let processors = Scheduler.processorCount() as ElementIndex
-
-		// `Scheduler.processorCount()` is declared `int(1 to i64.max)`, so this is belt and braces at the
-		// boundary the count arrives on: an empty pool runs nothing and reports nothing, which is a
-		// worse failure than a panic.
-		if processors < 1 'theSchedulerResolvedNoProcessor'
-			panic("PoolSizing.forJobs: the scheduler resolved {processors} processor(s), so the pool would be empty and no job would run at all")
-		end 'theSchedulerResolvedNoProcessor'
+		let processors = Scheduler.processorCount()
 
 		let workerCount = processors if processors < jobCount else jobCount
 		return Self{workerCount: workerCount, processors: processors, jobCount: jobCount}

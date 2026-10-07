@@ -653,3 +653,17 @@ Stack trace:
   in main
   in mrt_start
 ```
+
+<!-- test: error.main-returning-an-authors-exit-code-wider-than-the-builtin-is-refused -->
+An author's `ExitCode` is an entry's return type only when it is an integer alias whose range lies within the
+builtin's. `int(-1 to 70000)` admits `-1`, which no target's exit status holds, so `main` is refused.
+```maxon
+typealias ExitCode = int(-1 to 70000)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3002: Function 'main' must return ExitCode
+```

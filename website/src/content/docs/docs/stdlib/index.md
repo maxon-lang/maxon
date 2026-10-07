@@ -51,6 +51,7 @@ end 'main'
 | `ExitCode` | `int(0 to u32.max)` on Windows, `int(0 to 255)` elsewhere | Process |
 | `Byte` | `int(0 to u8.max)` | String |
 | `ByteArray` | `Array with Byte` | File |
+| `Count` | `int(0 to u64.max) implements ElementIndex` — what a collection's `count()` returns | Array |
 | `StringArray` | `Array with String` | Json |
 | `CharSet` | `Set with Character` | CharacterSet |
 | `FilePathArray` | `Array with FilePath` | Directory |
@@ -77,9 +78,12 @@ end 'main'
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
 | `SegmentByteCount`, `SegmentOffset`, `SegmentWord` | see [SharedMemory](/docs/stdlib/io/#sharedmemory) | SharedMemory |
 
-A program may declare one of these names itself. The declaring file reads its own declaration; any other
-file that sees both refuses the bare name (**E3063**) and spells the one it means, `stdlib.ByteArray` or
-`<directory>.ByteArray` (see [Qualified Names](/docs/language/namespaces/#qualified-names)).
+A program may declare one of these names itself. Its declaration is then what the bare name means in every
+file of the program, and the library's is reached as `stdlib.ByteArray` (see
+[Qualified Names](/docs/language/namespaces/#qualified-names)); the two are two types, and a value crossing
+between them needs a cast. Prefer the library's alias where it fits, and otherwise give your own a
+different name. Two project declarations of one name a file can both see are **E3063** in every file,
+the declaring ones included.
 
 ### Names a library signature asks for
 
@@ -97,7 +101,7 @@ to name one.
 | `MemberCount` | `int(0 to 4611686018427387904)` | Set |
 | `IterPos` | `int(0 to u64.max)` | Range |
 | `ElementTransform`, `ElementPredicate` | `function(Element) returns Element` / `returns bool`, on the `Iterable` extension | Interfaces |
-| `Utf8ByteCount` | `int(0 to u64.max)` | Character |
+| `TableCapacity` | `int(0 to 4611686018427387904)` | Map, Set |
 | `JsonInt` | `int(i64.min to i64.max)` | Json |
 | `JsonFloat` | `float(f64.min to f64.max)` | Json |
 | `Milliseconds` | `int(0 to u64.max)` | Sleep |
@@ -119,8 +123,20 @@ to name one.
 | `Tolerance` | `float(0.0 to f64.max)` | Testing |
 
 `Byte` and `BytePos` are declared once, in `String` (see the table above). `BytePos`, `GraphemeIndex`,
-`JsonNodeId` and `EntryCount` implement `ElementIndex`, and `MemberCount` implements `EntryCount`, so each
-indexes an `Array` with no cast; an index of any other alias, or of a non-integer type, is **E3005** (see [Subtypes With `implements`](/docs/language/ranged-typealiases/#subtypes-with-implements)).
+`JsonNodeId` and `Count` implement `ElementIndex`; `EntryCount`, `TableCapacity` and
+`SchedulerProcessorCount` implement `Count`; and `MemberCount` implements `EntryCount`. So each indexes an
+`Array` with no cast, and any two of them compare with no cast through their common ancestor; an index of
+any other alias, or of a non-integer type, is **E3005** (see
+[Subtypes With `implements`](/docs/language/ranged-typealiases/#subtypes-with-implements)). An `ElementIndex` goes where
+a `Count` is declared only by cast.
+
+`Array`, `List` and `Vector` `count()`, `JsonDoc.arrayLength`, `Character.byteLength()` and the `count()` of a
+string's codepoint and UTF-16 views return `Count`. `String.count()` returns a `GraphemeIndex` and a byte
+view's `count()` a `BytePos`.
+
+The inner typealiases a library type's `public` members name are `public` as well and can be written
+qualified: `Array.ElementIterator`, `Array.ElementMemory`, `Map.Entry`, `List.ListIter`, `Set.SetIter`,
+`Vector.VectorIter` and the like.
 
 ### Target support
 

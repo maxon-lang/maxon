@@ -913,20 +913,18 @@ error E3010: <fragment>:21:13: unneeded cast: 'Idx' already fits in 'Idx'
 ```
 
 <!-- test: a-literal-cast-to-a-same-named-alias-from-another-file-is-not-unneeded -->
-The cast names this file's `Item`, and the parameter is declared with the other file's, so the cast is not the destination's own type.
+The literal cast names this file's `Codepoint`, a different type from the library's of that name, so it is
+not unneeded: it gives the literal the file's own type. That value then reaches the library's `Codepoint`
+parameter through an explicit conversion, which is not unneeded either.
 ```maxon
-// --- file: a.maxon
-export typealias Item = int(0 to 255)
-
-export function put(x Item) returns ExitCode
-	return x
-end 'put'
-
-// --- file: main.maxon
-typealias Item = int(0 to 200)
+typealias Codepoint = int(0 to 200)
 
 function main() returns ExitCode
-	return put(5 as Item)
+	let c = 32 as Codepoint
+	if Unicode.isWhitespace(c as stdlib.Codepoint) 'space'
+		return 5
+	end 'space'
+	return 1
 end 'main'
 ```
 ```exitcode

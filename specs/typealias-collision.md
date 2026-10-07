@@ -27,11 +27,11 @@ error E3063: Ambiguous type name 'Score': more than one visible declaration matc
 
 The qualifying namespace is the declaring file's directory (joined with `.` for nested directories — e.g. `lib.fmt.Score` for a file at `lib/fmt/types.maxon`). A declaration at the project root is spelled `export.Score`, and the standard library's is spelled `stdlib.Score`.
 
-**Every visible declaration counts, and none outranks another.** The standard library is one candidate like any directory: a project export beside a `public` library declaration of the same name is E3063 in a file that declares neither. A nested directory's export competes with its enclosing directory's on equal terms, read from either. The rule covers every kind of type name — ranged, function, generic and tuple aliases, and `type`, `enum`, `union` and `interface` declarations, in any mix — and every position a type name is written in, including a static call's base, a `from` head and a top-level constant's cast target.
+**Every visible author declaration counts, and none outranks another** — the reading file's own included: a file that declares a private `Score` and sees another file's exported `Score` is E3063 at its own bare `Score`, and the remedy there is to rename its alias. A nested directory's export competes with its enclosing directory's on equal terms, read from either. The rule covers every kind of type name — ranged, function, generic and tuple aliases, and `type`, `enum`, `union` and `interface` declarations, in any mix — and every position a type name is written in, including a static call's base, a `from` head and a top-level constant's cast target.
 
 What is NOT a competitor:
 
-- **The reading file's own declaration** wins its bare name in that file.
+- **A standard-library declaration.** Beside one visible author declaration of the name, the bare name means the author's; `stdlib.Name` still reaches the library's.
 - **A file-private alias** (`typealias` with no modifier) is visible only in its declaring file.
 - **A declaration the reader may not see** — a `module` one outside its directory subtree, or a library declaration without `public`.
 - **Author declarations, read from a library file.** A library file never sees them.
@@ -125,24 +125,25 @@ end 'main'
 
 <!-- test: project-export-shadows-stdlib-export -->
 A project file EXPORTS a typealias whose bare name the standard library also
-declares `public` (here `StringArray`, from `stdlib/Json.maxon`). The library is one
-candidate like any directory, so a bare reference from a file that declares neither
-is E3063, listing `lib.StringArray` and `stdlib.StringArray`.
+declares `public` (here `StringArray`, from `stdlib/Json.maxon`). A library declaration
+never takes part in ambiguity, so a bare reference from a file that declares neither
+means the project's `lib.StringArray` — an array of `ExitCode` here, which the library's
+`Array with String` could not hold.
 ```maxon
 // --- file: lib/types.maxon
-export typealias StringArray = Array with String
+export typealias StringArray = Array with ExitCode
 
 // --- file: app/main.maxon
 function main() returns ExitCode
 	var xs = StringArray.create()
-	xs.push("a")
-	xs.push("b")
+	xs.push(40)
+	xs.push(2)
 
-	return xs.count() as ExitCode
+	return (try xs.get(0) otherwise 0) + (try xs.get(1) otherwise 0)
 end 'main'
 ```
-```maxoncstderr
-error E3063: app/<fragment>:7:11: Ambiguous type name 'StringArray': more than one visible declaration matches it. Qualify it as one of: lib.StringArray, stdlib.StringArray
+```exitcode
+42
 ```
 
 
@@ -170,11 +171,11 @@ error E3063: Compiler/<fragment>:10:16: Ambiguous type name 'Tally': more than o
 ```
 
 
-<!-- test: exported-typealias-file-private-doesnt-collide -->
-A file-private `typealias` is invisible across files. When one file exports `Score` and another file declares a file-private `Score`, a third file using bare `Score` resolves to the exported one without ambiguity — the file-private alias isn't reachable from outside its declaring file.
+<!-- test: module-typealias-file-private-doesnt-collide -->
+A file-private `typealias` is invisible across files. When `app/types.maxon` declares a `module` `Score` and `legacy/util.maxon` a file-private `Score`, `app/main.maxon`'s bare `Score` resolves to the `module` one without ambiguity — the file-private alias isn't reachable from outside its declaring file. The `module` tier keeps `app/`'s declaration out of `legacy/util.maxon`'s sight, so neither declaring file sees the other's.
 ```maxon
-// --- file: api/types.maxon
-export typealias Score = int(0 to 100)
+// --- file: app/types.maxon
+module typealias Score = int(0 to 100)
 
 // --- file: legacy/util.maxon
 typealias Score = int(0 to 999)
@@ -370,21 +371,22 @@ end 'main'
 error E3182: Directory 'stdlib' cannot be a namespace: 'stdlib' already names the standard library. Rename the directory
 ```
 
-<!-- test: error.an-author-export-beside-the-librarys-alias-over-another-primitive-is-ambiguous -->
+<!-- test: an-author-export-beside-the-librarys-alias-over-another-primitive-is-what-the-bare-name-means -->
 An author's `float` `Byte` beside the library's `int` one: the two declarations coexist whatever their
-underlying primitives, and the bare read from a third file is the error.
+underlying primitives, and the bare read from a third file means the author's, because a library
+declaration never takes part in ambiguity. `0.75` keeps its fraction only in the `float` alias.
 ```maxon
 // --- file: legacy/types.maxon
 export typealias Byte = float(0.0 to 1.0)
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	let b = 7 as Byte
-	return b
+	let b = 0.75 as Byte
+	return 3 if b > 0.5 else 4
 end 'main'
 ```
-```maxoncstderr
-error E3063: app/<fragment>:7:15: Ambiguous type name 'Byte': more than one visible declaration matches it. Qualify it as one of: legacy.Byte, stdlib.Byte
+```exitcode
+3
 ```
 
 <!-- test: an-author-export-beside-the-librarys-alias-over-another-primitive-is-named-by-its-directory -->
@@ -414,9 +416,13 @@ The qualified twin of `project-export-shadows-stdlib-export`, in a type position
 export typealias StringArray = Array with String
 
 // --- file: app/main.maxon
-function countOf(xs stdlib.StringArray) returns ExitCode
+function countMine(xs lib.StringArray) returns ExitCode
 	return xs.count() as ExitCode
-end 'countOf'
+end 'countMine'
+
+function countTheirs(xs stdlib.StringArray) returns ExitCode
+	return xs.count() as ExitCode
+end 'countTheirs'
 
 function main() returns ExitCode
 	var mine = lib.StringArray.create()
@@ -424,7 +430,7 @@ function main() returns ExitCode
 	var theirs = stdlib.StringArray.create()
 	theirs.push("b")
 	theirs.push("c")
-	return (countOf(mine) * 10 + countOf(theirs)) as ExitCode
+	return (countMine(mine) * 10 + countTheirs(theirs)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -484,25 +490,28 @@ function sum(p lib.Pair) returns ExitCode
 	return a + b
 end 'sum'
 
-function flags(p alt.Pair) returns ExitCode
+function flags(p alt.Pair, marks alt.Bag) returns ExitCode
 	let (a, b) = p
-	return 1 if a and not b else 0
+	let marked = try marks.get(0) otherwise false
+	return 1 if a and not b and marked else 0
 end 'flags'
 
 function main() returns ExitCode
 	var b = lib.Bag.create()
 	b.push(7)
 	let p = lib.Point.make()
-	return first(b) + sum((1, 2)) + p.x + flags((true, false))
+	let marks = alt.Bag from [true]
+	return first(b) + sum((1, 2)) + p.x + flags((true, false), marks: marks)
 end 'main'
 ```
 ```exitcode
 16
 ```
 
-<!-- test: error.a-user-type-beside-the-librarys-alias-is-ambiguous -->
+<!-- test: a-user-type-beside-the-librarys-alias-is-what-the-bare-name-means -->
 The cross-KIND pair: a user `type` against `stdlib/Builtins.maxon`'s public `typealias ParsedInt`, read from a
-third file as a static call's base.
+third file as a static call's base. The library's declaration takes no part in ambiguity, so the bare name
+is the user's `type`, the only one of the two with a `create`.
 ```maxon
 // --- file: lib/p.maxon
 export type ParsedInt
@@ -519,8 +528,8 @@ function main() returns ExitCode
 	return p.value
 end 'main'
 ```
-```maxoncstderr
-error E3063: app/<fragment>:13:10: Ambiguous type name 'ParsedInt': more than one visible declaration matches it. Qualify it as one of: lib.ParsedInt, stdlib.ParsedInt
+```exitcode
+7
 ```
 
 <!-- test: a-user-type-and-the-librarys-alias-are-each-named-by-their-directory -->
@@ -550,10 +559,10 @@ end 'main'
 12
 ```
 
-<!-- test: error.a-user-type-beside-the-librarys-type-is-ambiguous -->
+<!-- test: a-user-type-beside-the-librarys-type-is-what-the-bare-name-means -->
 A user `type Clock` exported beside `stdlib/Clock.maxon`'s public `Clock`, read bare from a third file. The
-library's declaration still moves out of the user's way (`__Clock`), but a reader that declares neither has
-two visible declarations and must qualify.
+library's declaration moves out of the user's way (`__Clock`) and takes no part in ambiguity, so the bare
+name is the user's type, the one with a `make`.
 ```maxon
 // --- file: lib/clock.maxon
 export type Clock
@@ -570,8 +579,8 @@ function main() returns ExitCode
 	return c.ticks
 end 'main'
 ```
-```maxoncstderr
-error E3063: app/<fragment>:13:10: Ambiguous type name 'Clock': more than one visible declaration matches it. Qualify it as one of: lib.Clock, stdlib.Clock
+```exitcode
+7
 ```
 
 <!-- test: a-user-type-and-the-librarys-type-are-each-named-by-their-directory -->
@@ -648,9 +657,9 @@ end 'main'
 error E3063: app/<fragment>:11:11: Ambiguous type name 'Smalls': more than one visible declaration matches it. Qualify it as one of: api.Smalls, legacy.Smalls
 ```
 
-<!-- test: error.an-ambiguous-literal-init-head-is-refused -->
-A user `FilePath` exported beside the library's: a bare `FilePath from "…"` in a third file names a type two
-declarations hold.
+<!-- test: a-bare-literal-init-head-beside-the-librarys-builds-the-users-type -->
+A user `FilePath` exported beside the library's: a bare `FilePath from "…"` in a third file builds the user's
+type, because the library's declaration takes no part in ambiguity. Only the user's has a `text` field.
 ```maxon
 // --- file: lib/path.maxon
 export type FilePath implements InitableFromStringLiteral
@@ -664,16 +673,19 @@ end 'FilePath'
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let p = FilePath from "x"
-	print(p.text)
+	print("{p.text}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3063: app/<fragment>:13:10: Ambiguous type name 'FilePath': more than one visible declaration matches it. Qualify it as one of: lib.FilePath, stdlib.FilePath
+```exitcode
+0
+```
+```stdout
+x
 ```
 
 <!-- test: a-qualified-literal-init-head-names-the-type-it-qualifies -->
-The spelling E3063 prescribes for that `FilePath` builds the user's type.
+The qualified spelling of that `FilePath` builds the user's type.
 ```maxon
 // --- file: lib/path.maxon
 export type FilePath implements InitableFromStringLiteral
@@ -706,7 +718,8 @@ export typealias Smalls = Array with bool
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let xs = api.Smalls from [1, 2, 3]
-	return xs.count() as ExitCode
+	let flags = legacy.Smalls from [true]
+	return (xs.count() * flags.count()) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -741,9 +754,10 @@ export typealias Smalls = Array with bool
 
 // --- file: app/main.maxon
 let Xs = api.Smalls from [1, 2, 3]
+let Flags = legacy.Smalls from [true]
 
 function main() returns ExitCode
-	return Xs.count() as ExitCode
+	return (Xs.count() * Flags.count()) as ExitCode
 end 'main'
 ```
 ```exitcode

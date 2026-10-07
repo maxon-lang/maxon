@@ -33,9 +33,6 @@ The three answers are deliberately distinct, so that aliasing cannot pass by coi
 correct is `8 + 110 = 118`; aliasing onto featA's 7 gives `8 + 18 = 26`; aliasing onto featB's
 100 gives `101 + 111 = 212`, which is the aliasing this case exists to catch: `bumpA()` reading
 featB's slot and answering 101.
-
-`Num` is declared in BOTH files rather than once, because a `typealias` without `export` is
-file-private. The repetition is load-bearing, not an oversight.
 ```maxon
 // --- file: featA/a.maxon
 export typealias Num = int(i64.min to i64.max)
@@ -48,8 +45,6 @@ export function bumpA() returns Num
 end 'bumpA'
 
 // --- file: featB/b.maxon
-export typealias Num = int(i64.min to i64.max)
-
 var counter = 100
 
 export function bumpB() returns Num

@@ -1977,8 +1977,6 @@ held to the same rule. `closeStdin` and `release` are NOT: they are idempotent, 
 already satisfies their postcondition, so they answer as no-ops rather than throwing — and neither
 reaches the freed handle.
 ```maxon
-typealias StringArray = Array with String
-
 function readBytesAfterRelease(child StreamingSubprocess) returns String
 	let text = try child.readStdoutBytes(4) otherwise (e) 'refused'
 		return e.displayReason()

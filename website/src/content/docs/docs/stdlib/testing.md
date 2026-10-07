@@ -56,7 +56,7 @@ Every matcher also takes `message String = ""`, `file String = __file__` and
 
 `equal`, `notEqual` and the four ordering matchers are each one
 [generic function](/docs/language/composite-types/#generic-functions): the type is inferred from the two arguments, so
-`Expect.equal(parts.count(), expected: 3)` compares two `ElementIndex` values and a value of any alias needs
+`Expect.equal(parts.count(), expected: 3)` compares two `Count` values and a value of any alias needs
 no cast. Each value is printed as its interpolation prints it; `String` values are quoted, so empty or
 space-padded values stay visible.
 

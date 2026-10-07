@@ -85,7 +85,9 @@ export enum ErrorCode
 	// A match's arms, or a ternary's two branches, produce different types (or a ternary condition is not bool).
 	// a match arm or postfix-ternary's two arms produce different types,
 	// or a ternary condition is not bool. Thrown at parse time so it wins over the
-	// body-finish unused-variable check (E3012).
+	// body-finish unused-variable check (E3012). Two declarations of one typealias name are two types,
+	// so arms giving one each disagree; where the two would print alike each is followed by
+	// `(declared in <file>)`.
 	matchTypeMismatch = "E2028"
 
 	// A match's 'default' arm is not the last arm.
@@ -378,7 +380,9 @@ export enum ErrorCode
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"
 
-	// 'main' declares a return type other than ExitCode.
+	// 'main' declares a return type other than ExitCode. A program's own `typealias ExitCode` is accepted
+	// as the return type when it is an integer alias whose range fits the builtin ExitCode's (`0 to 255`,
+	// `0 to u32.max` on Windows).
 	mainWrongReturnType = "E3002"
 
 	// A call names a function that does not exist -- a typo, or a callee not visible from here.
@@ -390,6 +394,13 @@ export enum ErrorCode
 	// A value's type does not match the type required at this position. The required type is named as its
 	// declaration wrote it, except that a ranged alias met by a primitive value is named by its class
 	// (`expected 'int', got 'bool'`).
+	// Every typealias declaration is its own type, whatever its form: two aliases over one range are two
+	// types, and so are two declarations of ONE name in two files, even over the same range, shape or
+	// instance. Mixing them -- an operator, an argument, a store -- needs an explicit `as`; a `return`
+	// converts as it does between any two aliases. A type is named as source would qualify it: the standard library's as `stdlib.Name`, another
+	// directory's as `dir.Name`, the root's bare. Where the two sides would still print alike, each is
+	// followed by `(declared in <file>)`, and a buffer view reads `__ManagedMemory with <element>`
+	// followed by `(the view of 'Name')`.
 	typeMismatch = "E3005"
 
 	// A name is declared twice where exactly one binding is legal: two functions with the same signature, a top-level `let`/`var` declared twice, a TYPE name claimed by two declarations, or a local shadowing a 'self' field.
@@ -440,8 +451,9 @@ export enum ErrorCode
 	semanticAmbiguousOverload = "E3007"
 
 	// A symbol is referenced from another file but is not declared 'export'.
-	// It covers a function, a static member, a type and a typealias, at every position a name can be
-	// written in: a type annotation, a cast target, a construction or static call head, an `implements`,
+	// It covers a function, a static member, a type and a typealias -- a type body's inner `typealias` too,
+	// which is file-private unless it carries its own modifier, and is refused written bare or qualified
+	// (`Holder.Inner`) -- at every position a name can be written in: a type annotation, a cast target, a construction or static call head, an `implements`,
 	// `extends`, `where` or `throws` clause, a `from` head, and a top-level initializer. A type the reading
 	// file may not name hides its members too: its fields, methods, extension methods, accessors and
 	// statics are refused through a value of it that reached the file, and so are the calls the compiler
@@ -467,7 +479,8 @@ export enum ErrorCode
 	// what fixes the type: an unannotated `let`/`var`, an array-literal element, a generic parameter,
 	// an operator operand. At an overloaded call the casts are reported only when removing all of them
 	// still selects the same overload. A cast to an alias the value's own alias implements, directly
-	// or through its parents, is unneeded too: the value already widens to it.
+	// or through its parents, is unneeded too: the value already widens to it. A cast between two
+	// declarations of one name in two files converts, and is never unneeded.
 	semanticUnneededCast = "E3010"
 
 	// A named type resolves to no declared type -- a typo, or a type this compiler slice does not have.
@@ -593,12 +606,16 @@ export enum ErrorCode
 	// is not a use.
 	semanticUnusedTypeAlias = "E3062"
 
-	// A bare type name has more than one declaration this file may name -- typealiases, types, enums,
-	// unions or interfaces in different directories, or one of them and a standard-library declaration of
-	// the same name. A declaration in the reading file itself wins its bare name and is never ambiguous.
-	// It is refused at every position a type name can be written in, and the message lists the qualified
-	// spellings that remove the ambiguity: `dir.Name` for a directory, `export.Name` for the project root,
-	// `stdlib.Name` for the standard library. Mirrors E3095, which is the same rule for functions.
+	// A bare type name reaches more than one author declaration this file may name -- typealiases, types,
+	// enums, unions or interfaces in different directories. It is ambiguous in every file, a file that declares
+	// one of them included. It is refused at every position a type name can be written in, the element of
+	// a `b"…"` literal (the bare `Byte`) among them, and the message lists the qualified spellings that
+	// remove the ambiguity: `dir.Name` for a directory, `export.Name` for the project root. Where the
+	// reading file's own declaration is file-private, no spelling qualifies it and the message ends `or
+	// rename this file's own declaration`. A standard-library or runtime declaration never takes part: an
+	// author's declaration of a library name is what the bare name means, and the library's stays
+	// reachable as `stdlib.Name`. Rename one declaration, or qualify the reference. Mirrors E3095, which is
+	// the same rule for functions.
 	semanticAmbiguousTypeAlias = "E3063"
 
 	// a pure-function call's result was discarded. Pure callees must
@@ -860,18 +877,24 @@ export enum ErrorCode
 	// modifier" is not the remedy for such a type: narrow the demanding
 	// function to file-private, or raise the type. Narrowing that function to
 	// `module` keeps a demand, which excuses this and E3094 but not E3093.
+	// Every typealias form is audited -- ranged, function, generic-instance
+	// and tuple -- and a use credits exactly the declaration it means, so a
+	// name two files declare is two audits. A use reached only through a
+	// called function's signature counts.
 	semanticUnusedExportedSymbol = "E3092"
 
 	// An 'export' symbol is referenced only inside its declaring directory subtree. It could be 'module', or 'public' if it is API surface.
 	// an `export` (global) decl is referenced only from files inside
 	// its declaring directory subtree. The decl could be downgraded to
-	// `module`-visible. Emitted by `checkUnusedExports`.
+	// `module`-visible. Emitted by `checkUnusedExports`. A typealias of
+	// every form is audited and credited as for E3092.
 	semanticExportableAsModule = "E3093"
 
 	// A 'module' symbol is never referenced outside its declaring file. It could be file-private.
 	// a `module` decl is never referenced from any file other than
 	// the one it was declared in. The decl could be file-private (drop the
-	// `module` modifier). Emitted by `checkUnusedExports`.
+	// `module` modifier). Emitted by `checkUnusedExports`. A typealias of
+	// every form is audited and credited as for E3092.
 	semanticUnusedModuleSymbol = "E3094"
 
 	// A bare function name has more than one reachable definition; qualify it as 'dir.name'.
@@ -1359,7 +1382,7 @@ export enum ErrorCode
 	// signature (`FuncSignature.paramExistentialSites` / `returnExistentialSites`) or the field's declared
 	// spelling (`ProgramSignatures.fieldExistentialSites`), are substituted through the call's own generic
 	// instance or the stored-into record's, and the site's argument at each position is compared -- RAW, for
-	// E3125's measured reason -- against what THIS conformer binds there (`conformerAssociatedBinding`).
+	// E3125's measured reason -- against what THIS conformer binds there (`declAssociatedBinding`).
 	// Without it the deferral is E3119's own recorded hazard one indirection later: a dispatch through the
 	// widened value is emitted against the type the SITE claims and lands in an impl written for the type
 	// the CONFORMER bound. E3119's header records what that costs -- `with String` beside `with Integer`
@@ -1467,6 +1490,9 @@ export enum ErrorCode
 	// Accepting the spelling and doing nothing would leave the value at its original type and the program
 	// failing later, at whatever use site first noticed, naming neither the cast nor its target.
 	// Build the container with the element type you need, or convert it element by element.
+	// One cast is legal: between two instances whose elements are same-named typealias declarations of one
+	// layout -- the same underlying type, range and domain (`implements` is not part of it). That cast
+	// re-brands the container and moves no element.
 	castTargetIsAContainer = "E3131"
 
 	// A call passes the hidden witness table for one of the callee's `where` constraints, the type argument
@@ -1842,8 +1868,8 @@ export enum ErrorCode
 
 	// A `runtime/` declaration reaches for a visibility wider than `module` — `export` (global) or `public`.
 	// `runtime/` is loaded into every program, so such a declaration contests names with the programs the
-	// tier is linked into, the compiler compiling itself among them, where it and the compiler's own name
-	// render each other ambiguous (E3063). `module` is the widest tier that still gives the runtime the
+	// tier is linked into, the compiler compiling itself among them. `module` is the widest tier that still
+	// gives the runtime the
 	// file-to-file sharing a runtime split across several files needs.
 	wideVisibilityInRuntimeSource = "E3154"
 
@@ -1969,9 +1995,12 @@ export enum ErrorCode
 	// Whoever may call a function must be able to name what the call takes and gives back, so every type the
 	// signature names -- each parameter type, the return type, the throws type -- must carry a written
 	// visibility at least the function's own. The tiers, narrowest first: no modifier (file-private),
-	// `module`, `export`, `public`. The signature is walked structurally, through a generic instance's base
-	// type and its type arguments, a tuple's elements and a function typealias's parameter and return shapes;
-	// a type parameter, a primitive and a tuple itself name no declaration and are asked nothing. A member's
+	// `module`, `export`, `public`. Every type name the signature writes is judged, an interface
+	// requirement's included, and so is every name reached THROUGH a typealias it names -- a generic
+	// alias's base type and type arguments, a tuple alias's elements, a function alias's parameter and
+	// return types -- each read as the alias's own file means it. A type body's inner typealias is judged
+	// by its own modifier before its right-hand side is walked. A type parameter, a primitive and a tuple
+	// itself name no declaration and are asked nothing. A member's
 	// OWN modifier decides, not its enclosing type's, so an `export type` may hold a `public` method and that
 	// method is held to the `public` bar. An interface's members take the interface's modifier, because a
 	// conformer's caller reaches the requirement through the interface. A service's message is held to the

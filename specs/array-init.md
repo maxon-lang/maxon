@@ -701,8 +701,8 @@ a user may declare `Byte`, and a compiler-minted buffer's stride may not follow.
 equality would therefore refuse it, and this is the NINTH door of the class
 `ProgramSignatures.byteBufferBoundaryAdmits`'s header enumerates — and the only one that does not
 ride `aggregatesConflict`, so the other eight do not cover it. `stdlib/Console.maxon:68` is
-`ByteArray.init(__Builtins.readStdin(n))`, which without it is `E3005 … expected '__ManagedMemory with
-Byte', got 'Array___ManagedByte'` on a module that must compile.
+`ByteArray.init(__Builtins.readStdin(n))`, which without it is an `E3005 argument type mismatch for
+'managed'` on a module that must compile.
 
 The buffer here is `__ManagedDirectory.currentPath()` rather than a stdin read, deliberately: the
 subject is the DOOR and not the intrinsic, and this producer is the same four-line shape that
@@ -745,5 +745,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:20: argument type mismatch for 'managed': expected '__ManagedMemory with Byte$0_200', got 'Array___ManagedByte'
+error E3005: <fragment>:7:20: argument type mismatch for 'managed': expected '__ManagedMemory with Byte', got 'Array with stdlib.Byte'
 ```

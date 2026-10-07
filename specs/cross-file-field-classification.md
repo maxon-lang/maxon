@@ -288,18 +288,17 @@ end 'main'
 ```
 
 <!-- test: crossfile-same-alias-name-declared-in-two-files -->
-A file-private `typealias` and an exported one of one name coexist in one directory, so two files may
-each declare `Num`. The field's type is the one the STRUCT's own file declares, and a temporary read still
-copies it.
+Two file-private `typealias`es of one name coexist in one directory, so two files may each declare
+`Num`. The field's type is the one the STRUCT's own file declares, and a temporary read still copies it.
 ```maxon
 // --- file: gate.maxon
-export typealias Num = int(0 to 1000)
+typealias Num = int(0 to 1000)
 
 export type Gate
 	export var n as Num
 
-	export static function twice(v Num) returns Gate
-		return Gate{n: v + v}
+	export static function twice(v ExitCode) returns Gate
+		return Gate{n: (v + v) as Num}
 	end 'twice'
 end 'Gate'
 
@@ -530,7 +529,6 @@ export function seed() returns Integer
 end 'seed'
 
 // --- file: bag.maxon
-typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 export type Bag

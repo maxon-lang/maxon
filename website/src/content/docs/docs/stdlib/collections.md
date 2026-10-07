@@ -54,7 +54,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `count()` | `int(0 to u64.max)` | Number of elements. |
+| `count()` | `Count` | Number of elements. |
 | `isEmpty()` | `bool` | True when `count()` is 0. |
 | `capacity()` | `int(i64.min to i64.max)` | Slots allocated. Negative when the storage is not this array's own yet: `-1` for a slice view that has not been written, other negative values for a literal's or a module-level constant's read-only storage. Treat any negative value as "not owned yet". |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds` at or past `count()`, `ArrayError.emptySlot` for a slot that was never written. |
@@ -130,7 +130,7 @@ there was never filled.
 | Member | Returns | Complexity | Description |
 |--------|---------|-----------|-------------|
 | `List.create()` | `List` | O(1) | An empty list. |
-| `count()` | `int(0 to u64.max)` | O(1) | Number of elements. |
+| `count()` | `Count` | O(1) | Number of elements. |
 | `isEmpty()` | `bool` | O(1) | True when empty. |
 | `first()` | `Element` | O(1) | Throws `ArrayError` when empty. |
 | `last()` | `Element` | O(1) | Throws `ArrayError` when empty. |
@@ -186,7 +186,7 @@ order, which is unspecified. The table resizes when it is three-quarters full.
 | `get(key Key)` | `Value` | Throws `MapError.keyNotFound`. |
 | `contains(key Key)` | `bool` | Key test. |
 | `remove(key Key)` | `bool` | Remove the entry; true when the key was present. |
-| `count()` | `int(0 to 4611686018427387904)` | Number of entries. |
+| `count()` | `EntryCount` | Number of entries. |
 | `getCapacity()` | table capacity | Total slots in the table: `0` for a map from `create()` until its first insert, `16` after that for a small map. |
 | `clone()` | `Map` | An independent copy of every key and value; writing either map leaves the other unchanged. A map whose values are or hold promises is E3141. |
 | `createIterator()` | `MapIterator` | Throws `IterationError.exhausted` when empty. |
@@ -238,7 +238,7 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 | `insert(element Element)` | — | Add an element; inserting a present element does nothing. |
 | `contains(element Element)` | `bool` | Membership test. |
 | `remove(element Element)` | `bool` | Remove; true when the element was present. |
-| `count()` | `int(0 to 4611686018427387904)` | Number of elements. |
+| `count()` | `MemberCount` | Number of elements. |
 | `getCapacity()` | table capacity | Total slots in the table. |
 | `clone()` | `Set` | An independent copy of every element; changing either set leaves the other unchanged. |
 | `createIterator()` | `SetIterator` | Throws `IterationError.exhausted` when empty. |
@@ -269,7 +269,7 @@ three elements, and `countof(Vec3)` is the constant `3`. It implements `Iterable
 |--------|---------|-------------|
 | `Vector.create()` | `Vector` | Every element zero. |
 | `Vector from [a, b, c]` | `Vector` | A literal; the count is the literal's length. |
-| `count()` | `int(0 to u64.max)` | The fixed size, answered from the type. |
+| `count()` | `Count` | The fixed size, answered from the type. |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds`. |
 | `set(index, value Element)` | — | Throws `ArrayError.indexOutOfBounds` at or past the fixed size. |
 | `createIterator()` | `ArrayIterator` | Throws `IterationError.exhausted` when the vector is empty. |

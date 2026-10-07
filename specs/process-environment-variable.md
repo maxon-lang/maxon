@@ -96,8 +96,6 @@ end 'main'
 contains an `=`, and the child echoes what it read back: a split that stopped at the first separator
 would answer `a` where the whole value is `a=b`.
 ```maxon
-typealias StringArray = Array with String
-
 function child() returns ExitCode
 	let value = try Process.environmentVariable("MAXON_SPEC_ENV_EQ") otherwise 'unset'
 		print("unset\n")

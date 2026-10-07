@@ -432,7 +432,7 @@ end 'paramFloatMask'
 // The set of qualified function names whose body reads `sizeof(T)` and therefore carries a hidden
 // trailing layout-descriptor parameter. Built once per lowering by an op-scan; read at a call
 // site to decide whether to append the descriptor argument, and per callee to bind the descriptor param.
-export typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
+typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
 
 // The set of witness-table `.rdata` labels already emitted — the blob, its method-slot
 // relocations, and the DCE-rooting of each impl are recorded ONCE per `(Type, Interface)`, even though a
@@ -446,25 +446,25 @@ export typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
 // never recorded its own relocations — a silent wrong answer that looked exactly like a cache hit. The
 // remedy is the separator and NOT a second, pair-keyed memo beside this one: two keys for one fact is the
 // shape that drifts, and with an injective label there is nothing the pair knows that the label does not.
-export typealias WitnessTableLabelSet = Set with String
+typealias WitnessTableLabelSet = Set with String
 
 // The `.rdata` labels of the immortal EMPTY-container records already registered — the dedup gate for
 // their `element_destroy@40` relocation, and injective for `WitnessTableLabelSet`'s reason: the label is
 // built from the stride and the destructor's own name, which is the whole of what the record encodes.
-export typealias ImmortalEmptyArrayLabelSet = Set with String
+typealias ImmortalEmptyArrayLabelSet = Set with String
 
 // The imaged STRING-TABLE records whose per-slot relocations have already been recorded, keyed by the
 // record's label. Its own set beside `ImmortalEmptyArrayLabelSet` because the two memos guard different
 // obligations: that one guards a single `element_destroy@40` stamp, this one guards that stamp AND one
 // address relocation per element slot.
-export typealias ImmortalStringTableLabelSet = Set with String
+typealias ImmortalStringTableLabelSet = Set with String
 
 // The imaged STRUCT BOXES whose per-slot column relocations have already been recorded, keyed by the box's
 // label. Its own set for `ImmortalStringTableLabelSet`'s reason — a box of scalars owes no relocation at
 // all, and a container's box owes one per column slot.
-export typealias ImmortalStructBoxLabelSet = Set with String
+typealias ImmortalStructBoxLabelSet = Set with String
 
-export typealias FunctionRecordLabelSet = Set with String
+typealias FunctionRecordLabelSet = Set with String
 
 typealias FunctionValueTargetMap = Map with (ValueId, ByteArray)
 
@@ -3307,7 +3307,7 @@ type MaxonToStdLowering
 	// compile-time constant and lives here, in the conformer's own table, where a dispatch site that has the
 	// receiver's witness can load it.
 	//
-	// ⚠ **IT IS THE CONFORMER'S OWN BINDING AND NOT THE FOLD'S** (`conformerAssociatedBinding`, not
+	// ⚠ **IT IS THE CONFORMER'S OWN BINDING AND NOT THE FOLD'S** (`declAssociatedBinding`, not
 	// `associatedAbiBindingOf`): a held position is the one place two conformers are ALLOWED to bind
 	// differently, which is the whole point — `UpBag` names `__witness_UpCursor.Cursor` here and `DownBag`
 	// names `__witness_DownCursor.Cursor`, and a dispatch through either lands in the right one without the

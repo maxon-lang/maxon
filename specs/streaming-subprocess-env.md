@@ -42,8 +42,6 @@ byte length — `seen`, 4. A spawn that inherited instead would echo the unexpan
 `%MAXON_STREAM_ENV_PROBE%` literal, which is 24 bytes and not 4, so the wrong answer is a different
 exit code rather than a near miss.
 ```maxon
-typealias StringArray = Array with String
-
 function main() returns ExitCode
 	var argv = StringArray.create()
 	argv.push("/c")

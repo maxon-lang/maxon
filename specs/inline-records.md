@@ -1020,32 +1020,33 @@ end 'main'
 
 <!-- test: inline-records.a-contested-alias-is-read-in-the-declaring-file -->
 A field's storage width is read through the alias the DECLARING file means, not through a fold over
-every file's declaration. `wide/wide.maxon` exports `Wide` as the whole signed span and never names `Packed`;
+every file's declaration. `wide/wide.maxon` declares `Wide` as the whole signed span and never names `Packed`;
 `packed/packed.maxon`, in another directory, declares its own `Wide` and the type built on it, so `Packed` is two 32-bit fields in one
-word. A width folded across both files would take the machine word for `Wide`, put the pair at 128 bits
-and leave `Packed` a heap record.
+word. Both declarations are file-private, so each file sees one `Wide`. A width folded across both files
+would take the machine word for `Wide`, put the pair at 128 bits and leave `Packed` a heap record.
 ```maxon
 // --- file: wide/wide.maxon
-export typealias Wide = int(i64.min to i64.max)
+typealias Wide = int(i64.min to i64.max)
 
-export function widest(v Wide) returns Wide
-	return v - 1
+export function widest(v ExitCode) returns ExitCode
+	let w = v as Wide
+	return (w - 1) as ExitCode
 end 'widest'
 
 // --- file: packed/packed.maxon
-export typealias Wide = int(0 to u32.max)
+typealias Wide = int(0 to u32.max)
 
 export type Packed
 	export let lo as Wide
 	export let hi as Wide
 
-	export static function create(lo Wide, hi Wide) returns Self
-		return Self{lo: lo, hi: hi}
+	export static function create(lo Count, hi Count) returns Self
+		return Self{lo: lo as Wide, hi: hi as Wide}
 	end 'create'
 end 'Packed'
 
-export function packedSize() returns Wide
-	return sizeof(Packed) as Wide
+export function packedSize() returns ExitCode
+	return sizeof(Packed)
 end 'packedSize'
 
 // --- file: main.maxon
@@ -1064,7 +1065,7 @@ function main() returns ExitCode
 		return 3
 	end 'wide'
 
-	return packedSize() as ExitCode
+	return packedSize()
 end 'main'
 ```
 ```exitcode

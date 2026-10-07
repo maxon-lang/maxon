@@ -2431,8 +2431,6 @@ reports, decided by whichever spelling interned first. The mask rides the VALUE 
 refused with the `Array` roster.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 function pair() returns (ByteArray, Int)
 	return ("hello".toByteArray(), 7)
@@ -2444,7 +2442,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:13: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:10:13: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-tuple-of-byte-arrays-still-serves-count -->
@@ -2453,8 +2451,6 @@ The control's positive half — the same tuple type, still answering the `Array`
 refusal case alone would pass just as well if the element had lost BOTH surfaces.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 function pair() returns (ByteArray, Int)
 	return ("hello".toByteArray(), 7)
@@ -2475,8 +2471,6 @@ end 'main'
 `Array with __ManagedMemory` share one `GenericInstanceId`, so the element surface may not be keyed on the
 instance. It is keyed on the ALIAS NAME the declaration wrote, and this alias did not write the buffer's.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 typealias BufArray = Array with ByteArray
 
 function main() returns ExitCode
@@ -2487,15 +2481,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:11: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:11: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: an-array-of-byte-arrays-still-serves-count -->
 
 The array control's positive half, for the reason its tuple twin has one.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 typealias BufArray = Array with ByteArray
 
 function main() returns ExitCode
@@ -2522,8 +2514,6 @@ program COMPILES, LINKS AND RUNS, exit 7** — `q.0.length()` accepted on a slot
 `Array with Byte`, which is the over-acceptance no diagnostic reports.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 function bufferPair() returns (__ManagedMemory, Int)
 	return ("hello".toByteArray(), 7)
@@ -2544,7 +2534,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:21:14: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:19:14: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 ### Pins — four behaviours a move of the buffer mark must not disturb
@@ -2705,9 +2695,6 @@ release on too few paths is a leak (exit 101); one on a path that never built th
 failure several passes later. Each receiver is read back as an `Array` (`count`) afterwards, which is what
 says the buffer mark never reached it.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-
 function bufLength(m __ManagedMemory) returns Integer
 	return m.length()
 end 'bufLength'
@@ -2787,8 +2774,6 @@ SLOT, which is the identical ambiguity through the identical channel. Without th
 compiles, and the surface `make()`'s result carries is decided by which member was written first.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 function make() returns (__ManagedMemory, Int)
 	return ("hello".toByteArray(), 7)
@@ -2804,7 +2789,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: overloading 'make' — one of its declarations NAMES `__ManagedMemory` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names
+error E2015: <fragment>:8:10: Unsupported: overloading 'make' — one of its declarations NAMES `__ManagedMemory` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names
 ```
 
 ### Every door out of an array of buffers, and every copy of one
@@ -2961,8 +2946,6 @@ sharing the same two layouts, so a surface written onto either layout would reac
 depths. It rides the value, so this stays refused.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 function nested() returns ((ByteArray, Int), Int)
 	return (("hello".toByteArray(), 7), 9)
@@ -2974,7 +2957,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:10:15: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-nested-tuple-of-byte-arrays-still-serves-count -->
@@ -2982,8 +2965,6 @@ error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — the comp
 The depth control's positive half — the same nested slot, still answering the `Array` roster it belongs to.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 function nested() returns ((ByteArray, Int), Int)
 	return (("hello".toByteArray(), 7), 9)
@@ -3031,8 +3012,6 @@ the tuple, the layout or the instance — only on the ALIAS NAME the declaration
 write the buffer's.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 typealias BufList = Array with ByteArray
 
 function slotted(t (BufList, Int)) returns Int
@@ -3047,7 +3026,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:9:11: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:7:11: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-tuple-slot-of-byte-arrays-still-serves-count -->
@@ -3055,8 +3034,6 @@ error E2015: <fragment>:9:11: Unsupported: `Array` member 'length' — the compi
 The alias-slot control's positive half, for the reason its two siblings have one.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 typealias BufList = Array with ByteArray
 
 function slotted(t (BufList, Int)) returns Int
@@ -3298,8 +3275,6 @@ If the surface had leaked onto either shared tuple layout — and the two nested
 layouts — this program could not give 9, because one of the two calls would have been refused.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 function mixed() returns ((ByteArray, Int), (Int, __ManagedMemory), Int)
 	return (("hello".toByteArray(), 1), (2, "abcd".toByteArray()), 9)
@@ -3321,8 +3296,6 @@ type that carries a buffer at another slot. A mask that set the wrong bit, or a 
 subtree, would accept this.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 function mixed() returns ((ByteArray, Int), (Int, __ManagedMemory), Int)
 	return (("hello".toByteArray(), 1), (2, "abcd".toByteArray()), 9)
@@ -3334,7 +3307,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:10:15: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-seventy-element-tuple-carries-its-last-slots-surface -->
@@ -3474,8 +3447,6 @@ cannot be keyed on it. A fix that handed the buffer roster to every payload woul
 nothing would report it.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 union Held
 	mem(m ByteArray)
@@ -3495,7 +3466,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:18: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:11:18: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-byte-array-payload-still-serves-count -->
@@ -3504,8 +3475,6 @@ The over-acceptance control's positive half, for the reason its tuple and array 
 also be satisfied by a payload binding that lost its `Array` surface without gaining the buffer's.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 union Held
 	mem(m ByteArray)
@@ -3581,8 +3550,6 @@ whose text the helper does not contain.
 top-level declaration has closed, so the state that reaches the helper is the last function's.
 ```maxon
 typealias Int = int(i64.min to i64.max)
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 
 function arrayPair() returns (ByteArray, Int)
 	return ("hi".toByteArray(), 3)
@@ -3601,7 +3568,7 @@ function useBufferPair(p (__ManagedMemory, Int)) returns Int
 end 'useBufferPair'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:44: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:44: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-sibling-files-buffer-array-payload-serves-the-roster-alias-file-first -->
@@ -3768,9 +3735,6 @@ above declares — the surface cannot be keyed on it, and only the alias NAME te
 derived the bit from the resolved type, or that handed the buffer roster to every alias-typed field, would
 accept this program and nothing would report it.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-
 type Holder
 	export var buf as ByteArray
 
@@ -3785,7 +3749,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:15: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: an-array-alias-at-a-struct-field-still-serves-count -->
@@ -3793,9 +3757,6 @@ error E2015: <fragment>:15:15: Unsupported: `Array` member 'length' — the comp
 The positive control for the case above — the `Array`-aliased field is still USABLE, so its refusal of
 `length` is a surface decision and not a broken field read.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-
 type Holder
 	export var buf as ByteArray
 
@@ -3839,9 +3800,6 @@ end 'main'
 The return door's over-acceptance control, for the field control's exact reason: the two return types are one
 `MaxonType`.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-
 function makeBuf() returns ByteArray
 	return "hello".toByteArray()
 end 'makeBuf'
@@ -3851,7 +3809,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:19: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:7:19: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-buffer-alias-serves-the-roster-at-a-union-payload -->
@@ -3893,7 +3851,6 @@ inner-alias arm stamps the swept field type with the BASE-QUALIFIED name (`Holde
 `qualifiedInnerGenericAlias` files the alias in `bufferSurfaceAliases` under that same one string — so the
 read-door derivation asks the name it was filed under without needing to know an inner alias exists.
 ```maxon
-typealias Byte = int(0 to u8.max)
 typealias Int = int(i64.min to i64.max)
 
 type Holder
@@ -3917,6 +3874,36 @@ end 'main'
 ```
 ```exitcode
 5
+```
+
+<!-- test: a-cast-to-a-qualified-inner-alias-converts -->
+
+The inner alias reached from OUTSIDE its type, by its qualified name, as the target of an `as`: the
+library `ByteArray` converts to `Holder.Mem`, as it converts to a top-level `ByteBuffer`.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder
+	export typealias Mem = __ManagedMemory with Byte
+
+	export var buf as Mem
+
+	static function create(buf Mem) returns Self
+		return Self{buf: buf}
+	end 'create'
+
+	function size() returns Int
+		return self.buf.length()
+	end 'size'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray() as Holder.Mem)
+	return (h.buf.length() + h.size()) as ExitCode
+end 'main'
+```
+```exitcode
+10
 ```
 
 <!-- test: a-sibling-files-buffer-alias-serves-the-roster-alias-file-first -->
@@ -4014,16 +4001,19 @@ empty map and allocates nothing.
 
 Both halves in one program, so neither can be satisfied by handing everything one surface: `bufferWidth`'s
 parameter must reach `length` (its file spelled the buffer) and `arrayWidth`'s must reach `count` (its file
-did not), under one alias name.
+did not), under one alias name. Both `B`s are file-private, so each file sees one.
 ```maxon
 // --- file: buffer.maxon
-export typealias Byte = int(0 to u8.max)
 export typealias Int = int(i64.min to i64.max)
-export typealias B = __ManagedMemory with Byte
+typealias B = __ManagedMemory with Byte
 
-export function bufferWidth(m B) returns Int
+function bufferWidth(m B) returns Int
 	return m.length()
 end 'bufferWidth'
+
+export function textWidth(t String) returns Int
+	return bufferWidth(t.toByteArray())
+end 'textWidth'
 
 // --- file: main.maxon
 typealias Int2 = int(i64.min to i64.max)
@@ -4036,7 +4026,7 @@ end 'arrayWidth'
 function main() returns ExitCode
 	var xs = B.create()
 	xs.push(7 as Int2)
-	return ((bufferWidth("hello".toByteArray()) as Int2) + arrayWidth(xs)) as ExitCode
+	return ((textWidth("hello") as Int2) + arrayWidth(xs)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -4054,9 +4044,8 @@ both file orders**, `b.items.count()`, on a field of the `Array` kind, is refuse
 roster.
 ```maxon
 // --- file: buffer.maxon
-export typealias Byte = int(0 to u8.max)
 export typealias Int = int(i64.min to i64.max)
-export typealias B = __ManagedMemory with Byte
+typealias B = __ManagedMemory with Byte
 
 type Holder
 	export var buf as B
@@ -4074,7 +4063,7 @@ end 'seed'
 // --- file: main.maxon
 typealias Int2 = int(i64.min to i64.max)
 typealias B = Array with Int2
-export typealias Nums = Array with Int2
+typealias Nums = Array with Int2
 
 type Bag
 	export var items as B
@@ -4093,6 +4082,49 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+<!-- test: a-family-buffer-alias-keeps-its-buffer-surface -->
+
+An alias whose name a nominal type in another directory also holds is a declaration of its own, and it keeps
+the surface its spelling gives it. `buf.maxon` spells `B` as the buffer; `shapes/` declares a `module type B`,
+which `buf.maxon` cannot see, so the bare `B` there means the alias and `width`'s parameter reaches `length`.
+```maxon
+// --- file: shapes/b.maxon
+module type B
+	export let n as ExitCode
+
+	module static function make() returns Self
+		return Self{n: 2}
+	end 'make'
+end 'B'
+
+// --- file: buf.maxon
+typealias Int = int(i64.min to i64.max)
+typealias B = __ManagedMemory with Byte
+
+function width(k B) returns Int
+	return k.length()
+end 'width'
+
+module function textWidth(t String) returns ExitCode
+	let k = t.toByteArray() as B
+	return width(k) as ExitCode
+end 'textWidth'
+
+// --- file: shapes/main.maxon
+function main() returns ExitCode
+	let made = B.make()
+	let w = textWidth("hello")
+	print("{w}\n")
+	return w + made.n
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+5
 ```
 
 ### A GENERIC TYPE ARGUMENT — the fourth declared position, and the only one that never had a word
@@ -4156,8 +4188,6 @@ type Cell uses U
 	end 'get'
 end 'Cell'
 
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 typealias BytesCell = Cell with ByteArray
 
 function main() returns ExitCode
@@ -4166,7 +4196,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:20:17: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:18:17: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-byte-array-generic-argument-still-serves-count -->
@@ -4186,8 +4216,6 @@ type Cell uses U
 	end 'get'
 end 'Cell'
 
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 typealias BytesCell = Cell with ByteArray
 
 function main() returns ExitCode
@@ -4333,8 +4361,6 @@ type Holder uses T
 	end 'inner'
 end 'Holder'
 
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 typealias BufCell = Cell with ByteArray
 typealias BufHolder = Holder with ByteArray
 
@@ -4344,7 +4370,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:34:25: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:32:25: Unsupported: `Array` member 'length' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-two-hop-byte-array-argument-still-serves-count -->
@@ -4376,8 +4402,6 @@ type Holder uses T
 	end 'inner'
 end 'Holder'
 
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
 typealias BufCell = Cell with ByteArray
 typealias BufHolder = Holder with ByteArray
 

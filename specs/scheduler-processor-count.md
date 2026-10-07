@@ -82,8 +82,6 @@ itself with that text as `MAXON_MAX_PROCS` in the child's environment and prints
 The child compares against `__Builtins.cpuCount()`, which keeps the answer the same on every host. Not on
 `wasm32-wasi`, where the subprocess band is refused at compile time (`subprocess-unsupported.md`).
 ```maxon
-typealias StringArray = Array with String
-
 function child() returns ExitCode
 	let machine = Scheduler.processorCount() == __Builtins.cpuCount()
 	print("machine={machine}\n")
@@ -123,8 +121,6 @@ child exit=0
 ignored rather than read as 12, and the machine's count applies. The same re-execution as its sibling
 above, with this text as `MAXON_MAX_PROCS`.
 ```maxon
-typealias StringArray = Array with String
-
 function child() returns ExitCode
 	let machine = Scheduler.processorCount() == __Builtins.cpuCount()
 	print("machine={machine}\n")
@@ -163,8 +159,6 @@ child exit=0
 `+4` is a decimal, as Go's `strconv.ParseInt` reads one: a leading `+` is part of the number, so the count
 is 4. The same re-execution as the siblings above, with this text as `MAXON_MAX_PROCS`.
 ```maxon
-typealias StringArray = Array with String
-
 function child() returns ExitCode
 	print("procs={Scheduler.processorCount()}\n")
 	return 0
@@ -203,8 +197,6 @@ Forty `0`s and a `4` are 41 bytes of one decimal whose value is 4. The length of
 count; its value is, so a value longer than any first read's buffer is read whole and the count is 4. The
 same re-execution as the siblings above, with this text as `MAXON_MAX_PROCS`.
 ```maxon
-typealias StringArray = Array with String
-
 function child() returns ExitCode
 	print("procs={Scheduler.processorCount()}\n")
 	return 0

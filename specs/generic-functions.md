@@ -106,7 +106,7 @@ end 'main'
 3
 ```
 
-<!-- test: error.an-inferred-element-index-is-nominal -->
+<!-- test: error.an-inferred-count-is-nominal -->
 ```maxon
 typealias Row = int(0 to 100)
 typealias RowArray = Array with Row
@@ -127,7 +127,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:16:10: argument type mismatch for 'r': expected 'Row', got 'ElementIndex'
+error E3005: <fragment>:16:10: argument type mismatch for 'r': expected 'Row', got 'Count'
 ```
 
 <!-- test: two-aliases-infer-their-nearest-common-ancestor -->
@@ -210,6 +210,62 @@ end 'main'
 ```
 ```maxoncstderr
 error E3180: <fragment>:16:10: the arguments of 'larger' give type parameter 'T' no one type: 'Apples' and 'Oranges' share no alias they both implement
+```
+
+<!-- test: error.two-files-same-range-limits-give-no-one-type -->
+Three files of one directory each declare a file-private `Limit`: `pkg/a.maxon` and `pkg/b.maxon` over one
+range, `pkg/c.maxon` over another. The first two are still two declarations, so a value of each gives `T`
+two types.
+```maxon
+// --- file: pkg/a.maxon
+typealias Limit = int(0 to 9)
+
+export type Ha
+	export var v as Limit
+
+	export static function make() returns Ha
+		return Ha{v: 3}
+	end 'make'
+end 'Ha'
+
+// --- file: pkg/b.maxon
+typealias Limit = int(0 to 9)
+
+export type Hb
+	export var v as Limit
+
+	export static function make() returns Hb
+		return Hb{v: 4}
+	end 'make'
+end 'Hb'
+
+// --- file: pkg/c.maxon
+typealias Limit = int(0 to 5)
+
+export function smallOk() returns bool
+	let low = 1 as Limit
+	return low == 1
+end 'smallOk'
+
+// --- file: pkg/main.maxon
+function larger(a T, b T) uses T returns T
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+function main() returns ExitCode
+	if smallOk() 'ok'
+		print("{larger(Ha.make().v, b: Hb.make().v)}\n")
+	end 'ok'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3180: pkg/<fragment>:43:11: the arguments of 'larger' give type parameter 'T' no one type: 'Limit' (declared in pkg/a.maxon) and 'Limit' (declared in pkg/b.maxon) share no alias they both implement
 ```
 
 <!-- test: error.a-record-that-is-not-equatable -->

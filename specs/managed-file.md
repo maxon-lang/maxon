@@ -745,9 +745,6 @@ bound of any kind can refuse it and only the OWNERSHIP test can — a case that 
 be satisfied by a guard that merely got its arithmetic right. The parent is read back afterwards to prove
 nothing was written through it.
 ```maxon
-typealias Byte = int(0 to 255)
-typealias Bytes = Array with Byte
-
 enum TestFileError implements Error
 	openFailed
 end 'TestFileError'
@@ -772,7 +769,7 @@ function main() returns ExitCode
 	try wf.file.write("ZZZZZZZZZZZZZZZZZZZZZZZZ".toByteArray().managed) otherwise panic("write: 24 bytes to a freshly opened file")
 	wf.file.close()
 
-	var arr = Bytes.create()
+	var arr = ByteArray.create()
 	arr.push(65)
 	arr.push(66)
 	arr.push(67)
@@ -861,4 +858,28 @@ end 'main'
 ```
 ```stdout
 at=4 first=48 over=999
+```
+
+<!-- test: error.a-managed-memory-parameter-mismatch-names-managed-memory -->
+A bare `__ManagedMemory` parameter holds the library's `Byte`. A buffer over a `Byte` the program declares
+is another type, and the refusal names the parameter's side as `__ManagedMemory` over `stdlib.Byte`, not
+through any alias the program wrote for its own buffer.
+```maxon
+// --- file: holder.maxon
+export function open(path __ManagedMemory) returns ExitCode
+	return path.length() as ExitCode
+end 'open'
+
+// --- file: main.maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(1)
+	return open(b.managed)
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:9: argument type mismatch for 'path': expected '__ManagedMemory with stdlib.Byte', got '__ManagedMemory with Byte'
 ```

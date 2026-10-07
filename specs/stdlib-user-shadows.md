@@ -14,14 +14,15 @@ The stdlib loader loads every module under `stdlib/` into EVERY compile
 `ParseError`, `Promise`, `Parsable` — so the question "what happens when a user program declares one of
 them too?" is not hypothetical for any of them.
 
-**THE RULE: a user declaration and a stdlib module's of one TYPE name coexist, and each file's own
-declaration wins in that file.** The user's file means the user's declaration; a library file never sees
-an author declaration and keeps its own; any OTHER author file that declares neither sees both and must
-qualify (E3063 lists `dir.Name` — `export.Name` at the project root — and `stdlib.Name`). Coexisting is
+**THE RULE: a user declaration and a stdlib module's of one TYPE name coexist, and the library's never
+takes part in ambiguity.** The user's file means the user's declaration; a library file never sees an
+author declaration and keeps its own; any OTHER author file that sees that one author declaration means
+it too, and reaches the library's as `stdlib.Name`. Only two visible AUTHOR declarations are ambiguous
+(E3063, listing each as `dir.Name` — `export.Name` at the project root). Coexisting is
 load-bearing rather than cosmetic: `parsable-interface.md`'s cases declare their own `enum ParseError`
 while implementing the stdlib's `interface Parsable`, so a rule that refused the pair would refuse the
 specs that stdlib module exists to unblock. Every case below declares the name and reads it in ONE file,
-so the own-file rule is what decides it.
+whose one visible author declaration is what the bare name means.
 
 A FREE FUNCTION follows a different rule: a user free function outranks a stdlib module's of the same name
 for user code (see the bullet under *What the rule must NOT do*).
@@ -143,7 +144,9 @@ file is still refused; `c.nowMs()` on a value of the moved declaration is not.
 A typealias is resolved per reading file, so a stdlib module's alias and a user's declaration of that
 name never need to share one spelling: the shadow contest does not move an alias, and it does not need
 to — **the reading file settles it instead of a rename.** In the user's declaring file the user's own
-declaration wins; a library file never sees it; and a third author file that sees both qualifies. A
+declaration answers; a library file never sees it; and a third author file that sees it and no other
+author declaration of the name means it too, writing `stdlib.Name` for the library's. The two are two
+types even over one range, so a value crosses between them only through a cast. A
 user's own ranged `typealias DurationMs` coexists with `stdlib/Clock.maxon`'s `public` one and answers
 for the user's file, including for its RANGE, which is what `user-ranged-typealias-wins-over-a-listed-module`
 below observes.
@@ -1034,4 +1037,78 @@ end 'main'
 a 2.5
 b 3.5
 main 4
+```
+
+<!-- test: stdlib-user-shadows.a-cast-of-a-library-float-alias-to-the-programs-own-alias-of-that-name-is-not-unneeded -->
+`Math.pow` answers the library's `Real`, and this file's `Real` is a different declaration of that name, so the cast between them is a conversion rather than an unneeded cast.
+```maxon
+typealias Real = float(f64.min to f64.max)
+
+function half(x Real) returns Real
+	return x / 2.0
+end 'half'
+
+function main() returns ExitCode
+	let cube = Math.pow(2.0, exponent: 3.0) as Real
+	print("{half(cube)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4.0
+```
+
+<!-- test: stdlib-user-shadows.a-masked-count-cast-to-the-programs-own-count-is-not-unneeded -->
+A masked `count()` keeps the library's `Count`, and this file's `Count` is a different declaration of that name, so the cast between them is a conversion rather than an unneeded cast.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function main() returns ExitCode
+	let xs = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+	let low = (xs.count() and 7) as Count
+	print("{low}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: stdlib-user-shadows.arithmetic-between-the-librarys-real-and-the-programs-own-real-is-refused -->
+`Math.pow` answers the library's `Real` and `mine` is this file's `Real`. They share a spelling and a range but are two declarations, so `+` refuses the pair, quoting the library's as `stdlib.Real`.
+```maxon
+typealias Real = float(f64.min to f64.max)
+
+function main() returns ExitCode
+	let mine = 2.0 as Real
+	let sum = Math.pow(2.0, exponent: 3.0) + mine
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:41: operator '+' requires both operands to be the same type: 'stdlib.Real' and 'Real' are different typealiases — cast one side with 'as'
+```
+
+<!-- test: stdlib-user-shadows.a-librarys-count-and-the-programs-own-count-do-not-mix -->
+`count()` answers the library's `Count` and `mine` is this file's `Count`, declared with the same range, so `+` refuses the pair.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function main() returns ExitCode
+	let xs = [1, 2, 3]
+	let mine = 3 as Count
+	let total = xs.count() + mine
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:25: operator '+' requires both operands to be the same type: 'stdlib.Count' and 'Count' are different typealiases — cast one side with 'as'
 ```

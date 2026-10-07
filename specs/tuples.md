@@ -1539,6 +1539,41 @@ end 'main'
 error E3005: <fragment>:14:2: Cannot return '((int, int), int)' from function declared to return 'P'
 ```
 
+<!-- test: error.a-tuple-over-a-contested-alias-is-named-in-source-form -->
+`pkg/lib.maxon` and `pkg/main.maxon` each declare a file-private `Bytes` over a `Byte` of their own, so a
+`(Bytes, String)` from one file is not a `(Bytes, String)` of the other. The refusal names each tuple's
+element in source form.
+```maxon
+// --- file: pkg/lib.maxon
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+export type Holder
+	export var pair as (Bytes, String)
+
+	export static function make() returns Holder
+		var b = Bytes.create()
+		b.push(300)
+		return Holder{pair: (b, "wide")}
+	end 'make'
+end 'Holder'
+
+// --- file: pkg/main.maxon
+typealias Byte = int(0 to u8.max)
+typealias Bytes = Array with Byte
+
+function takesNarrow(p (Bytes, String)) returns ExitCode
+	return p.0.count() as ExitCode
+end 'takesNarrow'
+
+function main() returns ExitCode
+	return takesNarrow(Holder.make().pair)
+end 'main'
+```
+```maxoncstderr
+error E3005: pkg/<fragment>:25:9: argument type mismatch for 'p': expected '(Bytes (declared in pkg/main.maxon), String)', got '(Bytes (declared in pkg/lib.maxon), String)'
+```
+
 ### A tuple typealias as a GENERIC TYPE ARGUMENT — the RAW instance-argument doors
 
 ⭐⭐ **A GENERIC INSTANCE'S TYPE ARGUMENT IS A *STORED* TYPE, NOT A DECLARED SLOT — so no read door re-tags

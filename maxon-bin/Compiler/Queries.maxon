@@ -474,18 +474,19 @@ function closeDeclarationFold(signatures ProgramSignatures)
 	// container.
 	signatures.internWellKnownContainerInstances()
 
-	// The companions of every service the program spawns (`T.request` / `T.handle`), minted from the
-	// candidates the pre-fold token walk noted. Below the contest and
-	// `internWellKnownContainerInstances`, so which `type Calc` a spawn names is settled before it is
-	// asked; above `allFilesFolded = true`, so every whole-program normalization from here down treats
-	// a companion as the ordinary layout it is.
-	synthesizeServiceCompanions(signatures)
-
 	// From here on an absence in the index MEANS the program does not declare the name. Above this
 	// line, inside the loop, an absence means only that the declaring file has not been swept yet —
 	// which is why the parser's whole-program semantic checks read this flag before spending anything
 	// on a verdict they would have to throw away.
 	signatures.allFilesFolded = true
+
+	// The companions of every service the program spawns (`T.request` / `T.handle`), minted from the
+	// candidates the pre-fold token walk noted. Below the contest and
+	// `internWellKnownContainerInstances`, so which `type Calc` a spawn names is settled before it is
+	// asked; below `allFilesFolded = true`, so a payload declared with an alias resolves to the instance
+	// its declaring file means; above every whole-program normalization after it, so each treats a
+	// companion as the ordinary layout it is.
+	synthesizeServiceCompanions(signatures)
 	signatures.settleAliasImplementsClauses()
 
 	// Before anything can read an enum case's function: the contest that decides the name is complete only now.
@@ -1101,7 +1102,7 @@ type FileTokenFacts
 	function noteInto(signatures ProgramSignatures, path FilePath, isStdlibSource bool, extents BlockExtentsByPath)
 		let isRuntimeSource = self.declarations.isRuntimeTier()
 		signatures.attributeHashEventsTo(hashEventSourceOf(isStdlibSource, isRuntimeSource: isRuntimeSource))
-		signatures.recordFileModuleDirectory(path, moduleDirectory: self.moduleDirectory, isLibrary: isStdlibSource or isRuntimeSource)
+		signatures.recordFileModuleDirectory(path, moduleDirectory: self.moduleDirectory, isLibrary: isStdlibSource or isRuntimeSource, isRuntime: isRuntimeSource)
 		self.declarations.noteInto(signatures, path: path, moduleDirectory: self.moduleDirectory, isStdlibSource: isStdlibSource, extents: extents)
 
 		for event in self.events 'eachEvent'
@@ -2579,13 +2580,7 @@ function armDeclaringFileNote(project Project, name ByteArray, captionsDiffer bo
 	end 'theCaptionsTellThemApart'
 
 	var signatures = programSignaturesIn(project, asker: "armDeclaringFileNote")
-	let declFilePaths = signatures.functionValueArmDeclaringFiles(name)
-
-	if declFilePaths.count() == 0 'noDeclarationNamesThisArm'
-		return ""
-	end 'noDeclarationNamesThisArm'
-
-	return " (declared in {declaringFileList(signatures, declFilePaths: declFilePaths)})"
+	return signatures.originNote(TypeOrigin.declaredIn(signatures.functionValueArmDeclaringFiles(name)))
 end 'armDeclaringFileNote'
 
 // True for a declared function/closure OR a function-TYPED value whose name is a function alias (`f
@@ -2596,8 +2591,8 @@ function armFnTypeResolvable(project Project, name ByteArray) returns bool
 end 'armFnTypeResolvable'
 
 // A declared function/closure's display is built from its parameter signature + return type; a
-// function-alias arm's is the `display` string the parser stored on the alias. Both build the same
-// canonical string, so `f UnaryOp` and a `triple` that fits it compare EQUAL.
+// function-alias arm's from the alias's stored parameter and return slots, through the same formatter.
+// Both build the same canonical string, so `f UnaryOp` and a `triple` that fits it compare EQUAL.
 function armFnTypeDisplay(project Project, name ByteArray) returns String
 	if let sig = try project.funcSignatures.get(name) 'declaredFn'
 		let returnType = try project.funcReturnTypes.get(name) otherwise panic("armFnTypeDisplay: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function")
@@ -2606,10 +2601,13 @@ function armFnTypeDisplay(project Project, name ByteArray) returns String
 
 	let alias = try project.functionTypeAliases.get(name) otherwise panic("armFnTypeDisplay: '{String.from(name)}' is armFnTypeResolvable but in neither registry — this and armFnTypeResolvable disagree")
 
-	match alias.display 'display'
-		unread then panic("armFnTypeDisplay: '{String.from(name)}' reached `project.functionTypeAliases` without its display — the real parse reads every alias it records there")
-		spelled(text) then return String.from(text)
-	end 'display'
+	var paramTypes = MaxonTypeArray.create()
+
+	for param in alias.paramTypes 'eachParam'
+		paramTypes.push(maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames))
+	end 'eachParam'
+
+	return formatFnTypeDisplay(paramTypes, returnType: maxonTypeOfStoredAliasReturn(alias, typeNames: project.typeNames), typeNames: project.typeNames, signatures: programSignaturesIn(project, asker: "armFnTypeDisplay"))
 end 'armFnTypeDisplay'
 
 // The compiler carries no full function type on a value, so a function-typed parameter/field/call-result
@@ -2961,7 +2959,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	// Re-aimed at the SAME target the project was created with — a reset must not be a second chance
 	// to pick a platform for the builtin `ExitCode`'s range.
 	project.typeAliases = RangedAliasRegistry.create(project.target.os)
-	project.typeAliases.provenance.shareModuleDirectories(signatures.settled.fileModuleDirectories)
+	project.typeAliases.provenance.shareFilePartition(signatures.settled.fileModuleDirectories, libraryPaths: signatures.settled.libraryFilePaths)
 
 	// FIRST-WINS, so it must reset: a warm rebuild that re-merged the same files would find every name
 	// already claimed by its own declaration and report the whole program as duplicates.
@@ -3240,13 +3238,13 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		witnessSelfArgNotTypeParam(what, typeParamName, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{what}' on type parameter '{typeParamName}' requires an argument of type '{typeParamName}' (the `Self` its constraint provides), not {got}", line: line, column: column, filePath: path)
 		structEqualsResultNotBool(structName, got, op, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Operator '{op}' dispatches '{structName}.equals', which returns '{got}' — an equality operator requires the 'bool' result 'Equatable' declares", line: line, column: column, filePath: path)
 		nonBoolCondition(keyword, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "'{keyword}' requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
-		assignTypeMismatch(place, got, expected, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot assign a value of type '{got}' to {place}, which holds '{expected}'", line: line, column: column, filePath: path)
+		assignTypeMismatch(place, got, gotNote, expected, expectedNote, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot assign a value of type '{got}'{gotNote} to {place}, which holds '{expected}'{expectedNote}", line: line, column: column, filePath: path)
 		typeMismatchExpectedGot(expected, got, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "type mismatch: 'expected {expected}, got {got}'", line: line, column: column, filePath: path)
 
 		// `specs/tuple-assign.md`'s wording verbatim — it says "bindings" of what this compiler calls
 		// targets, and the spec is the language definition here.
 		tupleAssignArityMismatch(elements, targets, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Tuple has {elements} elements but destructuring has {targets} bindings", line: line, column: column, filePath: path)
-		returnTypeMismatch(got, expected, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Cannot return '{got}' from function declared to return '{expected}'", line: line, column: column, filePath: path)
+		returnTypeMismatch(got, gotNote, expected, expectedNote, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Cannot return '{got}'{gotNote} from function declared to return '{expected}'{expectedNote}", line: line, column: column, filePath: path)
 		functionValueIntoNonFunction(noun, name, heldType, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "cannot assign a value of type 'function' to {noun} '{name}', which holds '{heldType}': {FunctionValueMisuseSuffix}", line: line, column: column, filePath: path)
 		functionValueReturned(returnType, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Cannot return 'function' from function declared to return '{returnType}': {FunctionValueMisuseSuffix}", line: line, column: column, filePath: path)
 
@@ -3562,7 +3560,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		implementsRangeDoesNotFit(aliasName, parentName, line, column) gives Diagnostic.create(ErrorCode.aliasImplementsRangeDoesNotFit, message: "typealias '{aliasName}' does not fit the alias it implements: its range is not inside the range of '{parentName}'", line: line, column: column, filePath: path)
 		implementsPrimitiveDiffers(aliasName, parentName, own, parents, line, column) gives Diagnostic.create(ErrorCode.aliasImplementsRangeDoesNotFit, message: "typealias '{aliasName}' does not fit the alias it implements: it is {own} and '{parentName}' is {parents}", line: line, column: column, filePath: path)
 		genericTypeParameterNotInferable(paramName, functionName, line, column) gives Diagnostic.create(ErrorCode.genericTypeParameterNotInferable, message: "type parameter '{paramName}' of '{functionName}' cannot be inferred: no parameter is declared '{paramName}'", line: line, column: column, filePath: path)
-		genericArgumentsHaveNoCommonType(functionName, paramName, first, second, line, column) gives Diagnostic.create(ErrorCode.genericArgumentsHaveNoCommonType, message: "the arguments of '{functionName}' give type parameter '{paramName}' no one type: '{first}' and '{second}' share no alias they both implement", line: line, column: column, filePath: path)
+		genericArgumentsHaveNoCommonType(functionName, paramName, first, firstNote, second, secondNote, line, column) gives Diagnostic.create(ErrorCode.genericArgumentsHaveNoCommonType, message: "the arguments of '{functionName}' give type parameter '{paramName}' no one type: '{first}'{firstNote} and '{second}'{secondNote} share no alias they both implement", line: line, column: column, filePath: path)
 		genericConstraintNotSatisfied(typeName, interfaceName, paramName, functionName, line, column) gives Diagnostic.create(ErrorCode.semanticWhereConstraintViolation, message: "Type '{typeName}' does not satisfy constraint '{interfaceName}' required by type parameter '{paramName}' of '{functionName}'", line: line, column: column, filePath: path)
 		genericCallAmbiguous(functionName, candidates, line, column) gives Diagnostic.create(ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{functionName}': {candidates} generic declarations infer a type for this call", line: line, column: column, filePath: path)
 		genericArgumentKindUnsupported(functionName, paramName, typeName, line, column) gives Diagnostic.create(ErrorCode.genericArgumentKindUnsupported, message: "type parameter '{paramName}' of '{functionName}' cannot be '{typeName}': a generic function's type parameter is inferred as a number, `String`, `bool`, `Character`, a typealias, a record or an enum", line: line, column: column, filePath: path)

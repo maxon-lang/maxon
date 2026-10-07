@@ -62,7 +62,7 @@
 // need the ANSWER, not the bytes: handed the bytes, each door spells its own copy of the rule. Nothing
 // outside this file names the constant; the doors ask the table, which is the only thing that keeps them
 // from drifting.
-let ExitCodeBuiltinName = b"ExitCode"
+module let ExitCodeBuiltinName = b"ExitCode"
 
 // ⭐⭐ **THE TAG A BUILTIN TYPE NAME DENOTES — THE ONE ANSWER FOR EVERY DOOR THAT HOLDS A TYPE ONLY AS ITS
 // SOURCE-SPELLED NAME.** Two registries store a declared type INTERNER-FREE, as the bytes the source
@@ -985,7 +985,7 @@ function syncResolvedSignature(project Project, func IrFunction)
 	end 'noSig'
 
 	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames))
 end 'syncResolvedSignature'
 
 // ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED
@@ -1498,7 +1498,7 @@ function resolveNamedType(project Project, signatures ProgramSignatures, id Type
 	end 'aDeclaredType'
 
 	return try denotedAliasForm(signatures, name: name, readerFilePath: readerFilePath, into: project.typeNames) otherwise 'undeclared'
-		reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.unknownType, message: unknownTypeMessage(String.from(name))))
+		reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.unknownType, message: unknownTypeMessage(signatures.aliasIdentityDisplay(name))))
 
 		// A RECOVERY type, not a sentinel answer: `PassPipeline.run` gates on diagnostics
 		// after EVERY pass and `resolveTypes` IS a pass, so the build throws the moment
@@ -1514,7 +1514,7 @@ export function denotedAliasForm(signatures ProgramSignatures, name ByteArray, r
 	let form = try signatures.aliasFormFor(name, readerFilePath: readerFilePath)
 
 	match form 'form'
-		functionAlias then return MaxonType.function(into.intern(signatures.functionAliasScopedName(name, readerFilePath: readerFilePath)))
+		functionAlias then return MaxonType.function(into.intern(signatures.declaredIdentityOfSpelling(name, declFilePath: readerFilePath)))
 		genericAlias then return signatures.instanceDenotedType(signatures.genericAliasInstanceFrom(name, readerFilePath: readerFilePath), into: into)
 		tupleAlias then return MaxonType.structRef(into.intern(signatures.tupleAliasTargetFrom(name, readerFilePath: readerFilePath)))
 	end 'form'

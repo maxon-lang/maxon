@@ -59,8 +59,6 @@ lands while it is unambiguously alive; the poll after `wait()` sees a signalled 
 the code. 42 is distinctive and non-zero, so an `exited` arm that answered a zero-by-default — an
 unwritten scratch word, a masked-off upper half — is a different number rather than a plausible one.
 ```maxon
-typealias StringArray = Array with String
-
 function describePoll(poll ExitPoll) returns String
 	return match poll 'seen'
 		running gives "running"
@@ -116,7 +114,6 @@ obvious wrong implementation, and the reason this member is not a wrapper — tu
 distinguishable by the number and not only in principle. `exitedSeen` staying `-1` is the second half of
 the same claim: not one of the five polls claimed an exit that had not happened.
 ```maxon
-typealias StringArray = Array with String
 typealias PollTally = int(0 to 1000)
 typealias SeenCode = int(-1 to i64.max)
 
@@ -175,7 +172,6 @@ microseconds after the spawn, so `sawNone` is decided by the child's shape rathe
 spin is bounded at 4000 turns of 5 ms so a reader that had begun BLOCKING would fail the case rather
 than hang the suite: the line would never be read, and the exit code would be 0 instead of 9.
 ```maxon
-typealias StringArray = Array with String
 typealias SpinTally = int(0 to 100000)
 
 function lateChildArguments() returns StringArray
@@ -238,7 +234,6 @@ hang the first read past the 400 ms mark rather than answering `none`; a reader 
 DRAINING the buffer would come back with `def`, three bytes and a different exit code, rather than a near
 miss.
 ```maxon
-typealias StringArray = Array with String
 typealias SpinTally = int(0 to 100000)
 
 function describePoll(poll LinePoll) returns String
@@ -312,7 +307,6 @@ both streams through one `fromStderr` flag rather than written twice: an unread 
 4000 turns and fails the case rather than hanging the suite. The exit code packs both lengths
 (`7*10 + 7`), so a stream that answered nothing shows up as 7 or 70.
 ```maxon
-typealias StringArray = Array with String
 typealias SpinTally = int(0 to 100000)
 
 function describePoll(poll LinePoll) returns String
@@ -380,8 +374,6 @@ The child runs to completion first, so `running` here is the released answer and
 `pollExit` that consulted the freed handle would report `exited 0` (or fault), and either is a different
 line rather than a near miss.
 ```maxon
-typealias StringArray = Array with String
-
 function describeExit(poll ExitPoll) returns String
 	return match poll 'seen'
 		running gives "running"
@@ -442,7 +434,6 @@ The exit code sums the three descriptions' lengths (`11 + 6 + 10`), so a blank l
 5 ms because this child has no delay in it — every line is there within milliseconds — so a poll that
 never answers fails the case in about two seconds instead of hanging the suite.
 ```maxon
-typealias StringArray = Array with String
 typealias SpinTally = int(0 to 100000)
 
 function blankBetweenArguments() returns StringArray

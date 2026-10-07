@@ -14,9 +14,6 @@ grapheme/codepoint iteration, slicing, clone/COW, and `String.append`.
 
 <!-- test: heap-string-data-access -->
 ```maxon
-
-typealias Byte = int(0 to u8.max)
-
 function main() returns ExitCode
 	// Verify heap-allocated string data is accessible via bytes()
 	let s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"

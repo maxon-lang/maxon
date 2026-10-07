@@ -142,7 +142,8 @@ The no-argument forms use `CharacterSet.whitespacesAndNewlines()`. Trimming walk
 | `utf16()` | `UTF16View` | Each UTF-16 code unit |
 | `createIterator()` | `StringIterator` | Each `Character` (what `for c in s` uses) |
 
-Each view has `count()` and `createIterator()`, and works in `for`-`in`. Constructing a view does not copy.
+Each view has `count()` and `createIterator()`, and works in `for`-`in`. A `ByteView`'s `count()` is a
+`BytePos`; a `CodepointView`'s and a `UTF16View`'s is a `Count`. A view reads the string's own bytes in place.
 `StringIterator` implements `Iterator with Character`: `StringIterator.create(s)`, `current()`,
 `advance()`.
 
@@ -197,7 +198,7 @@ end 'StringError'
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `byteLength()` | `int(0 to u64.max)` | UTF-8 bytes in the cluster. |
+| `byteLength()` | `Count` | UTF-8 bytes in the cluster. |
 | `codepoint()` | `Codepoint` | The first codepoint of the cluster. |
 | `codepoints()` | `CodepointView` | Every codepoint of the cluster. |
 | `bytes()` | `ByteView` | The UTF-8 bytes. |

@@ -1573,10 +1573,6 @@ standing in for stderr is a visible failure rather than a coincidence. The bytes
 NUL are printed individually: a length alone would pass for a reader that answered five bytes of
 the wrong thing.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-typealias StringArray = Array with String
-
 function describe(label String, text String) returns String
 	let bytes = text.toByteArray()
 	var line = "{label} len={bytes.count()} ["
@@ -1650,10 +1646,6 @@ line — and the readers are called in that order, which also asserts the two sh
 byte reader with a buffer of its own would leave the line reader waiting on bytes already pulled off
 the pipe.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-typealias StringArray = Array with String
-
 function describe(label String, text String) returns String
 	let bytes = text.toByteArray()
 	var line = "{label} len={bytes.count()} ["

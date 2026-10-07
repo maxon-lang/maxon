@@ -46,6 +46,7 @@ end 'main'
 | `ExitCode` | `int(0 to u32.max)` on Windows, `int(0 to 255)` elsewhere | Process |
 | `Byte` | `int(0 to u8.max)` | String |
 | `ByteArray` | `Array with Byte` | File |
+| `Count` | `int(0 to u64.max) implements ElementIndex` — what a collection's `count()` returns | Array |
 | `StringArray` | `Array with String` | Json |
 | `CharSet` | `Set with Character` | CharacterSet |
 | `FilePathArray` | `Array with FilePath` | Directory |
@@ -72,9 +73,12 @@ end 'main'
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
 | `SegmentByteCount`, `SegmentOffset`, `SegmentWord` | see [SharedMemory](#sharedmemory) | SharedMemory |
 
-A program may declare one of these names itself. The declaring file reads its own declaration; any other
-file that sees both refuses the bare name (**E3063**) and spells the one it means, `stdlib.ByteArray` or
-`<directory>.ByteArray` (see [Qualified Names](LANGUAGE_REFERENCE.md#qualified-names)).
+A program may declare one of these names itself. Its declaration is then what the bare name means in every
+file of the program, and the library's is reached as `stdlib.ByteArray` (see
+[Qualified Names](LANGUAGE_REFERENCE.md#qualified-names)); the two are two types, and a value crossing
+between them needs a cast. Prefer the library's alias where it fits, and otherwise give your own a
+different name. Two project declarations of one name a file can both see are **E3063** in every file,
+the declaring ones included.
 
 ### Names a library signature asks for
 
@@ -92,7 +96,7 @@ to name one.
 | `MemberCount` | `int(0 to 4611686018427387904)` | Set |
 | `IterPos` | `int(0 to u64.max)` | Range |
 | `ElementTransform`, `ElementPredicate` | `function(Element) returns Element` / `returns bool`, on the `Iterable` extension | Interfaces |
-| `Utf8ByteCount` | `int(0 to u64.max)` | Character |
+| `TableCapacity` | `int(0 to 4611686018427387904)` | Map, Set |
 | `JsonInt` | `int(i64.min to i64.max)` | Json |
 | `JsonFloat` | `float(f64.min to f64.max)` | Json |
 | `Milliseconds` | `int(0 to u64.max)` | Sleep |
@@ -114,8 +118,20 @@ to name one.
 | `Tolerance` | `float(0.0 to f64.max)` | Testing |
 
 `Byte` and `BytePos` are declared once, in `String` (see the table above). `BytePos`, `GraphemeIndex`,
-`JsonNodeId` and `EntryCount` implement `ElementIndex`, and `MemberCount` implements `EntryCount`, so each
-indexes an `Array` with no cast; an index of any other alias, or of a non-integer type, is **E3005** (see [Subtypes With `implements`](LANGUAGE_REFERENCE.md#subtypes-with-implements)).
+`JsonNodeId` and `Count` implement `ElementIndex`; `EntryCount`, `TableCapacity` and
+`SchedulerProcessorCount` implement `Count`; and `MemberCount` implements `EntryCount`. So each indexes an
+`Array` with no cast, and any two of them compare with no cast through their common ancestor; an index of
+any other alias, or of a non-integer type, is **E3005** (see
+[Subtypes With `implements`](LANGUAGE_REFERENCE.md#subtypes-with-implements)). An `ElementIndex` goes where
+a `Count` is declared only by cast.
+
+`Array`, `List` and `Vector` `count()`, `JsonDoc.arrayLength`, `Character.byteLength()` and the `count()` of a
+string's codepoint and UTF-16 views return `Count`. `String.count()` returns a `GraphemeIndex` and a byte
+view's `count()` a `BytePos`.
+
+The inner typealiases a library type's `public` members name are `public` as well and can be written
+qualified: `Array.ElementIterator`, `Array.ElementMemory`, `Map.Entry`, `List.ListIter`, `Set.SetIter`,
+`Vector.VectorIter` and the like.
 
 ### Target support
 
@@ -391,7 +407,8 @@ The no-argument forms use `CharacterSet.whitespacesAndNewlines()`. Trimming walk
 | `utf16()` | `UTF16View` | Each UTF-16 code unit |
 | `createIterator()` | `StringIterator` | Each `Character` (what `for c in s` uses) |
 
-Each view has `count()` and `createIterator()`, and works in `for`-`in`. Constructing a view does not copy.
+Each view has `count()` and `createIterator()`, and works in `for`-`in`. A `ByteView`'s `count()` is a
+`BytePos`; a `CodepointView`'s and a `UTF16View`'s is a `Count`. A view reads the string's own bytes in place.
 `StringIterator` implements `Iterator with Character`: `StringIterator.create(s)`, `current()`,
 `advance()`.
 
@@ -446,7 +463,7 @@ end 'StringError'
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `byteLength()` | `int(0 to u64.max)` | UTF-8 bytes in the cluster. |
+| `byteLength()` | `Count` | UTF-8 bytes in the cluster. |
 | `codepoint()` | `Codepoint` | The first codepoint of the cluster. |
 | `codepoints()` | `CodepointView` | Every codepoint of the cluster. |
 | `bytes()` | `ByteView` | The UTF-8 bytes. |
@@ -604,7 +621,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `count()` | `int(0 to u64.max)` | Number of elements. |
+| `count()` | `Count` | Number of elements. |
 | `isEmpty()` | `bool` | True when `count()` is 0. |
 | `capacity()` | `int(i64.min to i64.max)` | Slots allocated. Negative when the storage is not this array's own yet: `-1` for a slice view that has not been written, other negative values for a literal's or a module-level constant's read-only storage. Treat any negative value as "not owned yet". |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds` at or past `count()`, `ArrayError.emptySlot` for a slot that was never written. |
@@ -680,7 +697,7 @@ there was never filled.
 | Member | Returns | Complexity | Description |
 |--------|---------|-----------|-------------|
 | `List.create()` | `List` | O(1) | An empty list. |
-| `count()` | `int(0 to u64.max)` | O(1) | Number of elements. |
+| `count()` | `Count` | O(1) | Number of elements. |
 | `isEmpty()` | `bool` | O(1) | True when empty. |
 | `first()` | `Element` | O(1) | Throws `ArrayError` when empty. |
 | `last()` | `Element` | O(1) | Throws `ArrayError` when empty. |
@@ -736,7 +753,7 @@ order, which is unspecified. The table resizes when it is three-quarters full.
 | `get(key Key)` | `Value` | Throws `MapError.keyNotFound`. |
 | `contains(key Key)` | `bool` | Key test. |
 | `remove(key Key)` | `bool` | Remove the entry; true when the key was present. |
-| `count()` | `int(0 to 4611686018427387904)` | Number of entries. |
+| `count()` | `EntryCount` | Number of entries. |
 | `getCapacity()` | table capacity | Total slots in the table: `0` for a map from `create()` until its first insert, `16` after that for a small map. |
 | `clone()` | `Map` | An independent copy of every key and value; writing either map leaves the other unchanged. A map whose values are or hold promises is E3141. |
 | `createIterator()` | `MapIterator` | Throws `IterationError.exhausted` when empty. |
@@ -788,7 +805,7 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 | `insert(element Element)` | — | Add an element; inserting a present element does nothing. |
 | `contains(element Element)` | `bool` | Membership test. |
 | `remove(element Element)` | `bool` | Remove; true when the element was present. |
-| `count()` | `int(0 to 4611686018427387904)` | Number of elements. |
+| `count()` | `MemberCount` | Number of elements. |
 | `getCapacity()` | table capacity | Total slots in the table. |
 | `clone()` | `Set` | An independent copy of every element; changing either set leaves the other unchanged. |
 | `createIterator()` | `SetIterator` | Throws `IterationError.exhausted` when empty. |
@@ -819,7 +836,7 @@ three elements, and `countof(Vec3)` is the constant `3`. It implements `Iterable
 |--------|---------|-------------|
 | `Vector.create()` | `Vector` | Every element zero. |
 | `Vector from [a, b, c]` | `Vector` | A literal; the count is the literal's length. |
-| `count()` | `int(0 to u64.max)` | The fixed size, answered from the type. |
+| `count()` | `Count` | The fixed size, answered from the type. |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds`. |
 | `set(index, value Element)` | — | Throws `ArrayError.indexOutOfBounds` at or past the fixed size. |
 | `createIterator()` | `ArrayIterator` | Throws `IterationError.exhausted` when the vector is empty. |
@@ -2441,7 +2458,7 @@ refers to its children by `JsonNodeId`. Walk a document through the `JsonDoc` ac
 | `getString(parent, key:)` | `String` | `JsonAccessError` | A string member; `wrongType` for another kind. |
 | `getInt(parent, key:)` | `int(i64.min to i64.max)` | `JsonAccessError` | A number member, truncated toward zero. |
 | `getBool(parent, key:)` | `bool` | `JsonAccessError` | A boolean member. |
-| `arrayLength(id JsonNodeId)` | `int(0 to u64.max)` | `JsonAccessError` | `notArray` for another kind. |
+| `arrayLength(id JsonNodeId)` | `Count` | `JsonAccessError` | `notArray` for another kind. |
 | `arrayAt(id JsonNodeId, index)` | `JsonNodeId` | `JsonAccessError` | `outOfBounds` past the end. |
 
 ### JsonNode
@@ -2636,7 +2653,7 @@ Output: `2024-10-04 11017`, then `2023-11-14T22:13:20.123Z`.
 | Method | Description |
 |--------|-------------|
 | `Scheduler.yield()` | Let the next runnable green thread run. The caller resumes behind everything that was already runnable. When nothing else is runnable it returns promptly, so a loop that yields is a busy wait that lets others progress. It uses no timer, unlike `sleep(0)`, and is safe in a program that never starts a green thread. |
-| `Scheduler.processorCount()` | The number of processors the scheduler runs services on, as a `SchedulerProcessorCount` (`int(1 to i64.max)`): the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets (1 to 2147483647, above the machine's count as well as below it). The count is resolved before `main` runs, so it is the same before the first `spawn` as after it. |
+| `Scheduler.processorCount()` | The number of processors the scheduler runs services on, as a `SchedulerProcessorCount` (`int(1 to i64.max)`, a `Count`, so it compares with a collection's `count()` with no cast): the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets (1 to 2147483647, above the machine's count as well as below it). The count is resolved before `main` runs, so it is the same before the first `spawn` as after it. |
 
 Both are refused on `wasm32-wasi` (E3104). Green threads, `async` and `await` are described under Concurrency in
 [LANGUAGE_REFERENCE.md](LANGUAGE_REFERENCE.md).
@@ -2847,7 +2864,7 @@ Every matcher also takes `message String = ""`, `file String = __file__` and
 
 `equal`, `notEqual` and the four ordering matchers are each one
 [generic function](LANGUAGE_REFERENCE.md#generic-functions): the type is inferred from the two arguments, so
-`Expect.equal(parts.count(), expected: 3)` compares two `ElementIndex` values and a value of any alias needs
+`Expect.equal(parts.count(), expected: 3)` compares two `Count` values and a value of any alias needs
 no cast. Each value is printed as its interpolation prints it; `String` values are quoted, so empty or
 space-padded values stay visible.
 

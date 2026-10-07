@@ -219,8 +219,6 @@ export function duplicate() returns Integer
 end 'duplicate'
 
 // --- file: beta/dup.maxon
-export typealias Integer = int(i64.min to i64.max)
-
 export function duplicate() returns Integer
 	return 2
 end 'duplicate'
@@ -231,7 +229,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: app/specs/namespaces/error.cross-file-bare-name-ambiguous.maxon:18:9: Ambiguous bare-name call to 'duplicate': more than one visible declaration matches it. Qualify it as one of: alpha.duplicate, beta.duplicate
+error E3095: app/specs/namespaces/error.cross-file-bare-name-ambiguous.maxon:16:9: Ambiguous bare-name call to 'duplicate': more than one visible declaration matches it. Qualify it as one of: alpha.duplicate, beta.duplicate
 ```
 
 <!-- test: bare-sibling-instance-method-call-injects-self -->

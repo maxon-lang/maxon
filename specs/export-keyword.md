@@ -98,7 +98,7 @@ error E3095: Ambiguous bare-name call to 'add': more than one visible declaratio
 
 When there is no collision, unqualified cross-file calls continue to work via the cross-file fallback. See `specs/namespaces.md` for the canonical resolution rules and the `error.cross-file-bare-name-ambiguous` test that pins this diagnostic.
 
-The same model applies to **type names** — typealiases, types, enums, unions and interfaces: two exported declarations of one bare name in different directories are accepted at decl time, and a bare reference from a third file is rejected with **E3063** (`Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, legacy.Score`). The user writes `api.Score` or `legacy.Score` to disambiguate; a project-root declaration is `export.Score` and the standard library's is `stdlib.Score`. A file's own declaration wins its bare name in that file. Two typealiases of one name in one file, or two nameable ones in one directory, are E3061 — qualification cannot tell them apart. See `specs/typealias-collision.md` for the canonical tests.
+The same model applies to **type names** — typealiases, types, enums, unions and interfaces: two exported declarations of one bare name in different directories are accepted at decl time, and a bare reference from a third file is rejected with **E3063** (`Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, legacy.Score`). The user writes `api.Score` or `legacy.Score` to disambiguate; a project-root declaration is `export.Score` and the standard library's is `stdlib.Score`. The rule holds in a file that declares one of them too, whose remedy is to rename its own; the standard library's declarations never make a bare name ambiguous, and a visible author declaration is what the bare name means. Two typealiases of one name in one file, or two nameable ones in one directory, are E3061 — qualification cannot tell them apart. See `specs/typealias-collision.md` for the canonical tests.
 
 Qualification never bypasses visibility, and a type hidden from a file hides its members too: through a value of it, that file reaches no field, method, extension method, accessor or static, nor the calls the compiler makes on the value's behalf (interpolation's `toString`, `==` and ordering operators, `for` iteration, `match`) — E3008, or E3088 for a `module` type outside its subtree. A value held at an exported interface answers that interface's requirements whatever type stands behind it.
 
@@ -1278,27 +1278,28 @@ end 'main'
 
 Whether `7 as Score` is legal in a file that declares no `Score` depends on whether ANY declaration of
 `Score` is visible to it — not on whichever declaration happened to be recorded last, so the answer does
-not depend on the order files are walked, which is alphabetical. **The filenames below are load-bearing** —
-`a.maxon` sorts before `b.maxon`, so the private declaration is the one recorded last, and the
-exported one must still be found.
+not depend on the order files are walked, which is alphabetical. **The paths below are load-bearing** —
+`lib/a.maxon` sorts before `zz/b.maxon`, so the private declaration is the one recorded last, and the
+`module` one must still be found. `zz/` is outside `lib/`, so the private alias's file cannot see the
+`module` one and is not ambiguous, and `lib/main.maxon` cannot see the private one.
 
 <!-- test: exported-alias-found-past-a-later-private-one -->
 ```maxon
-// --- file: a.maxon
-export typealias Score = int(0 to 100)
+// --- file: lib/a.maxon
+module typealias Score = int(0 to 100)
 
 function fromA() returns Score
 	return 7
 end 'fromA'
 
-// --- file: b.maxon
+// --- file: zz/b.maxon
 typealias Score = int(0 to 50)
 
 function fromB() returns Score
 	return 3
 end 'fromB'
 
-// --- file: main.maxon
+// --- file: lib/main.maxon
 function main() returns ExitCode
 	let s = 7 as Score
 	return s

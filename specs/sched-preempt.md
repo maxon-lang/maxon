@@ -955,7 +955,6 @@ its `main` runs. Not on `wasm32-wasi`, where the subprocess band is refused at c
 time (`subprocess-unsupported.md`).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias StringArray = Array with String
 
 type Echo
 	var n as Integer

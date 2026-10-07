@@ -46,9 +46,6 @@ let OverloadMangleMarker = "#"
 // `<Type>.<member>` — how every method is registered, and the only shape this file reads a roster by.
 let CompletionMemberSeparator = "."
 
-// The compiler's reserved prefix. A name an author may not write is a name an editor must not offer.
-let CompletionReservedNamePrefix = "__"
-
 module function completionServedMethods() returns LspMethodArray
 	var served = LspMethodArray.create()
 	served.push(LspMethod.completion)
@@ -349,7 +346,7 @@ function addOffer(offers CompletionOfferArray, offered OfferedLabelSet, label St
 
 	// A nested member (`Map.Entry.get`) is not a member of the type the cursor is on, and a reserved name
 	// is one an author may not write at all.
-	if label.contains(CompletionMemberSeparator) or label.startsWith(CompletionReservedNamePrefix) 'notWritableHere'
+	if label.contains(CompletionMemberSeparator) or isCompilerReservedName(label.toByteArray()) 'notWritableHere'
 		return
 	end 'notWritableHere'
 

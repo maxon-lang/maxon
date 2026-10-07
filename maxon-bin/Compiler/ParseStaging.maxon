@@ -1337,7 +1337,7 @@ function commitArtifactRegistries(project Project, artifact FileParseArtifact, o
 	commitPendingFunctionTypeDoors(project, artifact: artifact)
 	commitPendingDiscardedResults(project, artifact: artifact)
 	commitRangeChecks(project, artifact: artifact)
-	commitTypeAliases(project, artifact: artifact, signatures: signatures)
+	commitTypeAliases(project, artifact: artifact)
 	commitFunctionTypeAliases(project, artifact: artifact, signatures: signatures)
 	commitStructTypes(project, artifact: artifact)
 	commitEnumTypes(project, artifact: artifact)
@@ -1939,27 +1939,24 @@ function commitRangeChecks(project Project, artifact FileParseArtifact)
 	end 'each'
 end 'commitRangeChecks'
 
-function commitTypeAliases(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
-	let declaredByTheCorpus = signatures.declaredByTheCorpus(artifact.filePath)
-
+function commitTypeAliases(project Project, artifact FileParseArtifact)
 	for alias in artifact.typeAliases 'each'
-		project.typeAliases.record(alias, declaredByTheCorpus: declaredByTheCorpus)
+		project.typeAliases.record(alias)
 	end 'each'
 end 'commitTypeAliases'
 
 // Commit the artifact's FUNCTION typealiases into the project registry — the twin of
 // `commitTypeAliases`, remap-free (a function alias carries no interner ids).
 //
-// A declaration of a SHAPE-CONTESTED name is committed twice: once bare, and once under this file's mint.
-// The bare key is what an unqualified read still resolves through, and the mint is the key every scoped
-// door hands on — a registry holding only the bare one answers a mint with nothing.
+// A declaration of a SHAPE-CONTESTED name is committed under this file's mint alone — the key every scoped
+// door hands on — and every other declaration under its bare name.
 function commitFunctionTypeAliases(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
 	for alias in artifact.functionTypeAliases 'each'
-		project.functionTypeAliases.upsert(alias.name, value: alias)
-
 		let scoped = signatures.functionAliasScopedName(alias.name, readerFilePath: alias.declFilePath)
 
-		if not scoped.equals(alias.name) 'thisFilesOwnShapeAnswersUnderItsOwnKey'
+		if scoped.equals(alias.name) 'noShapeContestHoldsTheName'
+			project.functionTypeAliases.upsert(alias.name, value: alias)
+		end 'noShapeContestHoldsTheName' else 'thisFilesOwnShapeAnswersUnderItsOwnKey'
 			project.functionTypeAliases.upsert(scoped, value: alias.underName(scoped))
 		end 'thisFilesOwnShapeAnswersUnderItsOwnKey'
 	end 'each'
@@ -2312,13 +2309,13 @@ function duplicateFunctionMessage(project Project, name ByteArray, declFilePath 
 	let signatures = try queryProgramSignatures(project) otherwise panic("duplicateFunctionMessage: queryProgramSignatures failed during merge — the whole-program index is computed and memoized before the pipeline runs, so a merge-time ask cannot fail fresh")
 
 	if signatures.isContestedRegistrationName(name) 'aFreeFunctionContestedAcrossDirectories'
-		return mangledDuplicateFunctionMessage(name, why: "a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function")
+		return mangledDuplicateFunctionMessage(name, signatures: signatures, why: "a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function")
 	end 'aFreeFunctionContestedAcrossDirectories'
 
 	let base = overloadRegistrationBaseName(name)
 
 	if signatures.isContestedExtensionMethod(base) 'anExtensionMethodContestedAcrossFiles'
-		return parameterSpellingCollisionMessage(name, base: base, whyThereAreSeveral: "is declared by an `extension` in more than one FILE")
+		return parameterSpellingCollisionMessage(name, base: base, signatures: signatures, whyThereAreSeveral: "is declared by an `extension` in more than one FILE")
 	end 'anExtensionMethodContestedAcrossFiles'
 
 	// ⭐⭐ **THE FOURTH SYNTHESIZED-NAME KIND: A FREE FUNCTION MORE THAN ONE FILE OF ITS DIRECTORY DECLARES**,
@@ -2327,7 +2324,7 @@ function duplicateFunctionMessage(project Project, name ByteArray, declFilePath 
 	// declaration in this program", because a file boundary is the fact the author has to see: the two
 	// declarations are in two files, and nothing in either one of them looks like a duplicate.
 	if signatures.isCrossFileOverloadedFreeFunctionAt(base, declFilePath: declFilePath) 'aFreeFunctionDeclaredByTwoFilesOfOneDirectory'
-		return parameterSpellingCollisionMessage(name, base: base, whyThereAreSeveral: "is declared as a free function in more than one FILE of its directory")
+		return parameterSpellingCollisionMessage(name, base: base, signatures: signatures, whyThereAreSeveral: "is declared as a free function in more than one FILE of its directory")
 	end 'aFreeFunctionDeclaredByTwoFilesOfOneDirectory'
 
 	// ⛔⛔ **THE MINTED-NAME SENTENCES ARE GATED ON THE PROPERTY — `name` IS NOT WHAT A DECLARATION WROTE — AND
@@ -2351,10 +2348,10 @@ function duplicateFunctionMessage(project Project, name ByteArray, declFilePath 
 		// correct for the further-suffixed spelling too (`Box.getValue#__static#Integer` collides when two
 		// statics spell `Integer`), which is why the arm keys on the base rather than on an exact suffix.
 		if signatures.isStaticInstanceContest(base) 'aStaticBesideAnInstanceOfOneName'
-			return mangledDuplicateFunctionMessage(name, why: "'{String.from(base)}' names both a `static` member and an instance member, so the static is registered under a spelling of its own — and more than one `static` declaration of it claims that spelling. Give the statics distinct parameter types, or distinct names")
+			return mangledDuplicateFunctionMessage(name, signatures: signatures, why: "'{String.from(base)}' names both a `static` member and an instance member, so the static is registered under a spelling of its own — and more than one `static` declaration of it claims that spelling. Give the statics distinct parameter types, or distinct names")
 		end 'aStaticBesideAnInstanceOfOneName'
 
-		return parameterSpellingCollisionMessage(name, base: base, whyThereAreSeveral: "has more than one declaration in this program")
+		return parameterSpellingCollisionMessage(name, base: base, signatures: signatures, whyThereAreSeveral: "has more than one declaration in this program")
 	end 'aMintedNameNoDeclarationWrote'
 
 	return "Duplicate function '{String.from(name)}'"
@@ -2363,16 +2360,16 @@ end 'duplicateFunctionMessage'
 // THE one speller of the mangled register's opening. Three call sites above, identical up to the tail; it is
 // written once so that a future reconciliation of the wordings (see the header) is one edit and cannot leave
 // a sibling behind.
-function mangledDuplicateFunctionMessage(name ByteArray, why String) returns String
-	return "duplicate definition of function '{String.from(name)}' — {why}"
+function mangledDuplicateFunctionMessage(name ByteArray, why String, signatures ProgramSignatures) returns String
+	return "duplicate definition of function '{registrationNameDisplay(name, signatures: signatures)}' — {why}"
 end 'mangledDuplicateFunctionMessage'
 
 // The two PARAMETER-SPELLING kinds — a contested `extension` method, and an ordinary overload set's member
 // redeclared — differ only in why the name has several declarations. What follows from that is one fact: every
 // declaration is filed under its parameter spelling, two spelled the same, and the fix is the parameters or
 // the name. It is stated once.
-function parameterSpellingCollisionMessage(name ByteArray, base ByteArray, whyThereAreSeveral String) returns String
-	return mangledDuplicateFunctionMessage(name, why: "'{String.from(base)}' {whyThereAreSeveral}, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names")
+function parameterSpellingCollisionMessage(name ByteArray, base ByteArray, whyThereAreSeveral String, signatures ProgramSignatures) returns String
+	return mangledDuplicateFunctionMessage(name, signatures: signatures, why: "'{String.from(base)}' {whyThereAreSeveral}, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names")
 end 'parameterSpellingCollisionMessage'
 
 // Commit this file's overload sets. A file that overloads nothing carries the shared empty table and

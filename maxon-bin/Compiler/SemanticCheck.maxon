@@ -391,8 +391,13 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, signature
 		return
 	end 'cannotDiscriminate'
 
-	let pick = selectOverload(project, func: func, readerFilePath: readerFilePath, op: op, candidates: candidates, retype: argumentsAsWritten)
-	retireDisambiguatingLiteralCasts(project, func: func, readerFilePath: readerFilePath, op: op, candidates: candidates, pick: pick)
+	let nameable = membersTheCallerMayName(project, signatures: signatures, funcNames: funcNames, func: func, op: op, candidates: candidates)
+	let narrowed = nameable.count() > 0 and nameable.count() < candidates.count()
+	let firstPick = selectOverload(project, func: func, readerFilePath: readerFilePath, op: op, candidates: nameable if narrowed else candidates, retype: argumentsAsWritten)
+	let widens = narrowed and pickFindsNoMember(firstPick)
+	let pick = selectOverload(project, func: func, readerFilePath: readerFilePath, op: op, candidates: candidates, retype: argumentsAsWritten) if widens else firstPick
+	let pool = nameable if narrowed and not widens else candidates
+	retireDisambiguatingLiteralCasts(project, func: func, readerFilePath: readerFilePath, op: op, candidates: pool, pick: pick)
 
 	match pick 'pick'
 		chosen(member) then bindOverloadChoice(project, module: module, signatures: signatures, funcNames: funcNames, func: func, opIndex: opIndex, callee: callee, member: member, valueDefiners: valueDefiners, resolution: resolution)
@@ -401,14 +406,13 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, signature
 		// EARNS THE AUTHOR A SECOND, WRONG DIAGNOSTIC.** A CONTESTED set has no member under the bare
 		// name (`Parser.overloadRegistrationNameFor`), so an op left naming it reaches `validateCall` and is
 		// reported **`E3004: call to undefined function 'f'`** — about a name declared twice over — under the
-		// E3007 that has just explained the real fault. MEASURED on two root-level files each declaring
-		// `f(a Integer = 1)` / `f(a Count = 1)`, two spellings of one underlying type: E3007 then E3004.
-		// It is the same premise `noMatch` needed made true, so it takes the same repair.
-		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied, module: module, candidates: candidates)
+		// E3007 that has just explained the real fault. It is the same premise `noMatch` needed made true, so
+		// it takes the same repair.
+		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied, module: module, candidates: pool)
 
 		// Nothing the call could mean. Left on a DECLARED member deliberately — see this pass's header,
 		// step 5, and `leaveUnmatchedCallOnFirstCandidate` for the one set where "left alone" is not that.
-		noMatch then leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: candidates)
+		noMatch then leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, callee: callee, candidates: pool)
 	end 'pick'
 end 'resolveOneOverloadedCall'
 
@@ -671,6 +675,26 @@ export function overloadCandidates(project Project, members ByteArrayArray) retu
 
 	return candidates
 end 'overloadCandidates'
+
+function membersTheCallerMayName(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, func IrFunction, op MaxonOp, candidates ByteArrayArray) returns ByteArrayArray
+	var nameable = ByteArrayArray.create()
+
+	for member in candidates 'eachCandidate'
+		if not boundMemberIsRefusedAsHidden(project, signatures: signatures, funcNames: funcNames, func: func, op: op, member: member) 'theCallerMayNameIt'
+			nameable.push(member)
+		end 'theCallerMayNameIt'
+	end 'eachCandidate'
+
+	return nameable
+end 'membersTheCallerMayName'
+
+function pickFindsNoMember(pick OverloadPick) returns bool
+	return match pick 'pick'
+		noMatch gives true
+		chosen or
+			ambiguous gives false
+	end 'pick'
+end 'pickFindsNoMember'
 
 // The outcome of scoring a call against an overload set's candidates. `ambiguous` carries the TIED candidates
 // (not all of them) because that is what the diagnostic lists — the ones the call genuinely cannot choose
@@ -3522,7 +3546,8 @@ function witnessFormalDeclaredType(project Project, signatures ProgramSignatures
 	// PARAMETER of that alias carries — so `checkOneArgType`'s function-shape arm compares the two shapes
 	// exactly as it does for a direct call.
 	if signatures.isFunctionAliasFor(formalName, readerFilePath: declaring.declFilePath) 'functionAliasFormal'
-		return WitnessFormalType.declared(MaxonType.function(id), preErasedAggregate: EmptySourceText)
+		let aliasId = try project.typeNames.idOf(signatures.declaredIdentityOfSpelling(formalName, declFilePath: declaring.declFilePath)) otherwise return WitnessFormalType.opaque
+		return WitnessFormalType.declared(MaxonType.function(aliasId), preErasedAggregate: EmptySourceText)
 	end 'functionAliasFormal'
 
 	// A struct, an interface, an enum/union, a ranged alias — the whole-program cascade, one door.
@@ -4042,7 +4067,7 @@ end 'renderAmbiguousCandidates'
 // reached only when it answered `false` — so it panics rather than inventing a third sentence.
 function reportCalleeNotVisible(project Project, funcNames FunctionNameIndex, callee ByteArray, noun ByteArray, callRange SourceRange, filePath FilePath)
 	let declared = try funcNames.funcNamed(callee) otherwise panic("reportCalleeNotVisible: '{String.from(callee)}' has no declaration — `calleeVisibleFrom` answered `false`, which it can only do for a callee it found")
-	reportDiagnostic(project, diagnostic: hiddenSymbolDiagnostic(HiddenSymbolKind.functionDeclaration, noun: String.from(noun), tier: declared.visibility, line: callRange.line, column: callRange.column, filePath: filePath))
+	reportDiagnostic(project, diagnostic: hiddenSymbolDiagnostic(HiddenSymbolKind.functionDeclaration, noun: registrationNameDisplay(noun, signatures: programSignaturesIn(project, asker: "reportCalleeNotVisible")), tier: declared.visibility, line: callRange.line, column: callRange.column, filePath: filePath))
 end 'reportCalleeNotVisible'
 
 // ⭐ **WHICH KIND OF DECLARATION A HIDDEN-SYMBOL REFUSAL IS ABOUT — the ONE axis on which its two sentences
@@ -4185,38 +4210,14 @@ end 'checkFunctionTypeDoors'
 // different KINDS of difference. Where the shapes differ the shape text is the whole content; where it
 // does not, the declaring files are.
 //
-// A brand whose source spellings already differ earns nothing: the names carry the content themselves.
-function contestedBrandNote(signatures ProgramSignatures, brand ByteArray, other ByteArray, shapeText String, tellsThemApart bool) returns String
-	if not sourceSpelledAliasName(brand).equals(sourceSpelledAliasName(other)) 'theSourceSpellingsTellThemApart'
-		return ""
-	end 'theSourceSpellingsTellThemApart'
+// A brand whose display already differs earns nothing: the names carry the content themselves.
+function contestedBrandNote(signatures ProgramSignatures, brand ByteArray, shown String, otherShown String, shapeText String, tellsThemApart bool) returns String
+	if tellsThemApart and shown.equals(otherShown) 'theShapesAreTheContent'
+		return " ({shapeText})"
+	end 'theShapesAreTheContent'
 
-	return " ({shapeText})" if tellsThemApart else " (declared in {declaringFileList(signatures, declFilePaths: signatures.functionAliasMintDeclaringFiles(brand))})"
+	return signatures.declaredInNote(brand, shown: shown, otherShown: otherShown)
 end 'contestedBrandNote'
-
-export function declaringFileList(signatures ProgramSignatures, declFilePaths FilePathArray) returns String
-	var rendered = StringArray.create()
-
-	for declFilePath in declFilePaths 'eachDeclaringFile'
-		insertCandidateName(rendered, candidate: signatures.projectRelativeFileDisplay(declFilePath))
-	end 'eachDeclaringFile'
-
-	return joinedWith(rendered, separator: CandidateListSeparator)
-end 'declaringFileList'
-
-function contestedInstanceNote(signatures ProgramSignatures, tag ValueTypeTag, nameId TypeNameId) returns String
-	if tag != ValueTypeTag.genericInstance 'carriesNoInstance'
-		return ""
-	end 'carriesNoInstance'
-
-	let declFilePaths = signatures.genericInstanceDeclaringFiles(nameId as GenericInstanceId)
-
-	if declFilePaths.count() == 0 'noDeclarationNamesThisInstance'
-		return ""
-	end 'noDeclarationNamesThisInstance'
-
-	return " (declared in {declaringFileList(signatures, declFilePaths: declFilePaths)})"
-end 'contestedInstanceNote'
 
 // One door. Both governing names resolve — see `TypeResolution.requireFunctionShapeOf`.
 function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
@@ -4239,10 +4240,10 @@ function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
 	let declaredShapeText = formatFunctionShapeDisplay(declared, typeNames: project.typeNames, signatures: signatures)
 	let gotShapeText = formatFunctionShapeDisplay(got, typeNames: project.typeNames, signatures: signatures)
 	let shapesTellThemApart = not declaredShapeText.equals(gotShapeText)
-	let expected = sourceSpelledAliasText(door.declaredName) if brandsConflict else declaredShapeText
-	let actual = sourceSpelledAliasText(door.gotName) if brandsConflict else gotShapeText
-	let expectedNote = contestedBrandNote(signatures, brand: door.declaredName, other: door.gotName, shapeText: declaredShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else ""
-	let actualNote = contestedBrandNote(signatures, brand: door.gotName, other: door.declaredName, shapeText: gotShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else ""
+	let expected = signatures.aliasIdentityDisplay(door.declaredName) if brandsConflict else declaredShapeText
+	let actual = signatures.aliasIdentityDisplay(door.gotName) if brandsConflict else gotShapeText
+	let expectedNote = contestedBrandNote(signatures, brand: door.declaredName, shown: expected, otherShown: actual, shapeText: declaredShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else ""
+	let actualNote = contestedBrandNote(signatures, brand: door.gotName, shown: actual, otherShown: expected, shapeText: gotShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else ""
 
 	// A cast is a CAST rejection and takes E3009, the sibling of the cross-kind refusal
 	// `castHasNoLegalConversion` makes; every other door is a type mismatch and takes E3005, the sibling of
@@ -6092,7 +6093,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 			// way (user ruling, 2026-08-04). The compiled twin read `expected 'Box_Leaf', got 'OtherBox'`
 			// on a program that declares `typealias LeafBox = Box with Leaf` — the `got` side quoting the
 			// author and the `expected` side quoting the mangler.
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i, expected: String.from(signatures.instanceArgDisplayName(gid, position: position)), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(ArgumentParameter.named(paramName), position: i, expected: signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(gid, position: position)), got: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 			return
 		end 'wrongTypeArgument'
 
@@ -6321,10 +6322,6 @@ end 'valueBrandOf'
 function paramBrandOf(sig FuncSignature, position ParamCount, paramTag ValueTypeTag) returns ByteArray
 	return declaredBrandOf(try sig.paramDeclaredNames.get(position) otherwise panic("paramBrandOf: paramDeclaredNames.get OOB at {position} — a signature's param columns are built in lockstep"), paramTag: paramTag)
 end 'paramBrandOf'
-
-function declaredBrandOf(declaredName ByteArray, paramTag ValueTypeTag) returns ByteArray
-	return declaredName if paramTag == ValueTypeTag.genericInstance else EmptySourceText
-end 'declaredBrandOf'
 
 // ⭐⭐ **HOW A DIAGNOSTIC SPELLS THE TYPE OF A *VALUE*** — its brand where it wears one, because `Xs` and `Ys`
 // share a gid and the brand is the type the value IS; else the type's own spelling. The parser's twin is
@@ -6984,7 +6981,7 @@ function nestedClaimAgainstBinding(project Project, signatures ProgramSignatures
 end 'nestedClaimAgainstBinding'
 
 // What the value being widened binds `interfaceName`'s associated type at `position` to — the conformer's own
-// answer (`conformerAssociatedBinding`), reduced through the conformer's INSTANCE when it has one.
+// answer (`fileScopedConformerBinding`), reduced through the conformer's INSTANCE when it has one.
 //
 // A conformance's `withArgs` are RENDERED SOURCE NAMES, so a GENERIC conformer records its own type parameter's
 // spelling: `type Array uses Element implements Iterable with Element` binds the string `Element`. That names a
@@ -7009,7 +7006,7 @@ end 'conformerBindingThroughInstance'
 
 function fileScopedConformerBinding(project Project, signatures ProgramSignatures, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns ByteArray throws MapError
 	let decl = try conformanceDeclOf(project.conformances, typeName: typeName)
-	return signatures.rangeScopedDeclaredName(try declAssociatedBinding(decl, interfaceName: interfaceName, position: position), readerFilePath: decl.filePath)
+	return signatures.declaredIdentityOfSpelling(try declAssociatedBinding(decl, interfaceName: interfaceName, position: position), declFilePath: decl.filePath)
 end 'fileScopedConformerBinding'
 
 // ⭐ **THE SITE'S CLAIM AS THE CALL SEES IT** — the callee's declared `Base with Args` with the CALLER's own
@@ -7543,7 +7540,9 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			let expectedDisplay = paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag, readerFilePath: filePath)
 			let gotDisplay = valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)
 			var argSignatures = programSignaturesIn(project, asker: "checkOneArgType")
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: expectedDisplay, got: gotDisplay, expectedNote: contestedInstanceNote(argSignatures, tag: paramTag, nameId: typeNameIdOf(paramType)), gotNote: contestedInstanceNote(argSignatures, tag: argTag, nameId: argNameId)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+			let declaredParamBrandOfCall = declaredBrandOf(declaredParamName, paramTag: paramTag)
+			let gotBrandOfCall = valueBrandOf(project, func: func, value: argId)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: argSignatures.tupleDisplayNoted(expectedDisplay, identity: expectedAggregate, otherShown: gotDisplay, otherIdentity: gotAggregate), got: argSignatures.tupleDisplayNoted(gotDisplay, identity: gotAggregate, otherShown: expectedDisplay, otherIdentity: expectedAggregate), expectedNote: argSignatures.contestedTypeNote(paramTag, nameId: typeNameIdOf(paramType), brand: declaredParamBrandOfCall, identity: expectedAggregate, shown: expectedDisplay, otherShown: gotDisplay), gotNote: argSignatures.contestedTypeNote(argTag, nameId: argNameId, brand: gotBrandOfCall, identity: gotAggregate, shown: gotDisplay, otherShown: expectedDisplay)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 			return
 		end 'aggregateArgMismatch'
 	end 'aggregateComparable'
@@ -7622,9 +7621,9 @@ function checkFunctionArgShape(project Project, func IrFunction, declaredShape F
 	let declaredShapeText = formatFunctionShapeDisplay(declaredShape, typeNames: project.typeNames, signatures: signatures)
 	let gotShapeText = formatFunctionShapeDisplay(gotShape, typeNames: project.typeNames, signatures: signatures)
 	let shapesTellThemApart = not declaredShapeText.equals(gotShapeText)
-	let expected = sourceSpelledAliasText(declaredBrand) if brandsConflict else declaredShapeText
-	let actual = sourceSpelledAliasText(gotBrand) if brandsConflict else gotShapeText
-	reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(param, position: position, expected: expected, got: actual, expectedNote: contestedBrandNote(signatures, brand: declaredBrand, other: gotBrand, shapeText: declaredShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else "", gotNote: contestedBrandNote(signatures, brand: gotBrand, other: declaredBrand, shapeText: gotShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else ""), line: callRange.line, column: callRange.column, filePath: filePath)
+	let expected = signatures.aliasIdentityDisplay(declaredBrand) if brandsConflict else declaredShapeText
+	let actual = signatures.aliasIdentityDisplay(gotBrand) if brandsConflict else gotShapeText
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(param, position: position, expected: expected, got: actual, expectedNote: contestedBrandNote(signatures, brand: declaredBrand, shown: expected, otherShown: actual, shapeText: declaredShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else "", gotNote: contestedBrandNote(signatures, brand: gotBrand, shown: actual, otherShown: expected, shapeText: gotShapeText, tellsThemApart: shapesTellThemApart) if brandsConflict else ""), line: callRange.line, column: callRange.column, filePath: filePath)
 	return true
 end 'checkFunctionArgShape'
 
@@ -7862,7 +7861,7 @@ function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTy
 	end 'nominal'
 
 	if not declaredName.isEmpty() and not tagAdmitsNoAggregate(argTag) 'declaredAliasAgainstANamedArgument'
-		return String.from(declaredName)
+		return programSignaturesIn(project, asker: "paramDisplayName").aliasIdentityDisplay(declaredName)
 	end 'declaredAliasAgainstANamedArgument'
 
 	return typeTagName(paramTag)
@@ -7876,7 +7875,8 @@ function reportArgError(project Project, code ErrorCode, message String, argRang
 	reportPositioned(project, code: code, message: message, line: range.line, column: range.column, filePath: filePath)
 end 'reportArgError'
 
-// E3001 / E3002: the ENTRY function must exist and return ExitCode.
+// E3001 / E3002: the ENTRY function must exist and return ExitCode — the builtin, or an author's integer
+// alias named `ExitCode` whose range fits the builtin's.
 function checkMainFunction(project Project)
 	let entryName = String.from(project.entryFunctionName)
 
@@ -7887,7 +7887,7 @@ function checkMainFunction(project Project)
 
 	let returnType = try project.funcReturnTypes.get(project.entryFunctionName) otherwise panic("checkMainFunction: contains({entryName}) true but get({entryName}) failed")
 
-	if not returnsExitCode(returnType) 'wrongReturn'
+	if not returnsExitCode(returnType) and not entryReturnsAnExitCodeDeclaration(project) 'wrongReturn'
 		reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.mainWrongReturnType, message: "Function '{entryName}' must return ExitCode"))
 	end 'wrongReturn'
 end 'checkMainFunction'
@@ -7900,6 +7900,16 @@ function returnsExitCode(returnType MaxonReturnType) returns bool
 		value(inner) gives isExitCodeType(inner)
 	end 'r'
 end 'returnsExitCode'
+
+function entryReturnsAnExitCodeDeclaration(project Project) returns bool
+	let sig = try project.funcSignatures.get(project.entryFunctionName) otherwise return false
+
+	if not sourceSpelledAliasName(sig.returnAggregateName).equals(ExitCodeBuiltinName) 'notNamedExitCode'
+		return false
+	end 'notNamedExitCode'
+
+	return programSignaturesIn(project, asker: "entryReturnsAnExitCodeDeclaration").declaresAnExitStatusRange(sig.returnAggregateName)
+end 'entryReturnsAnExitCodeDeclaration'
 
 function isExitCodeType(t MaxonType) returns bool
 	return match t 'r'

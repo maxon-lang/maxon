@@ -344,7 +344,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3141: <fragment>:4:11: a promise cannot be borrowed through 'slice': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `IntPromiseBag` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
-note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above
+note: stdlib/Array.maxon:83:32: raised inside the library, on behalf of the construct above
 ```
 
 <!-- test: promise-typing.inner-is-the-one-unwrap -->

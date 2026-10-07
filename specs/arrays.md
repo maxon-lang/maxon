@@ -1100,7 +1100,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:4: argument type mismatch for 'source': expected 'Bytes', got 'Smalls'
+error E3005: <fragment>:11:4: argument type mismatch for 'source': expected 'Bytes', got '__ManagedMemory with Small'
 ```
 
 <!-- test: error.appendMemory-on-a-let-array -->
@@ -2558,7 +2558,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:12:4: argument type mismatch for 'source': expected 'Smalls', got 'Bytes'
+error E3005: <fragment>:12:4: argument type mismatch for 'source': expected 'Smalls', got '__ManagedMemory with Byte'
 ```
 
 <!-- test: append-same-alias-arrays -->

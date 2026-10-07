@@ -327,6 +327,165 @@ error E3016: <fragment>:11:6: Partial interface implementation: type 'Widget' ha
   - process(value B) returns Integer (expected process(value A) returns Integer)
 ```
 
+<!-- test: error.an-interface-requirement-over-another-files-same-instance-alias-is-not-met -->
+The same rule across two files, over a GENERIC alias. `alpha/ifc.maxon` and `beta/impl.maxon` each declare
+`Bag = Array with Integer` — one instance, two declarations — so the requirement's `alpha.Bag` is not met by
+a method taking `beta.Bag`. Both are exported from two directories, which is legal, and every file that sees
+both names its own through its directory.
+```maxon
+// --- file: alpha/ifc.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Bag = Array with Integer
+
+export interface Sink
+	function put(b alpha.Bag) returns Integer
+end 'Sink'
+
+// --- file: beta/impl.maxon
+export typealias Bag = Array with Integer
+
+export type Store implements Sink
+	var total as Integer
+
+	export static function create() returns Store
+		return Store{total: 0}
+	end 'create'
+
+	export function put(b beta.Bag) returns Integer
+		return self.total + (b.count() as Integer)
+	end 'put'
+end 'Store'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let store = Store.create()
+	var bag = beta.Bag.create()
+	bag.push(3)
+	let spare = alpha.Bag.create()
+	return (store.put(bag) + (spare.count() as Integer)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3016: beta/<fragment>:13:13: Partial interface implementation: type 'Store' has 1 method(s) with wrong signature:
+  - put(b beta.Bag) returns Integer (expected put(b alpha.Bag) returns Integer)
+```
+
+<!-- test: error.an-impl-over-another-files-same-named-alias-of-another-range-does-not-conform -->
+The ranged form, over two RANGES. `a/` and `b/` each export `Score`, `a/`'s over `int(0 to 10)` and `b/`'s
+over `int(0 to 100)`; a type is its declaration, not its name, so the requirement's `a.Score` is not met by
+a method taking `b.Score`. Each file sees both exports, so each spells the one it means through its
+directory, and both signature lines quote that spelling.
+```maxon
+// --- file: a/rater.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Score = int(0 to 10)
+
+export interface Rater
+	function rate(s a.Score) returns Integer
+end 'Rater'
+
+// --- file: b/judge.maxon
+export typealias Score = int(0 to 100)
+
+export type Judge implements Rater
+	var bias as Integer
+
+	export static function create() returns Judge
+		return Judge{bias: 1}
+	end 'create'
+
+	export function rate(s b.Score) returns Integer
+		return self.bias + (s as Integer)
+	end 'rate'
+end 'Judge'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let judge = Judge.create()
+	let high = 50 as b.Score
+	let low = 3 as a.Score
+	return (judge.rate(high) + (low as Integer)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3016: b/<fragment>:13:13: Partial interface implementation: type 'Judge' has 1 method(s) with wrong signature:
+  - rate(s b.Score) returns Integer (expected rate(s a.Score) returns Integer)
+```
+
+<!-- test: error.a-conformance-mismatch-over-a-contested-byte-array-names-it-in-source-form -->
+The file declares its own `Byte` beside the library's, so `Bytes` is an `Array with Byte` over the
+author's two-byte `Byte` and the library's `ByteArray` is a different type. Both signature lines name
+each parameter as source spells it, and neither alias name is contested, so both stay bare.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to 1000)
+typealias Bytes = Array with Byte
+
+interface Sink
+	function put(b Bytes) returns Integer
+end 'Sink'
+
+type Store implements Sink
+	var total as Integer
+
+	function put(b ByteArray) returns Integer
+		return self.total + (b.count() as Integer)
+	end 'put'
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+end 'Store'
+
+function main() returns ExitCode
+	let store = Store.create()
+	let spare = Bytes.create()
+	return (store.put("A".toByteArray()) + (spare.count() as Integer)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3016: <fragment>:10:6: Partial interface implementation: type 'Store' has 1 method(s) with wrong signature:
+  - put(b ByteArray) returns Integer (expected put(b Bytes) returns Integer)
+```
+
+<!-- test: an-impl-spelling-the-requirements-alias-qualified-meets-it -->
+Only `alpha/` declares `Bag`. The requirement spells it bare and the implementation in `beta/` spells it
+`alpha.Bag`: two spellings of one declaration, so the requirement is met.
+```maxon
+// --- file: alpha/ifc.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Bag = Array with Integer
+
+export interface Sink
+	function put(b Bag) returns Integer
+end 'Sink'
+
+// --- file: beta/impl.maxon
+export type Store implements Sink
+	var total as Integer
+
+	export static function create() returns Store
+		return Store{total: 0}
+	end 'create'
+
+	export function put(b alpha.Bag) returns Integer
+		return self.total + (b.count() as Integer)
+	end 'put'
+end 'Store'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let store = Store.create()
+	var bag = Bag.create()
+	bag.push(3)
+	bag.push(4)
+	return store.put(bag) as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
 <!-- test: conformance-alias-crossing -->
 The crossing that IS legal: the implementation declares the requirement's own alias, and a `B` value
 reaches it through the one door between two aliases, an explicit `as`.
@@ -400,8 +559,8 @@ identity its bytes do not have: a container declared generic over `Element` whos
 stride whatever `Element` is.
 
 ⚠ **THE REFUSAL IS AT THE FIELD, AHEAD OF THE LATER RETURN COMPARE, WHOSE SENTENCE NAMES NEITHER
-FAULT**: `Cannot return 'ByteArray' from function declared to return 'MyCollection_Te051b2272b3afaf0'` — a
-mangled instance name at the author, about a RETURN, in a program whose fault is a FIELD.
+FAULT**: `Cannot return 'ByteArray' from function declared to return …` — a sentence about a RETURN, in a
+program whose fault is a FIELD.
 ```maxon
 type MyCollection uses Element implements BuiltinArrayLiteral
 	var managed as __ManagedMemory

@@ -685,18 +685,18 @@ end 'main'
 error E3005: <fragment>:26:9: argument type mismatch for '_': expected 'LeafBox', got 'OtherBox'
 ```
 
-### ⚠ `Box_Leaf` BELOW IS THE FALLBACK, NOT AN UNCONVERTED DOOR — and the `typealias` line is the tell
+### ⚠ `Box with Leaf` BELOW IS THE INSTANCE'S SOURCE FORM — and the `typealias` line is the tell
 
 A diagnostic names a type by the `typealias` the author wrote, and every case in
 this file that HAS such a line reads it back: `expected 'LeafBox'` above, `Cannot return 'OtherBox' …` below.
-The three cases that print a mint are the three whose type has **no declaration to quote** —
+The cases that print `Box with Leaf` are the ones whose type has **no declaration to quote** —
 `typealias LeafBoxBox = Box with (Box with Leaf)` declares `LeafBoxBox`, and the `Box with Leaf` inside its
-argument list is interned without any name of its own. There is nothing else the message could say, so the
-canonical mint is the answer rather than the absence of one (`ProgramSignatures.instanceDisplayName`).
+argument list has no name of its own. The message spells that instance the way source writes it
+(`ProgramSignatures.instanceDisplayName`).
 
 The discriminator is mechanical: add `typealias LeafBox = Box with Leaf` to one of these programs and the
-`expected` side becomes `LeafBox`. **A mint here beside a declaration that names the same type
-would be a bug; a mint here with no such declaration is the rule working.**
+`expected` side becomes `LeafBox`. **A source-form instance here beside a declaration that names the same
+type would be a bug; one with no such declaration is the rule working.**
 
 <!-- test: error.type-parameter-arg-wrong-instance -->
 ```maxon
@@ -726,7 +726,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:23: argument type mismatch for 'v': expected 'Box_Leaf', got 'OtherBox'
+error E3005: <fragment>:23:23: argument type mismatch for 'v': expected 'Box with Leaf', got 'OtherBox'
 ```
 
 <!-- test: error.type-parameter-arg-wrong-instance-bound -->
@@ -758,7 +758,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:24:23: argument type mismatch for 'v': expected 'Box_Leaf', got 'OtherBox'
+error E3005: <fragment>:24:23: argument type mismatch for 'v': expected 'Box with Leaf', got 'OtherBox'
 ```
 
 <!-- test: error.method-arg-wrong-instance -->
@@ -960,7 +960,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:25:15: argument type mismatch for 'v': expected 'Pair_Box_Leaf_Box_Box_Leaf', got 'WrongPair'
+error E3005: <fragment>:25:15: argument type mismatch for 'v': expected 'Pair with (LeafBox, Box with LeafBox)', got 'WrongPair'
 ```
 
 <!-- test: error.two-aliases-one-instance-are-two-brands -->

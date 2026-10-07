@@ -1261,7 +1261,7 @@ module type HoverDocument
 	// ⚠ `instanceArgsAreFullyConcrete` is what keeps this from reopening the leak one level down:
 	// `instanceArgDisplayName` hands back a type parameter's own name for an argument that is still one.
 	function declaredTypeArgument(signatures ProgramSignatures, written ByteArray, position ElementIndex, readerPath FilePath) returns HoverType
-		if not signatures.isGenericAliasFor(written, readerFilePath: readerPath) 'namesNoInstance'
+		if not signatures.isAliasOfFormFor(written, readerFilePath: readerPath, wanted: FormAliasKind.generic) 'namesNoInstance'
 			return HoverType.unknown
 		end 'namesNoInstance'
 
@@ -1399,8 +1399,8 @@ module type HoverDocument
 	// mean different containers by one word.
 	function brandedMemberType(signatures ProgramSignatures, spelling SpelledFieldName, owner ByteArray, declFilePath FilePath) returns HoverMemberType
 		match spelling 'spelling'
-			bareName(brand) then return brandedNameMemberType(signatures, brand: brand, owner: owner, declFilePath: declFilePath)
-			notABareName then return HoverMemberType.none
+			named(brand) then return brandedNameMemberType(signatures, brand: brand, owner: owner, declFilePath: declFilePath)
+			unnamed then return HoverMemberType.none
 		end 'spelling'
 	end 'brandedMemberType'
 

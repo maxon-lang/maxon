@@ -883,8 +883,8 @@ the base therefore IS a function name (`String.contains` is exactly this). For a
 extension method it costs the whole answer: when a `<Conformer>.<method>` is
 declared by extensions in more than one file, **nobody keeps the bare spelling** — `Array.contains`
 is declared by `stdlib/Array.maxon`'s `where Element is Equatable` extension AND published onto
-`Array` by `stdlib/Interfaces.maxon`'s `extension Iterable`, so its members register as
-`Array.contains#type parameter` and `Array.contains#struct` and NOTHING is named `Array.contains`.
+`Array` by `stdlib/Interfaces.maxon`'s `extension Iterable`, so each member registers under
+`Array.contains#` and its parameter-type suffix, and NOTHING is named `Array.contains`.
 A scan by bare name misses that real edge, files every stdlib name `unreachable`, and `lowerMaxonToStd`
 lowers no body — and `DeadFunctionElimination` then reaches the resolved member from its own root
 set and PANICS (`requireUnreachableLibraryStayedDead`, which is the guard doing its job: without it
@@ -928,7 +928,7 @@ end 'main'
 ⭐ **THE TWO CASES ABOVE TEST THEIR RULE ONLY BECAUSE `contains` IS STRUCK FROM
 `Parser.arraySurfaceMemberNames`.** With the roster serving `contains`, these two programs would never
 cross into stdlib at all and would PASS without touching the rule they exist for. Without the widening,
-both panic in `DeadFunctionElimination`, naming `Array.contains#struct` and `Array.contains#type parameter`.
+both panic in `DeadFunctionElimination`, naming the suffixed member each one calls.
 
 ⚠ **`Array.contains` IS THE ONLY CONTESTED `<Conformer>.<method>` THE CORPUS HAS**
 (`stdlib/Interfaces.maxon`'s `extension Iterable` and `stdlib/Array.maxon`'s `where Element is Equatable`

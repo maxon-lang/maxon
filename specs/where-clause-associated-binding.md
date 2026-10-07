@@ -336,6 +336,96 @@ end 'main'
 error E3133: <fragment>:32:11: 'Wrap' constrains type parameter 'S' to 'Cursor with Integer', but 'TextCur' binds 'Cursor's associated type 'Element' to 'String' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
 ```
 
+<!-- test: error.a-constraint-over-one-files-limit-is-not-met-by-another-files-wider-or-narrower-limit -->
+The binding is a declaration, not a spelling. `pkg/lib.maxon`'s constraint binds `Element` to its own
+`Limit`; `Tick` binds it to `pkg/main.maxon`'s `Limit`, a different declaration over a different range.
+```maxon
+// --- file: pkg/lib.maxon
+typealias Limit = int(0 to 9)
+
+export interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+export type Wrap uses S where S is Cursor with Limit
+	export var s as S
+
+	export static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Wrap'
+
+// --- file: pkg/main.maxon
+typealias Limit = int(0 to 5)
+
+type Tick implements Cursor with Limit
+	var v as Limit
+
+	static function create() returns Self
+		return Self{v: 3}
+	end 'create'
+
+	function current() returns Limit
+		return self.v
+	end 'current'
+end 'Tick'
+
+typealias TickWrap = Wrap with Tick
+
+function main() returns ExitCode
+	let w = TickWrap.create(Tick.create())
+	return w.s.current() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3133: pkg/<fragment>:32:11: 'Wrap' constrains type parameter 'S' to 'Cursor with Limit', but 'Tick' binds 'Cursor's associated type 'Element' to 'Limit' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
+```
+
+<!-- test: error.a-constraint-over-one-files-limit-is-not-met-by-another-files-limit-of-the-same-range -->
+The same program with both declarations over one range. They are still two declarations, so the binding
+still disagrees.
+```maxon
+// --- file: pkg/lib.maxon
+typealias Limit = int(0 to 9)
+
+export interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+export type Wrap uses S where S is Cursor with Limit
+	export var s as S
+
+	export static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Wrap'
+
+// --- file: pkg/main.maxon
+typealias Limit = int(0 to 9)
+
+type Tick implements Cursor with Limit
+	var v as Limit
+
+	static function create() returns Self
+		return Self{v: 3}
+	end 'create'
+
+	function current() returns Limit
+		return self.v
+	end 'current'
+end 'Tick'
+
+typealias TickWrap = Wrap with Tick
+
+function main() returns ExitCode
+	let w = TickWrap.create(Tick.create())
+	return w.s.current() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3133: pkg/<fragment>:32:11: 'Wrap' constrains type parameter 'S' to 'Cursor with Limit', but 'Tick' binds 'Cursor's associated type 'Element' to 'Limit' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
+```
+
 <!-- test: error.a-where-constraint-cannot-bind-more-than-the-interface-declares -->
 ⭐ **AN OVER-LONG BINDING LIST IS THE `implements` CLAUSE'S REFUSAL, ONE DOOR OVER.** `Sized` declares
 no associated types at all, so there is no position for `with Integer` to name.

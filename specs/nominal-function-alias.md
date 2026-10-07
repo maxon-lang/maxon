@@ -425,25 +425,23 @@ end 'main'
 ```
 
 <!-- test: an-alias-from-another-directory-merges-with-a-declared-function -->
-`api.Score` is declared over `api`'s own private `Integer`, and `addOne` over `app`'s: the two arms still
-merge.
+`api.Score` is declared in `api`, and `addOne` is a function declared in `app` over the same `api.Integer`:
+the two arms merge.
 ```maxon
 // --- file: api/types.maxon
-typealias Integer = int(i64.min to i64.max)
+export typealias Integer = int(i64.min to i64.max)
 export typealias Score = function(n Integer) returns Integer
 
 // --- file: app/main.maxon
-typealias Integer = int(i64.min to i64.max)
-
-function addOne(n Integer) returns Integer
+function addOne(n api.Integer) returns api.Integer
 	return n + 1
 end 'addOne'
 
-function twice(n Integer) returns Integer
+function twice(n api.Integer) returns api.Integer
 	return n * 2
 end 'twice'
 
-function pick(f api.Score, flag bool) returns Integer
+function pick(f api.Score, flag bool) returns api.Integer
 	let g = f if flag else addOne
 	return g(20)
 end 'pick'
@@ -458,6 +456,133 @@ end 'main'
 ```
 ```stdout
 40 21
+```
+
+<!-- test: a-qualified-function-alias-beside-a-ranged-alias-of-its-name-is-the-same-type -->
+`api/` declares `Score` as a function alias and `legacy/` declares `Score` as a ranged alias: two
+declarations of one name, of two forms, so even `api/` names its own as `api.Score`. `run`'s parameter and
+`app/`'s value both name that one declaration, so the value reaches `run`.
+```maxon
+// --- file: api/score.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Score = function(n Integer) returns Integer
+
+export function run(f api.Score) returns Integer
+	return f(20)
+end 'run'
+
+// --- file: legacy/score.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: app/main.maxon
+function addOne(n api.Integer) returns api.Integer
+	return n + 1
+end 'addOne'
+
+function pick() returns api.Score
+	return addOne
+end 'pick'
+
+function main() returns ExitCode
+	let h = pick()
+	let rank = 7 as legacy.Score
+	print("{api.run(h)} {rank}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+21 7
+```
+
+<!-- test: a-qualified-function-alias-of-a-contested-shape-reaches-its-own-directorys-function -->
+`api/` and `beta/` each export a function alias `Score` of one shape: two declarations, so two types. Each
+directory's function takes its own `Score`, qualified through its directory, and `app/` hands each the
+value it typed through that directory.
+```maxon
+// --- file: api/score.maxon
+export typealias Integer = int(i64.min to i64.max)
+export typealias Score = function(n Integer) returns Integer
+
+export function run(f api.Score) returns Integer
+	return f(20)
+end 'run'
+
+// --- file: beta/score.maxon
+export typealias Score = function(n api.Integer) returns api.Integer
+
+export function apply(f beta.Score) returns api.Integer
+	return f(1)
+end 'apply'
+
+// --- file: app/main.maxon
+function addOne(n api.Integer) returns api.Integer
+	return n + 1
+end 'addOne'
+
+function twice(n api.Integer) returns api.Integer
+	return n * 2
+end 'twice'
+
+function pickApi() returns api.Score
+	return addOne
+end 'pickApi'
+
+function pickBeta() returns beta.Score
+	return twice
+end 'pickBeta'
+
+function main() returns ExitCode
+	let a = pickApi()
+	let b = pickBeta()
+	print("{api.run(a)} {beta.apply(b)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+21 2
+```
+
+<!-- test: a-function-alias-element-spelled-bare-and-qualified-is-one-instance -->
+`alpha/` writes its element `Handler` bare and `main.maxon` writes the same declaration as `alpha.Handler`.
+Both spellings name one declaration, so `Handlers` and `Mine` are two aliases of one instance and the `as` is
+a re-brand.
+```maxon
+// --- file: alpha/a.maxon
+export typealias Integer = int(0 to 1000)
+export typealias Handler = function(n Integer) returns Integer
+export typealias Handlers = Array with Handler
+
+function addOne(n Integer) returns Integer
+	return n + 1
+end 'addOne'
+
+export function makeHandlers() returns Handlers
+	var handlers = Handlers.create()
+	handlers.push(addOne)
+	return handlers
+end 'makeHandlers'
+
+// --- file: main.maxon
+typealias Mine = Array with alpha.Handler
+
+function main() returns ExitCode
+	let m = makeHandlers() as Mine
+	let h = try m.get(0) otherwise panic("makeHandlers pushed one handler")
+	print("{m.count()}")
+	return h(6) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+```stdout
+1
 ```
 
 <!-- test: error.nested-alias-position-is-nominal -->
@@ -489,6 +614,43 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:20:10: argument type mismatch for 'o': expected 'fn(Handler) returns int', got 'fn(Callback) returns int'
+```
+
+<!-- test: error.a-function-value-over-a-contested-shape-is-named-in-source-form -->
+`pkg/lib.maxon` and `pkg/main.maxon` each declare a file-private `Score` and a file-private `Grader` over
+it, so the two `Grader`s are two types. A `lib` `Grader` reaches `main` through an exported field and is
+handed to a parameter declared over `main`'s own; the refusal names both sides in source form.
+```maxon
+// --- file: pkg/lib.maxon
+typealias Score = int(0 to 100)
+typealias Grader = function(n Score) returns Score
+
+function keep(n Score) returns Score
+	return n
+end 'keep'
+
+export type Holder
+	export var grade as Grader
+
+	export static function make() returns Holder
+		return Holder{grade: keep}
+	end 'make'
+end 'Holder'
+
+// --- file: pkg/main.maxon
+typealias Score = int(0 to 1000)
+typealias Grader = function(n Score) returns Score
+
+function run(g Grader) returns ExitCode
+	return g(7) as ExitCode
+end 'run'
+
+function main() returns ExitCode
+	return run(Holder.make().grade)
+end 'main'
+```
+```maxoncstderr
+error E3005: pkg/<fragment>:27:9: argument type mismatch for 'g': expected 'Grader' (declared in pkg/main.maxon), got 'Grader' (declared in pkg/lib.maxon)
 ```
 
 <!-- test: a-closure-literal-decays-into-any-function-alias -->

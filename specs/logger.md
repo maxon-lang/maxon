@@ -22,8 +22,6 @@ nothing; `Log.error` waits until its record is written, and every record queued 
 The program runs itself as a child whose only statement is `Log.info("test")`, and checks the SHAPE of the
 child's stderr: the timestamp varies, so each digit is read as a digit and every other byte is pinned.
 ```maxon
-typealias StringArray = Array with String
-
 function child() returns ExitCode
 	Log.info("test")
 	return 0
@@ -587,8 +585,6 @@ collected 2: INFO fromWorker
 The child logs three records, then `Log.error`, then panics. `Log.error` returns only once its record is
 written, and the handler's mailbox is FIFO, so all four lines precede the panic on the child's stderr.
 ```maxon
-typealias StringArray = Array with String
-
 function child()
 	Log.info("one")
 	Log.info("two")

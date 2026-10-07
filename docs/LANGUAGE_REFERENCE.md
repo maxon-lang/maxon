@@ -383,7 +383,8 @@ let done = false       // bool
 
 The standard library declares a few aliases every file can use, among them `ExitCode`, `Byte`
 (`int(0 to u8.max)`), `ByteArray` (`Array with Byte`), `Codepoint` (`int(0 to 1114111)`), `HashValue`
-(`int(0 to u32.max)`), `SourceLineNumber` and `Real` (`float(f64.min to f64.max)`).
+(`int(0 to u32.max)`), `Count` (what a collection's `count()` returns), `SourceLineNumber` and `Real`
+(`float(f64.min to f64.max)`).
 [Ranged Type Aliases](#ranged-type-aliases) covers declaring your own.
 
 ### Integers
@@ -574,7 +575,7 @@ end 'main'
 | `bool` ↔ number, `String` → number, struct ↔ anything | **E3009** |
 | a value to its own alias (`b as Byte` when `b` is a `Byte`) | **E3010** `unneeded cast` |
 | a literal to the alias its destination declares (`open(8080 as Port)` for a `Port` parameter) | **E3010** `unneeded cast: the literal 8080 already fits in 'Port'` — see [Construction](#construction) |
-| one container instance to a different one | **E3131** |
+| one container instance to a different one | **E3131**, unless the elements are same-named declarations of one layout, which re-brands the container |
 
 #### Floats to Integers
 
@@ -661,9 +662,9 @@ typealias TallyArray = Array with Tally      // not Array with int
 
 ### Aliases Are Distinct Types
 
-**Every typealias is its own type**, even when two aliases spell the same range. A value of one alias
-never flows into a place declared with another — a parameter, an assignment, an `otherwise` fallback, a
-`match` arm, a struct field, a union payload, a generic argument — unless you write the cast:
+**Every typealias declaration is its own type**, even when two aliases spell the same range. A value of one
+alias reaches a place declared with another — a parameter, an assignment, an `otherwise` fallback, a `match`
+arm, a struct field, a union payload, a generic argument — through the cast you write:
 
 ```maxon
 typealias Age = int(0 to 150)
@@ -687,10 +688,16 @@ end 'main'
 - A value with **no** alias fits any alias of its kind: a literal, a counted-loop counter, a `var`
   initialized from a literal, the raw value of a payload-free enum case. A named value also fits an
   unnamed slot. Two *different* names conflict unless one implements the other (next section).
-- The same alias name declared over the same range in two files is one type.
-- An `Array` is indexed by the standard library's `ElementIndex`: `get`, `set` and `resize` take one and
-  `count()` returns one. The index must be an `ElementIndex` or an alias that implements it; any other
-  alias, or a non-integer such as a `String`, is **E3005** — cast it, or declare it `implements ElementIndex`.
+- Two declarations of one alias name, in two files, are two types too, even over the same range. An
+  operator, an argument, a store or a join that mixes them is **E3005** (**E2028** for a join) until one side
+  is cast; `as` between them converts, and `return` converts as it does for any two aliases. The rule holds
+  for every alias form — ranged, function, generic-instance and tuple — and for the elements of a container
+  instance: `Array with Score` over two `Score` declarations is two types.
+- An `Array` is indexed by the standard library's `ElementIndex`: `get`, `set` and `resize` take one.
+  `count()` returns a `Count`, which implements `ElementIndex`, so a count goes wherever an index is taken
+  and an `ElementIndex` goes where a `Count` is declared only by cast. The index must be an `ElementIndex`
+  or an alias that implements it; any other alias, or a non-integer such as a `String`, is **E3005** —
+  cast it, or declare it `implements ElementIndex`.
   A program's own array record that declares `get`, `set` or `resize` with a first parameter that is not an
   integer alias has an ordinary method: the call is served from that declaration, not the array surface.
 
@@ -848,7 +855,9 @@ end 'bump'
 
 **`ExitCode`** is the stdlib alias `main` returns. Its range follows the target: `int(0 to u32.max)` on
 Windows and `int(0 to 255)` on Linux, macOS and WASI. A literal outside it is a compile error, and a
-computed value outside it panics at the `return`.
+computed value outside it panics at the `return`. A program's own `typealias ExitCode` may be `main`'s
+declared return type when it is an integer alias whose range lies within the builtin's; any other is
+**E3002**.
 
 Integers are plain values: `var pos = start` copies, and advancing `pos` never changes `start`, so a ranged
 alias makes a safe loop cursor:
@@ -873,8 +882,8 @@ end 'skipSpaces'
 
 ### Naming Aliases
 
-Name an alias for its **purpose** — `Tally`, `BytePos`, `Coord`, `Milliseconds` — rather than reaching for
-a generic `Count` or `Index`, and declare it in the module it belongs to. The standard library follows the
+Name an alias for its **purpose** — `Tally`, `BytePos`, `Coord`, `Milliseconds` — and declare it in the
+module it belongs to. The standard library follows the
 same pattern and exports a small set of cross-cutting aliases:
 
 | Alias | Definition | Purpose |
@@ -883,16 +892,23 @@ same pattern and exports a small set of cross-cutting aliases:
 | `Byte` | `int(0 to u8.max)` | one byte; `ByteArray` is `Array with Byte` |
 | `HashValue` | `int(0 to u32.max)` | `Hashable.hash()` results |
 | `Codepoint` | `int(0 to 1114111)` | Unicode scalar values |
+| `Count` | `int(0 to u64.max) implements ElementIndex` | a collection's `count()` |
 | `SourceLineNumber` | `int(1 to i32.max)` | caller line numbers (`__line__`) |
 | `Real` | `float(f64.min to f64.max)` | general floating-point values |
 
 Because every alias is its own type, a quantity crossing from one module's alias to another's is cast at
 the crossing.
 
+Where a standard-library alias fits, use it; where none fits, give your own alias a name of its own,
+distinct from the library's. A program's declaration of a library name is
+what the bare name means in every author file — the library's stays reachable as `stdlib.Name` — so the two
+are two types and every value crossing between them needs a cast.
+
 A non-exported ranged alias is private to its file: two files may declare one name over different ranges,
 or one over `int` and the other over `float`, and each file's uses mean its own declaration. Exported
-declarations of one name live in different directories, whatever their ranges, and a file that sees more
-than one names the one it means by its directory (see [Bare Names and Ambiguity](#bare-names-and-ambiguity)).
+declarations of one name live in different directories, whatever their ranges, and a bare name that reaches
+more than one of them is ambiguous in every file, the declaring files included (see
+[Bare Names and Ambiguity](#bare-names-and-ambiguity)).
 
 ### Generic-Instance and Function-Type Aliases Are Brands
 
@@ -904,26 +920,27 @@ no cost, and `return` re-brands implicitly.
 - A `[...]` literal carries no brand and fits either.
 - A closure literal or a declared function carries no brand and fits any function alias of its shape.
 - A function alias declared **inside a type or extension body** carries no brand either, in both
-  directions: no source outside the type can write `Array.SortComparator`, so it is never the name an
-  author chose to distinguish two shapes. A value of any other alias of that shape flows into it, and a
-  value of it flows into any other alias of that shape.
+  directions: `Array.SortComparator` spells the shared body's signature over the type's own parameters,
+  and a brand is a file-scope name an author chose to distinguish two shapes. A value of any other alias
+  of that shape flows into it, and a value of it flows into any other alias of that shape.
 - Two **file-scope** function aliases of one shape still refuse each other — including two
   directory-qualified ones, `api.Score` and `legacy.Score`, which are file-scope declarations wearing
   their directory and can be written in a type position.
-- A non-exported function alias is **private to its file**, so two files declaring one name over
-  **different** shapes have two brands and two types: each file's declarations mean its own, and a value
-  of one does not fit a door declared with the other. What a slot's spelling *means* in the declaring
-  file decides — two files that write the identical `function(Tally) returns Tally` over two different
-  `Tally` ranges still have two shapes. Two files that **agree** about the shape share one brand, exactly
-  as two files declaring one ranged alias over one range share one type.
-- When both declarations are `export`ed, a bare reference from a third file is ambiguous rather than
-  split: **E3063**, resolved by qualifying with the directory namespace. This holds whether or not the
-  two shapes agree.
-- Where a refusal would print the same bare name on both sides, the message adds a parenthesised note —
-  the shape where the two shapes differ, otherwise the declaring files. The alias itself is always quoted
-  by the name its author wrote.
+- A non-exported function alias is **private to its file**, so two files declaring one name have two
+  brands and two types, whatever their shapes: each file's declarations mean its own, and a value of one
+  reaches a door declared with the other only through `as`. Two declarations of one generic-instance alias over the
+  same instance are two brands in the same way.
+- A bare reference that reaches two `export`ed declarations is ambiguous in every file, a declaring file
+  included: **E3063**, resolved by qualifying with the directory namespace or by renaming.
+- A diagnostic names each type as source would qualify it: the standard library's as `stdlib.Name`,
+  another directory's as `dir.Name`, the root's bare. Where the two sides would still print alike, it adds
+  a parenthesised note — the shape where two function shapes differ, otherwise `(declared in <file>)`. A
+  view of a buffer prints as `__ManagedMemory with <element>`, noted `(the view of 'Name')` where two views
+  read alike.
 - Casting to a **different** instance (`Array with Byte` to `Array with Integer`) is **E3131**: the
-  elements have different layouts, so build a new container instead.
+  elements have different layouts, so build a new container instead. A cast between two instances whose
+  elements are same-named declarations of one layout — the same underlying type, range and domain;
+  `implements` aside — re-brands the container in place.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -977,8 +994,8 @@ accepted by both.
 A ranged alias declared in a type or extension body is a nominal type by the same rule as a file-scope
 one: a value of any other alias, over the same range or not, crosses into it with a cast.
 
-A per-instance **function** alias is not a brand, because no source outside the type can write its name.
-`Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
+A per-instance **function** alias is unbranded: it spells the shared body's signature over the type's own
+parameters. `Array.sort` takes an `Array.SortComparator`, so a field declared with your own `typealias RowComparator =
 function(Row, Row) returns Ordering` passes straight through: `rows.sort(self.compare)` compiles with no
 cast and no wrapping closure.
 
@@ -4121,8 +4138,10 @@ the whole program's, so a second declaration of it anywhere is **E3006** (see
 
 The same modifiers apply to members inside a type. An unmarked field is private to the type: reading or
 writing it anywhere else is **E3014**. An unmarked method or static member is private to the file, like a
-top-level declaration: calling it from another file is **E3008**. At most one modifier may be written;
-combining two is **E2001** (`'export' and 'public' cannot be combined`).
+top-level declaration: calling it from another file is **E3008**. A typealias declared inside a type body
+carries its own modifier the same way: unmarked, it is private to the file, and naming it from another file —
+bare or as `Holder.Inner` — is **E3008**. A typealias inside an `interface` has the interface's visibility.
+At most one modifier may be written; combining two is **E2001** (`'export' and 'public' cannot be combined`).
 
 **A type hides its members.** Where a type is not visible, nothing of it is: naming it is **E3008**
 (**E3088** for a `module` type), and so is reaching a member through a value of it — a value an exported
@@ -4138,8 +4157,10 @@ be able to name what the call takes and gives back, so every type its parameters
 *(none)* < `module` < `export` < `public`: `public` outranks `export`, so a `public` function may not name an
 `export` type. The check is structural — a generic instance's base type and each of its type arguments, a
 tuple's elements, and a function typealias's parameter and return types are all asked; a type parameter and a
-primitive name no declaration and are asked nothing. A member is held to its own modifier rather than its
-type's, and an interface's members are held to the interface's. A [service](#services--spawn)'s message is
+primitive name no declaration and are asked nothing. A typealias the signature names is walked through, each
+name on its right-hand side read as the alias's own file means it, and a type body's inner typealias is held
+to its own modifier before its right-hand side is walked. A member is held to its own modifier, whatever its
+type's, and an interface's members — its requirements' types included — are held to the interface's. A [service](#services--spawn)'s message is
 held to the narrower of its own modifier and its service type's. Naming a narrower type is
 [E3167](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3167); the fix is to raise the type to the function's
 tier, or to narrow the function.
@@ -4168,7 +4189,9 @@ declaring directory it suggests `module` (**E3093**). These checks run on every 
 compiles, a one-file program included. The entry point, every target a `.maxproj` file declares and every
 task a `.maxtasks` file declares are exempt, because the driver calls them by name. A type an exported or `module` signature names is exempt while that function is itself
 referenced from another file: the signature requires the wider tier, so dropping the modifier would only
-trade E3092 for [E3167](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3167).
+trade E3092 for [E3167](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3167). Every typealias form —
+ranged, function, generic-instance and tuple — is audited, and a use credits exactly the declaration it
+means, a use reached only through a called function's signature included.
 
 ### `public`
 
@@ -4241,18 +4264,23 @@ is resolved from the file that declares the enum, whichever file reads the case;
 single declaration is reported in that file.
 
 **A type name** — a typealias of any form, a type, an enum, a union or an interface — that reaches more than
-one declaration is ambiguous, **E3063**, unless the referring file declares the name itself: a file's own
-declaration always wins its bare name in that file. The standard library counts as one candidate and each
-project declaration as another, so a project's `export typealias StringArray` makes a bare `StringArray`
-ambiguous in every other file that sees both. The message lists the spellings that resolve it, a
-declaration at the project root as `export.Name`:
+one project declaration is ambiguous, **E3063**, in every file, a file that declares one of them included.
+The message lists the spellings that resolve it, a declaration at the project root as `export.Name`:
 
 ```text
-error E3063: app/main.maxon:7:11: Ambiguous type name 'StringArray': more than one visible declaration matches it. Qualify it as one of: lib.StringArray, stdlib.StringArray
+error E3063: app/main.maxon:7:11: Ambiguous type name 'Score': more than one visible declaration matches it. Qualify it as one of: api.Score, lib.Score
 ```
 
-The standard library's own files see only the library's declarations, and a type the compiler supplies — a
-byte-string literal's element type, for one — is always the library's.
+In a file whose own declaration is file-private, the message ends `, or rename this file's own declaration`:
+renaming is the remedy in the declaring file, and other files qualify.
+
+Only project declarations take part. A project declaration of a library name is what the bare name means in
+every project file, so a project's `export typealias StringArray` is the one a bare
+`StringArray` names, and the library's stays reachable as `stdlib.StringArray`. The standard library's own
+files see only the library's declarations. A `b"…"` literal's element is the type the file's bare `Byte`
+names when that is an integer alias — the file's own, else the one project alias it sees, else the
+library's; a `type Byte` leaves the literal on the library's, and an ambiguous bare `Byte` refuses the
+literal with **E3063**.
 
 **A function name** that reaches several declarations resolves to one at the project root, or in an
 enclosing directory, over one in a nested directory, and to a project function over a standard-library one.
@@ -4279,8 +4307,9 @@ coexist — a typealias in one and a type in another included — and a file-pri
 anything, since only its own file can name it. A type, enum, union or interface name is the whole program's:
 two of them sharing a name are **E3006** wherever they sit and whatever their modifiers.
 
-Every typealias a `public` standard-library signature names is itself `public`, so a value can always be cast
-to the alias a library signature asks for (`x as ElementIndex`). A standard-library typealias with no modifier
+Every typealias a `public` standard-library signature names is itself `public` — an inner one such as
+`Array.ElementIterator` included — so a value can always be cast to the alias a library signature asks for
+(`x as ElementIndex`). A standard-library typealias with no modifier
 is private to its declaring file exactly as anyone's is — `Math.maxon`'s `SeriesTermLimit` is one — and
 naming it from another file is **E3008**.
 

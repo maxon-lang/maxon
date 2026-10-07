@@ -33,7 +33,7 @@ refers to its children by `JsonNodeId`. Walk a document through the `JsonDoc` ac
 | `getString(parent, key:)` | `String` | `JsonAccessError` | A string member; `wrongType` for another kind. |
 | `getInt(parent, key:)` | `int(i64.min to i64.max)` | `JsonAccessError` | A number member, truncated toward zero. |
 | `getBool(parent, key:)` | `bool` | `JsonAccessError` | A boolean member. |
-| `arrayLength(id JsonNodeId)` | `int(0 to u64.max)` | `JsonAccessError` | `notArray` for another kind. |
+| `arrayLength(id JsonNodeId)` | `Count` | `JsonAccessError` | `notArray` for another kind. |
 | `arrayAt(id JsonNodeId, index)` | `JsonNodeId` | `JsonAccessError` | `outOfBounds` past the end. |
 
 ### JsonNode

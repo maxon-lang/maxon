@@ -81,7 +81,7 @@ export type ServiceSpawnCandidate
 	// @generated library-cache end
 end 'ServiceSpawnCandidate'
 
-module typealias ServiceSpawnCandidateArray = Array with ServiceSpawnCandidate
+export typealias ServiceSpawnCandidateArray = Array with ServiceSpawnCandidate
 
 // @generated library-cache begin
 module function cacheWriteServiceSpawnCandidateArray(writer LibraryCacheWriter, value ServiceSpawnCandidateArray)
@@ -570,7 +570,7 @@ end 'ServiceRosterVerdict'
 // sweep resolves `returns Self` to a `structRef` from the tokens alone, but a factory written
 // `returns Calc` records a bare `named` until `ProgramSignatures.rewriteRecordedReturnTypes` re-tags it —
 // and that runs LATER in `queryProgramSignatures` than the synthesis this classification feeds (which must
-// precede `allFilesFolded = true`, so the companions are ordinary layouts to every normalization after it).
+// precede every normalization, so the companions are ordinary layouts to each of them).
 // Accepting only `structRef` here would make `returns Self` a service and `returns Calc` not one, which is
 // the same declaration written two ways.
 module function classifyServiceTarget(signatures ProgramSignatures, typeName ByteArray, member ByteArray) returns ServiceTargetVerdict
@@ -1500,7 +1500,7 @@ module function buildServiceHandleStruct(signatures ProgramSignatures, typeName 
 	// produces and no declared slot could hold one. It changes nothing about the LAYOUT: the one field is
 	// the mailbox pointer at every instantiation, which is why the geometry audit below still holds.
 	handle.recordTypeParams(owner.typeParamNames)
-	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.notABareName)
+	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
 
 	// ⭐⭐ **THE AUDIT THAT KEEPS THE RUNTIME'S TWO NUMBERS HONEST.** `__mbox_handle_clone_box` allocates
 	// `ServiceHandleBoxSize` bytes and both handle entries load the mailbox from `ServiceHandleMailboxOffset`,
@@ -1791,8 +1791,8 @@ function serviceNameAlreadyListed(services ByteArrayArray, typeName ByteArray) r
 end 'serviceNameAlreadyListed'
 
 // ⭐⭐ **THE PERFORM HALF — every type on the roster above, minted once.** Called from
-// `Queries.queryProgramSignatures` directly after `internWellKnownContainerInstances()` and BEFORE
-// `allFilesFolded = true`, so that:
+// `Queries.closeDeclarationFold` directly AFTER `allFilesFolded = true`, so that:
+//   • a payload declared with an alias resolves to the instance its declaring file means,
 //   • every whole-program normalization after that line (`rewriteRecordedReturnTypes`,
 //     `normalizeSweptInterfaceTypes`, `deriveInstanceNames`) treats the companions as ordinary layouts, and
 //   • the decision stands on the FAR SIDE of the stdlib/user name contest, which the fold has settled.
@@ -1886,8 +1886,8 @@ module let InterfaceHandleBoxSize = 16 as ParsedInt
 
 function buildInterfaceHandleStruct(interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
 	var handle = StructLayout.create(serviceHandleCompanionName(interfaceName), visibility: visibility, declFilePath: declFilePath)
-	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.notABareName)
-	handle.addField(InterfaceHandleTableFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.notABareName)
+	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
+	handle.addField(InterfaceHandleTableFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
 
 	if handle.sizeBytes() != InterfaceHandleBoxSize or handle.offsetOfField(0) != ServiceHandleMailboxOffset or handle.offsetOfField(1) != InterfaceHandleTableOffset 'geometryDrifted'
 		panic("buildInterfaceHandleStruct: `{String.from(handle.name)}` lays out {handle.sizeBytes()} byte(s) with its mailbox at {handle.offsetOfField(0)} and its send table at {handle.offsetOfField(1)}, against the {InterfaceHandleBoxSize}/{ServiceHandleMailboxOffset}/{InterfaceHandleTableOffset} the registry runtime spells")

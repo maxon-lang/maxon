@@ -326,7 +326,7 @@ end 'main'
 <!-- test: self-in-an-interface-requirement-matches-the-declaration -->
 `Cloneable.clone() returns Self` and `BuiltinArrayLiteral.init(…) returns Self` are matched against a
 declaration whose `Self` is an INSTANCE. The comparison and the diagnostic both spell it as the
-declaration, never as a mangled instance name such as `Array_Te3315404e8d3fd14`, a type no author can write.
+declaration writes it.
 ```maxon
 typealias Num = int(0 to 1000)
 

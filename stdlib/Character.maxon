@@ -10,13 +10,6 @@ public typealias Codepoint = int(0 to 1114111)
 // negative here is a backwards step rather than the mistake it would be there.
 public typealias CodepointDelta = int(-1114111 to 1114111)
 
-// How many UTF-8 bytes a `Character` occupies. ⚠ NOT `int(0 to 4)`: a `Character` is a grapheme
-// CLUSTER, not a codepoint, and a cluster is any number of codepoints — four is the width of ONE
-// codepoint's encoding (`Utf8ByteWidth` in `helpers/string/views.maxon` is that). The honest bound is
-// the one holding every byte count in the stdlib: the cluster's bytes live in a `__ManagedMemory`
-// whose length is a signed machine word.
-public typealias Utf8ByteCount = int(0 to u64.max)
-
 // CharacterError - errors for character operations
 public enum CharacterError implements Error
 	notAscii
@@ -46,7 +39,7 @@ public type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 	end 'clone'
 
 	// Basic properties
-	public function byteLength() returns Utf8ByteCount
+	public function byteLength() returns Count
 		return managed.length()
 	end 'byteLength'
 

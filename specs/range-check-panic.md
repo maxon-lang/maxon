@@ -478,10 +478,10 @@ end 'tiny'
 ```
 
 <!-- test: range-check-panic.field-store-checks-the-fields-own-alias -->
-A literal stored to a field is checked against the alias the field was declared with, not a same-named alias of the storing file.
+A literal stored to a field is checked against the alias the field was declared with, not a same-named alias of the storing file. Both aliases are file-private, so each file sees one `Item`.
 ```maxon
 // --- file: a.maxon
-export typealias Item = int(0 to 255)
+typealias Item = int(0 to 255)
 
 export type Box
   export var item as Item
@@ -559,24 +559,24 @@ end 'main'
 0
 ```
 
-<!-- test: range-check-panic.an-interface-result-crossing-into-a-same-named-alias-is-guarded -->
-An interface call's result is typed by the interface file's alias, so returning it where another file's same-named alias is declared converts between two aliases and carries that alias's guard.
+<!-- test: range-check-panic.an-interface-result-crossing-into-another-files-alias-is-guarded -->
+An interface call's result is typed by the interface file's alias, so returning it where another file's alias is declared converts between two aliases and carries that alias's guard.
 ```maxon
 // --- file: a.maxon
-export typealias Level = int(0 to 100)
+export typealias Fill = int(0 to 100)
 
 export interface Gauge
-  function read() returns Level
+  function read() returns Fill
 end 'Gauge'
 
 type Tank implements Gauge
-  let fill as Level
+  let fill as Fill
 
   static function create() returns Self
     return Self{fill: 90}
   end 'create'
 
-  function read() returns Level
+  function read() returns Fill
     return self.fill
   end 'read'
 end 'Tank'
@@ -608,17 +608,21 @@ Stack trace:
 ```
 
 <!-- test: range-check-panic.an-alias-beside-a-same-named-type-is-named-as-its-file-spells-it -->
-A file's own alias that shares its name with another directory's type is named in the panic exactly as the file
-writes it.
+A file's own alias that shares its name with another directory's file-private type is named in the panic exactly
+as the file writes it.
 ```maxon
 // --- file: a/t.maxon
-export type Score
+type Score
 	export let v as ExitCode
 
-	export static function make() returns Score
+	static function make() returns Score
 		return Score{v: 0}
 	end 'make'
 end 'Score'
+
+export function scoreBase() returns ExitCode
+	return Score.make().v
+end 'scoreBase'
 
 // --- file: app/main.maxon
 typealias Signed = int(i64.min to i64.max)
@@ -633,7 +637,7 @@ function narrow(v Signed) returns Score
 end 'narrow'
 
 function main() returns ExitCode
-	return narrow(launder(11)) as ExitCode + a.Score.make().v
+	return narrow(launder(11)) as ExitCode + scoreBase()
 end 'main'
 ```
 ```exitcode

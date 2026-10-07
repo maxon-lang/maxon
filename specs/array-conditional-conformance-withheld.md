@@ -131,7 +131,7 @@ program that COPIES NOTHING (`for … in` over a nested array, an `isEmpty()`, a
 although `stdlib/Array.maxon:147`'s `managed.slice(0, len)` is in a body compiled once for the whole program.
 
 ⚠ **A stdlib-body refusal is BLAMED AT THE USER'S OWN CONSTRUCT, and the library line is kept as a
-NOTE** — the arrangement the opaque-gate cases print. It is RAISED at `stdlib/Array.maxon:79:32`,
+NOTE** — the arrangement the opaque-gate cases print. It is RAISED at `stdlib/Array.maxon:83:32`,
 a line no user wrote, and REPORTED at the `typealias` whose instantiation made the element uncopyable. The
 library location reads REPO-RELATIVE because the runner rewrites the compiler's absolute `stdlib/` root the
 way it rewrites a staged fragment's path (`SpecTestRunner.rewriteSourceTierPaths`). Only the NOTE carries
@@ -261,7 +261,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:41:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned — a compiler-owned aggregate (`__ManagedFile`), a base-struct-less generic instance with no runtime copy of its own, an ELEMENT held at an interface type (an element slot is one machine word and a fat pointer is two), or a generic instance that owns one of those. String / struct / boxed-union / container (`Array with int`, `List with String`, `Array with (Array with String)`) / trivial instantiations, a record holding an interface-typed FIELD, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported.
-note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above
+note: stdlib/Array.maxon:83:32: raised inside the library, on behalf of the construct above
 ```
 
 <!-- test: error.a-map-key-array-is-refused-for-its-element -->
@@ -340,14 +340,11 @@ constrained twice and this key discharges neither, so `checkOneInstantiation` re
 reduces to a conformer name nothing claims (`instanceConformerName`'s conditional `Array` arm), and the
 sibling `E4006` cases above state it in full.
 
-⛔⛔ **`Array_Opaque` IS THE COMPILER'S MINT, NOT A SPELLING ANY AUTHOR WROTE, AND IT IS PINNED HERE ONLY
-BECAUSE IT IS WHAT THE COMPILER SAYS.** The key is spelled INLINE, so no `typealias` names the instance and
-`ProgramSignatures.instanceDisplayName` falls back to the canonical mint — where the `Map` twin above, whose
-key is aliased, correctly prints `OpaqueArr`. It is NOT an `Array` fault: with no array anywhere,
-`typealias S = Set with (Box with Opaque)` over a user `type Box uses T` answers
-*"Type 'Box_Opaque' does not satisfy constraint 'Hashable'"*. The display map is filled from `typealias`
-declarations and an inline `Base with Args` is a spelling the author DID write, so the miss is a gap rather
-than the documented "compiler minted it, there is nothing to quote" answer.
+⭐ **THE KEY IS NAMED IN THE FORM THE AUTHOR WROTE IT.** It is spelled INLINE, so no `typealias` names the
+instance, and the diagnostic quotes it as source — `Array with Opaque` — where the `Map` twin above, whose
+key is aliased, prints `OpaqueArr`. A diagnostic never shows an internal spelling of an instance; the same
+holds with no array anywhere, so `typealias S = Set with (Box with Opaque)` over a user `type Box uses T`
+names `Box with Opaque`.
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -367,8 +364,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3017: <fragment>:12:11: Type 'Array_Opaque' does not satisfy constraint 'Hashable' required by type parameter 'Element' of 'Set'
-error E3017: <fragment>:12:11: Type 'Array_Opaque' does not satisfy constraint 'Equatable' required by type parameter 'Element' of 'Set'
+error E3017: <fragment>:12:11: Type 'Array with Opaque' does not satisfy constraint 'Hashable' required by type parameter 'Element' of 'Set'
+error E3017: <fragment>:12:11: Type 'Array with Opaque' does not satisfy constraint 'Equatable' required by type parameter 'Element' of 'Set'
 ```
 
 <!-- test: error.a-key-type-nothing-conforms-for-still-reads-as-a-later-slice -->
