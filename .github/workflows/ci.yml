@@ -214,8 +214,8 @@ jobs:
         run: ./maxon-bin/.maxon/maxon test tests/mcp
 
       # `tests/cli` builds wasm32-wasi from this checkout, and wrapping the core module into a
-      # component needs `vendor/wasm-tools` (E6005 without it). `vendor/` is gitignored, so nothing
-      # else stages it.
+      # component needs `vendor/wasm-tools` (E6005 without it); the wasm32-wasi suite below runs its
+      # programs under `vendor/wasmtime`. `vendor/` is gitignored, so nothing else stages it.
       - name: Stage vendor
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/fetch-vendor.sh ${{ matrix.target }}
@@ -223,6 +223,12 @@ jobs:
       - name: CLI corpus
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/cli
+
+      # One lane: its programs run under `vendor/wasmtime`, staged above, rather than on the runner's
+      # OS, so no lane's host changes what they run on.
+      - name: wasm32-wasi suite
+        if: steps.seed.outputs.seeded == 'yes' && matrix.target == 'x64-linux'
+        run: ./maxon-bin/.maxon/maxon spec-test --target=wasm32-wasi
 
       # ⭐ THE FIXPOINT IS THE ONE CHECK A GREEN SUITE CANNOT STAND IN FOR. Every stage shares the
       # compiler's logic, so the suite exercises the same behaviour whichever stage ran it; only the
