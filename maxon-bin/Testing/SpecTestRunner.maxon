@@ -2177,7 +2177,7 @@ function claimAnswerFor(tempDir FilePath, test SpecTest, specDirName String, eff
 end 'claimAnswerFor'
 
 function stagedClaimAnswer(staged StagedTest, effectiveTarget Target, fileMemos SharedFileMemoMap) returns ClaimAnswer
-	let session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: TreeLockHold.none())
+	let session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
 	let claims = try claimsOfSources(staged.buildTargets, target: effectiveTarget, session: session, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir)) otherwise 'refused'
 		deleteWrittenFiles(staged.writtenFiles)
 		return ClaimAnswer.refused
@@ -2306,7 +2306,7 @@ end 'testLabel'
 // total could be read back off disk, and `CompileProduct.totalCpuTicks` IS that total — the same
 // number, from the same whole-compile probe, without the file.
 function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exePath FilePath, emitIr bool, effectiveTarget Target, fileMemos SharedFileMemoMap) returns CompiledTest
-	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: TreeLockHold.none())
+	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
 
 	// The target is stated EXPLICITLY even when it IS the host — the runner says what it is testing
 	// rather than trusting a default to agree with it, exactly as the old `--target=` argument did.

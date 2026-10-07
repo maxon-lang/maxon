@@ -359,7 +359,7 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={try args.emitCorpus.text() otherwise panic("runScaleTest: only a stated --emit-corpus names a path that can fail to parse")}")
 	end 'badCorpus'
 
-	var treeLock = TreeLockHold.none()
+	var treeLock = LockHold.none()
 	let lockExit = acquireTreeLock(corpusRoot, into: treeLock)
 
 	if not exitSucceeded(lockExit) 'busyTree'
@@ -375,7 +375,7 @@ function scaleTestUsage() returns String
 	return "maxon {ScaleTestCommandName} [{RungsFlagPrefix}<n>] [{RepeatFlagPrefix}<n>] [{NoteFlagPrefix}<text>] [{EmitCorpusFlagPrefix}<dir>] [{ResultJsonFlagPrefix}<path>]"
 end 'scaleTestUsage'
 
-function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock TreeLockHold) returns ExitCode
+function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock LockHold) returns ExitCode
 	// Where this run is measured is resolved first, because it is two things at once: what each rung
 	// is compiled by and from, and the provenance every recorded row carries.
 	//

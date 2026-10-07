@@ -1170,7 +1170,7 @@ function compileWithoutRecord(job BuildJob, output FilePath, reason String, sess
 	return compileAndReport(job, subject: output, reason: reason, keeping: RecordKeeping.keepsNone, session: session)
 end 'compileWithoutRecord'
 
-function acquireBuildOutputLock(output FilePath, into TreeLockHold) returns ExitCode
+function acquireBuildOutputLock(output FilePath, into LockHold) returns ExitCode
 	let lockPath = try recordLockPathOf(output) otherwise return SucceededExit
 
 	return acquireOutputLock(lockPath, output: output, into: into)
@@ -1216,7 +1216,7 @@ end 'refusedBuildOptions'
 // The root comes from `commonAncestorOf`, the function `loadProject` roots the project at, so the
 // lock and the compile cannot disagree about which tree is written. A root with no `stdlib/` above
 // it takes no lock: `acquireTreeLock` answers that itself.
-function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride StatedText, into TreeLockHold) returns ExitCode
+function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride StatedText, into LockHold) returns ExitCode
 	if outputOverride.isStated() 'callerOwnsTheOutput'
 		return SucceededExit
 	end 'callerOwnsTheOutput'
@@ -1406,7 +1406,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// Two suites share `<specDir>/.spec-tmp`, so one would delete what the other is compiling, and a
 	// build running alongside replaces the binary this run draws verdicts from. Asked after every free
 	// check, so a refusal is instant and precedes any worker.
-	var treeLock = TreeLockHold.none()
+	var treeLock = LockHold.none()
 	let lockExit = acquireTreeLock(specDir, into: treeLock)
 
 	if not exitSucceeded(lockExit) 'busyTree'
@@ -1530,7 +1530,7 @@ module function backQuoted(words StringArray) returns StringArray
 end 'backQuoted'
 
 // Separate so `runSpecTest` has one exit that releases the tree lock; see `compileAndReport`.
-function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target, treeLock TreeLockHold) returns ExitCode
+function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target, treeLock LockHold) returns ExitCode
 	let run = try runSpecPool(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, mode: args.specRunMode(), workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork, treeLock: treeLock) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return OwnFailureExit

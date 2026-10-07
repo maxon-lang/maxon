@@ -9052,6 +9052,14 @@ end 'ArrayBitwiseKind'
 
 let ThirtyTwoBitElementBytes = 4 as ElementStride
 
+enum ArrayElementClass
+	notBitwise
+	integer
+	namedValue
+	booleanOrExitCode
+	floatValue
+end 'ArrayElementClass'
+
 // ⭐ **THE INCLUSIVE INTEGER VALUE SET A TRIVIAL ARRAY ELEMENT ADMITS, WHEN IT HAS ONE** — the answer
 // `ProgramSignatures.elementIntegerValueRange` gives, and a UNION because *"this element has no integer
 // value set"* is an ANSWER and not a failure: a `bool`, an enum and an `ExitCode` are perfectly good
@@ -19112,11 +19120,11 @@ export type ProgramSignatures
 	end 'arrayRecordBaseNameIn'
 
 	// ⭐⭐ **THE NAME THE DECLARATION ITSELF WRITES, BEFORE ANY CONTEST — the record's spelling as a READER
-	// knows it.** It answers the questions whose subject is a NAME on the page: the CONFORMER an array
-	// instance reduces to (`conformerNameOfInstanceSpelling`, and through it every witness lookup and the
-	// hash-table key roster), and every diagnostic that has to quote the type. It is deliberately the
-	// pre-contest spelling for both: a refusal quoting this compile's mint would send a reader to a name no
-	// author wrote and `Parser.requireUnreservedName` forbids them from writing.
+	// knows it.** It answers the questions whose subject is a NAME on the page: every diagnostic that has to
+	// quote the type. It is deliberately the pre-contest spelling: a refusal quoting this compile's mint
+	// would send a reader to a name no author wrote and `Parser.requireUnreservedName` forbids them from
+	// writing. The CONFORMER an array instance reduces to (`conformerNameOfInstanceSpelling`, and through it
+	// every witness lookup and the hash-table key roster) is `arrayRecordBaseName`.
 	//
 	// ⛔ **IT IS NOT THE BASE A COMPILER-MINTED INSTANCE IS INTERNED UNDER — that is
 	// `arrayRecordBaseName`.** A `b"…"`, an `[1, 2, 3]`, `<Enum>.allCaseNames` and `String.split`'s
@@ -29974,8 +29982,12 @@ export type ProgramSignatures
 
 	export function cannotSourceALayoutDescriptor(callee ByteArray) returns bool
 		let site = try self.settled.funcDeclSites.get(callee) otherwise return false
-		return not site.takesReceiver and not self.calleeReturnsItsDeclaringType(callee)
+		return self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: site.takesReceiver)
 	end 'cannotSourceALayoutDescriptor'
+
+	function hasNoInstanceToTakeHiddenArgumentsFrom(callee ByteArray, takesReceiver bool) returns bool
+		return not takesReceiver and not self.calleeReturnsItsDeclaringType(callee)
+	end 'hasNoInstanceToTakeHiddenArgumentsFrom'
 
 	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER?** — `functionNeedsLayoutDescriptor`'s
 	// twin, over the same qualified `Type.method` key and the same solved graph.
@@ -32359,7 +32371,7 @@ export type ProgramSignatures
 	// here names, and a caller cannot reach for either after a `satisfied`.
 	//
 	// ⚠ An OPAQUE element (`Array with T` inside a generic body) satisfies the clause exactly when
-	// `T`'s own `where` clause promises each interface (`opaqueParamPromises`): every instantiation
+	// `T`'s own `where` clause promises each interface (`opaqueParamDischarge`): every instantiation
 	// then binds `T` to a conforming type.
 	//
 	// ⚠ **IT IS MUTUALLY RECURSIVE and terminates on ELEMENT-NESTING DEPTH**: `containerElementConformerName`
@@ -32388,7 +32400,7 @@ export type ProgramSignatures
 
 	function opaqueElementConstraintCheck(id GenericInstanceId, elementType MaxonType, clauseInterfaces ByteArrayArray) returns ExtensionConstraintCheck
 		for interfaceName in clauseInterfaces 'eachConstraint'
-			if not opaqueParamPromises(self, token: typeParamIdOf(elementType), interfaceName: interfaceName) 'unpromised'
+			if not opaqueConstraintIsDischarged(opaqueParamDischarge(self, interfaces: self.interfaceMap(), token: typeParamIdOf(elementType), interfaceName: interfaceName)) 'unpromised'
 				return ExtensionConstraintCheck.unmet(interfaceName, bindingName: self.instanceArgDisplayName(id, position: 0))
 			end 'unpromised'
 		end 'eachConstraint'
@@ -32412,17 +32424,35 @@ export type ProgramSignatures
 	// `equals`. Admitting one would make `__managed_eq` and the stdlib body give two answers for one
 	// pair.
 	export function arrayEqualityIsBitwise(id GenericInstanceId) returns bool
-		if not self.isArrayInstance(id) or not self.genericInstanceBaseName(id).equals(self.arrayRecordBaseName()) or self.containerElementOccupiesAPointerSlot(id) or self.containerElementIsOpaque(id) 'notAnInlineScalarSlotOfTheLibraryArray'
-			return false
-		end 'notAnInlineScalarSlotOfTheLibraryArray'
+		return match self.arrayElementClass(id) 'class'
+			integer or
+				namedValue or
+				booleanOrExitCode gives not self.elementDeclaresItsOwn(self.containerElementType(id), member: EqualsMethodName)
+			floatValue or
+				notBitwise gives false
+		end 'class'
+	end 'arrayEqualityIsBitwise'
+
+	function isLibraryArrayInstance(id GenericInstanceId) returns bool
+		return self.isArrayInstance(id) and self.genericInstanceBaseName(id).equals(self.arrayRecordBaseName())
+	end 'isLibraryArrayInstance'
+
+	function isInlineSlotOfLibraryArray(id GenericInstanceId) returns bool
+		return self.isLibraryArrayInstance(id) and not self.containerElementOccupiesAPointerSlot(id) and not self.containerElementIsOpaque(id)
+	end 'isInlineSlotOfLibraryArray'
+
+	function arrayElementClass(id GenericInstanceId) returns ArrayElementClass
+		if not self.isInlineSlotOfLibraryArray(id) 'notAnInlineSlot'
+			return ArrayElementClass.notBitwise
+		end 'notAnInlineSlot'
 
 		let element = self.containerElementType(id)
 
-		let storedAsItsValue = match maxonTypeTag(element) 'tag'
+		return match maxonTypeTag(element) 'tag'
 			boolean or
-				integer or
-				exitCode gives true
-			named gives self.namedElementEqualityIsBitwise(self.nameOfId(typeNameIdOf(element)))
+				exitCode gives ArrayElementClass.booleanOrExitCode
+			integer gives ArrayElementClass.integer
+			named gives self.namedElementClass(self.nameOfId(typeNameIdOf(element)))
 			float or
 				unresolved or
 				void or
@@ -32433,27 +32463,25 @@ export type ProgramSignatures
 				genericInstance or
 				character or
 				interfaceRef or
-				cstring gives false
+				cstring gives ArrayElementClass.notBitwise
 		end 'tag'
-
-		return storedAsItsValue and not self.elementDeclaresItsOwn(element, member: EqualsMethodName)
-	end 'arrayEqualityIsBitwise'
+	end 'arrayElementClass'
 
 	function nameIsAnUndeclaredByteElement(name ByteArray) returns bool
 		return isByteElementName(name) and not self.settled.typeAliases.anyFileDeclares(name) and not self.containsEnumInAnyFile(name)
 	end 'nameIsAnUndeclaredByteElement'
 
-	function namedElementEqualityIsBitwise(name ByteArray) returns bool
+	function namedElementClass(name ByteArray) returns ArrayElementClass
 		if self.nameIsAnUndeclaredByteElement(name) 'theUndeclaredByteElement'
-			return true
+			return ArrayElementClass.namedValue
 		end 'theUndeclaredByteElement'
 
 		if not self.settled.typeAliases.anyFileDeclares(name) 'noFileDeclaresIt'
-			return false
+			return ArrayElementClass.notBitwise
 		end 'noFileDeclaresIt'
 
-		return not self.settled.typeAliases.declaredAsFloatInAnyFile(name)
-	end 'namedElementEqualityIsBitwise'
+		return ArrayElementClass.floatValue if self.settled.typeAliases.declaredAsFloatInAnyFile(name) else ArrayElementClass.namedValue
+	end 'namedElementClass'
 
 	function elementDeclaresItsOwn(element MaxonType, member ByteArray) returns bool
 		return self.userDeclaresMember(self.conformerNameOfType(element, idsFrom: self.typeNames, readerFilePath: CompilerOwnedDeclFilePath).toByteArray(), member: member)
@@ -32470,53 +32498,38 @@ export type ProgramSignatures
 		end 'range'
 	end 'elementLoadsAsItsValue'
 
-	function arrayHashesFloatBits(id GenericInstanceId) returns bool
-		if not self.isArrayInstance(id) or not self.genericInstanceBaseName(id).equals(self.arrayRecordBaseName()) or self.containerElementOccupiesAPointerSlot(id) or self.containerElementIsOpaque(id) 'notAnInlineSlotOfTheLibraryArray'
-			return false
-		end 'notAnInlineSlotOfTheLibraryArray'
-
-		let element = self.containerElementType(id)
-
-		if maxonTypeTag(element) != ValueTypeTag.named 'notAnAlias'
-			return false
-		end 'notAnAlias'
-
-		return self.settled.typeAliases.declaredAsFloatInAnyFile(self.nameOfId(typeNameIdOf(element))) and self.arrayElementIsMachineWord(id) and not self.elementDeclaresItsOwn(element, member: HashMethodName)
-	end 'arrayHashesFloatBits'
-
 	export function arrayBitwiseKind(id GenericInstanceId) returns ArrayBitwiseKind
-		if self.arrayHashesFloatBits(id) 'aFloatElement'
+		return match self.arrayElementClass(id) 'class'
+			notBitwise gives ArrayBitwiseKind.neither
+			floatValue gives self.floatArrayBitwiseKind(id)
+			integer gives self.afterUserDeclarations(id, natural: ArrayBitwiseKind.equalsAndHash)
+			namedValue gives self.afterUserDeclarations(id, natural: ArrayBitwiseKind.equalsAndHash if self.elementLoadsAsItsValue(id) else ArrayBitwiseKind.equalsOnly)
+			booleanOrExitCode gives self.afterUserDeclarations(id, natural: ArrayBitwiseKind.equalsOnly)
+		end 'class'
+	end 'arrayBitwiseKind'
+
+	function floatArrayBitwiseKind(id GenericInstanceId) returns ArrayBitwiseKind
+		if self.arrayElementIsMachineWord(id) and not self.elementDeclaresItsOwn(self.containerElementType(id), member: HashMethodName) 'hashedByFloatBits'
 			return ArrayBitwiseKind.floatHashOnly
-		end 'aFloatElement'
+		end 'hashedByFloatBits'
 
-		if not self.arrayEqualityIsBitwise(id) 'notBytewise'
-			return ArrayBitwiseKind.neither
-		end 'notBytewise'
+		return ArrayBitwiseKind.neither
+	end 'floatArrayBitwiseKind'
 
+	function afterUserDeclarations(id GenericInstanceId, natural ArrayBitwiseKind) returns ArrayBitwiseKind
 		let element = self.containerElementType(id)
 
-		if self.elementDeclaresItsOwn(element, member: HashMethodName) 'theProgramOwnsHash'
+		if self.elementDeclaresItsOwn(element, member: EqualsMethodName) 'theProgramOwnsEquals'
+			return ArrayBitwiseKind.neither
+		end 'theProgramOwnsEquals'
+
+		if natural == ArrayBitwiseKind.equalsAndHash and self.elementDeclaresItsOwn(element, member: HashMethodName) 'theProgramOwnsHash'
 			return ArrayBitwiseKind.equalsOnly
 		end 'theProgramOwnsHash'
 
-		return match maxonTypeTag(element) 'tag'
-			integer gives ArrayBitwiseKind.equalsAndHash
-			named gives ArrayBitwiseKind.equalsAndHash if self.elementLoadsAsItsValue(id) else ArrayBitwiseKind.equalsOnly
-			boolean or
-				exitCode gives ArrayBitwiseKind.equalsOnly
-			float or
-				unresolved or
-				void or
-				structRef or
-				string or
-				function or
-				typeParameter or
-				genericInstance or
-				character or
-				interfaceRef or
-				cstring panic("arrayBitwiseKind: an element of tag {typeTagName(maxonTypeTag(self.containerElementType(id)))} passed arrayEqualityIsBitwise, which admits only boolean, integer, exitCode and named elements")
-		end 'tag'
-	end 'arrayBitwiseKind'
+		return natural
+	end 'afterUserDeclarations'
+
 
 	export function calleeIsArrayRecordMember(callee ByteArray, member ByteArray) returns bool
 		return qualifiedNameIs(callee, typeName: self.arrayRecordBaseName(), member: member)
@@ -34000,7 +34013,7 @@ export type ProgramSignatures
 	end 'elementAdmitsEverySlotValue'
 
 	// The ONE element with no value set that still admits every pattern of its slot: the `Byte` a `b"…"`
-	// literal MINTS FOR ITSELF in a program that declares no such alias. `undeclaredNamedElementSlot`
+	// literal MINTS FOR ITSELF in a program that declares no such alias or enum. `undeclaredNamedElementSlot`
 	// gives it a one-byte slot by construction and there is no declared range for a raw byte to fall outside
 	// of — exactly the case `Parser.requireRawByteFillFitsItsElement` returns on, asked here of the slot
 	// instead of the byte.
@@ -34093,7 +34106,7 @@ export type ProgramSignatures
 	// THREE different things, and only one of them is the machine word:
 	//
 	//   • **`Byte`** — the `Array with Byte` instance a `b"…"` literal MINTS FOR ITSELF
-	//     (`internArrayByteInstance`) in a program that declares no such alias. No user type can name that
+	//     (`internArrayByteInstance`) in a program that declares no such alias or enum. No user type can name that
 	//     instance (`Array with Byte` over an undeclared `Byte` does not resolve), so the literal's own record
 	//     is the only one there is — and it is stamped byte-PACKED by construction (`ByteStringElementSize`).
 	//     Answering the machine word here would leave this door and that record disagreeing about ONE
@@ -36952,7 +36965,7 @@ export type ProgramSignatures
 		// reduction remains the only thing that can. Until the reduction is per-INTERFACE, `Array` is the one
 		// base with such an extension and its own arm stays authoritative for it — including the FALLBACK,
 		// which is the half that moved.
-		if self.isArrayInstance(id) and self.genericInstanceBaseName(id).equals(self.arrayRecordBaseName()) 'theConditionalConformanceIsAuthoritative'
+		if self.isLibraryArrayInstance(id) 'theConditionalConformanceIsAuthoritative'
 			if self.arrayElementCarriesConformance(id) 'conformingArray'
 				return GenericInstanceConformer.arrayBuiltin
 			end 'conformingArray'
@@ -43095,7 +43108,7 @@ export type ProgramSignatures
 	// list `appendWitnessArgs` then walks (`ProgramSignatures.witnessConstraintsOfMethod`), rather
 	// than a second lookup that could answer for a different list.
 	export function witnessParamCountForCallee(callee ByteArray, sig FuncSignature) returns ParamCount
-		if not sig.takesReceiver() and not self.calleeReturnsItsDeclaringType(callee) 'noWitnessSource'
+		if self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: sig.takesReceiver()) 'noWitnessSource'
 			return 0
 		end 'noWitnessSource'
 

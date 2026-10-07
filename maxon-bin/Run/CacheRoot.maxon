@@ -26,10 +26,19 @@ export typealias CacheFormatNumber = int(1 to u32.max)
 	let PosixTempVariable = "TMPDIR"
 #endif
 
-// `<scratch area>/maxon/run/<format>/<one directory per program>` — under a directory of this compiler's
-// own, so a shared temp area is not littered with slot names that say nothing about what put them there.
+// `<scratch area>/maxon/<command>/<format>/…` — under a directory of this compiler's own, so a shared temp
+// area is not littered with names that say nothing about what put them there. Every cache the driver
+// keeps lives under it, `run`'s slots and `build`'s records alike.
 let CacheVendorDirName = "maxon"
-module let CacheCommandDirName = "run"
+
+// A slot path has a budget, and Windows sets it at 260 characters: two full SHA-256s spelled out
+// are 128 of them before the root, the stem or the extension. Past it the backend cannot write the
+// `.mxdbg` sidecar, which reads as a build that produced no file rather than as a path too long.
+//
+// These are names, not signatures. 64 bits distinguishes the builds one developer's cache holds;
+// the collision it risks is a stale binary served for changed inputs, at a population no cache
+// reaches.
+module let CacheNameDigestBytes = 8 as DigestPrefixBytes
 
 // ⭐ **`<home>/.maxon` IS THE INSTALL SCRIPT'S OWN DEFAULT INSTALL ROOT** (`website/public/install.sh`,
 // `install.ps1`), so under a home directory the cache sits beside the `bin/` and `stdlib/` it belongs to

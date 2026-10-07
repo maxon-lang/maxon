@@ -653,7 +653,7 @@ function refuseOverloadedFunctionValue(project Project, func IrFunction, opIndex
 	end 'notOverloaded'
 
 	let range = project.opRanges.get(opIndex)
-	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "taking a function value of the overloaded name '{String.from(name)}' — a function value carries no arguments, so there is nothing to pick an overload by. Give the overloads distinct names, or call it directly", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("taking a function value of the overloaded name '{String.from(name)}' — a function value carries no arguments, so there is nothing to pick an overload by. Give the overloads distinct names, or call it directly"), line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 end 'refuseOverloadedFunctionValue'
 
 // The members of a set that are actually in the signature registry, in declaration order. A member absent
@@ -1513,7 +1513,7 @@ function reportOverloadReturnDisagreement(project Project, range SourceRange, fi
 		aDefaultedArgument(callee, slot) gives "the overloads of '{bareMethodName(callee)}' do not agree on the TYPE of parameter {slot}, which this call omitted and the compiler supplied from that parameter's default ('{typeTagName(current)}' and '{typeTagName(declared)}'). A defaulted argument's type is fixed while the call is parsed, from a whole-program index that records one answer per NAME, and the overload is resolved a whole pass later — so only a difference between plain scalars can be corrected by then. Declare that parameter at the same type in every overload"
 	end 'about'
 
-	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: message, line: range.line, column: range.column, filePath: filePath)
+	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(message), line: range.line, column: range.column, filePath: filePath)
 end 'reportOverloadReturnDisagreement'
 
 // Is this tag one of the three the retype above may cross between — unmanaged, un-named, non-float, GPR? See
@@ -5793,7 +5793,7 @@ function reportOpaqueReceiverWithoutTables(project Project, signatures ProgramSi
 	let arrival = arrivalWhenWithoutTables(holder, outsideAClosure: NoWitnessTablesArrival.dispatchedOnAnInstanceOverATypeParameter)
 
 	match splitQualifiedName(overloadRegistrationBaseName(callee)) 'q'
-		parts(_, member) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: {noWitnessTablesSentence(member, arrival: arrival)}", line: callRange.line, column: callRange.column, filePath: filePath)
+		parts(_, member) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(noWitnessTablesSentence(member, arrival: arrival)), line: callRange.line, column: callRange.column, filePath: filePath)
 		notQualified then panic("reportOpaqueReceiverWithoutTables: '{String.from(callee)}' carries extension constraints but is not a qualified method name — `Parser.noteTypeExtensionWitnessConstraints` files them under `<Conformer>.<member>` only")
 	end 'q'
 end 'reportOpaqueReceiverWithoutTables'

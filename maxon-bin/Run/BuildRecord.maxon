@@ -3,9 +3,10 @@ let BuildCommandDirName = "build"
 let BuildRecordExtension = ".mxbr"
 let MostBuildRecords = 256 as ElementIndex
 
-let AbsentStamp = "absent"
-let UnreadableStamp = "unreadable"
+let AbsentStampText = "absent"
+let UnreadableStampText = "unreadable"
 let StampSeparator = " "
+let StampFieldCount = 2 as ElementIndex
 let VersionComponentSeparator = "."
 let ReasonFieldSeparator = " "
 
@@ -138,6 +139,11 @@ export type BuildRecord
 	end 'create'
 end 'BuildRecord'
 
+union RecordRead
+	stored(record StoredRecord)
+	ofAnotherFormat(format String)
+end 'RecordRead'
+
 type StoredRecord
 	export let build as BuildRecord
 	export let started as Timestamp
@@ -174,7 +180,7 @@ export function recordLockPathOf(output FilePath) returns FilePath throws RunCac
 		throw RunCacheError.unavailable("could not create {directory.toString()}, where build locks are kept")
 	end 'unusable'
 
-	return directory.join("{outputKeyOf(anchoredOutputOf(output))}{OutputLockSuffix}")
+	return outputLockPathIn(directory, key: outputKeyOf(anchoredOutputOf(output)))
 end 'recordLockPathOf'
 
 export function isBuildLocksDirectory(path FilePath) returns bool
@@ -190,9 +196,7 @@ export function buildLockBelonging(path FilePath) returns FilePath throws Absent
 		throw AbsentError.absent
 	end 'notALockFile'
 
-	let key = try path.filename().split(OutputLockSuffix).get(0) otherwise panic("buildLockBelonging: a split answers at least one piece")
-
-	return directory.join("{key}{OutputLockSuffix}")
+	return outputLockBelonging(path, directory: directory)
 end 'buildLockBelonging'
 
 function anchoredOutputOf(output FilePath) returns FilePath
@@ -239,15 +243,24 @@ end 'stampedInputs'
 
 function optionsOf(request BuildRecordRequest) returns NamedValueArray
 	var options = NamedValueArray.create()
-	options.push(NamedValue.create(RecordOption.target.name, value: targetToString(request.target)))
-	options.push(NamedValue.create(RecordOption.debugInfo.name, value: "{request.debugInfo}"))
-	options.push(NamedValue.create(RecordOption.coverage.name, value: "{request.coverage}"))
-	options.push(NamedValue.create(RecordOption.debugStream.name, value: "{request.debugStream}"))
-	options.push(NamedValue.create(RecordOption.asyncTrace.name, value: "{request.asyncTrace}"))
-	options.push(NamedValue.create(RecordOption.version.name, value: versionText(request.productVersion)))
+
+	for option in RecordOption.allCases 'eachOption'
+		options.push(NamedValue.create(option.name, value: optionValueOf(option, request: request)))
+	end 'eachOption'
 
 	return options
 end 'optionsOf'
+
+function optionValueOf(option RecordOption, request BuildRecordRequest) returns String
+	return match option 'which'
+		target gives targetToString(request.target)
+		debugInfo gives "{request.debugInfo}"
+		coverage gives "{request.coverage}"
+		debugStream gives "{request.debugStream}"
+		asyncTrace gives "{request.asyncTrace}"
+		version gives versionText(request.productVersion)
+	end 'which'
+end 'optionValueOf'
 
 function definesOf(request BuildRecordRequest) returns NamedValueArray
 	var defines = NamedValueArray.create()
@@ -308,10 +321,17 @@ export function freshnessOf(current BuildRecord) returns Freshness
 		return Freshness.stale("no record of a previous build")
 	end 'neverRecorded'
 
-	let stored = try readBuildRecord(current.path) otherwise (e) 'unreadable'
+	let read = try readBuildRecord(current.path) otherwise (e) 'unreadable'
 		return Freshness.stale("the build record is unreadable: {e.sentence()}")
 	end 'unreadable'
 
+	return match read 'read'
+		stored(record) gives freshnessAgainst(current, stored: record)
+		ofAnotherFormat(format) gives Freshness.stale("the build record is of format {format}, not {cacheFormatDirectoryName(BuildRecordFormat)}")
+	end 'read'
+end 'freshnessOf'
+
+function freshnessAgainst(current BuildRecord, stored StoredRecord) returns Freshness
 	for check in RecordCheck.allCases 'eachCheck'
 		if let reason = try changeFor(check, current: current, stored: stored).text() 'changed'
 			return Freshness.stale(reason)
@@ -319,7 +339,7 @@ export function freshnessOf(current BuildRecord) returns Freshness
 	end 'eachCheck'
 
 	return Freshness.upToDate
-end 'freshnessOf'
+end 'freshnessAgainst'
 
 function changeFor(check RecordCheck, current BuildRecord, stored StoredRecord) returns StatedText
 	return match check 'which'
@@ -376,24 +396,52 @@ function firstNamedChange(label RecordLabel, current NamedValueArray, stored Nam
 		end 'unrecorded'
 	end 'eachCurrent'
 
-	for entry in stored 'eachStored'
-		if not currentByName.contains(entry.name) 'dropped'
-			return StatedText.stated("{label.name} {entry.name} removed")
-		end 'dropped'
-	end 'eachStored'
+	if let dropped = try firstKeyMissingFrom(namesOf(stored), kept: setOf(namesOf(current))) 'aDroppedEntry'
+		return StatedText.stated("{label.name} {dropped} removed")
+	end 'aDroppedEntry'
 
 	return StatedText.unstated
 end 'firstNamedChange'
 
-function pathSetOf(inputs RecordedInputArray) returns RecordedPathSet
-	var spelled = RecordedPathSet.create()
+function namesOf(entries NamedValueArray) returns StringArray
+	var names = StringArray.create()
+
+	for entry in entries 'eachEntry'
+		names.push(entry.name)
+	end 'eachEntry'
+
+	return names
+end 'namesOf'
+
+function pathsOf(inputs RecordedInputArray) returns StringArray
+	var spelled = StringArray.create()
 
 	for input in inputs 'eachInput'
-		spelled.insert(input.path.toString())
+		spelled.push(input.path.toString())
 	end 'eachInput'
 
 	return spelled
-end 'pathSetOf'
+end 'pathsOf'
+
+function setOf(keys StringArray) returns RecordedPathSet
+	var keyed = RecordedPathSet.create()
+
+	for key in keys 'eachKey'
+		keyed.insert(key)
+	end 'eachKey'
+
+	return keyed
+end 'setOf'
+
+function firstKeyMissingFrom(keys StringArray, kept RecordedPathSet) returns String throws AbsentError
+	for key in keys 'eachKey'
+		if not kept.contains(key) 'missing'
+			return key
+		end 'missing'
+	end 'eachKey'
+
+	throw AbsentError.absent
+end 'firstKeyMissingFrom'
 
 function pathNounOf(label RecordLabel) returns String
 	return match label 'which'
@@ -410,20 +458,16 @@ function inputListChange(label RecordLabel, current RecordedInputArray, stored R
 	end 'unchanged'
 
 	let noun = pathNounOf(label)
-	let currentSet = pathSetOf(current)
-	let storedSet = pathSetOf(stored)
+	let currentPaths = pathsOf(current)
+	let storedPaths = pathsOf(stored)
 
-	for input in current 'eachCurrent'
-		if not storedSet.contains(input.path.toString()) 'added'
-			return StatedText.stated("{noun} added: {input.path.toString()}")
-		end 'added'
-	end 'eachCurrent'
+	if let added = try firstKeyMissingFrom(currentPaths, kept: setOf(storedPaths)) 'anAddedPath'
+		return StatedText.stated("{noun} added: {added}")
+	end 'anAddedPath'
 
-	for input in stored 'eachStored'
-		if not currentSet.contains(input.path.toString()) 'removed'
-			return StatedText.stated("{noun} removed: {input.path.toString()}")
-		end 'removed'
-	end 'eachStored'
+	if let removed = try firstKeyMissingFrom(storedPaths, kept: setOf(currentPaths)) 'aRemovedPath'
+		return StatedText.stated("{noun} removed: {removed}")
+	end 'aRemovedPath'
 
 	return StatedText.stated("the {label.name} lines are in another order")
 end 'inputListChange'
@@ -444,18 +488,63 @@ function sameSequence(inputs RecordedInputArray, other RecordedInputArray) retur
 	return true
 end 'sameSequence'
 
-function stampOf(path FilePath) returns String
+union RecordedFileStamp
+	absent
+	unreadable
+	written(size FileSize, modifiedTime Timestamp)
+	foreign(text String)
+end 'RecordedFileStamp'
+
+function stampOf(path FilePath) returns RecordedFileStamp
 	let info = try File.info(path) otherwise (e) 'noInfo'
-		return AbsentStamp if e == FileInfoError.notFound else UnreadableStamp
+		return RecordedFileStamp.absent if e == FileInfoError.notFound else RecordedFileStamp.unreadable
 	end 'noInfo'
 
-	return "{info.size}{StampSeparator}{info.modifiedTime}"
+	return RecordedFileStamp.written(info.size, modifiedTime: info.modifiedTime)
 end 'stampOf'
+
+function encodedStamp(stamp RecordedFileStamp) returns String
+	return match stamp 'stamp'
+		absent gives AbsentStampText
+		unreadable gives UnreadableStampText
+		written(size, modifiedTime) gives "{size}{StampSeparator}{modifiedTime}"
+		foreign(text) gives text
+	end 'stamp'
+end 'encodedStamp'
+
+function decodedStamp(text String) returns RecordedFileStamp
+	if text == AbsentStampText 'absent'
+		return RecordedFileStamp.absent
+	end 'absent'
+
+	if text == UnreadableStampText 'unreadable'
+		return RecordedFileStamp.unreadable
+	end 'unreadable'
+
+	let pieces = text.split(StampSeparator)
+
+	if pieces.count() != StampFieldCount 'notASizeAndATime'
+		return RecordedFileStamp.foreign(text)
+	end 'notASizeAndATime'
+
+	let size = try int.fromString(try pieces.get(FirstField) otherwise panic("decodedStamp: a two-piece split has a first")) otherwise return RecordedFileStamp.foreign(text)
+	let modified = try int.fromString(try pieces.get(SecondField) otherwise panic("decodedStamp: a two-piece split has a second")) otherwise return RecordedFileStamp.foreign(text)
+
+	if size < 0 or modified < 0 'outOfRange'
+		return RecordedFileStamp.foreign(text)
+	end 'outOfRange'
+
+	return RecordedFileStamp.written(size as FileSize, modifiedTime: modified as Timestamp)
+end 'decodedStamp'
+
+function sameStamp(stamp RecordedFileStamp, other RecordedFileStamp) returns bool
+	return encodedStamp(stamp) == encodedStamp(other)
+end 'sameStamp'
 
 function currentFilesOf(record BuildRecord) returns NamedValueArray
 	var files = NamedValueArray.create()
-	files.push(NamedValue.create(RecordedFile.output.name, value: stampOf(record.output)))
-	files.push(NamedValue.create(RecordedFile.sidecar.name, value: stampOf(sidecarPathOf(record.output))))
+	files.push(NamedValue.create(RecordedFile.output.name, value: encodedStamp(stampOf(record.output))))
+	files.push(NamedValue.create(RecordedFile.sidecar.name, value: encodedStamp(stampOf(sidecarPathOf(record.output)))))
 
 	return files
 end 'currentFilesOf'
@@ -472,26 +561,33 @@ function fileChange(current BuildRecord, stored StoredRecord) returns StatedText
 	let recorded = valuesByName(stored.files)
 
 	for file in RecordedFile.allCases 'eachFile'
-		let found = try now.get(file.name) otherwise panic("fileChange: {file.name} was just entered into the map built from the current files")
-		let wasWritten = try recorded.get(file.name) otherwise return StatedText.stated("the build record names no stamp for {describedFile(file)}")
+		let found = decodedStamp(try now.get(file.name) otherwise panic("fileChange: {file.name} was just entered into the map built from the current files"))
+		let wasWritten = decodedStamp(try recorded.get(file.name) otherwise return StatedText.stated("the build record names no stamp for {describedFile(file)}"))
 
-		if found == UnreadableStamp 'unreadable'
-			return StatedText.stated("{describedFile(file)} could not be read")
-		end 'unreadable'
-
-		if found == wasWritten 'unchanged'
-			continue
-		end 'unchanged'
-
-		if found == AbsentStamp 'gone'
-			return StatedText.stated("{describedFile(file)} is missing")
-		end 'gone'
-
-		return StatedText.stated("{describedFile(file)} was replaced since it was written")
+		if let reason = try fileStampChange(found, was: wasWritten, described: describedFile(file)).text() 'changed'
+			return StatedText.stated(reason)
+		end 'changed'
 	end 'eachFile'
 
 	return StatedText.unstated
 end 'fileChange'
+
+function fileStampChange(found RecordedFileStamp, was RecordedFileStamp, described String) returns StatedText
+	return match found 'found'
+		unreadable gives StatedText.stated("{described} could not be read")
+		absent gives changedUnlessSame(found, was: was, reason: "{described} is missing")
+		written or
+			foreign gives changedUnlessSame(found, was: was, reason: "{described} was replaced since it was written")
+	end 'found'
+end 'fileStampChange'
+
+function changedUnlessSame(found RecordedFileStamp, was RecordedFileStamp, reason String) returns StatedText
+	if sameStamp(found, other: was) 'unchanged'
+		return StatedText.unstated
+	end 'unchanged'
+
+	return StatedText.stated(reason)
+end 'changedUnlessSame'
 
 function modifiedInputChange(current RecordedInputArray, stored RecordedInputArray, started Timestamp) returns StatedText
 	for (iter, input) in current.withIterator() 'eachInput'
@@ -500,6 +596,10 @@ function modifiedInputChange(current RecordedInputArray, stored RecordedInputArr
 		// Any differing time is stale, an older one included: a file restored from a backup goes back in
 		// time. A recorded time at or after `started` is stale too: an mtime is whole seconds, so a later
 		// edit within that same second leaves it unchanged.
+		if input.modifiedTime < was.modifiedTime 'restored'
+			return StatedText.stated("{input.path.toString()} was replaced by an older copy")
+		end 'restored'
+
 		if input.modifiedTime != was.modifiedTime or was.modifiedTime >= started 'modified'
 			return StatedText.stated("{input.path.toString()} was modified at or after the last compile started")
 		end 'modified'
@@ -614,7 +714,7 @@ function soleFieldsOf(lines RecordLineArray, label RecordLabel) returns StringAr
 	let matching = fieldLinesOf(lines, label: label)
 
 	if matching.count() != SoleLineCount 'notOne'
-		throw RunCacheError.unavailable("it has {matching.count()} `{label.name}` lines, where it has one")
+		throw RunCacheError.unavailable("it has {matching.count()} `{label.name}` lines, where a record has one")
 	end 'notOne'
 
 	return try matching.get(FirstField) otherwise panic("soleFieldsOf: a list of {SoleLineCount} line has a first")
@@ -642,17 +742,21 @@ function recordedInputsOf(lines RecordLineArray, label RecordLabel) returns Reco
 	return inputs
 end 'recordedInputsOf'
 
-function readBuildRecord(path FilePath) returns StoredRecord throws RunCacheError
+function readBuildRecord(path FilePath) returns RecordRead throws RunCacheError
 	let text = try File.readText(path) otherwise throw RunCacheError.unavailable("{path.toString()} could not be read")
 	let lines = try recordLinesIn(text)
 
-	try requireFormat(try soleFieldsOf(lines, label: RecordLabel.format))
+	let format = try fieldAt(try soleFieldsOf(lines, label: RecordLabel.format), index: FirstField)
+
+	if format != cacheFormatDirectoryName(BuildRecordFormat) 'anotherFormat'
+		return RecordRead.ofAnotherFormat(format)
+	end 'anotherFormat'
 
 	let output = try pathOf(try fieldAt(try soleFieldsOf(lines, label: RecordLabel.output), index: FirstField))
 	let build = BuildRecord.create(path, output: output, compiler: try soleFieldsOf(lines, label: RecordLabel.compiler), options: try namedValuesOf(lines, label: RecordLabel.option), defines: try namedValuesOf(lines, label: RecordLabel.define), programs: try recordedInputsOf(lines, label: RecordLabel.program), libraries: try recordedInputsOf(lines, label: RecordLabel.library), tools: try recordedInputsOf(lines, label: RecordLabel.tool))
 	let started = try timestampOf(try fieldAt(try soleFieldsOf(lines, label: RecordLabel.started), index: FirstField))
 
-	return StoredRecord.create(build, started: started, files: try namedValuesOf(lines, label: RecordLabel.file))
+	return RecordRead.stored(StoredRecord.create(build, started: started, files: try namedValuesOf(lines, label: RecordLabel.file)))
 end 'readBuildRecord'
 
 function fieldAt(fields StringArray, index ElementIndex) returns String throws RunCacheError
@@ -676,14 +780,6 @@ function timestampOf(spelled String) returns Timestamp throws RunCacheError
 
 	return parsed as Timestamp
 end 'timestampOf'
-
-function requireFormat(fields StringArray) throws RunCacheError
-	let spelled = try fieldAt(fields, index: FirstField)
-
-	if spelled != cacheFormatDirectoryName(BuildRecordFormat) 'anotherFormat'
-		throw RunCacheError.unavailable("it is of format `{spelled}`")
-	end 'anotherFormat'
-end 'requireFormat'
 
 // `started` is read off the cache root's filesystem clock, because what it is compared with are mtimes a
 // filesystem stamped. An input on a filesystem whose clock is skewed from that one can still slip a

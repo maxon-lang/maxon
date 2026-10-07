@@ -635,10 +635,7 @@ union HiddenParameterSlot
 end 'HiddenParameterSlot'
 
 function hiddenSlotsShareAKind(slot HiddenParameterSlot, other HiddenParameterSlot) returns bool
-	return match slot 'slot'
-		layout gives hiddenSlotIsTheLayout(other)
-		witness gives not hiddenSlotIsTheLayout(other)
-	end 'slot'
+	return hiddenSlotIsTheLayout(slot) == hiddenSlotIsTheLayout(other)
 end 'hiddenSlotsShareAKind'
 
 function hiddenSlotIsTheLayout(slot HiddenParameterSlot) returns bool
@@ -1003,16 +1000,21 @@ end 'WitnessTableEntry'
 
 typealias WitnessTableEntryArray = Array with WitnessTableEntry
 
-type GrowingWitnessEntry
+type WitnessPartition
 	export let owner as ByteArray
-	export let entry as WitnessTableEntry
+	export let kept as WitnessTableEntryArray
+	export let shed as WitnessTableEntryArray
 
-	static function create(owner ByteArray, entry WitnessTableEntry) returns GrowingWitnessEntry
-		return Self{owner: owner, entry: entry}
+	static function create(owner ByteArray, kept WitnessTableEntryArray, shed WitnessTableEntryArray) returns WitnessPartition
+		return Self{owner: owner, kept: kept, shed: shed}
 	end 'create'
-end 'GrowingWitnessEntry'
+end 'WitnessPartition'
 
-typealias GrowingWitnessEntryArray = Array with GrowingWitnessEntry
+typealias WitnessPartitionArray = Array with WitnessPartition
+
+function entryIndexIn(entries WitnessTableEntryArray, instance GenericInstanceId, interfaceName ByteArray) returns ElementIndex throws AbsentError
+	return try firstIndexWhere(entries.count(), test: function(i) gives (try entries.get(i) otherwise panic("entryIndexIn: entries.get({i}) below count")).names(instance, otherInterface: interfaceName))
+end 'entryIndexIn'
 
 type DescriptorTable
 	export var instances as GenericInstanceIdArray
@@ -1022,6 +1024,20 @@ type DescriptorTable
 	static function create() returns DescriptorTable
 		return Self{instances: GenericInstanceIdArray.create(), witnesses: WitnessTableEntryArray.create(), dropped: WitnessTableEntryArray.create()}
 	end 'create'
+
+	function reachedInstances() returns GenericInstanceIdArray
+		var reached = GenericInstanceIdArray.create()
+
+		for instance in self.instances 'eachInstance'
+			reached.push(instance)
+		end 'eachInstance'
+
+		for witness in self.witnesses 'eachWitness'
+			reached.push(witness.instance)
+		end 'eachWitness'
+
+		return reached
+	end 'reachedInstances'
 end 'DescriptorTable'
 
 typealias DescriptorTableMap = Map with (ByteArray, DescriptorTable)
@@ -2302,8 +2318,7 @@ type MaxonToStdLowering
 		// result = __mm_alloc(ManagedRecordBytes, 0) — the owned heap 48-byte record (MM header + refcount before it).
 		let recordSize = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(recordSize, value: ManagedRecordBytes as ParsedInt, valueType: StdType.i64))
-		let recordDtor = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(recordDtor, value: 0, valueType: StdType.i64))
+		let recordDtor = self.emitZeroConst(dstBlock)
 		var allocArgs = ValueIdArray.create()
 		allocArgs.push(recordSize)
 		allocArgs.push(recordDtor)
@@ -2461,7 +2476,7 @@ type MaxonToStdLowering
 			return
 		end 'noLayout'
 
-		self.implicitLayoutValueId = layoutDescriptorSlotValueId(func.paramCount, witnessParamCount: self.currentWitnessCount, fixedElementCountSlots: countSlots)
+		self.implicitLayoutValueId = self.hiddenSlotValueId(func, slot: HiddenParameterSlot.layout)
 	end 'bindImplicitParams'
 
 	function witnessCountOf(callee ByteArray, sig FuncSignature) returns ParamCount
@@ -2736,8 +2751,7 @@ type MaxonToStdLowering
 		end 'resolvedAtTheConcreteRoot'
 
 		self.pendingNullWitnessArgs.push(NullWitnessArgRequest.create(self.currentFuncName(), callee: callee, constraintIndex: constraintIndex, conformerType: conformer, interfaceName: constraint.interfaceName))
-		let nullId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(nullId, value: 0, valueType: StdType.i64))
+		let nullId = self.emitZeroConst(dstBlock)
 		return nullId
 	end 'parametricWitnessArg'
 
@@ -2772,7 +2786,7 @@ type MaxonToStdLowering
 	end 'currentFunctionIsAMethodOf'
 
 	function indexOfWitnessTableEntry(table DescriptorTable, instance GenericInstanceId, interfaceName ByteArray) returns ElementIndex throws AbsentError
-		return try firstIndexWhere(table.witnesses.count(), test: function(i) gives (try table.witnesses.get(i) otherwise panic("indexOfWitnessTableEntry: witnesses.get({i}) below count")).names(instance, otherInterface: interfaceName))
+		return try entryIndexIn(table.witnesses, instance: instance, interfaceName: interfaceName)
 	end 'indexOfWitnessTableEntry'
 
 	// ⭐⭐ **FORWARD THE SLOT THE ENCLOSING DECLARATION'S OWN `where` CLAUSE PROMISED FOR AN OPAQUE ARGUMENT
@@ -3323,7 +3337,7 @@ type MaxonToStdLowering
 
 		for _ in request.slotArity upto impl.paramCount 'eachHiddenParam'
 			let zeroId = args.count() as ValueId
-			self.stdModule.appendOp(entry, op: StdOp.const(zeroId, value: 0, valueType: StdType.i64))
+			self.emitZeroConstAs(entry, id: zeroId)
 			args.push(zeroId)
 		end 'eachHiddenParam'
 	end 'appendNullAdapterDictionary'
@@ -3519,13 +3533,11 @@ type MaxonToStdLowering
 		end 'calleeHasNoLoweredBody'
 
 		let callee = try self.funcNames.funcNamed(calleeName) otherwise panic("useOfHiddenParameter: '{String.from(calleeName)}' is in no function of this module — the call that passed '{String.from(callerName)}' a zero had already been resolved by the lowering")
-		let sig = try self.funcSignatures.get(calleeName) otherwise panic("useOfHiddenParameter: '{String.from(calleeName)}' has no signature — a hidden argument is appended only for a callee whose signature sized the hidden block")
-		let witnessCount = self.witnessCountOf(calleeName, sig: sig)
+		if not self.funcSignatures.contains(calleeName) 'calleeHasASignature'
+			panic("useOfHiddenParameter: '{String.from(calleeName)}' has no signature — a hidden argument is appended only for a callee whose signature sized the hidden block")
+		end 'calleeHasASignature'
 
-		let parameter = match slot 'slot'
-			layout gives layoutDescriptorSlotValueId(callee.paramCount, witnessParamCount: witnessCount, fixedElementCountSlots: self.fixedElementCountParamCountFor(calleeName))
-			witness(constraintIndex) gives witnessParameterValueId(calleeName, paramCount: callee.paramCount, witnessCount: witnessCount, constraintIndex: constraintIndex)
-		end 'slot'
+		let parameter = self.hiddenSlotValueId(callee, slot: slot)
 
 		var reads = false
 		var forwards = HiddenSlotTargetArray.create()
@@ -3599,6 +3611,15 @@ type MaxonToStdLowering
 		return self.calleeReadsHiddenParameter(impl.name, callerName: impl.name, slot: slot)
 	end 'hiddenPositionIsRead'
 
+	function hiddenSlotValueId(func IrFunction, slot HiddenParameterSlot) returns ValueId
+		let witnessCount = self.witnessParamCountForFunc(func)
+
+		return match slot 'slot'
+			layout gives layoutDescriptorSlotValueId(func.paramCount, witnessParamCount: witnessCount, fixedElementCountSlots: self.fixedElementCountParamCountFor(func.name))
+			witness(constraintIndex) gives witnessParameterValueId(func.name, paramCount: func.paramCount, witnessCount: witnessCount, constraintIndex: constraintIndex)
+		end 'slot'
+	end 'hiddenSlotValueId'
+
 	function hiddenSlotKindAt(impl IrFunction, position ParamCount) returns HiddenParameterSlot throws AbsentError
 		let sig = try self.funcSignatures.get(impl.name) otherwise throw AbsentError.absent
 		let witnessCount = self.witnessCountOf(impl.name, sig: sig)
@@ -3608,7 +3629,7 @@ type MaxonToStdLowering
 			return HiddenParameterSlot.witness((position - first) as WitnessSlotIndex)
 		end 'aWitnessSlot'
 
-		if self.functionHasDescriptorParam(impl) and valueIdAtParamPosition(position) == layoutDescriptorSlotValueId(impl.paramCount, witnessParamCount: witnessCount, fixedElementCountSlots: self.fixedElementCountParamCountFor(impl.name)) 'theLayoutSlot'
+		if self.functionHasDescriptorParam(impl) and valueIdAtParamPosition(position) == self.hiddenSlotValueId(impl, slot: HiddenParameterSlot.layout) 'theLayoutSlot'
 			return HiddenParameterSlot.layout
 		end 'theLayoutSlot'
 
@@ -3997,36 +4018,32 @@ type MaxonToStdLowering
 			owners.push(owner.clone())
 		end 'eachOwner'
 
-		var growing = GrowingWitnessEntryArray.create()
+		var partitions = WitnessPartitionArray.create()
 
 		for owner in owners 'eachOwnerWithWitnesses'
 			let table = try self.descriptorTables.get(owner) otherwise panic("dropGrowingWitnessEntries: '{String.from(owner)}' was just listed and is not there")
+			var kept = WitnessTableEntryArray.create()
+			var shed = WitnessTableEntryArray.create()
 
 			for entry in table.witnesses 'eachEntry'
 				var visited = DescriptorTableOwnerSet.create()
 
 				if self.descriptorTableReaches(owner, from: self.signatures.genericInstanceBaseName(entry.instance), visited: visited) 'aChainThatGrows'
-					growing.push(GrowingWitnessEntry.create(owner.clone(), entry: entry.clone()))
-				end 'aChainThatGrows'
-			end 'eachEntry'
-		end 'eachOwnerWithWitnesses'
-
-		for dropping in growing 'eachGrowingEntry'
-			var table = try self.descriptorTables.get(dropping.owner) otherwise panic("dropGrowingWitnessEntries: '{String.from(dropping.owner)}' was just listed and is not there")
-			var kept = WitnessTableEntryArray.create()
-			var shed = WitnessTableEntryArray.create()
-
-			for entry in table.witnesses 'eachFiledEntry'
-				if entry.names(dropping.entry.instance, otherInterface: dropping.entry.interfaceName) 'thisOne'
 					shed.push(entry.clone())
-				end 'thisOne' else 'staysFiled'
+				end 'aChainThatGrows' else 'staysFiled'
 					kept.push(entry.clone())
 				end 'staysFiled'
-			end 'eachFiledEntry'
+			end 'eachEntry'
 
-			table.witnesses = kept
-			table.dropped.append(shed)
-		end 'eachGrowingEntry'
+			partitions.push(WitnessPartition.create(owner.clone(), kept: kept, shed: shed))
+		end 'eachOwnerWithWitnesses'
+
+		for partition in partitions 'eachPartition'
+			var table = try self.descriptorTables.get(partition.owner) otherwise panic("dropGrowingWitnessEntries: '{String.from(partition.owner)}' was just listed and is not there")
+
+			table.witnesses = partition.kept
+			table.dropped.append(partition.shed)
+		end 'eachPartition'
 	end 'dropGrowingWitnessEntries'
 
 	function requireEveryComposedDescriptorHasASource(sites DescriptorSubjectSiteArray, project Project) throws CompileError
@@ -4064,24 +4081,18 @@ type MaxonToStdLowering
 		visited.insert(from)
 		let table = try self.descriptorTables.get(from) otherwise return false
 
-		for entry in table.instances 'eachEntry'
+		for entry in table.reachedInstances() 'eachEntry'
 			if self.descriptorTableReaches(owner, from: self.signatures.genericInstanceBaseName(entry), visited: visited) 'reachedThroughAnEntry'
 				return true
 			end 'reachedThroughAnEntry'
 		end 'eachEntry'
-
-		for witness in table.witnesses 'eachWitness'
-			if self.descriptorTableReaches(owner, from: self.signatures.genericInstanceBaseName(witness.instance), visited: visited) 'reachedThroughAWitness'
-				return true
-			end 'reachedThroughAWitness'
-		end 'eachWitness'
 
 		return false
 	end 'descriptorTableReaches'
 
 	function refuseDescriptorSubject(site DescriptorSubjectSite, project Project, reason String) throws CompileError
 		let func = try self.maxonModule.functions.get(site.funcIndex) otherwise panic("refuseDescriptorSubject: functions.get({site.funcIndex}) — the plan recorded the index while walking this array")
-		reportAtFunctionName(project, func: func, code: ErrorCode.parserUnsupportedFeature, message: "'{String.from(overloadRegistrationBaseName(site.callee))}' {reason}")
+		reportAtFunctionName(project, func: func, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("'{String.from(overloadRegistrationBaseName(site.callee))}' {reason}"))
 		throw CompileError.compileError
 	end 'refuseDescriptorSubject'
 
@@ -4216,13 +4227,8 @@ type MaxonToStdLowering
 	end 'fileWitnessTableEntry'
 
 	function tableDropped(table DescriptorTable, instance GenericInstanceId, interfaceName ByteArray) returns bool
-		for entry in table.dropped 'eachDropped'
-			if entry.names(instance, otherInterface: interfaceName) 'thisOne'
-				return true
-			end 'thisOne'
-		end 'eachDropped'
-
-		return false
+		_ = try entryIndexIn(table.dropped, instance: instance, interfaceName: interfaceName) otherwise return false
+		return true
 	end 'tableDropped'
 
 	function holdsWitnessEntry(table DescriptorTable, instance GenericInstanceId, interfaceName ByteArray) returns bool
@@ -4358,8 +4364,7 @@ type MaxonToStdLowering
 		end 'aFirmNeed'
 
 		self.pendingNullLayoutArgs.push(NullLayoutArgRequest.create(self.currentFuncName(), callee: callee, opIndex: self.currentMaxonOpIndex))
-		let nullId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(nullId, value: 0, valueType: StdType.i64))
+		let nullId = self.emitZeroConst(dstBlock)
 		return nullId
 	end 'forwardCallerLayout'
 
@@ -4383,7 +4388,7 @@ type MaxonToStdLowering
 
 	function reportNullLayoutRead(request NullLayoutArgRequest, project Project)
 		let caller = try self.funcNames.funcNamed(request.caller) otherwise panic("reportNullLayoutRead: '{String.from(request.caller)}' is in no function of this module — it is the function whose body this pass was lowering when the null was recorded")
-		let message = "'{String.from(request.caller)}' calls '{String.from(request.callee)}', which reads the enclosing instance's layout descriptor, and {self.nullLayoutHolderSentence(request.caller)}"
+		let message = unsupportedFeatureMessage("'{String.from(request.caller)}' calls '{String.from(request.callee)}', which reads the enclosing instance's layout descriptor, and {self.nullLayoutHolderSentence(request.caller)}")
 
 		if request.opIndex >= project.opRanges.count() 'noRecordedPosition'
 			reportAtFunctionName(project, func: caller, code: ErrorCode.parserUnsupportedFeature, message: message)
@@ -4398,10 +4403,10 @@ type MaxonToStdLowering
 		let callerSignature = try self.funcSignatures.get(callerName) otherwise return "the function this closure was written in carries none to hand it — write the call in a method that does"
 
 		if callerSignature.takesReceiver() 'anInstanceMethod'
-			return "this method carries no layout descriptor of its own to forward — the receiver it calls on was not recognised as the enclosing type, so none was reserved. Reach the callee through `self`, through a local bound to a `Self\{…}`, or through a concrete instance instead"
+			return "this method carries no layout descriptor of its own to forward — the receiver it calls on was not recognised as the enclosing type, so none was reserved. Reach the callee {ReachThroughSelfClause}, or through a concrete instance instead"
 		end 'anInstanceMethod'
 
-		return "this `static function` carries none to hand it — a static sources a descriptor from the instance it RETURNS. Declare it `returns Self`, or make it an instance method"
+		return "this `static function` carries none to hand it — a static sources a descriptor {StaticSourcesFromTheReturnedInstance}. Declare it `returns Self`, or make it an instance method"
 	end 'nullLayoutHolderSentence'
 
 	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA —
@@ -4784,8 +4789,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(addr, label: DsBaseLabel))
 		let base = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(base, addrId: addr, offset: 0, valueType: StdType.i64))
-		let detached = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(detached, value: 0, valueType: StdType.i64))
+		let detached = self.emitZeroConst(dstBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(result, lhs: base, rhs: detached, pred: StdCmpPred.ne, operandType: StdType.i64))
 	end 'appendDebugStreamAttachedTest'
 
@@ -5819,7 +5823,7 @@ type MaxonToStdLowering
 		if serviceReplyNeedsReleaser(messageName, funcSignatures: self.funcSignatures, signatures: self.signatures, typeNames: self.typeNames) 'ownsAResult'
 			self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(releaserPtr, funcName: serviceReplyReleaserName(messageName)))
 		end 'ownsAResult' else 'nothingToRelease'
-			self.stdModule.appendOp(dstBlock, op: StdOp.const(releaserPtr, value: 0, valueType: StdType.i64))
+			self.emitZeroConstAs(dstBlock, id: releaserPtr)
 		end 'nothingToRelease'
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtCellAllocName, args: argsOf(releaserPtr)))
@@ -6432,8 +6436,7 @@ type MaxonToStdLowering
 			return
 		end 'scalarEncodeDefinesItDirectly'
 
-		let zero = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+		let zero = self.emitZeroConst(dstBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: errValue, rhs: zero, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	end 'lowerErrorFlagEncode'
 
@@ -6738,9 +6741,13 @@ type MaxonToStdLowering
 	// return type's register file.
 	function emitZeroConst(dstBlock IrBlock) returns ValueId
 		let zero = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+		self.emitZeroConstAs(dstBlock, id: zero)
 		return zero
 	end 'emitZeroConst'
+
+	function emitZeroConstAs(dstBlock IrBlock, id ValueId)
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(id, value: 0, valueType: StdType.i64))
+	end 'emitZeroConstAs'
 
 	// The THROW-edge PRIMARY value — a family-default the caller reads ONLY for its register file, never
 	// its bits (once the error flag is set the value is dead). It must be born in the file the return type

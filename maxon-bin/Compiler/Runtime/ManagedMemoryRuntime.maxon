@@ -4347,36 +4347,11 @@ enum ArrayHashElement
 	floatBits
 end 'ArrayHashElement'
 
-function emitArrayHashStepTail(module StdModule, block IrBlock, header IrBlock, i ValueId, h ValueId, term ValueId, ids ValueMinter)
-	let hNext = emitDjb2Step(module, block: block, h: h, value: term, ids: ids)
-	let one = emitConst(module, block: block, value: 1, ids: ids)
-	let iNext = emitBin(module, block: block, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(block, op: StdOp.branch(header.id))
-	block.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: hNext)))
-end 'emitArrayHashStepTail'
-
 // An element's term is `float.hash`'s value for it, `-0.0` arm included (`buildFloatHash`): `[0.0]`
 // and `[-0.0]` are equal arrays and must hash equal.
 function emitFloatElementHashStep(module StdModule, func IrFunction, fold IrBlock, header IrBlock, i ValueId, h ValueId, bits ValueId, ids ValueMinter)
-	var negativeZero = module.addBlock(func, label: b"negzero", heat: BlockHeat.normal)
-	var folded = module.addBlock(func, label: b"floatfold", heat: BlockHeat.normal)
 	var step = module.addBlock(func, label: b"step", heat: BlockHeat.normal)
-
-	let term = ids.mint()
-	step.blockArgs.push(IrBlockArg.create(term, argType: StdType.i64))
-
-	let negativeZeroBits = emitConst(module, block: fold, value: NegativeZeroBits, ids: ids)
-	let isNegativeZero = emitCmp(module, block: fold, a: bits, b: negativeZeroBits, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(fold, op: StdOp.condBranch(isNegativeZero, thenBlockId: negativeZero.id, elseBlockId: folded.id))
-
-	let zeroTerm = emitConst(module, block: negativeZero, value: ZeroFloatHash, ids: ids)
-	module.setTerminator(negativeZero, op: StdOp.branch(step.id))
-	negativeZero.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(zeroTerm)))
-
-	let foldedTerm = emitFloatBitsFold(module, block: folded, bits: bits, ids: ids)
-	module.setTerminator(folded, op: StdOp.branch(step.id))
-	folded.branchEdges.push(BranchEdge.create(step.id, argIds: argsOf(foldedTerm)))
-
+	let term = emitFloatHashInto(module, func: func, entry: fold, bits: bits, join: step, ids: ids)
 	emitArrayHashStepTail(module, block: step, header: header, i: i, h: h, term: term, ids: ids)
 end 'emitFloatElementHashStep'
 

@@ -7001,7 +7001,6 @@ export union EqualityOperand
 	structOverParameters(base ByteArray)
 end 'EqualityOperand'
 
-export typealias EqualityOperandArray = Array with EqualityOperand
 
 export type StructLayout
 	export var name as ByteArray
@@ -12284,26 +12283,26 @@ end 'CompileInterest'
 export type CompileSession
 	export var diagnostics as DiagnosticSink
 	export var fileMemos as SharedFileMemoMap
-	export var treeLock as TreeLockHold
+	export var treeLock as LockHold
 	var interest as CompileInterest
 	var interestAskedMs as InstantMs
 	var abandoned as bool
 
-	export static function create(diagnostics DiagnosticSink, fileMemos SharedFileMemoMap, treeLock TreeLockHold) returns CompileSession
+	export static function create(diagnostics DiagnosticSink, fileMemos SharedFileMemoMap, treeLock LockHold) returns CompileSession
 		return Self{diagnostics: diagnostics, fileMemos: fileMemos, treeLock: treeLock, interest: CompileInterest.always, interestAskedMs: Clock.nowMs(), abandoned: false}
 	end 'create'
 
 	export static function printing() returns CompileSession
-		return Self.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.forOneCompile(), treeLock: TreeLockHold.none())
+		return Self.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.forOneCompile(), treeLock: LockHold.none())
 	end 'printing'
 
 	// For a check whose memo counters assume every memo lives in this process (`verify-warm-rebuild`).
 	export static function printingWithoutLibraryCache() returns CompileSession
-		return Self.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.withoutLibraryCache(), treeLock: TreeLockHold.none())
+		return Self.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.withoutLibraryCache(), treeLock: LockHold.none())
 	end 'printingWithoutLibraryCache'
 
 	export static function discarding() returns CompileSession
-		return Self.create(DiagnosticSink.discarding(), fileMemos: SharedFileMemoMap.create(), treeLock: TreeLockHold.none())
+		return Self.create(DiagnosticSink.discarding(), fileMemos: SharedFileMemoMap.create(), treeLock: LockHold.none())
 	end 'discarding'
 
 	// `always` answers before any clock is read: checkpoints sit in per-function loops, and a build must

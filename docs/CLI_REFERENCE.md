@@ -379,6 +379,7 @@ The reason a compiling build gives is one of these:
 |--------|------|
 | `no record of a previous build` | The first build of this output, or the first since its record was removed |
 | `<path> was modified at or after the last compile started` | A recorded file changed |
+| `<path> was replaced by an older copy` | A recorded file now has an earlier modification time than the record holds, as a restored backup does |
 | `source added: <path>`, `source removed: <path>` | The program or the library gained or lost a file; `tool added:` and `tool removed:` for the `wasm32-wasi` tools |
 | `option <name> changed: <old> -> <new>` | `<name>` is `target`, `debugInfo`, `coverage`, `debugStream`, `asyncTrace` or `version` |
 | `define <name> added`, `define <name> removed`, `define <name> changed: <old> -> <new>` | A `--define` or a described build's define differs |
@@ -388,7 +389,8 @@ The reason a compiling build gives is one of these:
 | `<flag> observes the compile` | See below |
 | `the output is the running compiler` | See [Rebuilding a running compiler](#rebuilding-a-running-compiler) |
 | `no build record can be kept: <why>` | See below |
-| `the build record is unreadable: <why>` | The record is damaged or of another format |
+| `the build record is unreadable: <why>` | The record is damaged |
+| `the build record is of format vN, not vM` | The record was written in another format |
 
 **These builds always compile, and remove the output's build record:**
 

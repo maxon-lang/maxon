@@ -104,10 +104,10 @@ let FloatHashHalfShift = 32
 // against. Merging them would make the parser export a numeric constant down into the runtime layer, and
 // `Arm64Backend.Arm64WordSignBit` is a third same-valued constant that declines the same merge for the
 // same reason.
-export let NegativeZeroBits = i64.min as ParsedInt
+let NegativeZeroBits = i64.min as ParsedInt
 
 // What `-0.0` hashes to: `+0.0`'s fold, which is zero because every bit of `+0.0` is.
-export let ZeroFloatHash = 0 as ParsedInt
+let ZeroFloatHash = 0 as ParsedInt
 
 // djb2 over `String`'s bytes: `h = Djb2Seed`, then `h = h * Djb2Multiplier + b` per byte. The two magic
 // numbers of the algorithm, named rather than bare so the loop reads as djb2. `""` -> `5381`, `"abc"` ->
@@ -553,7 +553,7 @@ function buildIntHash(module StdModule, name ByteArray)
 	module.functions.push(func)
 end 'buildIntHash'
 
-export function emitFloatBitsFold(module StdModule, block IrBlock, bits ValueId, ids ValueMinter) returns ValueId
+function emitFloatBitsFold(module StdModule, block IrBlock, bits ValueId, ids ValueMinter) returns ValueId
 	let halfShift = emitConst(module, block: block, value: FloatHashHalfShift, ids: ids)
 	let highHalf = emitBin(module, block: block, a: bits, b: halfShift, opcode: StdBinOpcode.shrLogical, ids: ids)
 	let folded = emitBin(module, block: block, a: bits, b: highHalf, opcode: StdBinOpcode.bitXor, ids: ids)
@@ -592,23 +592,38 @@ function buildFloatHash(module StdModule, name ByteArray)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var negativeZero = module.addBlock(func, label: b"negzero", heat: BlockHeat.normal)
-	var fold = module.addBlock(func, label: b"fold", heat: BlockHeat.normal)
+	var join = module.addBlock(func, label: b"hashed", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
 	let receiver = 0 as ValueId
 
 	let bits = emitUnary(module, block: entry, operand: receiver, opcode: StdUnaryOpcode.bitcastF64ToI64, operandType: StdType.f64, ids: ids)
-	let negativeZeroBits = emitConst(module, block: entry, value: NegativeZeroBits, ids: ids)
-	emitOrderingTest(module, block: entry, a: bits, b: negativeZeroBits, pred: StdCmpPred.eq, operandType: StdType.i64, thenBlock: negativeZero, elseBlock: fold, ids: ids)
-
-	emitConstReturn(module, block: negativeZero, value: ZeroFloatHash, ids: ids)
-
-	// `shrLogical` rather than `shr`: the two differ only in the high word, which the final mask discards.
-	module.setTerminator(fold, op: StdOp.ret(emitFloatBitsFold(module, block: fold, bits: bits, ids: ids)))
+	let hashed = emitFloatHashInto(module, func: func, entry: entry, bits: bits, join: join, ids: ids)
+	module.setTerminator(join, op: StdOp.ret(hashed))
 
 	module.functions.push(func)
 end 'buildFloatHash'
+
+export function emitFloatHashInto(module StdModule, func IrFunction, entry IrBlock, bits ValueId, join IrBlock, ids ValueMinter) returns ValueId
+	var negativeZero = module.addBlock(func, label: b"negzero", heat: BlockHeat.normal)
+	var folded = module.addBlock(func, label: b"floatfold", heat: BlockHeat.normal)
+
+	let hashed = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(hashed, argType: StdType.i64))
+
+	let negativeZeroBits = emitConst(module, block: entry, value: NegativeZeroBits, ids: ids)
+	emitOrderingTest(module, block: entry, a: bits, b: negativeZeroBits, pred: StdCmpPred.eq, operandType: StdType.i64, thenBlock: negativeZero, elseBlock: folded, ids: ids)
+
+	let zeroTerm = emitConst(module, block: negativeZero, value: ZeroFloatHash, ids: ids)
+	module.setTerminator(negativeZero, op: StdOp.branch(join.id))
+	negativeZero.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(zeroTerm)))
+
+	let foldedTerm = emitFloatBitsFold(module, block: folded, bits: bits, ids: ids)
+	module.setTerminator(folded, op: StdOp.branch(join.id))
+	folded.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(foldedTerm)))
+
+	return hashed
+end 'emitFloatHashInto'
 
 // `block` is the block the value is live in and becomes the returning block, which is why the
 // caller passes it rather than this minting one: `int.hash` ends in its entry, `String.hash` and
@@ -967,7 +982,7 @@ function buildStrHash(module StdModule, name ByteArray)
 	module.functions.push(func)
 end 'buildStrHash'
 
-export function emitDjb2Step(module StdModule, block IrBlock, h ValueId, value ValueId, ids ValueMinter) returns ValueId
+function emitDjb2Step(module StdModule, block IrBlock, h ValueId, value ValueId, ids ValueMinter) returns ValueId
 	let mult = emitConst(module, block: block, value: Djb2Multiplier, ids: ids)
 	let hScaled = emitBin(module, block: block, a: h, b: mult, opcode: StdBinOpcode.mul, ids: ids)
 	return emitBin(module, block: block, a: hScaled, b: value, opcode: StdBinOpcode.add, ids: ids)
@@ -1000,6 +1015,14 @@ end 'emitDjb2Step'
 //
 // ⚠ The three block LABELS are emitted into every `jmp` the rendered Target IR shows, so renaming
 // them rewrites that IR while the code stays the same.
+export function emitArrayHashStepTail(module StdModule, block IrBlock, header IrBlock, i ValueId, h ValueId, term ValueId, ids ValueMinter)
+	let hNext = emitDjb2Step(module, block: block, h: h, value: term, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let iNext = emitBin(module, block: block, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(block, op: StdOp.branch(header.id))
+	block.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: hNext)))
+end 'emitArrayHashStepTail'
+
 function emitDjb2HashOverByteRange(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, len ValueId, ids ValueMinter)
 	var header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
@@ -1023,11 +1046,7 @@ function emitDjb2HashOverByteRange(module StdModule, func IrFunction, cur IrBloc
 	// body: `h = h * 33 + buffer[i]`; `i = i + 1`; back-edge. `i`/`h` are the header phis (header dominates
 	// body), so they are read directly.
 	let curByte = emitLoadByteIndexed(module, block: body, base: buffer, index: i, ids: ids)
-	let hNext = emitDjb2Step(module, block: body, h: h, value: curByte, ids: ids)
-	let one = emitConst(module, block: body, value: 1, ids: ids)
-	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: hNext)))
+	emitArrayHashStepTail(module, block: body, header: header, i: i, h: h, term: curByte, ids: ids)
 
 	// done: mask the accumulator to the low 32 bits and return it (`h` is the header phi, and header
 	// dominates done).

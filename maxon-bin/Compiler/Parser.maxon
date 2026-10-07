@@ -2426,6 +2426,10 @@ module enum NoWitnessTablesArrival
 	forwardedFromAClosure
 end 'NoWitnessTablesArrival'
 
+module let StaticSourcesFromTheReturnedInstance = "from the instance it RETURNS"
+
+module let ReachThroughSelfClause = "through `self`, through a local bound to a `Self\{…}`"
+
 let NoWitnessTablesDispatchRemedy = ", or make it an instance method, or take the operation as a function parameter"
 
 module function noWitnessTablesSentence(methodName ByteArray, arrival NoWitnessTablesArrival) returns String
@@ -2439,7 +2443,7 @@ module function noWitnessTablesSentence(methodName ByteArray, arrival NoWitnessT
 end 'noWitnessTablesSentence'
 
 function noWitnessTablesCallSentence(methodName ByteArray, receiver String, verb String, remedy String) returns String
-	return "calling '{String.from(methodName)}' (which dispatches through the type's `where` constraints) on a value of {receiver}, from a `static function` that carries no witness tables of its own to {verb} — a static sources them from the instance it RETURNS, so declare this one `returns Self`{remedy}"
+	return "calling '{String.from(methodName)}' (which dispatches through the type's `where` constraints) on a value of {receiver}, from a `static function` that carries no witness tables of its own to {verb} — a static sources them {StaticSourcesFromTheReturnedInstance}, so declare this one `returns Self`{remedy}"
 end 'noWitnessTablesCallSentence'
 
 let NoWitnessTablesClosureSentence = "a closure that dispatches through the type's `where` constraints, written inside a `static function` (or a field-default helper) that carries no witness tables of its own — the closure inherits its table through its environment from the function that built it, and a static has no receiver to source one from. Write the closure in an instance method, or take the operation as a function parameter"
@@ -5972,18 +5976,29 @@ enum ScanRegion
 	fieldDefault
 end 'ScanRegion'
 
+typealias EqualityOperandMap = Map with (ByteArray, EqualityOperand)
+
+type DeferredCorpusEdge
+	export let receiver as ByteArray
+	export let callee as ByteArray
+
+	static function create(receiver ByteArray, callee ByteArray) returns DeferredCorpusEdge
+		return Self{receiver: receiver, callee: callee}
+	end 'create'
+end 'DeferredCorpusEdge'
+
+typealias DeferredCorpusEdgeArray = Array with DeferredCorpusEdge
+
 type ParamReceiverTracker
 	export var parameters as ByteArrayArray
 	export var rebound as ByteArrayArray
-	export var operandNames as ByteArrayArray
-	export var operandBeliefs as EqualityOperandArray
-	export var deferredReceivers as ByteArrayArray
-	export var deferredCallees as ByteArrayArray
+	export var operandBeliefs as EqualityOperandMap
+	export var deferred as DeferredCorpusEdgeArray
 	export let headEnd as ElementIndex
 	export let fieldsAreUnshadowed as bool
 
 	static function create(headEnd ElementIndex, fieldsAreUnshadowed bool) returns ParamReceiverTracker
-		return Self{parameters: ByteArrayArray.create(), rebound: ByteArrayArray.create(), operandNames: ByteArrayArray.create(), operandBeliefs: EqualityOperandArray.create(), deferredReceivers: ByteArrayArray.create(), deferredCallees: ByteArrayArray.create(), headEnd: headEnd, fieldsAreUnshadowed: fieldsAreUnshadowed}
+		return Self{parameters: ByteArrayArray.create(), rebound: ByteArrayArray.create(), operandBeliefs: EqualityOperandMap.create(), deferred: DeferredCorpusEdgeArray.create(), headEnd: headEnd, fieldsAreUnshadowed: fieldsAreUnshadowed}
 	end 'create'
 
 	function declares(name ByteArray) returns bool
@@ -5995,18 +6010,15 @@ type ParamReceiverTracker
 	end 'reboundTo'
 
 	function noteOperand(name ByteArray, belief EqualityOperand)
-		self.operandNames.push(name)
-		self.operandBeliefs.push(belief)
+		if self.operandBeliefs.contains(name) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		self.operandBeliefs.upsert(name, value: belief)
 	end 'noteOperand'
 
 	function operandBeliefOf(name ByteArray) returns EqualityOperand throws AbsentError
-		for i in 0 upto self.operandNames.count() 'eachName'
-			if (try self.operandNames.get(i) otherwise panic("operandBeliefOf: operandNames.get({i}) below count")).equals(name) 'found'
-				return try self.operandBeliefs.get(i) otherwise panic("operandBeliefOf: operandBeliefs.get({i}) — the two columns are pushed in one act")
-			end 'found'
-		end 'eachName'
-
-		throw AbsentError.absent
+		return try self.operandBeliefs.get(name) otherwise throw AbsentError.absent
 	end 'operandBeliefOf'
 end 'ParamReceiverTracker'
 
@@ -22096,8 +22108,8 @@ export type Parser
 					directlyNeeded = directlyNeeded or (try directSeeds.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' is a seeded key by `contains` and absent by `get`"))
 					readsACount = readsACount or (try countSeeds.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' is a seeded key by `contains` and absent from the count column — the two seed columns are written in one act"))
 					edges.append(try selfCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no self-callee row — the two columns are written in one act"))
-					blindEdges = mergedCountEdges(blindEdges, previous: try blindCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no blind-callee row — the edge columns are written in one act"))
-					countEdges = mergedCountEdges(countEdges, previous: try countCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no count-callee row — the two edge columns are written in one act"))
+					blindEdges = mergedEdgeRows(blindEdges, previous: try blindCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no blind-callee row — the edge columns are written in one act"))
+					countEdges = mergedEdgeRows(countEdges, previous: try countCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no count-callee row — the two edge columns are written in one act"))
 				end 'aSecondDeclarationWearingThisName'
 
 				directSeeds.upsert(qualified, value: directlyNeeded)
@@ -22209,7 +22221,7 @@ export type Parser
 	// always freshly minted (`qualifiedSelfCallees`); a count row for anything but the sized container is
 	// `sharedEmptySizedContainerSelfCallees`, and appending into that would grow an array every scanned method
 	// in the program is reading.
-	function mergedCountEdges(edges ByteArrayArray, previous ByteArrayArray) returns ByteArrayArray
+	function mergedEdgeRows(edges ByteArrayArray, previous ByteArrayArray) returns ByteArrayArray
 		if previous.count() == 0 'nothingToMerge'
 			return edges
 		end 'nothingToMerge'
@@ -22218,7 +22230,7 @@ export type Parser
 		merged.append(edges)
 		merged.append(previous)
 		return merged
-	end 'mergedCountEdges'
+	end 'mergedEdgeRows'
 
 	function qualifiedSelfCallees(typeName ByteArray, callees ByteArrayArray) returns ByteArrayArray
 		var qualified = ByteArrayArray.create()
@@ -23096,8 +23108,7 @@ export type Parser
 		let receiverAt = (boundary - 1) as ElementIndex
 
 		if self.kindAt(receiverAt) == TokenKind.identifier and self.nameOpensAReceiverChainAt(receiverAt) and tracker.declares(self.tokenAt(receiverAt).value) 'aTypeParameterParameter'
-			tracker.deferredReceivers.push(self.tokenAt(receiverAt).value)
-			tracker.deferredCallees.push(callee)
+			tracker.deferred.push(DeferredCorpusEdge.create(self.tokenAt(receiverAt).value, callee: callee))
 			return
 		end 'aTypeParameterParameter'
 
@@ -23105,9 +23116,9 @@ export type Parser
 	end 'recordCorpusContainerEdge'
 
 	function settleDeferredCorpusEdges(edges DescriptorEdgeScratch, tracker ParamReceiverTracker)
-		for i in 0 upto tracker.deferredReceivers.count() 'eachDeferred'
-			if tracker.reboundTo(try tracker.deferredReceivers.get(i) otherwise panic("settleDeferredCorpusEdges: deferredReceivers.get({i}) below count")) 'notAPlainParameterAfterAll'
-				edges.corpusContainerCallees.push(try tracker.deferredCallees.get(i) otherwise panic("settleDeferredCorpusEdges: deferredCallees.get({i}) — the two columns are pushed in one act"))
+		for edge in tracker.deferred 'eachDeferred'
+			if tracker.reboundTo(edge.receiver) 'notAPlainParameterAfterAll'
+				edges.corpusContainerCallees.push(edge.callee)
 			end 'notAPlainParameterAfterAll'
 		end 'eachDeferred'
 	end 'settleDeferredCorpusEdges'
@@ -27273,14 +27284,6 @@ export type Parser
 	// outside the TYPE, in the same file — `type B` reading `type A`'s unexported field is E3014 — so
 	// dropping it silently accepts a program the language rejects. `specs/export-var-fields.md`'s two
 	// `error.unexported-field-*` cases read it.
-	function requireFieldTypeIsFinite(ownerName ByteArray, fieldName ByteArray, anchor Token) throws SourceParseError
-		if not self.signatures.allFilesFolded or not self.signatures.fieldTypeGrowsItsOwner(ownerName, fieldName: fieldName) 'nothingGrows'
-			return
-		end 'nothingGrows'
-
-		throw SourceParseError.genericTypeGrowsWithoutBound(String.from(ownerName), fieldName: String.from(fieldName), typeName: self.signatures.declaredFieldTypeDisplayName(ownerName, fieldName: fieldName), line: anchor.line, column: anchor.column)
-	end 'requireFieldTypeIsFinite'
-
 	function readStructFieldInto(layout StructLayout) throws SourceParseError
 		let visibility = try self.consumeOptionalVisibility()
 
@@ -27406,6 +27409,14 @@ export type Parser
 		try self.requireFieldDefaultType(nameTok, fieldType: fieldType, owner: SlotOwner.declaredBy(layout.name), given: given)
 		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(given.payload, tag: given.tag, writtenNegative: given.writtenNegative), declaredSurface: declaredSurface, declaredBrand: declaredBrand, spelledName: spelledName)
 	end 'readStructFieldInto'
+
+	function requireFieldTypeIsFinite(ownerName ByteArray, fieldName ByteArray, anchor Token) throws SourceParseError
+		if not self.signatures.allFilesFolded or not self.signatures.fieldTypeGrowsItsOwner(ownerName, fieldName: fieldName) 'nothingGrows'
+			return
+		end 'nothingGrows'
+
+		throw SourceParseError.genericTypeGrowsWithoutBound(String.from(ownerName), fieldName: String.from(fieldName), typeName: self.signatures.declaredFieldTypeDisplayName(ownerName, fieldName: fieldName), line: anchor.line, column: anchor.column)
+	end 'requireFieldTypeIsFinite'
 
 	// ⛔⛔ **A FIELD DECLARED AT A TYPE PARAMETER MAY NOT CARRY A DEFAULT — OF EITHER FORM (S2f).** `type Box
 	// uses T … var value as T = <anything>` is not a missing feature: a default is produced ONCE, from this
@@ -63389,18 +63400,14 @@ export type Parser
 
 		let tag = self.tagOf(lhs)
 
-		if tag == ValueTypeTag.structRef 'aStruct'
-			return self.signatures.declaresCallee(qualifiedMethodName(self.comparedStructName(lhs), methodName: structComparisonMethodName(op)))
-		end 'aStruct'
-
-		if tag == ValueTypeTag.genericInstance and not self.signatures.isArrayInstance(self.valueInstanceId(lhs)) 'aUserGenericInstance'
-			return self.signatures.declaresCallee(qualifiedMethodName(self.comparedStructName(lhs), methodName: structComparisonMethodName(op)))
-		end 'aUserGenericInstance'
+		if tag == ValueTypeTag.structRef or (tag == ValueTypeTag.genericInstance and not self.signatures.isArrayInstance(self.valueInstanceId(lhs))) 'aStructOrAUserGenericInstance'
+			return self.signatures.declaresCallee(qualifiedMethodName(self.comparedTypeName(lhs), methodName: structComparisonMethodName(op)))
+		end 'aStructOrAUserGenericInstance'
 
 		return false
 	end 'structComparisonOperands'
 
-	function comparedStructName(value ValueId) returns ByteArray
+	function comparedTypeName(value ValueId) returns ByteArray
 		let tag = self.tagOf(value)
 
 		if tag == ValueTypeTag.structRef 'aStruct'
@@ -63411,8 +63418,8 @@ export type Parser
 			return self.signatures.genericInstanceBaseName(self.valueInstanceId(value))
 		end 'aGenericInstance'
 
-		panic("Parser.comparedStructName: a {typeTagName(tag)} value is neither a struct nor a generic instance")
-	end 'comparedStructName'
+		panic("Parser.comparedTypeName: a {typeTagName(tag)} value is neither a struct nor a generic instance")
+	end 'comparedTypeName'
 
 	// `a == b` / `a != b` on one user struct or user generic instance, as the ORDINARY instance call
 	// `a.equals(b)` — same callee key, same argument slotting, same `bool` result, so nothing
@@ -63435,7 +63442,7 @@ export type Parser
 	// `NoImmutableArgNames`) are the honest ones here — every argument shares the operator's own span,
 	// because that IS where each came from.
 	function emitStructComparisonCall(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws SourceParseError
-		let structName = self.comparedStructName(lhs)
+		let structName = self.comparedTypeName(lhs)
 		let methodName = structComparisonMethodName(op)
 		try self.requireImplicitMethodReachable(structName, methodName: methodName, anchor: opTok)
 		let callee = qualifiedMethodName(structName, methodName: methodName)
@@ -63546,7 +63553,7 @@ export type Parser
 			return
 		end 'nothingToForwardOrSomewhereToForwardFrom'
 
-		throw SourceParseError.unsupported("comparing two values of a generic type over a type parameter with `==` or `!=` (which calls 'equals', and 'equals' reads the type parameter's layout descriptor) from a function that carries no layout descriptor of its own to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method", line: anchor.line, column: anchor.column)
+		throw SourceParseError.unsupported("comparing two values of a generic type over a type parameter with `==` or `!=` (which calls 'equals', and 'equals' reads the type parameter's layout descriptor) from a function that carries no layout descriptor of its own to hand it — a static sources a descriptor {StaticSourcesFromTheReturnedInstance}, so declare this one `returns Self`, or make it an instance method", line: anchor.line, column: anchor.column)
 	end 'requireALayoutToCompareAnOpaqueArray'
 
 	// The one place the comparison operators are split into equality and ordering, because both
@@ -73024,7 +73031,7 @@ export type Parser
 		let callee = qualifiedMethodName(self.enclosingTypeName(), methodName: memberTok.value)
 
 		if self.signatures.functionNeedsLayoutDescriptor(callee) and not self.signatures.functionLayoutNeedIsSpeculative(callee) 'reject'
-			throw SourceParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads sizeof of the type parameter) on a value of the enclosing type, from a function that carries no layout descriptor of its own to forward — reach it through `self`, through a local bound to a `Self\{…}`, or through a concrete instance instead", line: memberTok.line, column: memberTok.column)
+			throw SourceParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads the enclosing instance's layout descriptor) on a value of the enclosing type, from a function that carries no layout descriptor of its own to forward — reach it {ReachThroughSelfClause}, or through a concrete instance instead", line: memberTok.line, column: memberTok.column)
 		end 'reject'
 	end 'requireSelfForDescriptorForwarding'
 
@@ -73072,7 +73079,7 @@ export type Parser
 		end 'hasOneToForward'
 
 		if self.signatures.functionReadsFixedElementCount(qualifiedMethodName(base.layout.name, methodName: memberTok.value)) 'reject'
-			throw SourceParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it through `self`, through a local bound to a `Self\{…\}` or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance", line: memberTok.line, column: memberTok.column)
+			throw SourceParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it {ReachThroughSelfClause} or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance", line: memberTok.line, column: memberTok.column)
 		end 'reject'
 	end 'requireFixedElementCountSourceForForwarding'
 
@@ -73118,7 +73125,7 @@ export type Parser
 
 		if not needsCount and not scan.direct 'maybeAnEdgeIsTheCause'
 			if let callee = try self.layoutReadingCalleeOf(scan) 'namesTheCallee'
-				return SourceParseError.unsupported("calling '{String.from(unqualifiedMemberName(callee))}' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method", line: nameTok.line, column: nameTok.column)
+				return SourceParseError.unsupported("calling '{String.from(unqualifiedMemberName(callee))}' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor {StaticSourcesFromTheReturnedInstance}, so declare this one `returns Self`, or make it an instance method", line: nameTok.line, column: nameTok.column)
 			end 'namesTheCallee'
 		end 'maybeAnEdgeIsTheCause'
 

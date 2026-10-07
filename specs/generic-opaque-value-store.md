@@ -710,7 +710,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:11: 'Pair.create' is called on 'Pair.Deeper', whose type arguments build on the type parameters of 'Pair', and whose methods reach 'Pair' again — so composing its layout descriptor at a concrete instantiation would build an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own
+error E2015: <fragment>:15:11: Unsupported: 'Pair.create' is called on 'Pair.Deeper', whose type arguments build on the type parameters of 'Pair', and whose methods reach 'Pair' again — so composing its layout descriptor at a concrete instantiation would build an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own
 ```
 
 <!-- test: mapping-a-map-of-records-releases-the-entry-tuples-it-built -->
