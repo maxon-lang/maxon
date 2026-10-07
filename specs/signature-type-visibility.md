@@ -788,6 +788,70 @@ end 'main'
 error E3008: api/<fragment>:13:23: typealias 'Arr' is not exported
 ```
 
+<!-- test: error.a-qualified-file-private-inner-alias-from-another-file-is-refused -->
+Qualifying the name does not widen it. `Wrapper.Idx` is unmarked, so it is private to `api/lib.maxon`
+however visible `Wrapper` is, and `app/main.maxon` cannot name it as `Wrapper.Idx` any more than bare.
+```maxon
+// --- file: api/lib.maxon
+export type Wrapper
+	typealias Idx = int(0 to 9)
+
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+
+	export function code() returns ExitCode
+		return 2
+	end 'code'
+end 'Wrapper'
+
+// --- file: app/main.maxon
+function g(i Wrapper.Idx) returns ExitCode
+	return i as ExitCode
+end 'g'
+
+function main() returns ExitCode
+	return g(3) + Wrapper.make().code()
+end 'main'
+```
+```maxoncstderr
+error E3008: app/<fragment>:16:14: typealias 'Wrapper.Idx' is not exported
+```
+
+<!-- test: error.a-per-instance-spelling-of-a-file-private-inner-alias-is-refused -->
+An instance alias reaches the same member. `Pools` names `Pool with ExitCode`, so `Pools.Idx` is that
+instance's copy of `Pool`'s unmarked inner alias, private to `api/lib.maxon`, and naming it from
+`app/main.maxon` is refused as the generic's own spelling is.
+```maxon
+// --- file: api/lib.maxon
+export type Pool uses T
+	typealias Idx = int(0 to 9)
+	var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function code() returns ExitCode
+		return 2
+	end 'code'
+end 'Pool'
+
+// --- file: app/main.maxon
+typealias Pools = Pool with ExitCode
+
+function g(i Pools.Idx) returns ExitCode
+	return i as ExitCode
+end 'g'
+
+function main() returns ExitCode
+	return g(3) + Pools.create(1).code()
+end 'main'
+```
+```maxoncstderr
+error E3008: app/<fragment>:19:14: typealias 'Pools.Idx' is not exported
+```
+
 <!-- test: equal-tiers-are-legal -->
 Equal is enough at every tier — the rule asks "at least as visible", not "wider". Both pairs are here
 in one program so that a check written as a strict comparison fails on both.
