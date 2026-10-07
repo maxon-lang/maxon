@@ -118,7 +118,11 @@ Binding on every comment written and every comment touched.
   false, a history clause, a fact outside the allow-list, a duplicate. A comment whose content is true
   and allowed stays byte-for-byte as it is, whatever its formatting: bold, capitals, `⭐`, its wrap
   width and its wording are not reasons to edit it. When content does change, rewrite the sentences
-  that carry it, not the block around them.
+  that carry it, not the block around them. ⛔ **Never reflow.** Inserting or replacing words re-breaks
+  only the lines those words sit on; every other line of the paragraph stays byte-for-byte, even if
+  the paragraph's line lengths come out uneven or one line runs past 100 columns. A line that grows
+  too long is split in two where the edit is — never by re-wrapping the lines after it. A diff line
+  whose words did not change is formatting churn.
 
 The Maxon form:
 
@@ -245,8 +249,9 @@ These govern text this pass WRITES. They are never a reason to edit an existing 
 - **No `⭐`.** At most one `⚠` per block, only where the hazard is a *silent wrong answer* rather than a
   compile error. Never doubled.
 - No ALL-CAPS runs. A single capitalized word for emphasis, rarely.
-- **Wrap at 100 columns** (a tab counted as one). Tabs for indentation, matching the code the comment
-  attaches to.
+- **Wrap at 100 columns** (a tab counted as one) — NEW comment text only; an edit inside an existing
+  comment never reflows it (see the edit rule above). Tabs for indentation, matching the code the
+  comment attaches to.
 
 The register to aim at:
 
