@@ -32439,8 +32439,12 @@ export type ProgramSignatures
 		return storedAsItsValue and not self.elementDeclaresItsOwn(element, member: EqualsMethodName)
 	end 'arrayEqualityIsBitwise'
 
+	function nameIsAnUndeclaredByteElement(name ByteArray) returns bool
+		return isByteElementName(name) and not self.settled.typeAliases.anyFileDeclares(name) and not self.containsEnumInAnyFile(name)
+	end 'nameIsAnUndeclaredByteElement'
+
 	function namedElementEqualityIsBitwise(name ByteArray) returns bool
-		if isByteElementName(name) and not self.settled.typeAliases.anyFileDeclares(name) and not self.containsEnumInAnyFile(name) 'theUndeclaredByteElement'
+		if self.nameIsAnUndeclaredByteElement(name) 'theUndeclaredByteElement'
 			return true
 		end 'theUndeclaredByteElement'
 
@@ -34012,7 +34016,7 @@ export type ProgramSignatures
 	// name some OTHER file declares wide, whose slot is then that file's width and not a byte.
 	function elementIsAByteNoFileDeclares(giid GenericInstanceId) returns bool
 		let name = try self.arrayNamedElementName(ValueTypeTag.genericInstance, nameId: giid as TypeNameId) otherwise return false
-		return isByteElementName(name) and not self.settled.typeAliases.anyFileDeclares(name)
+		return self.nameIsAnUndeclaredByteElement(name)
 	end 'elementIsAByteNoFileDeclares'
 
 	// ⭐ **THE ONE PLACE A RANGED ALIAS'S DECLARED BOUNDS BECOME A STORAGE WIDTH.** A trivial element is
@@ -34109,7 +34113,7 @@ export type ProgramSignatures
 	// So there is no second meaning left for a reader to take. ⛔ If a kind is ever allowed to reach an
 	// element slot as a bare `named`, this argument stops holding and the stride becomes a guess.
 	function undeclaredNamedElementSlot(name ByteArray) returns StorageSlot
-		if isByteElementName(name) 'bytePacked'
+		if self.nameIsAnUndeclaredByteElement(name) 'bytePacked'
 			return StorageSlot.create(ByteStringElementSize as ByteOffset, signExtends: false)
 		end 'bytePacked'
 
