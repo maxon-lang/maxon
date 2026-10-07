@@ -72003,9 +72003,29 @@ export type Parser
 
 	function requireCloneCopiesNoGreenThread(verdict SourceCloneVerdict, subject String, memberTok Token) throws SourceParseError
 		if verdict == SourceCloneVerdict.holdsAGreenThread 'aGreenThreadIsCopied'
-			throw SourceParseError.promiseCannotBeBorrowed(String.from(memberTok.value), cure: "{subject} is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT", line: memberTok.line, column: memberTok.column)
+			throw self.greenThreadCopyRefusal(subject, memberTok: memberTok)
 		end 'aGreenThreadIsCopied'
 	end 'requireCloneCopiesNoGreenThread'
+
+	function greenThreadCopyRefusal(subject String, memberTok Token) returns SourceParseError
+		return SourceParseError.promiseCannotBeBorrowed(String.from(memberTok.value), cure: "{subject} is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT", line: memberTok.line, column: memberTok.column)
+	end 'greenThreadCopyRefusal'
+
+	function requireInstantiationsCopyNoGreenThread(param TypeParamId, fallbackSubject String, memberTok Token) throws SourceParseError
+		match self.signatures.genericTypeFieldGreenThreadInstantiation(param) 'greenThread'
+			noInstance then return
+			instance(site) then try self.refuseCopyOfAnInstantiation(site, fallbackSubject: fallbackSubject, memberTok: memberTok)
+		end 'greenThread'
+	end 'requireInstantiationsCopyNoGreenThread'
+
+	function refuseCopyOfAnInstantiation(site InstantiationSiteLookup, fallbackSubject String, memberTok Token) throws SourceParseError
+		self.blameLibraryRefusalOnInstantiation(site)
+
+		match site 'site'
+			unwritten then throw self.greenThreadCopyRefusal(fallbackSubject, memberTok: memberTok)
+			written(written) then throw self.greenThreadCopyRefusal("`{String.from(self.signatures.instanceDisplayName(written.gid))}`", memberTok: memberTok)
+		end 'site'
+	end 'refuseCopyOfAnInstantiation'
 
 	function cloneableInstanceOf(base StructBase, memberTok Token) returns GenericInstanceId throws SourceParseError
 		if self.tagOf(base.box) != ValueTypeTag.genericInstance 'noInstanceInHand'
@@ -72013,7 +72033,7 @@ export type Parser
 		end 'noInstanceInHand'
 
 		let instance = self.valueInstanceId(base.box)
-		try self.requireStructCloneVerdict(self.signatures.sourceCloneVerdictOfInstance(instance), typeName: base.layout.name, display: self.valueDisplayTypeName(base.box), memberTok: memberTok)
+		try self.requireStructCloneVerdict(self.signatures.sourceCloneVerdictOfType(MaxonType.genericInstance(instance)), typeName: base.layout.name, display: self.valueDisplayTypeName(base.box), memberTok: memberTok)
 		return instance
 	end 'cloneableInstanceOf'
 
@@ -78955,7 +78975,7 @@ export type Parser
 		let instance = recv.nameId as GenericInstanceId
 
 		if not self.signatures.containerElementIsOpaque(instance) 'aConcreteElement'
-			try self.requireCloneCopiesNoGreenThread(self.signatures.sourceCloneVerdictOfInstance(instance), subject: "`{self.valueDisplayTypeName(recv.value)}`", memberTok: member)
+			try self.requireCloneCopiesNoGreenThread(self.signatures.sourceCloneVerdictOfType(MaxonType.genericInstance(instance)), subject: "`{self.valueDisplayTypeName(recv.value)}`", memberTok: member)
 		end 'aConcreteElement'
 
 		self.signatures.noteArrayCopyDemanded(instance)
@@ -80582,36 +80602,25 @@ export type Parser
 		try self.requireArrayElementCopyable(giid, methodTok: methodTok)
 	end 'requireArrayCopyMethodSupported'
 
-	// ⭐ **THE COPY GATE for an OPAQUE-`T` array (P1.7 slice 3b-vi-b-β).** An opaque `Array with <type parameter>`
-	// inside a generic body copies each element through the enclosing instance's descriptor `copyFunc@32`, which
-	// can hold only a SINGLE `(box) -> newBox` cloner (`__managed_*_opaque` branches on it: a byte-blit for a
-	// trivial element, a deep clone for a managed one). It REJECTS (E2015) only when SOME instantiation of the
-	// enclosing generic type substitutes a managed type nothing can deep-clone — an OS handle, a base-struct-less
-	// generic instance with no runtime copy of its own (a cursor), an existential, or a type that owns one of
-	// those — because such an element has no `copyFunc` and its copy would byte-blit a managed pointer and
-	// double-free it. The reject is per-INSTANTIATION (the shared body's element is opaque), so it enumerates the
-	// enclosing type's instances through `genericTypeFieldUncopyableInstantiation`, mirroring the concrete gate's
-	// `arrayElementSupportsDeepClone`.
-	//
-	// ⭐⭐ **A MANAGED-ELEMENT CONTAINER USED TO BE ON THAT REJECT LIST AND IS NOT ANY MORE (G18).** It was there
-	// for an ARITY reason and never for an impossibility: an `Array with (Array with String)` element copies
-	// through a 2-argument `__managed_clone_managed(box, funcAddr(__str_clone))`, which `callIndirect(fn, elem)`
-	// could not reach. A per-instance one-argument thunk now can
-	// (`SignatureIndex.managedElementRecordCopy`), so this gate has nothing left to refuse there.
-	//
-	// ⛔ **AND UNTIL IT DID, THIS GATE REFUSED PROGRAMS THAT COPY NOTHING — which is the shape G18 was found by,
-	// not a hypothetical.** The refusal fires where `stdlib/Array.maxon:142`'s `managed.slice(0, len)` IS, and
-	// that body is compiled once for the whole program, so ANY program reaching the corpus `Array` at all (a
-	// `for … in`, an `isEmpty()`, a `clear()`) answered for `clone` on behalf of every instantiation in the
-	// file. Curing THAT by making the demand reachability-driven was measured and rejected as the wrong cure:
-	// the instantiation that would be exempted still needs a `copyFunc@32`, and a 0 there is the shape 25
-	// measured `0xC0000005`s came out of (see `ProgramSignatures.managedOpaqueArrayElementOf`). The cloner was
-	// the missing piece, not the demand.
+	// ⭐ **THE COPY GATE for an OPAQUE-`T` array (P1.7 slice 3b-vi-b-β).** An opaque
+	// `Array with <type parameter>` inside a generic body copies each element through the enclosing
+	// instance's descriptor `copyFunc@32`, which can hold only a SINGLE `(box) -> newBox` cloner
+	// (`__managed_*_opaque` branches on it: a byte-blit for a trivial element, a deep clone for a
+	// managed one). It REJECTS (E2015) when SOME instantiation of the enclosing generic type
+	// substitutes a managed type nothing can deep-clone — an OS handle, a base-struct-less generic
+	// instance with no runtime copy of its own (a cursor), an existential, or a type that owns one of
+	// those — because such an element has no `copyFunc` and its copy would byte-blit a managed pointer
+	// and double-free it. The reject is per-INSTANTIATION (the shared body's element is opaque), so it
+	// enumerates the enclosing type's instances through `genericTypeFieldUncopyableInstantiation`,
+	// mirroring the concrete gate `requireArrayElementCopyable`. An instantiation whose element is or
+	// holds a promise is refused first, E3141 (`genericTypeFieldGreenThreadInstantiation`).
 	function requireOpaqueArrayCopyable(giid GenericInstanceId, methodTok Token) throws SourceParseError
-		// ⚠ The declaring type is NOT paired in here from `self.enclosingType` any more (W14): the element's
-		// token names its own declaration, so the gate resolves both halves from one fact — see
-		// `instanceWithTypeArgKind` for the hand-pairing that removes.
-		match self.signatures.genericTypeFieldUncopyableInstantiation(typeParamIdOf(self.signatures.containerElementType(giid))) 'uncopyable'
+		let element = typeParamIdOf(self.signatures.containerElementType(giid))
+		try self.requireInstantiationsCopyNoGreenThread(element, fallbackSubject: "`{String.from(self.signatures.instanceDisplayName(giid))}`", memberTok: methodTok)
+
+		// ⚠ The element's token names its own declaration, so the gate resolves both halves from that one
+		// fact and pairs nothing in from `self.enclosingType` — see `instanceWithTypeArgKind`.
+		match self.signatures.genericTypeFieldUncopyableInstantiation(element) 'uncopyable'
 			noInstance then return
 
 			// ⭐ The offending INSTANTIATION is what the user wrote, so it is what this refusal is blamed at
@@ -81354,7 +81363,7 @@ export type Parser
 			return
 		end 'trivial'
 
-		let verdict = self.signatures.sourceCloneVerdictOfArrayElement(giid)
+		let verdict = self.signatures.sourceCloneVerdictOfType(self.signatures.containerElementType(giid))
 
 		if verdict != SourceCloneVerdict.cloneable 'unsupportedNested'
 			try self.requireCloneCopiesNoGreenThread(verdict, subject: "an element of this array", memberTok: methodTok)
@@ -93929,31 +93938,28 @@ export type Parser
 		return self.signatures.projectRelativeFileDisplay(self.filePath).toByteArray()
 	end 'sourceFileDisplayPath'
 
-	// ⭐ **RETYPE-OF-T AT A CONCRETE METHOD'S RETURN (D7) — `emitFieldLoad`'s rule, reached one op further.**
-	// `c.unwrap()` on a `Cell with Wide` returns what the SHARED body declared, the opaque `T`, and an opaque
-	// value AGREES WITH EVERY TYPE: it is not merely imprecise, it is the one tag that cannot discriminate,
-	// so an overloaded callee handed one has no way to choose (`specs/function-overloads.md`'s
-	// `method-call-argument-generic-element` reported E3007 against a call whose type is fully determined).
-	// The receiver's alias binds `T`, so the answer is the instance's substituted argument — the same
-	// `substitutedInstanceArg` a concrete field read already asks.
+	// ⭐ **RETYPE-OF-T AT A CONCRETE METHOD'S RETURN (D7) — `emitFieldLoad`'s rule, reached one op
+	// further.** `c.unwrap()` on a `Cell with Wide` returns what the SHARED body declared, the opaque
+	// `T`, and an opaque value AGREES WITH EVERY TYPE: it is not merely imprecise, it is the one tag
+	// that cannot discriminate, so an overloaded callee handed one has no way to choose
+	// (`specs/function-overloads.md`'s `method-call-argument-generic-element` is a call whose type is
+	// fully determined). The receiver's alias binds `T`, so the answer is the instance's substituted
+	// argument — the same `substitutedInstanceArg` a concrete field read already asks.
 	//
-	// ⭐ **IT IS THE FIELD-READ RULE EXACTLY, INCLUDING FOR A MANAGED ARGUMENT (A5o).** It was narrower until
-	// A5o, on an ORDERING premise rather than a rule: a call RESULT's drop enrolment ran inside the mint,
-	// FROM THE OPAQUE TYPE, so retyping opaque→`Alpha` here would have moved a decision that was already
-	// taken. `emitCall` now enrols AFTER this call (`enrolOwnedCallTemp`), so the ownership decision is made
-	// from the SUBSTITUTED tag and the substitution applies whether or not the concrete argument owns heap.
-	// A field read remains a BORROW and this remains an OWNED result; what they now share is that both learn
+	// ⭐ **IT IS THE FIELD-READ RULE EXACTLY, INCLUDING FOR A MANAGED ARGUMENT (A5o).** `emitCall`
+	// enrols a call RESULT's drop AFTER this call (`enrolOwnedCallTemp`), so the ownership decision is
+	// made from the SUBSTITUTED tag and the substitution applies whether or not the concrete argument
+	// owns heap. A field read is a BORROW and this an OWNED result; what they share is that both learn
 	// what `T` is before anything reads the answer.
 	//
 	// The gate is ordered cheapest-first: almost every call in a program has a non-generic first argument, and
 	// that test is one array read. Only past it is the callee's return type looked up.
 	//
-	// ⚠ **IT REPORTS NOTHING, AND IT USED TO REPORT AN OWNERSHIP BIT.** `emitCall` asked it *"did the shared
-	// body hand this back without taking a reference for it?"* to choose between adopting the result and
-	// co-owning it. That question is answered from the DECLARED return type and the obligation belongs to the
-	// RETURNED VALUE, so the two could disagree — and did, for every body that returned a value it already
-	// owned. The callee now discharges the hand-off for every shape (`emitOwnedValueReturn`), so there is one
-	// convention, no bit, and nothing here for a caller to read back.
+	// ⚠ **IT REPORTS NO OWNERSHIP BIT.** Whether the result is co-owned would be answered from the
+	// DECLARED return type while the obligation belongs to the RETURNED VALUE, and the two disagree
+	// for every body that returns a value it already owns. The callee discharges the hand-off for
+	// every shape (`emitOwnedValueReturn`), so there is one convention and nothing here for a caller
+	// to read back.
 	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray, anchor Token) returns OpaqueWordReading throws SourceParseError
 		if args.isEmpty() 'noReceiver'
 			return OpaqueWordReading.asItStands
@@ -93971,11 +93977,12 @@ export type Parser
 			return OpaqueWordReading.asItStands
 		end 'notItsOwnMethod'
 
-		// ⭐⭐ **THE CORPUS-CALL DOOR IS THE ONLY PLACE A CORPUS MEMBER'S ELEMENT TYPE IS CONCRETE** (`W217`).
-		// `stdlib/Array.maxon` is compiled ONCE over an opaque `Element`, so no rule about promise elements can
-		// be written inside `last()` or `cursor()` — in there the element is a type parameter and nothing about
-		// green threads is true of it yet. Here the receiver's instance is known, so here is where a member
-		// that hands back a BORROWED promise element is refused.
+		// ⭐⭐ **THE CORPUS-CALL DOOR IS THE ONLY PLACE A CORPUS MEMBER'S ELEMENT TYPE IS CONCRETE**
+		// (`W217`). `stdlib/Array.maxon` is compiled ONCE over an opaque `Element`, so no rule about
+		// promise elements can be written inside `last()` or `cursor()` — in there the element is a type
+		// parameter and nothing about green threads is true of it yet. Here the receiver's instance is
+		// known, so here is where a member that hands back a BORROWED promise element, or a copy of a
+		// receiver holding one, is refused.
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
 			declared(returnType) then break 'declared'
 			undeclared then return OpaqueWordReading.asItStands
@@ -93986,9 +93993,41 @@ export type Parser
 			undeclared gives MaxonReturnType.void
 		end 'again'
 
+		try self.requireCorpusCopyHoldsNoGreenThread(callee, receiver: receiver, anchor: anchor)
 		try self.settleCorpusPromiseRead(result, callee: callee, args: args, returnType: declaredReturn, anchor: anchor)
 		return self.retypeOpaqueReturn(result, receiver: receiver, returnType: declaredReturn, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
 	end 'retypeOpaqueMethodResult'
+
+	function requireCorpusCopyHoldsNoGreenThread(callee ByteArray, receiver ValueId, anchor Token) throws SourceParseError
+		if not self.calleeCopiesItsNonArrayReceiver(callee, receiver: receiver) 'notACorpusCopy'
+			return
+		end 'notACorpusCopy'
+
+		let instance = self.valueInstanceId(receiver)
+		let subject = "`{self.valueDisplayTypeName(receiver)}`"
+
+		if self.signatures.containerElementIsOpaque(instance) 'anOpaqueElement'
+			try self.requireInstantiationsCopyNoGreenThread(typeParamIdOf(self.signatures.containerElementType(instance)), fallbackSubject: subject, memberTok: anchor)
+			return
+		end 'anOpaqueElement'
+
+		try self.requireCloneCopiesNoGreenThread(self.signatures.sourceCloneVerdictOfType(MaxonType.genericInstance(instance)), subject: subject, memberTok: anchor)
+	end 'requireCorpusCopyHoldsNoGreenThread'
+
+	// A corpus method that takes its receiver and returns its own declaring type is a copy of the
+	// receiver (`List.clone`); its declared return is the bare base, so the element is read off the
+	// receiver's instance. `Array`'s copies are refused at `admitArrayCopy`.
+	function calleeCopiesItsNonArrayReceiver(callee ByteArray, receiver ValueId) returns bool
+		if self.signatures.isArrayInstanceAt(self.tagOf(receiver), nameId: self.valueNameId(receiver)) 'anArray'
+			return false
+		end 'anArray'
+
+		if not self.signatures.calleeReturnsItsDeclaringType(callee) 'notASelfReturn'
+			return false
+		end 'notASelfReturn'
+
+		return self.signatures.declaredByTheCorpus(self.signatures.declaringFileOf(callee)) and self.signatures.declaredMethodTakesReceiver(callee)
+	end 'calleeCopiesItsNonArrayReceiver'
 
 	// ⭐ **A CORPUS MEMBER MAY HAND A PROMISE ELEMENT OVER ONLY IF IT STOPPED HOLDING IT, OR NAMES THE SLOT IT
 	// STILL HOLDS IT IN.**

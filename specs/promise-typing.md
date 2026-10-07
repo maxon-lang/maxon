@@ -253,6 +253,100 @@ end 'main'
 error E3141: <fragment>:22:19: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `JobArray` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
 ```
 
+<!-- test: promise-typing.error.clone-a-list-of-promises -->
+`List` declares its own `clone`, which walks the list and appends each element to a new one. Over promises
+that walk copies every handle, so the refusal is the same one a synthesized copy gets, at the call.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseList = List with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var pending = IntPromiseList.create()
+		pending.append(async plain())
+		let copy = pending.clone()
+		return copy.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:14:22: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `IntPromiseList` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
+```
+
+<!-- test: promise-typing.error.filter-a-list-of-promises -->
+`filter` keeps each element its predicate accepts by copying it into a new array, so a list of promises
+filtered would give each kept thread two owners.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseList = List with IntPromise
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var pending = IntPromiseList.create()
+		pending.append(async plain())
+		let kept = pending.filter(function(p IntPromise) gives p.inner > 0)
+		return kept.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:14:22: a promise cannot be borrowed through 'filter': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`
+```
+
+<!-- test: promise-typing.error.clone-a-generic-array-field-instantiated-with-a-promise -->
+A generic type's shared body copies an `Array with T` field without knowing what `T` is, so the copy is
+refused at the instantiation that makes `T` a promise, as every opaque-element copy is.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseBag = Bag with IntPromise
+
+type Bag uses T
+	typealias TArray = Array with T
+	var items as TArray
+
+	static function create() returns Self
+		return Self{items: TArray.create()}
+	end 'create'
+
+	function add(item T)
+		self.items.push(item)
+	end 'add'
+
+	function copied() returns Self
+		return Self{items: self.items.clone()}
+	end 'copied'
+
+	function count() returns ElementIndex
+		return self.items.count()
+	end 'count'
+end 'Bag'
+
+function plain() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 7
+end 'plain'
+
+function main() returns ExitCode
+		var bag = IntPromiseBag.create()
+		bag.add(async plain())
+		let copy = bag.copied()
+		return copy.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:4:11: a promise cannot be borrowed through 'slice': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `IntPromiseBag` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
+note: stdlib/Array.maxon:79:32: raised inside the library, on behalf of the construct above
+```
+
 <!-- test: promise-typing.inner-is-the-one-unwrap -->
 The sanctioned promise → `int` conversion. `.inner` peeks at the handle word without consuming the
 promise, so the `await` that follows still reclaims the thread and the program still balances to zero.

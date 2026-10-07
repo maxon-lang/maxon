@@ -692,7 +692,7 @@ there was never filled.
 | `removeLast()` | `Element` | O(1) | Throws `ArrayError` when empty. |
 | `remove(at)` | `Element` | O(n) | Throws `ArrayError.indexOutOfBounds`. |
 | `clear()` | — | O(n) | Remove every element. |
-| `clone()` | `List` | O(n) | A deep copy. |
+| `clone()` | `List` | O(n) | A deep copy. A copy of an element that is or holds a promise is E3141. |
 | `createIterator()` | `ListIterator` | O(1) | Throws `IterationError.exhausted` when empty. |
 
 `ListIterator` implements `Iterator with Element`: `current()` and `advance()`.

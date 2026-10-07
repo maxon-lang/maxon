@@ -3577,11 +3577,11 @@ enum DeclKind
 	stored
 end 'DeclKind'
 
-// The per-argument classification the three "does any interned instance of `baseName` classify its type
+// The per-argument classification the "does any interned instance of `baseName` classify its type
 // parameter at `position` as …?" instance-scan gates in `ProgramSignatures` differ on — the ONE thing that
 // varies between them, named here so the registry SCAN (match base name, bounds-guard the arg) lives in one
 // place (`instanceWithTypeArgKind`) and a fix to the loop or the bound cannot reach one gate and silently
-// miss the other two.
+// miss the others.
 enum TypeArgInstantiationKind
 	// The box MOVES the argument in and the caller may not reuse it (`typeArgIsOwned`): a String, an owning
 	// struct, a boxed union, a managed generic instance — the managed-field DROP and the reassign's
@@ -3621,10 +3621,15 @@ enum TypeArgInstantiationKind
 	// is a USE-AFTER-FREE — a managed instantiation whose row was skipped would leave the borrow unreferenced.
 	// So it reads EVERY row, exactly as `consumeMoved`/`coOwnedTrivial` do.
 	retainedFeed
+
+	// Is or holds a promise (`sourceCloneVerdictOfType`): the opaque-copy refusal, E3141. Kept apart
+	// from `uncopyableElement` because the `deepClone` walk that one reads takes a promise for a
+	// cloneable leaf, so a copy it admits gives two owners one green thread.
+	greenThreadElement
 end 'TypeArgInstantiationKind'
 
 // @generated library-cache begin
-let CacheCasesTypeArgInstantiationKind = [TypeArgInstantiationKind.consumeMoved, TypeArgInstantiationKind.coOwnedTrivial, TypeArgInstantiationKind.uncopyableElement, TypeArgInstantiationKind.managedElement, TypeArgInstantiationKind.retainedFeed]
+let CacheCasesTypeArgInstantiationKind = [TypeArgInstantiationKind.consumeMoved, TypeArgInstantiationKind.coOwnedTrivial, TypeArgInstantiationKind.uncopyableElement, TypeArgInstantiationKind.managedElement, TypeArgInstantiationKind.retainedFeed, TypeArgInstantiationKind.greenThreadElement]
 
 function cacheReadTypeArgInstantiationKind(reader LibraryCacheReader) returns TypeArgInstantiationKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -3668,7 +3673,7 @@ end 'TypeArgKindMatch'
 //
 // The emission kinds answer *"must this shared body carry a drop?"*, where a row describing a shape that
 // never occurs buys a descriptor-gated drop nothing executes — a no-op at run time — and ignoring one would
-// omit a drop that is owed. They therefore keep reading every row. The two REFUSING kinds answer *"must this
+// omit a drop that is owed. They therefore keep reading every row. The REFUSING kinds answer *"must this
 // program be REFUSED?"*, where such a row is not a conservative margin but a wrong answer about a program
 // that does not contain the instantiation being refused for.
 //
@@ -3682,7 +3687,8 @@ function kindIsARefusal(kind TypeArgInstantiationKind) returns bool
 			coOwnedTrivial or
 			retainedFeed then return false
 		uncopyableElement or
-			managedElement then return true
+			managedElement or
+			greenThreadElement then return true
 	end 'kind'
 end 'kindIsARefusal'
 
@@ -3698,14 +3704,15 @@ end 'kindIsARefusal'
 // destructor against the parameter the view stands at (`MmRuntime.nestedViewDropKind`), so the reference its
 // constructor feed takes must be decided by the same parameter's instantiations.
 //
-// ⛔ The two REFUSING kinds do not.
+// ⛔ The REFUSING kinds do not.
 function kindFollowsADeclarationView(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
 		consumeMoved or
 			coOwnedTrivial or
 			retainedFeed then return true
 		uncopyableElement or
-			managedElement then return false
+			managedElement or
+			greenThreadElement then return false
 	end 'kind'
 end 'kindFollowsADeclarationView'
 
@@ -8446,7 +8453,7 @@ end 'managedElementRecordCopy'
 
 // The single `(box) -> newBox` clone callee of a `direct` strategy. Precondition: the caller has classified the
 // element deep-cloneable through the FULL-GRAPH `typeSupportsDeepClone` (via
-// `genericInstanceOpaqueArrayElementIsCopyable` or the concrete copy gate `arrayElementSupportsDeepClone`), which
+// `genericInstanceOpaqueArrayElementIsCopyable` or the concrete copy gate `sourceCloneVerdictOfType`), which
 // is `direct` at the TOP LEVEL for every deep-cloneable element — so a `managedElements`/`unsupported` strategy
 // reaching here is an invariant break and panics. (The full-graph gate is the RIGHT precondition, not a mere
 // top-level `direct` check: a struct/union that is `direct` at the top but owns a non-clonable field must NOT
@@ -33127,7 +33134,7 @@ export type ProgramSignatures
 	// `arrayElementDropCallee`. The front end stamps `funcAddr(<the direct callee>)` into the `_managed`
 	// array-copy call, exactly as it stamps `funcAddr(<the drop callee>)` into `element_destroy@40`. Routed
 	// through the SAME `managedFieldCascadeStrategy` a managed FIELD of the element's type uses, so the element's
-	// clone matches its own field-clone by construction. Precondition: `arrayElementSupportsDeepClone`, which
+	// clone matches its own field-clone by construction. Precondition: `sourceCloneVerdictOfType`, which
 	// guarantees the result is `direct` (an element cloner is invoked through `callIndirect`, a `(box) -> box`
 	// shape a `managedElements`/`unsupported` strategy cannot satisfy).
 	//
@@ -37533,7 +37540,7 @@ export type ProgramSignatures
 						continue
 					end 'aRowE3017AlreadyOwns'
 
-					if kind == TypeArgInstantiationKind.uncopyableElement and self.isArrayBaseName(owner.declaringTypeName) and not self.arrayInstanceMayBeCopied(id) 'nothingCopiesIt'
+					if self.isArrayBaseName(owner.declaringTypeName) and self.kindExemptsAnUncopiedInstance(kind, id: id) 'nothingCopiesIt'
 						continue
 					end 'nothingCopiesIt'
 
@@ -37563,6 +37570,7 @@ export type ProgramSignatures
 			uncopyableElement then return not self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
 			managedElement then return self.typeArgIsManagedElement(t)
 			retainedFeed then return self.typeIsManaged(t, from: self.typeNames)
+			greenThreadElement then return self.sourceCloneVerdictOfType(t) == SourceCloneVerdict.holdsAGreenThread
 		end 'kind'
 	end 'typeArgHasKind'
 
@@ -37732,6 +37740,25 @@ export type ProgramSignatures
 			return true
 		end 'copiedWhereItIsWritten'
 
+		return self.arrayInstanceIsCopiedByAGenericBody(id)
+	end 'arrayInstanceMayBeCopied'
+
+	function kindExemptsAnUncopiedInstance(kind TypeArgInstantiationKind, id GenericInstanceId) returns bool
+		match kind 'kind'
+			uncopyableElement then return not self.arrayInstanceMayBeCopied(id)
+
+			// A copy written against a concrete instance is refused at the copy (`Parser.admitArrayCopy`),
+			// so this kind answers only for a copy a generic body makes.
+			greenThreadElement then return not self.arrayInstanceIsCopiedByAGenericBody(id)
+
+			consumeMoved or
+				coOwnedTrivial or
+				managedElement or
+				retainedFeed then return false
+		end 'kind'
+	end 'kindExemptsAnUncopiedInstance'
+
+	function arrayInstanceIsCopiedByAGenericBody(id GenericInstanceId) returns bool
 		for hop in self.instantiationOriginChain(id) 'eachEnclosingInstantiation'
 			if self.genericBodyCopiesAnArrayOfItsParameter(self.genericInstanceBaseName(hop)) 'itsBodyCopies'
 				return true
@@ -37739,7 +37766,7 @@ export type ProgramSignatures
 		end 'eachEnclosingInstantiation'
 
 		return false
-	end 'arrayInstanceMayBeCopied'
+	end 'arrayInstanceIsCopiedByAGenericBody'
 
 	function genericBodyCopiesAnArrayOfItsParameter(declaringTypeName ByteArray) returns bool
 		for demanded in self.genericInstances.copyDemandedIds() 'eachDemanded'
@@ -37781,7 +37808,7 @@ export type ProgramSignatures
 	// with a positioned E2015 at the copy site rather than crash at descriptor emit. HOW the instances are found
 	// is `instanceWithTypeArgKind`'s business and is described there once; what this gate adds is the KIND —
 	// each instance's argument at that parameter's position read through the SAME
-	// `typeSupportsDeepClone` the concrete element-copy gate (`arrayElementSupportsDeepClone`)
+	// `typeSupportsDeepClone` the concrete element-copy gate (`sourceCloneVerdictOfType`)
 	// uses, so the opaque reject and the concrete reject agree on what "deep-cloneable as an element" means. A
 	// TRIVIAL argument is copyable (a byte blit), so it never triggers the reject.
 	//
@@ -37790,6 +37817,10 @@ export type ProgramSignatures
 	export function genericTypeFieldUncopyableInstantiation(param TypeParamId) returns TypeArgKindMatch
 		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.uncopyableElement)
 	end 'genericTypeFieldUncopyableInstantiation'
+
+	export function genericTypeFieldGreenThreadInstantiation(param TypeParamId) returns TypeArgKindMatch
+		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.greenThreadElement)
+	end 'genericTypeFieldGreenThreadInstantiation'
 
 	// ⭐⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PUBLISHED SLOT A NULL
 	// POINTER?** The front-end gate for `Vector with <N> <type parameter>` inside a generic body.
@@ -39373,7 +39404,7 @@ export type ProgramSignatures
 	// stamped, and the element's `__clone_<T>` SYNTHESIZED, only when the element is deep-cloneable by this rung's
 	// single-`(box) -> newBox` mechanism: a String / boxed-union / struct / trivial-element-array element WHOSE WHOLE
 	// reachable type graph is itself clonable. It MUST read the SAME full-graph classifier the front-end reject
-	// (`genericTypeFieldUncopyableInstantiation`) and the concrete gate (`arrayElementSupportsDeepClone`) use —
+	// (`genericTypeFieldUncopyableInstantiation`) and the concrete gate (`sourceCloneVerdictOfType`) use —
 	// `typeSupportsDeepClone` — NOT merely the element's TOP-LEVEL clone strategy. The reason is the
 	// stamp+root synthesizes the cloner UNCONDITIONALLY for every copyable-opaque instance, INCLUDING in a program
 	// that never copies (drop-only) and so never reaches the copy-site reject: a struct/union element that is
@@ -40141,27 +40172,13 @@ export type ProgramSignatures
 		return true
 	end 'recordTypeIsImmutable'
 
-	// ⭐ **CAN A MANAGED-ELEMENT `Array with T` BE DEEP-CLONED by this rung's mechanism?**
-	// The FRONT-END gate for a managed `slice`/`clone`/`append`, and the exact envelope the cloner synthesis
-	// handles — the two agree so the synthesizer never meets an `unsupported` field on a program the front end
-	// accepted (else it would panic, a compiler crash on valid input). The element is invoked through
-	// `callIndirect(fn, elem)`, so it must be reachable by a SINGLE `(box) -> newBox` callee — which every
-	// deep-cloneable type is, a managed-element container through its own per-instance thunk — and its
-	// whole reachable type graph must be clonable too. Precondition: `containerElementIsManaged` (a
-	// trivial-element array never needs this — its copy is a byte blit).
-	export function arrayElementSupportsDeepClone(id GenericInstanceId) returns bool
-		return self.typeSupportsDeepClone(self.containerElementType(id), visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
-	end 'arrayElementSupportsDeepClone'
-
-	module function sourceCloneVerdictOfInstance(id GenericInstanceId) returns SourceCloneVerdict
-		let instance = MaxonType.genericInstance(id)
-
-		if self.typeSupportsDeepClone(instance, visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'cloneable'
+	module function sourceCloneVerdictOfType(t MaxonType) returns SourceCloneVerdict
+		if self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'cloneable'
 			return SourceCloneVerdict.cloneable
 		end 'cloneable'
 
-		return refusedSourceCloneVerdict(self.typeSupportsDeepClone(instance, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone))
-	end 'sourceCloneVerdictOfInstance'
+		return refusedSourceCloneVerdict(self.typeSupportsDeepClone(t, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone))
+	end 'sourceCloneVerdictOfType'
 
 	module function sourceCloneVerdictOfAggregate(name ByteArray) returns SourceCloneVerdict
 		if self.aggregateNameSupportsDeepClone(name, visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'cloneable'
@@ -40171,19 +40188,10 @@ export type ProgramSignatures
 		return refusedSourceCloneVerdict(self.aggregateSupportsDeepClone(name))
 	end 'sourceCloneVerdictOfAggregate'
 
-	module function sourceCloneVerdictOfArrayElement(id GenericInstanceId) returns SourceCloneVerdict
-		if self.typeSupportsDeepClone(self.containerElementType(id), visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'cloneable'
-			return SourceCloneVerdict.cloneable
-		end 'cloneable'
-
-		return refusedSourceCloneVerdict(self.arrayElementSupportsDeepClone(id))
-	end 'sourceCloneVerdictOfArrayElement'
-
 	// ⭐ **CAN A DECLARED STRUCT BE DEEP-CLONED?**
-	// `arrayElementSupportsDeepClone`'s twin, and it exists for that one's exact reason: the gate and
-	// `synthesizeStructCascade` must agree, or the synthesizer meets an `unsupported` field on a program the
-	// front end accepted and PANICS — a compiler crash on valid-looking input (see `managedNameCascadeStrategy`,
-	// which records the measured one).
+	// The gate and `synthesizeStructCascade` must agree, or the synthesizer meets an `unsupported`
+	// field on a program the front end accepted and PANICS — a compiler crash on valid-looking input
+	// (see `managedNameCascadeStrategy`, which records the measured one).
 	//
 	// It asks by NAME, not by `MaxonType`, because the caller holds a `StructLayout` or an `EnumLayout` and
 	// the ids in a parser artifact's interner are not this index's — the mispairing this file's
@@ -40193,11 +40201,12 @@ export type ProgramSignatures
 	// same walk through `sourceCloneVerdictOfAggregate`, and `aggregateNameSupportsDeepClone` below routes
 	// each to its own field/payload walk.
 	//
-	// ⚠ **IT GOES THROUGH `aggregateNameSupportsDeepClone`, WHICH IS THE WHOLE OF WHAT THE TWIN DOES ONCE IT
-	// HOLDS A NAME.** Calling the field walk directly skips the compiler-owned arm, which leaves this gate and
-	// the element gate disagreeing about `CharacterSet` / `__ManagedFile` / `__ManagedDirectory`. The
-	// cycle-break seeding comes free with it: that function inserts the name before it walks, so
-	// `type Node { var next as Node }` terminates on the same break.
+	// ⚠ **IT GOES THROUGH `aggregateNameSupportsDeepClone`, WHICH IS THE WHOLE OF WHAT
+	// `typeSupportsDeepClone` DOES ONCE IT HOLDS A NAME.** Calling the field walk directly skips the
+	// compiler-owned arm, which leaves this gate and the element gate disagreeing about `CharacterSet`
+	// / `__ManagedFile` / `__ManagedDirectory`. The cycle-break seeding comes free with it: that
+	// function inserts the name before it walks, so `type Node { var next as Node }` terminates on the
+	// same break.
 	//
 	// ⛔⛔ **THE MEMO BELONGS HERE AND NOWHERE DEEPER.** `aggregateNameSupportsDeepClone`'s answer is computed
 	// under the cycle break — a name already in flight is ASSUMED clonable so the walk terminates — so its
@@ -40940,8 +40949,7 @@ export type ProgramSignatures
 
 	// ⭐⭐ **CAN A NON-`Array` GENERIC INSTANCE BE DEEP-CLONED?** `structFieldsSupportDeepClone`'s
 	// instance twin, and the exact gate `installGenericInstanceCascades` synthesizes to — the two agree so the
-	// synthesizer never meets an `unsupported` field on a program the front end accepted, which is the rule
-	// `arrayElementSupportsDeepClone`'s header states for the struct side and the reason it exists.
+	// synthesizer never meets an `unsupported` field on a program the front end accepted.
 	//
 	// ⚠ **AN INSTANCE THAT CLONES AT ALL CLONES AS AN ELEMENT TOO**, because `__clone_<mangled>` is the single
 	// `(box) -> newBox` shape a `callIndirect(fn, elem)` needs — the same shape a declared struct's `__clone_<T>`

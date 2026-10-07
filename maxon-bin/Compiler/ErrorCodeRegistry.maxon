@@ -1690,10 +1690,11 @@ export enum ErrorCode
 	// move-out (`pop`, `remove`), whose result the caller owns outright.
 	// It is NOT about the promise being un-awaitable: every one of these reads yields a perfectly good
 	// promise. It is about there being no way to say which slot stopped owning it.
-	// A COPY is refused for the same reason: a `clone()`, or an array's `slice` or `append`, of anything that
-	// is or holds a promise -- through a struct field, a union payload, a generic instance (`Map`, `Set`, a
-	// declared `Box with T`) or an array element -- would give two owners one thread. `await` the promise and
-	// copy a value holding its result.
+	// A COPY is refused for the same reason: a `clone()` (a `List`'s included), or an array's `slice`
+	// or `append`, of anything that is or holds a promise -- through a struct field, a union payload,
+	// a generic instance (`Map`, `Set`, a declared `Box with T`) or an array element -- would give two
+	// owners one thread. A generic type whose body copies an `Array with T` field is refused where the
+	// program instantiates it with a promise. `await` the promise and copy a value holding its result.
 	semanticPromiseCannotBeBorrowed = "E3141"
 
 	// A promise is USED after it was consumed. A promise owns a green thread, and a green thread has
