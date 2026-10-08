@@ -1,21 +1,19 @@
 // The low-level wasm binary encoder — the wasm sibling of PeWriter/MachOWriter, but one
 // tier lower: those render a finished CodeResult into an OS container, while this renders
 // individual wasm instructions and a whole CORE module into the raw bytes the wasm binary
-// format specifies. StdToWasm (agent A2) codes against the API here and NEVER touches a raw
+// format specifies. StdToWasm codes against the API here and NEVER touches a raw
 // opcode byte or a LEB128 immediate — that split is the whole point of this file.
 //
-// SCOPE: the scalar slice (integer/bool AND f64 arithmetic, comparisons, structured control
-// flow, calls). Only the opcodes and sections that slice needs are here — no tables, no data
-// segments, no narrow loads/stores, no bulk memory. Those grow the file when their milestone lands.
+// SCOPE: only the opcodes and sections StdToWasm uses (integer/bool AND f64 arithmetic, comparisons,
+// structured control flow, calls, word and byte loads/stores, bulk memory, a funcref table, data
+// segments). An opcode StdToWasm never emits is not here.
 //
-// TWO CONTRACT DEVIATIONS, both forced (see the CONTRACT §3 Seam 1):
-//   • `end()` → `endOp()`. `end` is a reserved block-delimiter keyword (Lexer TokenKind.end),
-//     so no method can be named `end`. The contract's own `returnOp`/`elseClause` names show
-//     its author was already dodging keywords (`return`/`else`); `end` slipped through. Renamed
-//     to `endOp()` to match the `returnOp` convention. A2 calls `body.endOp()`.
-//   • `i64Sub_wrapNeg()` is OMITTED. Its name carries an underscore (forbidden), and it is
-//     explicitly optional in the contract ("or A2 does (0 - x)"). wasm has no integer negate
-//     opcode, so a single instruction cannot express one anyway: A2 materializes `neg` as
+// TWO SPELLINGS FORCED BY THE LANGUAGE:
+//   • The block terminator is `endOp()`. `end` is a reserved block-delimiter keyword (Lexer
+//     TokenKind.end), so no method can be named `end`; `endOp()` matches the `returnOp`/`elseClause`
+//     convention of dodging keywords (`return`/`else`). StdToWasm calls `body.endOp()`.
+//   • There is no `i64Sub_wrapNeg()`: a name with an underscore is forbidden. wasm has no integer negate
+//     opcode, so a single instruction cannot express one anyway: StdToWasm materializes `neg` as
 //     `i64Const(0)` BELOW the operand, then `i64Sub()`;
 //     `bitNot` as operand then `i64Const(-1)` then `i64Xor()` (xor is commutative, so operand
 //     order is free); `logicalNot` as `i32Const(1)` then `i32Xor()` — a BIT FLIP, matching the
@@ -103,9 +101,9 @@ function writeSleb128(buf ByteArray, value ParsedInt)
 end 'writeSleb128'
 
 // --- Value types ---
-// The wasm value types the scalar slice produces. i32 backs i1/i8..i32; i64 backs i64/u64;
+// The wasm value types the backend produces. i32 backs i1/i8..i32; i64 backs i64/u64;
 // f64 backs a Maxon `float`. f32 is declared for completeness but nothing produces one (the
-// language's `float` is f64), so no f32 ALU exists in this file. A2 chooses the width per op.
+// language's `float` is f64), so no f32 ALU exists in this file. StdToWasm chooses the width per op.
 export enum WasmValType
 	i32
 	i64
@@ -154,12 +152,12 @@ let opDrop = 0x1A
 
 // The UNTYPED `select` (0x1B) — pops an i32 condition and the two candidate values below it, and
 // pushes the one chosen. It is valid for exactly the NUMERIC types (i32/i64/f32/f64), which is all
-// the scalar slice has; the TYPED form (0x1C, carrying an explicit valtype vector) exists only for
+// the backend has; the TYPED form (0x1C, carrying an explicit valtype vector) exists only for
 // reference types, which this backend does not emit. Its one user is the `min` intrinsic
 // (`StdToWasm.emitFloatMin`).
 let opSelect = 0x1B
 
-// The block signature byte shared by block/loop/if. Every scalar-slice construct is a VOID
+// The block signature byte shared by block/loop/if. Every block this backend emits is a VOID
 // block (values flow through locals, not the operand stack across block boundaries), so the
 // signature is always the empty type 0x40.
 let wasmBlockTypeEmpty = 0x40
@@ -198,7 +196,7 @@ let opI64GeU = 0x5A
 // DELIBERATE. `div`/`mod` are the two Std ops with no operand type, and the rest were selected by
 // an operand type whose narrowness describes STORAGE, not arithmetic; this backend computes every
 // integer op at MACHINE WIDTH (`StdToWasm.wasmMachineValTypeOf`), so no 32-bit arithmetic is ever
-// emitted. The file's rule is that an opcode is here because the slice needs it, and no 32-bit
+// emitted. The file's rule is that an opcode is here because StdToWasm needs it, and no 32-bit
 // arithmetic op is. What is left is address arithmetic (`add`/`sub` over an i32 linear-memory
 // address, and the frame stack's `and`/`shl` masking a ring slot into one) and `logicalNot`'s bit
 // flip (`xor`).
@@ -293,7 +291,7 @@ let opI64ReinterpretF64 = 0xBD
 // form of this direction and would validate against an f32 result this backend never produces.
 let opF64ReinterpretI64 = 0xBF
 
-// The memory-access band (the top-level-`var` milestone, then the heap-String one). A load/store
+// The memory-access band. A load/store
 // carries a MEMARG — an
 // `align` ULEB then an `offset` ULEB. The WORD forms below (an `int`/pointer is i64, a `float` is f64)
 // serve globals and heap-record fields; the BYTE forms that follow serve a heap String's per-byte
@@ -304,14 +302,13 @@ let opF64Load = 0x2B
 let opI64Store = 0x37
 let opF64Store = 0x39
 
-// The NARROW byte forms — the heap-String milestone. A String's bytes are accessed one at a time
+// The NARROW byte forms. A String's bytes are accessed one at a time
 // (`buffer[i]`), so a `loadIndirect`/`storeIndirect` of `u8` lowers here: `i32.load8_u` ZERO-extends
 // the byte into the i32 a byte-width value occupies (see wasmValTypeOf — everything ≤ 32 bits is an
 // i32 local), and `i32.store8` writes the LOW byte of the i32 operand. Only the `u8`/`i1` byte forms
 // join the word forms above, because the shared native `accessWidthFor` door lowers only BYTE
 // (`i1`/`u8`) and WORD (`i64`/`f64`) accesses today — a wider narrow integer needs the `as` cast
-// which the wasm backend refuses identically (StdToWasm's `wasmMemAccessType`). The narrower
-// forms grow the file when that cast lands.
+// which the wasm backend refuses identically (StdToWasm's `wasmMemAccessType`).
 let opI32Load8U = 0x2D
 let opI32Store8 = 0x3A
 let opI32Load = 0x28
@@ -617,7 +614,7 @@ export type WasmBody
 	// selectable only by a NARROW operand type, and a narrow operand type is a storage class rather
 	// than an arithmetic one — selecting on it truncated `ExitCode * 2` to 32 bits and read an
 	// `ExitCode > 100` as SIGNED. Same rule as the `i32.div_s`/`i32.rem_s` note above: an opcode is
-	// here because the slice needs it.
+	// here because StdToWasm needs it.
 	export function i32Add()
 		self.buf.push(opI32Add)
 	end 'i32Add'
@@ -823,7 +820,7 @@ end 'WasmBody'
 
 // --- Section IDs (canonical order) ---
 // A wasm module's sections MUST appear in ascending id order; finish() emits exactly this
-// subset in this order. Ids 6 (global) and 8 (start) stay unused by this slice; ids 4 (table)
+// subset in this order. Ids 6 (global) and 8 (start) stay unused; ids 4 (table)
 // and 9 (element) carry the function-value funcref table; id 11 (data) carries the
 // top-level-`var` `.data` image.
 //
@@ -1003,7 +1000,7 @@ function writeLocalDecls(buf ByteArray, localTypes WasmValTypeArray)
 	end 'emit'
 end 'writeLocalDecls'
 
-// One export entry, held until finish() so exports emit in the order A2 declared them (which
+// One export entry, held until finish() so exports emit in the order StdToWasm declared them (which
 // determinism requires and the component tooling expects: memory before the run function).
 type WasmExport
 	export var name as ByteArray
@@ -1018,10 +1015,10 @@ end 'WasmExport'
 typealias WasmExportArray = Array with WasmExport
 
 // One active data segment: `bytes` laid into linear memory at `base` when the module is
-// instantiated. Held until `finish()` so segments emit in the order A2 declared them, which
-// determinism requires. The scalar-plus-float milestone had ONE (the top-level-`var` `.data`
-// image); the String-literal milestone adds a SECOND (the `.rdata` record/blob image at a
-// higher base), so the builder holds a LIST rather than a single triple.
+// instantiated. Held until `finish()` so segments emit in the order StdToWasm declared them, which
+// determinism requires. The top-level-`var` `.data` image is one segment and the `.rdata`
+// record/blob image at a higher base is a second, so the builder holds a LIST rather than a
+// single triple.
 type WasmDataSegment
 	export var base as Wasm32Index
 	export var bytes as ByteArray
@@ -1041,9 +1038,9 @@ typealias WasmDataSegmentArray = Array with WasmDataSegment
 typealias FuncTypeDedupMap = Map with (ByteArray, Wasm32Index)
 
 // --- WasmModuleBuilder: assembles a complete CORE wasm module ---
-// FUNCTION INDEX SPACE (the contract A2 mirrors): imports take indices 0..importCount-1 in
+// FUNCTION INDEX SPACE (the contract StdToWasm mirrors): imports take indices 0..importCount-1 in
 // addImportFunc call order; defined functions take importCount, importCount+1, … in addFunction
-// call order. So A2 must add ALL imports before ANY function — addFunction returns the index it
+// call order. So StdToWasm must add ALL imports before ANY function — addFunction returns the index it
 // assigned, computed from the import count at that moment.
 export type WasmModuleBuilder
 	// Interned functype encodings, position = type index. Deduplicated so identical signatures

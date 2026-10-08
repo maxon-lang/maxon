@@ -1,4 +1,4 @@
-// WORK-STEALING torture program (W212) — maximally UNEVEN per-P load.
+// WORK-STEALING torture program — maximally UNEVEN per-P load.
 //
 // Why this exists: `alloc-torture` and `remote-free-torture` spread their work
 // across processors by construction — main spawns every task itself, so each
@@ -7,7 +7,7 @@
 // one. This program can, because ALL of its work is created by ONE green
 // thread and therefore enters ONE queue: every other P starts with an empty ring
 // and an empty global queue, so the only way it can ever run anything is
-// `__sched_find_runnable`'s stealing rounds. ⚠ Since EC10 that queue is the
+// `__sched_find_runnable`'s stealing rounds. ⚠ That queue is the
 // owner's COROUTINE queue and a thief cannot reach it at all — see the note
 // below, which is the reading rather than a caveat on it.
 //
@@ -25,18 +25,14 @@
 // MAXON_MAX_PROCS in {1, 2, 7, 12} — which is what makes a stolen thread having
 // run EXACTLY ONCE a checked property rather than a hope.
 //
-// ⛔⛔ **SINCE EC10 IT READS `steals=0 workers=1` AT EVERY PROCESSOR COUNT, AND
+// ⛔⛔ **IT READS `steals=0 workers=1` AT EVERY PROCESSOR COUNT, AND
 // THAT IS THE MEASUREMENT RATHER THAN A FAILURE.** An `async f(...)` call creates
 // a COROUTINE of the green thread that called it, not a green thread: it is
 // published only to its owner's coroutine queue, never to a P ring or the global
 // queue, so `__sched_wake_or_spawn` is never called, no worker M is ever created,
 // and there is nothing anywhere for a thief to find. `producer` still creates all
 // of the work and `aggregate` is still the proof that every child ran exactly
-// once — what changed is that the work never leaves the M its owner is running on.
-//
-// The parent-commit reading of this same program, same box, same binary shape:
-// `workers=1 steals=0` at N=1, `2 / 24` at N=2, `7 / 3997` at N=7 and `8 / 3996`
-// at N=12. `scripts/multicore-stress/pin-matrix.sh` is the driver that takes both.
+// once — the work never leaves the M its owner is running on.
 //
 // ⚠ **THE ZERO IS THIS PROGRAM'S SHAPE, NOT A SCHEDULER THAT CANNOT STEAL.** A
 // `spawn` (`specs/services.md`) creates real green threads, which are exactly

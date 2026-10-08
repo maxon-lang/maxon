@@ -128,14 +128,12 @@ let WasmWriteFlushParamCount = 4
 // The linear-memory address the top-level-`var` `.data` image is laid at. Low memory below it is
 // a NULL GUARD — no global's address is ever 0 — keeping any future
 // null/None sentinel distinct from real data. 8-aligned (1024 = 128·8), so every word64 global
-// slot lands naturally aligned; the exact value is otherwise free (nothing else in this slice
-// touches linear memory). A `globalAddr` resolves to `base + the global's `.data` offset`.
+// slot lands naturally aligned; the exact value is otherwise free. A `globalAddr` resolves to `base + the global's `.data` offset`.
 let WasmDataBaseOffset = 1024 as Wasm32Index
 
 // A wasm linear-memory page is 64 KiB. The memory's declared minimum must cover every image up to
 // the end of the last (`base + size`); the page size is a power of two, so rounding up is a shift,
-// not a divide (a divide would desugar to a throwing checked-division call — see the
-// throwing-division rung).
+// not a divide (a divide would desugar to a throwing checked-division call).
 let WasmPageSizeLog2 = 16
 let WasmPageSizeMask = 0xFFFF as BytePos
 
@@ -220,8 +218,7 @@ let WasiGetRandomU64DebugName = b"get_random_u64"
 
 // The `.rdata` image (String-literal records + blobs) is laid in linear memory immediately
 // after the `.data` image, rounded up to 8 so every 8-byte record field lands naturally
-// aligned. The base is otherwise free — nothing else in this slice touches linear memory
-// above the `.data` image.
+// aligned. The base is otherwise free.
 let WasmRdataAlignment = 8 as BytePos
 
 // ==========================================================================
@@ -1264,7 +1261,7 @@ end 'wasmMachineValTypeOf'
 
 // Refuse a FLOAT operand type reaching an INTEGER-op emitter — a lowering bug (the float emitters are
 // dispatched before this point, or, for the immediate forms, `foldConstOperands` never builds one),
-// not an out-of-slice case. The twin of `requireF64` for the other domain.
+// not an unsupported-type case. The twin of `requireF64` for the other domain.
 function requireIntegerOperand(t StdType, what String)
 	if stdTypeIsFloat(t) 'float'
 		panic("wasm: {what} on {t.name} — this integer-op emitter should have taken the float path first; no float value reaches the integer ALU")
@@ -1274,7 +1271,7 @@ end 'requireIntegerOperand'
 // the compiler's `float` is f64 THROUGHOUT — the wasm float path, like the native backends
 // (arm64RequireScalarDouble / its x64 twin), is scalar-double only. Nothing in the frontend
 // produces an f32 (a Maxon `float` is an f64), so an f32 reaching a float emitter is a
-// lowering bug, not an unsupported-slice case — and `f64.const`/`f64.*` would encode the wrong
+// lowering bug, not an unsupported-type case — and `f64.const`/`f64.*` would encode the wrong
 // width for one silently. This is the one door that says so.
 function requireF64(t StdType, what String)
 	if t != StdType.f64 'notDouble'
@@ -1515,7 +1512,7 @@ function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns 
 end 'unaryResultValType'
 
 // The valtype of a `call`'s result — the callee's return type. A void callee still names a
-// result value in the Std IR (nothing reads it in the scalar slice); i64 is a harmless
+// result value in the Std IR (nothing reads it); i64 is a harmless
 // placeholder for that unread local.
 function callResultValType(callee ByteArray, funcNames FunctionNameIndex) returns WasmValType
 	let rt = (try funcNames.funcNamed(callee) otherwise panic("callResultValType: no Std function named '{String.from(callee)}'")).returnType
@@ -2742,7 +2739,7 @@ type WasmFuncEmitter
 
 	// The integer ALU opcode. ONE family, because an integer op is computed at the machine word
 	// (`wasmMachineValTypeOf`) — there is no width left to select on. `div` (StdBinOpcode) is FLOAT
-	// division and out of the scalar slice; integer division is the separate `StdOp.div`, so a
+	// division and never reaches this integer emitter; integer division is the separate `StdOp.div`, so a
 	// `binOp(div)` here is a lowering bug.
 	function emitBinOpcode(opcode StdBinOpcode)
 		match opcode 'w'
@@ -3947,19 +3944,19 @@ end 'wasmMemAccessType'
 // `Imm32` an `i32.const` carries. Shared by `globalAddr` (`.data`), `rdataAddr` and the String
 // buffer fixup (`.rdata`) — all fixed-base wasm addresses. The whole image sits well below
 // i32.max, so the address always fits; a violation is an invariant break (a section larger than 2
-// GiB, which the single-page memory this slice declares cannot hold), not a user error.
+// GiB, which the single-page memory the module declares cannot hold), not a user error.
 function wasmLinearAddress(base Wasm32Index, byteOffset ByteOffset) returns Imm32
 	let addr = (base as ByteOffset) + byteOffset
 
 	if addr > i32.max 'tooFar'
-		panic("wasmLinearAddress: address {addr} (base {base} + offset {byteOffset}) does not fit the signed i32 a wasm linear-memory address is — the data/rdata image exceeds 2 GiB, which the single-page memory this slice declares cannot hold")
+		panic("wasmLinearAddress: address {addr} (base {base} + offset {byteOffset}) does not fit the signed i32 a wasm linear-memory address is — the data/rdata image exceeds 2 GiB, which the single-page memory the module declares cannot hold")
 	end 'tooFar'
 
 	return addr as Imm32
 end 'wasmLinearAddress'
 
-// A memory-band byte offset as the ULEB `offset` a wasm memarg carries (a u32). Every offset in
-// this slice is 0 (a plain global's load/store); the bound starts mattering at struct fields. A value past u32.max is an invariant break — no single 64 KiB memory reaches that far.
+// A memory-band byte offset as the ULEB `offset` a wasm memarg carries (a u32): 0 for a
+// plain global's load/store, a field offset for a struct or heap-record field. A value past u32.max is an invariant break — no single 64 KiB memory reaches that far.
 function wasmMemOffset(offset ByteOffset) returns Wasm32Index
 	if offset > u32.max 'tooFar'
 		panic("wasmMemOffset: memarg offset {offset} exceeds the u32 a wasm memarg encodes — an access reaching that far past its base is outside a single linear memory")

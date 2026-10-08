@@ -148,7 +148,7 @@ let SignMultiplierSpan = 2 as ParsedInt
 // it cannot name a budget at all.
 let IntToStringScratchBytes = 21 as ParsedInt
 
-// The scratch the UNSIGNED renderer reserves (X11): `u64.max` renders as "18446744073709551615", 20
+// The scratch the UNSIGNED renderer reserves: `u64.max` renders as "18446744073709551615", 20
 // digits and NO sign, and no u64 is wider. It is a constant of its own rather than the signed budget
 // reused, because the two are derived from two different worst cases and the byte the difference is
 // made of — the sign — is precisely the byte this renderer never writes. Pairing it with the wrong
@@ -217,7 +217,7 @@ export let StrEqName = b"__str_eq"
 // driven by the interpolation's OWN `__mm_alloc` calls, which `scanRuntimeUsage` already sees.
 export let IntToStringName = b"__int_to_string"
 
-// The UNSIGNED decimal renderer (X11) — `__int_to_string` with no sign handling at all and an unsigned
+// The UNSIGNED decimal renderer — `__int_to_string` with no sign handling at all and an unsigned
 // digit walk. It is a second ENTRY POINT and not a second implementation: one builder emits both (see
 // `buildIntegerToString`), because the two graphs share their count loop and their write loop and
 // differ only in the three places the sign reaches.
@@ -798,7 +798,7 @@ export function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur 
 end 'emitByteRangeCompareLoop'
 
 // ⭐ **WHAT THE SIGNED RENDERING DERIVES IN `setup` AND THE SHARED GRAPH THEN READS — and what the
-// UNSIGNED one has instead, which is nothing at all (X11).** These two values are the ENTIRETY of the
+// UNSIGNED one has instead, which is nothing at all.** These two values are the ENTIRETY of the
 // difference between the two renderings beyond the divides' own signedness, which is why one builder
 // emits both: an unsigned rendering writes no `-`, its digit COUNT is already its length, and each
 // `value % 10` is already the digit.
@@ -815,7 +815,7 @@ end 'RenderedSign'
 // decimal text into `dest` at the signedness `signedness` names, returning the byte count written (never
 // a NUL — the caller's buffer is zeroed and it copies exactly `len` bytes).
 //
-// ⭐⭐ **ONE BUILDER, TWO ENTRY POINTS, AND THAT IS THE POINT (X11).** The two graphs share their entry
+// ⭐⭐ **ONE BUILDER, TWO ENTRY POINTS, AND THAT IS THE POINT.** The two graphs share their entry
 // zero case, their digit-COUNT loop and their digit-WRITE loop — the whole of the algorithm — and differ
 // in exactly three places, all of them the sign: what `setup` derives (`RenderedSign`), whether the digit
 // count is widened to a length, and whether each digit is multiplied back into its magnitude. Copying the
@@ -832,7 +832,7 @@ end 'RenderedSign'
 // divides below take their signedness from the parameter, and it must be the SAME reading the sign
 // handling above takes: an unsigned `/10` under a `-` already written at `dest[0]` would emit the
 // magnitude's digits while the sign still claimed a negative, and a signed `/10` on a value with bit 63
-// set is X11's defect itself.
+// set would read the magnitude bit as a sign.
 //
 // Values dominating from `entry`/`setup` (`value`, `dest`, `neg`, `sign`) are read directly in the loop
 // blocks those dominate; only the loop-variant `digits`/`v`/`pos` ride block-args. `len` is computed once
@@ -894,8 +894,8 @@ function buildIntegerToString(module StdModule, signedness IntegerSignedness)
 	module.appendOp(countLoop, op: StdOp.const(radixCount, value: DecimalRadix, valueType: StdType.i64))
 	let vNext = ids.mint()
 
-	// ⭐ **IT TAKES THE READING THE SIGN HANDLING ABOVE TOOK** (X10 made every `StdOp.div` state its reading
-	// rather than inherit one; X11 made the reading a parameter). For the SIGNED rendering the sign is
+	// ⭐ **IT TAKES THE READING THE SIGN HANDLING ABOVE TOOK** (every `StdOp.div` states its reading
+	// rather than inheriting one, and the reading is a parameter). For the SIGNED rendering the sign is
 	// handled by `neg`/`sign` and each digit step is multiplied back, so the walk is signed by
 	// construction; for the UNSIGNED one there is no sign to handle and bit 63 is a magnitude bit. The two
 	// halves cannot be mixed — see this builder's header.

@@ -66,7 +66,7 @@ end 'X64Register'
 // an i64 lives in a GPR, and no amount of spilling, splitting, or recoloring
 // changes that.
 //
-// ⭐⭐ THE CLASS IS NOT A FORBIDDEN MASK, AND THIS IS THE RUNG'S CENTRAL
+// ⭐⭐ THE CLASS IS NOT A FORBIDDEN MASK, AND THIS IS THE CENTRAL
 // DISTINCTION. It is tempting to spend no new column and encode "not a GPR" as
 // 16 set bits in a value's `forbidden` mask. That is WRONG, and it fails
 // silently — `LivenessResult.clearForbidden` ZEROES that mask, and
@@ -561,7 +561,7 @@ export union TargetOp
 	// are CALLEE-saved and DELIBERATELY EXCLUDED.
 	//
 	// The XMM half is 0x003F0000: SIX registers, xmm0–5 (bits 16–21). xmm6–15 (0xFFC00000) are
-	// CALLEE-saved as of Wave 2, exactly as rbx/r12–r15 are on the GPR side, and are excluded here
+	// CALLEE-saved, exactly as rbx/r12–r15 are on the GPR side, and are excluded here
 	// for the same reason. Clobbering all sixteen would forbid a float live across a call its
 	// ENTIRE file, leave it no register, and FORCE-SPILL a store/reload bracket at every call —
 	// which makes `regalloc:splitting` quadratic in the number of cross-call floats.
@@ -1487,7 +1487,7 @@ export union TargetOp
 	// `isMemory: false` — it computes an address; it does not touch memory (the mirror of `leaRegGlobal`).
 	leaRegSlot(destReg TargetVReg, slot SpillSlot) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// --- F1b: the byte-fill SIZE LADDER, one macro-op per ISA ---
+	// --- the byte-fill SIZE LADDER, one macro-op per ISA ---
 	//
 	//
 	// ⭐⭐ **A MACRO-OP BECAUSE THE LADDER HAS INTERNAL BRANCHES AND THE Std→Target LOWERINGS CANNOT CREATE
@@ -1537,7 +1537,7 @@ export union TargetOp
 	// union-literal reason (guarded by `assertEncoderScratchMasks`).
 	arm64MemFill(fillByte ParsedInt) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0xF}
 
-	// --- F2: the ATOMICS, one shape per ISA ---
+	// --- The ATOMICS, one shape per ISA ---
 	//
 	//
 	// ⭐⭐ **x64 SPELLS EACH ATOMIC AS ONE INSTRUCTION AND arm64 AS A RETRY LOOP, SO THE TWO ISAs GET

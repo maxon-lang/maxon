@@ -116,7 +116,7 @@ export enum ErrorCode
 	labelTargetsOwnLoop = "E2048"
 
 	// A match arm's body is a block-opening statement. Each arm body must be a single statement.
-	// Phase 9 Stage 0: a match arm body cannot be a block-opening
+	// A match arm body cannot be a block-opening
 	// statement (`if` / `while` / `for` / `match` / block-form `try`).
 	// Each arm body is a single statement; block-form constructs would
 	// allocate persistent slots that leak on every error path through
@@ -1209,7 +1209,7 @@ export enum ErrorCode
 	// unsigned value of the element's whole slot, because the shared element load zero-extends
 	// (`ManagedMemoryRuntime.emitLoadElem`). The only honest question is therefore whether the element admits
 	// every one of those, and it is the SAME question at every stride.
-	// MEASURED before the rule existed, each a value read back through an accessor whose declared type
+	// MEASURED with no such rule, each a value read back through an accessor whose declared type
 	// cannot hold it: `setByte(1, 223)` under `typealias Wide = int(0 to 1000)` -- a TWO-byte slot --
 	// read back 57089; `setByte(0, 223)` under `int(-5 to 5)`, which keeps the machine word because
 	// `rangedAliasStorageBytes` is the unsigned ladder, read back 223; `setByte(0, 223)` on a `bool`
@@ -1219,9 +1219,9 @@ export enum ErrorCode
 	// matching an ordinal no arm names.
 	// It is deliberately NOT a widening of E3117. That code asks whether the element admits every
 	// BYTE, which is this question's answer at a ONE-byte slot and at no other width: asked at a wider
-	// slot it refuses a correct `Array with Int` (MEASURED at A4a, which had to be pulled back), and
+	// slot it refuses a correct `Array with Int`, and
 	// asked here at a one-byte slot it would give the identical verdict this code already gives. So
-	// `setByte` moved wholly to this rule and E3117 kept the two fills that are byte-per-element by
+	// `setByte` is governed wholly by this rule and E3117 covers the two fills that are byte-per-element by
 	// contract. Its one-byte arm ASKS `rangeHoldsEveryByte` rather than re-spelling it, so what a byte
 	// is stays written down once.
 	// The ADMITTING direction must be a proof, which is why an element with no value set the compiler
@@ -2142,7 +2142,7 @@ export enum ErrorCode
 
 	// a declaration in the source took a function name that belongs to the compiler.
 	// Reachable only from `stdlib/Builtins.maxon`, the one file whose declarations may
-	// carry the reserved `__` prefix (E2051's D6 exemption): the name is declarable
+	// carry the reserved `__` prefix (E2051's exemption for that file): the name is declarable
 	// THERE, so what E2051 refuses is not what this refuses. ONE rule, and the compiler
 	// can enforce it at the two places it USES such a name, since the full roster of
 	// names it owns is not enumerable (the dynamic families are built from the program's

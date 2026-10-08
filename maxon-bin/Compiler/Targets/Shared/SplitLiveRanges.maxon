@@ -4,8 +4,8 @@
 // region of high register pressure is SPLIT — it lives in memory across the gap and in a
 // register only where it is used — so the colorer then always finds `maxPressure ≤ pool`.
 // HOT pressure (a value a loop USES that still cannot fit) is the E5001 diagnostic —
-// `chooseVictim` returns `none` and the driver throws `raiseRegisterPressure` (M5.7,
-// RegisterPressureDiagnostic.maxon).
+// `chooseVictim` returns `none` and the driver throws `raiseRegisterPressure`
+// (RegisterPressureDiagnostic.maxon).
 //
 // THE TWO INVARIANTS THIS RESTS ON (design Rules 1 + 2):
 //
@@ -1029,13 +1029,13 @@ end 'emptyRank'
 // both, which the def pass removes and the use pass re-adds). Everything else at that op cancels, so a
 // split's repair only ever has to state what the victim and the fresh ids contribute, before and after.
 //
-// SLOTS, NOT POSITIONS, and this is the choice PLAN.md left open. An op's block POSITION shifts when a
+// SLOTS, NOT POSITIONS. An op's block POSITION shifts when a
 // split splices an op in ahead of it — which is precisely what a split does — so a structure keyed by
 // position would have to move every leaf after the insert. A SLOT is gap-labelled (`SlotGap` free slots
 // per op, the same idiom `seqAt` uses between blocks with `SeqStride`) and therefore STABLE: a spliced
 // op takes a free slot BETWEEN its neighbours and no existing leaf moves. Positions are recovered from
 // the tree's own occupancy count (`positionOfSlot` / `slotOfPosition`), so there is exactly one
-// statement of the order. The alternative PLAN.md named — a lazily applied cumulative shift, as
+// statement of the order. The alternative — a lazily applied cumulative shift, as
 // `SplitEdits.resequence` uses — REPAIRS the coordinates of records that already exist and has nothing
 // to say about where a NEW op goes, which is the whole question a splice asks.
 //
@@ -3353,7 +3353,7 @@ export type SplitDriver
 	// found seven programs reaching the sibling shape, every one compiler-SYNTHESIZED, because
 	// `E3012 unused variable` forbids the source-level route.
 	//
-	// ⇒ A future rung that changes the volatility preference, the parameter forbid, or the unused-
+	// ⇒ A change to the volatility preference, the parameter forbid, or the unused-
 	// parameter rule should re-try the construction. Until one does, the zero counter is the standing
 	// record that this cure is UNEXERCISED by the suite.
 	export function repairByEvictingOccupant(module TargetModule, v ValueId, w ValueId, counters RegAllocCounters) returns bool
@@ -4055,8 +4055,8 @@ end 'choiceFound'
 //     that confines them outranks the op that reads them. ⇒ REACHING HERE WITH AN EMPTY WITNESS
 //     POINTS AT THE RUN-BREAK, not at `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak`.
 //
-//     ⚠⚠ **WAVE 2 REMOVED THE ONLY WAY A *CALL* CAN PRODUCE ∅, AND THE GUARD STAYS ANYWAY.** xmm6–15
-//     are callee-saved now, so a float live across a call is confined to TEN registers and a GPR to
+//     ⚠⚠ **NO *CALL* CAN PRODUCE ∅, AND THE GUARD STAYS ANYWAY.** xmm6–15
+//     are callee-saved, so a float live across a call is confined to TEN registers and a GPR to
 //     FIVE — the counting argument holds for both files, and no call op's witness is empty. But ∅ is
 //     a property of the WITNESS, which is `classPool ∖ op.implicitDefs` for ANY fixed-register op,
 //     not only a call: an op whose `implicitDefs` covered a whole class would produce it again, and
@@ -5612,8 +5612,8 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 		//
 		// So it is a real missed optimization (a spilled global address would reload from the stack
 		// where it could re-`lea` for the same size and no slot), and it is priced: taking it means
-		// generalizing remat from "a constant value" to "an op with no register inputs". Not this
-		// rung's, and recorded here rather than silently ranged over.
+		// generalizing remat from "a constant value" to "an op with no register inputs". Not done,
+		// and recorded here rather than silently ranged over.
 		//
 		// ⚠ `movsdRegRip` is the SECOND instance of that exact `false`, for that exact
 		// reason. An f64 constant reads no register and cannot change, but it lives behind a

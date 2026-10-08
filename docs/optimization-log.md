@@ -621,7 +621,7 @@ parked.
 
 **The defect it closes is a WRONG ANSWER**, and the reproducer
 (`scripts/multicore-stress/awaitany-index-torture.maxon` + `awaitany-index-race.sh`) is committed with it.
-⚠ **THE NUMBERS ARE IN `scripts/multicore-stress/README.md` UNDER "W219's READINGS" AND ARE NOT REPEATED HERE** —
+⚠ **THE NUMBERS ARE IN `scripts/multicore-stress/README.md` UNDER "THE AWAIT-ANY WAKE READINGS" AND ARE NOT REPEATED HERE** —
 the reproducer's rate before and after, the 80 ms variant's latency, the wake-removed control and the
 send-and-await wall times. That section exists because the first cut of this change scattered five copies of
 those readings and two of them disagreed about which configuration they were quoting.

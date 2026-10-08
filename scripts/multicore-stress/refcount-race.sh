@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# REFCOUNT-RACE driver (EC10) — runs `refcount-torture.maxon` REPS times
+# REFCOUNT-RACE driver — runs `refcount-torture.maxon` REPS times
 # at each MAXON_MAX_PROCS and tabulates EXIT CODES.
 #
 # ⭐⭐ THE EXIT CODE IS THE ONLY DISCRIMINATOR, AND THAT IS MEASURED RATHER THAN
@@ -15,7 +15,7 @@
 #   exit 139 = segfault                        — the LOST-INCREF half, freed early
 #
 # ⚠ THE RACE IS INTERMITTENT, WHICH IS WHY THIS EXISTS AND A SINGLE RUN DOES NOT.
-# MEASURED at EC10 slice 2, 24 runs per cell, on the FINISHED tree with the pin
+# MEASURED with 24 runs per cell, on the FINISHED tree with the pin
 # undone at one publish site: N=2 read 101 twice out of 24 while N=4 read 101
 # fifteen times and 139 nine times — 24 of 24. A one-shot driver pointed at N=2
 # would have called that "fine" five times out of six.

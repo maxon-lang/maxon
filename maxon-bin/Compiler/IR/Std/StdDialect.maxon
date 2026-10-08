@@ -297,10 +297,8 @@ export typealias ArgFloatMask = bits(64)
 // an integer register.
 //
 // It is therefore DIAGNOSED rather than assumed — `Parser.requireAbiParamCount` refuses a signature past it
-// with a positioned error that names this number and this reason. That is the whole difference from the cap
-// it replaced: `MaxRegisterParams = 6` was not a limit of anything, only of a milestone that had not been
-// built, and it refused programs the machine can run perfectly well. This one is a limit of a
-// representation, and the day a program needs a 65th argument the fix is to widen the representation, which
+// with a positioned error that names this number and this reason. It is a limit of a
+// representation rather than an arbitrary cap, and the day a program needs a 65th argument the fix is to widen the representation, which
 // the diagnostic says.
 export let MaxAbiArgs = 64 as ParamCount
 
@@ -2106,9 +2104,8 @@ export union StdOp
 	// came from, and the two would be free to drift on the out-param slot. So this op supplies the ONE thing
 	// `osReadFile` cannot get for itself, and `__con_read_stdin` composes them at the Std tier.
 	//
-	// ⚠ **THE SELECTOR IS AN OPERAND, AND IT WAS AN ISEL IMMEDIATE UNTIL THE SUBPROCESS RUNG.** While standard
-	// INPUT was the only stream anyone asked for, materializing `STD_INPUT_HANDLE` in the backend was right — there
-	// was nothing to pass. `OutputDestination.inherit` asks for the other two: a child spawned with inherited stdout
+	// ⚠ **THE SELECTOR IS AN OPERAND, NOT AN ISEL IMMEDIATE.** Standard INPUT is one stream of three, and
+	// `OutputDestination.inherit` asks for the other two: a child spawned with inherited stdout
 	// takes the PARENT's `STD_OUTPUT_HANDLE` into its STARTUPINFO, and one op that reads a selector is the honest
 	// shape where three ops differing only in an immediate would be three copies of one marshalling.
 	osStdHandle(resultId ValueId, whichId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}

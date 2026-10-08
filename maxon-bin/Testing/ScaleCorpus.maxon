@@ -94,19 +94,19 @@
 //
 // ⚠ THE SUBSET AND THE CORPUS ARE TWO DIFFERENT SETS, AND THE GAP BETWEEN THEM IS WHERE BUGS LIVE.
 // This is the file's most durable defect, and the eight bullets below are its recurrences:
-//   • `float` was in the subset for a full rung before one line of this file generated any. See
+//   • `float` was in the subset before one line of this file generated any. See
 //     `FloatOpsBase` for what that cost (a panicking emitter, shipped).
 //   • integer `/` and `mod` were in it — the entire `idiv` fixed-register path — while
 //     every `/` the corpus emitted was a FLOAT `/`. See `IntDivideBase`.
-//   • top-level `let` and `var` were in it for TWO rungs, 36 spec tests' worth. See `GlobalConstsBase`.
-//   • `type` declarations were in it from the rung that gave the compiler a HEAP. See `StructTypesBase`.
-//   • ⭐ AND THEN TEN RUNGS AT ONCE. `match`, `enum`, `String`, `Array`, generics and interfaces —
+//   • top-level `let` and `var` were in it with 36 spec tests' worth. See `GlobalConstsBase`.
+//   • `type` declarations were in it from the time the compiler had a HEAP. See `StructTypesBase`.
+//   • ⭐ AND THEN TEN CONSTRUCTS AT ONCE. `match`, `enum`, `String`, `Array`, generics and interfaces —
 //     the whole middle of the language — were in the subset and the corpus generated NOT ONE of them.
 //     Measured on the ladder this file shipped with: `match` 0, `enum` 0, `String` 0, `Array with` 0,
 //     `type ... uses` 0, `interface` 0, `implements` 0, `print(` 0, ` or ` 0, ` xor ` 0, struct field
 //     WRITE 0 — at rung 0 AND at rung 5, in 109,697 lines. So the one artifact that answers *"what has
 //     this compiler's cost actually done, change by change"* was measuring the compiler roughly as it
-//     stood a dozen rungs back, and rung after rung of PLAN.md records `scale allocsΔ0 … the corpus is
+//     stood a dozen changes back, and every recorded result read `scale allocsΔ0 … the corpus is
 //     generics-free / Set-free / conformance-free` — which is not evidence of anything. Every optimizer
 //     instead built a throwaway ladder of its own and discarded it. See `EnumTypesBase` onwards.
 //   • ⭐ AND THE SIXTH IS THE ONE THE FIFTH'S OWN FIX WALKED PAST. `Array` moved to CONSTRUCTS GENERATED
@@ -123,8 +123,7 @@
 //     for every source file in every rung and the ENTIRE namespace mechanism — the `module` visibility
 //     tier, the qualified-alias mirror, the namespace-qualified function set, the dotted-chain
 //     recognizer and the multi-segment walk — ran zero times at rung 0 and zero times at rung 5. This
-//     one was NAMED BY ITS OWN IMPLEMENTER before it shipped ("the ladder is structurally blind to the
-//     USER half of this rung"), which is why it is the one that cost nothing to find. See
+//     one was NAMED BY ITS OWN IMPLEMENTER before it shipped, which is why it is the one that cost nothing to find. See
 //     `NamespacedModulesBase`.
 //   • ⭐ AND THE EIGHTH IS THE ONE THAT LOOKED COVERED, WHICH IS THE HARDEST KIND. There WAS a String
 //     knob — the fifth recurrence's own fix — and it generated a literal, an interpolation, `.append`,
@@ -411,10 +410,10 @@ end 'confinedCrossCallDefs'
 
 // ONE file, N top-level `let` constants — the constant ARENA, the initializer DFS and its memo.
 //
-// ⚠ TWO WHOLE RUNGS WERE INVISIBLE HERE, AND THE MANIFEST DID NOT MERELY MISS THEM — IT REPORTED THEM
-// AS COVERED. Top-level `let` and top-level `var` each landed a rung's worth of spec cases
+// ⚠ TWO WHOLE CONSTRUCTS WERE INVISIBLE HERE, AND THE MANIFEST DID NOT MERELY MISS THEM — IT REPORTED THEM
+// AS COVERED. Top-level `let` and top-level `var` each carried spec cases
 // (281 -> 295, then 295 -> 317), and this corpus generated NEITHER, at any rung. The float case at least
-// printed "no float" in plain text under NOT GENERATED for five rungs, and was read as a footnote
+// printed "no float" in plain text under NOT GENERATED, and was read as a footnote
 // about the reader's own measurement. This one was worse: the manifest listed `let / var` under
 // CONSTRUCTS GENERATED — meaning the BODY-LOCAL kind, the only kind the corpus had — and named the
 // top-level kind under NEITHER heading. A gap nobody is told about reads as coverage; a gap filed
@@ -800,7 +799,7 @@ let GeneratedLoopTrips = 4
 //   • `scaleFloats` returns `i64.min` — `trunc()` of a double outside i64.
 //
 // ⭐⭐ **AND A SITE'S DATA COMES FROM THE PARAMETER `a`, NEVER FROM THE RUNNING `acc` — WHICH IS NOT A
-// TIDINESS POINT, IT IS WHAT MAKES THE WITNESS DISCRIMINATE.** MEASURED, while sabotaging this rung's own
+// TIDINESS POINT, IT IS WHAT MAKES THE WITNESS DISCRIMINATE.** MEASURED, while sabotaging this
 // mechanism to prove it fails: with the divide knob reading `acc`, breaking its emitted mask left every
 // rung STILL EXITING 7. The reason is that a corrupted `acc` feeds the NEXT site, so the driver is a map
 // `acc -> f(acc)` — and that map had a two-cycle through the seed, so an even site count (32 at rung 0)
@@ -906,7 +905,7 @@ end 'witnessExpr'
 
 // ⭐⭐ **THE MONOTONE HALF OF EVERY WITNESS, AND THE REASON IT EXISTS IS MEASURED RATHER THAN IMAGINED.**
 // Subtracting an expectation from a running total is exact and REVERSIBLE — a later site can put it back
-// — and one did: the FIRST sabotage written to prove this rung fails, a broken divisor mask, left every
+// — and one did: the FIRST sabotage written to prove this check fails, a broken divisor mask, left every
 // rung still exiting 7, because the driver's map had a two-cycle through the seed and an even site count
 // walked out where it walked in. Pinning the site data to `a` stopped a corrupted total from steering
 // later sites, but two sites failing by equal and opposite deltas would still have summed to nothing.
@@ -921,7 +920,7 @@ end 'witnessExpr'
 // shifting the emitted `y` up by one and the emitted field REWRITE down by one makes the first fold read
 // one too high and the second read one too low — equal, opposite, and at every site. MEASURED on the
 // rung-0 binary with a print in front of the check: **`acc=19`, `wit=1`** — the additive total came out
-// EXACTLY at the seed, so the check this rung shipped with an hour earlier would have passed it, and only
+// EXACTLY at the seed, so the additive check alone would have passed it, and only
 // the counter refused. That is the third sabotage, and it is the reason the counter exists rather than
 // an argument that it might.
 //
@@ -1265,7 +1264,7 @@ let TryCoOwnSpellingCount = 2 as KnobSize
 // triage that filed it is not to land many protocol interfaces in one artifact. Holding
 // `InterfacesPerFile` CONSTANT and letting the file count double is what keeps that scan bounded while
 // the conformance count still climbs. (This corpus emits no `where` clause, so the scan has zero sites
-// today; the shape is kept honest for the rung that adds one.)
+// today; the shape is kept honest for a knob that adds one.)
 let InterfaceTypesBase = 4 as KnobSize
 
 // How many interfaces (and their conforming types) go in ONE generated file — see `InterfaceTypesBase`.
@@ -1600,8 +1599,8 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 
 	// Beside the two generic knobs because it shares their base emitter, and separate from them because
 	// it is a per-SITE dimension over FIXED instances: the `try` sites where a substituted
-	// managed `T` result's co-own is lifted onto the ok edge. Nothing in this corpus reached that
-	// mechanism before it — the rung that built the lift measured Δ0 in all three columns and said so.
+	// managed `T` result's co-own is lifted onto the ok edge. Nothing else in this corpus reaches that
+	// mechanism.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "x_trycoown", source: tryCoOwnSource(knobAt(TryCoOwnSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(TryCoOwnDriver))
 
 	// The interface knob writes and registers itself across MANY files, like `writeManyFunctions`: its
@@ -1831,7 +1830,7 @@ function seedSource() returns String
 	//
 	// ⚠ **A CASCADING INLINER WOULD FLATTEN THIS AGAIN, and the fix then is not another wrapper.** Once
 	// `scaleOpaqueCore` is inlined, `scaleOpaque` is call-free; a second round would make it a leaf and
-	// splice it into the loops after all. The rung that adds a cascade re-derives this knob, and the
+	// splice it into the loops after all. A cascading inliner means re-deriving this knob, and the
 	// honest shape then is a callee the inliner must refuse for a reason a cascade cannot dissolve (past
 	// the op budget, or holding a store and a panic) — not a deeper stack of levels.
 	out.append(exportedFunctionHeader(OpaqueCoreCalleeName, parameters: "a {ScaleIntAlias}"))
@@ -1980,7 +1979,7 @@ let LongIfDriver = "scaleLongIf"
 // tracked values leave i64 and wrap — 2^533 worth of wrapping at rung 5. It would have been easy to
 // replace it with a bounded increment and buy a tidy closed form; that would have taken a reg-reg ADD
 // and a reg-reg COMPARE out of 3,200 sites at the top rung, which is a reduction in what the knob
-// PRICES, and this rung's whole purpose forbids that. So the emitted text is byte-for-byte what it was
+// PRICES, and this knob's whole purpose forbids that. So the emitted text is byte-for-byte what it was
 // and the GENERATOR follows it instead: the same update and the same guard, applied to `tracked` in the
 // loop that writes each site. Maxon `int` is i64 and MEASURED to wrap identically under both compilers,
 // so a tracked value that overflows is still the value the program computes.
@@ -2083,8 +2082,8 @@ end 'chainLinkName'
 // cannot disagree.
 // ⭐ **THE BASE LINK IS THE ONE FUNCTION HERE THAT DOES NOT WITNESS ITSELF, AND THAT IS THE POINT.**
 // `scaleChain0` is a single `a + 1`; a witness on it would compare `a + 1` against `a + 1`, which is two
-// spellings of one expression and catches nothing — a check that cannot fail, in the rung that exists to
-// remove them. It is witnessed instead by the link ABOVE it, whose `z` must arrive as `a + 1` exactly;
+// spellings of one expression and catches nothing — a check that cannot fail.
+// It is witnessed instead by the link ABOVE it, whose `z` must arrive as `a + 1` exactly;
 // every link from 1 up returns its argument unchanged, so link 2 and above expect a bare `a`. A
 // miscompiled base therefore moves link 1's witness, which is a real failure and not a tautology.
 //
@@ -2971,7 +2970,7 @@ end 'genericBoxDecl'
 // the promotion lifted onto the ok edge.
 //
 // ⭐ **THE `live` FLAG IS WHAT MAKES THE ERROR EDGE RUN, and a corpus whose error edge never runs cannot
-// check the half of this rung that emits NOTHING.** The lift's rule is that the promotion goes on the ok
+// check the half of this mechanism that emits NOTHING.** The lift's rule is that the promotion goes on the ok
 // edge ALONE, because on the error edge the throw never wrote the result register; a retain that leaked
 // onto that edge would take a reference to whatever the register held. That is a RUNTIME fact, so the
 // caller passes an opaque bool (`tryCoOwnLiveText`) and the ladder takes both edges at every rung.
@@ -3030,11 +3029,8 @@ let StructTypesDriver = "scaleStructTypes"
 // whose types own a `String`. Keep the two apart: a change to destructor synthesis must move that column
 // and leave this one flat, which is the whole reason both knobs exist.
 //
-// (This paragraph read "THERE IS NO `__destruct_*` CASCADE TO MEASURE YET … a per-type destructor is a
-// later rung" for ten rungs after it landed, citing `LowerMaxonToStd.maxon:9` — which lists the
-// `own.drop` → `__destruct_T` lowering as one of the 1:N desugarings that pass PERFORMS, not as future
-// work. A gap named with a reason that has stopped being true is this file's worst failure mode, because
-// the reason is what a reader uses to decide the gap is not theirs to close.)
+// A gap named with a reason that has stopped being true is this file's worst failure mode, because the
+// reason is what a reader uses to decide the gap is not theirs to close.
 function structTypesSource(typeCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the struct-types knob — {typeCount} type declarations, each built once.\n")
@@ -3450,7 +3446,7 @@ let ShiftHighBitOffset = 100
 //   • An `as` cast over an OPAQUE value, which emits a runtime RANGE GUARD. A cast of a literal is
 //     checked at compile time and emits nothing, so only an opaque operand measures the guard.
 //   • `print` — the whole formatted-output path, which nothing in the corpus reached.
-//   • A loop that actually `break`s. `break` was in the subset from M4b and the manifest said, in plain
+//   • A loop that actually `break`s. `break` was in the subset and the manifest said, in plain
 //     text, "in the subset, but no generated loop exits early": a loop EXIT phi carrying live values is a
 //     different merge from a loop header phi, and no knob was minting one.
 //   • A struct-typed FIELD written through the loaded box (`o.inner.x = ...`). This is a SHAPE, not a
@@ -5380,7 +5376,7 @@ end 'qualifiedReferenceGroup'
 // instruction is not to land many protocol interfaces in one artifact. Holding `InterfacesPerFile`
 // constant and letting the file count double keeps that scan bounded while the conformance count climbs.
 // (This corpus emits no `where` clause, so there are zero sites today. The shape is kept honest for the
-// rung that adds one — and that cost is in TIME, which this instrument cannot see, so the corpus paying
+// knob that adds one — and that cost is in TIME, which this instrument cannot see, so the corpus paying
 // it would show nothing while slowing every run.)
 function writeInterfaceTypes(dir FilePath, count KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
 	let fileCount = bucketCount(count, perBucket: InterfacesPerFile)

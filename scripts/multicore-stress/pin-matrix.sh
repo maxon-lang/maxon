@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# PIN MATRIX (EC10) — the positive control for "an `async` frame is a
+# PIN MATRIX — the positive control for "an `async` frame is a
 # COROUTINE of its green thread".
 #
 # ⛔ IT IS NOT `validate.sh`. That one measures the emitted RUNTIME's slab and
@@ -28,7 +28,7 @@
 #   3. `leaked=0` from every program in `LEAK_READING_PROGRAMS` at every N — and a
 #      row of one that prints no `leaked=` at all FAILS, because it died before its
 #      reading and an exit code it shares with every other row asserts nothing.
-#   4. ⭐ THE PIN ITSELF, AND IT IS NOW PER FAMILY (SV1). A COROUTINE-ONLY
+#   4. ⭐ THE PIN ITSELF, AND IT IS PER FAMILY. A COROUTINE-ONLY
 #      program reads `workers=1` and `steals=0` at every N unless its `monitor=`
 #      reading says the system monitor stepped in (`monitor-witness.maxon`): a
 #      preemption, a retake or a machine started for an overdue timer can each put a
@@ -43,13 +43,13 @@
 #      enumeration that makes `monitor=0` the exact condition.
 #   5. Every program in `REFUSED_PROGRAMS` FAILS TO BUILD, with the code named.
 #
-# ⭐⭐ ASSERTION 4 IS WHAT THIS SCRIPT EXISTS FOR, AND IT IS THE ONE THAT FLIPPED.
-# Before EC10 every `async f(...)` published a GT to the SCHEDULER, so at N >= 2 a
-# worker M popped, stole and ran an `async` frame on a different M than its caller
-# — MEASURED on the parent commit, same box, this script: steal-torture read
+# ⭐⭐ ASSERTION 4 IS WHAT THIS SCRIPT EXISTS FOR.
+# Were every `async f(...)` published as a GT to the SCHEDULER, at N >= 2 a
+# worker M would pop, steal and run an `async` frame on a different M than its caller
+# — MEASURED in that arrangement, same box, this script: steal-torture read
 # `workers/steals` of 1/0, 2/24, 7/3997 and 8/3996 at N=1/2/7/12, and
 # drop-running-torture 1/0, 2/6, 7/35 and 11/51.
-# After the pin an `async` frame is a coroutine of the green thread that
+# With the pin an `async` frame is a coroutine of the green thread that
 # called it: it is published only to that green thread's coroutine queue, never to
 # a P ring or the global queue, so no coroutine ever wakes a worker M. A second M
 # comes only from the system monitor — a preemption, a retake, or a machine started
@@ -61,18 +61,16 @@
 # tree, so every `async` frame is a GREEN THREAD again; one line, nothing else
 # changed — drop-running-torture reads 1/0, 2/6, 7/42 and 11/43 and steal-torture
 # 1/0, 2/52, 7/3970 and 7/3985, with byte-identical aggregates throughout
-# (MEASURED at SV1 wave 1; the pre-EC10 spelling of the same sabotage read
-# 2/242, 7/393 and 12/410). A gate nobody has seen move is not a gate.
+# (MEASURED). A gate nobody has seen move is not a gate.
 #
-# ⭐⭐ `spawn` HAS LANDED AND ASSERTION 4 HAS FLIPPED, EXACTLY WHERE THIS PARAGRAPH
-# SAID IT WOULD. A `spawn` (`specs/services.md`) creates REAL green threads, which
-# are exactly what the scheduler's ring, its stealing and its worker loop
-# schedule — all built before they had a producer.
-# `service-torture` and `service-fanin-torture` are that producer, and they are the
-# TWO programs here whose rows are asserted the other way; every other program stays
-# coroutine-only and stays 1/0.
+# ⭐⭐ A `spawn` FLIPS ASSERTION 4. A `spawn` (`specs/services.md`) creates REAL
+# green threads, which are exactly what the scheduler's ring, its stealing and its
+# worker loop schedule.
+# `service-torture` and `service-fanin-torture` are the producers, and they are the
+# TWO programs here whose rows are asserted the other way; every other program is
+# coroutine-only and reads 1/0.
 #
-# RE-MEASURED at the `DefaultMaxProcs` flip, same box, this script (12 services x
+# MEASURED with the `default` row present, same box, this script (12 services x
 # 400 String sends each): `workers/steals` of 1/0, 2/692, 7/7882, 8/8071 and — on
 # the new `default` row, this 16-processor host — 8/8339, with a byte-identical
 # `aggregate=42680` and exit 42 at every one. The N=1 row is not a weaker reading
@@ -82,25 +80,25 @@
 # 12/8253: the worker and steal counts are an OUTCOME of how the work happened to be
 # scheduled, so they move run to run and only their FAMILY is asserted — the
 # `aggregate` is what is byte-identical, and it was, across both runs and all ten
-# rows. (SV1 wave 3 read 1/0, 2/886, 7/7790 and 9/8120 for the four explicit rows.)
+# rows.
 #
-# ⭐⭐ RE-MEASURED AT MC1 (SPINNING-M ACCOUNTING), AND THE STEAL COLUMN FELL BY AN
-# ORDER OF MAGNITUDE: `service-torture` reads 1/0, 2/582, 7/896, 12/1006 and default
+# ⭐⭐ WITH SPINNING-M ACCOUNTING THE STEAL COLUMN IS AN ORDER OF MAGNITUDE LOWER:
+# `service-torture` reads 1/0, 2/582, 7/896, 12/1006 and default
 # 9/1023, where the readings above it are 2/692, 7/7882 and 8/8071. That is the
-# change working — a publisher that sees an M already looking for work wakes nobody,
+# accounting working — a publisher that sees an M already looking for work wakes nobody,
 # so far fewer green threads cross an M — and it is the reason every number in these
 # paragraphs is a DATED READING and never a target.
 #
-# ⛔⛔ ASSERTION 4 WAS FLAKY AND THE PROGRAMS ARE WHAT WAS FIXED — NOT THE BAR (MC1's
-# REVIEW). The review measured 6/40 and 7/40 `1/0` readings on its own box at
-# `MAXON_MAX_PROCS=2` — about 15%. ⚠ THAT RATE DID NOT REPRODUCE HERE AT ANY PARTIAL
+# ⛔⛔ ASSERTION 4 FLAKES ON A SHORT PROGRAM, SO THE PROGRAMS ARE WHAT IS TUNED — NOT THE BAR.
+# A review measured 6/40 and 7/40 `1/0` readings on its own box at
+# `MAXON_MAX_PROCS=2` — about 15%. ⚠ THAT RATE DOES NOT REPRODUCE HERE AT ANY PARTIAL
 # LOAD, and the table below is why that is worth stating rather than quietly
-# inheriting: on this box the OLD length reads 0/40 with up to half the processors
+# inheriting: on this box the 400-round length reads 0/40 with up to half the processors
 # busy and 40/40 with all of them busy. So the ~15% is real but its condition is the
 # BOX, not the program, and no number here should be quoted as the flake rate.
-# The two SPAWNING_PROGRAMS now run 4000 rounds where they ran 400,
+# The two SPAWNING_PROGRAMS run 4000 rounds,
 # so EVERY `aggregate=42680` AND `taken=4800` ANYWHERE IN THIS HEADER IS A READING OF
-# THE SHORTER PROGRAMS — both now answer `aggregate=474680`, and the fan-in
+# THE 400-ROUND PROGRAMS — the 4000-round ones answer `aggregate=474680`, and the fan-in
 # `taken=48000`. The numbers are left as they were measured rather than rewritten:
 # they are dated readings, and a reading edited to match a later program is a
 # fabrication. Both new constants carry the argument at their own `let`.
@@ -117,7 +115,7 @@
 # not a gate. The SAME program at `rounds = 1` (a ~1 ms run) reads below the bar
 # 37 of 40 at `MAXON_MAX_PROCS=2`. Run length is the lever, and this is it pulled.
 #
-# MEASURED at MC1's review, `MAXON_MAX_PROCS=2`, 40 consecutive runs per cell, on a
+# MEASURED at `MAXON_MAX_PROCS=2`, 40 consecutive runs per cell, on a
 # 16-processor box, with `yes > /dev/null` x K as the competing load:
 #
 #                                   K=0    K=4    K=8   K=16
@@ -126,14 +124,14 @@
 #     service-fanin    rounds=400    0/40   0/40   0/40  40/40
 #     service-fanin    rounds=4000   0/40   0/40   0/40  37/40
 #
-# ⚠⚠ EVERY CELL ABOVE IS A READING OF THE *SAMPLED* SHAPE, WHICH THESE PROGRAMS NO
-# LONGER HAVE. It was taken when `main` published its messages and read
+# ⚠⚠ EVERY CELL ABOVE IS A READING OF THE *SAMPLED* SHAPE, WHICH THESE PROGRAMS DO NOT
+# HAVE. It was taken with `main` publishing its messages and reading
 # `schedMaxActiveWorkers()` straight away, so a K=16 cell is the OS declining to give
 # the worker M a timeslice inside a ~40 ms window. The table is kept because it is what
 # motivated the wait and it has not been re-run against it; re-measuring the four cells
 # under `yes > /dev/null` x K for K in {0,4,8,16} is the outstanding reading.
 #
-# ⭐⭐ THE SHAPE IS NOW BLOCKING. `main` waits on `schedMaxActiveWorkers() >= 2` with a
+# ⭐⭐ THE SHAPE IS BLOCKING. `main` waits on `schedMaxActiveWorkers() >= 2` with a
 # bounded budget (`worker-arrival.maxon`), short-circuits when
 # `__Builtins.schedProcessorCount()` resolves to one — the row where the wait must not
 # happen — and reports expiry as `workerwait=timeout`. So a starved box is a NAMED
@@ -156,21 +154,21 @@
 # longer window in which P0's ring is non-empty for a late-waking M to steal from at
 # all, which is the `workers >= 2` half. The `steals >= 1` half still passes by one.
 #
-# ⚠⚠ AND MC1 DID *NOT* MOVE service-fanin-torture's MARGIN — THIS HEADER CLAIMED IT
-# DID, AND THE CLAIM WAS READ OFF THE CODE RATHER THAN MEASURED. That row's
-# `steals >= 1` at N=2 does pass by ONE most runs, and it passed by one before MC1
-# too. MEASURED at MC1's review on the UNCHANGED 400-round program — same box, same
-# source (this diff does not touch it), the two binaries INTERLEAVED run by run in
-# one session, 20 runs each at `MAXON_MAX_PROCS=2`:
+# ⚠⚠ THE SPINNING-M ACCOUNTING DID *NOT* MOVE service-fanin-torture's MARGIN, AND THAT IS
+# MEASURED RATHER THAN READ OFF THE CODE. That row's `steals >= 1` at N=2 passes by ONE
+# most runs, with or without the accounting. MEASURED on the UNCHANGED 400-round
+# program — same box, same source, the two binaries INTERLEAVED run by run in one
+# session, 20 runs each at `MAXON_MAX_PROCS=2`:
 #
-#     steals    1    2    3    6    7
-#     parent   16    1    1    2    -
-#     MC1      12    5    1    1    1
+#     steals       1    2    3    6    7
+#     without     16    1    1    2    -
+#     with        12    5    1    1    1
 #
-# ⇒ the PARENT is the tighter of the two. A second, independent 40-run pair read
-# `steals=1` on 30/40 parent and 25/40 MC1 — same direction, same conclusion. The
-# thin margin is PRE-EXISTING; what MC1 moved is the steal COUNT on service-torture,
-# one paragraph up, which is a different program and a different column.
+# ⇒ the build without the accounting is the tighter of the two. A second, independent
+# 40-run pair read `steals=1` on 30/40 without and 25/40 with — same direction, same
+# conclusion. The thin margin does not come from the accounting; what the accounting
+# moves is the steal COUNT on service-torture, one paragraph up, which is a different
+# program and a different column.
 #
 # ⚠ refcount-torture IS IN THE LIST FOR ITS workers/steals ROW ONLY. Its own
 # subject — whether a contended refcount word survives — is INTERMITTENT, so a
@@ -196,7 +194,7 @@
 # multi-producer half of `__mbox_send` finally has more than one producer. Its
 # aggregate is accumulated by the SINK — whose handlers its own mailbox serializes
 # — rather than by `main`, which is what makes the reading sound at N >= 2 without
-# a cross-thread flag. RE-MEASURED at the flip: `aggregate=42680 taken=4800` at
+# a cross-thread flag. MEASURED with the `default` row present: `aggregate=42680 taken=4800` at
 # every row, with workers/steals of 1/0, 2/6, 7/1, 12/24 and, on the new `default`
 # row of this 16-processor host, **16/23** — the first reading in this table to
 # show every one of the host's processors carrying an M. ⚠ A SECOND RUN OF THE SAME
@@ -204,7 +202,7 @@
 # steal counts are an outcome of how the work happened to be scheduled, they move
 # run to run, and only the FAMILY (1/0 at one P, >= 2 workers and >= 1 steal above
 # it) is asserted. The `aggregate` was byte-identical across both runs and all ten
-# rows. (SV1 wave 4 read 1/0, 2/2, 7/20 and 12/23.)
+# rows.
 #
 # ⚠ AND THAT IS ALSO WHAT alloc-torture AND remote-free-torture STILL COST. Both
 # exist to drive the sharded allocator's CROSS-P paths, and both do it by getting
@@ -213,8 +211,8 @@
 # prove determinism and leak-freedom on ONE M, and no row of theirs below should be
 # read as covering a cross-P free.
 #
-# ⭐⭐ WHAT CHANGED IS THAT THE SUBJECT NOW HAS A PRODUCER SOMEWHERE ELSE IN THIS
-# TABLE (SV1). `service-torture` moves 4,800 freshly built heap `String`s across to
+# ⭐⭐ THE SUBJECT HAS A PRODUCER SOMEWHERE ELSE IN THIS
+# TABLE. `service-torture` moves 4,800 freshly built heap `String`s across to
 # twelve services and `service-fanin-torture` moves 4,800 the other way — in both,
 # a record allocated on the M that built it is RELEASED on whichever M ran its
 # receiver, which is the remote-free push these two were written for. Both now READ that
@@ -223,7 +221,7 @@
 # allocation reading rather than a program that merely happens to produce one.
 #
 # ⭐⭐ syscall-stack-torture IS THE ONLY ONE THAT PUTS TWO Ms INSIDE THE SYSCALL
-# SHIM AT ONCE, WHICH IS WHY W213-C1 ADDED IT. Every other program here computes;
+# SHIM AT ONCE, WHICH IS WHY THIS PROGRAM EXISTS. Every other program here computes;
 # this one has twelve services making ~24,000 real kernel calls between them — the
 # attribute query (`GetFileAttributesW`, no stack args) at high frequency and the
 # widest stack-arg copy in the shim's table (`CreateFileW`, seven arguments, three
@@ -232,14 +230,14 @@
 # overwrite each other's parked RSP and the first one out returns onto the other's
 # stack. Its own header carries the mechanism and the sabotage.
 #
-# ⭐ THE SABOTAGE READING, and note WHAT it changes — MEASURED at W213-C1, this
+# ⭐ THE SABOTAGE READING, and note WHAT it changes — MEASURED on this
 # box, `emitSchedStartM` altered to hand every M ONE shared 64 KB region allocated
 # once in `__sched_init_procs` (three lines, nothing else touched): the program
 # SEGFAULTS (139) on 9 of 9 runs at MAXON_MAX_PROCS 2, 7 and 12, and exits 42 with
 # `aggregate=30952` on 3 of 3 at 1.
 #
-# ⚠⚠ AND THE SPEC SUITE IS *NOT* BLIND TO IT — THE FIRST DRAFT OF THIS PARAGRAPH
-# SAID IT WAS, AND MEASURING KILLED THAT CLAIM. On the same sabotaged compiler the
+# ⚠⚠ AND THE SPEC SUITE IS *NOT* BLIND TO IT — MEASURED.
+# On the same sabotaged compiler the
 # full suite goes RED, at **3 cases in one run and 4 in another** out of 7,097:
 # `sched-syscall-handoff/more-blocking-file-reads-than-processors-still-finish`,
 # `sched-syscall-handoff/a-blocking-subprocess-wait-does-not-stall-a-sibling` and
@@ -262,9 +260,9 @@
 # `.data` global did not have and which handoff would take away from the per-P
 # spelling.
 #
-# ⭐⭐ park-torture IS THE ONLY ONE THAT PARKS, WHICH IS WHY SV1 ADDED IT. Every
+# ⭐⭐ park-torture IS THE ONLY ONE THAT PARKS, WHICH IS WHY IT EXISTS. Every
 # other program here spins and returns, so not one of them walks the deferred-park
-# path (W218) at all — the window between registering on the store that will wake
+# path at all — the window between registering on the store that will wake
 # a green thread and its registers being saved. It contributes 3200 suspensions
 # per run for about fifty milliseconds, and its own header carries the sabotage
 # reading that proves it can go red (139 at N=2/7/12 with the deferral reverted

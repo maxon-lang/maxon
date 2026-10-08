@@ -628,8 +628,7 @@ function serviceTypeNames(signatures ProgramSignatures, t MaxonType, typeName By
 end 'serviceTypeNames'
 
 // A type-name id resolved against the SIGNATURE INDEX's own interner — the table every id reaching this file
-// was minted in (`ProgramSignatures.foldFile` remaps a file's ids into it). Resolving one anywhere else is
-// OPEN #56, whose two measured wrong answers `indexTypeNames`' header records.
+// was minted in (`ProgramSignatures.foldFile` remaps a file's ids into it). Resolving one anywhere else misreads it, as `indexTypeNames`' header records.
 function serviceIndexTypeName(signatures ProgramSignatures, id TypeNameId) returns ByteArray
 	return try signatures.indexTypeNames().nameOf(id) otherwise panic("serviceIndexTypeName: type-name id {id} is not in the signature index's interner — every id a swept declaration carries was remapped into it at `foldFile`")
 end 'serviceIndexTypeName'
@@ -1282,8 +1281,7 @@ module function serviceReplyBlame(typeName ByteArray, methodName ByteArray) retu
 	return "the reply of the message `{String.from(typeName)}.{String.from(methodName)}`"
 end 'serviceReplyBlame'
 
-// ⚠⚠ **THE INTERNER IS A PARAMETER AND IT IS NOT OPTIONAL — THIS IS OPEN #56's HAZARD (four times, and
-// counting).** A payload type built below is a `MaxonType`, which carries a `TypeNameId` that is only a
+// ⚠⚠ **THE INTERNER IS A PARAMETER AND IT IS NOT OPTIONAL.** A payload type built below is a `MaxonType`, which carries a `TypeNameId` that is only a
 // number without its table: the layouts the SIGNATURE INDEX holds carry the index's ids, and a
 // `FileParseArtifact`'s carry that file's own. `ProgramSignatures.indexTypeNames`' header records what
 // resolving one against the wrong table cost — a destructor synthesized for `InstantNanos` on a field that

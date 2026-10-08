@@ -213,9 +213,7 @@ end 'patchArm64ElfRelocations'
 // addressed from code, and the arm64 pairs never appear in an x64 module. (The `.rdata`-INTERNAL
 // descriptor slot — patched with a `.text` VA, not a disp32 in code — is not an `RdataRelocKind`: it rides
 // `GlobalDataTable.pendingRdataRelocs` and is baked by `bakeFuncAbs64Relocs`.) This is duplicated from
-// PeWriter rather than shared because consolidating would mean editing PeWriter, outside this rung's
-// file set — the same reason `bakeElfRdataAbsRelocs` duplicates `patchRdataAbsRelocs`; see
-// the report's follow-up note.
+// PeWriter, as `bakeElfRdataAbsRelocs` duplicates `patchRdataAbsRelocs`.
 function patchX64SectionRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textVmAddr MachineWord, rdataVmAddr MachineWord, dataVmAddr MachineWord)
 	for reloc in rdataRelocs 'patch'
 		let ripAtReloc = textVmAddr + (reloc.codeOffset as MachineWord) + X64Disp32Width

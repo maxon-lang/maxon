@@ -124,8 +124,8 @@ end 'maxClassPoolSize'
 // ⚠⚠ AN EMPTY ALLOWED SET IS CONFINED — VACUOUSLY, AND THAT IS THE ANSWER, not a hole.
 // ∅ ⊆ every set, and a value with no legal register at all is the MOST confined value there is: it
 // cannot be coloured anywhere, so it is always part of the overflow it is live across, and it is
-// always the one that must be relieved. An f64 live across a call is exactly this — Wave 1 makes
-// every XMM caller-saved, so the call forbids all sixteen.
+// always the one that must be relieved. A value live across an op whose clobber mask covers its
+// whole register class is exactly this.
 //
 // ⚠ ANSWERING `false` HERE STOPS THE FORCE-SPILL PATH RUNNING AT ALL, and the hazard that would
 // motivate it is real: `witness` is a bag of bits that does not
@@ -567,10 +567,9 @@ end 'HallVerdict'
 // ON THE HOT PATH it runs only where the cardinality screen already fired AND the point does not
 // overflow the full pool, so `live.count() <= poolSize <= RegisterFileSize`: the search is bounded by
 // `RegisterFileSize` values × `RegisterFileSize` registers and cannot be a hot-path cost. (The
-// register side is `valueOfReg`'s width, which is that same constant — spelling it as a literal is
-// what left this paragraph claiming 16 across the rung that made it 32.)
+// register side is `valueOfReg`'s width, which is that same constant.)
 //
-// ⚠ **`live.count() <= poolSize` IS A COST PREMISE, NOT A CORRECTNESS ONE, and there is now one caller
+// ⚠ **`live.count() <= poolSize` IS A COST PREMISE, NOT A CORRECTNESS ONE, and there is one caller
 // that does not meet it.** `SplitLiveRanges.confinedOverflowAtPeak` asks this AT a full-pool peak —
 // deliberately, to find the confinement the ranking hid underneath one — so its live list is larger
 // than the pool and the matching cannot saturate. The answer is still exact: what a bigger live set

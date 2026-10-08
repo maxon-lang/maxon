@@ -97,7 +97,7 @@ export enum HostFacility
 
 	// The program's own argument vector (`__cl_*`). Its own facility rather than a corner of `processInfo`
 	// because argv has a DIFFERENT SHAPE per platform — one unsplit string on Windows, a pre-split vector
-	// under SysV — so a target serves it as a rung rather than as a lowering.
+	// under SysV — so a target serves it with a runtime body of its own rather than as a lowering.
 	commandLine
 
 	// Standard input (`__con_*`).
@@ -116,7 +116,7 @@ export enum HostFacility
 	// worker Ms).
 	//
 	// ⚠ **THE SPLIT RECORDS THE DIFFERENCE IN KIND, NOT A SCHEDULE** — and because the two are separate
-	// rows, a lane may serve the identity half rungs before it can serve the priority half.
+	// rows, a lane may serve the identity half before it can serve the priority half.
 	processPriority
 
 	processLiveness
@@ -307,7 +307,7 @@ end 'CalleeFacility'
 // eight-method surface is gated by construction rather than by a list somebody has to remember to extend.
 // The command-line entries join on the same terms and by the same PREFIX test. ⚠ Their reason is one the
 // four above do not have: argv is not merely UNIMPLEMENTED elsewhere, it has a DIFFERENT SHAPE elsewhere
-// (one unsplit string on Windows, a pre-split vector under SysV), so serving another target is a rung
+// (one unsplit string on Windows, a pre-split vector under SysV), so serving another target takes a runtime body of its own
 // rather than a lowering. `CommandLineRuntime`'s header carries it in full.
 // The standard-input and executable-path entries join on the same terms and by the same PREFIX test, and
 // each has a reason of its own beyond "unimplemented elsewhere" — the shape argument again, twice over.
@@ -317,12 +317,12 @@ end 'CalleeFacility'
 // different retry protocols (`stdlib/Process.maxon:26-27`), and WASI has no analogue at all.
 // `ConsoleRuntime`'s and `ProcessRuntime`'s headers carry each in full.
 //
-// ⭐⭐⭐ **FOUR OF THE PARAGRAPHS ABOVE CONCLUDE "A RUNG RATHER THAN A LOWERING", AND arm64-macOS SETTLES
+// ⭐⭐⭐ **FOUR OF THE PARAGRAPHS ABOVE CONCLUDE "A BODY OF ITS OWN RATHER THAN A LOWERING", AND arm64-macOS SETTLES
 // EACH OF THEM DIFFERENTLY — WHICH IS WHY THE REASONS STAY AND ONLY THE TABLE MOVES.** The `commandLine`
 // argument is RIGHT: argv really is a different shape, and arm64-macOS serves it through a different Std
 // GRAPH (`CommandLineRuntime.commandLineShape`) rather than a different lowering. The `consoleStdin`
 // argument is HALF right: there really is no `GetStdHandle` under POSIX, and it does not follow that a
-// rung is needed — an op with no OS work to do lowers to arithmetic, and `osStdHandle` is one
+// body of its own is needed — an op with no OS work to do lowers to arithmetic, and `osStdHandle` is one
 // subtraction. `managedFile` and `managedDirectory` are plain "unimplemented elsewhere", and that lane
 // implements them — the directory half at real cost, because Win32 takes a GLOB where POSIX takes a
 // DIRECTORY. ⇒ **A reason on this roster says what a callee NEEDS and never what a target HAS; only
@@ -330,12 +330,12 @@ end 'CalleeFacility'
 // The SUBPROCESS band joins on the same terms and by the same PREFIX test, so an entry point added to it
 // later is gated by construction rather than by memory. Its own reason is stronger than "unimplemented
 // elsewhere": `CreateProcessW`, three named pipes and an IOCP completion port are a WINDOWS shape, and
-// WASI has no process-spawn primitive at all — so serving another target is a rung rather than a
+// WASI has no process-spawn primitive at all — so serving another target takes a runtime body of its own rather than a
 // lowering, and on wasm it is not even that. `__Builtins.runProcess` and `spawnReadLine` are named individually
 // because their entries live in the SCHEDULER band rather than behind the subprocess prefix.
 // The SOCKET band joins on the same terms and by the same PREFIX test. Its own reason is the
 // subprocess band's, one library over: `ws2_32.dll` is a Windows shape, and while WASI does have
-// `wasi:sockets`, this slice is not wired to it — so serving another target is a rung rather than a
+// `wasi:sockets`, this slice is not wired to it — so serving another target takes a runtime body of its own rather than a
 // lowering.
 //
 // ⛔⛔ **WITHOUT THIS ROW A LEGAL PROGRAM PANICS THE COMPILER.** MEASURED 2026-08-21,
@@ -360,7 +360,7 @@ end 'CalleeFacility'
 // The THREAD-COST query (`__Builtins.threadCpuTicks` ⇒ `__thread_cpu_ticks`) joins on the same terms and
 // by the same PREFIX test. Its own reason is the SHAPE argument once more: `QueryThreadCycleTime` answers
 // TSC ticks through a `ULONG64*` while `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` answers NANOSECONDS
-// through a `timespec`, so a POSIX lane is a rung rather than a lowering — and WASI has no per-thread CPU
+// through a `timespec`, so a POSIX lane needs a body of its own rather than a lowering — and WASI has no per-thread CPU
 // clock at all. A lowering there could only fabricate a cost, which is the silent wrong answer the
 // machine query's paragraph refuses one clause up.
 // ⚠ **ITS BAND-MATE, THE `__mm_counter_*` READERS, IS DELIBERATELY ABSENT** for
@@ -392,7 +392,7 @@ end 'CalleeFacility'
 // the strength of `os(Windows)` alone would not fail — it would read three unrelated words as a program
 // counter and a frame chain, and hand back a confident profile of nothing. macOS has the equivalent
 // primitives behind `task_for_pid`, which is an ENTITLEMENT question rather than a coding one, and Linux's
-// `ptrace` is a different mechanism with a stop protocol. Every one of those is a rung; none is a lowering.
+// `ptrace` is a different mechanism with a stop protocol. Every one of those is a body of its own; none is a lowering.
 //
 function calleeHostFacility(callee ByteArray) returns CalleeFacility
 	// The four scheduler entries named individually: their bands hold calls the compiler inserts, so a

@@ -1586,8 +1586,7 @@ type MaxonToStdLowering
 		// Relocate blocks 1:1 first so blockRef indices stay aligned between the
 		// source MaxonModule and the dest StdModule; each dest block starts empty
 		// and its ops are appended during the per-function walk below. The
-		// per-block source footprint is copied in lock-step so it survives to the
-		// coverage-instrumentation pass (a later-milestone consumer).
+		// per-block id, label, heat, inline site and role are copied (`IrBlock.createLike`).
 		for i in 0 upto self.maxonModule.blocks.count() 'relocateBlocks'
 			let srcBlock = try self.maxonModule.blocks.get(i) otherwise panic("lowerMaxonToStd: maxonModule.blocks.get OOB at {i}")
 
@@ -6371,7 +6370,7 @@ type MaxonToStdLowering
 	end 'emitRetVoidOrErrorReturn'
 
 	// `throw E.case` / `throw U.case(x)` / `throw e` — the error-flag ENCODE lives HERE (the ABI in one
-	// place, per PLAN.md), not in the parser. `errIsBoxed` (set by the parser, which alone holds the enum
+	// place), not in the parser. `errIsBoxed` (set by the parser, which alone holds the enum
 	// registry that classifies the thrown type) picks the encoding:
 	//   • a BOXED union — `errValue` is the heap-box POINTER, written to the flag VERBATIM. It is non-zero
 	//     (`__mm_alloc` never returns 0), so `flag != 0` still reads "error in flight", and there is NO
@@ -6408,8 +6407,7 @@ type MaxonToStdLowering
 	// `try`'s shared handler as a VALUE (a bare `throw` inside the body branches rather than returns). A second
 	// spelling of this add — in the parser, say, where the matching DECODE already lives — would be the ABI
 	// written at two tiers, free to drift the day the bias moves; both readers of `ErrorFlagOrdinalBias`
-	// (`Parser.declareCaughtError`'s decode and this) then still name the one constant, which is the property
-	// PLAN.md's own note about this bias asks for.
+	// (`Parser.declareCaughtError`'s decode and this) then still name the one constant.
 	//
 	// ⚠ **THE DESTINATION IS THE CALLER'S**, so each spelling of the encode defines the id ITS OWN consumer
 	// names: the terminator form a fresh value it invents, the value form the `result` the parser declared and

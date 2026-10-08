@@ -220,7 +220,7 @@ export typealias Arm64FuncAdrpRelocArray = Array with Arm64FuncAdrpReloc
 // move together; three literal `4`s would drift.
 export let JumpTableSlotBytes = 4 as BytePos
 
-// ⭐ **THE BLOCK-ADDRESS RELOCATION** — the one genuinely new link-time mechanism this slice adds. A dense
+// ⭐ **THE BLOCK-ADDRESS RELOCATION.** A dense
 // `match` emits an `.rdata` jump table of N i32 slots, each holding `targetBlockVA − tableBaseVA` (a
 // table-base-relative signed offset — position-independent, needing NO runtime rebase on any target, where
 // an 8-byte absolute rdata pointer would need a dyld rebase on Mach-O). The offsets cannot be known until
@@ -340,7 +340,7 @@ end 'patchJumpTables'
 // The signed 32-bit table-base-relative offset for one slot: `targetAddr − tableBaseAddr`, returned as its
 // 32-bit two's-complement bit pattern (`patchDword` writes the low four bytes). Both blocks and the table
 // sit in the SAME image, so the true delta fits i32 for any program the backend can produce (a `.text` far
-// larger than 2 GiB is not reachable at this rung) — but a delta that did NOT fit would silently truncate
+// larger than 2 GiB is not reachable) — but a delta that did NOT fit would silently truncate
 // to a wrong jump, so it is checked and a violation is a loud link error, not a corrupt table.
 function jumpTableEntry(targetAddr MachineWord, tableBaseAddr MachineWord, tableLabel String, slotIndex ElementIndex) returns MachineWord
 	let delta = (targetAddr as ParsedInt) - (tableBaseAddr as ParsedInt)

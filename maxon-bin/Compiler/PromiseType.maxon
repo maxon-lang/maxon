@@ -1,5 +1,5 @@
 // PromiseType.maxon — everything the compiler knows about the STORAGE TYPE `Promise with T` /
-// `Promise with (T, E)` (P1.5-B2c). One home, because the same three facts are read by the type index
+// `Promise with (T, E)`. One home, because the same three facts are read by the type index
 // (is this slot managed?), the parser's storage door (may this spawn be stored here?) and the await
 // (what does this promise return, and what does it throw?), and a disagreement between any two of them
 // is a wrong answer rather than a diagnostic.
@@ -10,8 +10,8 @@
 // that; what it adds is the three facts a DECLARATION cannot state.
 //
 // ⭐⭐ **THE FIRST FACT: A PROMISE HANDLE IS NOT A REFCOUNTED HEAP RECORD, SO A `Promise` INSTANCE IS A
-// TRIVIAL ONE-WORD SLOT.** `Parser.decrefCalleeFor` has said this about the VALUE since B2 — *"a promise
-// owns no `__mm_alloc` box; the handle is the GT struct pointer"* — and B2c is where the TYPE learns to say
+// TRIVIAL ONE-WORD SLOT.** `Parser.decrefCalleeFor` says this about the VALUE — *"a promise
+// owns no `__mm_alloc` box; the handle is the GT struct pointer"* — and this file is where the TYPE says
 // it too. `ProgramSignatures.typeIsManaged` answers `true` for every other generic instance because every
 // other one IS a base-struct box; this one's runtime value is a pointer into the scheduler's own slab,
 // whose lifetime is the green thread's and is discharged by `__gt_promise_drop` at the parse-tracked sites,
@@ -20,31 +20,28 @@
 // ⛔ **THE HANDLE ITSELF IS STORED, TYPED AT THE INSTANCE, RATHER THAN BOXED INTO A REAL `Promise` RECORD
 // AT THE STORAGE SITE AND LOADED BACK OUT AT THE AWAIT.** The reasons are two:
 //
-//   • **A BOX WOULD HAVE BEEN UNREACHABLE HERE WHEN THIS WAS WRITTEN, AND IS NOT ANY MORE — the argument
-//     rests on the SECOND bullet now.** A boxed `Promise` element makes `Array with IntPromise` a
-//     MANAGED-element array, and the compiler's managed-element array requires its element to be deep-cloneable as
-//     a single `(box) -> newBox` function (`ProgramSignatures.typeSupportsDeepClone`). A non-`Array` generic
-//     instance was not, so `Parser.requireOpaqueArrayCopyable` refused it with E2015 — MEASURED on a stand-in
-//     (`type Cell uses Slot` with one `int` field): `push` and `get` compile, and `for c in arr` was **E2015
-//     raised inside `stdlib/Array.maxon`'s `slice`**; five of this spec's storage cases iterate. **W162 built
-//     that per-instance cloner**, so this refusal no longer stands in the way and the box is merely wrong
-//     rather than impossible.
+//   • **A BOX IS POSSIBLE — the argument rests on the SECOND bullet.** A boxed `Promise`
+//     element makes `Array with IntPromise` a MANAGED-element array, and the compiler's managed-element
+//     array requires its element to be deep-cloneable as a single `(box) -> newBox` function
+//     (`ProgramSignatures.typeSupportsDeepClone`). A per-instance cloner supplies that for a non-`Array`
+//     generic instance, so `Parser.requireOpaqueArrayCopyable` does not refuse it and the box is merely
+//     wrong rather than impossible.
 //   • **AND CLONING A PROMISE IS WRONG ANYWAY.** Two boxes naming one green thread is the double free
 //     `await`'s linearity (E3100) exists to make unrepresentable, so a cloner for this type would be a
 //     mechanism whose every use is a bug.
 //
-// ⛔⛔ **THIS PARAGRAPH USED TO SAY "NOTHING OBSERVABLE DEPENDS ON THE BOX", AND THAT WAS A SILENT WRONG
-// ANSWER FOR AS LONG AS IT STOOD (G17).** Its premise was right — `Promise.inner` is documented in
+// ⛔⛔ **"NOTHING OBSERVABLE DEPENDS ON THE BOX" IS A SILENT WRONG ANSWER.** Its premise is right —
+// `Promise.inner` is documented in
 // `stdlib/Builtins.maxon:124` as *"a raw GT pointer"*, which is exactly what the unboxed value IS, and a box
-// would be an allocation the leak gate has to see freed, which storing the handle never makes. What did not
-// follow is the conclusion, because **NOTHING HAD TOLD THE FIELD-READ DOOR**: the ordinary lowering of a
+// would be an allocation the leak gate has to see freed, which storing the handle never makes. What does not
+// follow is the conclusion, because **THE FIELD-READ DOOR MUST BE TOLD**: the ordinary lowering of a
 // field read is *load the word at the field's offset*, and with the value being the handle that
 // DEREFERENCES it. `inner` is at offset 0, where a green thread keeps its saved stack pointer (`GtOffSp`).
 // MEASURED on `function peek(p IntPromise) returns Integer { return p.inner }`:
 // `x64.loadRegBaseDisp.word64 r8, [rcx + 0]` — `gt->sp`, handed to a caller that asked for the handle. It
 // never faulted (the stack is committed) and never crashed; it answered a plausible number, and
 // `Testing/SpecWorkerPool.drainHasAnswered` would have peeked a word 16 bytes into the green thread's own
-// stack. ⇒ `fieldReadIsThePromiseHandle` below is what the door now asks, and `specs/promise-peek.md`
+// stack. ⇒ `fieldReadIsThePromiseHandle` below is what the door asks, and `specs/promise-peek.md`
 // is what would have caught it: with the read left as a load, its `completes-under-the-drive` case exits
 // **0xC0000005**.
 //
@@ -94,7 +91,7 @@ export let PromiseCancelMethodName = b"cancel"
 // two doors a consume can come by are one list rather than two literals in two files.
 let PromiseAwaitDoorName = b"await"
 
-// ⭐⭐ **WHAT HAS ALREADY BECOME OF A GREEN THREAD (P1.5-B2c, widened at W232).** Two arms are RECLAIMS:
+// ⭐⭐ **WHAT HAS ALREADY BECOME OF A GREEN THREAD.** Two arms are RECLAIMS:
 // `await p` takes the thread's result and `__gt_await` reclaims its struct, `p.cancel()` takes nothing and
 // `__gt_promise_drop` reclaims its struct — they differ in what they yield and agree exactly where it
 // matters, which is that the GT is on the scheduler's free list afterwards. `movedIntoStorage` is neither

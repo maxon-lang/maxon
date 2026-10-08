@@ -107,7 +107,7 @@ export type RuntimeUsage
 	export var usesStrCopy as bool
 	export var usesIntToString as bool
 
-	// The UNSIGNED decimal renderer (X11). A bit of its own rather than a widening of the one above,
+	// The UNSIGNED decimal renderer. A bit of its own rather than a widening of the one above,
 	// because a program that only prints a declared non-negative value references only `__uint_to_string`
 	// and must not carry the signed entry point it never calls — the "vocabulary does not ship ahead of
 	// its consumer" rule `installStringRuntime` states, applied to a second entry point of one builder.
@@ -197,7 +197,7 @@ export type RuntimeUsage
 	// check it never asked for — a codegen change in a build the flag is supposed to leave untouched.
 	export var usesDebugStreamLog as bool
 
-	// The program co-owns a BORROWED managed-aggregate parameter into a `var` (`var q = p`, OPEN #40),
+	// The program co-owns a BORROWED managed-aggregate parameter into a `var` (`var q = p`),
 	// which the parser makes a second owner of the caller's box via `__mm_retain`. Its OWN bit, not
 	// `usesIncref`: `__mm_retain` (returns the pointer) and `__mm_incref` (void) have independent callers,
 	// so folding either into the other installs a dead function in the program that uses only the other
@@ -1023,8 +1023,8 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 	end 'incref'
 
-	// A `__mm_retain` the PARSER emitted (co-owning a borrowed managed-aggregate parameter into a `var`,
-	// OPEN #40) — install the retain helper for it. `usesHeap` follows because the box it retains was
+	// A `__mm_retain` the PARSER emitted (co-owning a borrowed managed-aggregate parameter into a `var`)
+	// — install the retain helper for it. `usesHeap` follows because the box it retains was
 	// `__mm_alloc`'d (which set `usesHeap` at that box's own allocation site anyway).
 	if callee.equals(MmRetainName) 'retain'
 		usage.usesRetain = true

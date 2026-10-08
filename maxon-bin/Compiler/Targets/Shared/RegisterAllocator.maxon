@@ -1,10 +1,9 @@
 // Register allocator (pure Design B: SSA chordal coloring + gap
 // splitting + E5001; design in docs/internals/register-allocation.md). Spine:
-// cold-spill splitting → liveness → biased forward-sweep coloring → SSA destruction. It adopts
-// the `Reuse` operand model to DELETE the pre-emitted two-address seed `mov`: ISel now
+// cold-spill splitting → liveness → biased forward-sweep coloring → SSA destruction. It uses
+// the `Reuse` operand model, so there is no pre-emitted two-address seed `mov`: ISel
 // emits ONE reuse-def op (`sub`/`imul`/`neg`) and THIS pass materializes the copy only
-// when the reuse input outlives the op (`allocateReuseDef`). It REPLACES the M1
-// `MinimalColorer` (no liveness; a fresh register per distinct value, forever).
+// when the reuse input outlives the op (`allocateReuseDef`).
 //
 // WHAT GATES IT. Two things, and they are the SUITE, not a pass inside the compiler:
 //   * RUNNING a spec test proves the allocation is CORRECT. A value left in the wrong register
@@ -447,7 +446,7 @@ export type RegAllocCounters
 	// and handles everything the corpus produces, so a single merged counter could never tell a reader
 	// that `SplitDriver.repairByEvictingOccupant` has never executed. Split, the zero
 	// is legible: it is the standing evidence that the eviction path is UNEXERCISED by the suite, and the
-	// only thing that will tell a future rung so. Do not merge them back to tidy the report.
+	// only thing that will tell a future reader so. Do not merge them back to tidy the report.
 	export var repairedByWidening as EventCount
 	export var repairedByEviction as EventCount
 
@@ -530,7 +529,7 @@ export type RegAllocStats
 	// and handles everything the corpus produces, so a single merged counter could never tell a reader
 	// that `SplitDriver.repairByEvictingOccupant` has never executed. Split, the zero
 	// is legible: it is the standing evidence that the eviction path is UNEXERCISED by the suite, and the
-	// only thing that will tell a future rung so. Do not merge them back to tidy the report.
+	// only thing that will tell a future reader so. Do not merge them back to tidy the report.
 	export var repairedByWidening as EventCount
 	export var repairedByEviction as EventCount
 
@@ -624,8 +623,8 @@ end 'RegAllocStats'
 // pool — the compiler needs no reserved scratch (SSA destruction breaks copy cycles with `xchg`,
 // and the IAT call is RIP-relative), so the doc's r10/r11-as-scratch is a FUTURE tuning.
 //
-// WAVE 2 gave the XMM file the same two halves: 6 CALLER-saved {xmm0–5} and 10 CALLEE-saved
-// {xmm6–15}, so a float live across a call has the same kind of home an int has had since M5.6
+// The XMM file has the same two halves: 6 CALLER-saved {xmm0–5} and 10 CALLEE-saved
+// {xmm6–15}, so a float live across a call has the same kind of home an int has
 // instead of no home at all. The XMM half needs no `push` — there is no `push xmm` — so the prologue
 // preserves it in ordinary 8-byte frame SLOTS, exactly as arm64 preserves d8–d15.
 // The pool is a property of the target — arm64 declares its own when its backend lands.
@@ -1012,9 +1011,8 @@ end 'arm64CallerSavedMask'
 //
 // MEASURED: a probe build of the BASE compiler changing only that one
 // expression to a literal reproduces −10,358…−294,501 allocations across the scale ladder with
-// `codeBytes` identical at all six rungs — **99.9% of the whole A/B delta, ~75% of this rung's entire
-// improvement.** The A/B attributes `regalloc:coloring` −10,369…−294,884 against `regalloc:splitting`
-// −2,518…−93,023, so the row the rung first credited to the splitter is three quarters this.
+// `codeBytes` identical at all six rungs. The A/B attributes `regalloc:coloring` −10,369…−294,884 against
+// `regalloc:splitting` −2,518…−93,023, so the saving lands three quarters in the coloring row.
 //
 // ⇒ **DO NOT "SIMPLIFY" THIS BACK TOWARDS `classRegisterMask(…, file: x64RegisterFile())`**, or any
 // form that calls `x64RegisterFile()` per value; the operation COUNT was never the cost, the
@@ -1043,7 +1041,7 @@ function callerSavedMask() returns RegMask
 end 'callerSavedMask'
 
 // The CALLEE-saved registers a function must preserve across its own body — the effective pool for a
-// value live across a call, per file: 5 GPRs (rbx, r12–r15) and, since Wave 2, 10 XMMs (xmm6–15).
+// value live across a call, per file: 5 GPRs (rbx, r12–r15) and 10 XMMs (xmm6–15).
 // The prologue/epilogue pass preserves exactly the ones a function's coloring used — the GPRs with
 // `push`/`pop`, the XMMs in frame SLOTS (x86-64 has no `push xmm`). rsp/rbp are the frame and are
 // never allocatable.

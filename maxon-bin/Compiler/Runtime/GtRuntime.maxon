@@ -4362,7 +4362,7 @@ function buildGtAwait(module StdModule, name ByteArray, throwing bool, arrival G
 	let result = ids.mint()
 	module.appendOp(cur, op: StdOp.loadIndirect(result, addrId: promise, offset: GtOffResult, valueType: StdType.i64))
 
-	// ⭐⭐ **RELEASE THE THREAD'S ARGUMENTS — WITH THE RESULT CONSUMED (A2).** The `+1` on the awaited value has
+	// ⭐⭐ **RELEASE THE THREAD'S ARGUMENTS — WITH THE RESULT CONSUMED.** The `+1` on the awaited value has
 	// just been loaded above and is handed to the awaiting frame, which enrols it and drops it once
 	// (`Parser.emitAwaitOp`); releasing it here as well is a DOUBLE FREE, and `consumedByAwaiter` is what says
 	// so. The ARGUMENTS the spawn took on the thread's behalf are still outstanding and are given back exactly
@@ -4430,7 +4430,7 @@ end 'awaitExitTerminator'
 // **A NULL RELEASER IS THE COMMON CASE AND MUST BE FREE.** A spawn of a callee with no managed argument,
 // result or error writes 0 (`LowerMaxonToStd.emitAsyncSpawn`), and this SKIPS rather than indirect-calling
 // through it — so a scalar-only async program pays one load, one compare and one branch, and emits nothing
-// else that A2 added.
+// else.
 //
 // ⚠ **THE CLEAR IS A BACKSTOP AND NOT THE MECHANISM, AND THE ORDER OF THOSE TWO WORDS MATTERS.** What
 // actually stops a GT being released twice is a COMPILE-TIME fact: `Parser.emitAwaitOp` consumes the

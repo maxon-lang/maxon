@@ -78,7 +78,7 @@
 // re-read by every later consumer that meant something else by it. `Compiler.maxon` sets it beside
 // `debugStream`, at the seam where lowering has finished and nothing has been installed yet.
 //
-// ⚠ **THE ARENA IS ALIGNED TO A COMMIT GRANULE (W215), AND THE ARENA-SIZED ALIGNMENT GO USES IS A DIFFERENT
+// ⚠ **THE ARENA IS ALIGNED TO A COMMIT GRANULE, AND THE ARENA-SIZED ALIGNMENT GO USES IS A DIFFERENT
 // THING THAT IS STILL DELIBERATELY NOT COPIED.** `__slab_arena_new` raises the base `osReservePages` answered
 // to the next `SlabArenaCommitGranuleBytes`, because the OS promises only its own page granularity and
 // x64-linux's is 4 KiB — HALF a chunk, which puts the chunk grid out of phase with the reverse map's page
@@ -192,8 +192,8 @@ type SlabArenaGeometry
 	// The bitmap that describes them, in machine words.
 	export let bitmapWords as ParsedInt
 
-	// ⭐⭐ **THE COMMIT GRANULES IN ONE ARENA — S6's replacement for the WATERMARK, and the reason it had to
-	// go.** A watermark says *"`[0, committedChunks)` is committed"*, which is only expressible while commits
+	// ⭐⭐ **THE COMMIT GRANULES IN ONE ARENA — a bitmap rather than a WATERMARK, and why.**
+	// A watermark says *"`[0, committedChunks)` is committed"*, which is only expressible while commits
 	// go one way. The scavenger decommits a granule wherever its chunks happen to have gone free, so the
 	// committed set stops being a prefix the moment it runs; a bitmap is the honest shape of the same fact,
 	// and it costs 16 words on the reserving lane against the watermark's one.
@@ -290,7 +290,7 @@ let BitmapBitsPerWordMask = BitmapBitsPerWord - 1
 
 // A machine word, for the COMPILE-TIME size arithmetic here — the bitmap's byte count and each reverse-map
 // level's table size. The EMITTED `base + index · 8` is not spelled in this file at all: it is
-// `MmRuntime.emitWordSlotAddr`, exported at S2 precisely so a third copy of that arithmetic did not get
+// `MmRuntime.emitWordSlotAddr`, exported precisely so a third copy of that arithmetic does not get
 // written, and `SlabRuntime`'s `WordBytes` records the same split one layer up. What stays private is the
 // LAYOUT constant, because a shared "8" is not a shared fact — these are strides of tables this file owns.
 let ArenaWordBytes = 8
@@ -311,8 +311,8 @@ let SlabArenaCommitGranuleChunks = SlabArenaCommitGranuleBytes shr SlabPageShift
 // The two shifts the granule is REACHED by — `chunk >> chunksShift` is its granule, `granule << shift` is its
 // byte offset in the arena. A width and the shift that divides by it are ONE fact written twice by necessity,
 // so both are asserted against the widths above (`requireShiftMatchesWidth`) rather than trusted. They exist
-// because S6's commit bitmap and its scavenger index BY GRANULE, where the watermark they replaced only ever
-// compared chunk counts.
+// because the commit bitmap and its scavenger index BY GRANULE, where a watermark would only
+// compare chunk counts.
 let SlabArenaCommitGranuleChunksShift = 3
 let SlabArenaCommitGranuleShift = SlabPageShift + SlabArenaCommitGranuleChunksShift
 
@@ -750,7 +750,7 @@ end 'emitMapSlotAddr'
 // and the consumer cannot disagree about it. This is the one place in this file a zero return is not a
 // sentinel standing in for a failure, and it is spelled out because it reads exactly like one.
 //
-// ⭐ **IT IS THE FIRST QUESTION EVERY FREE ASKS, AND SINCE EC8 `__slab_free` ASKS IT WITHOUT A CALL.** The
+// ⭐ **IT IS THE FIRST QUESTION EVERY FREE ASKS, AND `__slab_free` ASKS IT WITHOUT A CALL.** The
 // walk is four loads and three tests over tables nothing ever overwrites — call-free by construction — so a
 // frame around it was pure overhead on the path of every free in the language. `__slab_free_to_span`'s note
 // makes the same argument for the push that follows it.

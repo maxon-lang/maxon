@@ -1,4 +1,4 @@
-// SYSCALL-STACK torture (W213-C1) — the ONE program in this directory
+// SYSCALL-STACK torture — the ONE program in this directory
 // whose subject is the 64 KB SCRATCH STACK a green thread's kernel calls run on,
 // and the only one that puts more than one M inside the syscall shim at once.
 //
@@ -16,15 +16,15 @@
 // suite makes two green threads on two different Ms call the kernel at the same
 // instant: a spec case is a small deterministic program, and the ones that DO
 // spawn services mostly compute rather than syscall. The suite was green over a
-// shared region for the whole of G1's life and would be green over one again.
+// shared region for the whole life of a per-P layout and would be green over one again.
 //
-// ⭐⭐ WHOSE STACK IT IS, AND WHY THAT HAS MOVED TWICE.
-//   • Before G1: ONE `.data` region, `__gt_system_stack_top`. Safe under the
-//     prose "single-M runs one thing at a time", which multi-M falsified.
-//   • G1: one region PER P. Safe under "an M can only reach its own P".
-//   • W213-C1: one region PER M (`SchedRuntime.MOffSystemStackSP`), because
-//     W213 falsifies G1's sentence in turn — a P taken from an M blocked inside
-//     a kernel call would hand the region to a second M mid-call.
+// ⭐⭐ WHOSE STACK IT IS, AND WHY THE PARTITION IS PER M.
+//   • ONE `.data` region, `__gt_system_stack_top`, is safe only under the
+//     prose "single-M runs one thing at a time", which multi-M falsifies.
+//   • One region PER P is safe only under "an M can only reach its own P", which
+//     is falsified in turn: a P taken from an M blocked inside a kernel call
+//     would hand the region to a second M mid-call.
+//   • One region PER M (`SchedRuntime.MOffSystemStackSP`) is what is built.
 //
 // ⚠⚠ AND THAT IS WHY THE SABOTAGE THAT REDDENS THIS PROGRAM IS *SHARING THE
 // REGION*, NOT "PUTTING IT BACK ON THE P". Until handoff lands, an M holds one P
@@ -33,10 +33,10 @@
 // property both spellings must have and the `.data` global did not: THE REGION
 // IS NOT SHARED BETWEEN Ms. That is what this program measures.
 //
-// MEASURED (W213-C1, this box, 16 processors): with `emitSchedBecomeM` changed to
+// MEASURED (this box, 16 processors): with `emitSchedBecomeM` changed to
 // read one shared 64 KB region allocated once in `__sched_init_procs` — three
 // lines, nothing else touched — this program dies at every MAXON_MAX_PROCS >= 2
-// and is clean at 1. The readings are in the rung's report and in
+// and is clean at 1. The readings are in
 // `pin-matrix.sh`'s header; a gate nobody has watched move is not a gate.
 //
 // ⭐ WHAT THE KERNEL CALLS ARE, AND WHY THESE. The shim's cost and its exposure

@@ -1,17 +1,17 @@
-// SCAVENGE-RACE torture (A3) — the allocator's DECOMMIT running concurrently with the scheduler's
+// SCAVENGE-RACE torture — the allocator's DECOMMIT running concurrently with the scheduler's
 // queue walks, which is the one interaction that can turn a stale read into an access violation.
 //
-// ⭐⭐ WHAT IT GUARDS, AND WHY IT IS A GUARD RATHER THAN A REGRESSION TEST. `S6`'s scavenger
+// ⭐⭐ WHAT IT GUARDS, AND WHY IT IS A GUARD RATHER THAN A REGRESSION TEST. The slab arena's scavenger
 // (`SlabArena.__slab_arena_scavenge` → `osDecommitPages`) drops the physical backing of every commit granule
 // whose chunks are all free, KEEPING the reservation — so an address that was fine a microsecond ago faults
 // rather than answering stale bytes. Any scheduler code that dereferences a green thread it has not claimed
 // is therefore a latent fault the day a concurrent `__Builtins.scavengeMemory()` frees the last chunk in its
 // 64 KiB granule.
 //
-// ⛔ A3 REMOVED THE ONE PLACE THAT DID THAT, AND THIS PROGRAM CANNOT SHOW IT RED — WHICH IS ITSELF THE
-// FINDING, AND IS RECORDED HERE RATHER THAN LEFT AS A GAP IN THE REPORT. The offender was
-// `__sched_sweep_dropped`'s ring PEEK: it loaded `slot[head]`, followed that pointer to read `GtOffTeardown`
-// and `GtOffWaiter`, and only then CAS'd the head. It was deleted, not repaired, because **no producer in
+// ⛔ NO SCHEDULER CODE DEREFERENCES A GREEN THREAD IT HAS NOT CLAIMED, SO THIS PROGRAM CANNOT SHOW THAT HAZARD RED —
+// WHICH IS ITSELF THE FINDING, AND IS RECORDED HERE RATHER THAN LEFT AS A GAP IN THE REPORT. The offender would be
+// `__sched_sweep_dropped`'s ring PEEK, were it present: it would load `slot[head]`, follow that pointer to read
+// `GtOffTeardown` and `GtOffWaiter`, and only then CAS the head. It is absent, not repaired, because **no producer in
 // this tree can put a tombstone in a ring**: `emitGtIsDropped` needs the consumer's teardown ticket, which
 // only an `await` or a `__gt_promise_drop` adds, and both need a **Promise** — while `spawn` yields a
 // `<T>.handle`, an `async` frame is a coroutine on its owner's queue, and a reply cell is swept as a
@@ -101,8 +101,8 @@ function main() returns ExitCode
 	// exit 89 (`RuntimeAbort.slabFreeOfParkedSpan`) at `MAXON_MAX_PROCS=1` and a SEGFAULT (139) at 7 and 12**,
 	// against a clean 42 at every count for the direct push below. It is pre-existing, it is nothing to do
 	// with the scavenger this program is about (it reproduces with every `scavengeMemory()` call removed), and
-	// it is filed rather than fixed here — the drop cascade for a moved handle is the Parser/lowering lane,
-	// `W217`'s neighbourhood. `multicore-stress/service-torture.maxon` uses the direct form too, which is why the pin
+	// it is filed rather than fixed here — the drop cascade for a moved handle is the Parser/lowering lane.
+	// `multicore-stress/service-torture.maxon` uses the direct form too, which is why the pin
 	// matrix has never seen this.
 	var workers = ChurnHandleArray.create()
 

@@ -3,10 +3,9 @@
 # THE STALE-BINARY GATE — does a harness command REFUSE to report on a binary older than its sources?
 #
 # A `spec-test` run on a stale binary reports a verdict about code that is not in the tree. It can be
-# a false RED — measured during rung A1, exactly 4 tests, which is what identified it as staleness —
+# a false RED — measured, exactly 4 tests, which is what identified it as staleness —
 # and it can just as easily be a false GREEN, which is the same lie in the direction nobody checks.
-# The same hazard reaches `scale-test`: a whole ladder read off the previous binary, which is how this
-# rung got filed.
+# The same hazard reaches `scale-test`: a whole ladder read off the previous binary.
 #
 # The window is one keystroke wide. `build; suite` (`;`, not `&&`) runs the suite whatever the build
 # did, and a failed build LEAVES THE OLD BINARY IN PLACE — see `output-lock-gate.sh`, which gates the
@@ -417,8 +416,8 @@ fi
 
 # ---- CHECK 7: scale-test refuses too ----------------------------------------------------------------
 #
-# The incident that filed this rung was a whole scaling LADDER read off the previous binary, not a
-# suite — so the command that produces those numbers has to refuse on the same terms. It is checked
+# A whole scaling LADDER read off the previous binary is the same hazard as a suite read off it,
+# so the command that produces those numbers has to refuse on the same terms. It is checked
 # with the ladder's smallest possible shape because the refusal happens before a single rung is
 # generated; if it ever stops refusing, this check turns into a real (slow) scale run and says so.
 if ! age_forward "$VICTIM"; then
@@ -434,7 +433,7 @@ if [ "$code" = "$STALE_EXIT" ] && grep -q 'STALE' "$WORK/scale.log"; then
 	pass "CHECK 7: scale-test refuses on the same terms (exit $code)"
 else
 	fail "CHECK 7: scale-test refuses on the same terms" \
-	     "exit=$code  <-- a ladder measured on a stale binary is the incident that filed this rung"
+	     "exit=$code  <-- a ladder measured on a stale binary is the hazard this gate exists for"
 fi
 
 printf '\n'

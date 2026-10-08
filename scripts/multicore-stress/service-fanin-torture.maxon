@@ -1,4 +1,4 @@
-// MANY-SENDER torture (SV1 wave 4) — the mailbox's MULTI-PRODUCER side,
+// MANY-SENDER torture — the mailbox's MULTI-PRODUCER side,
 // which nothing else in this directory reaches.
 //
 // ⭐⭐ `service-torture.maxon` IS ONE SENDER AND TWELVE MAILBOXES; THIS IS TWELVE
@@ -10,7 +10,7 @@
 // written for and the only shape that can contend it.
 //
 // ⭐⭐ THE SINK PRINTS, AND THAT IS WHAT MAKES THE READING SOUND WITHOUT REPLIES.
-// SV1 has no reply, so a sender cannot be told anything and `main` cannot learn when
+// A service send has no reply, so a sender cannot be told anything and `main` cannot learn when
 // the work is finished — which rules out `main` reading the counters, because it
 // would read them before the senders had run. The SINK can: its handlers are
 // serialized by its own mailbox, so the message that brings `taken` to
@@ -47,16 +47,12 @@ let senderCount = 12
 // `senderCount * roundsPerSender` payloads from `senderCount` different green
 // threads and drops every one of them on its own.
 //
-// ⭐⭐ **IT IS 4000 AND IT WAS 400, FOR THE REASON `service-torture.maxon`'s OWN
-// `rounds` CARRIES IN FULL (MC1's REVIEW): the run was short enough that
-// `pin-matrix.sh`'s assertion 4 was reading a race rather than a property.** Here
-// the thin column is `steals`, not `workers` — MEASURED at MC1's review, 20 runs of
-// each binary INTERLEAVED at `MAXON_MAX_PROCS=2`, the parent read `steals=1` on 16
-// of 20 and MC1 on 12 of 20, both sitting on a bar of 1. ⚠ **AND THAT MARGIN IS
-// PRE-EXISTING, NOT MC1's** — the parent is the tighter of the two, and this program
-// is untouched by that change; `pin-matrix.sh`'s header records the A/B in full,
-// because a claim about which change moved a margin is exactly the kind that is read
-// off code and never measured.
+// ⭐⭐ **IT IS 4000, FOR THE REASON `service-torture.maxon`'s OWN
+// `rounds` CARRIES IN FULL: at 400 the run is short enough that
+// `pin-matrix.sh`'s assertion 4 reads a race rather than a property.** Here
+// the thin column is `steals`, not `workers`, with a bar of 1; `pin-matrix.sh`'s
+// header records the interleaved A/B readings in full, because a claim about which
+// change moved a margin is exactly the kind that is read off code and never measured.
 //
 // ⛔ **AND BE PRECISE ABOUT WHAT THE TENFOLD BOUGHT HERE, BECAUSE IT IS NOT THE STEAL
 // COUNT: THAT STILL READS 1 AT N=2.** A steal is one `__sched_find_runnable` call

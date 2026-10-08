@@ -16,7 +16,7 @@
 # `2696 passed, 0 failed`: they finished, they were just slow. Raising the deadline does not fix
 # that; it only moves the threshold at which the instrument starts lying, and it lies in the
 # expensive direction — a detector that fires on load makes BOTH arms of an A/B unreadable, and
-# B2's whole acceptance is an A/B.
+# the acceptance test is an A/B.
 #
 # ⭐ SO ASK FOR PROGRESS, NOT FOR PATIENCE. Sample every process's ACCUMULATED CPU TIME, wait, and
 # sample again. A wedged pool is the one shape that cannot fake it: its parent is parked in `kevent`

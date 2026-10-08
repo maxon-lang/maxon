@@ -464,7 +464,7 @@ let Arm64PairImm7Mask = 0x7F
 let Arm64PairScaleBytes = 8
 
 // The STP pre-index / LDP post-index imm7 reaches -512..+504 (scaled by 8). The smaller bound
-// governs both so one threshold decides the compact-vs-split frame form (M1 trap: larger frames use
+// governs both so one threshold decides the compact-vs-split frame form (larger frames use
 // a SUB-sp split).
 let Arm64FramePairIndexMax = 504
 
@@ -918,8 +918,7 @@ export function arm64ImmIsEncodableCmp(imm Imm32) returns bool
 end 'arm64ImmIsEncodableCmp'
 
 // ADD/SUB Rd, Rn, #imm for an immediate that may exceed the 12-bit field: a plain 12-bit form
-// silently truncates any value ≥ 0x1000, corrupting a large stack-slot address or frame size (M1
-// trap). Splits into a high (<<12) and low part; `rd` doubles as the running accumulator, so it is
+// silently truncates any value ≥ 0x1000, corrupting a large stack-slot address or frame size. Splits into a high (<<12) and low part; `rd` doubles as the running accumulator, so it is
 // safe even when `rd == rn`. `opcode` selects ADD (`Arm64OpAddImm`) or SUB (`Arm64OpSubImm`).
 export function arm64EmitAddSubImmWide(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, imm MachineWord)
 	if imm > Arm64AddSubImmWideMax 'tooLarge'
@@ -2292,7 +2291,7 @@ end 'arm64EmitBrk'
 // chunks call the encoder directly, exactly as the panic runtime and the Darwin host surface do.
 
 // `MOV Xd, SP` — and it MUST be the `ADD Xd, SP, #0` alias, never the ORR/XZR MOV: field value 31 is SP in
-// an ADD and XZR in an ORR, so the ORR form would move the ZERO register (the M1 trap `arm64EmitAddFpFromSp`
+// an ADD and XZR in an ORR, so the ORR form would move the ZERO register (the trap `arm64EmitAddFpFromSp`
 // records one screen down, in the direction that matters here as well).
 export function arm64EmitMovFromSp(code ByteArray, dest MachineWord)
 	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: dest, rn: Arm64SpBaseField, imm12: 0, shiftHi: false)
@@ -2916,7 +2915,7 @@ export function patchArm64FuncAdrpRelocs(code ByteArray, funcAdrpRelocs Arm64Fun
 end 'patchArm64FuncAdrpRelocs'
 
 // Patch every `bl` to the 26-bit PC-relative displacement of its named target (the arm64 twin of
-// `resolveCallFixups`). A bare stdlib-qualified/unqualified fallback is not needed this rung —
+// `resolveCallFixups`). A bare stdlib-qualified/unqualified fallback is not needed —
 // scalar-core calls resolve directly by name.
 function arm64ResolveCallFixups(code ByteArray, labelOffsets FuncLabelOffsetMap, callFixups CallFixupArray)
 	for fixup in callFixups 'resolve'

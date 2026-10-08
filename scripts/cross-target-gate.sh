@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# THE CROSS-TARGET GATE — the last thing a rung does before it lands.
+# THE CROSS-TARGET GATE — the last thing a change does before it lands.
 #
-# Step 8's battery proves the rung on ONE target: whichever one this host happens to be. Everything
+# The gate battery proves the change on ONE target: whichever one this host happens to be. Everything
 # else the compiler claims to emit goes untested until somebody, somewhere, eventually runs it. This
 # closes that gap by running every supported target that can be reached from here, and by SAYING SO
 # when one cannot.
 #
-#   target        suite     how it runs                       in the rung gate?
+#   target        suite     how it runs                       in the land gate?
 #   ------        -----     -----------                       -----------------
 #   x64-windows   specs/    natively                          YES (this IS the host)
 #   x64-linux     specs/    WSL2 (static ELF, raw syscalls)   YES, if WSL is installed
@@ -25,12 +25,11 @@
 # ⭐ BEST EFFORT MEANS UNREACHABLE IS NOT FAILURE — AND IS NOT SUCCESS EITHER.
 #
 # A target whose runner is absent is SKIPPED and the gate still passes: a laptop asleep in another
-# room must not block a rung. But a skip is REPORTED, never silently folded into the green, because
+# room must not block a landing. But a skip is REPORTED, never silently folded into the green, because
 # the one thing worse than not testing arm64 is believing you did. The matrix prints one row per
 # target with its verdict, and the summary counts skips out loud.
 #
-# A target that RUNS and FAILS is a red gate — that is a rung-halting condition (see the rung
-# skill's HALT list), and no flag softens it.
+# A target that RUNS and FAILS is a red gate — a landing-halting condition — and no flag softens it.
 #
 # ⚖ A RED LANE IS A REAL FAILURE AND CANNOT BE ANYTHING ELSE.
 #
@@ -39,19 +38,19 @@
 # no longer renders. A FAIL row below therefore means a program did the wrong thing or the emitted code
 # moved. Read the log.
 #
-# ⭐ THE RUNG PATH DOES NOT REDO WHAT STEP 8 JUST DID (2026-07-27).
+# ⭐ THE LANDING PATH DOES NOT REDO WHAT THE GATE BATTERY JUST DID.
 #
-# Run straight, this script rebuilds the compiler and runs the HOST suite — both of which the rung's
-# own step-8 battery performed moments earlier, on the identical tree. Against a whole local matrix
+# Run straight, this script rebuilds the compiler and runs the HOST suite — both of which the landing's
+# own gate battery performs moments earlier, on the identical tree. Against a whole local matrix
 # of ~2.5 min, that is most of the gate spent re-deriving a known answer.
 #
-# So the rung path passes `--skip-build --skip-host`, and NEITHER weakens the matrix:
+# So the landing path passes `--skip-build --skip-host`, and NEITHER weakens the matrix:
 #
 #   --skip-build  refuses outright if a SOURCE IS NEWER than the binary it would have built. It does
 #                 not trust you; it checks. (Measured 2026-07-27: a stale `maxon.exe` on a clean
 #                 tree read 71 FAILED, and a 13 s rebuild read 1922/0. A flag that merely believed
 #                 the caller would have shipped that.)
-#   --skip-host   prints the host row as PRIOR, not SKIP — the lane WAS verified, by step 8, on this
+#   --skip-host   prints the host row as PRIOR, not SKIP — the lane WAS verified, by the gate battery, on this
 #                 tree. SKIP means unverified and inflates the skip count; PRIOR means covered
 #                 elsewhere and names by what. Conflating them would be this repo's own signature
 #                 bug: one fact, two spellings.
@@ -69,7 +68,7 @@ cd "$REPO_ROOT" || exit 2
 
 FILTER=""
 # Both OFF by default: run straight, this script is self-contained and assumes nothing was built or
-# run before it. The rung path turns them on because step 8 did both. See the header.
+# run before it. The landing path turns them on because the gate battery did both. See the header.
 SKIP_BUILD=0
 SKIP_HOST=0
 
@@ -204,8 +203,8 @@ HOST_TARGET="x64-windows"
 
 if [ "$SKIP_HOST" = 1 ]; then
 	banner "$HOST_TARGET (native) — PRIOR (--skip-host)"
-	echo "The host lane is the one target the rung's step-8 battery already proved, on this tree."
-	prior_row "$HOST_TARGET" "suite — covered by the step-8 battery"
+	echo "The host lane is the one target the gate battery already proved, on this tree."
+	prior_row "$HOST_TARGET" "suite — covered by the gate battery"
 else
 	banner "$HOST_TARGET (native) — suite"
 	if "$MAXON" spec-test ${SPEC_FILTER[@]+"${SPEC_FILTER[@]}"} && ir_suite; then
@@ -271,7 +270,7 @@ done
 
 echo
 if [ "$FAILED" -gt 0 ]; then
-	echo "RED — $FAILED target(s) ran and FAILED. This is a rung-halting gate: stop and report."
+	echo "RED — $FAILED target(s) ran and FAILED. This is a landing-halting gate: stop and report."
 	echo "Every failure counted here is a REAL one — a wrong exit code, wrong stdout, a failed compile, a"
 	echo "leak or a Target IR pin that no longer matches: read the suite output above and find out what"
 	echo "the program did wrong or what the emitted code now says."
@@ -280,17 +279,17 @@ fi
 
 if [ "$SKIPPED" -gt 0 ]; then
 	# Stated as a limit on COVERAGE, not as a warning to be scrolled past. The gate passed on what it
-	# ran, and the rung's report should carry which targets went unverified. A skip is a skip whether
+	# ran, and the landing's report should carry which targets went unverified. A skip is a skip whether
 	# the runner was absent or the lane was deliberately not requested — neither one is evidence.
 	echo "GREEN, with $SKIPPED target(s) SKIPPED — not run, so UNVERIFIED, not proven good."
-	echo "Say which in the rung report; do not describe this run as full cross-target coverage."
+	echo "Say which in the landing report; do not describe this run as full cross-target coverage."
 	exit 0
 fi
 
 if [ "$PRIOR" -gt 0 ]; then
 	# Distinct from the SKIP wording above on purpose: these lanes ARE verified, just not by this
 	# run. Saying "every supported target tested" would be true of the tree and false of the run.
-	echo "GREEN — every supported target covered ($PRIOR lane(s) PRIOR: proved by the step-8 battery on this tree)."
+	echo "GREEN — every supported target covered ($PRIOR lane(s) PRIOR: proved by the gate battery on this tree)."
 	exit 0
 fi
 

@@ -1,15 +1,15 @@
-// SERVICE torture (SV1) — the first program in this directory whose
+// SERVICE torture — the first program in this directory whose
 // concurrency is REAL, and the one that flips `pin-matrix.sh`'s assertion 4.
 //
 // ⭐⭐ EVERY OTHER PROGRAM HERE IS A COROUTINE PROGRAM, AND `pin-matrix.sh` ASSERTS
-// `workers=1 steals=0` OF THEM. That assertion is the EC10 pin: an `async` frame
+// `workers=1 steals=0` OF THEM. That assertion pins the coroutine model: an `async` frame
 // is a coroutine of the green thread that called it, published only to that
 // thread's own queue, so no worker M is ever created. A `spawn` is the opposite
 // by construction — `__svc_spawn` calls `__gt_spawn_green` and publishes to a P
 // RING (`GtRuntime.GtReadyName`), which is exactly what `__sched_wake_or_spawn`
 // starts a worker M for. So this program's row reads `workers >= 2` and
-// `steals > 0` at N >= 2 and `1/0` at N=1, and the script's header predicted
-// exactly that for the rung that landed `spawn`.
+// `steals > 0` at N >= 2 and `1/0` at N=1, and the script's header predicts
+// exactly that.
 //
 // ⭐⭐ IT IS ALSO THE CO-OWN SABOTAGE'S SUBJECT, AND THE SHAPE IS CHOSEN FOR THAT.
 // Every send hands over a FRESHLY BUILT `String`, which is legal under both
@@ -20,18 +20,18 @@
 //   • CO-OWN (`Parser.moveIntoGreenThread` routed to `transferConsumedArg`, which
 //     is `async`'s door and the 2026-08-12 ruling for it): the sender keeps its
 //     own reference and drops it at statement end while the service drops the
-//     one it was handed. TWO green threads step ONE refcount word, and since
-//     EC10 that step is a plain load/add/store (`MmRuntime.emitAdjustRefcount`).
+//     one it was handed. TWO green threads step ONE refcount word, and
+//     that step is a plain load/add/store (`MmRuntime.emitAdjustRefcount`).
 //
 // ⇒ the discriminator is the EXIT CODE, exactly as it is for `refcount-torture`:
 // a lost decref is 101 at the leak gate and a lost incref frees the record under
 // a live holder, which is 139. `aggregate=` is deceptive here for that program's
 // stated reason — it is computed by the SENDER and is byte-identical either way.
 //
-// ⚠ THE AGGREGATE IS THE SENDER'S BECAUSE SV1 HAS NO REPLY. A fire-and-forget
+// ⚠ THE AGGREGATE IS THE SENDER'S BECAUSE A SERVICE SEND HAS NO REPLY. A fire-and-forget
 // send delivers no value, so there is nothing to await and nothing a receiver
 // could hand back; what the services do is observable only through the leak gate
-// and the exit code. That is the whole of SV1's observability and it is enough
+// and the exit code. That is the whole of a service's observability and it is enough
 // for this program's two subjects.
 
 typealias Integer = int(i64.min to i64.max)
@@ -44,9 +44,9 @@ let sinkCount = 12
 // Messages per sink. Each is one fresh `String` moved across, so a round is
 // `sinkCount` allocations handed to `sinkCount` different green threads.
 //
-// ⭐⭐ **IT IS 4000 AND IT WAS 400, AND THE TENFOLD IS A GATE FIX, NOT A BIGGER
-// NUMBER FOR ITS OWN SAKE (MC1's REVIEW).** `pin-matrix.sh`'s assertion 4 asks
-// whether a SPAWNED green thread reached a worker M, and at 400 the answer was a
+// ⭐⭐ **IT IS 4000, AND THE LENGTH IS A GATE FIX, NOT A BIGGER
+// NUMBER FOR ITS OWN SAKE.** `pin-matrix.sh`'s assertion 4 asks
+// whether a SPAWNED green thread reached a worker M, and at 400 the answer is a
 // coin flip on a busy box: `main` sends all 4,800 messages and reads
 // `schedMaxActiveWorkers()` in about 40 ms, which is a race against the OS thread
 // `__sched_wake_or_spawn` created ever executing its first instruction. It reads
@@ -55,8 +55,8 @@ let sinkCount = 12
 //
 // ⛔ **THE BAR IS NOT WHAT MOVED, AND MUST NOT BE.** "A spawned green thread
 // reached a worker M at least once" is the whole content of the row; a program too
-// short to give it a chance is the thing that was wrong. MEASURED at MC1's review,
-// same box, `MAXON_MAX_PROCS=2`, 40 consecutive runs at each length: `rounds = 1`
+// short to give it a chance is the thing that is wrong. MEASURED
+// on one box, `MAXON_MAX_PROCS=2`, 40 consecutive runs at each length: `rounds = 1`
 // (a ~1 ms run) reads below the bar **37 of 40**. That is the lever seen moving —
 // the failure is a function of RUN LENGTH — and it is the whole of the evidence for
 // this constant, which is honest about what it is: TEN TIMES the margin against a

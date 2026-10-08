@@ -39,7 +39,7 @@
 #   reader's own critical path by construction and completing is not.
 #
 # ⭐⭐ EVERY FIGURE ABOVE WAS TAKEN ON arm64/kqueue, AND ONE OF THEM DOES NOT CARRY TO x64-WINDOWS.
-# Measured 2026-08-01 (B3, the first run of this driver on Windows), 4x400 lines, ~6.5 s baseline:
+# Measured 2026-08-01 on Windows, 4x400 lines, ~6.5 s baseline:
 #   CLAIM=1000 -> +8 s. The completer knob costs two sleeps per traversal, so that is ~4 traversals
 #     per run landing where a reader waits. ⚠ COMPARE THAT AGAINST arm64's CRITICAL-PATH figure —
 #     "about four or five traversals per run" from its own CLAIM=1000 -> +8.5 s — and NOT against
@@ -65,7 +65,7 @@
 #
 #   MAXON_GT_PARK_DELAY_MS   widens the PARKER's window: between its last self-detect and the
 #                            commit CAS. This is the window the old two-word protocol lost a
-#                            wakeup in, and the one B2's acceptance A/Bs.
+#                            wakeup in, and the one an acceptance A/B exercises.
 #   MAXON_GT_CLAIM_DELAY_MS  widens the COMPLETER's window: the interval in which a completer OWNS
 #                            the park word and has not yet released it. It fires at BOTH ENDS of
 #                            that interval, and the two ends falsify different things:
@@ -127,7 +127,7 @@ if [ -z "$timeoutBin" ]; then
 	exit 2
 fi
 
-# ⚠ BUILT BY THE BOOTSTRAP, NOT BY the compiler, AND THAT IS NOT AN ACCIDENT: The compiler cannot lower the P1.5
+# ⚠ BUILT BY THE BOOTSTRAP, NOT BY the compiler, AND THAT IS NOT AN ACCIDENT: The compiler cannot lower the
 # IOCP ops on arm64, so the async runtime under test has to be the bootstrap's — which is also
 # where the park protocol lives.
 if ! "$repoRoot/maxon-bin/.maxon/maxon" build "$driverDir" > "$outDir/build.log" 2>&1; then

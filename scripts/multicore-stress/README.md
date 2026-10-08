@@ -227,7 +227,7 @@ asserts it across processor counts.
   path that main's own spawns take. Fix: reload `gt` from its stack slot before the enqueue, matching
   what the ARM64 emitter already did. After the fix, 340+ high-concurrency runs are clean.
 
-### ⭐⭐ W219's READINGS — THE ONE COPY, AND EVERYTHING ELSE CITES IT
+### ⭐⭐ THE AWAIT-ANY WAKE READINGS — THE ONE COPY, AND EVERYTHING ELSE CITES IT
 
 ⛔ **THIS SECTION EXISTS BECAUSE THE FIRST CUT HAD FIVE COPIES AND TWO OF THEM DISAGREED** — one
 comment said the deadline was 25 ms and another said 80, both citing this program, whose `slowSleepMs`
@@ -236,7 +236,7 @@ comments now say *"`multicore-stress/README.md` owns the measurement"* and stop.
 
 All rows `MAXON_MAX_PROCS=16` unless stated, on the 16-processor box:
 
-| what | before W219 | after |
+| what | before the interruptible waits | after |
 |---|---|---|
 | `awaitany-index-torture` (`slowSleepMs = 25`), 12 runs | **10 red** — 6 the wrong index, 4 late at 15-32 ms | — |
 | the same, 180 runs across procs 1 / 4 / 16 | — | **180 clean, worst latency 0 ms** |

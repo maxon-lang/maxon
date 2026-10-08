@@ -4193,10 +4193,10 @@ end 'cacheEnumTablesAgreeInCompilerProject'
 //
 // ⚠ **THESE FIVE LITERALS ARE A SECOND SPELLING OF `TokenKind`'s, AND THAT IS A MEASURED CHOICE, not
 // an oversight.** `TokenKind.type.rawValue` and friends are where the language defines the words, and
-// sourcing them from there was tried: it COMPILES and it costs **+26,503 code bytes** in the
+// sourcing them from there COMPILES and costs **+26,503 code bytes** in the
 // compiler (6,934,377 -> 6,960,880), because a string-backed enum's `rawValue` does not fold to its
-// literal at a `gives` arm — it is a real accessor, not a constant. A rung whose whole claim is
-// byte-neutral codegen does not spend 26 KB to delete five words. What holds the copies in step
+// literal at a `gives` arm — it is a real accessor, not a constant. 26 KB is too much to spend on
+// deleting five words. What holds the copies in step
 // instead is the SUITE: `specs/type-name-collision.md` pins `type`, `typealias`, `interface` and
 // `union` in `maxoncstderr` blocks, and `EnumLayout.kindWord` — its only other reader — is too,
 // for `enum` and `union` across `specs/enum-match-exhaustive.md`. Rename a keyword: those fail.
@@ -4821,8 +4821,8 @@ end 'claimReachesEveryReader'
 // that must be checked (an `as`-cast operand, a ranged `return`, a struct-literal field, a field
 // store, a field's declared default, an array element, a call argument) is found by the parser at
 // PARSE time, not by any later structural walk. A dedicated `MaxonOp` would ALSO force a new arm
-// into every exhaustive `MaxonOp` match — including the escape-analysis functions the closures/async
-// rung owns and is actively editing — so the site is recorded HERE instead, keyed by the enclosing
+// into every exhaustive `MaxonOp` match — including the escape-analysis functions
+// — so the site is recorded HERE instead, keyed by the enclosing
 // function's (unique) name, and resolved by the Std-tier `InsertRangeChecks` pass.
 //
 // ⭐ **THE SIDE TABLE IS ALSO WHAT MAKES THE ERASURE SURVIVABLE, AND THAT IS THE WHOLE DESIGN.**
@@ -6529,14 +6529,14 @@ export typealias CaseIndex = int(0 to 65535) implements ElementIndex
 //   • **NO FIELD IS NARROW HERE — not `bool`, not `ExitCode`, not a ranged alias.** Every one of them gets
 //     the same 8 bytes, for the paragraph above. Narrowing an enum field ALONE would make it the only
 //     narrow field in the language, which is an inconsistency wearing a spec's clothes; narrowing all of
-//     them is a layout change to every struct in the corpus and is not one enum's rung.
+//     them is a layout change to every struct in the corpus and is not one enum's to make.
 //   • **NO TARGET CAN LOAD OR STORE ONE.** `Targets/Shared/StdLoweringShared.accessWidthFor` PANICS for
 //     `i8` through `i32`, and `X64AccessWidth` has exactly two members (`byte`, `word64`); arm64 has
 //     `ldrb`/`ldr` and wasm gates `i8`. So this is three new access widths in three backends —
 //     and the array half needed NONE of that, because the element load is byte-granular and strides the
 //     record at run time (`ManagedMemoryRuntime.emitLoadElemAt`). A field read has no such indirection.
 //
-// ⇒ it is a CROSS-TARGET CODEGEN rung with a cross-target gate, and two of its three lanes cannot be
+// ⇒ it is a CROSS-TARGET CODEGEN change with a cross-target gate, and two of its three lanes cannot be
 // executed on the host that would write it (arm64 needs the Mac, wasm needs the vendored wasmtime sweep).
 // The spec's own sentence is the record of what is owed; it is deliberately filed nowhere else.
 let FieldSlotBytes = 8 as ByteOffset
@@ -6652,7 +6652,7 @@ export union FieldDefault
 	// declaration's own fact and therefore rides the layout's content hash beside the pair.
 	literal(payload ParsedInt, tag ValueTypeTag, writtenNegative bool)
 
-	// ⭐⭐ **ANY OTHER DEFAULT IS A SYNTHESIZED NULLARY FUNCTION, AND THIS IS ITS NAME (S2f).**
+	// ⭐⭐ **ANY OTHER DEFAULT IS A SYNTHESIZED NULLARY FUNCTION, AND THIS IS ITS NAME.**
 	// `export var items as IntArray = IntArray.create()` declares a second function,
 	// `__fieldDefault#Bag#items`, whose whole body is `return IntArray.create()`; a `Self{…}` that omits
 	// the field emits an ordinary call to it and stores the result. That is the SAME mechanism a
@@ -8045,7 +8045,7 @@ export enum EnumBackingFieldDomain
 	// read must keep DESCENDING through (`op.rawValue.meta.latency` — `Parser.resolveEnumBackingLeaf`) and
 	// the one the door recurses into (`Parser.checkEnumBackingGroup`). It reaches a leaf, or it is refused.
 	//
-	// ⚠ It is NOT `unsupported`, and the difference is exactly the one this rung exists for: `unsupported`
+	// ⚠ It is NOT `unsupported`, and the difference is exactly the one this case exists for: `unsupported`
 	// says "no constant can stand for this", while a nested record's SCALAR LEAVES each can.
 	nestedRecord
 
@@ -8395,8 +8395,7 @@ end 'builtinErrorConformance'
 // its raw value; a FLOAT-backed case's tag is its IEEE-754 BIT PATTERN — the same representation
 // `FieldDefault.literal` stores a float default as. An enum value is therefore always an i64 (the
 // tag, or the float bits), living in a GENERAL-PURPOSE register and matched by an i64 compare, so a
-// `match` needs no float register class and no second dispatch path. (`.rawValue` — the accessor that
-// NAMES the decoded value — is a later rung.)
+// `match` needs no float register class and no second dispatch path.
 //
 // ⚠⚠ **BUT A SITE THAT CONSUMES THE VALUE AS A *NUMBER* MUST DECODE IT, AND THE TAG COLUMN CANNOT TELL
 // IT TO.** The uniform i64 is a representation decision, not a claim that a float-backed enum IS an
@@ -9216,10 +9215,9 @@ export type EnumLayout
 	// declaration index and the value itself rides `caseRawValues` (the declared text, or the function's
 	// name).
 	//
-	// ⛔ **EXHAUSTIVE ON PURPOSE, exactly as `enumBackingDiscriminator` is and for the identical reason.** It
-	// replaced an `if backing == string` written out at BOTH readers, each falling through silently to the
-	// tag path — and `Parser.readEnumIntRawValue`'s own message still promises a struct backing "arrives with
-	// a later rung". Such a backing added to an `if` takes the tag compare at both sites and produces a WRONG
+	// ⛔ **EXHAUSTIVE ON PURPOSE, exactly as `enumBackingDiscriminator` is and for the identical reason.** An
+	// `if backing == string` written out at BOTH readers would fall through silently to the tag path, and a
+	// backing added to such an `if` takes the tag compare at both sites and produces a WRONG
 	// ANSWER, not a compile error: two distinct struct raw values reading as a duplicate, and two distinct
 	// enums folding to one hash. Written as a `match`, it cannot be declared without being classified here.
 	// (The FUNCTION backing is exactly the case this argument predicted: two cases naming two different
@@ -9805,8 +9803,8 @@ end 'DeclaredBuiltinErrorEnum'
 // ⭐ **THE ONE DOOR TO A BUILTIN ERROR ENUM'S *DECLARED* LAYOUT** — `stdlib/Builtins.maxon`'s, out
 // of the authority registry `commitEnumTypes` fills.
 //
-// ⚠ **ITS ABSENCE IS A DIAGNOSTIC, NOT A PANIC AND NOT A SILENTLY-EMPTY ENUM** — the coupling this rung's
-// ruling deliberately buys is that the builtin error families now depend on a stdlib module being LOADED.
+// ⚠ **ITS ABSENCE IS A DIAGNOSTIC, NOT A PANIC AND NOT A SILENTLY-EMPTY ENUM** — the coupling this design
+// deliberately buys is that the builtin error families depend on a stdlib module being LOADED.
 // ⛔ **AND NO EARLIER, MORE PRECISE GUARD STANDS IN FRONT OF IT.** The loader
 // enumerates `stdlib/` and simply does not find a file that is not there, so a module DELETED from the
 // checkout arrives here as this diagnostic and nowhere sooner. What reaches this arm is therefore
@@ -9965,9 +9963,9 @@ export function declarationContestsACompilerOwnedName(name ByteArray, declaredBy
 	return not typeMeaningsAgree(compilerOwnedTypeMeaning(name), declared: declares)
 end 'declarationContestsACompilerOwnedName'
 
-// --- Project: the compiler-wide shared state (Chunk C growth) ---
+// --- Project: the compiler-wide shared state ---
 //
-// The parse-staging design (PLAN.md) keeps the parser OFF this struct — a file parses into a
+// The parse-staging design keeps the parser OFF this struct — a file parses into a
 // `FileParseArtifact` (see ParseStaging.maxon) and `mergeArtifact` is the ONLY writer of the
 // derived registries below (`funcReturnTypes`, `typeNames`), so per-file parse stays a pure
 // function and the registries are rebuilt deterministically from artifacts on every
@@ -10211,8 +10209,8 @@ export type FuncSignature
 	// reason), and every signature in a generics-free program would mint one just to read "none".
 	export var returnExistentialSites as GenericInstanceIdArray
 
-	// ⭐⭐ **THE CONDITIONAL TYPE-EXTENSION CLAUSE OF THE DECLARATION THAT CLAIMED *THIS REGISTRATION NAME*
-	// (ARR3b)** — the extra `where` constraints on top of the enclosing type's own, and so the second half of
+	// ⭐⭐ **THE CONDITIONAL TYPE-EXTENSION CLAUSE OF THE DECLARATION THAT CLAIMED *THIS REGISTRATION NAME***
+	// — the extra `where` constraints on top of the enclosing type's own, and so the second half of
 	// the witness-slot count this function's ABI reserves. EMPTY for everything else, which is every function
 	// in a program that declares no conditional type extension.
 	//
@@ -10350,7 +10348,7 @@ export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 // `funcSignatures` holds a later overload under is not. This map is what turns one into the other,
 // and `SemanticCheck.resolveOverloadedCalls` is its only reader.
 //
-// ⚠ **A CONTESTED EXTENSION METHOD PUTS NO MEMBER AT ALL UNDER THE BARE NAME (X-contains)** — every
+// ⚠ **A CONTESTED EXTENSION METHOD PUTS NO MEMBER AT ALL UNDER THE BARE NAME** — every
 // declaration of a `<Conformer>.<method>` that two files' extensions declare is registered under its
 // parameter-type suffix. The bare name is still the KEY here and still the callee a call op carries; it is
 // simply not one of the values. See `Parser.overloadRegistrationNameFor`.
@@ -10437,7 +10435,7 @@ end 'cacheReadOverloadSetTableEntries'
 
 export let noOverloadSets = OverloadSetTable.unwritten
 
-// ⭐⭐ **WHICH MEMBER SATISFIES EACH WITNESS-TABLE SLOT — THE CONFORMANCE DECISION, WRITTEN DOWN ONCE (R10).**
+// ⭐⭐ **WHICH MEMBER SATISFIES EACH WITNESS-TABLE SLOT — THE CONFORMANCE DECISION, WRITTEN DOWN ONCE.**
 // `witnessSlotImplKey(<conformer>, <interface>, <method>)` ⇒ the REGISTRATION name of the member
 // `ConformanceCheck` accepted for that requirement. `LowerMaxonToStd.ensureWitnessTable` stamps the slot's
 // `funcAbs64InRdata` relocation from this, instead of re-joining `<Type>.<method>` for itself.
@@ -10755,7 +10753,7 @@ end 'isParamDefaultHelperName'
 // wanted a `String` take `String.from(prefix)` at the panic instead, where the cost is a crash away.
 let ParamDefaultHelperPrefix = b"__paramDefault"
 
-// ⭐ **THE NAME OF THE SYNTHESIZED NULLARY FUNCTION THAT PRODUCES FIELD `fieldName`'s DEFAULT VALUE** (S2f)
+// ⭐ **THE NAME OF THE SYNTHESIZED NULLARY FUNCTION THAT PRODUCES FIELD `fieldName`'s DEFAULT VALUE**
 // — `__fieldDefault#Bag#items`. See `FieldDefault.helper` for what the mechanism is; this is only where
 // its name is spelled, and it is spelled HERE, beside the parameter twin, so the `#` join keeps its one
 // speller.
@@ -10793,15 +10791,15 @@ let FieldDefaultHelperPrefix = b"__fieldDefault"
 
 // ⭐ **THE INVERSE OF THE PARAMETER MINT: WHICH CALL DID THE AUTHOR ACTUALLY WRITE?** A helper call is a
 // call the author wrote NO part of — they wrote `greet()`, and the compiler supplied the argument — so a
-// diagnostic that quoted `__paramDefault#greet#0` would name a symbol absent from the program, which is the
-// defect class D11c is on the board for. Every consumer asks THIS rather than decoding the name itself
+// diagnostic that quoted `__paramDefault#greet#0` would name a symbol absent from the program.
+// Every consumer asks THIS rather than decoding the name itself
 // (`SemanticCheck.callDiagnosticNoun`), and it lives beside the join so the two cannot drift —
 // `primitiveStaticSourceSpelling`'s arrangement exactly, one mint over.
 export function paramDefaultCalleeSpelling(helperName ByteArray) returns ByteArray
 	return splitMintedHelperName(helperName, prefix: ParamDefaultHelperPrefix, mint: "CalleeMint.paramDefaultHelper").head
 end 'paramDefaultCalleeSpelling'
 
-// ⭐ **AND THE INVERSE OF THE FIELD MINT (S2f)** — but the author wrote no CALL here at all: they wrote a
+// ⭐ **AND THE INVERSE OF THE FIELD MINT** — but the author wrote no CALL here at all: they wrote a
 // `Self{…}` that omitted a field, and the compiler supplied its default. So the nearest thing to what they
 // wrote is the FIELD, named the way every other diagnostic in the compiler names a type's member. It joins
 // through `qualifiedMethodName` rather than re-spelling the `.`, for the reason the mint joins through
@@ -11639,7 +11637,7 @@ export type Project
 	// program declares one name twice with different signatures.
 	export var overloadSets as OverloadSetMap
 
-	// ⭐ Which member `checkConformance` accepted for each witness-table slot (R10) — see WitnessSlotImplMap
+	// ⭐ Which member `checkConformance` accepted for each witness-table slot — see WitnessSlotImplMap
 	// for why the lowering reads this instead of re-deriving the impl symbol. Empty for every program that
 	// declares no conformance.
 	export var witnessSlotImpls as WitnessSlotImplMap

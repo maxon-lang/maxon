@@ -1,6 +1,6 @@
 // CascadeNeeds — the ONE worklist engine behind EVERY per-type cascade closure.
 //
-// ⭐ **THREE CLOSURES, ONE MECHANISM (P1.7 Workstream O).** A synthesized per-type cascade calls other
+// ⭐ **THREE CLOSURES, ONE MECHANISM.** A synthesized per-type cascade calls other
 // synthesized per-type cascades from inside a body the Maxon-module scan cannot see: a
 // `__destruct_<Outer>` calls its managed field's `__destruct_<Inner>` (`MmRuntime.closeDestructorNeeds`),
 // the CLONE dual `__clone_<Outer>` calls that field's `__clone_<Inner>`, and the SOLENESS walk
@@ -39,15 +39,15 @@ export typealias StructRosterEntryArray = Array with StructRosterEntry
 // One node of the cascade graph — a type whose synthesized cascade body may call other cascades. The
 // LAYOUT travels with the node rather than its name, and a struct layout with the interner its field-type
 // ids index (`StructRosterEntry`), so a driver never re-fetches it: a layout read against the wrong
-// interner misresolves its field-type ids (the OPEN #56 mismatch `managedStructFieldDropCallee` exists to
+// interner misresolves its field-type ids (the mismatch `managedStructFieldDropCallee` exists to
 // prevent). Registered from one table, expanded from the same object.
 export union CascadeNode
 	structLayout(entry StructRosterEntry)
 	declaredUnion(layout EnumLayout)
 
-	// A monomorphized generic instance (`Box with String`). Registered by BOTH drivers since W162: an
+	// A monomorphized generic instance (`Box with String`). Registered by BOTH drivers: an
 	// instance has a `__clone_<mangled>` beside its `__destruct_<mangled>`, so the two closures walk one
-	// node space. (It was destructor-side only while a non-`Array` instance had no per-instance cloner.)
+	// node space.
 	genericInstance(id GenericInstanceId)
 
 	// ⭐ **THE TWO DICTIONARY NODES, LAST AND ADJACENT ON PURPOSE.** Each is a SECOND node over a layout or an
@@ -57,11 +57,11 @@ export union CascadeNode
 	// so the CLONE closure, which has nothing to expand through either, declines them in one arm
 	// (`MmRuntime.noteCascadeUsage`), which names them both.
 	//
-	// A declared record's (`MmRuntime.dictionaryDestructorSymbol`, W183) — a TUPLE of the enclosing generic's
+	// A declared record's (`MmRuntime.dictionaryDestructorSymbol`) — a TUPLE of the enclosing generic's
 	// own parameters is a `structRef` and reaches none of the instance family.
 	structLayoutDictionary(entry StructRosterEntry)
 
-	// A generic instance's DECLARATION VIEW (BATCH41) — a nested declaration-view field names its DICTIONARY
+	// A generic instance's DECLARATION VIEW — a nested declaration-view field names its DICTIONARY
 	// destructor rather than its plain one, which is the second way this classification differs.
 	genericInstanceDictionary(id GenericInstanceId)
 end 'CascadeNode'

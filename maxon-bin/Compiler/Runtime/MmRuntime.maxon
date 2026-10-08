@@ -707,7 +707,7 @@ end 'ValueMinter'
 // consumers are two files apart.
 //
 // ⚠ `__mm_retain` IS CONDITIONAL for the same reason, under its OWN bit. Its one consumer is the parser
-// co-owning a borrowed managed-aggregate parameter into a `var` (`var q = p`, OPEN #40) — a `call
+// co-owning a borrowed managed-aggregate parameter into a `var` (`var q = p`) — a `call
 // __mm_retain` `scanRuntimeUsage` sees directly (`usesRetain`). It is NOT folded under `usesIncref`
 // despite both being increfs: the two functions have independent callers (an array/`try` program
 // references `__mm_incref` but never `__mm_retain`, and vice versa), so folding either bit into the
@@ -840,7 +840,7 @@ export function fourI64Params() returns StdTypeArray
 	return types
 end 'fourI64Params'
 
-// Five i64 parameters — the rung below `sixI64Params`, and the shape of the debug host's five-word entry
+// Five i64 parameters — one parameter fewer than `sixI64Params`, and the shape of the debug host's five-word entry
 // points (`DebugHostRuntime`).
 export function fiveI64Params() returns StdTypeArray
 	var types = fourI64Params()
@@ -1217,7 +1217,7 @@ export let AsciiNineDigit = 0x39 as ParsedInt
 // header, whose layout is computed from this number).
 //
 // ⭐ **IT IS THE MAXIMUM OVER THE TARGETS THIS COMPILER SERVES, NOT A PER-TARGET ANSWER, AND THAT IS
-// DELIBERATE (MAC3).** A Win64 `CRITICAL_SECTION` is 40 bytes; a Darwin `pthread_mutex_t` is 64 (MEASURED on
+// DELIBERATE.** A Win64 `CRITICAL_SECTION` is 40 bytes; a Darwin `pthread_mutex_t` is 64 (MEASURED on
 // this host). Making the number target-dependent would make `SlabRuntime.SlabStateMcentralOffset` — a
 // top-level `let` deriving a STRUCT LAYOUT from it — target-dependent too, which is a layout fork paid for by
 // every allocation in the program to save 24 bytes on ONE lock per family. So there is one number, sized for
@@ -3230,7 +3230,7 @@ end 'closeDestructorNeeds'
 // project layout and resolved against `project.typeNames`, the ONE interner that layout's ids live in. SOLE
 // home of that pairing: both the needs closure (`addNestedStructDestructors`) and the body synthesis
 // (`synthesizeStructDestructor`) route through here, so neither can drift back to re-fetching a `signatures`
-// layout and misresolving its id against `project.typeNames` — the OPEN #56 mismatch (a panic when the misread
+// layout and misresolving its id against `project.typeNames` — the interner mismatch (a panic when the misread
 // name was no declared type, a WRONG destructor when it happened to be one), now unrepresentable rather than
 // re-asserted by a comment at each site. Precondition: the caller checked `structFieldIsManaged`.
 function managedStructFieldDropCallee(layout StructLayout, index FieldIndex, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
@@ -3519,7 +3519,7 @@ end 'installOneStructRuntimeEntry'
 // ⚠⚠ **THE TWO REGISTRIES HAND OVER LAYOUTS FROM TWO NAME SPACES, AND THE INTERNER TRAVELS WITH THE
 // LAYOUT (`StructRosterEntry`).** A `project.structTypes` layout's field-type ids index `project.typeNames`;
 // an INTERNED TUPLE comes out of the signature index and its ids index that index's table. Resolving both
-// against the project's is OPEN #56 — see `ProgramSignatures.indexTypeNames` for the panic it produced on
+// against the project's misreads them — see `ProgramSignatures.indexTypeNames` for the panic it produced on
 // this compiler's own source, and for why a misread that happens to land on a declared type is worse.
 function structRuntimeRoster(project Project, signatures ProgramSignatures) returns StructRosterEntryArray
 	var roster = StructRosterEntryArray.create()

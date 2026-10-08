@@ -88,7 +88,7 @@ cat <<'HDR'
 //
 // ⚠ **AND THE 12.5% BOUND DOES NOT HOLD AT THE SMALL END — GO'S OWN HEADER SAYS SO.** Class 1 (8
 // bytes) carries a `max waste` of **87.50%**, because a 1-byte object still occupies an 8-byte slot
-// and 8 is the smallest step there is. Any check asserting a flat 12.5% panics on the first rung.
+// and 8 is the smallest step there is. Any check asserting a flat 12.5% panics at class 1.
 //
 // **ONLY TWO ARRAYS ARE COPIED FROM GO; THE REST IS DERIVED AND THE DERIVATION IS VERIFIED.**
 //   • `slabClassSizes` / `slabClassPages` — copied.

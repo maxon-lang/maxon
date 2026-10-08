@@ -96,8 +96,8 @@ end 'hostChunkArgRegisterAt'
 // xmm0 doubles as the float RETURN register
 // (`callResultRegister`), exactly as an integer first-arg register never conflicts with R8: an
 // argument is consumed by the callee before the call, and the return value overwrites xmm0 after it.
-// All six are CALLER-saved (`callerSavedMask`) — the whole caller-saved XMM half since Wave 2 made
-// xmm6–15 callee-saved — so a float live ACROSS a call is confined to xmm6–15 by the liveness census
+// All six are CALLER-saved (`callerSavedMask`) — the whole caller-saved XMM half, xmm6–15 being
+// callee-saved — so a float live ACROSS a call is confined to xmm6–15 by the liveness census
 // with no hand-holding at a call site.
 //
 // EXPORTED for the reason `argRegisterAt` is: `__gt_morestack` (X64GtRuntime) runs from a stack guard
@@ -255,19 +255,17 @@ let CreateNew = 1  // dwCreationDisposition — create, failing on an existing p
 let MoveFileReplaceWriteThrough = 9  // MOVEFILE_REPLACE_EXISTING (1) | MOVEFILE_WRITE_THROUGH (8)
 let FileAttributeNormal = 0x80  // dwFlagsAndAttributes
 
-// --- The socket slice's ws2_32 constants ---
+// --- The ws2_32 constants ---
 //
-// ⚠⚠ **`AfInet` / `SockStream` / `IpprotoTcp` / `SockaddrInBytes` DO NOT LIVE HERE ANY MORE — THEY ARE
-// `ManagedSocketRuntime`'s, AND THIS FILE READS THEM.** The note this paragraph replaces said they lived here
-// "and nowhere else", on the argument that only the x64-windows lowering knows a "create a TCP socket" op
-// means `AF_INET`/`SOCK_STREAM`/`IPPROTO_TCP`. That held only while nothing above the target tier had to
-// WRITE those values into an OS structure. `__ms_tcp_connect` does: it fills a 48-byte `addrinfo` hints
+// ⚠⚠ **`AfInet` / `SockStream` / `IpprotoTcp` / `SockaddrInBytes` ARE `ManagedSocketRuntime`'s, AND THIS FILE
+// READS THEM.** Code above the target tier has to WRITE those values into an OS structure:
+// `__ms_tcp_connect` fills a 48-byte `addrinfo` hints
 // record with the SAME three values `socket()` is called with, and a 16-byte `sockaddr_in` whose length must
 // equal what `connect` is handed below. Resolve for one family and create a socket in another and `connect`
 // fails on a family mismatch, with no diagnostic anywhere — one fact, so one home. See
 // `ManagedSocketRuntime`'s protocol block for the full argument and for what a POSIX or IPv6 lane changes.
 
-// `MAKEWORD(2, 2)` - the Winsock version `WSAStartup` is asked for. This one IS still only this file's:
+// `MAKEWORD(2, 2)` - the Winsock version `WSAStartup` is asked for. This one IS only this file's:
 // nothing above the target tier reads a Winsock version.
 let WinsockVersion22 = 0x0202
 
@@ -2357,7 +2355,7 @@ export type StdToX64Lowering
 	//
 	// A divide TRAPS (#DE) on divide-by-zero, and the SIGNED one also on INT_MIN / -1 overflow —
 	// the unsigned one cannot overflow at all, because a zeroed RDX makes every quotient fit. That
-	// trap is delivered by the runtime fault handler (a Workstream-R / M6 deliverable), NOT by a
+	// trap is delivered by the runtime fault handler, NOT by a
 	// compiler guard — so `x / 0` here is correct-but-raw-#DE for now, by design.
 	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, signedness IntegerSignedness, resultReg X64Register, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rax), srcReg: TargetVReg.virtual(lhs)))
@@ -3286,7 +3284,7 @@ export type StdToX64Lowering
 	// Std-tier CONSTANT query — "is the value behind `operandId` the literal 1?" — and this isel has none:
 	// constants reach it only pre-folded into `binOpImm`/`cmpImm` operand forms, and `atomicRmw` has no
 	// immediate form to fold into. Adding one is a Std-tier `atomicRmwImm` variant plus a `FoldConstOperands`
-	// arm, which is dialect vocabulary this rung deliberately does not add ahead of a measured consumer.
+	// arm, which is dialect vocabulary deliberately not added ahead of a measured consumer.
 	function lowerAtomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode, dstBlock IrBlock)
 		let priorValueIsRead = self.compareFusion.valueIsReadFromRegister(resultId)
 		let insn = match opcode 'op'
@@ -4374,7 +4372,7 @@ export type StdToX64Lowering
 	// user-facing rejection. A copy of the same `match x64OsCallKind` wrapper per op is the duplication this
 	// replaces; the op's name is the only thing that differed between them, so it is the only thing passed in.
 	//
-	// ⚠ **THE SENTENCE NAMES THE OP AND NOT A RUNG, BECAUSE THE CALLERS ARE NOT ONE FAMILY** — the command
+	// ⚠ **THE SENTENCE NAMES THE OP AND NOT A FEATURE, BECAUSE THE CALLERS ARE NOT ONE FAMILY** — the command
 	// line and the two `getaddrinfo` doors have nothing in common but this route. Count them off the call
 	// sites, never off a roster in prose, which has nothing between it and drift.
 	function requireWin64Import(opName String)

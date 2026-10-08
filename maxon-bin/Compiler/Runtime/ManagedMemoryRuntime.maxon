@@ -531,11 +531,10 @@ export let ManagedIncrefName = b"__managed_incref"
 // bounds `errorReturn` of whichever inner slice it calls), `append` is not — exactly the inner operations'
 // shapes.
 //
-// ⚠ **THERE WERE THREE UNTIL ARRH, AND `__managed_clone_opaque` WENT WITH THE ROSTER LINE THAT WAS ITS ONLY
-// CALLER.** `Array.clone` is `stdlib/Array.maxon:140` now and its body is `managed.slice(0, len)`, so an
+// ⚠ **THERE IS NO `__managed_clone_opaque`.** `Array.clone` is `stdlib/Array.maxon:140` and its body is `managed.slice(0, len)`, so an
 // opaque-element clone reaches the descriptor through `__managed_slice_opaque` like every other corpus copy —
-// and a second wrapper doing the same branch for a name nothing emits is emitted runtime no program can
-// call. `__managed_clone` and `__managed_clone_managed` both STAYED, because neither was ever the `Array` SURFACE's:
+// and a second wrapper doing the same branch for a name nothing emits would be emitted runtime no program can
+// call. `__managed_clone` and `__managed_clone_managed` both exist because neither is the `Array` SURFACE's:
 // the first is what a managed-array FIELD's cloner calls (`SignatureIndex.managedFieldCascadeStrategy`) and
 // the second is the deep-clone half that field cascade branches to.
 export let ManagedSliceOpaqueName = b"__managed_slice_opaque"
@@ -2800,13 +2799,11 @@ end 'emitElementIsManaged'
 // slice range's two endpoints, and `emitBufferAccessGuard`'s byte offset — which keeps two tests for a
 // reason of its own, stated in its header.
 //
-// ⛔⛔ **THIS HEADER SAID "the compiler's `StdCmpPred` HAS NO UNSIGNED COMPARE", AND THAT WAS THE STATED REASON THE
-// BOUNDS GUARD COST SEVEN INSTRUCTIONS. IT STOPPED BEING TRUE UPSTREAM.** Signedness rides on a compare's
-// `operandType` since X11 (`StdDialect.stdTypeIsUnsigned` / `unsignedStdTypeOf`,
+// ⛔⛔ **THE COMPILER HAS AN UNSIGNED COMPARE, EVEN THOUGH A `StdCmpPred` CARRIES NO SIGNEDNESS.** Signedness rides on a
+// compare's `operandType` (`StdDialect.stdTypeIsUnsigned` / `unsignedStdTypeOf`,
 // `LowerMaxonToStd.lowerCompare`), and all three backends read it — x64's `unsignedCondCodeForPred`
-// (`jae`/`jb`), arm64's `arm64UnsignedCondForPred` (`hs`/`lo`) and wasm's `i64.ge_u`/`lt_u`. The sentence was
-// narrowly true about the ENUM — a `StdCmpPred` still carries no signedness, the `operandType` beside it does
-// — and false about the compiler, which is the class of comment this tree keeps paying for.
+// (`jae`/`jb`), arm64's `arm64UnsignedCondForPred` (`hs`/`lo`) and wasm's `i64.ge_u`/`lt_u`. That is what lets a
+// bounds guard be one compare instead of seven instructions.
 function emitIsNegative(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	return emitCmp(module, block: block, a: value, b: zero, pred: StdCmpPred.lt, ids: ids)
@@ -2874,15 +2871,15 @@ let BoundsCompareOperandType = StdType.u64
 // index is a position into a `count`-long chain: the same question over the same two words, differing only
 // in what the caller does with the answer.
 //
-// ⭐⭐ **ONE UNSIGNED COMPARE ANSWERS BOTH HALVES OF THAT SENTENCE** (`A2`, 2026-08-29) — see
-// `BoundsCompareOperandType` above for the idiom and for the `length >= 0` precondition it rests on. It used
-// to be `emitIsNegative` OR-ed into a signed `index >= length`, which on x64 is
+// ⭐⭐ **ONE UNSIGNED COMPARE ANSWERS BOTH HALVES OF THAT SENTENCE** — see
+// `BoundsCompareOperandType` above for the idiom and for the `length >= 0` precondition it rests on. The
+// alternative, `emitIsNegative` OR-ed into a signed `index >= length`, is on x64
 // `cmp`/`setcc`/`cmp`/`setcc`/`or`/`cmp`/`jcc`: SEVEN instructions in the hottest loop of every
 // array-indexing program — and seven rather than five because a `bitOr` is not a compare, so the branch on it
-// could not fuse and paid its own `cmp $0`. A single compare CAN fuse, and does: the guard is now
+// could not fuse and paid its own `cmp $0`. A single compare CAN fuse, and does: the guard is
 // `cmp index, length` + `jae` on x64, `cmp`/`cset`/`cbnz` on arm64 and `i64.ge_u` on wasm.
 //
-// ⚠ **IT STAYS A FUNCTION THOUGH ITS BODY IS NOW ONE CALL.** What its call sites share is the RULE — the
+// ⚠ **IT IS A FUNCTION THOUGH ITS BODY IS ONE CALL.** What its call sites share is the RULE — the
 // half-open end, the unsigned reading and the precondition — not the instruction; spelled out at each site,
 // the day one of them is written `gt` by accident is the day nothing says so.
 //
@@ -3186,7 +3183,7 @@ end 'emitBoundaryPositionOutOfRange'
 // a signed compare letting a negative index address before the buffer). The caller wires its own oob/ok branch
 // off the returned flag, so the two slice builders cannot drift on what "out of bounds" means.
 //
-// ⚠ **IT COLLAPSES TO TWO UNSIGNED COMPARES AND A2 DID NOT TAKE IT — the equivalence is written down here so
+// ⚠ **IT COLLAPSES TO TWO UNSIGNED COMPARES AND `emitIndexOutOfRange`'S IDIOM IS NOT APPLIED TO IT — the equivalence is written down here so
 // the next reader inherits it rather than re-deriving it.** For a non-negative `length`,
 // `(end >u length) OR (start >u end)` is TRUE on exactly the same values as the four signed disjuncts: a
 // negative `end` is enormous unsigned and fails the first, and a negative `start` is enormous unsigned and
@@ -4714,7 +4711,7 @@ end 'buildManagedByteAt'
 // element member's is the limit itself. The two coincide at element size 1 and at no other size, which is the
 // whole reason `setByte` is not `set`'s alias.
 //
-// ⚠⚠ **IT KEEPS TWO TESTS WHERE `emitIndexOutOfRange` TOOK ONE UNSIGNED COMPARE (A2), AND THE REASON IS THE
+// ⚠⚠ **IT KEEPS TWO TESTS WHERE `emitIndexOutOfRange` TAKES ONE UNSIGNED COMPARE, AND THE REASON IS THE
 // DETACH RATHER THAN THE ARITHMETIC.** Its two limits ARE non-negative — the byte-addressed one comes out of
 // `emitBitsToBytes`' logical shift, whose top three bits are clear whatever it is handed, and the element
 // limit is `capacity@16` read AFTER `emitCowDetach` (`__managed_cow_detach` either early-outs on a record
@@ -4723,7 +4720,7 @@ end 'buildManagedByteAt'
 // detach, and merging them would move the negative refusal AFTER it. A `set(-1)` on a non-owned record would
 // then copy the buffer into a fresh allocation and only then throw, changing a provenance `__managed_capacity`
 // hands straight to user code. That is a change to what the guard DECIDES, not to how it is spelled, so it
-// belongs to whoever wants it and not to A2. ⇒ It is also already 4 instructions rather than 7: each of its
+// belongs to whoever wants it and not to the unsigned-compare idiom. ⇒ It is also already 4 instructions rather than 7: each of its
 // two compares IS its block's branch condition, so both fuse; the seven were an artefact of OR-ing two
 // compares into one block.
 //
@@ -4815,13 +4812,13 @@ end 'buildManagedMemSet'
 // and its hottest edge is `__managed_mem_set ← Array.refill ← augmentValue` at 17.6%.** See `ManagedFillName`
 // for the surface contract and for why the answer is a bool.
 //
-// ⚠ **IT REFUSES THREE WAYS AND THEY ARE THREE COMPARES, NOT ONE — AND THE END TEST GOING UNSIGNED (A2) DID
+// ⚠ **IT REFUSES THREE WAYS AND THEY ARE THREE COMPARES, NOT ONE — AND THE END TEST BEING UNSIGNED DOES
 // NOT MAKE EITHER OF THE OTHER TWO REDUNDANT.** The end test is about the END, so it says nothing about how
 // the window got there: `start = -1, count = 2` over a length-5 buffer ends at 1, which is IN RANGE under
 // either reading, and the address would then be computed BEFORE the buffer. `start = 3, count = -1` ends at 2,
 // likewise in range, and the loop simply runs zero times while the call reports that it APPLIED — the worse
 // failure of the two, a wrong answer rather than a fault. ⇒ both `emitIsNegative` calls below are
-// load-bearing; each was re-derived against the unsigned end test rather than inherited.
+// load-bearing; each is derived against the unsigned end test.
 //
 // ⚠ **THE BOUND IS THE LIVE LENGTH, WHERE `__managed_mem_set`'s IS THE CAPACITY, AND THAT IS DELIBERATE.**
 // `emitBufferAccessGuard`'s header carries the ruling that gives the buffer's element WRITE a capacity bound:
