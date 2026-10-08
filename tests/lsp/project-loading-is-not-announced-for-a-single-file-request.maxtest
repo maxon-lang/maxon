@@ -1,0 +1,28 @@
+let SingleFileRequestDirName = "project-loading-single-file-request"
+let SingleFileRequestFileName = "main.maxon"
+let SingleFileRequestUseLine = 1 as LspCoordinate
+let SingleFileRequestUseCharacter = 15 as LspCoordinate
+
+test 'project loading: a definition asked in a single file announces no load'
+	let root = freshOutsideCheckoutDir(SingleFileRequestDirName)
+	let source = corpusFilePathSource()
+	writeCorpusFile(root, fileName: SingleFileRequestFileName, content: source)
+
+	var documents = WorkspaceFolderDocumentArray.create()
+	documents.push(WorkspaceFolderDocument.followedByDefinition(fileUriOf(root.join(SingleFileRequestFileName)), content: source, line: SingleFileRequestUseLine, character: SingleFileRequestUseCharacter))
+
+	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: documents)
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		answered(projects, notices) then requireNoLoadForTheRequest(projects, notices: notices)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project loading: a definition asked in a single file announces no load'
+
+function requireNoLoadForTheRequest(projects ListProjectsResult, notices ProjectLoadingNoticeArray) throws TestFailure
+	let note = "`{SingleFileRequestFileName}` was opened in a session that named no workspace folder, in a staged directory holding no `.maxproj`, and a `textDocument/definition` was asked on its use of the stdlib type `FilePath`, which only the library corpus can answer. Only a `.maxproj` or a library tier marks a project, so the document is a single file and nothing about it is ever loaded: the library and the buffer answer the request, and no `maxon/projectLoading` pair brackets it."
+
+	try requireListedAsTheSingleFile(projects, notices: notices, fileName: SingleFileRequestFileName, note: note)
+end 'requireNoLoadForTheRequest'

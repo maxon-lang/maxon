@@ -13,8 +13,8 @@
 // `RootPurpose.loadsTheProject` takes the rungs below as a source beside it would: a saved one is
 // found by the climb's first step, and an unsaved one marks nothing on disk; otherwise the
 // nearest ancestor holding a `.maxproj`, climbed no higher than the nearest client-named root that
-// holds this document; then the document's own directory. Only a `.maxproj` or a library tier
-// states a project. A named root is a ceiling and never a rung: a directory above the one the client
+// holds this document; otherwise the document is a single file, checked against the library tiers
+// and never swept. Only a `.maxproj` or a library tier states a project. A named root is a ceiling and never a rung: a directory above the one the client
 // opened may hold a `.maxproj` of its own, and rooting a document with no `.maxproj` at the named
 // root would load everything under it for a program `maxon build <file>` compiles from its own
 // directory. A client that names no root leaves the climb uncapped.
@@ -91,14 +91,13 @@ function directoryHolding(path FilePath) returns DocumentDirectory
 	return DocumentDirectory.at(dir)
 end 'directoryHolding'
 
-enum RootPurpose
+module enum RootPurpose
 	loadsTheProject
 	readsTheDocument
 end 'RootPurpose'
 
-union WorkspaceRoot
+module union WorkspaceRoot
 	projectDirectory(dir FilePath)
-	documentDirectory(dir FilePath)
 	libraryTier(dir FilePath)
 	singleFile
 end 'WorkspaceRoot'
@@ -210,14 +209,22 @@ type HeldWorkspace
 			return held.sweptFor(root, request: request)
 		end 'heldAlready'
 
+		match root 'root'
+			projectDirectory or
+				libraryTier then return self.announcedSwept(root, key: key, selection: selection, tiers: tiers, request: request)
+			singleFile then return self.builtSwept(root, selection: selection, tiers: tiers, request: request)
+		end 'root'
+	end 'sweptFor'
+
+	function announcedSwept(root WorkspaceRoot, key String, selection SourceSelection, tiers LibraryTiers, request SweepRequest) returns SweptProject
 		writeProjectLoadingNotification(key, loading: true)
 		let swept = self.builtSwept(root, selection: selection, tiers: tiers, request: request)
 		writeProjectLoadingNotification(key, loading: false)
 
 		return swept
-	end 'sweptFor'
+	end 'announcedSwept'
 
-	// Every return here reaches the `loading: false` in `sweptFor`; one that skipped it would leave
+	// Every return here reaches the `loading: false` in `announcedSwept`; one that skipped it would leave
 	// the client showing this project as loading for the rest of the session.
 	function builtSwept(root WorkspaceRoot, selection SourceSelection, tiers LibraryTiers, request SweepRequest) returns SweptProject
 		let project = try libraryTierProject(buildRootOf(root, readerPath: documentOf(request)), tiers: tiers, buffer: OpenBuffer.none) otherwise return SweptProject.unavailable
@@ -377,7 +384,6 @@ function factsUnderTheRootOf(reader LspReaderSearch) returns LspProjectFacts
 
 	return match root 'root'
 		projectDirectory or
-			documentDirectory or
 			libraryTier gives heldProjectFacts(root, readerPath: reader.document.path)
 		singleFile gives LspProjectFacts.singleFile(reader.document.path)
 	end 'root'
@@ -406,28 +412,21 @@ module function lspDocumentCorpus(uri String) returns LspCorpus
 	end 'search'
 end 'lspDocumentCorpus'
 
-// The corpus a diagnostic may be corrected against, admitted only where the project is stated: a
-// library tier, or a directory holding a `.maxproj`. At the document's own directory an unrelated
-// neighbouring file would count as a sibling and could silence a real error about a name no part of
-// the author's project declares.
-module function lspProjectCorpus(reader LspReaderSearch, project StatedProject) returns LspCorpus
-	return match project 'project'
-		stated(root) gives sweptWorkspace(root, tiers: reader.tiers, readerPath: reader.document.path)
-		unstated gives LspCorpus.unavailable
-	end 'project'
+module function lspProjectCorpus(reader LspReaderSearch, root WorkspaceRoot) returns LspCorpus
+	return match root 'root'
+		projectDirectory or
+			libraryTier gives sweptWorkspace(root, tiers: reader.tiers, readerPath: reader.document.path)
+		singleFile gives LspCorpus.unavailable
+	end 'root'
 end 'lspProjectCorpus'
 
-// A document-directory root is left unbuilt: nothing states it is a project, it can be a whole home
-// directory, and the server is single-threaded, so opening a file there would hold every request
-// behind a walk of it. `lspDocumentCorpus` builds it for a hover, definition or completion.
 module function lspLoadProject(reader LspReaderSearch)
 	let root = workspaceRootOf(reader, purpose: RootPurpose.loadsTheProject)
 
 	match root 'root'
 		projectDirectory or
 			libraryTier then _ = heldProjectSwept(root, tiers: reader.tiers, request: SweepRequest.loadingFor(reader.document.path))
-		documentDirectory or
-			singleFile then return
+		singleFile then return
 	end 'root'
 end 'lspLoadProject'
 
@@ -436,41 +435,17 @@ module union ProjectCheckRoot
 	none
 end 'ProjectCheckRoot'
 
-module function lspProjectCheckRoot(reader LspReaderSearch, project StatedProject) returns ProjectCheckRoot
+module function lspProjectCheckRoot(reader LspReaderSearch, root WorkspaceRoot) returns ProjectCheckRoot
 	if not selectionAdmits(SourceSelection.productionOnly, name: reader.document.path.filename()) 'notAProgramABuildChecks'
 		return ProjectCheckRoot.none
 	end 'notAProgramABuildChecks'
 
-	return match project 'project'
-		stated(root) gives checkRootOf(root)
-		unstated gives ProjectCheckRoot.none
-	end 'project'
-end 'lspProjectCheckRoot'
-
-function checkRootOf(root WorkspaceRoot) returns ProjectCheckRoot
 	return match root 'root'
 		projectDirectory(dir) gives ProjectCheckRoot.at(dir)
-		documentDirectory or
-			libraryTier or
+		libraryTier or
 			singleFile gives ProjectCheckRoot.none
 	end 'root'
-end 'checkRootOf'
-
-module union StatedProject
-	stated(root WorkspaceRoot)
-	unstated
-end 'StatedProject'
-
-module function lspStatedProjectOf(reader LspReaderSearch) returns StatedProject
-	let root = workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument)
-
-	return match root 'root'
-		projectDirectory or
-			libraryTier gives StatedProject.stated(root)
-		documentDirectory or
-			singleFile gives StatedProject.unstated
-	end 'root'
-end 'lspStatedProjectOf'
+end 'lspProjectCheckRoot'
 
 function nearestNamedRootOver(document FilePath) returns ProjectClimbCeiling
 	var nearest = ProjectClimbCeiling.none
@@ -651,7 +626,6 @@ end 'RecentHeldRoots'
 function heldRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
 		projectDirectory(dir) gives dir
-		documentDirectory(dir) gives dir
 		libraryTier(dir) gives dir
 		singleFile gives readerPath
 	end 'root'
@@ -665,7 +639,6 @@ function buildRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
 		libraryTier(dir) gives try dir.parent() otherwise panic("buildRootOf: '{dir.toString()}' is a library tier, a directory `LibraryTiers.locate` found by name inside another")
 		projectDirectory or
-			documentDirectory or
 			singleFile gives heldRootOf(root, readerPath: readerPath)
 	end 'root'
 end 'buildRootOf'
@@ -680,7 +653,6 @@ end 'lspBufferRootOf'
 function sourcesUnder(root WorkspaceRoot, selection SourceSelection) returns SourceSweep
 	return match root 'root'
 		projectDirectory(dir) gives maxonSourcesIn(dir, selection: selection)
-		documentDirectory(dir) gives maxonSourcesIn(dir, selection: selection)
 		libraryTier(dir) gives maxonSourcesIn(dir, selection: selection)
 		singleFile gives SourceSweep.swept(MaxonSourcePathArray.create())
 	end 'root'
@@ -699,7 +671,7 @@ end 'maxonSourcesIn'
 // every source in it to answer one jump.
 //
 // A `.maxproj` is only a marker here, never read or run; a `.maxtasks` beside it marks nothing.
-function workspaceRootOf(reader LspReaderSearch, purpose RootPurpose) returns WorkspaceRoot
+module function workspaceRootOf(reader LspReaderSearch, purpose RootPurpose) returns WorkspaceRoot
 	match reader.tier 'tier'
 		inTier(dir) then return WorkspaceRoot.libraryTier(dir)
 		outside then break 'tier'
@@ -736,8 +708,8 @@ end 'tierHolding'
 
 function rootAround(document ReaderDocument, directory FilePath, workingDirectory FilePath) returns WorkspaceRoot
 	return match nearestProjectFile(directory.resolve(workingDirectory), ceiling: document.climbCeiling) 'manifest'
-		found(projectFile) gives sweepableRoot(WorkspaceRoot.projectDirectory(directoryHoldingProjectFile(projectFile)))
-		none gives sweepableRoot(WorkspaceRoot.documentDirectory(directory))
+		found(projectFile) gives projectRootAt(directoryHoldingProjectFile(projectFile))
+		none gives WorkspaceRoot.singleFile
 	end 'manifest'
 end 'rootAround'
 
@@ -763,17 +735,11 @@ module function projectLayoutOf(reader LspReaderSearch) returns ProjectLayout
 	end 'enclosing'
 end 'projectLayoutOf'
 
-// A root at a volume root — `/`, `C:\`, or a `\\server\share` — would sweep the whole volume to
-// answer one request, so a document sitting at one is a single file checked against the library
-// tiers.
-function sweepableRoot(root WorkspaceRoot) returns WorkspaceRoot
-	return match root 'root'
-		projectDirectory(dir) gives WorkspaceRoot.singleFile if isAVolumeRoot(dir) else root
-		documentDirectory(dir) gives WorkspaceRoot.singleFile if isAVolumeRoot(dir) else root
-		libraryTier(dir) gives WorkspaceRoot.singleFile if isAVolumeRoot(dir) else root
-		singleFile gives root
-	end 'root'
-end 'sweepableRoot'
+// A `.maxproj` at a volume root — `/`, `C:\`, or a `\\server\share` — would sweep the whole volume
+// to answer one request on a single-threaded server, so a document under it is a single file.
+function projectRootAt(dir FilePath) returns WorkspaceRoot
+	return WorkspaceRoot.singleFile if isAVolumeRoot(dir) else WorkspaceRoot.projectDirectory(dir)
+end 'projectRootAt'
 
 function isAVolumeRoot(dir FilePath) returns bool
 	_ = try dir.parent() otherwise return true

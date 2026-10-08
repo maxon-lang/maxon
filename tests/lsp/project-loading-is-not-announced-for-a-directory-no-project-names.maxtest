@@ -3,9 +3,8 @@ let BareDirectoryMainFileName = "main.maxon"
 let BareDirectoryHelperFileName = "helper.maxon"
 let BareDirectoryMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let BareDirectoryHelperSource = "export function bareDirectoryHelper() returns ExitCode\n\treturn 0\nend 'bareDirectoryHelper'\n"
-let BareDirectoryUnsweptFileCount = 0
 
-test 'project loading: opening a document in a directory no maxproj and no workspace folder names builds nothing'
+test 'project loading: opening a document in a directory no maxproj names is a single file and builds nothing'
 	let root = freshOutsideCheckoutDir(BareDirectoryDirName)
 
 	writeCorpusFile(root, fileName: BareDirectoryMainFileName, content: BareDirectoryMainSource)
@@ -16,19 +15,13 @@ test 'project loading: opening a document in a directory no maxproj and no works
 	discardOutsideCheckoutDir(root)
 
 	match probe 'probe'
-		answered(projects, notices) then requireTheDirectoryWasLeftUnbuilt(notices, projects: projects)
+		answered(projects, notices) then requireTheDocumentStandsAlone(notices, projects: projects)
 		unanswered(reason) then Expect.fail(reason)
 	end 'probe'
-end 'project loading: opening a document in a directory no maxproj and no workspace folder names builds nothing'
+end 'project loading: opening a document in a directory no maxproj names is a single file and builds nothing'
 
-function requireTheDirectoryWasLeftUnbuilt(notices ProjectLoadingNoticeArray, projects ListProjectsResult) throws TestFailure
-	let note = "`{BareDirectoryMainFileName}` was opened in a session that named no workspace folder, in a staged directory holding a sibling `{BareDirectoryHelperFileName}` and no `.maxproj`, and `maxon/listProjects` was asked after it. Nothing states a project there, so the only root the ladder has for it is the document's own directory — which for a file in a home directory is a walk of everything under it, on the single thread every other request waits behind. A document with no known project loads nothing on open; its first hover, definition or completion builds it."
+function requireTheDocumentStandsAlone(notices ProjectLoadingNoticeArray, projects ListProjectsResult) throws TestFailure
+	let note = "`{BareDirectoryMainFileName}` was opened in a session that named no workspace folder, in a staged directory holding a sibling `{BareDirectoryHelperFileName}` and no `.maxproj`, and `maxon/listProjects` was asked after it. Only a `.maxproj` marks a project, so the document's own directory is not one: the document is a single file, checked against the library alone, and nothing is built for it."
 
-	try requireNoAnnouncedLoad(notices, note: note)
-
-	let project = try soleProject(projects, note: note)
-	let expectedTail = outsideCheckoutDirName(BareDirectoryDirName)
-
-	try Expect.isTrue(foldedRootPath(project.rootPath).endsWith(expectedTail), message: "{note} The project is rooted at {project.rootPath}, not at the document's own directory (a rootPath ending {expectedTail}).")
-	try Expect.equal(project.fileCount, expected: BareDirectoryUnsweptFileCount, message: "{note} The project reported {project.fileCount} files, and {BareDirectoryUnsweptFileCount} is the count of a root the server has not built.")
-end 'requireTheDirectoryWasLeftUnbuilt'
+	try requireListedAsTheSingleFile(projects, notices: notices, fileName: BareDirectoryMainFileName, note: note)
+end 'requireTheDocumentStandsAlone'

@@ -10,8 +10,8 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
   file of your project, or in the standard library, opens that file, and hovering one renders its
   declaration, whether top-level or a field or method of such a type. The project is the nearest
   directory above the file that holds a `.maxproj` file, searched up to the workspace folder that
-  contains the file; failing that, the file is a program of its own in its directory, as `maxon build`
-  compiles it. A file of the standard library's `stdlib/` or `runtime/` belongs to that directory's
+  contains the file; failing that, the file is a single file, resolved against the standard library
+  and itself. A file of the standard library's `stdlib/` or `runtime/` belongs to that directory's
   project. In a multi-root window every folder caps the search for its own files, and a folder added to
   the window does so at once. Hover and completion also resolve a
   receiver typed by `self`, by a call, by a `try … otherwise`, by a field of the enclosing type, by a
@@ -347,8 +347,7 @@ at your option.
   item turns red while the server is stopped. If the server fails to start, that channel says which
   compiler it found, or that it found none. See [Finding the compiler](#finding-the-compiler).
 - The status bar item turns yellow while the server loads a project, which happens when a document of
-  that project opens, or, for a file whose project is its own directory, at its first hover, definition
-  or completion. Its tooltip shows the compiler's version (as `maxon version` prints it, reported by
+  that project opens. A project is a directory holding a `.maxproj`, `stdlib/` or `runtime/`. Its tooltip shows the compiler's version (as `maxon version` prints it, reported by
   the server when it starts) and its location, lists the projects loading and loaded, and ends with **Restart** and **Show Output** links (also the commands
   **Maxon: Restart Language Server** and **Maxon: Show Language Server Output**).
 - For LSP server issues, the embedded server code is in `maxon-bin/Compiler/Lsp/`.

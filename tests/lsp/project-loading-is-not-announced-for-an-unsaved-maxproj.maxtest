@@ -3,7 +3,6 @@ let UnsavedMaxprojFileName = "app.maxproj"
 let UnsavedMaxprojSource = "export function app() returns ExitCode\n\treturn 0\nend 'app'\n"
 let UnsavedMaxprojMainFileName = "main.maxon"
 let UnsavedMaxprojMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
-let UnsavedMaxprojUnsweptFileCount = 0
 
 test 'project loading: an unsaved .maxproj marks no project and loads nothing'
 	let root = freshOutsideCheckoutDir(UnsavedMaxprojDirName)
@@ -20,11 +19,7 @@ test 'project loading: an unsaved .maxproj marks no project and loads nothing'
 end 'project loading: an unsaved .maxproj marks no project and loads nothing'
 
 function requireNothingLoaded(projects ListProjectsResult, notices ProjectLoadingNoticeArray) throws TestFailure
-	let note = "`{UnsavedMaxprojFileName}` was opened in a session that named no workspace folder, in a staged directory holding `{UnsavedMaxprojMainFileName}` and no `.maxproj` on disk. A project file the disk does not hold marks no project for `maxon build`, so the directory is answered as one an unsaved source there gets: unbuilt, since it can be a whole home directory."
+	let note = "`{UnsavedMaxprojFileName}` was opened in a session that named no workspace folder, in a staged directory holding `{UnsavedMaxprojMainFileName}` and no `.maxproj` on disk. A project file the disk does not hold marks no project for `maxon build`, so the document is a single file, as a source there with no `.maxproj` above it is: nothing is built for it."
 
-	try requireNoAnnouncedLoad(notices, note: note)
-
-	let project = try soleProject(projects, note: note)
-
-	try Expect.equal(project.fileCount, expected: UnsavedMaxprojUnsweptFileCount, message: "{note} The project reported {project.fileCount} files, and {UnsavedMaxprojUnsweptFileCount} is the count of a root the server has not built.")
+	try requireListedAsTheSingleFile(projects, notices: notices, fileName: UnsavedMaxprojFileName, note: note)
 end 'requireNothingLoaded'

@@ -1975,8 +1975,9 @@ project rooted at its directory, and `maxon/listProjects` lists it as that proje
 rooted as an unsaved source in its directory is. A `.maxtasks` document is rooted at its own file. Any
 other document is rooted at the
 nearest ancestor directory holding a `.maxproj` file, searched up to the nearest workspace folder the
-client named that contains the document. Failing that the document is a program of its own, rooted at
-its own directory, as `maxon build <file>` compiles it. **Every** entry of `workspaceFolders` caps the
+client named that contains the document. Failing that the document is a single file, checked against
+the library tiers alone, and its hover, definition and completion read the library and the document.
+A `.maxproj` at a volume root (`/`, `C:\`, a `\\server\share`) marks a single file too. **Every** entry of `workspaceFolders` caps the
 search for the documents inside it, and `rootUri` is read when the folders name none, so in a
 multi-root window each folder caps its own documents. A client that sends no root, or one whose root is
 a uri of another scheme than `file:` — what Remote-SSH, WSL, dev containers and Codespaces send —
@@ -1993,8 +1994,8 @@ workspace is renegotiated.
 
 **A project is built when a document in it opens.** On `didOpen` the server builds the index that
 document reads, before it publishes the document's diagnostics, when the document's root is a known
-project: a directory holding a `.maxproj`, `stdlib/` or `runtime/`. A document rooted at its own
-directory or its own file has its project built by its first hover, definition or completion.
+project: a directory holding a `.maxproj`, `stdlib/` or `runtime/`. A single-file document has only
+the library built, by its first hover, definition or completion.
 
 Projects are held across requests, the eight most recently used roots at a time, and a source is re-read
 when its size or modification time changes on disk. Removing a workspace folder also drops every project
@@ -2101,12 +2102,11 @@ two files of one project are one entry, and two sibling projects are two:
 
 `rootPath` is that root directory, as a filesystem path; for a file of `stdlib/` or `runtime/` it is that
 tier directory. `isSingleFile` is true where the ladder roots a document at its own file — a `.maxtasks`
-document, or one sitting at a volume root — and then `rootPath` is that file. A document resolves to a root when its uri spells a
+document, or any document no `.maxproj` marks — and then `rootPath` is that file and `fileCount` is 1. A document resolves to a root when its uri spells a
 filesystem path with a directory above it, so the list can name fewer projects than there are open
 documents. `fileCount` is the number of production `.maxon` sources under that root, whether the open
 document is a `.maxon` or a `.maxtest` file. This request reads the projects the server holds, and
-counts **0** for a root it holds no build of: a root at a document's own directory until that document's
-first hover, definition or completion, a root whose walk or build failed, and a root that has left the
+counts **0** for a root it holds no build of: a root whose walk or build failed, and a root that has left the
 held projects until an open or a request builds it again. The answer after a build carries the real
 count. The projects are listed in path order.
 
@@ -2114,8 +2114,8 @@ count. The projects are listed in path order.
 project: `loading: true` immediately before the build and `loading: false` immediately after it, on
 every outcome, and each `true` is followed by its `false` before the next build begins. A project is
 built when a document in it opens, and the pair arrives before that document's
-`textDocument/publishDiagnostics`; a root at a document's own directory is built by the first hover,
-definition or completion there. A project that has left the held projects is built again by the next
+`textDocument/publishDiagnostics`. The pair belongs to a project or library tier root; a single file is
+checked with no announcement. A project that has left the held projects is built again by the next
 open or request that needs it, and a build that yields no project is repeated each time the project is
 needed. A root is held as two views, the production sources and the sources with the test files, and each view's build is
 announced, so opening a `.maxtest` document in a project already loaded for a `.maxon` one announces

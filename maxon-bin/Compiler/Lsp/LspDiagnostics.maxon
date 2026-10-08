@@ -49,7 +49,7 @@ module function publishBufferDiagnostics(uri String, text String, arrival Buffer
 end 'publishBufferDiagnostics'
 
 module union BufferPublish
-	published(reader LspReaderSearch, project StatedProject, path FilePath, fast DiagnosticArray)
+	published(reader LspReaderSearch, root WorkspaceRoot, path FilePath, fast DiagnosticArray)
 	unchecked
 end 'BufferPublish'
 
@@ -104,29 +104,30 @@ extension Project
 			edited then break 'arrival'
 		end 'arrival'
 
-		let project = lspStatedProjectOf(reader)
+		let root = workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument)
 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
 
-		let fast = self.documentDiagnostics(reader, project: project, path: path, text: text, tokens: tokens)
+		let fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
 		lspOutputWriter().write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create()))
 
-		return BufferPublish.published(reader, project: project, path: path, fast: fast)
+		return BufferPublish.published(reader, root: root, path: path, fast: fast)
 	end 'publishDocumentDiagnostics'
 
-	function documentDiagnostics(reader LspReaderSearch, project StatedProject, path FilePath, text String, tokens TokenArray) returns DiagnosticArray
+	function documentDiagnostics(reader LspReaderSearch, root WorkspaceRoot, path FilePath, text String, tokens TokenArray) returns DiagnosticArray
 		match projectLayoutOf(reader) 'layout'
 			nestedIn(outer) then return [nestedProjectFileDiagnostic(outer, nested: path)]
 			standsAlone then break 'layout'
 		end 'layout'
 
-		match project 'stating'
-			stated then break 'stating'
-			unstated then return self.checkedDiagnostics()
+		match root 'stating'
+			projectDirectory or
+				libraryTier then break 'stating'
+			singleFile then return self.checkedDiagnostics()
 		end 'stating'
 
 		match self.bufferParse(path) 'parse'
-			compilable then return self.correctedCheck(reader, project: project, buffer: path, text: text, tokens: tokens)
-			refused(reported) then return self.correctedRefusal(reported, reader: reader, project: project, buffer: path, text: text, tokens: tokens)
+			compilable then return self.correctedCheck(reader, root: root, buffer: path, text: text, tokens: tokens)
+			refused(reported) then return self.correctedRefusal(reported, reader: reader, root: root, buffer: path, text: text, tokens: tokens)
 		end 'parse'
 	end 'documentDiagnostics'
 
@@ -136,18 +137,18 @@ extension Project
 		return self.diagnostics.clone()
 	end 'checkedDiagnostics'
 
-	function correctedCheck(reader LspReaderSearch, project StatedProject, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
+	function correctedCheck(reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
 		let reported = thisDocumentsOwn(self.checkedDiagnostics(), path: buffer)
 
 		if reported.isEmpty() 'nothingToExplain'
 			return reported
 		end 'nothingToExplain'
 
-		return self.explainedByTheCorpus(reported, reader: reader, project: project, buffer: buffer, text: text, tokens: tokens)
+		return self.explainedByTheCorpus(reported, reader: reader, root: root, buffer: buffer, text: text, tokens: tokens)
 	end 'correctedCheck'
 
-	function explainedByTheCorpus(reported DiagnosticArray, reader LspReaderSearch, project StatedProject, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
-		match lspProjectCorpus(reader, project: project) 'corpus'
+	function explainedByTheCorpus(reported DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
+		match lspProjectCorpus(reader, root: root) 'corpus'
 			loaded(_, signatures, readerPath) then return self.unsuppressedRefusals(reported, signatures: signatures, reader: readerPath, buffer: buffer, text: text, tokens: tokens, road: RefusalRoad.aCleanParsesCheck)
 			unavailable then return reported
 		end 'corpus'
@@ -171,8 +172,8 @@ extension Project
 		return BufferParse.refused(thisDocumentsOwn(reported, path: path))
 	end 'bufferParse'
 
-	function correctedRefusal(reported DiagnosticArray, reader LspReaderSearch, project StatedProject, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
-		match lspProjectCorpus(reader, project: project) 'corpus'
+	function correctedRefusal(reported DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
+		match lspProjectCorpus(reader, root: root) 'corpus'
 			loaded(corpus, signatures, readerPath) then return self.refusalCorrectedBy(corpus, signatures: signatures, reader: readerPath, buffer: buffer, reported: reported, text: text, tokens: tokens)
 			unavailable then return reported
 		end 'corpus'

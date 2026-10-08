@@ -125,18 +125,18 @@ function ceilingTail(dirName String, path String) returns String
 end 'ceilingTail'
 
 function requireTheNeighbourResolves(neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
-	try expectDefinitionInFile(neighbourCall, fileTail: ceilingTail(dirName, path: "{CeilingFolderDirName}{ProjectRootsSlash}{CeilingReaderDirName}{ProjectRootsSlash}{CeilingNeighbourFileName}"), startLine: ProjectRootsDeclarationLine, note: "{note} The call to `neighbour`, declared beside the open document, did not resolve, so the document's own directory was never built and the check proves nothing.")
+	try expectDefinitionInFile(neighbourCall, fileTail: ceilingTail(dirName, path: "{CeilingFolderDirName}{ProjectRootsSlash}{CeilingReaderDirName}{ProjectRootsSlash}{CeilingNeighbourFileName}"), startLine: ProjectRootsDeclarationLine, note: "{note} The call to `neighbour`, declared beside the open document, did not resolve, so the project was never built and the check proves nothing.")
 end 'requireTheNeighbourResolves'
 
 function requireTheDecoyResolves(outerCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
 	try expectDefinitionInFile(outerCall, fileTail: ceilingTail(dirName, path: "{CeilingDecoyDirName}{ProjectRootsSlash}{CeilingDecoyFileName}"), startLine: ProjectRootsDeclarationLine, note: "{note} `outerOnly`, declared beside the `.maxproj` above the open document, did not resolve.")
 end 'requireTheDecoyResolves'
 
-export function requireOnlyTheOwnDirectoryIsBuilt(control CorpusDefinitionProbe, outerCall CorpusDefinitionProbe, neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
+export function requireTheDocumentIsASingleFile(control CorpusDefinitionProbe, outerCall CorpusDefinitionProbe, neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
 	try requireTheDecoyResolves(control, dirName: dirName, note: "The control session named no workspace folder, so nothing stops the climb from reaching the `.maxproj` above the open document, and the fixture's `outerOnly` must resolve through it.")
-	try requireTheNeighbourResolves(neighbourCall, dirName: dirName, note: note)
-	try expectNoDefinitionInProject(outerCall, note: "{note} `outerOnly` resolves from an unbounded climb, and is declared outside the document's own directory: a document that no `.maxproj` reaches within its folder is a program of its own there.")
-end 'requireOnlyTheOwnDirectoryIsBuilt'
+	try expectNoDefinitionInProject(neighbourCall, note: "{note} `neighbour` is declared beside the open document and resolves, so the document's own directory was built for it. A document that no `.maxproj` reaches within its folder is a single file, and no directory is built for one.")
+	try expectNoDefinitionInProject(outerCall, note: "{note} `outerOnly` resolves from an unbounded climb, and is declared outside the document's own directory: a document that no `.maxproj` reaches within its folder is a single file.")
+end 'requireTheDocumentIsASingleFile'
 
 export function requireClimbReachesTheMaxproj(outerCall CorpusDefinitionProbe, neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
 	try requireTheNeighbourResolves(neighbourCall, dirName: dirName, note: note)
@@ -291,6 +291,14 @@ export function requireADriverFileStandsAlone(result ListProjectsResult, notices
 
 	try Expect.isTrue(project.isSingleFile, message: "{note} The document was answered as part of a project rooted at {project.rootPath} rather than as a single file.")
 end 'requireADriverFileStandsAlone'
+
+export function requireListedAsTheSingleFile(result ListProjectsResult, notices ProjectLoadingNoticeArray, fileName String, note String) throws TestFailure
+	try requireADriverFileStandsAlone(result, notices: notices, note: note)
+
+	let project = try soleProject(result, note: note)
+
+	try Expect.isTrue(foldedRootPath(project.rootPath).endsWith(fileName), message: "{note} The single file listed is {project.rootPath}, not {fileName}.")
+end 'requireListedAsTheSingleFile'
 
 export function projectsRootedAt(result ListProjectsResult, expectedTail String) returns ElementIndex
 	var found = 0

@@ -11,25 +11,20 @@ test 'project loading: a workspace folder holding no .maxproj marks no project, 
 
 	let examples = createdStagingDirectory(UnmarkedFolderExamplesDirName, under: root)
 	writeCorpusFile(examples, fileName: UnmarkedFolderDocumentFileName, content: UnmarkedFolderDocumentSource)
+	writeCorpusFile(examples, fileName: UnmarkedFolderOtherFileName, content: UnmarkedFolderOtherSource)
 
 	let probe = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(root)), documents: projectRootsDocument(fileUriOf(examples.join(UnmarkedFolderDocumentFileName)), content: UnmarkedFolderDocumentSource))
 
 	discardOutsideCheckoutDir(root)
 
 	match probe 'probe'
-		answered(projects, notices) then requireOnlyTheDocumentsDirectory(projects, notices: notices)
+		answered(projects, notices) then requireOnlyTheDocument(projects, notices: notices)
 		unanswered(reason) then Expect.fail(reason)
 	end 'probe'
 end 'project loading: a workspace folder holding no .maxproj marks no project, and opening a source in it loads nothing'
 
-function requireOnlyTheDocumentsDirectory(projects ListProjectsResult, notices ProjectLoadingNoticeArray) throws TestFailure
-	let note = "`{UnmarkedFolderExamplesDirName}/{UnmarkedFolderDocumentFileName}` was opened in a session whose workspace folder holds it, a `{UnmarkedFolderOtherFileName}` at the top, and no `.maxproj` anywhere. Only a `.maxproj` marks a project, so the folder is not one: the document is a program of its own, rooted at its own directory, and opening it builds nothing — a workspace folder can be a whole checkout."
+function requireOnlyTheDocument(projects ListProjectsResult, notices ProjectLoadingNoticeArray) throws TestFailure
+	let note = "`{UnmarkedFolderExamplesDirName}/{UnmarkedFolderDocumentFileName}` was opened in a session whose workspace folder holds it, a `{UnmarkedFolderOtherFileName}` beside it and another at the top, and no `.maxproj` anywhere. Only a `.maxproj` marks a project, so neither the folder nor the document's directory is one: the document is a single file, checked against the library alone, and nothing is loaded for it."
 
-	try requireNoAnnouncedLoad(notices, note: note)
-
-	let project = try soleProject(projects, note: note)
-	let expectedTail = "{outsideCheckoutDirName(UnmarkedFolderDirName)}/{UnmarkedFolderExamplesDirName}"
-
-	try Expect.isTrue(foldedRootPath(project.rootPath).endsWith(expectedTail), message: "{note} The project is rooted at {project.rootPath}, not at the document's own directory (a rootPath ending {expectedTail}).")
-	try Expect.equal(project.fileCount, expected: ProjectRootsUnsweptFileCount, message: "{note} The project reported {project.fileCount} files, and {ProjectRootsUnsweptFileCount} is the count of a root the server has not built.")
-end 'requireOnlyTheDocumentsDirectory'
+	try requireListedAsTheSingleFile(projects, notices: notices, fileName: UnmarkedFolderDocumentFileName, note: note)
+end 'requireOnlyTheDocument'
