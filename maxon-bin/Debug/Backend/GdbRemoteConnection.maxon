@@ -54,6 +54,11 @@ union GdbFill
 	broken(reason String)
 end 'GdbFill'
 
+union GdbRegisterWidth
+	sized(bytes GdbRegisterBytes)
+	unusable
+end 'GdbRegisterWidth'
+
 module type GdbRegisterInfo
 	export let name as String
 	export let number as GdbRegisterNumber
@@ -173,7 +178,7 @@ module type GdbRemoteConnection
 		while true 'untilAWholePacket'
 			match self.framedPacket() 'framed'
 				broken(reason) then return GdbPacketRead.broken(reason)
-				timedOut then break 'framed'
+				timedOut then break
 				packet(raw) then return GdbPacketRead.packet(raw)
 			end 'framed'
 
@@ -275,14 +280,14 @@ module type GdbRemoteConnection
 		match self.ask("QStartNoAckMode") 'noAck'
 			answered then self.acking = false
 			unsupported or
-				failed then break 'noAck'
+				failed then break
 			timedOut then return GdbHandshake.refused("the debug stub did not answer the debugger's request to stop acknowledging every packet")
 			broken(reason) then return GdbHandshake.refused(reason)
 		end 'noAck'
 
 		match self.ask("QThreadSuffixSupported") 'suffix'
 			answered then self.suffixed = true
-			unsupported then break 'suffix'
+			unsupported then break
 			failed(code) then return GdbHandshake.refused("the debug stub refused the thread-suffix question with {code}")
 			timedOut then return GdbHandshake.refused("the debug stub did not answer the thread-suffix question")
 			broken(reason) then return GdbHandshake.refused(reason)
@@ -291,7 +296,7 @@ module type GdbRemoteConnection
 		match self.ask("qSupported:swbreak+;hwbreak+;no-resumed+;xmlRegisters=i386") 'supported'
 			answered(features) then self.readPayloadLimit(features)
 			unsupported or
-				failed then break 'supported'
+				failed then break
 			timedOut then return GdbHandshake.refused("the debug stub did not answer which packets it supports")
 			broken(reason) then return GdbHandshake.refused(reason)
 		end 'supported'
@@ -384,7 +389,7 @@ end 'gdbPayloadLimitOf'
 
 function gdbPushRegister(registers GdbRegisterInfoArray, number GdbRegisterNumber, description String)
 	var name = ""
-	var width = 0 as GdbRegisterBytes
+	var width = GdbRegisterWidth.unusable
 
 	for field in description.split(GdbFieldSeparator) 'eachField'
 		let halves = field.split(GdbKeyValueSeparator)
@@ -404,21 +409,24 @@ function gdbPushRegister(registers GdbRegisterInfoArray, number GdbRegisterNumbe
 		end 'itsWidth'
 	end 'eachField'
 
-	if name.isEmpty() or width == 0 'notADescribedRegister'
+	if name.isEmpty() 'notADescribedRegister'
 		return
 	end 'notADescribedRegister'
 
-	registers.push(GdbRegisterInfo.create(name, number: number, bytes: width))
+	match width 'hosted'
+		sized(bytes) then registers.push(GdbRegisterInfo.create(name, number: number, bytes: bytes))
+		unusable then break
+	end 'hosted'
 end 'gdbPushRegister'
 
-function gdbRegisterWidthOf(spelled String) returns GdbRegisterBytes
-	let bits = try int.fromString(spelled) otherwise return 0
+function gdbRegisterWidthOf(spelled String) returns GdbRegisterWidth
+	let bits = try int.fromString(spelled) otherwise return GdbRegisterWidth.unusable
 
-	if bits <= 0 or bits > (64 * BitsPerByte) 'notARegisterThisFileHolds'
-		return 0
+	if bits < BitsPerByte or bits > (64 * BitsPerByte) 'notARegisterThisFileHolds'
+		return GdbRegisterWidth.unusable
 	end 'notARegisterThisFileHolds'
 
-	return (bits / BitsPerByte) as GdbRegisterBytes
+	return GdbRegisterWidth.sized((bits / BitsPerByte) as GdbRegisterBytes)
 end 'gdbRegisterWidthOf'
 
 function classifiedAnswer(raw ByteArray) returns GdbAnswer
