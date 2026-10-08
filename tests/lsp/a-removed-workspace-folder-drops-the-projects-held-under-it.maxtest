@@ -1,0 +1,36 @@
+let DroppedFolderDirName = "removed-folder-held-project"
+let DroppedFolderMainFileName = "main.maxon"
+let DroppedFolderHelperFileName = "helper.maxon"
+let DroppedFolderMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let DroppedFolderHelperSource = "export function droppedHelper() returns ExitCode\n\treturn 0\nend 'droppedHelper'\n"
+let DroppedFolderHeldFileCount = 2
+
+test 'project roots: a removed workspace folder drops the projects already built under it'
+	let root = stagedProjectDiagnosticsRoot(DroppedFolderDirName)
+
+	writeCorpusFile(root, fileName: DroppedFolderMainFileName, content: DroppedFolderMainSource)
+	writeCorpusFile(root, fileName: DroppedFolderHelperFileName, content: DroppedFolderHelperSource)
+
+	let documents = projectRootsDocument(fileUriOf(root.join(DroppedFolderMainFileName)), content: DroppedFolderMainSource)
+	let kept = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(root)), documents: documents)
+	let removed = listProjectsIn(ProjectRootsSession.atFoldersThenRemoved(projectRootsFolders(root)), documents: documents)
+
+	discardOutsideCheckoutDir(root)
+
+	let held = try soleProject(listedProjects(kept), note: "one document of a staged `.maxproj` project was opened in a session whose workspace folder holds it, and the folder stayed.")
+
+	try Expect.equal(held.fileCount, expected: DroppedFolderHeldFileCount, message: "the project reported {held.fileCount} files with the folder still named, and opening a document builds the project it sits in, so the staged {DroppedFolderHeldFileCount} sources are the count of a project that is HELD. Without it the removal below has nothing to drop.")
+
+	let gone = try soleProject(listedProjects(removed), note: "the client removed the workspace folder after opening the document, which is still open.")
+
+	try Expect.equal(gone.fileCount, expected: ProjectRootsUnsweptFileCount, message: "the project reported {gone.fileCount} files after the folder was removed, and {ProjectRootsUnsweptFileCount} is the count of a root the server holds no corpus for. A removed folder takes every project already built under it, or the process keeps a workspace the author has closed for the rest of the session.")
+end 'project roots: a removed workspace folder drops the projects already built under it'
+
+function listedProjects(probe ListProjectsProbe) returns ListProjectsResult throws TestFailure
+	match probe 'probe'
+		answered(result, _) then return result
+		unanswered(reason) then try Expect.fail(reason)
+	end 'probe'
+
+	panic("project roots: the `unanswered` arm always throws, so this line is unreachable")
+end 'listedProjects'

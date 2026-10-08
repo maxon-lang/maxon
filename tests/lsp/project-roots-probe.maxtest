@@ -3,16 +3,21 @@ let ProjectRootsSlash = "/"
 export let ProjectRootsMaxonExtension = ".maxon"
 let ProjectRootsFileUriPrefix = "file://"
 
-let ProjectRootsReaderDirName = "reader"
-let ProjectRootsHelperDirName = "helper"
-let ProjectRootsReaderFileName = "main.maxon"
-let ProjectRootsHelperFileName = "helper.maxon"
-export let ProjectRootsReaderSource = "function main() returns ExitCode\n\treturn foldedHelper()\nend 'main'\n"
-let ProjectRootsHelperSource = "export function foldedHelper() returns ExitCode\n\treturn 0\nend 'foldedHelper'\n"
+let CeilingDecoyDirName = "decoy"
+let CeilingFolderDirName = "inner"
+let CeilingReaderDirName = "a"
+let CeilingReaderFileName = "main.maxon"
+let CeilingNeighbourFileName = "neighbour.maxon"
+let CeilingDecoyFileName = "outer-only.maxon"
+export let CeilingReaderSource = "function reachesOutside() returns ExitCode\n\treturn outerOnly()\nend 'reachesOutside'\n\nfunction main() returns ExitCode\n\treturn neighbour()\nend 'main'\n"
+let CeilingNeighbourSource = "export function neighbour() returns ExitCode\n\treturn 0\nend 'neighbour'\n"
+let CeilingDecoySource = "export function outerOnly() returns ExitCode\n\treturn 0\nend 'outerOnly'\n"
+let CeilingOuterCallLine = 1 as LspCoordinate
+let CeilingNeighbourCallLine = 5 as LspCoordinate
+let CeilingCallCharacter = 12 as LspCoordinate
+export let ProjectRootsUnsweptFileCount = 0
 export let ProjectRootsFillerFileName = "filler.maxon"
 export let ProjectRootsFillerSource = "export function firstFolderFiller() returns ExitCode\n\treturn 0\nend 'firstFolderFiller'\n"
-export let ProjectRootsCallLine = 1 as LspCoordinate
-export let ProjectRootsCallCharacter = 12 as LspCoordinate
 export let ProjectRootsDeclarationLine = 0 as LspCoordinate
 
 export union ListProjectsProbe
@@ -22,6 +27,7 @@ end 'ListProjectsProbe'
 
 export union ProjectRootsSession
 	atFolders(folders WorkspaceFolderRootArray)
+	atFoldersThenRemoved(folders WorkspaceFolderRootArray)
 	unrooted
 end 'ProjectRootsSession'
 
@@ -49,18 +55,7 @@ export type WorkspaceFolderDocument
 	end 'followedByDefinition'
 end 'WorkspaceFolderDocument'
 
-export type WorkspaceFolderProbePosition
-	export var uri as String
-	export var line as LspCoordinate
-	export var character as LspCoordinate
-
-	export static function create(uri String, line LspCoordinate, character LspCoordinate) returns WorkspaceFolderProbePosition
-		return Self{uri: uri, line: line, character: character}
-	end 'create'
-end 'WorkspaceFolderProbePosition'
-
 export typealias WorkspaceFolderDocumentArray = Array with WorkspaceFolderDocument
-export typealias WorkspaceFolderProbePositionArray = Array with WorkspaceFolderProbePosition
 
 export function projectRootsFolders(first FilePath) returns WorkspaceFolderRootArray
 	var folders = WorkspaceFolderRootArray.create()
@@ -83,24 +78,76 @@ export function projectRootsDocument(uri String, content String) returns Workspa
 	return documents
 end 'projectRootsDocument'
 
-export function stagedCrossDirectoryRoot(dirName String) returns FilePath
-	let root = freshOutsideCheckoutDir(dirName)
-	let readerDirectory = createdStagingDirectory(ProjectRootsReaderDirName, under: root)
-	let helperDirectory = createdStagingDirectory(ProjectRootsHelperDirName, under: root)
+export function stagedUnmarkedTree(dirName String) returns FilePath
+	let outer = freshOutsideCheckoutDir(dirName)
+	let decoyDirectory = createdStagingDirectory(CeilingDecoyDirName, under: outer)
+	let folder = createdStagingDirectory(CeilingFolderDirName, under: outer)
+	let readerDirectory = createdStagingDirectory(CeilingReaderDirName, under: folder)
 
-	writeCorpusFile(helperDirectory, fileName: ProjectRootsHelperFileName, content: ProjectRootsHelperSource)
-	writeCorpusFile(readerDirectory, fileName: ProjectRootsReaderFileName, content: ProjectRootsReaderSource)
+	writeCorpusFile(decoyDirectory, fileName: CeilingDecoyFileName, content: CeilingDecoySource)
+	writeCorpusFile(readerDirectory, fileName: CeilingReaderFileName, content: CeilingReaderSource)
+	writeCorpusFile(readerDirectory, fileName: CeilingNeighbourFileName, content: CeilingNeighbourSource)
 
-	return root
-end 'stagedCrossDirectoryRoot'
+	return outer
+end 'stagedUnmarkedTree'
 
-export function crossDirectoryReaderUri(root FilePath) returns String
-	return fileUriOf(root.join("{ProjectRootsReaderDirName}").join("{ProjectRootsReaderFileName}"))
-end 'crossDirectoryReaderUri'
+export function stagedCeilingTree(dirName String) returns FilePath
+	let outer = stagedUnmarkedTree(dirName)
+	markedAsAProject(outer)
 
-export function crossDirectoryHelperTail(dirName String) returns String
-	return "{outsideCheckoutDirName(dirName)}{ProjectRootsSlash}{ProjectRootsHelperDirName}{ProjectRootsSlash}{ProjectRootsHelperFileName}"
-end 'crossDirectoryHelperTail'
+	return outer
+end 'stagedCeilingTree'
+
+export function ceilingFolder(outer FilePath) returns FilePath
+	return outer.join(CeilingFolderDirName)
+end 'ceilingFolder'
+
+export function ceilingReaderUri(outer FilePath) returns String
+	return fileUriOf(ceilingFolder(outer).join(CeilingReaderDirName).join(CeilingReaderFileName))
+end 'ceilingReaderUri'
+
+export function ceilingPositions(uri String) returns CorpusProbePointArray
+	var positions = projectRootsPosition(CorpusProbePoint.at(uri, line: CeilingOuterCallLine, character: CeilingCallCharacter))
+	positions.push(CorpusProbePoint.at(uri, line: CeilingNeighbourCallLine, character: CeilingCallCharacter))
+
+	return positions
+end 'ceilingPositions'
+
+export function ceilingProbePair(probes CorpusDefinitionProbeArray, offset ElementIndex) returns (CorpusDefinitionProbe, CorpusDefinitionProbe)
+	let outerCall = try probes.get(offset) otherwise panic("project roots: the ceiling positions were probed in pairs and the session answered {probes.count()} probes")
+	let neighbourCall = try probes.get(offset + 1) otherwise panic("project roots: the ceiling positions were probed in pairs and the session answered {probes.count()} probes")
+
+	return (outerCall, neighbourCall)
+end 'ceilingProbePair'
+
+function ceilingTail(dirName String, path String) returns String
+	return "{outsideCheckoutDirName(dirName)}{ProjectRootsSlash}{path}"
+end 'ceilingTail'
+
+function requireTheNeighbourResolves(neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
+	try expectDefinitionInFile(neighbourCall, fileTail: ceilingTail(dirName, path: "{CeilingFolderDirName}{ProjectRootsSlash}{CeilingReaderDirName}{ProjectRootsSlash}{CeilingNeighbourFileName}"), startLine: ProjectRootsDeclarationLine, note: "{note} The call to `neighbour`, declared beside the open document, did not resolve, so the document's own directory was never built and the check proves nothing.")
+end 'requireTheNeighbourResolves'
+
+function requireTheDecoyResolves(outerCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
+	try expectDefinitionInFile(outerCall, fileTail: ceilingTail(dirName, path: "{CeilingDecoyDirName}{ProjectRootsSlash}{CeilingDecoyFileName}"), startLine: ProjectRootsDeclarationLine, note: "{note} `outerOnly`, declared beside the `.maxproj` above the open document, did not resolve.")
+end 'requireTheDecoyResolves'
+
+export function requireOnlyTheOwnDirectoryIsBuilt(control CorpusDefinitionProbe, outerCall CorpusDefinitionProbe, neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
+	try requireTheDecoyResolves(control, dirName: dirName, note: "The control session named no workspace folder, so nothing stops the climb from reaching the `.maxproj` above the open document, and the fixture's `outerOnly` must resolve through it.")
+	try requireTheNeighbourResolves(neighbourCall, dirName: dirName, note: note)
+	try expectNoDefinitionInProject(outerCall, note: "{note} `outerOnly` resolves from an unbounded climb, and is declared outside the document's own directory: a document that no `.maxproj` reaches within its folder is a program of its own there.")
+end 'requireOnlyTheOwnDirectoryIsBuilt'
+
+export function requireClimbReachesTheMaxproj(outerCall CorpusDefinitionProbe, neighbourCall CorpusDefinitionProbe, dirName String, note String) throws TestFailure
+	try requireTheNeighbourResolves(neighbourCall, dirName: dirName, note: note)
+	try requireTheDecoyResolves(outerCall, dirName: dirName, note: "{note} With no workspace folder left to stop it, the climb reaches the `.maxproj` above.")
+end 'requireClimbReachesTheMaxproj'
+
+export function ceilingControl(outer FilePath) returns CorpusDefinitionProbe
+	markedAsAProject(outer)
+
+	return probeCorpusDefinitionWithRoot(CorpusSessionRoot.unrooted, uri: ceilingReaderUri(outer), content: CeilingReaderSource, line: CeilingOuterCallLine, character: CeilingCallCharacter)
+end 'ceilingControl'
 
 export function listProjectsIn(session ProjectRootsSession, documents WorkspaceFolderDocumentArray) returns ListProjectsProbe
 	var client = LspClient.start()
@@ -114,6 +161,8 @@ export function listProjectsIn(session ProjectRootsSession, documents WorkspaceF
 			client.openDocument(document.uri, content: document.content)
 			followUpTheOpen(client, document: document)
 		end 'eachDocument'
+
+		removeTheSessionsFolders(client, session: session)
 
 		// Asked before the stash is read: its reply follows every notice the opens sent, and a stash
 		// read first can miss them, which a test expecting no load reads as a pass.
@@ -135,9 +184,18 @@ end 'listProjectsIn'
 function openProjectRootsSession(client LspClient, session ProjectRootsSession) throws LspClientError
 	match session 'session'
 		atFolders(folders) then _ = try client.initializeAtWorkspaceFolders(folders)
+		atFoldersThenRemoved(folders) then _ = try client.initializeAtWorkspaceFolders(folders)
 		unrooted then _ = try client.initialize()
 	end 'session'
 end 'openProjectRootsSession'
+
+function removeTheSessionsFolders(client LspClient, session ProjectRootsSession) throws LspClientError
+	match session 'session'
+		atFoldersThenRemoved(folders) then try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(), removed: folders)
+		atFolders or
+			unrooted then return
+	end 'session'
+end 'removeTheSessionsFolders'
 
 function followUpTheOpen(client LspClient, document WorkspaceFolderDocument) throws LspClientError
 	match document.followUp 'followUp'
@@ -146,8 +204,8 @@ function followUpTheOpen(client LspClient, document WorkspaceFolderDocument) thr
 	end 'followUp'
 end 'followUpTheOpen'
 
-export function projectRootsPosition(position WorkspaceFolderProbePosition) returns WorkspaceFolderProbePositionArray
-	var positions = WorkspaceFolderProbePositionArray.create()
+export function projectRootsPosition(position CorpusProbePoint) returns CorpusProbePointArray
+	var positions = CorpusProbePointArray.create()
 	positions.push(position)
 
 	return positions
@@ -162,7 +220,7 @@ export function probesAnswered(outcome WorkspaceFolderDefinitionOutcome) returns
 	panic("project roots: the `broke` arm always throws, so this line is unreachable")
 end 'probesAnswered'
 
-export function definitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions WorkspaceFolderProbePositionArray) returns WorkspaceFolderDefinitionOutcome
+export function definitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions CorpusProbePointArray) returns WorkspaceFolderDefinitionOutcome
 	var client = LspClient.start()
 	var probes = CorpusDefinitionProbeArray.create()
 	var outcome = WorkspaceFolderDefinitionOutcome.broke(UnreportedSessionEnding)

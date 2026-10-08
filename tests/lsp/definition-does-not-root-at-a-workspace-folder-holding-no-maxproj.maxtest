@@ -1,0 +1,17 @@
+let UnmarkedDefinitionDirName = "definition-unmarked-workspace-folder"
+
+test 'definition: a workspace folder holding no .maxproj is no project, so a document there sees only its own directory'
+	let root = stagedUnmarkedTree(UnmarkedDefinitionDirName)
+
+	let uri = ceilingReaderUri(root)
+	let outcome = definitionsAcrossWorkspaceFolders(projectRootsFolders(root), addedFolders: WorkspaceFolderRootArray.create(), removedFolders: WorkspaceFolderRootArray.create(), documents: projectRootsDocument(uri, content: CeilingReaderSource), positions: ceilingPositions(uri))
+
+	let probes = probesAnswered(outcome)
+	let control = ceilingControl(root)
+
+	discardOutsideCheckoutDir(root)
+
+	let (outerCall, neighbourCall) = ceilingProbePair(probes, offset: 0)
+
+	requireOnlyTheOwnDirectoryIsBuilt(control, outerCall: outerCall, neighbourCall: neighbourCall, dirName: UnmarkedDefinitionDirName, note: "the client named a workspace folder that holds the open document two directories down, a sibling directory declaring `outerOnly`, and no `.maxproj` anywhere. Only a `.maxproj` marks a project, so naming a folder does not: the document is a program of its own, and a workspace folder can be a whole checkout.")
+end 'definition: a workspace folder holding no .maxproj is no project, so a document there sees only its own directory'

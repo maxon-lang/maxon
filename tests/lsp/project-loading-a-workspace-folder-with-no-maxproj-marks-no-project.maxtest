@@ -1,0 +1,35 @@
+let UnmarkedFolderDirName = "project-loading-unmarked-workspace-folder"
+let UnmarkedFolderExamplesDirName = "examples"
+let UnmarkedFolderDocumentFileName = "grep.maxon"
+let UnmarkedFolderDocumentSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let UnmarkedFolderOtherFileName = "helper.maxon"
+let UnmarkedFolderOtherSource = "export function unmarkedHelper() returns ExitCode\n\treturn 0\nend 'unmarkedHelper'\n"
+
+test 'project loading: a workspace folder holding no .maxproj marks no project, and opening a source in it loads nothing'
+	let root = freshOutsideCheckoutDir(UnmarkedFolderDirName)
+	writeCorpusFile(root, fileName: UnmarkedFolderOtherFileName, content: UnmarkedFolderOtherSource)
+
+	let examples = createdStagingDirectory(UnmarkedFolderExamplesDirName, under: root)
+	writeCorpusFile(examples, fileName: UnmarkedFolderDocumentFileName, content: UnmarkedFolderDocumentSource)
+
+	let probe = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(root)), documents: projectRootsDocument(fileUriOf(examples.join(UnmarkedFolderDocumentFileName)), content: UnmarkedFolderDocumentSource))
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		answered(projects, notices) then requireOnlyTheDocumentsDirectory(projects, notices: notices)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project loading: a workspace folder holding no .maxproj marks no project, and opening a source in it loads nothing'
+
+function requireOnlyTheDocumentsDirectory(projects ListProjectsResult, notices ProjectLoadingNoticeArray) throws TestFailure
+	let note = "`{UnmarkedFolderExamplesDirName}/{UnmarkedFolderDocumentFileName}` was opened in a session whose workspace folder holds it, a `{UnmarkedFolderOtherFileName}` at the top, and no `.maxproj` anywhere. Only a `.maxproj` marks a project, so the folder is not one: the document is a program of its own, rooted at its own directory, and opening it builds nothing — a workspace folder can be a whole checkout."
+
+	try requireNoAnnouncedLoad(notices, note: note)
+
+	let project = try soleProject(projects, note: note)
+	let expectedTail = "{outsideCheckoutDirName(UnmarkedFolderDirName)}/{UnmarkedFolderExamplesDirName}"
+
+	try Expect.isTrue(foldedRootPath(project.rootPath).endsWith(expectedTail), message: "{note} The project is rooted at {project.rootPath}, not at the document's own directory (a rootPath ending {expectedTail}).")
+	try Expect.equal(project.fileCount, expected: ProjectRootsUnsweptFileCount, message: "{note} The project reported {project.fileCount} files, and {ProjectRootsUnsweptFileCount} is the count of a root the server has not built.")
+end 'requireOnlyTheDocumentsDirectory'

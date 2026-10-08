@@ -580,6 +580,10 @@ public type LspClient
 		return try self.initializeRooted([uri], rootUri: InitializeRootUri.named(uri), declaresWorkspaceFolders: false)
 	end 'initializeAtRootUri'
 
+	public function initializeAtRootUriOnly(root FilePath) returns InitializeResult throws LspClientError
+		return try self.initializeRooted(StringArray.create(), rootUri: InitializeRootUri.named(fileUriOf(root)), declaresWorkspaceFolders: false)
+	end 'initializeAtRootUriOnly'
+
 	public function initializeAtWorkspaceFolder(root FilePath) returns InitializeResult throws LspClientError
 		return try self.initializeRooted([fileUriOf(root)], rootUri: InitializeRootUri.absent, declaresWorkspaceFolders: false)
 	end 'initializeAtWorkspaceFolder'
@@ -600,7 +604,10 @@ public type LspClient
 			absent then params.putNull(RootUriKey)
 		end 'alsoRootUri'
 
-		params.putNode(WorkspaceFoldersKey, value: doc.add(JsonNode.arrayNode(workspaceFolderNodes(doc, uris: folderUris))))
+		if not folderUris.isEmpty() 'namesFolders'
+			params.putNode(WorkspaceFoldersKey, value: doc.add(JsonNode.arrayNode(workspaceFolderNodes(doc, uris: folderUris))))
+		end 'namesFolders'
+
 		params.putNode(CapabilitiesKey, value: clientCapabilities(doc, declaresWorkspaceFolders: declaresWorkspaceFolders))
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 

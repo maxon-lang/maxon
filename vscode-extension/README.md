@@ -10,9 +10,10 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
   file of your project, or in the standard library, opens that file, and hovering one renders its
   declaration, whether top-level or a field or method of such a type. The project is the nearest
   directory above the file that holds a `.maxproj` file, searched up to the workspace folder that
-  contains the file; failing that, that folder itself. A file of the standard library's `stdlib/` or
-  `runtime/` belongs to that directory's project. In a multi-root window every folder is a root of
-  its own, and a folder added to the window is served at once. Hover and completion also resolve a
+  contains the file; failing that, the file is a program of its own in its directory, as `maxon build`
+  compiles it. A file of the standard library's `stdlib/` or `runtime/` belongs to that directory's
+  project. In a multi-root window every folder caps the search for its own files, and a folder added to
+  the window does so at once. Hover and completion also resolve a
   receiver typed by `self`, by a call, by a `try … otherwise`, by a field of the enclosing type, by a
   `for … in` loop variable, by a chain of any of these (`a.b.c`, `a.m().n()`), by a generic-instance type alias, by
   an element taken out of a generic container, or by a service handle, which offers its service's messages
@@ -20,8 +21,8 @@ Visual Studio Code extension that provides syntax highlighting and Language Serv
 - **Diagnostics that know about your other files**: a name a sibling file of the project declares
   counts as declared. Each buffer is checked on its own at once; in a project with a `.maxproj`, the
   whole project is then compiled with your unsaved text, a moment after you stop typing, and the file
-  shows the errors `maxon build`'s checks report on it. This needs a workspace folder that contains the
-  file — with none open, each buffer is checked alone. Each project check writes an outcome line to the
+  shows the errors `maxon build`'s checks report on it. Outside `stdlib/` and `runtime/`, a file with no
+  `.maxproj` in or above its directory is checked alone. Each project check writes an outcome line to the
   **Maxon Language Server** output channel.
 - Language configuration: comment support, bracket pairing, and auto-closing pairs
 - **Code formatting**: the language server's formatter, applied on save by default

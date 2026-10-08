@@ -1,0 +1,17 @@
+let UnrootedCorrectionDirName = "diagnostics-project-unrooted-correction"
+let UnrootedCorrectionDeclaringFileName = "helper.maxon"
+let UnrootedCorrectionBufferFileName = "main.maxon"
+let UnrootedCorrectionDeclaringSource = "module function unrootedCorrectionHelper() returns ExitCode\n\treturn 0\nend 'unrootedCorrectionHelper'\n"
+let UnrootedCorrectionBufferSource = "function main() returns ExitCode\n\treturn unrootedCorrectionHelper()\nend 'main'\n"
+
+test 'an unrooted session corrects a call into a sibling a .maxproj marks'
+	let root = stagedProjectDiagnosticsRoot(UnrootedCorrectionDirName)
+	writeCorpusFile(root, fileName: UnrootedCorrectionDeclaringFileName, content: UnrootedCorrectionDeclaringSource)
+	writeCorpusFile(root, fileName: UnrootedCorrectionBufferFileName, content: UnrootedCorrectionBufferSource)
+
+	let probe = probeProjectDiagnosticsUnrooted(root, fileName: UnrootedCorrectionBufferFileName, content: UnrootedCorrectionBufferSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoProjectDiagnostics(probe, note: "`unrootedCorrectionHelper` is a `module function` the sibling file of this project declares, and a `maxon build` of the staged project exits 0, in a session that named NO root at all. A `.maxproj` states the project whether or not the client named a root, so the buffer check's first publish is corrected against the project's declarations instead of reporting `call to undefined function`.")
+end 'an unrooted session corrects a call into a sibling a .maxproj marks'

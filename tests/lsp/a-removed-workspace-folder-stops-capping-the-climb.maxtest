@@ -1,0 +1,25 @@
+let RemovedFolderFirstDirName = "removed-folder-one"
+let RemovedFolderCeilingDirName = "removed-folder-two"
+
+test 'project roots: a removed workspace folder stops capping the climb'
+	let first = freshOutsideCheckoutDir(RemovedFolderFirstDirName)
+	let outer = stagedCeilingTree(RemovedFolderCeilingDirName)
+
+	writeCorpusFile(first, fileName: ProjectRootsFillerFileName, content: ProjectRootsFillerSource)
+
+	let uri = ceilingReaderUri(outer)
+	let outcome = definitionsAcrossWorkspaceFolders(projectRootsFolderPair(first, second: ceilingFolder(outer)), addedFolders: WorkspaceFolderRootArray.create(), removedFolders: projectRootsFolders(ceilingFolder(outer)), documents: projectRootsDocument(uri, content: CeilingReaderSource), positions: ceilingPositions(uri))
+
+	let probes = probesAnswered(outcome)
+	let control = ceilingControl(outer)
+
+	discardOutsideCheckoutDir(first)
+	discardOutsideCheckoutDir(outer)
+
+	let (outerBefore, neighbourBefore) = ceilingProbePair(probes, offset: 0)
+	let (outerAfter, neighbourAfter) = ceilingProbePair(probes, offset: 2)
+
+	requireOnlyTheOwnDirectoryIsBuilt(control, outerCall: outerBefore, neighbourCall: neighbourBefore, dirName: RemovedFolderCeilingDirName, note: "the client named TWO workspace folders and the open document sits in the SECOND of them. This is the BEFORE half of the removal, asserted so that the AFTER half is a statement about the removal rather than about a fixture that never capped the climb.")
+
+	requireClimbReachesTheMaxproj(outerAfter, neighbourCall: neighbourAfter, dirName: RemovedFolderCeilingDirName, note: "the client then sent `workspace/didChangeWorkspaceFolders` REMOVING the folder the open document sits in, and the SAME positions now reach the `.maxproj` above it. A folder an author drops out of an open window must stop bounding the climb, or the editor keeps answering out of a workspace the author has left.")
+end 'project roots: a removed workspace folder stops capping the climb'

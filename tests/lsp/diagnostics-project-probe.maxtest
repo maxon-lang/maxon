@@ -19,10 +19,14 @@ let ProjectDiagnosticsBuildFileName = "app.maxproj"
 let ProjectDiagnosticsBuildFileContent = ""
 let ProjectDiagnosticsNothingRendering = "nothing at all"
 
+export function markedAsAProject(directory FilePath)
+	writeCorpusFile(directory, fileName: ProjectDiagnosticsBuildFileName, content: ProjectDiagnosticsBuildFileContent)
+end 'markedAsAProject'
+
 // A staged project root with its own `.maxproj` marker, which is what stops the project-file climb there.
 export function stagedProjectDiagnosticsRoot(dirName String) returns FilePath
 	let directory = freshOutsideCheckoutDir(dirName)
-	writeCorpusFile(directory, fileName: ProjectDiagnosticsBuildFileName, content: ProjectDiagnosticsBuildFileContent)
+	markedAsAProject(directory)
 
 	return directory
 end 'stagedProjectDiagnosticsRoot'
@@ -31,15 +35,23 @@ end 'stagedProjectDiagnosticsRoot'
 // arrives. The buffer text is what the server is told the document holds, whatever the file on disk says.
 export function probeProjectDiagnostics(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
 	var client = LspClient.start()
-	let probe = collectProjectDiagnostics(client, rootUri: fileUriOf(root), uri: fileUriOf(root.join(fileName)), content: content)
+	let probe = collectProjectDiagnostics(client, session: CorpusSessionRoot.clientRootUri(fileUriOf(root)), uri: fileUriOf(root.join(fileName)), content: content)
 	client.release()
 
 	return probe
 end 'probeProjectDiagnostics'
 
+export function probeProjectDiagnosticsUnrooted(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
+	var client = LspClient.start()
+	let probe = collectProjectDiagnostics(client, session: CorpusSessionRoot.unrooted, uri: fileUriOf(root.join(fileName)), content: content)
+	client.release()
+
+	return probe
+end 'probeProjectDiagnosticsUnrooted'
+
 export function probeProjectDiagnosticsThroughEditorUris(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
 	var client = LspClient.start()
-	let probe = collectProjectDiagnostics(client, rootUri: editorUriOf(root), uri: editorUriOf(root.join(fileName)), content: content)
+	let probe = collectProjectDiagnostics(client, session: CorpusSessionRoot.clientRootUri(editorUriOf(root)), uri: editorUriOf(root.join(fileName)), content: content)
 	client.release()
 
 	return probe
@@ -61,11 +73,11 @@ export function probeRuntimeTierDiagnostics(fileName String, content String) ret
 	return probeProjectDiagnostics(Directory.currentPath(), fileName: runtimeTierDocumentName(fileName), content: content)
 end 'probeRuntimeTierDiagnostics'
 
-function collectProjectDiagnostics(client LspClient, rootUri String, uri String, content String) returns ProjectDiagnosticsProbe
+function collectProjectDiagnostics(client LspClient, session CorpusSessionRoot, uri String, content String) returns ProjectDiagnosticsProbe
 	var probe = ProjectDiagnosticsProbe.broke(UnreportedSessionEnding)
 
 	try 'session'
-		_ = client.initializeAtRootUri(rootUri)
+		openCorpusSession(client, root: session)
 		client.initialized()
 		client.openDocument(uri, content: content)
 		probe = ProjectDiagnosticsProbe.published(client.awaitPublishedDiagnostics(uri).items)
@@ -211,19 +223,23 @@ export function probeProjectCheckDiagnostics(root FilePath, fileName String, con
 end 'probeProjectCheckDiagnostics'
 
 export function probeProjectCheckSession(root FilePath, fileName String, content String, edits StringArray) returns ProjectCheckSession
+	return probeProjectCheckSessionRooted(CorpusSessionRoot.clientRoot(root), root: root, fileName: fileName, content: content, edits: edits)
+end 'probeProjectCheckSession'
+
+export function probeProjectCheckSessionRooted(rooting CorpusSessionRoot, root FilePath, fileName String, content String, edits StringArray) returns ProjectCheckSession
 	var client = LspClient.start()
-	let session = collectProjectCheckSession(client, root: root, uri: fileUriOf(root.join(fileName)), content: content, edits: edits)
+	let session = collectProjectCheckSession(client, rooting: rooting, uri: fileUriOf(root.join(fileName)), content: content, edits: edits)
 	client.release()
 
 	return session
-end 'probeProjectCheckSession'
+end 'probeProjectCheckSessionRooted'
 
-function collectProjectCheckSession(client LspClient, root FilePath, uri String, content String, edits StringArray) returns ProjectCheckSession
+function collectProjectCheckSession(client LspClient, rooting CorpusSessionRoot, uri String, content String, edits StringArray) returns ProjectCheckSession
 	var session = ProjectCheckSession.create(ProjectDiagnosticsProbe.broke(UnreportedSessionEnding), reports: ProjectCheckReportArray.create())
 	var sent = InitialDocumentVersion
 
 	try 'session'
-		_ = client.initializeAtRoot(root)
+		openCorpusSession(client, root: rooting)
 		client.initialized()
 		client.openDocument(uri, content: content)
 		var checked = client.awaitProjectCheckPublish(uri)

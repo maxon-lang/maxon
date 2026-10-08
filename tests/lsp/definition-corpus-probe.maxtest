@@ -4,8 +4,6 @@
 // never reaches the filesystem, and the uri is what a cross-file answer is judged by. Release discipline —
 // why every session is driven into a VALUE before anything is asserted — is `LspClient.maxon`'s hazard 1.
 
-let CorpusBuildFileName = "app.maxproj"
-let CorpusBuildFileContent = ""
 let CorpusBackslash = "\\"
 let CorpusSlash = "/"
 let CorpusNewline = "\n"
@@ -24,6 +22,7 @@ end 'CorpusDefinitionProbe'
 export union CorpusSessionRoot
 	unrooted
 	clientRoot(directory FilePath)
+	rootUriOnly(directory FilePath)
 	clientRootUri(uri String)
 	workspaceFolderOnly(directory FilePath)
 end 'CorpusSessionRoot'
@@ -58,7 +57,7 @@ end 'corpusFilePathSource'
 
 export function stagedCorpusDirectory(dirName String) returns FilePath
 	let resolved = createdStagingDirectory(dirName, under: Directory.currentPath())
-	writeCorpusFile(resolved, fileName: CorpusBuildFileName, content: CorpusBuildFileContent)
+	markedAsAProject(resolved)
 
 	return resolved
 end 'stagedCorpusDirectory'
@@ -108,12 +107,18 @@ export function probeCorpusDefinition(directory FilePath, fileName String, conte
 end 'probeCorpusDefinition'
 
 export function probeCorpusDefinitionWithRoot(root CorpusSessionRoot, uri String, content String, line LspCoordinate, character LspCoordinate) returns CorpusDefinitionProbe
+	let probes = probeCorpusDefinitionsWithRoot(root, uri: uri, content: content, points: projectRootsPosition(CorpusProbePoint.at(uri, line: line, character: character)))
+
+	return try probes.get(0) otherwise panic("definition corpus: one position was probed and the session answered {probes.count()} probes")
+end 'probeCorpusDefinitionWithRoot'
+
+export function probeCorpusDefinitionsWithRoot(root CorpusSessionRoot, uri String, content String, points CorpusProbePointArray) returns CorpusDefinitionProbeArray
 	var client = LspClient.start()
-	let probe = collectCorpusDefinition(client, root: root, uri: uri, content: content, line: line, character: character)
+	let probes = collectCorpusDefinitions(client, root: root, uri: uri, content: content, points: points)
 	client.release()
 
-	return probe
-end 'probeCorpusDefinitionWithRoot'
+	return probes
+end 'probeCorpusDefinitionsWithRoot'
 
 export function expectDefinitionInFile(probe CorpusDefinitionProbe, fileTail String, startLine LspCoordinate, note String) throws TestFailure
 	match probe 'probe'
@@ -145,24 +150,37 @@ function requireCorpusLocation(uri String, range LspRange, fileTail String, star
 	try Expect.equal(range.startLine, expected: startLine, message: "{note} The jump landed on line {range.startLine} of {uri}.")
 end 'requireCorpusLocation'
 
-function collectCorpusDefinition(client LspClient, root CorpusSessionRoot, uri String, content String, line LspCoordinate, character LspCoordinate) returns CorpusDefinitionProbe
-	var probe = CorpusDefinitionProbe.broke(UnreportedRequestEnding)
+function collectCorpusDefinitions(client LspClient, root CorpusSessionRoot, uri String, content String, points CorpusProbePointArray) returns CorpusDefinitionProbeArray
+	var probes = CorpusDefinitionProbeArray.create()
 
 	try 'session'
 		openCorpusSession(client, root: root)
 		client.initialized()
 		client.openDocument(uri, content: content)
-		probe = corpusProbeOf(client.definition(uri, line: line, character: character))
+
+		for point in points 'eachPoint'
+			probes.push(corpusProbeAt(client, point: point))
+		end 'eachPoint'
 	end 'session' otherwise (e) 'failed'
 		match e 'reason'
 			transportFailed or
 				malformedResponse or
-				serverRefused then probe = corpusProbeOfFailure(e)
+				serverRefused then probes = corpusProbesAllSaying(corpusProbeOfFailure(e), count: points.count())
 		end 'reason'
 	end 'failed'
 
-	return probe
-end 'collectCorpusDefinition'
+	return probes
+end 'collectCorpusDefinitions'
+
+function corpusProbesAllSaying(probe CorpusDefinitionProbe, count Count) returns CorpusDefinitionProbeArray
+	var probes = CorpusDefinitionProbeArray.create()
+
+	for _ in 0 upto count 'eachPoint'
+		probes.push(probe)
+	end 'eachPoint'
+
+	return probes
+end 'corpusProbesAllSaying'
 
 function corpusProbeOfFailure(e LspClientError) returns CorpusDefinitionProbe
 	return match e 'reason'
@@ -172,10 +190,11 @@ function corpusProbeOfFailure(e LspClientError) returns CorpusDefinitionProbe
 	end 'reason'
 end 'corpusProbeOfFailure'
 
-function openCorpusSession(client LspClient, root CorpusSessionRoot) throws LspClientError
+export function openCorpusSession(client LspClient, root CorpusSessionRoot) throws LspClientError
 	match root 'shape'
 		unrooted then _ = try client.initialize()
 		clientRoot(directory) then _ = try client.initializeAtRoot(directory)
+		rootUriOnly(directory) then _ = try client.initializeAtRootUriOnly(directory)
 		clientRootUri(uri) then _ = try client.initializeAtRootUri(uri)
 		workspaceFolderOnly(directory) then _ = try client.initializeAtWorkspaceFolder(directory)
 	end 'shape'

@@ -1,0 +1,22 @@
+let SecondFolderFirstDirName = "second-folder-one"
+let SecondFolderCeilingDirName = "second-folder-two"
+
+test 'project roots: a second workspace folder caps the climb for the documents under it'
+	let first = freshOutsideCheckoutDir(SecondFolderFirstDirName)
+	let outer = stagedCeilingTree(SecondFolderCeilingDirName)
+
+	writeCorpusFile(first, fileName: ProjectRootsFillerFileName, content: ProjectRootsFillerSource)
+
+	let uri = ceilingReaderUri(outer)
+	let outcome = definitionsAcrossWorkspaceFolders(projectRootsFolderPair(first, second: ceilingFolder(outer)), addedFolders: WorkspaceFolderRootArray.create(), removedFolders: WorkspaceFolderRootArray.create(), documents: projectRootsDocument(uri, content: CeilingReaderSource), positions: ceilingPositions(uri))
+
+	let probes = probesAnswered(outcome)
+	let control = ceilingControl(outer)
+
+	discardOutsideCheckoutDir(first)
+	discardOutsideCheckoutDir(outer)
+
+	let (outerCall, neighbourCall) = ceilingProbePair(probes, offset: 0)
+
+	requireOnlyTheOwnDirectoryIsBuilt(control, outerCall: outerCall, neighbourCall: neighbourCall, dirName: SecondFolderCeilingDirName, note: "the client named TWO workspace folders and the open document sits in the SECOND of them. A server that reads `workspaceFolders[0]` and nothing else leaves every folder but the first out of the workspace entirely, which is every multi-root window an editor opens.")
+end 'project roots: a second workspace folder caps the climb for the documents under it'

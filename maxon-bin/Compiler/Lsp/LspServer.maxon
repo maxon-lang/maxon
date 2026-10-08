@@ -99,12 +99,12 @@ type LspSession
 
 		match publishBufferDiagnostics(uri, text: text, arrival: arrival) 'publish'
 			unchecked then return
-			published(reader, path, fast) then self.requestProjectCheck(LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion, alone: fast.clone()), reader: reader)
+			published(reader, project, path, fast) then self.requestProjectCheck(LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion, alone: fast.clone()), reader: reader, project: project)
 		end 'publish'
 	end 'documentArrived'
 
-	function requestProjectCheck(request LspProjectCheckRequest, reader LspReaderSearch)
-		match lspProjectCheckRoot(reader) 'root'
+	function requestProjectCheck(request LspProjectCheckRequest, reader LspReaderSearch, project StatedProject)
+		match lspProjectCheckRoot(reader, project: project) 'root'
 			none then return
 			at(dir) then lspProjectCheckerFor(dir, tiers: reader.tiers).check(request.clone())
 		end 'root'

@@ -13,12 +13,11 @@
 // `RootPurpose.loadsTheProject` takes the rungs below as a source beside it would: a saved one is
 // found by the climb's first step, and an unsaved one marks nothing on disk; otherwise the
 // nearest ancestor holding a `.maxproj`, climbed no higher than the nearest client-named root that
-// holds this document; then that named root, for a document inside it; then the document's own
-// directory. A directory above the one the client
-// opened may hold a `.maxproj` of its own, so a named root consulted after an uncapped climb would
-// decide nothing, while one consulted before the climb would root a document under
-// `<root>/sub/x.maxproj` at `<root>`. Capping the climb is what leaves both rungs right. A client
-// that names no root leaves the climb and the document's own directory.
+// holds this document; then the document's own directory. Only a `.maxproj` or a library tier
+// states a project. A named root is a ceiling and never a rung: a directory above the one the client
+// opened may hold a `.maxproj` of its own, and rooting a document with no `.maxproj` at the named
+// root would load everything under it for a program `maxon build <file>` compiles from its own
+// directory. A client that names no root leaves the climb uncapped.
 //
 // The named roots change mid-session: `workspace/didChangeWorkspaceFolders` adds and removes them, and
 // a removed root takes every project held under it. The sweep under a root prunes a directory holding
@@ -42,11 +41,6 @@ module union LspProjectFacts
 	unlocated
 end 'LspProjectFacts'
 
-union StatedRoot
-	named(dir FilePath)
-	unnamed
-end 'StatedRoot'
-
 module union LspRootSearch
 	ready(tiers LibraryTiers, workingDirectory FilePath)
 	unavailable
@@ -60,13 +54,13 @@ end 'DocumentDirectory'
 type ReaderDocument
 	module let path as FilePath
 	module let normalized as FilePath
-	module let stated as StatedRoot
+	module let climbCeiling as ProjectClimbCeiling
 	module let directory as DocumentDirectory
 
 	static function of(readerPath FilePath) returns ReaderDocument
 		let normalized = readerPath.normalize()
 
-		return Self{path: readerPath, normalized: normalized, stated: nearestNamedRootOver(normalized), directory: directoryHolding(readerPath)}
+		return Self{path: readerPath, normalized: normalized, climbCeiling: nearestNamedRootOver(normalized), directory: directoryHolding(readerPath)}
 	end 'of'
 end 'ReaderDocument'
 
@@ -413,23 +407,14 @@ module function lspDocumentCorpus(uri String) returns LspCorpus
 end 'lspDocumentCorpus'
 
 // The corpus a diagnostic may be corrected against, admitted only where the project is stated: a
-// library tier, or a root the client named holding this document (`lspProjectIsStated`). Without
-// one the root can be the document's own directory, so an unrelated neighbouring file would count
-// as a sibling and could silence a real error about a name no part of the author's project
-// declares.
-module function lspProjectCorpus(reader LspReaderSearch) returns LspCorpus
-	if not lspProjectIsStated(reader) 'unstated'
-		return LspCorpus.unavailable
-	end 'unstated'
-
-	let root = workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument)
-
-	return match root 'root'
-		projectDirectory or
-			libraryTier gives sweptWorkspace(root, tiers: reader.tiers, readerPath: reader.document.path)
-		documentDirectory or
-			singleFile gives LspCorpus.unavailable
-	end 'root'
+// library tier, or a directory holding a `.maxproj`. At the document's own directory an unrelated
+// neighbouring file would count as a sibling and could silence a real error about a name no part of
+// the author's project declares.
+module function lspProjectCorpus(reader LspReaderSearch, project StatedProject) returns LspCorpus
+	return match project 'project'
+		stated(root) gives sweptWorkspace(root, tiers: reader.tiers, readerPath: reader.document.path)
+		unstated gives LspCorpus.unavailable
+	end 'project'
 end 'lspProjectCorpus'
 
 // A document-directory root is left unbuilt: nothing states it is a project, it can be a whole home
@@ -451,35 +436,44 @@ module union ProjectCheckRoot
 	none
 end 'ProjectCheckRoot'
 
-module function lspProjectCheckRoot(reader LspReaderSearch) returns ProjectCheckRoot
-	if not lspProjectIsStated(reader) or not selectionAdmits(SourceSelection.productionOnly, name: reader.document.path.filename()) 'notAProgramABuildChecks'
+module function lspProjectCheckRoot(reader LspReaderSearch, project StatedProject) returns ProjectCheckRoot
+	if not selectionAdmits(SourceSelection.productionOnly, name: reader.document.path.filename()) 'notAProgramABuildChecks'
 		return ProjectCheckRoot.none
 	end 'notAProgramABuildChecks'
 
-	return match workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument) 'root'
+	return match project 'project'
+		stated(root) gives checkRootOf(root)
+		unstated gives ProjectCheckRoot.none
+	end 'project'
+end 'lspProjectCheckRoot'
+
+function checkRootOf(root WorkspaceRoot) returns ProjectCheckRoot
+	return match root 'root'
 		projectDirectory(dir) gives ProjectCheckRoot.at(dir)
 		documentDirectory or
 			libraryTier or
 			singleFile gives ProjectCheckRoot.none
 	end 'root'
-end 'lspProjectCheckRoot'
+end 'checkRootOf'
 
-module function lspProjectIsStated(reader LspReaderSearch) returns bool
-	return match reader.tier 'tier'
-		inTier gives true
-		outside gives clientNamedTheRoot(reader.document.stated)
-	end 'tier'
-end 'lspProjectIsStated'
+module union StatedProject
+	stated(root WorkspaceRoot)
+	unstated
+end 'StatedProject'
 
-function clientNamedTheRoot(stated StatedRoot) returns bool
-	return match stated 'stated'
-		named gives true
-		unnamed gives false
-	end 'stated'
-end 'clientNamedTheRoot'
+module function lspStatedProjectOf(reader LspReaderSearch) returns StatedProject
+	let root = workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument)
 
-function nearestNamedRootOver(document FilePath) returns StatedRoot
-	var nearest = StatedRoot.unnamed
+	return match root 'root'
+		projectDirectory or
+			libraryTier gives StatedProject.stated(root)
+		documentDirectory or
+			singleFile gives StatedProject.unstated
+	end 'root'
+end 'lspStatedProjectOf'
+
+function nearestNamedRootOver(document FilePath) returns ProjectClimbCeiling
+	var nearest = ProjectClimbCeiling.none
 
 	for root in namedClientRoots 'eachRoot'
 		nearest = nearerNamedRoot(nearest, candidate: root, document: document)
@@ -488,10 +482,10 @@ function nearestNamedRootOver(document FilePath) returns StatedRoot
 	return nearest
 end 'nearestNamedRootOver'
 
-// A root that does not hold this document is never selected, not even as the only candidate. Rooting a
-// document under a folder it sits outside builds a corpus over an unrelated tree and answers confidently
-// out of it, which is worse than the miss the document's own directory gives.
-function nearerNamedRoot(nearest StatedRoot, candidate FilePath, document FilePath) returns StatedRoot
+// A root that does not hold this document is never selected, not even as the only candidate: the climb
+// never meets it, so it caps nothing, and holding it would refuse a later root that does hold the
+// document.
+function nearerNamedRoot(nearest ProjectClimbCeiling, candidate FilePath, document FilePath) returns ProjectClimbCeiling
 	if not document.isInside(candidate) 'holdsNothingOfThisDocument'
 		return nearest
 	end 'holdsNothingOfThisDocument'
@@ -500,13 +494,13 @@ function nearerNamedRoot(nearest StatedRoot, candidate FilePath, document FilePa
 		return nearest
 	end 'noNearerThanTheOneHeld'
 
-	return StatedRoot.named(candidate)
+	return ProjectClimbCeiling.at(candidate)
 end 'nearerNamedRoot'
 
-function candidateIsNearer(nearest StatedRoot, dir FilePath) returns bool
+function candidateIsNearer(nearest ProjectClimbCeiling, dir FilePath) returns bool
 	return match nearest 'nearest'
-		named(held) gives dir.isInside(held)
-		unnamed gives true
+		at(held) gives dir.isInside(held)
+		none gives true
 	end 'nearest'
 end 'candidateIsNearer'
 
@@ -741,9 +735,9 @@ function tierHolding(document ReaderDocument, tiers LibraryTiers) returns TierMe
 end 'tierHolding'
 
 function rootAround(document ReaderDocument, directory FilePath, workingDirectory FilePath) returns WorkspaceRoot
-	return match nearestProjectFile(directory.resolve(workingDirectory), ceiling: climbCeilingOf(document.stated)) 'manifest'
+	return match nearestProjectFile(directory.resolve(workingDirectory), ceiling: document.climbCeiling) 'manifest'
 		found(projectFile) gives sweepableRoot(WorkspaceRoot.projectDirectory(directoryHoldingProjectFile(projectFile)))
-		none gives sweepableRoot(rootWithoutAManifest(document.stated, directory: directory))
+		none gives sweepableRoot(WorkspaceRoot.documentDirectory(directory))
 	end 'manifest'
 end 'rootAround'
 
@@ -769,13 +763,6 @@ module function projectLayoutOf(reader LspReaderSearch) returns ProjectLayout
 	end 'enclosing'
 end 'projectLayoutOf'
 
-function rootWithoutAManifest(stated StatedRoot, directory FilePath) returns WorkspaceRoot
-	return match stated 'stated'
-		named(dir) gives WorkspaceRoot.projectDirectory(dir)
-		unnamed gives WorkspaceRoot.documentDirectory(directory)
-	end 'stated'
-end 'rootWithoutAManifest'
-
 // A root at a volume root — `/`, `C:\`, or a `\\server\share` — would sweep the whole volume to
 // answer one request, so a document sitting at one is a single file checked against the library
 // tiers.
@@ -793,13 +780,6 @@ function isAVolumeRoot(dir FilePath) returns bool
 
 	return false
 end 'isAVolumeRoot'
-
-function climbCeilingOf(stated StatedRoot) returns ProjectClimbCeiling
-	return match stated 'stated'
-		named(dir) gives ProjectClimbCeiling.at(dir)
-		unnamed gives ProjectClimbCeiling.none
-	end 'stated'
-end 'climbCeilingOf'
 
 extension Project
 	// ⛔ The pipeline stops at LEX plus SIGNATURES, and `queryAllModule` is never called here. Lexing and

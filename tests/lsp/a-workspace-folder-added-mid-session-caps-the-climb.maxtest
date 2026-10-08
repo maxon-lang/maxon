@@ -1,0 +1,22 @@
+let AddedFolderFirstDirName = "added-folder-one"
+let AddedFolderCeilingDirName = "added-folder-two"
+
+test 'project roots: a workspace folder added mid session caps the climb for the documents under it'
+	let first = freshOutsideCheckoutDir(AddedFolderFirstDirName)
+	let outer = stagedCeilingTree(AddedFolderCeilingDirName)
+
+	writeCorpusFile(first, fileName: ProjectRootsFillerFileName, content: ProjectRootsFillerSource)
+
+	let uri = ceilingReaderUri(outer)
+	let outcome = definitionsAcrossWorkspaceFolders(projectRootsFolders(first), addedFolders: projectRootsFolders(ceilingFolder(outer)), removedFolders: WorkspaceFolderRootArray.create(), documents: projectRootsDocument(uri, content: CeilingReaderSource), positions: ceilingPositions(uri))
+
+	let probes = probesAnswered(outcome)
+	let control = ceilingControl(outer)
+
+	discardOutsideCheckoutDir(first)
+	discardOutsideCheckoutDir(outer)
+
+	let (outerCall, neighbourCall) = ceilingProbePair(probes, offset: 0)
+
+	requireOnlyTheOwnDirectoryIsBuilt(control, outerCall: outerCall, neighbourCall: neighbourCall, dirName: AddedFolderCeilingDirName, note: "the client initialized with ONE workspace folder, then sent `workspace/didChangeWorkspaceFolders` adding a second, then opened a document in the NEW folder. A session outlives its `initialize`: a folder added to an open window must bound the climb for its documents without a restart, and a server that handles no `workspace/*` message never learns the folder exists.")
+end 'project roots: a workspace folder added mid session caps the climb for the documents under it'

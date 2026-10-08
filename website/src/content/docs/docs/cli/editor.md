@@ -131,11 +131,11 @@ reports. Once it has been edited, diagnostics about the buffer's own text — sy
 are still published immediately, while diagnostics that turn on what a declaration says wait for the
 project check, which compiles the edited text, or for the buffer to match disk again. That is what
 stops an editor inventing errors about names it cannot see, and it applies only when the buffer does use
-a name that only the project declares. This project view needs a workspace folder that contains the
-file, or a file inside `stdlib/` or `runtime/`; a file the client named no root over gets the per-buffer
-behaviour described below.
+a name that only the project declares. This project view needs a `.maxproj` in the file's directory or
+one above it, or a file inside `stdlib/` or `runtime/`; any other file gets the per-buffer behaviour
+described below.
 
-**The project root is a ladder, and the client's workspace folders are one of its rungs.** The compiler's
+**The project root is a ladder, and only a `.maxproj` or a library tier marks a project.** The compiler's
 own `stdlib/` and `runtime/` are one project each, rooted at the tier directory, which the server
 locates itself: every file inside a tier belongs to that tier's project, and a `runtime/` file is checked
 as the build checks tier source — its reserved names and `__Raw` calls are legal, its restrictions still
@@ -145,28 +145,27 @@ the library and itself. A saved `.maxproj` document also marks its project, so o
 project rooted at its directory, and `maxon/listProjects` lists it as that project; an unsaved one is
 rooted as an unsaved source in its directory is. A `.maxtasks` document is rooted at its own file. Any
 other document is rooted at the
-nearest ancestor directory holding a `.maxproj` file, searched up to the nearest root the client named
-that contains the document. Failing that it is rooted at that named root itself; failing that, at its
-own directory. **Every** entry of `workspaceFolders` is a root, and `rootUri` is read when the folders
-name none — so a multi-root window has as many roots as it has folders, each deciding for the documents
-inside it alone. A client that sends no root, or one whose root is a uri of another scheme than `file:` —
-what Remote-SSH, WSL, dev containers and Codespaces send — leaves the `.maxproj` search, unbounded, and
-the document's own directory. The `.maxproj` file marks where a project begins, and the server runs
-none of it. A `.maxproj` file inside another project's tree is published with
+nearest ancestor directory holding a `.maxproj` file, searched up to the nearest workspace folder the
+client named that contains the document. Failing that the document is a program of its own, rooted at
+its own directory, as `maxon build <file>` compiles it. **Every** entry of `workspaceFolders` caps the
+search for the documents inside it, and `rootUri` is read when the folders name none, so in a
+multi-root window each folder caps its own documents. A client that sends no root, or one whose root is
+a uri of another scheme than `file:` — what Remote-SSH, WSL, dev containers and Codespaces send —
+searches for the `.maxproj` up to the volume root. The `.maxproj` file marks where a project begins,
+and the server runs none of it. A `.maxproj` file inside another project's tree is published with
 [E2074](/docs/cli/error-codes/#e2074--nestedprojectfile), and the outer project's walk skips the
 directory holding it.
 
 **The roots are not fixed for the session.** The `initialize` response advertises
 `workspace.workspaceFolders` with `supported` and `changeNotifications` both true, and the server then
-handles `workspace/didChangeWorkspaceFolders`: a folder added to the window becomes a root at once, and
-one removed from it stops being one, with no restart of the editor. Nothing else in the workspace is
-renegotiated.
+handles `workspace/didChangeWorkspaceFolders`: a folder added to the window caps the `.maxproj` search at
+once, and a folder removed from it stops capping it, with no restart of the editor. Nothing else in the
+workspace is renegotiated.
 
 **A project is built when a document in it opens.** On `didOpen` the server builds the index that
 document reads, before it publishes the document's diagnostics, when the document's root is a known
-project: a directory holding a `.maxproj`, `stdlib/` or `runtime/`, or a workspace folder the client named
-that contains the document. A document rooted at its own directory or its own file has its project built
-by its first hover, definition or completion.
+project: a directory holding a `.maxproj`, `stdlib/` or `runtime/`. A document rooted at its own
+directory or its own file has its project built by its first hover, definition or completion.
 
 Projects are held across requests, the eight most recently used roots at a time, and a source is re-read
 when its size or modification time changes on disk. Removing a workspace folder also drops every project
@@ -185,10 +184,10 @@ it as gone.
 (E3092, E3093, E3094) appear in `maxon build`'s output alone.
 
 **A `.maxon` document in a project is published twice per version: the buffer check's set, then the
-project check's.** This applies where the document's root is a directory holding a `.maxproj`, inside a
-workspace folder the client named. The buffer check's set is published at once. The project check then
-compiles the document's whole project from disk, with the buffer's current text — saved or not — in
-place of the file, through type checking and range checking, and publishes the diagnostics that compile
+project check's.** This applies where the document's root is a directory holding a `.maxproj`. The
+buffer check's set is published at once. The project check then compiles the document's whole project
+from disk, with the buffer's current text — saved or not — in place of the file, through type checking
+and range checking, and publishes the diagnostics that compile
 reports on this document: a range error in a call to a function a sibling file declares, a partial
 implementation of a sibling's interface, an unused variable, and every other error `maxon build` reports
 before code generation. A diagnostic with no position of its own is published when the buffer check

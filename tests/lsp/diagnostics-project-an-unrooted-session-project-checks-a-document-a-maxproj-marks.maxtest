@@ -1,0 +1,23 @@
+let UnrootedCheckDirName = "diagnostics-project-unrooted-check"
+let UnrootedCheckDeclaringFileName = "a.maxon"
+let UnrootedCheckBufferFileName = "b.maxon"
+let UnrootedCheckDeclaringSource = "module typealias Percent = int(0 to 100)\n\nmodule function clamp(x Percent) returns Percent\n\treturn x\nend 'clamp'\n"
+let UnrootedCheckBufferSource = "function main() returns ExitCode\n\treturn clamp(101)\nend 'main'\n"
+let UnrootedCheckCode = "E3005"
+let UnrootedCheckLine = 1
+
+test 'an unrooted session project-checks a document a .maxproj marks'
+	let root = stagedProjectDiagnosticsRoot(UnrootedCheckDirName)
+	writeCorpusFile(root, fileName: UnrootedCheckDeclaringFileName, content: UnrootedCheckDeclaringSource)
+	writeCorpusFile(root, fileName: UnrootedCheckBufferFileName, content: UnrootedCheckBufferSource)
+
+	let session = probeProjectCheckSessionRooted(CorpusSessionRoot.unrooted, root: root, fileName: UnrootedCheckBufferFileName, content: UnrootedCheckBufferSource, edits: StringArray.create())
+
+	discardOutsideCheckoutDir(root)
+
+	let reported = try onlyProjectDiagnostic(session.diagnostics, note: "the buffer passes `101` to a sibling's `clamp(Percent = int(0 to 100))` in a session that named NO root at all. A `.maxproj` states the project whether or not the client named a root, so the project check runs and reports what `maxon build` reports: one `{UnrootedCheckCode}` at the call. A session with no project check never publishes it, because only a compile of the whole project sees the sibling's range.")
+
+	try Expect.equal(reported.code.describe(), expected: UnrootedCheckCode, message: "the one error a build of this project reports is {UnrootedCheckCode}; the server published {reported.code.describe()}: {reported.message}")
+	try Expect.equal(reported.range.startLine, expected: UnrootedCheckLine, message: "the build anchors the error at the `clamp(101)` call on line 2.")
+	try expectOneProjectCheckOutcome(session.reports, version: InitialDocumentVersion, outcome: ProjectCheckPublished, note: "the opened version is current and the project loads, so its check runs and publishes.")
+end 'an unrooted session project-checks a document a .maxproj marks'
