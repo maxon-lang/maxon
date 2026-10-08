@@ -81,7 +81,7 @@ One parameter list declares the same name twice. The second parameter would be d
 
 ### E2015 — `parserUnsupportedFeature`
 
-The source uses a language construct this compiler does not implement yet.
+The source uses a language construct this compiler does not implement yet. It also refuses a user declaration of a type name the compiler owns, such as `String`, `ExitCode` or the literal marker interface `BuiltinStringLiteral`: rename the declaration.
 
 ### E2016 — `parserInvalidCharacterLiteral`
 

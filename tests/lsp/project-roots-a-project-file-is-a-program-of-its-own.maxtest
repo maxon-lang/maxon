@@ -1,0 +1,21 @@
+let ProjectFileRootDirName = "projects-project-file-alone"
+let ProjectFileFileName = "app.maxproj"
+let ProjectFileSource = "export function app() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'app'\n"
+let ProjectFileSiblingFileName = "main.maxon"
+let ProjectFileSiblingSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+test 'project roots: a .maxproj document is a program of its own'
+	let root = freshOutsideCheckoutDir(ProjectFileRootDirName)
+	writeCorpusFile(root, fileName: ProjectFileFileName, content: ProjectFileSource)
+	writeCorpusFile(root, fileName: ProjectFileSiblingFileName, content: ProjectFileSiblingSource)
+
+	let uri = fileUriOf(root.join(ProjectFileFileName))
+	let probe = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(root)), documents: projectRootsDocument(uri, content: ProjectFileSource))
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		answered(projects, notices) then requireADriverFileStandsAlone(projects, notices: notices, note: "`{ProjectFileFileName}` was opened in a session whose one workspace folder holds it and the project's `{ProjectFileSiblingFileName}`. The driver compiles a project file ALONE to run its targets, so the sources it describes are no part of its program, and the project must not be swept and folded to check it.")
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project roots: a .maxproj document is a program of its own'

@@ -226,6 +226,14 @@ export function requireProjectRootedAtADirectory(project ProjectEntry, expectedT
 	try Expect.isFalse(project.isSingleFile, message: "{note} The project was answered as a SINGLE FILE although it is a directory holding a `.maxproj` and several sources — which is the flag the extension reads to decide whether cross-file answers are available at all.")
 end 'requireProjectRootedAtADirectory'
 
+export function requireADriverFileStandsAlone(result ListProjectsResult, notices ProjectLoadingNoticeArray, note String) throws TestFailure
+	try requireNoAnnouncedLoad(notices, note: note)
+
+	let project = try soleProject(result, note: note)
+
+	try Expect.isTrue(project.isSingleFile, message: "{note} The document was answered as part of a project rooted at {project.rootPath} rather than as a single file.")
+end 'requireADriverFileStandsAlone'
+
 export function projectsRootedAt(result ListProjectsResult, expectedTail String) returns ElementIndex
 	var found = 0
 

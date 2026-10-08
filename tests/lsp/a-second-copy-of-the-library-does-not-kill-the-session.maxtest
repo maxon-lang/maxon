@@ -1,0 +1,76 @@
+let LibraryCopyRootDirName = "library-copy-as-author-source"
+let LibraryCopyDirName = "stdlib"
+let LibraryCopyModuleName = "Builtins.maxon"
+let SweptSiblingReaderFileName = "main.maxon"
+let SweptSiblingReaderSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+union SweptSiblingOutcome
+	published(reader PublishedDiagnosticArray, sibling PublishedDiagnosticArray)
+	broke(detail String)
+end 'SweptSiblingOutcome'
+
+function probeASweptSibling(root FilePath, siblingFile FilePath, siblingSource String) returns SweptSiblingOutcome
+	writeCorpusFile(root, fileName: SweptSiblingReaderFileName, content: SweptSiblingReaderSource)
+
+	var client = LspClient.start()
+	let outcome = collectSweptSiblingOutcome(client, root: root, siblingUri: fileUriOf(siblingFile), siblingSource: siblingSource)
+	client.release()
+
+	return outcome
+end 'probeASweptSibling'
+
+function collectSweptSiblingOutcome(client LspClient, root FilePath, siblingUri String, siblingSource String) returns SweptSiblingOutcome
+	var outcome = SweptSiblingOutcome.broke(UnreportedSessionEnding)
+	let readerUri = fileUriOf(root.join(SweptSiblingReaderFileName))
+
+	try 'session'
+		_ = client.initializeAtWorkspaceFolders(projectRootsFolders(root))
+		client.initialized()
+
+		client.openDocument(readerUri, content: SweptSiblingReaderSource)
+		let reader = client.awaitPublishedDiagnostics(readerUri).items
+
+		client.openDocument(siblingUri, content: siblingSource)
+		outcome = SweptSiblingOutcome.published(reader, sibling: client.awaitPublishedDiagnostics(siblingUri).items)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then outcome = SweptSiblingOutcome.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	return outcome
+end 'collectSweptSiblingOutcome'
+
+function requireOnlyTheSiblingRefused(outcome SweptSiblingOutcome, note String) throws TestFailure
+	match outcome 'outcome'
+		published(reader, sibling) then try requireTheRefusalStaysInTheSibling(reader, sibling: sibling, note: note)
+		broke(detail) then try Expect.fail("{note} The session never answered: {detail}. ⛔ THE STREAM ENDING IS THE SERVER PROCESS ENDING, and the client stops restarting a server that keeps dying.")
+	end 'outcome'
+end 'requireOnlyTheSiblingRefused'
+
+function requireTheRefusalStaysInTheSibling(reader PublishedDiagnosticArray, sibling PublishedDiagnosticArray, note String) throws TestFailure
+	try Expect.equal(reader.count(), expected: 0, message: "{note} `{SweptSiblingReaderFileName}` is clean and declares nothing the sibling contests, so nothing is published for it. The server published {reader.count()}.")
+	try Expect.isFalse(sibling.isEmpty(), message: "{note} The sibling declares a name only the library may declare, which a build of it refuses, so the editor must publish that refusal rather than nothing.")
+end 'requireTheRefusalStaysInTheSibling'
+
+test 'a workspace folder holding a second copy of the library is checked without taking the session down'
+	let root = freshOutsideCheckoutDir(LibraryCopyRootDirName)
+	let copyDirectory = createdStagingDirectory(LibraryCopyDirName, under: root)
+	let copySource = treeLibraryModuleText()
+
+	writeCorpusFile(copyDirectory, fileName: LibraryCopyModuleName, content: copySource)
+
+	let outcome = probeASweptSibling(root, siblingFile: copyDirectory.join(LibraryCopyModuleName), siblingSource: copySource)
+
+	discardOutsideCheckoutDir(root)
+
+	try requireOnlyTheSiblingRefused(outcome, note: "The workspace folder holds `{LibraryCopyDirName}/{LibraryCopyModuleName}`, a copy of this tree's own library module — what a folder holding a second Maxon checkout or an unpacked release looks like to a compiler whose library lives elsewhere. It sits outside the library tier, so it is author source.")
+end 'a workspace folder holding a second copy of the library is checked without taking the session down'
+
+function treeLibraryModuleText() returns String
+	let file = Directory.currentPath().join(LibraryCopyDirName).join(LibraryCopyModuleName)
+
+	return try File.readText(file) otherwise panic("library copy: could not read {file.toString()}, the module this case stages a copy of")
+end 'treeLibraryModuleText'

@@ -8,7 +8,8 @@
 //
 // A document's project root is a ladder, and the order of its rungs is the design.
 // `workspaceRootOf` holds it: a document under `stdlib/` or `runtime/` is held as one project
-// rooted at that tier directory; otherwise the nearest ancestor holding a `.maxproj`, climbed no
+// rooted at that tier directory; a `.maxproj` or `.maxtasks` document is a single file, because the
+// driver compiles a driver file alone; otherwise the nearest ancestor holding a `.maxproj`, climbed no
 // higher than the nearest client-named root that holds this document; then that named root, for a
 // document inside it; then the document's own directory. A directory above the one the client
 // opened may hold a `.maxproj` of its own, so a named root consulted after an uncapped climb would
@@ -666,6 +667,10 @@ function workspaceRootOf(reader LspReaderSearch) returns WorkspaceRoot
 		inTier(dir) then return WorkspaceRoot.libraryTier(dir)
 		outside then break 'tier'
 	end 'tier'
+
+	if isDriverFileName(reader.document.path.filename()) 'aDriverFile'
+		return WorkspaceRoot.singleFile
+	end 'aDriverFile'
 
 	return match reader.document.directory 'directory'
 		at(dir) gives rootAround(reader.document, directory: dir, workingDirectory: reader.workingDirectory)

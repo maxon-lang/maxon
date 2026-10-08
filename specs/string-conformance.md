@@ -428,3 +428,54 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Character', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one
 ```
+
+<!-- test: error.a-declaration-may-not-bind-the-name-BuiltinStringLiteral -->
+### The literal marker interfaces are reserved too
+`String`'s record is the fused byte record because `String` implements `BuiltinStringLiteral`, and the
+compiler recognises that marker by its name. A user interface of the same name would be read as an author
+shadow of the library's, and the library's own `implements BuiltinStringLiteral` renamed away from it, so
+`String` would lose its fused record. It is refused like a declaration of `String` itself.
+```maxon
+interface BuiltinStringLiteral
+end 'BuiltinStringLiteral'
+
+function main() returns ExitCode
+	print("hi\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:11: Unsupported: a declaration of the type name 'BuiltinStringLiteral', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one
+```
+
+<!-- test: error.a-declaration-may-not-bind-the-name-BuiltinCharLiteral -->
+### `BuiltinCharLiteral` is reserved for `Character`'s record
+```maxon
+interface BuiltinCharLiteral
+end 'BuiltinCharLiteral'
+
+function main() returns ExitCode
+	let c = 'x'
+	print("{c}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:11: Unsupported: a declaration of the type name 'BuiltinCharLiteral', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one
+```
+
+<!-- test: error.a-declaration-may-not-bind-the-name-BuiltinArrayLiteral -->
+### `BuiltinArrayLiteral` is reserved for the array literal's record
+```maxon
+interface BuiltinArrayLiteral
+end 'BuiltinArrayLiteral'
+
+function main() returns ExitCode
+	let values = [1, 2, 3]
+	print("{values.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:11: Unsupported: a declaration of the type name 'BuiltinArrayLiteral', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one
+```

@@ -1961,7 +1961,9 @@ behaviour described below.
 own `stdlib/` and `runtime/` are one project each, rooted at the tier directory, which the server
 locates itself: every file inside a tier belongs to that tier's project, and a `runtime/` file is checked
 as the build checks tier source — its reserved names and `__Raw` calls are legal, its restrictions still
-apply, and a body no program reaches is exempt from the call checks. Any other document is rooted at the
+apply, and a body no program reaches is exempt from the call checks. A `.maxproj` or `.maxtasks` document
+is a program of its own, as the driver compiles it, and is rooted at its own file: what it sees is the
+library and itself. Any other document is rooted at the
 nearest ancestor directory holding a `.maxproj` file, searched up to the nearest root the client named
 that contains the document. Failing that it is rooted at that named root itself; failing that, at its
 own directory. **Every** entry of `workspaceFolders` is a root, and `rootUri` is read when the folders
@@ -1982,8 +1984,8 @@ renegotiated.
 **A project is built when a document in it opens.** On `didOpen` the server builds the index that
 document reads, before it publishes the document's diagnostics, when the document's root is a known
 project: a directory holding a `.maxproj`, `stdlib/` or `runtime/`, or a workspace folder the client named
-that contains the document. A document rooted at its own directory has its project built by its first
-hover, definition or completion.
+that contains the document. A document rooted at its own directory or its own file has its project built
+by its first hover, definition or completion.
 
 Projects are held across requests, the eight most recently used roots at a time, and a source is re-read
 when its size or modification time changes on disk. Removing a workspace folder also drops every project
@@ -2089,8 +2091,8 @@ two files of one project are one entry, and two sibling projects are two:
 ```
 
 `rootPath` is that root directory, as a filesystem path; for a file of `stdlib/` or `runtime/` it is that
-tier directory. `isSingleFile` is true where the ladder roots a document at its own file — one sitting at
-a volume root — and then `rootPath` is that file. A document resolves to a root when its uri spells a
+tier directory. `isSingleFile` is true where the ladder roots a document at its own file — a `.maxproj`
+or `.maxtasks` document, or one sitting at a volume root — and then `rootPath` is that file. A document resolves to a root when its uri spells a
 filesystem path with a directory above it, so the list can name fewer projects than there are open
 documents. `fileCount` is the number of production `.maxon` sources under that root, whether the open
 document is a `.maxon` or a `.maxtest` file. This request reads the projects the server holds, and
