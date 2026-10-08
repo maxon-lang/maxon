@@ -10,7 +10,19 @@ import {
 	ServerOptions,
 	State
 } from 'vscode-languageclient/node';
+import {
+	CompilerSearch,
+	CompilerSource,
+	compilerBinaryName,
+	compilerToRestartOn,
+	isExecutableFile,
+	isMaxonCheckout,
+	locateCompiler,
+	LookupNotice,
+	watchedCompilers
+} from './compilerLocator';
 import { log, initLogger } from './logger';
+import { RestartCoordinator, systemTimers } from './restartCoordinator';
 import { CompilerExplorerViewProvider } from './compilerExplorerPanel';
 import { registerTestControllers, UnitTestController } from './testController';
 import { registerDebugging } from './debugAdapter';
@@ -19,11 +31,13 @@ interface ExtensionState {
 	client: LanguageClient;
 	compilerExecutable: string;
 	clientOptions: LanguageClientOptions;
+	context: vscode.ExtensionContext;
 }
 
 let state: ExtensionState | undefined;
 let statusBarItem: vscode.StatusBarItem | undefined;
 let clientSubscriptions: vscode.Disposable[] = [];
+let compilerWatchers: vscode.Disposable[] = [];
 let unitTests: UnitTestController | undefined;
 
 const ProjectLoadingNotification = 'maxon/projectLoading';
@@ -38,7 +52,6 @@ interface ProjectLoadingParams {
 const loadingProjectRoots = new Set<string>();
 
 const isWindows = os.platform() === 'win32';
-const binaryName = isWindows ? 'maxon.exe' : 'maxon';
 
 export function getClient(): LanguageClient | undefined {
 	return state?.client;
@@ -75,6 +88,8 @@ function buildTooltip(): vscode.MarkdownString {
 		'$(error) Stopped';
 	md.appendMarkdown(`**Maxon Language Server** — ${stateLabel}\n\n`);
 
+	appendCompiler(md);
+
 	if (lastClientState === State.Running) {
 		appendProjects(md);
 	}
@@ -84,6 +99,35 @@ function buildTooltip(): vscode.MarkdownString {
 	md.appendMarkdown(' · ');
 	md.appendMarkdown(`[$(output) Show Output](command:${ShowLanguageServerOutputCommand} "Open the Maxon Language Server output")`);
 	return md;
+}
+
+function compilerVersionText(client: LanguageClient, clientState: State): string {
+	const reported = client.initializeResult?.serverInfo?.version;
+	if (reported) {
+		return reported;
+	}
+
+	switch (clientState) {
+		case State.Running:
+			return 'unknown (this compiler does not report its version)';
+		case State.Starting:
+			return 'reported once the language server has started';
+		case State.Stopped:
+			return 'unknown (the language server is not running)';
+		default:
+			throw new Error(`compilerVersionText: unhandled client state ${clientState}`);
+	}
+}
+
+function appendCompiler(md: vscode.MarkdownString) {
+	if (!state) return;
+
+	md.appendMarkdown('**Compiler**\n\n');
+	md.appendMarkdown('Version: ');
+	md.appendText(compilerVersionText(state.client, lastClientState));
+	md.appendMarkdown('\n\nLocation: ');
+	md.appendText(state.compilerExecutable);
+	md.appendMarkdown('\n\n');
 }
 
 function appendProjects(md: vscode.MarkdownString) {
@@ -281,64 +325,58 @@ function createClient(compilerExecutable: string, clientOptions: LanguageClientO
 	);
 }
 
-/**
- * Where the compiler is, in the order a reader would look.
- *
- * ⭐⭐ THE SETTING, THEN `PATH`, THEN THE INSTALL SCRIPT'S DIRECTORY, THEN THIS WORKSPACE'S OWN BUILD.
- * The install directory is searched directly because a VS Code started from the dock or the Start menu
- * does not see the PATH a shell profile sets, and the install script's PATH change reaches only
- * processes started after it.
- *
- * ⚠ The dev fallback is `maxon-bin/.maxon/`, which is where `maxon build` writes. A contributor with a
- * built tree is found with nothing configured, which is what keeps them out of the install flow.
- */
-async function findCompiler(ctx: vscode.ExtensionContext): Promise<string> {
-	const configured = vscode.workspace.getConfiguration('maxon').get<string>('serverPath')?.trim();
-	if (configured) {
-		if (await isExecutable(configured)) {
-			log(`Using maxon.serverPath: ${configured}`);
-			return configured;
-		}
-		// ⚠ A SETTING THAT POINTS AT NOTHING IS SAID OUT LOUD rather than skipped. Someone who set it
-		// meant it, and silently searching elsewhere hides a typo behind a working editor.
-		vscode.window.showWarningMessage(`maxon.serverPath points at nothing: ${configured}`);
-	}
-
-	const onPath = await findOnPath();
-	if (onPath) {
-		log(`Using compiler from PATH: ${onPath}`);
-		return onPath;
-	}
-
-	const installed = path.join(installRoot(), 'bin', binaryName);
-	if (await isExecutable(installed)) {
-		log(`Using installed compiler: ${installed}`);
-		return installed;
-	}
-
-	const candidates: string[] = [];
-	if (vscode.workspace.workspaceFolders?.length) {
-		const root = vscode.workspace.workspaceFolders[0].uri.fsPath;
-		candidates.push(path.join(root, 'maxon-bin', '.maxon', binaryName));
-	}
-	candidates.push(path.join(ctx.extensionPath, '..', 'maxon-bin', '.maxon', binaryName));
-
-	for (const candidate of candidates) {
-		if (await isExecutable(candidate)) {
-			log(`Using compiler from this workspace: ${candidate}`);
-			return candidate;
-		}
-	}
-
-	return '';
+function workspaceFolderPaths(): string[] {
+	return (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath);
 }
 
-async function isExecutable(candidate: string): Promise<boolean> {
-	try {
-		await fs.promises.access(candidate, fs.constants.X_OK);
-		return true;
-	} catch {
-		return false;
+function searchFor(ctx: vscode.ExtensionContext): CompilerSearch {
+	return {
+		configuredPath: vscode.workspace.getConfiguration('maxon').get<string>('serverPath')?.trim() ?? '',
+		workspaceFolders: workspaceFolderPaths(),
+		extensionCheckout: path.join(ctx.extensionPath, '..'),
+		installRoot: installRoot(),
+		binaryName: compilerBinaryName,
+		findOnPath,
+		isExecutable: isExecutableFile,
+		isCheckout: isMaxonCheckout
+	};
+}
+
+async function findCompiler(ctx: vscode.ExtensionContext): Promise<string> {
+	const lookup = await locateCompiler(searchFor(ctx));
+
+	for (const notice of lookup.notices) {
+		reportLookupNotice(notice);
+	}
+
+	if (!lookup.choice) {
+		return '';
+	}
+
+	log(`Using ${CompilerSourceDescriptions[lookup.choice.source]}: ${lookup.choice.executable}`);
+	return lookup.choice.executable;
+}
+
+const CompilerSourceDescriptions: Record<CompilerSource, string> = {
+	setting: 'maxon.serverPath',
+	checkout: 'the compiler built in this workspace',
+	path: 'compiler from PATH',
+	install: 'installed compiler',
+	extension: 'the compiler built beside this extension'
+};
+
+function reportLookupNotice(notice: LookupNotice): void {
+	switch (notice.kind) {
+		case 'settingPointsAtNothing':
+			// ⚠ A SETTING THAT POINTS AT NOTHING IS SAID OUT LOUD rather than skipped. Someone who set it
+			// meant it, and silently searching elsewhere hides a typo behind a working editor.
+			vscode.window.showWarningMessage(`maxon.serverPath points at nothing: ${notice.configured}`);
+			return;
+		case 'checkoutHasNoBuild':
+			log(`${notice.checkout} is a Maxon checkout with no compiler built at ${notice.slot}; build it with 'maxon run build'. Using another compiler meanwhile.`);
+			return;
+		default:
+			throw new Error(`reportLookupNotice: unhandled notice ${JSON.stringify(notice)}`);
 	}
 }
 
@@ -453,26 +491,117 @@ function runLogged(command: string, args: string[], stdin?: string): Promise<num
 	});
 }
 
-export async function restartClient(): Promise<void> {
-	if (!state) {
+async function relocateCompiler(active: ExtensionState): Promise<void> {
+	const lookup = await locateCompiler(searchFor(active.context));
+	if (state !== active) {
+		return;
+	}
+
+	const next = compilerToRestartOn(active.compilerExecutable, lookup);
+
+	if (next !== active.compilerExecutable) {
+		log(`The compiler changed: ${active.compilerExecutable} -> ${next}`);
+		active.compilerExecutable = next;
+	}
+
+	watchCompilers(active);
+}
+
+function disposeCompilerWatchers(): void {
+	for (const watcher of compilerWatchers) {
+		watcher.dispose();
+	}
+	compilerWatchers = [];
+}
+
+// A rebuilt compiler restarts the server: one still running from the renamed-away `.previous`
+// answers from the old compiler, and keeps that file on disk until it exits. Every checkout's slot is
+// watched, chosen or not, so building an empty slot moves the server onto it.
+function watchCompilers(active: ExtensionState): void {
+	disposeCompilerWatchers();
+
+	const executables = watchedCompilers(active.compilerExecutable, workspaceFolderPaths(), compilerBinaryName, isMaxonCheckout);
+	compilerWatchers = executables.map(executable => {
+		const watcher = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(path.dirname(executable), path.basename(executable))
+		);
+		watcher.onDidChange(onCompilerFileChanged);
+		watcher.onDidCreate(onCompilerFileChanged);
+		return watcher;
+	});
+}
+
+function onCompilerFileChanged(uri: vscode.Uri): void {
+	log(`${uri.fsPath} changed, restarting the language server...`);
+	restarts.changed();
+}
+
+async function reconsiderCompiler(): Promise<void> {
+	const active = state;
+	if (!active) return;
+
+	try {
+		const lookup = await locateCompiler(searchFor(active.context));
+		if (state !== active) {
+			return;
+		}
+
+		for (const notice of lookup.notices) {
+			reportLookupNotice(notice);
+		}
+
+		if (compilerToRestartOn(active.compilerExecutable, lookup) !== active.compilerExecutable) {
+			await restartClient();
+			return;
+		}
+
+		watchCompilers(active);
+	} catch (error) {
+		log(`Re-locating the compiler failed: ${error}`);
+	}
+}
+
+const CompilerChangeDebounceMs = 1000;
+
+const restarts = new RestartCoordinator(
+	performRestart,
+	CompilerChangeDebounceMs,
+	systemTimers,
+	error => log(`LSP auto-restart failed: ${error}`)
+);
+
+export function restartClient(): Promise<void> {
+	return restarts.request();
+}
+
+async function performRestart(): Promise<void> {
+	const active = state;
+	if (!active) {
 		throw new Error('Extension not activated yet');
 	}
 
 	log('Restarting LSP client...');
 
+	await relocateCompiler(active);
+
 	try {
 		log('Stopping existing LSP client');
-		await state.client.stop();
+		await active.client.stop();
 		log('LSP client stopped');
 	} catch (error) {
 		log(`Error stopping client: ${error}`);
 	}
 
-	state.client = createClient(state.compilerExecutable, state.clientOptions);
-	subscribeToClient(state.client);
+	if (state !== active) {
+		log('The extension was deactivated during the restart; not starting a new client');
+		return;
+	}
+
+	active.client = createClient(active.compilerExecutable, active.clientOptions);
+	subscribeToClient(active.client);
 
 	try {
-		await state.client.start();
+		await active.client.start();
 		log('LSP client restarted successfully');
 	} catch (error) {
 		log(`LSP client restart failed: ${error}`);
@@ -578,7 +707,8 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	state = {
 		client,
 		compilerExecutable,
-		clientOptions
+		clientOptions,
+		context: ctx
 	};
 
 	statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -649,30 +779,17 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	);
 	ctx.subscriptions.push(generateIRCommand);
 
-	// A rebuilt compiler restarts the server: one still running from the renamed-away `.previous`
-	// answers from the old compiler, and keeps that file on disk until it exits.
-	const serverDir = path.dirname(compilerExecutable);
-	const serverFile = path.basename(compilerExecutable);
-	const watcher = vscode.workspace.createFileSystemWatcher(
-		new vscode.RelativePattern(serverDir, serverFile)
-	);
-	let restartDebounce: ReturnType<typeof setTimeout> | undefined;
-	const autoRestart = (uri: vscode.Uri) => {
-		// Debounce: the build may produce multiple file events (rename old, copy new)
-		if (restartDebounce) clearTimeout(restartDebounce);
-		restartDebounce = setTimeout(async () => {
-			log(`${binaryName} changed (${uri.fsPath}), restarting the language server...`);
-			try {
-				await restartClient();
-				log('LSP auto-restarted after binary change');
-			} catch (error) {
-				log(`LSP auto-restart failed: ${error}`);
+	watchCompilers(state);
+	ctx.subscriptions.push(
+		{ dispose: disposeCompilerWatchers },
+		{ dispose: () => restarts.dispose() },
+		vscode.workspace.onDidChangeWorkspaceFolders(() => void reconsiderCompiler()),
+		vscode.workspace.onDidChangeConfiguration(event => {
+			if (event.affectsConfiguration('maxon.serverPath')) {
+				void reconsiderCompiler();
 			}
-		}, 1000);
-	};
-	watcher.onDidChange(autoRestart);
-	watcher.onDidCreate(autoRestart);
-	ctx.subscriptions.push(watcher);
+		})
+	);
 
 	log('Maxon extension activated successfully');
 

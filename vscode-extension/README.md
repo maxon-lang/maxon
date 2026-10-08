@@ -48,18 +48,25 @@ or [Open VSX](https://open-vsx.org/extension/maxon-lang/maxon-lsp-client).
 The extension looks in this order:
 
 1. The `maxon.serverPath` setting, if you set one.
-2. `maxon` on your `PATH`.
-3. `~/.maxon/bin` (`%USERPROFILE%\.maxon\bin` on Windows), or `$MAXON_INSTALL/bin` — where the install
-   script puts it. Searched directly, because a VS Code started from the dock or the Start menu may not
-   see your shell's `PATH`.
-4. This workspace's own build at `maxon-bin/.maxon/`, so a contributor with a built tree needs no
-   configuration.
+2. The build in a workspace folder that is a Maxon source checkout (a folder holding `specs/`,
+   `stdlib/`, `runtime/` and `maxon-bin/`), at `maxon-bin/.maxon/maxon`. The compiler reads `stdlib/`
+   and `runtime/` from beside its own executable, so a checkout is served by the compiler built from
+   it. With several checkouts open, the first in folder order is used. A checkout with no build yet is
+   noted in the output channel ("build it with `maxon run build`") and the search goes on.
+3. `maxon` on your `PATH`.
+4. `~/.maxon/bin` (`%USERPROFILE%\.maxon\bin` on Windows), or `$MAXON_INSTALL/bin` — where the install
+   script puts it. Searched directly, because a VS Code started from the dock or the Start menu gets the
+   desktop's `PATH`, without your shell profile's additions.
+5. The build in the checkout the extension itself is part of, when you run the extension from source.
 
 If none of those finds one, it offers **Install**, which runs the installer for your account, and
 **Locate…**, which lets you pick a compiler you already have.
 
-The language server is the compiler it finds, run as `maxon lsp-server`. When that file is rebuilt
-the extension restarts the server, so it answers from the new compiler.
+The language server is the compiler it finds, run as `maxon lsp-server`. The extension searches again
+each time the server restarts, when a workspace folder is added or removed, and when
+`maxon.serverPath` changes, and moves the server to the compiler that search finds. When the compiler
+in use, or the build of any open checkout, is rebuilt, the extension restarts the server, so it answers
+from the new compiler.
 
 ### From source (for working on the extension)
 1. Build the compiler in the repository root (see the repository README); the extension finds
@@ -340,8 +347,8 @@ at your option.
   compiler it found, or that it found none. See [Finding the compiler](#finding-the-compiler).
 - The status bar item turns yellow while the server loads a project, which happens when a document of
   that project opens, or, for a file whose project is its own directory, at its first hover, definition
-  or completion. Its tooltip lists the
-  projects loading and loaded, and ends with **Restart** and **Show Output** links (also the commands
+  or completion. Its tooltip shows the compiler's version (as `maxon version` prints it, reported by
+  the server when it starts) and its location, lists the projects loading and loaded, and ends with **Restart** and **Show Output** links (also the commands
   **Maxon: Restart Language Server** and **Maxon: Show Language Server Output**).
 - For LSP server issues, the embedded server code is in `maxon-bin/Compiler/Lsp/`.
 

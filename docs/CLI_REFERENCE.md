@@ -1850,17 +1850,23 @@ Explorer, a Test Explorer and, on every native target, debugging. `.maxon` sourc
 **Finding the compiler.** The extension runs `maxon lsp-server` from the first compiler it finds:
 
 1. the `maxon.serverPath` setting, when it points at an executable;
-2. `maxon` on `PATH`;
-3. `$MAXON_INSTALL/bin/maxon` when `MAXON_INSTALL` is set, otherwise `~/.maxon/bin/maxon` (the install
+2. `maxon-bin/.maxon/maxon` in a workspace folder that is a Maxon source checkout (it holds `specs/`,
+   `stdlib/`, `runtime/` and `maxon-bin/`), the first such folder in folder order. The compiler reads
+   `stdlib/` and `runtime/` from beside its own executable, so a checkout is served by its own build. A
+   checkout with no build yet is noted in the output channel and the search goes on;
+3. `maxon` on `PATH`;
+4. `$MAXON_INSTALL/bin/maxon` when `MAXON_INSTALL` is set, otherwise `~/.maxon/bin/maxon` (the install
    script's default location);
-4. `maxon-bin/.maxon/maxon` in the first workspace folder, which is where a Maxon source checkout builds
-   its compiler.
+5. `maxon-bin/.maxon/maxon` in the checkout the extension itself is part of, when it runs from source.
 
 If none is found, the extension offers to **Install** Maxon with the install script or to **Locate…** a
-compiler, which it saves to `maxon.serverPath`. When the compiler binary changes on disk (for example
-after an upgrade or a rebuild), the extension restarts the language server. Language server errors are
-written to the **Maxon Language Server** output channel. The status bar item turns red while the server
-is stopped and yellow while it loads a project, and its tooltip links to **Restart** and **Show Output**.
+compiler, which it saves to `maxon.serverPath`. The extension searches again each time the language
+server restarts, when a workspace folder is added or removed, and when `maxon.serverPath` changes. When
+the compiler in use, or the build of any open checkout, changes on disk (for example after an upgrade
+or a rebuild), the extension restarts the language server. Language server errors are written to the
+**Maxon Language Server** output channel. The status bar item turns red while the server is stopped and
+yellow while it loads a project. Its tooltip shows the compiler's version and location, and links to
+**Restart** and **Show Output**.
 
 **Settings:**
 
@@ -1915,7 +1921,8 @@ maxon lsp-server
 Speaks the Language Server Protocol over stdin and stdout: JSON-RPC messages with `Content-Length`
 headers. It takes no arguments and is normally started by an editor, not by hand.
 
-**Lifecycle.** `initialize` returns the server's capabilities; `initialized` is accepted. `shutdown`
+**Lifecycle.** `initialize` returns the server's capabilities and its `serverInfo`: `name` is
+`maxon`, and `version` is the line `maxon version` prints. `initialized` is accepted. `shutdown`
 answers `null`, and `exit` ends the process with code **0** after a `shutdown` and **1** otherwise (as
 it does when stdin closes or a message cannot be framed). The process ends at once, stopping any
 project check still running.

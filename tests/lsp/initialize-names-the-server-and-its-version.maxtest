@@ -1,0 +1,34 @@
+let ExpectedServerName = "maxon"
+let VersionCommandWord = "version"
+let LineFeed = "\n"
+
+test 'initialize names the server and the version `maxon version` prints'
+	var client = LspClient.start()
+
+	let advertised = try client.initialize() otherwise 'initFailed'
+		client.release()
+		Expect.fail("the session could not be initialized, so the server's identity could not be read at all.")
+		return
+	end 'initFailed'
+
+	client.release()
+
+	Expect.equal(advertised.serverIdentity.name(), expected: ExpectedServerName)
+	Expect.equal(advertised.serverIdentity.version(), expected: versionCommandFirstLine())
+end 'initialize names the server and the version `maxon version` prints'
+
+function versionCommandFirstLine() returns String
+	let binary = testedServerPath()
+
+	let ran = try Subprocess.run(Executable.path(binary), arguments: [VersionCommandWord]) otherwise (e) 'unspawnable'
+		panic("initialize identity: the test could not run — `{binary.toString()} {VersionCommandWord}` did not spawn ({e.displayReason()}).")
+	end 'unspawnable'
+
+	if not ran.succeeded() 'refused'
+		panic("initialize identity: the test could not run — `{binary.toString()} {VersionCommandWord}` failed: {ran.stderr}")
+	end 'refused'
+
+	let first = try ran.stdout.split(LineFeed).get(0) otherwise panic("initialize identity: `{VersionCommandWord}` printed nothing")
+
+	return first.trim()
+end 'versionCommandFirstLine'

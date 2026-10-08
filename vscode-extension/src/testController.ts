@@ -2,10 +2,11 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { isMaxonCheckout } from './compilerLocator';
 import { debugToExit, NoCompilerMessage } from './debugAdapter';
 import { log } from './logger';
 import { registerAll } from './registration';
-import { isMaxonCheckout, registerSpecTestController } from './specTestController';
+import { registerSpecTestController } from './specTestController';
 import { appendRunOutput, childList, pipeLines } from './testItems';
 import {
 	debuggedTestVerdict,
@@ -66,7 +67,7 @@ export interface RegisteredTestControllers {
  */
 export function registerTestControllers(compilerExecutable: () => string | undefined): RegisteredTestControllers {
 	const unitTests = registerUnitTestController(compilerExecutable);
-	const checkouts = (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath).filter(isMaxonCheckout);
+	const checkouts = (vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath).filter(root => isMaxonCheckout(root));
 
 	const registration = registerAll([
 		() => unitTests.registration,

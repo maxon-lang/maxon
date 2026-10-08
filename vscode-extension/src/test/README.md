@@ -35,8 +35,8 @@ This will:
 
 The end-to-end tests need a built compiler, because the compiler *is* the language server and the debug
 adapter: `scripts/build-from-seed.sh`, or `maxon build maxon-bin`. To test another build, name its
-executable in `MAXON_E2E_COMPILER`; the file must be named `maxon` (`maxon.exe` on Windows), because the
-extension finds it on `PATH` by that name.
+executable, under any file name, in `MAXON_E2E_COMPILER`. `runTest.ts` pins the compiler under test
+by setting `maxon.serverPath` in a temporary `--user-data-dir`.
 
 ## Fixtures
 

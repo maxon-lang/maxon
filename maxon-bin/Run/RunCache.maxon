@@ -380,7 +380,7 @@ end 'slotStem'
 // The entry point is in the key because two entry points over one source are two programs.
 function freshnessKey(program FilePath, target Target, entryFunction ByteArray) returns String throws RunCacheError
 	var manifest = ""
-	manifest.append(versionLine())
+	manifest.append(cacheFormatLine())
 	manifest.append(try compilerLine(target))
 	manifest.append(manifestLine(EntryFieldLabel, fields: [String.from(entryFunction)]))
 
@@ -393,12 +393,12 @@ function freshnessKey(program FilePath, target Target, entryFunction ByteArray) 
 	return hexOfLeadingBytes(sha256(manifest.toByteArray()), count: CacheNameDigestBytes)
 end 'freshnessKey'
 
-function versionLine() returns String
+function cacheFormatLine() returns String
 	var fields = StringArray.create()
 	fields.push(cacheFormatName())
 
 	return manifestLine(VersionFieldLabel, fields: fields)
-end 'versionLine'
+end 'cacheFormatLine'
 
 // ⚠ **THE COMPILER IS IDENTIFIED BY ITS PATH, SIZE AND MODIFICATION TIME, NOT BY ITS BYTES.** Hashing a
 // binary of tens of megabytes ahead of every cached run is exactly the cost this cache exists to avoid.

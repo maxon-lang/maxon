@@ -1,8 +1,8 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { compilerBinaryName, slotCompilerOf } from './compilerLocator';
 import { log } from './logger';
 import {
 	parseSpecContent,
@@ -11,9 +11,6 @@ import {
 	SpecTestMarker
 } from './specParser';
 import { appendRunOutput, childList, pipeLines } from './testItems';
-
-const isWindows = os.platform() === 'win32';
-const compilerBinaryName = isWindows ? 'maxon.exe' : 'maxon';
 
 interface ProfileBinding {
 	profile: vscode.TestRunProfile;
@@ -30,19 +27,6 @@ const FAIL_LINE_RE = /^FAIL (\S+):(?: (.*))?$/;
 const NOT_RUN_LINE_RE = /^(?:SKIP|NOTRUN) (\S+)$/;
 const SUMMARY_RE = /^\d+ passed, \d+ failed$/;
 
-/** True when `workspaceRoot` is the Maxon compiler checkout, the one place `spec-test` means anything. */
-export function isMaxonCheckout(workspaceRoot: string): boolean {
-	return isDirectory(path.join(workspaceRoot, 'specs')) && isDirectory(path.join(workspaceRoot, 'maxon-bin'));
-}
-
-function isDirectory(candidate: string): boolean {
-	try {
-		return fs.statSync(candidate).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
 /** The checkout's language spec suite, run by the tree's own compiler build. */
 export function registerSpecTestController(workspaceRoot: string): vscode.Disposable {
 	const specDir = path.join(workspaceRoot, 'specs');
@@ -52,7 +36,7 @@ export function registerSpecTestController(workspaceRoot: string): vscode.Dispos
 	const testItemById = new Map<string, vscode.TestItem>();
 	const specByName = new Map<string, SpecFile>();
 
-	const compilerBinary = path.join(workspaceRoot, 'maxon-bin', '.maxon', compilerBinaryName);
+	const compilerBinary = slotCompilerOf(workspaceRoot, compilerBinaryName);
 
 	const binding: ProfileBinding = {
 		profile: controller.createRunProfile(

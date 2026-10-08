@@ -37,6 +37,8 @@ let MethodDidClose = "textDocument/didClose"
 let MethodDidChangeWorkspaceFolders = "workspace/didChangeWorkspaceFolders"
 
 let CapabilitiesKey = "capabilities"
+let ServerInfoKey = "serverInfo"
+let ServerNameKey = "name"
 let TextDocumentSyncKey = "textDocumentSync"
 let TextDocumentKey = "textDocument"
 let ContentChangesKey = "contentChanges"
@@ -309,8 +311,16 @@ function respondInitialize(id LspRequestId, doc JsonDoc)
 
 	var result = LspJsonObject.create(reply)
 	result.putNode(CapabilitiesKey, value: capabilities.finish())
+	result.putNode(ServerInfoKey, value: serverInfoNode(reply))
 	writeLspResult(reply, id: id, result: result.finish())
 end 'respondInitialize'
+
+function serverInfoNode(doc JsonDoc) returns JsonNodeId
+	var info = LspJsonObject.create(doc)
+	info.put(ServerNameKey, value: JsonNode.stringNode(CompilerProductName))
+	info.put(VersionKey, value: JsonNode.stringNode(versionLine()))
+	return info.finish()
+end 'serverInfoNode'
 
 // Both shapes, because clients in the field send either: `workspaceFolders` superseded `rootUri` in
 // LSP 3.6, and a client written since sends `rootUri: null` and names the root in the folders. The

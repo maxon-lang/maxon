@@ -172,9 +172,31 @@ public type CodeActionItem
 	end 'create'
 end 'CodeActionItem'
 
+public union ServerIdentity
+	absent
+	reported(name String, version String)
+
+	public function name() returns String throws LspClientError
+		match self 'identity'
+			reported(name, _) then return name
+			absent then throw LspClientError.malformedResponse(AbsentServerInfoDetail)
+		end 'identity'
+	end 'name'
+
+	public function version() returns String throws LspClientError
+		match self 'identity'
+			reported(_, version) then return version
+			absent then throw LspClientError.malformedResponse(AbsentServerInfoDetail)
+		end 'identity'
+	end 'version'
+end 'ServerIdentity'
+
+let AbsentServerInfoDetail = "the initialize reply carries no `serverInfo`, so an editor has no way to tell a user which compiler is answering"
+
 // What the server advertised in its `initialize` response. A real multi-root client reads the two
 // `workspace.workspaceFolders` flags before it names a second folder or sends a folder change at all.
 public type InitializeResult
+	public var serverIdentity as ServerIdentity = ServerIdentity.absent
 	public var hasTextDocumentSync = false
 	public var hasHoverProvider = false
 	public var hasCompletionProvider = false
@@ -1190,7 +1212,7 @@ function headerReadFailure(e SubprocessError) returns String
 end 'headerReadFailure'
 
 // The server binary with the suffix this host can actually spawn.
-function testedServerPath() returns FilePath
+export function testedServerPath() returns FilePath
 	#if os(Windows)
 		let spelled = "{TestedCompilerStem}.exe"
 	#else
@@ -1498,6 +1520,12 @@ function readAdvertised(replyDoc JsonDoc, result JsonNodeId) returns InitializeR
 	let capabilities = try memberNode(replyDoc, of: result, key: CapabilitiesKey)
 
 	var advertised = InitializeResult.create()
+
+	if hasMember(replyDoc, of: result, key: ServerInfoKey) 'namesItself'
+		let info = try memberNode(replyDoc, of: result, key: ServerInfoKey)
+		advertised.serverIdentity = ServerIdentity.reported(try stringMember(replyDoc, of: info, key: NameKey), version: try stringMember(replyDoc, of: info, key: VersionKey))
+	end 'namesItself'
+
 	advertised.hasTextDocumentSync = advertises(replyDoc, capabilities: capabilities, key: TextDocumentSyncKey)
 	advertised.hasHoverProvider = advertises(replyDoc, capabilities: capabilities, key: HoverProviderKey)
 	advertised.hasCompletionProvider = advertises(replyDoc, capabilities: capabilities, key: CompletionProviderKey)
@@ -1861,6 +1889,7 @@ let ReportWordSeparator = " "
 let ProjectCheckReportTailWords = 2
 
 let CapabilitiesKey = "capabilities"
+let ServerInfoKey = "serverInfo"
 let TextDocumentKey = "textDocument"
 let WorkspaceKey = "workspace"
 let WorkspaceFoldersKey = "workspaceFolders"
