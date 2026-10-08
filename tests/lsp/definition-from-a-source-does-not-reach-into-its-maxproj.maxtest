@@ -1,0 +1,25 @@
+let SourceToMaxprojDirName = "definition-source-to-maxproj"
+let SourceToMaxprojProjectFileName = "app.maxproj"
+let SourceToMaxprojProjectFileSource = "export function app() returns ExitCode\n\treturn 0\nend 'app'\n"
+let SourceToMaxprojMainFileName = "main.maxon"
+let SourceToMaxprojMainSource = "function main() returns ExitCode\n\treturn app()\nend 'main'\n"
+let SourceToMaxprojCallLine = 1 as LspCoordinate
+let SourceToMaxprojCallCharacter = 9 as LspCoordinate
+
+test 'definition from a source does not reach into the .maxproj opened before it'
+	let root = freshOutsideCheckoutDir(SourceToMaxprojDirName)
+	writeCorpusFile(root, fileName: SourceToMaxprojProjectFileName, content: SourceToMaxprojProjectFileSource)
+	writeCorpusFile(root, fileName: SourceToMaxprojMainFileName, content: SourceToMaxprojMainSource)
+
+	let mainUri = fileUriOf(root.join(SourceToMaxprojMainFileName))
+	var documents = projectRootsDocument(fileUriOf(root.join(SourceToMaxprojProjectFileName)), content: SourceToMaxprojProjectFileSource)
+	documents.push(WorkspaceFolderDocument.create(mainUri, content: SourceToMaxprojMainSource))
+
+	let outcome = definitionsAcrossWorkspaceFolders(projectRootsFolders(root), addedFolders: WorkspaceFolderRootArray.create(), removedFolders: WorkspaceFolderRootArray.create(), documents: documents, positions: projectRootsPosition(WorkspaceFolderProbePosition.create(mainUri, line: SourceToMaxprojCallLine, character: SourceToMaxprojCallCharacter)))
+
+	discardOutsideCheckoutDir(root)
+
+	let probe = try soleProbeAnswered(outcome)
+
+	expectNoDefinitionInProject(probe, note: "`{SourceToMaxprojProjectFileName}` was opened, then `{SourceToMaxprojMainFileName}`, and a definition was asked on its call to `app`. Only the project file declares `app`, and a project file is a program of its own that no build of the project compiles, so the jump must not land in it.")
+end 'definition from a source does not reach into the .maxproj opened before it'

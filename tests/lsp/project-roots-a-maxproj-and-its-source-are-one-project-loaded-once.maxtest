@@ -1,0 +1,42 @@
+let OneLoadDirName = "projects-maxproj-and-source-load-once"
+let OneLoadProjectFileName = "app.maxproj"
+let OneLoadProjectFileSource = "export function app() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'app'\n"
+let OneLoadMainFileName = "main.maxon"
+let OneLoadMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let OneLoadSourceCount = 1
+
+test 'project roots: a .maxproj and a source beside it are one project, loaded once, rooted or not'
+	let root = freshOutsideCheckoutDir(OneLoadDirName)
+	writeCorpusFile(root, fileName: OneLoadProjectFileName, content: OneLoadProjectFileSource)
+	writeCorpusFile(root, fileName: OneLoadMainFileName, content: OneLoadMainSource)
+
+	var documents = projectRootsDocument(fileUriOf(root.join(OneLoadProjectFileName)), content: OneLoadProjectFileSource)
+	documents.push(WorkspaceFolderDocument.create(fileUriOf(root.join(OneLoadMainFileName)), content: OneLoadMainSource))
+
+	let rooted = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(root)), documents: documents)
+	let unrooted = listProjectsIn(ProjectRootsSession.unrooted, documents: documents)
+
+	discardOutsideCheckoutDir(root)
+
+	try requireOneProjectLoadedOnce(rooted, session: "a session rooted at that folder")
+	try requireOneProjectLoadedOnce(unrooted, session: "a session that named no workspace folder")
+end 'project roots: a .maxproj and a source beside it are one project, loaded once, rooted or not'
+
+function requireOneProjectLoadedOnce(probe ListProjectsProbe, session String) throws TestFailure
+	let note = "`{OneLoadProjectFileName}` and then `{OneLoadMainFileName}` beside it were opened, in {session}. Both belong to the project the `.maxproj` marks, so the server builds that one project once and lists it once."
+	let expectedTail = outsideCheckoutDirName(OneLoadDirName)
+
+	match probe 'probe'
+		answered(projects, notices) then try requireTheOneProject(projects, notices: notices, expectedTail: expectedTail, note: note)
+		unanswered(reason) then try Expect.fail(reason)
+	end 'probe'
+end 'requireOneProjectLoadedOnce'
+
+function requireTheOneProject(projects ListProjectsResult, notices ProjectLoadingNoticeArray, expectedTail String, note String) throws TestFailure
+	try requireOneAnnouncedLoad(notices, expectedTail: expectedTail, note: note)
+
+	let project = try soleProject(projects, note: note)
+
+	try requireProjectRootedAtADirectory(project, expectedTail: expectedTail, note: note)
+	try Expect.equal(project.fileCount, expected: OneLoadSourceCount, message: "{note} The project reported {project.fileCount} sources; it holds {OneLoadSourceCount}.")
+end 'requireTheOneProject'

@@ -1,0 +1,18 @@
+let MaxprojSiblingCallDirName = "diagnostics-maxproj-sibling-call"
+let MaxprojFileName = "app.maxproj"
+let MaxprojSource = "export function app() returns ExitCode\n\treturn projectHelper()\nend 'app'\n"
+let MaxprojMainFileName = "main.maxon"
+let MaxprojMainSource = "function main() returns ExitCode\n\treturn projectHelper()\nend 'main'\n\nexport function projectHelper() returns ExitCode\n\treturn 0\nend 'projectHelper'\n"
+let MaxprojSiblingCallPublished = "E3004@1"
+
+test 'project diagnostics: a .maxproj calling a function only its project declares is refused'
+	let root = freshOutsideCheckoutDir(MaxprojSiblingCallDirName)
+	writeCorpusFile(root, fileName: MaxprojFileName, content: MaxprojSource)
+	writeCorpusFile(root, fileName: MaxprojMainFileName, content: MaxprojMainSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: MaxprojFileName, content: MaxprojSource)
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: MaxprojSiblingCallPublished, note: "`{MaxprojFileName}` calls `projectHelper`, which only the project's `{MaxprojMainFileName}` declares. The driver compiles a project file alone to run its targets, so `maxon build` refuses that call, and the editor must too, however much of the project it has loaded.")
+end 'project diagnostics: a .maxproj calling a function only its project declares is refused'

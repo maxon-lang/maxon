@@ -1,0 +1,29 @@
+let UnlexableDirName = "projects-unlexable-maxproj"
+let UnlexableProjectFileName = "app.maxproj"
+let UnlexableProjectFileSource = "export function app() returns ExitCode\n\tlet name = \"unterminated\n\treturn 0\nend 'app'\n"
+let UnlexableMainFileName = "main.maxon"
+let UnlexableMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let UnlexableSourceCount = 1
+
+test 'project roots: a .maxproj the lexer refuses still loads the project it marks'
+	let root = freshOutsideCheckoutDir(UnlexableDirName)
+	writeCorpusFile(root, fileName: UnlexableProjectFileName, content: UnlexableProjectFileSource)
+	writeCorpusFile(root, fileName: UnlexableMainFileName, content: UnlexableMainSource)
+
+	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(fileUriOf(root.join(UnlexableProjectFileName)), content: UnlexableProjectFileSource))
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		answered(projects, _) then requireTheProjectSwept(projects)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project roots: a .maxproj the lexer refuses still loads the project it marks'
+
+function requireTheProjectSwept(projects ListProjectsResult) throws TestFailure
+	let note = "`{UnlexableProjectFileName}` holds an unterminated string, beside a clean `{UnlexableMainFileName}`. The project file is a program of its own and none of the project's sources, so its text cannot stop the project it marks from loading."
+	let project = try soleProject(projects, note: note)
+
+	try requireProjectRootedAtADirectory(project, expectedTail: outsideCheckoutDirName(UnlexableDirName), note: note)
+	try Expect.equal(project.fileCount, expected: UnlexableSourceCount, message: "{note} The project reported {project.fileCount} sources: a count of 0 is a project the server announced and never held.")
+end 'requireTheProjectSwept'

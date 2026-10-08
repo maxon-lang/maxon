@@ -1,0 +1,30 @@
+let ClashRootDirName = "projects-project-file-clashing-name"
+let ClashProjectFileName = "app.maxproj"
+let ClashProjectFileSource = "export function app() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'app'\n"
+let ClashMainFileName = "main.maxon"
+let ClashMainSource = "function main() returns ExitCode\n\treturn app()\nend 'main'\n\nfunction app() returns ExitCode\n\treturn 0\nend 'app'\n"
+let ClashSourceCount = 1
+
+test 'project roots: a .maxproj declaring a name its project also declares still loads the project'
+	let root = freshOutsideCheckoutDir(ClashRootDirName)
+	writeCorpusFile(root, fileName: ClashProjectFileName, content: ClashProjectFileSource)
+	writeCorpusFile(root, fileName: ClashMainFileName, content: ClashMainSource)
+
+	let uri = fileUriOf(root.join(ClashProjectFileName))
+	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(uri, content: ClashProjectFileSource))
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		answered(projects, _) then requireTheClashingProjectSwept(projects)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project roots: a .maxproj declaring a name its project also declares still loads the project'
+
+function requireTheClashingProjectSwept(projects ListProjectsResult) throws TestFailure
+	let note = "`{ClashProjectFileName}` declares a target `app`, and the project's `{ClashMainFileName}` declares a function `app` of its own. The project file is a program of its own, so the two never meet in any build, and opening the project file loads the project it marks."
+	let project = try soleProject(projects, note: note)
+
+	try requireProjectRootedAtADirectory(project, expectedTail: outsideCheckoutDirName(ClashRootDirName), note: note)
+	try Expect.equal(project.fileCount, expected: ClashSourceCount, message: "{note} The project reported {project.fileCount} sources: a count of 0 is a project the server announced and never held.")
+end 'requireTheClashingProjectSwept'

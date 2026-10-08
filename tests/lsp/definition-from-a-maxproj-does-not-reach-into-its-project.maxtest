@@ -1,0 +1,19 @@
+let MaxprojDefinitionDirName = "definition-from-a-maxproj"
+let MaxprojFileName = "app.maxproj"
+let MaxprojSource = "export function app() returns ExitCode\n\treturn projectHelper()\nend 'app'\n"
+let MaxprojMainFileName = "main.maxon"
+let MaxprojMainSource = "function main() returns ExitCode\n\treturn projectHelper()\nend 'main'\n\nexport function projectHelper() returns ExitCode\n\treturn 0\nend 'projectHelper'\n"
+let MaxprojCallLine = 1 as LspCoordinate
+let MaxprojCallCharacter = 9 as LspCoordinate
+
+test 'definition from a .maxproj does not reach into the project it marks'
+	let root = freshOutsideCheckoutDir(MaxprojDefinitionDirName)
+	writeCorpusFile(root, fileName: MaxprojFileName, content: MaxprojSource)
+	writeCorpusFile(root, fileName: MaxprojMainFileName, content: MaxprojMainSource)
+
+	let probe = probeCorpusDefinition(root, fileName: MaxprojFileName, content: MaxprojSource, line: MaxprojCallLine, character: MaxprojCallCharacter)
+
+	discardOutsideCheckoutDir(root)
+
+	expectNoDefinitionInProject(probe, note: "a definition request on `projectHelper` inside `{MaxprojFileName}`, which only the project's `{MaxprojMainFileName}` declares. A project file is a program of its own that no build of the project compiles, so the call resolves nowhere and the jump must not land in `{MaxprojMainFileName}`.")
+end 'definition from a .maxproj does not reach into the project it marks'

@@ -1969,8 +1969,11 @@ own `stdlib/` and `runtime/` are one project each, rooted at the tier directory,
 locates itself: every file inside a tier belongs to that tier's project, and a `runtime/` file is checked
 as the build checks tier source — its reserved names and `__Raw` calls are legal, its restrictions still
 apply, and a body no program reaches is exempt from the call checks. A `.maxproj` or `.maxtasks` document
-is a program of its own, as the driver compiles it, and is rooted at its own file: what it sees is the
-library and itself. Any other document is rooted at the
+is a program of its own, as the driver compiles it: its diagnostics, hover, definition and completion see
+the library and itself. A saved `.maxproj` document also marks its project, so opening one loads the
+project rooted at its directory, and `maxon/listProjects` lists it as that project; an unsaved one is
+rooted as an unsaved source in its directory is. A `.maxtasks` document is rooted at its own file. Any
+other document is rooted at the
 nearest ancestor directory holding a `.maxproj` file, searched up to the nearest root the client named
 that contains the document. Failing that it is rooted at that named root itself; failing that, at its
 own directory. **Every** entry of `workspaceFolders` is a root, and `rootUri` is read when the folders
@@ -2098,8 +2101,8 @@ two files of one project are one entry, and two sibling projects are two:
 ```
 
 `rootPath` is that root directory, as a filesystem path; for a file of `stdlib/` or `runtime/` it is that
-tier directory. `isSingleFile` is true where the ladder roots a document at its own file — a `.maxproj`
-or `.maxtasks` document, or one sitting at a volume root — and then `rootPath` is that file. A document resolves to a root when its uri spells a
+tier directory. `isSingleFile` is true where the ladder roots a document at its own file — a `.maxtasks`
+document, or one sitting at a volume root — and then `rootPath` is that file. A document resolves to a root when its uri spells a
 filesystem path with a directory above it, so the list can name fewer projects than there are open
 documents. `fileCount` is the number of production `.maxon` sources under that root, whether the open
 document is a `.maxon` or a `.maxtest` file. This request reads the projects the server holds, and

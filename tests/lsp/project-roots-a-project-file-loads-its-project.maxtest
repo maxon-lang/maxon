@@ -1,0 +1,34 @@
+let ProjectFileRootDirName = "projects-project-file-loads-its-project"
+let ProjectFileFileName = "app.maxproj"
+let ProjectFileSource = "export function app() returns ExitCode\n\tBuild.build(\".\")\n\treturn 0\nend 'app'\n"
+let ProjectFileSiblingFileName = "main.maxon"
+let ProjectFileSiblingSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let ProjectFileSourceCount = 1
+
+test 'project roots: opening a .maxproj loads the project it marks'
+	let root = freshOutsideCheckoutDir(ProjectFileRootDirName)
+	writeCorpusFile(root, fileName: ProjectFileFileName, content: ProjectFileSource)
+	writeCorpusFile(root, fileName: ProjectFileSiblingFileName, content: ProjectFileSiblingSource)
+
+	let uri = fileUriOf(root.join(ProjectFileFileName))
+	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(uri, content: ProjectFileSource))
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		answered(projects, notices) then requireTheMarkedProjectLoaded(projects, notices: notices)
+		unanswered(reason) then Expect.fail(reason)
+	end 'probe'
+end 'project roots: opening a .maxproj loads the project it marks'
+
+function requireTheMarkedProjectLoaded(projects ListProjectsResult, notices ProjectLoadingNoticeArray) throws TestFailure
+	let note = "`{ProjectFileFileName}` was opened, beside the project's `{ProjectFileSiblingFileName}`, in a session that named no workspace folder. A `.maxproj` states that its directory is a project, so opening it loads that project as opening any of its sources does."
+	let expectedTail = outsideCheckoutDirName(ProjectFileRootDirName)
+
+	try requireOneAnnouncedLoad(notices, expectedTail: expectedTail, note: note)
+
+	let project = try soleProject(projects, note: note)
+
+	try requireProjectRootedAtADirectory(project, expectedTail: expectedTail, note: note)
+	try Expect.equal(project.fileCount, expected: ProjectFileSourceCount, message: "{note} The project reported {project.fileCount} sources; it holds {ProjectFileSourceCount}, `{ProjectFileSiblingFileName}`.")
+end 'requireTheMarkedProjectLoaded'

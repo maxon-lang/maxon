@@ -1,0 +1,45 @@
+let MaxprojDeclaresDirName = "diagnostics-maxproj-declares-nothing-for-its-project"
+let MaxprojFileName = "app.maxproj"
+let MaxprojSource = "export function app() returns ExitCode\n\treturn 0\nend 'app'\n"
+let MaxprojMainFileName = "main.maxon"
+let MaxprojMainSource = "function main() returns ExitCode\n\treturn app()\nend 'main'\n"
+let MaxprojMainPublished = "E3004@1"
+
+test 'project diagnostics: a function a .maxproj declares is not declared for the project it marks'
+	let root = freshOutsideCheckoutDir(MaxprojDeclaresDirName)
+	writeCorpusFile(root, fileName: MaxprojFileName, content: MaxprojSource)
+	writeCorpusFile(root, fileName: MaxprojMainFileName, content: MaxprojMainSource)
+
+	var client = LspClient.start()
+	let probe = collectMainAfterTheProjectFile(client, root: root)
+	client.release()
+
+	discardOutsideCheckoutDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: MaxprojMainPublished, note: "`{MaxprojFileName}` was opened, then the project's `{MaxprojMainFileName}`, which calls `app`. Only the project file declares `app`, and a project file is a program of its own that no build of the project compiles, so `maxon build` refuses the call and the editor must too.")
+end 'project diagnostics: a function a .maxproj declares is not declared for the project it marks'
+
+function collectMainAfterTheProjectFile(client LspClient, root FilePath) returns ProjectDiagnosticsProbe
+	var probe = ProjectDiagnosticsProbe.broke(UnreportedSessionEnding)
+	let projectFileUri = fileUriOf(root.join(MaxprojFileName))
+	let mainUri = fileUriOf(root.join(MaxprojMainFileName))
+
+	try 'session'
+		_ = client.initializeAtRootUri(fileUriOf(root))
+		client.initialized()
+
+		client.openDocument(projectFileUri, content: MaxprojSource)
+		_ = client.awaitPublishedDiagnostics(projectFileUri)
+
+		client.openDocument(mainUri, content: MaxprojMainSource)
+		probe = ProjectDiagnosticsProbe.published(client.awaitPublishedDiagnostics(mainUri).items)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+				malformedResponse or
+				serverRefused then probe = ProjectDiagnosticsProbe.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	return probe
+end 'collectMainAfterTheProjectFile'

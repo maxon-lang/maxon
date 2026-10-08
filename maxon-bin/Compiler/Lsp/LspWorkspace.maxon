@@ -8,10 +8,13 @@
 //
 // A document's project root is a ladder, and the order of its rungs is the design.
 // `workspaceRootOf` holds it: a document under `stdlib/` or `runtime/` is held as one project
-// rooted at that tier directory; a `.maxproj` or `.maxtasks` document is a single file, because the
-// driver compiles a driver file alone; otherwise the nearest ancestor holding a `.maxproj`, climbed no
-// higher than the nearest client-named root that holds this document; then that named root, for a
-// document inside it; then the document's own directory. A directory above the one the client
+// rooted at that tier directory; a `.maxproj` or `.maxtasks` document is read as a single file,
+// because the driver compiles a driver file alone, while a `.maxproj` loaded for
+// `RootPurpose.loadsTheProject` takes the rungs below as a source beside it would: a saved one is
+// found by the climb's first step, and an unsaved one marks nothing on disk; otherwise the
+// nearest ancestor holding a `.maxproj`, climbed no higher than the nearest client-named root that
+// holds this document; then that named root, for a document inside it; then the document's own
+// directory. A directory above the one the client
 // opened may hold a `.maxproj` of its own, so a named root consulted after an uncapped climb would
 // decide nothing, while one consulted before the climb would root a document under
 // `<root>/sub/x.maxproj` at `<root>`. Capping the climb is what leaves both rungs right. A client
@@ -94,6 +97,11 @@ function directoryHolding(path FilePath) returns DocumentDirectory
 	return DocumentDirectory.at(dir)
 end 'directoryHolding'
 
+enum RootPurpose
+	loadsTheProject
+	readsTheDocument
+end 'RootPurpose'
+
 union WorkspaceRoot
 	projectDirectory(dir FilePath)
 	documentDirectory(dir FilePath)
@@ -134,11 +142,11 @@ type HeldCorpus
 		return Self{project: project, selection: selection, sweep: sweep, sweptAtMs: sweptAtMs}
 	end 'create'
 
-	function corpusFor(root WorkspaceRoot, readerPath FilePath) returns LspCorpus
+	function sweptFor(root WorkspaceRoot, request SweepRequest) returns SweptProject
 		resweep(root)
 
-		return self.project.sweptOver(self.sweep, readerPath: readerPath)
-	end 'corpusFor'
+		return self.project.sweptOver(self.sweep, request: request)
+	end 'sweptFor'
 
 	function resweep(root WorkspaceRoot)
 		if sweepIsFresh() 'sweptRecently'
@@ -199,37 +207,38 @@ type HeldWorkspace
 		return Self{corpora: HeldCorpusMap.create()}
 	end 'create'
 
-	function corpusFor(root WorkspaceRoot, key String, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
-		let selection = readerSelectionOf(readerPath)
+	function sweptFor(root WorkspaceRoot, key String, tiers LibraryTiers, request SweepRequest) returns SweptProject
+		let selection = readerSelectionOf(documentOf(request))
 
 		if self.corpora.contains(selection) 'heldAlready'
-			var held = try self.corpora.get(selection) otherwise panic("HeldWorkspace.corpusFor: the corpus for this selection was found one line above")
+			var held = try self.corpora.get(selection) otherwise panic("HeldWorkspace.sweptFor: the corpus for this selection was found one line above")
 
-			return held.corpusFor(root, readerPath: readerPath)
+			return held.sweptFor(root, request: request)
 		end 'heldAlready'
 
 		writeProjectLoadingNotification(key, loading: true)
-		let corpus = self.builtCorpus(root, selection: selection, tiers: tiers, readerPath: readerPath)
+		let swept = self.builtSwept(root, selection: selection, tiers: tiers, request: request)
 		writeProjectLoadingNotification(key, loading: false)
 
-		return corpus
-	end 'corpusFor'
+		return swept
+	end 'sweptFor'
 
-	// Every return here reaches the `loading: false` in `corpusFor`; one that skipped it would leave
+	// Every return here reaches the `loading: false` in `sweptFor`; one that skipped it would leave
 	// the client showing this project as loading for the rest of the session.
-	function builtCorpus(root WorkspaceRoot, selection SourceSelection, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
-		let project = try libraryTierProject(buildRootOf(root, readerPath: readerPath), tiers: tiers, buffer: OpenBuffer.none) otherwise return LspCorpus.unavailable
+	function builtSwept(root WorkspaceRoot, selection SourceSelection, tiers LibraryTiers, request SweepRequest) returns SweptProject
+		let project = try libraryTierProject(buildRootOf(root, readerPath: documentOf(request)), tiers: tiers, buffer: OpenBuffer.none) otherwise return SweptProject.unavailable
 		var fresh = HeldCorpus.create(project, selection: selection, sweep: sourcesUnder(root, selection: selection), sweptAtMs: Clock.nowMs())
 
-		let corpus = fresh.corpusFor(root, readerPath: readerPath)
+		let swept = fresh.sweptFor(root, request: request)
 
-		match corpus 'outcome'
-			loaded then self.corpora.upsert(selection, value: fresh)
-			unavailable then return LspCorpus.unavailable
+		match swept 'outcome'
+			read or
+				loaded then self.corpora.upsert(selection, value: fresh)
+			unavailable then return SweptProject.unavailable
 		end 'outcome'
 
-		return corpus
-	end 'builtCorpus'
+		return swept
+	end 'builtSwept'
 
 	function facts(root FilePath) returns LspProjectFacts
 		for selection in SourceSelection.allCases 'eachSelection'
@@ -241,6 +250,24 @@ type HeldWorkspace
 		panic("HeldWorkspace.facts: '{root.toString()}' is held, and a workspace is held only once one of its corpora has loaded")
 	end 'facts'
 end 'HeldWorkspace'
+
+union SweepRequest
+	reading(path FilePath)
+	loadingFor(path FilePath)
+end 'SweepRequest'
+
+function documentOf(request SweepRequest) returns FilePath
+	return match request 'request'
+		reading(path) gives path
+		loadingFor(path) gives path
+	end 'request'
+end 'documentOf'
+
+union SweptProject
+	read(project Project, signatures ProgramSignatures, readerPath FilePath)
+	loaded
+	unavailable
+end 'SweptProject'
 
 typealias HeldProjectKeyArray = Array with String
 
@@ -352,7 +379,7 @@ function locatedFacts(document ReaderDocument, search LspRootSearch) returns Lsp
 end 'locatedFacts'
 
 function factsUnderTheRootOf(reader LspReaderSearch) returns LspProjectFacts
-	let root = workspaceRootOf(reader)
+	let root = workspaceRootOf(reader, purpose: RootPurpose.loadsTheProject)
 
 	return match root 'root'
 		projectDirectory or
@@ -362,7 +389,7 @@ function factsUnderTheRootOf(reader LspReaderSearch) returns LspProjectFacts
 	end 'root'
 end 'factsUnderTheRootOf'
 
-// The key is `heldRootOf`'s answer, which is the derivation `sweptWorkspace` files a project under. A
+// The key is `heldRootOf`'s answer, which is the derivation `heldProjectSwept` files a project under. A
 // second spelling of it here reads a miss for every root and reports every project unswept, with nothing
 // failing to say so.
 function heldProjectFacts(root WorkspaceRoot, readerPath FilePath) returns LspProjectFacts
@@ -380,7 +407,7 @@ module function lspDocumentCorpus(uri String) returns LspCorpus
 	let document = ReaderDocument.of(readerPath)
 
 	return match lspRootSearch() 'search'
-		ready(tiers, workingDirectory) gives sweptWorkspace(workspaceRootOf(LspReaderSearch.create(document, tiers: tiers, workingDirectory: workingDirectory)), tiers: tiers, readerPath: readerPath)
+		ready(tiers, workingDirectory) gives sweptWorkspace(workspaceRootOf(LspReaderSearch.create(document, tiers: tiers, workingDirectory: workingDirectory), purpose: RootPurpose.readsTheDocument), tiers: tiers, readerPath: readerPath)
 		unavailable gives LspCorpus.unavailable
 	end 'search'
 end 'lspDocumentCorpus'
@@ -395,14 +422,7 @@ module function lspProjectCorpus(reader LspReaderSearch) returns LspCorpus
 		return LspCorpus.unavailable
 	end 'unstated'
 
-	return lspKnownProjectCorpus(reader)
-end 'lspProjectCorpus'
-
-// A document-directory root is left unbuilt: nothing states it is a project, it can be a whole home
-// directory, and the server is single-threaded, so opening a file there would hold every request
-// behind a walk of it. `lspDocumentCorpus` builds it for a hover, definition or completion.
-module function lspKnownProjectCorpus(reader LspReaderSearch) returns LspCorpus
-	let root = workspaceRootOf(reader)
+	let root = workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument)
 
 	return match root 'root'
 		projectDirectory or
@@ -410,7 +430,21 @@ module function lspKnownProjectCorpus(reader LspReaderSearch) returns LspCorpus
 		documentDirectory or
 			singleFile gives LspCorpus.unavailable
 	end 'root'
-end 'lspKnownProjectCorpus'
+end 'lspProjectCorpus'
+
+// A document-directory root is left unbuilt: nothing states it is a project, it can be a whole home
+// directory, and the server is single-threaded, so opening a file there would hold every request
+// behind a walk of it. `lspDocumentCorpus` builds it for a hover, definition or completion.
+module function lspLoadProject(reader LspReaderSearch)
+	let root = workspaceRootOf(reader, purpose: RootPurpose.loadsTheProject)
+
+	match root 'root'
+		projectDirectory or
+			libraryTier then _ = heldProjectSwept(root, tiers: reader.tiers, request: SweepRequest.loadingFor(reader.document.path))
+		documentDirectory or
+			singleFile then return
+	end 'root'
+end 'lspLoadProject'
 
 module union ProjectCheckRoot
 	at(dir FilePath)
@@ -422,7 +456,7 @@ module function lspProjectCheckRoot(reader LspReaderSearch) returns ProjectCheck
 		return ProjectCheckRoot.none
 	end 'notAProgramABuildChecks'
 
-	return match workspaceRootOf(reader) 'root'
+	return match workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument) 'root'
 		projectDirectory(dir) gives ProjectCheckRoot.at(dir)
 		documentDirectory or
 			libraryTier or
@@ -477,25 +511,34 @@ function candidateIsNearer(nearest StatedRoot, dir FilePath) returns bool
 end 'candidateIsNearer'
 
 function sweptWorkspace(root WorkspaceRoot, tiers LibraryTiers, readerPath FilePath) returns LspCorpus
-	let key = heldRootOf(root, readerPath: readerPath).toString()
+	match heldProjectSwept(root, tiers: tiers, request: SweepRequest.reading(readerPath)) 'swept'
+		read(project, signatures, reader) then return LspCorpus.loaded(project, signatures: signatures, readerPath: reader)
+		unavailable then return LspCorpus.unavailable
+		loaded then panic("sweptWorkspace: a request that reads is answered with the reader's corpus or not at all")
+	end 'swept'
+end 'sweptWorkspace'
+
+function heldProjectSwept(root WorkspaceRoot, tiers LibraryTiers, request SweepRequest) returns SweptProject
+	let key = heldRootOf(root, readerPath: documentOf(request)).toString()
 
 	if let held = try heldRoots.recentAt(key) 'heldAlready'
 		match held.workspace 'workspace'
-			built(workspace) then return workspace.corpusFor(root, key: key, tiers: tiers, readerPath: readerPath)
+			built(workspace) then return workspace.sweptFor(root, key: key, tiers: tiers, request: request)
 			notBuilt then break 'workspace'
 		end 'workspace'
 	end 'heldAlready'
 
 	var fresh = HeldWorkspace.create()
-	let corpus = fresh.corpusFor(root, key: key, tiers: tiers, readerPath: readerPath)
+	let swept = fresh.sweptFor(root, key: key, tiers: tiers, request: request)
 
-	match corpus 'outcome'
-		loaded then heldRoots.holdWorkspace(key, workspace: fresh)
+	match swept 'outcome'
+		read or
+			loaded then heldRoots.holdWorkspace(key, workspace: fresh)
 		unavailable then break 'outcome'
 	end 'outcome'
 
-	return corpus
-end 'sweptWorkspace'
+	return swept
+end 'heldProjectSwept'
 
 function readerSelectionOf(readerPath FilePath) returns SourceSelection
 	return SourceSelection.productionAndTests if isTestSourceName(readerPath.filename()) else SourceSelection.productionOnly
@@ -635,7 +678,7 @@ end 'buildRootOf'
 
 module function lspBufferRootOf(reader LspReaderSearch) returns FilePath
 	return match reader.tier 'tier'
-		inTier gives buildRootOf(workspaceRootOf(reader), readerPath: reader.document.path)
+		inTier(dir) gives buildRootOf(WorkspaceRoot.libraryTier(dir), readerPath: reader.document.path)
 		outside gives reader.document.path
 	end 'tier'
 end 'lspBufferRootOf'
@@ -662,21 +705,28 @@ end 'maxonSourcesIn'
 // every source in it to answer one jump.
 //
 // A `.maxproj` is only a marker here, never read or run; a `.maxtasks` beside it marks nothing.
-function workspaceRootOf(reader LspReaderSearch) returns WorkspaceRoot
+function workspaceRootOf(reader LspReaderSearch, purpose RootPurpose) returns WorkspaceRoot
 	match reader.tier 'tier'
 		inTier(dir) then return WorkspaceRoot.libraryTier(dir)
 		outside then break 'tier'
 	end 'tier'
 
-	if isDriverFileName(reader.document.path.filename()) 'aDriverFile'
+	if isAProgramOfItsOwn(reader.document.path.filename(), purpose: purpose) 'aProgramOfItsOwn'
 		return WorkspaceRoot.singleFile
-	end 'aDriverFile'
+	end 'aProgramOfItsOwn'
 
 	return match reader.document.directory 'directory'
 		at(dir) gives rootAround(reader.document, directory: dir, workingDirectory: reader.workingDirectory)
 		none gives WorkspaceRoot.singleFile
 	end 'directory'
 end 'workspaceRootOf'
+
+function isAProgramOfItsOwn(name String, purpose RootPurpose) returns bool
+	return match purpose 'purpose'
+		readsTheDocument gives isDriverFileName(name)
+		loadsTheProject gives isTaskFileName(name)
+	end 'purpose'
+end 'isAProgramOfItsOwn'
 
 function tierHolding(document ReaderDocument, tiers LibraryTiers) returns TierMembership
 	if document.normalized.isInside(tiers.normalizedStdlibDir) 'aStdlibFile'
@@ -709,7 +759,7 @@ end 'ProjectLayout'
 module function projectLayoutOf(reader LspReaderSearch) returns ProjectLayout
 	let document = reader.document.path.resolve(reader.workingDirectory)
 
-	if not document.filename().endsWith(ProjectFileExtension) 'notAProjectFile'
+	if not isProjectFileName(document.filename()) 'notAProjectFile'
 		return ProjectLayout.standsAlone
 	end 'notAProjectFile'
 
@@ -755,13 +805,36 @@ extension Project
 	// ⛔ The pipeline stops at LEX plus SIGNATURES, and `queryAllModule` is never called here. Lexing and
 	// folding signatures is what a name-to-file question actually needs; parse and merge cost more than
 	// the two of them together and answer nothing asked here.
-	function sweptOver(walk SourceSweep, readerPath FilePath) returns LspCorpus
-		let reader = try self.refreshFromWalk(walk, readerPath: readerPath, unreadable: UnreadableSource.skipped) otherwise panic("sweptOver: a corpus skips a source it cannot read, so its refresh refuses nothing")
-
-		try lexEveryFileOnAPool(self) otherwise return LspCorpus.unavailable
-		let signatures = try queryProgramSignatures(self) otherwise return LspCorpus.unavailable
-		return LspCorpus.loaded(self, signatures: signatures, readerPath: reader)
+	function sweptOver(walk SourceSweep, request SweepRequest) returns SweptProject
+		return match request 'request'
+			reading(readerPath) gives self.sweptForReader(walk, readerPath: readerPath)
+			loadingFor gives self.sweptForLoad(walk, request: request)
+		end 'request'
 	end 'sweptOver'
+
+	function sweptForReader(walk SourceSweep, readerPath FilePath) returns SweptProject
+		let reader = try self.refreshFromWalk(walk, readerPath: readerPath, unreadable: UnreadableSource.skipped) otherwise panic("sweptForReader: a corpus skips a source it cannot read, so its refresh refuses nothing")
+
+		let signatures = try self.foldedSignatures() otherwise return SweptProject.unavailable
+
+		return SweptProject.read(self, signatures: signatures, readerPath: reader)
+	end 'sweptForReader'
+
+	// Registers no reader: the document asking may be the `.maxproj` that marks this project, and as a
+	// reader its declarations would fold into the project's signatures and its text could fail the fold.
+	function sweptForLoad(walk SourceSweep, request SweepRequest) returns SweptProject
+		try self.refreshWithoutReader(walk, request: request, unreadable: UnreadableSource.skipped) otherwise panic("sweptForLoad: a load skips a source it cannot read, so its refresh refuses nothing")
+
+		_ = try self.foldedSignatures() otherwise return SweptProject.unavailable
+
+		return SweptProject.loaded
+	end 'sweptForLoad'
+
+	function foldedSignatures() returns ProgramSignatures throws CompileError
+		try lexEveryFileOnAPool(self)
+
+		return try queryProgramSignatures(self)
+	end 'foldedSignatures'
 
 	module function refreshFromDisk(readerPath FilePath) returns DiskRefresh throws CompileError
 		let walk = maxonSourcesIn(self.rootPath, selection: SourceSelection.productionOnly)
@@ -776,6 +849,27 @@ extension Project
 	function refreshFromWalk(walk SourceSweep, readerPath FilePath, unreadable UnreadableSource) returns FilePath throws CompileError
 		var kept = MaxonSourcePathSet.create()
 
+		try self.keepWhatTheWalkLists(walk, kept: kept, unreadable: unreadable, request: SweepRequest.reading(readerPath))
+
+		let reader = registeredSpellingOf(self, path: readerPath.resolve(Directory.currentPath()))
+		kept.insert(reader)
+
+		unregisterWhatTheWalkNoLongerLists(self, walk: walk, kept: kept)
+
+		registerTheReader(self, readerPath: reader)
+
+		return reader
+	end 'refreshFromWalk'
+
+	function refreshWithoutReader(walk SourceSweep, request SweepRequest, unreadable UnreadableSource) throws CompileError
+		var kept = MaxonSourcePathSet.create()
+
+		try self.keepWhatTheWalkLists(walk, kept: kept, unreadable: unreadable, request: request)
+
+		unregisterWhatTheWalkNoLongerLists(self, walk: walk, kept: kept)
+	end 'refreshWithoutReader'
+
+	function keepWhatTheWalkLists(walk SourceSweep, kept MaxonSourcePathSet, unreadable UnreadableSource, request SweepRequest) throws CompileError
 		// Seeded from the array the library loops index (`StdlibSource.growStdlibBodyDemand` and its two
 		// siblings), so the keep-set and their domain cannot drift apart. `registerTheReader` names what
 		// a library file missing from the corpus costs.
@@ -794,18 +888,9 @@ extension Project
 			// unregistered. Under `skipped` one file that will not open leaves the rest answering; a
 			// project check refuses instead, as `maxon build` does. The reader is always `skipped`, because
 			// the buffer's text stands in for it (`overlayUnsavedText`).
-			try self.keptAndRefreshed(path, kept: kept, unreadable: UnreadableSource.skipped if namesTheSameFile(path, other: readerPath) else unreadable)
+			try self.keptAndRefreshed(path, kept: kept, unreadable: UnreadableSource.skipped if isTheRequestsReader(request, path: path) else unreadable)
 		end 'eachSource'
-
-		let reader = registeredSpellingOf(self, path: readerPath.resolve(Directory.currentPath()))
-		kept.insert(reader)
-
-		unregisterWhatTheWalkNoLongerLists(self, walk: walk, kept: kept)
-
-		registerTheReader(self, readerPath: reader)
-
-		return reader
-	end 'refreshFromWalk'
+	end 'keepWhatTheWalkLists'
 
 	function keptAndRefreshed(path FilePath, kept MaxonSourcePathSet, unreadable UnreadableSource) throws CompileError
 		kept.insert(path)
@@ -815,6 +900,13 @@ extension Project
 		end 'unread'
 	end 'keptAndRefreshed'
 end 'Project'
+
+function isTheRequestsReader(request SweepRequest, path FilePath) returns bool
+	return match request 'request'
+		reading(readerPath) gives namesTheSameFile(path, other: readerPath)
+		loadingFor gives false
+	end 'request'
+end 'isTheRequestsReader'
 
 module union DiskRefresh
 	listed(reader FilePath)
