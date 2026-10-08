@@ -1351,9 +1351,9 @@ function commitArtifactRegistries(project Project, artifact FileParseArtifact, o
 	commitWrittenGenericAliasNames(project, artifact: artifact, signatures: signatures)
 end 'commitArtifactRegistries'
 
-// Every `Project` table keyed by an op index into the merged module. One missing here escapes
-// `FoldLedger.requireTablesHeld`, and a stale key in it names a different op with nothing to
-// notice.
+// Every `Project` table keyed by an op index into the merged module, or holding one, or running parallel
+// to the ops. One missing here escapes `FoldLedger.requireTablesHeld`, and a stale key in it names a
+// different op with nothing to notice.
 module enum OpKeyedTable
 	moduleVarAccessSites
 	synthesizedOpFiles
@@ -1366,6 +1366,8 @@ module enum OpKeyedTable
 	valueOrigins
 	deferralSources
 	refusedOverloadCalls
+	pendingDiscardedResults
+	opRanges
 end 'OpKeyedTable'
 
 module typealias OpKeyedTableArray = Array with OpKeyedTable
@@ -1383,6 +1385,8 @@ module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
 		valueOrigins gives project.valueOrigins.count()
 		deferralSources gives project.deferralSources.count()
 		refusedOverloadCalls gives project.refusedOverloadCalls.count()
+		pendingDiscardedResults gives project.pendingDiscardedResults.count()
+		opRanges gives project.opRanges.count()
 	end 'whichTable'
 end 'heldBy'
 
