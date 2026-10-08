@@ -57,7 +57,8 @@ what keeps it from climbing to the checkout root and indexing the whole tree.
    the program's own exit code; F5 without a `program` debugging the active editor's file; and the Test
    Explorer's Debug profile reporting one passing and one failing test, building a project once for all
    its tests, stopping a live session when the run is cancelled, and leaving the project free for a Run
-   while a session is live. That project is staged under `vscode-extension/.maxon/e2e-fixtures/`, which
+   while a session is live. That project is rooted by an empty `.maxproj`, because a test no `.maxproj`
+   marks runs as its file alone and cannot call the source beside it. It is staged under `vscode-extension/.maxon/e2e-fixtures/`, which
    is gitignored and listed by the Test Explorer; `temp/` holds a `.maxonignore`, which hides a fixture
    there from it
 

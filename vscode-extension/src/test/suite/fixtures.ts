@@ -38,8 +38,10 @@ export async function activateMaxonExtension(): Promise<vscode.Extension<unknown
     return found;
 }
 
+export const FixtureProjectFileName = 'fixture.maxproj';
+
 /**
- * Where a staged fixture project goes: `<workspace>/temp/vscode-e2e/`.
+ * Where a staged fixture project goes:`<workspace>/temp/vscode-e2e/`.
  *
  * `temp/` is gitignored and carries a `.maxonignore`, so a fixture written here is in neither the
  * repository nor any project walk rooted above it. The server's own sweep is rooted at the
@@ -72,7 +74,7 @@ export function stageProject(name: string, files: Record<string, string>): strin
     const dir = path.join(fixturesRoot(), name);
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'fixture.maxproj'), '');
+    fs.writeFileSync(path.join(dir, FixtureProjectFileName), '');
 
     for (const [fileName, content] of Object.entries(files)) {
         fs.writeFileSync(path.join(dir, fileName), content);

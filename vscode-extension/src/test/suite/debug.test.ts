@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { UnitTestController } from '../../testController';
 import { TestBinaryExitCode } from '../../unitTestModel';
-import { activateMaxonExtension, closeAllEditors, openFixture, stageProject } from './fixtures';
+import { activateMaxonExtension, closeAllEditors, FixtureProjectFileName, openFixture, stageProject } from './fixtures';
 
 interface DapMessage {
     type: string;
@@ -207,6 +207,7 @@ function stageTestExplorerProject(name: string): string {
     const dir = path.resolve(__dirname, '../../../.maxon/e2e-fixtures', name);
     removeFixture(dir);
     fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, FixtureProjectFileName), '');
     fs.writeFileSync(path.join(dir, SourceFileName), DoublingSource);
     fs.writeFileSync(path.join(dir, TestFileName), DoublingTestSource);
     stagedTestExplorerProjects.push(dir);
