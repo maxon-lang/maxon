@@ -822,7 +822,7 @@ function assertEncoderScratchMasks(target Target)
 	match target.cpu 'cpu'
 		x64 then assertX64EncoderScratchMasks()
 		arm64 then assertArm64EncoderScratchMasks()
-		wasm32 then break 'cpu'
+		wasm32 then break
 	end 'cpu'
 end 'assertEncoderScratchMasks'
 
@@ -1565,7 +1565,7 @@ function collectDebugTouches(touches DebugTouches, liveness LivenessResult, name
 		end 'unnamed'
 
 		match index.defKindOf(value) 'def'
-			none then break 'def'
+			none then break
 			opDef then noteOpTouches(touches, names: names, value: value, placeOfLocal: placeOfLocal, local: index.defBlockOf(value), ordinalOfOp: ordinalOfOp, opIdx: index.requireDefOp(value), siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
 			phiDef then notePhiDefTouches(touches, names: names, value: value, placeOfLocal: placeOfLocal, local: index.defBlockOf(value), blockFirst: blockFirst, siteKeyOfPlace: siteKeyOfPlace, scratch: scratch)
 		end 'def'
@@ -1615,7 +1615,7 @@ function debugValueLocationOf(alloc Allocation, liveness LivenessResult, value V
 	end 'notInThisFunction'
 
 	match liveness.useIndex.spillSlotOf(value) 'home'
-		none then break 'home'
+		none then break
 		slot(slot) then return DebugValueLocation.create(DebugValueInSpillSlot, number: slot as DebugValueNumber)
 	end 'home'
 
@@ -2091,7 +2091,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 			arm64Mulh or
 			covInc or
 			x64AluBaseDispReg or
-			x64AluBaseDispImm32 then break 'hint'
+			x64AluBaseDispImm32 then break
 	end 'hint'
 end 'collectOpHints'
 
@@ -2124,7 +2124,7 @@ end 'addCopyHint'
 function addFixedFromPhysDst(dReg RegNum, src TargetVReg, hints ColorHints)
 	match src 's'
 		virtual(sId) then hints.setFixedIfUnset(sId, regNum: dReg)
-		physical then break 's'
+		physical then break
 	end 's'
 end 'addFixedFromPhysDst'
 
@@ -2208,7 +2208,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
 
 			match runs.runAt(pos as ElementIndex) 'run'
-				none then break 'run'
+				none then break
 				run(id) then recordColdRunBracketIfFirst(module, ordered: ordered, runs: runs, id: id, pos: pos as ElementIndex, blockBaseSeq: blockBaseSeq, inUse: inUse, deaths: deaths, alloc: alloc, liveness: liveness, brackets: brackets, buf: buf)
 			end 'run'
 

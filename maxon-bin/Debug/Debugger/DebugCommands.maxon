@@ -391,7 +391,7 @@ end 'debugWalkModeMeaning'
 
 function debugCommandFrom(canonical String, argument String) returns DebugCommandParse
 	match debugWalkModeNamed(canonical) 'aWalk'
-		none then break 'aWalk'
+		none then break
 		mode(mode) then return DebugCommandParse.command(DebugCommand.walk(mode))
 	end 'aWalk'
 
@@ -572,7 +572,7 @@ end 'DebugPendingWalk'
 function returnAddressOf(held DebugPosition) returns DebugReturnAddress
 	match held.entryCaller 'unchained'
 		at(address) then return DebugReturnAddress.at(address)
-		none then break 'unchained'
+		none then break
 	end 'unchained'
 
 	let address = try held.record.returnAddresses.get(0) otherwise return DebugReturnAddress.none
@@ -804,7 +804,7 @@ export type DebugConversation
 	function noticeAPendingStop(replies DebugReplyArray)
 		match self.position 'stopped'
 			none then self.reportWaited(replies, waited: self.engine.lastLookForAStop(), expiry: DebugWaitExpiry.stillRunning)
-			at then break 'stopped'
+			at then break
 		end 'stopped'
 	end 'noticeAPendingStop'
 
@@ -826,7 +826,7 @@ export type DebugConversation
 	function pollIdleProgram(replies DebugReplyArray, sliceMs StopTimeoutMs)
 		match self.position 'stopped'
 			none then self.reportWaited(replies, waited: self.engine.pollForStop(sliceMs), expiry: DebugWaitExpiry.stillRunning)
-			at then break 'stopped'
+			at then break
 		end 'stopped'
 	end 'pollIdleProgram'
 
@@ -946,7 +946,7 @@ export type DebugConversation
 
 	function liftTheReturnPoint(replies DebugReplyArray)
 		match self.engine.liftReturnPoint() 'lifted'
-			done then break 'lifted'
+			done then break
 			nothingParked then replies.push(motionRefused(ReturnPointLiftVerb, reason: DebugNotRunningReason))
 			refused(reason) then replies.push(motionRefused(ReturnPointLiftVerb, reason: reason))
 			gone(ending) then self.settle(ending)
@@ -963,7 +963,7 @@ export type DebugConversation
 
 	function reportExpiry(replies DebugReplyArray, expiry DebugWaitExpiry)
 		match expiry 'expired'
-			stillRunning then break 'expired'
+			stillRunning then break
 			reportedAs(waitingFor) then self.reportTimeout(replies, waitingFor: waitingFor)
 		end 'expired'
 	end 'reportExpiry'
@@ -1072,7 +1072,7 @@ export type DebugConversation
 		end 'anotherConditionHoldsTheByte'
 
 		match self.conditionHeldAt(candidate.offset) 'armed'
-			none then break 'armed'
+			none then break
 			at(condition) then return self.rearmedHeldByte(candidate, request: request, attempt: attempt, held: condition)
 		end 'armed'
 
@@ -1337,7 +1337,7 @@ export type DebugConversation
 	function interruptTheRun(replies DebugReplyArray)
 		match self.engine.requestPause() 'posted'
 			done or
-				nothingParked then break 'posted'
+				nothingParked then break
 			refused(reason) then self.pauseRefusedMidWalk(replies, reason: reason)
 			gone(ending) then _ = self.walkEnded(replies, ending: ending)
 		end 'posted'
@@ -1461,7 +1461,7 @@ export type DebugConversation
 
 		match listing 'answered'
 			listed(records, truncated) then self.threads.refresh(records, wasTruncated: truncated, symbols: self.symbols, textBase: self.engine.imageTextBase())
-			refused then break 'answered'
+			refused then break
 			gone(ending) then self.settle(ending)
 		end 'answered'
 
@@ -1652,7 +1652,7 @@ export type DebugConversation
 			let leaving = self.plantedOnReturnTo(pending.startReturn, framePointer: pending.startFrame, greenThread: pending.startThread)
 
 			match leaving 'tried'
-				declined then break 'tried'
+				declined then break
 				planted or
 					failed then return leaving
 			end 'tried'
@@ -1694,7 +1694,7 @@ export type DebugConversation
 		match self.unchainedReturnOf(stop) 'unchained'
 			onTheStack(bytesAbove, _) then return self.plantedOnTheReturnAbove(stop, bytesAbove: bytesAbove)
 			inTheLinkRegister then return self.plantedOnTheLinkRegister(stop)
-			none then break 'unchained'
+			none then break
 		end 'unchained'
 
 		if self.symbols.functionAtIsTheProgramsOwn(stop.pc - self.engine.imageTextBase()) 'splicedIntoTheProgramsFrame'
@@ -1760,7 +1760,7 @@ export type DebugConversation
 			let planting = self.plantedAt(point)
 
 			match planting 'tried'
-				planted then break 'tried'
+				planted then break
 
 				declined or
 					failed then return self.withdrawnAfter(planting)
@@ -1932,7 +1932,7 @@ export type DebugConversation
 
 	function runLandingSettled(replies DebugReplyArray, pending DebugPendingWalk, record EngineStop) returns bool
 		match self.engine.returnPointReachedBy(record) 'reached'
-			none then break 'reached'
+			none then break
 			at(point) then return self.returnPointLandingSettled(replies, pending: pending, point: point, record: record)
 		end 'reached'
 
@@ -2132,7 +2132,7 @@ export type DebugConversation
 	function finishedARound(replies DebugReplyArray) returns bool
 		match self.engine.resume() 'posted'
 			done or
-				nothingParked then break 'posted'
+				nothingParked then break
 			refused then return false
 			gone(ending) then return self.endedBy(replies, ending: ending)
 		end 'posted'
@@ -2198,7 +2198,7 @@ export type DebugConversation
 
 		match ending 'which'
 			running or
-				terminated then break 'which'
+				terminated then break
 			exited(code) then replies.push(DebugReply.exited(code))
 			crashed(status) then replies.push(DebugReply.crashed(status))
 		end 'which'
@@ -2212,7 +2212,7 @@ export type DebugConversation
 		match ending 'which'
 			running or
 				terminated or
-				exited then break 'which'
+				exited then break
 			crashed then self.failed = true
 		end 'which'
 	end 'settle'

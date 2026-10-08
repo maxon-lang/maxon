@@ -314,14 +314,14 @@ function noteIfServiceReplyCell(op MaxonOp, seen AsyncReleaserSet, targets ByteA
 			witnessDispatch or
 			witnessTryDispatch or
 			panicAbortValue or
-			errorFlagEncode then break 'op'
+			errorFlagEncode then break
 		serviceSpawn or
-			serviceSend then break 'op'
+			serviceSend then break
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness then break 'op'
+			existentialWitness then break
 	end 'op'
 end 'noteIfServiceReplyCell'
 
@@ -583,7 +583,7 @@ function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayAr
 			propagateError or
 			panicAbort or
 			functionRef or
-			indirectCall then break 'op'
+			indirectCall then break
 		await or
 			tryAwait or
 			sizeofType or
@@ -592,19 +592,19 @@ function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayAr
 			witnessDispatch or
 			witnessTryDispatch or
 			panicAbortValue or
-			errorFlagEncode then break 'op'
+			errorFlagEncode then break
 
 		// A SERVICE's green thread owns its state and its request boxes and releases them in its own loop
 		// (`ServiceLoop`), so it needs no per-callee releaser: the GT-struct release protocol this file
 		// implements is the `async` PROMISE's, and a service has no promise.
 		serviceSpawn or
 			serviceSend or
-			serviceReplyCell then break 'op'
+			serviceReplyCell then break
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness then break 'op'
+			existentialWitness then break
 	end 'op'
 end 'noteIfAsyncSpawn'
 
@@ -820,7 +820,7 @@ function emitCellSlotRelease(module StdModule, func IrFunction, ids ValueMinter,
 
 	match slot.content 'content'
 		owned(drop) then release = emitNullGuardedDrop(module, cur: release, box: cell, offset: ParameterCellValueOffset, kind: drop, ids: ids, func: func)
-		scalar then break 'content'
+		scalar then break
 	end 'content'
 
 	module.appendOp(release, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(cell)))

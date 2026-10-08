@@ -1091,7 +1091,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'k'
+			osSocketServe then break
 		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count() as ParamCount, isThrowing: false)
 
 		// A witness call is an indirect call on wasm: its callee is a funcref-table index loaded out of a
@@ -1299,7 +1299,7 @@ function funcResultValTypes(returnType StdReturnType) returns WasmValTypeArray
 	var results = WasmValTypeArray.create()
 
 	match returnType 'r'
-		void then break 'r'
+		void then break
 		value(inner) then results.push(wasmMachineValTypeOf(inner))
 	end 'r'
 
@@ -1703,7 +1703,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'def'
+			osSocketServe then break
 
 		// A parameter's local is the wasm parameter, so it takes the signature's machine word, the same
 		// answer the `func.paramTypes` sweep recorded and `funcParamValTypes` declares.
@@ -1744,7 +1744,7 @@ end 'recordWitnessTryCallDefs'
 // def — its local reads as the i64 fill any unreferenced value id does, and nothing reads it.
 function recordIndirectCallDefValtype(valtypes WasmValTypeArray, resultId ValueId, resultType StdReturnType)
 	match resultType 'r'
-		void then break 'r'
+		void then break
 		value(inner) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(inner))
 	end 'r'
 end 'recordIndirectCallDefValtype'
@@ -2336,7 +2336,7 @@ type WasmFuncEmitter
 				osDecommitPages or
 				osLockInit or
 				osLockEnter or
-				osLockLeave then break 'body'
+				osLockLeave then break
 
 			// One `memory.fill` is this lane's whole size ladder. See `emitMemFill`.
 			memFill(destId, byteCountId, value) then self.emitMemFill(destId, byteCountId: byteCountId, value: value)
@@ -4012,7 +4012,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 			// straight-line, like `ret`.
 			errorReturn or
 			witnessCall or
-			witnessTryCall then break 'k'
+			witnessTryCall then break
 		condBranch or
 			branch or
 

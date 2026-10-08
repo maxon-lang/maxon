@@ -2132,7 +2132,7 @@ function show(m M) returns Integer
 	while i < 200 'spin'
 		match m 'k'
 			text(s) then seen = s.byteLength() and fallthrough
-			silent then break 'k'
+			silent then break
 		end 'k'
 		n = n + 7
 		i = i + 1

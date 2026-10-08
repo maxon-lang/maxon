@@ -117,7 +117,7 @@ function cacheWriteSpawnGate(writer LibraryCacheWriter, value SpawnGate)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		always then break 'payload'
+		always then break
 		defaultOf(a0) then cacheWriteSpawnGateDefaultOf(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteSpawnGate'
@@ -161,7 +161,7 @@ function cacheWriteDefaultSpawn(writer LibraryCacheWriter, value DefaultSpawn)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		value then break 'payload'
+		value then break
 		spawns(a0) then cacheWriteDefaultSpawnSpawns(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteDefaultSpawn'
@@ -682,17 +682,17 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 		let decl = serviceFirstDeclOf(decls, key: messageKey)
 
 		match uncarriableReplyNoun(signatures, messageKey: messageKey, decl: decl, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyCannotBeCarried'
-			acceptable then break 'replyCannotBeCarried'
+			acceptable then break
 			refused(replyNoun) then return ServiceRosterVerdict.messageReplyIsNotCarriable(methodName, noun: replyNoun)
 		end 'replyCannotBeCarried'
 
 		match instantiatedReplyGraphRefusal(signatures, returnType: decl.returnType, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyGraphCannotBeWalked'
-			acceptable then break 'replyGraphCannotBeWalked'
+			acceptable then break
 			refused(graphNoun) then return ServiceRosterVerdict.messageReplyGraphIsNotWalkable(methodName, noun: graphNoun)
 		end 'replyGraphCannotBeWalked'
 
 		match instantiatedOpaqueReplyAliasesState(signatures, messageKey: messageKey, returnType: decl.returnType, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyAliasesTheServicesOwnState'
-			acceptable then break 'replyAliasesTheServicesOwnState'
+			acceptable then break
 			refused(aliasedReplyType) then return ServiceRosterVerdict.messageReplyAliasesServiceState(methodName, replyTypeName: aliasedReplyType)
 		end 'replyAliasesTheServicesOwnState'
 
@@ -700,7 +700,7 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 			let declared = try decl.paramTypes.get(p) otherwise panic("classifyServiceRoster: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(typeName)}.{String.from(methodName)}'")
 
 			match untransferableParameterNoun(signatures, declared: declared, declFilePath: layout.declFilePath) 'cannotCross'
-				acceptable then break 'cannotCross'
+				acceptable then break
 				refused(noun) then return ServiceRosterVerdict.messageParameterIsNotTransferable(methodName, paramName: serviceParamName(decl, index: p), noun: noun)
 			end 'cannotCross'
 		end 'eachParam'
@@ -721,7 +721,7 @@ function uncarriableReplyNoun(signatures ProgramSignatures, messageKey ByteArray
 	end 'fireAndForget'
 
 	match uncarriableReplyResultNoun(signatures, returnType: decl.returnType, declFilePath: declFilePath, knowledge: knowledge) 'theValueWord'
-		acceptable then break 'theValueWord'
+		acceptable then break
 		refused(resultNoun) then return ServiceCrossing.refused(resultNoun)
 	end 'theValueWord'
 
@@ -740,7 +740,7 @@ function uncarriableReplyResultNoun(signatures ProgramSignatures, returnType Max
 
 	match knowledge 'known'
 		atInstance(instance) then return uncarriableReplyNounOfType(signatures.instanceResolvedSlotType(declared, declFilePath: declFilePath, instance: instance))
-		declarationOnly then break 'known'
+		declarationOnly then break
 	end 'known'
 
 	// ⭐ **A `returns T` IS NOT YET AN ANSWER.** What the cell can carry is a fact about the CONCRETE type,
@@ -1762,7 +1762,7 @@ function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns By
 				memberTakesAReceiver or
 				memberDoesNotReturnTheType or
 				typeIsAConstrainedGeneric then continue
-			startsAService then break 'verdict'
+			startsAService then break
 		end 'verdict'
 
 		if serviceNameAlreadyListed(services, typeName: candidate.typeName) 'aSecondSpawnOfOneType'

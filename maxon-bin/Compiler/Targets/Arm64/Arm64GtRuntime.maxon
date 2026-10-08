@@ -160,7 +160,7 @@ let Arm64GtErrnoValueReg = Arm64Register.x12
 function emitArm64GtCarryLastError(asm Arm64RuntimeAsm, gtReg Arm64Register, os Os, direction GtLastErrorDirection)
 	match os 'os'
 		linux then emitArm64GtCopyThreadLastError(asm, gtReg: gtReg, direction: direction)
-		macos then break 'os'
+		macos then break
 		windows then panic("emitArm64GtCarryLastError: there is no arm64-windows backend — `buildBackend` dispatches arm64 to this backend only for macos/linux")
 		wasi then panic("emitArm64GtCarryLastError: wasm32-wasi is not an arm64 lane — a WASI component has no `.text` this fragment could be spliced into")
 	end 'os'
@@ -426,7 +426,7 @@ end 'emitArm64DarwinLoadGtOnItsOwnStackOrBail'
 // Maxon code without one would, and one instruction turns that from a wild load into a diagnosable answer.
 function arm64LinuxEmitBailOnNullThreadPointer(asm Arm64RuntimeAsm, reg Arm64Register, bail BlockId, os Os)
 	match os 'os'
-		macos then break 'os'
+		macos then break
 		linux then arm64EmitCbzTo(asm, reg: reg, label: bail)
 		windows then panic("arm64LinuxEmitBailOnNullThreadPointer: there is no arm64-windows backend — `buildBackend` dispatches arm64 to this backend only for macos/linux")
 		wasi then panic("arm64LinuxEmitBailOnNullThreadPointer: wasm32-wasi is not an arm64 lane — a WASI component has no `.text` this fragment could be spliced into")
@@ -1346,7 +1346,7 @@ function buildArm64PreemptSelfRegisterChunk(os Os) returns FunctionCodeChunk
 
 	match arm64OsCallKind(os) 'identity'
 		importCall then emitArm64DarwinUniqueThreadId(asm, machineSlot: SlotMachine, idSlot: SlotUniqueId)
-		syscall then break 'identity'
+		syscall then break
 	end 'identity'
 
 	return asm.finishFunction(PreemptSelfRegisterName)

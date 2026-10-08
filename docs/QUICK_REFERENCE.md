@@ -396,9 +396,9 @@ continue 'loop'   // labeled continue
 ```
 
 `break 'lab'` / `continue 'lab'` is an error (E2048) when `lab` names the
-innermost enclosing loop — use bare `break`/`continue` for that case.
-Labels are only meaningful when targeting an *outer* loop (or, for `break`,
-escaping across an intervening `match`).
+innermost enclosing loop, or, for `break`, the `match` it sits in — use bare
+`break`/`continue` for that case. A label reaches an *outer* loop (for `break`,
+across an intervening `match`).
 
 ### For (iterator)
 ```maxon
@@ -432,7 +432,7 @@ match value 'label'
 end 'label'
 
 break            // exits innermost match
-break 'label'    // exits match (or loop) with that label
+break 'loop'     // exits the labelled enclosing loop
 ```
 
 Alternatives: `a or` / newline / `b then …` — one per line, chain continues after a trailing `or` (E3147 otherwise).

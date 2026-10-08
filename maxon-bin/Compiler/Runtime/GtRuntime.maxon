@@ -2524,7 +2524,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	match kind 'markMain'
 		mainThread then emitStoreField(module, block: initBlock, record: gt, offset: GtOffIsMainThread, value: emitConst(module, block: initBlock, value: GtMainThreadMark, ids: ids))
 		coroutine or
-			greenThread then break 'markMain'
+			greenThread then break
 	end 'markMain'
 
 	// ⭐ COMMIT A FRESH SEED STACK, of the size the adaptive seed chose (`GtSeedBytesLabel`). The STACK is
@@ -2560,7 +2560,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	match kind 'countedAndNamed'
 		coroutine or
 			greenThread then seeded = emitGtSpawnCountAndTraceId(module, func: func, block: seeded, gt: gt, tracing: tracing, ids: ids)
-		mainThread then break 'countedAndNamed'
+		mainThread then break
 	end 'countedAndNamed'
 
 	// ⚠ **THE GT IS NOT PUBLISHED HERE.** It is returned UNQUEUED, and the lowering calls `__gt_ready` once
@@ -4353,7 +4353,7 @@ function buildGtAwait(module StdModule, name ByteArray, throwing bool, arrival G
 	var cur = awaited
 
 	match awaitTrace 'awaitTrace'
-		untraced then break 'awaitTrace'
+		untraced then break
 		read(tags, traceId, alreadyDone) then cur = emitAwaitTraceLines(module, func: func, cur: cur, tags: tags, throwing: throwing, traceId: traceId, alreadyDone: alreadyDone, ids: ids)
 	end 'awaitTrace'
 
@@ -4380,7 +4380,7 @@ function buildGtAwait(module StdModule, name ByteArray, throwing bool, arrival G
 
 	match arrival 'arrival'
 		inTheAwait then module.appendOp(exit, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(promise)))
-		inReplyWitness then break 'arrival'
+		inReplyWitness then break
 	end 'arrival'
 
 	module.setTerminator(exit, op: exitTerminator)
@@ -4841,7 +4841,7 @@ function collectCompletedWordDefs(access StdAccessOperands, completedConsts Valu
 		neither or
 			globalAddress or
 			store or
-			atomic then break 'k'
+			atomic then break
 	end 'k'
 end 'collectCompletedWordDefs'
 
@@ -4872,7 +4872,7 @@ function requireOrderedCompletedAccess(access StdAccessOperands, arith StdArithO
 			constant or
 			globalAddress or
 			load or
-			atomic then break 'k'
+			atomic then break
 	end 'k'
 end 'requireOrderedCompletedAccess'
 
@@ -4915,7 +4915,7 @@ function requireOrderedObservation(func IrFunction, lhs ValueId, rhs ValueId, pr
 	// `status >= completed` would be meaningless against an enum whose order carries no meaning.
 	match pred 'asked'
 		eq or
-			ne then break 'asked'
+			ne then break
 
 		lt or
 			gt or
@@ -7759,7 +7759,7 @@ function buildSubpYieldRead(module StdModule, target Target)
 	match ioCompletionShape(target) 'source'
 		completionPort then source = emitSubpOpenReadSource(module, block: entry, gt: selfGt, readEnd: readEnd, ids: ids)
 
-		inlineCompletion then break 'source'
+		inlineCompletion then break
 	end 'source'
 
 	// The read begins on the source's record here, ahead of the retry ring, so the life its wait carries is the
@@ -7821,7 +7821,7 @@ function buildSubpYieldRead(module StdModule, target Target)
 	match ioCompletionShape(target) 'give'
 		completionPort then emitNetpollOpClose(module, block: answer, source: source, ids: ids)
 
-		inlineCompletion then break 'give'
+		inlineCompletion then break
 	end 'give'
 
 	module.setTerminator(answer, op: StdOp.ret(count))
@@ -8160,7 +8160,7 @@ function emitSubpOpenNamedPipePair(module StdModule, func IrFunction, ids ValueM
 
 	match direction 'joins'
 		towardParent then stored = emitSubpJoinReadPipeToPort(module, func: func, ids: ids, cur: stored, server: server, client: client, scratch: scratch, whenFailed: failed)
-		towardChild then break 'joins'
+		towardChild then break
 	end 'joins'
 
 	emitStoreField(module, block: stored, record: scratch, offset: subpPipeServerWord(direction), value: server)

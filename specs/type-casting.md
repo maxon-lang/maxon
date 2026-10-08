@@ -1215,7 +1215,7 @@ function pick(k K, x Num, y Num) returns Num
 	var t = x
 	match k 'm'
 		a then t = y
-		b then break 'm'
+		b then break
 	end 'm'
 	return t as Num
 end 'pick'

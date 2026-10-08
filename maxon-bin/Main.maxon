@@ -507,7 +507,7 @@ end 'runProjectBuild'
 function withoutAProjectFile(targetWord StatedText) returns ProjectRun
 	match targetWord 'nameWithoutAProject'
 		stated then return ProjectRun.noSuchTarget
-		unstated then break 'nameWithoutAProject'
+		unstated then break
 	end 'nameWithoutAProject'
 
 	printError("Usage: maxon build <file|directory|target>... [{OutputFlagPrefix}<output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
@@ -534,7 +534,7 @@ function chosenTarget(projectFile FilePath, word StatedText) returns TargetChoic
 
 	match word 'aTargetNamed'
 		stated(spelled) then return declaredTargetNamed(spelled, declared: declared)
-		unstated then break 'aTargetNamed'
+		unstated then break
 	end 'aTargetNamed'
 
 	if declared.count() == 0 'noTargets'
@@ -720,7 +720,7 @@ module function buildFromManifestOutput(described String, args MaxonArgs, manife
 	end 'badRebuildWithOutput'
 
 	match delegateDirectory 'delegated'
-		unstated then break 'delegated'
+		unstated then break
 		stated(directory) then return buildDelegatedManifest(doc, build: chosen, directory: directory, statedSources: statedSources, rebuildWithOutput: rebuildWithOutput, args: args, manifest: manifest, base: base, depth: depth)
 	end 'delegated'
 
@@ -1143,7 +1143,7 @@ function buildKeepingRecord(job BuildJob, record BuildRecord, output FilePath, s
 	let freshness = Freshness.stale("{RebuildFlag} was requested") if job.args.rebuildRequested else freshnessOf(record)
 
 	match freshness 'freshness'
-		upToDate then break 'freshness'
+		upToDate then break
 		stale(reason) then return compileRecording(job, record: record, output: output, reason: reason, session: session)
 	end 'freshness'
 
@@ -1393,7 +1393,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		inGuest then return runSuiteInGuest(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, mode: args.specRunMode(), workerCount: args.workers, workersOverridden: args.workersOverridden, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
 		individually or
 			wslBatch or
-			noneHere then break 'lane'
+			noneHere then break
 	end 'lane'
 
 	// That a verdict nothing ran is still counted and not green; see `SpecVerdictSelfTest`.
@@ -1839,7 +1839,7 @@ module function reportCompileError(e CompileError, sink DiagnosticSink = Diagnos
 	match e 'report'
 		nestedProjectFile(outer, nested) then sink.emit(nestedProjectFileDiagnostic(outer, nested: nested).render())
 		compileError or
-			abandoned then break 'report'
+			abandoned then break
 		fileNotFound or
 			directoryNotFound or
 			noSourceFiles or

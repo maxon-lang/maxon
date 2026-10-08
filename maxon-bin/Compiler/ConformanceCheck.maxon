@@ -288,7 +288,7 @@ end 'checkOneAssociatedPosition'
 function checkOneAssociatedType(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementIndex, isDispatchedResult bool)
 	match associatedAbiBindingOf(project.conformances, signatures: signatures, interfaceName: iface.name, position: position) 'binding'
 		agreed(conformer, binding, _) then checkAgreedBindingIsCarryable(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding, isDispatchedResult: isDispatchedResult)
-		unconformed then break 'binding'
+		unconformed then break
 		disagreed(first, firstBinding, second, secondBinding) then reportAssociatedTypeBindingDisagreement(project, signatures: signatures, iface: iface, name: name, first: first, firstBinding: firstBinding, second: second, secondBinding: secondBinding)
 	end 'binding'
 end 'checkOneAssociatedType'
@@ -377,25 +377,25 @@ function noteDispatchedSlot(op MaxonOp, slots DispatchedSlotMap, signatures Prog
 			tryAwait or
 			sizeofType or
 			constArrayLiteral or
-			switch then break 'op'
+			switch then break
 		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then noteOneDispatchedSlot(slots, signatures: signatures, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then noteOneDispatchedSlot(slots, signatures: signatures, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
-		panicAbortValue then break 'op'
+		panicAbortValue then break
 
 		// The error-flag encode dispatches nothing — it is arithmetic on a value already in hand, so it fills no
 		// interface slot.
-		errorFlagEncode then break 'op'
+		errorFlagEncode then break
 
 		// No service op dispatches through a witness: a `spawn` calls a static factory by name, a send names
 		// its message by name — both resolved at the parse — and a reply cell calls nothing.
 		serviceSpawn or
 			serviceSend or
-			serviceReplyCell then break 'op'
+			serviceReplyCell then break
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness then break 'op'
+			existentialWitness then break
 	end 'op'
 end 'noteDispatchedSlot'
 
@@ -945,8 +945,8 @@ function checkOneAssociatedBinding(project Project, signatures ProgramSignatures
 	end 'deferredToTheWidening'
 
 	match associatedAbiBindingOf(project.conformances, signatures: signatures, interfaceName: iface.name, position: position) 'binding'
-		unconformed then break 'binding'
-		disagreed then break 'binding'
+		unconformed then break
+		disagreed then break
 		agreed(conformer, binding, _) then requireWrittenBindingMatchesConformers(project, signatures: signatures, site: site, iface: iface, position: position, conformer: conformer, binding: binding)
 	end 'binding'
 end 'checkOneAssociatedBinding'
@@ -2254,7 +2254,7 @@ end 'validateThrowsConformance'
 // The interface method declares NO throws clause: the impl may not declare one either (the compiler's own rule).
 function requireImplDoesNotThrow(project Project, conformance ConformanceDecl, collectedMethod CollectedInterfaceMethod, implClause ThrowsClause)
 	match implClause 'impl'
-		none then break 'impl'
+		none then break
 		throwing(declared) then reportThrowsViolation(project, conformance: conformance, message: "{throwsConformanceSubject(conformance.typeName, collectedMethod: collectedMethod)} throws '{declared}' but interface '{String.from(collectedMethod.sourceInterfaceName)}' declares it non-throwing — a witness dispatch of a non-throwing interface method reads no error flag, so the error would be silently dropped")
 	end 'impl'
 end 'requireImplDoesNotThrow'

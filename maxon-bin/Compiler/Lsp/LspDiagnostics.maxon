@@ -101,7 +101,7 @@ extension Project
 		// `maxon/projectLoading` pair reaches the client ahead of this document's diagnostics.
 		match arrival 'arrival'
 			opened then lspLoadProject(reader)
-			edited then break 'arrival'
+			edited then break
 		end 'arrival'
 
 		let root = workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument)
@@ -116,12 +116,12 @@ extension Project
 	function documentDiagnostics(reader LspReaderSearch, root WorkspaceRoot, path FilePath, text String, tokens TokenArray) returns DiagnosticArray
 		match projectLayoutOf(reader) 'layout'
 			nestedIn(outer) then return [nestedProjectFileDiagnostic(outer, nested: path)]
-			standsAlone then break 'layout'
+			standsAlone then break
 		end 'layout'
 
 		match root 'stating'
 			projectDirectory or
-				libraryTier then break 'stating'
+				libraryTier then break
 			singleFile then return self.checkedDiagnostics()
 		end 'stating'
 
@@ -315,7 +315,7 @@ end 'tokenStreamsAgree'
 function refusalsThisRoadMayPublish(kept DiagnosticArray, road RefusalRoad, verdicts SiblingVerdictMap, buffer FilePath, document HoverDocument, tokens TokenArray, corpus ProgramSignatures, reader FilePath, own ProgramSignatures) returns DiagnosticArray
 	match road 'road'
 		aCleanParsesCheck then return kept
-		aModifiedBuffersParse then break 'road'
+		aModifiedBuffersParse then break
 	end 'road'
 
 	if kept.isEmpty() 'nothingSurvivedTheOracle'
@@ -406,7 +406,7 @@ end 'declaredOutsideTheReader'
 function theBufferBindsTheName(name ByteArray, index ElementIndex, document HoverDocument, own ProgramSignatures, buffer FilePath) returns bool
 	match declaringFileOfTheSubject(own, name: name, reader: buffer) 'atTopLevel'
 		declared then return true
-		undeclared then break 'atTopLevel'
+		undeclared then break
 	end 'atTopLevel'
 
 	return document.bindsTheName(name, near: index)
@@ -419,12 +419,12 @@ end 'theBufferBindsTheName'
 function declaringFileOfTheSubject(signatures ProgramSignatures, name ByteArray, reader FilePath) returns SubjectDeclaration
 	match signatures.declaredTypeNameIn(name, readerFilePath: reader) 'aType'
 		declared(_, _, declFilePath) then return SubjectDeclaration.declared(declFilePath)
-		undeclared then break 'aType'
+		undeclared then break
 	end 'aType'
 
 	match calleeDeclaringFile(signatures, name: name, reader: reader) 'aCallee'
 		declared(declFilePath) then return SubjectDeclaration.declared(declFilePath)
-		undeclared then break 'aCallee'
+		undeclared then break
 	end 'aCallee'
 
 	match signatures.bindingFor(name, readerFilePath: reader) 'aBinding'

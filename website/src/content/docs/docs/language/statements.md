@@ -181,8 +181,9 @@ for i in 0 upto 3 'rows'
 end 'rows'
 ```
 
-A label that names the innermost loop is redundant and is **E2048**; use a label only to reach an outer
-loop, or to reach a loop from inside a `match` arm (where a bare `break` leaves the `match`).
+A label that names the construct a bare `break` or `continue` already leaves is redundant and is
+**E2048**: the innermost loop, or for `break` the `match` it sits in. Use a label only to reach an outer
+loop, including from inside a `match` arm (where a bare `break` leaves the `match`).
 
 ## Match Statement
 

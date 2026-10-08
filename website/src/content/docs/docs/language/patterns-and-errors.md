@@ -278,12 +278,19 @@ match level 'filter'
 end 'filter'                  // E2026: match on enum 'Level' is not exhaustive, missing: trace, info
 ```
 
-**A redundant loop label**
+**A redundant loop or match label**
 
 ```maxon
 while i < 3 'loop'
 	break 'loop'              // E2048: 'break' with label 'loop' targets its own loop
 end 'loop'
+```
+
+```maxon
+match n 'pick'
+	0 then break 'pick'       // E2048: 'break' with label 'pick' targets its own match
+	default then fallback()
+end 'pick'
 ```
 
 ### Run-Time Behavior

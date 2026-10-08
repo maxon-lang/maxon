@@ -366,7 +366,7 @@ export type DebugEngine implements DebugMemory
 
 		match trace 'ring'
 			untraced or
-				noProducer then break 'ring'
+				noProducer then break
 			ring(collector) then environment.upsert(DsActivationEnvVar, value: collector.segmentName())
 		end 'ring'
 
@@ -541,7 +541,7 @@ export type DebugEngine implements DebugMemory
 	function pumpTrace()
 		match self.trace 'ring'
 			untraced or
-				noProducer then break 'ring'
+				noProducer then break
 			ring(collector) then collector.pump()
 		end 'ring'
 	end 'pumpTrace'
@@ -696,7 +696,7 @@ export type DebugEngine implements DebugMemory
 
 		match self.breakpointAt(self.textBase + offset) 'known'
 			none then return CommandOutcome.refused(DebugNoSuchBreakpointReason)
-			at then break 'known'
+			at then break
 		end 'known'
 
 		let restored = self.restoreBytesAt(offset)
@@ -709,7 +709,7 @@ export type DebugEngine implements DebugMemory
 	function restoreBytesAt(offset DebugAddress) returns bool
 		match self.breakpointAt(self.textBase + offset) 'known'
 			none then return true
-			at then break 'known'
+			at then break
 		end 'known'
 
 		return self.backend.liftTrap(self.textBase + offset, original: self.originalBytesAt(offset))
@@ -731,7 +731,7 @@ export type DebugEngine implements DebugMemory
 	export function attachCondition(offset DebugAddress, record DebugConditionRecord) returns CommandOutcome
 		match self.breakpointAt(self.textBase + offset) 'known'
 			none then return CommandOutcome.refused(DebugNoSuchBreakpointReason)
-			at then break 'known'
+			at then break
 		end 'known'
 
 		let held = self.returnPointHeldOver(offset, conditioned: true)
@@ -748,7 +748,7 @@ export type DebugEngine implements DebugMemory
 	export function clearCondition(offset DebugAddress) returns CommandOutcome
 		match self.breakpointAt(self.textBase + offset) 'known'
 			none then return CommandOutcome.refused(DebugNoSuchBreakpointReason)
-			at then break 'known'
+			at then break
 		end 'known'
 
 		self.recordBreakpoint(offset, originalBytes: self.originalBytesAt(offset), usersOwn: true, conditioned: false, condition: DebugConditionRecord.unconditioned())
@@ -837,7 +837,7 @@ export type DebugEngine implements DebugMemory
 	function returnPointHeldOver(offset DebugAddress, conditioned bool) returns CommandOutcome
 		match self.unheldReturnPointAt(offset) 'standing'
 			none then return CommandOutcome.done
-			at then break 'standing'
+			at then break
 		end 'standing'
 
 		if not conditioned 'nothingToHold'
@@ -1175,7 +1175,7 @@ export type DebugEngine implements DebugMemory
 		end 'aPauseBeforeTheProgramRan'
 
 		match self.liftedTrapOn(self.stopThread) 'lifted'
-			none then break 'lifted'
+			none then break
 			at(lifted) then return self.replantedAfterTheStepOver(lifted, reason: landedReason, faultCode: faultCode, address: landedAddress)
 		end 'lifted'
 
@@ -1343,7 +1343,7 @@ export type DebugEngine implements DebugMemory
 	function reachedABreakpoint(address DebugAddress) returns StopWait
 		match self.breakpointAt(address) 'known'
 			none then return self.reachedATrapNobodyPlanted(address)
-			at then break 'known'
+			at then break
 		end 'known'
 
 		let holds = self.conditionHoldsAt(address)
@@ -1418,7 +1418,7 @@ export type DebugEngine implements DebugMemory
 		end 'eachDeparted'
 
 		match self.readerStep 'step'
-			none then break 'step'
+			none then break
 			on(thread) then self.readerStepKeptIfLive(thread, live: live)
 		end 'step'
 	end 'departedSteppersReconciled'
@@ -1485,7 +1485,7 @@ export type DebugEngine implements DebugMemory
 		self.departedSteppersReconciled()
 
 		match self.readerStep 'step'
-			none then break 'step'
+			none then break
 			on(thread) then self.readerStepRetired(thread)
 		end 'step'
 
@@ -1597,7 +1597,7 @@ export type DebugEngine implements DebugMemory
 
 	function writeContractWord(name String, value DebuggeeWord)
 		match self.contract.globalAt(name) 'known'
-			none then break 'known'
+			none then break
 			at(address, bytes) then _ = self.backend.writeMemory(address, bytes: debuggeeWordBytes(value, width: bytes))
 		end 'known'
 	end 'writeContractWord'
@@ -1919,7 +1919,7 @@ end 'refusedTraceRing'
 function closeTraceRing(trace DebugTraceState)
 	match trace 'ring'
 		untraced or
-			noProducer then break 'ring'
+			noProducer then break
 		ring(collector) then collector.close()
 	end 'ring'
 end 'closeTraceRing'

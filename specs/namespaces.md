@@ -423,7 +423,7 @@ end 'pick'
 function main() returns ExitCode
 	let r = try pick(1) otherwise (e) 'failed'
 		match e 'which'
-			rootBad then break 'which'
+			rootBad then break
 		end 'which'
 		return 9
 	end 'failed'

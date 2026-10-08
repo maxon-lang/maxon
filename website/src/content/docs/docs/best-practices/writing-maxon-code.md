@@ -618,10 +618,11 @@ continue           // skip to next iteration
 continue 'outer'   // labeled continue
 ```
 
-Labeling `break` / `continue` with the innermost enclosing loop's own
-label is redundant and rejected as E2048 — use unlabeled `break` /
-`continue` for that case. A label is only meaningful when targeting an
-outer loop (or, for `break`, jumping out across an intervening `match`).
+Labeling `break` / `continue` with the label of the construct it already
+leaves — the innermost enclosing loop, or for `break` the `match` it sits
+in — is redundant and rejected as E2048. Use unlabeled `break` /
+`continue` for that case; a label reaches an outer loop (for `break`,
+across an intervening `match`).
 
 ### match statement
 

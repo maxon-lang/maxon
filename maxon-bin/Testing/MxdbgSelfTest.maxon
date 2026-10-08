@@ -544,7 +544,7 @@ function checkInlineLookups(broken StringArray, reader MxdbgReader)
 	end 'outer'
 
 	match reader.inlineSiteContaining(InNeither) 'gap'
-		none then break 'gap'
+		none then break
 		site(index) then broken.push("offset {InNeither} is under no inline range and resolved to '{reader.inlineSite(index).name}'")
 	end 'gap'
 end 'checkInlineLookups'
@@ -573,7 +573,7 @@ function checkSiteAttribution(broken StringArray, reader MxdbgReader)
 	end 'debitCall'
 
 	match reader.inlineSite(CheckFundsSite).call 'checkFundsCall'
-		none then break 'checkFundsCall'
+		none then break
 		at(file, line, column) then broken.push("'{CheckFundsName}' was written with no call position and reads back at {file}:{line}:{column}")
 	end 'checkFundsCall'
 
@@ -616,7 +616,7 @@ function requireOutermostSite(broken StringArray, reader MxdbgReader, index Mxdb
 	end 'wrongSite'
 
 	match site.parent 'parent'
-		none then break 'parent'
+		none then break
 		site(parentIndex) then broken.push("'{name}' is spliced into its function's own text but reads back nested under '{reader.inlineSite(parentIndex).name}'")
 	end 'parent'
 end 'requireOutermostSite'
@@ -680,7 +680,7 @@ function checkFunctionWindows(broken StringArray, reader MxdbgReader)
 	end 'containmentWrong'
 
 	match reader.functionContaining(PastEverything) 'inTheGap'
-		none then break 'inTheGap'
+		none then break
 		found(fn) then broken.push("offset {PastEverything} is past every function and resolved to '{fn.name}'")
 	end 'inTheGap'
 end 'checkFunctionWindows'
@@ -698,7 +698,7 @@ function checkLineLookups(broken StringArray, reader MxdbgReader)
 	requireLineAt(broken, reader: reader, offset: 130, file: IoFileName, line: 6)
 
 	match reader.pcToLine(PastEverything) 'inTheGap'
-		none then break 'inTheGap'
+		none then break
 		found(row) then broken.push("offset {PastEverything} is in no function and resolved to {row.file}:{row.line}")
 	end 'inTheGap'
 end 'checkLineLookups'

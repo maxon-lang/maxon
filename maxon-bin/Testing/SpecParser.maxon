@@ -1330,7 +1330,7 @@ type CaseBuilder
 
 		for opening in openings 'each'
 			match directiveOf(opening) 'directive'
-				known then break 'directive'
+				known then break
 				unread then refuseUnreadOpening(opening, lineIndex: lineIndex, specPath: specPath, site: site)
 			end 'directive'
 		end 'each'
@@ -1587,7 +1587,7 @@ type CaseBuilder
 			end 'pinsOnARejectedCase'
 
 			match traceCapture 'traceCaptureOnARejectedCase'
-				off then break 'traceCaptureOnARejectedCase'
+				off then break
 				unpinned or
 					pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a `{traceFenceOf(traceCaptureFamilyOf(traceCapture))}` block or `{traceMarkerOf(traceCaptureFamilyOf(traceCapture))} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
 			end 'traceCaptureOnARejectedCase'
@@ -1749,22 +1749,22 @@ function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdo
 	// and only one of them is an assertion, which is the distinction the three-state field exists to make.
 	match traceCapture 'trace'
 		off or
-			unpinned then break 'trace'
+			unpinned then break
 		pinned then return true
 	end 'trace'
 
 	match exitCode 'exit'
-		unpinned then break 'exit'
+		unpinned then break
 		pinned then return true
 	end 'exit'
 
 	match stderr 'err'
-		unpinned then break 'err'
+		unpinned then break
 		pinned then return true
 	end 'err'
 
 	match stdout 'out'
-		unpinned then break 'out'
+		unpinned then break
 		pinned then return true
 	end 'out'
 
@@ -2316,7 +2316,7 @@ function parseProcsValue(opening String, lineIndex ElementIndex, specPath FilePa
 
 	match specRequestedProcessorsIn(value) 'reading'
 		count(requested) then return SpecProcs.pinned(requested)
-		notACount then break 'reading'
+		notACount then break
 	end 'reading'
 
 	panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: test '{testName}' carries `{ProcsMarker} {value} -->`, and the scheduler honours a processor count from {FewestRequestedProcessors} to {MostRequestedProcessors} only, spelled as decimal digits with an optional leading `+`: it ignores any other `{String.from(MaxProcsEnvName)}` and runs on the machine's count, so this value would be silently discarded rather than honoured")

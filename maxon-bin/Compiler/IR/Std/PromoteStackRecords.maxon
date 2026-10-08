@@ -325,7 +325,7 @@ function anyConstructor(constructors RecordConstructorArray) returns bool
 		let verdict = try constructors.get(funcIndex) otherwise panic("anyConstructor: constructors.get OOB at {funcIndex}")
 
 		match verdict 'verdict'
-			notAConstructor then break 'verdict'
+			notAConstructor then break
 			constructor then return true
 		end 'verdict'
 	end 'eachFunc'
@@ -1166,7 +1166,7 @@ function scanOneOp(module StdModule, opIdx ElementIndex, tracked BoolArray, byNa
 
 		// A field read THROUGH the pointer. Its only operand IS the address, so an admitted `loadIndirect`
 		// needs nothing recorded at all.
-		loadIndirect then break 'shape'
+		loadIndirect then break
 
 		// A field write through the pointer is admitted; the pointer as the STORED VALUE is the
 		// container / global / error-payload escape route, and is not.
@@ -1266,7 +1266,7 @@ function collectConstructorResults(module StdModule, liveOps OpIndexArray, value
 
 	for opIdx in liveOps 'eachOp'
 		match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
-			notAConstructorCall then break 'site'
+			notAConstructorCall then break
 			builds(resultId, _, _, _) then try candidates.set(resultId, value: true) otherwise panic("collectConstructorResults: candidates.set OOB at {resultId} — the column is sized to the function's value space")
 		end 'site'
 	end 'eachOp'
@@ -1279,7 +1279,7 @@ end 'collectConstructorResults'
 function functionBuildsARecord(module StdModule, liveOps OpIndexArray, byName FunctionNameIndex, constructors RecordConstructorArray) returns bool
 	for opIdx in liveOps 'eachOp'
 		match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
-			notAConstructorCall then break 'site'
+			notAConstructorCall then break
 			builds then return true
 		end 'site'
 	end 'eachOp'
@@ -1463,7 +1463,7 @@ function planPromotions(module StdModule, func IrFunction, valueBound ValueId, s
 
 		for opIdx in block.opRefs 'eachOp'
 			match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
-				notAConstructorCall then break 'site'
+				notAConstructorCall then break
 				builds(resultId, sizeBytes, fields, args) then planOnePromotion(opIdx, resultId: resultId, sizeBytes: sizeBytes, fields: fields, args: args, scan: scan, retained: retained, plans: plans)
 			end 'site'
 		end 'eachOp'

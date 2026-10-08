@@ -78,7 +78,7 @@ export function debugBreakTargetOf(spelling String) returns DebugBreakTargetPars
 	end 'anExactOffset'
 
 	match wholeNumberIn(trimmed) 'aBareLine'
-		none then break 'aBareLine'
+		none then break
 		zero then return DebugBreakTargetParse.lineZero(trimmed)
 		value(line) then return DebugBreakTargetParse.target(DebugBreakTarget.lineOfMain(line))
 	end 'aBareLine'
@@ -450,7 +450,7 @@ export type DebugSymbols
 		self.appendFramesFor(frames, pc: stop.pc, framePointer: stop.framePointer, textBase: textBase, biased: false)
 
 		match entryCaller 'atAnEntry'
-			none then break 'atAnEntry'
+			none then break
 			at(returnAddress) then self.appendFramesFor(frames, pc: returnAddress, framePointer: stop.framePointer, textBase: textBase, biased: true)
 		end 'atAnEntry'
 
@@ -867,7 +867,7 @@ export type DebugSymbols
 
 		if depth > 1 'aRelativePath'
 			match self.filesAt(named.resolve(self.sourceRoot).normalize()) 'fromTheRoot'
-				unknown then break 'fromTheRoot'
+				unknown then break
 				ambiguous(candidates) then return DebugFileResolution.ambiguous(candidates)
 				files(fileIds, name, path) then return DebugFileResolution.files(fileIds, name: name, path: path)
 			end 'fromTheRoot'
@@ -926,7 +926,7 @@ export type DebugSymbols
 	function instructionStartAt(fn MxdbgFunctionInfo, offset MxdbgCodeOffset) returns DebugInstructionStart
 		match hostInstructionWidth() 'width'
 			fixed(bytes) then return alignedInstructionStart((offset - fn.codeStart) as MxdbgCodeOffset, stride: bytes)
-			variable then break 'width'
+			variable then break
 		end 'width'
 
 		var at = fn.codeStart as DecodedOffset
@@ -944,7 +944,7 @@ export type DebugSymbols
 	function presentedNameAt(offset DebugAddress, hidden DebugTally) returns String
 		match self.presentedSiteAt(offset, hidden: hidden) 'presented'
 			site(index) then return self.reader.inlineSite(index).name
-			none then break 'presented'
+			none then break
 		end 'presented'
 
 		match self.functionNameAt(offset) 'enclosing'

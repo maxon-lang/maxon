@@ -167,32 +167,32 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 			tryCall or
 			throwError or
 			propagateError or
-			panicAbort then break 'op'
+			panicAbort then break
 		functionRef(_, funcName, form) then noteFnRefTarget(funcName, form: form, seen: seen, targets: targets, funcSignatures: funcSignatures)
-		indirectCall then break 'op'
+		indirectCall then break
 
 		// An async spawn takes the DIRECT function's address in lowering (not a function value through
 		// the uniform `(userargs, record)` ABI — the trampoline calls it with user args only), so it
 		// names no thunk target; `await`/`try await` reference no function value.
 		asyncCall or
 			await or
-			tryAwait then break 'op'
-		sizeofType then break 'op'
-		constArrayLiteral then break 'op'
+			tryAwait then break
+		sizeofType then break
+		constArrayLiteral then break
 
 		// The jump table names no function value — it branches on an integer index.
-		switch then break 'op'
+		switch then break
 
 		// A witness dispatch names no function value — it dispatches through a runtime witness table, not a
 		// `funcAddr` thunk target; nor does its throwing form.
 		witnessDispatch or
-			witnessTryDispatch then break 'op'
+			witnessTryDispatch then break
 
 		// A rendered panic names no function — its operand is a byte pointer.
-		panicAbortValue then break 'op'
+		panicAbortValue then break
 
 		// The error-flag encode names no function value — its operand is an enum tag or a box pointer.
-		errorFlagEncode then break 'op'
+		errorFlagEncode then break
 
 		// No service op names a function VALUE. The two addresses a `serviceSpawn` lowers to (`<T>.__loop`,
 		// `<T>.__abandon`) and the one a `serviceReplyCell` lowers to (`__gt_reply_release_<message>`) are
@@ -200,14 +200,14 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 		// than through a function value's `(args, record)` one.
 		serviceSpawn or
 			serviceSend or
-			serviceReplyCell then break 'op'
+			serviceReplyCell then break
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
-			rawIntrinsic then break 'op'
+			rawIntrinsic then break
 
 		// A witness table's slots are relocations to impls, never a function VALUE's thunk target.
-		existentialWitness then break 'op'
+		existentialWitness then break
 	end 'op'
 end 'noteIfFunctionRef'
 
@@ -217,7 +217,7 @@ end 'noteIfFunctionRef'
 function noteFnRefTarget(funcName ByteArray, form FunctionRefForm, seen FnRefThunkSet, targets ByteArrayArray, funcSignatures FuncSignatureMap)
 	match form 'form'
 		codeAddress then return
-		functionValue then break 'form'
+		functionValue then break
 	end 'form'
 
 	if not functionValueNeedsFnRefThunk(funcName, funcSignatures: funcSignatures) 'noThunk'

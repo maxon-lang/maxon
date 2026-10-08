@@ -48,7 +48,7 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 			genericInstance or
 			character or
 			interfaceRef or
-			cstring then break 'residue'
+			cstring then break
 	end 'residue'
 
 	return valueTagToStdType(maxonTypeTag(ref))
@@ -945,7 +945,7 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 			rawIntrinsic or
 
 			// A witness table is registered by `ensureWitnessTable` when the op is lowered.
-			existentialWitness then break 'op'
+			existentialWitness then break
 		stringLiteral(_, bytes) then _ = registerStringBlob(globalData, bytes: bytes)
 		constArrayLiteral(_, _, _, bytes) then _ = registerByteArrayLiteralBlob(globalData, bytes: bytes)
 	end 'op'
@@ -2278,7 +2278,7 @@ type MaxonToStdLowering
 			schedPreemptExtLockAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedPreemptExtLockLabel))
 			schedLockAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedLockLabel))
 			ownFrame or
-				splicedAtEverySite then break 'row'
+				splicedAtEverySite then break
 		end 'row'
 	end 'lowerRawIntrinsic'
 
@@ -2964,7 +2964,7 @@ type MaxonToStdLowering
 	function witnessTableInstanceFor(typeName ByteArray, instance WitnessTableInstance, interfaceName ByteArray) returns WitnessTableInstance
 		match instance 'stated'
 			shared then return WitnessTableInstance.shared
-			perInstance then break 'stated'
+			perInstance then break
 		end 'stated'
 
 		if not self.signatures.spawnsAnyService() and not self.conformanceImplsCarryADictionary(typeName, interfaceName: interfaceName) 'nothingToSupply'
@@ -3094,7 +3094,7 @@ type MaxonToStdLowering
 		// carried a dictionary.
 		match instance 'stated'
 			shared then return false
-			perInstance then break 'stated'
+			perInstance then break
 		end 'stated'
 
 		if self.instanceIsFullyConcrete(instance) 'aConcreteInstantiation'
@@ -6396,7 +6396,7 @@ type MaxonToStdLowering
 	// not an identity).
 	function carryOplessTerminator(srcTerminator Terminator, srcBlockId BlockId, dstBlock IrBlock)
 		match srcTerminator 'carry'
-			unset then break 'carry'
+			unset then break
 			dead then dstBlock.terminator = Terminator.dead
 			fallthrough then dstBlock.terminator = Terminator.fallthrough
 			opIndex then panic("carryOplessTerminator: block {srcBlockId} has an op terminator but terminatorNamesAnOp() was false")
@@ -6731,7 +6731,7 @@ type MaxonToStdLowering
 
 			// The total remainder has no error channel at all — its divisor is PROVEN non-zero, so a flag
 			// register would be one nobody reads and a compare nobody branches on.
-			guardedRemainder then break 'zeroTest'
+			guardedRemainder then break
 		end 'zeroTest'
 
 		// ⭐⭐ **THE DIVIDE ITSELF GOES THROUGH `lowerBinOp`, WHICH IS ALREADY THE ONE PLACE THAT DECIDES WHAT
@@ -6750,7 +6750,7 @@ type MaxonToStdLowering
 		// FLAG computed and nothing else guarded.
 		if stdTypeIsFloat(operandType) 'floatDivide'
 			match kind 'floatKind'
-				quotient then break 'floatKind'
+				quotient then break
 				remainder or
 					guardedRemainder then panic("lowerDivisionExpansion: float `mod` does not exist — `requireBinOpOperands` refuses it, so a float-typed remainder expansion is a parser bug")
 				notCheckedDivision then panic("lowerDivisionExpansion: reached with `notCheckedDivision` — `lowerTryCall` and `lowerRuntimeCall` route only the three division kinds here")
@@ -6784,7 +6784,7 @@ type MaxonToStdLowering
 		match expansion 'divisorGuard'
 			checkedQuotient(errorFlag) then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)
 			checkedRemainder(errorFlag) then safeDivisor = self.emitOrredSafeDivisor(divisor, errorFlag: errorFlag, operandType: operandType, dstBlock: dstBlock)
-			guardedRemainder then break 'divisorGuard'
+			guardedRemainder then break
 		end 'divisorGuard'
 
 		// ⭐ The KIND says WHICH division and the callee's SIGNEDNESS says at what reading — the two facts

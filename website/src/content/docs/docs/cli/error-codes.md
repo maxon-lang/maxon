@@ -127,9 +127,9 @@ A match over an enum may only carry a 'default' arm if that arm throws.
 
 'break' or 'continue' appears outside any loop, or targets a label that names no enclosing loop.
 
-### E2048 — `labelTargetsOwnLoop`
+### E2048 — `redundantControlLabel`
 
-'break'/'continue' carries the label of the innermost enclosing loop. The label is redundant. `break 'lab'` / `continue 'lab'` where `lab` names the innermost enclosing loop (with no intervening match for `break`). The label is redundant -- unlabeled `break`/`continue` already targets that loop. Emitted from `resolveBreakTarget` / `resolveContinueTarget`.
+'break'/'continue' carries the label of the construct it already leaves. The label is redundant. `break 'lab'` / `continue 'lab'` where `lab` names the innermost enclosing loop (with no intervening match for `break`), or, for `break`, the innermost enclosing match. Unlabeled `break`/`continue` already targets it; a label reaches an outer loop. Emitted from `resolveControlTarget`.
 
 ### E2049 — `matchBlockStatement`
 

@@ -672,9 +672,9 @@ end 'State'
 
 function scan(op Op, state State)
 	match op 'm'
-		noop then break 'm'
+		noop then break
 		mark then state.flag = true
-		done then break 'm'
+		done then break
 	end 'm'
 end 'scan'
 

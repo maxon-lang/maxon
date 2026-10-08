@@ -2431,13 +2431,13 @@ function collectTraceRemint(reminted BlockRemintArray, test SpecTest, observatio
 		completed(capture) then reminted.push(BlockRemint.create(traceSliceOf(test.traceCapture), fence: traceFenceOf(family), body: normalizeTrace(capture.stdout, family: family)))
 		notRequired or
 			failed or
-			notRunnableHere then break 'observed'
+			notRunnableHere then break
 	end 'observed'
 end 'collectTraceRemint'
 
 function collectTargetIrRemint(reminted BlockRemintArray, run TestRun, effectiveTarget Target)
 	match run.minted 'minted'
-		none then break 'minted'
+		none then break
 		minted(slice, text) then reminted.push(BlockRemint.create(slice, fence: targetIrFenceFor(effectiveTarget), body: text))
 	end 'minted'
 end 'collectTargetIrRemint'
@@ -2693,7 +2693,7 @@ function checkCapturedStdout(stdout SpecStdout, actual String, traceCapture Spec
 	match traceCapture 'mode'
 		off then return checkRunStdout(stdout, actual: actual)
 		unpinned or
-			pinned then break 'mode'
+			pinned then break
 	end 'mode'
 
 	return match stdout 'pin'
@@ -2778,7 +2778,7 @@ function withMonitorStderr(outcome TestOutcome, traceCapture SpecTraceCapture, m
 	match traceCapture 'mode'
 		off then return outcome
 		unpinned or
-			pinned then break 'mode'
+			pinned then break
 	end 'mode'
 
 	return match outcome 'verdict'
@@ -3509,7 +3509,7 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 	// monitor is filtered by. A bool would answer "under the monitor" and then leave the family to be
 	// re-derived from the test at the one site that could still get it wrong.
 	match traceCapture 'underTheMonitor'
-		off then break 'underTheMonitor'
+		off then break
 		unpinned or
 			pinned then return buildMonitorRunCommand(modulePath, family: traceCaptureFamilyOf(traceCapture), programArgs: programArgs)
 	end 'underTheMonitor'
@@ -4234,12 +4234,12 @@ function runEnvironmentFor(procs SpecProcs, preempt SpecPreempt) returns Environ
 	var overrides = EnvMap.create()
 
 	match procs 'p'
-		unset then break 'p'
+		unset then break
 		pinned(count) then overrides.upsert(String.from(MaxProcsEnvName), value: "{count}")
 	end 'p'
 
 	match preempt 'q'
-		unset then break 'q'
+		unset then break
 		off then overrides.upsert(String.from(PreemptEnvName), value: String.from(PreemptEnvOffValue))
 	end 'q'
 
@@ -4679,7 +4679,7 @@ export function requireRunnerAvailable(effectiveTarget Target)
 		wasmtime then _ = findWasmtimePath()
 		orbstack then requireOrbMachineReachable(effectiveTarget)
 		wsl then requireWslAvailable(effectiveTarget)
-		unspawnable then break 'runner'
+		unspawnable then break
 	end 'runner'
 end 'requireRunnerAvailable'
 

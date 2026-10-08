@@ -240,7 +240,7 @@ export type GdbRemoteBackend
 
 	export function close()
 		match self.link 'linked'
-			unconnected then break 'linked'
+			unconnected then break
 			connected(connection) then connection.close()
 		end 'linked'
 
@@ -262,7 +262,7 @@ export type GdbRemoteBackend
 
 	function stopListening()
 		match self.listener 'holding'
-			none then break 'holding'
+			none then break
 			held(door) then door.close()
 		end 'holding'
 
@@ -315,7 +315,7 @@ export type GdbRemoteBackend
 			self.stubOutputDrained()
 
 			match self.stubExit() 'stub'
-				running then break 'stub'
+				running then break
 				exited(code) then return BackendAdoption.refused("the debug stub exited with {code} before it connected back to the debugger{self.stubSaidText()}")
 			end 'stub'
 
@@ -475,12 +475,12 @@ export type GdbRemoteBackend
 		self.stubOutputDrained()
 
 		match self.takeWithheldStop() 'withheld'
-			none then break 'withheld'
+			none then break
 			at(stop) then return self.withheldStopReported(stop)
 		end 'withheld'
 
 		match self.heldStopDisposition() 'held'
-			bookkeeping then break 'held'
+			bookkeeping then break
 			ended(ending) then return ending
 			stop(stopping) then return stopping
 		end 'held'
@@ -662,7 +662,7 @@ export type GdbRemoteBackend
 
 			failed or
 				timedOut or
-				broken then break 'asked'
+				broken then break
 		end 'asked'
 	end 'queuedIfItTookATrapOfItsOwn'
 
@@ -786,7 +786,7 @@ export type GdbRemoteBackend
 		var code = 0 as BackendExitCode
 
 		match gdbHexValueOf(digits) 'read'
-			notHex then break 'read'
+			notHex then break
 			value(ending) then code = ending as BackendExitCode
 		end 'read'
 
@@ -869,7 +869,7 @@ export type GdbRemoteBackend
 
 			match stop.valueOf(info.number) 'held'
 				value(word) then return debugAddressOrZero(word)
-				unreadable then break 'held'
+				unreadable then break
 			end 'held'
 
 			match self.registerRead(info, thread: thread) 'read'
@@ -938,7 +938,7 @@ export type GdbRemoteBackend
 
 		match self.stepping.company() 'others'
 			run then packet.append(self.continueActions())
-			hold then break 'others'
+			hold then break
 		end 'others'
 
 		return self.tellStub(packet)
@@ -1038,7 +1038,7 @@ export type GdbRemoteBackend
 		self.drainedToTheEnd()
 
 		match self.status 'ending'
-			ended then break 'ending'
+			ended then break
 			running then self.status = BackendExitStatus.ended(0)
 		end 'ending'
 
@@ -1055,7 +1055,7 @@ export type GdbRemoteBackend
 					broken then gone = true
 
 				unsupported or
-					failed then break 'seen'
+					failed then break
 
 				answered(payload) then gone = self.endedOnTheWayOut(payload)
 			end 'seen'
@@ -1169,7 +1169,7 @@ export type GdbRemoteBackend
 		self.returnedTheBorrowedStop(borrowed)
 
 		match planted 'planted'
-			answered then break 'planted'
+			answered then break
 			unsupported or
 				failed or
 				timedOut or
@@ -1195,7 +1195,7 @@ export type GdbRemoteBackend
 		self.returnedTheBorrowedStop(borrowed)
 
 		match lifted 'lifted'
-			answered then break 'lifted'
+			answered then break
 			unsupported or
 				failed or
 				timedOut or
@@ -1308,7 +1308,7 @@ export type GdbRemoteBackend
 
 			failed or
 				timedOut or
-				broken then break 'asked'
+				broken then break
 		end 'asked'
 
 		return GdbExpedited.none
@@ -1330,7 +1330,7 @@ export type GdbRemoteBackend
 
 	function slotFilled(file DebugRegisterFile, slot BackendRegisterNumber, info GdbRegisterInfo, thread String, expedited GdbExpedited) returns bool
 		match gdbExpeditedValue(expedited, number: info.number) 'held'
-			unreadable then break 'held'
+			unreadable then break
 			value(word) then return gdbSlotSet(file, slot: slot, value: word)
 		end 'held'
 
@@ -1364,7 +1364,7 @@ export type GdbRemoteBackend
 
 	function registerWritten(info GdbRegisterInfo, thread String, value DebuggeeWord) returns bool
 		match self.askStub("P{info.number:x}={gdbHexTextOf(debuggeeWordBytes(value, width: info.bytes as DebugWidth))}{gdbThreadSuffix(thread, suffixed: self.threadSuffixSupported())}") 'written'
-			answered then break 'written'
+			answered then break
 
 			unsupported or
 				failed or

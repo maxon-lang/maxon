@@ -380,12 +380,12 @@ function mxdbgDescribeType(project Project, signatures ProgramSignatures, name B
 	end 'aDeclaredEnumOrUnion'
 
 	match project.typeAliases.lookup(name, readerFilePath: CompilerOwnedDeclFilePath) 'alias'
-		undeclared then break 'alias'
+		undeclared then break
 		declared(alias) then return mxdbgDescribeRangedAlias(alias)
 	end 'alias'
 
 	match mxdbgPrimitiveSpellingOf(name) 'primitive'
-		notAPrimitive then break 'primitive'
+		notAPrimitive then break
 		width(bytes, signed) then return MxdbgTypeDesc.create(MxdbgTypeKindPrimitive, size: bytes as MxdbgIndex, align: mxdbgPrimitiveAlign(bytes), fields: MxdbgFieldDescArray.create(), flags: MxdbgTypeFlagSigned if signed else 0)
 	end 'primitive'
 
@@ -464,7 +464,7 @@ function mxdbgDescribeRangedAlias(alias RangedTypeAlias) returns MxdbgTypeDesc
 
 	match alias.underlying 'backing'
 		float then kind = MxdbgTypeKindFloatRanged
-		integer then break 'backing'
+		integer then break
 		default panic("mxdbgDescribeRangedAlias: `typealias {String.from(alias.name)}` resolves to neither `int` nor `float` — a ranged alias is declared over one of the two keywords")
 	end 'backing'
 

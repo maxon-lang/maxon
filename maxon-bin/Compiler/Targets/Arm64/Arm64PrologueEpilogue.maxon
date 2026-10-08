@@ -247,22 +247,22 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 					x64Syscall or
 					x64JumpTable or
 					arm64JumpTable or
-					callMem then break 'o'
-				arm64StoreOutgoingArg then break 'o'
+					callMem then break
+				arm64StoreOutgoingArg then break
 
 				// Both bit reinterpretations are already concrete — each names two registers and no frame fact.
 				arm64FmovGprFp or
-					arm64FmovFpGpr then break 'o'
+					arm64FmovFpGpr then break
 
 				// A frame address is already concrete: it names a SLOT, which the ENCODER resolves off x29 with
 				// no frame-size term (`arm64SlotDisplacement`) — unlike an incoming stack argument, whose
 				// displacement depends on the frame this pass has just sized.
-				leaRegSlot then break 'o'
+				leaRegSlot then break
 
 				// A fill ladder names no frame fact at all — its two operands are already in fixed physical
 				// registers and its only field is a constant byte, so there is nothing for this pass to resolve.
 				x64MemFill or
-					arm64MemFill then break 'o'
+					arm64MemFill then break
 
 				// An atomic names no frame fact — its operands are ordinary coloured registers and its scratch is
 				// the encoder's, so there is nothing for this pass to resolve.
@@ -273,36 +273,36 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 					x64GsLoadRegBase or
 					arm64AtomicCas or
 					arm64AtomicRmw or
-					arm64ThreadPointer then break 'o'
+					arm64ThreadPointer then break
 
 				// A scaled-index address or access names no frame fact — its base, index and value are
 				// ordinary coloured registers and its scale/displacement are immediates.
 				leaRegBaseIndexScale or
 					loadRegBaseIndexScale or
 					storeBaseIndexScaleReg or
-					arm64AddLsl then break 'o'
+					arm64AddLsl then break
 
 				// The high multiply names no frame fact either — one coloured register operand and an
 				// implicit RAX/RDX pair. (x64-only; it cannot appear in an arm64 program at all.)
-				mulHighReg then break 'o'
+				mulHighReg then break
 
 				// `fneg` names no frame fact — two coloured FP registers.
-				arm64Fneg then break 'o'
+				arm64Fneg then break
 
 				// An ordered access names no frame fact — a coloured base, a coloured value, no displacement.
 				arm64LoadAcquire or
-					arm64StoreRelease then break 'o'
+					arm64StoreRelease then break
 
 				// The arm64 high multiply names no frame fact — three ordinary coloured registers.
-				arm64Mulh then break 'o'
+				arm64Mulh then break
 
 				// A coverage counter names no operand and no coloured register: it reaches its address through
 				// the reserved x16/x17 pair and a stack-borrowed word it gives straight back.
-				covInc then break 'o'
+				covInc then break
 
 				// x64-only, and it names no frame fact — a coloured base and a displacement off it.
 				x64AluBaseDispReg or
-					x64AluBaseDispImm32 then break 'o'
+					x64AluBaseDispImm32 then break
 			end 'o'
 		end 'eachOp'
 

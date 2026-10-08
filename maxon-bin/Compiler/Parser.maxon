@@ -481,6 +481,7 @@ export union SourceParseError implements Error
 	// the MATCH, so naming the loop is the only way to say "the loop" (see `resolveControlTarget`).
 	// The text is therefore true for both keywords and stays verbatim.
 	labelTargetsOwnLoop(keyword String, label String, line LineNumber, column ColumnNumber)
+	labelTargetsOwnMatch(keyword String, label String, line LineNumber, column ColumnNumber)
 
 	// A labelled `break 'l'`/`continue 'l'` whose label matches no enclosing target.
 	// `targets` as above. Renders as E2047.
@@ -2687,7 +2688,7 @@ function enumInterpRendering(layout EnumLayout) returns EnumInterpRendering
 	match layout.backing 'backing'
 		unresolved or
 			integer or
-			functionRef then break 'backing'
+			functionRef then break
 		float then panic("enumInterpRendering: a float-backed enum reached the interpolation dispatch — `materializeInterpExpr` decodes one to a `float`-tagged value through `floatBehindEnumValue` before asking whether the hole is an enum, so its tag cannot still be `named` here. Rendering it as a number would print the IEEE bit pattern as a decimal integer")
 		character or
 			string then return EnumInterpRendering.declaredText
@@ -2742,7 +2743,7 @@ module function cacheWriteUsedTypeNameRoster(writer LibraryCacheWriter, value Us
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unwritten then break 'payload'
+		unwritten then break
 		entries(a0) then cacheWriteUsedTypeNameRosterEntries(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteUsedTypeNameRoster'
@@ -2822,7 +2823,7 @@ module function cacheWriteDeferredNameDiagnosticRoster(writer LibraryCacheWriter
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unwritten then break 'payload'
+		unwritten then break
 		entries(a0) then cacheWriteDeferredNameDiagnosticRosterEntries(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteDeferredNameDiagnosticRoster'
@@ -2861,7 +2862,7 @@ module function cacheWriteDeferredDiagnosticRoster(writer LibraryCacheWriter, va
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unwritten then break 'payload'
+		unwritten then break
 		entries(a0) then cacheWriteDeferredDiagnosticRosterEntries(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteDeferredDiagnosticRoster'
@@ -3577,7 +3578,7 @@ end 'removeMark'
 // installation and the caller needs no column back.
 function unmarkValue(column ValueMarkColumn, value ValueId)
 	match column 'state'
-		unwritten then break 'state'
+		unwritten then break
 		entries(marked) then removeMark(marked, value: value)
 	end 'state'
 end 'unmarkValue'
@@ -3797,7 +3798,7 @@ function fieldDefaultHelpersIn(layout StructLayout) returns ByteArrayArray
 	for i in 0 upto layout.fieldCount() 'eachField'
 		match layout.fieldDefault(i) 'declared'
 			none or
-				literal then break 'declared'
+				literal then break
 			helper(name) then helpers.push(name)
 			bareCreateHelper(name) then helpers.push(name)
 		end 'declared'
@@ -5234,7 +5235,7 @@ let CallerFileDefaultName = b"__file__"
 // nothing of the sort. The token is here for the POSITION.
 function requireNotACallerLocationDefault(name ByteArray, at Token) throws SourceParseError
 	match callerLocationNamed(name) 'keyword'
-		none then break 'keyword'
+		none then break
 		line or
 			file then throw SourceParseError.callerLocationOutsideDefault(String.from(name), line: at.line, column: at.column)
 	end 'keyword'
@@ -7326,7 +7327,7 @@ end 'raiseNonNumericOperands'
 
 function requireBinOpOperands(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag, opTok Token) throws SourceParseError
 	match checkBinOpOperands(op, left: left, right: right) 'operands'
-		ok then break 'operands'
+		ok then break
 		mixedWordOperands then throw SourceParseError.operandTypeMismatch(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
 		nonNumericOperands then try raiseNonNumericOperands(opTok, left: left, right: right)
 
@@ -13521,7 +13522,7 @@ end 'enumArmDispatchLayout'
 function armPayloadEnumOf(table EnumArmTable, members TryBlockErrorMemberArray) returns DeclaredEnum
 	match table 't'
 		declared(layout) then return DeclaredEnum.declared(layout)
-		errorUnion then break 't'
+		errorUnion then break
 	end 't'
 
 	if members.count() != 1 'severalMembers'
@@ -24794,7 +24795,7 @@ export type Parser
 				let tok = self.tokenAt(q)
 
 				match callerLocationNamed(tok.value) 'keyword'
-					none then break 'keyword'
+					none then break
 					line or
 						file then throw SourceParseError.unsupported("'{String.from(tok.value)}' inside a larger default expression — a caller-location default is materialized AT THE CALL SITE, from the caller's own position, and the declaring file's expression is not available there to evaluate around it. The whole default must be the keyword alone; do the arithmetic in the body", line: tok.line, column: tok.column)
 				end 'keyword'
@@ -24961,7 +24962,7 @@ export type Parser
 
 		match overloadMemberHoldingSignature(members, typeSuffix: typeSuffix, labelSuffix: labelSuffix) 'redeclaration'
 			redeclares(registered) then return registered
-			newSignature then break 'redeclaration'
+			newSignature then break
 		end 'redeclaration'
 
 		let suffix = labelDistinguishedSuffix(typeSuffix, labelSuffix: labelSuffix) if overloadMembersHoldTypeSuffix(members, typeSuffix: typeSuffix) else typeSuffix
@@ -25514,7 +25515,7 @@ export type Parser
 					// A TUPLE alias is keyed whole-program by the reader itself, under the `<Type>.<member>` name
 					// `TupleAliasOwner.enclosingType` just gave it — there is no per-declaration column for it to
 					// land in, because it mints no identity of its own (see `NestedAliasResult`).
-					tupleAlias then break 'nested'
+					tupleAlias then break
 
 					// Into the FILE's function-alias array, the one a top-level `typealias Fn = function(…)`
 					// lands in — under BOTH its bare name and `<Type>.<member>`, because a nested one declares
@@ -26073,7 +26074,7 @@ export type Parser
 						genericInstance(entry) then genericAliasOut.push(self.qualifiedInnerGenericAlias(entry))
 
 						// Already keyed (or deliberately not) by the reader, off `nestedTupleOwner` above.
-						tupleAlias then break 'nested'
+						tupleAlias then break
 
 						// ⭐⭐ **AND THE FUNCTION FORM IS PER-CONFORMER TOO — IT IS THE READING INSIDE THE BODY THAT
 						// IS, WHICH IS WHY IT TAKES A SECOND KEY RATHER THAN A DIFFERENT ONE.** `ElementTransform` is
@@ -26383,7 +26384,7 @@ export type Parser
 			// has no conformers and never reaches here.
 			typeExtension or
 				undeclaredTarget then return ExtensionConstraintCheck.satisfied
-			interfaceExtension then break 'target'
+			interfaceExtension then break
 		end 'target'
 
 		// Through `conformerAssociatedBindings`, NOT a second `bindingsForInterface` of its own: that accessor
@@ -26405,7 +26406,7 @@ export type Parser
 		match header.target 'target'
 			interfaceExtension or
 				undeclaredTarget then return
-			typeExtension then break 'target'
+			typeExtension then break
 		end 'target'
 
 		// ⭐ An UNCONDITIONAL declaration files no constraint and is still a FACT about the name: it says the
@@ -27641,7 +27642,7 @@ export type Parser
 				arrayValue or
 				containerValue or
 				factoryValue or
-				boxedUnionValue then break 'outcome'
+				boxedUnionValue then break
 			failed(error) then try self.throwRecordedConstantError(error)
 			pending or
 				evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
@@ -27888,7 +27889,7 @@ export type Parser
 	function requireRegistryResultMatchesReplacement(replacement RegistryReplacement, resultUsed bool, memberTok Token) throws SourceParseError
 		match replacement 'replacement'
 			replacing then return
-			unconditional then break 'replacement'
+			unconditional then break
 		end 'replacement'
 
 		if resultUsed 'aValueOfAVoidCall'
@@ -28303,7 +28304,7 @@ export type Parser
 		match tupleOwner 'owner'
 			fileScope then self.signatures.recordTupleAlias(nameTok.value, tupleName: target, declFilePath: self.filePath, visibility: visibility)
 			enclosingType(owner) then self.signatures.recordTupleAlias(joinQualifiedName(owner, member: nameTok.value), tupleName: target, declFilePath: self.filePath, visibility: visibility)
-			unpublished then break 'owner'
+			unpublished then break
 		end 'owner'
 	end 'readTupleAliasForm'
 
@@ -28703,7 +28704,7 @@ export type Parser
 		let header = try self.readExtensionHeader() otherwise return
 
 		match header.target 'target'
-			undeclaredTarget then break 'target'
+			undeclaredTarget then break
 			interfaceExtension or
 				typeExtension then return
 		end 'target'
@@ -30076,7 +30077,7 @@ export type Parser
 		let literal = String.from(tok.value)
 
 		match err 'kind'
-			overflow then break 'kind'
+			overflow then break
 			malformed then return SourceParseError.malformedNumericLiteral(literal, line: tok.line, column: tok.column)
 		end 'kind'
 
@@ -30339,7 +30340,7 @@ export type Parser
 				// A withheld method has no signature, so a body emitted for it would be a function nothing can
 				// call — and its own statements would not type, which is the whole reason the clause exists.
 				unmet then continue
-				satisfied then break 'verdict'
+				satisfied then break
 			end 'verdict'
 
 			// ⭐ **THE EXTENSION'S OWN `implements` IS RECORDED HERE, PAST THE VERDICT, AND THAT POSITION IS THE
@@ -30652,7 +30653,7 @@ export type Parser
 				// requirement's rendered type is already the type.
 				match try self.readNestedTypeAlias(try self.consumeOptionalVisibility(), recordFunctionSignature: false, tupleOwner: TupleAliasOwner.unpublished) 'nested'
 					ranged or
-						tupleAlias then break 'nested'
+						tupleAlias then break
 					genericInstance(entry) then self.noteInterfaceAlias(entry)
 					functionAlias then throw SourceParseError.unsupported("a function typealias inside an `interface` body is not supported — the declaration sweep does not read an interface's members, so the alias would name a type only its own file could resolve; declare it at file scope", line: aliasTok.line, column: aliasTok.column)
 				end 'nested'
@@ -30769,7 +30770,7 @@ export type Parser
 		// and LINKED, and the first dispatch on the result reported `a member access on a 'int' value` — the
 		// declared type having quietly degraded to the machine word.
 		match returnType 'declaredReturn'
-			void then break 'declaredReturn'
+			void then break
 			value(inner) then self.noteUnstorableRequirementType(inner, position: DeclaredStoragePosition.interfaceRequirementReturnType, line: returnTok.line, column: returnTok.column)
 		end 'declaredReturn'
 
@@ -31167,7 +31168,7 @@ export type Parser
 
 		match self.conformanceUsesArity(interfaceName) 'arity'
 			declared(count) then self.checkConformanceArgsAgainstArity(interfaceName, declared: count, written: written, openTok: openTok)
-			unresolvable then break 'arity'
+			unresolvable then break
 		end 'arity'
 	end 'checkParenthesizedConformanceArgs'
 
@@ -32916,7 +32917,7 @@ export type Parser
 		// pointer — is not one.
 		if throwsClauseIsThrowing(throwsClause) 'theErrorFlagAlreadyOwnsTheSecondRegister'
 			match returnType 'declaredReturn'
-				void then break 'declaredReturn'
+				void then break
 				value(inner) then try self.requireStorableDeclaredType(inner, position: DeclaredStoragePosition.throwingReturnType, line: nameTok.line, column: nameTok.column)
 			end 'declaredReturn'
 		end 'theErrorFlagAlreadyOwnsTheSecondRegister'
@@ -34303,7 +34304,7 @@ export type Parser
 		match offer 'offer'
 			offered(paramTypes, _) then return try paramTypes.get(paramIndex) otherwise throw SourceParseError.uninferrableClosureParam(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 			deferred then return MaxonType.unresolved
-			none then break 'offer'
+			none then break
 		end 'offer'
 
 		throw SourceParseError.unsupported("parameter '{String.from(nameTok.value)}' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type", line: nameTok.line, column: nameTok.column)
@@ -34323,7 +34324,7 @@ export type Parser
 		match owner 'owner'
 			closureLiteral then throw SourceParseError.unsupported("a default value on closure parameter '{String.from(paramName)}' — a closure is called INDIRECTLY, through a function value, so no call site has a callee name to look the default up by. Give the closure's caller the value explicitly", line: eqTok.line, column: eqTok.column)
 			interfaceRequirement then throw SourceParseError.unsupported("a default value on interface requirement parameter '{String.from(paramName)}' — a witness dispatch slots its arguments against the INTERFACE's formals, which are in no signature registry, so no dispatch site can read a default from the requirement. Declare the default on each conforming type's method", line: eqTok.line, column: eqTok.column)
-			declaredFunction then break 'owner'
+			declaredFunction then break
 		end 'owner'
 
 		// ⭐⭐ **THE THIRD REFUSAL: THIS NAME'S DECLARATIONS DO NOT DESCRIBE ONE DEFAULT SHAPE, SO NO CALL CAN
@@ -34497,7 +34498,7 @@ export type Parser
 	// whose parse throws never reaches the drain at all.
 	function sweptParamDefaultHelperName(ownerName ByteArray, paramIndex ParamCount) returns ByteArray
 		match self.signatures.defaultsOf(ownerName) 'swept'
-			allRequired then break 'swept'
+			allRequired then break
 			defaults(info) then return self.requireSweptHelperName(info.producerFor(paramIndex), ownerName: ownerName, paramIndex: paramIndex)
 		end 'swept'
 
@@ -34551,7 +34552,7 @@ export type Parser
 		// just installed, which is exactly what those declarations have.
 		match self.signatures.structFor(declaringType, readerFilePath: self.filePath) 'declaringType'
 			declared(layout) then self.installDeclaringTypeScope(layout)
-			undeclared then break 'declaringType'
+			undeclared then break
 		end 'declaringType'
 
 		self.innerAliasesFromIndex = true
@@ -35175,7 +35176,7 @@ export type Parser
 
 	function runtimeManagedValueSpan(value ValueId, funcIndex ElementIndex, anchorIndex ElementIndex) returns SourceRange
 		match self.artifact.valueOrigins.lookup(funcIndex, valueId: value) 'origin'
-			none then break 'origin'
+			none then break
 			found(opIndex) then return self.artifact.opRanges.get(opIndex)
 		end 'origin'
 
@@ -35546,7 +35547,7 @@ export type Parser
 			if qualifierDots == 0 and self.genericBindingNames.count() != 0 'insideAGenericInstance'
 				match self.genericBoundType(tok.value) 'binding'
 					resolved(bound) then return bound
-					byName then break 'binding'
+					byName then break
 				end 'binding'
 			end 'insideAGenericInstance'
 
@@ -35628,7 +35629,7 @@ export type Parser
 					self.recordTypeNameVerdict(declared.nameVerdict())
 
 					match declared 'declared'
-						none then break 'declared'
+						none then break
 						one(kind, declFilePath, name, _) then return self.namespaceQualifiedType(kind, declFilePath: declFilePath, name: name)
 					end 'declared'
 				end 'theWholeProgramIsKnown'
@@ -35864,7 +35865,7 @@ export type Parser
 			if self.enclosingTypeParams.count() != 0 'insideATypeParameterScope'
 				match self.bareGenericInstanceInScope(name) 'scoped'
 					instance(gid) then return MaxonType.genericInstance(gid)
-					none then break 'scoped'
+					none then break
 				end 'scoped'
 			end 'insideATypeParameterScope'
 
@@ -36148,7 +36149,7 @@ export type Parser
 		end 'calleeDeclaresNoTypeParameters'
 
 		match self.signatures.scopedGenericInstanceOf(self.internedName(self.valueNameId(result)), declaringTypeName: declaringType, scopeParamNames: scopeParamNames) 'scoped'
-			notInScope then break 'scoped'
+			notInScope then break
 			instance(gid) then self.retypeValue(result, valueType: MaxonType.genericInstance(gid))
 		end 'scoped'
 	end 'promoteBareGenericResultToCalleeScope'
@@ -36439,7 +36440,7 @@ export type Parser
 			let stmtTok = self.current()
 
 			match preceding 'dead'
-				none then break 'dead'
+				none then break
 				keyword(name) then throw SourceParseError.unreachableCode(String.from(name), line: stmtTok.line, column: stmtTok.column)
 			end 'dead'
 
@@ -37573,7 +37574,7 @@ export type Parser
 
 		match source 'source'
 			tuple(layout) then try self.requireAssignsEveryElement(layout, targetIndices: targetIndices, openTok: openTok)
-			deferred then break 'source'
+			deferred then break
 		end 'source'
 
 		self.recordDiscardOf(discardedCallee, anchor: openTok, door: DiscardDoor.explicitDiscard)
@@ -37776,7 +37777,7 @@ export type Parser
 	function recordDiscardOf(producer DiscardedCallee, anchor Token, door DiscardDoor)
 		match producer 'usedNothing'
 				named(_, result, opIndex) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(opIndex, door: door, subject: self.runtimeReadSubjectOf(result), line: anchor.line, column: anchor.column, filePath: self.filePath))
-			notACall then break 'usedNothing'
+			notACall then break
 		end 'usedNothing'
 	end 'recordDiscardOf'
 
@@ -37894,7 +37895,7 @@ export type Parser
 
 		match source 'source'
 			tuple(layout) then try self.requireNamesEveryElement(layout, nameToks: nameToks, keywordTok: keywordTok, patternSubject: patternSubject)
-			deferred then break 'source'
+			deferred then break
 		end 'source'
 
 		return source
@@ -39541,7 +39542,7 @@ export type Parser
 	// `assignableValue` — this plus that conversion, in one call, so the two halves cannot come apart.
 	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, placeOwner SlotOwner, voice SlotMismatchVoice) throws SourceParseError
 		match checkDeclaredType(value, declared: declared) 'declared'
-			ok then break 'declared'
+			ok then break
 			mismatch then throw self.slotMismatchError(voice, placeDoor: door, placeName: nameTok.value, placeOwner: placeOwner, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: typeTagName(value), gotNote: "", gotTag: value, resolvedExpected: typeTagName(declared), expectedNote: "", declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
 			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(typeTagName(value), targetType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 
@@ -39897,34 +39898,34 @@ export type Parser
 		// keeps that field a map. A function that recorded nothing hands over nothing and the target keeps its
 		// own empty one.
 		match self.bodyState.valueExistentialInstance 'function'
-			unwritten then break 'function'
+			unwritten then break
 			entries(byValue) then func.valueExistentialInstances = byValue
 		end 'function'
 
 		match self.bodyState.valueCallInstance 'function'
-			unwritten then break 'function'
+			unwritten then break
 			entries(byValue) then func.valueCallInstances = byValue
 		end 'function'
 
 		match self.bodyState.literalCastArguments 'function'
-			unwritten then break 'function'
+			unwritten then break
 			entries(confirmed) then func.literalCastArguments = confirmed
 		end 'function'
 
 		func.existentialFieldStores = self.bodyState.existentialFieldStores
 
 		match self.bodyState.deferredArgumentBindings 'function'
-			unwritten then break 'function'
+			unwritten then break
 			entries(bindings) then func.deferredArgumentBindings = bindings
 		end 'function'
 
 		match self.bodyState.conditionalOps 'function'
-			unwritten then break 'function'
+			unwritten then break
 			entries(ops) then func.conditionalOps = ops
 		end 'function'
 
 		match self.bodyState.conditionalRefusals 'function'
-			unwritten then break 'function'
+			unwritten then break
 			entries(refusals) then func.conditionalRefusals = refusals
 		end 'function'
 
@@ -39934,7 +39935,7 @@ export type Parser
 		// legal depends on `bump`'s BODY, which may be in another file — which is precisely the split E3019
 		// already has. The shared-empty set rides across unchanged for a function that marked nothing.
 		match self.bodyState.immutableGlobalReads 'function'
-			unwritten then break 'function'
+			unwritten then break
 			entries(marked) then func.immutableGlobalAliasValues = marked as GlobalAliasValueSet
 		end 'function'
 
@@ -40159,7 +40160,7 @@ export type Parser
 	function denotedAliasId(value ValueId) returns TypeNameId throws MapError
 		match self.recordedCastAlias(value) 'castAlias'
 			declared then return try self.castAliasOf(value)
-			undeclared then break 'castAlias'
+			undeclared then break
 		end 'castAlias'
 
 		match self.provenAliasOfValue(value) 'proven'
@@ -40571,7 +40572,7 @@ export type Parser
 
 	function borrowOperandsForWrite() returns BorrowOperandsMap
 		match self.bodyState.borrowOperands 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(byDifference) then return byDifference
 		end 'state'
 
@@ -41304,7 +41305,7 @@ export type Parser
 		end 'declared'
 
 		match func.maxonReturnType 'unneeded'
-			void then break 'unneeded'
+			void then break
 			value(declared) then self.reportUnneededLiteralCastAt(expression, first: retStart, declared: declared)
 		end 'unneeded'
 
@@ -41357,7 +41358,7 @@ export type Parser
 		// the case the tag check WRONGLY AGREES on — a boxed union returned where a scalar is declared,
 		// where `checkDeclaredType(named, named)` agrees because `ValueTypeTag.named` is overloaded.
 		match checkDeclaredType(retTag, declared: declaredTag) 'declared'
-			ok then break 'declared'
+			ok then break
 			mismatch then throw SourceParseError.returnTypeMismatch(typeTagName(retTag), gotNote: "", expected: self.declaredSpellingDisplay(self.bodyState.functionReturnSpelling, tag: declaredTag, nameId: declaredNameId, gotTag: retTag), expectedNote: "", line: anchor.line, column: anchor.column)
 			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(typeTagName(retTag), targetType: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
 
@@ -41416,7 +41417,7 @@ export type Parser
 		// ask this inside `recordRangedTargetSite`; a `return` asks it through `recordRangedReturnSite`
 		// because its destination is the FUNCTION's declared type rather than one written at the site.
 		match self.bodyState.rangeCheckReturnAlias 'rangedReturn'
-			undeclared then break 'rangedReturn'
+			undeclared then break
 			declared(alias) then self.recordRangedReturnSite(returned, alias: alias, anchor: anchor)
 		end 'rangedReturn'
 	end 'parseCheckedValueReturn'
@@ -41544,7 +41545,7 @@ export type Parser
 			closed or
 				walkedBy or
 				walkedAlone or
-				walkedThroughWitness then break 'graph'
+				walkedThroughWitness then break
 			refused(noun) then throw self.unwalkableTransferGraphError(value, blame: serviceReplyBlame(typeName, methodName: methodName), noun: noun, anchor: anchor)
 		end 'graph'
 	end 'proveReplyCrossable'
@@ -42686,7 +42687,7 @@ export type Parser
 				match asyncCalleeIfMatch(try self.artifact.module.ops.get(opIdx) otherwise panic("resolveAsyncCallee: opIdx {opIdx} not in module.ops"), promise: promise) 'm'
 					found(callee) then return AsyncCalleeLookup.found(callee)
 					serviceReply(messageName, awaitedService) then return AsyncCalleeLookup.serviceReply(messageName, awaitedService: awaitedService)
-					none then break 'm'
+					none then break
 				end 'm'
 			end 'eachOp'
 		end 'eachBlock'
@@ -42696,7 +42697,7 @@ export type Parser
 			match self.resolveAsyncCallee(func, promise: incoming, visited: visited) 'r'
 				found(callee) then return AsyncCalleeLookup.found(callee)
 				serviceReply(messageName, awaitedService) then return AsyncCalleeLookup.serviceReply(messageName, awaitedService: awaitedService)
-				none then break 'r'
+				none then break
 			end 'r'
 		end 'eachIncoming'
 
@@ -42780,7 +42781,7 @@ export type Parser
 			// non-throwing reply for E3055 to refuse — `tryTargetThrows` answers `throwing` for every one. A
 			// `deferred` target is the undeclared callee above, left to E3004.
 			serviceReply or
-				deferred then break 'kind'
+				deferred then break
 		end 'kind'
 	end 'requireThrowingTryTarget'
 
@@ -42811,7 +42812,7 @@ export type Parser
 			// builtin, which the sentence below is for.
 			quotient or
 				remainder then panic("requireThrowingNamedTryTarget: '{String.from(callee)}' is a THROWING division, so `isThrowingRuntimeCallee` must have accepted the `try` already — reaching here means `divisionKindThrows` and that predicate disagree")
-			notCheckedDivision then break 'totalDivision'
+			notCheckedDivision then break
 		end 'totalDivision'
 
 		throw SourceParseError.tryOnNonThrowingBuiltin(tryTok.line, column: tryTok.column)
@@ -44176,7 +44177,7 @@ export type Parser
 			named or
 				witness or
 				promise or
-				deferred then break 'kind'
+				deferred then break
 			serviceReply(messageName, _) then return self.serviceReplyCaughtForm(messageName, flag: flag)
 		end 'kind'
 
@@ -45137,7 +45138,7 @@ export type Parser
 	// witness dispatch — because each answers `tryTargetThrows` and only the CLAUSE reaches here.
 	function checkPropagateType(func IrFunction, throwsClause ThrowsClause, tryTok Token) throws SourceParseError
 		match throwsClause 'calleeThrows'
-			none then break 'calleeThrows'
+			none then break
 			throwing(propagated) then try self.requireErrorTypeFitsEnclosing(func, errorType: propagated, door: ErrorExitDoor.propagate, anchor: tryTok)
 		end 'calleeThrows'
 	end 'checkPropagateType'
@@ -45455,7 +45456,7 @@ export type Parser
 	function dropCascade() returns DropCascade
 		match self.bodyState.dropCascade 'state'
 			built(cascade) then return cascade
-			unbuilt then break 'state'
+			unbuilt then break
 		end 'state'
 
 		let cascade = DropCascade.create()
@@ -46414,7 +46415,7 @@ export type Parser
 				InterpolationScratch or
 				ClosureEnv or
 				ParameterCell or
-				WalkVisitTable then break 'tag'
+				WalkVisitTable then break
 		end 'tag'
 
 		self.artifact.recordAllocTagSite(tag)
@@ -49055,7 +49056,7 @@ export type Parser
 	// caught error whether or not an `else` was written, so it routes to its own opener.
 	function parseElseBody(func IrFunction, elseBlock IrBlock, cond IfCondition, ifTok Token) returns IrBlock throws SourceParseError
 		match cond 'shape'
-			plain then break 'shape'
+			plain then break
 			tryCatch(_, _, _, flag, errorType, form) then return try self.parseCatchingElseBody(func, elseBlock: elseBlock, flag: flag, errorType: errorType, form: form, ifTok: ifTok)
 		end 'shape'
 
@@ -49161,7 +49162,7 @@ export type Parser
 	// propagating `try` keeps every other position it had.
 	function parseIfCondition(func IrFunction, block IrBlock, ifTok Token, binder IfBinder) returns IfCondition throws SourceParseError
 		match binder 'b'
-			none then break 'b'
+			none then break
 			binding then return try self.parseCatchingCondition(func, block: block, binder: binder)
 		end 'b'
 
@@ -49210,7 +49211,7 @@ export type Parser
 			named or
 				witness or
 				promise or
-				serviceReply then break 'kind'
+				serviceReply then break
 		end 'kind'
 
 		let producesNothing = self.tagOf(result) == ValueTypeTag.void
@@ -49298,7 +49299,7 @@ export type Parser
 	// Parse the then branch's body, giving a catching `if`'s success value the home its condition could not.
 	function parseIfThenBody(func IrFunction, thenBlock IrBlock, label ByteArray, cond IfCondition, binder IfBinder, anchor Token) returns IrBlock throws SourceParseError
 		match cond 'shape'
-			plain then break 'shape'
+			plain then break
 			tryCatch(_, result, resultWasPending, _, _, _) then return try self.parseCaughtThenBody(func, thenBlock: thenBlock, label: label, result: result, resultWasPending: resultWasPending, binder: binder, anchor: anchor)
 		end 'shape'
 
@@ -49319,7 +49320,7 @@ export type Parser
 		// in behind it and this routine is entered after them. What is left here is the binding or the discard
 		// drop, both of which name the promoted value and both of which must follow it.
 		match binder 'b'
-			none then break 'b'
+			none then break
 			binding(nameIndex, mutable) then return try self.parseBoundThenBody(func, thenBlock: thenBlock, label: label, result: result, nameIndex: nameIndex, mutable: mutable)
 		end 'b'
 
@@ -50360,7 +50361,7 @@ export type Parser
 		// "a 'int' element", a method call "'int' has no method" — in front of E3004.
 		match src.deferredSource 'deferredCallElement'
 			value(sourceFuncIndex, sourceId) then loopValue = self.deferredValueFrom(sourceFuncIndex, sourceId: sourceId, chainCalls: DeferredChainCalls.noCall)
-			none then break 'deferredCallElement'
+			none then break
 		end 'deferredCallElement'
 
 		// ⭐ **A CHARACTER RANGE MINTS ITS ELEMENT FROM THE COUNTER**, where a String mints it from a byte
@@ -51039,7 +51040,7 @@ export type Parser
 		match try self.surfaceIterableFactory(surface, anchor: forTok) 'factory'
 			notDeclared then return IterableIterationSource.notIterable
 			infallible then return IterableIterationSource.cursor(try self.emitReceiverProtocolCall(surface, methodName: CreateIteratorMethodName, anchor: forTok, resultUsed: true), entrySeed: self.emitLiteral(NoErrorFlag, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok)))
-			throwsIterationError then break 'factory'
+			throwsIterationError then break
 			throwsSomethingElse(errorName) then throw SourceParseError.unsupported("`for … in` over a `{String.from(self.methodSurfaceTypeName(surface))}`, whose `{String.from(CreateIteratorMethodName)}()` throws `{errorName}` — the loop absorbs what the traversal protocol throws without binding it, which is sound only for the payload-free `{String.from(IterationErrorTypeName)}`; a factory throwing anything else must be called with an explicit `try` and its result iterated", line: forTok.line, column: forTok.column)
 		end 'factory'
 
@@ -51164,7 +51165,7 @@ export type Parser
 		// same value; the expensive half — walking the slot list per protocol name — is not repeated.
 		match self.methodSurfaceOf(source) 'sharedSentenceIsWrong'
 			declared or
-				none then break 'sharedSentenceIsWrong'
+				none then break
 
 			// ⭐ **A DISPATCHED RECEIVER: the shared sentence ends *"any type DECLARING the cursor protocol"*,
 			// which is true of a struct source and false here.** A conformer may declare both methods and still
@@ -51271,7 +51272,7 @@ export type Parser
 
 		match try self.witnessProtocolTarget(receiver, methodName: CurrentMethodName, anchor: anchor) 'current'
 			notRequired then return false
-			required then break 'current'
+			required then break
 		end 'current'
 
 		return match try self.witnessProtocolTarget(receiver, methodName: AdvanceMethodName, anchor: anchor) 'advance'
@@ -53251,7 +53252,7 @@ export type Parser
 		let dependents = scan.cellEpochsRootedAt(headerEpoch)
 
 		match scan.firstReadAmong(dependents) 'read'
-			none then break 'read'
+			none then break
 			read(at) then throw at.movedInAnEarlierIteration()
 		end 'read'
 
@@ -53379,7 +53380,7 @@ export type Parser
 		let dependents = self.headerDependents(func, scan: scan, headerValue: headerValue)
 
 		match scan.firstReadAmong(dependents) 'read'
-			none then break 'read'
+			none then break
 			read(at) then return try self.refuseAReadOfTheMovedHeader(at, whenTaken: whenTaken)
 		end 'read'
 
@@ -53425,7 +53426,7 @@ export type Parser
 
 	function loopEdgeIndexOf(func IrFunction, scan LoopMoveScan) returns LoopEdgeIndex
 		match scan.edgeIndex 'state'
-			unbuilt then break 'state'
+			unbuilt then break
 			built(index) then return index
 		end 'state'
 
@@ -53823,8 +53824,8 @@ export type Parser
 	// ⭐⭐ **BREAK TARGETS ARE MATCHES ∪ LOOPS; CONTINUE TARGETS ARE LOOPS ONLY.**
 	//
 	// No label → the innermost break target (the match, if one is open; else the innermost loop). A label
-	// → the enclosing match, else the enclosing loop, with that label. Naming the innermost LOOP is
-	// redundant (E2048) — but only when no match is open, see below. A label matching no enclosing target,
+	// → the enclosing match, else the enclosing loop, with that label. Naming the innermost target is
+	// redundant (E2048): the innermost match, or the innermost loop when no match is open. A label matching no enclosing target,
 	// or a keyword with no target at all, is E2047. Returns the live stack entry (a reference), so a
 	// `break` reaches the same `LoopContext`/`MatchContext` the stack still holds.
 	function resolveControlTarget(kwTok Token) returns ControlTarget throws SourceParseError
@@ -53859,15 +53860,16 @@ export type Parser
 
 		let labelTok = try self.consume(TokenKind.charLiteral)
 
-		// Matches first, innermost out — a labelled break names its target directly, and a match's label is
-		// NEVER redundant: `break 'check'` inside `match … 'check'` says exactly what the bare `break` says,
-		// but the redundancy diagnostic exists for LOOP labels only (E2048's text names a loop), and both
-		// references accept the match spelling silently. `match-arm-field-assignment` and
-		// `match-statements.break-exhaustive-enum` are both written that way.
+		// Matches first, innermost out — a labelled break names its target directly. `break 'check'` inside
+		// `match … 'check'` says exactly what the bare `break` says, so it is E2048.
 		for i in 0 upto matchDepth 'matchSearch'
 			let ctx = try self.bodyState.matches.get(matchDepth - 1 - i) otherwise panic("resolveControlTarget: matches.get OOB during the label search")
 
 			if ctx.label.equals(labelTok.value) 'foundMatch'
+				if i == 0 'ownMatch'
+					throw SourceParseError.labelTargetsOwnMatch(String.from(kwTok.value), label: String.from(labelTok.value), line: labelTok.line, column: labelTok.column)
+				end 'ownMatch'
+
 				return ControlTarget.matchMerge(ctx)
 			end 'foundMatch'
 		end 'matchSearch'
@@ -55699,7 +55701,7 @@ export type Parser
 
 		match give 'g'
 			// A STATEMENT arm carries no value, so there is nothing to settle — not "settle it to itself".
-			none then break 'g'
+			none then break
 			value(v) then settled = self.armGiveUnion(give, settled: try self.settleArmGive(v, ownedFloor: ownedFloor, exitBlock: exitBlock, anchor: anchor))
 		end 'g'
 
@@ -56668,7 +56670,7 @@ export type Parser
 			match try self.boxedUnionAnswers.get(nameId) otherwise panic("valueIsBoxedUnion: boxedUnionAnswers.get OOB at {nameId} below its own count") 'answer'
 				boxed then return true
 				notBoxed then return false
-				unasked then break 'answer'
+				unasked then break
 			end 'answer'
 		end 'mayHaveAsked'
 
@@ -58356,7 +58358,7 @@ export type Parser
 	function recordMergeAliasProof(phiId ValueId, incoming ValueIdArray)
 		match self.declaredAliasOfValue(phiId) 'dest'
 			// The merge names no ranged alias, so there is no claim to lift and nothing downstream reads one.
-			undeclared then break 'dest'
+			undeclared then break
 			declared(alias) then self.recordMergeAliasProofAgainst(phiId, alias: alias, incoming: incoming)
 		end 'dest'
 	end 'recordMergeAliasProof'
@@ -60152,7 +60154,7 @@ export type Parser
 			currentIsALiteral = false
 
 			match admittingAlias 'aLiteralTheTargetAlreadyAdmits'
-				undeclared then break 'aLiteralTheTargetAlreadyAdmits'
+				undeclared then break
 				declared(alias) then self.recordLiteralCast(current, alias: alias, first: operandStart, asTok: asTok)
 			end 'aLiteralTheTargetAlreadyAdmits'
 		end 'cast'
@@ -60328,7 +60330,7 @@ export type Parser
 
 	function qualifiedTypeDeclarationAt(qualified ByteArray, anchor Token) returns NameableQualifiedType throws SourceParseError
 		match self.signatures.namespaceDeclarationOf(qualified, readerFilePath: self.filePath) 'declared'
-			none then break 'declared'
+			none then break
 			several(candidates) then throw ambiguousTypeNameRefusal(qualified, candidates: candidates, ownDeclarationUnqualifiable: false, anchor: anchor)
 			one(kind, declFilePath, name) then return NameableQualifiedType.one(kind, declFilePath: declFilePath, name: name, verdict: TypeNameVerdict.nameable)
 		end 'declared'
@@ -60440,7 +60442,7 @@ export type Parser
 		let declared = try self.qualifiedTypeDeclarationAt(qualified, anchor: self.current())
 
 		match declared 'declared'
-			none then break 'declared'
+			none then break
 			one(kind, declFilePath, name, _) then self.enterQualifiedTypeBase(qualified, typeDots: typeDots, kind: kind, declFilePath: declFilePath, name: name)
 		end 'declared'
 
@@ -60668,7 +60670,7 @@ export type Parser
 		let target = classifyServiceTarget(self.signatures, typeName: typeTok.value, member: memberTok.value)
 
 		match target 'target'
-			startsAService then break 'target'
+			startsAService then break
 
 			// ⚖ A constrained generic is E2015 — the witness threading a synthesized loop would need is a
 			// thing that could be built. Every other refusing arm is E3134: not what `spawn` means, ever, so
@@ -60704,7 +60706,7 @@ export type Parser
 		// The deferred half, asked only where something was deferred: a monomorphic service has no type
 		// parameter for the first ask to have left open, so it is judged once and exactly as it always was.
 		match instance 'fixed'
-			monomorphic then break 'fixed'
+			monomorphic then break
 			at then try self.requireServiceRosterIsDispatchable(typeTok.value, knowledge: ServiceRosterKnowledge.atInstance(instance), spawnTok: spawnTok)
 		end 'fixed'
 
@@ -61214,7 +61216,7 @@ export type Parser
 	// else.
 	function reportUnneededCast(source DeclaredAlias, target DeclaredAlias, asTok Token)
 		match source 's'
-			undeclared then break 's'
+			undeclared then break
 			declared(sourceAlias) then self.reportUnneededCastFrom(sourceAlias, target: target, asTok: asTok)
 		end 's'
 	end 'reportUnneededCast'
@@ -61223,7 +61225,7 @@ export type Parser
 	// reads as the two sentences it is rather than as a nested match.
 	function reportUnneededCastFrom(source RangedTypeAlias, target DeclaredAlias, asTok Token)
 		match target 't'
-			undeclared then break 't'
+			undeclared then break
 			declared(targetAlias) then self.reportUnneededCastBetween(source, target: targetAlias, asTok: asTok)
 		end 't'
 	end 'reportUnneededCastFrom'
@@ -61979,7 +61981,7 @@ export type Parser
 		match zeroVerdict 'verdict'
 			alwaysZero then throw SourceParseError.divisionByProvableZero(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
 			neverZero or
-				possiblyZero then break 'verdict'
+				possiblyZero then break
 		end 'verdict'
 
 		// ⭐ **THE FLOAT-BACKED ENUM DECODE, PAID ONCE FOR BOTH ROUTES BELOW.** It sits past every
@@ -62101,7 +62103,7 @@ export type Parser
 
 		match self.domainDeclaringAlias(value) 'declaredType'
 			declared(alias) then return IntegerValueDomain.declaredNonNegative if rangeIsUnsigned(alias.low) else IntegerValueDomain.signed
-			undeclared then break 'declaredType'
+			undeclared then break
 		end 'declaredType'
 
 		// ⭐⭐ **`u64.max` IS A NON-NEGATIVE CONSTANT WHOSE PATTERN IS NEGATIVE, and the test below is a
@@ -63601,7 +63603,7 @@ export type Parser
 
 		match self.captureScopeOf(name) 'captured'
 			found(enclosing, _) then return maxonTypeTag(enclosing.getInfo(name).varType) == ValueTypeTag.function
-			notCaptured then break 'captured'
+			notCaptured then break
 		end 'captured'
 
 		return match self.signatures.globalDeclFor(name, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
@@ -64338,7 +64340,7 @@ export type Parser
 	// The written-type-name roster.
 	function usedTypeNamesForWrite() returns UsedTypeNameSet
 		match self.usedTypeNames 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(names) then return names
 		end 'state'
 
@@ -64350,7 +64352,7 @@ export type Parser
 	// The reached-into-type roster.
 	function memberAccessedTypeNamesForWrite() returns UsedTypeNameSet
 		match self.memberAccessedTypeNames 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(names) then return names
 		end 'state'
 
@@ -64362,7 +64364,7 @@ export type Parser
 	// The counted-loop interval column.
 	function countedValueRangesForWrite() returns ProvenIntRangeMap
 		match self.bodyState.countedValueRanges 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(proven) then return proven
 		end 'state'
 
@@ -64382,7 +64384,7 @@ export type Parser
 	// The parameterized-interface instance column.
 	function valueExistentialInstancesForWrite() returns ValueExistentialInstanceMap
 		match self.bodyState.valueExistentialInstance 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(byValue) then return byValue
 		end 'state'
 
@@ -64398,7 +64400,7 @@ export type Parser
 
 	function valueCallInstancesForWrite() returns ValueCallInstanceMap
 		match self.bodyState.valueCallInstance 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(byValue) then return byValue
 		end 'state'
 
@@ -64426,7 +64428,7 @@ export type Parser
 
 	function valueExistentialScopesForWrite() returns ValueExistentialScopeMap
 		match self.bodyState.valueExistentialScope 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(byValue) then return byValue
 		end 'state'
 
@@ -64438,7 +64440,7 @@ export type Parser
 	// The deferred-diagnostic candidate list.
 	function declaredTypeAliasesForWrite() returns DeferredNameDiagnosticArray
 		match self.declaredTypeAliases 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(recorded) then return recorded
 		end 'state'
 
@@ -64450,7 +64452,7 @@ export type Parser
 	// The borrow-subject stand-in table.
 	function borrowSubjectsForWrite() returns VarInfoMap
 		match self.topLevelBorrowSubjects 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64462,7 +64464,7 @@ export type Parser
 	// The tuple-slot surface column.
 	function bufferSurfaceSlotsForWrite() returns ValueSlotSurfaceMap
 		match self.bodyState.bufferSurfaceSlots 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64474,7 +64476,7 @@ export type Parser
 	// The character-literal op table.
 	function charLiteralOpsForWrite() returns CharLiteralOpMap
 		match self.bodyState.charLiteralOps 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64486,7 +64488,7 @@ export type Parser
 	// The corpus-member verdict memo.
 	function corpusVerdictsForWrite() returns DescriptorNeedMap
 		match self.corpusServedContainerMembers 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64498,7 +64500,7 @@ export type Parser
 	// The roster of names this file declares.
 	function declaredFuncNamesForWrite() returns DeclaredFuncNameSet
 		match self.declaredFuncNames 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64510,7 +64512,7 @@ export type Parser
 	// The folded index-call site table.
 	function foldedIndexCallSitesForWrite() returns FoldedIndexCallSiteMap
 		match self.bodyState.foldedIndexCallSites 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64522,7 +64524,7 @@ export type Parser
 	// The single-byte-grapheme verdict memo.
 	function graphemeVerdictsForWrite() returns SingleByteGraphemeLiteralMap
 		match self.singleByteGraphemeLiterals 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64534,7 +64536,7 @@ export type Parser
 	// The nested-typealias roster of the enclosing declaration.
 	function innerAliasesForWrite() returns InnerAliasNameSet
 		match self.enclosingInnerAliases 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64546,7 +64548,7 @@ export type Parser
 	// The merge-blame column.
 	function mergeBlamesForWrite() returns MergeBlameMap
 		match self.bodyState.mergeImmutableBlame 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64558,7 +64560,7 @@ export type Parser
 	// The mutable-binding name index.
 	function mutableVarIndexForWrite() returns MutableVarPositionByName
 		match self.bodyState.mutableVarInnermost 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64570,7 +64572,7 @@ export type Parser
 	// The overload-member table.
 	function overloadMembersForWrite() returns OverloadMemberMap
 		match self.overloadMembers 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64582,7 +64584,7 @@ export type Parser
 	// The byte-view op table.
 	function stringBytesViewOpsForWrite() returns StringBytesViewOpMap
 		match self.bodyState.stringBytesViewOps 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64594,7 +64596,7 @@ export type Parser
 	// The filed-tuple roster.
 	function filedTupleNamesForWrite() returns FiledTupleNameSet
 		match self.filedTupleNames 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64606,7 +64608,7 @@ export type Parser
 	// The declared-alias column.
 	function valueDeclaredAliasesForWrite() returns ValueDeclaredAliasMap
 		match self.bodyState.valueDeclaredAlias 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64617,7 +64619,7 @@ export type Parser
 
 	function literalCastsForWrite() returns LiteralCastSpanMap
 		match self.bodyState.literalCasts 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64628,7 +64630,7 @@ export type Parser
 
 	function literalCastArgumentsForWrite() returns LiteralCastMap
 		match self.bodyState.literalCastArguments 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -64640,7 +64642,7 @@ export type Parser
 	// The witness-slot memo.
 	function witnessSlotsForWrite() returns WitnessSlotsByInterfaceMap
 		match self.witnessSlotsByInterface 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(table) then return table
 		end 'state'
 
@@ -66396,7 +66398,7 @@ export type Parser
 			_ = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
 			match entry 'entry'
-				element then break 'entry'
+				element then break
 				pair then try self.skipDeferredPairValue(func)
 			end 'entry'
 		end 'moreEntries'
@@ -67493,7 +67495,7 @@ export type Parser
 		let rosterVerdict = self.staticRosterVerdictFor(baseTok, memberIndex: self.pos + TokensPerQualifierSegment)
 
 		match rosterVerdict 'roster'
-			notADeclaredTypeMember then break 'roster'
+			notADeclaredTypeMember then break
 			undeclaredMember or
 				hidden then try self.throwStaticRosterRefusal(rosterVerdict, baseTok: baseTok, memberTok: self.tokenAt(self.pos + TokensPerQualifierSegment))
 		end 'roster'
@@ -67653,7 +67655,7 @@ export type Parser
 		if self.memberCallFollows(self.pos + 1) 'aMethodOnTheMember'
 			match try self.dispatchOnManagedTopLevelReceiver(func, tok: nameTok, resultUsed: resultUsed) 'binding'
 				dispatched(result) then return result
-				notAManagedReceiver then break 'binding'
+				notAManagedReceiver then break
 			end 'binding'
 		end 'aMethodOnTheMember'
 
@@ -68326,7 +68328,7 @@ export type Parser
 				unresolved or
 				float or
 				character or
-				string then break 'backing'
+				string then break
 			functionRef then throw SourceParseError.unsupported("`{String.from(EnumFromRawValueMemberName)}` on `{layout.kindWord()} {String.from(layout.name)}`, which is {enumBackingNoun(layout.backing, backingStruct: layout.backingStruct)}-backed — a code address has no literal spelling a program could look one up BY, which is why the reference refuses this backing here too", line: memberTok.line, column: memberTok.column)
 			structRecord then panic("requireFromRawValueBacking: `{layout.kindWord()} {String.from(layout.name)}` is struct-backed and reached the `{String.from(EnumFromRawValueMemberName)}` guard — `parseEnumLiteral` does not CLAIM the member for that backing, so such a call is an unknown case (E3034) and never arrives here")
 		end 'backing'
@@ -68947,7 +68949,7 @@ export type Parser
 			// half one act rather than two that agree. A CELL releases its occupant itself (`cellOwnsItsOccupant`).
 			match slot 'owner'
 				inRecord(box) then self.markRecordOwningOpaqueSlots(box)
-				inCell then break 'owner'
+				inCell then break
 			end 'owner'
 
 			return self.coOwnBorrowedOpaque(arg, range: range)
@@ -69317,7 +69319,7 @@ export type Parser
 
 			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
-			undeclaredName then break 'c'
+			undeclaredName then break
 			existential then self.recordExistentialPayloadStore(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
 		end 'c'
 
@@ -69364,7 +69366,7 @@ export type Parser
 		end 'functionIntoFunctionPayload'
 
 		match checkDeclaredType(got, declared: declaredTag) 'declared'
-			ok then break 'declared'
+			ok then break
 			mismatch then throw self.slotMismatchError(voice, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: SlotOwner.unowned, placeBrand: EmptySourceText, placeSpelling: EmptySourceText, got: self.valueDisplayTypeName(value), gotNote: "", gotTag: got, resolvedExpected: typeTagName(declaredTag), expectedNote: "", declared: declaredTag, declaredNameId: typeNameIdOf(declared), line: argTok.line, column: argTok.column)
 			narrowsFloatToInt then throw SourceParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: argTok.line, column: argTok.column)
 
@@ -69791,7 +69793,7 @@ export type Parser
 		let result = try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: mint, inferInstanceOf: self.bareGenericFactoryBase(constructed, typeTok: typeTok), spawned: false)
 
 		match constructed 'constructed'
-			none then break 'constructed'
+			none then break
 			instance(gid) then self.retypeGenericAliasConstructorResult(result, gid: gid, aliasName: aliasName)
 		end 'constructed'
 
@@ -69804,7 +69806,7 @@ export type Parser
 	function bareGenericFactoryBase(constructed ConstructorInstance, typeTok Token) returns FactoryInference
 		match constructed 'constructed'
 			instance then return FactoryInference.none
-			none then break 'constructed'
+			none then break
 		end 'constructed'
 
 		return FactoryInference.of(typeTok.value) if self.signatures.structDeclaresTypeParams(typeTok.value) else FactoryInference.none
@@ -70055,7 +70057,7 @@ export type Parser
 		let aliasName = self.genericAliasKeyFor(typeTok.value)
 
 		match self.compilerOwnedStaticSurface(typeTok.value, aliasName: aliasName) 'surface'
-			none then break 'surface'
+			none then break
 			managedFile then return try self.parseManagedFileStaticCall(func, typeTok: typeTok)
 			managedDirectory then return try self.parseManagedDirectoryStaticCall(func, typeTok: typeTok)
 			managedSocket then return try self.parseManagedSocketStaticCall(func, typeTok: typeTok)
@@ -70401,7 +70403,7 @@ export type Parser
 		// so a mutating method would have written the global while the program named a local.
 		match self.captureScopeOf(self.baseBindingName(baseTok)) 'captured'
 			found(enclosing, frame) then return try self.capturedMethodCall(func, baseTok: baseTok, enclosing: enclosing, frame: frame, resultUsed: resultUsed)
-			notCaptured then break 'captured'
+			notCaptured then break
 		end 'captured'
 
 		// ⭐ **A TOP-LEVEL MANAGED BINDING IS A RECEIVER** — a `let` (`Live.count()`, `name.byteLength()`) or a
@@ -70439,7 +70441,7 @@ export type Parser
 		if self.managedTopLevelBaseAt(self.pos) 'managedTopLevelBase'
 			match try self.dispatchOnManagedTopLevelReceiver(func, tok: baseTok, resultUsed: resultUsed) 'binding'
 				dispatched(result) then return result
-				notAManagedReceiver then break 'binding'
+				notAManagedReceiver then break
 			end 'binding'
 		end 'managedTopLevelBase'
 
@@ -70711,7 +70713,7 @@ export type Parser
 
 		match recv.subjectName 'subject'
 			storage(name) then self.markNameMutabilityExercised(name)
-			none then break 'subject'
+			none then break
 		end 'subject'
 
 		// The cursor is ON the `.`, so the method name is the next token and its argument list — if it has
@@ -71165,7 +71167,7 @@ export type Parser
 		// refusal it already had.
 		match self.boxedUnionCloneReceiver(enumName, callee: callee, memberTok: memberTok) 'synthesizedClone'
 			declared(layout) then return try self.emitSynthesizedUnionClone(recv, layout: layout, memberTok: memberTok)
-			undeclared then break 'synthesizedClone'
+			undeclared then break
 		end 'synthesizedClone'
 
 		match self.enumGrantedConformanceMethod(enumName, memberName: memberTok.value) 'granted'
@@ -71374,7 +71376,7 @@ export type Parser
 			foundManaged(bytes, kind) then return ManagedReceiverBinding.constant(bytes, kind: kind)
 			foundImageRecord(image) then return ManagedReceiverBinding.imageRecord(image)
 			foundImageBox(nodes, root, typeName, tag) then return ManagedReceiverBinding.imageBox(nodes, root: root, typeName: typeName, tag: tag)
-			notFound then break 'constant'
+			notFound then break
 		end 'constant'
 
 		return match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
@@ -71478,7 +71480,7 @@ export type Parser
 		match access 'member'
 			fieldRead(fieldIndex) then return try self.readFieldMember(base, index: fieldIndex, baseTok: baseTok, memberTok: memberTok)
 			missingField then throw SourceParseError.unknownField(String.from(base.layout.name), fieldName: String.from(memberTok.value), line: memberTok.line, column: memberTok.column)
-			methodCall then break 'member'
+			methodCall then break
 		end 'member'
 
 		// ⭐ **E3077's THIRD DISPATCH ENTRY POINT.** `dispatchMethodOnBinding` and
@@ -71494,7 +71496,7 @@ export type Parser
 		// struct PARAMETER's field writable inherits the question. Marked here so it inherits an answer too.
 		match base.subjectName 'subject'
 			storage(name) then self.markNameMutabilityExercised(name)
-			none then break 'subject'
+			none then break
 		end 'subject'
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
@@ -71801,7 +71803,7 @@ export type Parser
 	function requireServiceReplyInstanceIsKnown(callee ByteArray, typeName ByteArray, instance ServiceStateInstance, memberTok Token) throws SourceParseError
 		match instance 'known'
 			at then return
-			monomorphic then break 'known'
+			monomorphic then break
 		end 'known'
 
 		if not self.signatures.structDeclaresTypeParams(typeName) 'aMonomorphicService'
@@ -72239,7 +72241,7 @@ export type Parser
 	// allocates nothing: `callee` is the caller's own, which it is about to dispatch on regardless.
 	function requireMethodNotWithheldByConstraint(typeName ByteArray, callee ByteArray, receiver ValueId, memberTok Token) throws SourceParseError
 		match self.signatures.conditionalExtensionSkipOf(callee) 'skip'
-			notWithheld then break 'skip'
+			notWithheld then break
 			withheld(skip) then throw SourceParseError.conditionalExtensionWithheld(String.from(skip.typeName), methodName: String.from(skip.methodName), clause: skip.clause, unmetInterfaceName: String.from(skip.unmetInterfaceName), bindingName: String.from(skip.bindingName), line: memberTok.line, column: memberTok.column)
 		end 'skip'
 
@@ -72308,7 +72310,7 @@ export type Parser
 		end 'anotherDeclarationOfThisNameHasNoClause'
 
 		match receiverMeetsExtensionConstraints(self.signatures, gid: self.valueInstanceId(receiver), constraints: constraints) 'constraint'
-			met then break 'constraint'
+			met then break
 			unmet(interfaceName, argDisplayName) then throw SourceParseError.conditionalExtensionWithheld(String.from(typeName), methodName: String.from(memberTok.value), clause: clause, unmetInterfaceName: String.from(interfaceName), bindingName: String.from(argDisplayName), line: memberTok.line, column: memberTok.column)
 		end 'constraint'
 
@@ -72615,7 +72617,7 @@ export type Parser
 		match self.bodyState.fixedElementCountParam 'hasOneToForward'
 			slot or
 				enclosingThroughEnv then return
-			none then break 'hasOneToForward'
+			none then break
 		end 'hasOneToForward'
 
 		if self.signatures.functionReadsFixedElementCount(qualifiedMethodName(base.layout.name, methodName: memberTok.value)) 'reject'
@@ -72712,7 +72714,7 @@ export type Parser
 
 		match self.deferralSourceOfBinding(binding, frame: self.capturedFrame(frame).funcIndex) 'deferredBase'
 			value(sourceFuncIndex, sourceId) then return try self.deferredUnresolvedMemberResult(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
-			none then break 'deferredBase'
+			none then break
 		end 'deferredBase'
 
 		if maxonTypeTag(binding.varType) == ValueTypeTag.interfaceRef 'anExistentialReceiver'
@@ -72881,7 +72883,7 @@ export type Parser
 		// typo rather than a permissions message.
 		match builtinConformerMethod(StringConformerName, methodName: methodTok.value, discovered: DiscoveredConformer.none) 'conformanceMethod'
 			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: recv.value, target: DirectConformanceTarget.builtinValue(BuiltinConformer.stringConformer), method: method, baseTok: baseTok, methodTok: methodTok)
-			notSupplied then break 'conformanceMethod'
+			notSupplied then break
 		end 'conformanceMethod'
 
 		// ⚠⚠ **NO `String` RECEIVER CAN REACH HERE, AND THIS IS THE CHECK THAT SAYS SO.** The gate at
@@ -73066,7 +73068,7 @@ export type Parser
 		let interfaces = self.signatures.arrayConformanceProtocolNames()
 
 		match self.signatures.arrayElementConstraintCheck(giid, clauseInterfaces: interfaces) 'clause'
-			satisfied then break 'clause'
+			satisfied then break
 			unmet(unmetInterfaceName, bindingName) then throw SourceParseError.conditionalExtensionWithheld(String.from(self.signatures.arrayRecordDeclaredName()), methodName: String.from(methodName), clause: arrayWhereClause(interfaces), unmetInterfaceName: String.from(unmetInterfaceName), bindingName: String.from(bindingName), line: anchor.line, column: anchor.column)
 		end 'clause'
 
@@ -76064,7 +76066,7 @@ export type Parser
 
 		match form 'form'
 			reference then return head
-			construction then break 'form'
+			construction then break
 		end 'form'
 
 		try self.consume(TokenKind.from)
@@ -78305,7 +78307,7 @@ export type Parser
 		match pickSoleWitnessCandidate(matching) 'pick'
 			one(target) then return target
 			ambiguous(first, second) then throw SourceParseError.ambiguousWitnessDispatch(String.from(methodTok.value), provider: self.witnessDispatchProviderPhrase(receiver), argCount: argCount, first: renderWitnessRequirement(first, signatures: self.signatures), second: renderWitnessRequirement(second, signatures: self.signatures), line: methodTok.line, column: methodTok.column)
-			none then break 'pick'
+			none then break
 		end 'pick'
 
 		// Nothing of that name takes this many arguments. With exactly ONE candidate there is nothing to select
@@ -79042,7 +79044,7 @@ export type Parser
 	function refuseASizedContainersRecordEscapingIntoACall(args ValueIdArray, argRanges SourceRangeArray) throws SourceParseError
 		match self.bodyState.sizedContainerBufferValues 'function'
 			unwritten then return
-			entries then break 'function'
+			entries then break
 		end 'function'
 
 		for i in 0 upto args.count() 'eachArgument'
@@ -80102,7 +80104,7 @@ export type Parser
 			// intervening allocations).
 			match borrowSubjectName 'sourceIsNameableStorage'
 				storage(name) then self.mintPendingBorrow(func, subjectName: name, borrowValue: cursor, range: range)
-				none then break 'sourceIsNameableStorage'
+				none then break
 			end 'sourceIsNameableStorage'
 
 			return cursor
@@ -81113,7 +81115,7 @@ export type Parser
 			// reads, so a bare `get(0)` on the enclosing `self` and a bare `set(0, …)` on it key alike.
 			match self.receiverBorrowSubjectName(borrowSubjectName, receiver: container) 'borrowsANamedSourcesElement'
 				storage(name) then self.mintPendingBorrow(func, subjectName: name, borrowValue: result, range: range)
-				none then break 'borrowsANamedSourcesElement'
+				none then break
 			end 'borrowsANamedSourcesElement'
 		end 'borrowsInPlace'
 
@@ -81724,7 +81726,7 @@ export type Parser
 			match source 'known'
 				found or
 					serviceReply then return source
-				none then break 'known'
+				none then break
 			end 'known'
 		end 'aSpawnOrAReply'
 
@@ -81776,7 +81778,7 @@ export type Parser
 		// promise from a function that throws"*), which is a wrong noun here: `Slow.value` throws nothing,
 		// its REPLY does.
 		match promiseStorageThrows(self.signatures, gid: storage) 'storageNamesAnError'
-			throwing then break 'storageNamesAnError'
+			throwing then break
 			none then throw SourceParseError.promiseStorageMismatch("{subject} always carries '{replyThrows}' — the service can be gone, whatever the message declares — so '{String.from(self.signatures.instanceDisplayName(storage))}' would erase it; declare the storage as 'Promise with (T, {replyThrows})' so 'try await' can bind it", line: anchor.line, column: anchor.column)
 		end 'storageNamesAnError'
 
@@ -82404,7 +82406,7 @@ export type Parser
 	function parseFieldAccess(func IrFunction) returns ValueId throws SourceParseError
 		match self.chainBaseDeferralSource() 'deferredBase'
 			value(sourceFuncIndex, sourceId) then return try self.deferredMemberResultPastTheBase(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
-			none then break 'deferredBase'
+			none then break
 		end 'deferredBase'
 
 		let step = try self.resolveFieldChain()
@@ -82596,7 +82598,7 @@ export type Parser
 			// the env and resolves its layout the same way `requireStructBase` does.
 			match self.captureScopeOf(baseName) 'captured'
 				found(enclosing, frame) then return try self.resolveCapturedFieldChain(baseTok, enclosing: enclosing, frame: frame)
-				notCaptured then break 'captured'
+				notCaptured then break
 			end 'captured'
 		end 'valueBase'
 
@@ -82626,7 +82628,7 @@ export type Parser
 				// through, so both take the `undefinedVariable` an unknown base (`none`) does, spelled at the
 				// QUALIFIED name because that is what this chain is rooted at.
 				constant or
-					none then break 'binding'
+					none then break
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
 				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(nameTok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(nameTok)), name: nameTok.value, image: true), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
 				imageRecord(image) then return try self.resolveValueFieldChain(nameTok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(nameTok)), name: nameTok.value, image: true), valueType: image.valueType, mutable: false)
@@ -82654,7 +82656,7 @@ export type Parser
 				// through the value like every other base, and a member the record has not got is then the
 				// chain's own diagnostic rather than a claim that the base does not exist.
 				constant or
-					none then break 'binding'
+					none then break
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
 				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(baseTok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(baseTok)), name: baseTok.value, image: true), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
 				imageRecord(image) then return try self.resolveValueFieldChain(baseTok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(baseTok)), name: baseTok.value, image: true), valueType: image.valueType, mutable: false)
@@ -83803,7 +83805,7 @@ export type Parser
 		// yields is the env load rather than an id from a different function's SSA space.
 		match self.captureScopeOf(SelfParamName) 'capturedReceiver'
 			found(enclosing, frame) then return try self.emitCaptureRead(SelfParamName, enclosing: enclosing, frame: frame, anchor: anchor)
-			notCaptured then break 'capturedReceiver'
+			notCaptured then break
 		end 'capturedReceiver'
 
 		return try self.bodyState.scope.lookupValue(SelfParamName) otherwise panic("requireReceiverValue: `requireReceiverInScope` passed and no enclosing scope captured the receiver, so it is bound in this function's own scope — but `lookupValue` missed it. The two are reading one `Scope` and disagree.")
@@ -84879,7 +84881,7 @@ export type Parser
 		var returnType = MaxonReturnType.void
 
 		match maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames) 'declaredReturn'
-			void then break 'declaredReturn'
+			void then break
 			value(inner) then returnType = MaxonReturnType.value(self.functionSlotThroughInstance(self.repairSweptType(inner, scopeFilePath: alias.declFilePath), gid: gid, scopeFilePath: alias.declFilePath))
 		end 'declaredReturn'
 
@@ -85323,7 +85325,7 @@ export type Parser
 		// `parseMethodCall` carries the measurement of what the opposite order costs; a change here is a change there.
 		match try self.captureEnclosing(tok, site: site) 'capture'
 			captured(value) then return value
-			notCaptured then break 'capture'
+			notCaptured then break
 		end 'capture'
 
 		return try self.topLevelBindingReference(func, tok: tok, site: site)
@@ -85519,7 +85521,7 @@ export type Parser
 	function carryCapturedDeferral(binding VarInfo, frame ElementIndex, captured ValueId)
 		match self.deferralSourceOfBinding(binding, frame: self.capturedFrame(frame).funcIndex) 'deferredBinding'
 			value(sourceFuncIndex, sourceId) then self.artifact.recordDeferralSource(captured, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, chainCalls: DeferredChainCalls.noCall)
-			none then break 'deferredBinding'
+			none then break
 		end 'deferredBinding'
 	end 'carryCapturedDeferral'
 
@@ -85564,7 +85566,7 @@ export type Parser
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
 			foundImageRecord(image) then return self.recordImmutableConstantRead(tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)))
 			foundImageBox(nodes, root, typeName, tag) then return self.recordImmutableConstantRead(tok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)))
-			notFound then break 'constant'
+			notFound then break
 		end 'constant'
 
 		return try self.topLevelGlobalRead(func, tok: tok, site: site)
@@ -86373,7 +86375,7 @@ export type Parser
 	// panic, `witnessOfValue` on a `callIndirect` result nothing could pair (MEASURED on both routes).
 	function requireFunctionValueReturnHasRoom(returnType MaxonReturnType, tok Token) throws SourceParseError
 		match returnType 'declaredReturn'
-			void then break 'declaredReturn'
+			void then break
 			value(inner) then try self.requireStorableDeclaredType(inner, position: DeclaredStoragePosition.functionValueReturnType, line: tok.line, column: tok.column)
 		end 'declaredReturn'
 	end 'requireFunctionValueReturnHasRoom'
@@ -86438,7 +86440,7 @@ export type Parser
 
 		match self.signatures.throwsOf(funcName) 'throwsClause'
 			throwing(errorType) then throw SourceParseError.throwingFunctionAsValue(String.from(tok.value), errorType: errorType, line: tok.line, column: tok.column)
-			none then break 'throwsClause'
+			none then break
 		end 'throwsClause'
 	end 'requireNameIsUsableAsFunctionValue'
 
@@ -86707,7 +86709,7 @@ export type Parser
 		match paramTypeOffer 'offer'
 			deferred(sourceFuncIndex, sourceId) then self.recordDeferredClosureParams(paramTypes, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
 			offered or
-				none then break 'offer'
+				none then break
 		end 'offer'
 
 		// Parse the single body expression, then close the lifted function like a value `return`: the
@@ -86907,7 +86909,7 @@ export type Parser
 
 	function claimHiddenWordIfRead(lifted IrFunction, word ClosureHiddenWord)
 		match self.hiddenWordParamOf(word) 'inherited'
-			enclosingThroughEnv then break 'inherited'
+			enclosingThroughEnv then break
 			none or
 				slot then return
 		end 'inherited'
@@ -87075,7 +87077,7 @@ export type Parser
 
 	function claimDescriptorForCaptureReleases()
 		match self.hiddenWordParamOf(ClosureHiddenWord.descriptor) 'inherited'
-			enclosingThroughEnv then break 'inherited'
+			enclosingThroughEnv then break
 			none or
 				slot then return
 		end 'inherited'
@@ -87223,7 +87225,7 @@ export type Parser
 
 	function emitGlobalLoad(label ByteArray, valueType MaxonType, range SourceRange, reader ModuleSlotReader) returns ValueId
 		match reader 'reader'
-			notASharedAccess then break 'reader'
+			notASharedAccess then break
 			source(nameTok) then self.recordModuleVarAccess(nameTok, access: ModuleVarAccess.read)
 		end 'reader'
 
@@ -87499,7 +87501,7 @@ export type Parser
 	// inside an `enum` body must reach the enum's own refusal rather than a `structOf` miss (`requireConstructible`).
 	function seatInDeclaringTypeBody(decl TopLevelDecl)
 		match decl.scope 'declaredIn'
-			fileScope then break 'declaredIn'
+			fileScope then break
 			typeBody(typeName) then self.enterTypeScope(typeName, isEnum: self.signatures.containsEnumFor(typeName, readerFilePath: self.filePath))
 		end 'declaredIn'
 	end 'seatInDeclaringTypeBody'
@@ -88190,7 +88192,7 @@ export type Parser
 
 		match columns 'expected'
 			// The FIRST pair FIXES both columns, so there is nothing yet to hold it to.
-			open then break 'expected'
+			open then break
 			fixed(keyType, valueType) then try self.requireConstMapColumns(key, value: value, calls: calls, keyType: keyType, valueType: valueType, keyTok: keyTok, valueTok: valueTok)
 		end 'expected'
 
@@ -88488,7 +88490,7 @@ export type Parser
 		let value = try self.evalConstNodeValue(calls, stack: stack)
 
 		match self.signatures.constArrayElementCheck(giid, value: value, calls: calls, declName: typeTok.value, elementFilePath: self.filePath) 'verdict'
-			agrees then break 'verdict'
+			agrees then break
 			widensToFloat then return self.constWidenedToFloat(value)
 			mismatch(_, expected) then throw ConstEvalError.defective(SourceParseError.builtinOperandType("{String.from(typeTok.value)} from", required: expected, got: tokenDisplayText(elemTok), line: elemTok.line, column: elemTok.column))
 		end 'verdict'
@@ -88625,7 +88627,7 @@ export type Parser
 	// of the two names is the one that is right for both.
 	function requireConstFieldValueFits(calls ConstFactoryCallArray, layout StructLayout, index FieldIndex, value ConstFactoryArgumentValue, fieldTok Token) returns ConstFactoryArgumentValue throws ConstEvalError
 		match self.signatures.constStructFieldCheck(layout, index: index, value: value, calls: calls, declName: layout.name, elementFilePath: layout.declFilePath) 'verdict'
-			agrees then break 'verdict'
+			agrees then break
 			widensToFloat then return self.constWidenedToFloat(value)
 			mismatch(got, expected) then throw ConstEvalError.defective(SourceParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.field, name: self.fieldNameAt(layout, index: index), owner: SlotOwner.declaredBy(layout.name)), got: got, gotNote: "", expected: expected, expectedNote: "", line: fieldTok.line, column: fieldTok.column))
 		end 'verdict'
@@ -89516,7 +89518,7 @@ export type Parser
 		end 'notCheckable'
 
 		match self.signatures.declaredAliasOfSpelling(targetTok.value, readerFilePath: self.filePath) 'a'
-			undeclared then break 'a'
+			undeclared then break
 			declared(alias) then try self.reportConstCastIfOutOfRange(value, alias: alias, anchor: asTok)
 		end 'a'
 	end 'checkConstCastRange'
@@ -90290,7 +90292,7 @@ export type Parser
 		// ⚠ **BOTH TOKENS TRAVEL, BECAUSE THEY ARE DIFFERENT TOKENS** — the ARGUMENT span is the receiver's, and
 		// E3070's write site is the METHOD's. See `prependReceiverArg`.
 		match receiver 'prependReceiver'
-			none then break 'prependReceiver'
+			none then break
 			value(id, immutableName, subjectName, receiverTok) then self.prependReceiverArg(func, callee: callee, callAnchor: anchor, receiverTok: receiverTok, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, receiverIndex: self.pos)
 		end 'prependReceiver'
 
@@ -91399,7 +91401,7 @@ export type Parser
 				schedTlsTebOffsetAddr or
 				schedAllMachinesAddr or
 				schedPreemptExtLockAddr or
-				schedLockAddr then break 'row'
+				schedLockAddr then break
 		end 'row'
 	end 'recordFrameDirective'
 
@@ -93012,7 +93014,7 @@ export type Parser
 		// byte compare, an arity and a flag) leave every other call having built nothing.
 		if callee.equals(StringSliceMethodName) and args.count() == StringSliceArgCount and not self.bodyState.tryTargetMustStayACall 'aSliceCallWorthAsking'
 			match self.foldConstantStringSlice(anchor, args: args, argLabels: argLabels, rparenTok: rparenTok) 'constantSlice'
-				notFolded then break 'constantSlice'
+				notFolded then break
 				folded(literal) then return literal
 			end 'constantSlice'
 		end 'aSliceCallWorthAsking'
@@ -93115,7 +93117,7 @@ export type Parser
 		// a bare generic base has no spelling to carry (see that door).
 		if inferInstanceOf.isOf() 'aSpawnFactory'
 			match constructed 'inferred'
-				none then break 'inferred'
+				none then break
 				instance(gid) then self.retypeConstructorResultToInstance(result, gid: gid)
 			end 'inferred'
 		end 'aSpawnFactory'
@@ -93447,7 +93449,7 @@ export type Parser
 
 		match self.signatures.enumInAnyFile(name) 'enumeration'
 			declared then return GenericFunctionArgument.create(GenericArgumentKind.enumeration, name: name)
-			undeclared then break 'enumeration'
+			undeclared then break
 		end 'enumeration'
 
 		let identity = self.signatures.rangedIdentityOfSpelling(name, readerFilePath: self.filePath)
@@ -93770,7 +93772,7 @@ export type Parser
 		end 'notAnIndexAccessor'
 
 		match self.knownLiteralBytes(try args.get(SliceReceiverArgIndex) otherwise panic("recordConstStringIndexResult: args.get OOB at the receiver of a one-argument call")) 'receiver'
-			unknown then break 'receiver'
+			unknown then break
 			payload(_, bytes) then self.recordAccessorBytePos(result, atTheFirstByte: atTheFirstByte, receiverBytes: bytes)
 		end 'receiver'
 	end 'recordConstStringIndexResult'
@@ -93969,7 +93971,7 @@ export type Parser
 		// known, so here is where a member that hands back a BORROWED promise element, or a copy of a
 		// receiver holding one, is refused.
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
-			declared(returnType) then break 'declared'
+			declared(returnType) then break
 			undeclared then return OpaqueWordReading.asItStands
 		end 'declared'
 
@@ -94927,7 +94929,7 @@ export type Parser
 		// storage door proved the storage type describes the reply exactly.
 		match source 'reply'
 			found or
-				none then break 'reply'
+				none then break
 			serviceReply(messageName, awaitedService) then return AwaitedPromise.create(self.serviceReplyResultType(messageName, cell: promise), tryTarget: TryTarget.serviceReply(messageName, awaitedService: awaitedService))
 		end 'reply'
 
@@ -95221,7 +95223,7 @@ export type Parser
 	function applyCallerConsume(callee ByteArray, declarations DeclarationFactsArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, callResult ValueId, spawned bool) returns PendingArgumentBindingArray throws SourceParseError
 		if declarations.count() < 2 'oneDeclarationDecides'
 			match self.consumeOfTheOneDeclaration(callee, declarations: declarations) 'c'
-				borrowsAll then break 'c'
+				borrowsAll then break
 				consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, spawned: spawned, callee: callee)
 			end 'c'
 
@@ -95815,7 +95817,7 @@ export type Parser
 			promotedLiteral then return self.handOverPromotedLiteral(value, door: argument.door, anchor: argument.anchor)
 			cellOccupant(read, exclusivity) then return self.handCellOccupantOver(func, read: read, exclusivity: exclusivity, argument: argument)
 			promiseMovedIn then return self.handPromiseIntoClosure(value, anchor: argument.anchor)
-			movedOut then break 'take'
+			movedOut then break
 		end 'take'
 
 		self.emitHandedOffGraphProof(value, door: argument.door, anchor: argument.anchor, exclusivity: CellOccupantExclusivity.sole)
@@ -95884,7 +95886,7 @@ export type Parser
 
 		match handOffRefusesOccupantFrom(door) 'refusal'
 			from (threshold) then self.recordCellTakeInEnclosingLoops(read.epoch, refusedFrom: threshold, refusal: self.handOffRefusal(door, value: value, anchor: anchor))
-			never then break 'refusal'
+			never then break
 		end 'refusal'
 
 		self.noteBindingMovedOut(func, binding: read.binding, door: handOffDoorMoveDisplay(door), range: SourceRange.ofToken(anchor))
@@ -96366,7 +96368,7 @@ export type Parser
 		// `overloadedCallResultType` for what it will and will not decide.
 		match self.overloadedCallResultType(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'overloaded'
 			resolved(returnType) then return try self.mintDeclaredCallResult(callee, anchor: anchor, returnType: returnType, resultUsed: resultUsed)
-			undecided then break 'overloaded'
+			undecided then break
 		end 'overloaded'
 
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'callee'
@@ -96552,7 +96554,7 @@ export type Parser
 			// type is a slot of the function that declared it, so the repair below is scoped by that file
 			// and never by the one making the call.
 			value(inner) then return self.mintDeclaredCallValue(callee, inner: inner)
-			void then break 'r'
+			void then break
 		end 'r'
 
 		// A VOID callee. In STATEMENT position that is precisely what the position is FOR — the call
@@ -96936,7 +96938,7 @@ export type Parser
 
 		match recovered.returnType 'r'
 			value(inner) then return self.mintOwnedCallResult(inner, scopeFilePath: recovered.scopeFilePath)
-			void then break 'r'
+			void then break
 		end 'r'
 
 		// A VOID function value used where a value belongs. Reported with the callee's governing function
@@ -96977,12 +96979,12 @@ export type Parser
 			// `ExitCode`'s u32 width from the stored name, which a second spelling would drop to a `named`
 			// i64.
 			declared(alias) then return FunctionValueShape.create(self.aliasParamTypes(alias), returnType: maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames), scopeFilePath: alias.declFilePath)
-			undeclared then break 'alias'
+			undeclared then break
 		end 'alias'
 
 		match self.signatures.returnTypeOf(name, into: self.artifact.typeNames) 'fn'
 			declared(returnType) then return FunctionValueShape.create(self.declaredFunctionParamTypes(name), returnType: returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(name))
-			undeclared then break 'fn'
+			undeclared then break
 		end 'fn'
 
 		// A function-backed enum's `.rawValue` is the one mint whose name is not checked in the reading
@@ -98327,7 +98329,7 @@ export type Parser
 			// RECORD, so what a program compares is a FIELD of it (`op.rawValue.category`) — an ordinary value
 			// read out of the backing, and refusing that would refuse the corpus's own dispatch tables.
 			rawValue then return self.notedEnumAccessorRead(try self.emitEnumRawValue(layout, tag: tag, anchor: memberTok, range: range), member: memberTok, tag: tag, isACaseTest: layout.backing != EnumBacking.structRecord)
-			ordinal then break 'member'
+			ordinal then break
 
 			// ⭐ **THE ONE MEMBER THAT IS NOT ONE OF THE THREE AND IS STILL A READ: a STRUCT-BACKED enum's
 			// BACKING FIELD** (`p.width`, the shorthand for `p.rawValue.width`). `enumAccessorFieldAt` admits it
@@ -98396,12 +98398,12 @@ export type Parser
 	function requireNotAnEnumAccessorComparison(lhs ValueId, rhs ValueId, opTok Token) throws SourceParseError
 		match self.enumAccessorReadOf(lhs) 'left'
 			read(member) then throw SourceParseError.enumAccessorComparison(String.from(member), op: opTok.kind.rawValue, line: opTok.line, column: opTok.column)
-			notAnAccessor then break 'left'
+			notAnAccessor then break
 		end 'left'
 
 		match self.enumAccessorReadOf(rhs) 'right'
 			read(member) then throw SourceParseError.enumAccessorComparison(String.from(member), op: opTok.kind.rawValue, line: opTok.line, column: opTok.column)
-			notAnAccessor then break 'right'
+			notAnAccessor then break
 		end 'right'
 	end 'requireNotAnEnumAccessorComparison'
 
@@ -98475,7 +98477,7 @@ export type Parser
 			integer or
 				unresolved then return try self.enumTagAsANumber(tag, anchor: anchor, range: range)
 			float then return self.emitUnaryOp(tag, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)
-			character then break 'backing'
+			character then break
 			string then return try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.declaredRawValue, valueType: MaxonType.string, anchor: anchor, range: range)
 			functionRef then return try self.emitEnumCaseFunctionSelect(layout, tag: tag, anchor: anchor, range: range)
 

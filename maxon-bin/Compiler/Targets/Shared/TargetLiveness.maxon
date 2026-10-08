@@ -1749,7 +1749,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 
 	match terminatorExitOf(module, block: block) 'exit'
 		none or
-			returns then break 'exit'
+			returns then break
 		blockId(target) then out.push(target)
 		table(defaultTarget, caseTargets) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 	end 'exit'
@@ -3330,7 +3330,7 @@ function collectReindexCandidates(index UseIndex, pressure PressureIndex, edits 
 			// An EDGE use names no operand of the op it is anchored at; the per-block edge scan is what
 			// re-records it.
 			match index.useKindAt(record) 'kind'
-				edge then break 'kind'
+				edge then break
 				op then out.push(pressure.slotOfPosition(index.useBlockAt(record), pos: index.usePosAt(record)))
 			end 'kind'
 
@@ -3554,7 +3554,7 @@ export type LivenessMarkScratch
 
 			match index.useKindAt(record) 'kind'
 				edge then self.editLiveOut(live, gen: gen, blockLocal: useBlock, v: v, adding: adding, touched: touched)
-				op then break 'kind'
+				op then break
 			end 'kind'
 
 			pending.push(useBlock)
@@ -4079,7 +4079,7 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 				arm64Mulh or
 				covInc or
 				x64AluBaseDispReg or
-				x64AluBaseDispImm32 then break 'capture'
+				x64AluBaseDispImm32 then break
 		end 'capture'
 	end 'eachOp'
 
@@ -4093,7 +4093,7 @@ end 'collectEntryParamCaptures'
 function recordParamCapture(captures ParamCaptureArray, dst TargetVReg, src TargetVReg, paramCount ParamCount)
 	match dst 'd'
 		virtual(vid) then recordParamCaptureFromPhysSource(captures, vid: vid, src: src, paramCount: paramCount)
-		physical then break 'd'
+		physical then break
 	end 'd'
 end 'recordParamCapture'
 
@@ -4104,7 +4104,7 @@ function recordParamCaptureFromPhysSource(captures ParamCaptureArray, vid ValueI
 
 	match src 's'
 		physical(reg) then captures.push(ParamCapture.create(vid, incomingReg: reg))
-		virtual then break 's'
+		virtual then break
 	end 's'
 end 'recordParamCaptureFromPhysSource'
 
@@ -4212,7 +4212,7 @@ function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockH
 
 	if heat == BlockHeat.cold 'coldBlock'
 		match runs.runAt(pos) 'run'
-			none then break 'run'
+			none then break
 			run(id) then coldRun.confineRunOp(op, buf: buf, opFacts: opFacts, runs: runs, id: id, pos: pos, liveRow: liveRow, forbidden: forbidden, liveBuf: liveBuf)
 		end 'run'
 	end 'coldBlock'
@@ -4432,7 +4432,7 @@ export type ColdBlockRuns
 
 			match kind 'k'
 				none or
-					store then break 'k'
+					store then break
 				capture then self.requireCaptureAdjacent(lastKind, block: block, pos: pos)
 				clobber or
 					call then self.openRunIfClosed(lastKind, pos: pos)

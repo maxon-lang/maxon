@@ -440,7 +440,7 @@ end 'releaseUnderClaim'
 
 function changeRecordUnderClaim(lock OwnedLock, claimToken String, change RecordChange) returns LockStep
 	match claimOwnership(lock.claimPath, token: claimToken, startedMs: Clock.nowMs()) 'claim'
-		mine then break 'claim'
+		mine then break
 		another then return LockStep.failed("another command took over this command's claim on the lock before it could change the record")
 		contended(reason) then return LockStep.failed(reason)
 		failed(reason) then return LockStep.failed(reason)
@@ -1545,7 +1545,7 @@ function recordText(token String, sinceUnix UnixSeconds, heldSeconds LockSeconds
 
 	match host 'host'
 		known(identity) then appendField(text, key: HostField, value: identity)
-		unknown then break 'host'
+		unknown then break
 	end 'host'
 
 	return text.build()

@@ -281,7 +281,7 @@ type ArgProvenance
 	// than silently dropping out of the provenance walk.
 	function noteOp(op MaxonOp, func IrFunction)
 		match op 'op'
-			call then break 'op'
+			call then break
 			literal or
 				ret or
 				retVoid or
@@ -292,38 +292,38 @@ type ArgProvenance
 				branch or
 				globalAddr or
 				loadIndirect or
-				storeIndirect then break 'op'
+				storeIndirect then break
 			stringLiteral(result, _) then try self.isImmortal.set(result, value: true) otherwise panic("ArgProvenance.noteOp: v{result} of '{String.from(func.name)}' is outside its own value space of {func.valueTags.count()} — every SSA value is minted through Parser.mintValue")
 			tryCall or
 				throwError or
 				propagateError or
 				panicAbort or
 				functionRef or
-				indirectCall then break 'op'
+				indirectCall then break
 			asyncCall or
 				await or
-				tryAwait then break 'op'
-			sizeofType then break 'op'
-			constArrayLiteral then break 'op'
-			switch then break 'op'
+				tryAwait then break
+			sizeofType then break
+			constArrayLiteral then break
+			switch then break
 			witnessDispatch or
-				witnessTryDispatch then break 'op'
-			panicAbortValue then break 'op'
+				witnessTryDispatch then break
+			panicAbortValue then break
 
 			// The error-flag encode takes no ARGUMENT position — its operand is an enum value the parser already
 			// materialized, never a literal this pass could promote.
-			errorFlagEncode then break 'op'
+			errorFlagEncode then break
 
 			// No service op DEFINES a byte record: a spawn's result is a mailbox pointer, a reply cell's is a
 			// GT struct pointer, and a send defines nothing at all.
 			serviceSpawn or
 				serviceSend or
-				serviceReplyCell then break 'op'
+				serviceReplyCell then break
 			immortalStructRecord or
 				immortalStringTable or
 				covPoint or
 				rawIntrinsic or
-				existentialWitness then break 'op'
+				existentialWitness then break
 		end 'op'
 	end 'noteOp'
 
@@ -387,36 +387,36 @@ function promoteCallAt(project Project, module MaxonModule, opIdx ElementIndex, 
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
-			stringLiteral then break 'op'
+			stringLiteral then break
 		tryCall(_, _, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
 		throwError or
 			propagateError or
 			panicAbort or
 			functionRef or
-			indirectCall then break 'op'
-		asyncCall then break 'op'
+			indirectCall then break
+		asyncCall then break
 		await or
-			tryAwait then break 'op'
-		sizeofType then break 'op'
-		constArrayLiteral then break 'op'
-		switch then break 'op'
+			tryAwait then break
+		sizeofType then break
+		constArrayLiteral then break
+		switch then break
 		witnessDispatch or
-			witnessTryDispatch then break 'op'
-		panicAbortValue then break 'op'
+			witnessTryDispatch then break
+		panicAbortValue then break
 
 		// Same: no argument position, so no promotion decision to record for it.
-		errorFlagEncode then break 'op'
+		errorFlagEncode then break
 
 		// See `opCallsAWritingCallee`: a message's arguments are owned records by the time they reach the
 		// request box, so there is no immortal one here to promote.
 		serviceSpawn or
 			serviceSend or
-			serviceReplyCell then break 'op'
+			serviceReplyCell then break
 		immortalStructRecord or
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness then break 'op'
+			existentialWitness then break
 	end 'op'
 
 	newRefs.push(opIdx)

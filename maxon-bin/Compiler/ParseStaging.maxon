@@ -146,7 +146,7 @@ function cacheWriteParseMints(writer LibraryCacheWriter, value ParseMints)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		none then break 'payload'
+		none then break
 		minted(a0) then cacheWriteParseMintsMinted(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteParseMints'
@@ -819,7 +819,7 @@ export type FileParseArtifact
 
 	function registryUseSitesForWrite() returns RegistryUseSiteMap
 		match self.registryUseSites 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(byOp) then return byOp
 		end 'state'
 
@@ -887,7 +887,7 @@ export type FileParseArtifact
 	// value and records nothing.
 	function recordValueOrigin(op MaxonOp, opIndex ElementIndex)
 		match maxonOpResultValue(op) 'result'
-			none then break 'result'
+			none then break
 			value(id) then self.valueOrigins.record(self.currentFuncIndex, valueId: id, opIndex: opIndex)
 		end 'result'
 	end 'recordValueOrigin'
@@ -936,7 +936,7 @@ export type FileParseArtifact
 	// The unused-alias list this file defers into.
 	function unusedTypeAliasesForWrite() returns DeferredNameDiagnosticArray
 		match self.unusedTypeAliases 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(recorded) then return recorded
 		end 'state'
 
@@ -948,7 +948,7 @@ export type FileParseArtifact
 	// The hidden-name list, its twin.
 	function hiddenTypeNamesForWrite() returns DiagnosticArray
 		match self.hiddenTypeNames 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(recorded) then return recorded
 		end 'state'
 
@@ -959,7 +959,7 @@ export type FileParseArtifact
 
 	function overloadSetsForWrite() returns OverloadSetMap
 		match self.overloadSets 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(byBase) then return byBase
 		end 'state'
 
@@ -1437,12 +1437,12 @@ end 'commitCovPoints'
 // `DeferredNameDiagnostic` for why, and `TypeResolution.reportDeferredNameDiagnostics` for the drain.
 function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifact)
 	match artifact.unusedTypeAliases 'unused'
-		unwritten then break 'unused'
+		unwritten then break
 		entries(recorded) then pushEachDeferredDiagnostic(project.unusedTypeAliasDiagnostics, recorded: recorded)
 	end 'unused'
 
 	match artifact.hiddenTypeNames 'hidden'
-		unwritten then break 'hidden'
+		unwritten then break
 		entries(recorded) then project.hiddenTypeNameDiagnostics.append(recorded)
 	end 'hidden'
 end 'commitDeferredNameDiagnostics'
@@ -1461,7 +1461,7 @@ end 'commitDeferredParseErrors'
 // declaration.
 function commitWrittenGenericAliasNames(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
 	match artifact.usedTypeNames 'written'
-		unwritten then break 'written'
+		unwritten then break
 		entries(names) then noteWrittenGenericAliasNames(project, names: names, signatures: signatures, spellingFilePath: artifact.filePath)
 	end 'written'
 end 'commitWrittenGenericAliasNames'
@@ -2125,7 +2125,7 @@ export function footprintOf(project Project, artifact FileParseArtifact, signatu
 	absorbWatched(moduleWatcher, instances: instances, names: names, interfaces: interfaces)
 
 	match artifact.parseMints 'mints'
-		none then break 'mints'
+		none then break
 		minted(mints) then watchMints(mints, instances: instances, names: names, interfaces: interfaces)
 	end 'mints'
 
@@ -2393,7 +2393,7 @@ end 'parameterSpellingCollisionMessage'
 // diagnostic says which candidates rather than which came first.
 function commitOverloadSets(project Project, artifact FileParseArtifact)
 	match artifact.overloadSets 'file'
-		unwritten then break 'file'
+		unwritten then break
 		entries(byBase) then commitEachOverloadSet(project, byBase: byBase)
 	end 'file'
 end 'commitOverloadSets'
@@ -2441,7 +2441,7 @@ function commitOpKeyedSites(project Project, artifact FileParseArtifact, opOffse
 	project.moduleVarAccessSites.upsertRelocated(artifact.moduleVarAccessSites, offset: opOffset)
 
 	match artifact.registryUseSites 'registryUses'
-		unwritten then break 'registryUses'
+		unwritten then break
 		entries(byOp) then project.registryUseSites.upsertRelocated(byOp, offset: opOffset)
 	end 'registryUses'
 

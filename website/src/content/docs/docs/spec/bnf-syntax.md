@@ -695,7 +695,7 @@ in match arms with E2049. Every single-statement `try` form (bare propagation,
 
 ```
 break_stmt    = 'break' [ LABEL ]   (* LABEL must NOT name the innermost
-                                       enclosing loop; that's E2048 *)
+                                       enclosing loop or match; that's E2048 *)
 
 continue_stmt = 'continue' [ LABEL ] (* same E2048 rule as `break` *)
 ```

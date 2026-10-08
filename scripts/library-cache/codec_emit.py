@@ -408,7 +408,7 @@ class Emitter:
                     spacing = " " if case in config.SPACED_PAYLOAD_CASES else ""
                     out.append("\t\t%s%s(%s) then cacheWrite%s%s(writer, %s)" % (case, spacing, bindings, name, capitalized(case), arguments))
                 else:
-                    out.append("\t\t%s then break 'payload'" % case)
+                    out.append("\t\t%s then break" % case)
 
             out.append("\tend 'payload'")
 

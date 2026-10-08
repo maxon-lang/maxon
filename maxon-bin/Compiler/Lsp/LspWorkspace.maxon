@@ -493,7 +493,7 @@ function heldProjectSwept(root WorkspaceRoot, tiers LibraryTiers, request SweepR
 	if let held = try heldRoots.recentAt(key) 'heldAlready'
 		match held.workspace 'workspace'
 			built(workspace) then return workspace.sweptFor(root, key: key, tiers: tiers, request: request)
-			notBuilt then break 'workspace'
+			notBuilt then break
 		end 'workspace'
 	end 'heldAlready'
 
@@ -503,7 +503,7 @@ function heldProjectSwept(root WorkspaceRoot, tiers LibraryTiers, request SweepR
 	match swept 'outcome'
 		read or
 			loaded then heldRoots.holdWorkspace(key, workspace: fresh)
-		unavailable then break 'outcome'
+		unavailable then break
 	end 'outcome'
 
 	return swept
@@ -527,7 +527,7 @@ module function lspProjectCheckerFor(dir FilePath, tiers LibraryTiers) returns L
 
 	match held.checker 'checker'
 		spawned(checker) then return checker.clone()
-		notSpawned then break 'checker'
+		notSpawned then break
 	end 'checker'
 
 	let checker = spawn LspProjectChecker.create(dir.clone(), stdlibDir: tiers.stdlibDir.clone(), runtimeDir: tiers.runtimeDir.clone(), writer: lspOutputWriter())
@@ -674,7 +674,7 @@ end 'maxonSourcesIn'
 module function workspaceRootOf(reader LspReaderSearch, purpose RootPurpose) returns WorkspaceRoot
 	match reader.tier 'tier'
 		inTier(dir) then return WorkspaceRoot.libraryTier(dir)
-		outside then break 'tier'
+		outside then break
 	end 'tier'
 
 	if isAProgramOfItsOwn(reader.document.path.filename(), purpose: purpose) 'aProgramOfItsOwn'
@@ -824,7 +824,7 @@ extension Project
 		end 'eachLibraryFile'
 
 		match walk 'walk'
-			swept then break 'walk'
+			swept then break
 			walkFailed then try refuseWhen(unreadable, failure: CompileError.directoryNotFound(self.rootPath))
 		end 'walk'
 

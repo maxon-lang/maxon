@@ -59,7 +59,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 	for fn in codeResult.debugFunctions 'eachFunctionsTypes'
 		match mxdbgFunctionOf(codeResult.targetModule, functionsByName: functionsByName, name: fn.name) 'itsIr'
-			none then break 'itsIr'
+			none then break
 			found(func) then closeLocalTypes(project, signatures: signatures, types: types, func: func)
 		end 'itsIr'
 	end 'eachFunctionsTypes'
@@ -73,7 +73,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 		writer.addFunction(String.from(fn.name), displayName: provenance.displayNameOf(fn.name), origin: provenance.originOfChunk(project, lookup: lookup, name: fn.name), codeStart: fn.codeStart as MxdbgCodeOffset, codeEnd: fn.codeEnd as MxdbgCodeOffset, prologueOffset: fn.prologueOffset as MxdbgCodeOffset, frameSize: fn.frameSize as MxdbgIndex, paramCount: fn.paramCount as MxdbgIndex)
 
 		match lookup 'itsIr'
-			none then break 'itsIr'
+			none then break
 			found(func) then writeFunctionLocals(project, signatures: signatures, writer: writer, types: types, func: func, range: fn)
 		end 'itsIr'
 	end 'eachFunction'
@@ -140,7 +140,7 @@ function writeGlobalsTable(writer MxdbgWriter, codeResult CodeResult, imageBase 
 		let slot = codeResult.globalData.dataSectionSlotOf(name)
 
 		match slot 'laidOut'
-			none then break 'laidOut'
+			none then break
 			at(offset, bytes) then writer.addGlobal(name, imageOffset: (dataRva + (offset as ImageRva)) as MxdbgIndex, slotBytes: bytes as MxdbgIndex)
 		end 'laidOut'
 	end 'eachGlobal'
@@ -384,13 +384,13 @@ end 'collectPlacedRows'
 
 function unplacedRow(local DebugLocalDecl, writer MxdbgWriter, types MxdbgTypeTable, typeName ByteArray, range DebugFunctionRange) returns MxdbgLocalRow
 	match foldedAggregatePlacement(local, writer: writer, types: types, typeName: typeName) 'aggregate'
-		none then break 'aggregate'
+		none then break
 		placed(placement) then return MxdbgLocalRow.create(placement, codeStart: range.codeStart, codeEnd: range.codeEnd)
 	end 'aggregate'
 
 	if local.valueIds.count() <= 1 'oneValueForTheWholeName'
 		match local.foldedConstant 'folded'
-			none then break 'folded'
+			none then break
 			immediate(value) then return foldedRow(value, range: range)
 		end 'folded'
 	end 'oneValueForTheWholeName'

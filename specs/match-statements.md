@@ -280,7 +280,6 @@ Use `break` in a match arm to exit the match early without executing any further
 ```text
 match value 'label'
   1 then break                  // exits the match
-  2 then break 'label'          // labeled break (same effect)
   default then doSomething()
 end 'label'
 ```
@@ -1544,7 +1543,7 @@ end 'main'
 0
 ```
 
-<!-- test: match-break.labeled -->
+<!-- test: match-break.error-labeled-own-match -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -1557,8 +1556,8 @@ function main() returns ExitCode
 	return result
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E2048: <fragment>:7:16: 'break' with label 'outer' targets its own match; use 'break' without a label, or 'break' with the label of an outer loop
 ```
 
 <!-- test: match-break.inside-loop -->
@@ -1686,11 +1685,10 @@ end 'main'
 8
 ```
 
-Naming a MATCH's own label is never redundant-label (E2048): that diagnostic is about
-loop labels, and `break 'check'` inside `match … 'check'` is exactly how an
-explicit match exit is spelled.
+Naming a MATCH's own label is a redundant label (E2048), exactly as naming a loop's own
+label is: a bare `break` inside `match … 'check'` already leaves that match.
 
-<!-- test: match-break.match-own-label -->
+<!-- test: match-break.error-match-own-label -->
 ```maxon
 function main() returns ExitCode
 	var r = 0
@@ -1706,8 +1704,8 @@ function main() returns ExitCode
 	return r
 end 'main'
 ```
-```exitcode
-23
+```maxoncstderr
+error E2048: <fragment>:7:17: 'break' with label 'check' targets its own match; use 'break' without a label, or 'break' with the label of an outer loop
 ```
 
 A labelled `break` still reaches PAST a match to an outer loop.
@@ -1846,11 +1844,11 @@ end 'main'
 
 ⭐ **THE SEARCH ORDER IS MATCHES-BEFORE-LOOPS, AND IT IS OBSERVABLE.** When a match
 statement and an enclosing loop carry the SAME label, a labelled `break 'dup'` names
-the MATCH — the innermost construct wearing that label. Nothing else in the suite
-distinguishes the two search loops in `resolveControlTarget`, so reversing them would
-stay green everywhere else while changing this program from 32 to 10.
+the MATCH — the innermost construct wearing that label — and is therefore E2048. Nothing
+else in the suite distinguishes the two search loops in `resolveControlTarget`, so
+reversing them would stay green everywhere else while this program compiled and left the loop.
 
-<!-- test: match-break.match-label-shadows-loop-label -->
+<!-- test: match-break.error-match-label-shadows-loop-label -->
 ```maxon
 function main() returns ExitCode
 	var n = 0
@@ -1866,8 +1864,8 @@ function main() returns ExitCode
 	return trips
 end 'main'
 ```
-```exitcode
-32
+```maxoncstderr
+error E2048: <fragment>:8:17: 'break' with label 'dup' targets its own match; use 'break' without a label, or 'break' with the label of an outer loop
 ```
 
 CONTROL, and the RUNTIME half of the `continue` rule the E2048 case above only
@@ -1993,7 +1991,7 @@ end 'Container'
 function process(c Container) returns Integer
 	var result = 0
 	match c 'check'
-		empty then break 'check'
+		empty then break
 		value(n) then result = n
 	end 'check'
 	return result
@@ -2040,8 +2038,8 @@ type Holder
 	function assertUsable()
 		match self.slot 'check'
 			vacant then panic("slot is vacant")
-			reserved then break 'check'
-			filled then break 'check'
+			reserved then break
+			filled then break
 		end 'check'
 	end 'assertUsable'
 end 'Holder'

@@ -371,7 +371,7 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'kind'
+			osSocketServe then break
 		div or
 			mod or
 			osPanic or
@@ -479,7 +479,7 @@ type LeafPlan
 		match scan.verdict 'tally'
 			eligible then self.recordEligible(funcIndex, module: module, func: func)
 			tooManyOps then self.recordTooManyOps(funcIndex, opCount: scan.opCount)
-			notALeaf then break 'tally'
+			notALeaf then break
 		end 'tally'
 	end 'record'
 
@@ -563,7 +563,7 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 	let alwaysSpliced = func.mustBeSplicedAtEverySite
 
 	match functionShape(func) 'shape'
-		spliceable then break 'shape'
+		spliceable then break
 		refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: 0)
 	end 'shape'
 
@@ -573,7 +573,7 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 		let block = module.blockAtPosition(func, position: blockIndex)
 
 		match blockShape(block, blockIndex: blockIndex) 'blockShape'
-			spliceable then break 'blockShape'
+			spliceable then break
 			refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
 		end 'blockShape'
 
@@ -598,7 +598,7 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 
 			// A `tailCall`-shaped terminator refuses the leaf rule as any call does.
 			match terminatorRole(module.getOp(block.terminatorIndex()), func: func, meta: meta) 'termRole'
-				body then break 'termRole'
+				body then break
 				calling or
 					refusing then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
 			end 'termRole'
@@ -664,7 +664,7 @@ end 'SpliceableShape'
 // helpers inside its own walk (`scanLeafBody`).
 function scanSpliceableShape(module StdModule, func IrFunction, meta StdOpMetaMemo) returns SpliceableShape
 	match functionShape(func) 'shape'
-		spliceable then break 'shape'
+		spliceable then break
 		refused(reason) then return SpliceableShape.refused(reason)
 	end 'shape'
 
@@ -672,7 +672,7 @@ function scanSpliceableShape(module StdModule, func IrFunction, meta StdOpMetaMe
 		let block = module.blockAtPosition(func, position: blockIndex)
 
 		match blockShape(block, blockIndex: blockIndex) 'blockShape'
-			spliceable then break 'blockShape'
+			spliceable then break
 			refused(reason) then return SpliceableShape.refused(reason)
 		end 'blockShape'
 
@@ -687,7 +687,7 @@ function scanSpliceableShape(module StdModule, func IrFunction, meta StdOpMetaMe
 
 			match terminatorRole(term, func: func, meta: meta) 'termRole'
 				body or
-					calling then break 'termRole'
+					calling then break
 				refusing then return SpliceableShape.refused(terminatorRefusal(term, meta: meta))
 			end 'termRole'
 		end 'terminated'
@@ -1237,7 +1237,7 @@ type AlwaysSplicedPlan
 		// behind a different report from all the others, and this walk would be the only reader of it.
 		match alwaysSplicedStateAt(state, funcIndex: callee) 'calleeState'
 			done or
-				onStack then break 'calleeState'
+				onStack then break
 			unvisited then enterAlwaysSplicedBody(callee, state: state, stack: stack, nextEdge: nextEdge)
 		end 'calleeState'
 	end 'stepCalleesFirstWalk'
@@ -1410,7 +1410,7 @@ export function requireAlwaysSplicedBodiesAreGone(project Project, module StdMod
 			stdFunctionReferenceOf(op, byName: byName.byName, into: reference)
 
 			match reference.kind 'reference'
-				none then break 'reference'
+				none then break
 				directCall or
 					otherReference then try requireReferenceIsNotToAnAlwaysSplicedBody(project, module: module, calleeIndex: reference.funcIndex, caller: func, byName: byName, always: always)
 			end 'reference'
@@ -1418,7 +1418,7 @@ export function requireAlwaysSplicedBodiesAreGone(project Project, module StdMod
 	end 'eachFunc'
 
 	match alwaysSplicedBodyNamedByData(project, module: module, byName: byName) 'dataDoors'
-		none then break 'dataDoors'
+		none then break
 		found(funcIndex, door) then try refuseAlwaysSplicedBodyStillReached(project, module: module, calleeIndex: funcIndex, reachedBy: "{door} names it", reason: "a reference that is not a call keeps the body alive as a real function, which is what the row denies")
 	end 'dataDoors'
 end 'requireAlwaysSplicedBodiesAreGone'
@@ -1435,7 +1435,7 @@ function alwaysSplicedBodyNamedByData(project Project, module StdModule, byName 
 		let slot = alwaysSplicedBodyNamed(module, name: reloc.funcName, byName: byName, door: "an .rdata slot")
 
 		match slot 'anRdataSlot'
-			none then break 'anRdataSlot'
+			none then break
 			found then return slot
 		end 'anRdataSlot'
 	end 'eachRdataSlot'
@@ -1444,7 +1444,7 @@ function alwaysSplicedBodyNamedByData(project Project, module StdModule, byName 
 		let target = alwaysSplicedBodyNamed(module, name: name, byName: byName, door: "a function value")
 
 		match target 'aFunctionValue'
-			none then break 'aFunctionValue'
+			none then break
 			found then return target
 		end 'aFunctionValue'
 	end 'eachValueTarget'
@@ -1501,12 +1501,12 @@ function whyTheSpliceWasRefused(project Project, module StdModule, calleeIndex E
 	// carries — and the reason they are still standing is one another.
 	match always.cycleThrough(module, start: calleeIndex, funcCount: module.funcCount()) 'cycle'
 		found(text) then return "it lies on a cycle of bodies declaring the row — {text} — so splicing any member would nest a body inside itself"
-		none then break 'cycle'
+		none then break
 	end 'cycle'
 
 	match functionShape(module.getFunc(calleeIndex)) 'shape'
 		refused(reason) then return calledOnceRefusalText(reason)
-		spliceable then break 'shape'
+		spliceable then break
 	end 'shape'
 
 	if splicingWouldWidenTheSafePoint(module.getFunc(calleeIndex), caller: caller, runtimeTier: project.libraryFacts.runtimeTier) 'wouldWidenTheSafePoint'
@@ -1532,7 +1532,7 @@ function bodyOpRefusalText(module StdModule, calleeIndex ElementIndex, byName Fu
 		let block = module.blockAtPosition(module.getFunc(calleeIndex), position: blockIndex)
 
 		match blockShape(block, blockIndex: blockIndex) 'blockShape'
-			spliceable then break 'blockShape'
+			spliceable then break
 			refused(reason) then return calledOnceRefusalText(reason)
 		end 'blockShape'
 
@@ -1548,7 +1548,7 @@ function bodyOpRefusalText(module StdModule, calleeIndex ElementIndex, byName Fu
 			let term = module.getOp(block.terminatorIndex())
 
 			match terminatorRole(term, func: module.getFunc(calleeIndex), meta: meta) 'termRole'
-				body then break 'termRole'
+				body then break
 				calling or
 					refusing then return calledOnceRefusalText(terminatorRefusal(term, meta: meta))
 			end 'termRole'
@@ -1802,7 +1802,7 @@ type CalledOnceCensus
 		stdFunctionReferenceOf(op, byName: byName.byName, into: self.reference)
 
 		match self.reference.kind 'reference'
-			none then break 'reference'
+			none then break
 			directCall then self.noteCall(self.reference.funcIndex, from: from, position: position, opPos: opPos)
 			otherReference then self.markReferencedIndex(self.reference.funcIndex)
 		end 'reference'
@@ -1814,7 +1814,7 @@ type CalledOnceCensus
 		stdFunctionReferenceOf(op, byName: byName.byName, into: self.reference)
 
 		match self.reference.kind 'reference'
-			none then break 'reference'
+			none then break
 			directCall then panic("CalledOnceCensus: '{String.from(func.name)}' holds a direct call of function {self.reference.funcIndex} in a TERMINATOR slot — every call is a body op, and the splice cuts a block immediately past the call it replaces")
 			otherReference then self.markReferencedIndex(self.reference.funcIndex)
 		end 'reference'
@@ -3166,7 +3166,7 @@ type SiteSplicer
 					osNetpoll or
 					osPathQuery or
 					osSocketOverlapped or
-					osSocketServe then break 'kind'
+					osSocketServe then break
 				call(_, callee, _) then self.considerSite(pos, callee: callee)
 			end 'kind'
 		end 'eachOp'
@@ -3203,7 +3203,7 @@ type SiteSplicer
 		match plan.verdictOf(calleeIndex) 'verdict'
 			eligible then self.recordLeafSiteUnlessItWidensTheSafePoint(pos, calleeIndex: calleeIndex)
 			tooManyOps then self.stats.noteSizeRefusal(plan.isWithinLargerBudget(calleeIndex))
-			notALeaf then break 'verdict'
+			notALeaf then break
 		end 'verdict'
 	end 'considerLeafSite'
 
@@ -3626,7 +3626,7 @@ type SiteSplicer
 		var out = ValueIdArray.create()
 
 		match calleeFunc.returnType 'rt'
-			void then break 'rt'
+			void then break
 			value then out.push(valueId)
 		end 'rt'
 
@@ -3647,7 +3647,7 @@ type SiteSplicer
 	// of continuations.
 	function attachContinuationArg(contRef ElementIndex, calleeFunc IrFunction, resultId ValueId)
 		match calleeFunc.returnType 'rt'
-			void then break 'rt'
+			void then break
 			value(inner) then attachBlockArgs(self.blockAt(contRef), valueIds: self.returnedValues(calleeFunc, valueId: resultId), argType: inner)
 		end 'rt'
 	end 'attachContinuationArg'

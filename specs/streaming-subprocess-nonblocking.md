@@ -270,7 +270,7 @@ function main() returns ExitCode
 	while spins < 4000 'spin'
 		match child.tryReadStdoutLine() 'polled'
 			line(text) then seen = text
-			none then break 'polled'
+			none then break
 		end 'polled'
 
 		if not seen.isEmpty() 'arrived'
@@ -332,7 +332,7 @@ function spinForLine(child StreamingSubprocess, fromStderr bool) returns String
 		let poll = child.tryReadStderrLine() if fromStderr else child.tryReadStdoutLine()
 		match poll 'polled'
 			line(text) then return text
-			none then break 'polled'
+			none then break
 		end 'polled'
 
 		sleep(5)
@@ -452,7 +452,7 @@ function nextLine(child StreamingSubprocess) returns String
 	while spins < 400 'spin'
 		match child.tryReadStdoutLine() 'polled'
 			line(text) then return "line[{text}]"
-			none then break 'polled'
+			none then break
 		end 'polled'
 
 		sleep(5)

@@ -1093,11 +1093,11 @@ function cacheWriteTopLevelConstant(writer LibraryCacheWriter, value TopLevelCon
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		pending then break 'payload'
-		evaluating then break 'payload'
+		pending then break
+		evaluating then break
 		value(a0, a1, a2) then cacheWriteTopLevelConstantValue(writer, a0: a0, a1: a1, a2: a2)
 		failed(a0) then cacheWriteTopLevelConstantFailed(writer, a0: a0)
-		poisoned then break 'payload'
+		poisoned then break
 		managedValue(a0, a1) then cacheWriteTopLevelConstantManagedValue(writer, a0: a0, a1: a1)
 		arrayValue(a0, a1) then cacheWriteTopLevelConstantArrayValue(writer, a0: a0, a1: a1)
 		containerValue(a0, a1, a2) then cacheWriteTopLevelConstantContainerValue(writer, a0: a0, a1: a1, a2: a2)
@@ -1408,7 +1408,7 @@ function cacheWriteGenericAliasContestTable(writer LibraryCacheWriter, value Gen
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unwritten then break 'payload'
+		unwritten then break
 		entries(a0) then cacheWriteGenericAliasContestTableEntries(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteGenericAliasContestTable'
@@ -1448,7 +1448,7 @@ function cacheWriteDisagreeingAliasNameRoster(writer LibraryCacheWriter, value D
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unwritten then break 'payload'
+		unwritten then break
 		entries(a0) then cacheWriteDisagreeingAliasNameRosterEntries(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteDisagreeingAliasNameRoster'
@@ -1488,7 +1488,7 @@ function cacheWriteCrossKindContestTable(writer LibraryCacheWriter, value CrossK
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unwritten then break 'payload'
+		unwritten then break
 		entries(a0) then cacheWriteCrossKindContestTableEntries(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteCrossKindContestTable'
@@ -1832,7 +1832,7 @@ module function cacheWriteOwnershipCallee(writer LibraryCacheWriter, value Owner
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		inert then break 'payload'
+		inert then break
 		named(a0) then cacheWriteOwnershipCalleeNamed(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteOwnershipCallee'
@@ -2596,7 +2596,7 @@ function cacheWriteDataSlotLabel(writer LibraryCacheWriter, value DataSlotLabel)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unlabelled then break 'payload'
+		unlabelled then break
 		labelled(a0) then cacheWriteDataSlotLabelLabelled(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteDataSlotLabel'
@@ -2640,7 +2640,7 @@ function cacheWriteDefinedInitializer(writer LibraryCacheWriter, value DefinedIn
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		written then break 'payload'
+		written then break
 		text(a0) then cacheWriteDefinedInitializerText(writer, a0: a0)
 		flag(a0) then cacheWriteDefinedInitializerFlag(writer, a0: a0)
 	end 'payload'
@@ -3761,7 +3761,7 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 			// alias also carries this tag, and the i64 collapse below would be a wrong answer about it, so
 			// an `as` cast in a constant initializer owes this door an arm of its own rather than inheriting
 			// this one.
-			named then break 'reachable'
+			named then break
 		exitCode or
 			unresolved or
 			void then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — the constant evaluator folds integers, bools, floats and payload-free enum or union cases only")
@@ -3882,7 +3882,7 @@ module function cacheWriteDeclaredAlias(writer LibraryCacheWriter, value Declare
 
 	match value 'payload'
 		declared(a0) then cacheWriteDeclaredAliasDeclared(writer, a0: a0)
-		undeclared then break 'payload'
+		undeclared then break
 	end 'payload'
 end 'cacheWriteDeclaredAlias'
 
@@ -4210,14 +4210,14 @@ export function slotStorageType(signatures ProgramSignatures, declared MaxonType
 		// ⚠ A CAPTURED interface binding — this function's other caller, a closure env slot — is still
 		// refused by the capture path's own E2015, so no env slot reaches this arm.
 		interfaceRef then return MaxonType.integer
-		named then break 'kind'
+		named then break
 	end 'kind'
 
 	let name = try typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("slotStorageType: a slot's named type has an id that is not in the interner it was asked against — a field's type is adopted through `fieldTypeOf`, which re-interns into exactly that table, and a captured binding's was interned by its own file's `parseTypeReference`")
 
 	match signatures.aliasOf(name, readerFilePath: readerFilePath) 'alias'
 		declared(alias) then return alias.underlying
-		undeclared then break 'alias'
+		undeclared then break
 	end 'alias'
 
 	// A declared enum/union field's width, through the accessor the UNION-PAYLOAD slot reads too
@@ -4311,7 +4311,7 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// shares one slot region across every case, so a two-slot payload has nowhere to widen into — and this
 		// classifier serves both, so the refusal lives at the declaration rather than here.
 		interfaceRef then return PayloadClass.existential
-		named then break 'kind'
+		named then break
 	end 'kind'
 
 	let name = try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("classifyUnionPayload: a payload field's named type id is not in the interner it was resolved against — pass the interner the layout's ids live in")
@@ -4860,7 +4860,7 @@ export function formatFnTypeDisplay(paramTypes MaxonTypeArray, returnType MaxonR
 
 	match returnType 'return'
 		value(returnValue) then rendered = "{rendered} returns {maxonTypeDisplayName(returnValue, typeNames: typeNames, signatures: signatures)}"
-		void then break 'return'
+		void then break
 	end 'return'
 
 	return rendered
@@ -5161,7 +5161,7 @@ function cacheWriteTypeParamFeed(writer LibraryCacheWriter, value TypeParamFeed)
 
 	match value 'payload'
 		feeds(a0, a1) then cacheWriteTypeParamFeedFeeds(writer, a0: a0, a1: a1)
-		none then break 'payload'
+		none then break
 	end 'payload'
 end 'cacheWriteTypeParamFeed'
 
@@ -5732,8 +5732,8 @@ function cacheWriteDeclCallability(writer LibraryCacheWriter, value DeclCallabil
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		bareCallOnly then break 'payload'
-		bareCallOrDirectoryRoute then break 'payload'
+		bareCallOnly then break
+		bareCallOrDirectoryRoute then break
 		methodOf(a0) then cacheWriteDeclCallabilityMethodOf(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteDeclCallability'
@@ -6270,9 +6270,9 @@ function cacheWriteParamDefaultProducer(writer LibraryCacheWriter, value ParamDe
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		required then break 'payload'
-		callerLine then break 'payload'
-		callerFile then break 'payload'
+		required then break
+		callerLine then break
+		callerFile then break
 		helper(a0) then cacheWriteParamDefaultProducerHelper(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteParamDefaultProducer'
@@ -7032,7 +7032,7 @@ function cacheWriteEnclosingTypeScope(writer LibraryCacheWriter, value Enclosing
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		fileScope then break 'payload'
+		fileScope then break
 		typeBody(a0) then cacheWriteEnclosingTypeScopeTypeBody(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteEnclosingTypeScope'
@@ -7706,7 +7706,7 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		//     handle count (closing the mailbox when it was the last), steps the reference count (freeing it when
 		//     it was the last owner) and then takes the ordinary decref of the box.
 		serviceHandle then return MboxHandleDropBoxName
-		userDeclared then break 'compilerOwned'
+		userDeclared then break
 	end 'compilerOwned'
 
 	// ⭐⭐ **AN INSTANCE ALSO ARRIVES AS ITS OWN CANONICAL RENDERING, AND `declaredNameIsManaged` ALREADY SAID
@@ -8239,7 +8239,7 @@ function managedNameCascadeStrategy(signatures ProgramSignatures, declaredName B
 		// `handle.clone()`: a SECOND HANDLE to the same service, which steps both mailbox counts and mints a
 		// fresh box. `direct` because that is one entry point taking one record, exactly as a `__clone_<T>` is.
 		serviceHandle then return ManagedCascadeStrategy.direct(serviceHandleCascadeCallee(action, clone: serviceHandleClonerOf(signatures, handleName: declaredName)))
-		userDeclared then break 'compilerOwned'
+		userDeclared then break
 	end 'compilerOwned'
 
 	// The drop twin's canonical-rendering arm, at the same tier and on the same gid — see it for the measured
@@ -11495,7 +11495,7 @@ function cacheWriteTypeNameClaimIndex(writer LibraryCacheWriter, value TypeNameC
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unsettled then break 'payload'
+		unsettled then break
 		settled(a0, a1) then cacheWriteTypeNameClaimIndexSettled(writer, a0: a0, a1: a1)
 	end 'payload'
 end 'cacheWriteTypeNameClaimIndex'
@@ -12603,7 +12603,7 @@ module function cacheWriteInstanceSize(writer LibraryCacheWriter, value Instance
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unsized then break 'payload'
+		unsized then break
 		sized(a0) then cacheWriteInstanceSizeSized(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteInstanceSize'
@@ -13184,7 +13184,7 @@ function cacheWriteGenericAliasAnchor(writer LibraryCacheWriter, value GenericAl
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unanchored then break 'payload'
+		unanchored then break
 		declaredAt(a0, a1, a2, a3) then cacheWriteGenericAliasAnchorDeclaredAt(writer, a0: a0, a1: a1, a2: a2, a3: a3)
 	end 'payload'
 end 'cacheWriteGenericAliasAnchor'
@@ -13555,7 +13555,7 @@ function cacheWriteAliasCycleResult(writer LibraryCacheWriter, value AliasCycleR
 
 	match value 'payload'
 		at(a0) then cacheWriteAliasCycleResultAt(writer, a0: a0)
-		none then break 'payload'
+		none then break
 	end 'payload'
 end 'cacheWriteAliasCycleResult'
 
@@ -13657,7 +13657,7 @@ function cacheWriteInstantiationSiteLookup(writer LibraryCacheWriter, value Inst
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unwritten then break 'payload'
+		unwritten then break
 		written(a0) then cacheWriteInstantiationSiteLookupWritten(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteInstantiationSiteLookup'
@@ -13710,7 +13710,7 @@ function cacheWriteInnerAliasMember(writer LibraryCacheWriter, value InnerAliasM
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		none then break 'payload'
+		none then break
 		named(a0) then cacheWriteInnerAliasMemberNamed(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteInnerAliasMember'
@@ -13911,7 +13911,7 @@ function cacheWriteInterfaceName(writer LibraryCacheWriter, value InterfaceName)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		none then break 'payload'
+		none then break
 		named(a0) then cacheWriteInterfaceNameNamed(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteInterfaceName'
@@ -14592,7 +14592,7 @@ function cacheWriteAssociatedHolding(writer LibraryCacheWriter, value Associated
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		unheld then break 'payload'
+		unheld then break
 		heldAt(a0) then cacheWriteAssociatedHoldingHeldAt(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteAssociatedHolding'
@@ -17983,7 +17983,7 @@ export type ProgramSignatures
 		match self.hashSource 'source'
 			author then self.insertAuthorDeclaredName(mixBytes(Hasher.empty(), bytes: name))
 			library then self.noteMentionedName(name)
-			whole then break 'source'
+			whole then break
 		end 'source'
 	end 'noteDeclaredName'
 
@@ -17999,7 +17999,7 @@ export type ProgramSignatures
 		match self.hashSource 'source'
 			library then self.insertMeantName(name)
 			author or
-				whole then break 'source'
+				whole then break
 		end 'source'
 	end 'noteMentionedName'
 
@@ -19422,7 +19422,7 @@ export type ProgramSignatures
 
 				// Already contested ⇒ the incumbent was moved when the SECOND directory appeared, and a third
 				// has nothing left to move. This file still claims its OWN key below.
-				alreadyContested then break 'contest'
+				alreadyContested then break
 
 				// Every entry at the bare key was written by the INCUMBENT directory's own fold, which is
 				// premise `rekeyDeclarationSweepEntries` rests on — nothing else has declared the name yet.
@@ -19720,7 +19720,7 @@ export type ProgramSignatures
 		if returnTypeNamesAType(returnType) 'theClauseNamedAType'
 			match returnAliasName 'spelled'
 				named(aliasName) then self.settled.funcReturnAliasNames.upsert(key, value: aliasName)
-				none then break 'spelled'
+				none then break
 			end 'spelled'
 		end 'theClauseNamedAType'
 
@@ -20490,7 +20490,7 @@ export type ProgramSignatures
 		if self.keyNamesOneDeclaration(key) 'theOnlyDeclarationOfItsName'
 			match self.consumeOf(key) 'c'
 				consumes(info) then facts.push(info)
-				borrowsAll then break 'c'
+				borrowsAll then break
 			end 'c'
 
 			return facts
@@ -20735,7 +20735,7 @@ export type ProgramSignatures
 	export function namesImmutableRecordGlobal(name ByteArray, readerFilePath FilePath) returns bool
 		match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.stored) 'stored'
 			found(index) then return not self.declAt(index).mutable
-			notFound then break 'stored'
+			notFound then break
 		end 'stored'
 
 		return match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.inlined) 'imaged'
@@ -21875,7 +21875,7 @@ export type ProgramSignatures
 		// has none). The `giid` + anchor is all the check needs: the base's constraints and the substituted args
 		// are read off `giid`.
 		match entry.anchor 'anchor'
-			unanchored then break 'anchor'
+			unanchored then break
 			declaredAt(nameLine, nameColumn, _, _) then self.settled.genericAliasSites.push(GenericInstantiationSite.create(giid, nameLine: nameLine, nameColumn: nameColumn, filePath: entry.filePath))
 		end 'anchor'
 
@@ -22146,7 +22146,7 @@ export type ProgramSignatures
 		// above; and because the struct's name is a per-DECLARATION fact rather than a per-case one, it is
 		// mixed once by `recordEnum` instead of once per case here.
 		match layout.rawValueIdentity() 'identity'
-			theTag then break 'identity'
+			theTag then break
 			recordedText then folded = mixBytes(folded, bytes: layout.rawValueAt(index).toByteArray())
 			incomparable then folded = self.mixEnumBackingFields(folded, layout: layout, index: index)
 		end 'identity'
@@ -22685,7 +22685,7 @@ export type ProgramSignatures
 				match self.resolveFunctionName(layout.rawValueAt(index).toByteArray(), readerFilePath: layout.declFilePath) 'resolution'
 					declaration(name) then layout.nameCaseFunction(index, functionName: String.from(name))
 					ambiguous or
-						undeclared then break 'resolution'
+						undeclared then break
 				end 'resolution'
 			end 'eachCase'
 		end 'eachEnum'
@@ -22920,7 +22920,7 @@ export type ProgramSignatures
 				required or
 					callerLine or
 					callerFile then continue
-				helper then break 'produces'
+				helper then break
 			end 'produces'
 
 			let swept = paramDefaultHelperName(bareName, paramIndex: slot)
@@ -23167,7 +23167,7 @@ export type ProgramSignatures
 					arrayValue or
 					containerValue or
 					factoryValue or
-					boxedUnionValue then break 'state'
+					boxedUnionValue then break
 				evaluating then panic("ProgramSignatures.evaluateInitializers: '{String.from(decl.name)}' is still marked `evaluating` between two top-level walks — every DFS pops what it pushes")
 				pending then self.startDecl(i, anchors: anchors)
 			end 'state'
@@ -23241,7 +23241,7 @@ export type ProgramSignatures
 				// this), so asking anywhere else would mean either a second arena walk or a memo that can be
 				// asked too early.
 				match self.declInitializerCall(decl) 'initializer'
-					none then break 'initializer'
+					none then break
 					calls(callees, functionValues) then self.settled.corpusSlotInitCallees.upsert(label, value: initializerRootNames(callees, functionValues: functionValues))
 					namesFunctions(functionValues) then self.settled.corpusSlotInitCallees.upsert(label, value: functionValues)
 				end 'initializer'
@@ -23301,7 +23301,7 @@ export type ProgramSignatures
 
 			// Reached a decl already on this walk's stack: the reference chain has closed on itself.
 			evaluating then return self.recordCycle(index, stack: stack)
-			pending then break 'state'
+			pending then break
 		end 'state'
 
 		decl.outcome = TopLevelConstant.evaluating
@@ -23330,7 +23330,7 @@ export type ProgramSignatures
 		// the evaluator to decide — and running it anyway would fold the literal the source carries, only for
 		// the answer to be thrown away.
 		match decl.defined 'defined'
-			written then break 'defined'
+			written then break
 			text(value) then return self.settleFoldedValue(decl, value: ConstFoldedValue.managed(value.toByteArray(), kind: ManagedConstKind.string))
 			flag(value) then return self.settleFoldedValue(decl, value: ConstFoldedValue.scalar(ConstValue.ofBool(value)))
 		end 'defined'
@@ -24169,7 +24169,7 @@ export type ProgramSignatures
 
 	function crossKindContestsForWrite() returns CrossKindContestMap
 		match self.settled.crossKindContests 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(byName) then return byName
 		end 'state'
 
@@ -24200,7 +24200,7 @@ export type ProgramSignatures
 
 	function genericAliasContestsForWrite() returns ContestedGenericAliasMap
 		match self.settled.contestedGenericAliases 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(byName) then return byName
 		end 'state'
 
@@ -24227,7 +24227,7 @@ export type ProgramSignatures
 
 	function disagreeingAliasNamesForWrite() returns DisagreeingAliasNameSet
 		match self.settled.multiplyDeclaredGenericAliases 'state'
-			unwritten then break 'state'
+			unwritten then break
 			entries(names) then return names
 		end 'state'
 
@@ -24254,7 +24254,7 @@ export type ProgramSignatures
 		match decl.outcome 'state'
 			// `recordCycle` already ruled on this decl.
 			failed or
-				poisoned then break 'state'
+				poisoned then break
 			evaluating then decl.outcome = TopLevelConstant.poisoned
 			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a scalar value AND failed to evaluate — an initializer produces one or the other")
 			managedValue or
@@ -24683,7 +24683,7 @@ export type ProgramSignatures
 		if not decl.declaredByTheCorpus 'theProgramsOwnDeclaration'
 			match self.declInitializerCall(decl) 'initializer'
 				none or
-					namesFunctions then break 'initializer'
+					namesFunctions then break
 				calls then return true
 			end 'initializer'
 		end 'theProgramsOwnDeclaration'
@@ -24813,7 +24813,7 @@ export type ProgramSignatures
 	// twice.
 	function appendArgumentValueCallee(callees ByteArrayArray, value ConstFactoryArgumentValue)
 		match value 'value'
-			call then break 'value'
+			call then break
 			folded(folded) then self.appendFoldedArgumentCallee(callees, folded: folded)
 		end 'value'
 	end 'appendArgumentValueCallee'
@@ -24877,7 +24877,7 @@ export type ProgramSignatures
 		match self.declaredContainerElementAdd(giid) 'add'
 			push(callee) then callees.push(callee)
 			upsert(callee) then callees.push(callee)
-			unsupported then break 'add'
+			unsupported then break
 		end 'add'
 	end 'appendDeclaredInstanceCreateCallee'
 
@@ -24916,7 +24916,7 @@ export type ProgramSignatures
 			end 'creditedAtTheRead'
 
 			match self.declInitializerCall(decl) 'initializer'
-				none then break 'initializer'
+				none then break
 				calls(run, functionValues) then callees.append(initializerRootNames(run, functionValues: functionValues))
 				namesFunctions(functionValues) then callees.append(functionValues)
 			end 'initializer'
@@ -25445,7 +25445,7 @@ export type ProgramSignatures
 			managed or
 				arrayLiteral or
 				containerCreate or
-				boxedUnionCase then break 'kind'
+				boxedUnionCase then break
 		end 'kind'
 
 		let record = self.globalRecordOf(folded, elementFilePath: elementFilePath)
@@ -25884,7 +25884,7 @@ export type ProgramSignatures
 			managed or
 				arrayLiteral or
 				containerCreate or
-				boxedUnionCase then break 'kind'
+				boxedUnionCase then break
 		end 'kind'
 
 		return self.foldedValueType(folded, elementFilePath: elementFilePath)
@@ -26922,7 +26922,7 @@ export type ProgramSignatures
 
 		match self.settled.functionTypeAliases.declarationInAnyFile(identity) 'functionAlias'
 			declared(alias) then return self.contestedDeclarationSpelling(aliasBaseName(alias.name), declFilePath: alias.declFilePath)
-			undeclared then break 'functionAlias'
+			undeclared then break
 		end 'functionAlias'
 
 		if isTupleTypeName(identity) 'aTuple'
@@ -27079,7 +27079,7 @@ export type ProgramSignatures
 				cycle or
 					notARangedAlias or
 					rangeDoesNotFit or
-					primitiveDiffers then break 'linkWhenResolved'
+					primitiveDiffers then break
 			end 'linkWhenResolved'
 		end 'eachClause'
 
@@ -27964,17 +27964,17 @@ export type ProgramSignatures
 
 		match self.structInAnyFile(name) 'aStruct'
 			declared(layout) then claims.push(self.typeNameClaim(TypeDeclKind.structType, visibility: layout.visibility, declFilePath: layout.declFilePath))
-			undeclared then break 'aStruct'
+			undeclared then break
 		end 'aStruct'
 
 		match self.enumInAnyFile(name) 'anEnumOrUnion'
 			declared(layout) then claims.push(self.typeNameClaim(TypeDeclKind.unionType if layout.isUnion else TypeDeclKind.enumType, visibility: layout.visibility, declFilePath: layout.declFilePath))
-			undeclared then break 'anEnumOrUnion'
+			undeclared then break
 		end 'anEnumOrUnion'
 
 		match self.interfaceDeclaredIn(name) 'anInterface'
 			declared(_, visibility, declFilePath) then claims.push(self.typeNameClaim(TypeDeclKind.interfaceType, visibility: visibility, declFilePath: declFilePath))
-			undeclared then break 'anInterface'
+			undeclared then break
 		end 'anInterface'
 
 		let aliasKey = self.aliasFamilyIdentity(name)
@@ -27987,7 +27987,7 @@ export type ProgramSignatures
 		end 'severalFilesDeclareTheRangedAlias' else 'atMostOneFileDoes'
 			match self.settled.typeAliases.declarationInAnyFile(aliasKey) 'theSoleRangedAlias'
 				declared(alias) then claims.push(self.typeNameClaim(TypeDeclKind.rangedAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
-				undeclared then break 'theSoleRangedAlias'
+				undeclared then break
 			end 'theSoleRangedAlias'
 		end 'atMostOneFileDoes'
 
@@ -28000,7 +28000,7 @@ export type ProgramSignatures
 		end 'severalFilesDeclareTheFunctionAlias' else 'atMostOneFileDoes'
 			match self.functionAliasInAnyFile(aliasKey) 'theSoleFunctionAlias'
 				declared(alias) then claims.push(self.typeNameClaim(TypeDeclKind.functionAlias, visibility: alias.visibility, declFilePath: alias.declFilePath))
-				undeclared then break 'theSoleFunctionAlias'
+				undeclared then break
 			end 'theSoleFunctionAlias'
 		end 'atMostOneFileDoes'
 
@@ -28186,12 +28186,12 @@ export type ProgramSignatures
 	module function nominalTypeNameIn(name ByteArray) returns DeclaredTypeName
 		match self.structInAnyFile(name) 'aStruct'
 			declared(layout) then return DeclaredTypeName.declared(TypeDeclKind.structType, visibility: layout.visibility, declFilePath: layout.declFilePath)
-			undeclared then break 'aStruct'
+			undeclared then break
 		end 'aStruct'
 
 		match self.enumInAnyFile(name) 'anEnumOrUnion'
 			declared(layout) then return DeclaredTypeName.declared(TypeDeclKind.unionType if layout.isUnion else TypeDeclKind.enumType, visibility: layout.visibility, declFilePath: layout.declFilePath)
-			undeclared then break 'anEnumOrUnion'
+			undeclared then break
 		end 'anEnumOrUnion'
 
 		return self.interfaceDeclaredIn(name)
@@ -28204,7 +28204,7 @@ export type ProgramSignatures
 
 		match self.innerAliasDeclaredIn(self.innerAliasKeyOf(name, readerFilePath: meaningFile)) 'anInnerAlias'
 			declared(innerKind, innerVisibility, innerFile) then return DeclaredTypeName.declared(innerKind, visibility: innerVisibility, declFilePath: innerFile)
-			undeclared then break 'anInnerAlias'
+			undeclared then break
 		end 'anInnerAlias'
 
 		if let form = try self.aliasFormFor(name, readerFilePath: meaningFile) 'anAliasForm'
@@ -28213,17 +28213,17 @@ export type ProgramSignatures
 
 		match self.structFor(name, readerFilePath: meaningFile) 'aStruct'
 			declared(layout) then return DeclaredTypeName.declared(TypeDeclKind.structType, visibility: layout.visibility, declFilePath: layout.declFilePath)
-			undeclared then break 'aStruct'
+			undeclared then break
 		end 'aStruct'
 
 		match self.enumFor(name, readerFilePath: meaningFile) 'anEnum'
 			declared(layout) then return DeclaredTypeName.declared(TypeDeclKind.unionType if layout.isUnion else TypeDeclKind.enumType, visibility: layout.visibility, declFilePath: layout.declFilePath)
-			undeclared then break 'anEnum'
+			undeclared then break
 		end 'anEnum'
 
 		match self.aliasOf(name, readerFilePath: meaningFile) 'aRangedAlias'
 			declared(alias) then return DeclaredTypeName.declared(TypeDeclKind.rangedAlias, visibility: alias.visibility, declFilePath: alias.declFilePath)
-			undeclared then break 'aRangedAlias'
+			undeclared then break
 		end 'aRangedAlias'
 
 		if not self.containsInterfaceFor(name, readerFilePath: meaningFile) 'noInterfaceAnswersHere'
@@ -28449,7 +28449,7 @@ export type ProgramSignatures
 
 		match self.structInAnyFile(name) 'aStruct'
 			declared(layout) then return layout.declFilePath.toString().equals(readerFilePath.toString())
-			undeclared then break 'aStruct'
+			undeclared then break
 		end 'aStruct'
 
 		match self.enumInAnyFile(name) 'anEnumOrUnion'
@@ -28792,7 +28792,7 @@ export type ProgramSignatures
 		var shared = DisagreeingAliasNameSet.create()
 
 		match self.settled.contestedGenericAliases 'index'
-			unwritten then break 'index'
+			unwritten then break
 			entries(byName) then self.noteSharedInstanceAliases(byName, into: shared)
 		end 'index'
 
@@ -29003,7 +29003,7 @@ export type ProgramSignatures
 		if containsQualifier(spelling) 'aDirectoryQualifiedName'
 			match self.namespaceAliasOf(spelling, readerFilePath: readerFilePath, wanted: wanted) 'qualified'
 				declared(declFilePath, member, kind) then return WrittenAlias.declared(self.aliasFamilyIdentity(member), readerFilePath: declFilePath, kind: kind)
-				notAnAlias then break 'qualified'
+				notAnAlias then break
 			end 'qualified'
 		end 'aDirectoryQualifiedName'
 
@@ -29265,7 +29265,7 @@ export type ProgramSignatures
 
 		match inner 'inner'
 			declared then return inner
-			undeclared then break 'inner'
+			undeclared then break
 		end 'inner'
 
 		return self.perInstanceAliasOf(name, readerFilePath: readerFilePath)
@@ -29501,7 +29501,7 @@ export type ProgramSignatures
 		if self.readerMeansKind(typeName, readerFilePath: declFilePath, kind: TypeDeclKind.rangedAlias) 'mayBeARangedAliasSlot'
 			match self.settled.typeAliases.lookup(typeName, readerFilePath: declFilePath) 'aRangedAliasSlot'
 				declared(ranged) then return Hasher.combined(Hasher.combined(spelled, value: ranged.low as HashDigest), value: ranged.high as HashDigest)
-				undeclared then break 'aRangedAliasSlot'
+				undeclared then break
 			end 'aRangedAliasSlot'
 		end 'mayBeARangedAliasSlot'
 
@@ -30951,7 +30951,7 @@ export type ProgramSignatures
 		for element in elements 'eachElement'
 			match self.tupleElementCitationOf(element) 'citation'
 				nestedTuple or
-					asSpelled then break 'citation'
+					asSpelled then break
 				separatorBearing(spelling) then self.recordSeparatorBearingToken(spelling)
 			end 'citation'
 		end 'eachElement'
@@ -31254,7 +31254,7 @@ export type ProgramSignatures
 
 		match self.innerAliasOf(name) 'inner'
 			declared(alias) then return alias.underlying
-			undeclared then break 'inner'
+			undeclared then break
 		end 'inner'
 
 		// ⭐⭐ **AND THE PRE-PASS'S ANSWER IF THE FOLD HAS NOT REACHED THE DECLARATION YET — the ONE reader of
@@ -31266,7 +31266,7 @@ export type ProgramSignatures
 		// these declarations from still cannot NAME them (E3011) — the verdict stays the fold's to take.
 		match self.preVerdictInnerAliasOf(name) 'beforeTheFold'
 			declared(alias) then return alias.underlying
-			undeclared then break 'beforeTheFold'
+			undeclared then break
 		end 'beforeTheFold'
 
 		return resolved
@@ -31747,7 +31747,7 @@ export type ProgramSignatures
 		if let byFile = try self.genericAliasClaimantsOf(name) 'contested'
 			match self.declaringFileMeantBy(name, byFile: byFile, readerFilePath: readerFilePath) 'meant'
 				declaredIn(declPath) then return try byFile.get(declPath) otherwise panic("ProgramSignatures.scopedGenericAliasInstance: '{String.from(name)}' resolved to a declaration in '{declPath}', which is not one of the files declaring it")
-				unresolved then break 'meant'
+				unresolved then break
 			end 'meant'
 		end 'contested'
 
@@ -35325,7 +35325,7 @@ export type ProgramSignatures
 
 	function rewrittenParamTypesUnder(rule RecordedReturnTypeRule, decl OverloadedDecl) returns MaxonTypeArray throws MapError
 		match rule 'rule'
-			contestScopedAlias then break 'rule'
+			contestScopedAlias then break
 			declaredStruct or
 				declaredInterface then throw MapError.keyNotFound
 		end 'rule'
@@ -37669,7 +37669,7 @@ export type ProgramSignatures
 		// to converge. Asked FIRST because it is a fact already established, not a walk.
 		match self.divergedGenericAliasDecl 'contestDiverged'
 			at then return self.divergedGenericAliasDecl
-			none then break 'contestDiverged'
+			none then break
 		end 'contestDiverged'
 
 		let onCycle = nodesOnACycle(self.buildInstanceArgGraph())
@@ -41840,7 +41840,7 @@ export type ProgramSignatures
 				managedSocket or
 				serviceHandle then return false
 
-			userDeclared then break 'compilerOwned'
+			userDeclared then break
 		end 'compilerOwned'
 
 		for writable in self.structLayoutOf(name).fieldMutable 'eachField'
@@ -42177,7 +42177,7 @@ export type ProgramSignatures
 
 			match found 'found'
 				slot then return found
-				none then break 'found'
+				none then break
 			end 'found'
 		end 'eachField'
 
@@ -42196,7 +42196,7 @@ export type ProgramSignatures
 
 				match found 'found'
 					slot then return found
-					none then break 'found'
+					none then break
 				end 'found'
 			end 'eachPayload'
 		end 'eachCase'
@@ -42226,7 +42226,7 @@ export type ProgramSignatures
 
 		match self.osHandleOwnedBy(self.denotedAggregateName(typeName), visited: ClonerSet.create()) 'handle'
 			handle(handleName) then return "owns an OS handle (`{String.from(handleName)}`) and cannot be duplicated"
-			none then break 'handle'
+			none then break
 		end 'handle'
 
 		return "owns a field this compiler cannot deep-clone"
@@ -42239,7 +42239,7 @@ export type ProgramSignatures
 				managedSocket then return OwnedOsHandle.handle(name)
 
 			serviceHandle or
-				userDeclared then break 'compilerOwned'
+				userDeclared then break
 		end 'compilerOwned'
 
 		if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyInFlight'
@@ -42257,7 +42257,7 @@ export type ProgramSignatures
 
 			match nested 'nested'
 				handle then return nested
-				none then break 'nested'
+				none then break
 			end 'nested'
 		end 'eachField'
 
@@ -42296,7 +42296,7 @@ export type ProgramSignatures
 
 			match nested 'nested'
 				handle then return nested
-				none then break 'nested'
+				none then break
 			end 'nested'
 		end 'eachField'
 
@@ -42315,7 +42315,7 @@ export type ProgramSignatures
 
 				match nested 'nested'
 					handle then return nested
-					none then break 'nested'
+					none then break
 				end 'nested'
 			end 'eachPayload'
 		end 'eachCase'
@@ -42585,7 +42585,7 @@ export type ProgramSignatures
 			// A handle's clone is a real entry (`managedNameCascadeStrategy`), so the GATE must admit what the
 			// STRATEGY answers — this arm and that one are the divergence this function exists to prevent.
 			serviceHandle then return true
-			userDeclared then break 'compilerOwned'
+			userDeclared then break
 		end 'compilerOwned'
 
 		if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyInFlight'
@@ -45407,7 +45407,7 @@ function cacheWriteRowSetAnswer(writer LibraryCacheWriter, value RowSetAnswer)
 	writer.unsigned(value.ordinal as CacheUnsigned)
 
 	match value 'payload'
-		noInstance then break 'payload'
+		noInstance then break
 		instance(a0) then cacheWriteRowSetAnswerInstance(writer, a0: a0)
 		holds(a0) then cacheWriteRowSetAnswerHolds(writer, a0: a0)
 	end 'payload'

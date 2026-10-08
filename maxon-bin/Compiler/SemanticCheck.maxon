@@ -226,7 +226,7 @@ function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signa
 		// the only writing arm last is what ends the borrow before the write; the resolver re-reads the op
 		// itself, which is why it is handed an INDEX and not the op.
 		match maxonOpCalleeKind(op) 'callee'
-			noCallee then break 'callee'
+			noCallee then break
 			functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
 			direct then resolveOneOverloadedCall(project, module: module, signatures: signatures, funcNames: funcNames, func: func, funcIndex: funcIndex, opIndex: opIdx, valueDefiners: valueDefiners, resolution: resolution)
 		end 'callee'
@@ -359,7 +359,7 @@ type FunctionValueOrigins
 
 			match maxonOpResultValue(op) 'result'
 				value(id) then self.record(id, at: opIdx, func: func)
-				none then break 'result'
+				none then break
 			end 'result'
 		end 'eachOp'
 
@@ -548,7 +548,7 @@ end 'traceUndeclaredCalls'
 function traceDeferredValue(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndex ElementIndex, value ValueId, origins FunctionValueOrigins, calls SourceRangeArray, pending ValueIdArray) returns bool
 	match project.deferralSources.sourceOf(funcIndex, valueId: value) 'recorded'
 		value(sourceFuncIndex, sourceId) then return followDeferralSource(project, module: module, signatures: signatures, funcIndex: funcIndex, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, calls: calls, pending: pending)
-		none then break 'recorded'
+		none then break
 	end 'recorded'
 
 	match origins.originOf(module, func: func, value: value) 'origin'
@@ -1348,7 +1348,7 @@ function repointDefaultedArgHelpers(project Project, module MaxonModule, func Ir
 			required or
 				callerLine or
 				callerFile then continue
-			helper then break 'produces'
+			helper then break
 		end 'produces'
 
 		let argValue = try args.get(sourceCount + k) otherwise panic("repointDefaultedArgHelpers: args.get OOB at {sourceCount + k} — the synthesized defaults are the trailing run of args")
@@ -1434,7 +1434,7 @@ function reconcileOverloadResultType(project Project, func IrFunction, opIndex E
 	match overloadResultValue(op) 'result'
 		defines(result) then reconcileOverloadResultTag(project, func: func, opIndex: opIndex, result: result, member: member, disagreement: disagreement)
 		definesAPromise or
-			definesNothing then break 'result'
+			definesNothing then break
 	end 'result'
 end 'reconcileOverloadResultType'
 
@@ -1657,7 +1657,7 @@ function checkThrowsClausesNameDeclaredErrors(project Project, module MaxonModul
 
 	for func in module.functions 'eachFunc'
 		match func.throwsTypeName 'clause'
-			none then break 'clause'
+			none then break
 			throwing(declared) then anyUnthrown = (requireThrowsClauseNamesADeclaredError(project, signatures: signatures, func: func, declared: declared) and isUnthrownCandidate(project, module: module, func: func)) or anyUnthrown
 		end 'clause'
 	end 'eachFunc'
@@ -1744,7 +1744,7 @@ type UnthrownClauses
 
 		for func in module.functions 'eachFunc'
 			match func.throwsTypeName 'clause'
-				none then break 'clause'
+				none then break
 				throwing(declared) then unthrown.noteIfCandidate(project, module: module, signatures: signatures, func: func, declared: declared)
 			end 'clause'
 		end 'eachFunc'
@@ -2297,7 +2297,7 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness then break 'op'
+			existentialWitness then break
 		tryCall(_, _, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots)
 		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then addWitnessParamEdges(project, signatures: signatures, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots)
@@ -2707,7 +2707,7 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 					immortalStringTable or
 					covPoint or
 					rawIntrinsic or
-					existentialWitness then break 'op'
+					existentialWitness then break
 				await (_, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise, kind: PromiseConsume.awaited))
 
 				// A `try await` awaits (and consumes) its promise exactly as a plain `await` does — linearity
@@ -2744,7 +2744,7 @@ end 'pushIfPromiseDrop'
 function checkAwaitSite(project Project, module MaxonModule, blockIndex BlockIndexById, func IrFunction, site AwaitSite) returns bool
 	match reachableReawait(module, blockIndex: blockIndex, func: func, startBlock: site.block, startPos: site.pos, promise: site.promise) 'reach'
 		found(secondOpIdx) then return reportedViolation(project, func: func, secondOpIdx: secondOpIdx, first: site.kind)
-		none then break 'reach'
+		none then break
 	end 'reach'
 
 	return false
@@ -2817,7 +2817,7 @@ function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func Ir
 		// SSA guarantees the definition dominates (precedes) the await, so a re-arm cannot sit in the tail —
 		// but the arm is handled rather than assumed, so a future non-SSA shape cannot fall through silently.
 		rearmed then return ReachableReawait.none
-		ranOff then break 'tail'
+		ranOff then break
 	end 'tail'
 
 	var visited = BlockIdSet.create()
@@ -2861,7 +2861,7 @@ function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func Ir
 			foundSecond(idx) then return ReachableReawait.found(idx)
 
 			// Re-armed here — do NOT follow this block's successors; the promise past this point is a new thread.
-			rearmed then break 'scan'
+			rearmed then break
 			ranOff then collectMaxonBlockSuccessors(module, block: block, into: worklist)
 		end 'scan'
 	end 'bfs'
@@ -2891,7 +2891,7 @@ function scanBlockForReawait(module MaxonModule, block IrBlock, from ElementInde
 		match classifyOpForPromise(try module.ops.get(opIdx) otherwise panic("scanBlockForReawait: opIdx {opIdx} not in module.ops"), promise: promise) 'role'
 			reawaitOf then return AwaitScan.foundSecond(opIdx)
 			rearmOf then return AwaitScan.rearmed
-			unrelated then break 'role'
+			unrelated then break
 		end 'role'
 	end 'eachOp'
 
@@ -2966,7 +2966,7 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness then break 'op'
+			existentialWitness then break
 		await (_, awaited) then return awaitRoleForPromise(op, awaited: awaited, promise: promise)
 
 		// A `try await` of the tracked promise is a re-await exactly as a plain `await` is.
@@ -3067,7 +3067,7 @@ module function collectMaxonBlockSuccessors(module MaxonModule, block IrBlock, i
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness then break 'term'
+			existentialWitness then break
 		condBranch(_, thenBlockId, elseBlockId) then pushSuccessorPair(into, thenId: thenBlockId, elseId: elseBlockId)
 		branch(targetBlockId) then into.push(targetBlockId)
 
@@ -3225,7 +3225,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 						// slab allocator is that shape, and what keeps a lane from meeting an op it cannot lower is
 						// that the builder forks on `TargetFacilities.machineModel` before it mints anything.
 						rawIntrinsic or
-						existentialWitness then break 'op'
+						existentialWitness then break
 
 					// A `tryCall`'s args are validated exactly like a `call`'s (it IS a call plus a flag);
 					// its throws-compatibility (E3055) was checked by the parser at the `try` token.
@@ -3706,7 +3706,7 @@ function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 	match runtimeCalleeSourceMethod(callee) 'sourceMethod'
 		found(method) then return throwingCallRequiresTryMessage(method)
 		sharedByTwoSpellings(spelling, alsoSpelled) then return "{throwingCallRequiresTryMessage(spelling)} or '{String.from(alsoSpelled)}' — the two are ONE call, so the callee cannot say which was written"
-		notFound then break 'sourceMethod'
+		notFound then break
 	end 'sourceMethod'
 
 	// ⭐ **THE DIVISION FAMILY NAMES THE OPERATOR AND BOTH WAYS OUT — the second of the two arms here
@@ -3734,7 +3734,7 @@ function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 		quotient or
 			remainder then return divisionRequiresTryMessage(divisionOperatorSpellingForKind(divisionKind))
 		guardedRemainder then panic("throwingRuntimeCalleeMessage: the TOTAL `mod` overflow guard is not a throwing callee, so E3057 is never raised for it — this builder is reached only through `isThrowingRuntimeCallee`, whose answer comes from the same `divisionKindThrows` list")
-		notCheckedDivision then break 'division'
+		notCheckedDivision then break
 	end 'division'
 
 	return throwingCallRequiresTryMessage(callee)
@@ -3863,7 +3863,7 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 			// An argument deferred only by undeclared calls is reported by their own E3004.
 			match provenance.causeOfArguments(args) 'cause'
 				undeclaredCalls then return
-				standsAlone then break 'cause'
+				standsAlone then break
 			end 'cause'
 
 			reportPositioned(project, code: ErrorCode.genericTypeParameterNotInferable, message: "the type parameters of '{String.from(noun)}' cannot be inferred: an argument's type is not known", line: callRange.line, column: callRange.column, filePath: filePath)
@@ -4452,7 +4452,7 @@ end 'checkDiscardedResults'
 function effectFreeSummaryIfConsulted(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns BoolArray
 	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
 		match resolveDiscardSite(project, module: module, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
-			settled then break 'resolved'
+			settled then break
 			purityOf then return buildEffectFreeSummary(project, module: module, signatures: signatures, funcNames: funcNames)
 		end 'resolved'
 	end 'eachSite'
@@ -4551,7 +4551,7 @@ end 'runtimeReadVerdict'
 // earned neither.
 function reportDiscardVerdict(project Project, siteIndex ElementIndex, verdict DiscardVerdict)
 	match verdict 'earned'
-		none then break 'earned'
+		none then break
 		pureResultUnused(subject) then reportAtDiscardSite(project, siteIndex: siteIndex, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{subject}' must be used")
 		impureResultUnused(subject) then reportAtDiscardSite(project, siteIndex: siteIndex, code: ErrorCode.semanticDiscardedImpureResult, message: "result of '{subject}' is not used (use '_ = expr' to discard)")
 	end 'earned'
@@ -6488,7 +6488,7 @@ end 'resolvedSlotThroughCallInstance'
 // makes its own function.
 function returnTypeThroughCallInstance(project Project, signatures ProgramSignatures, returnType MaxonReturnType, gid GenericInstanceId) returns MaxonReturnType
 	match returnType 'returned'
-		void then break 'returned'
+		void then break
 		value(inner) then return MaxonReturnType.value(resolvedSlotThroughCallInstance(project, signatures: signatures, slotType: inner, gid: gid))
 	end 'returned'
 
@@ -6963,7 +6963,7 @@ function checkConformerAgainstSiteClaim(project Project, signatures ProgramSigna
 	let noun = wideningPlaceNoun(place)
 
 	match claim 'claim'
-		agrees then break 'claim'
+		agrees then break
 		disagrees(associatedName, siteBinding, conformerBinding, route) then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {noun}, which is declared at {existentialSiteClaimSentence(interfaceName, associatedName: associatedName, siteBinding: siteBinding, route: route)} — {existentialSiteClaimContradiction(conformer, associatedName: associatedName, conformerBinding: conformerBinding, route: route)}. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds '{String.from(associatedName)}' to '{String.from(siteBinding)}'", line: line, column: column, filePath: filePath)
 		unresolvable(associatedName, siteBinding, route) then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {noun}, which is declared at {existentialSiteClaimSentence(interfaceName, associatedName: associatedName, siteBinding: siteBinding, route: route)} — '{String.from(siteBinding)}' is a type parameter this {wideningPlaceAct(place)} fixes to nothing, so what '{conformer}' would have to bind '{String.from(associatedName)}' to is not known here. {wideningPlaceActAdvice(place)} through a concrete instance of the declaring type, or write the binding the conformers declare", line: line, column: column, filePath: filePath)
 	end 'claim'
@@ -6982,7 +6982,7 @@ function checkDeferredClaimAgainstExistentialValue(project Project, signatures P
 	let iface = String.from(interfaceName)
 
 	match claim 'declared'
-		agrees then break 'declared'
+		agrees then break
 		disagrees then panic("checkDeferredClaimAgainstExistentialValue: the value is held at interface '{iface}' and the claim reports a conformer binding — `conformerBindingThroughInstance` keys the lookup by the arriving type's name, which is that interface's, and E3006 forbids a `type` sharing it")
 		unresolvable(associatedName, siteBinding, route) then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot {wideningPlaceHandOver(place, iface: iface)}, which is declared at {existentialSiteClaimSentence(interfaceName, associatedName: associatedName, siteBinding: siteBinding, route: route)} — '{String.from(siteBinding)}' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the {wideningPlaceAct(place)} to settle it against. {wideningPlaceHandOverAdvice(place)} the concrete conformer, or declare {wideningPlaceNoun(place)} at '{iface}' with no `with` clause", line: line, column: column, filePath: filePath)
 	end 'declared'
@@ -7008,7 +7008,7 @@ function checkExistentialSiteClaimAtReturn(project Project, func IrFunction, ret
 	let conformer = typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath)
 
 	match claim 'claim'
-		agrees then break 'claim'
+		agrees then break
 		disagrees(associatedName, siteBinding, conformerBinding, route) then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot return '{conformer}' from '{funcName}', which is declared to return {existentialSiteClaimSentence(interfaceName, associatedName: associatedName, siteBinding: siteBinding, route: route)} — {existentialSiteClaimContradiction(conformer, associatedName: associatedName, conformerBinding: conformerBinding, route: route)}. A dispatch through the returned value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or return a conformer that binds '{String.from(associatedName)}' to '{String.from(siteBinding)}'", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 		unresolvable(associatedName, siteBinding, route) then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot return a value from '{funcName}', which is declared to return {existentialSiteClaimSentence(interfaceName, associatedName: associatedName, siteBinding: siteBinding, route: route)} — '{String.from(siteBinding)}' is a type parameter of the declaring type, and a `return` is checked once against the shared body, where no instantiation has fixed it. Write the binding the conformers declare, or take the value as a PARAMETER instead, where the call's own instance resolves it", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 	end 'claim'
@@ -7043,7 +7043,7 @@ function checkReturnedValueTypes(project Project, module MaxonModule, signatures
 		end 'notInTheProgram'
 
 		match func.maxonReturnType 'declaredReturn'
-			void then break 'declaredReturn'
+			void then break
 			value(inner) then checkReturnsAgainstInterface(project, module: module, signatures: signatures, func: func, funcIndex: iter.index(), declaredReturn: inner)
 		end 'declaredReturn'
 	end 'eachFunc'
@@ -7112,7 +7112,7 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
 				immortalStringTable or
 				covPoint or
 				rawIntrinsic or
-				existentialWitness then break 'op'
+				existentialWitness then break
 		end 'op'
 	end 'eachOp'
 
@@ -7465,7 +7465,7 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNam
 	let verdict = checkDeclaredType(argTag, declared: declaredTag)
 
 	match verdict 'declared'
-		ok then break 'declared'
+		ok then break
 		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 
 		// ⚠ **THE TWO ARMS BELOW SPELL THE PARAMETER BY ITS RESOLVED CLASS WORD AND NOT BY ITS DECLARATION,

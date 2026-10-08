@@ -404,7 +404,7 @@ function markNamedOpCallee(op MaxonOp, project Project, byName FuncIndexByName, 
 	match maxonOpCalleeKind(op) 'kind'
 		direct or
 			functionValue then markCalleeEdge(maxonOpCalleeName(op), project: project, edges: EdgeConfidence.named, byName: byName, reached: reached, worklist: worklist, names: names)
-		noCallee then break 'kind'
+		noCallee then break
 	end 'kind'
 end 'markNamedOpCallee'
 
@@ -434,7 +434,7 @@ end 'markNamedCallee'
 // about the receiver — credited at `possible` and never at `named`.
 function markWitnessEdges(func IrFunction, project Project, signatures ProgramSignatures, edges EdgeConfidence, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match edges 'edges'
-		named then break 'edges'
+		named then break
 		possible then markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: noSeededConformers, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'edges'
 end 'markWitnessEdges'
@@ -483,7 +483,7 @@ function orderedByDependency(nodeCount ElementIndex, deps GlobalInitDependencies
 
 	for root in 0 upto nodeCount 'eachRoot'
 		match visitOf(state, index: root) 'root'
-			settled then break 'root'
+			settled then break
 			onTheStack then panic("orderedByDependency: global {root} is on the stack between two roots — every frame this walk pushes it also pops")
 			unvisited then descendTo(root, state: state, frames: frames, cursors: cursors)
 		end 'root'
@@ -499,7 +499,7 @@ function orderedByDependency(nodeCount ElementIndex, deps GlobalInitDependencies
 				let dependency = try row.get(cursor) otherwise panic("orderedByDependency: row.get OOB at {cursor}, below the count this branch tested")
 
 				match visitOf(state, index: dependency) 'dependency'
-					settled then break 'dependency'
+					settled then break
 					onTheStack then panic("orderedByDependency: global {dependency} closes a cycle — `buildEffectiveDeps` adds no edge that does, so the graph handed here is acyclic by construction")
 					unvisited then descendTo(dependency, state: state, frames: frames, cursors: cursors)
 				end 'dependency'

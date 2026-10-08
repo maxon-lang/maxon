@@ -3414,8 +3414,9 @@ for i in 0 upto 3 'rows'
 end 'rows'
 ```
 
-A label that names the innermost loop is redundant and is **E2048**; use a label only to reach an outer
-loop, or to reach a loop from inside a `match` arm (where a bare `break` leaves the `match`).
+A label that names the construct a bare `break` or `continue` already leaves is redundant and is
+**E2048**: the innermost loop, or for `break` the `match` it sits in. Use a label only to reach an outer
+loop, including from inside a `match` arm (where a bare `break` leaves the `match`).
 
 ### Match Statement
 
@@ -5699,12 +5700,19 @@ match level 'filter'
 end 'filter'                  // E2026: match on enum 'Level' is not exhaustive, missing: trace, info
 ```
 
-**A redundant loop label**
+**A redundant loop or match label**
 
 ```maxon
 while i < 3 'loop'
 	break 'loop'              // E2048: 'break' with label 'loop' targets its own loop
 end 'loop'
+```
+
+```maxon
+match n 'pick'
+	0 then break 'pick'       // E2048: 'break' with label 'pick' targets its own match
+	default then fallback()
+end 'pick'
 ```
 
 ### Run-Time Behavior

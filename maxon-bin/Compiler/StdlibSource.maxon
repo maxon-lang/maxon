@@ -197,7 +197,7 @@ type ConstrainedOwnerLedger
 
 	function noteOwnerOf(funcName ByteArray)
 		match splitQualifiedName(funcName) 'owner'
-			notQualified then break 'owner'
+			notQualified then break
 			parts(typeName, _) then self.noteOwner(typeName)
 		end 'owner'
 	end 'noteOwnerOf'
@@ -1104,7 +1104,7 @@ function collectWitnessPositionInterfaces(func IrFunction, project Project, sign
 	end 'eachParam'
 
 	match func.maxonReturnType 'returnPosition'
-		void then break 'returnPosition'
+		void then break
 		value(inner) then noteWitnessPositionInterfaceIfExistential(inner, project: project, into: into, order: order)
 	end 'returnPosition'
 
@@ -1374,7 +1374,7 @@ module function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncInde
 	match maxonOpCalleeKind(op) 'kind'
 		direct or
 			functionValue then markReachable(maxonOpCalleeName(op), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		noCallee then break 'kind'
+		noCallee then break
 	end 'kind'
 end 'markMaxonCalleeEdge'
 
@@ -1476,7 +1476,7 @@ end 'markServiceLoopHandlers'
 module function markConformerWitnessImpls(func IrFunction, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match splitQualifiedName(func.name) 'owner'
 		// A FREE function belongs to no type, so reaching it produces no conformer and implies no table.
-		notQualified then break 'owner'
+		notQualified then break
 		parts(typeName, _) then markEveryDeclaredWitnessImplOf(typeName, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'owner'
 end 'markConformerWitnessImpls'
@@ -2020,13 +2020,13 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 			globalAddr or
 			loadIndirect or
 			storeIndirect or
-			stringLiteral then break 'op'
+			stringLiteral then break
 		tryCall(_, _, callee, _, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		throwError or
 			propagateError or
-			panicAbort then break 'op'
+			panicAbort then break
 		functionRef(_, funcName, _) then noteSubstrateCallee(funcName, callerNode: callerNode, nodeOf: nodeOf, state: state)
-		indirectCall then break 'op'
+		indirectCall then break
 		asyncCall(_, callee, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		await or
 			tryAwait or
@@ -2034,16 +2034,16 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 			constArrayLiteral or
 			switch or
 			witnessDispatch or
-			witnessTryDispatch then break 'op'
+			witnessTryDispatch then break
 
 		// A panic names no callee at all, so it reaches no stdlib substrate.
-		panicAbortValue then break 'op'
+		panicAbortValue then break
 
 		// The error-flag encode names no callee at all, so it reaches no stdlib substrate.
-		errorFlagEncode then break 'op'
+		errorFlagEncode then break
 
 		// A `spawn` names a TYPE; the factory it calls is an ordinary `call` op beside it and is noted there.
-		serviceSpawn then break 'op'
+		serviceSpawn then break
 
 		// ⭐ A SEND REACHES ITS MESSAGE, so it is an EDGE exactly as an `async` spawn is — the handler runs on
 		// another green thread, but it is the same function and it reaches whatever that function reaches.
@@ -2051,10 +2051,10 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 
 		// A REPLY CELL names the message only to derive its releaser symbol; the `serviceSend` beside it is
 		// the edge to that message, and noting it twice would credit one call graph edge to two ops.
-		serviceReplyCell then break 'op'
+		serviceReplyCell then break
 		immortalStructRecord or
 			immortalStringTable or
-			covPoint then break 'op'
+			covPoint then break
 
 		// ⭐⭐ **A `__Raw` OP IS A SEED WITH NO CALLEE TO NAME IT, AND IT IS THE ONLY KIND THERE IS.** Every
 		// other seed here is a CALL to a runtime entry, which the crossing can meet by name; a raw row has no
@@ -2063,7 +2063,7 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		rawIntrinsic(_, intrinsic, _, _) then noteSubstrateRawIntrinsic(intrinsic, callerNode: callerNode, state: state)
 
 		// A witness table's impls are reached through the conformer, never through an edge this op names.
-		existentialWitness then break 'op'
+		existentialWitness then break
 	end 'op'
 end 'noteSubstrateEdge'
 

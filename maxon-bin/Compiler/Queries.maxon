@@ -1970,7 +1970,7 @@ function queryAllModuleOn(project Project, pool FrontEndPool, directories Namesp
 	// warm hit too.
 	match directories 'directories'
 		refuseUnnameable then try refuseUnnameableNamespaceDirectories(project, pool: pool)
-		unchecked then break 'directories'
+		unchecked then break
 	end 'directories'
 
 	project.retiredWorkers.release()
@@ -3248,7 +3248,8 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 
 		// `targets` rather than a hardcoded "loop": a `break` may also leave a MATCH statement.
 		controlOutsideLoop(keyword, targets, line, column) gives Diagnostic.create(ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a {targets}", line: line, column: column, filePath: path)
-		labelTargetsOwnLoop(keyword, label, line, column) gives Diagnostic.create(ErrorCode.labelTargetsOwnLoop, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
+		labelTargetsOwnLoop(keyword, label, line, column) gives Diagnostic.create(ErrorCode.redundantControlLabel, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
+		labelTargetsOwnMatch(keyword, label, line, column) gives Diagnostic.create(ErrorCode.redundantControlLabel, message: "'{keyword}' with label '{label}' targets its own match; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
 		unknownLoopLabel(keyword, targets, label, line, column) gives Diagnostic.create(ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing {targets} with label '{label}'", line: line, column: column, filePath: path)
 		firstArgNamed(line, column) gives Diagnostic.create(ErrorCode.callFirstArgNamed, message: "the first argument cannot be named; only the second and later arguments take 'name:' labels", line: line, column: column, filePath: path)
 		argMissingLabel(line, column) gives Diagnostic.create(ErrorCode.callArgMissingLabel, message: "the second and later arguments must be named ('name: value')", line: line, column: column, filePath: path)

@@ -369,7 +369,7 @@ function firstOriginLineOfOp(project Project, funcIndex ElementIndex, op TargetO
 	for o in buf 'eachOperand'
 		if operandIsDef(o) and operandIsVirtual(o) 'def'
 			match project.valueOrigins.lookup(funcIndex, valueId: operandValueId(o)) 'origin'
-				none then break 'origin'
+				none then break
 				found(opIndex) then return project.opRanges.get(opIndex).line
 			end 'origin'
 		end 'def'
@@ -519,17 +519,17 @@ end 'ValueSource'
 function classifyValue(project Project, funcIndex ElementIndex, valueId ValueId, lineage SplitLineage) returns ValueSource
 	match project.valueOrigins.paramRange(funcIndex, valueId: valueId) 'param'
 		found(range) then return ValueSource.param(range)
-		none then break 'param'
+		none then break
 	end 'param'
 
 	match lineage.sourceOf(valueId) 'reload'
 		source(sourceId) then return ValueSource.derived(sourceId)
-		none then break 'reload'
+		none then break
 	end 'reload'
 
 	match project.valueOrigins.derivationOf(funcIndex, valueId: valueId) 'derived'
 		source(sourceId) then return ValueSource.derived(sourceId)
-		none then break 'derived'
+		none then break
 	end 'derived'
 
 	match project.valueOrigins.lookup(funcIndex, valueId: valueId) 'origin'

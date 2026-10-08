@@ -2465,7 +2465,7 @@ export type StdToX64Lowering
 	// silently miscaptured return, not a compile error).
 	function captureIndirectResult(resultId ValueId, resultType StdReturnType, dstBlock IrBlock)
 		match resultType 'r'
-			void then break 'r'
+			void then break
 			value(inner) then self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(indirectResultRegister(inner))))
 		end 'r'
 	end 'captureIndirectResult'
@@ -2922,7 +2922,7 @@ export type StdToX64Lowering
 	function lowerOsHandleSetInherit(handleId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsHandleSetInheritWin64(handleId, dstBlock: dstBlock)
-			syscall then break 'route'
+			syscall then break
 		end 'route'
 	end 'lowerOsHandleSetInherit'
 
@@ -3370,7 +3370,7 @@ export type StdToX64Lowering
 	function emitCaptureImportAnswer(dstBlock IrBlock, slot IatSlot, into TargetVReg)
 		match into 'target'
 			physical(reg) then panic("emitCaptureImportAnswer: `{slot.name}`'s answer is captured into physical register {reg}; a capture defines a VIRTUAL value, and a physical target would let the widening clobber a register the allocator has promised to something else")
-			virtual then break 'target'
+			virtual then break
 		end 'target'
 
 		match importAnswerOf(slot) 'width'
@@ -4658,7 +4658,7 @@ export type StdToX64Lowering
 	// leaves a caller nothing to do.
 	function lowerOsUnpublishNamedSegment(namePtrId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
-			importCall then break 'route'
+			importCall then break
 			syscall then self.emitHostCall(dstBlock, callee: HostCallee.chunk(LinuxShmUnlinkName), args: argsOf(namePtrId))
 		end 'route'
 	end 'lowerOsUnpublishNamedSegment'

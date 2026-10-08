@@ -588,7 +588,7 @@ function noteAddressTakenByOp(op StdOp, taken FnRefThunkSet)
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe then break
 		funcAddr(_, funcName) then taken.insert(funcName)
 	end 'op'
 end 'noteAddressTakenByOp'
@@ -943,7 +943,7 @@ function noteReturnedOperand(op StdOp, into ValueIdArray)
 
 	match op 'op'
 		ret(retValId) then into.push(retValId)
-		retVoid then break 'op'
+		retVoid then break
 		default panic("noteReturnedOperand: `role: ret` but neither `ret` nor `retVoid` — StdOpMeta's role and this match have come apart")
 	end 'op'
 end 'noteReturnedOperand'
@@ -1070,7 +1070,7 @@ function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention Bo
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe then break
 		call(resultId, callee, args) then trackCallResult(resultId, callee: callee, args: args, byName: byName, onTheConvention: onTheConvention, flow: flow, consts: consts)
 	end 'op'
 end 'trackValueOrigin'
@@ -1234,7 +1234,7 @@ function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUse
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe then break
 		ret(retValId) then noteReturnedValue(flow, retValId: retValId)
 		call(_, callee, args) then noteTrivialDrop(flow, callee: callee, args: args)
 		loadIndirect(_, addrId, offset, valueType) then noteHalfLoad(flow, addrId: addrId, offset: offset, valueType: valueType)
@@ -1673,7 +1673,7 @@ function noteCallSite(op StdOp, funcIndex ElementIndex, byName FunctionNameIndex
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe then break
 		call(resultId, callee, _) then noteCandidateCallSite(resultId, callee: callee, funcIndex: funcIndex, byName: byName, flow: flow, onTheConvention: onTheConvention, sites: sites)
 	end 'op'
 end 'noteCallSite'
@@ -1752,7 +1752,7 @@ function collectDependencyEdges(dependedOn CsrColumn, dependent CsrColumn, retVe
 		match verdict.kind 'kind'
 			freshPair or
 				unreachableZero or
-				unusable then break 'kind'
+				unusable then break
 			forwarded(calleeIndex) then noteDependency(dependedOn, dependent: dependent, dependedOnIndex: calleeIndex, dependentIndex: verdict.funcIndex)
 		end 'kind'
 	end 'eachReturn'
@@ -1760,7 +1760,7 @@ function collectDependencyEdges(dependedOn CsrColumn, dependent CsrColumn, retVe
 	for site in callSites 'eachSite'
 		match site.shape 'shape'
 			readThenDropped or
-				unusable then break 'shape'
+				unusable then break
 			forwardedByCaller then noteDependency(dependedOn, dependent: dependent, dependedOnIndex: site.callerIndex, dependentIndex: site.calleeIndex)
 		end 'shape'
 	end 'eachSite'
@@ -1777,7 +1777,7 @@ function seedRefusals(seeds BoolArray, retVerdicts ValueTupleRetVerdictArray, ca
 		match verdict.kind 'kind'
 			freshPair or
 				forwarded or
-				unreachableZero then break 'kind'
+				unreachableZero then break
 			unusable then markSeed(seeds, funcIndex: verdict.funcIndex)
 		end 'kind'
 	end 'eachReturn'
@@ -1785,7 +1785,7 @@ function seedRefusals(seeds BoolArray, retVerdicts ValueTupleRetVerdictArray, ca
 	for site in callSites 'eachSite'
 		match site.shape 'shape'
 			readThenDropped or
-				forwardedByCaller then break 'shape'
+				forwardedByCaller then break
 			unusable then markSeed(seeds, funcIndex: site.calleeIndex)
 		end 'shape'
 	end 'eachSite'
@@ -2105,7 +2105,7 @@ function noteOrphanedConstant(op StdOp, stillRead StdValueUseSet, orphaned StdVa
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe then break
 	end 'op'
 end 'noteOrphanedConstant'
 
@@ -2240,7 +2240,7 @@ function planOneOp(op StdOp, funcIndex ElementIndex, flow FunctionTupleFlow, onT
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe then break
 		ret(retValId) then planOneReturn(retValId, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
 		call(resultId, _, _) then planOneCallResult(resultId, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
 	end 'op'
@@ -2270,7 +2270,7 @@ function planReturnedValue(retValId ValueId, funcIndex ElementIndex, flow Functi
 
 		// The call site's own plan entry has already captured the pair into two registers; this return
 		// merely reads them, and `rewriteOneOp` finds it through the `registerPair` mark.
-		forwarded then break 'kind'
+		forwarded then break
 		unusable then panic("planReturnedValue: function {funcIndex} is on the value-tuple convention but one of its returns is neither a fresh pair nor a forwarded one — `settleTheConvention` removes exactly such a candidate before this runs")
 	end 'kind'
 end 'planReturnedValue'
@@ -2298,7 +2298,7 @@ function planOneCallResult(resultId ValueId, flow FunctionTupleFlow, onTheConven
 		freshBox then markTheBoxIfFrameLocal(resultId, flow: flow, plan: plan)
 		directCall(calleeIndex) then markThePairIfTheCalleeKeptTheConvention(resultId, calleeIndex: calleeIndex, onTheConvention: onTheConvention, plan: plan, mint: mint)
 		constant or
-			elsewhere then break 'origin'
+			elsewhere then break
 	end 'origin'
 end 'planOneCallResult'
 
@@ -2441,7 +2441,7 @@ function rewriteOneOp(module StdModule, opIdx ElementIndex, plan ValueTuplePlan,
 			osNetpoll or
 			osPathQuery or
 			osSocketOverlapped or
-			osSocketServe then break 'op'
+			osSocketServe then break
 		ret(retValId) then rewriteOneReturn(module, opIdx: opIdx, retValId: retValId, plan: plan)
 		call(resultId, callee, args) then rewriteOneCall(module, opIdx: opIdx, resultId: resultId, callee: callee, args: args, plan: plan, doomed: doomed)
 		loadIndirect(resultId, addrId, offset, _) then rewriteOneHalfLoad(opIdx, resultId: resultId, addrId: addrId, offset: offset, plan: plan, subst: subst, doomed: doomed)
