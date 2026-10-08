@@ -10,7 +10,8 @@ category: type-system
 
 Built-in numeric types (`int`, `float`, `byte`) implement the `Hashable` and `Equatable`
 interfaces, allowing them to be used in hash-based collections like `Set` and `Map`.
-Note: `bool` does not implement `Hashable` or `Equatable` because bool arrays use bit-packing.
+`bool` implements `Equatable` and `Comparable`; the primitives that implement `Hashable` are the numeric
+ones above.
 
 ## hash()
 
@@ -328,4 +329,23 @@ end 'main'
 ```
 ```maxoncstderr
 error E2062: <fragment>:8:31: Cannot use 'float' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under the compiler's dictionary-passing, and a float value travels in a floating-point register, so it has no way through
+```
+
+<!-- test: bool.equatable-and-comparable -->
+`bool` meets the library's `Equatable` and `Comparable`, so `contains` and `sort` serve an array of them.
+```maxon
+function main() returns ExitCode
+	var flags = [true, false, true]
+	let found = flags.contains(false)
+	flags.sort()
+	let first = try flags.get(0) otherwise return 3
+	print("{found} {first}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false
 ```
