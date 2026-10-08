@@ -1995,6 +1995,1270 @@ end 'main'
 error E3064: specs/discarded-results/error.a-with-iterator-search-stays-pure-beside-an-iterator-that-moves-records-between-its-fields.maxon:46:2: result of pure function 'positionOf' must be used
 ```
 
+<!-- test: error.a-search-through-a-with-iterator-loop-over-a-list-is-pure -->
+A pure search through `withIterator()` over a `List`, discarded, is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstAbove(values IntList, floor Integer) returns Integer throws SearchError
+	for (iter, value) in values.withIterator() 'each'
+		if value > floor 'hit'
+			return iter.current()
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstAbove'
+
+function hasAbove(values IntList, floor Integer) returns bool
+	_ = try firstAbove(values, floor: floor) otherwise return false
+	return true
+end 'hasAbove'
+
+function main() returns ExitCode
+	var values = IntList.create()
+	values.append(4)
+	values.append(5)
+
+	return 0 if hasAbove(values, floor: 3) else 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-through-a-with-iterator-loop-over-a-list-is-pure.maxon:20:2: result of pure function 'firstAbove' must be used
+```
+
+<!-- test: error.a-search-through-a-for-loop-over-a-list-is-pure -->
+The same search through a plain `for ... in` loop.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstAbove(values IntList, floor Integer) returns Integer throws SearchError
+	for value in values 'each'
+		if value > floor 'hit'
+			return value
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstAbove'
+
+function hasAbove(values IntList, floor Integer) returns bool
+	_ = try firstAbove(values, floor: floor) otherwise return false
+	return true
+end 'hasAbove'
+
+function main() returns ExitCode
+	var values = IntList.create()
+	values.append(4)
+	values.append(5)
+
+	return 0 if hasAbove(values, floor: 3) else 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-through-a-for-loop-over-a-list-is-pure.maxon:20:2: result of pure function 'firstAbove' must be used
+```
+
+<!-- test: a-with-iterator-loop-over-a-list-whose-body-prints-keeps-its-result-droppable -->
+A loop body that prints is an effect of the function, whatever the iterator does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function show(values IntList) returns Integer
+	var shown = 0 as Integer
+
+	for (iter, value) in values.withIterator() 'each'
+		print("{iter.current()}={value}\n")
+		shown = shown + 1
+	end 'each'
+
+	return shown
+end 'show'
+
+function main() returns ExitCode
+	var values = IntList.create()
+	values.append(4)
+
+	_ = show(values)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4=4
+```
+
+<!-- test: a-with-iterator-loop-over-a-list-whose-body-writes-an-argument-keeps-its-result-droppable -->
+A loop body that pushes into an array it was handed is an effect, whatever the container.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+typealias IntArray = Array with Integer
+
+function copyInto(values IntList, target IntArray) returns Integer
+	var copied = 0 as Integer
+
+	for (iter, value) in values.withIterator() 'each'
+		target.push(value + iter.current())
+		copied = copied + 1
+	end 'each'
+
+	return copied
+end 'copyInto'
+
+function main() returns ExitCode
+	var values = IntList.create()
+	values.append(4)
+	values.append(5)
+	var target = IntArray.create()
+
+	_ = copyInto(values, target: target)
+
+	if target.count() != 2 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-search-through-a-with-iterator-loop-over-a-vector-is-pure -->
+A pure search through `withIterator()` over a `Vector`, discarded, is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntVector = Vector with 3 Integer
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstAbove(values IntVector, floor Integer) returns Integer throws SearchError
+	for (iter, value) in values.withIterator() 'each'
+		if value > floor 'hit'
+			return iter.current()
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstAbove'
+
+function hasAbove(values IntVector, floor Integer) returns bool
+	_ = try firstAbove(values, floor: floor) otherwise return false
+	return true
+end 'hasAbove'
+
+function main() returns ExitCode
+	var values = IntVector.create()
+	try values.set(0, value: 4) otherwise ignore
+	try values.set(1, value: 5) otherwise ignore
+	try values.set(2, value: 6) otherwise ignore
+
+	return 0 if hasAbove(values, floor: 3) else 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-through-a-with-iterator-loop-over-a-vector-is-pure.maxon:20:2: result of pure function 'firstAbove' must be used
+```
+
+<!-- test: error.a-search-through-a-for-loop-over-a-vector-is-pure -->
+The same search through a plain `for ... in` loop.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntVector = Vector with 3 Integer
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstAbove(values IntVector, floor Integer) returns Integer throws SearchError
+	for value in values 'each'
+		if value > floor 'hit'
+			return value
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstAbove'
+
+function hasAbove(values IntVector, floor Integer) returns bool
+	_ = try firstAbove(values, floor: floor) otherwise return false
+	return true
+end 'hasAbove'
+
+function main() returns ExitCode
+	var values = IntVector.create()
+	try values.set(0, value: 4) otherwise ignore
+	try values.set(1, value: 5) otherwise ignore
+	try values.set(2, value: 6) otherwise ignore
+
+	return 0 if hasAbove(values, floor: 3) else 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-through-a-for-loop-over-a-vector-is-pure.maxon:20:2: result of pure function 'firstAbove' must be used
+```
+
+<!-- test: a-with-iterator-loop-over-a-vector-whose-body-prints-keeps-its-result-droppable -->
+A loop body that prints is an effect of the function, whatever the iterator does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntVector = Vector with 3 Integer
+
+function show(values IntVector) returns Integer
+	var shown = 0 as Integer
+
+	for (iter, value) in values.withIterator() 'each'
+		print("{iter.current()}={value}\n")
+		shown = shown + 1
+	end 'each'
+
+	return shown
+end 'show'
+
+function main() returns ExitCode
+	var values = IntVector.create()
+	try values.set(0, value: 4) otherwise ignore
+	try values.set(1, value: 5) otherwise ignore
+	try values.set(2, value: 6) otherwise ignore
+
+	_ = show(values)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4=4
+5=5
+6=6
+```
+
+<!-- test: a-with-iterator-loop-over-a-vector-whose-body-writes-an-argument-keeps-its-result-droppable -->
+A loop body that pushes into an array it was handed is an effect, whatever the container.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntVector = Vector with 3 Integer
+typealias IntArray = Array with Integer
+
+function copyInto(values IntVector, target IntArray) returns Integer
+	var copied = 0 as Integer
+
+	for (iter, value) in values.withIterator() 'each'
+		target.push(value + iter.current())
+		copied = copied + 1
+	end 'each'
+
+	return copied
+end 'copyInto'
+
+function main() returns ExitCode
+	var values = IntVector.create()
+	try values.set(0, value: 4) otherwise ignore
+	try values.set(1, value: 5) otherwise ignore
+	try values.set(2, value: 6) otherwise ignore
+	var target = IntArray.create()
+
+	_ = copyInto(values, target: target)
+
+	if target.count() != 3 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-search-through-a-with-iterator-loop-over-a-set-is-pure -->
+A pure search through `withIterator()` over a `Set`, discarded, is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstAbove(values IntSet, floor Integer) returns Integer throws SearchError
+	for (iter, value) in values.withIterator() 'each'
+		if value > floor 'hit'
+			return iter.current()
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstAbove'
+
+function hasAbove(values IntSet, floor Integer) returns bool
+	_ = try firstAbove(values, floor: floor) otherwise return false
+	return true
+end 'hasAbove'
+
+function main() returns ExitCode
+	var values = IntSet.create()
+	values.insert(4)
+	values.insert(5)
+
+	return 0 if hasAbove(values, floor: 3) else 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-through-a-with-iterator-loop-over-a-set-is-pure.maxon:20:2: result of pure function 'firstAbove' must be used
+```
+
+<!-- test: error.a-search-through-a-for-loop-over-a-set-is-pure -->
+The same search through a plain `for ... in` loop.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstAbove(values IntSet, floor Integer) returns Integer throws SearchError
+	for value in values 'each'
+		if value > floor 'hit'
+			return value
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstAbove'
+
+function hasAbove(values IntSet, floor Integer) returns bool
+	_ = try firstAbove(values, floor: floor) otherwise return false
+	return true
+end 'hasAbove'
+
+function main() returns ExitCode
+	var values = IntSet.create()
+	values.insert(4)
+	values.insert(5)
+
+	return 0 if hasAbove(values, floor: 3) else 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-through-a-for-loop-over-a-set-is-pure.maxon:20:2: result of pure function 'firstAbove' must be used
+```
+
+<!-- test: a-with-iterator-loop-over-a-set-whose-body-prints-keeps-its-result-droppable -->
+A loop body that prints is an effect of the function, whatever the iterator does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+
+function show(values IntSet) returns Integer
+	var shown = 0 as Integer
+
+	for (iter, value) in values.withIterator() 'each'
+		print("{iter.current()}={value}\n")
+		shown = shown + 1
+	end 'each'
+
+	return shown
+end 'show'
+
+function main() returns ExitCode
+	var values = IntSet.create()
+	values.insert(4)
+
+	_ = show(values)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4=4
+```
+
+<!-- test: a-with-iterator-loop-over-a-set-whose-body-writes-an-argument-keeps-its-result-droppable -->
+A loop body that pushes into an array it was handed is an effect, whatever the container.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+typealias IntArray = Array with Integer
+
+function copyInto(values IntSet, target IntArray) returns Integer
+	var copied = 0 as Integer
+
+	for (iter, value) in values.withIterator() 'each'
+		target.push(value + iter.current())
+		copied = copied + 1
+	end 'each'
+
+	return copied
+end 'copyInto'
+
+function main() returns ExitCode
+	var values = IntSet.create()
+	values.insert(4)
+	values.insert(5)
+	var target = IntArray.create()
+
+	_ = copyInto(values, target: target)
+
+	if target.count() != 2 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-search-through-a-with-iterator-loop-over-a-map-is-pure -->
+A pure search through the entries `withIterator()` yields over a `Map`, discarded, is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntMap = Map with (Integer, Integer)
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function keyOf(table IntMap, wanted Integer) returns Integer throws SearchError
+	for (iter, entry) in table.withIterator() 'each'
+		let (key, value) = entry
+
+		if value == wanted 'hit'
+			return key + iter.current().0
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'keyOf'
+
+function holds(table IntMap, wanted Integer) returns bool
+	_ = try keyOf(table, wanted: wanted) otherwise return false
+	return true
+end 'holds'
+
+function main() returns ExitCode
+	var table = IntMap.create()
+	table.upsert(1, value: 4)
+	table.upsert(2, value: 5)
+
+	return 0 if holds(table, wanted: 4) else 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-through-a-with-iterator-loop-over-a-map-is-pure.maxon:22:2: result of pure function 'keyOf' must be used
+```
+
+<!-- test: error.a-search-through-a-for-loop-over-a-map-is-pure -->
+The same search through a plain `for (key, value) in` loop.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntMap = Map with (Integer, Integer)
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function keyOf(table IntMap, wanted Integer) returns Integer throws SearchError
+	for (key, value) in table 'each'
+		if value == wanted 'hit'
+			return key
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'keyOf'
+
+function holds(table IntMap, wanted Integer) returns bool
+	_ = try keyOf(table, wanted: wanted) otherwise return false
+	return true
+end 'holds'
+
+function main() returns ExitCode
+	var table = IntMap.create()
+	table.upsert(1, value: 4)
+	table.upsert(2, value: 5)
+
+	return 0 if holds(table, wanted: 4) else 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-through-a-for-loop-over-a-map-is-pure.maxon:20:2: result of pure function 'keyOf' must be used
+```
+
+<!-- test: a-with-iterator-loop-over-a-map-whose-body-prints-keeps-its-result-droppable -->
+A loop body that prints is an effect of the function, whatever the iterator does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntMap = Map with (Integer, Integer)
+
+function show(table IntMap) returns Integer
+	var shown = 0 as Integer
+
+	for (iter, entry) in table.withIterator() 'each'
+		let (key, value) = entry
+		print("{key}={value}/{iter.current().0}\n")
+		shown = shown + 1
+	end 'each'
+
+	return shown
+end 'show'
+
+function main() returns ExitCode
+	var table = IntMap.create()
+	table.upsert(1, value: 4)
+
+	_ = show(table)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1=4/1
+```
+
+<!-- test: a-with-iterator-loop-over-a-map-whose-body-writes-an-argument-keeps-its-result-droppable -->
+A loop body that inserts into a map it was handed is an effect, whatever the container.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntMap = Map with (Integer, Integer)
+
+function copyInto(table IntMap, target IntMap) returns Integer
+	var copied = 0 as Integer
+
+	for (iter, entry) in table.withIterator() 'each'
+		let (key, value) = entry
+		target.upsert(key, value: value + iter.current().0)
+		copied = copied + 1
+	end 'each'
+
+	return copied
+end 'copyInto'
+
+function main() returns ExitCode
+	var table = IntMap.create()
+	table.upsert(1, value: 4)
+	table.upsert(2, value: 5)
+
+	var target = IntMap.create()
+	_ = copyInto(table, target: target)
+
+	if target.count() != 2 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-record-holding-a-cursor-over-an-argument-takes-a-write-to-the-cursor-for-free -->
+A write to a cursor the function made is its own, even when the cursor reads an argument.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Cursor
+	var data as IntArray
+	var position as Integer
+
+	static function over(data IntArray) returns Cursor
+		return Cursor{data: data, position: 0}
+	end 'over'
+
+	function step()
+		self.position = self.position + 1
+	end 'step'
+end 'Cursor'
+
+type Walker
+	var cursor as Cursor
+
+	static function over(data IntArray) returns Walker
+		return Walker{cursor: Cursor.over(data)}
+	end 'over'
+
+	function step()
+		self.cursor.step()
+	end 'step'
+end 'Walker'
+
+function walked(data IntArray) returns Integer
+	let walker = Walker.over(data)
+	walker.step()
+	return 1
+end 'walked'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	values.push(4)
+	_ = walked(values)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-record-holding-a-cursor-over-an-argument-takes-a-write-to-the-cursor-for-free.maxon:39:2: result of pure function 'walked' must be used
+```
+
+<!-- test: a-record-holding-a-cursor-over-an-argument-keeps-a-write-through-the-cursor-visible -->
+A write through the cursor to the argument it reads is an effect.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Cursor
+	var data as IntArray
+
+	static function over(data IntArray) returns Cursor
+		return Cursor{data: data}
+	end 'over'
+
+	function wipe()
+		self.data.clear()
+	end 'wipe'
+end 'Cursor'
+
+type Walker
+	var cursor as Cursor
+
+	static function over(data IntArray) returns Walker
+		return Walker{cursor: Cursor.over(data)}
+	end 'over'
+
+	function wipe()
+		self.cursor.wipe()
+	end 'wipe'
+end 'Walker'
+
+function wiped(data IntArray) returns Integer
+	let walker = Walker.over(data)
+	walker.wipe()
+	return 1
+end 'wiped'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	values.push(4)
+	_ = wiped(values)
+
+	if values.count() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-record-another-call-handed-a-foreign-record-keeps-a-write-through-it-visible -->
+A record stored below a record the function made is foreign afterwards, wherever it was reached from.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var number as Integer
+
+	static function create(number Integer) returns Box
+		return Box{number: number}
+	end 'create'
+end 'Box'
+
+type Child
+	export var box as Box
+
+	static function create() returns Child
+		return Child{box: Box.create(0)}
+	end 'create'
+
+	function bump()
+		self.box.number = self.box.number + 1
+	end 'bump'
+end 'Child'
+
+type Parent
+	var child as Child
+
+	static function over(child Child) returns Parent
+		return Parent{child: child}
+	end 'over'
+
+	function adopt(box Box)
+		self.child.box = box
+	end 'adopt'
+end 'Parent'
+
+function bumped(target Box) returns Integer
+	let child = Child.create()
+	let parent = Parent.over(child)
+	parent.adopt(target)
+	child.bump()
+	return 1
+end 'bumped'
+
+function main() returns ExitCode
+	let target = Box.create(5)
+	_ = bumped(target)
+
+	if target.number != 6 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-record-no-call-handed-a-foreign-record-takes-a-write-through-it-for-free -->
+The same program with the argument only read: what is stored below the record is made by the function.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var number as Integer
+
+	static function create(number Integer) returns Box
+		return Box{number: number}
+	end 'create'
+end 'Box'
+
+type Child
+	export var box as Box
+
+	static function create(number Integer) returns Child
+		return Child{box: Box.create(number)}
+	end 'create'
+
+	function bump()
+		self.box.number = self.box.number + 1
+	end 'bump'
+end 'Child'
+
+function bumped(target Box) returns Integer
+	let child = Child.create(target.number)
+	child.bump()
+	return 1
+end 'bumped'
+
+function main() returns ExitCode
+	let target = Box.create(5)
+	_ = bumped(target)
+
+	if target.number != 5 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-record-no-call-handed-a-foreign-record-takes-a-write-through-it-for-free.maxon:32:2: result of pure function 'bumped' must be used
+```
+
+<!-- test: a-write-two-levels-below-a-record-made-here-keeps-its-result-droppable -->
+A record the function made holds an argument two levels down; a write that reaches it is an effect.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Child
+	export var data as IntArray
+
+	static function over(data IntArray) returns Child
+		return Child{data: data}
+	end 'over'
+end 'Child'
+
+type Parent
+	var child as Child
+
+	static function over(data IntArray) returns Parent
+		return Parent{child: Child.over(data)}
+	end 'over'
+
+	function grow()
+		self.child.data.push(1)
+	end 'grow'
+end 'Parent'
+
+function grown(target IntArray) returns Integer
+	let parent = Parent.over(target)
+	parent.grow()
+	return 1
+end 'grown'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	_ = grown(values)
+	return 0 if values.count() == 1 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-call-two-levels-below-a-record-made-here-keeps-its-result-droppable -->
+The same, reached through a call on the argument held two levels down.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Child
+	export var data as IntArray
+
+	static function over(data IntArray) returns Child
+		return Child{data: data}
+	end 'over'
+end 'Child'
+
+type Parent
+	var child as Child
+
+	static function over(data IntArray) returns Parent
+		return Parent{child: Child.over(data)}
+	end 'over'
+
+	function shorten()
+		self.child.data.truncate(1)
+	end 'shorten'
+end 'Parent'
+
+function shortened(target IntArray) returns Integer
+	let parent = Parent.over(target)
+	parent.shorten()
+	return 1
+end 'shortened'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	values.push(2)
+	values.push(1)
+	_ = shortened(values)
+	return 0 if values.count() == 1 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-closure-calling-a-method-that-writes-two-levels-down-keeps-its-result-droppable -->
+The same, reached from a closure that captured the record.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Action = function() returns Integer
+
+type Child
+	export var data as IntArray
+
+	static function over(data IntArray) returns Child
+		return Child{data: data}
+	end 'over'
+end 'Child'
+
+type Parent
+	var child as Child
+
+	static function over(data IntArray) returns Parent
+		return Parent{child: Child.over(data)}
+	end 'over'
+
+	function growCount() returns Integer
+		self.child.data.push(1)
+		return 1
+	end 'growCount'
+end 'Parent'
+
+function run(action Action) returns Integer
+	return action()
+end 'run'
+
+function grown(target IntArray) returns Integer
+	let parent = Parent.over(target)
+	return run(function() gives parent.growCount())
+end 'grown'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	_ = grown(values)
+	return 0 if values.count() == 1 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-write-through-records-holding-records-keeps-its-result-droppable -->
+The same shape over records instead of arrays.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var number as Integer
+
+	static function create(number Integer) returns Box
+		return Box{number: number}
+	end 'create'
+end 'Box'
+
+type Child
+	export var box as Box
+
+	static function over(box Box) returns Child
+		return Child{box: box}
+	end 'over'
+end 'Child'
+
+type Parent
+	var child as Child
+
+	static function over(child Child) returns Parent
+		return Parent{child: child}
+	end 'over'
+
+	function bump()
+		self.child.box.number = self.child.box.number + 1
+	end 'bump'
+end 'Parent'
+
+function bumped(target Box) returns Integer
+	let parent = Parent.over(Child.over(target))
+	parent.bump()
+	return 1
+end 'bumped'
+
+function main() returns ExitCode
+	let target = Box.create(5)
+	_ = bumped(target)
+	return 0 if target.number == 6 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-argument-adopted-through-a-chain-of-calls-keeps-its-result-droppable -->
+A record that adopts an argument several calls down is no longer made of what the function made, whatever else the chain does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Holder
+	var items as IntArray
+
+	static function make() returns Holder
+		return Holder{items: IntArray.create()}
+	end 'make'
+
+	function adopt(fresh IntArray)
+		self.items = fresh
+	end 'adopt'
+
+	function grow()
+		self.items.push(1)
+	end 'grow'
+end 'Holder'
+
+type Wrapper
+	var items as IntArray
+
+	static function make() returns Wrapper
+		return Wrapper{items: IntArray.create()}
+	end 'make'
+
+	function touchChild()
+		self.items.push(1)
+	end 'touchChild'
+end 'Wrapper'
+
+function relay(target Holder, items IntArray)
+	target.adopt(items)
+end 'relay'
+
+function hand(target Holder, items IntArray)
+	let scratch = Wrapper.make()
+	scratch.touchChild()
+	relay(target, items: items)
+end 'hand'
+
+function grown(items IntArray) returns Integer
+	let holder = Holder.make()
+	hand(holder, items: items)
+	holder.grow()
+	return 1
+end 'grown'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	_ = grown(values)
+	return 0 if values.count() == 1 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-record-adopting-an-argument-through-a-chain-keeps-a-later-write-visible -->
+The same shape over records instead of arrays.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var number as Integer
+
+	static function create(number Integer) returns Box
+		return Box{number: number}
+	end 'create'
+end 'Box'
+
+type Holder
+	var box as Box
+
+	static function make() returns Holder
+		return Holder{box: Box.create(0)}
+	end 'make'
+
+	function adopt(fresh Box)
+		self.box = fresh
+	end 'adopt'
+
+	function bumpBox()
+		self.box.number = self.box.number + 1
+	end 'bumpBox'
+end 'Holder'
+
+type Wrapper
+	var box as Box
+
+	static function make() returns Wrapper
+		return Wrapper{box: Box.create(0)}
+	end 'make'
+
+	function touchChild()
+		self.box.number = 1
+	end 'touchChild'
+end 'Wrapper'
+
+function relay(target Holder, box Box)
+	target.adopt(box)
+end 'relay'
+
+function hand(target Holder, box Box)
+	let scratch = Wrapper.make()
+	scratch.touchChild()
+	relay(target, box: box)
+end 'hand'
+
+function bumped(box Box) returns Integer
+	let holder = Holder.make()
+	hand(holder, box: box)
+	holder.bumpBox()
+	return 1
+end 'bumped'
+
+function main() returns ExitCode
+	var box = Box.create(5)
+	_ = bumped(box)
+	return 0 if box.number == 6 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-adoption-through-a-function-parameter-keeps-a-later-write-visible -->
+A record handed an argument by a function the caller passed in holds that argument afterwards, so a later write reaches it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Adopt = function(Holder, IntArray)
+
+type Holder
+	var items as IntArray
+
+	static function create() returns Holder
+		return Holder{items: IntArray.create()}
+	end 'create'
+
+	function adopt(fresh IntArray)
+		self.items = fresh
+	end 'adopt'
+
+	function grow()
+		self.items.push(1)
+	end 'grow'
+end 'Holder'
+
+function adoptInto(holder Holder, items IntArray)
+	holder.adopt(items)
+end 'adoptInto'
+
+function apply(holder Holder, items IntArray, action Adopt)
+	action(holder, items)
+end 'apply'
+
+function made(items IntArray, action Adopt) returns Holder
+	var holder = Holder.create()
+	apply(holder, items: items, action: action)
+	return holder
+end 'made'
+
+function grown(target IntArray) returns Integer
+	let holder = made(target, action: adoptInto)
+	holder.grow()
+	return 1
+end 'grown'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	_ = grown(values)
+	return 0 if values.count() == 1 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-adoption-through-a-function-parameter-keeps-a-later-write-visible-over-records -->
+The same shape over records instead of arrays.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Adopt = function(Holder, Box)
+
+type Box
+	export var number as Integer
+
+	static function create(number Integer) returns Box
+		return Box{number: number}
+	end 'create'
+end 'Box'
+
+type Holder
+	export var box as Box
+
+	static function create() returns Holder
+		return Holder{box: Box.create(0)}
+	end 'create'
+
+	function bump()
+		self.box.number = self.box.number + 1
+	end 'bump'
+end 'Holder'
+
+function adoptInto(holder Holder, box Box)
+	holder.box = box
+end 'adoptInto'
+
+function apply(holder Holder, box Box, action Adopt)
+	action(holder, box)
+end 'apply'
+
+function made(box Box, action Adopt) returns Holder
+	var holder = Holder.create()
+	apply(holder, box: box, action: action)
+	return holder
+end 'made'
+
+function bumped(target Box) returns Integer
+	let holder = made(target, action: adoptInto)
+	holder.bump()
+	return 1
+end 'bumped'
+
+function main() returns ExitCode
+	let target = Box.create(5)
+	_ = bumped(target)
+	return 0 if target.number == 6 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-adoption-in-a-generic-method-that-stops-at-a-drop-keeps-a-later-write-visible -->
+A generic method whose body, read without its type arguments, stops at the drop of a local it may not own still stores its argument.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Shelf uses T
+	typealias TArray = Array with T
+	var items as IntArray
+	var flagged as bool
+
+	static function create() returns Self
+		return Self{items: IntArray.create(), flagged: false}
+	end 'create'
+
+	function adopt(fresh IntArray, scratchy bool)
+		if scratchy 'scratch'
+			var scratch = TArray.create()
+
+			if scratch.isEmpty() 'empty'
+				self.flagged = true
+			end 'empty'
+		end 'scratch'
+
+		self.items = fresh
+	end 'adopt'
+
+	static function filled(fresh IntArray) returns Self
+		var made = Self.create()
+		made.adopt(fresh, scratchy: false)
+		return made
+	end 'filled'
+
+	function grow()
+		self.items.push(1)
+	end 'grow'
+end 'Shelf'
+
+typealias IntShelf = Shelf with Integer
+
+function grown(target IntArray) returns Integer
+	let shelf = IntShelf.filled(target)
+	shelf.grow()
+	return 1
+end 'grown'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	_ = grown(values)
+	return 0 if values.count() == 1 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: error.a-record-holding-only-what-the-function-made-takes-a-deep-write-for-free -->
 A record that holds nothing the function was handed may be written through its fields; one that holds an argument may not.
 ```maxon

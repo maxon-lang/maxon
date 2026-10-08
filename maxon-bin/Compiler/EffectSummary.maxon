@@ -10,24 +10,70 @@ typealias ResourceByInstance = Map with (GenericInstanceId, bool)
 typealias ResourceByName = Map with (ByteArray, bool)
 
 // What a value is, as far as writes through it go: a record this body minted (`OriginLocal`), or a
-// parameter's record or one reached by loading out of it (the two encodings from `FirstParameterOrigin`),
+// parameter's record, a record loaded out of it, or one loaded out of that (three levels encoded from
+// `FirstParameterOrigin`, the deepest standing for every level past the second),
 // or nothing known (`OriginUnknown`). A record counts as minted here only when its owner claims it is the
 // sole one (`valueMintedSole`) or a callee returns a fresh one. Whatever else could reach it must have been
 // handed it by a write to a parameter, a global or a record this body does not own, and that write already
 // makes this body an effect. A load out of a minted record is unknown: it may hold a foreign record.
-// `OriginLocalDeep` is a minted record whose whole reachable graph was also minted here, so a deep
-// write through it stays inside the body; a minted record that may hold a parameter's graph or any
-// other foreign record stays `OriginLocal`, and a deep write through it is an effect.
+// `OriginLocalDeep` is a minted record whose whole reachable graph was also minted here, so a write
+// anywhere below it stays inside the body. `OriginLocalShell` is one whose directly held records
+// were all minted here but whose graph below them may be foreign: a write to a directly held record
+// stays inside the body, a write further down does not. A minted record that directly holds a
+// parameter's graph or any other foreign record stays `OriginLocal`.
 let OriginUnvisited = 0 as ValueOriginCode
 let OriginUnknown = 1 as ValueOriginCode
 let OriginLocal = 2 as ValueOriginCode
 let OriginLocalDeep = 3 as ValueOriginCode
-let FirstParameterOrigin = 4 as ValueOriginCode
-let OriginsPerParameter = 2 as ValueOriginCode
+let OriginLocalShell = 4 as ValueOriginCode
+let FirstParameterOrigin = 5 as ValueOriginCode
+let OriginsPerParameter = 4 as ValueOriginCode
+let OriginLevelMask = 3 as ValueOriginCode
+let OwnLevel = 0 as ValueOriginCode
+let ChildLevel = 1 as ValueOriginCode
+let DeeperLevel = 2 as ValueOriginCode
+
+// How far below a parameter's own record a write lands: `own` is the record itself, `near` a record
+// loaded out of it, `far` anything beyond that.
+enum WriteReach
+	own
+	near
+	far
+end 'WriteReach'
+
+function reachBeyond(reach WriteReach) returns WriteReach
+	return match reach 'reach'
+		own gives WriteReach.near
+		near gives WriteReach.far
+		far gives WriteReach.far
+	end 'reach'
+end 'reachBeyond'
+
+function reachAtDepth(origin ValueOriginCode) returns WriteReach
+	return reachBelow(WriteReach.own, origin: origin)
+end 'reachAtDepth'
+
+function reachBelow(reach WriteReach, origin ValueOriginCode) returns WriteReach
+	let level = originLevel(origin)
+
+	if level == OwnLevel 'theRecordItself'
+		return reach
+	end 'theRecordItself'
+
+	if level == ChildLevel 'aDirectlyHeldRecord'
+		return reachBeyond(reach)
+	end 'aDirectlyHeldRecord'
+
+	return WriteReach.far
+end 'reachBelow'
 
 function originIsLocal(code ValueOriginCode) returns bool
-	return code == OriginLocal or code == OriginLocalDeep
+	return code == OriginLocal or code == OriginLocalShell or code == OriginLocalDeep
 end 'originIsLocal'
+
+function originChildrenAreMinted(code ValueOriginCode) returns bool
+	return code == OriginLocalShell or code == OriginLocalDeep
+end 'originChildrenAreMinted'
 
 function everyParamPosition() returns ParamPositionMask
 	var every = NoParamPositions
@@ -51,20 +97,24 @@ function parameterOrigin(position ParamCount) returns ValueOriginCode
 	return FirstParameterOrigin + (position as ValueOriginCode) * OriginsPerParameter
 end 'parameterOrigin'
 
-function withinParameterOrigin(position ParamCount) returns ValueOriginCode
-	return parameterOrigin(position) + 1
-end 'withinParameterOrigin'
+function parameterOriginAtLevel(position ParamCount, level ValueOriginCode) returns ValueOriginCode
+	return parameterOrigin(position) + level
+end 'parameterOriginAtLevel'
 
 function originNamesAParameter(code ValueOriginCode) returns bool
 	return code >= FirstParameterOrigin
 end 'originNamesAParameter'
 
+function originLevel(code ValueOriginCode) returns ValueOriginCode
+	return (code - FirstParameterOrigin) and OriginLevelMask
+end 'originLevel'
+
 function originIsWithin(code ValueOriginCode) returns bool
-	return originNamesAParameter(code) and ((code - FirstParameterOrigin) and 1) == 1
+	return originNamesAParameter(code) and originLevel(code) != OwnLevel
 end 'originIsWithin'
 
 function originParameterPosition(code ValueOriginCode) returns ParamCount
-	return ((code - FirstParameterOrigin) shr 1) as ParamCount
+	return ((code - FirstParameterOrigin) shr 2) as ParamCount
 end 'originParameterPosition'
 
 function joinOrigins(a ValueOriginCode, b ValueOriginCode) returns ValueOriginCode
@@ -77,7 +127,7 @@ function joinOrigins(a ValueOriginCode, b ValueOriginCode) returns ValueOriginCo
 	end 'sameAnswer'
 
 	if originNamesAParameter(a) and originNamesAParameter(b) and originParameterPosition(a) == originParameterPosition(b) 'oneParameter'
-		return withinParameterOrigin(originParameterPosition(a))
+		return parameterOriginAtLevel(originParameterPosition(a), level: originLevel(a) if originLevel(a) > originLevel(b) else originLevel(b))
 	end 'oneParameter'
 
 	return OriginUnknown
@@ -114,7 +164,13 @@ type CalleeFacts
 	var flags as BoolArray
 	var retMasks as ParamPositionMaskArray
 	var retBottoms as BoolArray
-	var imports as ParamPositionMaskArray
+	// For a returned minted record: the parameters whose own record, and whose graph beyond it, may
+	// sit directly in its fields, and whether anything else foreign may.
+	var directOwns as ParamPositionMaskArray
+	var directDeeps as ParamPositionMaskArray
+	var directBottoms as BoolArray
+	var importsOwn as ParamPositionMaskArray
+	var importsBelow as ParamPositionMaskArray
 
 	static function create(funcIndexByName FuncIndexByName, functionCount ElementIndex) returns CalleeFacts
 		var flags = BoolArray.create()
@@ -123,9 +179,17 @@ type CalleeFacts
 		retMasks.refill(functionCount, value: NoParamPositions)
 		var retBottoms = BoolArray.create()
 		retBottoms.refill(functionCount, value: true)
-		var imports = ParamPositionMaskArray.create()
-		imports.refill(functionCount, value: everyParamPosition())
-		return Self{funcIndexByName: funcIndexByName, flags: flags, retMasks: retMasks, retBottoms: retBottoms, imports: imports}
+		var directOwns = ParamPositionMaskArray.create()
+		directOwns.refill(functionCount, value: NoParamPositions)
+		var directDeeps = ParamPositionMaskArray.create()
+		directDeeps.refill(functionCount, value: NoParamPositions)
+		var directBottoms = BoolArray.create()
+		directBottoms.refill(functionCount, value: true)
+		var importsOwn = ParamPositionMaskArray.create()
+		importsOwn.refill(functionCount, value: everyParamPosition())
+		var importsBelow = ParamPositionMaskArray.create()
+		importsBelow.refill(functionCount, value: everyParamPosition())
+		return Self{funcIndexByName: funcIndexByName, flags: flags, retMasks: retMasks, retBottoms: retBottoms, directOwns: directOwns, directDeeps: directDeeps, directBottoms: directBottoms, importsOwn: importsOwn, importsBelow: importsBelow}
 	end 'create'
 
 	function holds(callee ByteArray) returns bool
@@ -146,6 +210,24 @@ type CalleeFacts
 		try self.retBottoms.set(index, value: bottom) otherwise panic("CalleeFacts.noteReturned: {index} is past the {self.retBottoms.count()} functions")
 	end 'noteReturned'
 
+	function noteDirect(index ElementIndex, own ParamPositionMask, deep ParamPositionMask, bottom bool)
+		try self.directOwns.set(index, value: own) otherwise panic("CalleeFacts.noteDirect: {index} is past the {self.directOwns.count()} functions")
+		try self.directDeeps.set(index, value: deep) otherwise panic("CalleeFacts.noteDirect: {index} is past the {self.directDeeps.count()} functions")
+		try self.directBottoms.set(index, value: bottom) otherwise panic("CalleeFacts.noteDirect: {index} is past the {self.directBottoms.count()} functions")
+	end 'noteDirect'
+
+	function directOwnAt(index ElementIndex) returns ParamPositionMask
+		return summaryMaskAt(self.directOwns, index: index)
+	end 'directOwnAt'
+
+	function directDeepAt(index ElementIndex) returns ParamPositionMask
+		return summaryMaskAt(self.directDeeps, index: index)
+	end 'directDeepAt'
+
+	function directBottomAt(index ElementIndex) returns bool
+		return try self.directBottoms.get(index) otherwise panic("CalleeFacts.directBottomAt: {index} is past the {self.directBottoms.count()} functions")
+	end 'directBottomAt'
+
 	function returnedMaskAt(index ElementIndex) returns ParamPositionMask
 		return summaryMaskAt(self.retMasks, index: index)
 	end 'returnedMaskAt'
@@ -154,20 +236,26 @@ type CalleeFacts
 		return try self.retBottoms.get(index) otherwise panic("CalleeFacts.returnedBottomAt: {index} is past the {self.retBottoms.count()} functions")
 	end 'returnedBottomAt'
 
-	function publishImports(masks ParamPositionMaskArray)
-		self.imports = masks
+	function publishImports(own ParamPositionMaskArray, below ParamPositionMaskArray)
+		self.importsOwn = own
+		self.importsBelow = below
 	end 'publishImports'
 
 	// Per node, not per function: a generic function's base node merges every conformer a dispatch
 	// inside it may reach, while a specialized node sees only its own. A node nothing has published
 	// reads as importing into every parameter.
-	function importsAt(node ElementIndex) returns ParamPositionMask
-		return try self.imports.get(node) otherwise everyParamPosition()
-	end 'importsAt'
+	function importsOwnAt(node ElementIndex) returns ParamPositionMask
+		return try self.importsOwn.get(node) otherwise everyParamPosition()
+	end 'importsOwnAt'
+
+	function importsBelowAt(node ElementIndex) returns ParamPositionMask
+		return try self.importsBelow.get(node) otherwise everyParamPosition()
+	end 'importsBelowAt'
 end 'CalleeFacts'
 
 type ValueOrigins
 	let signatures as ProgramSignatures
+	let typeNames as TypeNameInterner
 	let calleeFacts as CalleeFacts
 	var codes as ValueOriginColumn
 	var valueRefs as FunctionRefNames
@@ -176,17 +264,26 @@ type ValueOrigins
 	var ambiguousBoxes as ValueIdSet
 	var merges as MergeEdges
 	// Per minted record: the parameters whose graph it may hold, and whether it may hold a record from
-	// anywhere else. Aliases of one record share both.
+	// anywhere else. The `direct` columns say the same for what its own fields hold. Aliases of one
+	// record share all of them.
 	var taintMasks as ParamPositionMaskArray
 	var taintBottoms as BoolArray
+	var directOwns as ParamPositionMaskArray
+	var directDeeps as ParamPositionMaskArray
+	var directBottoms as BoolArray
+	// A call handed a foreign record to a record held below this one, so everything this one holds is
+	// no longer known to be minted here.
+	var belowForeign as BoolArray
+	// (holder, held) pairs: the held record's taint also belongs to its holder.
+	var containment as MergeEdges
 	var taintChanged as bool
 
-	static function empty(signatures ProgramSignatures, calleeFacts CalleeFacts) returns ValueOrigins
-		return Self{signatures: signatures, calleeFacts: calleeFacts, codes: ValueOriginColumn.create(), valueRefs: FunctionRefNames.create(), codeRefs: FunctionRefNames.create(), boxCode: FunctionRefNames.create(), ambiguousBoxes: ValueIdSet.create(), merges: MergeEdges.create(), taintMasks: ParamPositionMaskArray.create(), taintBottoms: BoolArray.create(), taintChanged: false}
+	static function empty(signatures ProgramSignatures, typeNames TypeNameInterner, calleeFacts CalleeFacts) returns ValueOrigins
+		return Self{signatures: signatures, typeNames: typeNames, calleeFacts: calleeFacts, codes: ValueOriginColumn.create(), valueRefs: FunctionRefNames.create(), codeRefs: FunctionRefNames.create(), boxCode: FunctionRefNames.create(), ambiguousBoxes: ValueIdSet.create(), merges: MergeEdges.create(), taintMasks: ParamPositionMaskArray.create(), taintBottoms: BoolArray.create(), directOwns: ParamPositionMaskArray.create(), directDeeps: ParamPositionMaskArray.create(), directBottoms: BoolArray.create(), belowForeign: BoolArray.create(), containment: MergeEdges.create(), taintChanged: false}
 	end 'empty'
 
-	static function ofBody(module MaxonModule, func IrFunction, signatures ProgramSignatures, calleeFacts CalleeFacts) returns ValueOrigins
-		var origins = ValueOrigins.empty(signatures, calleeFacts: calleeFacts)
+	static function ofBody(module MaxonModule, func IrFunction, signatures ProgramSignatures, typeNames TypeNameInterner, calleeFacts CalleeFacts) returns ValueOrigins
+		var origins = ValueOrigins.empty(signatures, typeNames: typeNames, calleeFacts: calleeFacts)
 		origins.populate(module, func: func)
 		return origins
 	end 'ofBody'
@@ -435,10 +532,15 @@ type ValueOrigins
 	function startTaint()
 		self.taintMasks.refill(self.codes.count(), value: NoParamPositions)
 		self.taintBottoms.refill(self.codes.count(), value: false)
+		self.directOwns.refill(self.codes.count(), value: NoParamPositions)
+		self.directDeeps.refill(self.codes.count(), value: NoParamPositions)
+		self.directBottoms.refill(self.codes.count(), value: false)
+		self.belowForeign.refill(self.codes.count(), value: false)
 		self.taintChanged = false
 	end 'startTaint'
 
 	function beginTaintRound()
+		self.containment = MergeEdges.create()
 		self.taintChanged = false
 	end 'beginTaintRound'
 
@@ -454,6 +556,26 @@ type ValueOrigins
 		return try self.taintBottoms.get(value) otherwise true
 	end 'taintBottomOf'
 
+	function directOwnOf(value ValueId) returns ParamPositionMask
+		return try self.directOwns.get(value) otherwise NoParamPositions
+	end 'directOwnOf'
+
+	function directDeepOf(value ValueId) returns ParamPositionMask
+		return try self.directDeeps.get(value) otherwise NoParamPositions
+	end 'directDeepOf'
+
+	function directBottomOf(value ValueId) returns bool
+		return try self.directBottoms.get(value) otherwise true
+	end 'directBottomOf'
+
+	function belowOf(value ValueId) returns bool
+		return try self.belowForeign.get(value) otherwise true
+	end 'belowOf'
+
+	function directIsClean(value ValueId) returns bool
+		return self.directOwnOf(value) == NoParamPositions and self.directDeepOf(value) == NoParamPositions and not self.directBottomOf(value)
+	end 'directIsClean'
+
 	function setTaint(value ValueId, mask ParamPositionMask, bottom bool)
 		if mask == self.taintMaskOf(value) and bottom == self.taintBottomOf(value) 'unchanged'
 			return
@@ -464,30 +586,101 @@ type ValueOrigins
 		self.taintChanged = true
 	end 'setTaint'
 
+	function setDirect(value ValueId, own ParamPositionMask, deep ParamPositionMask, bottom bool)
+		if own == self.directOwnOf(value) and deep == self.directDeepOf(value) and bottom == self.directBottomOf(value) 'unchanged'
+			return
+		end 'unchanged'
+
+		try self.directOwns.set(value, value: own) otherwise panic("ValueOrigins.setDirect: value {value} is past the {self.directOwns.count()} values")
+		try self.directDeeps.set(value, value: deep) otherwise panic("ValueOrigins.setDirect: value {value} is past the {self.directDeeps.count()} values")
+		try self.directBottoms.set(value, value: bottom) otherwise panic("ValueOrigins.setDirect: value {value} is past the {self.directBottoms.count()} values")
+		self.taintChanged = true
+	end 'setDirect'
+
+	function setBelow(value ValueId)
+		if self.belowOf(value) 'alreadyMarked'
+			return
+		end 'alreadyMarked'
+
+		try self.belowForeign.set(value, value: true) otherwise panic("ValueOrigins.setBelow: value {value} is past the {self.belowForeign.count()} values")
+		self.taintChanged = true
+	end 'setBelow'
+
 	function unify(a ValueId, b ValueId)
 		let mask = self.taintMaskOf(a) or self.taintMaskOf(b)
 		let bottom = self.taintBottomOf(a) or self.taintBottomOf(b)
+		let own = self.directOwnOf(a) or self.directOwnOf(b)
+		let deep = self.directDeepOf(a) or self.directDeepOf(b)
+		let directBottom = self.directBottomOf(a) or self.directBottomOf(b)
 		self.setTaint(a, mask: mask, bottom: bottom)
 		self.setTaint(b, mask: mask, bottom: bottom)
+		self.setDirect(a, own: own, deep: deep, bottom: directBottom)
+		self.setDirect(b, own: own, deep: deep, bottom: directBottom)
+
+		if self.belowOf(a) or self.belowOf(b) 'eitherReceivedBelow'
+			self.setBelow(a)
+			self.setBelow(b)
+		end 'eitherReceivedBelow'
 	end 'unify'
 
-	function taintForeign(value ValueId)
+	function taintGraph(value ValueId)
 		self.setTaint(value, mask: self.taintMaskOf(value), bottom: true)
+	end 'taintGraph'
+
+	function taintDirect(value ValueId)
+		self.setDirect(value, own: self.directOwnOf(value), deep: self.directDeepOf(value), bottom: true)
+	end 'taintDirect'
+
+	function taintForeign(value ValueId)
+		self.taintGraph(value)
+		self.taintDirect(value)
 	end 'taintForeign'
 
+	function taintBelow(value ValueId)
+		self.taintGraph(value)
+		self.setBelow(value)
+	end 'taintBelow'
+
 	function isRecordTyped(func IrFunction, value ValueId) returns bool
-		return not tagIsAScalarWhateverIsDeclared(try func.valueTags.get(value) otherwise ValueTypeTag.unresolved)
+		let tag = try func.valueTags.get(value) otherwise ValueTypeTag.unresolved
+
+		if tag == ValueTypeTag.named 'maybeAScalarAlias'
+			return not self.namedTypeIsAScalar(try func.valueNameIds.get(value) otherwise return true)
+		end 'maybeAScalarAlias'
+
+		return not tagIsAScalarWhateverIsDeclared(tag)
 	end 'isRecordTyped'
 
+	function namedTypeIsAScalar(nameId TypeNameId) returns bool
+		let form = try self.signatures.declaredFormInAnyFile(try self.typeNames.nameOf(nameId) otherwise return false) otherwise return false
+		return form == TypeDeclKind.rangedAlias or form == TypeDeclKind.enumType
+	end 'namedTypeIsAScalar'
+
 	function absorb(into ValueId, from ValueId, func IrFunction)
+		self.absorbReturned(into, from: from, whole: true, below: false, func: func)
+	end 'absorb'
+
+	function absorbReturned(into ValueId, from ValueId, whole bool, below bool, func IrFunction)
 		if not self.isRecordTyped(func, value: from) 'nothingToHold'
 			return
 		end 'nothingToHold'
 
+		self.absorbGraph(into, from: from)
+
+		if whole 'itsRecordSitsInIt'
+			self.holdDirectly(into, from: from, whole: true)
+		end 'itsRecordSitsInIt'
+
+		if below 'itsGraphSitsInIt'
+			self.holdDirectly(into, from: from, whole: false)
+		end 'itsGraphSitsInIt'
+	end 'absorbReturned'
+
+	function absorbGraph(into ValueId, from ValueId)
 		let origin = self.originOf(from)
 
 		if originIsLocal(origin) 'anotherRecordOfThisBody'
-			self.unify(into, b: from)
+			self.containment.note(into, incoming: from)
 			return
 		end 'anotherRecordOfThisBody'
 
@@ -496,8 +689,33 @@ type ValueOrigins
 			return
 		end 'aParametersGraph'
 
-		self.taintForeign(into)
-	end 'absorb'
+		self.taintGraph(into)
+	end 'absorbGraph'
+
+	// `whole` is `from`'s own record sitting in a field of `into`; otherwise something reached through
+	// `from` does.
+	function holdDirectly(into ValueId, from ValueId, whole bool)
+		let origin = self.originOf(from)
+
+		if originIsLocal(origin) 'anotherRecordOfThisBody'
+			if not whole 'itsContentsSitInIt'
+				self.setDirect(into, own: self.directOwnOf(into), deep: self.directDeepOf(into) or self.taintMaskOf(from), bottom: self.directBottomOf(into) or self.taintBottomOf(from))
+			end 'itsContentsSitInIt'
+
+			return
+		end 'anotherRecordOfThisBody'
+
+		if originNamesAParameter(origin) 'aParametersGraph'
+			let bit = maskWithParam(NoParamPositions, param: originParameterPosition(origin))
+			let record = whole and not originIsWithin(origin)
+			let ownBit = bit if record else NoParamPositions
+			let deepBit = NoParamPositions if record else bit
+			self.setDirect(into, own: self.directOwnOf(into) or ownBit, deep: self.directDeepOf(into) or deepBit, bottom: self.directBottomOf(into))
+			return
+		end 'aParametersGraph'
+
+		self.taintDirect(into)
+	end 'holdDirectly'
 
 	function storeInto(addr ValueId, value ValueId, func IrFunction)
 		if originIsLocal(self.originOf(addr)) 'aRecordOfThisBody'
@@ -516,11 +734,34 @@ type ValueOrigins
 		end 'eachMerge'
 	end 'joinMergeTaints'
 
+	// Foreign records stored below a holder reach every record it holds, at any depth.
+	function joinContainment()
+		for index in 0 upto self.containment.count() 'eachHold'
+			let holder = self.containment.phiAt(index)
+			let held = self.containment.incomingAt(index)
+			self.setTaint(holder, mask: self.taintMaskOf(holder) or self.taintMaskOf(held), bottom: self.taintBottomOf(holder) or self.taintBottomOf(held))
+
+			if self.belowOf(holder) 'recordsBelowItReceivedForeign'
+				self.taintForeign(held)
+				self.setBelow(held)
+			end 'recordsBelowItReceivedForeign'
+		end 'eachHold'
+	end 'joinContainment'
+
 	function convertDeep()
 		for value in 0 upto self.codes.count() 'eachValue'
-			if self.raw(value) == OriginLocal and self.taintMaskOf(value) == NoParamPositions and not self.taintBottomOf(value) 'holdsNothingForeign'
+			if self.raw(value) != OriginLocal 'notMintedHere'
+				continue
+			end 'notMintedHere'
+
+			if self.taintMaskOf(value) == NoParamPositions and not self.taintBottomOf(value) 'holdsNothingForeign'
 				try self.codes.set(value, value: OriginLocalDeep) otherwise panic("ValueOrigins.convertDeep: value {value} is past the {self.codes.count()} values")
+				continue
 			end 'holdsNothingForeign'
+
+			if self.directIsClean(value) 'holdsNothingForeignDirectly'
+				try self.codes.set(value, value: OriginLocalShell) otherwise panic("ValueOrigins.convertDeep: value {value} is past the {self.codes.count()} values")
+			end 'holdsNothingForeignDirectly'
 		end 'eachValue'
 	end 'convertDeep'
 
@@ -635,7 +876,7 @@ type ValueOrigins
 		end 'notYetKnown'
 
 		if originNamesAParameter(code) 'inAParameter'
-			return withinParameterOrigin(originParameterPosition(code))
+			return parameterOriginAtLevel(originParameterPosition(code), level: ChildLevel if originLevel(code) == OwnLevel else DeeperLevel)
 		end 'inAParameter'
 
 		return OriginUnknown
@@ -942,11 +1183,15 @@ type EffectSummaryBuilder
 
 	// The parameters into whose graph a body may store a record it did not create.
 	var imports as ParamPositionMaskArray
+	var importsBelow as ParamPositionMaskArray
 
-	// The parameters whose own record a body writes, and those whose graph beyond that record it writes.
-	// A caller's minted record absorbs a shallow write; a deep one may reach records it merely holds.
+	// The parameters whose own record a body writes, whose directly held records it writes, and whose
+	// graph beyond those it writes. A caller's minted record absorbs a write of the first kind; the
+	// others may reach records it merely holds, so it absorbs them only as far as it holds nothing
+	// foreign.
 	var shallow as ParamPositionMaskArray
-	var deep as ParamPositionMaskArray
+	var near as ParamPositionMaskArray
+	var far as ParamPositionMaskArray
 	var siteCallers as CsrColumn
 	var siteCallees as CsrColumn
 	var siteFirstOrigins as CsrColumn
@@ -957,7 +1202,7 @@ type EffectSummaryBuilder
 		let dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
 		let calleeFacts = CalleeFacts.create(funcNames.byName, functionCount: funcNames.functions.count())
 
-		return Self{funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames, ownersByInstance: ResourceByInstance.create(), ownersByName: ResourceByName.create(), funcIndexByName: funcNames.byName, runtimeTier: runtimeTier, nodes: EffectNodes.create(signatures, functions: funcNames.functions, dispatch: dispatch), calleeFacts: calleeFacts, facts: ValueOrigins.empty(signatures, calleeFacts: calleeFacts), hard: BoolArray.create(), taintEnabled: false, imports: ParamPositionMaskArray.create(), shallow: ParamPositionMaskArray.create(), deep: ParamPositionMaskArray.create(), siteCallers: CsrColumn.create(), siteCallees: CsrColumn.create(), siteFirstOrigins: CsrColumn.create(), siteOriginCounts: CsrColumn.create(), siteOrigins: ValueOriginColumn.create()}
+		return Self{funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames, ownersByInstance: ResourceByInstance.create(), ownersByName: ResourceByName.create(), funcIndexByName: funcNames.byName, runtimeTier: runtimeTier, nodes: EffectNodes.create(signatures, functions: funcNames.functions, dispatch: dispatch), calleeFacts: calleeFacts, facts: ValueOrigins.empty(signatures, typeNames: typeNames, calleeFacts: calleeFacts), hard: BoolArray.create(), taintEnabled: false, imports: ParamPositionMaskArray.create(), importsBelow: ParamPositionMaskArray.create(), shallow: ParamPositionMaskArray.create(), near: ParamPositionMaskArray.create(), far: ParamPositionMaskArray.create(), siteCallers: CsrColumn.create(), siteCallees: CsrColumn.create(), siteFirstOrigins: CsrColumn.create(), siteOriginCounts: CsrColumn.create(), siteOrigins: ValueOriginColumn.create()}
 	end 'create'
 
 	// The first walk settles every node's imports; the second reads them to tell which minted records
@@ -966,8 +1211,9 @@ type EffectSummaryBuilder
 		self.grow(self.nodes.baseCount())
 		self.settleLocalReturns(module, functions: functions, calleesFirst: calleesFirst)
 		self.walkEveryNode(module, functions: functions)
+		self.importEverythingFromNodesWhoseBodyStopped()
 		self.settle()
-		self.calleeFacts.publishImports(self.imports)
+		self.calleeFacts.publishImports(self.imports, below: self.importsBelow)
 		self.settleDeepFreshness(module, functions: functions, calleesFirst: calleesFirst)
 		self.restart()
 		self.taintEnabled = true
@@ -975,6 +1221,18 @@ type EffectSummaryBuilder
 		self.settle()
 		return self.verdicts()
 	end 'build'
+
+	// A body that stopped at an effect recorded no later site or store, yet its imports are read for
+	// contexts it was not walked in: the base node stands in for every specialization when returned
+	// records are summarized, and a specialization's body may not stop where the base node's did.
+	function importEverythingFromNodesWhoseBodyStopped()
+		for node in 0 upto self.nodes.totalCount() 'eachNode'
+			if self.isHard(node) 'itsBodyStoppedAtAnEffect'
+				_ = widenSummaryColumn(self.imports, index: node, by: everyParamPosition())
+				_ = widenSummaryColumn(self.importsBelow, index: node, by: everyParamPosition())
+			end 'itsBodyStoppedAtAnEffect'
+		end 'eachNode'
+	end 'importEverythingFromNodesWhoseBodyStopped'
 
 	function walkEveryNode(module MaxonModule, functions IrFunctionArray)
 		let baseCount = self.nodes.baseCount()
@@ -1000,8 +1258,10 @@ type EffectSummaryBuilder
 	function restart()
 		self.hard = BoolArray.create()
 		self.imports = ParamPositionMaskArray.create()
+		self.importsBelow = ParamPositionMaskArray.create()
 		self.shallow = ParamPositionMaskArray.create()
-		self.deep = ParamPositionMaskArray.create()
+		self.near = ParamPositionMaskArray.create()
+		self.far = ParamPositionMaskArray.create()
 		self.siteCallers = CsrColumn.create()
 		self.siteCallees = CsrColumn.create()
 		self.siteFirstOrigins = CsrColumn.create()
@@ -1018,7 +1278,7 @@ type EffectSummaryBuilder
 				continue
 			end 'nothingToLearn'
 
-			if ValueOrigins.ofBody(module, func: func, signatures: self.signatures, calleeFacts: self.calleeFacts).everyReturnIsLocal(module, func: func) 'mintsWhatItReturns'
+			if ValueOrigins.ofBody(module, func: func, signatures: self.signatures, typeNames: self.typeNames, calleeFacts: self.calleeFacts).everyReturnIsLocal(module, func: func) 'mintsWhatItReturns'
 				self.calleeFacts.note(index)
 			end 'mintsWhatItReturns'
 		end 'eachCalleeBeforeItsCallers'
@@ -1032,18 +1292,25 @@ type EffectSummaryBuilder
 				continue
 			end 'nothingToLearn'
 
-			var origins = ValueOrigins.ofBody(module, func: func, signatures: self.signatures, calleeFacts: self.calleeFacts)
+			var origins = ValueOrigins.ofBody(module, func: func, signatures: self.signatures, typeNames: self.typeNames, calleeFacts: self.calleeFacts)
 			self.nodes.current = EffectContext.plain()
 			self.settleTaint(origins, module: module, func: func)
 			var mask = NoParamPositions
 			var bottom = false
+			var directOwn = NoParamPositions
+			var directDeep = NoParamPositions
+			var directBottom = false
 
 			for value in origins.returnedValues(module, func: func) 'eachReturned'
 				mask = mask or origins.taintMaskOf(value)
 				bottom = bottom or origins.taintBottomOf(value)
+				directOwn = directOwn or origins.directOwnOf(value)
+				directDeep = directDeep or origins.directDeepOf(value)
+				directBottom = directBottom or origins.directBottomOf(value)
 			end 'eachReturned'
 
 			self.calleeFacts.noteReturned(index, mask: mask, bottom: bottom)
+			self.calleeFacts.noteDirect(index, own: directOwn, deep: directDeep, bottom: directBottom)
 		end 'eachCalleeBeforeItsCallers'
 	end 'settleDeepFreshness'
 
@@ -1063,6 +1330,7 @@ type EffectSummaryBuilder
 			end 'eachBlock'
 
 			origins.joinMergeTaints()
+			origins.joinContainment()
 			moved = origins.taintMoved()
 		end 'toAFixedPoint'
 
@@ -1143,7 +1411,9 @@ type EffectSummaryBuilder
 
 		let calleeIndex = try self.funcIndexByName.get(callee) otherwise return
 		let ordered = try self.orderedArguments(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) otherwise return
-		let receives = self.calleeFacts.importsAt(self.calleeNode(calleeIndex, callee: callee, ordered: ordered, func: func, result: result, origins: origins))
+		let calleeNode = self.calleeNode(calleeIndex, callee: callee, ordered: ordered, func: func, result: result, origins: origins)
+		let receivesInto = self.calleeFacts.importsOwnAt(calleeNode)
+		let receivesBelow = self.calleeFacts.importsBelowAt(calleeNode)
 
 		for position in 0 upto ordered.count() 'eachArgument'
 			if position >= MaxAbiArgs 'pastTheMask'
@@ -1152,9 +1422,17 @@ type EffectSummaryBuilder
 
 			let arg = try ordered.get(position) otherwise panic("EffectSummaryBuilder.taintCall: ordered.get OOB at {position}")
 
-			if maskHasParam(receives, param: position as ParamCount) and originIsLocal(origins.originOf(arg)) 'receivesWhatItDidNotMake'
+			if not originIsLocal(origins.originOf(arg)) 'notARecordOfThisBody'
+				continue
+			end 'notARecordOfThisBody'
+
+			if maskHasParam(receivesInto, param: position as ParamCount) 'receivesWhatItDidNotMake'
 				origins.taintForeign(arg)
 			end 'receivesWhatItDidNotMake'
+
+			if maskHasParam(receivesBelow, param: position as ParamCount) 'recordsBelowItReceiveWhatTheyDidNotMake'
+				origins.taintBelow(arg)
+			end 'recordsBelowItReceiveWhatTheyDidNotMake'
 		end 'eachArgument'
 
 		if originIsLocal(origins.originOf(result)) 'theResultIsFresh'
@@ -1163,21 +1441,35 @@ type EffectSummaryBuilder
 	end 'taintCall'
 
 	function taintResult(origins ValueOrigins, func IrFunction, result ValueId, calleeIndex ElementIndex, ordered ValueIdArray)
-		if not self.calleeFacts.returnsLocalAt(calleeIndex) or self.calleeFacts.returnedBottomAt(calleeIndex) 'holdsWhatItIsNotTold'
+		if not self.calleeFacts.returnsLocalAt(calleeIndex) 'notMintedByTheCallee'
 			origins.taintForeign(result)
 			return
+		end 'notMintedByTheCallee'
+
+		if self.calleeFacts.returnedBottomAt(calleeIndex) 'holdsWhatItIsNotTold'
+			origins.taintGraph(result)
 		end 'holdsWhatItIsNotTold'
 
+		if self.calleeFacts.directBottomAt(calleeIndex) 'holdsForeignDirectly'
+			origins.taintDirect(result)
+		end 'holdsForeignDirectly'
+
 		let held = self.calleeFacts.returnedMaskAt(calleeIndex)
+		let heldWhole = self.calleeFacts.directOwnAt(calleeIndex)
+		let heldBelow = self.calleeFacts.directDeepAt(calleeIndex)
 
 		for position in 0 upto ordered.count() 'eachArgument'
 			if position >= MaxAbiArgs 'pastTheMask'
 				break
 			end 'pastTheMask'
 
-			if maskHasParam(held, param: position as ParamCount) 'resultHoldsThisArgument'
-				origins.absorb(result, from: try ordered.get(position) otherwise panic("EffectSummaryBuilder.taintResult: ordered.get OOB at {position}"), func: func)
-			end 'resultHoldsThisArgument'
+			let param = position as ParamCount
+
+			if not maskHasParam(held, param: param) 'notHeld'
+				continue
+			end 'notHeld'
+
+			origins.absorbReturned(result, from: try ordered.get(position) otherwise panic("EffectSummaryBuilder.taintResult: ordered.get OOB at {position}"), whole: maskHasParam(heldWhole, param: param), below: maskHasParam(heldBelow, param: param), func: func)
 		end 'eachArgument'
 	end 'taintResult'
 
@@ -1200,8 +1492,10 @@ type EffectSummaryBuilder
 		while self.hard.count() < count 'eachNewNode'
 			self.hard.push(false)
 			self.imports.push(NoParamPositions)
+			self.importsBelow.push(NoParamPositions)
 			self.shallow.push(NoParamPositions)
-			self.deep.push(NoParamPositions)
+			self.near.push(NoParamPositions)
+			self.far.push(NoParamPositions)
 		end 'eachNewNode'
 	end 'grow'
 
@@ -1225,12 +1519,7 @@ type EffectSummaryBuilder
 
 		let bit = maskWithParam(NoParamPositions, param: originParameterPosition(target))
 
-		if originIsWithin(target) 'throughAField'
-			_ = widenSummaryColumn(self.deep, index: node, by: bit)
-			return
-		end 'throughAField'
-
-		_ = widenSummaryColumn(self.shallow, index: node, by: bit)
+		_ = self.widenWrites(node, reach: reachAtDepth(target), by: bit)
 	end 'noteWrite'
 
 	// A drop runs destructors the IR does not show: a promise's cancels its green thread, and a
@@ -1300,7 +1589,7 @@ type EffectSummaryBuilder
 	end 'noteStore'
 
 	function noteImport(node ElementIndex, target ValueOriginCode)
-		_ = widenSummaryColumn(self.imports, index: node, by: maskWithParam(NoParamPositions, param: originParameterPosition(target)))
+		_ = self.noteImportInto(node, origin: target, reach: WriteReach.own)
 	end 'noteImport'
 
 	function noteStoredOperands(node ElementIndex, callee ByteArray, args ValueIdArray, func IrFunction)
@@ -1326,7 +1615,7 @@ type EffectSummaryBuilder
 			return
 		end 'hardFromTheStart'
 
-		var origins = ValueOrigins.ofBody(module, func: func, signatures: self.signatures, calleeFacts: self.calleeFacts)
+		var origins = ValueOrigins.ofBody(module, func: func, signatures: self.signatures, typeNames: self.typeNames, calleeFacts: self.calleeFacts)
 
 		if self.taintEnabled 'mayHoldOnlyWhatItMade'
 			self.settleTaint(origins, module: module, func: func)
@@ -1590,7 +1879,7 @@ type EffectSummaryBuilder
 		var queued = BoolArray.create()
 
 		for node in 0 upto nodeCount 'seed'
-			let known = self.isHard(node) or summaryMaskAt(self.shallow, index: node) != NoParamPositions or summaryMaskAt(self.deep, index: node) != NoParamPositions or summaryMaskAt(self.imports, index: node) != NoParamPositions
+			let known = self.isHard(node) or summaryMaskAt(self.shallow, index: node) != NoParamPositions or summaryMaskAt(self.near, index: node) != NoParamPositions or summaryMaskAt(self.far, index: node) != NoParamPositions or summaryMaskAt(self.imports, index: node) != NoParamPositions or summaryMaskAt(self.importsBelow, index: node) != NoParamPositions
 			queued.push(known)
 
 			if known 'hasSomethingToHandOn'
@@ -1617,11 +1906,15 @@ type EffectSummaryBuilder
 		end 'drain'
 	end 'settle'
 
+	// Imports are passed on whatever the caller's hardness: they are published after the first walk
+	// and read by the second, where a caller this walk made hard through a write to a minted record
+	// may no longer be hard, and an import it had dropped would leave a record looking minted.
 	function applySite(site ElementIndex, callee ElementIndex) returns bool
 		let caller = try self.siteCallers.get(site) otherwise panic("EffectSummaryBuilder.applySite: siteCallers.get OOB at {site}")
+		let importsMoved = self.passOnImports(site, caller: caller, callee: callee)
 
 		if self.isHard(caller) 'alreadyAsBadAsItGets'
-			return false
+			return importsMoved
 		end 'alreadyAsBadAsItGets'
 
 		if self.isHard(callee) 'theCalleeHasAnEffect'
@@ -1629,50 +1922,100 @@ type EffectSummaryBuilder
 			return true
 		end 'theCalleeHasAnEffect'
 
-		let calleeShallow = summaryMaskAt(self.shallow, index: callee)
-		let calleeDeep = summaryMaskAt(self.deep, index: callee)
+		return self.passOnWrites(site, caller: caller, callee: callee) or importsMoved
+	end 'applySite'
+
+	function passOnImports(site ElementIndex, caller ElementIndex, callee ElementIndex) returns bool
 		let calleeImports = summaryMaskAt(self.imports, index: callee)
+		let calleeImportsBelow = summaryMaskAt(self.importsBelow, index: callee)
+
+		if calleeImports == NoParamPositions and calleeImportsBelow == NoParamPositions 'importsNothing'
+			return false
+		end 'importsNothing'
+
 		var moved = false
-		let first = try self.siteFirstOrigins.get(site) otherwise panic("EffectSummaryBuilder.applySite: siteFirstOrigins.get OOB at {site}")
-		let count = try self.siteOriginCounts.get(site) otherwise panic("EffectSummaryBuilder.applySite: siteOriginCounts.get OOB at {site}")
+		let first = try self.siteFirstOrigins.get(site) otherwise panic("EffectSummaryBuilder.passOnImports: siteFirstOrigins.get OOB at {site}")
+		let count = try self.siteOriginCounts.get(site) otherwise panic("EffectSummaryBuilder.passOnImports: siteOriginCounts.get OOB at {site}")
+
+		for position in 0 upto count 'eachArgument'
+			if position >= MaxAbiArgs 'pastTheMask'
+				break
+			end 'pastTheMask'
+
+			let origin = try self.siteOrigins.get(first + position) otherwise panic("EffectSummaryBuilder.passOnImports: siteOrigins.get OOB at {first + position}")
+
+			if not originNamesAParameter(origin) 'notAParameter'
+				continue
+			end 'notAParameter'
+
+			let param = position as ParamCount
+
+			if maskHasParam(calleeImports, param: param) and self.noteImportInto(caller, origin: origin, reach: WriteReach.own) 'importsMoved'
+				moved = true
+			end 'importsMoved'
+
+			if maskHasParam(calleeImportsBelow, param: param) and self.noteImportInto(caller, origin: origin, reach: WriteReach.near) 'importsBelowMoved'
+				moved = true
+			end 'importsBelowMoved'
+		end 'eachArgument'
+
+		return moved
+	end 'passOnImports'
+
+	function passOnWrites(site ElementIndex, caller ElementIndex, callee ElementIndex) returns bool
+		let calleeShallow = summaryMaskAt(self.shallow, index: callee)
+		let calleeNear = summaryMaskAt(self.near, index: callee)
+		let calleeFar = summaryMaskAt(self.far, index: callee)
+		var moved = false
+		let first = try self.siteFirstOrigins.get(site) otherwise panic("EffectSummaryBuilder.passOnWrites: siteFirstOrigins.get OOB at {site}")
+		let count = try self.siteOriginCounts.get(site) otherwise panic("EffectSummaryBuilder.passOnWrites: siteOriginCounts.get OOB at {site}")
 
 		for position in 0 upto MaxAbiArgs 'eachWrittenPosition'
-			let writesShallow = maskHasParam(calleeShallow, param: position as ParamCount)
-			let writesDeep = maskHasParam(calleeDeep, param: position as ParamCount)
-			let importsHere = maskHasParam(calleeImports, param: position as ParamCount)
+			let param = position as ParamCount
+			let writesShallow = maskHasParam(calleeShallow, param: param)
+			let writesNear = maskHasParam(calleeNear, param: param)
+			let writesFar = maskHasParam(calleeFar, param: param)
 
-			if not writesShallow and not writesDeep and not importsHere 'notTouched'
+			if not writesShallow and not writesNear and not writesFar 'notTouched'
 				continue
 			end 'notTouched'
 
 			if position >= count 'noArgumentThere'
-				if writesShallow or writesDeep 'aWriteWithNowhereToLand'
-					self.markHard(caller)
-					return true
-				end 'aWriteWithNowhereToLand'
-
-				continue
+				self.markHard(caller)
+				return true
 			end 'noArgumentThere'
 
-			let origin = try self.siteOrigins.get(first + position) otherwise panic("EffectSummaryBuilder.applySite: siteOrigins.get OOB at {first + position}")
+			let origin = try self.siteOrigins.get(first + position) otherwise panic("EffectSummaryBuilder.passOnWrites: siteOrigins.get OOB at {first + position}")
 
-			if (writesShallow or writesDeep) and self.passOnWrite(caller, origin: origin, writesDeep: writesDeep) 'callerMoved'
+			if writesShallow and self.passOnWrite(caller, origin: origin, reach: WriteReach.own) 'shallowMoved'
 				moved = true
-			end 'callerMoved'
+			end 'shallowMoved'
 
-			if importsHere and originNamesAParameter(origin) 'importsIntoAParameter'
-				if widenSummaryColumn(self.imports, index: caller, by: maskWithParam(NoParamPositions, param: originParameterPosition(origin))) 'importsMoved'
-					moved = true
-				end 'importsMoved'
-			end 'importsIntoAParameter'
+			if writesNear and self.passOnWrite(caller, origin: origin, reach: WriteReach.near) 'nearMoved'
+				moved = true
+			end 'nearMoved'
+
+			if writesFar and self.passOnWrite(caller, origin: origin, reach: WriteReach.far) 'farMoved'
+				moved = true
+			end 'farMoved'
 		end 'eachWrittenPosition'
 
 		return moved
-	end 'applySite'
+	end 'passOnWrites'
 
-	function passOnWrite(caller ElementIndex, origin ValueOriginCode, writesDeep bool) returns bool
+	function noteImportInto(caller ElementIndex, origin ValueOriginCode, reach WriteReach) returns bool
+		let bit = maskWithParam(NoParamPositions, param: originParameterPosition(origin))
+
+		if reach == WriteReach.own and not originIsWithin(origin) 'intoTheParametersOwnRecord'
+			return widenSummaryColumn(self.imports, index: caller, by: bit)
+		end 'intoTheParametersOwnRecord'
+
+		return widenSummaryColumn(self.importsBelow, index: caller, by: bit)
+	end 'noteImportInto'
+
+	function passOnWrite(caller ElementIndex, origin ValueOriginCode, reach WriteReach) returns bool
 		if originIsLocal(origin) 'theCallersOwnRecord'
-			if writesDeep and origin != OriginLocalDeep 'reachesWhatItHolds'
+			if not self.localAbsorbs(origin, reach: reach) 'reachesWhatItHolds'
 				self.markHard(caller)
 				return true
 			end 'reachesWhatItHolds'
@@ -1687,12 +2030,24 @@ type EffectSummaryBuilder
 
 		let bit = maskWithParam(NoParamPositions, param: originParameterPosition(origin))
 
-		if originIsWithin(origin) or writesDeep 'throughAField'
-			return widenSummaryColumn(self.deep, index: caller, by: bit)
-		end 'throughAField'
-
-		return widenSummaryColumn(self.shallow, index: caller, by: bit)
+		return self.widenWrites(caller, reach: reachBelow(reach, origin: origin), by: bit)
 	end 'passOnWrite'
+
+	function widenWrites(caller ElementIndex, reach WriteReach, by ParamPositionMask) returns bool
+		return match reach 'reach'
+			own gives widenSummaryColumn(self.shallow, index: caller, by: by)
+			near gives widenSummaryColumn(self.near, index: caller, by: by)
+			far gives widenSummaryColumn(self.far, index: caller, by: by)
+		end 'reach'
+	end 'widenWrites'
+
+	function localAbsorbs(origin ValueOriginCode, reach WriteReach) returns bool
+		return match reach 'reach'
+			own gives true
+			near gives originChildrenAreMinted(origin)
+			far gives origin == OriginLocalDeep
+		end 'reach'
+	end 'localAbsorbs'
 
 	// A function that returns nothing exists for its effects, so it is never effect-free itself. Callers
 	// inherit what its body does, not that it returns nothing.
@@ -1701,7 +2056,7 @@ type EffectSummaryBuilder
 
 		for index in 0 upto self.nodes.baseCount() 'eachFunction'
 			let func = try self.nodes.functions.get(index) otherwise panic("EffectSummaryBuilder.verdicts: functions.get OOB at {index}")
-			effectFree.push(not self.isHard(index) and summaryMaskAt(self.shallow, index: index) == NoParamPositions and summaryMaskAt(self.deep, index: index) == NoParamPositions and not functionReturnsNothing(func))
+			effectFree.push(not self.isHard(index) and summaryMaskAt(self.shallow, index: index) == NoParamPositions and summaryMaskAt(self.near, index: index) == NoParamPositions and summaryMaskAt(self.far, index: index) == NoParamPositions and not functionReturnsNothing(func))
 		end 'eachFunction'
 
 		return effectFree
