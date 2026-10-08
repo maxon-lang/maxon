@@ -780,6 +780,8 @@ function buildArm64LinuxFileOpenChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x2, src: Arm64Register.x1)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x16, value: LinuxOpenCloseOnExec)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: Arm64Register.x2, lhs: Arm64Register.x2, rhs: Arm64Register.x16)
 	arm64LinuxEmitSyscallRestartingOnEintr(asm, number: Arm64LinuxSyscallOpenat)
 
 	arm64LinuxEmitStashIfFailed(asm)
@@ -970,7 +972,7 @@ function buildArm64LinuxFileRenameChunk() returns FunctionCodeChunk
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: released)
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPrefix)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixOpenReadOnly)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixOpenReadOnly or LinuxOpenCloseOnExec)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoFileMode as MachineWord)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
@@ -1425,7 +1427,7 @@ function buildArm64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x10, imm: LinuxSearchPrefixOffset)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: Arm64LinuxOpenDirectoryFlags)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: Arm64LinuxOpenDirectoryFlags or LinuxOpenCloseOnExec)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoFileMode as MachineWord)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
@@ -2447,11 +2449,8 @@ end 'buildArm64LinuxEnvReadChunk'
 // PARENT executes before this chunk is called. The `clone` copies the address space, so the child inherits
 // the finished vector and does nothing between the `clone` and the `execve` but raw syscalls.
 //
-// ⚠ **AN ORDINARY DESCRIPTOR THE PARENT HOLDS IS INHERITED, WHERE `POSIX_SPAWN_CLOEXEC_DEFAULT` WOULD CLOSE
-// IT.** What matters is that no PIPE end leaks — an inherited write end is an EOF that never arrives — and
-// none can: every pipe on this lane is `pipe2(O_CLOEXEC)` and the three the child keeps are the three `dup3`
-// clears the bit on. An inherited data file changes no observable behaviour, which is why the difference is
-// recorded rather than bought back with a close-everything loop over the descriptor table.
+// ⚠ The three descriptors `dup3` installs are the only ones that survive the `execve`: everything else the
+// runtime opens is close-on-exec, and `LinuxOpenCloseOnExec` owns that rule.
 function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	let SlotArgv = 0 as StackSize
 	let SlotCwd = 1 as StackSize
@@ -2780,7 +2779,7 @@ end 'arm64LinuxEmitShmPath'
 
 module function arm64LinuxEmitShmOpenPath(asm Arm64RuntimeAsm, pathSlot StackSize, flags MachineWord, mode MachineWord)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: pathSlot)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: flags)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: flags or LinuxOpenCloseOnExec)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: mode)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)

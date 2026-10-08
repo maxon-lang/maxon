@@ -1251,6 +1251,7 @@ function buildX64LinuxFileOpenChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r10, src: X64Register.r8, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtOr, reg: X64Register.rdx, imm: LinuxOpenCloseOnExec as Imm32)
 	x64LinuxEmitSyscallRestartingOnEintr(asm, number: X64LinuxSyscallOpenat)
 
 	x64LinuxEmitStashIfFailed(asm)
@@ -1437,7 +1438,7 @@ function buildX64LinuxFileRenameChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: released)
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: prefixDisp)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixOpenReadOnly)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixOpenReadOnly or LinuxOpenCloseOnExec)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixNoFileMode as MachineWord)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
@@ -1889,7 +1890,7 @@ function buildX64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.r8, disp: LinuxSearchPrefixOffset)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: X64LinuxOpenDirectoryFlags)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: X64LinuxOpenDirectoryFlags or LinuxOpenCloseOnExec)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixNoFileMode as MachineWord)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
@@ -3611,6 +3612,9 @@ end 'buildX64LinuxProcessSignalChunk'
 // `lpEnvironment` is a NUL-separated BLOCK and `execve`'s third argument is a POINTER VECTOR, and the
 // conversion runs in `SubprocessRuntime.buildSubpEnvVector` — Std-IR the PARENT executes before this chunk
 // is called, so the `clone` copies a vector the child only reads.
+//
+// ⚠ The three descriptors `dup3` installs are the only ones that survive the `execve`: everything else the
+// runtime opens is close-on-exec, and `LinuxOpenCloseOnExec` owns that rule.
 function buildX64LinuxSpawnChunk() returns FunctionCodeChunk
 	let SlotArgv = 0 as StackSize
 	let SlotCwd = 1 as StackSize
@@ -3941,7 +3945,7 @@ end 'buildX64LinuxShmPathChunk'
 
 function x64LinuxEmitShmOpenPath(asm X64RuntimeAsm, pathDisp Imm32, flags MachineWord, mode MachineWord)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: pathDisp)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: flags)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: flags or LinuxOpenCloseOnExec)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: mode)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)

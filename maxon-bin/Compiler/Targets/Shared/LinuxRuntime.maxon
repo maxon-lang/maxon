@@ -790,8 +790,11 @@ export let LinuxReapUntilItExits = 0
 // handle, while an inherited standard stream and a redirected file reach it as bare descriptors.
 export let LinuxDup3NoFlags = 0
 
-// `O_CLOEXEC`. Every pipe this lane opens carries it, because there is no `POSIX_SPAWN_CLOEXEC_DEFAULT` here
-// to invert the inheritance default for the whole exec — see `Arm64PosixRuntime.buildArm64PosixPipeChunk`.
+// `O_CLOEXEC`. Every descriptor this lane opens carries it, because there is no
+// `POSIX_SPAWN_CLOEXEC_DEFAULT` here to invert the inheritance default for the whole exec: a spawn hands
+// its child every descriptor open at the `clone` without it, and a leaked pipe or FIFO write end is an end
+// of file the child's reader never sees. The one exception is the `/dev/null` that fills a missing 0, 1
+// or 2 at startup, which must be inherited.
 export let LinuxOpenCloseOnExec = 0o2000000
 
 // What a child that could not `execve` exits with — the shell's own "command found but could not be run",

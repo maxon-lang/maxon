@@ -2443,3 +2443,89 @@ end 'main'
 ```stdout
 second: kind=0 code=0 out=through the fifo
 ```
+
+<!-- test: subprocess-builtins.posix-a-file-open-in-the-parent-is-not-inherited-by-the-child -->
+<!-- unsupported-targets: x64-windows, arm64-macos, wasm32-wasi -->
+A descriptor the parent holds open when it spawns is not the child's. Here the parent writes 1 MiB into the FIFO
+the child reads as its stdin; that is more than a pipe buffers, so the parent's write end is still open when the
+reader's spawn runs. The child drains the payload and counts the descriptors it holds on that FIFO: only its
+stdin. A child that inherited the parent's write end would hold a writer on its own stdin, and a reader that
+waits for end of file there, such as `cat`, would wait forever.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+let payloadBytes = 1048576
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+type FifoReader
+	var summary as String
+
+	static function create() returns Self
+		return Self{summary: ""}
+	end 'create'
+
+	export function countFrom(fifo String)
+		var argv = ByteArray.create()
+		appendToken(argv, token: "/bin/sh")
+		appendToken(argv, token: "-c")
+		appendToken(argv, token: "head -c {payloadBytes} >/dev/null; t=$(readlink /proc/$$/fd/0); n=0; for f in /proc/$$/fd/*; do if [ \"$(readlink \"$f\")\" = \"$t\" ]; then n=$((n+1)); fi; done; echo $n")
+		let empty = ""
+		let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+		let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 3, fifo.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+		let r = __Builtins.subprocessWaitCollect(h, 0)
+		let out = String.init(__Builtins.subprocessResultStdout(r))
+		self.summary = "kind={__Builtins.subprocessResultStatusKind(r)} code={__Builtins.subprocessResultStatusCode(r)} fds={out.trim()}"
+		__Builtins.subprocessResultRelease(r)
+		__Builtins.subprocessReleaseHandle(h)
+	end 'countFrom'
+
+	export function answer() returns String
+		return self.summary.clone()
+	end 'answer'
+end 'FifoReader'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "d=$(mktemp -d) && mkfifo \"$d/f\" && printf %s \"$d\"")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let first = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let made = __Builtins.subprocessWaitCollect(first, 0)
+	let dir = String.init(__Builtins.subprocessResultStdout(made))
+	__Builtins.subprocessResultRelease(made)
+	__Builtins.subprocessReleaseHandle(first)
+	let fifo = "{dir}/f"
+
+	var payload = StringBuilder.create()
+	for _ in 0 upto payloadBytes 'fill'
+		payload.append("x")
+	end 'fill'
+
+	let reader = spawn FifoReader.create()
+	reader.countFrom("{dir}/f")
+	try File.writeText(try FilePath.from(fifo) otherwise return 2, content: payload.build()) otherwise return 3
+	let answer = try await reader.answer() otherwise return 8
+	print("child: {answer}\n")
+
+	try File.delete(try FilePath.from(fifo) otherwise return 4) otherwise return 5
+	try Directory.delete(try FilePath.from(dir) otherwise return 6) otherwise return 7
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+child: kind=0 code=0 fds=1
+```

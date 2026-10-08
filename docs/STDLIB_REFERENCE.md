@@ -1758,8 +1758,8 @@ override's spelling, and a map that names one variable in two spellings makes th
 A run feeds `bytes` and `delayed` input while it drains the child's output, so a child that writes before it
 reads still receives its whole input, and a `timeoutMs` deadline fires while input is still pending.
 
-On Windows a child inherits only the three standard handles its own configuration gives it; the pipes of
-other spawns in progress at the same moment stay with this process.
+A child inherits only the three standard streams its own configuration gives it; the files this process
+holds open and the pipes of other spawns in progress at the same moment stay with this process.
 
 ### Results
 
