@@ -477,13 +477,13 @@ type ValueOrigins
 		return true
 	end 'settle'
 
+	// Joined with the previous answer: a result may copy an operand's origin, and an operand such as a
+	// merge can still move from minted to unknown on a later round.
 	function originOfResult(op MaxonOp, result ValueId, func IrFunction, soleKept bool) returns ValueOriginCode
-		let before = self.raw(result)
+		return joinOrigins(self.raw(result), b: self.derivedOriginOfResult(op, result: result, func: func, soleKept: soleKept))
+	end 'originOfResult'
 
-		if before == OriginLocal or before == OriginUnknown 'alreadyFinal'
-			return before
-		end 'alreadyFinal'
-
+	function derivedOriginOfResult(op MaxonOp, result ValueId, func IrFunction, soleKept bool) returns ValueOriginCode
 		if soleKept and (try func.valueMintedSole.get(result) otherwise panic("ValueOrigins.originOfResult: valueMintedSole.get OOB at {result}")) 'mintedHere'
 			return OriginLocal
 		end 'mintedHere'
@@ -527,7 +527,7 @@ type ValueOrigins
 				witnessTryDispatch or
 				existentialWitness gives OriginUnknown
 		end 'op'
-	end 'originOfResult'
+	end 'derivedOriginOfResult'
 
 	function startTaint()
 		self.taintMasks.refill(self.codes.count(), value: NoParamPositions)
@@ -1045,7 +1045,7 @@ type EffectNodes
 		return node
 	end 'nodeFor'
 
-	function calleeInstance(callee ByteArray, args ValueIdArray, func IrFunction, result ValueId, takesReceiver bool) returns GenericInstanceId throws AbsentError
+	function calleeInstance(callee ByteArray, declared IrFunction, args ValueIdArray, func IrFunction, result ValueId, takesReceiver bool) returns GenericInstanceId throws AbsentError
 		let owner = try ownerTypeOf(callee)
 
 		if self.signatures.structTypeParamsOf(owner).isEmpty() 'notAMethodOfAGenericType'
@@ -1056,8 +1056,50 @@ type EffectNodes
 			return try self.receiverInstance(args, func: func, owner: owner)
 		end 'aMethod'
 
+		if not self.returnsItsOwnInstance(declared, owner: owner) 'anotherInstanceOfTheType'
+			throw AbsentError.absent
+		end 'anotherInstanceOfTheType'
+
 		return try self.resultInstance(result, func: func, owner: owner)
 	end 'calleeInstance'
+
+	// A static takes the instance its result names only when it is declared to return its own; one
+	// declared to return another instance of the type is read without the instance it was called on.
+	function returnsItsOwnInstance(declared IrFunction, owner ByteArray) returns bool
+		return match declared.maxonReturnType 'returned'
+			void gives false
+			value(inner) gives self.isOwnInstance(inner, owner: owner)
+		end 'returned'
+	end 'returnsItsOwnInstance'
+
+	function isOwnInstance(type MaxonType, owner ByteArray) returns bool
+		if maxonTypeTag(type) != ValueTypeTag.genericInstance 'selfOrAnotherType'
+			return true
+		end 'selfOrAnotherType'
+
+		let id = genericInstanceIdOf(type)
+
+		if not self.signatures.genericInstanceBaseName(id).equals(owner) 'anotherType'
+			return false
+		end 'anotherType'
+
+		for position in 0 upto self.signatures.genericInstanceArgCount(id) 'eachArgument'
+			if not self.argumentIsTheOwnersParameter(self.signatures.substitutedInstanceArg(id, position: position), owner: owner, position: position) 'notItsOwnParameter'
+				return false
+			end 'notItsOwnParameter'
+		end 'eachArgument'
+
+		return true
+	end 'isOwnInstance'
+
+	function argumentIsTheOwnersParameter(argument MaxonType, owner ByteArray, position ElementIndex) returns bool
+		if maxonTypeTag(argument) != ValueTypeTag.typeParameter 'notAParameter'
+			return false
+		end 'notAParameter'
+
+		let declaringType = try self.signatures.typeParamOwnerOf(typeNameIdOf(argument) as TypeParamId) otherwise return false
+		return declaringType.declaringTypeName.equals(owner) and declaringType.position == position
+	end 'argumentIsTheOwnersParameter'
 
 	function resultInstance(result ValueId, func IrFunction, owner ByteArray) returns GenericInstanceId throws AbsentError
 		if (try func.valueTags.get(result) otherwise throw AbsentError.absent) != ValueTypeTag.genericInstance 'notAnInstance'
@@ -1507,6 +1549,16 @@ type EffectSummaryBuilder
 		return try self.hard.get(node) otherwise panic("EffectSummaryBuilder.isHard: node {node} is past the {self.hard.count()} grown")
 	end 'isHard'
 
+	// Only the second walk knows whether a minted record holds nothing foreign, so the first leaves a
+	// minted operand alone rather than refuse it for a reason the second may lift.
+	function noteWriteToWholeGraph(node ElementIndex, target ValueOriginCode)
+		if originIsLocal(target) and not self.taintEnabled 'theSecondWalkKnowsWhatItHolds'
+			return
+		end 'theSecondWalkKnowsWhatItHolds'
+
+		_ = self.passOnWrite(node, origin: target, reach: WriteReach.far)
+	end 'noteWriteToWholeGraph'
+
 	function noteWrite(node ElementIndex, target ValueOriginCode)
 		if originIsLocal(target) 'theCallersOwn'
 			return
@@ -1695,6 +1747,11 @@ type EffectSummaryBuilder
 
 		if receiverWritingRuntimeCallee(callee) 'writesOnlyItsReceiver'
 			self.noteWrite(node, target: self.facts.originOf(try args.get(0) otherwise panic("EffectSummaryBuilder.walkCall: '{String.from(callee)}' writes its receiver but the call carries no argument")))
+
+			if movesANodeOutOfItsChainCallee(callee) 'writesTheOldChain'
+				self.noteWriteToWholeGraph(node, target: self.facts.originOf(try args.get(1) otherwise panic("EffectSummaryBuilder.walkCall: '{String.from(callee)}' moves a node but the call carries none")))
+			end 'writesTheOldChain'
+
 			self.noteStoredOperands(node, callee: callee, args: args, func: func)
 			return
 		end 'writesOnlyItsReceiver'
@@ -1726,7 +1783,7 @@ type EffectSummaryBuilder
 	function calleeNode(calleeIndex ElementIndex, callee ByteArray, ordered ValueIdArray, func IrFunction, result ValueId, origins ValueOrigins) returns ElementIndex
 		var context = EffectContext.plain()
 
-		if let instance = try self.nodes.calleeInstance(callee, args: ordered, func: func, result: result, takesReceiver: self.takesReceiver(callee)) 'aMethodOfAConcreteInstance'
+		if let instance = try self.nodes.calleeInstance(callee, declared: try self.nodes.functions.get(calleeIndex) otherwise panic("EffectSummaryBuilder.calleeNode: calleeIndex {calleeIndex} is past the functions"), args: ordered, func: func, result: result, takesReceiver: self.takesReceiver(callee)) 'aMethodOfAConcreteInstance'
 			context = EffectContext.ofInstance(instance)
 		end 'aMethodOfAConcreteInstance'
 

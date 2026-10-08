@@ -3259,6 +3259,184 @@ end 'main'
 0
 ```
 
+<!-- test: moving-a-node-out-of-an-argument-chain-keeps-its-result-droppable -->
+Reinserting a node moves it out of the chain it was in, which is the argument's chain, not the receiver's.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntChain = __ManagedList with Integer
+
+function steal(source IntChain) returns Integer
+	var mine = IntChain.create()
+
+	let node = try source.head() otherwise 'empty'
+		return 0
+	end 'empty'
+
+	mine.reinsertFirst(node)
+	return mine.count() as Integer
+end 'steal'
+
+function main() returns ExitCode
+	var chain = IntChain.create()
+	_ = chain.insertLast(5)
+	_ = steal(chain)
+	return 0 if chain.count() == 0 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: moving-a-node-out-of-a-global-chain-keeps-its-result-droppable -->
+The same move out of a module-level chain.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntChain = __ManagedList with Integer
+
+var shelf = IntChain.create()
+
+function takeFromShelf() returns Integer
+	var mine = IntChain.create()
+
+	let node = try shelf.head() otherwise 'empty'
+		return 0
+	end 'empty'
+
+	mine.reinsertLast(node)
+	return mine.count() as Integer
+end 'takeFromShelf'
+
+function main() returns ExitCode
+	_ = shelf.insertLast(5)
+	_ = takeFromShelf()
+	return 0 if shelf.count() == 0 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-loop-that-reaches-a-global-through-a-co-owned-copy-keeps-its-result-droppable -->
+A record the first trip made and a later trip swapped for a global is not made by the function, however many names it passes through.
+```maxon
+typealias Small = int(0 to 100)
+
+type Box
+	export var n as Small
+
+	static function create(n Small) returns Box
+		return Box{n: n}
+	end 'create'
+end 'Box'
+
+var shared = Box.create(0)
+
+function scribble() returns Small
+	var held = Box.create(0)
+	var other = Box.create(0)
+	var i = 0 as Small
+
+	while i < 3 'loop'
+		let fresh = Box.create(0)
+		let b = held
+		let pick = fresh if i < 2 else b
+		other = pick
+		other.n = 7
+		held = shared
+		i = i + 1
+	end 'loop'
+
+	return other.n
+end 'scribble'
+
+function main() returns ExitCode
+	_ = scribble()
+	return 0 if shared.n == 7 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-static-returning-another-instance-of-its-type-is-judged-on-its-own-body -->
+A static of a generic type that returns a different instance than the one it was called on is read without the called instance.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+typealias IntTally = Tally with Integer
+
+type Tally uses T
+	export var weight as Integer
+
+	static function of(seed T) returns IntTally
+		return IntTally.build(1)
+	end 'of'
+
+	static function build(weight Integer) returns Self
+		return Self{weight: weight}
+	end 'build'
+end 'Tally'
+
+typealias WordTally = Tally with String
+
+function weigh(seed String) returns Integer
+	let tally = WordTally.of(seed)
+	return tally.weight
+end 'weigh'
+
+function main() returns ExitCode
+	_ = weigh("word")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-static-returning-another-instance-of-its-type-is-judged-on-its-own-body.maxon:26:2: result of pure function 'weigh' must be used
+```
+
+<!-- test: moving-a-node-out-of-a-field-chain-keeps-its-result-droppable -->
+The same move out of a chain a record holds, where the method that moves it is the only thing that touches the chain.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntChain = __ManagedList with Integer
+
+type Shelf
+	var chain as IntChain
+
+	static function create() returns Shelf
+		return Shelf{chain: IntChain.create()}
+	end 'create'
+
+	function stock()
+		_ = self.chain.insertLast(5)
+	end 'stock'
+
+	function left() returns Integer
+		return self.chain.count() as Integer
+	end 'left'
+
+	function steal() returns Integer
+		var mine = IntChain.create()
+
+		let node = try self.chain.head() otherwise 'empty'
+			return 0
+		end 'empty'
+
+		mine.reinsertFirst(node)
+		return mine.count() as Integer
+	end 'steal'
+end 'Shelf'
+
+function main() returns ExitCode
+	let shelf = Shelf.create()
+	shelf.stock()
+	_ = shelf.steal()
+	return 0 if shelf.left() == 0 else 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: error.a-record-holding-only-what-the-function-made-takes-a-deep-write-for-free -->
 A record that holds nothing the function was handed may be written through its fields; one that holds an argument may not.
 ```maxon

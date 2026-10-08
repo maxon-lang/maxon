@@ -5040,12 +5040,19 @@ function containerMutatorCallee(callee ByteArray) returns bool
 	return callee.equals(ManagedPushName) or callee.equals(ManagedSetName) or callee.equals(ManagedResizeName) or callee.equals(ManagedSetLengthName) or callee.equals(ManagedSetByteName) or callee.equals(ManagedMemGrowName) or callee.equals(ManagedMemSwapName) or callee.equals(ManagedMemShiftRightName) or callee.equals(ManagedMemShiftLeftName) or callee.equals(ManagedMemSetName) or callee.equals(ManagedFillName) or callee.equals(ManagedCursorAdvanceName) or callee.equals(ManagedCursorRetreatName) or callee.equals(ManagedCursorSeekName)
 end 'containerMutatorCallee'
 
+// A reinsertion unlinks its node from the chain the node names, which need not be the receiver, so it
+// also writes that chain's header and its neighbouring links.
+module function movesANodeOutOfItsChainCallee(callee ByteArray) returns bool
+	return callee.equals(ListReinsertFirstName) or callee.equals(ListReinsertLastName)
+end 'movesANodeOutOfItsChainCallee'
+
 function listMutatorCallee(callee ByteArray) returns bool
 	return callee.equals(ListAppendName) or callee.equals(ListPrependName) or callee.equals(ListReinsertFirstName) or callee.equals(ListReinsertLastName) or callee.equals(ListNodeSetValueName)
 end 'listMutatorCallee'
 
-// Entries that write their first operand and nothing else. A promise vacate is left out: it hands a
-// green thread's result to a waiter, which is more than a write to its receiver.
+// Entries that write their first operand, and nothing else but what `movesANodeOutOfItsChainCallee`
+// names. A promise vacate is left out: it hands a green thread's result to a waiter, which is more than
+// a write to its receiver.
 module function receiverWritingRuntimeCallee(callee ByteArray) returns bool
 	return containerMutatorCallee(callee) or listMutatorCallee(callee) or copiesItsSourceCallee(callee) or (takesRecordsOutCallee(callee) and not callee.equals(GtPromiseFieldVacateName))
 end 'receiverWritingRuntimeCallee'
