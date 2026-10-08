@@ -1335,7 +1335,7 @@ function commitArtifactRegistries(project Project, artifact FileParseArtifact, o
 	commitOverloadSets(project, artifact: artifact)
 	commitPendingFnMergeChecks(project, artifact: artifact)
 	commitPendingFunctionTypeDoors(project, artifact: artifact)
-	commitPendingDiscardedResults(project, artifact: artifact)
+	commitPendingDiscardedResults(project, artifact: artifact, opOffset: opOffset)
 	commitRangeChecks(project, artifact: artifact)
 	commitTypeAliases(project, artifact: artifact)
 	commitFunctionTypeAliases(project, artifact: artifact, signatures: signatures)
@@ -2457,8 +2457,8 @@ end 'Map'
 
 // Append this file's recorded discarded-result sites to the whole-program list — the twin of the door and
 // transform commits above, and dedup-free for their reason: each entry is a distinct SITE with its own position.
-function commitPendingDiscardedResults(project Project, artifact FileParseArtifact)
+function commitPendingDiscardedResults(project Project, artifact FileParseArtifact, opOffset ElementIndex)
 	for site in artifact.pendingDiscardedResults 'each'
-		project.pendingDiscardedResults.push(site)
+		project.pendingDiscardedResults.push(site.relocated(opOffset))
 	end 'each'
 end 'commitPendingDiscardedResults'

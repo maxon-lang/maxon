@@ -3437,6 +3437,178 @@ end 'main'
 0
 ```
 
+<!-- test: an-overload-the-call-reached-keeps-its-result-droppable -->
+A discard is judged by the overload the call reaches, not by the first one declared: the zero-argument digest bumps a counter.
+```maxon
+typealias Code = int(0 to u32.max)
+
+var noise = 0 as Code
+
+type Loud
+	export var x as Code
+
+	static function create(x Code) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function digest(salt Code) returns Code
+		return self.x + salt
+	end 'digest'
+
+	function digest() returns Code
+		noise = noise + 1
+		return self.x
+	end 'digest'
+end 'Loud'
+
+function main() returns ExitCode
+	let loud = Loud.create(3)
+	_ = loud.digest()
+	return noise - 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-free-overload-the-call-reached-keeps-its-result-droppable -->
+The same for free functions: the String member prints, the number member before it is pure.
+```maxon
+typealias Number = int(0 to u32.max)
+
+function describe(x Number) returns Number
+	return x + 1
+end 'describe'
+
+function describe(s String) returns Number
+	print("{s}\n")
+	return 0
+end 'describe'
+
+function main() returns ExitCode
+	_ = describe("hi")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi
+```
+
+<!-- test: error.a-pure-overload-the-call-reached-is-refused-though-the-first-one-prints -->
+The converse: the member the call reaches is pure, so its discarded result is refused whatever the first member does.
+```maxon
+typealias Number = int(0 to u32.max)
+
+function describe(x Number) returns Number
+	print("{x}\n")
+	return x
+end 'describe'
+
+function describe(s String) returns Number
+	return s.count() as Number
+end 'describe'
+
+function main() returns ExitCode
+	_ = describe("hi")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-pure-overload-the-call-reached-is-refused-though-the-first-one-prints.maxon:14:2: result of pure function 'describe' must be used
+```
+
+<!-- test: error.a-pure-method-overload-is-reported-under-its-bare-name -->
+The diagnostic names the member the author wrote, never the registration name an overload carries.
+```maxon
+typealias Code = int(0 to u32.max)
+
+var noise = 0 as Code
+
+type Loud
+	export var x as Code
+
+	static function create(x Code) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function digest(salt Code) returns Code
+		noise = noise + salt
+		return self.x
+	end 'digest'
+
+	function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Loud'
+
+function main() returns ExitCode
+	let loud = Loud.create(3)
+	_ = loud.digest()
+	return noise
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-pure-method-overload-is-reported-under-its-bare-name.maxon:25:2: result of pure function 'Loud.digest' must be used
+```
+
+<!-- test: error.a-bare-call-of-the-impure-overload-the-call-reached-earns-e3065 -->
+A bare statement of the member that bumps a counter earns the impure code, not the pure one the first member would.
+```maxon
+typealias Code = int(0 to u32.max)
+
+var noise = 0 as Code
+
+type Loud
+	export var x as Code
+
+	static function create(x Code) returns Self
+		return Self{x: x}
+	end 'create'
+
+	function digest(salt Code) returns Code
+		return self.x + salt
+	end 'digest'
+
+	function digest() returns Code
+		noise = noise + 1
+		return self.x
+	end 'digest'
+end 'Loud'
+
+function main() returns ExitCode
+	let loud = Loud.create(3)
+	loud.digest()
+	return noise - 1
+end 'main'
+```
+```maxoncstderr
+error E3065: specs/discarded-results/error.a-bare-call-of-the-impure-overload-the-call-reached-earns-e3065.maxon:25:7: result of 'Loud.digest' is not used (use '_ = expr' to discard)
+```
+
+<!-- test: an-allocation-counter-read-keeps-its-result-droppable -->
+A counter read is a read of a figure that moves, like a clock read, so its function is not pure.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+function allocated() returns Tally
+	return __Builtins.processAllocTotal() as Tally
+end 'allocated'
+
+function main() returns ExitCode
+	let before = allocated()
+	var kept = ByteArray.create()
+	kept.push(1)
+	_ = allocated()
+	return 0 if allocated() > before else 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: error.a-record-holding-only-what-the-function-made-takes-a-deep-write-for-free -->
 A record that holds nothing the function was handed may be written through its fields; one that holds an argument may not.
 ```maxon

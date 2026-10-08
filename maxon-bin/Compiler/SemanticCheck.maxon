@@ -4399,8 +4399,9 @@ end 'DiscardVerdict'
 union DiscardResolution
 	settled(verdict DiscardVerdict)
 
-	// The callee's slot in the effect-free column is the rest of this site's answer.
-	purityOf(calleeIndex ElementIndex)
+	// The callee's slot in the effect-free column is the rest of this site's answer, and its resolved name
+	// is what the verdict reports.
+	purityOf(calleeIndex ElementIndex, callee ByteArray)
 end 'DiscardResolution'
 
 // ⭐⭐ **E3064 — A CALL WHOSE RESULT NOBODY TOOK, WHEN THE CALLEE HAD NO OTHER REASON TO RUN.** Drains the
@@ -4431,9 +4432,9 @@ function checkDiscardedResults(project Project, module MaxonModule, signatures P
 	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
 	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
-		match resolveDiscardSite(project, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
+		match resolveDiscardSite(project, module: module, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
 			settled(verdict) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: verdict)
-			purityOf(calleeIndex) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: declaredCalleeVerdict(project, siteIndex: siteIndex, calleeIndex: calleeIndex, effectFree: effectFree))
+			purityOf(calleeIndex, callee) then reportDiscardVerdict(project, siteIndex: siteIndex, verdict: declaredCalleeVerdict(project, siteIndex: siteIndex, calleeIndex: calleeIndex, callee: callee, effectFree: effectFree))
 		end 'resolved'
 	end 'eachSite'
 end 'checkDiscardedResults'
@@ -4450,7 +4451,7 @@ end 'checkDiscardedResults'
 // — next to the summary build it lets most compiles skip entirely.
 function effectFreeSummaryIfConsulted(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns BoolArray
 	for siteIndex in 0 upto project.pendingDiscardedResults.count() 'eachSite'
-		match resolveDiscardSite(project, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
+		match resolveDiscardSite(project, module: module, siteIndex: siteIndex, funcNames: funcNames) 'resolved'
 			settled then break 'resolved'
 			purityOf then return buildEffectFreeSummary(project, module: module, signatures: signatures, funcNames: funcNames)
 		end 'resolved'
@@ -4475,33 +4476,42 @@ end 'effectFreeSummaryIfConsulted'
 //     wrote (`PendingDiscardedResult.subject`), which is the spelling the author used: `Array.first`, never
 //     `__managed_first`. A runtime entry no lowering arm named is left alone, which is the safe direction —
 //     a missed diagnostic, never a legal program refused under a symbol nobody wrote.
-function resolveDiscardSite(project Project, siteIndex ElementIndex, funcNames FunctionNameIndex) returns DiscardResolution
+function resolveDiscardSite(project Project, module MaxonModule, siteIndex ElementIndex, funcNames FunctionNameIndex) returns DiscardResolution
 	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("resolveDiscardSite: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 
-	if site.calleeIsACompilerIntrinsic 'anIntrinsicWhosePurityIsSettled'
-		return DiscardResolution.settled(DiscardVerdict.pureResultUnused(String.from(site.callee)))
-	end 'anIntrinsicWhosePurityIsSettled'
+	return match site.producer 'producer'
+		intrinsic(name) gives DiscardResolution.settled(DiscardVerdict.pureResultUnused(String.from(name)))
+		call(opIndex) gives resolveCallSite(project, siteIndex: siteIndex, callee: maxonOpCalleeName(try module.ops.get(opIndex) otherwise panic("resolveDiscardSite: ops.get({opIndex}) OOB — the site names an op of the merged module")), funcNames: funcNames)
+	end 'producer'
+end 'resolveDiscardSite'
 
+// `callee` is the name on the call op as it stands now: overload resolution has since rewritten it to
+// the member the arguments chose, which the parser could not know when it filed the site.
+function resolveCallSite(project Project, siteIndex ElementIndex, callee ByteArray, funcNames FunctionNameIndex) returns DiscardResolution
 	// A `__`-prefixed callee is the compiler's own name whatever a declaration says — a stdlib overlay
 	// may wear it, but a program that does so collides with the symbol the compiler emits, and E4015
 	// at the Std tier is the diagnostic that owns that collision. Consulting a declared body's purity
 	// here would pre-empt it, so this door answers from the runtime-read roster alone, never from
 	// `funcNames`.
-	if reservedCalleeReasonOf(site.callee) == ReservedCalleeReason.compilerInternalPrefix 'theCompilersOwnName'
-		return DiscardResolution.settled(runtimeReadVerdict(project, siteIndex: siteIndex))
+	if reservedCalleeReasonOf(callee) == ReservedCalleeReason.compilerInternalPrefix 'theCompilersOwnName'
+		return DiscardResolution.settled(runtimeReadVerdict(project, siteIndex: siteIndex, callee: callee))
 	end 'theCompilersOwnName'
 
-	let calleeIndex = try funcNames.byName.get(site.callee) otherwise return DiscardResolution.settled(runtimeReadVerdict(project, siteIndex: siteIndex))
+	let calleeIndex = try funcNames.byName.get(callee) otherwise return DiscardResolution.settled(runtimeReadVerdict(project, siteIndex: siteIndex, callee: callee))
+
+	if functionReturnsNothing(try funcNames.functions.get(calleeIndex) otherwise panic("resolveCallSite: functions.get({calleeIndex}) OOB — byName resolves into funcNames.functions")) 'nothingWasDiscarded'
+		return DiscardResolution.settled(DiscardVerdict.none)
+	end 'nothingWasDiscarded'
 
 	// Asked ahead of the purity question, not after it: a builder step is droppable whatever its body does,
 	// which is the only order that keeps `c.increment()` — impure by its own field
 	// write — a legal statement. It is also what keeps a builder-only program from building the summary.
-	if calleeIsChainable(project, callee: site.callee) 'aBuilderStep'
+	if calleeIsChainable(project, callee: callee) 'aBuilderStep'
 		return DiscardResolution.settled(DiscardVerdict.none)
 	end 'aBuilderStep'
 
-	return DiscardResolution.purityOf(calleeIndex)
-end 'resolveDiscardSite'
+	return DiscardResolution.purityOf(calleeIndex, callee: callee)
+end 'resolveCallSite'
 
 // ⭐⭐ **WHAT A DECLARED CALLEE EARNS ONCE THE SUMMARY HAS ANSWERED FOR IT** — E3064 when it had no other
 // reason to run, and otherwise E3065 or silence, according to which position took nothing.
@@ -4512,28 +4522,28 @@ end 'resolveDiscardSite'
 // where the callee is in `funcNames` and the summary actually walked its body. A lowered runtime
 // entry off the effect-free roster is therefore left alone in both directions: the roster is a whitelist of
 // READS, and absence from a whitelist is not proof of an effect.
-function declaredCalleeVerdict(project Project, siteIndex ElementIndex, calleeIndex ElementIndex, effectFree BoolArray) returns DiscardVerdict
+function declaredCalleeVerdict(project Project, siteIndex ElementIndex, calleeIndex ElementIndex, callee ByteArray, effectFree BoolArray) returns DiscardVerdict
 	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("declaredCalleeVerdict: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 	let calleeIsEffectFree = try effectFree.get(calleeIndex) otherwise panic("declaredCalleeVerdict: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into, and it is built whenever any site resolves to a purity question, which this one did")
 
 	if calleeIsEffectFree 'theCallHadNoOtherReasonToRun'
-		return DiscardVerdict.pureResultUnused(String.from(site.callee))
+		return DiscardVerdict.pureResultUnused(String.from(overloadRegistrationBaseName(callee)))
 	end 'theCallHadNoOtherReasonToRun'
 
 	return match site.door 'whereTheResultFellAway'
-		statement gives DiscardVerdict.impureResultUnused(String.from(site.callee))
+		statement gives DiscardVerdict.impureResultUnused(String.from(overloadRegistrationBaseName(callee)))
 		explicitDiscard gives DiscardVerdict.none
 	end 'whereTheResultFellAway'
 end 'declaredCalleeVerdict'
 
 // The verdict a LOWERED RUNTIME READ earns. Split out so the lookup miss above reads as a question with its
 // own answer rather than as a fallthrough.
-function runtimeReadVerdict(project Project, siteIndex ElementIndex) returns DiscardVerdict
+function runtimeReadVerdict(project Project, siteIndex ElementIndex, callee ByteArray) returns DiscardVerdict
 	let site = try project.pendingDiscardedResults.get(siteIndex) otherwise panic("runtimeReadVerdict: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")
 
 	return match site.subject 'subject'
 		none gives DiscardVerdict.none
-		runtimeRead(qualifiedName) gives DiscardVerdict.pureResultUnused(String.from(qualifiedName)) if effectFreeRuntimeCallee(site.callee) else DiscardVerdict.none
+		runtimeRead(qualifiedName) gives DiscardVerdict.pureResultUnused(String.from(qualifiedName)) if effectFreeRuntimeCallee(callee) else DiscardVerdict.none
 	end 'subject'
 end 'runtimeReadVerdict'
 
@@ -4986,8 +4996,14 @@ module function effectFreeRuntimeCallee(callee ByteArray) returns bool
 		return false
 	end 'noRosterEntryWearsThisShape'
 
-	return ownershipBookkeepingCallee(callee) or containerReadCallee(callee) or pureComputationCallee(callee)
+	return (ownershipBookkeepingCallee(callee) and not allocationCounterCallee(callee)) or containerReadCallee(callee) or pureComputationCallee(callee)
 end 'effectFreeRuntimeCallee'
+
+// The `__mm_` prefix reads as heap bookkeeping, but a counter answers from figures the allocator keeps
+// moving, so a function that reads one is not pure.
+function allocationCounterCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: MmCounterPrefix)
+end 'allocationCounterCallee'
 
 // ⭐⭐ **WHERE A CALLEE NO SUMMARY DESCRIBES MAY STORE WHAT IT WAS HANDED** — `StorageProvenance`'s question of a
 // runtime entry, or of a declared callee whose body was not read. A container mutator puts its other operands

@@ -341,7 +341,7 @@ closure is judged by the closure's own body when the closure is known where the 
 literal, or a named function, handed to a helper that only calls it. A closure the call cannot identify (one
 read out of a field, say) makes the caller impure. Releasing a value that can own a green thread, a mailbox or an
 operating-system handle (a promise, a file, a socket, a type parameter's value) is an effect of the function that
-releases it.
+releases it. A call to an overloaded name is judged by the overload its arguments select.
 
 A function that returns nothing has no result to discard. Destructuring a pure function's tuple result must
 keep at least one element (`(_, _) = pure()` is **E3064**). A throwing call is judged the same way: a pure

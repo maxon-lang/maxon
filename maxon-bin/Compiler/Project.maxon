@@ -11324,6 +11324,55 @@ end 'cacheReadDiscardSubjectRuntimeRead'
 
 // @generated library-cache end
 
+// A call is named by its op, not by a callee name: overload resolution rewrites the op's callee after
+// the parse, so the name the parser saw may belong to another member of the set.
+export union DiscardedProducer
+	intrinsic(name ByteArray)
+	call(opIndex ElementIndex)
+end 'DiscardedProducer'
+
+// @generated library-cache begin
+function cacheWriteDiscardedProducer(writer LibraryCacheWriter, value DiscardedProducer)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		intrinsic(a0) then cacheWriteDiscardedProducerIntrinsic(writer, a0: a0)
+		call(a0) then cacheWriteDiscardedProducerCall(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteDiscardedProducer'
+
+function cacheWriteDiscardedProducerIntrinsic(writer LibraryCacheWriter, a0 ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteDiscardedProducerIntrinsic'
+
+function cacheWriteDiscardedProducerCall(writer LibraryCacheWriter, a0 ElementIndex)
+	writer.unsigned(a0 as CacheUnsigned)
+end 'cacheWriteDiscardedProducerCall'
+
+function cacheReadDiscardedProducer(reader LibraryCacheReader) returns DiscardedProducer throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadDiscardedProducerIntrinsic(reader)
+		1 gives try cacheReadDiscardedProducerCall(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadDiscardedProducer'
+
+function cacheReadDiscardedProducerIntrinsic(reader LibraryCacheReader) returns DiscardedProducer throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+
+	return DiscardedProducer.intrinsic(a0)
+end 'cacheReadDiscardedProducerIntrinsic'
+
+function cacheReadDiscardedProducerCall(reader LibraryCacheReader) returns DiscardedProducer throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ElementIndex
+
+	return DiscardedProducer.call(a0)
+end 'cacheReadDiscardedProducerCall'
+
+// @generated library-cache end
+
 // ⭐⭐ **A SITE THAT USES NONE OF A CALL'S RESULT, AWAITING THE WHOLE-PROGRAM VERDICT ON WHETHER THE CALLEE
 // HAD ANY OTHER REASON TO RUN (E3064, `specs/tuple-assign.md`).** Recorded rather than checked in place for
 // `PendingFunctionTypeDoor`'s reason and a sharper one of its own: whether a callee is PURE is a property of
@@ -11337,19 +11386,11 @@ end 'cacheReadDiscardSubjectRuntimeRead'
 // already in hand: the roster is machine instructions, so there is no body to walk and no entry in the
 // module's function index to walk it from.
 export type PendingDiscardedResult
-	// The callee whose result nobody took, as the CALL OP spells it — the key the effect summary is indexed
-	// by, so it is the resolved name and not the source token.
-	export var callee as ByteArray
+	export var producer as DiscardedProducer
 
 	// Which statement position filed this site. Set once, at the filing door, because that is the only tier
 	// that knows it: by `SemanticCheck` the `_` is long gone.
 	export var door as DiscardDoor
-
-	// ⭐ Whether this callee is a COMPILER INTRINSIC rather than a declared function. An intrinsic has no
-	// entry in the module's function index — it emits no call at all — so the effect summary cannot be asked
-	// about it, and does not need to be: a machine instruction over its arguments has no observable effect.
-	// Recording the provenance rather than a bare "already known pure" keeps the field to one meaning.
-	export var calleeIsACompilerIntrinsic as bool
 
 	// ⭐ **THE NAME THE DIAGNOSTIC PRINTS, WHEN IT IS NOT THE KEY.** the compiler's parser lowers a
 	// container read straight to a runtime symbol, so `items.first()` files `__managed_first` — a name
@@ -11361,21 +11402,27 @@ export type PendingDiscardedResult
 	export var column as ColumnNumber
 	export var filePath as FilePath
 
-	export static function create(callee ByteArray, door DiscardDoor, subject DiscardSubject, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
-		return Self{callee: callee, door: door, calleeIsACompilerIntrinsic: false, subject: subject, line: line, column: column, filePath: filePath}
+	export static function create(opIndex ElementIndex, door DiscardDoor, subject DiscardSubject, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
+		return Self{producer: DiscardedProducer.call(opIndex), door: door, subject: subject, line: line, column: column, filePath: filePath}
 	end 'create'
 
 	// An intrinsic is recognized in CALL position, and the only call position that takes nothing is a bare
 	// statement — so its door is settled here rather than passed in.
 	export static function createForIntrinsic(callee ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
-		return Self{callee: callee, door: DiscardDoor.statement, calleeIsACompilerIntrinsic: true, subject: DiscardSubject.none, line: line, column: column, filePath: filePath}
+		return Self{producer: DiscardedProducer.intrinsic(callee), door: DiscardDoor.statement, subject: DiscardSubject.none, line: line, column: column, filePath: filePath}
 	end 'createForIntrinsic'
+
+	export function relocated(offset ElementIndex) returns PendingDiscardedResult
+		return match self.producer 'producer'
+			intrinsic gives self.clone()
+			call(opIndex) gives Self{producer: DiscardedProducer.call(opIndex + offset), door: self.door, subject: self.subject, line: self.line, column: self.column, filePath: self.filePath}
+		end 'producer'
+	end 'relocated'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
-		writer.bytes(self.callee)
+		cacheWriteDiscardedProducer(writer, value: self.producer)
 		writer.unsigned(self.door.ordinal as CacheUnsigned)
-		writer.flag(self.calleeIsACompilerIntrinsic)
 		cacheWriteDiscardSubject(writer, value: self.subject)
 		writer.unsigned(self.line as CacheUnsigned)
 		writer.unsigned(self.column as CacheUnsigned)
@@ -11383,19 +11430,18 @@ export type PendingDiscardedResult
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns PendingDiscardedResult throws LibraryCacheDamage
-		let f_callee = try reader.bytes()
+		let f_producer = try cacheReadDiscardedProducer(reader)
 		let f_door = try cacheReadDiscardDoor(reader)
-		let f_calleeIsACompilerIntrinsic = try reader.flag()
 		let f_subject = try cacheReadDiscardSubject(reader)
 		let f_line = (try reader.unsigned()) as LineNumber
 		let f_column = (try reader.unsigned()) as ColumnNumber
 		let f_filePath = try reader.path()
 
-		return Self{callee: f_callee, door: f_door, calleeIsACompilerIntrinsic: f_calleeIsACompilerIntrinsic, subject: f_subject, line: f_line, column: f_column, filePath: f_filePath}
+		return Self{producer: f_producer, door: f_door, subject: f_subject, line: f_line, column: f_column, filePath: f_filePath}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize56
-		return sizeof(PendingDiscardedResult) as CacheSize56
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(PendingDiscardedResult) as CacheSize48
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

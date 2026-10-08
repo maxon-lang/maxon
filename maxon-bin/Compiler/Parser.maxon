@@ -4236,9 +4236,9 @@ union TryChannelResult
 	definedValue(value ValueId)
 end 'TryChannelResult'
 
-function tryChannelCallOf(op RoutableOp, wanted TryChannelResult) returns DiscardedCallee
+function tryChannelCallOf(op RoutableOp, opIndex ElementIndex, wanted TryChannelResult) returns DiscardedCallee
 	return match op 'op'
-		tryChannelCall(result, callee) gives DiscardedCallee.named(callee, result: result) if tryChannelWants(wanted, result: result) else DiscardedCallee.notACall
+		tryChannelCall(result, callee) gives DiscardedCallee.named(callee, result: result, opIndex: opIndex) if tryChannelWants(wanted, result: result) else DiscardedCallee.notACall
 		notRoutable or
 			call or
 			witness or
@@ -4801,7 +4801,7 @@ end 'tupleAssignTargetDeclares'
 // the same shape of question with a sentinel index instead, and its header says why the two differ.)
 union DiscardedCallee
 	notACall
-	named(callee ByteArray, result ValueId)
+	named(callee ByteArray, result ValueId, opIndex ElementIndex)
 end 'DiscardedCallee'
 
 // Did a call produce the value at all? The `try` rewrite's half of `directCallDefining` — it needs the fact,
@@ -37729,7 +37729,7 @@ export type Parser
 
 		while idx > opFloor 'scanThisStatementBackwards'
 			idx = idx - 1
-			let producer = tryChannelCallOf(self.routableOpAt(idx), wanted: wanted)
+			let producer = tryChannelCallOf(self.routableOpAt(idx), opIndex: idx, wanted: wanted)
 
 			if discardedCalleeIsACall(producer) 'theStatementMadeThisCall'
 				return producer
@@ -37747,13 +37747,24 @@ export type Parser
 	// ⚠ **A VOID RESULT IS NOT A DISCARD.** A `void` callee is seeded effectful anyway
 	// (`EffectSummaryBuilder.verdicts`), so filing one could never fire — but every bare void statement in every
 	// program would still pay for a record and for the whole-program summary those records switch on.
+	// An overloaded name is filed whatever the parser typed it as: it may have typed the call from another
+	// member, and `SemanticCheck.resolveCallSite` drops the site if the member reached returns nothing.
 	function recordDiscardedCallResult(value ValueId, opFloor ElementIndex, anchor Token, door DiscardDoor)
-		if self.tagOf(value) == ValueTypeTag.void 'theCallPromisedNothing'
+		let producer = self.directCallProducing(value, opFloor: opFloor)
+
+		if self.tagOf(value) == ValueTypeTag.void and not self.producerIsOverloaded(producer) 'theCallPromisedNothing'
 			return
 		end 'theCallPromisedNothing'
 
-		self.recordDiscardOf(self.directCallProducing(value, opFloor: opFloor), anchor: anchor, door: door)
+		self.recordDiscardOf(producer, anchor: anchor, door: door)
 	end 'recordDiscardedCallResult'
+
+	function producerIsOverloaded(producer DiscardedCallee) returns bool
+		return match producer 'producer'
+			notACall gives false
+			named(callee, _, _) gives self.signatures.overloadedDeclsOf(callee).count() > 1
+		end 'producer'
+	end 'producerIsOverloaded'
 
 	// File a probed producer, if it was a call at all. The ANCHOR is the statement's own token — where the
 	// author decided to take nothing — rather than the callee's, which is what makes `_ = double(5)` report at
@@ -37764,7 +37775,7 @@ export type Parser
 	// own subject and `SemanticCheck.checkDiscardedResults` reports it under the name it is keyed by.
 	function recordDiscardOf(producer DiscardedCallee, anchor Token, door DiscardDoor)
 		match producer 'usedNothing'
-			named(callee, result) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(callee, door: door, subject: self.runtimeReadSubjectOf(result), line: anchor.line, column: anchor.column, filePath: self.filePath))
+				named(_, result, opIndex) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(opIndex, door: door, subject: self.runtimeReadSubjectOf(result), line: anchor.line, column: anchor.column, filePath: self.filePath))
 			notACall then break 'usedNothing'
 		end 'usedNothing'
 	end 'recordDiscardOf'
@@ -41981,7 +41992,7 @@ export type Parser
 	function routedCallNeverComesBack(routed DiscardedCallee) returns bool
 		return match routed 'routed'
 			notACall gives false
-			named(callee, _) gives self.signatures.functionAlwaysThrows(callee)
+			named(callee, _, _) gives self.signatures.functionAlwaysThrows(callee)
 		end 'routed'
 	end 'routedCallNeverComesBack'
 
@@ -42520,7 +42531,7 @@ export type Parser
 
 	function directCallDefining(idx ElementIndex, value ValueId) returns DiscardedCallee
 		return match self.routableOpAt(idx) 'producer'
-			call(result, callee) gives DiscardedCallee.named(callee, result: result) if result == value else DiscardedCallee.notACall
+			call(result, callee) gives DiscardedCallee.named(callee, result: result, opIndex: idx) if result == value else DiscardedCallee.notACall
 			notRoutable or
 				tryChannelCall or
 				witness or
@@ -51075,7 +51086,7 @@ export type Parser
 
 	function opIsAnIterationThrowingCallDefining(source ValueId, opIdx ElementIndex) returns bool
 		return match self.directCallDefining(opIdx, value: source) 'call'
-			named(callee, _) gives throwsClauseIsIterationError(self.signatures.throwsOf(callee))
+			named(callee, _, _) gives throwsClauseIsIterationError(self.signatures.throwsOf(callee))
 			notACall gives false
 		end 'call'
 	end 'opIsAnIterationThrowingCallDefining'
