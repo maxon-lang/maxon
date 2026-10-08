@@ -1269,7 +1269,9 @@ each emits. The case name says what its fixture's program declares: `library-reu
 `own-types/`, `own-type-names/` (type names different from the first's), `iterating/` (an interface),
 `managed-clone/` (nested managed elements cloned) and `batch-shape/` (per-case directories after a primer
 of another shape). `shadowing/` declares its own `Clock`, and its case asserts the library is parsed cold
-instead (`library parsed cold (shadowed)`).
+instead (`library parsed cold (shadowed)`). `contested-library-function/` declares `sleep` in two
+per-case directories, which `stdlib/Sleep.maxon` also declares, and its case asserts the same
+(`library parsed cold (namesOverlap)`).
 
 The driver compiles the program several times. It applies rule 1's `.fixture` half only and rule 4 (the child runs in a staging
 directory under `temp/warm-rebuild/`).

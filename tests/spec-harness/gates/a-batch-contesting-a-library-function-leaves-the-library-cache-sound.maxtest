@@ -1,0 +1,34 @@
+let ContestingSpecName = "contested-library-function"
+let ContestingCaseNames = ["contested-library-function.first-declares-sleep", "contested-library-function.second-declares-sleep"]
+let CallerSpecName = "library-sleep-caller"
+let CallerCaseNames = ["library-sleep-caller.calls-the-librarys-sleep"]
+let ContestedFunctionWorkersFlag = "--workers=1"
+let ContestedFunctionCacheRootVariable = "MAXON_RUN_CACHE_ROOT"
+let ContestedFunctionFirstRunName = "the first run"
+let ContestedFunctionSecondRunName = "the second run"
+
+test 'a batch in which two cases declare the library sleep leaves a library cache a program calling the library sleep compiles from'
+	let cacheRoot = stagedRunCacheRoot()
+	let environment = Environment.inheritUpdating([ContestedFunctionCacheRootVariable: cacheRoot.toString()])
+
+	let first = runGateFixtureOnce([ContestedFunctionWorkersFlag], environment: environment)
+	let second = runGateFixtureOnce([ContestedFunctionWorkersFlag], environment: environment)
+	discardStaging(cacheRoot)
+
+	var broken = StringArray.create()
+
+	collectContestedFunctionFailures(first, which: ContestedFunctionFirstRunName, broken: broken)
+	collectContestedFunctionFailures(second, which: ContestedFunctionSecondRunName, broken: broken)
+
+	requireNothingBroken(broken, headline: "a batch contesting a library function leaves the library cache sound")
+end 'a batch in which two cases declare the library sleep leaves a library cache a program calling the library sleep compiles from'
+
+function collectContestedFunctionFailures(run CollectedOutput, which String, broken StringArray)
+	let said = everythingSaid(run)
+	collectNotPassed(said, specName: ContestingSpecName, testNames: ContestingCaseNames, broken: broken)
+	collectNotPassed(said, specName: CallerSpecName, testNames: CallerCaseNames, broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("{which} exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+end 'collectContestedFunctionFailures'

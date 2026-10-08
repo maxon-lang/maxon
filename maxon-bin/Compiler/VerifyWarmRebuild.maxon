@@ -788,12 +788,11 @@ end 'reportWarmFail'
 
 let LibraryReuseProbeText = "enum LibraryReuseProbeKind\n\tfirst\n\tsecond\nend 'LibraryReuseProbeKind'\n\ninterface LibraryReuseProbeShape\n\tfunction isFirst() returns bool\nend 'LibraryReuseProbeShape'\n\ntype LibraryReuseProbeRecord implements LibraryReuseProbeShape\n\tlet kind as LibraryReuseProbeKind\n\n\tstatic function create(kind LibraryReuseProbeKind) returns LibraryReuseProbeRecord\n\t\treturn Self\{kind: kind\}\n\tend 'create'\n\n\tfunction isFirst() returns bool\n\t\treturn self.kind == LibraryReuseProbeKind.first\n\tend 'isFirst'\nend 'LibraryReuseProbeRecord'\n\ntypealias LibraryReuseProbeRecords = Array with LibraryReuseProbeRecord\n\nfunction libraryReuseProbe() returns bool\n\tvar records = LibraryReuseProbeRecords.create()\n\trecords.push(LibraryReuseProbeRecord.create(LibraryReuseProbeKind.first))\n\tlet held = try records.get(0) otherwise return false\n\treturn held.isFirst()\nend 'libraryReuseProbe'"
 let LibraryReusedClause = "library parses reused across programs"
-let LibraryParsedColdClause = "library parsed cold (shadowed)"
 
 union LibraryReuseOutcome
 	failed
 	reused
-	parsedCold
+	parsedCold(verdict LibraryParseSharing)
 
 	function held() returns bool
 		return match self 'outcome'
@@ -806,7 +805,7 @@ union LibraryReuseOutcome
 	function clause() returns String
 		return match self 'outcome'
 			reused gives LibraryReusedClause
-			parsedCold gives LibraryParsedColdClause
+			parsedCold(verdict) gives "library parsed cold ({verdict.name})"
 			failed panic("LibraryReuseOutcome.clause: a failed property has no clause — the verdict line is printed only when every property held")
 		end 'outcome'
 	end 'clause'
@@ -951,7 +950,7 @@ function libraryColdOutcome(first Project, second Project, verdict LibraryParseS
 	end 'aPropertyFailed'
 
 	print("PASS library reuse: library parsed cold ({verdict.name}); the store was never consulted and a second program compiles to what a cold compile of it emits\n")
-	return LibraryReuseOutcome.parsedCold
+	return LibraryReuseOutcome.parsedCold(verdict)
 end 'libraryColdOutcome'
 
 // The last source file in fold order that is not library source, owned (`editableSourceAt`).

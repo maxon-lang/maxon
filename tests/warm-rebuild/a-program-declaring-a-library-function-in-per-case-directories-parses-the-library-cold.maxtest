@@ -1,0 +1,9 @@
+let ContestedFunctionColdPassLine = "verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold + library parsed cold (namesOverlap)"
+
+test 'a program whose per-case directories each declare a function the library declares parses the library cold'
+	let staged = stagedFixture("contested-library-function", caseLabel: "a-program-declaring-a-library-function-in-per-case-directories-parses-the-library-cold")
+	let run = spawnVerify(staged)
+
+	Expect.contains(run.stdout, needle: ContestedFunctionColdPassLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report the library parsed cold for a program whose directories `c0` and `c1` each declare `sleep`, which `stdlib/Sleep.maxon` declares. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited {run.exitCode()}. It wrote to stderr: {run.stderr}")
+end 'a program whose per-case directories each declare a function the library declares parses the library cold'

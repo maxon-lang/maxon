@@ -22445,6 +22445,12 @@ export type ProgramSignatures
 	function noteFreeFunctionDeclaration(bareName ByteArray, moduleDirectory String, declFilePath FilePath) returns FreeFunctionContest
 		self.noteFreeFunctionDeclaringFile(bareName, moduleDirectory: moduleDirectory, declFilePath: declFilePath)
 
+		// A contested declaration is registered under its qualified spelling, which `record` notes
+		// instead of the bare name. Without the bare name here, an author function that contests a
+		// library function never trips `authorNamesOverlapTheLibrary`, and its program stores library
+		// parses that register the library function under the qualified key.
+		self.noteDeclaredName(bareName)
+
 		if self.settled.contestedFreeFunctions.contains(bareName) 'alreadyContested'
 			self.addContestedSpelling(bareName, moduleDirectory: moduleDirectory)
 			return FreeFunctionContest.alreadyContested
