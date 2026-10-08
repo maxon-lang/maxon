@@ -1129,3 +1129,177 @@ end 'main'
 ```maxoncstderr
 error E3064: specs/discarded-results/try-block-pure-discard.maxon:18:3: result of pure function 'parseNum' must be used
 ```
+
+<!-- test: error.try-otherwise-return-underscore-discard-of-a-pure-function -->
+A pure throwing function whose result is discarded is refused in every form the discard can take. A
+fallback that leaves the function (`otherwise return`, `otherwise panic(…)`) hands the value back from a
+block the failing arm never rejoins, but the call was still made for nothing but its result.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum LookupError implements Error
+	notFound
+end 'LookupError'
+
+function find(key Integer) returns Integer throws LookupError
+	if key < 0 'missing'
+		throw LookupError.notFound
+	end 'missing'
+	return key + 1
+end 'find'
+
+function check(key Integer) returns bool
+	_ = try find(key) otherwise return false
+	return true
+end 'check'
+
+function main() returns ExitCode
+	if check(3) 'found'
+		return 0
+	end 'found'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.try-otherwise-return-underscore-discard-of-a-pure-function.maxon:16:2: result of pure function 'find' must be used
+```
+
+<!-- test: error.try-otherwise-return-underscore-discard-of-a-pure-method -->
+A pure throwing function whose result is discarded is refused in every form the discard can take. A
+fallback that leaves the function (`otherwise return`, `otherwise panic(…)`) hands the value back from a
+block the failing arm never rejoins, but the call was still made for nothing but its result.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum LookupError implements Error
+	notFound
+end 'LookupError'
+
+type Registry
+	var base as Integer
+
+	static function create(base Integer) returns Registry
+		return Registry{base: base}
+	end 'create'
+
+	function lookup(key Integer) returns Integer throws LookupError
+		if key < 0 'missing'
+			throw LookupError.notFound
+		end 'missing'
+		return key + self.base
+	end 'lookup'
+end 'Registry'
+
+type Holder
+	var registry as Registry
+
+	static function create(registry Registry) returns Holder
+		return Holder{registry: registry}
+	end 'create'
+
+	function has(key Integer) returns bool
+		_ = try self.registry.lookup(key) otherwise return false
+		return true
+	end 'has'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create(Registry.create(1))
+	if holder.has(3) 'found'
+		return 0
+	end 'found'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.try-otherwise-return-underscore-discard-of-a-pure-method.maxon:31:3: result of pure function 'Registry.lookup' must be used
+```
+
+<!-- test: error.try-otherwise-panic-underscore-discard-of-a-pure-function -->
+A pure throwing function whose result is discarded is refused in every form the discard can take. A
+fallback that leaves the function (`otherwise return`, `otherwise panic(…)`) hands the value back from a
+block the failing arm never rejoins, but the call was still made for nothing but its result.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum LookupError implements Error
+	notFound
+end 'LookupError'
+
+function find(key Integer) returns Integer throws LookupError
+	if key < 0 'missing'
+		throw LookupError.notFound
+	end 'missing'
+	return key + 1
+end 'find'
+
+function main() returns ExitCode
+	_ = try find(3) otherwise panic("find only fails below zero")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.try-otherwise-panic-underscore-discard-of-a-pure-function.maxon:16:2: result of pure function 'find' must be used
+```
+
+<!-- test: error.pure-map-lookup-discarded-while-another-key-type-has-an-effectful-hash -->
+A pure lookup in a `Map` is judged by the key type it is instantiated with. Another `Map` in the same
+program keyed by a type whose `hash` has an effect must not make this one look impure.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Count = int(0 to 1000)
+typealias Widths = Map with (String, Count)
+
+var hashCalls = 0 as Integer
+
+type Loud implements Hashable, Equatable
+	export let id as Integer
+
+	static function create(id Integer) returns Loud
+		return Loud{id: id}
+	end 'create'
+
+	function hash() returns HashValue
+		hashCalls = hashCalls + 1
+		return (id and 0xFFFF) as HashValue
+	end 'hash'
+
+	function equals(other Loud) returns bool
+		return id == other.id
+	end 'equals'
+end 'Loud'
+
+typealias LoudMap = Map with (Loud, Integer)
+
+type Registry
+	var widths as Widths
+
+	static function create() returns Registry
+		return Registry{widths: Widths.create()}
+	end 'create'
+
+	function widthOf(name String) returns Count throws MapError
+		return try self.widths.get(name)
+	end 'widthOf'
+
+	function declares(name String) returns bool
+		_ = try self.widthOf(name) otherwise return false
+		return true
+	end 'declares'
+end 'Registry'
+
+function main() returns ExitCode
+	var loud = LoudMap.create()
+	try loud.insert(Loud.create(1), value: 2) otherwise return 2
+	let registry = Registry.create()
+
+	if registry.declares("a") 'found'
+		return 1
+	end 'found'
+
+	return hashCalls as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.pure-map-lookup-discarded-while-another-key-type-has-an-effectful-hash.maxon:39:3: result of pure function 'Registry.widthOf' must be used
+```

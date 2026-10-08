@@ -4625,10 +4625,20 @@ function buildEffectFreeSummary(module MaxonModule, signatures ProgramSignatures
 		seeds.push(functionShowsAnEffect(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges, dispatch: dispatch, runtimeTier: runtimeTier))
 	end 'eachFunc'
 
-	var effectFree = BoolArray.create()
-	let effectful = markSeededCallers(edges, seeds: seeds, nodeCount: funcNames.functions.count() as CsrIndex)
+	var specialized = 0 as ElementIndex
 
-	for i in 0 upto effectful.count() 'invert'
+	while specialized < dispatch.specializedCount() 'eachSpecializedNode'
+		let node = dispatch.specializedNodeAt(specialized)
+		let func = try funcNames.functions.get(node.functionIndex) otherwise panic("buildEffectFreeSummary: functions.get OOB at {node.functionIndex} for a specialized node")
+		dispatch.context = EffectContext.instance(node.within)
+		seeds.push(functionShowsAnEffect(module, func: func, funcIndexByName: funcNames.byName, callerIndex: dispatch.baseCount() + specialized, edges: edges, dispatch: dispatch, runtimeTier: runtimeTier))
+		specialized = specialized + 1
+	end 'eachSpecializedNode'
+
+	var effectFree = BoolArray.create()
+	let effectful = markSeededCallers(edges, seeds: seeds, nodeCount: (funcNames.functions.count() + dispatch.specializedCount()) as CsrIndex)
+
+	for i in 0 upto funcNames.functions.count() 'invert'
 		effectFree.push(not (try effectful.get(i) otherwise panic("buildEffectFreeSummary: effectful.get({i}) OOB below count {effectful.count()}")))
 	end 'invert'
 
@@ -4659,6 +4669,23 @@ end 'buildEffectFreeSummary'
 // decision, and a granted enum records none either) and so REFUSING a legal program.
 typealias WitnessTargetsByRequirement = Map with (ByteArray, ByteArrayArray)
 
+module union EffectContext
+	none
+	instance(id GenericInstanceId)
+end 'EffectContext'
+
+module type SpecializedNode
+	export let functionIndex as ElementIndex
+	export let within as GenericInstanceId
+
+	static function create(functionIndex ElementIndex, within GenericInstanceId) returns SpecializedNode
+		return Self{functionIndex: functionIndex, within: within}
+	end 'create'
+end 'SpecializedNode'
+
+module typealias SpecializedNodeArray = Array with SpecializedNode
+module typealias SpecializedNodeKeys = Map with (String, ElementIndex)
+
 // The two MEMOS and the two stores they are derived from, carried together because both must outlive the
 // per-op walk: one transitive slot walk per interface and one candidate scan per requirement, never one per
 // dispatch (`checkCalls` keeps the slot memo for that exact reason, stated there).
@@ -4672,10 +4699,142 @@ export type WitnessDispatchTargets
 	var bareNames as ByteArrayArray
 	var slots as WitnessSlotsByDeclIndex
 	var byRequirement as WitnessTargetsByRequirement
+	export var context as EffectContext
+	var nodeKeys as SpecializedNodeKeys
+	var nodes as SpecializedNodeArray
 
 	module static function create(signatures ProgramSignatures, functions IrFunctionArray) returns WitnessDispatchTargets
-		return Self{signatures: signatures, functions: functions, bareNames: ByteArrayArray.create(), slots: WitnessSlotsByDeclIndex.create(), byRequirement: WitnessTargetsByRequirement.create()}
+		return Self{signatures: signatures, functions: functions, bareNames: ByteArrayArray.create(), slots: WitnessSlotsByDeclIndex.create(), byRequirement: WitnessTargetsByRequirement.create(), context: EffectContext.none, nodeKeys: SpecializedNodeKeys.create(), nodes: SpecializedNodeArray.create()}
 	end 'create'
+
+	module function baseCount() returns ElementIndex
+		return self.functions.count()
+	end 'baseCount'
+
+	module function specializedCount() returns ElementIndex
+		return self.nodes.count()
+	end 'specializedCount'
+
+	module function specializedNodeAt(index ElementIndex) returns SpecializedNode
+		return try self.nodes.get(index) otherwise panic("specializedNodeAt: {index} is below specializedCount()")
+	end 'specializedNodeAt'
+
+	module function nodeFor(functionIndex ElementIndex, within GenericInstanceId) returns ElementIndex
+		let key = "{functionIndex}|{within}"
+
+		if let known = try self.nodeKeys.get(key) 'alreadyMinted'
+			return known
+		end 'alreadyMinted'
+
+		let node = self.baseCount() + self.nodes.count()
+		self.nodes.push(SpecializedNode.create(functionIndex, within: within))
+		self.nodeKeys.upsert(key, value: node)
+		return node
+	end 'nodeFor'
+
+	module function specializedCalleeNode(callee ByteArray, args ValueIdArray, func IrFunction, funcIndexByName FuncIndexByName) returns ElementIndex throws AbsentError
+		let calleeIndex = try funcIndexByName.get(callee) otherwise throw AbsentError.absent
+		let owner = try ownerTypeOf(callee)
+
+		if self.signatures.structTypeParamsOf(owner).isEmpty() 'notAMethodOfAGenericType'
+			throw AbsentError.absent
+		end 'notAMethodOfAGenericType'
+
+		return self.nodeFor(calleeIndex, within: try self.receiverInstance(args, func: func, owner: owner))
+	end 'specializedCalleeNode'
+
+	function receiverInstance(args ValueIdArray, func IrFunction, owner ByteArray) returns GenericInstanceId throws AbsentError
+		let receiver = try args.get(0) otherwise throw AbsentError.absent
+		let tag = try func.valueTags.get(receiver) otherwise throw AbsentError.absent
+		let nameId = try func.valueNameIds.get(receiver) otherwise throw AbsentError.absent
+
+		if tag == ValueTypeTag.structRef 'selfOfTheContext'
+			let outer = try self.contextInstance()
+
+			if self.signatures.genericInstanceBaseName(outer).equals(owner) 'sameType'
+				return outer
+			end 'sameType'
+
+			throw AbsentError.absent
+		end 'selfOfTheContext'
+
+		if tag != ValueTypeTag.genericInstance 'notAnInstance'
+			throw AbsentError.absent
+		end 'notAnInstance'
+
+		let id = try self.resolvedThroughContext(nameId as GenericInstanceId)
+
+		if not self.signatures.instanceArgsAreFullyConcrete(id) or not self.signatures.genericInstanceBaseName(id).equals(owner) 'notThisTypesConcreteInstance'
+			throw AbsentError.absent
+		end 'notThisTypesConcreteInstance'
+
+		return id
+	end 'receiverInstance'
+
+	function contextInstance() returns GenericInstanceId throws AbsentError
+		match self.context 'context'
+			none then throw AbsentError.absent
+			instance(id) then return id
+		end 'context'
+	end 'contextInstance'
+
+	function resolvedThroughContext(id GenericInstanceId) returns GenericInstanceId throws AbsentError
+		let outer = try self.contextInstance() otherwise return id
+		let resolved = self.signatures.substituteThroughInstance(MaxonType.genericInstance(id), id: outer)
+
+		if maxonTypeTag(resolved) != ValueTypeTag.genericInstance 'notAnInstance'
+			throw AbsentError.absent
+		end 'notAnInstance'
+
+		return genericInstanceIdOf(resolved)
+	end 'resolvedThroughContext'
+
+	function conformerSynthesizesItsImpl(conformer ByteArray, requirement ByteArray) returns bool
+		return builtinConformerSynthesizesRequirement(conformer, requirement: requirement)
+	end 'conformerSynthesizesItsImpl'
+
+	module function contextualTargets(func IrFunction, args ValueIdArray, requirement ByteArray, candidates ByteArrayArray, funcIndexByName FuncIndexByName, runtimeTier FunctionNameSet) returns ElementIndexArray throws AbsentError
+		let outer = try self.contextInstance()
+		let receiver = try args.get(0) otherwise throw AbsentError.absent
+		let token = (try func.valueNameIds.get(receiver) otherwise throw AbsentError.absent) as TypeParamId
+		let owner = try self.signatures.typeParamOwnerOf(token) otherwise throw AbsentError.absent
+
+		if not owner.declaringTypeName.equals(self.signatures.genericInstanceBaseName(outer)) 'anotherTypesParameter'
+			throw AbsentError.absent
+		end 'anotherTypesParameter'
+
+		let conformer = self.signatures.conformerTypeArgName(outer, position: owner.position).toByteArray()
+		var targets = ElementIndexArray.create()
+
+		for candidate in candidates 'eachCandidate'
+			let candidateOwner = try ownerTypeOf(candidate)
+
+			if not candidateOwner.equals(conformer) 'anotherConformer'
+				continue
+			end 'anotherConformer'
+
+			if runtimeTier.contains(candidate) 'opaque'
+				throw AbsentError.absent
+			end 'opaque'
+
+			let index = try funcIndexByName.get(candidate) otherwise throw AbsentError.absent
+
+			if self.signatures.structTypeParamsOf(candidateOwner).isEmpty() 'aPlainType'
+				targets.push(index)
+				continue
+			end 'aPlainType'
+
+			let argumentInstance = try self.signatures.conformerTypeArgInstance(outer, position: owner.position) otherwise throw AbsentError.absent
+
+			targets.push(self.nodeFor(index, within: argumentInstance))
+		end 'eachCandidate'
+
+		if targets.isEmpty() and not self.conformerSynthesizesItsImpl(conformer, requirement: requirement) 'noConformerMember'
+			throw AbsentError.absent
+		end 'noConformerMember'
+
+		return targets
+	end 'contextualTargets'
 
 	// ⭐ **ON THE FIRST DISPATCH ASKED, NOT AT CONSTRUCTION.** This undoes two joins per function of the
 	// WHOLE program and nothing but `candidatesFor` reads it, so a program that reaches this summary with no
@@ -4751,6 +4910,15 @@ export type WitnessDispatchTargets
 	end 'candidatesFor'
 end 'WitnessDispatchTargets'
 
+function ownerTypeOf(qualified ByteArray) returns ByteArray throws AbsentError
+	match splitQualifiedName(overloadRegistrationBaseName(qualified)) 'owner'
+		parts(typeName, _) then return typeName
+		notQualified then throw AbsentError.absent
+	end 'owner'
+end 'ownerTypeOf'
+
+module typealias ElementIndexArray = Array with ElementIndex
+
 // One dispatch. Records an edge to every candidate — so the closure carries a conformer's own effects back to
 // this caller — and answers `true` only for a candidate no `IrFunction` declares, which is
 // `calleeShowsAnEffect`'s own unknown-callee verdict and the safe direction.
@@ -4767,6 +4935,14 @@ function witnessDispatchShowsAnEffect(dispatch WitnessDispatchTargets, func IrFu
 	end 'chosenAtRunTime'
 
 	let candidates = dispatch.candidatesFor(dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
+
+	if let targets = try dispatch.contextualTargets(func, args: args, requirement: dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex), candidates: candidates, funcIndexByName: funcIndexByName, runtimeTier: runtimeTier) 'resolvedForTheInstance'
+		for target in targets 'eachTarget'
+			edges.record(target, callerIndex: callerIndex)
+		end 'eachTarget'
+
+		return false
+	end 'resolvedForTheInstance'
 
 	// ⚠ **NO CANDIDATE AT ALL IS AN EFFECT, NOT A VACUOUS PASS.** A dispatch exists, so something fills its
 	// slot; an empty set means this pass failed to find it, and every unknown resolves toward "effectful".
@@ -5117,7 +5293,7 @@ end 'functionReturnsNothing'
 // the refusing direction (see `buildEffectFreeSummary`'s safety argument).
 function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets, runtimeTier FunctionNameSet) returns bool
 	return match op 'op'
-		call(_, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
+		call(_, callee, args, _, _, _, _, _) gives callShowsAnEffect(callee, args: args, func: func, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, dispatch: dispatch, runtimeTier: runtimeTier)
 		literal or
 			ret or
 			retVoid or
@@ -5168,7 +5344,7 @@ function opShowsAnEffect(op MaxonOp, func IrFunction, funcIndexByName FuncIndexB
 			// build would move an E3064/E3065 verdict, and the tool that finds untested code would refuse
 			// the code it was pointed at.
 			covPoint gives false
-		tryCall(_, _, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
+		tryCall(_, _, callee, args, _, _, _, _, _) gives callShowsAnEffect(callee, args: args, func: func, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, dispatch: dispatch, runtimeTier: runtimeTier)
 
 		// The target is chosen at run time, so there is no callee to close over.
 		indirectCall or
@@ -5212,6 +5388,16 @@ end 'opShowsAnEffect'
 // verdict: a pure `module function` helper in a runtime file would classify effect-free, propagate that to
 // any user function whose only effect is calling it, and earn E3064 on a legal program. The roster is
 // asked FIRST, because a read-only entry is read-only wherever its body is written.
+function callShowsAnEffect(callee ByteArray, args ValueIdArray, func IrFunction, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, dispatch WitnessDispatchTargets, runtimeTier FunctionNameSet) returns bool
+	if effectFreeRuntimeCallee(callee) or runtimeTier.contains(callee) 'settledWithoutAContext'
+		return calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
+	end 'settledWithoutAContext'
+
+	let node = try dispatch.specializedCalleeNode(callee, args: args, func: func, funcIndexByName: funcIndexByName) otherwise return calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
+	edges.record(node, callerIndex: callerIndex)
+	return false
+end 'callShowsAnEffect'
+
 function calleeShowsAnEffect(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	if effectFreeRuntimeCallee(callee) 'aRuntimeEntryThatObservesNothing'
 		return false

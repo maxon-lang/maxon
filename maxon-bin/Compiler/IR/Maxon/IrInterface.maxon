@@ -2223,6 +2223,22 @@ end 'DiscoveredConformer'
 // `hash`/`equals` through `__witness_String.*` slots, so all three doors land in the same two bodies — which
 // is why the reservation below (`TypeResolution.isCompilerOwnedTypeName`) must cover `String` for any of
 // them to be trusted.
+export function builtinConformerSynthesizesRequirement(typeName ByteArray, requirement ByteArray) returns bool
+	if requirement.equals(HashMethodName) 'hash'
+		return isIntrinsicBuiltinConformance(typeName, interfaceName: HashableInterfaceName, discovered: DiscoveredConformer.none)
+	end 'hash'
+
+	if requirement.equals(EqualsMethodName) 'equals'
+		return isIntrinsicBuiltinConformance(typeName, interfaceName: EquatableInterfaceName, discovered: DiscoveredConformer.none)
+	end 'equals'
+
+	if requirement.equals(CompareMethodName) 'compare'
+		return isIntrinsicBuiltinConformance(typeName, interfaceName: ComparableInterfaceName, discovered: DiscoveredConformer.none)
+	end 'compare'
+
+	return false
+end 'builtinConformerSynthesizesRequirement'
+
 export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray, discovered DiscoveredConformer) returns bool
 	if typeName.equals(IntConformerName) 'int'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)

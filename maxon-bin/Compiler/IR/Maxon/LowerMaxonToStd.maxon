@@ -1012,6 +1012,16 @@ end 'WitnessPartition'
 
 typealias WitnessPartitionArray = Array with WitnessPartition
 
+function entriesHold(entries WitnessTableEntryArray, instance GenericInstanceId, interfaceName ByteArray) returns bool
+	for entry in entries 'eachEntry'
+		if entry.names(instance, otherInterface: interfaceName) 'thisOne'
+			return true
+		end 'thisOne'
+	end 'eachEntry'
+
+	return false
+end 'entriesHold'
+
 function entryIndexIn(entries WitnessTableEntryArray, instance GenericInstanceId, interfaceName ByteArray) returns ElementIndex throws AbsentError
 	return try firstIndexWhere(entries.count(), test: function(i) gives (try entries.get(i) otherwise panic("entryIndexIn: entries.get({i}) below count")).names(instance, otherInterface: interfaceName))
 end 'entryIndexIn'
@@ -4226,13 +4236,11 @@ type MaxonToStdLowering
 	end 'fileWitnessTableEntry'
 
 	function tableDropped(table DescriptorTable, instance GenericInstanceId, interfaceName ByteArray) returns bool
-		_ = try entryIndexIn(table.dropped, instance: instance, interfaceName: interfaceName) otherwise return false
-		return true
+		return entriesHold(table.dropped, instance: instance, interfaceName: interfaceName)
 	end 'tableDropped'
 
 	function holdsWitnessEntry(table DescriptorTable, instance GenericInstanceId, interfaceName ByteArray) returns bool
-		_ = try self.indexOfWitnessTableEntry(table, instance: instance, interfaceName: interfaceName) otherwise return false
-		return true
+		return entriesHold(table.witnesses, instance: instance, interfaceName: interfaceName)
 	end 'holdsWitnessEntry'
 
 	function noteTableCandidateOfSource(source LayoutSource, callee ByteArray, into DescriptorSubjects)
