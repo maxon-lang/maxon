@@ -2,6 +2,18 @@
 
 Versions are `YEAR.MONTH.PATCH`, the month a release shipped, and are independent of the compiler's.
 
+## 2026.10.1
+
+### Changed
+
+- In a workspace folder that is a Maxon source checkout, the extension runs that checkout's own built
+  compiler ahead of one on `PATH`, and moves to it when it is rebuilt. The compiler is looked for again
+  whenever the server restarts, a workspace folder is added or removed, or `maxon.serverPath` changes.
+- The status bar tooltip shows the compiler's version and path, and lists a single file by its path.
+- Only a `.maxproj` marks a project. A file with no `.maxproj` above it, up to its workspace folder, is
+  checked alone against the standard library, and the Test Explorer runs a test file with none as that
+  file alone.
+
 ## 2026.10.0
 
 ### Added
