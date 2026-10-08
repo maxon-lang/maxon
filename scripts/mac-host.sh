@@ -28,7 +28,7 @@ readonly OpWaitSeconds=$((2 * OpStaleSeconds))
 readonly OpPollSeconds=0.1
 readonly ConstantNamePattern='^[A-Z][a-z][A-Za-z0-9]*$'
 readonly ReadonlyDeclarationPattern='^declare -[a-z]*r'
-readonly EnvLinePattern='^(MAXON_MAC_[A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$'
+readonly EnvLinePattern='^MAXON_MAC_HOST[[:space:]]*=[[:space:]]*(.*)$'
 readonly SessionPattern='^[A-Za-z0-9_][A-Za-z0-9._-]*$'
 readonly SecretPattern="^[0-9a-f]{$((TokenBytes * 2))}\$"
 readonly SeedTagPattern='^v[0-9][A-Za-z0-9.+-]*$'
@@ -91,10 +91,10 @@ usage() {
 		"  MAXON_MAC_HOST   user@host of the Mac; host is a name, an IPv4 or an IPv6 address. On Windows" \
 		"                   a .local name is resolved to its IPv4 address with PowerShell." \
 		"" \
-		"  It is read from the environment, or else from a KEY=VALUE line in the repository's .env" \
-		"  (see .env.example; an export prefix and one pair of quotes are allowed, and a MAXON_MAC_ line" \
-		"  that does not parse or names an unknown key is an error, not a skip). When MAXON_MAC_HOST is" \
-		"  set in neither, every command whose arguments are valid prints" \
+		"  It is read from the environment, or else from a MAXON_MAC_HOST=VALUE line in the repository's" \
+		"  .env (see .env.example; an export prefix and one pair of quotes are allowed, and every other" \
+		"  line is ignored). When MAXON_MAC_HOST is set in neither, every command whose arguments are" \
+		"  valid prints" \
 		"  \"mac-host.sh: skipped — MAXON_MAC_HOST is not set (see .env.example)\" and exits" \
 		"  $ExitSuccess without touching the Mac, so a caller sees that line instead of token=, job= or" \
 		"  session-key= lines." \
@@ -146,10 +146,9 @@ resolve_address() {
 	printf '%s\n' "$mac_name"
 }
 
-# Parsed, never sourced, so a config file cannot execute code. A MAXON_MAC_ line that does not parse
-# or names an unknown key fails: a typo must not read as "unconfigured" and skip every command.
+# Parsed, never sourced, so a config file cannot execute code.
 load_env() {
-	local file="$repo_root/.env" line key value number=0
+	local file="$repo_root/.env" line value number=0
 
 	[ -f "$file" ] || return 0
 
@@ -170,28 +169,17 @@ load_env() {
 				;;
 		esac
 
-		case "$line" in
-			MAXON_MAC_*) ;;
-			*) continue ;;
-		esac
-
-		[[ "$line" =~ $EnvLinePattern ]] || die "$file line $number names a MAXON_MAC_ key but is not KEY=VALUE"
-		key="${BASH_REMATCH[1]}"
-		value="${BASH_REMATCH[2]}"
+		[[ "$line" =~ $EnvLinePattern ]] || continue
+		value="${BASH_REMATCH[1]}"
 		value="${value%"${value##*[![:space:]]}"}"
-
-		case "$key" in
-			MAXON_MAC_HOST) ;;
-			*) die "$file line $number sets the unknown key $key; the only known key is MAXON_MAC_HOST" ;;
-		esac
 
 		case "$value" in
 			\"*\") value="${value#\"}"; value="${value%\"}" ;;
 			\'*\') value="${value#\'}"; value="${value%\'}" ;;
 		esac
 
-		if [ -z "${!key:-}" ]; then
-			printf -v "$key" '%s' "$value"
+		if [ -z "${MAXON_MAC_HOST:-}" ]; then
+			MAXON_MAC_HOST="$value"
 		fi
 	done < "$file"
 }
