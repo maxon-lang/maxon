@@ -160,10 +160,17 @@ function appendProjects(md: vscode.MarkdownString) {
 
 	md.appendMarkdown('**Loaded projects**\n\n');
 	for (const p of projectsView.projects) {
-		const kind = p.isSingleFile ? 'file' : 'project';
-		const fileText = p.fileCount === 1 ? '1 file' : `${p.fileCount} files`;
-		md.appendMarkdown(`- \`${p.rootPath}\` _(${kind}, ${fileText})_\n`);
+		md.appendMarkdown(projectLine(p));
 	}
+}
+
+function projectLine(p: ProjectInfo): string {
+	if (p.isSingleFile) {
+		return `- \`${p.rootPath}\`\n`;
+	}
+
+	const fileText = p.fileCount === 1 ? '1 file' : `${p.fileCount} files`;
+	return `- \`${p.rootPath}\` _(project, ${fileText})_\n`;
 }
 
 function updateStatusBar() {
