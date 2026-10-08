@@ -14,8 +14,8 @@
 // has to reach a filesystem. It may NOT reach
 // the user's own tree, and `<project>/.maxon/` is not a hiding place: `Compiler.collectMaxonSources`
 // prunes on `.maxonignore` and on nothing else, so a generated `.maxon` left there would be swept into the
-// user's very next ordinary build. So the whole project is COPIED into a staging root, with each test
-// file's copy carrying its dispatcher, and the compile is rooted there.
+// user's very next ordinary build. So the whole project, or the one file run alone, is COPIED into a
+// staging root, with each test file's copy carrying its dispatcher, and the compile is rooted there.
 //
 // ⚠ **THE COPY PRESERVES EACH FILE'S PATH RELATIVE TO THE PROJECT ROOT, AND THAT IS LOAD-BEARING TWICE
 // OVER.** A file's namespace is its directory relative to the root (`Queries.moduleDirectoryForFile`), and
@@ -145,6 +145,18 @@ export union TestStagingError implements Error
 	refused(reason String)
 end 'TestStagingError'
 
+export union TestSubject
+	projectDirectory(dir FilePath)
+	singleFile(path FilePath)
+end 'TestSubject'
+
+export function testSubjectPath(subject TestSubject) returns FilePath
+	return match subject 'path'
+		projectDirectory(dir) gives dir
+		singleFile(path) gives path
+	end 'path'
+end 'testSubjectPath'
+
 // Which group covers a file, if any. A union rather than a throw, because "this file declares no test" is
 // the ordinary answer for most of a project's sources and not a failure of anything.
 union TestFileGroupLookup
@@ -246,16 +258,17 @@ function groupOfFile(groups TestFileGroupArray, file FilePath) returns TestFileG
 	return TestFileGroupLookup.absent
 end 'groupOfFile'
 
-// ⭐⭐ **STAGE THE WHOLE PROJECT AND ITS GENERATED SOURCE INTO `stagingRoot`, AND HAND BACK WHAT TO COMPILE.**
+// ⭐⭐ **STAGE THE SUBJECT AND ITS GENERATED SOURCE INTO `stagingRoot`, AND HAND BACK WHAT TO COMPILE.**
 //
-// `projectRoot` must be spelled exactly as it was for `TestDiscovery.discoverTests`: this walk and that
-// one both go through `Compiler.collectMaxonSources`, so the paths they produce are equal spellings, and
-// mapping a group's file onto its staged copy is a `FilePath.equals` rather than a re-derivation.
+// `subject` must be spelled exactly as it was for `TestDiscovery.discoverTests`: mapping a group's file
+// onto its staged copy is a `FilePath.equals` rather than a re-derivation, so a source spelled
+// differently is staged without its dispatcher. A project's walk here and discovery's both go through
+// `Compiler.collectMaxonSources`, which is what makes their spellings equal.
 //
 // The staging root is RECONSTRUCTED, never inherited: a `.maxon` left behind by an earlier run with a
 // different test set would join this build silently and change what it means. That is the failure
 // `SpecTestRunner.stageSourceFiles` records having had twice.
-export function stageTestBuild(stagingRoot FilePath, projectRoot FilePath, groups TestFileGroupArray) returns StagedTestBuild throws TestStagingError
+export function stageTestBuild(stagingRoot FilePath, subject TestSubject, groups TestFileGroupArray) returns StagedTestBuild throws TestStagingError
 	if groups.isEmpty() 'nothingToDispatch'
 		// A caller-contract violation and not a user error: a run with no tests is reported and exited on
 		// BEFORE anything is staged, because the generated entry would otherwise bind a `selection` no
@@ -265,6 +278,18 @@ export function stageTestBuild(stagingRoot FilePath, projectRoot FilePath, group
 
 	var build = try GeneratedBuild.begin(stagingRoot)
 
+	match subject 'sources'
+		projectDirectory(projectRoot) then try stageProjectSources(build, projectRoot: projectRoot, groups: groups)
+		singleFile(path) then try stageOneSource(build, source: path, stagedPath: build.root.join(path.filename()), groups: groups)
+	end 'sources'
+
+	try build.addSource(stagingRoot.join("{MaxonTestEntryFileName}"), content: entrySource(groups), mintedNames: mintedNamesForEntry())
+	build.fixRoot()
+
+	return StagedTestBuild.create(build.buildTargets, compilerWrittenSources: build.compilerWrittenSources, stagedSourceOrigins: build.stagedSourceOrigins, root: stagingRoot, groups: groups)
+end 'stageTestBuild'
+
+function stageProjectSources(build GeneratedBuild, projectRoot FilePath, groups TestFileGroupArray) throws TestStagingError
 	var sources = MaxonSourcePathArray.create()
 
 	// ⭐ **`productionAndTests`, WHICH IS THE ONE THING AN ORDINARY BUILD'S WALK ANSWERS DIFFERENTLY.** A
@@ -273,20 +298,12 @@ export function stageTestBuild(stagingRoot FilePath, projectRoot FilePath, group
 	_ = try collectMaxonSources(projectRoot, into: sources, selection: SourceSelection.productionAndTests) otherwise throw TestStagingError.refused("could not walk {projectRoot.toString()} for the project's sources")
 
 	for source in sources 'eachSource'
-		try stageOneSource(build, projectRoot: projectRoot, source: source, groups: groups)
+		let relative = try source.relativeTo(projectRoot) otherwise throw TestStagingError.refused("{source.toString()} is not under the project root {projectRoot.toString()}, so it has no place in the staged tree")
+		try stageOneSource(build, source: source, stagedPath: build.root.join(relative), groups: groups)
 	end 'eachSource'
+end 'stageProjectSources'
 
-	try build.addSource(stagingRoot.join("{MaxonTestEntryFileName}"), content: entrySource(groups), mintedNames: mintedNamesForEntry())
-	build.fixRoot()
-
-	return StagedTestBuild.create(build.buildTargets, compilerWrittenSources: build.compilerWrittenSources, stagedSourceOrigins: build.stagedSourceOrigins, root: stagingRoot, groups: groups)
-end 'stageTestBuild'
-
-// Copy ONE of the project's sources into the staging tree, with its dispatcher appended if it holds tests.
-// The relative path is preserved — see this file's header for the two things that depend on it.
-function stageOneSource(build GeneratedBuild, projectRoot FilePath, source FilePath, groups TestFileGroupArray) throws TestStagingError
-	let relative = try source.relativeTo(projectRoot) otherwise throw TestStagingError.refused("{source.toString()} is not under the project root {projectRoot.toString()}, so it has no place in the staged tree")
-	let stagedPath = build.root.join(relative)
+function stageOneSource(build GeneratedBuild, source FilePath, stagedPath FilePath, groups TestFileGroupArray) throws TestStagingError
 	let content = try File.readText(source) otherwise throw TestStagingError.refused("could not read {source.toString()}")
 
 	// Everything with no group — the project's ordinary sources, and any `.maxtest` file that declares

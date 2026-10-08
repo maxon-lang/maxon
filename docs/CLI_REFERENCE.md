@@ -31,7 +31,7 @@ agents, and reads back what a program did.
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went ([Debugging and Profiling](#debugging-and-profiling)) |
 | `maxon execute <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
 | `maxon run [<task> [args...]]` | Run a task declared in the directory's `.maxtasks` file, or list the tasks |
-| `maxon test [directory]` | Run a project's own `test` declarations |
+| `maxon test [directory\|file.maxtest]` | Run a project's own `test` declarations, or one test file's alone |
 | `maxon upgrade [--dry-run]` | Update this compiler's install to the newest release |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
 
@@ -568,10 +568,14 @@ Runs a project's unit tests: every `test` declaration in its `*.maxtest` files, 
 the project's `.maxon` sources. How to write tests is covered in [Testing](LANGUAGE_REFERENCE.md#testing).
 
 ```bash
-maxon test [directory] [options]
+maxon test [directory | file.maxtest] [options]
 ```
 
-`[directory]` is the project to test (default: the working directory). A second positional is refused.
+`[directory]` is the project to test (default: the working directory). A `.maxtest` file named in its
+place is run alone: it is compiled with the library tiers and nothing else, as the editor checks a file
+no `.maxproj` marks, so its siblings and any project around it stay out of the run. A path naming
+nothing is refused with ``test: no such directory or `.maxtest` file: <path>``, and any other file with
+``test: not a directory or a `.maxtest` file: <path>``; both exit 2 with the usage line. A second positional is refused.
 
 All discovered tests are compiled into **one binary** with a generated entry point, and which of them
 run is a runtime argument. Changing `--filter` between runs therefore recompiles nothing. The project's
@@ -597,8 +601,9 @@ normally with `maxon build`.
 The run is serial; there is no `--workers` option.
 
 **Where it runs.** The test binary runs in the directory `maxon test` was invoked from, so a relative
-path in a test means what it means in your shell. The build lives in `<project>/.maxon/test/`, which
-carries its own `.maxonignore` so generated sources never leak into an ordinary build.
+path in a test means what it means in your shell. The build lives in `<project>/.maxon/test/`, or for a
+test file run alone in `<its directory>/.maxon/test/<file name>/`, under a `.maxonignore` that keeps
+its generated sources out of every ordinary build.
 
 **Isolation.** By default each test **file** runs in its own process. If a test crashes the process, the
 harness re-runs the remaining tests of that file so one crash does not hide the others' results, and a
@@ -695,6 +700,7 @@ command reports `2 pass`, `0 fail` and exits 0.
 ```bash
 maxon test                        # every test under the working directory
 maxon test src/parser             # one project's tests
+maxon test src/lexer.maxtest      # one test file's tests, compiled alone
 maxon test --filter=json          # only tests whose name or file mentions "json"
 maxon test --filter=parser,lexer  # two patterns, as a union
 maxon test --filter=parser --filter=lexer  # the same union, one flag per pattern
@@ -925,7 +931,7 @@ Each kind of file has its own extension, and each command reads its own kinds:
 | File | Read by |
 |------|---------|
 | `*.maxon` | every build, `maxon test` and `maxon execute` |
-| `*.maxtest` | `maxon test`, beside the project's `.maxon` sources |
+| `*.maxtest` | `maxon test`, beside the project's `.maxon` sources, or alone when named |
 | `<name>.maxproj` | `maxon build` with no path or with a target word |
 | `<name>.maxtasks` | `maxon run` |
 
@@ -1156,7 +1162,8 @@ ancestor above it. Only a marker *below* the path you named can exclude anything
 
 `.maxon/` holds a project's build products and is safe to delete or ignore in version control:
 
-- `maxon test` stages its build in `<project>/.maxon/test/`, with its own `.maxonignore`.
+- `maxon test` stages its build in `<project>/.maxon/test/`, and a test file's run alone in
+  `<its directory>/.maxon/test/<file name>/`, under a `.maxonignore` in `.maxon/test/`.
 - A project target's build that states no output is written there, as `.maxon/<name>` for the project
   file `<name>.maxproj`, and the compiler creates the output directory if it is missing.
 
@@ -1896,8 +1903,9 @@ so it needs a `main`.
 **Test Explorer.** The **Maxon Tests** controller lists the `test` declarations in the workspace's
 `*.maxtest` files (the extension matched case and all, as the compiler matches it), one node per file,
 and runs them with the compiler the extension found, one `maxon test <project> --json` per project the
-selection touches. A test file's project is the highest directory above it, up to the workspace folder,
-whose every level holds a `.maxon` source. When the
+selection touches. A test file's project is the nearest directory holding a `.maxproj`, from the file's
+own directory up to the workspace folder; a test file with none there runs alone, as
+`maxon test <file> --json`. When the
 workspace folder is the Maxon source checkout, a second controller, **Maxon Spec Suite**, lists the spec
 tests in `specs/*.md` and runs them with the checkout's own compiler
 (`maxon-bin/.maxon/maxon spec-test --filter=…`).
@@ -1906,8 +1914,8 @@ tests in `specs/*.md` and runs them with the checkout's own compiler
 [`maxon dap-server`](#maxon-dap-server), run from the compiler it found, on every native target. **F5** works
 without a `launch.json`: a configuration without `program` debugs the active editor's `.maxon` file, or
 else the workspace folder when it holds a `.maxproj` file. A source file or project is built with debug info
-into the host's Maxon cache first. The Test Explorer's **Debug Test** builds each touched project's tests
-once with `maxon test --list --build --json`, copies the test binary and its sidecar to a temporary
+into the host's Maxon cache first. The Test Explorer's **Debug Test** builds the tests of each project, or lone
+test file, the selection touches once with `maxon test --list --build --json`, copies the test binary and its sidecar to a temporary
 directory, and debugs each selected test in turn under that copy (see
 [Running the test binary](#running-the-test-binary)); cancelling the run stops the session. The extension's
 README describes the launch attributes and the panes.
@@ -2449,7 +2457,7 @@ Runs a project's `test` declarations, as `maxon test` does.
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `path` | string | Project directory (default: the working directory) |
+| `path` | string | Project directory, or one `.maxtest` file to run alone (default: the working directory) |
 | `filter` | string | Selects tests by name or file: case-insensitive, comma-separated patterns are a union |
 | `timeoutSeconds` | number | Seconds the build and the tests together may take (default 600) |
 | `repoRoot` | string | Developer mode only. The checkout whose compiler runs the tests; see [Which tree, and which compiler](#which-tree-and-which-compiler). |

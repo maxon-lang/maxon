@@ -1,5 +1,6 @@
-// TestCommand — the `maxon test` command: discover every `test` declaration in a project, compile
-// them into ONE binary with a generated entry point, run it, and report.
+// TestCommand — the `maxon test` command: discover every `test` declaration in a project, or in one
+// `.maxtest` file run alone, compile them into ONE binary with a generated entry point, run it, and
+// report.
 //
 // ⭐ **THIS FILE SEQUENCES; IT BUILDS NOTHING.** Discovery is `TestDiscovery`, generation and staging
 // are `TestDispatcher`, execution is `TestExecutor`, and both faces of the report are `TestRender`. What
@@ -26,7 +27,9 @@ export let TestCommandName = "test"
 // WHERE A TEST BUILD LIVES
 // ============================================================================================
 //
-// ⭐⭐ **`<project>/.maxon/test/`, AND EVERY PART OF THAT IS A DECISION.**
+// ⭐⭐ **`<project>/.maxon/test/`, AND EVERY PART OF THAT IS A DECISION.** A file run alone builds in
+// `<its directory>/.maxon/test/<file name>/`, so two files in one directory never purge each other's
+// staged tree; they share the `.maxonignore` above it.
 //
 // · **Not `temp/`.** `temp/` is shared scratch that other runs clean out recursively, so a test binary
 //   parked there can vanish underneath a run that is still spawning it.
@@ -44,7 +47,7 @@ let TestBinaryStem = "maxon-test"
 
 // The usage line a refusal prints under itself.
 function testUsageLine() returns String
-	return "maxon {TestCommandName} [<directory>] [{FilterFlagPrefix}PATTERN]... [{TestListFlag} [{TestBuildFlag}]] [--json] [options]"
+	return "maxon {TestCommandName} [<directory> | <file{TestSourceExtension}>] [{FilterFlagPrefix}PATTERN]... [{TestListFlag} [{TestBuildFlag}]] [--json] [options]"
 end 'testUsageLine'
 
 // ============================================================================================
@@ -56,13 +59,9 @@ export function runTest(args MaxonArgs) returns ExitCode
 		return NothingRanExitCode
 	end 'tooManyPaths'
 
-	let projectDir = try testProjectDir(args) otherwise 'badPath'
-		return refuseTestRun("'{try args.positionalAt(SolePositionalIndex) otherwise panic("runTest: `testProjectDir` fails only on a path the command line spelled")}' is not a valid path")
-	end 'badPath'
-
-	if not Directory.isDirectory(projectDir) 'notADirectory'
-		return refuseTestRun("not a directory: {reportPathDisplay(projectDir)}")
-	end 'notADirectory'
+	let subject = try testSubject(args) otherwise (e) 'badSubject'
+		return refuseTestRun(subjectRefusalReason(e))
+	end 'badSubject'
 
 	if args.buildTestBinary and not args.listOnly 'buildWithoutAList'
 		return refuseTestRun("{TestBuildFlag} builds the test binary for {TestListFlag} and runs nothing, so it is given with {TestListFlag}")
@@ -76,10 +75,8 @@ export function runTest(args MaxonArgs) returns ExitCode
 
 	_ = quietTheBuildChatter(args)
 
-	// The same spelling reaches discovery and staging, which `TestDispatcher.stageTestBuild`
-	// requires: both walk through `Compiler.collectMaxonSources`, so a group's file maps onto its
-	// staged copy by `FilePath.equals` rather than by a second derivation.
-	let tests = try discoverTests(projectDir, target: target) otherwise (e) 'discoveryFailed'
+	// The same `subject` reaches discovery and staging, which `TestDispatcher.stageTestBuild` requires.
+	let tests = try discoverTests(testSubjectPath(subject), target: target) otherwise (e) 'discoveryFailed'
 		reportCompileError(e)
 		return NothingRanExitCode
 	end 'discoveryFailed'
@@ -93,26 +90,59 @@ export function runTest(args MaxonArgs) returns ExitCode
 	let selected = filtered.selected
 
 	if args.listOnly 'listOnly'
-		return listSelectedTests(args, projectDir: projectDir, target: target, groups: groups, selected: selected, color: color)
+		return listSelectedTests(args, subject: subject, target: target, groups: groups, selected: selected, color: color)
 	end 'listOnly'
 
 	if tests.isEmpty() 'noTestsAtAll'
-		return reportNothingToRun("no `test` declarations found under {reportPathDisplay(projectDir)}", args: args, color: color)
+		return reportNothingToRun(noTestsFoundReason(subject), args: args, color: color)
 	end 'noTestsAtAll'
 
 	if filtered.unmatchedPatterns.count() > 0 'filterMatchedNothing'
 		return reportNothingToRun("no test matched {quotedPatterns(filtered.unmatchedPatterns)}", args: args, color: color)
 	end 'filterMatchedNothing'
 
-	return compileAndRunTests(args, projectDir: projectDir, target: target, groups: groups, selected: selected, color: color)
+	return compileAndRunTests(args, subject: subject, target: target, groups: groups, selected: selected, color: color)
 end 'runTest'
 
-// The project under test: the positional argument, or the working directory when there was none.
-function testProjectDir(args MaxonArgs) returns FilePath throws FilePathError
-	let spelled = try args.positionalAt(SolePositionalIndex) otherwise return Directory.currentPath()
+union TestSubjectRefusal implements Error
+	notAPath(spelled String)
+	missing(path FilePath)
+	notATestFile(path FilePath)
+end 'TestSubjectRefusal'
 
-	return try FilePath.from(spelled)
-end 'testProjectDir'
+function testSubject(args MaxonArgs) returns TestSubject throws TestSubjectRefusal
+	let spelled = try args.positionalAt(SolePositionalIndex) otherwise return TestSubject.projectDirectory(Directory.currentPath())
+	let path = try FilePath.from(spelled) otherwise throw TestSubjectRefusal.notAPath(spelled)
+
+	if Directory.isDirectory(path) 'aProject'
+		return TestSubject.projectDirectory(path)
+	end 'aProject'
+
+	if not File.exists(path) 'nothingThere'
+		throw TestSubjectRefusal.missing(path)
+	end 'nothingThere'
+
+	if not isTestSourceName(path.filename()) 'notATestFile'
+		throw TestSubjectRefusal.notATestFile(path)
+	end 'notATestFile'
+
+	return TestSubject.singleFile(path)
+end 'testSubject'
+
+function subjectRefusalReason(error TestSubjectRefusal) returns String
+	return match error 'reason'
+		notAPath(spelled) gives "'{spelled}' is not a valid path"
+		missing(path) gives "no such directory or `{TestSourceExtension}` file: {reportPathDisplay(path)}"
+		notATestFile(path) gives "not a directory or a `{TestSourceExtension}` file: {reportPathDisplay(path)}"
+	end 'reason'
+end 'subjectRefusalReason'
+
+function noTestsFoundReason(subject TestSubject) returns String
+	return match subject 'where'
+		projectDirectory(dir) gives "no `test` declarations found under {reportPathDisplay(dir)}"
+		singleFile(path) gives "no `test` declarations found in {reportPathDisplay(path)}"
+	end 'where'
+end 'noTestsFoundReason'
 
 // The reason a staging refusal carries. A `match` rather than a field read because `TestStagingError` is
 // a union, and a second arm added there must be answered here rather than silently rendered as the first.
@@ -260,12 +290,12 @@ end 'selectedCount'
 // --list
 // ============================================================================================
 
-function listSelectedTests(args MaxonArgs, projectDir FilePath, target Target, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
+function listSelectedTests(args MaxonArgs, subject TestSubject, target Target, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
 	if not args.buildTestBinary or selectedCount(selected) == 0 'nothingToBuild'
 		return printTestList(args, groups: groups, selected: selected, color: color, binary: TestBinaryListing.notBuilt)
 	end 'nothingToBuild'
 
-	match buildTestBinary(projectDir, target: target, groups: groups, debugInfo: args.debugInfo) 'build'
+	match buildTestBinary(subject, target: target, groups: groups, debugInfo: args.debugInfo) 'build'
 		failed(exitCode) then return exitCode
 		built(_, binary) then return printTestList(args, groups: groups, selected: selected, color: color, binary: TestBinaryListing.built(binary.resolve(Directory.currentPath())))
 	end 'build'
@@ -348,12 +378,12 @@ union TestBinaryBuild
 	failed(exitCode ExitCode)
 end 'TestBinaryBuild'
 
-function buildTestBinary(projectDir FilePath, target Target, groups TestFileGroupArray, debugInfo bool) returns TestBinaryBuild
-	let buildRoot = try prepareTestBuildRoot(projectDir) otherwise (e) 'noBuildRoot'
+function buildTestBinary(subject TestSubject, target Target, groups TestFileGroupArray, debugInfo bool) returns TestBinaryBuild
+	let buildRoot = try prepareTestBuildRoot(subject) otherwise (e) 'noBuildRoot'
 		return TestBinaryBuild.failed(refuseTestRun(stagingRefusalReason(e)))
 	end 'noBuildRoot'
 
-	let staged = try stageTestBuild(buildRoot.join("{StagedTreeDirName}"), projectRoot: projectDir, groups: groups) otherwise (e) 'stagingRefused'
+	let staged = try stageTestBuild(buildRoot.join("{StagedTreeDirName}"), subject: subject, groups: groups) otherwise (e) 'stagingRefused'
 		return TestBinaryBuild.failed(refuseTestRun(stagingRefusalReason(e)))
 	end 'stagingRefused'
 
@@ -371,10 +401,10 @@ function buildTestBinary(projectDir FilePath, target Target, groups TestFileGrou
 	return TestBinaryBuild.built(staged, binary: product.outputPath)
 end 'buildTestBinary'
 
-function compileAndRunTests(args MaxonArgs, projectDir FilePath, target Target, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
+function compileAndRunTests(args MaxonArgs, subject TestSubject, target Target, groups TestFileGroupArray, selected TestSelection, color bool) returns ExitCode
 	let compileStarted = Clock.nowMs()
 
-	match buildTestBinary(projectDir, target: target, groups: groups, debugInfo: args.debugInfo) 'build'
+	match buildTestBinary(subject, target: target, groups: groups, debugInfo: args.debugInfo) 'build'
 		failed(exitCode) then return exitCode
 		built(staged, binary) then return runBuiltTests(args, staged: staged, binary: binary, compileMs: Clock.elapsedMs(compileStarted), selected: selected, color: color)
 	end 'build'
@@ -414,7 +444,7 @@ function runBuiltTests(args MaxonArgs, staged StagedTestBuild, binary FilePath, 
 	return SucceededExit
 end 'runBuiltTests'
 
-// ⭐⭐ **CREATE `<project>/.maxon/test/` AND MARK IT AS NOT PART OF THE PROJECT.**
+// ⭐⭐ **CREATE THE TEST BUILD DIRECTORY AND MARK `.maxon/test/` AS NOT PART OF THE PROJECT.**
 //
 // ⛔ **THE MARKER IS WRITTEN BEFORE ANYTHING IS STAGED, AND THAT ORDER IS THE WHOLE POINT.**
 // `stageTestBuild` walks the project for its sources, and the NEXT run's `discoverTests` walks it again;
@@ -426,22 +456,36 @@ end 'runBuiltTests'
 // It is rewritten every run rather than written once: `stageTestBuild` purges the staged tree beneath
 // it, and a marker that only ever existed because some earlier run happened to leave it is a premise,
 // not a fact.
-function prepareTestBuildRoot(projectDir FilePath) returns FilePath throws TestStagingError
+function prepareTestBuildRoot(subject TestSubject) returns FilePath throws TestStagingError
+	let base = try directoryHolding(subject)
+
 	// Interpolated so each argument is a committed `String`: a bare module-`let` constant is ambiguous
 	// between `join`'s String and FilePath overloads (the reason `SpecTestRunner.specTempRootDir` spells
 	// its own directory name that way).
-	let buildRoot = projectDir.join("{ProjectProductsDirName}").join("{TestBuildDirName}")
+	let markedRoot = base.join("{ProjectProductsDirName}").join("{TestBuildDirName}")
+
+	let buildRoot = match subject 'where'
+		projectDirectory gives markedRoot
+		singleFile(path) gives markedRoot.join(path.filename())
+	end 'where'
 
 	if not Directory.create(buildRoot) 'couldNotCreateIt'
 		throw TestStagingError.refused("could not create the test build directory {reportPathDisplay(buildRoot)}")
 	end 'couldNotCreateIt'
 
-	let marker = buildRoot.join("{IgnoreMarkerName}")
+	let marker = markedRoot.join("{IgnoreMarkerName}")
 	try File.writeText(marker, content: TestBuildIgnoreMarkerText) otherwise throw TestStagingError.refused("could not write {reportPathDisplay(marker)}, which is what keeps this run's generated source out of your own build")
 
 	return buildRoot
 end 'prepareTestBuildRoot'
 
+function directoryHolding(subject TestSubject) returns FilePath throws TestStagingError
+	match subject 'where'
+		projectDirectory(dir) then return dir
+		singleFile(path) then return try path.resolve(Directory.currentPath()).parent() otherwise throw TestStagingError.refused("could not derive the directory holding {reportPathDisplay(path)}")
+	end 'where'
+end 'directoryHolding'
+
 // ⚠ **THE MARKER IS A FLAG AND ITS CONTENTS ARE NEVER READ** (`Compiler.holdsIgnoreMarker` is a bare
 // `File.exists`), so this text is for the person who finds the directory and wonders what it is.
-let TestBuildIgnoreMarkerText = "Generated by `maxon test`. Everything under here is a COPY of your project with a test dispatcher appended, plus the binary built from it. Nothing here is yours to edit, and this marker is what keeps it out of your own builds.\n"
+let TestBuildIgnoreMarkerText = "Generated by `maxon test`. Everything under here is a COPY of the sources under test, a project or one test file, with a test dispatcher appended, plus the binary built from it. Nothing here is yours to edit, and this marker is what keeps it out of your own builds.\n"

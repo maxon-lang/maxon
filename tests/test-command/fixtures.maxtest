@@ -89,12 +89,14 @@ export let TestedCommandName = "test"
 let ReproducibleTimingFlag = "--no-timing"
 let ReproducibleColourFlag = "--color=never"
 
-// The three files a case directory keeps beside its sources. The first two are REQUIRED — a case that
+// The four files a case directory keeps beside its sources. The first two are REQUIRED — a case that
 // says nothing about what it expects proves nothing — and `argv.txt` is optional, absent meaning the
-// case takes no arguments beyond the two flags above.
+// case takes no arguments beyond the two flags above. `subject.txt` is optional too: it names the one
+// file in the case directory `maxon test` is given, and absent, the directory itself is given.
 let ExpectedStdoutFileName = "expected.txt"
 let ExpectedExitFileName = "expected-exit.txt"
 let ExtraArgvFileName = "argv.txt"
+let SubjectFileName = "subject.txt"
 
 // This project's own directory, and the one file in it that declares the shared half rather than a case.
 // Together they are how the coverage guard counts case files WITHOUT a hand-maintained number: one
@@ -177,6 +179,10 @@ end 'no corpus directory holds a source that is not a test'
 // RUNNING ONE CASE
 // ============================================================================================
 
+export function checkFixture(caseName String) throws TestFailure
+	try checkFixtureRun(runFixture(caseName), caseName: caseName)
+end 'checkFixture'
+
 // ⭐⭐ **ONE CASE, BOTH HALVES, REPORTED TOGETHER.** The exit code and the text are genuinely two
 // questions — a run can get both wrong at once — and a reader fixing one wants to see the other in the
 // same report, so the exit code is asserted first and the text is asserted whatever it said.
@@ -186,9 +192,8 @@ end 'no corpus directory holds a source that is not a test'
 // its stdout is byte-identical to the correct run's. `no-tests-found` is the sharpest of these: a
 // zero-test run exits 1 on purpose, and a suite that has stopped containing tests reads exactly like one
 // where everything passed.
-export function checkFixture(caseName String) throws TestFailure
+export function checkFixtureRun(run CollectedOutput, caseName String) throws TestFailure
 	let caseDir = readableDir("{FixturesDir}/{caseName}")
-	let run = runFixture(caseName)
 
 	// Bound to locals first for `the fixture corpus is covered case for case`'s reason.
 	let expectedExit = expectedExitCodeIn(caseDir, caseName: caseName)
@@ -197,7 +202,7 @@ export function checkFixture(caseName String) throws TestFailure
 	let expectedStdout = requiredFixtureText(caseDir, fileName: ExpectedStdoutFileName, caseName: caseName, holds: "the exact stdout this case's run must print")
 	let observedStdout = run.stdout
 	try Expect.equal(observedStdout, expected: expectedStdout)
-end 'checkFixture'
+end 'checkFixtureRun'
 
 // A missing binary, an unspellable path or a failed spawn panics rather than failing an assertion:
 // none is the command answering wrongly, and a report that read alike would send a reader after a
@@ -236,7 +241,7 @@ end 'testedCompilerPath'
 function fixtureArgv(caseDir FilePath, caseName String) returns StringArray
 	var argv = StringArray.create()
 	argv.push(TestedCommandName)
-	argv.push(caseDir.toString())
+	argv.push(subjectIn(caseDir, caseName: caseName).toString())
 	argv.push(ReproducibleTimingFlag)
 	argv.push(ReproducibleColourFlag)
 
@@ -246,6 +251,23 @@ function fixtureArgv(caseDir FilePath, caseName String) returns StringArray
 
 	return argv
 end 'fixtureArgv'
+
+function subjectIn(caseDir FilePath, caseName String) returns FilePath
+	let path = caseDir.join("{SubjectFileName}")
+
+	if not File.exists(path) 'theWholeCase'
+		return caseDir
+	end 'theWholeCase'
+
+	let text = try File.readText(path) otherwise panic("fixtures.test: the gate could not run — the '{caseName}' case has a {SubjectFileName} that could not be read. A case whose subject cannot be recovered would be run as the whole directory, silently.")
+	let named = text.trim()
+
+	if named.isEmpty() 'namesNoFile'
+		panic("fixtures.test: the gate could not run — the '{caseName}' case has a {SubjectFileName} naming no file. A case that tests its whole directory simply has no such file.")
+	end 'namesNoFile'
+
+	return caseDir.join(named)
+end 'subjectIn'
 
 // A case's own arguments, one per line of its `argv.txt`. OPTIONAL: a case with no such file takes none,
 // which is the ordinary shape and not a missing file.

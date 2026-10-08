@@ -34,7 +34,7 @@ agents, and reads back what a program did.
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon execute <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
 | `maxon run [<task> [args...]]` | Run a task declared in the directory's `.maxtasks` file, or list the tasks |
-| `maxon test [directory]` | Run a project's own `test` declarations |
+| `maxon test [directory\|file.maxtest]` | Run a project's own `test` declarations, or one test file's alone |
 | `maxon upgrade [--dry-run]` | Update this compiler's install to the newest release |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
 
@@ -571,10 +571,14 @@ Runs a project's unit tests: every `test` declaration in its `*.maxtest` files, 
 the project's `.maxon` sources. How to write tests is covered in [Testing](/docs/language/testing/).
 
 ```bash
-maxon test [directory] [options]
+maxon test [directory | file.maxtest] [options]
 ```
 
-`[directory]` is the project to test (default: the working directory). A second positional is refused.
+`[directory]` is the project to test (default: the working directory). A `.maxtest` file named in its
+place is run alone: it is compiled with the library tiers and nothing else, as the editor checks a file
+no `.maxproj` marks, so its siblings and any project around it stay out of the run. A path naming
+nothing is refused with ``test: no such directory or `.maxtest` file: <path>``, and any other file with
+``test: not a directory or a `.maxtest` file: <path>``; both exit 2 with the usage line. A second positional is refused.
 
 All discovered tests are compiled into **one binary** with a generated entry point, and which of them
 run is a runtime argument. Changing `--filter` between runs therefore recompiles nothing. The project's
@@ -600,8 +604,9 @@ normally with `maxon build`.
 The run is serial; there is no `--workers` option.
 
 **Where it runs.** The test binary runs in the directory `maxon test` was invoked from, so a relative
-path in a test means what it means in your shell. The build lives in `<project>/.maxon/test/`, which
-carries its own `.maxonignore` so generated sources never leak into an ordinary build.
+path in a test means what it means in your shell. The build lives in `<project>/.maxon/test/`, or for a
+test file run alone in `<its directory>/.maxon/test/<file name>/`, under a `.maxonignore` that keeps
+its generated sources out of every ordinary build.
 
 **Isolation.** By default each test **file** runs in its own process. If a test crashes the process, the
 harness re-runs the remaining tests of that file so one crash does not hide the others' results, and a
@@ -698,6 +703,7 @@ command reports `2 pass`, `0 fail` and exits 0.
 ```bash
 maxon test                        # every test under the working directory
 maxon test src/parser             # one project's tests
+maxon test src/lexer.maxtest      # one test file's tests, compiled alone
 maxon test --filter=json          # only tests whose name or file mentions "json"
 maxon test --filter=parser,lexer  # two patterns, as a union
 maxon test --filter=parser --filter=lexer  # the same union, one flag per pattern

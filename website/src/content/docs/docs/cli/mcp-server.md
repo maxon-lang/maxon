@@ -163,7 +163,7 @@ Runs a project's `test` declarations, as `maxon test` does.
 
 | Argument | Type | Description |
 |----------|------|-------------|
-| `path` | string | Project directory (default: the working directory) |
+| `path` | string | Project directory, or one `.maxtest` file to run alone (default: the working directory) |
 | `filter` | string | Selects tests by name or file: case-insensitive, comma-separated patterns are a union |
 | `timeoutSeconds` | number | Seconds the build and the tests together may take (default 600) |
 | `repoRoot` | string | Developer mode only. The checkout whose compiler runs the tests; see [Which tree, and which compiler](#which-tree-and-which-compiler). |

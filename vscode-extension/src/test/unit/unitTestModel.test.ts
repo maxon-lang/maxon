@@ -18,9 +18,10 @@ import {
 	StagedTestBinaryDirectoryPrefix,
 	stageTestBinary,
 	TestResult,
+	testBuildDirectory,
 	testFilterFor,
 	testKey,
-	testProjectDirectory,
+	testRunTarget,
 	verdictFor
 } from '../../unitTestModel';
 
@@ -249,36 +250,68 @@ suite('isTestFileName', () => {
 	});
 });
 
-suite('testProjectDirectory', () => {
-	test('climbs through directories holding sources, stopping at one that holds none', () => {
-		withTree(['tests/README.md', 'tests/cli/Harness.maxon', 'tests/cli/help.maxtest'], root => {
-			assert.strictEqual(testProjectDirectory(path.join(root, 'tests', 'cli', 'help.maxtest'), root), path.join(root, 'tests', 'cli'));
+suite('testRunTarget', () => {
+	test('a test file with no .maxproj above it runs alone, even where parent directories hold sources', () => {
+		withTree(['tests/README.md', 'tests/Shared.maxon', 'tests/cli/Harness.maxon', 'tests/cli/help.maxtest'], root => {
+			const file = path.join(root, 'tests', 'cli', 'help.maxtest');
+			assert.strictEqual(testRunTarget(file, root), file);
 		});
 	});
 
 	test('the nearest directory holding a .maxproj is the project, past a directory holding no source', () => {
 		withTree(['app.maxproj', 'main.maxon', 'src/README.md', 'src/pricing/pricing.maxon', 'src/pricing/pricing.maxtest'], root => {
-			assert.strictEqual(testProjectDirectory(path.join(root, 'src', 'pricing', 'pricing.maxtest'), root), root);
+			assert.strictEqual(testRunTarget(path.join(root, 'src', 'pricing', 'pricing.maxtest'), root), root);
+		});
+	});
+
+	test('a .maxproj beside the test file makes its own directory the project', () => {
+		withTree(['app.maxproj', 'main.maxon', 'app.maxtest'], root => {
+			assert.strictEqual(testRunTarget(path.join(root, 'app.maxtest'), root), root);
 		});
 	});
 
 	test('a .maxproj above the workspace folder is not consulted', () => {
 		withTree(['app.maxproj', 'workspace/README.md', 'workspace/cli/help.maxtest'], root => {
 			const workspace = path.join(root, 'workspace');
-			assert.strictEqual(testProjectDirectory(path.join(workspace, 'cli', 'help.maxtest'), workspace), path.join(workspace, 'cli'));
+			const file = path.join(workspace, 'cli', 'help.maxtest');
+			assert.strictEqual(testRunTarget(file, workspace), file);
 		});
 	});
 
-	test('a test beneath the sources it tests runs with them', () => {
+	test('a test beside sources and no .maxproj runs alone, without the sources it tests', () => {
 		withTree(['main.maxon', 'lib/math.maxon', 'lib/math.maxtest'], root => {
-			assert.strictEqual(testProjectDirectory(path.join(root, 'lib', 'math.maxtest'), root), root);
+			const file = path.join(root, 'lib', 'math.maxtest');
+			assert.strictEqual(testRunTarget(file, root), file);
 		});
 	});
 
-	test('never climbs above the workspace folder', () => {
+	test('a test file directly in the workspace folder with no .maxproj runs alone', () => {
 		withTree(['outer.maxon', 'workspace/main.maxon', 'workspace/main.maxtest'], root => {
 			const workspace = path.join(root, 'workspace');
-			assert.strictEqual(testProjectDirectory(path.join(workspace, 'main.maxtest'), workspace), workspace);
+			const file = path.join(workspace, 'main.maxtest');
+			assert.strictEqual(testRunTarget(file, workspace), file);
+		});
+	});
+
+	test('a relative test file path is resolved before it is answered', () => {
+		withTree(['lib/math.maxtest'], root => {
+			const relative = path.relative(process.cwd(), path.join(root, 'lib', 'math.maxtest'));
+			assert.strictEqual(testRunTarget(relative, root), path.join(root, 'lib', 'math.maxtest'));
+		});
+	});
+});
+
+suite('testBuildDirectory', () => {
+	test('a project directory is where its test build lives', () => {
+		withTree(['app.maxproj', 'main.maxon'], root => {
+			assert.strictEqual(testBuildDirectory(root), root);
+		});
+	});
+
+	test('a test file builds in the directory holding it', () => {
+		withTree(['lib/math.maxtest'], root => {
+			const file = path.join(root, 'lib', 'math.maxtest');
+			assert.strictEqual(testBuildDirectory(file), path.join(root, 'lib'));
 		});
 	});
 });

@@ -554,6 +554,12 @@ these corpora keep their oracles elsewhere — `lsp/`'s are `b"…"` byte litera
 a stored expectation"**, a weaker rule than "every Maxon file here is stored". `fmt/` states it the
 strong way because every one of ITS fixtures is a stored expectation.
 
+Each corpus holding `.maxtest` files also holds an empty `<corpus>.maxproj`. Only a `.maxproj` marks a
+project, so without one the editor checks each test file alone and the VS Code Test Explorer runs it as
+`maxon test <file>`, where a test that calls its corpus's shared half cannot compile. The marker is
+an empty file, so `fmt` has nothing to rewrite in it, and `fmt/fixtures.maxtest` exempts `fmt.maxproj`
+by name.
+
 ⛔ **No `.maxonignore` in this directory.** A marker excludes its subtree from every walk that
 honours it — `maxon test`'s, `fmt`'s and the build's — so a marker at a corpus root removes the
 very files the corpus stages: every `test-command` case finds no sources and exits 2.

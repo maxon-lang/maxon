@@ -168,4 +168,5 @@ declares is reported as `stdlib.ParseError.invalidFormat`.
 `maxon test [directory]` discovers every `test` under the directory, runs them and exits `0` when all pass,
 `1` when any fails (or there are none), and `2` when the tests do not compile. `--list` prints the tests
 without running them. A test binary's heap is checked for leaks like any program's, and a leaking test is
-reported as such. See the [CLI reference](/docs/cli/) for its flags.
+reported as such. `maxon test <file>.maxtest` runs that one file's tests, compiled with the library tiers
+alone. See the [CLI reference](/docs/cli/#maxon-test) for its flags.

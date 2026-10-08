@@ -130,10 +130,6 @@ function holdsFile(dir: string, matches: (name: string) => boolean): boolean {
 	}
 }
 
-function holdsMaxonSource(dir: string): boolean {
-	return holdsFile(dir, name => name.endsWith(MaxonSourceSuffix) || isTestFileName(name));
-}
-
 export function holdsProjectFile(dir: string): boolean {
 	return holdsFile(dir, name => name.endsWith(ProjectFileSuffix));
 }
@@ -148,31 +144,14 @@ function nearestProjectFileDirectory(start: string, root: string): string | unde
 	}
 }
 
-/**
- * The directory `maxon test` is pointed at for this test file.
- *
- * `maxon test <dir>` compiles every `.maxon` and `.maxtest` file beneath `<dir>` as one program.
- * The project is the nearest directory holding a `.maxproj`, from the test file's own directory up to
- * the workspace folder — the root the language server gives the same file. Without one, it is the
- * highest directory reachable through parents that each hold a source, never above the workspace
- * folder: sources that sit together are compiled together, and a directory holding none (`tests/`
- * above `tests/cli/`) separates independent projects.
- */
-export function testProjectDirectory(testFile: string, workspaceFolder: string): string {
-	const root = path.resolve(workspaceFolder);
-	const start = path.dirname(path.resolve(testFile));
-	const marked = nearestProjectFileDirectory(start, root);
-	if (marked !== undefined) return marked;
+/** Scoped as the language server scopes `testFile`, so a test runs in the program its diagnostics came from. */
+export function testRunTarget(testFile: string, workspaceFolder: string): string {
+	const file = path.resolve(testFile);
+	return nearestProjectFileDirectory(path.dirname(file), path.resolve(workspaceFolder)) ?? file;
+}
 
-	let project = start;
-
-	while (isWithin(project, root)) {
-		const above = path.dirname(project);
-		if (!holdsMaxonSource(above)) break;
-		project = above;
-	}
-
-	return project;
+export function testBuildDirectory(testTarget: string): string {
+	return fs.statSync(testTarget, { throwIfNoEntry: false })?.isDirectory() ? testTarget : path.dirname(testTarget);
 }
 
 function isWithin(child: string, parent: string): boolean {

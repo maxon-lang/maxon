@@ -30,7 +30,7 @@ Each kind of file has its own extension, and each command reads its own kinds:
 | File | Read by |
 |------|---------|
 | `*.maxon` | every build, `maxon test` and `maxon execute` |
-| `*.maxtest` | `maxon test`, beside the project's `.maxon` sources |
+| `*.maxtest` | `maxon test`, beside the project's `.maxon` sources, or alone when named |
 | `<name>.maxproj` | `maxon build` with no path or with a target word |
 | `<name>.maxtasks` | `maxon run` |
 
@@ -261,7 +261,8 @@ ancestor above it. Only a marker *below* the path you named can exclude anything
 
 `.maxon/` holds a project's build products and is safe to delete or ignore in version control:
 
-- `maxon test` stages its build in `<project>/.maxon/test/`, with its own `.maxonignore`.
+- `maxon test` stages its build in `<project>/.maxon/test/`, and a test file's run alone in
+  `<its directory>/.maxon/test/<file name>/`, under a `.maxonignore` in `.maxon/test/`.
 - A project target's build that states no output is written there, as `.maxon/<name>` for the project
   file `<name>.maxproj`, and the compiler creates the output directory if it is missing.
 

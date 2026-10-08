@@ -39,6 +39,7 @@
 // Where the corpus lives, and this project's own directory, both relative to the checkout root.
 let FixturesDirName = "tests/fmt/fixtures"
 let ProjectDirName = "tests/fmt"
+let CorpusProjectFileName = "fmt.maxproj"
 
 // The one file in this directory that declares the shared half rather than a case. Together with the
 // directory above it is how the coverage guard counts case files without a hand-maintained number.
@@ -186,9 +187,11 @@ end 'every fixture case is invoked by name'
 // themselves. `tests/README.md` states it as a rule of the directory.
 //
 // The `.maxtest` drivers are exempt: they should be formatted, and an ordinary build's walk leaves
-// them out, so they are the one live thing that may sit here.
+// them out. So is the corpus's own `fmt.maxproj`, an empty marker that makes the drivers one project
+// for the editor and the Test Explorer.
 test 'no fixture is stored as a source maxon fmt would rewrite'
-	let live = listedLines(liveSourcesUnder(readableDir(ProjectDirName)))
+	let corpus = readableDir(ProjectDirName)
+	let live = listedLines(liveSourcesUnder(corpus, corpusMarker: corpus.join(CorpusProjectFileName)))
 	Expect.isEmpty(live, message: "these files under {ProjectDirName} are LIVE Maxon sources, so `maxon fmt` over this checkout would rewrite them — and under {FixturesDirName} that means the tool under test editing its own oracle. Store a fixture source as `<name>{StoredFixtureSuffix}`; do NOT add a `.maxonignore`, which would hide the corpus from the command it exists to gate and break the two `maxonignore` cases outright.")
 end 'no fixture is stored as a source maxon fmt would rewrite'
 
@@ -776,7 +779,7 @@ end 'readableFile'
 // directories — `maxon test` stages a copy of this project there and writes a generated entry
 // source beside it, so a walk that went in would report the compiler's own output as a corpus
 // offence.
-function liveSourcesUnder(root FilePath) returns StringArray
+function liveSourcesUnder(root FilePath, corpusMarker FilePath) returns StringArray
 	var live = StringArray.create()
 
 	for entry in listing(root) 'eachEntry'
@@ -787,12 +790,16 @@ function liveSourcesUnder(root FilePath) returns StringArray
 				continue
 			end 'buildProducts'
 
-			for nested in liveSourcesUnder(entry) 'eachNested'
+			for nested in liveSourcesUnder(entry, corpusMarker: corpusMarker) 'eachNested'
 				live.push(nested)
 			end 'eachNested'
 
 			continue
 		end 'aDirectory'
+
+		if entry.equals(corpusMarker) 'theCorpusMarker'
+			continue
+		end 'theCorpusMarker'
 
 		if name.endsWith(MaxonSourceSuffix) or name.endsWith(ProjectFileSuffix) or name.endsWith(TaskFileSuffix) 'aLiveSource'
 			live.push(entry.toString())

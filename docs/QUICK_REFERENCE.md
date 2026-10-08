@@ -1154,6 +1154,7 @@ maxon run [task]             # Run a task of the .maxtasks file in the current d
 maxon execute <file|dir> [args] # Compile (or reuse a cached build) and run; args are the PROGRAM's
 maxon <file>.maxon [args]    # The same, with no word — what a `#!/usr/bin/env maxon` script arrives as
 maxon test [dir]             # Run a PROJECT's unit tests (its *.maxtest files)
+maxon test <file>.maxtest    # Run one test file's tests alone
 maxon fmt [file|dir]         # Re-print sources in canonical layout, in place
 maxon spec-test              # Run spec fragment tests (the COMPILER's own suite)
 maxon lsp-server             # Start LSP server for IDE integration

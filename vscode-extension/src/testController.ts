@@ -21,13 +21,14 @@ import {
 	resultKey,
 	StagedTestBinary,
 	stageTestBinary,
+	testBuildDirectory,
 	TestFileGlob,
 	testFilterFor,
 	TestListDocument,
 	TestListExitCode,
 	testKey,
 	TestProjectExitCode,
-	testProjectDirectory,
+	testRunTarget,
 	TestRunDocument,
 	TestVerdict,
 	verdictFor
@@ -172,10 +173,10 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 		return controller.createRunProfile(label, kind, (request, token) => startTestRun(request, token, perform), isDefault);
 	}
 
-	// Every `maxon test` in one project stages into and builds over the same `.maxon/test/` tree, so
-	// two commands in one project run one after the other.
-	function exclusivelyInProject<T>(projectDirectory: string, work: () => Promise<T>): Promise<T> {
-		const key = pathKey(projectDirectory);
+	// Every `maxon test` aimed at one directory, a project or the files run alone in it, writes the same
+	// `.maxon/test/` tree, so two such commands run one after the other.
+	function exclusivelyInBuildDirectory<T>(testTarget: string, work: () => Promise<T>): Promise<T> {
+		const key = pathKey(testBuildDirectory(testTarget));
 		const previous = projectCommands.get(key) ?? Promise.resolve();
 		const result = previous.then(work);
 		const settled = result.then(() => undefined, () => undefined);
@@ -242,7 +243,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 
 	interface TestProject {
 		folder: vscode.WorkspaceFolder;
-		projectDirectory: string;
+		testTarget: string;
 		workingDirectory: string;
 	}
 
@@ -259,7 +260,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 
 		return {
 			folder,
-			projectDirectory: testProjectDirectory(file, folder.uri.fsPath),
+			testTarget: testRunTarget(file, folder.uri.fsPath),
 			workingDirectory: folder.uri.fsPath
 		};
 	}
@@ -282,7 +283,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 		for (const item of requested) {
 			const test = declaredTest(item);
 			const located = locate(test.file);
-			const key = pathKey(located.projectDirectory);
+			const key = pathKey(located.testTarget);
 			let group = groups.get(key);
 			if (!group) {
 				group = { ...located, tests: [], filter: undefined, wholeProject: true };
@@ -294,7 +295,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 		// A project runs unfiltered only when every test discovered in it is requested.
 		for (const [id, test] of declared) {
 			if (requestedIds.has(id)) continue;
-			const group = groups.get(pathKey(locate(test.file).projectDirectory));
+			const group = groups.get(pathKey(locate(test.file).testTarget));
 			if (group) group.wholeProject = false;
 		}
 
@@ -315,7 +316,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 
 			return {
 				folder: group.folder,
-				projectDirectory: group.projectDirectory,
+				testTarget: group.testTarget,
 				workingDirectory: group.workingDirectory,
 				tests: group.tests,
 				filter: testFilterFor({ wholeFiles, testNames }, group.workingDirectory, group.wholeProject)
@@ -330,7 +331,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 	}
 
 	function testCommandArguments(project: ProjectRun, modeFlags: string[]): string[] {
-		const args = ['test', project.projectDirectory, ...modeFlags, JSON_FLAG];
+		const args = ['test', project.testTarget, ...modeFlags, JSON_FLAG];
 		if (project.filter !== undefined) args.push(`${FILTER_FLAG}${project.filter}`);
 		return args;
 	}
@@ -356,7 +357,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 	async function runProject(compiler: string, project: ProjectRun, run: vscode.TestRun, token: vscode.CancellationToken): Promise<void> {
 		for (const item of project.tests) run.started(item);
 
-		const outcome = await exclusivelyInProject(project.projectDirectory, () => runTestCommand(compiler, testCommandArguments(project, []), project, run, token));
+		const outcome = await exclusivelyInBuildDirectory(project.testTarget, () => runTestCommand(compiler, testCommandArguments(project, []), project, run, token));
 		if (!outcome) return;
 
 		if (outcome.code !== TestProjectExitCode.AllPassed && outcome.code !== TestProjectExitCode.TestsFailed) {
@@ -381,7 +382,7 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 	}
 
 	async function debugProject(compiler: string, project: ProjectRun, run: vscode.TestRun, token: vscode.CancellationToken): Promise<void> {
-		const build = await exclusivelyInProject(project.projectDirectory, () => buildForDebugging(compiler, project, run, token));
+		const build = await exclusivelyInBuildDirectory(project.testTarget, () => buildForDebugging(compiler, project, run, token));
 		if (!build) return;
 
 		try {

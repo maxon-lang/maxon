@@ -173,7 +173,7 @@ Type or paste a whole program into the **Source** pane. The **Target IR** pane u
 ## Test Explorer
 
 The extension contributes a **Maxon Tests** controller to VS Code's Test Explorer. It lists every
-`test '<name>'` declaration in the workspace's `*.test.maxon` files, one node per file with its tests
+`test '<name>'` declaration in the workspace's `*.maxtest` files, one node per file with its tests
 beneath it, and runs them with [`maxon test`](https://maxon.dev/docs/cli/#maxon-test) — the same compiler
 the language server uses (see [Finding the compiler](#finding-the-compiler)). The tests are listed even
 when no compiler is found; running them then reports that none was.
@@ -186,25 +186,25 @@ refresh button in the Test Explorer re-reads every test file.
 
 ### Which project a test runs in
 
-`maxon test <directory>` compiles every `.maxon` file beneath the directory, together with its tests, as
-one program. A test file's project is the highest directory reachable from the file's own directory
-through parent directories that each hold a `.maxon` source (a `build.maxon` manifest does not count),
-never above the workspace folder. So a `lib/math.test.maxon` in a project whose `main.maxon` is at the
-root runs from the root, and `tests/cli/help.test.maxon` runs from `tests/cli/` when `tests/` itself
-holds no source.
+A test file's project is the nearest directory holding a `.maxproj`, from the file's own directory up to
+the workspace folder, and the test runs as `maxon test <that directory>`, which compiles every `.maxon`
+file beneath it together with its tests as one program. A test file with no `.maxproj` there runs alone,
+as `maxon test <file>`: it is compiled with the library tiers and nothing else, as the language server
+checks it. So `lib/math.maxtest` runs with the whole project when an `app.maxproj` sits at the root, and
+by itself when nothing marks a project.
 
 The compiler runs in the workspace folder, so a relative path inside a test means what it means in a
 terminal opened there.
 
 ### Running
 
-Each project the selection touches is one invocation:
+Each project, or lone test file, the selection touches is one invocation:
 
 ```text
-maxon test <project> --json [--filter=<patterns>]
+maxon test <project or file> --json [--filter=<patterns>]
 ```
 
-Running every test of a project passes no filter. Otherwise the filter names each file whose tests are
+Running every test of a project or file passes no filter. Otherwise the filter names each file whose tests are
 all selected by its path, and each other selected test by its name. The compiler matches a pattern as a
 case-insensitive substring, so the run may include more tests than you selected; only the selected
 ones are reported.
@@ -312,14 +312,14 @@ configuration takes:
 ### Debugging a test
 
 The [Test Explorer](#test-explorer) has a **Debug Test** action beside **Run Test**. It debugs the
-selected tests under the same test binary `maxon test` runs. Each project the selection touches is built
-once:
+selected tests under the same test binary `maxon test` runs. Each project, or lone test file, the selection
+touches is built once:
 
 ```text
-maxon test <project> --list --build --json [--filter=<the selection>]
+maxon test <project or file> --list --build --json [--filter=<the selection>]
 ```
 
-builds the project's tests with debug info without running them, and names the binary and, for each
+builds its tests with debug info without running them, and names the binary and, for each
 listed test, the value that selects it alone. The extension copies the binary and its `.mxdbg` sidecar
 into a temporary directory, then debugs each selected test in turn as a session of
 `<copy> --select=<value>` in the workspace folder, where `maxon test` runs it too. Debugging the copy

@@ -67,8 +67,9 @@ so it needs a `main`.
 **Test Explorer.** The **Maxon Tests** controller lists the `test` declarations in the workspace's
 `*.maxtest` files (the extension matched case and all, as the compiler matches it), one node per file,
 and runs them with the compiler the extension found, one `maxon test <project> --json` per project the
-selection touches. A test file's project is the highest directory above it, up to the workspace folder,
-whose every level holds a `.maxon` source. When the
+selection touches. A test file's project is the nearest directory holding a `.maxproj`, from the file's
+own directory up to the workspace folder; a test file with none there runs alone, as
+`maxon test <file> --json`. When the
 workspace folder is the Maxon source checkout, a second controller, **Maxon Spec Suite**, lists the spec
 tests in `specs/*.md` and runs them with the checkout's own compiler
 (`maxon-bin/.maxon/maxon spec-test --filter=…`).
@@ -77,8 +78,8 @@ tests in `specs/*.md` and runs them with the checkout's own compiler
 [`maxon dap-server`](#maxon-dap-server), run from the compiler it found, on every native target. **F5** works
 without a `launch.json`: a configuration without `program` debugs the active editor's `.maxon` file, or
 else the workspace folder when it holds a `.maxproj` file. A source file or project is built with debug info
-into the host's Maxon cache first. The Test Explorer's **Debug Test** builds each touched project's tests
-once with `maxon test --list --build --json`, copies the test binary and its sidecar to a temporary
+into the host's Maxon cache first. The Test Explorer's **Debug Test** builds the tests of each project, or lone
+test file, the selection touches once with `maxon test --list --build --json`, copies the test binary and its sidecar to a temporary
 directory, and debugs each selected test in turn under that copy (see
 [Running the test binary](/docs/cli/#running-the-test-binary)); cancelling the run stops the session. The extension's
 README describes the launch attributes and the panes.
