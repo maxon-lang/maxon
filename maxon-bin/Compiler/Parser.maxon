@@ -10063,7 +10063,7 @@ end 'arraySurfaceMemberNames'
 // ⚠ **THE LIST IS A PARAMETER THOUGH `Array` HAS ONE CLAUSE, and the parameter is what says
 // the renderer is not the clause's OWNER.** That clause is `hash`/`equals`'s `where Element is Hashable and
 // Equatable` (`stdlib/Array.maxon:626`), whose list is `Array`'s own
-// conformance row (`IrInterface.intrinsicConformanceProtocolNames`). The one caller names the source of it,
+// conformance row (`IrInterface.intrinsicConformanceProtocols`). The one caller names the source of it,
 // so this function renders a list it is handed and never states one.
 function arrayWhereClause(interfaces ByteArrayArray) returns String
 	var constraints = WhereConstraintArray.create()
@@ -18335,8 +18335,9 @@ export type Parser
 	// ⚠ **IT IS SOUND BECAUSE IT IS UNIFORM OVER STDLIB SOURCE.** Every stdlib file is rewritten with the
 	// same table, so a name renamed at its declaration is renamed at every stdlib use of it — including a
 	// method's `Type.` head and a cross-module reference — and everything stdlib-internal is therefore
-	// unchanged. What DOES change is exactly the rule: the bare name is no longer reachable from user code,
-	// whose tokens are never rewritten. The one shape that argument does not cover — a stdlib MEMBER spelled
+	// unchanged. What DOES change is exactly the rule: user code, whose tokens are never rewritten, cannot
+	// reach the library's declaration by the bare name, which means the author's own declaration there — a
+	// synthesized protocol included (`IrInterfaceMap.protocolKind`). The one shape that argument does not cover — a stdlib MEMBER spelled
 	// like a contested type name, which user code can name — is refused before this runs
 	// (`Queries.refuseContestedNamesUsedAsMembers`, E3112).
 	//
@@ -18348,7 +18349,7 @@ export type Parser
 	// A compile that contests nothing gets its own array back, so it allocates nothing and parses the very
 	// tokens it would parse without the rename — which is what keeps its emitted code byte-identical.
 	static function shadowRenamedTokens(tokens TokenArray, signatures ProgramSignatures, isStdlibSource bool) returns TokenArray
-		if not isStdlibSource or not signatures.hasStdlibShadowRenames() 'nothingToRename'
+		if not isStdlibSource or not signatures.interfaceMap().hasLibraryRenames() 'nothingToRename'
 			return tokens
 		end 'nothingToRename'
 
@@ -18361,7 +18362,7 @@ export type Parser
 				continue
 			end 'notAName'
 
-			let name = signatures.stdlibShadowRenameOf(tok.value)
+			let name = signatures.interfaceMap().libraryNameOf(tok.value)
 
 			if name.equals(tok.value) 'uncontested'
 				renamed.push(tok)
@@ -33371,11 +33372,11 @@ export type Parser
 	end 'declaresANameOutsideABodyAt'
 
 	function labelInNameSpace(label ByteArray) returns ByteArray
-		if not self.isStdlibSource or not self.signatures.hasStdlibShadowRenames() 'notRenamed'
+		if not self.isStdlibSource or not self.signatures.interfaceMap().hasLibraryRenames() 'notRenamed'
 			return label
 		end 'notRenamed'
 
-		return self.signatures.stdlibShadowRenameOf(label)
+		return self.signatures.interfaceMap().libraryNameOf(label)
 	end 'labelInNameSpace'
 
 	// ⛔ **A BODY THAT DROPS AN OPAQUE `T` MUST CARRY THE LAYOUT DESCRIPTOR THAT DROP READS.** Asked once
@@ -39300,7 +39301,7 @@ export type Parser
 		end 'theImplicitReceiversName'
 
 		// The rule's own test comes first because this runs once per declared name in every file, and the
-		// two exemptions below are linear scans (`isMintedStdlibShadowName`'s also allocates): asked
+		// two exemptions below are linear scans (`isMintedLibraryName`'s also allocates): asked
 		// first, they would cost `sites × renames` at every stdlib declaration. The scale ladder cannot
 		// see a regression here, because its corpus contests no name.
 		if not isCompilerReservedName(declaredName) 'notReserved'
@@ -39315,7 +39316,7 @@ export type Parser
 		// ⚠ It is scoped to stdlib source because `shadowRenamedTokens` rewrites only stdlib tokens: a
 		// minted name reaching here from a user file is the author typing `__Clock`, which E2051 exists
 		// to refuse.
-		if self.isStdlibSource and self.signatures.isMintedStdlibShadowName(declaredName) 'theCompilersOwnMint'
+		if self.isStdlibSource and self.signatures.interfaceMap().isMintedLibraryName(declaredName) 'theCompilersOwnMint'
 			return
 		end 'theCompilersOwnMint'
 
@@ -59250,7 +59251,7 @@ export type Parser
 		var args = pairArgs(lo, second: hi)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
-		return try self.emitCall(qualifiedMethodName(self.signatures.stdlibShadowRenameOf(typeName), methodName: CreateMethod), anchor: rangeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: rangeTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.rangeOperator)
+		return try self.emitCall(qualifiedMethodName(self.signatures.interfaceMap().libraryNameOf(typeName), methodName: CreateMethod), anchor: rangeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: rangeTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.rangeOperator)
 	end 'emitRangeValue'
 
 	// ⭐ **THE INLINE CONDITIONAL `<t> if <c> else <f>`.** Called with the TRUE arm already
@@ -63312,12 +63313,12 @@ export type Parser
 	//
 	// ⭐ **THE PROTOCOL IS FETCHED, NOT DESCRIBED.** The method name the constraints are searched for, the
 	// result type the verdict reads and the FORMALS the operator can fill are ALL taken off the interface
-	// `builtinInterface` synthesizes — the whole `InterfaceMethodSig` is handed on rather than picked apart
-	// into parallel `want*` arguments, so this function names ONE fact (which protocol the operator belongs
+	// `IrInterfaceMap.protocolDeclaration` synthesizes — the whole `InterfaceMethodSig` is handed on rather
+	// than picked apart into parallel `want*` arguments, so this function names ONE fact (which protocol the operator belongs
 	// to) instead of several parallel spellings of it.
 	function requireOperatorWitness(receiver ValueId, op MaxonCmpOp, opTok Token) returns WitnessDispatchTarget throws SourceParseError
-		let protocol = requireBuiltinInterface(EquatableInterfaceName if comparisonIsEquality(op) else ComparableInterfaceName)
-		let method = try protocol.methods.get(0) otherwise panic("requireOperatorWitness: the synthesized protocol '{String.from(protocol.name)}' declares no method — a comparison operator dispatches its SOLE method (`singleMethodInterface`), so `builtinInterface` must give it exactly one")
+		let protocol = self.signatures.interfaceMap().protocolDeclaration(BuiltinInterfaceKind.equatable if comparisonIsEquality(op) else BuiltinInterfaceKind.comparable)
+		let method = try protocol.methods.get(0) otherwise panic("requireOperatorWitness: the synthesized protocol '{String.from(protocol.name)}' declares no method — a comparison operator dispatches its SOLE method (`singleMethodInterface`), so `IrInterfaceMap.protocolDeclaration` must give it exactly one")
 
 		// The search itself runs by METHOD (the shared core the `.equals()`/`.compare()` dispatch uses), so a hit
 		// still has to be PROVED to be the protocol's — see `witnessTargetIsProtocol`. It is now the FILTER
@@ -78886,12 +78887,12 @@ export type Parser
 	// an `Array` receiver can be asked. Threading a receiver through the shared gate to serve one surface is how
 	// the shared gate stops being shared.
 	//
-	// It is DEAD for every program in the corpus: `hasStdlibShadowRenames` is false unless something is
-	// contested, which is the one gate every cost of that mechanism sits behind.
+	// It is DEAD for every program in the corpus: `IrInterfaceMap.hasLibraryRenames` is false unless
+	// something is contested, which is the one gate every cost of that mechanism sits behind.
 	function refuseArrayMemberTheOtherDeclarationCarries(giid GenericInstanceId, methodTok Token, isManagedMemory bool) throws SourceParseError
 		// A BUFFER receiver is refused in the buffer's own words and has no second declaration to be confused
 		// with — `__ManagedMemory` is the compiler's own name and no file declares a member on it.
-		if isManagedMemory or not self.signatures.hasStdlibShadowRenames() 'oneArrayDeclarationInThisCompile'
+		if isManagedMemory or not self.signatures.interfaceMap().hasLibraryRenames() 'oneArrayDeclarationInThisCompile'
 			return
 		end 'oneArrayDeclarationInThisCompile'
 
@@ -83880,7 +83881,7 @@ export type Parser
 	end 'requireMembersReachable'
 
 	function requireInterfaceMembersReachable(interfaceName ByteArray, memberTok Token) throws SourceParseError
-		if isBuiltinInterfaceName(interfaceName) 'aSynthesizedProtocol'
+		if self.signatures.interfaceMap().namesALibraryProtocol(interfaceName) 'aSynthesizedProtocol'
 			return
 		end 'aSynthesizedProtocol'
 

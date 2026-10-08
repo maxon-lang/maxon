@@ -129,18 +129,19 @@ end 'checkGrantedEnumConformance'
 
 // Every requirement of every protocol this enum is GRANTED, held against the member the enum declares under
 // that name — if it declares one at all. The protocol list and the requirement list are both FETCHED from the
-// row that grants them (`intrinsicConformanceProtocolNames` → `requireBuiltinInterface`), never transcribed,
-// so the set of members this validates is the set of slots the witness table stamps, by construction.
+// row that grants them (`intrinsicConformanceProtocols` → `IrInterfaceMap.protocolDeclaration`), never
+// transcribed, so the set of members this validates is the set of slots the witness table stamps, by
+// construction.
 function checkOneGrantedEnumConformance(project Project, functionsByName FunctionNameIndex, signatures ProgramSignatures, enumName ByteArray)
-	for protocolName in intrinsicConformanceProtocolNames(enumName, discovered: DiscoveredConformer.payloadFreeEnum) 'eachProtocol'
-		let iface = requireBuiltinInterface(protocolName)
+	for protocol in intrinsicConformanceProtocols(enumName, discovered: DiscoveredConformer.payloadFreeEnum) 'eachProtocol'
+		let iface = project.interfaces.protocolDeclaration(protocol)
 
 		for method in iface.methods 'eachRequirement'
 			if not signatures.enumDeclaresOwnConformanceMethod(enumName, methodName: method.name) 'theCompilerServesIt'
 				continue
 			end 'theCompilerServesIt'
 
-			requireGrantedEnumMemberMatches(project, functionsByName: functionsByName, signatures: signatures, enumName: enumName, protocolName: protocolName, method: method)
+			requireGrantedEnumMemberMatches(project, functionsByName: functionsByName, signatures: signatures, enumName: enumName, protocolName: iface.name, method: method)
 		end 'eachRequirement'
 	end 'eachProtocol'
 end 'checkOneGrantedEnumConformance'
@@ -246,7 +247,7 @@ let grantedEnumTypeParamNames = ByteArrayArray.create()
 function checkAssociatedTypeAbiAgreement(project Project, module MaxonModule, signatures ProgramSignatures)
 	let dispatched = dispatchedRequirementSlots(module, signatures: signatures)
 
-	for (_, iface) in signatures.interfaceMap() 'eachInterface'
+	for (_, iface) in signatures.interfaceMap().entries 'eachInterface'
 		// An interface with no `uses` names has neither refusal to answer for and no holding to check, so it
 		// pays neither the slot walk below nor a position loop that would iterate zero times anyway.
 		if iface.associatedTypeNames.count() == 0 'noAssociatedTypes'
@@ -1189,7 +1190,7 @@ end 'constrainedTypeParamName'
 // are the same discovered answer `conformerNameOfType` already reduced `typeName` to. Asking one
 // home means the reduction and the rows cannot come to disagree about which conformer a name is.
 export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray, discovered DiscoveredConformer) returns bool
-	if isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName, discovered: discovered) 'intrinsic'
+	if isIntrinsicBuiltinConformance(interfaces, typeName: typeName, interfaceName: interfaceName, discovered: discovered) 'intrinsic'
 		return true
 	end 'intrinsic'
 
@@ -2012,7 +2013,7 @@ function grantedConformanceServes(signatures ProgramSignatures, conformerName By
 		return false
 	end 'writesEveryRequirementItself'
 
-	return isIntrinsicBuiltinConformance(conformerName, interfaceName: interfaceName, discovered: signatures.discoveredConformerOf(conformerName))
+	return isIntrinsicBuiltinConformance(signatures.interfaceMap(), typeName: conformerName, interfaceName: interfaceName, discovered: signatures.discoveredConformerOf(conformerName))
 end 'grantedConformanceServes'
 
 // The requirement's name is OVERLOADED: match it against every live member of the set and accept it when

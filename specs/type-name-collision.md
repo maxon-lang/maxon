@@ -3617,6 +3617,332 @@ end 'main'
 0
 ```
 
+<!-- test: an-authors-comparable-leaves-the-library-sort-on-ints -->
+An author `Comparable` names the author's interface, and the library's `where Element is Comparable`
+still names the library's, which `int` meets.
+```maxon
+interface Comparable
+	function compare(other Self) returns Ordering
+end 'Comparable'
+
+function main() returns ExitCode
+	var values = [3, 1, 2]
+	values.sort()
+	let first = try values.get(0) otherwise return 3
+	print("{first}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: an-authors-comparable-leaves-the-library-sort-on-strings -->
+The same for `String`, which meets the library's `Comparable` as `int` does.
+```maxon
+interface Comparable
+	function compare(other Self) returns Ordering
+end 'Comparable'
+
+function main() returns ExitCode
+	var words = ["b", "a"]
+	words.sort()
+	let first = try words.get(0) otherwise return 3
+	print("{first}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a
+```
+
+<!-- test: an-authors-equatable-leaves-the-library-contains-on-ints -->
+An author `Equatable` beside the library's `where Element is Equatable`.
+```maxon
+interface Equatable
+	function equals(other Self) returns bool
+end 'Equatable'
+
+function main() returns ExitCode
+	let values = [3, 1, 2]
+	print("{values.contains(2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+<!-- test: an-authors-error-leaves-a-services-reply-errors-conforming -->
+An author `Error` beside the library's. A service's reply errors still conform to the library's `Error`,
+so an implementation may narrow the library's abstract `throws Error` to them.
+```maxon
+interface Error
+	function code() returns bool
+end 'Error'
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MathError implements Error
+	divideByZero
+
+	function code() returns bool
+		return true
+	end 'code'
+end 'MathError'
+
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function divide(n Integer, by Integer) returns Integer throws MathError
+		if by == 0 'zero'
+			throw MathError.divideByZero
+		end 'zero'
+
+		return try (n / by) otherwise 0
+	end 'divide'
+end 'Calc'
+
+type Value implements Parsable
+	export var n as Integer
+
+	static function fromString(_ String) returns Self throws Calc.divide.errors
+		let h = spawn Calc.create()
+		let q = try await h.divide(3, by: 1)
+		return Value{n: q}
+	end 'fromString'
+end 'Value'
+
+function main() returns ExitCode
+	let v = try Value.fromString("abc") otherwise panic("cannot fail")
+	print("{v.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+```
+
+<!-- test: an-authors-hashable-leaves-library-map-keys-hashing -->
+An author `Hashable` beside `Map` keys the library hashes: `int`, `String` and a payload-free enum.
+```maxon
+interface Hashable
+	function hash() returns HashValue
+end 'Hashable'
+
+enum Color
+	red
+	green
+end 'Color'
+
+typealias Count = int(0 to 9)
+typealias CountsByNumber = Map with (Count, Count)
+typealias CountsByWord = Map with (String, Count)
+typealias CountsByColor = Map with (Color, Count)
+
+function main() returns ExitCode
+	var byNumber = CountsByNumber.create()
+	byNumber.upsert(3, value: 1)
+	var byWord = CountsByWord.create()
+	byWord.upsert("a", value: 2)
+	var byColor = CountsByColor.create()
+	byColor.upsert(Color.green, value: 3)
+	let n = try byNumber.get(3) otherwise return 3
+	let w = try byWord.get("a") otherwise return 3
+	let c = try byColor.get(Color.green) otherwise return 3
+	print("{n} {w} {c}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2 3
+```
+
+<!-- test: an-authors-error-leaves-the-compiler-owned-errors-catchable -->
+An author `Error` beside a division by zero and a raw-value lookup that both fail and are caught.
+```maxon
+interface Error
+	function code() returns bool
+end 'Error'
+
+typealias Integer = int(i64.min to i64.max)
+
+enum Step
+	first = 0
+	second = 1
+end 'Step'
+
+function divided(n Integer, by Integer) returns Integer
+	return try (n / by) otherwise 9
+end 'divided'
+
+function stepOf(raw Integer) returns Step
+	return try Step.fromRawValue(raw) otherwise Step.second
+end 'stepOf'
+
+function main() returns ExitCode
+	let quotient = divided(7, by: 0)
+	let step = stepOf(99)
+	print("{quotient} {step.rawValue}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9 1
+```
+
+<!-- test: an-authors-comparable-with-the-librarys-shape-orders-its-own-type -->
+An author `Comparable` shaped like the library's constrains the author's generic, whose `<` reaches the
+conformer's own `compare`.
+```maxon
+interface Comparable
+	function compare(other Self) returns Ordering
+end 'Comparable'
+
+typealias Score = int(0 to 100)
+
+type Grade implements Comparable
+	var score as Score
+
+	static function of(score Score) returns Grade
+		return Self{score: score}
+	end 'of'
+
+	function compare(other Grade) returns Ordering
+		if self.score < other.score 'below'
+			return Ordering.lessThan
+		end 'below'
+
+		if self.score > other.score 'above'
+			return Ordering.greaterThan
+		end 'above'
+
+		return Ordering.equalTo
+	end 'compare'
+end 'Grade'
+
+function lower(a T, than T) uses T returns bool where T is Comparable
+	return a < than
+end 'lower'
+
+function main() returns ExitCode
+	let low = Grade.of(1)
+	let high = Grade.of(2)
+	print("{lower(low, than: high)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+<!-- test: an-authors-type-named-comparable-leaves-the-library-sort -->
+An author TYPE named `Comparable`, not an interface, beside the library's `sort`.
+```maxon
+type Comparable
+	export var count as ExitCode
+
+	static function create() returns Comparable
+		return Self{count: 0}
+	end 'create'
+end 'Comparable'
+
+function main() returns ExitCode
+	let held = Comparable.create()
+	var values = [3, 1, 2]
+	values.sort()
+	let first = try values.get(0) otherwise return 3
+	print("{first} {held.count}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 0
+```
+
+<!-- test: an-authors-comparable-is-the-authors-own-interface -->
+The bare name names the author's interface: its requirement is the author's `rank()`, not the library's
+`compare`.
+```maxon
+interface Comparable
+	function rank() returns bool
+end 'Comparable'
+
+type Plate implements Comparable
+	static function create() returns Plate
+		return Self{}
+	end 'create'
+
+	export function rank() returns bool
+		return true
+	end 'rank'
+end 'Plate'
+
+function ranked(x T) uses T returns bool where T is Comparable
+	return x.rank()
+end 'ranked'
+
+function main() returns ExitCode
+	let plate = Plate.create()
+	print("{ranked(plate)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+<!-- test: error.int-does-not-meet-an-authors-comparable -->
+`int` meets the library's `Comparable`, never the author's.
+```maxon
+interface Comparable
+	function rank() returns bool
+end 'Comparable'
+
+function ranked(x T) uses T returns bool where T is Comparable
+	return x.rank()
+end 'ranked'
+
+function main() returns ExitCode
+	print("{ranked(5)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3017: <fragment>:11:10: Type 'int' does not satisfy constraint 'Comparable' required by type parameter 'T' of 'ranked'
+```
+
 <!-- test: error.an-interface-the-library-keeps-private-cannot-be-implemented -->
 A library interface without `public` is hidden from author code, exactly as a library type is.
 ```maxon

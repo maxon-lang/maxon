@@ -8354,24 +8354,23 @@ export function conformanceListDeclares(conformsTo ByteArrayArray, interfaceName
 	return false
 end 'conformanceListDeclares'
 
-// ⭐ **WHAT A COMPILER-SYNTHESIZED *ERROR* ENUM DECLARES.** `implements Error` — the
+// ⭐ **WHAT A COMPILER-SYNTHESIZED *ERROR* ENUM DECLARES.** `implements` the library's `Error` — the
 // clause the declaration each seed stands in for actually writes, and the fact
-// `ConformanceCheck.requireImplErrorConformsAndIsScalar` reads off the layout.
+// `ConformanceCheck.requireImplErrorConformsAndIsScalar` reads off the layout. ⚠ Spelled through
+// `IrInterfaceMap.spellingOf`: under a contest a bare `Error` is the author's interface, and the seed would
+// conform to that instead.
 //
-// ⚠⚠ **IT IS NOT DECORATION: WITHOUT IT THE SEEDS CONTRADICT THE DECLARATIONS THEY STAND IN FOR,
-// AND A LEGAL PROGRAM IS REFUSED.** A `type V implements Parsable` whose `fromString` declares
-// `throws ArrayError` (the error `arr.get` actually throws, which four committed cases already
-// propagate) is refused with `E3016: … throws 'ArrayError' which does not conform to Error` when
-// `builtinArrayErrorEnum` seeds an EMPTY conformance list, because `stdlib/Array.maxon:6` declares
-// `export enum ArrayError implements Error`.
+// ⚠⚠ **IT IS NOT DECORATION: WITHOUT IT A LEGAL PROGRAM IS REFUSED.** A `throws` clause naming a seeded
+// error enum is checked like any other, and a seed with an EMPTY conformance list fails it with
+// `E3016: … which does not conform to Error`.
 //
 // ⇒ A seed stands in for a DECLARATION and owes every clause that declaration writes, not just its cases.
 // ⚠ `module`: `ServiceCompanions.buildServiceReplyErrorEnum` synthesizes an error enum too,
 // and it owes `implements Error` for the reason this header gives — a `throws Calc.divide.errors` clause is
 // checked by `ConformanceCheck.requireImplErrorConformsAndIsScalar` like any other.
-module function builtinErrorConformance() returns ByteArrayArray
+module function builtinErrorConformance(interfaces IrInterfaceMap) returns ByteArrayArray
 	var conformsTo = ByteArrayArray.create()
-	conformsTo.push(ErrorInterfaceName)
+	conformsTo.push(interfaces.spellingOf(BuiltinInterfaceKind.error))
 	return conformsTo
 end 'builtinErrorConformance'
 
@@ -9495,8 +9494,8 @@ end 'cacheReadEnumLayoutMap'
 //
 // Seeded UNCONDITIONALLY beside the other four for their stated reason: `createEnumRegistry` is the one door
 // that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`.
-module function builtinDivisionByZeroErrorEnum() returns EnumLayout
-	var layout = EnumLayout.createCompilerOwned(DivisionByZeroErrorTypeName, conformsTo: builtinErrorConformance())
+module function builtinDivisionByZeroErrorEnum(interfaces IrInterfaceMap) returns EnumLayout
+	var layout = EnumLayout.createCompilerOwned(DivisionByZeroErrorTypeName, conformsTo: builtinErrorConformance(interfaces))
 	addBuiltinEnumCase(layout, caseName: DivisionByZeroCaseName)
 	return layout
 end 'builtinDivisionByZeroErrorEnum'
@@ -9504,8 +9503,8 @@ end 'builtinDivisionByZeroErrorEnum'
 // ⭐ **WHAT `<Enum>.fromRawValue(raw)` THROWS ON A RAW VALUE NO CASE CARRIES.** The division family's twin in
 // every respect — declared in no corpus file, seeded unconditionally beside it for the same reason, and
 // payload-free so it emits no code (see `createEnumRegistry`).
-module function builtinEnumLookupErrorEnum() returns EnumLayout
-	var layout = EnumLayout.createCompilerOwned(EnumLookupErrorTypeName, conformsTo: builtinErrorConformance())
+module function builtinEnumLookupErrorEnum(interfaces IrInterfaceMap) returns EnumLayout
+	var layout = EnumLayout.createCompilerOwned(EnumLookupErrorTypeName, conformsTo: builtinErrorConformance(interfaces))
 
 	// ⚠ **DECLARATION ORDER IS THE WIRE FORMAT** — `addBuiltinEnumCase` derives each tag from its position,
 	// and `EnumLookupRuntime` transcribes both. Appending is safe; reordering silently renames every handler
@@ -9874,9 +9873,13 @@ end 'requireCorpusDeclaredEnum'
 //
 // ⚠⚠ **A SEED THAT OUTLIVES ITS DECLARATION IS NOT A HARMLESS DUPLICATE** — the ⛔⛔ block above
 // `declaredBuiltinErrorEnum`'s neighbours records what it costs: a disarmed drift guard, measured.
-export function createEnumRegistry() returns EnumLayoutMap
+export function createEnumRegistry(interfaces IrInterfaceMap) returns EnumLayoutMap
 	var registry = EnumLayoutMap.create()
+	seedCompilerOwnedErrorEnums(registry, interfaces: interfaces)
+	return registry
+end 'createEnumRegistry'
 
+export function seedCompilerOwnedErrorEnums(registry EnumLayoutMap, interfaces IrInterfaceMap)
 	// ⚠ **THE SIX DECLARED FAMILIES ARE NOT SEEDED HERE** — the three `__Managed*Error` ones are
 	// declared in `stdlib/Builtins.maxon`, and `ArrayError` / `StringError` / `MapError` in their own
 	// listed modules. All six arrive through the ordinary declaration path (`upsertDeclaredEnum`), which
@@ -9884,13 +9887,12 @@ export function createEnumRegistry() returns EnumLayoutMap
 	// a seed nothing checks. See `declaredBuiltinErrorEnum` for what happens when a module is not loaded.
 	// What a possibly-zero `/` or `mod` throws — declared in no stdlib file, so it is seeded and its
 	// guard stays `overSynthesized`. See `builtinDivisionByZeroErrorEnum`.
-	registry.upsert(DivisionByZeroErrorTypeName, value: builtinDivisionByZeroErrorEnum())
+	registry.upsert(DivisionByZeroErrorTypeName, value: builtinDivisionByZeroErrorEnum(interfaces))
 
 	// What `<Enum>.fromRawValue(raw)` throws — declared in no stdlib file either, so it is seeded beside the
 	// division one. See `builtinEnumLookupErrorEnum`.
-	registry.upsert(EnumLookupErrorTypeName, value: builtinEnumLookupErrorEnum())
-	return registry
-end 'createEnumRegistry'
+	registry.upsert(EnumLookupErrorTypeName, value: builtinEnumLookupErrorEnum(interfaces))
+end 'seedCompilerOwnedErrorEnums'
 
 // ⭐ **THE ONE DOOR A *DECLARED* ENUM ENTERS EITHER REGISTRY THROUGH, AND A USER MAY NOT DISPLACE THE
 // COMPILER'S OWN** — `Project.enumTypes` (the authority, via `commitEnumTypes`) and
@@ -11738,9 +11740,9 @@ export type Project
 	// is its i64 tag), and the parser reads the cases through the whole-program signature index.
 	export var enumTypes as EnumLayoutMap
 
-	// Declared `interface` types, keyed by name (see IrInterface). Holds only
+	// Declared `interface` types, keyed by name (see IrInterface). Its `entries` hold only
 	// USER-declared interfaces; the stdlib protocol interfaces (Stringable, Hashable, …) are
-	// synthesized on lookup (`builtinInterface`) rather than merged here, so they never ride the
+	// synthesized on lookup (`lookupInterface`) rather than merged here, so they never ride the
 	// merge/reset machinery. Read whole-program by `checkConformance`.
 	export var interfaces as IrInterfaceMap
 
@@ -12158,6 +12160,8 @@ export type Project
 	export var readerAnchors as ParserAnchors
 
 	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool, session CompileSession) returns Project
+		let interfaces = IrInterfaceMap.create()
+
 		return Self{
 			db: db,
 			stdlibDir: stdlibDir,
@@ -12187,8 +12191,8 @@ export type Project
 			functionTypeAliases: FunctionTypeAliasMap.create(),
 			functionAliasShapes: FunctionShapeMap.create(),
 			structTypes: StructLayoutMap.create(),
-			enumTypes: createEnumRegistry(),
-			interfaces: IrInterfaceMap.create(),
+			enumTypes: createEnumRegistry(interfaces),
+			interfaces: interfaces,
 			conformances: ConformanceDeclArray.create(),
 			declaredConformances: DeclaredConformanceMap.create(),
 			declaredConformanceIndexBuilt: false,

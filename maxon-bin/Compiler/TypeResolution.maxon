@@ -1132,16 +1132,15 @@ end 'resolveType'
 // `typealias Codepoint = int(0 to 1114111)` — the very declaration `stdlib/Character.maxon` makes — erases
 // to the same `integer` the builtin does, so the two answers agree and there is nothing to refuse.
 //
-// ⭐⭐ **`ArrayError` IS ON THE LIST FOR `Ordering`'S EXACT REASON — IT IS SEEDED BY `createEnumRegistry`
-// UNDER A BARE NAME.** `Project.builtinArrayErrorEnum` is a compiler-owned enum registered there that
-// cannot wear the `__` prefix its two `__ManagedMemoryError` / `__ManagedFileError` siblings do, because
-// user source already spells the bare name in a `throws` clause (see `SignatureIndex.ArrayErrorTypeName`).
-// A bare seed and no entry here is precisely the hole this function's header describes.
+// ⭐⭐ **`ArrayError` IS ON THE LIST FOR `Ordering`'S EXACT REASON — THE CORPUS DECLARES IT UNDER A BARE
+// NAME** (`stdlib/Array.maxon`), and the runtime throws its ordinals. It cannot wear the `__` prefix its
+// two `__ManagedMemoryError` / `__ManagedFileError` siblings do, because user source spells the bare name in
+// a `throws` clause (see `SignatureIndex.ArrayErrorTypeName`).
 // ⚠ **Without this line** a program declaring `enum ArrayError` with cases `somethingElse`/`another`
-// compiles, `upsertDeclaredEnum` lets the declaration displace the seed, and
+// compiles, `upsertDeclaredEnum` lets the declaration displace the corpus's, and
 // `try arr.get(5) otherwise (e) … match e` routes the runtime's `indexOutOfBounds` (ordinal 0) into the
 // user's `somethingElse` arm, with no diagnostic anywhere. One error type under two meanings, decided
-// by whichever write landed last: the wrong answer the seed is supposed to be undisplaceable against.
+// by whichever write landed last.
 // ⇒ The reservation is only over a DECLARATION. `throws ArrayError` is a type REFERENCE and stays legal —
 // which is the whole reason the name is bare.
 //

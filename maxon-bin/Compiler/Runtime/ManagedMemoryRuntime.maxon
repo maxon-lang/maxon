@@ -1156,12 +1156,11 @@ let ManagedMemoryOrdinalInstaller = b"the managed-memory runtime (__ManagedMemor
 // `stdlib/Array.maxon`) and both take `overDeclared`, so a disagreement is an edit to this
 // checkout's `stdlib/`, which is `E4016` and not a panic (`Project.BuiltinErrorDeclarationSource`).
 //
-// ⛔ **A CHECK AGAINST THE SYNTHESIZED SEED WOULD BE WORSE THAN NONE, WHICH IS NOT OBVIOUS.**
-// `ArrayErrorTypeName` is the BARE `b"ArrayError"`, so the parsed declaration displaces the seed on one
-// registry key and the program runs on the CORPUS layout — while `overSynthesized(builtinArrayErrorEnum())`
-// would rebuild the seed and compare it against itself, agreeing unconditionally: swapping the two
-// cases in `stdlib/Array.maxon:7-8` would trade the handler answers with the guard SILENT. Reading
-// the declaration is what makes the guard watch the layout the program actually uses.
+// ⛔ **A CHECK AGAINST A COMPILER-BUILT LAYOUT WOULD BE WORSE THAN NONE, WHICH IS NOT OBVIOUS.** The
+// program runs on the CORPUS layout, and a layout the compiler rebuilt would be compared against itself,
+// agreeing unconditionally: swapping the two cases in `stdlib/Array.maxon:7-8` would trade the handler
+// answers with the guard SILENT. Reading the declaration is what makes the guard watch the layout the
+// program actually uses.
 export function verifyManagedMemoryRuntimeOrdinals(project Project)
 	match declaredBuiltinErrorEnum(project, typeName: ArrayErrorTypeName, installer: ArrayErrorOrdinalInstaller) 'arrayDeclaration'
 		notDeclared then break 'arrayDeclaration'

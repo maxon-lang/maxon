@@ -888,9 +888,9 @@ end 'foldOneFileInto'
 // ⚠ Bypassed entirely when a stdlib name is contested: the mask is read off `Parser.tokens`, which
 // for a stdlib file is the shadow-renamed stream, so it is a function of the file's bytes only
 // while nothing has been renamed. It costs nothing for the corpus as it stands, where
-// `hasStdlibShadowRenames` is false.
+// `IrInterfaceMap.hasLibraryRenames` is false.
 function producerMaskFor(project Project, signatures ProgramSignatures, path FilePath, scanner Parser) returns ProducerMask throws CompileError
-	if signatures.hasStdlibShadowRenames() 'aNameIsContested'
+	if signatures.interfaceMap().hasLibraryRenames() 'aNameIsContested'
 		return scanner.fileNamesProducerMask()
 	end 'aNameIsContested'
 
@@ -1364,10 +1364,13 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 	signatures.settleStdlibShadowSpellings(declared.names, declaringFiles: declared.files)
 	adoptShadowSpellings(project, spellings: signatures.shadowSpellings())
 
-	if not signatures.hasStdlibShadowRenames() 'nothingContested'
+	if not signatures.interfaceMap().hasLibraryRenames() 'nothingContested'
 		return
 	end 'nothingContested'
 
+	// Re-seeded because `SettledDeclarations` seeds its registry before the contest exists, spelling a
+	// bare `Error` that a contest makes the author's interface.
+	seedCompilerOwnedErrorEnums(signatures.settled.enumTypes, interfaces: signatures.interfaceMap())
 	try refuseContestedNamesUsedAsMembers(project, signatures: signatures, stdlibPaths: stdlibPaths)
 end 'contestStdlibDeclarationsAgainstUserNames'
 
@@ -1517,7 +1520,7 @@ function refuseContestedNamesUsedAsMembers(project Project, signatures ProgramSi
 				continue
 			end 'notAName'
 
-			if signatures.stdlibShadowRenameOf(tok.value).equals(tok.value) 'notContested'
+			if signatures.interfaceMap().libraryNameOf(tok.value).equals(tok.value) 'notContested'
 				continue
 			end 'notContested'
 
@@ -2994,7 +2997,10 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 
 	// The literal-inferred instantiation sites, a PUSH array for the same reason.
 	project.inferredInstantiationSites = GenericInstantiationSiteArray.create()
-	project.interfaces = IrInterfaceMap.create()
+
+	// Carries the settled contest table, which `createEnumRegistry` below spells its seeds through, so it
+	// is reset first.
+	project.interfaces = signatures.interfaceMap().withSharedLibraryRenames()
 
 	// The accepted-member filing is derived from those two and is FIRST-WINS, not an upsert, because
 	// two routes to one slot must agree. Carried across a re-merge, a previous fold's selection would
@@ -3011,7 +3017,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.typeNameDecls = TypeNameRegistry.create()
 	project.rangeChecks = RangeCheckPlanMap.create()
 	project.structTypes = StructLayoutMap.create()
-	project.enumTypes = createEnumRegistry()
+	project.enumTypes = createEnumRegistry(project.interfaces)
 	project.functionTypeAliases = FunctionTypeAliasMap.create()
 
 	// ⛔ `project.typeNames` is deliberately NOT reset, the one registry here that must not be. Every

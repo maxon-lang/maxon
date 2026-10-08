@@ -4295,8 +4295,12 @@ renaming is the remedy in the declaring file, and other files qualify.
 Only project declarations take part. A project declaration of a library name is what the bare name means in
 every project file, so a project's `export typealias StringArray` is the one a bare
 `StringArray` names, and the library's stays reachable as `stdlib.StringArray`. The standard library's own
-files see only the library's declarations. A `b"…"` literal's element is the type the file's bare `Byte`
-names when that is an integer alias — the file's own, else the one project alias it sees, else the
+files see only the library's declarations. The same holds for the protocols the library defines —
+`Stringable`, `FormattedStringable`, `Hashable`, `Equatable`, `Comparable`, `Cloneable` and `Error`: a
+project's own `interface Comparable` is what `implements Comparable` names in project files, while the
+library's generics, such as `sort` and `contains`, keep their library constraints. `int`, `float`, `bool`,
+`Character`, `String`, arrays and payload-free enums meet the library's protocols. A `b"…"` literal's
+element is the type the file's bare `Byte` names when that is an integer alias — the file's own, else the one project alias it sees, else the
 library's; a `type Byte` leaves the literal on the library's, and an ambiguous bare `Byte` refuses the
 literal with **E3063**.
 

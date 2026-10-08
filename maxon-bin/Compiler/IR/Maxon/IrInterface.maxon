@@ -13,11 +13,12 @@
 //
 // ⭐ **The stdlib protocol interfaces (Stringable, Hashable, …) are SYNTHESIZED on
 // lookup, not parsed.** The compiler does not read `stdlib/`; it synthesizes `String`/`Array`
-// natively, and it synthesizes these the same way (`builtinInterface`). So a
+// natively, and it synthesizes these the same way (`synthesizedProtocol`). So a
 // `type X implements Stringable` resolves against a compiler-known interface rather
 // than raising a spurious E3015 — exactly as a `String` field resolves against a
 // compiler-known type. This keeps the builtins OUT of the merge/reset machinery:
-// `project.interfaces` holds only USER-declared interfaces.
+// `IrInterfaceMap.entries` holds only USER-declared interfaces. Which names denote the
+// library's protocols is the compile's contest table's answer — see `IrInterfaceMap.protocolKind`.
 
 // The rendered spelling of a `Self` type in an interface signature — the conforming
 // type substitutes for it during a conformance check (`Movable.move returns Self`
@@ -329,32 +330,20 @@ function separatorFreedomIdentitiesOf(component WitnessLabelComponent) returns S
 end 'separatorFreedomIdentitiesOf'
 
 // --- The stdlib protocol-interface names (SYNTHESIZED, not parsed from stdlib/) ---
+// ⚠ These spellings are read only by `canonicalProtocolName` and `builtinInterfaceKind`. Any other site
+// spells a protocol through `IrInterfaceMap.spellingOf`, because under a contest the bare name is the
+// author's own interface and the library's protocol answers to its minted `__` name; a bare constant
+// there would silently name the author's declaration.
 let StringableInterfaceName = b"Stringable"
 let FormattedStringableInterfaceName = b"FormattedStringable"
-
-// `Hashable`/`Equatable`/`Comparable` are EXPORTED, the other protocol names are not, and the three consumers
-// are the reason: the comparison-operator lowerings pick their PROTOCOL by name (`==`/`!=` is Equatable's,
-// `<`/`>`/`<=`/`>=` is Comparable's) and then read everything else off the synthesized interface
-// (`requireBuiltinInterface`); and a witness table is MATERIALIZED by name
-// (`LowerMaxonToStd.materializeWitnessTableAddr` builds `rdataAddr(__witness_<conformer>.Hashable)`), whose
-// label must be the one the builtin-conformance table registers under. Each reads THIS spelling instead of
-// keeping its own.
-// ⚠ The third reader is the `where T is I` dictionary parameter, which names the same three spellings.
 let HashableInterfaceName = b"Hashable"
-export let EquatableInterfaceName = b"Equatable"
-export let ComparableInterfaceName = b"Comparable"
+let EquatableInterfaceName = b"Equatable"
+let ComparableInterfaceName = b"Comparable"
 let CloneableInterfaceName = b"Cloneable"
-
-// ⚠ **EXPORTED, BECAUSE A SYNTHESIZED ERROR ENUM HAS TO DECLARE THE SAME CONFORMANCE THE
-// DECLARATION IT STANDS IN FOR DOES.** `Project.builtinArrayErrorEnum` /
-// `builtinDivisionByZeroErrorEnum` stand in for declarations that spell `implements Error`
-// (`stdlib/Array.maxon:6`), and `EnumLayout.conformsTo` is what
-// `ConformanceCheck.requireImplErrorConformsAndIsScalar` reads. Spelling `b"Error"` there
-// instead would be a second copy of the one name this file's `builtinInterface` answers for.
-export let ErrorInterfaceName = b"Error"
+let ErrorInterfaceName = b"Error"
 
 // ⚠ **THE ONE PROTOCOL NAME HERE THAT IS *NOT* SYNTHESIZED — it is DECLARED, in `stdlib/Builtins.maxon:40`,
-// which the loader already lists.** So it needs no `builtinInterface` arm: a `type X implements
+// which the loader already lists.** So it needs no `synthesizedProtocol` arm: a `type X implements
 // InitableFromStringLiteral` resolves through the ordinary user-interface lookup and `checkConformance`
 // validates its `static function init(value String) returns Self` like any other requirement. What this
 // spelling is for is the CONVERSE question — "may `X from "…"` be written?" — which
@@ -413,13 +402,13 @@ end 'IterableFactory'
 // All three are exported for ONE reason: `BuiltinConformanceRuntime` names each SYNTHESIZED impl it installs
 // (`int.hash`, `<scalar>.equals`, `<scalar>.compare`, `String.hash`/`String.equals`) by joining a conformer
 // name to the method name, and that symbol must be the one the witness-table reloc points at. The operator
-// lowerings do NOT name them — they read the method off the protocol `builtinInterface` synthesizes
-// (`requireBuiltinInterface`), so the method searched for and its result type stay one fact.
+// lowerings do NOT name them — they read the method off the synthesized protocol
+// (`IrInterfaceMap.protocolDeclaration`), so the method searched for and its result type stay one fact.
 export let CompareMethodName = b"compare"
 
 // ⚠ **`clone` IS EXPORTED FOR THE OPPOSITE REASON TO THE THREE ABOVE: NO `<type>.clone` SYMBOL EXISTS, AND
 // THE TOKEN IS STILL WHAT EVERY `clone` DOOR MATCHES ON.** `Cloneable.clone` is declared here
-// (`builtinInterface`) and advertised here (`builtinConformerLoweredMethodNames`); the primitive lowering,
+// (`synthesizedProtocol`) and advertised here (`builtinConformerLoweredMethodNames`); the primitive lowering,
 // the `String` surface and the `Array` surface each serve it, and only the last two copy anything.
 // Holding these same bytes a SECOND time as `Parser.CloneMethod` would make the advertisement and the arm
 // read different constants — the one-fact-written-twice `Parser`'s own shared-method block is written
@@ -428,8 +417,7 @@ export let CloneMethodName = b"clone"
 
 let FormatParamName = b"format"
 
-// ⚠ Exported because `Parser.requireSameArrayInstanceArg` reports a bad `Array.equals`
-// argument under the formal name `Equatable.equals` DECLARES, which is this one. It is deliberately not
+// The formal the synthesized `Equatable.equals` and `Comparable.compare` declare. It is deliberately not
 // `SignatureIndex.ManagedMemoryOtherParamName` — that is `__ManagedMemory.append`'s own formal, a different
 // declaration that happens to have chosen the same word, and merging them would make one interface's
 // signature the authority for a buffer method's.
@@ -956,21 +944,68 @@ export function declAssociatedBinding(decl ConformanceDecl, interfaceName ByteAr
 	throw MapError.keyNotFound
 end 'declAssociatedBinding'
 
-export typealias IrInterfaceMap = Map with (ByteArray, IrInterface)
+// ⭐⭐ **THE SHADOW RENAME TABLE — bare name ⇒ the reserved name a LISTED STDLIB module's declaration of
+// that name is moved to.**
+//
+// ⚠ **IT IS A SCOPING RULE RATHER THAN A TIE-BREAK.** A user `enum ParseError` and a call to
+// `int.fromString("41")` must COEXIST in one program: the user's declaration answers user code
+// while `stdlib/Builtins.maxon`'s own body goes on throwing its own `ParseError.invalidFormat`.
+// Parse order cannot deliver that here — `queryProgramSignatures` folds EVERY file's declarations
+// before any file is parsed, so there is no "already bound" state and no file order produces one.
+//
+// ⚠ **AND A PLAIN "the user's declaration displaces the stdlib one" RULE IS A WRONG ANSWER.** A stdlib
+// module REFERENCES the names it declares, so displacing its declaration reports errors inside a file the
+// author never opened. Two declarations of one name have to coexist, and the compiler identifies aggregates by
+// NAME all the way down (`structRef(name)`, `aggregateNameFor`, `__destruct_<name>`, `__layout_<name>`), so
+// coexisting means one of them is RENAMED.
+//
+// ⇒ The stdlib one moves, into the space `E2051` already reserves — the identical trade
+// `ProgramSignatures.reservedIfDeclared` makes for a contested COMPILED name, one namespace over, and for
+// the identical reason: `__` is a prefix no declaration may take, so the moved name cannot contest anything
+// and no user program can reach it. Re-probed rather than prefixed once, and ON CONTEST ONLY — a program
+// that shadows nothing renames nothing and compiles to the bytes it would with no rename at all.
+export typealias StdlibShadowRenameMap = Map with (ByteArray, ByteArray)
 
 // @generated library-cache begin
-export function cacheWriteIrInterfaceMap(writer LibraryCacheWriter, value IrInterfaceMap)
+function cacheWriteStdlibShadowRenameMap(writer LibraryCacheWriter, value StdlibShadowRenameMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.bytes(key)
+		writer.bytes(entry)
+	end 'eachEntry'
+end 'cacheWriteStdlibShadowRenameMap'
+
+function cacheReadStdlibShadowRenameMap(reader LibraryCacheReader) returns StdlibShadowRenameMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = StdlibShadowRenameMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = try reader.bytes()
+		let entry = try reader.bytes()
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadStdlibShadowRenameMap'
+
+// @generated library-cache end
+
+export typealias IrInterfaceEntryMap = Map with (ByteArray, IrInterface)
+
+// @generated library-cache begin
+function cacheWriteIrInterfaceEntryMap(writer LibraryCacheWriter, value IrInterfaceEntryMap)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for (key, entry) in value 'eachEntry'
 		writer.bytes(key)
 		entry.cacheWrite(writer)
 	end 'eachEntry'
-end 'cacheWriteIrInterfaceMap'
+end 'cacheWriteIrInterfaceEntryMap'
 
-export function cacheReadIrInterfaceMap(reader LibraryCacheReader) returns IrInterfaceMap throws LibraryCacheDamage
+function cacheReadIrInterfaceEntryMap(reader LibraryCacheReader) returns IrInterfaceEntryMap throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = IrInterfaceMap.create()
+	var result = IrInterfaceEntryMap.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let key = try reader.bytes()
@@ -979,9 +1014,116 @@ export function cacheReadIrInterfaceMap(reader LibraryCacheReader) returns IrInt
 	end 'eachEntry'
 
 	return result
-end 'cacheReadIrInterfaceMap'
+end 'cacheReadIrInterfaceEntryMap'
 
 // @generated library-cache end
+
+export type IrInterfaceMap
+	export var entries as IrInterfaceEntryMap
+
+	// Every contested stdlib nominal, not only interfaces. It rides the interface registry because every
+	// protocol lookup already takes one; `withSharedLibraryRenames` hands the table on to a fresh registry.
+	var libraryRenames as StdlibShadowRenameMap
+
+	export static function create() returns IrInterfaceMap
+		return Self{entries: IrInterfaceEntryMap.create(), libraryRenames: StdlibShadowRenameMap.create()}
+	end 'create'
+
+	export function withSharedLibraryRenames() returns IrInterfaceMap
+		return Self{entries: IrInterfaceEntryMap.create(), libraryRenames: self.libraryRenames}
+	end 'withSharedLibraryRenames'
+
+	// The ONE gate every cost of the contest sits behind: for a program that shadows no library name it
+	// answers false, the token rewrite never runs, and the emitted bytes are those of a compile with no rename.
+	export function hasLibraryRenames() returns bool
+		return self.libraryRenames.count() > 0
+	end 'hasLibraryRenames'
+
+	export function libraryRenameCount() returns EntryCount
+		return self.libraryRenames.count()
+	end 'libraryRenameCount'
+
+	export function contestsLibraryName(name ByteArray) returns bool
+		return self.libraryRenames.contains(name)
+	end 'contestsLibraryName'
+
+	export function renameLibraryName(name ByteArray, mintedAs ByteArray)
+		self.libraryRenames.upsert(name, value: mintedAs)
+	end 'renameLibraryName'
+
+	// The name a STDLIB file must spell this identifier under — the renamed one if the name is contested,
+	// and the name itself otherwise.
+	export function libraryNameOf(name ByteArray) returns ByteArray
+		return try self.libraryRenames.get(name) otherwise name
+	end 'libraryNameOf'
+
+	export function libraryNameMintedAs(minted ByteArray) returns ByteArray throws MapError
+		for (libraryName, mint) in self.libraryRenames 'eachMint'
+			if mint.equals(minted) 'thisMint'
+				return libraryName
+			end 'thisMint'
+		end 'eachMint'
+
+		throw MapError.keyNotFound
+	end 'libraryNameMintedAs'
+
+	// ⭐ **IS THIS A NAME *THIS COMPILE* MINTED FOR A CONTESTED STDLIB DECLARATION?** Asked by
+	// `Parser.requireUnreservedName`, which would otherwise refuse the compiler's own mint as a user's
+	// reserved-prefix declaration. A linear scan of the table, which is the right shape: it is asked only
+	// while a contest exists (never, for the whole existing corpus), the table holds one entry per contested
+	// name, and a second index keyed the other way would be the same fact stored twice.
+	export function isMintedLibraryName(name ByteArray) returns bool
+		try self.libraryNameMintedAs(name) otherwise return false
+		return true
+	end 'isMintedLibraryName'
+
+	export function spellingOf(protocol BuiltinInterfaceKind) returns ByteArray
+		return self.libraryNameOf(canonicalProtocolName(protocol))
+	end 'spellingOf'
+
+	// Under a contest the bare name is the author's own interface and the library's protocol answers only to
+	// its minted `__` name, so the intrinsic conformances of `int`, `String` and the other primitives meet
+	// the library's protocol and never the author's.
+	export function protocolKind(name ByteArray) returns BuiltinInterfaceKind
+		if not self.hasLibraryRenames() 'nothingIsContested'
+			return builtinInterfaceKind(name)
+		end 'nothingIsContested'
+
+		if self.contestsLibraryName(name) 'theAuthorsDeclaration'
+			return BuiltinInterfaceKind.notABuiltin
+		end 'theAuthorsDeclaration'
+
+		let libraryName = try self.libraryNameMintedAs(name) otherwise name
+		return builtinInterfaceKind(libraryName)
+	end 'protocolKind'
+
+	export function namesALibraryProtocol(name ByteArray) returns bool
+		return self.protocolKind(name) != BuiltinInterfaceKind.notABuiltin
+	end 'namesALibraryProtocol'
+
+	export function protocolDeclaration(protocol BuiltinInterfaceKind) returns IrInterface
+		return synthesizedProtocol(protocol, spelledAs: self.spellingOf(protocol))
+	end 'protocolDeclaration'
+
+	// @generated library-cache begin
+	export function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteIrInterfaceEntryMap(writer, value: self.entries)
+		cacheWriteStdlibShadowRenameMap(writer, value: self.libraryRenames)
+	end 'cacheWrite'
+
+	export static function cacheRead(reader LibraryCacheReader) returns IrInterfaceMap throws LibraryCacheDamage
+		let f_entries = try cacheReadIrInterfaceEntryMap(reader)
+		let f_libraryRenames = try cacheReadStdlibShadowRenameMap(reader)
+
+		return Self{entries: f_entries, libraryRenames: f_libraryRenames}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(IrInterfaceMap) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'IrInterfaceMap'
 
 // The per-file artifact contribution form — declaration order, folded into the
 // whole-program `IrInterfaceMap` by `mergeArtifact`.
@@ -1762,21 +1904,37 @@ end 'builtinProtocolResultStdType'
 
 // The SYNTHESIZED stdlib protocol interfaces, verbatim from stdlib/Interfaces.maxon —
 // so `implements Stringable`/`Hashable`/… resolves without the compiler reading the stdlib (the
-// same reason `String`/`Array` are synthesized). Returns `notFound` for every other name,
-// leaving the user-declared registry as the only other source. `Iterator`/`Iterable`
-// (associated types) are deliberately not synthesized here.
-function builtinInterface(name ByteArray) returns InterfaceLookup
-	match builtinInterfaceKind(name) 'which'
-		notABuiltin then return InterfaceLookup.notFound
-		stringable then return InterfaceLookup.found(singleMethodInterface(StringableInterfaceName, method: nullaryInterfaceMethod(ToStringMethodName, returnTypeName: StringConformerName)))
-		formattedStringable then return InterfaceLookup.found(singleMethodInterface(FormattedStringableInterfaceName, method: unaryInterfaceMethod(ToStringMethodName, paramName: FormatParamName, paramTypeName: StringConformerName, returnTypeName: StringConformerName)))
-		hashable then return InterfaceLookup.found(singleMethodInterface(HashableInterfaceName, method: nullaryInterfaceMethod(HashMethodName, returnTypeName: HashValueTypeName)))
-		equatable then return InterfaceLookup.found(singleMethodInterface(EquatableInterfaceName, method: unaryInterfaceMethod(EqualsMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: BoolConformerName)))
-		comparable then return InterfaceLookup.found(singleMethodInterface(ComparableInterfaceName, method: unaryInterfaceMethod(CompareMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: OrderingTypeName)))
-		cloneable then return InterfaceLookup.found(singleMethodInterface(CloneableInterfaceName, method: nullaryInterfaceMethod(CloneMethodName, returnTypeName: InterfaceSelfTypeName)))
-		error then return InterfaceLookup.found(markerInterface(ErrorInterfaceName))
+// same reason `String`/`Array` are synthesized). Declared under `spelledAs`, the name this compile
+// spells the protocol by. `Iterator`/`Iterable` (associated types) are deliberately not synthesized here.
+function synthesizedProtocol(protocol BuiltinInterfaceKind, spelledAs ByteArray) returns IrInterface
+	match protocol 'which'
+		notABuiltin then panic("synthesizedProtocol: asked for the declaration of a name that is not one of the synthesized protocols — every caller classifies the name first")
+		stringable then return singleMethodInterface(spelledAs, method: nullaryInterfaceMethod(ToStringMethodName, returnTypeName: StringConformerName))
+		formattedStringable then return singleMethodInterface(spelledAs, method: unaryInterfaceMethod(ToStringMethodName, paramName: FormatParamName, paramTypeName: StringConformerName, returnTypeName: StringConformerName))
+		hashable then return singleMethodInterface(spelledAs, method: nullaryInterfaceMethod(HashMethodName, returnTypeName: HashValueTypeName))
+		equatable then return singleMethodInterface(spelledAs, method: unaryInterfaceMethod(EqualsMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: BoolConformerName))
+		comparable then return singleMethodInterface(spelledAs, method: unaryInterfaceMethod(CompareMethodName, paramName: OtherParamName, paramTypeName: InterfaceSelfTypeName, returnTypeName: OrderingTypeName))
+		cloneable then return singleMethodInterface(spelledAs, method: nullaryInterfaceMethod(CloneMethodName, returnTypeName: InterfaceSelfTypeName))
+		error then return markerInterface(spelledAs)
 	end 'which'
-end 'builtinInterface'
+end 'synthesizedProtocol'
+
+function canonicalProtocolDeclaration(protocol BuiltinInterfaceKind) returns IrInterface
+	return synthesizedProtocol(protocol, spelledAs: canonicalProtocolName(protocol))
+end 'canonicalProtocolDeclaration'
+
+function canonicalProtocolName(protocol BuiltinInterfaceKind) returns ByteArray
+	match protocol 'which'
+		notABuiltin then panic("canonicalProtocolName: asked for the name of a kind that is not one of the synthesized protocols — every caller classifies the name first")
+		stringable then return StringableInterfaceName
+		formattedStringable then return FormattedStringableInterfaceName
+		hashable then return HashableInterfaceName
+		equatable then return EquatableInterfaceName
+		comparable then return ComparableInterfaceName
+		cloneable then return CloneableInterfaceName
+		error then return ErrorInterfaceName
+	end 'which'
+end 'canonicalProtocolName'
 
 // ⭐⭐ **EVERY SYNTHESIZED PROTOCOL'S NAME, IN ONE FIXED ORDER** — the prefix
 // `ProgramSignatures.interfaceNamesInDeclOrder` is seeded with, so that a `witnessDispatch` through
@@ -1785,46 +1943,34 @@ end 'builtinInterface'
 // without this it would have no position at all — MEASURED: `where T is Comparable` with `T = bool` panicked
 // at the parser's own guard, which is the guard doing its job.
 //
-// ⚠ **IT IS A DERIVED ROSTER, AND A ROSTER GOES STALE THE DAY A KIND IS ADDED.** The count is asserted
-// against `BuiltinInterfaceCount` below and every entry is asserted to CLASSIFY as a builtin, so a renamed
-// constant and a miscounted list both fail loudly at the first `ProgramSignatures.create` rather than
-// silently giving one protocol no index. What neither can catch is a new `BuiltinInterfaceKind` arm whose
-// name is not added here — which is why the count is a named constant beside the enum rather than a literal.
+// ⚠ Each name is asserted to classify back to its own kind, so `canonicalProtocolName` and
+// `builtinInterfaceKind` disagreeing fails at the first `ProgramSignatures.create` rather than silently
+// giving one protocol no index.
 export function builtinInterfaceNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
-	names.push(StringableInterfaceName)
-	names.push(FormattedStringableInterfaceName)
-	names.push(HashableInterfaceName)
-	names.push(EquatableInterfaceName)
-	names.push(ComparableInterfaceName)
-	names.push(CloneableInterfaceName)
-	names.push(ErrorInterfaceName)
 
-	if names.count() != BuiltinInterfaceCount 'rosterDrifted'
-		panic("builtinInterfaceNames: the roster lists {names.count()} protocols but `BuiltinInterfaceCount` says {BuiltinInterfaceCount} — a `BuiltinInterfaceKind` arm was added without giving its name a position, and a dispatch through it would have no handle")
-	end 'rosterDrifted'
+	for protocol in BuiltinInterfaceKind.allCases 'eachKind'
+		if protocol == BuiltinInterfaceKind.notABuiltin 'classifiesRatherThanNames'
+			continue
+		end 'classifiesRatherThanNames'
 
-	for rosterName in names 'eachName'
-		if not isBuiltinInterfaceName(rosterName) 'notAProtocolAfterAll'
-			panic("builtinInterfaceNames: '{String.from(rosterName)}' is in the roster but `builtinInterfaceKind` does not classify it as a protocol — the two read the same name constants and have drifted")
-		end 'notAProtocolAfterAll'
-	end 'eachName'
+		let name = canonicalProtocolName(protocol)
+
+		if builtinInterfaceKind(name) != protocol 'roundTripDrifted'
+			panic("builtinInterfaceNames: '{String.from(name)}' is the canonical name of a protocol that `builtinInterfaceKind` classifies as another — the two tables have drifted")
+		end 'roundTripDrifted'
+
+		names.push(name)
+	end 'eachKind'
 
 	return names
 end 'builtinInterfaceNames'
 
-export function isBuiltinInterfaceName(name ByteArray) returns bool
-	return builtinInterfaceKind(name) != BuiltinInterfaceKind.notABuiltin
-end 'isBuiltinInterfaceName'
-
-// One per `BuiltinInterfaceKind` arm EXCEPT `notABuiltin`, which classifies rather than names. Stated here so
-// `builtinInterfaceNames` can check itself against the enum instead of against a literal.
-let BuiltinInterfaceCount = 7
-
-// ⭐⭐ **WHICH SYNTHESIZED PROTOCOL A NAME IS, AS A SCALAR — the CLASSIFICATION half of `builtinInterface`.**
+// ⭐⭐ **WHICH SYNTHESIZED PROTOCOL A NAME IS, AS A SCALAR — the CLASSIFICATION half of `lookupInterface`.**
+// It reads bytes and knows no contest: only `IrInterfaceMap.protocolKind` and the roster above may ask it.
 //
 // ⚠ **PAYLOAD-FREE ON PURPOSE, AND THE REASON IS MEASURED — it is `BuiltinConformer`'s reason, on a hotter
-// path.** A Maxon union value is HEAP-BOXED in every case, `notFound` included, so asking `builtinInterface`
+// path.** A Maxon union value is HEAP-BOXED in every case, `notFound` included, so asking `lookupInterface`
 // merely to learn whether a name IS one costs an allocation per ask — and the ask sits on
 // `Parser.parseTypeReference`, i.e. on EVERY type annotation in the program. MEASURED on the scale ladder
 // (same binary path, same corpus, A/B): **+24,396 allocations in `phase:parse` at
@@ -1868,14 +2014,12 @@ end 'builtinInterfaceKind'
 // that only needs the ANSWER — the parser's type reference, the swept-type normalization — asks this; a
 // caller that needs the DECLARATION asks `lookupInterface`.
 export function isInterfaceName(interfaces IrInterfaceMap, name ByteArray) returns bool
-	return isBuiltinInterfaceName(name) or interfaces.contains(name)
+	return interfaces.namesALibraryProtocol(name) or interfaces.entries.contains(name)
 end 'isInterfaceName'
 
 // The synthesized protocol a name denotes, or `notABuiltin`. A payload-free ENUM, so a classification is a
 // scalar — see `builtinInterfaceKind` for the measurement that made it one.
-// ⚠ NOT exported: `builtinInterfaceKind`'s answer is consumed in this file alone, and
-// `checkUnusedExports` (E3092) is what says so — the SELF-COMPILE runs that pass.
-enum BuiltinInterfaceKind
+export enum BuiltinInterfaceKind
 	notABuiltin
 	stringable
 	formattedStringable
@@ -1887,9 +2031,9 @@ enum BuiltinInterfaceKind
 end 'BuiltinInterfaceKind'
 
 // ⭐ **WHICH INTERFACE DOES THIS NAME DENOTE, ASKED OF THE MERGED REGISTRY — ONE RULE, ONE HOME.**
-// A synthesized builtin FIRST, then the user-declared registry, else `notFound`. Builtins win so a user
-// cannot shadow `Stringable` with a broken redeclaration, and the common protocol interfaces resolve
-// without the compiler reading the stdlib.
+// A library protocol FIRST, then the user-declared registry, else `notFound`. Which names are library
+// protocols is `IrInterfaceMap.protocolKind`'s answer: under a contest the author's declaration holds the
+// bare name and the library's protocol its minted one.
 //
 // ⚠ **IT TAKES THE MAP, NOT THE `Project`, AND THAT IS WHAT LETS BOTH POST-MERGE READERS SHARE IT.**
 // `ConformanceCheck` asks through `project.interfaces` and `LowerMaxonToStd` through the field it was
@@ -1911,33 +2055,18 @@ end 'BuiltinInterfaceKind'
 // after), which is where it belongs, because the map IS the phase. What may not stand is two statements of
 // the RULE.
 export function lookupInterface(interfaces IrInterfaceMap, name ByteArray) returns InterfaceLookup
-	match builtinInterface(name) 'builtin'
-		found(iface) then return InterfaceLookup.found(iface)
-		notFound then break 'builtin'
-	end 'builtin'
+	let protocol = interfaces.protocolKind(name)
 
-	if let userIface = try interfaces.get(name) 'userDeclared'
+	if protocol != BuiltinInterfaceKind.notABuiltin 'aSynthesizedProtocol'
+		return InterfaceLookup.found(synthesizedProtocol(protocol, spelledAs: name))
+	end 'aSynthesizedProtocol'
+
+	if let userIface = try interfaces.entries.get(name) 'userDeclared'
 		return InterfaceLookup.found(userIface)
 	end 'userDeclared'
 
 	return InterfaceLookup.notFound
 end 'lookupInterface'
-
-// ⭐ **THE SYNTHESIZED PROTOCOL UNDER `name`, FOR A CALLER THAT NEEDS ITS *DECLARATION* AND NOT MERELY ITS
-// NAME.** A consumer that must agree with a protocol about more than one fact — the comparison-operator
-// lowering needs `Comparable`'s METHOD NAME to search the `where` constraints for, AND that method's RESULT
-// TYPE to read the dispatch's verdict off — reads both off the interface `builtinInterface` synthesizes here,
-// instead of spelling them a second time at the consumer. Three parallel spellings of one interface (name,
-// method, result) are exactly the shape that drifts; one fetch cannot.
-//
-// It PANICS on a miss because the only legitimate caller names a protocol this function synthesizes; a
-// user-declared interface is resolved through the registries (`requireInterfaceForParse`), never here.
-export function requireBuiltinInterface(name ByteArray) returns IrInterface
-	match builtinInterface(name) 'lookup'
-		found(iface) then return iface
-		notFound then panic("requireBuiltinInterface: '{String.from(name)}' is not one of the synthesized protocol interfaces — only a caller naming a protocol `builtinInterface` declares may ask for its declaration")
-	end 'lookup'
-end 'requireBuiltinInterface'
 
 // The canonical conformer name of the primitive `int` — what `ProgramSignatures.conformerTypeArgName`
 // reduces every ranged int alias to, and the key of `int`'s witness tables (`__witness_int.*`) and its
@@ -1948,7 +2077,7 @@ export let IntConformerName = b"int"
 
 // ⭐ **THE COMPILER'S OWN SYNTHESIZED RANGED INT ALIASES — the names that erase to `integer` without
 // appearing in ANY alias registry.** `HashValue` is the declared result type of the synthesized
-// `Hashable.hash()` (`builtinInterface`), and the compiler reads no stdlib, so its `typealias HashValue =
+// `Hashable.hash()` (`synthesizedProtocol`), and the compiler reads no stdlib, so its `typealias HashValue =
 // int(0 to u32.max)` is nowhere a reader can look it up: every reduction that goes THROUGH an alias
 // registry answers "not an alias" and leaves the name nominal.
 //
@@ -2106,7 +2235,7 @@ end 'byteRecordTagOfTypeName'
 
 // The canonical conformer name of the primitive `bool` — the key of its synthesized
 // `bool.compare` impl, and it MUST equal `primitiveTypeTagName(ValueTypeTag.boolean)`. It doubles as the
-// rendered spelling of `Equatable.equals`'s `bool` RESULT type (`builtinInterface`), which is the same fact
+// rendered spelling of `Equatable.equals`'s `bool` RESULT type (`synthesizedProtocol`), which is the same fact
 // and so must not become a second constant.
 export let BoolConformerName = b"bool"
 
@@ -2204,14 +2333,10 @@ end 'DiscoveredConformer'
 // ⚠ **THE TABLE IS DELIBERATELY RAGGED, and each hole is a mechanism that does not exist rather than an
 // oversight** — which is why the interface test is per conformer rather than one shared disjunction:
 //
-//   • **`String` is NOT `Comparable`** — a byte record has no ordering:
-//     `stdlib/String.maxon:34` lists `BuiltinStringLiteral, Hashable, Equatable, Iterable,
-//     Cloneable`, and no extension adds `Comparable`.
-//   • **`bool` is NEITHER `Hashable` NOR `Equatable`** — `bool` arrays bit-pack
-//     (`specs/primitive-hashable.md:13`), and the canonical corpus contains no
-//     `bool.hash`/`bool.equals` case at all, positive or negative.
-//   • **`Character` is NOT `Comparable`** — `Character` declares `Hashable, Equatable,
-//     Cloneable` and no ordering, the same hole `String` has above.
+//   • **`bool` is NOT `Hashable`** — `bool` arrays bit-pack (`specs/primitive-hashable.md:13`).
+//   • **an `Array` and a payload-free `enum` are NOT `Comparable`** — see their arm below.
+//
+// `String` IS intrinsically `Comparable` although `stdlib/String.maxon` declares no `Comparable`.
 //
 // ⭐ **DIRECT DISPATCH ON A CONCRETE VALUE (`i.compare(j)`, `i.hash()`, `f.equals(g)`) SHIPS**, and it is
 // gated on THIS predicate — see `builtinConformerMethod` below and `Parser.dispatchBuiltinConformanceMethod`.
@@ -2231,47 +2356,48 @@ end 'DiscoveredConformer'
 // them to be trusted.
 export function builtinConformerSynthesizesRequirement(typeName ByteArray, requirement ByteArray) returns bool
 	if requirement.equals(HashMethodName) 'hash'
-		return isIntrinsicBuiltinConformance(typeName, interfaceName: HashableInterfaceName, discovered: DiscoveredConformer.none)
+		return conformsIntrinsically(typeName, protocol: BuiltinInterfaceKind.hashable, discovered: DiscoveredConformer.none)
 	end 'hash'
 
 	if requirement.equals(EqualsMethodName) 'equals'
-		return isIntrinsicBuiltinConformance(typeName, interfaceName: EquatableInterfaceName, discovered: DiscoveredConformer.none)
+		return conformsIntrinsically(typeName, protocol: BuiltinInterfaceKind.equatable, discovered: DiscoveredConformer.none)
 	end 'equals'
 
 	if requirement.equals(CompareMethodName) 'compare'
-		return isIntrinsicBuiltinConformance(typeName, interfaceName: ComparableInterfaceName, discovered: DiscoveredConformer.none)
+		return conformsIntrinsically(typeName, protocol: BuiltinInterfaceKind.comparable, discovered: DiscoveredConformer.none)
 	end 'compare'
 
 	return false
 end 'builtinConformerSynthesizesRequirement'
 
-export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray, discovered DiscoveredConformer) returns bool
+export function isIntrinsicBuiltinConformance(interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray, discovered DiscoveredConformer) returns bool
+	return conformsIntrinsically(typeName, protocol: interfaces.protocolKind(interfaceName), discovered: discovered)
+end 'isIntrinsicBuiltinConformance'
+
+function namesAHashingOrOrderingProtocol(protocol BuiltinInterfaceKind) returns bool
+	return protocol == BuiltinInterfaceKind.hashable or protocol == BuiltinInterfaceKind.equatable or protocol == BuiltinInterfaceKind.comparable
+end 'namesAHashingOrOrderingProtocol'
+
+function conformsIntrinsically(typeName ByteArray, protocol BuiltinInterfaceKind, discovered DiscoveredConformer) returns bool
 	if typeName.equals(IntConformerName) 'int'
-		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+		return namesAHashingOrOrderingProtocol(protocol)
 	end 'int'
 
 	if typeName.equals(StringConformerName) 'string'
-		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+		return namesAHashingOrOrderingProtocol(protocol)
 	end 'string'
 
-	// ⭐ A `Character` hashes and compares as a `String` does — both ARE the fused byte record — and it is
-	// ALSO `Comparable`, which is the one place the two byte records part company.
-	//
-	// ⚠ **THE CORPUS IS THE AUTHORITY FOR THE PAIR, AND IT DOES NOT PUT THEM ON A LEVEL.**
-	// `stdlib/Character.maxon:19` declares
-	// `implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Cloneable` and `:80-104`
-	// writes the order out — byte-lexicographic, shorter-prefix-first — while `stdlib/String.maxon:49`
-	// declares no `Comparable`. So `String`'s hole is real and `Character` has none.
+	// ⭐ A `Character` hashes and compares as a `String` does — both ARE the fused byte record.
 	if typeName.equals(CharacterConformerName) 'character'
-		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+		return namesAHashingOrOrderingProtocol(protocol)
 	end 'character'
 
 	if typeName.equals(FloatConformerName) 'float'
-		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+		return namesAHashingOrOrderingProtocol(protocol)
 	end 'float'
 
 	if typeName.equals(BoolConformerName) 'bool'
-		return interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
+		return protocol == BuiltinInterfaceKind.equatable or protocol == BuiltinInterfaceKind.comparable
 	end 'bool'
 
 	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER AND THE FIRST *CONDITIONAL* ONE.**
@@ -2288,8 +2414,7 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	// is spelled `Array`" already means "its element satisfied the clause", and this arm may answer
 	// unconditionally.
 	//
-	// ⚠ **`Comparable` IS ABSENT for `String`'s reason one shape up**: `Array.equals` is a byte compare, and
-	// bytes have no ordering.
+	// ⚠ **`Comparable` IS ABSENT**: the declaration above names only `Hashable` and `Equatable`.
 	//
 	// ⭐⭐ **AND THIS ROW'S KEY IS THE ONE THE CALLER SUPPLIES, NOT A NAME THIS FILE HOLDS.** The five
 	// rows above are keyed by COMPILER-OWNED spellings — three keywords and two names
@@ -2324,10 +2449,10 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	// not the declaration index and why that does not change the answer.
 	return match discovered 'discovered'
 		arrayRecord or
-			payloadFreeEnum gives interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+			payloadFreeEnum gives protocol == BuiltinInterfaceKind.hashable or protocol == BuiltinInterfaceKind.equatable
 		none gives false
 	end 'discovered'
-end 'isIntrinsicBuiltinConformance'
+end 'conformsIntrinsically'
 
 // --- Direct dispatch on a CONCRETE value (`i.compare(j)`) ---
 
@@ -2426,7 +2551,7 @@ end 'isBuiltinConformer'
 // added to `BuiltinConformer` fails to compile here until it is given its name, which is the check that
 // keeps this map and the tag map above from drifting apart.
 //
-// It PANICS on `notAConformer` for `requireBuiltinInterface`'s reason: only a caller the gate above has
+// It PANICS on `notAConformer`: only a caller the gate above has
 // already admitted may ask for a name, so a miss is a driver invariant violation rather than user input.
 export function builtinConformerName(conformer BuiltinConformer) returns ByteArray
 	match conformer 'c'
@@ -2595,16 +2720,21 @@ export union BuiltinConformerMethodLookup
 	notSupplied
 end 'BuiltinConformerMethodLookup'
 
-// The protocols a BUILTIN type can intrinsically conform to — the only interface names
-// `isIntrinsicBuiltinConformance` ever answers `true` for, listed once so the method search below covers
-// exactly the set that predicate admits and not one name more.
-function builtinConformableProtocolNames() returns ByteArrayArray
-	var names = ByteArrayArray.create()
-	names.push(HashableInterfaceName)
-	names.push(EquatableInterfaceName)
-	names.push(ComparableInterfaceName)
-	return names
-end 'builtinConformableProtocolNames'
+export typealias BuiltinInterfaceKindArray = Array with BuiltinInterfaceKind
+
+// The protocols a BUILTIN type can intrinsically conform to — the only ones `conformsIntrinsically` ever
+// answers `true` for, so the method search below covers exactly the set that predicate admits.
+function builtinConformableProtocols() returns BuiltinInterfaceKindArray
+	var protocols = BuiltinInterfaceKindArray.create()
+
+	for protocol in BuiltinInterfaceKind.allCases 'eachKind'
+		if namesAHashingOrOrderingProtocol(protocol) 'conformable'
+			protocols.push(protocol)
+		end 'conformable'
+	end 'eachKind'
+
+	return protocols
+end 'builtinConformableProtocols'
 
 // ⭐⭐ **WHICH PROTOCOLS ONE BUILTIN CONFORMER ACTUALLY CONFORMS TO** — the ragged table's row for
 // `typeName`, read off the predicate rather than restated. Spelled as the opening `if … continue` of each
@@ -2614,17 +2744,17 @@ end 'builtinConformableProtocolNames'
 // its element must satisfy (see `isIntrinsicBuiltinConformance`'s `Array` arm), so the availability check,
 // the sentence a withheld method is refused with, and this predicate's answer are one list. Written out as
 // `[Hashable, Equatable]` at those doors it would be the copy that stops matching the day the row moves.
-export function intrinsicConformanceProtocolNames(typeName ByteArray, discovered DiscoveredConformer) returns ByteArrayArray
-	var names = ByteArrayArray.create()
+export function intrinsicConformanceProtocols(typeName ByteArray, discovered DiscoveredConformer) returns BuiltinInterfaceKindArray
+	var protocols = BuiltinInterfaceKindArray.create()
 
-	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
-		if isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName, discovered: discovered) 'conforms'
-			names.push(protocolName)
+	for protocol in builtinConformableProtocols() 'eachProtocol'
+		if conformsIntrinsically(typeName, protocol: protocol, discovered: discovered) 'conforms'
+			protocols.push(protocol)
 		end 'conforms'
 	end 'eachProtocol'
 
-	return names
-end 'intrinsicConformanceProtocolNames'
+	return protocols
+end 'intrinsicConformanceProtocols'
 
 // ⭐ **THE METHOD A DIRECT `<value>.<name>(…)` DISPATCH RESOLVES TO ON A BUILTIN CONFORMER** — searched
 // through the conformer's INTRINSIC conformances, so the method set is DERIVED from
@@ -2635,8 +2765,7 @@ end 'intrinsicConformanceProtocolNames'
 //     conforms to `Comparable`; a `Comparable`-less conformer's `.compare()` simply is not found), and
 //   • the returned `InterfaceMethodSig` carries the method's NAME (which spells the impl symbol), its
 //     formal TYPES (which the `Self`-argument check reads) and its RETURN TYPE (which types the call's
-//     result) — all three fetched off the one declaration instead of respelled at the dispatch site, the
-//     same "fetch, don't describe" rule `requireBuiltinInterface` exists for.
+//     result) — all three fetched off the one declaration instead of respelled at the dispatch site.
 //
 // ⭐⭐ **THE ARRAY RECORD IS NEVER ONE OF THE CONFORMERS ASKED ABOUT HERE, WHICH IS WHY IT CARRIES NO ARRAY
 // ROW.** A `BuiltinConformer` caller's `typeName` is `builtinConformerName`'s — a closed, payload-free
@@ -2656,15 +2785,15 @@ end 'intrinsicConformanceProtocolNames'
 // hazard: the symbol it reaches is `ProgramSignatures.enumConformanceImplName`'s, which is `int.<method>`
 // (a KEYWORD qualifier no declaration can wear) precisely when the enum declares no such method of its own.
 export function builtinConformerMethod(typeName ByteArray, methodName ByteArray, discovered DiscoveredConformer) returns BuiltinConformerMethodLookup
-	for protocolName in intrinsicConformanceProtocolNames(typeName, discovered: discovered) 'eachProtocol'
+	for protocol in intrinsicConformanceProtocols(typeName, discovered: discovered) 'eachProtocol'
 		// A DIRECT scan of the protocol's own methods, and deliberately not `interfaceWitnessSlots`: a
 		// synthesized protocol declares no `extends` (`singleMethodInterface`/`markerInterface` build them all
 		// with an empty list), so there is no chain to walk — and this dispatch wants the SIGNATURE, never a
 		// table slot, so it has nothing to keep in step with a witness table's numbering.
-		let iface = requireBuiltinInterface(protocolName)
+		let iface = canonicalProtocolDeclaration(protocol)
 
 		for i in 0 upto iface.methods.count() 'eachMethod'
-			let method = try iface.methods.get(i) otherwise panic("builtinConformerMethod: methods.get OOB at {i} below count {iface.methods.count()} for protocol '{String.from(protocolName)}'")
+			let method = try iface.methods.get(i) otherwise panic("builtinConformerMethod: methods.get OOB at {i} below count {iface.methods.count()} for protocol '{String.from(iface.name)}'")
 
 			if method.name.equals(methodName) 'declaresMethod'
 				return BuiltinConformerMethodLookup.supplied(method)
@@ -2680,13 +2809,12 @@ end 'builtinConformerMethod'
 // fail to find. That is not hypothetical: a reject naming "`hash`, `equals` and `compare`" as
 // a fixed list is a WRONG answer for any conformer with a ragged conformance row —
 // `b.hash()` would be told `bool` supplies `hash` while `isIntrinsicBuiltinConformance` withholds `Hashable`
-// from it (see that predicate's ragged-table warning). The derivation is also what lets a row MOVE — `float`
-// gaining `Hashable`, say — with no edit at all.
+// from it (see that predicate's ragged-table warning). The derivation is also what lets a row MOVE with no
+// edit at all.
 //
 // ⚠ **IT IS A LIST RATHER THAN A SENTENCE BECAUSE TWO CONSUMERS NEED IT AND ONLY ONE OF THEM IS
 // PROSE.** `Parser.stringSurfaceMemberNames` pushes these onto the `String` MEMBER ROSTER that
-// `dispatchStringMethod` GATES on — so the conformance door cannot offer a name the gate would refuse, and
-// the day `String` gains `Comparable` its `compare()` joins gate, message and dispatch together. Rendering
+// `dispatchStringMethod` GATES on — so the conformance door cannot offer a name the gate would refuse. Rendering
 // first and re-reading the prose would be parsing a diagnostic; re-walking the protocols beside it would be
 // a second copy of this answer.
 //
@@ -2695,8 +2823,8 @@ end 'builtinConformerMethod'
 export function builtinConformerMethodNameList(typeName ByteArray) returns ByteArrayArray
 	var names = ByteArrayArray.create()
 
-	for protocolName in intrinsicConformanceProtocolNames(typeName, discovered: DiscoveredConformer.none) 'eachProtocol'
-		let iface = requireBuiltinInterface(protocolName)
+	for protocol in intrinsicConformanceProtocols(typeName, discovered: DiscoveredConformer.none) 'eachProtocol'
+		let iface = canonicalProtocolDeclaration(protocol)
 
 		for method in iface.methods 'eachMethod'
 			names.push(method.name)
