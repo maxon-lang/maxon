@@ -306,11 +306,13 @@ end 'main'
 
 <!-- test: error.float-type-argument-still-refused -->
 ⚠ **MAKING `float` CONFORM TO `Hashable` DOES NOT OPEN THE GENERIC DOOR, AND THIS CASE IS WHAT KEEPS
-THE TWO APART.** `float.hash` ships as a DIRECT dispatch on a concrete value; the witness form is
-unreachable because a float TYPE ARGUMENT is E2062 — a type parameter is one opaque 8-byte
-general-purpose slot under the compiler's dictionary-passing, and a float travels in a floating-point register.
-`float` conforms, so E2062 is the only thing standing between a user and a witness slot that could not carry
-its receiver, so the refusal is pinned here rather than left resting on `generic-types.md` alone.
+THE TWO APART.** `float.hash` ships as a DIRECT dispatch on a concrete value, and a float element of an
+`Array` reaches the witness form only through the array's own `equals`, `contains` and `hash`, which pass
+the element to the slot as a machine word. A user's generic type is a different door: a float TYPE ARGUMENT
+there is E2062, because a type parameter is one opaque 8-byte general-purpose slot under the compiler's
+dictionary-passing and a float travels in a floating-point register. `float` conforms, so E2062 is the only
+thing standing between a user's `where T is Hashable` and a witness slot that could not carry its receiver,
+so the refusal is pinned here rather than left resting on `generic-types.md` alone.
 ```maxon
 type Box uses T where T is Hashable
 	export var value as T

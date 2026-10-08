@@ -636,17 +636,16 @@ function checkAgreedBindingIsCarryable(project Project, signatures ProgramSignat
 	checkAssociatedReturnIsUnmanagedMachineWord(project, signatures: signatures, iface: iface, name: name, conformer: conformer, binding: binding, isDispatchedResult: isDispatchedResult)
 end 'checkAgreedBindingIsCarryable'
 
-// ⭐⭐ **REFUSE AN ASSOCIATED RETURN BOUND TO ANYTHING BUT AN UNMANAGED MACHINE WORD (E3120), AND "MACHINE
-// WORD" ALONE WAS THE WRONG PREDICATE.** The parser types a dispatch's result from the interface's own
-// rendered spelling, which names the associated type and — at a receiver that claims nothing — can never name
-// what a conformer bound it to, so the result is typed `int`. For a `float` binding that is the wrong WIDTH
-// and register file. For a MANAGED binding it is the wrong OWNERSHIP: nothing takes ownership of the returned
-// refcounted value and nothing releases it. MEASURED: `with String` and `with Point` both leaked, **exit 101 on x64 AND wasm**, while the
-// same interface with the return SPELLED `String` instead of associated was clean — which attributes the leak
-// exactly to this path.
+// ⭐⭐ **REFUSE AN ASSOCIATED RETURN BOUND TO ANYTHING BUT AN UNMANAGED MACHINE WORD (E3120).** The parser
+// types a dispatch's result from the interface's own rendered spelling, which names the associated type and
+// — at a receiver that claims nothing — can never name what a conformer bound it to, so the result is typed
+// `int`. For a `float` binding, or a typealias of `float`, that is the wrong WIDTH and register file. For a
+// MANAGED binding it is the wrong OWNERSHIP: nothing takes ownership of the returned refcounted value and
+// nothing releases it, so the program leaks.
 //
 // The admitted set is therefore "an unmanaged machine word", asked of the BINDING NAME because the resolved
-// type has already collapsed a struct and a ranged alias to the same `integer` (`renderedTypeNameAbiType`).
+// type has already collapsed a struct and a ranged integer alias to the same `integer`
+// (`renderedTypeNameAbiType`).
 //
 // ⚠ **AT A RECEIVER THAT DOES SAY WHICH BINDING IT HOLDS THE PARSER *CAN* NAME IT, WHICH IS WHY
 // THIS IS NOT ASKED THERE.** `Parser.associatedReturnThroughReceiverInstance` reads the site's own
@@ -655,7 +654,7 @@ end 'checkAgreedBindingIsCarryable'
 // `unclaimedAssociatedPosition`, one walk up — the SAME gate E3119 gets, which is how these two go
 // on keying on one set of facts.
 function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, isDispatchedResult bool)
-	if bindingIsUnmanagedMachineWord(signatures, binding: binding) 'travelsAsAPlainWord'
+	if bindingIsUnmanagedMachineWord(signatures, binding: binding, readerFilePath: conformer.filePath) 'travelsAsAPlainWord'
 		return
 	end 'travelsAsAPlainWord'
 
@@ -669,25 +668,32 @@ function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures
 	reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(signatures.displaySpellingOfDeclaredName(binding))}', and '{String.from(name)}' is the RETURN type of one of '{String.from(iface.name)}'s requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at '{String.from(iface.name)} with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
 end 'checkAssociatedReturnIsUnmanagedMachineWord'
 
-// Ca compiler PROVE this binding is a plain, unowned machine word? The BUILTIN names it answers itself — `int`
-// alone qualifies, because `float`/`bool`/`ExitCode` are not machine words at all and `String` is a managed
-// byte record. Every other name is a DECLARED one, and `ProgramSignatures.declaredNameIsManaged` is the single
-// home of "does a value of this declared name own a record?", the same answer a struct field's drop routing
-// takes: a ranged alias and a payload-free enum are scalars there, a struct, a boxed union and a generic
-// instance are not. Asking it rather than re-listing the forms is what stops this from becoming the fifth
-// cascade over those registries that function exists to have collapsed.
+// Can the compiler PROVE this binding is a plain, unowned machine word? The BUILTIN names it answers itself —
+// `int` alone qualifies, because `float`/`bool`/`ExitCode` are not machine words at all and `String` is a
+// managed byte record. Every other name is a DECLARED one, and `ProgramSignatures.declaredNameIsManaged` is the
+// single home of "does a value of this declared name own a record?", the same answer a struct field's drop
+// routing takes: a ranged alias and a payload-free enum are scalars there, a struct, a boxed union and a
+// generic instance are not. Asking it rather than re-listing the forms is what stops this from becoming the
+// fifth cascade over those registries that function exists to have collapsed.
+//
+// A typealias of `float` is one of those unowned scalars and still not a machine word: its value comes back
+// in a float register while the call site reads a word, so it is answered false before that door is asked.
 //
 // ⚠ **A NAME NO REGISTRY DECLARES IS NOT AUTOMATICALLY SAFE.** *"An undeclared type in a conformance is
 // E3011 long before here"* is falsified by a GENERIC INSTANCE: the binding is rendered as the compiler's
-// OWN canonical name (`Box_Integer`), which no
-// registry is keyed by and which no diagnostic ever fires on — MEASURED, it reaches here, answers
-// "unmanaged", and the program leaks (exit 101). `declaredNameIsManaged` answers for that rendering.
-function bindingIsUnmanagedMachineWord(signatures ProgramSignatures, binding ByteArray) returns bool
+// OWN canonical name (`Box_Integer`), which no registry is keyed by and which no diagnostic ever fires on —
+// it reaches here, and answered "unmanaged" the program leaks. `declaredNameIsManaged` answers for that
+// rendering.
+function bindingIsUnmanagedMachineWord(signatures ProgramSignatures, binding ByteArray, readerFilePath FilePath) returns bool
 	let tag = builtinTypeNameTag(binding)
 
 	if tag != ValueTypeTag.named 'aBuiltinTypeName'
 		return tag == ValueTypeTag.integer
 	end 'aBuiltinTypeName'
+
+	if signatures.isFloatAliasFor(binding, readerFilePath: readerFilePath) 'travelsInTheFloatRegister'
+		return false
+	end 'travelsInTheFloatRegister'
 
 	// TWO questions, and they are genuinely different. `declaredNameIsManaged` answers OWNERSHIP — does a
 	// value of this name own a record the program must release. `declaredNameIsFatPointer` answers WIDTH — an
@@ -1085,8 +1091,7 @@ end 'substitutedBindingIn'
 // (a tuple, a nested instance) is one this comparison cannot make concrete, and it says nothing.
 function suppliedConstraintBinding(signatures ProgramSignatures, conformances ConformanceDeclArray, gid GenericInstanceId, constraint WhereConstraint, position ElementIndex) returns ByteArray throws MapError
 	let conformer = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
-	let decl = try conformanceDeclOf(conformances, typeName: conformer)
-	let binding = try declAssociatedBinding(decl, interfaceName: constraint.interfaceName, position: position)
+	let (decl, binding) = try conformanceDeclBinding(conformances, typeName: conformer, interfaceName: constraint.interfaceName, position: position)
 	let conformerParams = signatures.structTypeParamsOf(conformer)
 
 	if conformerParams.isEmpty() 'aNonGenericConformerBindsAConcreteType'

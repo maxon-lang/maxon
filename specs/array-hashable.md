@@ -872,3 +872,32 @@ end 'main'
 true true
 true
 ```
+
+### A float array compares and searches by its values
+
+<!-- test: a-float-array-compares-and-searches-by-its-values -->
+```maxon
+typealias Reals = Array with Real
+
+function main() returns ExitCode
+	var a = Reals.create()
+	a.push(1.5)
+	a.push(2.5)
+	var b = Reals.create()
+	b.push(1.5)
+	b.push(2.5)
+	var c = Reals.create()
+	c.push(1.5)
+	c.push(3.5)
+	print("{a == b} {a == c} {a.equals(c)}\n")
+	print("{a.contains(2.5)} {a.contains(7.5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false false
+true false
+```

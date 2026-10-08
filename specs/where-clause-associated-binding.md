@@ -925,3 +925,58 @@ end 'main'
 ```stdout
 9
 ```
+
+<!-- test: error.an-extension-declared-binding-is-checked-against-the-constraint -->
+A conformance declared by an `extension` is the one `Wrap`'s constraint is checked against, whichever declaration of the type comes first.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function code() returns Integer
+end 'Named'
+
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+type TextCur implements Named
+	var v as String
+
+	static function create(v String) returns Self
+		return Self{v: v}
+	end 'create'
+
+	function code() returns Integer
+		return 100
+	end 'code'
+end 'TextCur'
+
+extension TextCur implements Cursor with String
+	function current() returns String
+		return self.v
+	end 'current'
+end 'TextCur'
+
+type Wrap uses S, E where S is Cursor with E
+	var s as S
+
+	static function create(s S) returns Self
+		return Self{s: s}
+	end 'create'
+
+	function only() returns E
+		return self.s.current()
+	end 'only'
+end 'Wrap'
+
+typealias BadWrap = Wrap with (TextCur, Integer)
+
+function main() returns ExitCode
+	let w = BadWrap.create(TextCur.create("no"))
+	print("{w.only()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3133: <fragment>:42:11: 'Wrap' constrains type parameter 'S' to 'Cursor with Integer', but 'TextCur' binds 'Cursor's associated type 'Element' to 'String' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states
+```

@@ -918,15 +918,21 @@ function bindsAssociatedAt(entry InterfaceConformance, interfaceName ByteArray, 
 	return entry.interfaceName.equals(interfaceName) and position < entry.withArgs.count()
 end 'bindsAssociatedAt'
 
-export function conformanceDeclOf(conformances ConformanceDeclArray, typeName ByteArray) returns ConformanceDecl throws MapError
+// A type has one `ConformanceDecl` per `implements` clause — its header's and each `extension T implements`'s
+// — so the first one for `typeName` need not be the one that binds `interfaceName`.
+export function conformanceDeclBinding(conformances ConformanceDeclArray, typeName ByteArray, interfaceName ByteArray, position ElementIndex) returns (ConformanceDecl, ByteArray) throws MapError
 	for decl in conformances 'eachDeclaringType'
-		if decl.typeName.equals(typeName) 'thisType'
-			return decl
-		end 'thisType'
+		if not decl.typeName.equals(typeName) 'anotherType'
+			continue
+		end 'anotherType'
+
+		if let binding = try declAssociatedBinding(decl, interfaceName: interfaceName, position: position) 'thisClauseBindsIt'
+			return (decl, binding)
+		end 'thisClauseBindsIt'
 	end 'eachDeclaringType'
 
 	throw MapError.keyNotFound
-end 'conformanceDeclOf'
+end 'conformanceDeclBinding'
 
 // ⭐ **THE SAME READ WHEN THE CALLER ALREADY HOLDS THE DECLARATION**, which is what a WALK of the conformance
 // list holds. Split from the name-keyed door above rather than left inside it because the difference is a

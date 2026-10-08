@@ -74692,12 +74692,8 @@ export type Parser
 	// and `Array with bool` built through `BArr.create()` + `push` works); `float` needs the element-word
 	// bitcast (`containerElementWord` / `containerSlotValueType`).
 	//
-	// ⚠ **`typealias FloatArray = Array with float` IS E2062, and that is a POLICY and not a limitation.**
-	// That refusal is about a type ARGUMENT in a `with` clause — `checkGenericArgType`'s rule 1,
-	// pinned by `generic-types.md:error.float-type-arg-builtin-generic`. What it says about
-	// dictionary-passing is true of a declared generic's `T` and is not true
-	// of a builtin container's element, which lives in a buffer at a known stride; retiring it is a decision
-	// for whoever owns that spec file.
+	// A NAMED float array is `Array with Real`: `checkGenericArgType`'s `inlineElement` exemption admits a
+	// float alias as a buffer element, and a bare `Array with float` is E2061 there.
 	//
 	// ⭐ **A CAST TO A PACKING ALIAS ARRIVES HERE AS A `named` TAG, AND THAT IS WHY THIS DOOR NEEDS NO ARM
 	// OF ITS OWN FOR IT.** `[0 as Q, 1 as Q, 2 as Q, 3 as Q]` is an `Array with Q`, not an `Array with int`
@@ -81556,9 +81552,9 @@ export type Parser
 	// ⚠ **IT RUNS BEFORE THE MOVE-IN, NOT AFTER**, and that ordering is the fix rather than an ordering
 	// preference: `moveElementIntoContainer` PROMOTES a borrowed record by the ELEMENT's protocol
 	// (`tagIsByteRecord`), so a struct pushed into a `String` array would be copied as a fused byte record
-	// before any check could see it. It hands back the value the slot wants, so the caller rebinds — the
-	// widening is unreachable here (`Array with Float` is E2062 at the type argument), but a caller that
-	// stored the value it already held is precisely the bug the shared door exists to make unwriteable.
+	// before any check could see it. It hands back the value the slot wants, so the caller rebinds —
+	// `push(2)` into an `Array with Real` stores the widened `2.0`, and a caller that stored the value it
+	// already held is precisely the bug the shared door exists to make unwriteable.
 	//
 	// ⚠ **AN OPAQUE `T` ELEMENT IS NOT CHECKED, and that is the same ruling every other opaque door makes.**
 	// A shared generic body compiles ONCE, so `self.items.push(item)` has no concrete element type to compare

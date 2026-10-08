@@ -4413,3 +4413,337 @@ end 'main'
 error E3016: <fragment>:12:6: Partial interface implementation: type 'Crate' has 1 method(s) with wrong signature:
   - absorb(value OtherStore) returns void (expected absorb(value Array with Num) returns void)
 ```
+
+<!-- test: conformers-binding-an-associated-type-differently-are-each-dispatched-through-a-receiver-claiming-theirs -->
+Two conformers bind one associated type to different types, and every dispatch site claims the binding it reaches, so each conformer's witness table is built against its own binding.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Sink uses Item
+	function put(x Item) returns Integer
+end 'Sink'
+
+type A implements Sink with Integer
+	var base as Integer
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function put(x Integer) returns Integer
+		return x + self.base
+	end 'put'
+end 'A'
+
+type B implements Sink with String
+	var base as Integer
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function put(x String) returns Integer
+		return (x.count() as Integer) + self.base
+	end 'put'
+end 'B'
+
+typealias IntegerSink = Sink with Integer
+typealias StringSink = Sink with String
+
+function useA(s IntegerSink) returns Integer
+	return s.put(3)
+end 'useA'
+
+function useB(s StringSink) returns Integer
+	return s.put("ab")
+end 'useB'
+
+function main() returns ExitCode
+	print("{useA(A.create()) + useB(B.create())}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
+<!-- test: a-float-binding-beside-a-string-binding-is-built-from-its-own-conformer -->
+A conformer binding the associated type to a float is widened to the unclaimed interface beside a conformer binding it to `String`, and its table is built against its own float binding.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Sink uses Item
+	function put(x Item) returns Integer
+	function tag() returns Integer
+end 'Sink'
+
+type A implements Sink with Real
+	var base as Real
+
+	static function create() returns Self
+		return Self{base: 0.5}
+	end 'create'
+
+	function put(x Real) returns Integer
+		return trunc(x + self.base)
+	end 'put'
+
+	function tag() returns Integer
+		return 1
+	end 'tag'
+end 'A'
+
+type B implements Sink with String
+	var base as Integer
+
+	static function create() returns Self
+		return Self{base: 2}
+	end 'create'
+
+	function put(x String) returns Integer
+		return (x.count() as Integer) + self.base
+	end 'put'
+
+	function tag() returns Integer
+		return 10
+	end 'tag'
+end 'B'
+
+typealias StringSink = Sink with String
+
+function useB(s StringSink) returns Integer
+	return s.put("ab")
+end 'useB'
+
+function tagOf(s Sink) returns Integer
+	return s.tag()
+end 'tagOf'
+
+function main() returns ExitCode
+	print("{useB(B.create()) + tagOf(A.create()) + tagOf(B.create())}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+15
+```
+
+<!-- test: an-unclaimed-dispatch-of-another-requirement-does-not-read-a-float-bound-associated-result -->
+A conformer binds the associated type to a float, and the only dispatch through the unclaimed `Giver` is `tag()`, which has no associated type in it. The table the widening builds still holds `give`, whose result is the float the conformer bound.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Giver uses Element
+	function give() returns Element
+	function tag() returns Integer
+end 'Giver'
+
+type Runner implements Giver with Real
+	let base as Integer
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function give() returns Real
+		return 1.5
+	end 'give'
+
+	function tag() returns Integer
+		return 7
+	end 'tag'
+end 'Runner'
+
+function tagOf(g Giver) returns Integer
+	return g.tag()
+end 'tagOf'
+
+function main() returns ExitCode
+	print("{tagOf(Runner.create())}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: error.an-unclaimed-dispatch-of-a-float-bound-associated-result-is-refused -->
+Dispatching an associated-type result through a receiver that does not say which binding it holds types the result before any conformer is known, so it cannot be the float a conformer bound.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Giver uses Element
+	function give() returns Element
+	function tag() returns Integer
+end 'Giver'
+
+type Runner implements Giver with Real
+	let base as Integer
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function give() returns Real
+		return 1.5
+	end 'give'
+
+	function tag() returns Integer
+		return 7
+	end 'tag'
+end 'Runner'
+
+function giveBare(g Giver) returns Real
+	return g.give()
+end 'giveBare'
+
+function tagOf(g Giver) returns Integer
+	return g.tag()
+end 'tagOf'
+
+function main() returns ExitCode
+	print("{tagOf(Runner.create())}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3120: <fragment>:9:6: 'Runner' binds 'Giver's associated type 'Element' to 'Real', and 'Element' is the RETURN type of one of 'Giver's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Giver with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved
+```
+
+<!-- test: a-conformance-declared-by-an-extension-binds-its-own-associated-type -->
+`A` declares `implements Named` on the type and its `Sink` conformance on an `extension`, so its `Sink` binding is in a later declaration than its first.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function code() returns Integer
+end 'Named'
+
+interface Sink uses Item
+	function put(x Item) returns Integer
+end 'Sink'
+
+type A implements Named
+	var base as Integer
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function code() returns Integer
+		return 100
+	end 'code'
+end 'A'
+
+extension A implements Sink with Integer
+	function put(x Integer) returns Integer
+		return x + self.base
+	end 'put'
+end 'A'
+
+type B implements Sink with String
+	var base as Integer
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function put(x String) returns Integer
+		return (x.count() as Integer) + self.base
+	end 'put'
+end 'B'
+
+typealias IntegerSink = Sink with Integer
+typealias StringSink = Sink with String
+
+function useA(s IntegerSink) returns Integer
+	return s.put(3)
+end 'useA'
+
+function useB(s StringSink) returns Integer
+	return s.put("ab")
+end 'useB'
+
+function main() returns ExitCode
+	print("{useA(A.create()) + useB(B.create())}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5
+```
+
+<!-- test: error.an-extension-declared-binding-is-checked-against-the-receivers-claim -->
+The same split declaration, widened into a receiver claiming the other binding.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function code() returns Integer
+end 'Named'
+
+interface Sink uses Item
+	function put(x Item) returns Integer
+end 'Sink'
+
+type A implements Named
+	var base as Integer
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function code() returns Integer
+		return 100
+	end 'code'
+end 'A'
+
+extension A implements Sink with Integer
+	function put(x Integer) returns Integer
+		return x + self.base
+	end 'put'
+end 'A'
+
+type B implements Sink with String
+	var base as Integer
+
+	static function create() returns Self
+		return Self{base: 0}
+	end 'create'
+
+	function put(x String) returns Integer
+		return (x.count() as Integer) + self.base
+	end 'put'
+end 'B'
+
+typealias IntegerSink = Sink with Integer
+typealias StringSink = Sink with String
+
+function useA(s IntegerSink) returns Integer
+	return s.put(3)
+end 'useA'
+
+function useB(s StringSink) returns Integer
+	return s.put("ab")
+end 'useB'
+
+function main() returns ExitCode
+	print("{useB(A.create()) + useB(B.create())}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3127: <fragment>:54:10: cannot widen 'A' into 's', which is declared at the existential type 'Sink' with its associated type 'Item' bound to 'String' — 'A' binds 'Item' to 'Integer'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Item' to 'String'
+```
