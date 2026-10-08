@@ -198,7 +198,10 @@ export function optionalWholeArg(doc JsonDoc, args OptionalNode, key String) ret
 end 'optionalWholeArg'
 
 function wholeArgumentIn(doc JsonDoc, node JsonNodeId, key String) returns WholeArgument
-	_ = try doc.getChild(node, key: key) otherwise return WholeArgument.absent
+	if not doc.hasChild(node, key: key) 'missing'
+		return WholeArgument.absent
+	end 'missing'
+
 	let value = try doc.getInt(node, key: key) otherwise panic("wholeArgumentIn: `{key}` passed the roster's whole-number check before it was read")
 
 	return WholeArgument.given(value)

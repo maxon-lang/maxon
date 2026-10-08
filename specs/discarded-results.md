@@ -1303,3 +1303,879 @@ end 'main'
 ```maxoncstderr
 error E3064: specs/discarded-results/error.pure-map-lookup-discarded-while-another-key-type-has-an-effectful-hash.maxon:39:3: result of pure function 'Registry.widthOf' must be used
 ```
+
+<!-- test: error.filepath-keyed-map-lookup-discarded-is-refused-on-every-target -->
+A lookup in a `Map` keyed by `FilePath` is pure on every target. On Windows a `FilePath` compares in its lower-cased
+spelling, which `toLower` builds in a string the call created itself, so the verdict must not turn on the host.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Sizes = Map with (FilePath, Count)
+
+type Catalog
+	var sizes as Sizes
+
+	static function create() returns Catalog
+		return Catalog{sizes: Sizes.create()}
+	end 'create'
+
+	function sizeOf(path FilePath) returns Count throws MapError
+		return try self.sizes.get(path)
+	end 'sizeOf'
+
+	function knows(path FilePath) returns bool
+		_ = try self.sizeOf(path) otherwise return false
+		return true
+	end 'knows'
+end 'Catalog'
+
+function main() returns ExitCode
+	let catalog = Catalog.create()
+
+	if catalog.knows(FilePath from "a.txt") 'found'
+		return 1
+	end 'found'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.filepath-keyed-map-lookup-discarded-is-refused-on-every-target.maxon:17:3: result of pure function 'Catalog.sizeOf' must be used
+```
+
+<!-- test: error.lowering-a-string-is-pure -->
+`toLower` writes only into the string it builds, so discarding its result is refused whatever the host.
+```maxon
+function lowered(text String) returns String
+	return text.toLower()
+end 'lowered'
+
+function main() returns ExitCode
+	_ = lowered("ABC")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.lowering-a-string-is-pure.maxon:7:2: result of pure function 'lowered' must be used
+```
+
+<!-- test: error.a-builder-writing-only-its-own-array-is-pure -->
+A function that fills an array it created and returns it has no effect beyond its result.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function squares(count Integer) returns IntArray
+	var out = IntArray.create()
+
+	for i in 0 upto count 'each'
+		out.push(i * i)
+	end 'each'
+
+	return out
+end 'squares'
+
+function main() returns ExitCode
+	_ = squares(3)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-builder-writing-only-its-own-array-is-pure.maxon:16:2: result of pure function 'squares' must be used
+```
+
+<!-- test: error.a-method-writing-its-receiver-is-pure-when-the-receiver-is-the-callers-own -->
+A method that writes its receiver is an effect to a caller that was handed the receiver, and none to a caller that created it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var total as Integer
+
+	static function create() returns Counter
+		return Counter{total: 0}
+	end 'create'
+
+	function bump() returns Integer
+		self.total = self.total + 1
+		return self.total
+	end 'bump'
+end 'Counter'
+
+function once() returns Integer
+	let counter = Counter.create()
+	return counter.bump()
+end 'once'
+
+function main() returns ExitCode
+	_ = once()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-method-writing-its-receiver-is-pure-when-the-receiver-is-the-callers-own.maxon:23:2: result of pure function 'once' must be used
+```
+
+<!-- test: a-function-writing-an-array-it-was-handed-keeps-its-result-droppable -->
+Writing an array that arrived as an argument is an effect, so `_ =` is the legal way to drop the count.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function fill(target IntArray, count Integer) returns Integer
+	for i in 0 upto count 'each'
+		target.push(i)
+	end 'each'
+
+	return count
+end 'fill'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	_ = fill(values, count: 3)
+
+	if values.count() != 3 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-function-writing-an-array-it-was-handed-is-impure -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function fill(target IntArray, count Integer) returns Integer
+	for i in 0 upto count 'each'
+		target.push(i)
+	end 'each'
+
+	return count
+end 'fill'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	fill(values, count: 3)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3065: specs/discarded-results/error.a-function-writing-an-array-it-was-handed-is-impure.maxon:15:2: result of 'fill' is not used (use '_ = expr' to discard)
+```
+
+<!-- test: a-function-that-stores-a-fresh-array-into-its-argument-then-writes-it-is-impure -->
+An array stored into a record the caller holds has left the function, so the later write is visible.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Sink
+	var items as IntArray
+
+	static function create() returns Sink
+		return Sink{items: IntArray.create()}
+	end 'create'
+
+	function attach(extra IntArray)
+		self.items = extra
+	end 'attach'
+
+	function size() returns Integer
+		return self.items.count() as Integer
+	end 'size'
+end 'Sink'
+
+function stash(sink Sink, count Integer) returns Integer
+	var extra = IntArray.create()
+	sink.attach(extra)
+	extra.push(count)
+	return count
+end 'stash'
+
+function main() returns ExitCode
+	let sink = Sink.create()
+	_ = stash(sink, count: 4)
+
+	if sink.size() != 1 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-search-over-a-pure-closure-literal-is-pure -->
+A call through a closure whose identity is known where it is written is judged by the closure's own body.
+```maxon
+typealias Position = int(0 to 1000)
+typealias PositionTest = function(Position) returns bool
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstWhere(limit Position, test PositionTest) returns Position throws SearchError
+	for i in 0 upto limit 'each'
+		if test(i) 'hit'
+			return i
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstWhere'
+
+function firstOver(threshold Position) returns Position throws SearchError
+	return try firstWhere(100, test: function(i) gives i > threshold)
+end 'firstOver'
+
+function exceeds(threshold Position) returns bool
+	_ = try firstOver(threshold) otherwise return false
+	return true
+end 'exceeds'
+
+function main() returns ExitCode
+	if exceeds(5) 'found'
+		return 0
+	end 'found'
+
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-over-a-pure-closure-literal-is-pure.maxon:24:2: result of pure function 'firstOver' must be used
+```
+
+<!-- test: error.a-search-over-a-named-function-is-pure -->
+A named function passed as the predicate is as known as a closure literal.
+```maxon
+typealias Position = int(0 to 1000)
+typealias PositionTest = function(Position) returns bool
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstWhere(limit Position, test PositionTest) returns Position throws SearchError
+	for i in 0 upto limit 'each'
+		if test(i) 'hit'
+			return i
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstWhere'
+
+function isLarge(position Position) returns bool
+	return position > 50
+end 'isLarge'
+
+function firstLarge() returns Position throws SearchError
+	return try firstWhere(100, test: isLarge)
+end 'firstLarge'
+
+function hasLarge() returns bool
+	_ = try firstLarge() otherwise return false
+	return true
+end 'hasLarge'
+
+function main() returns ExitCode
+	if hasLarge() 'found'
+		return 0
+	end 'found'
+
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-over-a-named-function-is-pure.maxon:28:2: result of pure function 'firstLarge' must be used
+```
+
+<!-- test: a-search-whose-predicate-prints-keeps-its-result-droppable -->
+The same search with a predicate that prints is an effect, so discarding its result is legal.
+```maxon
+typealias Position = int(0 to 1000)
+typealias PositionTest = function(Position) returns bool
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstWhere(limit Position, test PositionTest) returns Position throws SearchError
+	for i in 0 upto limit 'each'
+		if test(i) 'hit'
+			return i
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstWhere'
+
+function noisy(position Position) returns bool
+	print("probe {position}\n")
+	return position > 1
+end 'noisy'
+
+function firstNoisy() returns Position throws SearchError
+	return try firstWhere(100, test: function(i) gives noisy(i))
+end 'firstNoisy'
+
+function main() returns ExitCode
+	_ = try firstNoisy() otherwise return 1
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+probe 0
+probe 1
+probe 2
+```
+
+<!-- test: a-search-whose-predicate-writes-captured-state-keeps-its-result-droppable -->
+A predicate that writes the receiver it captured writes state the caller can see.
+```maxon
+typealias Position = int(0 to 1000)
+typealias PositionTest = function(Position) returns bool
+typealias PositionArray = Array with Position
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstWhere(limit Position, test PositionTest) returns Position throws SearchError
+	for i in 0 upto limit 'each'
+		if test(i) 'hit'
+			return i
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstWhere'
+
+type Recorder
+	var seen as PositionArray
+
+	static function create() returns Recorder
+		return Recorder{seen: PositionArray.create()}
+	end 'create'
+
+	function record(position Position) returns bool
+		self.seen.push(position)
+		return position > 1
+	end 'record'
+
+	function firstRecorded() returns Position throws SearchError
+		return try firstWhere(100, test: function(i) gives self.record(i))
+	end 'firstRecorded'
+
+	function recorded() returns Position
+		return self.seen.count() as Position
+	end 'recorded'
+end 'Recorder'
+
+function main() returns ExitCode
+	let recorder = Recorder.create()
+	_ = try recorder.firstRecorded() otherwise return 1
+
+	if recorder.recorded() != 3 'wrong'
+		return 2
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-search-through-a-closure-of-unknown-origin-keeps-its-result-droppable -->
+A closure read out of a record is not known at the call, so the search is judged by what could run.
+```maxon
+typealias Position = int(0 to 1000)
+typealias PositionTest = function(Position) returns bool
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+type Probe
+	var test as PositionTest
+
+	static function create(test PositionTest) returns Probe
+		return Probe{test: test}
+	end 'create'
+
+	function firstHit(limit Position) returns Position throws SearchError
+		for i in 0 upto limit 'each'
+			if self.test(i) 'hit'
+				return i
+			end 'hit'
+		end 'each'
+
+		throw SearchError.absent
+	end 'firstHit'
+end 'Probe'
+
+function main() returns ExitCode
+	let probe = Probe.create(function(i) gives i > 2)
+	_ = try probe.firstHit(10) otherwise return 1
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-closure-handed-down-through-two-helpers-is-still-known -->
+A closure literal passed to a helper that forwards it to the search is judged by its own body at the end of the chain.
+The helper's own discard is left alone, because on its own the forwarded predicate is not known.
+```maxon
+typealias Position = int(0 to 1000)
+typealias PositionTest = function(Position) returns bool
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstWhere(limit Position, test PositionTest) returns Position throws SearchError
+	for i in 0 upto limit 'each'
+		if test(i) 'hit'
+			return i
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstWhere'
+
+function anyWhere(limit Position, test PositionTest) returns bool
+	_ = try firstWhere(limit, test: test) otherwise return false
+	return true
+end 'anyWhere'
+
+function anyOver(threshold Position) returns bool
+	return anyWhere(100, test: function(i) gives i > threshold)
+end 'anyOver'
+
+function main() returns ExitCode
+	_ = anyOver(3)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-closure-handed-down-through-two-helpers-is-still-known.maxon:29:2: result of pure function 'anyOver' must be used
+```
+
+<!-- test: a-registering-factory-keeps-writes-to-its-product-visible -->
+A function that registers the record it creates in a module-level array and then writes it changes state the caller can see,
+whatever it returns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	var total as Integer
+
+	static function create() returns Box
+		return Box{total: 0}
+	end 'create'
+
+	function bump() returns Integer
+		self.total = self.total + 1
+		return self.total
+	end 'bump'
+
+	function read() returns Integer
+		return self.total
+	end 'read'
+end 'Box'
+
+typealias BoxArray = Array with Box
+
+var registry = BoxArray.create()
+
+function enroll() returns Box
+	let box = Box.create()
+	registry.push(box)
+	return box
+end 'enroll'
+
+function tamper() returns Integer
+	let box = enroll()
+	return box.bump()
+end 'tamper'
+
+function main() returns ExitCode
+	_ = tamper()
+
+	if (try registry.get(0) otherwise return 2).read() != 1 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-search-through-a-with-iterator-loop-is-pure -->
+The iterator a `withIterator()` loop walks is created by the loop, so moving it is not an effect of the function.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function positionOf(values IntArray, wanted Integer) returns Integer throws SearchError
+	for (iter, value) in values.withIterator() 'each'
+		if value == wanted 'hit'
+			return iter.index() as Integer
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'positionOf'
+
+function contains(values IntArray, wanted Integer) returns bool
+	_ = try positionOf(values, wanted: wanted) otherwise return false
+	return true
+end 'contains'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	values.push(4)
+
+	if contains(values, wanted: 4) 'found'
+		return 0
+	end 'found'
+
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-search-through-a-with-iterator-loop-is-pure.maxon:20:2: result of pure function 'positionOf' must be used
+```
+
+<!-- test: a-with-iterator-loop-whose-body-writes-an-argument-keeps-its-result-droppable -->
+A loop body that pushes into an array it was handed is an effect, whatever the iterator does.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function copyInto(values IntArray, target IntArray) returns Integer
+	var copied = 0 as Integer
+
+	for (iter, value) in values.withIterator() 'each'
+		target.push(value + (iter.index() as Integer))
+		copied = copied + 1
+	end 'each'
+
+	return copied
+end 'copyInto'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	values.push(4)
+	values.push(5)
+	var target = IntArray.create()
+	_ = copyInto(values, target: target)
+
+	if target.count() != 2 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-with-iterator-loop-whose-body-prints-keeps-its-result-droppable -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function show(values IntArray) returns Integer
+	var shown = 0 as Integer
+
+	for (iter, value) in values.withIterator() 'each'
+		print("{iter.index()}={value}\n")
+		shown = shown + 1
+	end 'each'
+
+	return shown
+end 'show'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	values.push(7)
+	_ = show(values)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0=7
+```
+
+<!-- test: error.a-with-iterator-search-stays-pure-beside-an-iterator-that-moves-records-between-its-fields -->
+Another iterator type in the program that moves a record between its own fields does not make a search over an array effectful.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Slot
+	export var number as Integer
+
+	static function create(number Integer) returns Slot
+		return Self{number: number}
+	end 'create'
+end 'Slot'
+
+type SwapIter implements Iterator with Integer
+	var front as Slot
+	var back as Slot
+
+	static function create() returns Self
+		return Self{front: Slot.create(1), back: Slot.create(2)}
+	end 'create'
+
+	function current() returns Integer
+		return self.front.number
+	end 'current'
+
+	function advance() throws IterationError
+		self.front = self.back
+		throw IterationError.exhausted
+	end 'advance'
+end 'SwapIter'
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function positionOf(values IntArray, wanted Integer) returns Integer throws SearchError
+	for (iter, value) in values.withIterator() 'each'
+		if value == wanted 'hit'
+			return iter.index() as Integer
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'positionOf'
+
+function holds(values IntArray, wanted Integer) returns bool
+	_ = try positionOf(values, wanted: wanted) otherwise return false
+	return true
+end 'holds'
+
+function main() returns ExitCode
+	var swap = SwapIter.create()
+	try swap.advance() otherwise ignore
+	print("{swap.current()}\n")
+	var values = IntArray.create()
+	values.push(4)
+	return 0 if holds(values, wanted: 4) else 1
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-with-iterator-search-stays-pure-beside-an-iterator-that-moves-records-between-its-fields.maxon:46:2: result of pure function 'positionOf' must be used
+```
+
+<!-- test: error.a-record-holding-only-what-the-function-made-takes-a-deep-write-for-free -->
+A record that holds nothing the function was handed may be written through its fields; one that holds an argument may not.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Cursor
+	var data as IntArray
+
+	static function over(data IntArray) returns Cursor
+		return Cursor{data: data}
+	end 'over'
+
+	function drop()
+		self.data.clear()
+	end 'drop'
+end 'Cursor'
+
+function scratch() returns Integer
+	let cursor = Cursor.over(IntArray.create())
+	cursor.drop()
+	return 1
+end 'scratch'
+
+function main() returns ExitCode
+	_ = scratch()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3064: specs/discarded-results/error.a-record-holding-only-what-the-function-made-takes-a-deep-write-for-free.maxon:24:2: result of pure function 'scratch' must be used
+```
+
+<!-- test: a-record-holding-an-argument-keeps-a-deep-write-visible -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Cursor
+	var data as IntArray
+
+	static function over(data IntArray) returns Cursor
+		return Cursor{data: data}
+	end 'over'
+
+	function drop()
+		self.data.clear()
+	end 'drop'
+end 'Cursor'
+
+function wipe(values IntArray) returns Integer
+	let cursor = Cursor.over(values)
+	cursor.drop()
+	return 1
+end 'wipe'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	values.push(4)
+	_ = wipe(values)
+
+	if values.count() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-record-given-an-argument-after-it-was-made-keeps-a-deep-write-visible -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Cursor
+	var data as IntArray
+
+	static function over(data IntArray) returns Cursor
+		return Cursor{data: data}
+	end 'over'
+
+	function adopt(extra IntArray)
+		self.data = extra
+	end 'adopt'
+
+	function drop()
+		self.data.clear()
+	end 'drop'
+end 'Cursor'
+
+function reset(extra IntArray) returns Integer
+	let cursor = Cursor.over(IntArray.create())
+	cursor.adopt(extra)
+	cursor.drop()
+	return 1
+end 'reset'
+
+function main() returns ExitCode
+	var values = IntArray.create()
+	values.push(4)
+	_ = reset(values)
+
+	if values.count() != 0 'wrong'
+		return 1
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-function-whose-record-drops-a-promise-it-made-keeps-its-result-droppable -->
+Dropping a record that holds a promise cancels the green thread, which is more than bookkeeping: the worker below never
+runs, so the flag stays 0.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+var flag = 0 as Integer
+
+type Holder
+	var promise as IntPromise
+
+	static function wrap(promise IntPromise) returns Holder
+		return Holder{promise: promise}
+	end 'wrap'
+end 'Holder'
+
+function worker() returns Integer
+	Scheduler.yield()
+	flag = 1
+	return 1
+end 'worker'
+
+function keep() returns Integer
+	var promise = async worker()
+	let holder = Holder.wrap(promise)
+	_ = holder
+	return 1
+end 'keep'
+
+function main() returns ExitCode
+	_ = keep()
+	return flag as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-function-whose-array-drops-a-promise-it-made-keeps-its-result-droppable -->
+An array a function fills with a promise it made drops that promise, and the thread with it, when the function ends.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias PromiseArray = Array with IntPromise
+
+var flag = 0 as Integer
+
+function worker() returns Integer
+	Scheduler.yield()
+	flag = 1
+	return 1
+end 'worker'
+
+function park() returns Integer
+	var parked = PromiseArray.create()
+	parked.push(async worker())
+	return 1
+end 'park'
+
+function main() returns ExitCode
+	_ = park()
+	return flag as ExitCode
+end 'main'
+```
+```exitcode
+0
+```

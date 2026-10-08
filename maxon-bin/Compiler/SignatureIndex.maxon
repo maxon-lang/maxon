@@ -12994,6 +12994,10 @@ export type GenericInstanceRegistry
 		return try self.index.get(self.instanceKey(baseId, args: args, fixedSize: fixedSize))
 	end 'find'
 
+	export function holdsInstance(baseId TypeNameId, args MaxonTypeArray, fixedSize InstanceSize) returns bool
+		return self.index.contains(self.instanceKey(baseId, args: args, fixedSize: fixedSize))
+	end 'holdsInstance'
+
 	// The source named row `existing`. A parse's own row, and every row outside a parse, loses its speculative
 	// mark on the spot; a BASELINE row named during a parse is only noted, for the merge to apply.
 	function noteNamed(existing GenericInstanceId)
@@ -18202,8 +18206,9 @@ export type ProgramSignatures
 				continue
 			end 'aNameThisParseInterned'
 
-			_ = try self.genericInstances.find(row.baseId, args: row.args, fixedSize: row.fixedSize) otherwise continue
-			throw SharedMemoMiss.footprintMoved
+			if self.genericInstances.holdsInstance(row.baseId, args: row.args, fixedSize: row.fixedSize) 'theBaselineHoldsIt'
+				throw SharedMemoMiss.footprintMoved
+			end 'theBaselineHoldsIt'
 		end 'eachMintedRow'
 
 		return rebased
@@ -42922,6 +42927,12 @@ export type ProgramSignatures
 		end 'aScalar'
 
 		var name = self.denotedSlotAggregateName(type)
+
+		// The compiler-minted byte element is declared nowhere, so the lookup below would report it as
+		// holding anything.
+		if name.equals(SynthesizedByteElementName) 'aCompilerMintedByte'
+			return
+		end 'aCompilerMintedByte'
 
 		let form = try self.declaredFormInAnyFile(name) otherwise 'undeclared'
 			within.anything = true

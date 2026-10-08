@@ -30,6 +30,7 @@ refers to its children by `JsonNodeId`. Walk a document through the `JsonDoc` ac
 | `get(id JsonNodeId)` | `JsonNode` | — | The node; an id outside the arena panics. |
 | `rootKind()` | `JsonKind` | — | The kind of the root node. |
 | `getChild(parent JsonNodeId, key String)` | `JsonNodeId` | `JsonAccessError` | An object member's id: `notObject` or `missingKey`. |
+| `hasChild(parent JsonNodeId, key String)` | `bool` | — | Whether `parent` is an object holding `key`; `false` for any other kind of node. |
 | `getString(parent, key:)` | `String` | `JsonAccessError` | A string member; `wrongType` for another kind. |
 | `getInt(parent, key:)` | `int(i64.min to i64.max)` | `JsonAccessError` | A number member, truncated toward zero. |
 | `getBool(parent, key:)` | `bool` | `JsonAccessError` | A boolean member. |

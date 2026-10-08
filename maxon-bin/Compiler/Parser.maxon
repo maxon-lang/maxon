@@ -11775,7 +11775,7 @@ typealias BoxedUnionAnswerArray = Array with BoxedUnionAnswer
 
 // ⭐ **IS A VALUE OF `tag` A SCALAR WHATEVER THE PROGRAM DECLARES?** The parse-time `no` to
 // `ProvenanceTracer.valueTagCarriesProvenance`, which asks the whole program about a `named` type.
-function tagIsAScalarWhateverIsDeclared(tag ValueTypeTag) returns bool
+module function tagIsAScalarWhateverIsDeclared(tag ValueTypeTag) returns bool
 	return match tag 'tag'
 		boolean or
 			integer or
@@ -37720,7 +37720,7 @@ export type Parser
 	// end, bounded by `opFloor`, a module-wide index that cannot reach a previous statement's call.
 	//
 	// A `throws` clause is not an effect, so this shape cannot be declined on the reasoning that a
-	// throwing callee is never effect-free: `SemanticCheck.opShowsAnEffect` counts neither a throw nor
+	// throwing callee is never effect-free: `EffectSummaryBuilder.walkOp` counts neither a throw nor
 	// a panic, and a throwing pure callee's discarded result is reportable
 	// (`specs/discarded-results.md`'s `try-pure-let-discard`).
 	function tryChannelCallAbove(opFloor ElementIndex, wanted TryChannelResult) returns DiscardedCallee
@@ -37744,7 +37744,7 @@ export type Parser
 	// separates E3064's verdict from E3065's.
 	//
 	// ⚠ **A VOID RESULT IS NOT A DISCARD.** A `void` callee is seeded effectful anyway
-	// (`functionShowsAnEffect`), so filing one could never fire — but every bare void statement in every
+	// (`EffectSummaryBuilder.verdicts`), so filing one could never fire — but every bare void statement in every
 	// program would still pay for a record and for the whole-program summary those records switch on.
 	function recordDiscardedCallResult(value ValueId, opFloor ElementIndex, anchor Token, door DiscardDoor)
 		if self.tagOf(value) == ValueTypeTag.void 'theCallPromisedNothing'
@@ -38432,10 +38432,6 @@ export type Parser
 	end 'shedAliasIntoUnnamedBinding'
 
 	function writeBackPayload(func IrFunction, binding VarInfo, nameTok Token)
-		// E3064's seed, as at `emitFieldWrite`: this stores into the SCRUTINEE's box, an aggregate that already
-		// existed and that the caller may still be holding. The second of the two assignment emitters.
-		func.assignsIntoAnExistingAggregate = true
-
 		let range = SourceRange.ofToken(nameTok)
 		let value = binding.boundValue
 		let managed = self.bindingIsOwned(binding)
@@ -49179,7 +49175,7 @@ export type Parser
 	//
 	// The `_` binding needs no arm on THAT side: `if let _ = try f()` has SAID what happens to the result,
 	// which is all this rule asks. Whether a PURE callee may be discarded that way is E3064's question, and
-	// THIS DOOR does not ask it. ⚠ The classification exists (`SemanticCheck.buildEffectFreeSummary`) and
+	// THIS DOOR does not ask it. ⚠ The classification exists (`buildEffectFreeSummary`) and
 	// exactly one door consults it (the all-discard tuple assignment); wiring this one is a scope decision,
 	// not a missing mechanism (see specs/discarded-results.md).
 	//
@@ -55565,7 +55561,7 @@ export type Parser
 
 	function firstArmGiving(reachingArms MatchArmExitArray, sought SoughtGive) returns ElementIndex throws GivingArmSearchError
 		for (iter, arm) in reachingArms.withIterator() 'eachArm'
-			if self.giveIs(self.giveValueOf(arm.give), sought: sought) 'aSoughtGive'
+			if self.armGives(arm, sought: sought) 'aSoughtGive'
 				return iter.index()
 			end 'aSoughtGive'
 		end 'eachArm'
@@ -55574,12 +55570,18 @@ export type Parser
 	end 'firstArmGiving'
 
 	function anArmGives(reachingArms MatchArmExitArray, sought SoughtGive) returns bool
-		if let _ = try self.firstArmGiving(reachingArms, sought: sought) 'found'
-			return true
-		end 'found'
+		for arm in reachingArms 'eachArm'
+			if self.armGives(arm, sought: sought) 'aSoughtGive'
+				return true
+			end 'aSoughtGive'
+		end 'eachArm'
 
 		return false
 	end 'anArmGives'
+
+	function armGives(arm MatchArmExit, sought SoughtGive) returns bool
+		return self.giveIs(self.giveValueOf(arm.give), sought: sought)
+	end 'armGives'
 
 	function giveIs(give ValueId, sought SoughtGive) returns bool
 		return match sought 'kind'
@@ -81274,9 +81276,9 @@ export type Parser
 	// freshly minted means passing `coOwned` here, not extending this list.** (It is the enumerated-doors shape
 	// rather than transitive soleness — a different bug class,
 	// and not live today.)
-	function emitOwnedRuntimeResult(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+	function emitOwnedRuntimeResult(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange, exclusivity OwnedHeapExclusivity = OwnedHeapExclusivity.sole) returns ValueId
 		let result = self.emitRuntimeCall(callee, args: args, resultTag: resultTag, resultNameId: resultNameId, range: range)
-		self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
+		self.trackOwnedTemp(result, exclusivity: exclusivity)
 		return result
 	end 'emitOwnedRuntimeResult'
 
@@ -83010,7 +83012,7 @@ export type Parser
 		// (`name = n`) must MOVE the new value in and only THEN drop the value it displaces (a borrowed String
 		// is promoted, a borrowed struct is co-owned), not a raw store that leaks the old value and dangles
 		// behind a borrow. ⚠ The acquire-before-release order is load-bearing — `emitFieldWrite` says why.
-		try self.emitFieldWrite(func, box: receiver, layout: layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: fieldTok, range: range)
+		try self.emitFieldWrite(receiver, layout: layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: fieldTok, range: range)
 	end 'emitCheckedSelfFieldStore'
 
 	// `self.x` / `self.m(…)` — the receiver named explicitly. `self` is its own KEYWORD token, so it
@@ -83382,7 +83384,7 @@ export type Parser
 		self.noteClosureStoreSite(ClosureStoreDestination.field(step.box, base: ClosureStoreBase.spelled(step.baseBinding.boundValue, name: step.baseBinding.name)), value: value, at: self.tokenAt(valueStart))
 
 		self.noteWriteThroughAField(func, target: step.box, baseIndex: baseIndex, lastDotIndex: lastDotIndex, anchor: step.baseTok)
-		try self.emitFieldWrite(func, box: step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
+		try self.emitFieldWrite(step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
 	end 'parseResolvedFieldAssignment'
 
 	// ⭐ **A FIELD WRITE WRITES THE RECORD BEFORE ITS LAST `.`** — `box.item.x = 9` writes the record `box.item`, and
@@ -83434,15 +83436,7 @@ export type Parser
 		return self.slotTypeThroughReceiver(box, declared: self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames), scopeFilePath: layout.declFilePath)
 	end 'storedFieldType'
 
-	function emitFieldWrite(func IrFunction, box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws SourceParseError
-		// ⭐⭐ **E3064's SEED, SET AT THE ONE EMITTER BOTH FIELD-ASSIGNMENT DOORS FUNNEL INTO.** `self.n = 5`,
-		// `n = 5` and `p.x = 5` all arrive here, and every one of them writes an aggregate that already existed —
-		// which is an effect the function's RETURN type cannot express. Set HERE and not at the two doors, for
-		// the reason the loop-phi predicate is one predicate: a third assignment spelling would otherwise have to
-		// remember. ⚠ Deliberately NOT on `emitFieldStore`, which also fills a FRESH box — see
-		// `IrFunction.assignsIntoAnExistingAggregate` for what setting it there would cost.
-		func.assignsIntoAnExistingAggregate = true
-
+	function emitFieldWrite(box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws SourceParseError
 		let fieldType = self.storedFieldType(box, layout: layout, index: index)
 
 		// ⭐ **A BARE OPAQUE `T` FIELD REASSIGNMENT.** The field is typed opaque `T`
@@ -84623,7 +84617,7 @@ export type Parser
 			// `declarationsValueIsTheManagedRecord`, which is the very test the arm above just made. Provably the
 			// same value, so asking it removes a spelling and changes no behaviour; what it buys is that a second
 			// byte-record instance can never be taught to two of the three doors and missed at the third.
-			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.bufferSurfaceInstanceOf(box, layout: layout) as TypeNameId, range: range)
+			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.bufferSurfaceInstanceOf(box, layout: layout) as TypeNameId, range: range, exclusivity: OwnedHeapExclusivity.coOwned)
 			self.markBufferSurface(view, origin: EmptySourceText)
 			return view
 		end 'inlineManagedIsTheReceiver'

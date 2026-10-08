@@ -1,0 +1,1709 @@
+typealias ValueOriginCode = int(0 to u64.max)
+typealias ValueOriginColumn = Array with ValueOriginCode
+typealias ValueIdSet = Set with ValueId
+typealias FunctionRefNames = Map with (ValueId, ByteArray)
+typealias ClosureBindingArray = Array with ClosureBinding
+typealias SpecializedNodeArray = Array with SpecializedNode
+typealias SpecializedNodeKeys = Map with (String, ElementIndex)
+typealias ElementIndexArray = Array with ElementIndex
+typealias ResourceByInstance = Map with (GenericInstanceId, bool)
+typealias ResourceByName = Map with (ByteArray, bool)
+
+// What a value is, as far as writes through it go: a record this body minted (`OriginLocal`), or a
+// parameter's record or one reached by loading out of it (the two encodings from `FirstParameterOrigin`),
+// or nothing known (`OriginUnknown`). A record counts as minted here only when its owner claims it is the
+// sole one (`valueMintedSole`) or a callee returns a fresh one. Whatever else could reach it must have been
+// handed it by a write to a parameter, a global or a record this body does not own, and that write already
+// makes this body an effect. A load out of a minted record is unknown: it may hold a foreign record.
+// `OriginLocalDeep` is a minted record whose whole reachable graph was also minted here, so a deep
+// write through it stays inside the body; a minted record that may hold a parameter's graph or any
+// other foreign record stays `OriginLocal`, and a deep write through it is an effect.
+let OriginUnvisited = 0 as ValueOriginCode
+let OriginUnknown = 1 as ValueOriginCode
+let OriginLocal = 2 as ValueOriginCode
+let OriginLocalDeep = 3 as ValueOriginCode
+let FirstParameterOrigin = 4 as ValueOriginCode
+let OriginsPerParameter = 2 as ValueOriginCode
+
+function originIsLocal(code ValueOriginCode) returns bool
+	return code == OriginLocal or code == OriginLocalDeep
+end 'originIsLocal'
+
+function everyParamPosition() returns ParamPositionMask
+	var every = NoParamPositions
+
+	for position in 0 upto MaxAbiArgs 'eachPosition'
+		every = maskWithParam(every, param: position as ParamCount)
+	end 'eachPosition'
+
+	return every
+end 'everyParamPosition'
+
+function retainsItsOperand(callee ByteArray) returns bool
+	return callee.equals(MmRetainName) or callee.equals(ManagedRetainName) or callee.equals(StrRetainName)
+end 'retainsItsOperand'
+
+function releasesElementsOf(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: DestructorPrefix) or callee.equals(ManagedDecrefName) or callee.equals(ListDecrefName) or callee.equals(ListNodeDecrefName) or callee.equals(ManagedCursorDecrefName) or receiverWritingRuntimeCallee(callee)
+end 'releasesElementsOf'
+
+function parameterOrigin(position ParamCount) returns ValueOriginCode
+	return FirstParameterOrigin + (position as ValueOriginCode) * OriginsPerParameter
+end 'parameterOrigin'
+
+function withinParameterOrigin(position ParamCount) returns ValueOriginCode
+	return parameterOrigin(position) + 1
+end 'withinParameterOrigin'
+
+function originNamesAParameter(code ValueOriginCode) returns bool
+	return code >= FirstParameterOrigin
+end 'originNamesAParameter'
+
+function originIsWithin(code ValueOriginCode) returns bool
+	return originNamesAParameter(code) and ((code - FirstParameterOrigin) and 1) == 1
+end 'originIsWithin'
+
+function originParameterPosition(code ValueOriginCode) returns ParamCount
+	return ((code - FirstParameterOrigin) shr 1) as ParamCount
+end 'originParameterPosition'
+
+function joinOrigins(a ValueOriginCode, b ValueOriginCode) returns ValueOriginCode
+	if a == OriginUnvisited 'nothingYet'
+		return b
+	end 'nothingYet'
+
+	if b == OriginUnvisited or a == b 'sameAnswer'
+		return a
+	end 'sameAnswer'
+
+	if originNamesAParameter(a) and originNamesAParameter(b) and originParameterPosition(a) == originParameterPosition(b) 'oneParameter'
+		return withinParameterOrigin(originParameterPosition(a))
+	end 'oneParameter'
+
+	return OriginUnknown
+end 'joinOrigins'
+
+type MergeEdges
+	var phis as ValueIdArray
+	var incomings as ValueIdArray
+
+	static function create() returns MergeEdges
+		return Self{phis: ValueIdArray.create(), incomings: ValueIdArray.create()}
+	end 'create'
+
+	function note(phi ValueId, incoming ValueId)
+		self.phis.push(phi)
+		self.incomings.push(incoming)
+	end 'note'
+
+	function count() returns ElementIndex
+		return self.phis.count()
+	end 'count'
+
+	function phiAt(index ElementIndex) returns ValueId
+		return try self.phis.get(index) otherwise panic("MergeEdges.phiAt: {index} is below count()")
+	end 'phiAt'
+
+	function incomingAt(index ElementIndex) returns ValueId
+		return try self.incomings.get(index) otherwise panic("MergeEdges.incomingAt: {index} is below count()")
+	end 'incomingAt'
+end 'MergeEdges'
+
+type CalleeFacts
+	let funcIndexByName as FuncIndexByName
+	var flags as BoolArray
+	var retMasks as ParamPositionMaskArray
+	var retBottoms as BoolArray
+	var imports as ParamPositionMaskArray
+
+	static function create(funcIndexByName FuncIndexByName, functionCount ElementIndex) returns CalleeFacts
+		var flags = BoolArray.create()
+		flags.refill(functionCount, value: false)
+		var retMasks = ParamPositionMaskArray.create()
+		retMasks.refill(functionCount, value: NoParamPositions)
+		var retBottoms = BoolArray.create()
+		retBottoms.refill(functionCount, value: true)
+		var imports = ParamPositionMaskArray.create()
+		imports.refill(functionCount, value: everyParamPosition())
+		return Self{funcIndexByName: funcIndexByName, flags: flags, retMasks: retMasks, retBottoms: retBottoms, imports: imports}
+	end 'create'
+
+	function holds(callee ByteArray) returns bool
+		let index = try self.funcIndexByName.get(callee) otherwise return false
+		return try self.flags.get(index) otherwise panic("CalleeFacts.holds: {index} is past the {self.flags.count()} functions")
+	end 'holds'
+
+	function note(index ElementIndex)
+		try self.flags.set(index, value: true) otherwise panic("CalleeFacts.note: {index} is past the {self.flags.count()} functions")
+	end 'note'
+
+	function returnsLocalAt(index ElementIndex) returns bool
+		return try self.flags.get(index) otherwise panic("CalleeFacts.returnsLocalAt: {index} is past the {self.flags.count()} functions")
+	end 'returnsLocalAt'
+
+	function noteReturned(index ElementIndex, mask ParamPositionMask, bottom bool)
+		try self.retMasks.set(index, value: mask) otherwise panic("CalleeFacts.noteReturned: {index} is past the {self.retMasks.count()} functions")
+		try self.retBottoms.set(index, value: bottom) otherwise panic("CalleeFacts.noteReturned: {index} is past the {self.retBottoms.count()} functions")
+	end 'noteReturned'
+
+	function returnedMaskAt(index ElementIndex) returns ParamPositionMask
+		return summaryMaskAt(self.retMasks, index: index)
+	end 'returnedMaskAt'
+
+	function returnedBottomAt(index ElementIndex) returns bool
+		return try self.retBottoms.get(index) otherwise panic("CalleeFacts.returnedBottomAt: {index} is past the {self.retBottoms.count()} functions")
+	end 'returnedBottomAt'
+
+	function publishImports(masks ParamPositionMaskArray)
+		self.imports = masks
+	end 'publishImports'
+
+	// Per node, not per function: a generic function's base node merges every conformer a dispatch
+	// inside it may reach, while a specialized node sees only its own. A node nothing has published
+	// reads as importing into every parameter.
+	function importsAt(node ElementIndex) returns ParamPositionMask
+		return try self.imports.get(node) otherwise everyParamPosition()
+	end 'importsAt'
+end 'CalleeFacts'
+
+type ValueOrigins
+	let signatures as ProgramSignatures
+	let calleeFacts as CalleeFacts
+	var codes as ValueOriginColumn
+	var valueRefs as FunctionRefNames
+	var codeRefs as FunctionRefNames
+	var boxCode as FunctionRefNames
+	var ambiguousBoxes as ValueIdSet
+	var merges as MergeEdges
+	// Per minted record: the parameters whose graph it may hold, and whether it may hold a record from
+	// anywhere else. Aliases of one record share both.
+	var taintMasks as ParamPositionMaskArray
+	var taintBottoms as BoolArray
+	var taintChanged as bool
+
+	static function empty(signatures ProgramSignatures, calleeFacts CalleeFacts) returns ValueOrigins
+		return Self{signatures: signatures, calleeFacts: calleeFacts, codes: ValueOriginColumn.create(), valueRefs: FunctionRefNames.create(), codeRefs: FunctionRefNames.create(), boxCode: FunctionRefNames.create(), ambiguousBoxes: ValueIdSet.create(), merges: MergeEdges.create(), taintMasks: ParamPositionMaskArray.create(), taintBottoms: BoolArray.create(), taintChanged: false}
+	end 'empty'
+
+	static function ofBody(module MaxonModule, func IrFunction, signatures ProgramSignatures, calleeFacts CalleeFacts) returns ValueOrigins
+		var origins = ValueOrigins.empty(signatures, calleeFacts: calleeFacts)
+		origins.populate(module, func: func)
+		return origins
+	end 'ofBody'
+
+	function originOf(value ValueId) returns ValueOriginCode
+		let code = self.raw(value)
+		return OriginUnknown if code == OriginUnvisited else code
+	end 'originOf'
+
+	function raw(value ValueId) returns ValueOriginCode
+		return try self.codes.get(value) otherwise OriginUnknown
+	end 'raw'
+
+	function namedFunction(value ValueId) returns ByteArray throws MapError
+		return try self.valueRefs.get(value)
+	end 'namedFunction'
+
+	function closureCode(value ValueId) returns ByteArray throws AbsentError
+		if not originIsLocal(self.originOf(value)) or self.ambiguousBoxes.contains(value) 'notOneClosureBox'
+			throw AbsentError.absent
+		end 'notOneClosureBox'
+
+		return try self.boxCode.get(value) otherwise throw AbsentError.absent
+	end 'closureCode'
+
+	function populate(module MaxonModule, func IrFunction)
+		let valueCount = func.valueTags.count()
+		self.codes.refill(valueCount, value: OriginUnvisited)
+
+		for position in 0 upto func.paramCount 'eachParameter'
+			try self.codes.set(position, value: parameterOrigin(position as ParamCount)) otherwise panic("ValueOrigins.populate: parameter {position} is past the {valueCount} values of '{String.from(func.name)}'")
+		end 'eachParameter'
+
+		let soleKept = func.valueMintedSole.count() == valueCount
+		self.collectDefinitions(module, func: func)
+		var changed = true
+
+		while changed 'toAFixedPoint'
+			let refined = self.refine(module, func: func, soleKept: soleKept)
+			let joined = self.joinMerges()
+			changed = refined or joined
+		end 'toAFixedPoint'
+
+		self.settleUndefined()
+		changed = true
+
+		while changed 'againWithWhatNoOpDefines'
+			let refined = self.refine(module, func: func, soleKept: soleKept)
+			let joined = self.joinMerges()
+			changed = refined or joined
+		end 'againWithWhatNoOpDefines'
+	end 'populate'
+
+	// No op defines the error flags of `tryCall`, `tryAwait` and `witnessTryDispatch`. Left unvisited,
+	// a merge would read them as "no information" and take its other incoming's answer.
+	function settleUndefined()
+		var isMerge = BoolArray.create()
+		isMerge.refill(self.codes.count(), value: false)
+
+		for index in 0 upto self.merges.count() 'eachMerge'
+			try isMerge.set(self.merges.phiAt(index), value: true) otherwise panic("ValueOrigins.settleUndefined: phi {self.merges.phiAt(index)} is past the {self.codes.count()} values")
+		end 'eachMerge'
+
+		for value in 0 upto self.codes.count() 'eachValue'
+			if self.raw(value) == OriginUnvisited and not (try isMerge.get(value) otherwise panic("ValueOrigins.settleUndefined: isMerge.get OOB at {value}")) 'definedByNoOp'
+				_ = self.settle(value, after: OriginUnknown)
+			end 'definedByNoOp'
+		end 'eachValue'
+	end 'settleUndefined'
+
+	function collectDefinitions(module MaxonModule, func IrFunction)
+		var positions = OptionalElementIndexColumn.absent(func.nextBlockId)
+
+		for position in 0 upto func.blockRefs.count() 'indexBlocks'
+			let block = try module.blocks.get(try func.blockRefs.get(position) otherwise panic("ValueOrigins.collectDefinitions: blockRefs.get OOB at {position}")) otherwise panic("ValueOrigins.collectDefinitions: blockRef at {position} not in module.blocks")
+			positions.set(block.id, value: position)
+		end 'indexBlocks'
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("ValueOrigins.collectDefinitions: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.opRefs 'eachOp'
+				self.noteDefinition(try module.ops.get(opIdx) otherwise panic("ValueOrigins.collectDefinitions: opIdx {opIdx} not in module.ops"))
+			end 'eachOp'
+
+			for edge in block.branchEdges 'eachEdge'
+				let targetPosition = try positions.get(edge.targetBlockId) otherwise panic("ValueOrigins.collectDefinitions: branch edge names block {edge.targetBlockId}, which '{String.from(func.name)}' does not hold")
+				let target = try module.blocks.get(try func.blockRefs.get(targetPosition) otherwise panic("ValueOrigins.collectDefinitions: blockRefs.get OOB at {targetPosition}")) otherwise panic("ValueOrigins.collectDefinitions: blockRef at {targetPosition} not in module.blocks")
+
+				for index in 0 upto edge.argIds.count() 'eachBlockArg'
+					let phi = (try target.blockArgs.get(index) otherwise panic("ValueOrigins.collectDefinitions: block {target.id} takes fewer arguments than the edge passes")).valueId
+					self.merges.note(phi, incoming: try edge.argIds.get(index) otherwise panic("ValueOrigins.collectDefinitions: argIds.get OOB at {index}"))
+				end 'eachBlockArg'
+			end 'eachEdge'
+		end 'eachBlock'
+	end 'collectDefinitions'
+
+	function noteDefinition(op MaxonOp)
+		match op 'op'
+			functionRef(result, funcName, form) then self.noteFunctionRef(result, name: funcName, form: form)
+			storeIndirect(addr, offset, value, _) then self.noteStore(addr, offset: offset, value: value)
+			call or
+				tryCall or
+				literal or
+				ret or
+				retVoid or
+				binOp or
+				unaryOp or
+				compare or
+				condBranch or
+				branch or
+				globalAddr or
+				loadIndirect or
+				stringLiteral or
+				throwError or
+				propagateError or
+				panicAbort or
+				indirectCall or
+				asyncCall or
+				await or
+				tryAwait or
+				sizeofType or
+				constArrayLiteral or
+				switch or
+				panicAbortValue or
+				errorFlagEncode or
+				serviceSpawn or
+				serviceSend or
+				serviceReplyCell or
+				immortalStructRecord or
+				immortalStringTable or
+				covPoint or
+				rawIntrinsic or
+				witnessDispatch or
+				witnessTryDispatch or
+				existentialWitness then break 'op'
+		end 'op'
+	end 'noteDefinition'
+
+	function noteFunctionRef(result ValueId, name ByteArray, form FunctionRefForm)
+		match form 'form'
+			functionValue then self.valueRefs.upsert(result, value: name)
+			codeAddress then self.codeRefs.upsert(result, value: name)
+		end 'form'
+	end 'noteFunctionRef'
+
+	function noteStore(addr ValueId, offset ByteOffset, value ValueId)
+		if offset != FunctionRecordCodeOffset 'notTheCodeSlot'
+			return
+		end 'notTheCodeSlot'
+
+		let name = try self.codeRefs.get(value) otherwise return
+
+		if self.boxCode.contains(addr) 'storedTwice'
+			self.ambiguousBoxes.insert(addr)
+			return
+		end 'storedTwice'
+
+		self.boxCode.upsert(addr, value: name)
+	end 'noteStore'
+
+	function refine(module MaxonModule, func IrFunction, soleKept bool) returns bool
+		var changed = false
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("ValueOrigins.refine: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.opRefs 'eachOp'
+				if self.refineOp(try module.ops.get(opIdx) otherwise panic("ValueOrigins.refine: opIdx {opIdx} not in module.ops"), func: func, soleKept: soleKept) 'moved'
+					changed = true
+				end 'moved'
+			end 'eachOp'
+		end 'eachBlock'
+
+		return changed
+	end 'refine'
+
+	function refineOp(op MaxonOp, func IrFunction, soleKept bool) returns bool
+		match maxonOpResultValue(op) 'result'
+			none then return false
+			value(id) then return self.settle(id, after: self.originOfResult(op, result: id, func: func, soleKept: soleKept))
+		end 'result'
+	end 'refineOp'
+
+	function settle(value ValueId, after ValueOriginCode) returns bool
+		if after == self.raw(value) 'unchanged'
+			return false
+		end 'unchanged'
+
+		try self.codes.set(value, value: after) otherwise panic("ValueOrigins.settle: value {value} is past the {self.codes.count()} values of the body")
+		return true
+	end 'settle'
+
+	function originOfResult(op MaxonOp, result ValueId, func IrFunction, soleKept bool) returns ValueOriginCode
+		let before = self.raw(result)
+
+		if before == OriginLocal or before == OriginUnknown 'alreadyFinal'
+			return before
+		end 'alreadyFinal'
+
+		if soleKept and (try func.valueMintedSole.get(result) otherwise panic("ValueOrigins.originOfResult: valueMintedSole.get OOB at {result}")) 'mintedHere'
+			return OriginLocal
+		end 'mintedHere'
+
+		return match op 'op'
+			call(_, callee, args, _, _, _, _, _) gives self.callResultOrigin(callee, args: args)
+			tryCall(_, _, callee, _, _, _, _, _, _) gives OriginLocal if self.callReturnsAFreshRecord(callee) else OriginUnknown
+			loadIndirect(_, addr, _, _) gives self.withinOrigin(addr)
+			literal or
+				ret or
+				retVoid or
+				binOp or
+				unaryOp or
+				compare or
+				condBranch or
+				branch or
+				globalAddr or
+				storeIndirect or
+				stringLiteral or
+				throwError or
+				propagateError or
+				panicAbort or
+				functionRef or
+				indirectCall or
+				asyncCall or
+				await or
+				tryAwait or
+				sizeofType or
+				constArrayLiteral or
+				switch or
+				panicAbortValue or
+				errorFlagEncode or
+				serviceSpawn or
+				serviceSend or
+				serviceReplyCell or
+				immortalStructRecord or
+				immortalStringTable or
+				covPoint or
+				rawIntrinsic or
+				witnessDispatch or
+				witnessTryDispatch or
+				existentialWitness gives OriginUnknown
+		end 'op'
+	end 'originOfResult'
+
+	function startTaint()
+		self.taintMasks.refill(self.codes.count(), value: NoParamPositions)
+		self.taintBottoms.refill(self.codes.count(), value: false)
+		self.taintChanged = false
+	end 'startTaint'
+
+	function beginTaintRound()
+		self.taintChanged = false
+	end 'beginTaintRound'
+
+	function taintMoved() returns bool
+		return self.taintChanged
+	end 'taintMoved'
+
+	function taintMaskOf(value ValueId) returns ParamPositionMask
+		return try self.taintMasks.get(value) otherwise NoParamPositions
+	end 'taintMaskOf'
+
+	function taintBottomOf(value ValueId) returns bool
+		return try self.taintBottoms.get(value) otherwise true
+	end 'taintBottomOf'
+
+	function setTaint(value ValueId, mask ParamPositionMask, bottom bool)
+		if mask == self.taintMaskOf(value) and bottom == self.taintBottomOf(value) 'unchanged'
+			return
+		end 'unchanged'
+
+		try self.taintMasks.set(value, value: mask) otherwise panic("ValueOrigins.setTaint: value {value} is past the {self.taintMasks.count()} values")
+		try self.taintBottoms.set(value, value: bottom) otherwise panic("ValueOrigins.setTaint: value {value} is past the {self.taintBottoms.count()} values")
+		self.taintChanged = true
+	end 'setTaint'
+
+	function unify(a ValueId, b ValueId)
+		let mask = self.taintMaskOf(a) or self.taintMaskOf(b)
+		let bottom = self.taintBottomOf(a) or self.taintBottomOf(b)
+		self.setTaint(a, mask: mask, bottom: bottom)
+		self.setTaint(b, mask: mask, bottom: bottom)
+	end 'unify'
+
+	function taintForeign(value ValueId)
+		self.setTaint(value, mask: self.taintMaskOf(value), bottom: true)
+	end 'taintForeign'
+
+	function isRecordTyped(func IrFunction, value ValueId) returns bool
+		return not tagIsAScalarWhateverIsDeclared(try func.valueTags.get(value) otherwise ValueTypeTag.unresolved)
+	end 'isRecordTyped'
+
+	function absorb(into ValueId, from ValueId, func IrFunction)
+		if not self.isRecordTyped(func, value: from) 'nothingToHold'
+			return
+		end 'nothingToHold'
+
+		let origin = self.originOf(from)
+
+		if originIsLocal(origin) 'anotherRecordOfThisBody'
+			self.unify(into, b: from)
+			return
+		end 'anotherRecordOfThisBody'
+
+		if originNamesAParameter(origin) 'aParametersGraph'
+			self.setTaint(into, mask: self.taintMaskOf(into) or maskWithParam(NoParamPositions, param: originParameterPosition(origin)), bottom: self.taintBottomOf(into))
+			return
+		end 'aParametersGraph'
+
+		self.taintForeign(into)
+	end 'absorb'
+
+	function storeInto(addr ValueId, value ValueId, func IrFunction)
+		if originIsLocal(self.originOf(addr)) 'aRecordOfThisBody'
+			self.absorb(addr, from: value, func: func)
+		end 'aRecordOfThisBody'
+	end 'storeInto'
+
+	function joinMergeTaints()
+		for index in 0 upto self.merges.count() 'eachMerge'
+			let phi = self.merges.phiAt(index)
+			let incoming = self.merges.incomingAt(index)
+
+			if originIsLocal(self.originOf(phi)) and originIsLocal(self.originOf(incoming)) 'sameRecord'
+				self.unify(phi, b: incoming)
+			end 'sameRecord'
+		end 'eachMerge'
+	end 'joinMergeTaints'
+
+	function convertDeep()
+		for value in 0 upto self.codes.count() 'eachValue'
+			if self.raw(value) == OriginLocal and self.taintMaskOf(value) == NoParamPositions and not self.taintBottomOf(value) 'holdsNothingForeign'
+				try self.codes.set(value, value: OriginLocalDeep) otherwise panic("ValueOrigins.convertDeep: value {value} is past the {self.codes.count()} values")
+			end 'holdsNothingForeign'
+		end 'eachValue'
+	end 'convertDeep'
+
+	function callResultOrigin(callee ByteArray, args ValueIdArray) returns ValueOriginCode
+		if retainsItsOperand(callee) 'aSecondNameForTheOperand'
+			return self.raw(try args.get(0) otherwise return OriginUnknown)
+		end 'aSecondNameForTheOperand'
+
+		return OriginLocal if self.callReturnsAFreshRecord(callee) else OriginUnknown
+	end 'callResultOrigin'
+
+	function callReturnsAFreshRecord(callee ByteArray) returns bool
+		return self.calleeFacts.holds(callee) or self.signatures.returnsFreshValue(callee)
+	end 'callReturnsAFreshRecord'
+
+	function everyReturnIsLocal(module MaxonModule, func IrFunction) returns bool
+		let returned = self.returnedValues(module, func: func)
+
+		if returned.isEmpty() 'nothingReturnsAValue'
+			return false
+		end 'nothingReturnsAValue'
+
+		for value in returned 'eachReturned'
+			if not originIsLocal(self.originOf(value)) 'notMintedHere'
+				return false
+			end 'notMintedHere'
+		end 'eachReturned'
+
+		return true
+	end 'everyReturnIsLocal'
+
+	function returnedValues(module MaxonModule, func IrFunction) returns ValueIdArray
+		var returned = ValueIdArray.create()
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("ValueOrigins.returnedValues: blockRef from func.blockRefs not in module.blocks")
+
+			if self.blockPanics(module, block: block) 'neverReachesItsReturn'
+				continue
+			end 'neverReachesItsReturn'
+
+			match block.terminator 'terminator'
+				opIndex(index) then self.noteReturn(try module.ops.get(index) otherwise panic("ValueOrigins.returnedValues: terminator op {index} not in module.ops"), into: returned)
+				unset or
+					dead or
+					fallthrough then break 'terminator'
+			end 'terminator'
+		end 'eachBlock'
+
+		return returned
+	end 'returnedValues'
+
+	// The parser ends an aborting block with a `ret` of a placeholder that never runs; counting it would
+	// make every `otherwise panic(...)` turn the function's return foreign.
+	function blockPanics(module MaxonModule, block IrBlock) returns bool
+		for opIdx in block.opRefs 'eachOp'
+			if opAbortsTheProcess(try module.ops.get(opIdx) otherwise panic("ValueOrigins.blockPanics: opIdx {opIdx} not in module.ops")) 'aborts'
+				return true
+			end 'aborts'
+		end 'eachOp'
+
+		return false
+	end 'blockPanics'
+
+	function noteReturn(op MaxonOp, into ValueIdArray)
+		match op 'op'
+			ret(retVal) then into.push(retVal)
+			call or
+				tryCall or
+				literal or
+				retVoid or
+				binOp or
+				unaryOp or
+				compare or
+				condBranch or
+				branch or
+				globalAddr or
+				loadIndirect or
+				storeIndirect or
+				stringLiteral or
+				throwError or
+				propagateError or
+				panicAbort or
+				functionRef or
+				indirectCall or
+				asyncCall or
+				await or
+				tryAwait or
+				sizeofType or
+				constArrayLiteral or
+				switch or
+				panicAbortValue or
+				errorFlagEncode or
+				serviceSpawn or
+				serviceSend or
+				serviceReplyCell or
+				immortalStructRecord or
+				immortalStringTable or
+				covPoint or
+				rawIntrinsic or
+				witnessDispatch or
+				witnessTryDispatch or
+				existentialWitness then break 'op'
+		end 'op'
+	end 'noteReturn'
+
+	function withinOrigin(addr ValueId) returns ValueOriginCode
+		let code = self.raw(addr)
+
+		if code == OriginUnvisited 'notYetKnown'
+			return OriginUnvisited
+		end 'notYetKnown'
+
+		if originNamesAParameter(code) 'inAParameter'
+			return withinParameterOrigin(originParameterPosition(code))
+		end 'inAParameter'
+
+		return OriginUnknown
+	end 'withinOrigin'
+
+	function joinMerges() returns bool
+		var changed = false
+
+		for index in 0 upto self.merges.count() 'eachMerge'
+			let phi = self.merges.phiAt(index)
+
+			if self.settle(phi, after: joinOrigins(self.raw(phi), b: self.raw(self.merges.incomingAt(index)))) 'moved'
+				changed = true
+			end 'moved'
+		end 'eachMerge'
+
+		return changed
+	end 'joinMerges'
+end 'ValueOrigins'
+
+union ContextInstance
+	none
+	instance(id GenericInstanceId)
+end 'ContextInstance'
+
+type ClosureBinding
+	export let position as ParamCount
+	export let node as ElementIndex
+
+	static function create(position ParamCount, node ElementIndex) returns ClosureBinding
+		return Self{position: position, node: node}
+	end 'create'
+end 'ClosureBinding'
+
+type EffectContext
+	export let instance as ContextInstance
+	export let bindings as ClosureBindingArray
+
+	static function plain() returns EffectContext
+		return Self{instance: ContextInstance.none, bindings: ClosureBindingArray.create()}
+	end 'plain'
+
+	static function ofInstance(id GenericInstanceId) returns EffectContext
+		return Self{instance: ContextInstance.instance(id), bindings: ClosureBindingArray.create()}
+	end 'ofInstance'
+
+	function withBinding(position ParamCount, node ElementIndex) returns EffectContext
+		var extended = self.bindings.clone()
+		extended.push(ClosureBinding.create(position, node: node))
+		return Self{instance: self.instance, bindings: extended}
+	end 'withBinding'
+
+	function instanceIsNone() returns bool
+		return match self.instance 'instance'
+			none gives true
+			instance gives false
+		end 'instance'
+	end 'instanceIsNone'
+
+	function isPlain() returns bool
+		return self.bindings.isEmpty() and self.instanceIsNone()
+	end 'isPlain'
+
+	function instanceId() returns GenericInstanceId throws AbsentError
+		match self.instance 'instance'
+			none then throw AbsentError.absent
+			instance(id) then return id
+		end 'instance'
+	end 'instanceId'
+
+	function sameInstance() returns EffectContext
+		return match self.instance 'instance'
+			none gives EffectContext.plain()
+			instance(id) gives EffectContext.ofInstance(id)
+		end 'instance'
+	end 'sameInstance'
+
+	function bindingAt(position ParamCount) returns ElementIndex throws AbsentError
+		for binding in self.bindings 'eachBinding'
+			if binding.position == position 'thisOne'
+				return binding.node
+			end 'thisOne'
+		end 'eachBinding'
+
+		throw AbsentError.absent
+	end 'bindingAt'
+
+	function key(functionIndex ElementIndex) returns String
+		var text = "{functionIndex}|"
+
+		match self.instance 'instance'
+			none then text.append("-")
+			instance(id) then text.append("{id}")
+		end 'instance'
+
+		for binding in self.bindings 'eachBinding'
+			text.append("|{binding.position}={binding.node}")
+		end 'eachBinding'
+
+		return text
+	end 'key'
+end 'EffectContext'
+
+type SpecializedNode
+	export let functionIndex as ElementIndex
+	export let context as EffectContext
+
+	static function create(functionIndex ElementIndex, context EffectContext) returns SpecializedNode
+		return Self{functionIndex: functionIndex, context: context}
+	end 'create'
+end 'SpecializedNode'
+
+function ownerTypeOf(qualified ByteArray) returns ByteArray throws AbsentError
+	match splitQualifiedName(overloadRegistrationBaseName(qualified)) 'owner'
+		parts(typeName, _) then return typeName
+		notQualified then throw AbsentError.absent
+	end 'owner'
+end 'ownerTypeOf'
+
+type EffectNodes
+	let signatures as ProgramSignatures
+	export let functions as IrFunctionArray
+	export let dispatch as WitnessDispatchTargets
+	var keys as SpecializedNodeKeys
+	var specialized as SpecializedNodeArray
+	export var current as EffectContext
+
+	static function create(signatures ProgramSignatures, functions IrFunctionArray, dispatch WitnessDispatchTargets) returns EffectNodes
+		return Self{signatures: signatures, functions: functions, dispatch: dispatch, keys: SpecializedNodeKeys.create(), specialized: SpecializedNodeArray.create(), current: EffectContext.plain()}
+	end 'create'
+
+	function baseCount() returns ElementIndex
+		return self.functions.count()
+	end 'baseCount'
+
+	function totalCount() returns ElementIndex
+		return self.baseCount() + self.specialized.count()
+	end 'totalCount'
+
+	function specializedAt(index ElementIndex) returns SpecializedNode
+		return try self.specialized.get(index) otherwise panic("EffectNodes.specializedAt: {index} is below the {self.specialized.count()} specialized nodes")
+	end 'specializedAt'
+
+	function functionIndexOf(node ElementIndex) returns ElementIndex
+		if node < self.baseCount() 'aBaseFunction'
+			return node
+		end 'aBaseFunction'
+
+		return self.specializedAt(node - self.baseCount()).functionIndex
+	end 'functionIndexOf'
+
+	function nodeFor(functionIndex ElementIndex, context EffectContext) returns ElementIndex
+		if context.isPlain() 'theBaseNode'
+			return functionIndex
+		end 'theBaseNode'
+
+		let key = context.key(functionIndex)
+
+		if let known = try self.keys.get(key) 'alreadyMinted'
+			return known
+		end 'alreadyMinted'
+
+		let node = self.totalCount()
+		self.specialized.push(SpecializedNode.create(functionIndex, context: context))
+		self.keys.upsert(key, value: node)
+		return node
+	end 'nodeFor'
+
+	function calleeInstance(callee ByteArray, args ValueIdArray, func IrFunction, result ValueId, takesReceiver bool) returns GenericInstanceId throws AbsentError
+		let owner = try ownerTypeOf(callee)
+
+		if self.signatures.structTypeParamsOf(owner).isEmpty() 'notAMethodOfAGenericType'
+			throw AbsentError.absent
+		end 'notAMethodOfAGenericType'
+
+		if takesReceiver 'aMethod'
+			return try self.receiverInstance(args, func: func, owner: owner)
+		end 'aMethod'
+
+		return try self.resultInstance(result, func: func, owner: owner)
+	end 'calleeInstance'
+
+	function resultInstance(result ValueId, func IrFunction, owner ByteArray) returns GenericInstanceId throws AbsentError
+		if (try func.valueTags.get(result) otherwise throw AbsentError.absent) != ValueTypeTag.genericInstance 'notAnInstance'
+			throw AbsentError.absent
+		end 'notAnInstance'
+
+		let id = try self.resolvedThroughContext((try func.valueNameIds.get(result) otherwise throw AbsentError.absent) as GenericInstanceId)
+
+		if not self.signatures.instanceArgsAreFullyConcrete(id) or not self.signatures.genericInstanceBaseName(id).equals(owner) 'notThisTypesConcreteInstance'
+			throw AbsentError.absent
+		end 'notThisTypesConcreteInstance'
+
+		return id
+	end 'resultInstance'
+
+	function receiverInstance(args ValueIdArray, func IrFunction, owner ByteArray) returns GenericInstanceId throws AbsentError
+		let receiver = try args.get(0) otherwise throw AbsentError.absent
+		let tag = try func.valueTags.get(receiver) otherwise throw AbsentError.absent
+		let nameId = try func.valueNameIds.get(receiver) otherwise throw AbsentError.absent
+
+		if tag == ValueTypeTag.structRef 'selfOfTheContext'
+			let outer = try self.current.instanceId()
+
+			if self.signatures.genericInstanceBaseName(outer).equals(owner) 'sameType'
+				return outer
+			end 'sameType'
+
+			throw AbsentError.absent
+		end 'selfOfTheContext'
+
+		if tag != ValueTypeTag.genericInstance 'notAnInstance'
+			throw AbsentError.absent
+		end 'notAnInstance'
+
+		let id = try self.resolvedThroughContext(nameId as GenericInstanceId)
+
+		if not self.signatures.instanceArgsAreFullyConcrete(id) or not self.signatures.genericInstanceBaseName(id).equals(owner) 'notThisTypesConcreteInstance'
+			throw AbsentError.absent
+		end 'notThisTypesConcreteInstance'
+
+		return id
+	end 'receiverInstance'
+
+	function resolvedThroughContext(id GenericInstanceId) returns GenericInstanceId throws AbsentError
+		let outer = try self.current.instanceId() otherwise return id
+		let resolved = self.signatures.substituteThroughInstance(MaxonType.genericInstance(id), id: outer)
+
+		if maxonTypeTag(resolved) != ValueTypeTag.genericInstance 'notAnInstance'
+			throw AbsentError.absent
+		end 'notAnInstance'
+
+		return genericInstanceIdOf(resolved)
+	end 'resolvedThroughContext'
+
+	// The conformer's own members for the concrete type argument; absent whenever the instance, the
+	// conformer or a member is in doubt, so the caller falls back to every candidate of that name.
+	function contextualTargets(func IrFunction, args ValueIdArray, requirement ByteArray, candidates ByteArrayArray, funcIndexByName FuncIndexByName, runtimeTier FunctionNameSet) returns ElementIndexArray throws AbsentError
+		let outer = try self.current.instanceId()
+		let receiver = try args.get(0) otherwise throw AbsentError.absent
+		let token = (try func.valueNameIds.get(receiver) otherwise throw AbsentError.absent) as TypeParamId
+		let owner = try self.signatures.typeParamOwnerOf(token) otherwise throw AbsentError.absent
+
+		if not owner.declaringTypeName.equals(self.signatures.genericInstanceBaseName(outer)) 'anotherTypesParameter'
+			throw AbsentError.absent
+		end 'anotherTypesParameter'
+
+		let conformer = self.signatures.conformerTypeArgName(outer, position: owner.position).toByteArray()
+		var targets = ElementIndexArray.create()
+
+		for candidate in candidates 'eachCandidate'
+			let candidateOwner = try ownerTypeOf(candidate)
+
+			if not candidateOwner.equals(conformer) 'anotherConformer'
+				continue
+			end 'anotherConformer'
+
+			if runtimeTier.contains(candidate) 'opaque'
+				throw AbsentError.absent
+			end 'opaque'
+
+			let index = try funcIndexByName.get(candidate) otherwise throw AbsentError.absent
+
+			if self.signatures.structTypeParamsOf(candidateOwner).isEmpty() 'aPlainType'
+				targets.push(index)
+				continue
+			end 'aPlainType'
+
+			let argumentInstance = try self.signatures.conformerTypeArgInstance(outer, position: owner.position) otherwise throw AbsentError.absent
+
+			targets.push(self.nodeFor(index, context: EffectContext.ofInstance(argumentInstance)))
+		end 'eachCandidate'
+
+		if targets.isEmpty() and not builtinConformerSynthesizesRequirement(conformer, requirement: requirement) 'noConformerMember'
+			throw AbsentError.absent
+		end 'noConformerMember'
+
+		return targets
+	end 'contextualTargets'
+end 'EffectNodes'
+
+// A dense verdict per function: true only for one that provably has no effect beyond its result. The one
+// consumer refuses a program on a true, so everything this walk cannot see reads as an effect — an
+// undeclared callee, a spawn, an await, a write whose target is not known — and the cost of that is a
+// missed diagnostic, never a refused legal program.
+module function buildEffectFreeSummary(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns BoolArray
+	var builder = EffectSummaryBuilder.create(project.funcSignatures, signatures: signatures, typeNames: project.typeNames, funcNames: funcNames, runtimeTier: project.libraryFacts.runtimeTier)
+	return builder.build(module, functions: funcNames.functions, calleesFirst: calleesFirstOrder(module, funcNames: funcNames))
+end 'buildEffectFreeSummary'
+
+type EffectSummaryBuilder
+	let funcSignatures as FuncSignatureMap
+	let signatures as ProgramSignatures
+	let typeNames as TypeNameInterner
+	var ownersByInstance as ResourceByInstance
+	var ownersByName as ResourceByName
+	let funcIndexByName as FuncIndexByName
+	let runtimeTier as FunctionNameSet
+	var nodes as EffectNodes
+	let calleeFacts as CalleeFacts
+	var facts as ValueOrigins
+	var hard as BoolArray
+	var taintEnabled as bool
+
+	// The parameters into whose graph a body may store a record it did not create.
+	var imports as ParamPositionMaskArray
+
+	// The parameters whose own record a body writes, and those whose graph beyond that record it writes.
+	// A caller's minted record absorbs a shallow write; a deep one may reach records it merely holds.
+	var shallow as ParamPositionMaskArray
+	var deep as ParamPositionMaskArray
+	var siteCallers as CsrColumn
+	var siteCallees as CsrColumn
+	var siteFirstOrigins as CsrColumn
+	var siteOriginCounts as CsrColumn
+	var siteOrigins as ValueOriginColumn
+
+	static function create(funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner, funcNames FunctionNameIndex, runtimeTier FunctionNameSet) returns EffectSummaryBuilder
+		let dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
+		let calleeFacts = CalleeFacts.create(funcNames.byName, functionCount: funcNames.functions.count())
+
+		return Self{funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames, ownersByInstance: ResourceByInstance.create(), ownersByName: ResourceByName.create(), funcIndexByName: funcNames.byName, runtimeTier: runtimeTier, nodes: EffectNodes.create(signatures, functions: funcNames.functions, dispatch: dispatch), calleeFacts: calleeFacts, facts: ValueOrigins.empty(signatures, calleeFacts: calleeFacts), hard: BoolArray.create(), taintEnabled: false, imports: ParamPositionMaskArray.create(), shallow: ParamPositionMaskArray.create(), deep: ParamPositionMaskArray.create(), siteCallers: CsrColumn.create(), siteCallees: CsrColumn.create(), siteFirstOrigins: CsrColumn.create(), siteOriginCounts: CsrColumn.create(), siteOrigins: ValueOriginColumn.create()}
+	end 'create'
+
+	// The first walk settles every node's imports; the second reads them to tell which minted records
+	// hold only what their body made, so the two cannot be one walk.
+	function build(module MaxonModule, functions IrFunctionArray, calleesFirst CsrColumn) returns BoolArray
+		self.grow(self.nodes.baseCount())
+		self.settleLocalReturns(module, functions: functions, calleesFirst: calleesFirst)
+		self.walkEveryNode(module, functions: functions)
+		self.settle()
+		self.calleeFacts.publishImports(self.imports)
+		self.settleDeepFreshness(module, functions: functions, calleesFirst: calleesFirst)
+		self.restart()
+		self.taintEnabled = true
+		self.walkEveryNode(module, functions: functions)
+		self.settle()
+		return self.verdicts()
+	end 'build'
+
+	function walkEveryNode(module MaxonModule, functions IrFunctionArray)
+		let baseCount = self.nodes.baseCount()
+
+		for index in 0 upto baseCount 'eachFunction'
+			self.nodes.current = EffectContext.plain()
+			self.walkNode(index, functionIndex: index, module: module, functions: functions)
+		end 'eachFunction'
+
+		var next = baseCount
+
+		while next < self.nodes.totalCount() 'eachSpecializedNode'
+			self.grow(next + 1)
+			let specialized = self.nodes.specializedAt(next - baseCount)
+			self.nodes.current = specialized.context
+			self.walkNode(next, functionIndex: specialized.functionIndex, module: module, functions: functions)
+			next = next + 1
+		end 'eachSpecializedNode'
+
+		self.grow(self.nodes.totalCount())
+	end 'walkEveryNode'
+
+	function restart()
+		self.hard = BoolArray.create()
+		self.imports = ParamPositionMaskArray.create()
+		self.shallow = ParamPositionMaskArray.create()
+		self.deep = ParamPositionMaskArray.create()
+		self.siteCallers = CsrColumn.create()
+		self.siteCallees = CsrColumn.create()
+		self.siteFirstOrigins = CsrColumn.create()
+		self.siteOriginCounts = CsrColumn.create()
+		self.siteOrigins = ValueOriginColumn.create()
+		self.grow(self.nodes.totalCount())
+	end 'restart'
+
+	function settleLocalReturns(module MaxonModule, functions IrFunctionArray, calleesFirst CsrColumn)
+		for index in calleesFirst 'eachCalleeBeforeItsCallers'
+			let func = try functions.get(index) otherwise panic("EffectSummaryBuilder.settleLocalReturns: functions.get OOB at {index}")
+
+			if bodyIsUnreadable(func) or functionReturnsNothing(func) 'nothingToLearn'
+				continue
+			end 'nothingToLearn'
+
+			if ValueOrigins.ofBody(module, func: func, signatures: self.signatures, calleeFacts: self.calleeFacts).everyReturnIsLocal(module, func: func) 'mintsWhatItReturns'
+				self.calleeFacts.note(index)
+			end 'mintsWhatItReturns'
+		end 'eachCalleeBeforeItsCallers'
+	end 'settleLocalReturns'
+
+	function settleDeepFreshness(module MaxonModule, functions IrFunctionArray, calleesFirst CsrColumn)
+		for index in calleesFirst 'eachCalleeBeforeItsCallers'
+			let func = try functions.get(index) otherwise panic("EffectSummaryBuilder.settleDeepFreshness: functions.get OOB at {index}")
+
+			if bodyIsUnreadable(func) or functionReturnsNothing(func) or not self.calleeFacts.returnsLocalAt(index) 'nothingToLearn'
+				continue
+			end 'nothingToLearn'
+
+			var origins = ValueOrigins.ofBody(module, func: func, signatures: self.signatures, calleeFacts: self.calleeFacts)
+			self.nodes.current = EffectContext.plain()
+			self.settleTaint(origins, module: module, func: func)
+			var mask = NoParamPositions
+			var bottom = false
+
+			for value in origins.returnedValues(module, func: func) 'eachReturned'
+				mask = mask or origins.taintMaskOf(value)
+				bottom = bottom or origins.taintBottomOf(value)
+			end 'eachReturned'
+
+			self.calleeFacts.noteReturned(index, mask: mask, bottom: bottom)
+		end 'eachCalleeBeforeItsCallers'
+	end 'settleDeepFreshness'
+
+	function settleTaint(origins ValueOrigins, module MaxonModule, func IrFunction)
+		origins.startTaint()
+		var moved = true
+
+		while moved 'toAFixedPoint'
+			origins.beginTaintRound()
+
+			for blockRef in func.blockRefs 'eachBlock'
+				let block = try module.blocks.get(blockRef) otherwise panic("EffectSummaryBuilder.settleTaint: blockRef from func.blockRefs not in module.blocks")
+
+				for opIdx in block.opRefs 'eachOp'
+					self.taintOp(origins, op: try module.ops.get(opIdx) otherwise panic("EffectSummaryBuilder.settleTaint: opIdx {opIdx} not in module.ops"), func: func)
+				end 'eachOp'
+			end 'eachBlock'
+
+			origins.joinMergeTaints()
+			moved = origins.taintMoved()
+		end 'toAFixedPoint'
+
+		origins.convertDeep()
+	end 'settleTaint'
+
+	function taintOp(origins ValueOrigins, op MaxonOp, func IrFunction)
+		match op 'op'
+			storeIndirect(addr, _, value, _) then origins.storeInto(addr, value: value, func: func)
+			call(result, callee, args, argLabels, _, _, argDefaultSlots, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+			tryCall(result, _, callee, args, argLabels, _, _, argDefaultSlots, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+			indirectCall then self.taintIndirectCall(origins, op: op)
+			witnessDispatch(_, args, _, _, _, _, _) then self.taintArguments(origins, args: args)
+			witnessTryDispatch(_, _, args, _, _, _, _) then self.taintArguments(origins, args: args)
+			literal or
+				ret or
+				retVoid or
+				binOp or
+				unaryOp or
+				compare or
+				condBranch or
+				branch or
+				globalAddr or
+				loadIndirect or
+				stringLiteral or
+				throwError or
+				propagateError or
+				panicAbort or
+				functionRef or
+				asyncCall or
+				await or
+				tryAwait or
+				sizeofType or
+				constArrayLiteral or
+				switch or
+				panicAbortValue or
+				errorFlagEncode or
+				serviceSpawn or
+				serviceSend or
+				serviceReplyCell or
+				immortalStructRecord or
+				immortalStringTable or
+				covPoint or
+				rawIntrinsic or
+				existentialWitness then break 'op'
+		end 'op'
+	end 'taintOp'
+
+	function taintIndirectCall(origins ValueOrigins, op MaxonOp)
+		match op 'indirect'
+			indirectCall(_, _, args) then self.taintArguments(origins, args: args)
+			default panic("EffectSummaryBuilder.taintIndirectCall: handed an op that is not an indirect call")
+		end 'indirect'
+	end 'taintIndirectCall'
+
+	function taintArguments(origins ValueOrigins, args ValueIdArray)
+		for arg in args 'eachArgument'
+			if originIsLocal(origins.originOf(arg)) 'aRecordOfThisBody'
+				origins.taintForeign(arg)
+			end 'aRecordOfThisBody'
+		end 'eachArgument'
+	end 'taintArguments'
+
+	function taintCall(origins ValueOrigins, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray)
+		if retainsItsOperand(callee) and originIsLocal(origins.originOf(result)) 'aSecondNameForARecordOfThisBody'
+			origins.unify(result, b: try args.get(0) otherwise panic("EffectSummaryBuilder.taintCall: '{String.from(callee)}' retains an operand but the call carries none"))
+			return
+		end 'aSecondNameForARecordOfThisBody'
+
+		if effectFreeRuntimeCallee(callee) or self.runtimeTier.contains(callee) 'storesNothing'
+			return
+		end 'storesNothing'
+
+		if receiverWritingRuntimeCallee(callee) 'writesOnlyItsReceiver'
+			self.taintStoredOperands(origins, func: func, callee: callee, args: args)
+			return
+		end 'writesOnlyItsReceiver'
+
+		let calleeIndex = try self.funcIndexByName.get(callee) otherwise return
+		let ordered = try self.orderedArguments(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) otherwise return
+		let receives = self.calleeFacts.importsAt(self.calleeNode(calleeIndex, callee: callee, ordered: ordered, func: func, result: result, origins: origins))
+
+		for position in 0 upto ordered.count() 'eachArgument'
+			if position >= MaxAbiArgs 'pastTheMask'
+				break
+			end 'pastTheMask'
+
+			let arg = try ordered.get(position) otherwise panic("EffectSummaryBuilder.taintCall: ordered.get OOB at {position}")
+
+			if maskHasParam(receives, param: position as ParamCount) and originIsLocal(origins.originOf(arg)) 'receivesWhatItDidNotMake'
+				origins.taintForeign(arg)
+			end 'receivesWhatItDidNotMake'
+		end 'eachArgument'
+
+		if originIsLocal(origins.originOf(result)) 'theResultIsFresh'
+			self.taintResult(origins, func: func, result: result, calleeIndex: calleeIndex, ordered: ordered)
+		end 'theResultIsFresh'
+	end 'taintCall'
+
+	function taintResult(origins ValueOrigins, func IrFunction, result ValueId, calleeIndex ElementIndex, ordered ValueIdArray)
+		if not self.calleeFacts.returnsLocalAt(calleeIndex) or self.calleeFacts.returnedBottomAt(calleeIndex) 'holdsWhatItIsNotTold'
+			origins.taintForeign(result)
+			return
+		end 'holdsWhatItIsNotTold'
+
+		let held = self.calleeFacts.returnedMaskAt(calleeIndex)
+
+		for position in 0 upto ordered.count() 'eachArgument'
+			if position >= MaxAbiArgs 'pastTheMask'
+				break
+			end 'pastTheMask'
+
+			if maskHasParam(held, param: position as ParamCount) 'resultHoldsThisArgument'
+				origins.absorb(result, from: try ordered.get(position) otherwise panic("EffectSummaryBuilder.taintResult: ordered.get OOB at {position}"), func: func)
+			end 'resultHoldsThisArgument'
+		end 'eachArgument'
+	end 'taintResult'
+
+	function taintStoredOperands(origins ValueOrigins, func IrFunction, callee ByteArray, args ValueIdArray)
+		let receiver = try args.get(0) otherwise panic("EffectSummaryBuilder.taintStoredOperands: '{String.from(callee)}' carries no receiver")
+		let shape = runtimeCalleeStoreShape(callee)
+
+		if not originIsLocal(origins.originOf(receiver)) or not shapeStoresInto(shape, receiverIndex: 0) 'storesNothingIntoARecordOfThisBody'
+			return
+		end 'storesNothingIntoARecordOfThisBody'
+
+		for stored in 1 upto args.count() 'eachOperand'
+			if shapeStoresOperand(shape, storedIndex: stored as ParamCount) 'storedIntoTheReceiver'
+				origins.absorb(receiver, from: try args.get(stored) otherwise panic("EffectSummaryBuilder.taintStoredOperands: args.get OOB at {stored}"), func: func)
+			end 'storedIntoTheReceiver'
+		end 'eachOperand'
+	end 'taintStoredOperands'
+
+	function grow(count ElementIndex)
+		while self.hard.count() < count 'eachNewNode'
+			self.hard.push(false)
+			self.imports.push(NoParamPositions)
+			self.shallow.push(NoParamPositions)
+			self.deep.push(NoParamPositions)
+		end 'eachNewNode'
+	end 'grow'
+
+	function markHard(node ElementIndex)
+		try self.hard.set(node, value: true) otherwise panic("EffectSummaryBuilder.markHard: node {node} is past the {self.hard.count()} grown")
+	end 'markHard'
+
+	function isHard(node ElementIndex) returns bool
+		return try self.hard.get(node) otherwise panic("EffectSummaryBuilder.isHard: node {node} is past the {self.hard.count()} grown")
+	end 'isHard'
+
+	function noteWrite(node ElementIndex, target ValueOriginCode)
+		if originIsLocal(target) 'theCallersOwn'
+			return
+		end 'theCallersOwn'
+
+		if not originNamesAParameter(target) 'nothingKnownAboutIt'
+			self.markHard(node)
+			return
+		end 'nothingKnownAboutIt'
+
+		let bit = maskWithParam(NoParamPositions, param: originParameterPosition(target))
+
+		if originIsWithin(target) 'throughAField'
+			_ = widenSummaryColumn(self.deep, index: node, by: bit)
+			return
+		end 'throughAField'
+
+		_ = widenSummaryColumn(self.shallow, index: node, by: bit)
+	end 'noteWrite'
+
+	// A drop runs destructors the IR does not show: a promise's cancels its green thread, and a
+	// mailbox, file, directory or socket handle's closes an OS resource. A drop is bookkeeping only
+	// when the dropped value's type graph cannot hold one; a type parameter or an existential might.
+	function releasesWhatItMayNotOwn(func IrFunction, callee ByteArray, args ValueIdArray) returns bool
+		if callee.equals(DropTypeParamName) or callee.equals(DropExistentialName) 'releasesAnUnknownType'
+			return true
+		end 'releasesAnUnknownType'
+
+		if not releasesElementsOf(callee) 'dropsNothingHeld'
+			return false
+		end 'dropsNothingHeld'
+
+		return self.valueMayOwnAResource(func, value: try args.get(0) otherwise return true)
+	end 'releasesWhatItMayNotOwn'
+
+	function valueMayOwnAResource(func IrFunction, value ValueId) returns bool
+		let tag = try func.valueTags.get(value) otherwise return true
+
+		if tagIsByteRecord(tag) 'plainBytes'
+			return false
+		end 'plainBytes'
+
+		let nameId = try func.valueNameIds.get(value) otherwise return true
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.instanceMayOwnAResource(nameId as GenericInstanceId)
+		end 'anInstance'
+
+		if not self.signatures.tagMayNameAggregate(tag) 'opaque'
+			return true
+		end 'opaque'
+
+		return self.aggregateMayOwnAResource(try self.typeNames.nameOf(nameId) otherwise return true)
+	end 'valueMayOwnAResource'
+
+	function instanceMayOwnAResource(declared GenericInstanceId) returns bool
+		let id = try self.nodes.resolvedThroughContext(declared) otherwise declared
+
+		if let known = try self.ownersByInstance.get(id) 'asked'
+			return known
+		end 'asked'
+
+		let owns = self.signatures.recordKindsWithinInstance(id).anything
+		self.ownersByInstance.upsert(id, value: owns)
+		return owns
+	end 'instanceMayOwnAResource'
+
+	function aggregateMayOwnAResource(name ByteArray) returns bool
+		if let known = try self.ownersByName.get(name) 'asked'
+			return known
+		end 'asked'
+
+		let owns = self.signatures.recordKindsWithinAggregate(name).anything
+		self.ownersByName.upsert(name, value: owns)
+		return owns
+	end 'aggregateMayOwnAResource'
+
+	function noteStore(node ElementIndex, addr ValueId, value ValueId, func IrFunction)
+		let target = self.facts.originOf(addr)
+		self.noteWrite(node, target: target)
+
+		if originNamesAParameter(target) and self.facts.isRecordTyped(func, value: value) 'importsARecord'
+			self.noteImport(node, target: target)
+		end 'importsARecord'
+	end 'noteStore'
+
+	function noteImport(node ElementIndex, target ValueOriginCode)
+		_ = widenSummaryColumn(self.imports, index: node, by: maskWithParam(NoParamPositions, param: originParameterPosition(target)))
+	end 'noteImport'
+
+	function noteStoredOperands(node ElementIndex, callee ByteArray, args ValueIdArray, func IrFunction)
+		let receiver = self.facts.originOf(try args.get(0) otherwise panic("EffectSummaryBuilder.noteStoredOperands: '{String.from(callee)}' carries no receiver"))
+		let shape = runtimeCalleeStoreShape(callee)
+
+		if not originNamesAParameter(receiver) or not shapeStoresInto(shape, receiverIndex: 0) 'storesNothingIntoAParameter'
+			return
+		end 'storesNothingIntoAParameter'
+
+		for stored in 1 upto args.count() 'eachOperand'
+			if shapeStoresOperand(shape, storedIndex: stored as ParamCount) and self.facts.isRecordTyped(func, value: try args.get(stored) otherwise panic("EffectSummaryBuilder.noteStoredOperands: args.get OOB at {stored}")) 'importsARecord'
+				self.noteImport(node, target: receiver)
+			end 'importsARecord'
+		end 'eachOperand'
+	end 'noteStoredOperands'
+
+	function walkNode(node ElementIndex, functionIndex ElementIndex, module MaxonModule, functions IrFunctionArray)
+		let func = try functions.get(functionIndex) otherwise panic("EffectSummaryBuilder.walkNode: functions.get OOB at {functionIndex}")
+
+		if bodyIsUnreadable(func) or func.writesModuleStorage 'hardFromTheStart'
+			self.markHard(node)
+			return
+		end 'hardFromTheStart'
+
+		var origins = ValueOrigins.ofBody(module, func: func, signatures: self.signatures, calleeFacts: self.calleeFacts)
+
+		if self.taintEnabled 'mayHoldOnlyWhatItMade'
+			self.settleTaint(origins, module: module, func: func)
+		end 'mayHoldOnlyWhatItMade'
+
+		self.facts = origins
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("EffectSummaryBuilder.walkNode: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.opRefs 'eachOp'
+				self.walkOp(try module.ops.get(opIdx) otherwise panic("EffectSummaryBuilder.walkNode: opIdx {opIdx} not in module.ops"), node: node, func: func)
+			end 'eachOp'
+
+			if self.isHard(node) 'nothingMoreToLearn'
+				return
+			end 'nothingMoreToLearn'
+		end 'eachBlock'
+	end 'walkNode'
+
+	function walkOp(op MaxonOp, node ElementIndex, func IrFunction)
+		match op 'op'
+			call(result, callee, args, argLabels, _, _, argDefaultSlots, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+			tryCall(result, _, callee, args, argLabels, _, _, argDefaultSlots, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+			storeIndirect(addr, _, value, _) then self.noteStore(node, addr: addr, value: value, func: func)
+			indirectCall then self.walkIndirectCall(node, func: func, op: op)
+			witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then self.walkDispatch(node, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+			witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then self.walkDispatch(node, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+			asyncCall or
+				await or
+				tryAwait or
+				serviceSpawn or
+				serviceSend or
+				serviceReplyCell or
+				rawIntrinsic then self.markHard(node)
+			literal or
+				ret or
+				retVoid or
+				binOp or
+				unaryOp or
+				compare or
+				condBranch or
+				branch or
+				globalAddr or
+				loadIndirect or
+				stringLiteral or
+				throwError or
+				propagateError or
+				panicAbort or
+				functionRef or
+				sizeofType or
+				constArrayLiteral or
+				switch or
+				panicAbortValue or
+				errorFlagEncode or
+				immortalStructRecord or
+				immortalStringTable or
+				existentialWitness or
+				covPoint then break 'op'
+		end 'op'
+	end 'walkOp'
+
+	function walkCall(node ElementIndex, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray)
+		if self.releasesWhatItMayNotOwn(func, callee: callee, args: args) 'dropsAResource'
+			self.markHard(node)
+			return
+		end 'dropsAResource'
+
+		if effectFreeRuntimeCallee(callee) 'observesNothing'
+			return
+		end 'observesNothing'
+
+		if self.runtimeTier.contains(callee) 'opaque'
+			self.markHard(node)
+			return
+		end 'opaque'
+
+		if receiverWritingRuntimeCallee(callee) 'writesOnlyItsReceiver'
+			self.noteWrite(node, target: self.facts.originOf(try args.get(0) otherwise panic("EffectSummaryBuilder.walkCall: '{String.from(callee)}' writes its receiver but the call carries no argument")))
+			self.noteStoredOperands(node, callee: callee, args: args, func: func)
+			return
+		end 'writesOnlyItsReceiver'
+
+		let calleeIndex = try self.funcIndexByName.get(callee) otherwise 'undeclared'
+			self.markHard(node)
+			return
+		end 'undeclared'
+
+		let ordered = try self.orderedArguments(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) otherwise 'unslotted'
+			self.markHard(node)
+			return
+		end 'unslotted'
+
+		self.recordSite(node, callee: self.calleeNode(calleeIndex, callee: callee, ordered: ordered, func: func, result: result, origins: self.facts), args: ordered)
+	end 'walkCall'
+
+	function orderedArguments(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray) returns ValueIdArray throws AbsentError
+		let sig = try self.funcSignatures.get(callee) otherwise return args
+
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slotted'
+			ordered(argIds) then return argIds
+			arityMismatch or
+				unknownLabel or
+				duplicateArg then throw AbsentError.absent
+		end 'slotted'
+	end 'orderedArguments'
+
+	function calleeNode(calleeIndex ElementIndex, callee ByteArray, ordered ValueIdArray, func IrFunction, result ValueId, origins ValueOrigins) returns ElementIndex
+		var context = EffectContext.plain()
+
+		if let instance = try self.nodes.calleeInstance(callee, args: ordered, func: func, result: result, takesReceiver: self.takesReceiver(callee)) 'aMethodOfAConcreteInstance'
+			context = EffectContext.ofInstance(instance)
+		end 'aMethodOfAConcreteInstance'
+
+		for position in 0 upto ordered.count() 'eachArgument'
+			if position >= MaxAbiArgs 'pastTheMask'
+				break
+			end 'pastTheMask'
+
+			if let target = try self.functionNodeOf(try ordered.get(position) otherwise panic("EffectSummaryBuilder.calleeNode: ordered.get OOB at {position}"), func: func, origins: origins) 'aKnownFunctionValue'
+				context = context.withBinding(position as ParamCount, node: target)
+			end 'aKnownFunctionValue'
+		end 'eachArgument'
+
+		return self.nodes.nodeFor(calleeIndex, context: context)
+	end 'calleeNode'
+
+	function takesReceiver(callee ByteArray) returns bool
+		let sig = try self.funcSignatures.get(callee) otherwise return true
+		return sig.takesReceiver()
+	end 'takesReceiver'
+
+	function functionNodeOf(value ValueId, func IrFunction, origins ValueOrigins) returns ElementIndex throws AbsentError
+		if (try func.valueTags.get(value) otherwise throw AbsentError.absent) != ValueTypeTag.function 'notAFunctionValue'
+			throw AbsentError.absent
+		end 'notAFunctionValue'
+
+		if let name = try origins.namedFunction(value) 'aNamedFunction'
+			return self.nodes.nodeFor(try self.indexOfFunction(name), context: EffectContext.plain())
+		end 'aNamedFunction'
+
+		if let name = try origins.closureCode(value) 'aClosureLiteral'
+			return self.nodes.nodeFor(try self.indexOfFunction(name), context: self.nodes.current.sameInstance())
+		end 'aClosureLiteral'
+
+		let origin = origins.originOf(value)
+
+		if originNamesAParameter(origin) and not originIsWithin(origin) 'aParameterTheContextBinds'
+			return try self.nodes.current.bindingAt(originParameterPosition(origin))
+		end 'aParameterTheContextBinds'
+
+		throw AbsentError.absent
+	end 'functionNodeOf'
+
+	function indexOfFunction(name ByteArray) returns ElementIndex throws AbsentError
+		return try self.funcIndexByName.get(name) otherwise throw AbsentError.absent
+	end 'indexOfFunction'
+
+	function walkIndirectCall(node ElementIndex, func IrFunction, op MaxonOp)
+		match op 'indirect'
+			indirectCall(_, callee, args) then self.callThroughValue(node, func: func, callee: callee, args: args)
+			default panic("EffectSummaryBuilder.walkIndirectCall: handed an op that is not an indirect call")
+		end 'indirect'
+	end 'walkIndirectCall'
+
+	function callThroughValue(node ElementIndex, func IrFunction, callee ValueId, args ValueIdArray)
+		let target = try self.functionNodeOf(callee, func: func, origins: self.facts) otherwise 'unresolved'
+			self.markHard(node)
+			return
+		end 'unresolved'
+
+		let targetParamCount = (try self.nodes.functions.get(self.nodes.functionIndexOf(target)) otherwise panic("EffectSummaryBuilder.callThroughValue: functionIndexOf({target}) is past the functions")).paramCount
+
+		if targetParamCount == args.count() 'aClosureTakesItsRecord'
+			self.recordSite(node, callee: target, args: args)
+			return
+		end 'aClosureTakesItsRecord'
+
+		if targetParamCount + FunctionRecordArgCount != args.count() 'anotherShape'
+			self.markHard(node)
+			return
+		end 'anotherShape'
+
+		var userArguments = ValueIdArray.create()
+
+		for position in 0 upto targetParamCount 'eachUserArgument'
+			userArguments.push(try args.get(position) otherwise panic("EffectSummaryBuilder.callThroughValue: args.get OOB at {position}"))
+		end 'eachUserArgument'
+
+		self.recordSite(node, callee: target, args: userArguments)
+	end 'callThroughValue'
+
+	function walkDispatch(node ElementIndex, func IrFunction, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex)
+		if (try func.valueTags.get(witnessDispatchReceiver(args)) otherwise ValueTypeTag.interfaceRef) != ValueTypeTag.typeParameter 'chosenAtRunTime'
+			self.markHard(node)
+			return
+		end 'chosenAtRunTime'
+
+		let requirement = self.nodes.dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		let candidates = self.nodes.dispatch.candidatesFor(requirement)
+
+		if let targets = try self.nodes.contextualTargets(func, args: args, requirement: requirement, candidates: candidates, funcIndexByName: self.funcIndexByName, runtimeTier: self.runtimeTier) 'resolvedForTheInstance'
+			for target in targets 'eachTarget'
+				self.recordSite(node, callee: target, args: args)
+			end 'eachTarget'
+
+			return
+		end 'resolvedForTheInstance'
+
+		if candidates.isEmpty() 'nothingWearsTheRequirementsName'
+			self.markHard(node)
+			return
+		end 'nothingWearsTheRequirementsName'
+
+		for candidate in candidates 'eachCandidate'
+			self.walkCandidate(node, candidate: candidate, args: args)
+		end 'eachCandidate'
+	end 'walkDispatch'
+
+	function walkCandidate(node ElementIndex, candidate ByteArray, args ValueIdArray)
+		if effectFreeRuntimeCallee(candidate) 'observesNothing'
+			return
+		end 'observesNothing'
+
+		if self.runtimeTier.contains(candidate) 'opaque'
+			self.markHard(node)
+			return
+		end 'opaque'
+
+		let index = try self.funcIndexByName.get(candidate) otherwise 'undeclared'
+			self.markHard(node)
+			return
+		end 'undeclared'
+
+		self.recordSite(node, callee: index, args: args)
+	end 'walkCandidate'
+
+	function recordSite(caller ElementIndex, callee ElementIndex, args ValueIdArray)
+		self.siteCallers.push(caller)
+		self.siteCallees.push(callee)
+		self.siteFirstOrigins.push(self.siteOrigins.count())
+		self.siteOriginCounts.push(args.count())
+
+		for arg in args 'eachArgument'
+			self.siteOrigins.push(self.facts.originOf(arg))
+		end 'eachArgument'
+	end 'recordSite'
+
+	// A node's summary only grows (one hard bit, at most 64 shallow and 64 deep), so it re-enters the queue a
+	// bounded number of times; a round-based rescan would cost the call graph's depth on top.
+	function settle()
+		let nodeCount = self.nodes.totalCount()
+		var siteIds = CsrColumn.create()
+
+		for site in 0 upto self.siteCallers.count() 'eachSite'
+			siteIds.push(site)
+		end 'eachSite'
+
+		let sitesByCallee = buildCsr(self.siteCallees, to: siteIds, nodeCount: nodeCount as CsrIndex)
+		var queue = CsrColumn.create()
+		var queued = BoolArray.create()
+
+		for node in 0 upto nodeCount 'seed'
+			let known = self.isHard(node) or summaryMaskAt(self.shallow, index: node) != NoParamPositions or summaryMaskAt(self.deep, index: node) != NoParamPositions or summaryMaskAt(self.imports, index: node) != NoParamPositions
+			queued.push(known)
+
+			if known 'hasSomethingToHandOn'
+				queue.push(node)
+			end 'hasSomethingToHandOn'
+		end 'seed'
+
+		var head = 0 as CsrIndex
+
+		while head < queue.count() 'drain'
+			let callee = try queue.get(head) otherwise panic("EffectSummaryBuilder.settle: queue.get OOB at {head}")
+			head = head + 1
+			try queued.set(callee, value: false) otherwise panic("EffectSummaryBuilder.settle: queued.set OOB at {callee}")
+
+			for k in 0 upto sitesByCallee.degree(callee) 'eachSiteOfTheCallee'
+				let site = sitesByCallee.neighbour(callee, k: k)
+				let caller = try self.siteCallers.get(site) otherwise panic("EffectSummaryBuilder.settle: siteCallers.get OOB at {site}")
+
+				if self.applySite(site, callee: callee) and not (try queued.get(caller) otherwise panic("EffectSummaryBuilder.settle: queued.get OOB at {caller}")) 'callerMoved'
+					try queued.set(caller, value: true) otherwise panic("EffectSummaryBuilder.settle: queued.set OOB at {caller}")
+					queue.push(caller)
+				end 'callerMoved'
+			end 'eachSiteOfTheCallee'
+		end 'drain'
+	end 'settle'
+
+	function applySite(site ElementIndex, callee ElementIndex) returns bool
+		let caller = try self.siteCallers.get(site) otherwise panic("EffectSummaryBuilder.applySite: siteCallers.get OOB at {site}")
+
+		if self.isHard(caller) 'alreadyAsBadAsItGets'
+			return false
+		end 'alreadyAsBadAsItGets'
+
+		if self.isHard(callee) 'theCalleeHasAnEffect'
+			self.markHard(caller)
+			return true
+		end 'theCalleeHasAnEffect'
+
+		let calleeShallow = summaryMaskAt(self.shallow, index: callee)
+		let calleeDeep = summaryMaskAt(self.deep, index: callee)
+		let calleeImports = summaryMaskAt(self.imports, index: callee)
+		var moved = false
+		let first = try self.siteFirstOrigins.get(site) otherwise panic("EffectSummaryBuilder.applySite: siteFirstOrigins.get OOB at {site}")
+		let count = try self.siteOriginCounts.get(site) otherwise panic("EffectSummaryBuilder.applySite: siteOriginCounts.get OOB at {site}")
+
+		for position in 0 upto MaxAbiArgs 'eachWrittenPosition'
+			let writesShallow = maskHasParam(calleeShallow, param: position as ParamCount)
+			let writesDeep = maskHasParam(calleeDeep, param: position as ParamCount)
+			let importsHere = maskHasParam(calleeImports, param: position as ParamCount)
+
+			if not writesShallow and not writesDeep and not importsHere 'notTouched'
+				continue
+			end 'notTouched'
+
+			if position >= count 'noArgumentThere'
+				if writesShallow or writesDeep 'aWriteWithNowhereToLand'
+					self.markHard(caller)
+					return true
+				end 'aWriteWithNowhereToLand'
+
+				continue
+			end 'noArgumentThere'
+
+			let origin = try self.siteOrigins.get(first + position) otherwise panic("EffectSummaryBuilder.applySite: siteOrigins.get OOB at {first + position}")
+
+			if (writesShallow or writesDeep) and self.passOnWrite(caller, origin: origin, writesDeep: writesDeep) 'callerMoved'
+				moved = true
+			end 'callerMoved'
+
+			if importsHere and originNamesAParameter(origin) 'importsIntoAParameter'
+				if widenSummaryColumn(self.imports, index: caller, by: maskWithParam(NoParamPositions, param: originParameterPosition(origin))) 'importsMoved'
+					moved = true
+				end 'importsMoved'
+			end 'importsIntoAParameter'
+		end 'eachWrittenPosition'
+
+		return moved
+	end 'applySite'
+
+	function passOnWrite(caller ElementIndex, origin ValueOriginCode, writesDeep bool) returns bool
+		if originIsLocal(origin) 'theCallersOwnRecord'
+			if writesDeep and origin != OriginLocalDeep 'reachesWhatItHolds'
+				self.markHard(caller)
+				return true
+			end 'reachesWhatItHolds'
+
+			return false
+		end 'theCallersOwnRecord'
+
+		if not originNamesAParameter(origin) 'nothingKnownAboutIt'
+			self.markHard(caller)
+			return true
+		end 'nothingKnownAboutIt'
+
+		let bit = maskWithParam(NoParamPositions, param: originParameterPosition(origin))
+
+		if originIsWithin(origin) or writesDeep 'throughAField'
+			return widenSummaryColumn(self.deep, index: caller, by: bit)
+		end 'throughAField'
+
+		return widenSummaryColumn(self.shallow, index: caller, by: bit)
+	end 'passOnWrite'
+
+	// A function that returns nothing exists for its effects, so it is never effect-free itself. Callers
+	// inherit what its body does, not that it returns nothing.
+	function verdicts() returns BoolArray
+		var effectFree = BoolArray.create()
+
+		for index in 0 upto self.nodes.baseCount() 'eachFunction'
+			let func = try self.nodes.functions.get(index) otherwise panic("EffectSummaryBuilder.verdicts: functions.get OOB at {index}")
+			effectFree.push(not self.isHard(index) and summaryMaskAt(self.shallow, index: index) == NoParamPositions and summaryMaskAt(self.deep, index: index) == NoParamPositions and not functionReturnsNothing(func))
+		end 'eachFunction'
+
+		return effectFree
+	end 'verdicts'
+end 'EffectSummaryBuilder'

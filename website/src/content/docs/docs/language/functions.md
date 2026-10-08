@@ -335,6 +335,14 @@ function main() returns ExitCode
 end 'main'
 ```
 
+Writes to a value the function created itself — an array it fills, a string it lowers, a record it builds and
+returns — leave it pure; only writes to parameters, globals and records it was handed make it impure. A call through a
+closure is judged by the closure's own body when the closure is known where the call is made: a closure
+literal, or a named function, handed to a helper that only calls it. A closure the call cannot identify (one
+read out of a field, say) makes the caller impure. Releasing a value that can own a green thread, a mailbox or an
+operating-system handle (a promise, a file, a socket, a type parameter's value) is an effect of the function that
+releases it.
+
 A function that returns nothing has no result to discard. Destructuring a pure function's tuple result must
 keep at least one element (`(_, _) = pure()` is **E3064**). A throwing call is judged the same way: a pure
 one discarded as a bare statement inside a [`try` block](/docs/language/error-handling/#try-blocks) or a

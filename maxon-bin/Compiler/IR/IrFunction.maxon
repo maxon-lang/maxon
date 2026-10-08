@@ -2982,7 +2982,6 @@ export type IrFunction
 	// |---|---|
 	// | "does this body write this parameter as a container, or a field of its own receiver?" | `writtenParamMask` (E3019's narrow half) |
 	// | "does this body FREE borrowable storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
-	// | "does this body write a field of a box it did not just build?" | `assignsIntoAnExistingAggregate` (E3064) |
 	// | **"does this body write the record this parameter denotes, at all?"** | **this** |
 	//
 	// ⛔⛔ **IT IS ITS OWN COLUMN BECAUSE THE RECEIVER SLOT NEEDS THE NARROWER ANSWER.** E3019 refuses an
@@ -3017,45 +3016,15 @@ export type IrFunction
 	// compile rather than one set per function.
 	export var immutableGlobalAliasValues as GlobalAliasValueSet
 
-	// ⭐⭐ **DOES THIS BODY ASSIGN INTO AN AGGREGATE THAT ALREADY EXISTED? — the effect summary's OWN seed, and
-	// a THIRD question over the same territory as the two masks above, which is exactly why it is its own
-	// column and not a reading of theirs.**
-	//
-	// | question | column |
-	// |---|---|
-	// | "does passing an immutable binding HERE make it an error?" | `writtenParamMask` (E3019) |
-	// | "does this body write the storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
-	// | "does this body write a field of a box it did not just build?" | **this** (E3064) |
-	//
-	// ⛔⛔ **IT EXISTS BECAUSE READING E3070's COLUMN INSTEAD WAS A MEASURED FALSE REJECTION.** The effect
-	// summary first seeded off the two masks above; both decline a field store that frees nothing (see the
-	// divergence table), so `self.n = self.n + 1` on an INT field set neither, a method doing exactly that was
-	// classified effect-free, and `(_, _) = c.bump()` — a legal program — was refused
-	// E3064. That is a fact recorded for one consumer reused as the floor for another, where the first one's
-	// deliberate narrowing is the second one's hole.
-	//
-	// ⛔ **AND WIDENING E3070's COLUMN WOULD HAVE BEEN THE WRONG CURE**: its narrowing is its SCOPE (every
-	// borrow it tracks is a reference into a container), and a `String`/`Set` row added to it refuses
-	// `b.wipe()` while `b.items` is borrowed — a legal program, one pass over. Three questions, three columns.
-	//
-	// ⚠ **IT IS SET AT `Parser.emitFieldWrite` AND `Parser.writeBackPayload`, the two ASSIGNMENT emitters, and
-	// deliberately NOT at `emitFieldStore`** — the raw store, which is also how a FRESH box is filled
-	// (`Self{…}`, a tuple literal). Setting it there would mark every function that builds a value, including
-	// the `makePair` the acceptance case turns on, and the summary would be vacuous rather than conservative.
-	// It over-approximates in the safe direction instead: a write into a box this frame allocated (`var p =
-	// Point.create(1)` then `p.x = 5`) sets it too, costing a missed diagnostic and never a refusal.
-	export var assignsIntoAnExistingAggregate as bool
-
 	// ⭐ **IT ASSIGNS MODULE-LEVEL STORAGE — the effect summary's "modifies global state" seed (E3064).**
 	// Set at `Parser.emitCheckedGlobalStore`, the one door every `g = …` on a module `let`/`var` passes
-	// through, and read by `SemanticCheck.functionShowsAnEffect`.
+	// through, and read by `EffectSummaryBuilder.walkNode`.
 	//
 	// ⚠ **IT IS A FIELD BECAUSE THE OP CANNOT ANSWER IT.** A global's read and its write both open with the
 	// same `globalAddr` (`Parser.emitGlobalAddr` is the one door to either), so an op walk that counts
 	// `globalAddr` counts every READ as a write — which made a function that merely consults a module
 	// constant effectful, and no stdlib member effect-free. The distinction exists only at the emitter, so
-	// that is where it is recorded; `assignsIntoAnExistingAggregate` above carries the identical argument one
-	// storage kind over.
+	// that is where it is recorded.
 	export var writesModuleStorage as bool
 
 	// ⛔⛔ **THE PARSER WALKED PAST THIS BODY WITHOUT BUILDING IT — so NOTHING may be concluded from its ops,
@@ -3239,7 +3208,6 @@ export type IrFunction
 			storageWrittenParamMask: 0,
 			writesThroughParamMask: 0,
 			immutableGlobalAliasValues: sharedEmptyGlobalAliasValues,
-			assignsIntoAnExistingAggregate: false,
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
 			bodySplicedAway: false,
@@ -3322,7 +3290,6 @@ export type IrFunction
 			storageWrittenParamMask: 0,
 			writesThroughParamMask: 0,
 			immutableGlobalAliasValues: GlobalAliasValueSet.create(),
-			assignsIntoAnExistingAggregate: false,
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
 			bodySplicedAway: false,
@@ -3396,7 +3363,6 @@ export type IrFunction
 			storageWrittenParamMask: src.storageWrittenParamMask,
 			writesThroughParamMask: src.writesThroughParamMask,
 			immutableGlobalAliasValues: src.immutableGlobalAliasValues,
-			assignsIntoAnExistingAggregate: src.assignsIntoAnExistingAggregate,
 			writesModuleStorage: src.writesModuleStorage,
 			bodyWasSkippedAsUnreached: src.bodyWasSkippedAsUnreached,
 			bodySplicedAway: src.bodySplicedAway,
@@ -3731,7 +3697,6 @@ export type IrFunction
 		writer.unsigned(self.storageWrittenParamMask as CacheUnsigned)
 		writer.unsigned(self.writesThroughParamMask as CacheUnsigned)
 		cacheWriteGlobalAliasValueSet(writer, value: self.immutableGlobalAliasValues)
-		writer.flag(self.assignsIntoAnExistingAggregate)
 		writer.flag(self.writesModuleStorage)
 		writer.flag(self.bodyWasSkippedAsUnreached)
 		writer.flag(self.bodySplicedAway)
@@ -3792,7 +3757,6 @@ export type IrFunction
 		let f_storageWrittenParamMask = (try reader.unsigned()) as ParamPositionMask
 		let f_writesThroughParamMask = (try reader.unsigned()) as ParamPositionMask
 		let f_immutableGlobalAliasValues = try cacheReadGlobalAliasValueSet(reader)
-		let f_assignsIntoAnExistingAggregate = try reader.flag()
 		let f_writesModuleStorage = try reader.flag()
 		let f_bodyWasSkippedAsUnreached = try reader.flag()
 		let f_bodySplicedAway = try reader.flag()
@@ -3806,11 +3770,11 @@ export type IrFunction
 		let f_debugLocalLocations = try cacheReadDebugValueLocationArray(reader)
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, storageWrittenParamMask: f_storageWrittenParamMask, writesThroughParamMask: f_writesThroughParamMask, immutableGlobalAliasValues: f_immutableGlobalAliasValues, assignsIntoAnExistingAggregate: f_assignsIntoAnExistingAggregate, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, borrowFacts: f_borrowFacts, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, storageWrittenParamMask: f_storageWrittenParamMask, writesThroughParamMask: f_writesThroughParamMask, immutableGlobalAliasValues: f_immutableGlobalAliasValues, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, borrowFacts: f_borrowFacts, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize464
-		return sizeof(IrFunction) as CacheSize464
+	static function cacheLayoutBytes() returns CacheSize456
+		return sizeof(IrFunction) as CacheSize456
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

@@ -94,12 +94,21 @@ end 'reservedSpellingsOf'
 function validMemoValue(cache TokenCacheMap, path FilePath, entry SourceFileEntry) returns TokenArray throws TokenMemoMiss
 	let memo = try cache.get(path) otherwise throw TokenMemoMiss.absent
 
-	if memo.keyHash != entry.contentHash 'stale'
+	if not memoStampedFor(memo, entry: entry) 'stale'
 		throw TokenMemoMiss.stale
 	end 'stale'
 
 	return memo.value
 end 'validMemoValue'
+
+function memoHolds(cache TokenCacheMap, path FilePath, entry SourceFileEntry) returns bool
+	let memo = try cache.get(path) otherwise return false
+	return memoStampedFor(memo, entry: entry)
+end 'memoHolds'
+
+function memoStampedFor(memo TokenMemo, entry SourceFileEntry) returns bool
+	return memo.keyHash == entry.contentHash
+end 'memoStampedFor'
 
 function lexedTokens(project Project, content String, lexing LexSource) returns TokenArray throws LexerError
 	return match lexing 'source'
@@ -239,8 +248,11 @@ end 'filteredHere'
 // the shared store — asked without counting, so the query that later answers is the one that counts.
 module function activeTokensAreHeld(project Project, path FilePath, buildKey BuildKey) returns bool throws CompileError
 	let entry = try sourceEntryOf(project, path: path)
-	_ = try validMemoValue(project.db.activeTokenCache, path: path, entry: entry) otherwise return holdsSharedActiveTokens(project, contentHash: entry.contentHash, buildKey: buildKey)
-	return true
+	if memoHolds(project.db.activeTokenCache, path: path, entry: entry) 'heldHere'
+		return true
+	end 'heldHere'
+
+	return holdsSharedActiveTokens(project, contentHash: entry.contentHash, buildKey: buildKey)
 end 'activeTokensAreHeld'
 
 // Built from tokens, never from parses: a parse needs this index, so the index cannot need a parse.

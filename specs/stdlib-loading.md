@@ -1081,6 +1081,31 @@ maxon count=7 tags=3 second=20 ok=true
 absent key refused
 ```
 
+<!-- test: stdlib-loading.json-has-child-answers-for-an-object-member-only -->
+`hasChild` asks whether an object holds a key without reading its value: true for a member that is there, false for a
+missing key, and false for a node that is not an object at all, where `getChild` would throw.
+```maxon
+function main() returns ExitCode
+	let doc = try Json.parse("\{\"name\": \"maxon\", \"tags\": [1]\}") otherwise 'parseErr'
+		panic("Json.parse rejected a valid document")
+	end 'parseErr'
+	let tags = try doc.getChild(doc.root, key: "tags") otherwise 'tagsErr'
+		panic("tags missing")
+	end 'tagsErr'
+	let named = doc.hasChild(doc.root, key: "name")
+	let missing = doc.hasChild(doc.root, key: "missing")
+	let inArray = doc.hasChild(tags, key: "name")
+	print("{named} {missing} {inArray}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false false
+```
+
 <!-- test: stdlib-loading.json-stringify-round-trips-through-stdlib -->
 The other half of the module, which the parse case cannot reach: the 22 free emitter functions, driven
 by building an arena BY HAND through `JsonNode`'s exported constructors and serializing it. The emitted

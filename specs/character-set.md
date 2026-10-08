@@ -227,8 +227,9 @@ two drops.
 ```maxon
 function main() returns ExitCode
 	let members = CharSet from ['x']
-	_ = CharacterSet.from(members)
+	let adopted = CharacterSet.from(members)
 	print("{members.count()}")
+	_ = adopted
 	return 0
 end 'main'
 ```
@@ -486,7 +487,8 @@ type Trimmer
 end 'Trimmer'
 
 function main() returns ExitCode
-	_ = Trimmer.init(CharacterSet.whitespaces())
+	let trimmer = Trimmer.init(CharacterSet.whitespaces())
+	_ = trimmer
 	return 0
 end 'main'
 ```
