@@ -1,0 +1,76 @@
+export enum SpecResultJsonError implements Error
+	invalidPath
+	unwritable
+end 'SpecResultJsonError'
+
+export union SpecResultTarget
+	unasked
+	at(path FilePath)
+end 'SpecResultTarget'
+
+export function specResultTargetOf(stated StatedText) returns SpecResultTarget throws SpecResultJsonError
+	let spelling = try stated.text() otherwise return SpecResultTarget.unasked
+	let path = try FilePath.from(spelling) otherwise throw SpecResultJsonError.invalidPath
+
+	// Anchored here: the guest lane hands the path to a compiler that resolves it against the VM's
+	// working directory.
+	return SpecResultTarget.at(path.anchoredAt(Directory.currentPath()))
+end 'specResultTargetOf'
+
+export enum SpecResultKey
+	passed = "passed"
+	failed = "failed"
+	skipped = "skipped"
+	notRun = "notRun"
+	total = "total"
+	cases = "cases"
+	spec = "spec"
+	test = "test"
+	verdict = "verdict"
+	reason = "reason"
+end 'SpecResultKey'
+
+export function writeSpecResultJson(target FilePath, results SpecTestResultArray) throws SpecResultJsonError
+	let tally = tallyResults(results)
+
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+
+	pushJsonNumber(doc, keys: keys, children: children, key: SpecResultKey.passed.rawValue, value: tally.passed as JsonFloat)
+	pushJsonNumber(doc, keys: keys, children: children, key: SpecResultKey.failed.rawValue, value: tally.failed as JsonFloat)
+	pushJsonNumber(doc, keys: keys, children: children, key: SpecResultKey.skipped.rawValue, value: tally.skipped as JsonFloat)
+	pushJsonNumber(doc, keys: keys, children: children, key: SpecResultKey.notRun.rawValue, value: tally.notRunHere as JsonFloat)
+	pushJsonNumber(doc, keys: keys, children: children, key: SpecResultKey.total.rawValue, value: tally.total() as JsonFloat)
+
+	keys.push(SpecResultKey.cases.rawValue)
+	children.push(casesNode(doc, results: results))
+
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+
+	try File.writeText(target, content: Json.stringifyPrettyNode(doc, root: doc.root)) otherwise throw SpecResultJsonError.unwritable
+end 'writeSpecResultJson'
+
+function casesNode(doc JsonDoc, results SpecTestResultArray) returns JsonNodeId
+	var items = JsonNodeIdArray.create()
+
+	for result in results 'eachResult'
+		var keys = StringArray.create()
+		var children = JsonNodeIdArray.create()
+
+		pushJsonString(doc, keys: keys, children: children, key: SpecResultKey.spec.rawValue, value: result.specName)
+		pushJsonString(doc, keys: keys, children: children, key: SpecResultKey.test.rawValue, value: result.testName)
+		pushJsonString(doc, keys: keys, children: children, key: SpecResultKey.verdict.rawValue, value: result.outcome.token().rawValue)
+
+		match result.outcome 'reason'
+			fail(reason) then pushJsonString(doc, keys: keys, children: children, key: SpecResultKey.reason.rawValue, value: reason)
+			pass or
+				skipped or
+				notRunHere then break
+		end 'reason'
+
+		items.push(doc.add(JsonNode.objectNode(keys, children: children)))
+	end 'eachResult'
+
+	return doc.add(JsonNode.arrayNode(items))
+end 'casesNode'

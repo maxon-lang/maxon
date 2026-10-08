@@ -20,7 +20,6 @@ module let DumpIrToolName = "dump_ir"
 module let InfoToolName = "info"
 module let SpecTestToolName = "run_spec_test"
 module let ScaleTestToolName = "run_scale_test"
-module let SpecOutcomeToolName = "spec_test_outcome"
 
 export union McpValueKind
 	text
@@ -213,6 +212,8 @@ export function mcpToolRoster() returns McpToolSpecArray
 	specProps.push(flag("network", description: "Pass --network to ALSO run live network fragments.", devOnly: true))
 	specProps.push(str(TargetOption, description: "Cross-compile target passed to --target=<value> (e.g. 'wasm32-wasi').", devOnly: true))
 	specProps.push(workersProperty())
+	specProps.push(whole(MaxFailuresOption, description: "Most failing cases listed in `failures` ({LowestFailureLimit}-{HighestFailureLimit}, default {DefaultFailureLimit}); the rest are counted in `failuresOmitted`.", least: LowestFailureLimit, most: HighestFailureLimit, devOnly: true))
+	specProps.push(flag(CasesOption, description: "Also answer `cases`: every case the run covered, in run order, as `spec`, `test` and `status` ({spelledVerdictTokens()}). Not capped by `maxFailures`.", devOnly: true))
 	specProps.push(childTimeoutProperty())
 	specProps.push(repoRootProperty(RepoRootDefaultsToOwnCheckout))
 	tools.push(McpToolSpec.create(SpecTestToolName, description: "Run the Maxon spec-test suite, optionally filtered, returning structured pass/fail counts.", properties: specProps, devOnly: true))
@@ -226,15 +227,6 @@ export function mcpToolRoster() returns McpToolSpecArray
 	scaleProps.push(childTimeoutProperty())
 	scaleProps.push(repoRootProperty(RepoRootDefaultsToOwnCheckout))
 	tools.push(McpToolSpec.create(ScaleTestToolName, description: "Run the scaling INSTRUMENT: compile a doubling ladder and report per-phase memory and CPU. It has no verdict — the RATIO between rungs is the reading.", properties: scaleProps, devOnly: true))
-
-	var outcomeProps = McpPropertyArray.create()
-	outcomeProps.push(textOrList(FilterOption, description: "A pattern, or a list of at least one, each passed as its own --filter=<pattern>: a CASE-SENSITIVE substring, typically a label like 'arithmetic/addition'. A pattern that selects nothing refuses the run.", required: true, devOnly: true))
-	outcomeProps.push(str(TargetOption, description: "Cross-compile target passed to --target=<value>.", devOnly: true))
-	outcomeProps.push(flag("network", description: "Pass --network to ALSO run live network fragments.", devOnly: true))
-	outcomeProps.push(workersProperty())
-	outcomeProps.push(childTimeoutProperty())
-	outcomeProps.push(repoRootProperty(RepoRootDefaultsToOwnCheckout))
-	tools.push(McpToolSpec.create(SpecOutcomeToolName, description: "Run spec-tests with a filter, returning structured per-test PASS/FAIL entries plus a failure summary.", properties: outcomeProps, devOnly: true))
 
 	pushDebugTools(tools)
 

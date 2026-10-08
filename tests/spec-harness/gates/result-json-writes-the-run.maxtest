@@ -1,0 +1,41 @@
+let ResultJsonFlagPrefix = "--result-json="
+let ResultFileName = "run-result.json"
+let SpecName = "result-json"
+let PassingTest = "result-json.holds"
+let FailingTest = "result-json.breaks"
+
+function countField(doc JsonDoc, key String) returns JsonInt
+	return try doc.getInt(doc.root, key: key) otherwise panic("the result document has no number `{key}`")
+end 'countField'
+
+function caseField(doc JsonDoc, index ElementIndex, key String) returns String
+	let cases = try doc.getChild(doc.root, key: "cases") otherwise panic("the result document has no `cases`")
+	let item = try doc.arrayAt(cases, index: index) otherwise panic("the result document has no case {index}")
+
+	return try doc.getString(item, key: key) otherwise panic("case {index} of the result document has no `{key}`")
+end 'caseField'
+
+test 'a spec-test run writes its cases and counts to the document --result-json names'
+	let staged = stagedGateFixture()
+	let resultPath = staged.join(ResultFileName)
+	let run = runSpecTest(staged, includeNetwork: false, extraArguments: ["{ResultJsonFlagPrefix}{resultPath.toString()}"])
+	let said = everythingSaid(run)
+	let written = File.exists(resultPath)
+	let text = readStagedText(resultPath) if written else ""
+	discardStaging(staged)
+
+	Expect.notEqual(run.exitCode(), expected: SuccessExitCode, message: "the run holds a failing case and must exit non-zero. It said:\n{said}")
+	Expect.isTrue(written, message: "`{ResultJsonFlagPrefix}` wrote no document. It said:\n{said}")
+
+	let doc = try Json.parse(text) otherwise panic("the result document is not JSON: {text}")
+
+	Expect.equal(countField(doc, key: "passed"), expected: 1, message: "one case passes. The document said:\n{text}")
+	Expect.equal(countField(doc, key: "failed"), expected: 1, message: "one case fails. The document said:\n{text}")
+	Expect.equal(countField(doc, key: "total"), expected: 2, message: "two cases ran. The document said:\n{text}")
+	Expect.equal(caseField(doc, index: 0, key: "spec"), expected: SpecName, message: "the first case names its spec. The document said:\n{text}")
+	Expect.equal(caseField(doc, index: 0, key: "test"), expected: PassingTest, message: "the cases are in run order. The document said:\n{text}")
+	Expect.equal(caseField(doc, index: 0, key: "verdict"), expected: "PASS", message: "the first case passes. The document said:\n{text}")
+	Expect.equal(caseField(doc, index: 1, key: "test"), expected: FailingTest, message: "the second case is the failing one. The document said:\n{text}")
+	Expect.equal(caseField(doc, index: 1, key: "verdict"), expected: "FAIL", message: "the second case fails. The document said:\n{text}")
+	Expect.contains(caseField(doc, index: 1, key: "reason"), needle: "deliberately wrong", message: "a FAIL carries its reason. The document said:\n{text}")
+end 'a spec-test run writes its cases and counts to the document --result-json names'

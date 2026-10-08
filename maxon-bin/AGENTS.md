@@ -120,7 +120,7 @@ restart the MCP server when you need the new one to answer.
 > `success: true` about a tree containing none of your work.**
 >
 > ⇒ **In a worktree, pass `repoRoot` — the ABSOLUTE path of your worktree root — to EVERY tool call
-> that acts in a tree**: `build`, `run_spec_test`, `run_scale_test`, `spec_test_outcome`, and `execute`,
+> that acts in a tree**: `build`, `run_spec_test`, `run_scale_test`, and `execute`,
 > `test` and `fmt` when you mean YOUR tree's compiler to answer. Those last three default to the
 > host's working directory and name no tree, which is right for a path you wrote yourself and wrong
 > for a worktree whose compiler you want exercised. `check`, `dump_ir`, `lookup_error_code` and `info`
@@ -151,8 +151,8 @@ restart the MCP server when you need the new one to answer.
 | Task | Tool |
 |------|------|
 | Build the compiler | `./maxon-bin/.maxon/maxon run build` — MCP `build` with `path: "maxon-bin"` is a path build that writes `maxon-bin/maxon-bin.exe` and leaves the slot as it was; `from:` names the compiler to build WITH |
-| Run the spec suite | `run_spec_test` |
-| Per-test PASS/FAIL detail | `spec_test_outcome` (requires `filter`) |
+| Run the spec suite | `run_spec_test` — the failures come back inline, in `failures` |
+| Per-test PASS/FAIL detail | `run_spec_test` with `cases: true` |
 | MEASURE per-phase memory + CPU scaling — an instrument, **no verdict** | `run_scale_test` |
 | Run an inline snippet or a file | `execute` — `source:` for a snippet, `path:` for a file |
 | Dump IR | `dump_ir` |

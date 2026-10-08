@@ -306,13 +306,10 @@ function cacheFormatName() returns String
 	return cacheFormatDirectoryName(CacheFormat)
 end 'cacheFormatName'
 
-// What matters is that the slot is there afterwards, not that this run made it: a run losing the
-// mkdir to a simultaneous one sees `Directory.create` answer false against a directory that now
-// exists.
 function slotDirectory(program FilePath, entryFunction ByteArray, formatsRoot FilePath) returns FilePath throws RunCacheError
 	let dir = slotPathOf(program, entryFunction: entryFunction, formatsRoot: formatsRoot)
 
-	if not Directory.create(dir) and not Directory.isDirectory(dir) 'unusable'
+	if not Directory.create(dir) 'unusable'
 		throw RunCacheError.unavailable("could not create {dir.toString()}, where this program's build is kept. Set {RunCacheRootVariable} to a writable directory.")
 	end 'unusable'
 

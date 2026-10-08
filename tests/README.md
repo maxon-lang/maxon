@@ -23,7 +23,7 @@ SERVER its tests spawn.
 | `test-command/` | `maxon test`, under the compiler | `ProjectDir` |
 | `spec-harness/` | `maxon test`, under the compiler | `TestedCompilerStem` in `SpecHarness.maxon` — the binary it spawns: the compiler under test, which is also the `spec-test` harness whose refusals and gates are under test |
 | `lsp/` | `maxon test`, under the compiler | `TestedCompilerStem` — the server, not the dir |
-| `mcp/` | `maxon test`, under the compiler | `TestedCompilerStem` — the server, not the dir |
+| `mcp/` | `maxon test`, under the compiler | `testedCompilerPath()` in `McpHarness.maxon` — the server it spawns |
 | `ladders/` | `maxon test`, under the compiler | `LaddersDirName` in `index.maxtest` |
 | `parallel-compile/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns |
 | `debug/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DebugHarness.maxon` — the binary it spawns: the compiler under test, which is also what the sidecar case builds with |
@@ -474,9 +474,9 @@ tests/
     a-shadowing-program-parses-the-library-cold.maxtest a program shadowing a library type parses the library cold, still equal to cold
     fixtures/<program>/<name>.maxon.fixture stored names only - see rule 1
   mcp/
-    McpHarness.maxon                        the shared half: stdio and `--http` sessions, the debug tool readers, and JSON helpers
+    McpHarness.maxon                        the shared half: stdio and `--http` sessions, the debug tool readers, the spec-file staging, and JSON helpers
     standard.maxtest                        standard user-facing MCP server tests (21 standard tools)
-    dev.maxtest                             contributor MCP server tests (24 tools + --dev)
+    dev.maxtest                             contributor MCP server tests (23 tools + --dev)
     scale-defaults-agree-with-help.maxtest       `run_scale_test` states the defaults `help scale-test` states
     rebuild.maxtest                         a running server survives its image being replaced on disk
     rebuild-over-a-running-previous.maxtest      a self-rebuild succeeds while a server runs its `.previous`
@@ -511,6 +511,18 @@ tests/
     a-staged-snippet-is-removed-after-its-call.maxtest      a snippet staged for a tool call, and everything built from it, is gone once the call answers
     snippets-an-ended-server-left-are-swept.maxtest      a server sweeps the snippets and snippet builds an ended server left, and keeps a live server's
     run-spec-test-filter-union.maxtest           `run_spec_test` given a filter array runs the union of the specs those filters name
+    run-spec-test-answers-its-failures.maxtest      `run_spec_test` answers every failure, with its spec, test and message, under the default cap
+    run-spec-test-caps-its-failures.maxtest      `run_spec_test` lists at most `maxFailures` failures and counts the rest in `failuresOmitted`
+    run-spec-test-lists-no-failure-at-zero.maxtest      `maxFailures: 0` lists no failure and counts every one
+    run-spec-test-bounds-a-failure-message.maxtest      a failure message past 4000 bytes is cut to the bound and ends with the truncation marker
+    run-spec-test-cuts-a-failure-message-on-a-character.maxtest      a cut failure message ends on a character boundary
+    run-spec-test-a-printed-verdict-is-not-a-failure.maxtest      a `FAIL x/y:` line a spec program prints is read as its output
+    run-spec-test-counts-a-case-this-host-cannot-run.maxtest      a case this host cannot run counts as `notRun`, in `total`, and is listed as `NOTRUN`
+    run-spec-test-lists-cases-on-request.maxtest      `cases: true` lists every case the run covered, with its status
+    run-spec-test-omits-cases-by-default.maxtest      without `cases: true` the answer carries no `cases` key
+    run-spec-test-never-reads-another-runs-document.maxtest      `run_spec_test` reads only the result document its own run wrote, and leaves none behind
+    run-spec-test-removes-the-document-of-a-stopped-run.maxtest      a run stopped at its bound leaves no result document behind
+    run-scale-test-answers-its-document-and-leaves-none.maxtest      `run_scale_test` answers the document its own run wrote, and leaves none behind
     an-empty-string-argument-is-refused-by-name.maxtest      an empty string given to an argument is refused by name, never read as absent
     execute-passes-an-empty-argument-through.maxtest      `execute` hands an empty program argument to the program
     build-rebuild-compiles-an-up-to-date-output.maxtest  `build` given `rebuild: true` compiles a program its last call left up to date
@@ -675,7 +687,9 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   its program, a case staged below a `.maxonignore`d directory compiling its own files, a shared library
   parse served to a later program leaving that program's index at its baseline, a second run's workers
   starting from the library cache the first run wrote, a library diagnostic respelled by that warm run
-  exactly as the cold run respelled it, and the two marker shapes the reference grammar reads.
+  exactly as the cold run respelled it, the two marker shapes the reference grammar reads, and a
+  `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
+  counts.
   Each fixture's own preamble says what its test asserts.
 - **`corpus.maxtest`** holds the pairing: every fixture directory has its `<case>.maxtest` beside
   it, every test file its fixture, and every refusal fixture exactly one spec and its expectation.
@@ -1286,8 +1300,16 @@ as an MCP server on either transport, exchanging JSON-RPC messages, and inspecti
   (`build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info` and the thirteen
   `debug_*` tools), their schemas, and the refusals — an argument no tool declares, an argument of the
   wrong JSON type, a contributor argument in user mode, and an error code no registry case claims.
-- `dev.maxtest` gates contributor mode (`maxon mcp-server --dev`): the 24 tools, the `repoRoot` and
+- `dev.maxtest` gates contributor mode (`maxon mcp-server --dev`): the 23 tools, the `repoRoot` and
   `from` arguments, checkout validation, and the `repoRoot` ECHO on both an answer and a refusal.
+- The `run-spec-test-*` cases gate `run_spec_test`'s answer: the union a filter array selects, the
+  failures listed inline under `maxFailures` with the rest counted, a message bounded at 4000 bytes and
+  cut on a character, the four counts and `total`, `cases` only on request, and a `FAIL` line a spec
+  program prints read as that program's output. `run-spec-test-never-reads-another-runs-document.maxtest`,
+  `run-spec-test-removes-the-document-of-a-stopped-run.maxtest` and
+  `run-scale-test-answers-its-document-and-leaves-none.maxtest` gate the per-call result document: each
+  call reads the one its own run wrote, and none is left once the call answers, a stopped run's
+  included.
 - `stdio-debug-tools.maxtest`, `two-sessions-debug-one-source.maxtest` and
   `http-debug-session.maxtest` gate the `debug_*` tools: one debug session per MCP session, held
   across calls on either transport, and reaped with its build when the session ends.

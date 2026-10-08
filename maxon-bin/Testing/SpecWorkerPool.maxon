@@ -190,11 +190,6 @@ end 'WorkerStep'
 let StepCompileToken = "COMPILE"
 let StepRunToken = "RUN"
 
-let VerdictPassToken = "PASS"
-let VerdictFailToken = "FAIL"
-let VerdictSkipToken = "SKIP"
-let VerdictNotRunToken = "NOTRUN"
-
 // How long the dispatcher parks when no worker has an answer ready.
 //
 // This is a POLL, and it is deliberately NOT a busy-spin. `sleep` parks the dispatcher green thread
@@ -776,9 +771,9 @@ export function emitWorkerStep(step WorkerStep, label String)
 end 'emitWorkerStep'
 
 // The wire spelling of a step kind, and — in `stepFromToken` — its inverse. A pair rather than a
-// comparison at each site, for `verdictToken`/`decodeVerdict`'s reason: the encode is exhaustive over
-// the union (a new arm fails to compile until it is given a token) and the decode PANICS on anything
-// else, so a token can neither go missing nor be silently read as the wrong kind.
+// comparison at each site, for `TestOutcome.token`/`decodeVerdict`'s reason: the encode is exhaustive
+// over the union (a new arm fails to compile until it is given a token) and the decode PANICS on
+// anything else, so a token can neither go missing nor be silently read as the wrong kind.
 function stepToken(step WorkerStep) returns String
 	return match step 'kind'
 		compile gives StepCompileToken
@@ -811,18 +806,9 @@ end 'stepVerb'
 // The wire line for ONE result — the one place a result becomes bytes. Its inverse is
 // `decodeWorkerLine`, which reads the same five fields back in the same order.
 function recordLine(specName String, result SpecTestResult) returns String
-	let verdict = verdictToken(result.outcome)
+	let verdict = result.outcome.token().rawValue
 	return "{WorkerResultMarker}{verdict}{ProtocolFieldSep}{specName}{ProtocolFieldSep}{result.testName}{ProtocolFieldSep}{encodeRecordPayload(recordPayload(result))}"
 end 'recordLine'
-
-function verdictToken(outcome TestOutcome) returns String
-	return match outcome 'verdict'
-		pass gives VerdictPassToken
-		fail gives VerdictFailToken
-		skipped gives VerdictSkipToken
-		notRunHere gives VerdictNotRunToken
-	end 'verdict'
-end 'verdictToken'
 
 function recordPayload(result SpecTestResult) returns String
 	return match result.outcome 'verdict'
@@ -953,23 +939,14 @@ function decodeWorkerLine(line String) returns WorkerRecord
 end 'decodeWorkerLine'
 
 function decodeVerdict(token String, payload String, line String) returns TestOutcome
-	if token == VerdictPassToken 'isPass'
-		return TestOutcome.pass
-	end 'isPass'
+	let verdict = try VerdictToken.fromRawValue(token) otherwise panic("spec worker pool: '{token}' is not one of the verdict tokens {spelledVerdictTokens()}: '{line}'")
 
-	if token == VerdictFailToken 'isFail'
-		return TestOutcome.fail(payload)
-	end 'isFail'
-
-	if token == VerdictSkipToken 'isSkip'
-		return TestOutcome.skipped(payload)
-	end 'isSkip'
-
-	if token == VerdictNotRunToken 'isNotRun'
-		return TestOutcome.notRunHere
-	end 'isNotRun'
-
-	panic("spec worker pool: '{token}' is not one of the {VerdictPassToken}/{VerdictFailToken}/{VerdictSkipToken}/{VerdictNotRunToken} verdict tokens: '{line}'")
+	return match verdict 'decoded'
+		pass gives TestOutcome.pass
+		fail gives TestOutcome.fail(payload)
+		skip gives TestOutcome.skipped(payload)
+		notRun gives TestOutcome.notRunHere
+	end 'decoded'
 end 'decodeVerdict'
 
 // One structural separator consumed: the field in front of it, and everything behind it.

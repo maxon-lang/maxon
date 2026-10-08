@@ -1,0 +1,14 @@
+let StagingCaseDirName = "run-spec-test-lists-no-failure-at-zero"
+
+test 'run_spec_test with maxFailures 0 lists no failure and counts every one'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	let cases = failingSpecCases(["first", "second", "third"])
+
+	stageSpecFile(dir, specName: "zero", cases: cases)
+	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"maxFailures\":0\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	Expect.equal(payloadInt(answer, key: "failed"), expected: 3, message: "the staged spec has three failing cases. It answered: {toolCallText(answer)}")
+	Expect.isTrue(payloadArrayFields(answer, key: "failures", field: "test").isEmpty(), message: "`maxFailures: 0` lists no failure. It answered: {toolCallText(answer)}")
+	Expect.equal(payloadInt(answer, key: "failuresOmitted"), expected: 3, message: "every failure is counted as omitted. It answered: {toolCallText(answer)}")
+end 'run_spec_test with maxFailures 0 lists no failure and counts every one'

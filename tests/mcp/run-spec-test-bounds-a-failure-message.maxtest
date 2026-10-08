@@ -1,0 +1,24 @@
+let StagingCaseDirName = "run-spec-test-bounds-a-failure-message"
+let PrintedLineCount = 2000
+let PrintedLine = "0123456789012345678901234567890123456789"
+
+test 'run_spec_test bounds the reason a failure carries'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	let mainBody = "\tvar printed = 0\n\n\twhile printed < {PrintedLineCount} 'eachLine'\n\t\tprint(\"{PrintedLine}\\n\")\n\t\tprinted = printed + 1\n\tend 'eachLine'\n\n"
+	stageSpecFile(dir, specName: "bounded", cases: [printingSpecCase("loud", mainBody: mainBody, expectedStdout: "quiet")])
+
+	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())}\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	let messages = payloadArrayFields(answer, key: "failures", field: "message")
+	Expect.equal(messages.count(), expected: 1, message: "the one failing case must be answered. It answered: {toolCallText(answer)}")
+
+	let printedBytes = PrintedLineCount * (PrintedLine.byteLength() + 1)
+
+	for message in messages 'eachMessage'
+		Expect.isFalse(message.isEmpty(), message: "the failure must carry its reason")
+		Expect.isTrue(message.byteLength() < printedBytes, message: "a failure's reason must be bounded, not the {printedBytes} bytes the case printed; it carried {message.byteLength()}")
+		Expect.atMost(message.byteLength(), than: MessageByteBound, message: "a failure's reason, truncation marker included, must fit in {MessageByteBound} bytes; it carried {message.byteLength()}")
+		Expect.endsWith(message, needle: TruncationMarkerClose, message: "a reason cut short must end by saying so. It ended: {message}")
+	end 'eachMessage'
+end 'run_spec_test bounds the reason a failure carries'

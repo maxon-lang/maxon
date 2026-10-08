@@ -1,0 +1,23 @@
+let StagingCaseDirName = "run-spec-test-answers-its-failures"
+let StagedSpec = "answers"
+let FailingCases = ["first", "second", "third"]
+
+test 'run_spec_test answers every failure under the default cap'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	var cases = [passingSpecCase("passing")]
+	cases.append(failingSpecCases(FailingCases))
+
+	stageSpecFile(dir, specName: StagedSpec, cases: cases)
+	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())}\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	Expect.equal(payloadInt(answer, key: "failed"), expected: 3, message: "the staged spec has three failing cases. It answered: {toolCallText(answer)}")
+	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "failures", field: "test")), expected: renderedStrings(FailingCases), message: "`failures` must name each failing case, in run order. It answered: {toolCallText(answer)}")
+	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "failures", field: "spec")), expected: renderedStrings([StagedSpec, StagedSpec, StagedSpec]), message: "each failure must name its spec. It answered: {toolCallText(answer)}")
+
+	for message in payloadArrayFields(answer, key: "failures", field: "message") 'eachMessage'
+		Expect.isFalse(message.isEmpty(), message: "a failure must carry its reason. It answered: {toolCallText(answer)}")
+	end 'eachMessage'
+
+	Expect.equal(payloadInt(answer, key: "failuresOmitted"), expected: 0, message: "three failures are under the default cap, so none is omitted. It answered: {toolCallText(answer)}")
+end 'run_spec_test answers every failure under the default cap'

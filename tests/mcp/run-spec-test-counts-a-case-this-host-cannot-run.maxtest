@@ -1,0 +1,21 @@
+let StagingCaseDirName = "run-spec-test-counts-a-case-this-host-cannot-run"
+
+#if os(Macos)
+	let UnrunnableTarget = "x64-windows"
+#else
+	let UnrunnableTarget = "arm64-macos"
+#endif
+
+test 'run_spec_test counts a case compiled for a target this host cannot run as not run'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	stageSpecFile(dir, specName: "foreign", cases: [passingSpecCase("compiles")])
+
+	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"target\":\"{UnrunnableTarget}\",\"cases\":true\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	Expect.equal(payloadInt(answer, key: "notRun"), expected: 1, message: "the one case compiled but could not run here. It answered: {toolCallText(answer)}")
+	Expect.equal(payloadInt(answer, key: "passed"), expected: 0, message: "nothing was proved. It answered: {toolCallText(answer)}")
+	Expect.equal(payloadInt(answer, key: "failed"), expected: 0, message: "nothing went wrong. It answered: {toolCallText(answer)}")
+	Expect.equal(payloadInt(answer, key: "total"), expected: 1, message: "`total` counts the case that was not run. It answered: {toolCallText(answer)}")
+	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "cases", field: "status")), expected: renderedStrings(["NOTRUN"]), message: "the case is listed as NOTRUN. It answered: {toolCallText(answer)}")
+end 'run_spec_test counts a case compiled for a target this host cannot run as not run'

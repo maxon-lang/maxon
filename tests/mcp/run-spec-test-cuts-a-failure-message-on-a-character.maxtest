@@ -1,0 +1,33 @@
+let StagingCaseDirName = "run-spec-test-cuts-a-failure-message-on-a-character"
+let PrintedLineCount = 50
+let CharactersPerLine = 200
+let ThreeByteCharacter = "€"
+
+function printedLine() returns String
+	var line = ""
+
+	for _ in 0 upto CharactersPerLine 'eachCharacter'
+		line.append(ThreeByteCharacter)
+	end 'eachCharacter'
+
+	return line
+end 'printedLine'
+
+test 'run_spec_test never cuts a failure message inside a character'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	let mainBody = "\tvar printed = 0\n\n\twhile printed < {PrintedLineCount} 'eachLine'\n\t\tprint(\"{printedLine()}\\n\")\n\t\tprinted = printed + 1\n\tend 'eachLine'\n\n"
+	stageSpecFile(dir, specName: "wide", cases: [printingSpecCase("loud", mainBody: mainBody, expectedStdout: "quiet")])
+
+	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())}\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	let messages = payloadArrayFields(answer, key: "failures", field: "message")
+	Expect.equal(messages.count(), expected: 1, message: "the one failing case must be answered. It answered: {toolCallText(answer)}")
+
+	for message in messages 'eachMessage'
+		Expect.atMost(message.byteLength(), than: MessageByteBound, message: "a failure's reason must fit in {MessageByteBound} bytes; it carried {message.byteLength()}")
+
+		let kept = try message.split(TruncationMarkerOpen).get(0) otherwise panic("a split answers at least one piece")
+		Expect.endsWith(kept, needle: ThreeByteCharacter, message: "the kept text must end on a whole character, not inside one. It ended: {kept}")
+	end 'eachMessage'
+end 'run_spec_test never cuts a failure message inside a character'

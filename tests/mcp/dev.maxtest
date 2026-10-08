@@ -15,16 +15,15 @@ function thisCheckout() returns String
 	return Directory.currentPath().path
 end 'thisCheckout'
 
-test 'dev mcp-server advertises the twenty-one user tools plus the three contributor tools'
+test 'dev mcp-server advertises the twenty-one user tools plus the two contributor tools'
 	let names = toolNames(listTools(true))
-	Expect.equal(names.count(), expected: 24, message: "dev mode must advertise exactly 24 tools: the twenty-one of standard mode, and the three contributor ones")
+	Expect.equal(names.count(), expected: 23, message: "dev mode must advertise exactly 23 tools: the twenty-one of standard mode, and the two contributor ones")
 
 	Expect.isTrue(names.contains("run_spec_test"), message: "missing run_spec_test")
 	Expect.isTrue(names.contains("run_scale_test"), message: "missing run_scale_test")
-	Expect.isTrue(names.contains("spec_test_outcome"), message: "missing spec_test_outcome")
 	Expect.isTrue(names.contains(BuildTool), message: "missing build")
 	Expect.isTrue(names.contains("info"), message: "missing info")
-end 'dev mcp-server advertises the twenty-one user tools plus the three contributor tools'
+end 'dev mcp-server advertises the twenty-one user tools plus the two contributor tools'
 
 test 'dev mcp-server exposes repoRoot on every tool that acts in a tree'
 	let doc = listTools(true)
@@ -33,7 +32,7 @@ test 'dev mcp-server exposes repoRoot on every tool that acts in a tree'
 	Expect.isTrue(buildProps.contains("repoRoot"), message: "build must take repoRoot in dev mode")
 	Expect.isTrue(buildProps.contains("from"), message: "build must take from in dev mode")
 
-	for tool in ["run_spec_test", "run_scale_test", "spec_test_outcome", ExecuteTool, TestTool, FmtTool] 'each'
+	for tool in ["run_spec_test", "run_scale_test", ExecuteTool, TestTool, FmtTool] 'each'
 		Expect.isTrue(toolPropertyKeys(doc, toolName: tool).contains("repoRoot"), message: "{tool} must take repoRoot")
 	end 'each'
 end 'dev mcp-server exposes repoRoot on every tool that acts in a tree'
@@ -77,11 +76,6 @@ test 'dev mcp-server refuses a relative repoRoot on every tool that takes one'
 		Expect.isTrue(toolCallIsError(doc), message: "{tool} must refuse a relative repoRoot")
 		Expect.contains(toolCallText(doc), needle: "is relative. It must be an absolute path")
 	end 'each'
-
-	// `spec_test_outcome` requires a filter, so its relative-root refusal has to carry one.
-	let outcome = callTool("spec_test_outcome", argumentsJson: "\{\"repoRoot\":\"relative/path\",\"filter\":\"x\"\}", devMode: true)
-	Expect.isTrue(toolCallIsError(outcome), message: "spec_test_outcome must refuse a relative repoRoot")
-	Expect.contains(toolCallText(outcome), needle: "is relative. It must be an absolute path")
 end 'dev mcp-server refuses a relative repoRoot on every tool that takes one'
 
 test 'dev mcp-server refuses a repoRoot that is not a checkout'
@@ -107,13 +101,6 @@ test 'dev mcp-server names the tree in a refusal too'
 	Expect.contains(toolCallText(doc), needle: "does not exist")
 	Expect.equal(payloadString(doc, key: "repoRoot"), expected: thisCheckout())
 end 'dev mcp-server names the tree in a refusal too'
-
-test 'dev mcp-server requires a filter for spec_test_outcome'
-	let doc = callTool("spec_test_outcome", argumentsJson: "\{\}", devMode: true)
-
-	Expect.equal(rpcErrorCode(doc), expected: RpcInvalidParamsCode)
-	Expect.contains(rpcErrorMessage(doc), needle: "requires the `filter` argument")
-end 'dev mcp-server requires a filter for spec_test_outcome'
 
 // An `mmTrace: true` run that never traced, reported back as a clean success, is indistinguishable
 // from a leak-free run.

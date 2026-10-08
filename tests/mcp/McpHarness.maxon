@@ -1,12 +1,20 @@
 // Shared harness for `maxon mcp-server`: spawns the compiler under test and drives it over stdio
 // (newline-delimited JSON-RPC) or over the `--http` transport.
 
-let TestedCompilerStem = "maxon-bin/.maxon/maxon"
+let MaxonBinDirName = "maxon-bin"
+let SlotDirName = ".maxon"
+let CompilerBaseName = "maxon"
 export let CacheVendorDirName = "maxon"
 export let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
 export let CacheDirName = "cache"
 export let DebugBuildDirName = "debug-builds"
 export let SidecarSuffix = ".mxdbg"
+export let SpecTempDirName = ".spec-tmp"
+export let ResultFlagPrefix = "--result-json="
+export let MessageByteBound = 4000
+export let TruncationMarkerOpen = "\n["
+export let TruncationMarkerClose = " bytes truncated]"
+export let SpecResultStem = "spec-result"
 
 export function executableSuffix() returns String
 	#if os(Windows)
@@ -17,7 +25,7 @@ export function executableSuffix() returns String
 end 'executableSuffix'
 
 export function testedCompilerPath() returns FilePath
-	let spelled = "{TestedCompilerStem}{executableSuffix()}"
+	let spelled = "{MaxonBinDirName}/{SlotDirName}/{CompilerBaseName}{executableSuffix()}"
 	let relative = try FilePath.from(spelled) otherwise panic("McpHarness: '{spelled}' is not a valid path")
 	let binary = relative.resolve(Directory.currentPath())
 
@@ -28,17 +36,38 @@ export function testedCompilerPath() returns FilePath
 	return binary
 end 'testedCompilerPath'
 
+function requireDirectory(dir FilePath, purpose String)
+	if not Directory.create(dir) 'unusable'
+		panic("McpHarness: could not create {dir.path}, where {purpose}")
+	end 'unusable'
+end 'requireDirectory'
+
 // Absolute, because paths inside it are handed to a child.
 export function stagingDir(spelled String) returns FilePath
 	let dir = try FilePath.from(spelled) otherwise panic("McpHarness: '{spelled}' is not a valid path")
 	let resolved = dir.resolve(Directory.currentPath())
 
-	if not Directory.create(resolved) and not Directory.isDirectory(resolved) 'unusable'
-		panic("McpHarness: could not create {resolved.path}, where a case stages its compiler copy")
-	end 'unusable'
+	requireDirectory(resolved, purpose: "a case stages its compiler copy")
 
 	return resolved
 end 'stagingDir'
+
+export function resultPathNamedBy(command String) returns FilePath
+	let after = try command.split(ResultFlagPrefix).get(1) otherwise panic("the command line names no {ResultFlagPrefix}: {command}")
+
+	return try FilePath.from(after.trim()) otherwise panic("the result path is not a path: {after}")
+end 'resultPathNamedBy'
+
+export function fakeCheckoutWithCompiler(root FilePath, compiler FilePath)
+	for name in [CheckoutMarkerDirName, CheckoutRuntimeDirName] 'eachCheckoutDir'
+		requireDirectory(root.join(name), purpose: "a fake checkout holds its library tiers")
+	end 'eachCheckoutDir'
+
+	let slot = root.join(MaxonBinDirName).join(SlotDirName)
+	requireDirectory(slot, purpose: "a fake checkout keeps its compiler")
+
+	_ = stagedCopyOf(compiler, dir: slot, name: CompilerBaseName)
+end 'fakeCheckoutWithCompiler'
 
 // A case that replaces a compiler image on disk replaces a COPY: doing it to the tree's own slot would
 // rebuild the checkout's compiler as a side effect.
@@ -392,8 +421,44 @@ export function payloadInt(doc JsonDoc, key String) returns JsonInt
 	return try payload.getInt(payload.root, key: key) otherwise panic("tool payload has no number `{key}`: {toolCallText(doc)}")
 end 'payloadInt'
 
+let SpecFileExtension = ".md"
+
+export function printingSpecCase(name String, mainBody String, expectedStdout String) returns String
+	return "<!-- test: {name} -->\n\n```maxon\nfunction main() returns ExitCode\n{mainBody}\treturn 0\nend 'main'\n```\n\n```stdout\n{expectedStdout}\n```\n"
+end 'printingSpecCase'
+
+export function failingSpecCase(name String) returns String
+	return printingSpecCase(name, mainBody: "\tprint(\"{name}\\n\")\n", expectedStdout: "not {name}")
+end 'failingSpecCase'
+
+export function passingSpecCase(name String) returns String
+	return printingSpecCase(name, mainBody: "\tprint(\"kept\\n\")\n", expectedStdout: "kept")
+end 'passingSpecCase'
+
+export function failingSpecCases(names StringArray) returns StringArray
+	var cases = StringArray.create()
+
+	for name in names 'eachName'
+		cases.push(failingSpecCase(name))
+	end 'eachName'
+
+	return cases
+end 'failingSpecCases'
+
+export function stageSpecFile(dir FilePath, specName String, cases StringArray)
+	var source = "---\nfeature: mcp-{specName}\n---\n# {specName}\n\n## Tests\n"
+
+	for c in cases 'eachCase'
+		source = "{source}\n{c}"
+	end 'eachCase'
+
+	let path = dir.join("{specName}{SpecFileExtension}")
+	try File.writeText(path, content: source) otherwise panic("McpHarness: could not stage {path.path}")
+end 'stageSpecFile'
+
 let OutsideCheckoutStagingDirNamePrefix = "maxon-tests-mcp"
 let CheckoutMarkerDirName = "stdlib"
+let CheckoutRuntimeDirName = "runtime"
 
 #if os(Windows)
 	let HostTempVariable = "TEMP"
@@ -412,10 +477,7 @@ export function freshOutsideCheckoutDir(caseDirName String) returns FilePath
 		discardOutsideCheckoutDir(dir)
 	end 'leftByAnEndedProcess'
 
-	if not Directory.create(dir) 'couldNotCreate'
-		panic("McpHarness: could not create {dir.path}, where a case stages outside the checkout")
-	end 'couldNotCreate'
-
+	requireDirectory(dir, purpose: "a case stages outside the checkout")
 	return dir
 end 'freshOutsideCheckoutDir'
 
@@ -927,18 +989,13 @@ let DebugEventsKey = "events"
 let DebugEventKindKey = "event"
 let DebugOutputKey = "output"
 
-function debugToolPayload(doc JsonDoc) returns JsonDoc
-	let text = toolCallText(doc)
-	return try Json.parse(text) otherwise panic("McpHarness: a debug tool answered text that is not JSON: {text}")
-end 'debugToolPayload'
-
 export function debugToolState(doc JsonDoc) returns String
-	let payload = debugToolPayload(doc)
+	let payload = toolPayload(doc)
 	return try payload.getString(payload.root, key: DebugStateKey) otherwise panic("McpHarness: a debug tool answered no `{DebugStateKey}`: {toolCallText(doc)}")
 end 'debugToolState'
 
-function debugPayloadArray(payload JsonDoc, doc JsonDoc, key String) returns JsonNodeIdArray
-	let arrayId = try payload.getChild(payload.root, key: key) otherwise panic("McpHarness: a debug tool answered no `{key}`: {toolCallText(doc)}")
+function payloadArray(payload JsonDoc, doc JsonDoc, key String) returns JsonNodeIdArray
+	let arrayId = try payload.getChild(payload.root, key: key) otherwise panic("McpHarness: a tool answered no `{key}`: {toolCallText(doc)}")
 	let count = try payload.arrayLength(arrayId) otherwise panic("McpHarness: `{key}` is not an array: {toolCallText(doc)}")
 	var elements = JsonNodeIdArray.create()
 
@@ -947,13 +1004,24 @@ function debugPayloadArray(payload JsonDoc, doc JsonDoc, key String) returns Jso
 	end 'eachElement'
 
 	return elements
-end 'debugPayloadArray'
+end 'payloadArray'
+
+export function payloadArrayFields(doc JsonDoc, key String, field String) returns StringArray
+	let payload = toolPayload(doc)
+	var values = StringArray.create()
+
+	for elementId in payloadArray(payload, doc: doc, key: key) 'eachElement'
+		values.push(try payload.getString(elementId, key: field) otherwise panic("McpHarness: a `{key}` element carries no string `{field}`: {toolCallText(doc)}"))
+	end 'eachElement'
+
+	return values
+end 'payloadArrayFields'
 
 export function debugEventKinds(doc JsonDoc) returns StringArray
-	let payload = debugToolPayload(doc)
+	let payload = toolPayload(doc)
 	var kinds = StringArray.create()
 
-	for eventId in debugPayloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
+	for eventId in payloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
 		let kind = try payload.getString(eventId, key: DebugEventKindKey) otherwise continue
 		kinds.push(kind)
 	end 'eachEvent'
@@ -962,10 +1030,10 @@ export function debugEventKinds(doc JsonDoc) returns StringArray
 end 'debugEventKinds'
 
 export function debugEventLines(doc JsonDoc, kind String) returns StringArray
-	let payload = debugToolPayload(doc)
+	let payload = toolPayload(doc)
 	var lines = StringArray.create()
 
-	for eventId in debugPayloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
+	for eventId in payloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
 		let eventKind = try payload.getString(eventId, key: DebugEventKindKey) otherwise continue
 
 		if eventKind.equals(kind) 'wanted'
@@ -978,10 +1046,10 @@ export function debugEventLines(doc JsonDoc, kind String) returns StringArray
 end 'debugEventLines'
 
 export function debugOutputLines(doc JsonDoc) returns StringArray
-	let payload = debugToolPayload(doc)
+	let payload = toolPayload(doc)
 	var lines = StringArray.create()
 
-	for lineId in debugPayloadArray(payload, doc: doc, key: DebugOutputKey) 'eachLine'
+	for lineId in payloadArray(payload, doc: doc, key: DebugOutputKey) 'eachLine'
 		let line = payload.get(lineId)
 
 		if line.kind != JsonKind.jsonString 'notText'
@@ -995,10 +1063,10 @@ export function debugOutputLines(doc JsonDoc) returns StringArray
 end 'debugOutputLines'
 
 export function debugLocalNames(doc JsonDoc) returns StringArray
-	let payload = debugToolPayload(doc)
+	let payload = toolPayload(doc)
 	var names = StringArray.create()
 
-	for eventId in debugPayloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
+	for eventId in payloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
 		let localsId = try payload.getChild(eventId, key: "locals") otherwise continue
 		let localCount = try payload.arrayLength(localsId) otherwise continue
 

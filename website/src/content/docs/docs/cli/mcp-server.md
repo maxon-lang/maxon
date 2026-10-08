@@ -50,7 +50,7 @@ maxon mcp-server --http=7823      # ... on a port you choose
 
 | Option | Description |
 |--------|-------------|
-| `--dev` | Enable the tools for working on the Maxon compiler: `run_spec_test`, `run_scale_test`, `spec_test_outcome`, the `repoRoot` argument of `build`, `execute`, `test` and `fmt`, and the `from` argument of `build` |
+| `--dev` | Enable the tools for working on the Maxon compiler: `run_spec_test`, `run_scale_test`, the `repoRoot` argument of `build`, `execute`, `test` and `fmt`, and the `from` argument of `build` |
 | `--http=<port>` | Serve the same tool roster over HTTP on `127.0.0.1`, on `<port>` (1 to 65535). Written bare as `--http` it takes whichever free port the kernel gives. |
 | `--idle-timeout=<seconds>` | Close an HTTP session idle for this long, reaping any debug session it held (1 to 86400, default 300). See [Sessions and idleness](#sessions-and-idleness). Only with `--http`. |
 | `--max-sessions=<n>` | How many HTTP sessions may be live at once (1 to 4096, default 8); an `initialize` past the cap is answered `429`. Only with `--http`. |
@@ -67,7 +67,7 @@ implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `t
 | Mode | Invocation | Tools |
 |------|------------|-------|
 | Standard | `maxon mcp-server` | 21: `build`, `execute`, `test`, `fmt`, `check`, `dump_ir`, `lookup_error_code`, `info`, and the thirteen `debug_*` tools |
-| Developer | `maxon mcp-server --dev` | 24: the standard tools plus `run_spec_test`, `run_scale_test`, `spec_test_outcome` |
+| Developer | `maxon mcp-server --dev` | 23: the standard tools plus `run_spec_test` and `run_scale_test` |
 
 ## The HTTP transport
 
@@ -344,10 +344,10 @@ and `fmt` in developer mode, takes a `repoRoot` argument:
 - A tool acting on a tree runs **that tree's own compiler**, `<repoRoot>/maxon-bin/.maxon/maxon`, because
   the compiler finds its standard library by walking up from its own executable. A tree whose compiler
   has not been built is refused, naming the `build` tool.
-- **Omitted, the default differs by tool.** `build`, `run_spec_test`, `run_scale_test` and
-  `spec_test_outcome` act on the checkout the server's own compiler sits in. `execute`, `test` and `fmt` act in
-  the host's working directory, driven by the server's own compiler and naming no tree — their `path`
-  arguments are the caller's, and are resolved against the caller's directory.
+- **Omitted, the default differs by tool.** `build`, `run_spec_test` and `run_scale_test` act on the
+  checkout the server's own compiler sits in. `execute`, `test` and `fmt` act in the host's working
+  directory, driven by the server's own compiler and naming no tree — their `path` arguments are the
+  caller's, and are resolved against the caller's directory.
 - **An answer echoes the `repoRoot` it used** whenever it acted on a named tree, on success and on refusal.
   A tool that named no tree leaves the field out rather than reporting an empty one.
 - `check` and `dump_ir` take no `repoRoot`: they compile in the server process and answer with the
@@ -362,8 +362,19 @@ In developer mode `build` also accepts:
 
 ### `run_spec_test`
 
-Runs `maxon spec-test` and returns `passed`, `failed`, `total`, `summaryParsed`, `durationMs`,
-`exitCode`, `memoryLeak` (exit code 101) and `rawTail` (the last 4 KiB of output).
+Runs `maxon spec-test` and returns `passed`, `failed`, `skipped`, `notRun`, `total` (the four summed),
+`failures`, `failuresOmitted`, `durationMs`, `exitCode`, `memoryLeak` (exit code 101) and `rawTail` (the
+last 4 KiB of output, starting on a character boundary).
+
+- **`failures`** lists the failing cases in run order as `{spec, test, message}`, up to `maxFailures`;
+  `failuresOmitted` counts the rest. A `message` holds at most 4000 bytes: a longer one is cut on a
+  character boundary and ends `\n[N bytes truncated]`, where N is the bytes cut.
+- **`cases`**, with `cases: true`, lists every case the run covered, in run order, as
+  `{spec, test, status}`, where `status` is `PASS`, `FAIL`, `SKIP` or `NOTRUN`. It is complete whatever
+  `maxFailures` is.
+- The answer is read from the run's [`--result-json`](/docs/cli/compiler-development/#maxon-spec-test) document, written to
+  `.spec-tmp/spec-result-<pid>-<serial>.json` in the checkout, one per call, and deleted when the call
+  ends. A run that writes no document is answered with a tool error carrying `rawTail`.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -375,13 +386,17 @@ Runs `maxon spec-test` and returns `passed`, `failed`, `total`, `summaryParsed`,
 | `network` | boolean | `--network`: also run the cases that reach a real external host |
 | `target` | string | `--target=` value, such as `wasm32-wasi` |
 | `workers` | integer | `--workers=`: the worker process count. A debugging aid; the default is what the suite normally runs at. |
+| `maxFailures` | integer | Most failing cases listed in `failures` (0–1000, default 20) |
+| `cases` | boolean | Also answer `cases`, the verdict of every case the run covered |
 | `timeoutSeconds` | number | Seconds the run may take (default 600) |
 | `repoRoot` | string | The checkout to run in |
 
 ### `run_scale_test`
 
 Runs `maxon scale-test`, the scaling instrument, and returns its whole result document as `result`. It
-has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadratic).
+has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadratic). The document is written
+to `.scale-tmp/scale-result-<pid>-<serial>.json` in the checkout, one per call, and deleted when the call
+ends.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -390,20 +405,6 @@ has no verdict: the ratio between rungs is the reading (×2 linear, ×4 quadrati
 | `note` | string | Record the run in `docs/optimization-log.md` with this text as the reason |
 | `emitCorpus` | string | Write the generated programs to this directory and stop there |
 | `log` | string | `--log=` value |
-| `timeoutSeconds` | number | Seconds the run may take (default 600) |
-| `repoRoot` | string | The checkout to run in |
-
-### `spec_test_outcome`
-
-Runs spec tests for a filter and returns a `tests` array of `{spec, test, status}` entries (`PASS` or
-`FAIL`), a `failures` array of `{spec, message}`, and the counts.
-
-| Argument | Type | Description |
-|----------|------|-------------|
-| `filter` | string or array of strings, required | One `--filter=` per pattern, each a case-sensitive substring, typically a label like `arithmetic/addition`. At least one pattern, none of them empty. |
-| `target` | string | `--target=` value |
-| `network` | boolean | Also run the cases that reach a real external host |
-| `workers` | integer | `--workers=`: the worker process count. A debugging aid; the default is what the suite normally runs at. |
 | `timeoutSeconds` | number | Seconds the run may take (default 600) |
 | `repoRoot` | string | The checkout to run in |
 

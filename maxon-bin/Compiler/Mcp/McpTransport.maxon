@@ -366,24 +366,105 @@ export function combineStreams(stdout String, stderr String) returns String
 	return "{stdout}\n{stderr}"
 end 'combineStreams'
 
+function byteAt(bytes ByteArray, at BytePos) returns Byte
+	return try bytes.get(at) otherwise panic("byteAt: {at} is outside a range derived from the array's own length")
+end 'byteAt'
+
 export function sliceBytes(bytes ByteArray, from BytePos, until BytePos) returns String
 	var out = ByteArray.create()
 
 	for i in from upto until 'copy'
-		let b = try bytes.get(i as ElementIndex) otherwise panic("sliceBytes: {i} is outside a range derived from the array's own length")
-		out.push(b)
+		out.push(byteAt(bytes, at: i))
 	end 'copy'
 
 	return String.from(out)
 end 'sliceBytes'
 
-export function lastBytes(s String, max BytePos) returns String
-	let bytes = s.toByteArray()
-	let n = bytes.count()
+let MaxContinuationBytes = 3 as BytePos
+let TruncationMarkerOpen = "\n["
+let TruncationMarkerClose = " bytes truncated]"
 
-	if n as BytePos <= max 'fits'
+union BoundarySearch
+	found(at BytePos)
+	noLeadByteInReach
+end 'BoundarySearch'
+
+function isBoundary(bytes ByteArray, at BytePos) returns bool
+	return at >= bytes.count() or not utf8IsContinuation(byteAt(bytes, at: at))
+end 'isBoundary'
+
+function boundaryAtOrBefore(bytes ByteArray, at BytePos) returns BoundarySearch
+	for back in 0 to MaxContinuationBytes 'eachCandidate'
+		if back > at 'pastTheStart'
+			break
+		end 'pastTheStart'
+
+		if isBoundary(bytes, at: (at - back) as BytePos) 'found'
+			return BoundarySearch.found((at - back) as BytePos)
+		end 'found'
+	end 'eachCandidate'
+
+	return BoundarySearch.noLeadByteInReach
+end 'boundaryAtOrBefore'
+
+function boundaryAtOrAfter(bytes ByteArray, at BytePos) returns BoundarySearch
+	for ahead in 0 to MaxContinuationBytes 'eachCandidate'
+		if isBoundary(bytes, at: (at + ahead) as BytePos) 'found'
+			return BoundarySearch.found((at + ahead) as BytePos)
+		end 'found'
+	end 'eachCandidate'
+
+	return BoundarySearch.noLeadByteInReach
+end 'boundaryAtOrAfter'
+
+// Malformed UTF-8 is cut at the raw position: a spec program may print any bytes, and its output
+// must not panic the server.
+function cutPosition(search BoundarySearch, raw BytePos) returns BytePos
+	return match search 'reach'
+		found(boundary) gives boundary
+		noLeadByteInReach gives raw
+	end 'reach'
+end 'cutPosition'
+
+export function firstBytes(s String, max BytePos) returns String
+	let bytes = s.toByteArray()
+	let n = bytes.count() as BytePos
+
+	if n <= max 'fits'
 		return s
 	end 'fits'
 
-	return sliceBytes(bytes, from: (n as BytePos - max) as BytePos, until: n as BytePos)
+	return sliceBytes(bytes, from: 0, until: cutPosition(boundaryAtOrBefore(bytes, at: max), raw: max))
+end 'firstBytes'
+
+export function lastBytes(s String, max BytePos) returns String
+	let bytes = s.toByteArray()
+	let n = bytes.count() as BytePos
+
+	if n <= max 'fits'
+		return s
+	end 'fits'
+
+	return sliceBytes(bytes, from: cutPosition(boundaryAtOrAfter(bytes, at: (n - max) as BytePos), raw: (n - max) as BytePos), until: n)
 end 'lastBytes'
+
+function truncationMarker(dropped BytePos) returns String
+	return "{TruncationMarkerOpen}{dropped}{TruncationMarkerClose}"
+end 'truncationMarker'
+
+module function firstBytesMarked(s String, max BytePos) returns String
+	if s.byteLength() <= max 'fits'
+		return s
+	end 'fits'
+
+	// The widest count's width, so the marker actually appended can never push the result past `max`.
+	let reserved = truncationMarker(u64.max as BytePos).byteLength()
+
+	if max < reserved 'noRoomForTheMarker'
+		panic("firstBytesMarked: a bound of {max} bytes cannot hold the {reserved}-byte marker that says text was dropped")
+	end 'noRoomForTheMarker'
+
+	let kept = firstBytes(s, max: (max - reserved) as BytePos)
+
+	return "{kept}{truncationMarker((s.byteLength() - kept.byteLength()) as BytePos)}"
+end 'firstBytesMarked'

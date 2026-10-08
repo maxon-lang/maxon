@@ -1,0 +1,32 @@
+let StagingCaseDirName = "run-spec-test-never-reads-another-runs-document"
+let DecoyCase = "phantom"
+let NothingSelected = "nosuch/"
+let DecoyDocument = "\{\"passed\":0,\"failed\":1,\"skipped\":0,\"notRun\":0,\"total\":1,\"cases\":[\{\"spec\":\"decoy\",\"test\":\"phantom\",\"verdict\":\"FAIL\",\"reason\":\"planted by the test\"\}]\}"
+
+test 'run_spec_test reads only the document its own spec-test wrote, and leaves none behind'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	stageSpecFile(dir, specName: "kept", cases: [passingSpecCase("holds")])
+
+	let tempDir = Directory.currentPath().join(SpecTempDirName)
+	_ = Directory.create(tempDir)
+
+	let decoy = tempDir.join("{SpecResultStem}.json")
+	try File.writeText(decoy, content: DecoyDocument)
+
+	let selectsNothing = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"filter\":\"{NothingSelected}\"\}", devMode: true)
+	Expect.isTrue(toolCallIsError(selectsNothing), message: "a run that selects nothing writes no document and must answer an error. It answered: {toolCallText(selectsNothing)}")
+	Expect.isFalse(toolCallText(selectsNothing).contains(DecoyCase), message: "the answer carries a case from a document this run never wrote. It answered: {toolCallText(selectsNothing)}")
+
+	if File.exists(decoy) 'stillThere'
+		try File.delete(decoy)
+	end 'stillThere'
+
+	let ran = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())}\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	let written = resultPathNamedBy(payloadString(ran, key: "command"))
+	let leftBehind = File.exists(written)
+
+	Expect.equal(payloadInt(ran, key: "passed"), expected: 1, message: "the staged case passes. It answered: {toolCallText(ran)}")
+	Expect.isFalse(leftBehind, message: "the document {written.toString()} is still on disk after the answer was built from it")
+end 'run_spec_test reads only the document its own spec-test wrote, and leaves none behind'

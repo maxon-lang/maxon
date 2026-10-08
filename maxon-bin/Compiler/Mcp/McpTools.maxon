@@ -2,15 +2,19 @@
 
 let StdlibRootUnresolved = "unresolved — this compiler does not sit inside a tree holding stdlib/, so it can compile nothing"
 
-let ScaleResultRelativePath = ".scale-tmp/scale-result.json"
+let ScaleResultStem = "scale-result"
+let SpecResultStem = "spec-result"
+let ResultExtension = ".json"
 let SnippetStem = "mcp-snippet"
 let SnippetExtension = ".maxon"
 let SnippetStagedSeparator = "."
-let SnippetNameSeparator = "-"
+let StagedNameSeparator = "-"
 let FromArgument = "from"
 
 module let ChildTimeoutOption = "timeoutSeconds"
 module let WorkersOption = "workers"
+module let MaxFailuresOption = "maxFailures"
+module let CasesOption = "cases"
 module let RungsOption = "rungs"
 module let RepeatOption = "repeat"
 module let FilterOption = "filter"
@@ -20,7 +24,7 @@ module let LogOption = "log"
 module let NoteOption = "note"
 module let EmitCorpusOption = "emitCorpus"
 
-typealias SnippetSerial = int(0 to u64.max)
+typealias StagedSerial = int(0 to u64.max)
 
 // =============================================================================
 // Spawning
@@ -77,67 +81,110 @@ module function withinContext(context TreeContext, reqDoc JsonDoc, idNode JsonNo
 	end 'tree'
 end 'withinContext'
 
-function addTimedRunFields(doc JsonDoc, payload JsonObjectBuilder, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, combined String)
+function addTimedRunFields(doc JsonDoc, payload JsonObjectBuilder, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs)
 	addRunFields(doc, payload: payload, command: formatArgv(ctx.compiler, argv: argv), repoRoot: ctx.repoRootLabel, res: res)
 	payload.addNumber(doc, key: "durationMs", value: durationMs as JsonFloat)
-	payload.addString(doc, key: "rawTail", value: lastBytes(combined, max: RawTailMaxBytes))
+	payload.addString(doc, key: "rawTail", value: lastBytes(combineStreams(res.stdout, stderr: res.stderr), max: RawTailMaxBytes))
 end 'addTimedRunFields'
 
 // =============================================================================
 // Inline snippets
 // =============================================================================
 
+union StagedSnippet
+	staged(path FilePath)
+	refused(reason String)
+end 'StagedSnippet'
+
 // Staged in Maxon's cache directory on this host, never in or beside the caller's project: a tool
 // has no business writing there, and `maxon cache clear` could not reach it.
-//
-// What matters is that the directory exists afterwards, not that this call made it: only a root
-// this compiler cannot create leaves the snippet nowhere to stage.
-function stageSnippet(source String) returns FilePath throws McpError
-	let root = try hostCacheRoot() otherwise throw McpError.notFound
-	let dir = root.join(SnippetStem)
+function stageSnippet(source String) returns StagedSnippet
+	let root = try hostCacheRoot() otherwise (e) 'noRoot'
+		return StagedSnippet.refused("this host has no cache directory to stage it in ({e.name})")
+	end 'noRoot'
 
-	if not Directory.create(dir) and not Directory.isDirectory(dir) 'unusable'
-		throw McpError.notFound
+	let dir = StagedFamily.snippet.directoryUnder(root)
+
+	if not Directory.create(dir) 'unusable'
+		return StagedSnippet.refused("could not create {dir.path}")
 	end 'unusable'
 
-	let file = unusedSnippetPath(dir)
-	try File.writeText(file, content: source) otherwise throw McpError.notFound
+	let file = try StagedFamily.snippet.reserveIn(dir, content: source) otherwise (e) 'unwritten'
+		return StagedSnippet.refused("could not write it into {dir.path} ({e.name})")
+	end 'unwritten'
 
-	return file
+	return StagedSnippet.staged(file)
 end 'stageSnippet'
 
-function unusedSnippetPath(dir FilePath) returns FilePath
-	var serial = Clock.nowNanos() as SnippetSerial
+enum StagedFamily
+	snippet
+	specResult
+	scaleResult
 
-	while true 'untilUnused'
-		let candidate = childPath(dir, segment: "{SnippetStem}{SnippetNameSeparator}{__Builtins.currentProcessId()}{SnippetNameSeparator}{serial}{SnippetExtension}")
+	function stem() returns String
+		return match self 'family'
+			snippet gives SnippetStem
+			specResult gives SpecResultStem
+			scaleResult gives ScaleResultStem
+		end 'family'
+	end 'stem'
 
-		if not File.exists(candidate) 'unused'
+	function suffix() returns String
+		return match self 'family'
+			snippet gives SnippetExtension
+			specResult or
+				scaleResult gives ResultExtension
+		end 'family'
+	end 'suffix'
+
+	function directoryUnder(root FilePath) returns FilePath
+		return match self 'family'
+			snippet gives childPath(root, segment: SnippetStem)
+			specResult gives childPath(root, segment: SpecScratchDirName)
+			scaleResult gives childPath(root, segment: ScaleCorpusDirName)
+		end 'family'
+	end 'directoryUnder'
+
+	function prefix() returns String
+		return "{self.stem()}{StagedNameSeparator}"
+	end 'prefix'
+
+	function reserveIn(dir FilePath, content String) returns FilePath throws FileWriteError
+		var serial = Clock.nowNanos() as StagedSerial
+
+		while true 'untilReserved'
+			let candidate = childPath(dir, segment: "{self.prefix()}{__Builtins.currentProcessId()}{StagedNameSeparator}{serial}{self.suffix()}")
+
+			try File.createText(candidate, content: content) otherwise (e) 'notCreated'
+				if e != FileWriteError.alreadyExists 'unusable'
+					throw e
+				end 'unusable'
+
+				serial = serial + 1
+				continue
+			end 'notCreated'
+
 			return candidate
-		end 'unused'
+		end 'untilReserved'
 
-		serial = serial + 1
-	end 'untilUnused'
+		panic("StagedFamily.reserveIn: the search returns from inside its loop")
+	end 'reserveIn'
+end 'StagedFamily'
 
-	panic("unusedSnippetPath: the search returns from inside its loop")
-end 'unusedSnippetPath'
+function stagedLivenessOf(family StagedFamily, name String) returns OwnerLiveness
+	if not name.startsWith(family.prefix()) 'notStagedHere'
+		return OwnerLiveness.notOwned
+	end 'notStagedHere'
+
+	let owner = try name.replaceFirst(family.prefix(), with: "").split(StagedNameSeparator).get(0) otherwise panic("stagedLivenessOf: a split answers at least one piece")
+
+	return livenessOfOwner(ownerProcessNamed(owner))
+end 'stagedLivenessOf'
 
 export function sweepStaleSnippets()
 	let root = try hostCacheRoot() otherwise return
-	sweepLeftoversOfEndedOwners(root.join(SnippetStem), livenessOf: snippetLivenessOf, keyOf: snippetSourceOf, discardKeyed: discardSnippet)
+	sweepLeftoversOfEndedOwners(StagedFamily.snippet.directoryUnder(root), livenessOf: function(name) gives stagedLivenessOf(StagedFamily.snippet, name: name), keyOf: snippetSourceOf, discardKeyed: discardSnippet)
 end 'sweepStaleSnippets'
-
-function snippetLivenessOf(name String) returns OwnerLiveness
-	let stagedPrefix = "{SnippetStem}{SnippetNameSeparator}"
-
-	if not name.startsWith(stagedPrefix) 'notASnippetFile'
-		return OwnerLiveness.notOwned
-	end 'notASnippetFile'
-
-	let owner = try name.replaceFirst(stagedPrefix, with: "").split(SnippetNameSeparator).get(0) otherwise panic("snippetLivenessOf: a split answers at least one piece")
-
-	return livenessOfOwner(ownerProcessNamed(owner))
-end 'snippetLivenessOf'
 
 function snippetSourceOf(staged FilePath) returns FilePath
 	let name = staged.filename()
@@ -230,8 +277,10 @@ function resolveSourceTarget(reqDoc JsonDoc, args OptionalNode) returns SourceTa
 	end 'both'
 
 	if let sourceArg = try source.text() 'inline'
-		let file = try stageSnippet(sourceArg) otherwise return SourceTarget.refused("could not stage the inline source into a scratch file.")
-		return SourceTarget.staged(file)
+		return match stageSnippet(sourceArg) 'staging'
+			staged(file) gives SourceTarget.staged(file)
+			refused(reason) gives SourceTarget.refused("could not stage the inline source: {reason}")
+		end 'staging'
 	end 'inline'
 
 	// `.` names the working directory, which is what naming nothing already means.
@@ -587,9 +636,9 @@ end 'hostOrTreeContext'
 module function executeSpecTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	let dirArg = getOptionalStringArg(reqDoc, args: args, key: "directory", defaultVal: DefaultSpecDir)
 
-	match specToolArgv(reqDoc, idNode: idNode, args: args, ctx: ctx, directory: dirArg, tool: SpecTestToolName, filterRequired: false) 'argv'
+	match specToolArgv(reqDoc, idNode: idNode, args: args, ctx: ctx, directory: dirArg) 'argv'
 		refused(reply) then return reply
-		built(argv) then return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: SpecTestCommandName, answer: function(ranArgv StringArray, res CollectedOutput, took DurationMs) gives specTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res, durationMs: took))
+		built(argv) then return runWithResultDocument(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: SpecTestCommandName, family: StagedFamily.specResult, answer: function(parsed JsonDoc, ranArgv StringArray, res CollectedOutput, took DurationMs) gives specReportReply(reqDoc, idNode: idNode, args: args, ctx: ctx, parsed: parsed, argv: ranArgv, res: res, durationMs: took))
 	end 'argv'
 end 'executeSpecTestToolWithin'
 
@@ -598,10 +647,10 @@ union SpecToolArgv
 	refused(reply String)
 end 'SpecToolArgv'
 
-function specToolArgv(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext, directory String, tool String, filterRequired bool) returns SpecToolArgv
+function specToolArgv(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext, directory String) returns SpecToolArgv
 	let filterPatterns = getOptionalStringListArg(reqDoc, args: args, key: FilterOption) as FilterPatternArray
 
-	return match specFilterVerdict(filterPatterns, tool: tool, required: filterRequired) 'filter'
+	return match specFilterVerdict(filterPatterns) 'filter'
 		usable gives SpecToolArgv.built(specTestArgv(reqDoc, args: args, directory: directory, filterPatterns: filterPatterns))
 		refused(reason) gives SpecToolArgv.refused(toolErrorText(reqDoc, idNode: idNode, message: reason, repoRoot: ctx.repoRootLabel))
 	end 'filter'
@@ -612,14 +661,10 @@ union SpecFilterVerdict
 	refused(reason String)
 end 'SpecFilterVerdict'
 
-function specFilterVerdict(patterns FilterPatternArray, tool String, required bool) returns SpecFilterVerdict
-	if required and patterns.isEmpty() 'noPattern'
-		return SpecFilterVerdict.refused("{tool}: `{FilterOption}` must name at least one pattern.")
-	end 'noPattern'
-
+function specFilterVerdict(patterns FilterPatternArray) returns SpecFilterVerdict
 	for pattern in patterns 'eachPattern'
 		if pattern.isEmpty() 'emptyPattern'
-			return SpecFilterVerdict.refused("{tool}: `{FilterOption}` holds an empty pattern, which would select every case.")
+			return SpecFilterVerdict.refused("{SpecTestToolName}: `{FilterOption}` holds an empty pattern, which would select every case.")
 		end 'emptyPattern'
 	end 'eachPattern'
 
@@ -642,31 +687,169 @@ function specTestArgv(reqDoc JsonDoc, args OptionalNode, directory String, filte
 	return argv
 end 'specTestArgv'
 
-function specTestReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs) returns String
-	let combined = combineStreams(res.stdout, stderr: res.stderr)
-	let summary = parseSummary(combined)
+typealias ResultAnswer = function(JsonDoc, StringArray, CollectedOutput, DurationMs) returns String
+
+union ResultText
+	found(text String)
+	missing
+	unreadable(reason String)
+end 'ResultText'
+
+// Each call reads only the document it reserved: one server serves many agents, other servers and
+// CLI runs act on the same tree, and a spec dir outside a checkout takes no tree lock. At a shared
+// path, a run refused on a busy lock would answer with the lock holder's document.
+function runWithResultDocument(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, what String, family StagedFamily, answer ResultAnswer) returns String
+	let resultDir = family.directoryUnder(ctx.workingDir)
+
+	if not Directory.create(resultDir) 'unusable'
+		return toolErrorText(reqDoc, idNode: idNode, message: "{what}: could not create {resultDir.path}, where the run's result document is written.", repoRoot: ctx.repoRootLabel)
+	end 'unusable'
+
+	let resultPath = try family.reserveIn(resultDir, content: "") otherwise (e) 'unreserved'
+		return toolErrorText(reqDoc, idNode: idNode, message: "{what}: could not reserve a name for the run's result document in {resultDir.path} ({e.name}).", repoRoot: ctx.repoRootLabel)
+	end 'unreserved'
+
+	sweepLeftoversOfEndedOwners(resultDir, livenessOf: function(entry) gives stagedLivenessOf(family, name: entry), keyOf: function(entry) gives entry, discardKeyed: removeOwnedFile)
+
+	var ranArgv = StringArray.create()
+	ranArgv.append(argv)
+	ranArgv.push("{ResultJsonFlagPrefix}{resultPath.path}")
+
+	let readFrom = resultPath.clone()
+	let reply = runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, what: what, answer: function(shownArgv StringArray, res CollectedOutput, took DurationMs) gives resultDocumentReply(reqDoc, idNode: idNode, ctx: ctx, argv: shownArgv, res: res, durationMs: took, what: what, resultPath: readFrom, answer: answer))
+
+	removeOwnedFile(resultPath)
+
+	return reply
+end 'runWithResultDocument'
+
+function readResultText(path FilePath) returns ResultText
+	if not File.exists(path) 'absent'
+		return ResultText.missing
+	end 'absent'
+
+	let text = try File.readText(path) otherwise (e) 'unread'
+		return ResultText.unreadable(e.name)
+	end 'unread'
+
+	if text.isEmpty() 'onlyTheReservation'
+		return ResultText.missing
+	end 'onlyTheReservation'
+
+	return ResultText.found(text)
+end 'readResultText'
+
+function resultDocumentReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, what String, resultPath FilePath, answer ResultAnswer) returns String
+	return match readResultText(resultPath) 'document'
+		missing gives unusableResultReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: durationMs, why: noResultDocumentText(what, exitCode: res.exitCode() as ExitCode))
+		unreadable(reason) gives unusableResultReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: durationMs, why: "{what}: could not read {resultPath.path} ({reason})")
+		found(text) gives parsedResultReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: durationMs, what: what, text: text, answer: answer)
+	end 'document'
+end 'resultDocumentReply'
+
+function noResultDocumentText(what String, exitCode ExitCode) returns String
+	if exitCode == 0 'exitedCleanly'
+		return "{what} exited 0 without writing a result document. The tail of its output is in `rawTail`."
+	end 'exitedCleanly'
+
+	return "{what} exited {exitCode} before writing a result document. The tail of its output is in `rawTail`."
+end 'noResultDocumentText'
+
+function parsedResultReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, what String, text String, answer ResultAnswer) returns String
+	let parsed = try Json.parse(text) otherwise return unusableResultReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: durationMs, why: "{what}'s result document is not valid JSON.")
+
+	return answer(parsed, argv, res, durationMs)
+end 'parsedResultReply'
+
+function unusableResultReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, why String) returns String
+	var doc = JsonDoc.create()
+	var payload = JsonObjectBuilder.create()
+	addTimedRunFields(doc, payload: payload, ctx: ctx, argv: argv, res: res, durationMs: durationMs)
+	payload.addBool(doc, key: "success", value: false)
+	payload.addString(doc, key: "error", value: why)
+
+	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
+end 'unusableResultReply'
+
+function specReportReply(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext, parsed JsonDoc, argv StringArray, res CollectedOutput, durationMs DurationMs) returns String
+	let report = try readSpecReport(parsed) otherwise return unusableResultReply(reqDoc, idNode: idNode, ctx: ctx, argv: argv, res: res, durationMs: durationMs, why: "{SpecTestCommandName}'s result document does not have the shape this server reads.")
+
+	return specTestReply(reqDoc, idNode: idNode, args: args, ctx: ctx, argv: argv, res: res, durationMs: durationMs, report: report)
+end 'specReportReply'
+
+function specTestReply(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, report SpecReport) returns String
+	let listed = listedFailureCount(report.failures, limit: failureLimitOf(reqDoc, args: args) as Count)
 
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: res.succeeded())
-	addTimedRunFields(doc, payload: payload, ctx: ctx, argv: argv, res: res, durationMs: durationMs, combined: combined)
-	payload.addNumber(doc, key: "passed", value: summary.passed as JsonFloat)
-	payload.addNumber(doc, key: "failed", value: summary.failed() as JsonFloat)
-	payload.addNumber(doc, key: "total", value: summary.total as JsonFloat)
-	payload.addBool(doc, key: "summaryParsed", value: summary.parsed)
+	addTimedRunFields(doc, payload: payload, ctx: ctx, argv: argv, res: res, durationMs: durationMs)
+	payload.addNumber(doc, key: "passed", value: report.tally.passed as JsonFloat)
+	payload.addNumber(doc, key: "failed", value: report.tally.failed as JsonFloat)
+	payload.addNumber(doc, key: "skipped", value: report.tally.skipped as JsonFloat)
+	payload.addNumber(doc, key: "notRun", value: report.tally.notRunHere as JsonFloat)
+	payload.addNumber(doc, key: "total", value: report.tally.total() as JsonFloat)
 	payload.addBool(doc, key: "memoryLeak", value: isLeakDetectedExit(res.exitCode() as ExitCode))
+	payload.addNode("failures", node: failureArrayNode(doc, failures: report.failures, listed: listed))
+	payload.addNumber(doc, key: "failuresOmitted", value: (report.failures.count() - listed) as JsonFloat)
+
+	if getOptionalBoolArg(reqDoc, args: args, key: CasesOption, defaultVal: false) 'wantsCases'
+		payload.addNode("cases", node: caseArrayNode(doc, tests: report.tests))
+	end 'wantsCases'
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not res.succeeded())
 end 'specTestReply'
 
-module function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
-	// Removed first so a run that writes nothing cannot be read as the previous run's answer.
-	let resultPath = childPath(ctx.workingDir, segment: ScaleResultRelativePath)
-	try File.delete(resultPath) otherwise ignore
+function caseArrayNode(doc JsonDoc, tests SpecTestEntryArray) returns JsonNodeId
+	var nodeIds = JsonNodeIdArray.create()
 
+	for t in tests 'eachTest'
+		var entry = JsonObjectBuilder.create()
+		entry.addString(doc, key: "spec", value: t.spec)
+		entry.addString(doc, key: "test", value: t.name)
+		entry.addString(doc, key: "status", value: t.verdict.rawValue)
+		nodeIds.push(entry.build(doc))
+	end 'eachTest'
+
+	return doc.add(JsonNode.arrayNode(nodeIds))
+end 'caseArrayNode'
+
+function failureLimitOf(reqDoc JsonDoc, args OptionalNode) returns FailureLimit
+	return match optionalWholeArg(reqDoc, args: args, key: MaxFailuresOption) 'limit'
+		absent gives DefaultFailureLimit
+		given(value) gives value as FailureLimit
+	end 'limit'
+end 'failureLimitOf'
+
+function listedFailureCount(failures SpecFailureSummaryArray, limit Count) returns Count
+	if failures.count() <= limit 'allFit'
+		return failures.count()
+	end 'allFit'
+
+	return limit
+end 'listedFailureCount'
+
+function failureArrayNode(doc JsonDoc, failures SpecFailureSummaryArray, listed Count) returns JsonNodeId
+	var nodeIds = JsonNodeIdArray.create()
+
+	for (iter, f) in failures.withIterator() 'eachFailure'
+		if iter.index() >= listed 'pastWhatIsListed'
+			break
+		end 'pastWhatIsListed'
+
+		var entry = JsonObjectBuilder.create()
+		entry.addString(doc, key: "spec", value: f.spec)
+		entry.addString(doc, key: "test", value: f.test)
+		entry.addString(doc, key: "message", value: firstBytesMarked(f.message, max: FailureMessageMaxBytes))
+		nodeIds.push(entry.build(doc))
+	end 'eachFailure'
+
+	return doc.add(JsonNode.arrayNode(nodeIds))
+end 'failureArrayNode'
+
+module function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
 	var argv = StringArray.create()
 	argv.push(ScaleTestCommandName)
-	argv.push("{ResultJsonFlagPrefix}{resultPath.path}")
 
 	argv.append(wholeOptionOf(reqDoc, args: args, key: RungsOption, prefix: RungsFlagPrefix))
 	argv.append(wholeOptionOf(reqDoc, args: args, key: RepeatOption, prefix: RepeatFlagPrefix))
@@ -674,76 +857,15 @@ module function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, ar
 	argv.append(valuedOptionOf(reqDoc, args: args, key: EmitCorpusOption, prefix: EmitCorpusFlagPrefix))
 	argv.append(valuedOptionOf(reqDoc, args: args, key: LogOption, prefix: LogFlagPrefix))
 
-	return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: ScaleTestCommandName, answer: function(ranArgv StringArray, res CollectedOutput, took DurationMs) gives scaleTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res, durationMs: took, resultPath: resultPath))
+	return runWithResultDocument(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: ScaleTestCommandName, family: StagedFamily.scaleResult, answer: function(parsed JsonDoc, ranArgv StringArray, res CollectedOutput, took DurationMs) gives scaleTestReply(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res, durationMs: took, parsed: parsed))
 end 'executeScaleTestToolWithin'
 
-function scaleTestReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, resultPath FilePath) returns String
+function scaleTestReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, parsed JsonDoc) returns String
 	var doc = JsonDoc.create()
 	var payload = JsonObjectBuilder.create()
-	addTimedRunFields(doc, payload: payload, ctx: ctx, argv: argv, res: res, durationMs: durationMs, combined: combineStreams(res.stdout, stderr: res.stderr))
-
-	// A non-zero exit means the run itself broke and produced no valid data; the instrument has no
-	// verdict and exits 0 whatever the numbers say.
-	let resultText = try File.readText(resultPath) otherwise 'noResult'
-		payload.addBool(doc, key: "success", value: false)
-		payload.addString(doc, key: "error", value: "scale-test wrote no result document — it exited {res.exitCode()} before completing. The tail of its output is in `rawTail`.")
-		return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
-	end 'noResult'
-
-	let parsed = try Json.parse(resultText) otherwise 'badJson'
-		payload.addBool(doc, key: "success", value: false)
-		payload.addString(doc, key: "error", value: "scale-test's result document is not valid JSON.")
-		return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
-	end 'badJson'
-
+	addTimedRunFields(doc, payload: payload, ctx: ctx, argv: argv, res: res, durationMs: durationMs)
 	payload.addBool(doc, key: "success", value: res.succeeded())
 	payload.addNode("result", node: copyJsonNode(parsed, srcId: parsed.root, dst: doc))
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not res.succeeded())
 end 'scaleTestReply'
-
-module function executeSpecOutcomeToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
-	match specToolArgv(reqDoc, idNode: idNode, args: args, ctx: ctx, directory: DefaultSpecDir, tool: SpecOutcomeToolName, filterRequired: true) 'argv'
-		refused(reply) then return reply
-		built(argv) then return runCompilerThen(reqDoc, idNode: idNode, ctx: ctx, argv: argv, what: SpecTestCommandName, answer: function(ranArgv StringArray, res CollectedOutput, took DurationMs) gives specOutcomeReply(reqDoc, idNode: idNode, ctx: ctx, argv: ranArgv, res: res, durationMs: took))
-	end 'argv'
-end 'executeSpecOutcomeToolWithin'
-
-function specOutcomeReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs) returns String
-	let combined = combineStreams(res.stdout, stderr: res.stderr)
-	let report = parseReport(combined)
-
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
-	payload.addBool(doc, key: "success", value: res.succeeded())
-	addTimedRunFields(doc, payload: payload, ctx: ctx, argv: argv, res: res, durationMs: durationMs, combined: combined)
-	payload.addNumber(doc, key: "total", value: report.tests.count() as JsonFloat)
-	payload.addNumber(doc, key: "passed", value: report.passedCount() as JsonFloat)
-	payload.addNumber(doc, key: "failed", value: report.failedCount() as JsonFloat)
-	payload.addBool(doc, key: "memoryLeak", value: isLeakDetectedExit(res.exitCode() as ExitCode))
-
-	var testNodeIds = JsonNodeIdArray.create()
-
-	for t in report.tests 'eachTest'
-		var entry = JsonObjectBuilder.create()
-		entry.addString(doc, key: "spec", value: t.spec)
-		entry.addString(doc, key: "test", value: t.name)
-		entry.addString(doc, key: "status", value: "PASS" if t.passed else "FAIL")
-		testNodeIds.push(entry.build(doc))
-	end 'eachTest'
-
-	payload.addNode("tests", node: doc.add(JsonNode.arrayNode(testNodeIds)))
-
-	var failNodeIds = JsonNodeIdArray.create()
-
-	for f in report.failures 'eachFailure'
-		var entry = JsonObjectBuilder.create()
-		entry.addString(doc, key: "spec", value: f.spec)
-		entry.addString(doc, key: "message", value: f.message)
-		failNodeIds.push(entry.build(doc))
-	end 'eachFailure'
-
-	payload.addNode("failures", node: doc.add(JsonNode.arrayNode(failNodeIds)))
-
-	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not res.succeeded())
-end 'specOutcomeReply'

@@ -33,6 +33,7 @@ case is compiled inside this process, so the compiler under test is the executab
 | `--network` | Also run the cases that open a socket to a real external host. A default run names every case it left out. |
 | `--batch=on\|off` | `on` (the default) compiles a spec's plain run cases into the fewest programs whose type names do not overlap and runs each once, rerunning alone any case that did not finish cleanly. `off` compiles and runs every case on its own. Any other value is refused. |
 | `--update-required` | Re-mint the inline blocks a run checks, in the spec files themselves: the trace-capture blocks, and the `TargetIr:<lane>` pin of this run's lane for every selected case of a spec that holds any pin. A pin is compiled, not run, so a lane this host cannot execute still re-mints. Review the diff, and pair it with `--filter`: unfiltered, it re-mints every selected case's blocks. |
+| `--result-json=<path>` | Also write the run to `<path>` as JSON, after the printed report. See below. |
 
 The run prints one line per test, then `N passed, M failed`, the line `N run case(s) ran batched in M
 program(s); K ran alone`, and lines for skipped and not-run cases. A case whose spec carries a
@@ -51,6 +52,12 @@ A run in which any `--filter` pattern selects no test on this host exits 1 befor
 each such pattern: `error: no tests selected matching --filter=a, --filter=b`. A pattern whose only
 matches this host leaves out, such as live-network cases, counts as selecting nothing, and the lines
 for the left-out cases say why. An empty `--filter=` is refused as an invalid option value.
+
+`--result-json=<path>` writes `{passed, failed, skipped, notRun, total, cases}`, where `cases` lists every
+case in run order as `{spec, test, verdict}`, `verdict` is `PASS`, `FAIL`, `SKIP` or `NOTRUN`, and a
+`FAIL` also carries its `reason`. A relative `<path>` is resolved against the working directory. A
+`<path>` that is not a valid path exits 1 before any test runs; a document that cannot be written exits
+1 after the report.
 
 ```bash
 maxon spec-test

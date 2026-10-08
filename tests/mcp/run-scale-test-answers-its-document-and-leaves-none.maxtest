@@ -1,0 +1,10 @@
+let SmallestLadder = 1
+
+test 'run_scale_test answers the document its own scale-test wrote and leaves none behind'
+	let answer = callTool("run_scale_test", argumentsJson: argumentsOf(["\"rungs\":{SmallestLadder}"]), devMode: true)
+	let written = resultPathNamedBy(payloadString(answer, key: "command"))
+
+	Expect.isFalse(toolCallIsError(answer), message: "a one-rung ladder is a legal run. It answered: {toolCallText(answer)}")
+	Expect.isTrue(payloadHasKey(answer, key: "result"), message: "the answer carries the run's document as `result`. It answered: {toolCallText(answer)}")
+	Expect.isFalse(File.exists(written), message: "the document {written.toString()} is still on disk after the answer was built from it")
+end 'run_scale_test answers the document its own scale-test wrote and leaves none behind'

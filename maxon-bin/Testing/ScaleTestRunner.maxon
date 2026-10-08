@@ -127,7 +127,7 @@ let RungOutputSuffix = ".out"
 // session. Keeping this relative still removes the ARGV
 // copy of the path and is still right; the trend log's byte column is comparable across two runs only
 // when the working directory matches too, which is why `mintedAtCell` records both.
-let CorpusRelativeRoot = ".scale-tmp"
+export let ScaleCorpusDirName = ".scale-tmp"
 
 // Everything in the scale suite that can go wrong at RUN time: a rung that would not compile, a
 // metrics file that never appeared, a trend log that could not be read.
@@ -398,7 +398,7 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock LockHo
 	end 'staleBinary'
 
 	// Resolved to an absolute path for the comparison's sake, not for the compiler's: the compiler is
-	// still handed the RELATIVE rung path (see `CorpusRelativeRoot`), and this is the string that says
+	// still handed the RELATIVE rung path (see `ScaleCorpusDirName`), and this is the string that says
 	// which directory that relative path was relative TO.
 	let mintedAt = mintedAtCell(compilerExe.toString(), corpusRoot: corpusRoot.resolve(Directory.currentPath()).toString())
 
@@ -563,13 +563,13 @@ end 'unchangedColumnsText'
 
 // Where the corpus is generated. `--emit-corpus=<dir>` puts it somewhere a human can read it;
 // otherwise it goes to the gitignored `.scale-tmp/`, relative to the working directory — see
-// CorpusRelativeRoot for why relative rather than absolute is load-bearing.
+// ScaleCorpusDirName for why relative rather than absolute is load-bearing.
 function corpusRootPath(args MaxonArgs) returns FilePath throws FilePathError
 	if let emitCorpus = try args.emitCorpus.text() 'explicit'
 		return try FilePath.from(emitCorpus)
 	end 'explicit'
 
-	return try FilePath.from(CorpusRelativeRoot)
+	return try FilePath.from(ScaleCorpusDirName)
 end 'corpusRootPath'
 
 // ===========================================================================================

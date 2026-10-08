@@ -1,0 +1,15 @@
+let StagingCaseDirName = "run-spec-test-caps-its-failures"
+let StagedSpec = "capped"
+
+test 'run_spec_test answers at most maxFailures failures and counts the rest'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	let cases = failingSpecCases(["first", "second", "third"])
+
+	stageSpecFile(dir, specName: StagedSpec, cases: cases)
+	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"maxFailures\":2\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	Expect.equal(payloadInt(answer, key: "failed"), expected: 3, message: "the staged spec has three failing cases, whatever the cap lists. It answered: {toolCallText(answer)}")
+	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "failures", field: "test")), expected: renderedStrings(["first", "second"]), message: "`maxFailures: 2` must answer the first two failures. It answered: {toolCallText(answer)}")
+	Expect.equal(payloadInt(answer, key: "failuresOmitted"), expected: 1, message: "the third failure is past the cap and must be counted. It answered: {toolCallText(answer)}")
+end 'run_spec_test answers at most maxFailures failures and counts the rest'

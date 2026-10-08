@@ -1,0 +1,15 @@
+let StagingCaseDirName = "run-spec-test-lists-cases-on-request"
+let StagedSpec = "listed"
+
+test 'run_spec_test lists every case it ran, with its status, when cases is true'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	let cases = [passingSpecCase("kept"), failingSpecCase("broken"), passingSpecCase("also-kept")]
+	stageSpecFile(dir, specName: StagedSpec, cases: cases)
+
+	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"cases\":true,\"maxFailures\":0\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "cases", field: "spec")), expected: renderedStrings([StagedSpec, StagedSpec, StagedSpec]), message: "`cases` names the spec of every case it ran. It answered: {toolCallText(answer)}")
+	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "cases", field: "test")), expected: renderedStrings(["kept", "broken", "also-kept"]), message: "`cases` lists every case in run order, whatever `maxFailures` caps. It answered: {toolCallText(answer)}")
+	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "cases", field: "status")), expected: renderedStrings(["PASS", "FAIL", "PASS"]), message: "`cases` carries each case's verdict. It answered: {toolCallText(answer)}")
+end 'run_spec_test lists every case it ran, with its status, when cases is true'

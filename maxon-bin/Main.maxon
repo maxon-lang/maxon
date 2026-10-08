@@ -1333,7 +1333,7 @@ end 'runVerifyRecheck'
 // Every worker count, `--workers=1` included, takes the one path through the pool: a serial branch
 // would be a second implementation of running the suite, free to drift.
 function runSpecTest(args MaxonArgs) returns ExitCode
-	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon spec-test [dir] [--filter=<pattern>]... [--update-required] [--batch=on|off] [--network] [--workers=<n>] [--target=<cpu>-<os>]") 'tooManyPaths'
+	if refusedPositionalBeyond(args, allowed: 1, usage: "maxon spec-test [dir] [--filter=<pattern>]... [--update-required] [--batch=on|off] [--network] [--workers=<n>] [--target=<cpu>-<os>] [{ResultJsonFlagPrefix}<path>]") 'tooManyPaths'
 		return OwnFailureExit
 	end 'tooManyPaths'
 
@@ -1377,6 +1377,12 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return freshnessExit
 	end 'staleBinary'
 
+	// Before the run, so a bad path costs no suite.
+	let resultTarget = try specResultTargetOf(args.resultJson) otherwise 'badResultPath'
+		printError("error: the path {ResultJsonFlagPrefix} names is not a valid path\n")
+		return OwnFailureExit
+	end 'badResultPath'
+
 	// Asked once, by the parent: a missing runner fails every test identically, and inside a worker it
 	// surfaces as a dead pipe. A target with no runner on this host at all is not refused here; see
 	// `requireRunnerAvailable`.
@@ -1390,7 +1396,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// hold it yet; `requireRunnerAvailable` is the delegation's preflight, and `refuseIfStale` proves
 	// the binary that builds the guest's compiler current.
 	match runStrategyFor(effectiveTarget) 'lane'
-		inGuest then return runSuiteInGuest(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, mode: args.specRunMode(), workerCount: args.workers, workersOverridden: args.workersOverridden, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
+		inGuest then return runSuiteInGuest(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, mode: args.specRunMode(), workerCount: args.workers, workersOverridden: args.workersOverridden, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork, resultTarget: resultTarget)
 		individually or
 			wslBatch or
 			noneHere then break
@@ -1413,7 +1419,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return lockExit
 	end 'busyTree'
 
-	let suiteExit = runSpecSuite(args, specDir: specDir, harnessExe: harnessExe, effectiveTarget: effectiveTarget, treeLock: treeLock)
+	let suiteExit = runSpecSuite(args, specDir: specDir, harnessExe: harnessExe, effectiveTarget: effectiveTarget, resultTarget: resultTarget, treeLock: treeLock)
 	treeLock.release()
 	return suiteExit
 end 'runSpecTest'
@@ -1530,7 +1536,7 @@ module function backQuoted(words StringArray) returns StringArray
 end 'backQuoted'
 
 // Separate so `runSpecTest` has one exit that releases the tree lock; see `compileAndReport`.
-function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target, treeLock LockHold) returns ExitCode
+function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, effectiveTarget Target, resultTarget SpecResultTarget, treeLock LockHold) returns ExitCode
 	let run = try runSpecPool(harnessExe, specDir: specDir, filterPatterns: args.filterPatterns, mode: args.specRunMode(), workerCount: args.workers, effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork, treeLock: treeLock) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return OwnFailureExit
@@ -1549,6 +1555,9 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 	end 'selectedNothing'
 
 	let testsExit = reportResults(run.results, batch: run.batch)
+
+	// After the report, so an unwritable path cannot hide it.
+	let documentExit = writeSpecResultDocument(resultTarget, results: run.results)
 
 	// Stderr for the CPU line's reason below: which worker loads and writes varies with the pool.
 	printError("library cache: {run.library.loaded} loaded, {run.library.written} written, {run.library.rejected} rejected\n")
@@ -1574,6 +1583,10 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 		return testsExit
 	end 'someTestFailed'
 
+	if not exitSucceeded(documentExit) 'documentUnwritten'
+		return documentExit
+	end 'documentUnwritten'
+
 	// Every test passed — and a worker that exited NON-ZERO is still a suite failure. A worker is
 	// itself a leak-gated Maxon program, so exit 101 means the harness leaked memory while
 	// servicing its tests. Green tests must never be allowed to mask that.
@@ -1584,6 +1597,22 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, harnessExe FilePath, eff
 
 	return SucceededExit
 end 'runSpecSuite'
+
+function writeSpecResultDocument(target SpecResultTarget, results SpecTestResultArray) returns ExitCode
+	return match target 'asked'
+		unasked gives SucceededExit
+		at(path) gives writeSpecResultDocumentAt(path, results: results)
+	end 'asked'
+end 'writeSpecResultDocument'
+
+function writeSpecResultDocumentAt(path FilePath, results SpecTestResultArray) returns ExitCode
+	try writeSpecResultJson(path, results: results) otherwise 'unwritten'
+		printError("error: could not write the result document to {path.toString()}\n")
+		return OwnFailureExit
+	end 'unwritten'
+
+	return SucceededExit
+end 'writeSpecResultDocumentAt'
 
 // Empty when no pattern went unmatched: an empty spec directory and a filter that matched nothing are
 // different failures and read differently.
@@ -1736,11 +1765,13 @@ end 'reportResults'
 // census prints it once per case. A NOTRUN prints none because every case on such a lane shares one
 // reason, stated once in the trailer.
 module function verdictLine(outcome TestOutcome, label String) returns String
+	let token = outcome.token().rawValue
+
 	return match outcome 'verdict'
-		pass gives "PASS {label}"
-		fail(reason) gives "FAIL {label}: {reason}"
-		skipped gives "SKIP {label}"
-		notRunHere gives "NOTRUN {label}"
+		fail(reason) gives "{token} {label}: {reason}"
+		pass or
+			skipped or
+			notRunHere gives "{token} {label}"
 	end 'verdict'
 end 'verdictLine'
 
@@ -2272,7 +2303,7 @@ function optionReference(option HelpOption) returns OptionReference
 		repeat gives OptionReference.create("{RepeatFlagPrefix}<n>", description: "Compile every rung <n> times (default {DefaultRepeatCount}, range {MinRepeatCount}-{MaxRepeatCount}) and report the LEAST CPU ticks any of them spent in each phase, the least-disturbed sample:  noise can only ADD to a CPU reading and a mean would be dragged by one stall. The MEMORY columns take nothing from a repeat: they are exact, so they come from the first compile and are CROSS-CHECKED for equality against the rest. A memory number that differs between two compiles of one rung is a BROKEN RUN.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(RepeatFlagPrefix)])
 		note gives OptionReference.create("{NoteFlagPrefix}<text>", description: "Record this run in {OptimizationLogRelativePath}: one dated row of the per-rung allocations and bytes, with <text> as the reason. Without it a run reports and records nothing; WITH it the row is written, moved or not, because it is an INSTRUCTION. The instrument can see exactly WHAT moved and can never see why; you are the only one who knows, and only now.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(NoteFlagPrefix)])
 		emitCorpus gives OptionReference.create("{EmitCorpusFlagPrefix}<dir>", description: "Write the generated corpus to <dir> and compile nothing.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(EmitCorpusFlagPrefix)])
-		resultJson gives OptionReference.create("{ResultJsonFlagPrefix}<path>", description: "Write the whole run (per-rung and per-phase memory, and the deltas from the last recorded run) to <path> as JSON, so a tool never has to scrape the human report.", commands: [MaxonCommand.scaleTest], arrivals: [OptionArrival.prefixed(ResultJsonFlagPrefix)])
+		resultJson gives OptionReference.create("{ResultJsonFlagPrefix}<path>", description: "Write the whole run to <path> as JSON, so a tool never has to scrape the human report. {ScaleTestCommandName}: per-rung and per-phase memory, and the deltas from the last recorded run. {SpecTestCommandName}: the passed, failed, skipped and not-run counts and every case in run order as `spec`, `test`, `verdict` ({spelledVerdictTokens()}) and, for a {VerdictToken.fail.rawValue}, its `reason`.", commands: [MaxonCommand.scaleTest, MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(ResultJsonFlagPrefix)])
 		testFilter gives OptionReference.create("{FilterFlagPrefix}P", description: "Run only tests whose NAME or FILE contains P (case-insensitive). Repeatable, and each value may hold comma-separated patterns: the run takes every test any pattern selects, and a pattern that selects nothing refuses the run.", commands: [MaxonCommand.test], arrivals: [OptionArrival.prefixed(FilterFlagPrefix)])
 		testList gives OptionReference.create(TestListFlag, description: "Print the tests that would run, and compile nothing unless {TestBuildFlag} is given.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestListFlag)])
 		testBuild gives OptionReference.create(TestBuildFlag, description: "With {TestListFlag}, also build the test binary, with its debug-info sidecar, and run nothing.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestBuildFlag)])
@@ -2283,7 +2314,7 @@ function optionReference(option HelpOption) returns OptionReference
 		testNoTiming gives OptionReference.create(TestNoTimingFlag, description: "Omit durations, making stdout byte-reproducible.", commands: [MaxonCommand.test], arrivals: [OptionArrival.exactly(TestNoTimingFlag)])
 		testColor gives OptionReference.create("{TestColorFlagPrefix}{reportColorChoices()}", description: "Colour the report; `auto` means only when stdout is a terminal: not redirected, NO_COLOR unset, TERM not `dumb`. Only wasm32-wasi cannot detect a terminal; there `auto` degrades to `never`, so use `always` to force colour.", commands: [MaxonCommand.test], arrivals: [OptionArrival.prefixed(TestColorFlagPrefix)])
 		dryRun gives OptionReference.create(DryRunFlag, description: "Print the install root and the command that would update it, and run nothing. It never bypasses a refusal.", commands: [MaxonCommand.upgrade], arrivals: [OptionArrival.exactly(DryRunFlag)])
-		devMode gives OptionReference.create(DevFlag, description: "Enable compiler development tools (run_spec_test, run_scale_test, spec_test_outcome, worktree targeting).", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.exactly(DevFlag)])
+		devMode gives OptionReference.create(DevFlag, description: "Enable compiler development tools (run_spec_test, run_scale_test, worktree targeting).", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.exactly(DevFlag)])
 		mcpHttp gives OptionReference.create("{McpHttpFlagPrefix}<port>", description: "Serve the tool roster over loopback HTTP instead of stdio, on <port>; written bare as `{McpHttpFlag}` it takes whichever free port the kernel gives. The chosen endpoint is printed once on stdout as one JSON line naming it, and nothing else is ever written there. Loopback only: there is no host to choose.", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.exactly(McpHttpFlag), OptionArrival.prefixed(McpHttpFlagPrefix)])
 		mcpIdleTimeout gives OptionReference.create("{McpIdleTimeoutFlagPrefix}<seconds>", description: "Close an HTTP session untouched for this long, reaping any debug session it held (default {DefaultMcpIdleTimeoutSeconds}).", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.prefixed(McpIdleTimeoutFlagPrefix)])
 		mcpMaxSessions gives OptionReference.create("{McpMaxSessionsFlagPrefix}<n>", description: "How many HTTP sessions may be live at once (default {DefaultMcpMaxSessions}); an `initialize` past the cap is answered 429.", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.prefixed(McpMaxSessionsFlagPrefix)])

@@ -1,0 +1,14 @@
+let StagingCaseDirName = "run-spec-test-omits-cases-by-default"
+
+test 'run_spec_test answers no cases key unless asked'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	stageSpecFile(dir, specName: "quiet", cases: [passingSpecCase("kept")])
+
+	let omitted = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())}\}", devMode: true)
+	let declined = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"cases\":false\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	Expect.equal(payloadInt(omitted, key: "passed"), expected: 1, message: "the staged case passes. It answered: {toolCallText(omitted)}")
+	Expect.isFalse(payloadHasKey(omitted, key: "cases"), message: "a call that does not ask for `cases` must not get the key. It answered: {toolCallText(omitted)}")
+	Expect.isFalse(payloadHasKey(declined, key: "cases"), message: "`cases: false` must not get the key. It answered: {toolCallText(declined)}")
+end 'run_spec_test answers no cases key unless asked'

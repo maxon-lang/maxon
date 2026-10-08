@@ -51,7 +51,7 @@ After each edit:
 |---|---|
 | a standalone program or example | `mcp__maxon__check`, then `mcp__maxon__execute` if it should run — `path:` the file for a one-file program, **the directory** for one spread over several files |
 | a `.maxtest` or its project | `mcp__maxon__test` (`path:` the project directory, `filter:` the test) |
-| a spec case | `mcp__maxon__spec_test_outcome` (`filter:` a case-sensitive substring of `<spec>/<test>`, or an array of them selecting their union in one run) |
+| a spec case | `mcp__maxon__run_spec_test` (`filter:` a case-sensitive substring of `<spec>/<test>`, or an array of them selecting their union in one run; the failures come back in `failures`, and `cases: true` adds every case's verdict) |
 | `maxon-bin/` | build the slot — `./maxon-bin/.maxon/maxon run build` — then the spec filter that owns the behaviour |
 | `stdlib/` or `runtime/` | the spec filter that owns the behaviour — the suite compiles both from source. Build the slot too when a driver command (`fmt`, `test`, the LSP) must see the change |
 
@@ -72,7 +72,7 @@ After each edit:
 - The compiler binary is gitignored and nothing rebuilds it, so a stale one lies in both directions —
   build after editing `maxon-bin/`. `spec-test` and `scale-test` refuse a stale binary by themselves.
 - In a worktree, pass `repoRoot` (the worktree's absolute path) to the tools that act in a tree — `build`,
-  `run_spec_test`, `spec_test_outcome`, `run_scale_test`, `execute`, `test`, `fmt`. `check`, `dump_ir`,
+  `run_spec_test`, `run_scale_test`, `execute`, `test`, `fmt`. `check`, `dump_ir`,
   `lookup_error_code` and `info` take none.
 
 ## 5. Traps the compiler will not explain well

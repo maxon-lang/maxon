@@ -1,0 +1,53 @@
+let StagingCaseDirName = "run-spec-test-removes-the-document-of-a-stopped-run"
+let ProgramStagingDir = "temp/mcp-run-spec-test-stopped-run"
+let BoundSeconds = 2
+let SleepMs = 60000
+
+function documentThenSleepSource() returns String
+	var source = ""
+	source.append("function main() returns ExitCode\n")
+	source.append("\tfor argument in CommandLine.args() 'each'\n")
+	source.append("\t\tif argument.startsWith(\"{ResultFlagPrefix}\") 'asked'\n")
+	source.append("\t\t\tlet path = try FilePath.from(argument.replaceFirst(\"{ResultFlagPrefix}\", with: \"\")) otherwise panic(\"not a path\")\n")
+	source.append("\t\t\ttry File.writeText(path, content: \"\\\{\\\}\") otherwise panic(\"not written\")\n")
+	source.append("\t\tend 'asked'\n")
+	source.append("\tend 'each'\n")
+	source.append("\n")
+	source.append("\tsleep({SleepMs})\n")
+	source.append("\n")
+	source.append("\treturn 0\n")
+	source.append("end 'main'\n")
+
+	return source
+end 'documentThenSleepSource'
+
+function leftoverDocumentsIn(tempDir FilePath) returns StringArray
+	var left = StringArray.create()
+
+	if not Directory.isDirectory(tempDir) 'noDirectory'
+		return left
+	end 'noDirectory'
+
+	for entry in filesUnder(tempDir) 'eachFile'
+		if entry.filename().startsWith(SpecResultStem) 'aResultDocument'
+			left.push(entry.toString())
+		end 'aResultDocument'
+	end 'eachFile'
+
+	return left
+end 'leftoverDocumentsIn'
+
+test 'run_spec_test removes the result document of a run it had to stop'
+	let root = freshOutsideCheckoutDir(StagingCaseDirName)
+
+	let program = stagedProgram(ProgramStagingDir, fileName: "main.maxon", source: documentThenSleepSource())
+	let built = buildStagedProgram(program)
+	fakeCheckoutWithCompiler(root, compiler: built)
+
+	let answer = callTool("run_spec_test", argumentsJson: argumentsOf(["\"repoRoot\":{Json.quote(root.toString())}", secondsMember(TimeoutSecondsArgument, seconds: "{BoundSeconds}")]), devMode: true)
+	let left = leftoverDocumentsIn(root.join(SpecTempDirName))
+	discardOutsideCheckoutDir(root)
+
+	Expect.isTrue(toolCallIsError(answer), message: "a run stopped at its bound answers a failure. It answered: {toolCallText(answer)}")
+	Expect.isTrue(left.isEmpty(), message: "the stopped run's result document was left on disk: {renderedStrings(left)}")
+end 'run_spec_test removes the result document of a run it had to stop'

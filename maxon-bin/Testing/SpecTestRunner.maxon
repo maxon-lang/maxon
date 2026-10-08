@@ -31,7 +31,7 @@ let SpecFileExtension = ".md"
 // normalized to `<fragment>` for a ```maxoncstderr block (`normalizeCompilerOutput`), so this changes
 // no expectation. `.src`-directory multi-file staging (below) is unaffected.
 let MaxonFragmentExtension = ".test"
-let TempSubdirName = ".spec-tmp"
+export let SpecScratchDirName = ".spec-tmp"
 
 // ⭐⭐ **THE DIRECTORY EVERY TEST BINARY IS RUN FROM — `<checkoutRoot>/temp/` — AND IT IS A CONTRACT
 // WITH THE CORPUS, NOT A SCRATCH LOCATION THIS RUNNER IS FREE TO PICK.**
@@ -541,7 +541,40 @@ export union TestOutcome
 				skipped gives false
 		end 'p'
 	end 'pinsEmittedCode'
+
+	export function token() returns VerdictToken
+		return match self 'p'
+			pass gives VerdictToken.pass
+			fail gives VerdictToken.fail
+			skipped gives VerdictToken.skip
+			notRunHere gives VerdictToken.notRun
+		end 'p'
+	end 'token'
 end 'TestOutcome'
+
+export enum VerdictToken
+	pass = "PASS"
+	fail = "FAIL"
+	skip = "SKIP"
+	notRun = "NOTRUN"
+end 'VerdictToken'
+
+export function spelledVerdictTokens() returns String
+	var spelled = ""
+	let last = VerdictToken.allCases.count() - 1
+
+	for (iter, token) in VerdictToken.allCases.withIterator() 'eachToken'
+		if iter.index() == 0 'first'
+			spelled = token.rawValue
+		end 'first' else if iter.index() == last 'last'
+			spelled = "{spelled} or {token.rawValue}"
+		end 'last' else 'middle'
+			spelled = "{spelled}, {token.rawValue}"
+		end 'middle'
+	end 'eachToken'
+
+	return spelled
+end 'spelledVerdictTokens'
 
 export type SpecTestResult
 	export let specName as String
@@ -1531,6 +1564,10 @@ export type ResultTally
 		return self.passed + self.failed + self.skipped + self.notRunHere
 	end 'total'
 
+	export function sameCountsAs(other ResultTally) returns bool
+		return self.passed == other.passed and self.failed == other.failed and self.skipped == other.skipped and self.notRunHere == other.notRunHere
+	end 'sameCountsAs'
+
 	// ⛔ **A RUN THAT PROVED NOTHING IS NOT GREEN**, whichever of the two not-run columns emptied it.
 	// The filter selecting nothing is refused one step earlier (`runSpecSuite`); this is the same failure
 	// arriving from the far side of the compile — every case refused by the target, or every case
@@ -1540,23 +1577,35 @@ export type ResultTally
 	end 'provedNothing'
 end 'ResultTally'
 
+export typealias VerdictTokenArray = Array with VerdictToken
+
 export function tallyResults(results SpecTestResultArray) returns ResultTally
+	var verdicts = VerdictTokenArray.create()
+
+	for result in results 'each'
+		verdicts.push(result.outcome.token())
+	end 'each'
+
+	return tallyVerdicts(verdicts)
+end 'tallyResults'
+
+export function tallyVerdicts(verdicts VerdictTokenArray) returns ResultTally
 	var passed = 0 as TestTally
 	var failed = 0 as TestTally
 	var skipped = 0 as TestTally
 	var notRunHere = 0 as TestTally
 
-	for result in results 'each'
-		match result.outcome 'tally'
+	for verdict in verdicts 'each'
+		match verdict 'tally'
 			pass then passed = passed + 1
 			fail then failed = failed + 1
-			skipped then skipped = skipped + 1
-			notRunHere then notRunHere = notRunHere + 1
+			skip then skipped = skipped + 1
+			notRun then notRunHere = notRunHere + 1
 		end 'tally'
 	end 'each'
 
 	return ResultTally.create(passed, failed: failed, skipped: skipped, notRunHere: notRunHere)
-end 'tallyResults'
+end 'tallyVerdicts'
 
 // The census of everything this run did not run; `targetRefusalIn`'s header says why it may never
 // be silent. It names the count, the target and the constructs, the last straight out of the
@@ -1732,11 +1781,11 @@ end 'specTempDirFor'
 // The root the per-spec scratch directories hang off. The pool creates it once, in the parent,
 // so N workers don't race `Directory.create`'s mkdir -p on the shared parent.
 //
-// Built through a FilePath component (not the String overload): `TempSubdirName` is a fixed
+// Built through a FilePath component (not the String overload): `SpecScratchDirName` is a fixed
 // valid relative path, and a FilePath argument picks `join(FilePath)` unambiguously (a bare
 // String constant is ambiguous between join's String/FilePath overloads).
 export function specTempRootDir(specDir FilePath) returns FilePath
-	let tempSub = try FilePath.from(TempSubdirName) otherwise panic("SpecTestRunner: TempSubdirName '{TempSubdirName}' must be a valid relative path")
+	let tempSub = try FilePath.from(SpecScratchDirName) otherwise panic("SpecTestRunner: SpecScratchDirName '{SpecScratchDirName}' must be a valid relative path")
 	return specDir.join(tempSub)
 end 'specTempRootDir'
 
@@ -3659,9 +3708,9 @@ end 'buildLinuxVmRunCommand'
 // ⚠ ONE machine serves BOTH Linux targets. `OrbMachineName` is aarch64 with Rosetta enabled, so an
 // x64-linux compiler runs there too; a second machine would be a second answer to "where does Linux
 // run here".
-export function runSuiteInGuest(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, workerCount WorkerCount, workersOverridden bool, effectiveTarget Target, includeNetwork bool) returns ExitCode
+export function runSuiteInGuest(harnessExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, workerCount WorkerCount, workersOverridden bool, effectiveTarget Target, includeNetwork bool, resultTarget SpecResultTarget) returns ExitCode
 	return match guestCompilerFor(harnessExe, effectiveTarget: effectiveTarget) 'compiler'
-		ready(guestExe) gives spawnGuestSuite(guestExe, specDir: specDir, filterPatterns: filterPatterns, mode: mode, workerCount: workerCount, workersOverridden: workersOverridden, includeNetwork: includeNetwork)
+		ready(guestExe) gives spawnGuestSuite(guestExe, specDir: specDir, filterPatterns: filterPatterns, mode: mode, workerCount: workerCount, workersOverridden: workersOverridden, includeNetwork: includeNetwork, resultTarget: resultTarget)
 		unavailable(reason) gives reportGuestUnavailable(reason, effectiveTarget: effectiveTarget)
 	end 'compiler'
 end 'runSuiteInGuest'
@@ -3770,7 +3819,7 @@ let GuestCompilerBuildDeadlineMs = 30 * 60 * MillisecondsPerSecond
 // terminal and a failure would arrive only after everything else. `timeoutMs: 0` for the same reason
 // the deadline above is generous — the pool inside the guest carries every bound this run needs, and a
 // second one out here could only pre-empt a report that was about to arrive.
-function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, workerCount WorkerCount, workersOverridden bool, includeNetwork bool) returns ExitCode
+function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, workerCount WorkerCount, workersOverridden bool, includeNetwork bool, resultTarget SpecResultTarget) returns ExitCode
 	let launch = buildLinuxVmRunCommand(guestExe)
 
 	var argv = StringArray.create()
@@ -3789,6 +3838,11 @@ function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns Fil
 	if workersOverridden 'poolSizeTyped'
 		argv.push("{WorkersFlagPrefix}{workerCount}")
 	end 'poolSizeTyped'
+
+	match resultTarget 'documentAsked'
+		unasked then break
+		at(path) then argv.push("{ResultJsonFlagPrefix}{path.toString()}")
+	end 'documentAsked'
 
 	var config = Configuration.create(launch.exe)
 	config.arguments = argv

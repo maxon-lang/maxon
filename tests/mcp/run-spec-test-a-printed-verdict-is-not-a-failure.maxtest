@@ -1,0 +1,16 @@
+let StagingCaseDirName = "run-spec-test-a-printed-verdict-is-not-a-failure"
+let StagedSpec = "printed"
+let FailingCase = "loud"
+
+test 'run_spec_test does not read a verdict a program printed as a result'
+	let dir = freshOutsideCheckoutDir(StagingCaseDirName)
+	let mainBody = "\tprint(\"noise\\n\")\n\tprint(\"FAIL ghost/phantom: not a verdict\\n\")\n\tprint(\"PASS ghost/other\\n\")\n"
+	stageSpecFile(dir, specName: StagedSpec, cases: [printingSpecCase(FailingCase, mainBody: mainBody, expectedStdout: "quiet")])
+
+	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())}\}", devMode: true)
+	discardOutsideCheckoutDir(dir)
+
+	Expect.equal(payloadInt(answer, key: "failed"), expected: 1, message: "one case ran and failed. It answered: {toolCallText(answer)}")
+	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "failures", field: "test")), expected: renderedStrings([FailingCase]), message: "`failures` must name only the case that ran. It answered: {toolCallText(answer)}")
+	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "failures", field: "spec")), expected: renderedStrings([StagedSpec]), message: "`failures` must name only the spec that ran. It answered: {toolCallText(answer)}")
+end 'run_spec_test does not read a verdict a program printed as a result'

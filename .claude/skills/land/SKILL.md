@@ -279,8 +279,8 @@ run_spec_test filter=["<spec-a>/", "<spec-b>/", …]
 
 - **Read the failure of EVERY case in the set** and record the exact symptom — exit code, stderr, diff.
   That is your acceptance criterion *and* the most valuable input to the diagnosis.
-  (`spec_test_outcome` with the same `filter` gives per-case PASS/FAIL detail when the summary is not
-  enough.)
+  (`run_spec_test` answers each failure's message in `failures`; `cases: true` adds every case's
+  verdict.)
 - **A case that is already GREEN is not in the set.** Either it does not test your change, or the change
   is already done. Find out which before writing a line.
 - ⚠ **Select the whole set in ONE run.** Each pattern is a case-sensitive substring of the
