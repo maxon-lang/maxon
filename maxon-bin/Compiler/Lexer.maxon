@@ -491,6 +491,55 @@ export type Token
 	end 'eof'
 end 'Token'
 
+typealias InterpolationDepth = int(0 to u64.max)
+
+export enum CommentSpanKind
+	line
+	block
+end 'CommentSpanKind'
+
+export type CommentSpan
+	export let kind as CommentSpanKind
+	export let startByte as ByteOffset
+	export let endByte as ByteOffset
+	export let startLine as LineNumber
+	export let startColumn as ColumnNumber
+	export let endLine as LineNumber
+	export let followingToken as ElementIndex
+
+	export static function create(kind CommentSpanKind, startByte ByteOffset, endByte ByteOffset, startLine LineNumber, startColumn ColumnNumber, endLine LineNumber, followingToken ElementIndex) returns CommentSpan
+		return Self{kind: kind, startByte: startByte, endByte: endByte, startLine: startLine, startColumn: startColumn, endLine: endLine, followingToken: followingToken}
+	end 'create'
+end 'CommentSpan'
+
+export typealias CommentSpanArray = Array with CommentSpan
+
+union CommentLog
+	discarded
+	recorded(spans CommentSpanArray)
+
+	function record(kind CommentSpanKind, startByte ByteOffset, endByte ByteOffset, startLine LineNumber, startColumn ColumnNumber, endLine LineNumber, followingToken ElementIndex)
+		match self 'sink'
+			discarded then return
+			recorded(spans) then spans.push(CommentSpan.create(kind, startByte: startByte, endByte: endByte, startLine: startLine, startColumn: startColumn, endLine: endLine, followingToken: followingToken))
+		end 'sink'
+	end 'record'
+end 'CommentLog'
+
+// One shared value for every `tokenize`. A log built per `Lexer`, as a union value or as an array
+// field alike, costs a heap allocation per file and per merge on the compiler's path, which reads
+// no comment.
+let DiscardedComments = CommentLog.discarded
+
+export type LexedSource
+	export let tokens as TokenArray
+	export let comments as CommentSpanArray
+
+	export static function create(tokens TokenArray, comments CommentSpanArray) returns LexedSource
+		return Self{tokens: tokens, comments: comments}
+	end 'create'
+end 'LexedSource'
+
 // The text of a token whose kind already says what it is: every punctuator and
 // operator, `newline`, and EOF. ONE shared empty slice for the whole compile rather
 // than a fresh heap String per token — the allocation this type exists to not make.
@@ -835,8 +884,11 @@ type Lexer
 	var emittedAtEof as bool
 	let keywords as KeywordTable
 
-	static function create(source String, bytes ByteArray, cursor ByteCursor, keywords KeywordTable) returns Lexer
-		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count() as ByteOffset, line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false, keywords: keywords}
+	export var comments as CommentLog
+	var interpolationDepth as InterpolationDepth
+
+	static function create(source String, bytes ByteArray, cursor ByteCursor, keywords KeywordTable, comments CommentLog) returns Lexer
+		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count() as ByteOffset, line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false, keywords: keywords, comments: comments, interpolationDepth: 0}
 	end 'create'
 
 	// --- Navigation helpers ---
@@ -989,15 +1041,16 @@ type Lexer
 	// A `//` emits no token, so there is nothing to finish here but the scan.
 	function handleEnterComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
 		try advance() otherwise 'slashesEndTheFile'
+			self.recordComment(CommentSpanKind.line, startLine: startLine, startCol: startCol, startByte: startByte, endByte: len, endLine: startLine)
 			try finishAtEof()
 		end 'slashesEndTheFile'
 
 		try scanComment(startLine, startCol: startCol, startByte: startByte)
 	end 'handleEnterComment'
 
-	function handleEnterBlockComment(startLine LineNumber, startCol ColumnNumber) throws CursorError
+	function handleEnterBlockComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
 		try advance()
-		try scanBlockComment(startLine, startCol: startCol)
+		try scanBlockComment(startLine, startCol: startCol, startByte: startByte)
 	end 'handleEnterBlockComment'
 
 	// Walk one DFA step starting from the current cursor byte: read the byte's
@@ -1076,7 +1129,7 @@ type Lexer
 			enterNumber then try scanNumberFromDfa(lastChar, startLine: startLine, startCol: startCol)
 			enterIdent then try scanIdentifierFromDfa(lastChar, startLine: startLine, startCol: startCol)
 			enterComment then try handleEnterComment(startLine, startCol: startCol, startByte: startByte)
-			enterBlockComment then try handleEnterBlockComment(startLine, startCol: startCol)
+			enterBlockComment then try handleEnterBlockComment(startLine, startCol: startCol, startByte: startByte)
 			default panic("Lexer: unhandled action {action}")
 		end 'dispatch'
 	end 'dispatchAction'
@@ -1334,6 +1387,7 @@ type Lexer
 	// ⚠ ALL THREE BRACKET FAMILIES ARE COUNTED. Counting only `(`/`{` would split
 	// `"{["a": 1].count()}"` at the MAP literal's colon.
 	function scanInterp(openLine LineNumber, openCol ColumnNumber) throws CursorError
+		interpolationDepth = interpolationDepth + 1
 		var depth = 1
 
 		// Parens and brackets the interpolation body has left open. Braces are `depth`'s, since
@@ -1351,6 +1405,7 @@ type Lexer
 
 			if ch == ':' and depth == 1 and groupDepth == 0 'formatSpecifier'
 				try scanInterpFormatSpec(openLine, openCol: openCol, bodyStart: bodyStart)
+				interpolationDepth = interpolationDepth - 1
 				return
 			end 'formatSpecifier'
 
@@ -1368,6 +1423,7 @@ type Lexer
 				depth = depth - 1
 
 				if depth == 0 'atClose'
+					interpolationDepth = interpolationDepth - 1
 					return
 				end 'atClose'
 
@@ -1851,7 +1907,7 @@ type Lexer
 	// rule keyed on "a line beginning `#!`" would swallow a mistyped directive mid-file. Emits no token —
 	// the line is not part of the program.
 	function skipShebang() returns bool throws CursorError
-		try skipToLineEnd()
+		try skipCommentLine(line, startCol: column, startByte: cursorByte())
 		return false
 	end 'skipShebang'
 
@@ -1862,17 +1918,28 @@ type Lexer
 	//
 	// ⛔ **A LINE THAT RUNS TO EOF IS COMPLETE, NOT TRUNCATED INPUT.** The last byte is one no advance can
 	// step past, so an unguarded move here unwinds as `E1008 Unexpected end of input` on a whole file.
-	function skipToLineEnd() throws CursorError
+	function advanceToLineEnd() returns bool
 		while cursorByte() < len 'skipLine'
 			if cursor.current() == AsciiByte.lf 'endOfLine'
-				break
+				return false
 			end 'endOfLine'
 
 			if not tryAdvance() 'lineEndsTheFile'
-				try finishAtEof()
+				return true
 			end 'lineEndsTheFile'
 		end 'skipLine'
-	end 'skipToLineEnd'
+
+		panic("Lexer.advanceToLineEnd: the cursor stands outside the {len}-byte source")
+	end 'advanceToLineEnd'
+
+	function skipCommentLine(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
+		let atEof = self.advanceToLineEnd()
+		self.recordComment(CommentSpanKind.line, startLine: startLine, startCol: startCol, startByte: startByte, endByte: len if atEof else cursorByte(), endLine: startLine)
+
+		if atEof 'lineEndsTheFile'
+			try finishAtEof()
+		end 'lineEndsTheFile'
+	end 'skipCommentLine'
 
 	// Both '/' characters already consumed. A `//` emits no token, so the rest of the line is skipped
 	// whole; a THIRD slash makes it a doc comment, which does.
@@ -1882,12 +1949,12 @@ type Lexer
 			return
 		end 'aThirdSlash'
 
-		try skipToLineEnd()
+		try skipCommentLine(startLine, startCol: startCol, startByte: startByte)
 	end 'scanComment'
 
 	// ⭐⭐ **`///` IS THE ONE COMMENT FORM THAT BECOMES A TOKEN** — the formatter round-trips it and the
-	// LSP maps a cursor into it, so it cannot be dropped the way `//` and `/* … */` are. Its own walk stops
-	// AT the newline for `skipToLineEnd`'s reason, which is what makes a `docComment` token always
+	// LSP maps a cursor into it, so it cannot be dropped the way `//` and `/* … */` are. Its walk,
+	// `advanceToLineEnd`, stops AT the newline, which is what makes a `docComment` token always
 	// immediately followed by a `newline` one — the whole reason the parser can treat one as layout. The third slash
 	// and then ONE following space are consumed and left OUT of the text, so `/// text` and `///text`
 	// carry the identical prose and a re-emit can put the separator back by rule instead of preserving
@@ -1905,14 +1972,7 @@ type Lexer
 		end 'oneSeparatorSpace'
 
 		let textStart = cursorByte()
-		var atEof = false
-
-		while cursor.current() != AsciiByte.lf 'docBody'
-			if not tryAdvance() 'docEof'
-				atEof = true
-				break
-			end 'docEof'
-		end 'docBody'
+		let atEof = self.advanceToLineEnd()
 
 		// At EOF the cursor still sits ON the last byte — `advance` refuses to step past it — so that byte
 		// is part of the text and the span runs to the end of the source.
@@ -1933,10 +1993,20 @@ type Lexer
 		try finishAtEof()
 	end 'finishEmptyDocComment'
 
+	function recordComment(kind CommentSpanKind, startLine LineNumber, startCol ColumnNumber, startByte ByteOffset, endByte ByteOffset, endLine LineNumber)
+		// A comment inside an interpolation is part of its literal's source, which the formatter writes
+		// back verbatim; logged as well, it would be written twice.
+		if interpolationDepth > 0 'insideInterpolation'
+			return
+		end 'insideInterpolation'
+
+		comments.record(kind, startByte: startByte, endByte: endByte, startLine: startLine, startColumn: startCol, endLine: endLine, followingToken: tokens.count())
+	end 'recordComment'
+
 	// Both '/' and '*' already consumed. Scans until '*/' is found. A newline inside the comment is an
-	// ordinary consumed byte — `countConsumed` is what keeps `line` right across it, so this body no
-	// longer has an arm of its own for one.
-	function scanBlockComment(startLine LineNumber, startCol ColumnNumber) throws CursorError
+	// ordinary consumed byte — `countConsumed` is what keeps `line` right across it, so this body has
+	// no arm of its own for one.
+	function scanBlockComment(startLine LineNumber, startCol ColumnNumber, startByte ByteOffset) throws CursorError
 		while cursorByte() < len 'skipBlockComment'
 			let cc = cursor.current()
 
@@ -1945,6 +2015,8 @@ type Lexer
 				let next = try cursor.peek(1) otherwise 0
 
 				if next == AsciiByte.slash 'foundEnd'
+					self.recordComment(CommentSpanKind.block, startLine: startLine, startCol: startCol, startByte: startByte, endByte: cursorByte() + 2, endLine: line)
+
 					_ = tryAdvance()
 
 					if not tryAdvance() 'endSlashEof'
@@ -2028,9 +2100,24 @@ export function tokenize(source String, keywords KeywordTable) returns TokenArra
 		return TokenArray.create()
 	end 'emptySource'
 
-	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords)
+	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, comments: DiscardedComments)
 	return try lexer.run()
 end 'tokenize'
+
+export function tokenizeWithComments(source String, keywords KeywordTable) returns LexedSource throws LexerError
+	let bytes = source.toByteArray()
+	let cursor = try bytes.cursor() otherwise 'emptySource'
+		return LexedSource.create(TokenArray.create(), comments: CommentSpanArray.create())
+	end 'emptySource'
+
+	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, comments: CommentLog.recorded(CommentSpanArray.create()))
+	let tokens = try lexer.run()
+
+	return match lexer.comments 'sink'
+		recorded(spans) gives LexedSource.create(tokens, comments: spans)
+		discarded panic("tokenizeWithComments: the lexer was handed a recording log and discarded it")
+	end 'sink'
+end 'tokenizeWithComments'
 
 // --- Pure helpers ---
 

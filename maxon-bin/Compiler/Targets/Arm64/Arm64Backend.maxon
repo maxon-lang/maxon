@@ -1591,37 +1591,37 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 	match op 'emit'
 		// --- x64-only control/frame band ---
 		prologue or
-			epilogue or
-			ret or
-			jmp or
-			jcc or
-			movRegImm or
-			movRegImm32 then panic("emitArm64TargetOp: an x64 control/frame op reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
+		epilogue or
+		ret or
+		jmp or
+		jcc or
+		movRegImm or
+		movRegImm32 then panic("emitArm64TargetOp: an x64 control/frame op reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
 
 		// --- shared: reg-reg move ---
 		movRegReg(dest, src) then arm64EmitRegRegMove(code, dest: dest, src: src)
 
 		// --- x64-only ALU band ---
 		movReg32Reg32 or
-			subRegReg or
-			imulRegReg or
-			negReg or
-			cmpRegReg or
-			leaRegRegReg or
-			leaRegRegImm32 or
-			imulRegRegImm32 or
-			cmpRegImm32 then panic("emitArm64TargetOp: an x64 ALU op reached the arm64 encoder")
+		subRegReg or
+		imulRegReg or
+		negReg or
+		cmpRegReg or
+		leaRegRegReg or
+		leaRegRegImm32 or
+		imulRegRegImm32 or
+		cmpRegImm32 then panic("emitArm64TargetOp: an x64 ALU op reached the arm64 encoder")
 
 		// --- shared: post-coloring swap ---
 		xchgRegReg(a, b) then arm64EmitRegRegSwap(code, a: a, b: b)
 
 		// --- x64-only call/div/frame band ---
 		callDirect or
-			iatCall or
-			cqo or
-			divideReg or
-			pushReg or
-			popReg then panic("emitArm64TargetOp: an x64 call/idiv/push/pop op reached the arm64 encoder")
+		iatCall or
+		cqo or
+		divideReg or
+		pushReg or
+		popReg then panic("emitArm64TargetOp: an x64 call/idiv/push/pop op reached the arm64 encoder")
 
 		// --- shared: spill / reload ---
 		storeSlotReg(slot, srcReg) then arm64EmitStoreSlot(code, slot: slot, srcReg: srcReg)
@@ -1629,20 +1629,20 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 
 		// --- x64-only word ALU / shift / setcc / lea-global band ---
 		andRegReg or
-			orRegReg or
-			xorRegReg or
-			notReg or
-			andRegImm32 or
-			orRegImm32 or
-			xorRegImm32 or
-			shlRegImm8 or
-			sarRegImm8 or
-			shrRegImm8 or
-			shlRegCl or
-			sarRegCl or
-			shrRegCl or
-			setccReg or
-			leaRegGlobal then panic("emitArm64TargetOp: an x64 word-ALU/shift/setcc op reached the arm64 encoder")
+		orRegReg or
+		xorRegReg or
+		notReg or
+		andRegImm32 or
+		orRegImm32 or
+		xorRegImm32 or
+		shlRegImm8 or
+		sarRegImm8 or
+		shrRegImm8 or
+		shlRegCl or
+		sarRegCl or
+		shrRegCl or
+		setccReg or
+		leaRegGlobal then panic("emitArm64TargetOp: an x64 word-ALU/shift/setcc op reached the arm64 encoder")
 
 		// --- shared: base+disp data access ---
 		loadRegBaseDisp(dest, base, disp, width) then arm64EmitDataLoad(code, dest: dest, base: arm64GprField(base), disp: disp, width: width)
@@ -1652,21 +1652,21 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		// The endpoint MOVED when `movqXmmGpr` was appended to the end of the x64 SSE band: this range
 		// means "the x64 float ops", and its last member is whichever one that band currently ends on.
 		addsdRegReg or
-			subsdRegReg or
-			mulsdRegReg or
-			divsdRegReg or
-			ucomisdRegReg or
-			movsdRegRip or
-			cvtsi2sdRegReg or
-			cvttsd2siRegReg or
-			sqrtsdRegReg or
-			roundsdRegReg or
-			movqGprXmm or
-			absF64RegReg or
-			leaRegRdata or
-			minMaxSdRegReg or
-			movqXmmGpr or
-			negF64RegReg then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
+		subsdRegReg or
+		mulsdRegReg or
+		divsdRegReg or
+		ucomisdRegReg or
+		movsdRegRip or
+		cvtsi2sdRegReg or
+		cvttsd2siRegReg or
+		sqrtsdRegReg or
+		roundsdRegReg or
+		movqGprXmm or
+		absF64RegReg or
+		leaRegRdata or
+		minMaxSdRegReg or
+		movqXmmGpr or
+		negF64RegReg then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
 
 		// `minsd`/`maxsd` are inside the range above; the arm64 spelling of `min`/`max` is `fcmp` +
 		// `fcsel`, not one op.
@@ -1747,8 +1747,8 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		// same target-dispatch bug the x64-only bands above panic on. arm64's own function-value ops are
 		// `arm64LeaFuncAddr`/`arm64BranchLinkReg`, and its syscall is `arm64Syscall`.
 		leaRegFunc or
-			callReg or
-			x64Syscall then panic("emitArm64TargetOp: an x64-only op (`leaRegFunc`/`callReg`/`x64Syscall`) reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
+		callReg or
+		x64Syscall then panic("emitArm64TargetOp: an x64-only op (`leaRegFunc`/`callReg`/`x64Syscall`) reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
 		callMem then panic("emitArm64TargetOp: the x64-only `callMem` (the fused memory-indirect witness call) reached the arm64 encoder — arm64 LOWERS a witness dispatch instead, to `loadRegBaseDisp` of the slot followed by `arm64BranchLinkReg`, so it never mints one of these")
 
 		// The dense-match jump table: the imm12-safe cmp/b.hs/adrp+add/ldrsw/add/br sequence, its default-edge
@@ -1791,10 +1791,10 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 
 		// x64's atomics never reach the arm64 encoder, exactly as its fill ladder and jump table do not.
 		x64LockCmpxchg or
-			x64LockXadd or
-			x64LockAdd or
-			x64TebSelfPointer or
-			x64GsLoadRegBase then panic("emitArm64TargetOp: an x64-only atomic or TEB read reached the arm64 encoder — arm64's atomics are `arm64AtomicCas`/`arm64AtomicRmw` and its thread token is `arm64ThreadPointer`")
+		x64LockXadd or
+		x64LockAdd or
+		x64TebSelfPointer or
+		x64GsLoadRegBase then panic("emitArm64TargetOp: an x64-only atomic or TEB read reached the arm64 encoder — arm64's atomics are `arm64AtomicCas`/`arm64AtomicRmw` and its thread token is `arm64ThreadPointer`")
 
 		// The scaled-index band. The ADDRESS op is per-ISA (x64 spells `+` as a `lea`, arm64 as an
 		// `add`), so `leaRegBaseIndexScale` never reaches here; the two ACCESSES are SHARED, exactly as
@@ -1820,7 +1820,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 
 		// AArch64 is load/store: no ALU instruction takes a memory destination, so its isel never selects one.
 		x64AluBaseDispReg or
-			x64AluBaseDispImm32 then panic("emitArm64TargetOp: an x64 memory-destination read-modify-write reached the arm64 encoder — AArch64 has no such instruction, and `StdToArm64Conversion` lowers the step as a load, an ALU op and a store")
+		x64AluBaseDispImm32 then panic("emitArm64TargetOp: an x64 memory-destination read-modify-write reached the arm64 encoder — AArch64 has no such instruction, and `StdToArm64Conversion` lowers the step as a load, an ALU op and a store")
 	end 'emit'
 end 'emitArm64TargetOp'
 
@@ -2838,16 +2838,16 @@ end 'concatArm64FunctionChunks'
 function arm64SectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataRelocation) returns ByteOffset
 	return match reloc.kind 'kind'
 		arm64Adrp or
-			arm64PageOff gives globalData.rdataOffsetOf(reloc.rdataLabel)
+		arm64PageOff gives globalData.rdataOffsetOf(reloc.rdataLabel)
 		dataSectionArm64Adrp or
-			dataSectionArm64PageOff gives globalData.dataSectionOffsetOf(reloc.rdataLabel)
+		dataSectionArm64PageOff gives globalData.dataSectionOffsetOf(reloc.rdataLabel)
 		ripRelDisp32 or
-			symdataRipRelDisp32 or
-			dataSectionRipRelDisp32 panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' carries an x64 RIP-relative reloc kind in the arm64 backend")
+		symdataRipRelDisp32 or
+		dataSectionRipRelDisp32 panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' carries an x64 RIP-relative reloc kind in the arm64 backend")
 		arm64Adr or
-			arm64LdrLiteral or
-			symdataArm64Adr or
-			dataSectionArm64Adr panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' is a single-ADR reloc kind, which the arm64 encoder does not file (it uses the ADRP+ADD pair — M1 trap)")
+		arm64LdrLiteral or
+		symdataArm64Adr or
+		dataSectionArm64Adr panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' is a single-ADR reloc kind, which the arm64 encoder does not file (it uses the ADRP+ADD pair — M1 trap)")
 	end 'kind'
 end 'arm64SectionOffsetOfReloc'
 

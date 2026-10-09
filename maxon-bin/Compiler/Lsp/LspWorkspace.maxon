@@ -211,7 +211,7 @@ type HeldWorkspace
 
 		match root 'root'
 			projectDirectory or
-				libraryTier then return self.announcedSwept(root, key: key, selection: selection, tiers: tiers, request: request)
+			libraryTier then return self.announcedSwept(root, key: key, selection: selection, tiers: tiers, request: request)
 			singleFile then return self.builtSwept(root, selection: selection, tiers: tiers, request: request)
 		end 'root'
 	end 'sweptFor'
@@ -234,7 +234,7 @@ type HeldWorkspace
 
 		match swept 'outcome'
 			read or
-				loaded then self.corpora.upsert(selection, value: fresh)
+			loaded then self.corpora.upsert(selection, value: fresh)
 			unavailable then return SweptProject.unavailable
 		end 'outcome'
 
@@ -384,7 +384,7 @@ function factsUnderTheRootOf(reader LspReaderSearch) returns LspProjectFacts
 
 	return match root 'root'
 		projectDirectory or
-			libraryTier gives heldProjectFacts(root, readerPath: reader.document.path)
+		libraryTier gives heldProjectFacts(root, readerPath: reader.document.path)
 		singleFile gives LspProjectFacts.singleFile(reader.document.path)
 	end 'root'
 end 'factsUnderTheRootOf'
@@ -415,7 +415,7 @@ end 'lspDocumentCorpus'
 module function lspProjectCorpus(reader LspReaderSearch, root WorkspaceRoot) returns LspCorpus
 	return match root 'root'
 		projectDirectory or
-			libraryTier gives sweptWorkspace(root, tiers: reader.tiers, readerPath: reader.document.path)
+		libraryTier gives sweptWorkspace(root, tiers: reader.tiers, readerPath: reader.document.path)
 		singleFile gives LspCorpus.unavailable
 	end 'root'
 end 'lspProjectCorpus'
@@ -425,7 +425,7 @@ module function lspLoadProject(reader LspReaderSearch)
 
 	match root 'root'
 		projectDirectory or
-			libraryTier then _ = heldProjectSwept(root, tiers: reader.tiers, request: SweepRequest.loadingFor(reader.document.path))
+		libraryTier then _ = heldProjectSwept(root, tiers: reader.tiers, request: SweepRequest.loadingFor(reader.document.path))
 		singleFile then return
 	end 'root'
 end 'lspLoadProject'
@@ -443,7 +443,7 @@ module function lspProjectCheckRoot(reader LspReaderSearch, root WorkspaceRoot) 
 	return match root 'root'
 		projectDirectory(dir) gives ProjectCheckRoot.at(dir)
 		libraryTier or
-			singleFile gives ProjectCheckRoot.none
+		singleFile gives ProjectCheckRoot.none
 	end 'root'
 end 'lspProjectCheckRoot'
 
@@ -502,7 +502,7 @@ function heldProjectSwept(root WorkspaceRoot, tiers LibraryTiers, request SweepR
 
 	match swept 'outcome'
 		read or
-			loaded then heldRoots.holdWorkspace(key, workspace: fresh)
+		loaded then heldRoots.holdWorkspace(key, workspace: fresh)
 		unavailable then break
 	end 'outcome'
 
@@ -639,7 +639,7 @@ function buildRootOf(root WorkspaceRoot, readerPath FilePath) returns FilePath
 	return match root 'root'
 		libraryTier(dir) gives try dir.parent() otherwise panic("buildRootOf: '{dir.toString()}' is a library tier, a directory `LibraryTiers.locate` found by name inside another")
 		projectDirectory or
-			singleFile gives heldRootOf(root, readerPath: readerPath)
+		singleFile gives heldRootOf(root, readerPath: readerPath)
 	end 'root'
 end 'buildRootOf'
 

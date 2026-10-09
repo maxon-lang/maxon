@@ -38,17 +38,17 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		named then panic("maxonTypeToStdType: a `named` type must be resolved to a primitive before lowering (TypeResolution did not run)")
 		unresolved then panic("maxonTypeToStdType: an `unresolved` type reached lowering (TypeResolution did not run)")
 		boolean or
-			integer or
-			float or
-			exitCode or
-			structRef or
-			string or
-			function or
-			typeParameter or
-			genericInstance or
-			character or
-			interfaceRef or
-			cstring then break
+		integer or
+		float or
+		exitCode or
+		structRef or
+		string or
+		function or
+		typeParameter or
+		genericInstance or
+		character or
+		interfaceRef or
+		cstring then break
 	end 'residue'
 
 	return valueTagToStdType(maxonTypeTag(ref))
@@ -74,22 +74,22 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 	match tag 'collapse'
 		boolean then return StdType.i1
 		integer or
-			named or
+		named or
 
-			// Every reference is one machine word: a struct or generic instance is its box's address, a
-			// String or Character its record's, a function value its function record's, a `cstring` a
-			// raw address. A type parameter is an opaque word, which is what lets a generic type's method
-			// bodies compile once. MaxonType stays width-free (see MaxonDialect), so this arm is the one
-			// place the machine word is named. An existential's tag types only its value half; the
-			// witness half is a separate value with its own integer tag.
-			structRef or
-			string or
-			function or
-			typeParameter or
-			genericInstance or
-			character or
-			interfaceRef or
-			cstring then return StdType.i64
+		// Every reference is one machine word: a struct or generic instance is its box's address, a
+		// String or Character its record's, a function value its function record's, a `cstring` a
+		// raw address. A type parameter is an opaque word, which is what lets a generic type's method
+		// bodies compile once. MaxonType stays width-free (see MaxonDialect), so this arm is the one
+		// place the machine word is named. An existential's tag types only its value half; the
+		// witness half is a separate value with its own integer tag.
+		structRef or
+		string or
+		function or
+		typeParameter or
+		genericInstance or
+		character or
+		interfaceRef or
+		cstring then return StdType.i64
 		float then return StdType.f64
 
 		// `exitCode` is the resolved `ExitCode` builtin alias. Its width is
@@ -191,7 +191,7 @@ function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
 		// trap, so they need `StdOp.div`/`mod`'s `isPure: false`, and they are integer-only, so there is
 		// no float `binOp` for them to be. `lowerBinOp` routes both directly.
 		divUnsigned or
-			modUnsigned then panic("maxonBinOpToStdOpcode: `{op.rawValue}` lowers to StdOp.div/mod with `IntegerSignedness.unsigned` — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
+		modUnsigned then panic("maxonBinOpToStdOpcode: `{op.rawValue}` lowers to StdOp.div/mod with `IntegerSignedness.unsigned` — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
 	end 'map'
 end 'maxonBinOpToStdOpcode'
 
@@ -232,8 +232,8 @@ function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
 		// answer for that band is a panic, and there is no opcode to hand back. `lowerUnaryOp` routes it to
 		// `lowerSignExtend` before ever asking, so reaching here is a routing bug in that function.
 		signExtendI8 or
-			signExtendI16 or
-			signExtendI32 then panic("maxonUnaryOpToStdOpcode: {op.name} has no 1:1 Std opcode — it EXPANDS to a shift pair, and `lowerUnaryOp` routes it to `lowerSignExtend` before reaching this map")
+		signExtendI16 or
+		signExtendI32 then panic("maxonUnaryOpToStdOpcode: {op.name} has no 1:1 Std opcode — it EXPANDS to a shift pair, and `lowerUnaryOp` routes it to `lowerSignExtend` before reaching this map")
 	end 'map'
 end 'maxonUnaryOpToStdOpcode'
 
@@ -317,7 +317,7 @@ export function maxonBinOpOfStdOpcode(opcode StdBinOpcode) returns MaxonBinOp
 		// `foldConstants`, this function's one caller, refuses the opcode before asking (it could not
 		// evaluate a 128-bit product into a 64-bit `ParsedInt` anyway).
 		mulHighSigned or
-			mulHighUnsigned panic("maxonBinOpOfStdOpcode: the high multiply is a Std-TIER-ONLY opcode — it is minted by `StrengthReduceDivision` and has no source operator to carry back to. Its one would-be caller, `foldConstants.evaluateIntBinOp`, declines it before asking; reaching here means a new caller asked without that guard.")
+		mulHighUnsigned panic("maxonBinOpOfStdOpcode: the high multiply is a Std-TIER-ONLY opcode — it is minted by `StrengthReduceDivision` and has no source operator to carry back to. Its one would-be caller, `foldConstants.evaluateIntBinOp`, declines it before asking; reaching here means a new caller asked without that guard.")
 	end 'map'
 
 	let roundTrip = maxonBinOpToStdOpcode(op)
@@ -899,53 +899,53 @@ end 'registerProgramLiteralBlobs'
 function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 	match op 'op'
 		call or
-			literal or
-			ret or
-			retVoid or
-			binOp or
-			unaryOp or
-			compare or
-			condBranch or
-			branch or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			tryCall or
-			throwError or
-			propagateError or
-			panicAbort or
-			functionRef or
-			indirectCall or
-			asyncCall or
-			await or
-			tryAwait or
-			sizeofType or
-			switch or
-			witnessDispatch or
-			witnessTryDispatch or
-			panicAbortValue or
+		literal or
+		ret or
+		retVoid or
+		binOp or
+		unaryOp or
+		compare or
+		condBranch or
+		branch or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		tryCall or
+		throwError or
+		propagateError or
+		panicAbort or
+		functionRef or
+		indirectCall or
+		asyncCall or
+		await or
+		tryAwait or
+		sizeofType or
+		switch or
+		witnessDispatch or
+		witnessTryDispatch or
+		panicAbortValue or
 
-			// The error-flag encode's only constant is the bias, which the lowering mints for itself.
-			errorFlagEncode or
+		// The error-flag encode's only constant is the bias, which the lowering mints for itself.
+		errorFlagEncode or
 
-			// A `spawn`'s bytes are a type name the lowering turns into two symbols, and a send's and a
-			// reply cell's are callee names no `.rdata` blob holds.
-			serviceSpawn or
-			serviceSend or
-			serviceReplyCell or
+		// A `spawn`'s bytes are a type name the lowering turns into two symbols, and a send's and a
+		// reply cell's are callee names no `.rdata` blob holds.
+		serviceSpawn or
+		serviceSend or
+		serviceReplyCell or
 
-			// ⚠ An imaged struct record and an imaged string table register at their own lowering: what
-			// each registers is not a blob but interlocking payloads — the allocation header and the box,
-			// or a String record per element, the buffer of addresses over them and the Array record —
-			// whose labels point inside them. Registering here would mint each payload twice or hand this
-			// walk the header geometry; byte dedup already makes one object of two equal payloads.
-			immortalStructRecord or
-			immortalStringTable or
-			covPoint or
-			rawIntrinsic or
+		// ⚠ An imaged struct record and an imaged string table register at their own lowering: what
+		// each registers is not a blob but interlocking payloads — the allocation header and the box,
+		// or a String record per element, the buffer of addresses over them and the Array record —
+		// whose labels point inside them. Registering here would mint each payload twice or hand this
+		// walk the header geometry; byte dedup already makes one object of two equal payloads.
+		immortalStructRecord or
+		immortalStringTable or
+		covPoint or
+		rawIntrinsic or
 
-			// A witness table is registered by `ensureWitnessTable` when the op is lowered.
-			existentialWitness then break
+		// A witness table is registered by `ensureWitnessTable` when the op is lowered.
+		existentialWitness then break
 		stringLiteral(_, bytes) then _ = registerStringBlob(globalData, bytes: bytes)
 		constArrayLiteral(_, _, _, bytes) then _ = registerByteArrayLiteralBlob(globalData, bytes: bytes)
 	end 'op'
@@ -1909,7 +1909,7 @@ type MaxonToStdLowering
 
 			// The error terminators are never body ops.
 			throwError or
-				propagateError then panic("lowerMaxonToStd: an error terminator appeared as a body op (parser bug — throwError/propagateError are always block terminators)")
+			propagateError then panic("lowerMaxonToStd: an error terminator appeared as a body op (parser bug — throwError/propagateError are always block terminators)")
 
 			// `async f(…)` spills its scalar args into a slab argument buffer and spawns a green
 			// thread; `await p` drives the scheduler until the promise completes. `args` is safe to bind in
@@ -2159,20 +2159,20 @@ type MaxonToStdLowering
 			compare then panic("lowerMaxonToStd: a `compare` op appeared as a block terminator (parser bug — a comparison is never a terminator)")
 			call then panic("lowerMaxonToStd: a `call` op appeared as a block terminator (parser bug — a call is a body op, never a terminator)")
 			globalAddr or
-				loadIndirect or
-				storeIndirect then panic("lowerMaxonToStd: a varAccess op appeared as a block terminator (parser bug — a global's address, load and store are all body ops, never terminators)")
+			loadIndirect or
+			storeIndirect then panic("lowerMaxonToStd: a varAccess op appeared as a block terminator (parser bug — a global's address, load and store are all body ops, never terminators)")
 			stringLiteral then panic("lowerMaxonToStd: a `stringLiteral` op appeared as a block terminator (parser bug — a string literal is a value-producing body op, never a terminator)")
 			tryCall then panic("lowerMaxonToStd: a `tryCall` op appeared as a block terminator (parser bug — a throwing call is a value-producing body op, never a terminator)")
 			panicAbort then panic("lowerMaxonToStd: a `panicAbort` op appeared as a block terminator (parser bug — panicAbort is a body op followed by a dead return terminator)")
 			functionRef then panic("lowerMaxonToStd: a `functionRef` op appeared as a block terminator (parser bug — a function reference is a value-producing body op, never a terminator)")
 			indirectCall then panic("lowerMaxonToStd: an `indirectCall` op appeared as a block terminator (parser bug — an indirect call is a value-producing body op, never a terminator)")
 			asyncCall or
-				await or
-				tryAwait then panic("lowerMaxonToStd: an async/await op appeared as a block terminator (parser bug — `async`/`await`/`try await` are value-producing body ops, never terminators)")
+			await or
+			tryAwait then panic("lowerMaxonToStd: an async/await op appeared as a block terminator (parser bug — `async`/`await`/`try await` are value-producing body ops, never terminators)")
 			sizeofType then panic("lowerMaxonToStd: a `sizeofType` op appeared as a block terminator (parser bug — sizeof is a value-producing body op, never a terminator)")
 			constArrayLiteral then panic("lowerMaxonToStd: a `constArrayLiteral` op appeared as a block terminator (parser bug — a constant array literal is a value-producing body op, never a terminator)")
 			witnessDispatch or
-				witnessTryDispatch then panic("lowerMaxonToStd: a `witnessDispatch` op appeared as a block terminator (parser bug — a witness dispatch is a value-producing body op, never a terminator)")
+			witnessTryDispatch then panic("lowerMaxonToStd: a `witnessDispatch` op appeared as a block terminator (parser bug — a witness dispatch is a value-producing body op, never a terminator)")
 			panicAbortValue then panic("lowerMaxonToStd: a `panicAbortValue` op appeared as a block terminator (parser bug — like `panicAbort` it is a body op followed by a dead return terminator)")
 			errorFlagEncode then panic("lowerMaxonToStd: an `errorFlagEncode` op appeared as a block terminator (parser bug — it DEFINES the flag a routed throw's edge carries, so it is a value-producing body op emitted ahead of that edge's branch)")
 			immortalStructRecord then panic("lowerMaxonToStd: an `immortalStructRecord` op appeared as a block terminator (parser bug — an imaged struct record is a value-producing body op, never a terminator)")
@@ -2180,8 +2180,8 @@ type MaxonToStdLowering
 			covPoint then panic("lowerMaxonToStd: a `covPoint` op appeared as a block terminator (parser bug — a coverage counter is emitted at a block HEAD, ahead of the code it counts, and is never a terminator)")
 			rawIntrinsic then panic("lowerMaxonToStd: a `rawIntrinsic` op appeared as a block terminator (parser bug — a __Raw intrinsic is an instruction emitted into a body, never a terminator)")
 			serviceSpawn or
-				serviceSend or
-				serviceReplyCell then panic("lowerMaxonToStd: a service op appeared as a block terminator (parser bug — a `spawn` produces a mailbox pointer the next op stores, a send is a statement and a reply cell is a value the send that follows it reads; all three are body ops, never terminators)")
+			serviceSend or
+			serviceReplyCell then panic("lowerMaxonToStd: a service op appeared as a block terminator (parser bug — a `spawn` produces a mailbox pointer the next op stores, a send is a statement and a reply cell is a value the send that follows it reads; all three are body ops, never terminators)")
 			existentialWitness then panic("lowerMaxonToStd: an `existentialWitness` op appeared as a block terminator (parser bug — it defines the witness half the field store after it writes, so it is a body op)")
 		end 'lower'
 	end 'lowerTerminator'
@@ -2278,7 +2278,7 @@ type MaxonToStdLowering
 			schedPreemptExtLockAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedPreemptExtLockLabel))
 			schedLockAddr then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: SchedLockLabel))
 			ownFrame or
-				splicedAtEverySite then break
+			splicedAtEverySite then break
 		end 'row'
 	end 'lowerRawIntrinsic'
 
@@ -4231,7 +4231,7 @@ type MaxonToStdLowering
 			call(result, callee, args, argLabels, _, _, argDefaultSlots, _) then self.noteTableCandidateOfCall(result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, into: into)
 			tryCall(result, _, callee, args, argLabels, _, _, argDefaultSlots, _) then self.noteTableCandidateOfCall(result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, into: into)
 			asyncCall or
-				serviceSend then return
+			serviceSend then return
 			default panic("noteTableCandidateOfOp: maxonOpCalleeKind answers direct for an op that is not call, tryCall, asyncCall or serviceSend")
 		end 'callShape'
 	end 'noteTableCandidateOfOp'
@@ -4258,8 +4258,8 @@ type MaxonToStdLowering
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
 			ordered(argIds) then self.planHiddenArguments(argIds, sig: sig, result: result, callee: callee, readsATable: readsATable, passesADescriptor: passesADescriptor, into: into)
 			arityMismatch or
-				unknownLabel or
-				duplicateArg then panic("noteTableCandidateOfCall: '{String.from(callee)}' reached lowering with arguments SemanticCheck must have refused")
+			unknownLabel or
+			duplicateArg then panic("noteTableCandidateOfCall: '{String.from(callee)}' reached lowering with arguments SemanticCheck must have refused")
 		end 'slot'
 	end 'noteTableCandidateOfCall'
 
@@ -4286,7 +4286,7 @@ type MaxonToStdLowering
 			match self.witnessArgSourceOf(gid, constraint: constraint) 'source'
 				parametricInstance(conformer, argGid) then self.fileWitnessTableEntry(argGid, interfaceName: constraint.interfaceName, conformer: conformer)
 				forwardedBareParameter or
-					staticTable then continue
+				staticTable then continue
 			end 'source'
 		end 'eachConstraint'
 	end 'fileWitnessTableEntriesOfSlottedCall'
@@ -4688,9 +4688,9 @@ type MaxonToStdLowering
 		if self.signatures.calleeIsArrayRecordMember(callee, member: EqualsMethodName) 'anEquals'
 			match kind 'equalsKind'
 				equalsOnly or
-					equalsAndHash then return ManagedEqName
+				equalsAndHash then return ManagedEqName
 				neither or
-					floatHashOnly then throw AbsentError.absent
+				floatHashOnly then throw AbsentError.absent
 			end 'equalsKind'
 		end 'anEquals'
 
@@ -4699,7 +4699,7 @@ type MaxonToStdLowering
 				equalsAndHash then return ManagedHashName
 				floatHashOnly then return ManagedFloatHashName
 				neither or
-					equalsOnly then throw AbsentError.absent
+				equalsOnly then throw AbsentError.absent
 			end 'hashKind'
 		end 'aHash'
 
@@ -4959,7 +4959,7 @@ type MaxonToStdLowering
 		match divisionKindOf(callee) 'guardedDivision'
 			guardedRemainder then self.lowerDivisionExpansion(result, expansion: DivisionExpansion.guardedRemainder, signedness: divisionCalleeSignedness(callee), args: args, dstBlock: dstBlock)
 			quotient or
-				remainder then panic("lowerRuntimeCall: the THROWING '{String.from(callee)}' reached the plain call path — `isThrowingRuntimeCallee` names it, so `Parser.emitDivOrMod` must have emitted it without the `try` that E3057 requires")
+			remainder then panic("lowerRuntimeCall: the THROWING '{String.from(callee)}' reached the plain call path — `isThrowingRuntimeCallee` names it, so `Parser.emitDivOrMod` must have emitted it without the `try` that E3057 requires")
 			notCheckedDivision then self.appendRuntimeCall(result, callee: callee, args: args, dstBlock: dstBlock)
 		end 'guardedDivision'
 	end 'lowerRuntimeCall'
@@ -6191,19 +6191,19 @@ type MaxonToStdLowering
 	function lowerBinOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, dstBlock IrBlock)
 		match op 'op'
 			add or
-				sub or
-				mul or
-				bitAnd or
-				bitOr or
-				bitXor or
-				shl or
-				shr or
-				shrLogical or
+			sub or
+			mul or
+			bitAnd or
+			bitOr or
+			bitXor or
+			shl or
+			shr or
+			shrLogical or
 
-				// `min`/`max` need no `lowerDivision`-style fork: they are float-only outright
-				// (`stdBinOpcodeIsFloatOnly`) and the parser has already promoted both operands.
-				min or
-				max then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
+			// `min`/`max` need no `lowerDivision`-style fork: they are float-only outright
+			// (`stdBinOpcodeIsFloatOnly`) and the parser has already promoted both operands.
+			min or
+			max then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			div then self.lowerDivision(result, lhs: lhs, rhs: rhs, dstBlock: dstBlock)
 			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs, signedness: IntegerSignedness.signed))
 
@@ -6752,7 +6752,7 @@ type MaxonToStdLowering
 			match kind 'floatKind'
 				quotient then break
 				remainder or
-					guardedRemainder then panic("lowerDivisionExpansion: float `mod` does not exist — `requireBinOpOperands` refuses it, so a float-typed remainder expansion is a parser bug")
+				guardedRemainder then panic("lowerDivisionExpansion: float `mod` does not exist — `requireBinOpOperands` refuses it, so a float-typed remainder expansion is a parser bug")
 				notCheckedDivision then panic("lowerDivisionExpansion: reached with `notCheckedDivision` — `lowerTryCall` and `lowerRuntimeCall` route only the three division kinds here")
 			end 'floatKind'
 

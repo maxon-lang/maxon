@@ -171,8 +171,8 @@ export function listProjectsIn(session ProjectRootsSession, documents WorkspaceF
 	end 'session' otherwise (e) 'failed'
 		match e 'reason'
 			transportFailed or
-				malformedResponse or
-				serverRefused then probe = ListProjectsProbe.unanswered("`maxon/listProjects`, which the VS Code extension sends for its status bar, got no answer: {e.explained()}")
+			malformedResponse or
+			serverRefused then probe = ListProjectsProbe.unanswered("`maxon/listProjects`, which the VS Code extension sends for its status bar, got no answer: {e.explained()}")
 		end 'reason'
 	end 'failed'
 
@@ -193,7 +193,7 @@ function removeTheSessionsFolders(client LspClient, session ProjectRootsSession)
 	match session 'session'
 		atFoldersThenRemoved(folders) then try client.changeWorkspaceFolders(WorkspaceFolderRootArray.create(), removed: folders)
 		atFolders or
-			unrooted then return
+		unrooted then return
 	end 'session'
 end 'removeTheSessionsFolders'
 
@@ -253,7 +253,7 @@ export function definitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolder
 	end 'session' otherwise (e) 'failed'
 		match e 'reason'
 			transportFailed or
-				malformedResponse then outcome = WorkspaceFolderDefinitionOutcome.broke("the session broke before an answer arrived: {e.explained()}")
+			malformedResponse then outcome = WorkspaceFolderDefinitionOutcome.broke("the session broke before an answer arrived: {e.explained()}")
 			serverRefused(code, message) then outcome = WorkspaceFolderDefinitionOutcome.broke(corpusRefusalSentence(code, message: message))
 		end 'reason'
 	end 'failed'

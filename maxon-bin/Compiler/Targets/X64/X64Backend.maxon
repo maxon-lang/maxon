@@ -2254,57 +2254,57 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// x64 encoder only ever sees x64 ops (`buildBackend` dispatches on `target.cpu`). The
 		// exhaustiveness forced this arm; a panic keeps the ISA boundary loud.
 		arm64Ret or
-			arm64Branch or
-			arm64CondBranch or
-			arm64Cbz or
-			arm64Cbnz or
-			arm64MovImm or
-			arm64Prologue or
-			arm64Epilogue or
-			arm64Add or
-			arm64Sub or
-			arm64Mul or
-			arm64Sdiv or
-			arm64Udiv or
-			arm64Msub or
-			arm64And or
-			arm64Orr or
-			arm64Eor or
-			arm64Lslv or
-			arm64Asrv or
-			arm64Lsrv or
-			arm64Neg or
-			arm64Mvn or
-			arm64AddImm or
-			arm64SubImm or
-			arm64AndImm or
-			arm64OrrImm or
-			arm64EorImm or
-			arm64LslImm or
-			arm64AsrImm or
-			arm64LsrImm or
-			arm64Cmp or
-			arm64CmpImm or
-			arm64Cset or
-			arm64LeaFuncAddr or
-			arm64LeaRdata or
-			arm64LeaGlobal or
-			arm64BranchLink or
-			arm64BranchLinkReg or
-			arm64Fadd or
-			arm64Fsub or
-			arm64Fmul or
-			arm64Fdiv or
-			arm64Fcmp or
-			arm64Scvtf or
-			arm64Fcvtzs or
-			arm64Fsqrt or
-			arm64Frint or
-			arm64Fabs or
-			arm64FpLoadRdata or
-			arm64ImportCall or
-			arm64Syscall or
-			arm64Fcsel then panic("emitTargetOp: an arm64 op reached the x64 encoder — the arm64 backend encodes the arm64 band")
+		arm64Branch or
+		arm64CondBranch or
+		arm64Cbz or
+		arm64Cbnz or
+		arm64MovImm or
+		arm64Prologue or
+		arm64Epilogue or
+		arm64Add or
+		arm64Sub or
+		arm64Mul or
+		arm64Sdiv or
+		arm64Udiv or
+		arm64Msub or
+		arm64And or
+		arm64Orr or
+		arm64Eor or
+		arm64Lslv or
+		arm64Asrv or
+		arm64Lsrv or
+		arm64Neg or
+		arm64Mvn or
+		arm64AddImm or
+		arm64SubImm or
+		arm64AndImm or
+		arm64OrrImm or
+		arm64EorImm or
+		arm64LslImm or
+		arm64AsrImm or
+		arm64LsrImm or
+		arm64Cmp or
+		arm64CmpImm or
+		arm64Cset or
+		arm64LeaFuncAddr or
+		arm64LeaRdata or
+		arm64LeaGlobal or
+		arm64BranchLink or
+		arm64BranchLinkReg or
+		arm64Fadd or
+		arm64Fsub or
+		arm64Fmul or
+		arm64Fdiv or
+		arm64Fcmp or
+		arm64Scvtf or
+		arm64Fcvtzs or
+		arm64Fsqrt or
+		arm64Frint or
+		arm64Fabs or
+		arm64FpLoadRdata or
+		arm64ImportCall or
+		arm64Syscall or
+		arm64Fcsel then panic("emitTargetOp: an arm64 op reached the x64 encoder — the arm64 backend encodes the arm64 band")
 
 		// The dense-match jump table: the full cmp/jae/lea/movsxd/lea/jmp sequence, its default-edge rel32
 		// and table-address rdata reloc filed inline, its per-slot block-address relocs recorded in
@@ -2339,13 +2339,13 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// (see the dialect header for why arm64 cannot), so neither arm64 stack-argument op is ever produced
 		// for an x64 program and reaching this encoder is a lowering bug, not a missing encoding.
 		arm64StoreOutgoingArg or
-			arm64LoadIncomingArg then panic("emitX64TargetOp: an arm64 stack-argument op reached the x64 encoder — x64 places stack arguments with `storeBaseDispReg`/`loadRegBaseDisp` off rsp/rbp")
+		arm64LoadIncomingArg then panic("emitX64TargetOp: an arm64 stack-argument op reached the x64 encoder — x64 places stack arguments with `storeBaseDispReg`/`loadRegBaseDisp` off rsp/rbp")
 
 		// x64's own bit reinterpretations are `movqGprXmm`/`movqXmmGpr`, encoded above; neither arm64
 		// `fmov` general↔vector form ever reaches this encoder (`buildBackend` dispatches on
 		// `target.cpu`). ONE arm for the pair — the reason is the ISA, not the direction.
 		arm64FmovGprFp or
-			arm64FmovFpGpr then panic("emitX64TargetOp: an arm64-only general↔vector `fmov` reached the x64 encoder — x64's bit reinterpretations are `movqGprXmm`/`movqXmmGpr`")
+		arm64FmovFpGpr then panic("emitX64TargetOp: an arm64-only general↔vector `fmov` reached the x64 encoder — x64's bit reinterpretations are `movqGprXmm`/`movqXmmGpr`")
 
 		// `lea destReg, [rsp + slotDisp]` — the ADDRESS of a frame slot, through the SAME
 		// `slotDisplacement` the spill/reload pair above resolve their slots with, so a promoted record and
@@ -2371,8 +2371,8 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// The arm64 atomics never reach this encoder (`buildBackend` dispatches on `target.cpu`), exactly as
 		// the arm64 `fmov` pair above does not — x64's own atomics are the three locked forms one line up.
 		arm64AtomicCas or
-			arm64AtomicRmw or
-			arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd` and its thread token is `x64TebSelfPointer`")
+		arm64AtomicRmw or
+		arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd` and its thread token is `x64TebSelfPointer`")
 
 		// --- The scaled-index band ---
 		//
@@ -2395,7 +2395,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		mulHighReg(src, signedness) then encodeGrp3Reg(code, ext: Grp3ExtImul if signedness == IntegerSignedness.signed else Grp3ExtMul, reg: resolveGpr(src))
 		arm64Fneg then panic("emitTargetOp: an arm64 `fneg` reached the x64 encoder — the arm64 backend encodes the arm64 band; x64 spells the flip as `negF64RegReg`")
 		arm64LoadAcquire or
-			arm64StoreRelease then panic("emitTargetOp: an arm64 `LDAR`/`STLR` reached the x64 encoder — x64 is TSO, so `StdToX64Conversion` lowers the ordered pair to the ordinary `mov` forms and never mints these")
+		arm64StoreRelease then panic("emitTargetOp: an arm64 `LDAR`/`STLR` reached the x64 encoder — x64 is TSO, so `StdToX64Conversion` lowers the ordered pair to the ordinary `mov` forms and never mints these")
 		arm64Mulh then panic("emitTargetOp: an arm64 `SMULH` reached the x64 encoder — x64 spells the high half of a signed product as the one-operand `mulHighReg`, which reads RAX and writes RDX:RAX")
 		covInc(pointId) then encodeCovInc(code, rdataRelocs: rdataRelocs, covOffsets: covOffsets, pointId: pointId)
 
@@ -2519,149 +2519,149 @@ end 'BranchWindowRole'
 function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 	return match op 'role'
 		ret or
-			jmp gives BranchWindowRole.jump
+		jmp gives BranchWindowRole.jump
 		jcc gives BranchWindowRole.condBranch
 		callDirect or
-			callReg or
-			callMem gives BranchWindowRole.call
+		callReg or
+		callMem gives BranchWindowRole.call
 		iatCall gives BranchWindowRole.importCall
 		subRegReg or
-			cmpRegReg or
-			cmpRegImm32 or
-			andRegReg or
-			andRegImm32 gives BranchWindowRole.fusibleAlu
+		cmpRegReg or
+		cmpRegImm32 or
+		andRegReg or
+		andRegImm32 gives BranchWindowRole.fusibleAlu
 		prologue or
-			epilogue or
-			movRegImm or
-			movRegImm32 or
-			movRegReg or
-			movReg32Reg32 or
-			imulRegReg or
-			negReg or
-			leaRegRegReg or
-			leaRegRegImm32 or
-			imulRegRegImm32 or
-			xchgRegReg or
-			cqo or
-			divideReg or
-			pushReg or
-			popReg or
-			storeSlotReg or
-			loadRegSlot or
-			orRegReg or
-			xorRegReg or
-			notReg or
-			orRegImm32 or
-			xorRegImm32 or
-			shlRegImm8 or
-			sarRegImm8 or
-			shrRegImm8 or
-			shlRegCl or
-			sarRegCl or
-			shrRegCl or
-			setccReg or
-			leaRegGlobal or
-			loadRegBaseDisp or
-			storeBaseDispReg or
-			addsdRegReg or
-			subsdRegReg or
-			mulsdRegReg or
-			divsdRegReg or
-			ucomisdRegReg or
-			movsdRegRip or
-			cvtsi2sdRegReg or
-			cvttsd2siRegReg or
-			sqrtsdRegReg or
-			roundsdRegReg or
-			movqGprXmm or
-			absF64RegReg or
-			leaRegRdata or
-			minMaxSdRegReg or
-			movqXmmGpr or
-			negF64RegReg or
-			arm64Ret or
-			arm64Branch or
-			arm64CondBranch or
-			arm64Cbz or
-			arm64Cbnz or
-			arm64MovImm or
-			arm64Prologue or
-			arm64Epilogue or
-			arm64Add or
-			arm64Sub or
-			arm64Mul or
-			arm64Sdiv or
-			arm64Udiv or
-			arm64Msub or
-			arm64And or
-			arm64Orr or
-			arm64Eor or
-			arm64Lslv or
-			arm64Asrv or
-			arm64Lsrv or
-			arm64Neg or
-			arm64Mvn or
-			arm64AddImm or
-			arm64SubImm or
-			arm64AndImm or
-			arm64OrrImm or
-			arm64EorImm or
-			arm64LslImm or
-			arm64AsrImm or
-			arm64LsrImm or
-			arm64Cmp or
-			arm64CmpImm or
-			arm64Cset or
-			arm64LeaFuncAddr or
-			arm64LeaRdata or
-			arm64LeaGlobal or
-			arm64BranchLink or
-			arm64BranchLinkReg or
-			arm64Fadd or
-			arm64Fsub or
-			arm64Fmul or
-			arm64Fdiv or
-			arm64Fcmp or
-			arm64Scvtf or
-			arm64Fcvtzs or
-			arm64Fsqrt or
-			arm64Frint or
-			arm64Fabs or
-			arm64FpLoadRdata or
-			arm64ImportCall or
-			arm64Syscall or
-			arm64Fcsel or
-			leaRegFunc or
-			x64Syscall or
-			x64JumpTable or
-			arm64JumpTable or
-			arm64StoreOutgoingArg or
-			arm64LoadIncomingArg or
-			arm64FmovGprFp or
-			arm64FmovFpGpr or
-			leaRegSlot or
-			x64MemFill or
-			arm64MemFill or
-			x64LockCmpxchg or
-			x64LockXadd or
-			x64LockAdd or
-			x64TebSelfPointer or
-			x64GsLoadRegBase or
-			arm64AtomicCas or
-			arm64AtomicRmw or
-			arm64ThreadPointer or
-			leaRegBaseIndexScale or
-			loadRegBaseIndexScale or
-			storeBaseIndexScaleReg or
-			arm64AddLsl or
-			mulHighReg or
-			arm64Fneg or
-			arm64LoadAcquire or
-			arm64StoreRelease or
-			arm64Mulh or
-			covInc or
-			x64AluBaseDispReg or
-			x64AluBaseDispImm32 gives BranchWindowRole.other
+		epilogue or
+		movRegImm or
+		movRegImm32 or
+		movRegReg or
+		movReg32Reg32 or
+		imulRegReg or
+		negReg or
+		leaRegRegReg or
+		leaRegRegImm32 or
+		imulRegRegImm32 or
+		xchgRegReg or
+		cqo or
+		divideReg or
+		pushReg or
+		popReg or
+		storeSlotReg or
+		loadRegSlot or
+		orRegReg or
+		xorRegReg or
+		notReg or
+		orRegImm32 or
+		xorRegImm32 or
+		shlRegImm8 or
+		sarRegImm8 or
+		shrRegImm8 or
+		shlRegCl or
+		sarRegCl or
+		shrRegCl or
+		setccReg or
+		leaRegGlobal or
+		loadRegBaseDisp or
+		storeBaseDispReg or
+		addsdRegReg or
+		subsdRegReg or
+		mulsdRegReg or
+		divsdRegReg or
+		ucomisdRegReg or
+		movsdRegRip or
+		cvtsi2sdRegReg or
+		cvttsd2siRegReg or
+		sqrtsdRegReg or
+		roundsdRegReg or
+		movqGprXmm or
+		absF64RegReg or
+		leaRegRdata or
+		minMaxSdRegReg or
+		movqXmmGpr or
+		negF64RegReg or
+		arm64Ret or
+		arm64Branch or
+		arm64CondBranch or
+		arm64Cbz or
+		arm64Cbnz or
+		arm64MovImm or
+		arm64Prologue or
+		arm64Epilogue or
+		arm64Add or
+		arm64Sub or
+		arm64Mul or
+		arm64Sdiv or
+		arm64Udiv or
+		arm64Msub or
+		arm64And or
+		arm64Orr or
+		arm64Eor or
+		arm64Lslv or
+		arm64Asrv or
+		arm64Lsrv or
+		arm64Neg or
+		arm64Mvn or
+		arm64AddImm or
+		arm64SubImm or
+		arm64AndImm or
+		arm64OrrImm or
+		arm64EorImm or
+		arm64LslImm or
+		arm64AsrImm or
+		arm64LsrImm or
+		arm64Cmp or
+		arm64CmpImm or
+		arm64Cset or
+		arm64LeaFuncAddr or
+		arm64LeaRdata or
+		arm64LeaGlobal or
+		arm64BranchLink or
+		arm64BranchLinkReg or
+		arm64Fadd or
+		arm64Fsub or
+		arm64Fmul or
+		arm64Fdiv or
+		arm64Fcmp or
+		arm64Scvtf or
+		arm64Fcvtzs or
+		arm64Fsqrt or
+		arm64Frint or
+		arm64Fabs or
+		arm64FpLoadRdata or
+		arm64ImportCall or
+		arm64Syscall or
+		arm64Fcsel or
+		leaRegFunc or
+		x64Syscall or
+		x64JumpTable or
+		arm64JumpTable or
+		arm64StoreOutgoingArg or
+		arm64LoadIncomingArg or
+		arm64FmovGprFp or
+		arm64FmovFpGpr or
+		leaRegSlot or
+		x64MemFill or
+		arm64MemFill or
+		x64LockCmpxchg or
+		x64LockXadd or
+		x64LockAdd or
+		x64TebSelfPointer or
+		x64GsLoadRegBase or
+		arm64AtomicCas or
+		arm64AtomicRmw or
+		arm64ThreadPointer or
+		leaRegBaseIndexScale or
+		loadRegBaseIndexScale or
+		storeBaseIndexScaleReg or
+		arm64AddLsl or
+		mulHighReg or
+		arm64Fneg or
+		arm64LoadAcquire or
+		arm64StoreRelease or
+		arm64Mulh or
+		covInc or
+		x64AluBaseDispReg or
+		x64AluBaseDispImm32 gives BranchWindowRole.other
 	end 'role'
 end 'branchWindowRoleOf'
 
@@ -2669,11 +2669,11 @@ end 'branchWindowRoleOf'
 function isBranchWindowUnit(role BranchWindowRole, usesGt bool) returns bool
 	return match role 'unit'
 		jump or
-			condBranch or
-			call gives true
+		condBranch or
+		call gives true
 		importCall gives not usesGt
 		other or
-			fusibleAlu gives false
+		fusibleAlu gives false
 	end 'unit'
 end 'isBranchWindowUnit'
 
@@ -3068,13 +3068,13 @@ function sectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataRelocation)
 		dataSectionRipRelDisp32 gives globalData.dataSectionOffsetOf(reloc.rdataLabel)
 		symdataRipRelDisp32 panic("sectionOffsetOfReloc: '{reloc.rdataLabel}' is a `.symtab` reference, and the compiler's backend emits none")
 		arm64Adr or
-			arm64LdrLiteral or
-			symdataArm64Adr or
-			dataSectionArm64Adr or
-			arm64Adrp or
-			arm64PageOff or
-			dataSectionArm64Adrp or
-			dataSectionArm64PageOff panic("sectionOffsetOfReloc: '{reloc.rdataLabel}' carries an arm64 relocation kind in the x64 backend")
+		arm64LdrLiteral or
+		symdataArm64Adr or
+		dataSectionArm64Adr or
+		arm64Adrp or
+		arm64PageOff or
+		dataSectionArm64Adrp or
+		dataSectionArm64PageOff panic("sectionOffsetOfReloc: '{reloc.rdataLabel}' carries an arm64 relocation kind in the x64 backend")
 	end 'kind'
 end 'sectionOffsetOfReloc'
 

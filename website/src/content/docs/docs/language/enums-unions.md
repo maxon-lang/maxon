@@ -330,9 +330,9 @@ end 'Priority'
 function urgency(p Priority) returns String
 	return match p 'check'
 		low or
-			medium gives "not urgent"
+		medium gives "not urgent"
 		high or
-			critical gives "urgent"
+		critical gives "urgent"
 	end 'check'
 end 'urgency'
 ```

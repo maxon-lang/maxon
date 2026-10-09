@@ -255,7 +255,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		cqo then break
 		divideReg(divisor, _) then pushUse(buf, vreg: divisor)
 		pushReg or
-			popReg then panic("targetOpOperands: pushReg/popReg are POST-REGALLOC physical ops (inserted by the prologue/epilogue pass after coloring), so they must never reach the operand model")
+		popReg then panic("targetOpOperands: pushReg/popReg are POST-REGALLOC physical ops (inserted by the prologue/epilogue pass after coloring), so they must never reach the operand model")
 
 		// The spill/reload ops carry ONE register operand: a store READS `srcReg`, a reload
 		// DEFINES `destReg` (a fresh value). The slot is a memory location, not a register, so
@@ -450,7 +450,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// `arm64BranchLink` do (both `break` above). The Linux `svc` additionally writes x8, which the
 		// same call clobber already covers.
 		arm64ImportCall or
-			arm64Syscall then break
+		arm64Syscall then break
 
 		// `fcsel` (specs/min.md) — a 3-address PLAIN def with two uses, `arm64Fadd`'s shape exactly.
 		// It additionally READS the flags a preceding `arm64Fcmp` set, which no operand model on this
@@ -508,7 +508,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// so there is nothing here for the allocator to colour. The only field either carries is a constant
 		// fill pattern, which is an immediate and never a register.
 		x64MemFill or
-			arm64MemFill then break
+		arm64MemFill then break
 
 		// The atomics. Unlike the fill ladders one line up, these DO have operands: nothing is pre-moved
 		// into a fixed register except the CAS's comparand, which x86 pins to RAX and which therefore rides

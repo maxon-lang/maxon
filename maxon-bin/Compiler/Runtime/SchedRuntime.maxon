@@ -249,11 +249,11 @@ end 'MultiMSharing'
 export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sharing MultiMSharing, reach DataReach, seed ParsedInt = 0, valueType StdType = StdType.i64)
 	match sharing 'classified'
 		atomicStep or
-			underSchedLock or
-			publishedFromTheLock or
-			sealedBeforeWorkers or
-			monotoneApproximation or
-			lastWriterWins then break
+		underSchedLock or
+		publishedFromTheLock or
+		sealedBeforeWorkers or
+		monotoneApproximation or
+		lastWriterWins then break
 		unclassified then panic("pushRuntimeGlobal: '{String.from(label)}' is laid out with no multi-M sharing class. A `.data` word is reachable from every OS thread by construction, so it needs one of: atomicStep (every mutation is an atomicRmw/atomicCas wherever a second M can exist), underSchedLock (every read and write inside `__sched_lock`), publishedFromTheLock (mutated only inside `__sched_lock`, every store a release and every load an acquire, so any thread may read it without the lock), sealedBeforeWorkers (written only during bring-up, which no worker M can race), monotoneApproximation (a plain RMW whose lost update is bounded and self-correcting), or lastWriterWins (one word whose contract never said which writer wins). Argue the choice at the site. See MultiMSharing.")
 	end 'classified'
 
@@ -1514,7 +1514,7 @@ export function targetPreemptDelivery(target Target) returns PreemptDelivery
 	return match target.os 'os'
 		windows gives PreemptDelivery.threadSuspend
 		linux or
-			macos gives PreemptDelivery.signal
+		macos gives PreemptDelivery.signal
 
 		// A WASI component has one thread and no signals, and `targetProvidesFacility` denies it
 		// `greenThreads` — so there is neither a thread to stop nor a scheduler asking for one.
@@ -2243,7 +2243,7 @@ function emitRequireAddressableTlsSlot(module StdModule, func IrFunction, cur Ir
 		windows then return emitRequireTebTlsSlot(module, func: func, cur: cur, tlsIndex: tlsIndex, ids: ids)
 
 		linux or
-			macos then return cur
+		macos then return cur
 
 		wasi then panic("emitRequireAddressableTlsSlot: {target.os.name} has no per-OS-thread slot this scheduler could publish a P in — `targetProvidesFacility` denies `greenThreads` there, so no `__sched_init_procs` is built for it")
 	end 'os'
@@ -4322,115 +4322,115 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 		const(resultId, value, _) then return recordRunqOffsetConst(taint, resultId: resultId, value: value)
 		binOp(resultId, lhs, rhs, opcode, _) then return recordAddressTaint(taint, resultId: resultId, lhs: lhs, rhs: rhs, opcode: opcode)
 		unaryOp or
-			cmp or
-			cmpImm or
-			div or
-			mod or
-			condBranch or
-			branch or
-			retVoid or
-			storeIndirect or
-			osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osWaitChild or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osProcessNamespace or
-			osRandomFill or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osFileOpenCreateNew or
-			osEnvBlock or
-			osEnvBlockFree or
-			storeRelease or
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostProcess or
-			osNetpoll or
-			osPathQuery or
-			osSocketOverlapped or
-			osSocketServe then return false
+		cmp or
+		cmpImm or
+		div or
+		mod or
+		condBranch or
+		branch or
+		retVoid or
+		storeIndirect or
+		osAllocPages or
+		osWriteStdout or
+		rdataAddr or
+		errorReturn or
+		osExit or
+		funcAddr or
+		callIndirect or
+		osPanic or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osWaitHandle or
+		osWaitChild or
+		osFreePages or
+		switch or
+		witnessCall or
+		osPipeCreate or
+		osEventCreate or
+		osThreadCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osReadOverlapped or
+		osLastError or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osGetPid or
+		osPipeCreateOutbound or
+		osWriteFile or
+		osReadWallClock or
+		witnessTryCall or
+		osFileOpenRead or
+		osFileClose or
+		osReadFile or
+		osFileOpenWrite or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindClose or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
+		osPanicValue or
+		osCommandLine or
+		osStdHandle or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osWriteStderr or
+		stackRecordAddr or
+		osOpenNamedSegment or
+		osMapNamedSegment or
+		osTickCountMs or
+		osHandleSetInherit or
+		osPipePeek or
+		osEnvRead or
+		osProcessTerminate or
+		osSocketStartup or
+		osSocketResolve or
+		osSocketFreeAddrInfo or
+		osSocketCreate or
+		osSocketConnect or
+		osSocketSend or
+		osSocketError or
+		osSocketRecv or
+		osSocketClose or
+		osCpuCount or
+		osThreadCpuTicks or
+		osDecommitPages or
+		memFill or
+		osCommitPages or
+		osReservePages or
+		atomicCas or
+		atomicRmw or
+		currentThreadToken or
+		tlsAlloc or
+		tlsSetValue or
+		osSetEvent or
+		osEnterBackgroundPriority or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osEnvBlock or
+		osEnvBlockFree or
+		storeRelease or
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osHostProcess or
+		osNetpoll or
+		osPathQuery or
+		osSocketOverlapped or
+		osSocketServe then return false
 		binOpImm(resultId, lhs, imm, opcode, _) then return recordImmediateAddressTaint(taint, resultId: resultId, lhs: lhs, imm: imm, opcode: opcode)
 		ret(retValId) then return recordReturnTaint(taint, funcName: func.name, retValId: retValId)
 		param(resultId, index, _) then return recordParamTaint(taint, funcName: func.name, resultId: resultId, index: index as ParsedInt)
@@ -4599,11 +4599,11 @@ function entryIsPublishedFromTheLock(entry DataSectionEntry) returns bool
 	return match entry.sharing 'classified'
 		publishedFromTheLock gives true
 		atomicStep or
-			underSchedLock or
-			sealedBeforeWorkers or
-			monotoneApproximation or
-			lastWriterWins or
-			unclassified gives false
+		underSchedLock or
+		sealedBeforeWorkers or
+		monotoneApproximation or
+		lastWriterWins or
+		unclassified gives false
 	end 'classified'
 end 'entryIsPublishedFromTheLock'
 
@@ -4683,8 +4683,8 @@ function judgeAccessOfPublishedWord(access StdAccessOperands, func IrFunction, a
 		store then judgePublishedWordWrite(access, func: func, addr: addr, label: label, labels: labels, releases: releases)
 		atomic then judgePublishedWordAtomic(access, func: func, addr: addr, label: label, labels: labels, releases: releases, acquires: acquires)
 		neither or
-			constant or
-			globalAddress then refusePublishedWordEscape(func, label: label)
+		constant or
+		globalAddress then refusePublishedWordEscape(func, label: label)
 	end 'anAccess'
 end 'judgeAccessOfPublishedWord'
 

@@ -412,8 +412,8 @@ module function checkUnmarkableLetReads(project Project, funcNames FunctionNameI
 
 		match letGlobal.threadReach 'reach'
 			mainOnly or
-				everyThreadThrough or
-				packedInItsSlot then continue
+			everyThreadThrough or
+			packedInItsSlot then continue
 			everyThreadUnwalkable(noun) then reportUnmarkableLetRead(project, funcNames: funcNames, survey: survey, row: row, letGlobal: letGlobal, noun: noun)
 		end 'reach'
 
@@ -702,46 +702,46 @@ end 'RunTimeTarget'
 module function runTimeTargetOf(op MaxonOp) returns RunTimeTarget
 	return match op 'op'
 		call or
-			literal or
-			ret or
-			retVoid or
-			binOp or
-			unaryOp or
-			compare or
-			condBranch or
-			branch or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			stringLiteral or
-			tryCall or
-			throwError or
-			propagateError or
-			panicAbort gives RunTimeTarget.named
+		literal or
+		ret or
+		retVoid or
+		binOp or
+		unaryOp or
+		compare or
+		condBranch or
+		branch or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		stringLiteral or
+		tryCall or
+		throwError or
+		propagateError or
+		panicAbort gives RunTimeTarget.named
 
 		// Taking a function's ADDRESS runs nothing; the `indirectCall` that eventually runs it is the op below.
 		functionRef gives RunTimeTarget.named
 		indirectCall gives RunTimeTarget.closureValue
 		asyncCall or
-			await or
-			tryAwait or
-			sizeofType or
-			constArrayLiteral or
-			switch gives RunTimeTarget.named
+		await or
+		tryAwait or
+		sizeofType or
+		constArrayLiteral or
+		switch gives RunTimeTarget.named
 		witnessDispatch(_, _, _, methodIndex, interfaceDeclIndex, _, _) gives RunTimeTarget.witnessSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		witnessTryDispatch(_, _, _, _, methodIndex, interfaceDeclIndex, _) gives RunTimeTarget.witnessSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		panicAbortValue or
-			errorFlagEncode gives RunTimeTarget.named
+		errorFlagEncode gives RunTimeTarget.named
 
 		// A `spawn` names a TYPE and a send names a MESSAGE — both are names, and a send's handler is a seed
 		// of this walk in its own right.
 		serviceSpawn or
-			serviceSend or
-			serviceReplyCell or
-			immortalStructRecord or
-			immortalStringTable or
-			covPoint or
-			rawIntrinsic or
-			existentialWitness gives RunTimeTarget.named
+		serviceSend or
+		serviceReplyCell or
+		immortalStructRecord or
+		immortalStringTable or
+		covPoint or
+		rawIntrinsic or
+		existentialWitness gives RunTimeTarget.named
 	end 'op'
 end 'runTimeTargetOf'

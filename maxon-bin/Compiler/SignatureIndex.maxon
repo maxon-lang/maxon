@@ -1254,10 +1254,10 @@ function initializerCallsAFactory(calls ConstFactoryCallArray) returns bool
 		match call 'node'
 			call then return true
 			construct or
-				mapLiteral or
-				unionCase or
-				arrayLiteral or
-				functionValue then continue
+			mapLiteral or
+			unionCase or
+			arrayLiteral or
+			functionValue then continue
 		end 'node'
 	end 'eachCall'
 
@@ -1721,8 +1721,8 @@ function constArrayElementEnumName(element ConstArrayElement) returns ByteArray
 	return match element 'e'
 		enumCase(_, typeName) gives typeName
 		integer or
-			string or
-			character gives EmptySourceText
+		string or
+		character gives EmptySourceText
 	end 'e'
 end 'constArrayElementEnumName'
 
@@ -1750,7 +1750,7 @@ function constArrayElementScalar(element ConstArrayElement) returns ParsedInt
 		// in the same slot, which is what makes an enum array a constant blob at all.
 		enumCase(payload, _) gives payload
 		string or
-			character panic("constArrayElementScalar: a managed element has no constant image — its slot holds a heap address, which is why `arrayElementMayBeConstantBlob` refuses the instance before this is asked")
+		character panic("constArrayElementScalar: a managed element has no constant image — its slot holds a heap address, which is why `arrayElementMayBeConstantBlob` refuses the instance before this is asked")
 	end 'e'
 end 'constArrayElementScalar'
 
@@ -1763,7 +1763,7 @@ function constArrayElementText(element ConstArrayElement) returns ByteArray
 		string(bytes) gives bytes
 		integer panic("constArrayElementText: an integer element lays down as a VALUE in a constant blob, not as a String record — `arrayLiteralImageOf` routes on the element kind and sends it to `constBlobImageOf`")
 		character or
-			enumCase panic("constArrayElementText: a Character or enum-case element cannot reach a string table — a Character comes only from a SET literal, and an enum case is a scalar the constant blob holds inline")
+		enumCase panic("constArrayElementText: a Character or enum-case element cannot reach a string table — a Character comes only from a SET literal, and an enum case is a scalar the constant blob holds inline")
 	end 'e'
 end 'constArrayElementText'
 
@@ -1915,8 +1915,8 @@ export type ManagedGlobal
 		return match self.threadReach 'reach'
 			mainOnly gives true
 			everyThreadThrough or
-				everyThreadUnwalkable or
-				packedInItsSlot gives false
+			everyThreadUnwalkable or
+			packedInItsSlot gives false
 		end 'reach'
 	end 'isAVar'
 end 'ManagedGlobal'
@@ -2358,13 +2358,13 @@ function managedLiteralRecord(bytes ByteArray, kind ManagedConstKind) returns Ma
 	match kind 'k'
 		string or
 
-			// A character is the same record at a different tag (`Parser.emitCharacterLiteral`): the
-			// identical `stringLiteral` op over an immortal `.rdata` byte record. The `valueType`
-			// `globalRecordOf` carries beside it is what makes `ModuleInit.clonedStringRecord` mint the
-			// clone at `character` rather than at `string`. It reaches here only as the argument of a
-			// `<Type> from 'A'` construction: a top-level `let c = 'X'` is refused by
-			// `Parser.evalConstCharLiteral`.
-			character then return ManagedGlobalRecord.stringRecord(bytes)
+		// A character is the same record at a different tag (`Parser.emitCharacterLiteral`): the
+		// identical `stringLiteral` op over an immortal `.rdata` byte record. The `valueType`
+		// `globalRecordOf` carries beside it is what makes `ModuleInit.clonedStringRecord` mint the
+		// clone at `character` rather than at `string`. It reaches here only as the argument of a
+		// `<Type> from 'A'` construction: a top-level `let c = 'X'` is refused by
+		// `Parser.evalConstCharLiteral`.
+		character then return ManagedGlobalRecord.stringRecord(bytes)
 		byteArray then return ManagedGlobalRecord.constArrayRecord(ByteStringElementSize as ElementStride, elementCount: bytes.count() as ParsedInt, bytes: bytes)
 	end 'k'
 end 'managedLiteralRecord'
@@ -2688,15 +2688,15 @@ end 'cacheReadDefinedInitializerFlag'
 function declHoldsAnImageRecord(decl TopLevelDecl) returns bool
 	return match decl.outcome 'state'
 		pending or
-			evaluating or
-			value or
-			failed or
-			poisoned or
-			managedValue gives false
+		evaluating or
+		value or
+		failed or
+		poisoned or
+		managedValue gives false
 		arrayValue or
-			containerValue or
-			factoryValue or
-			boxedUnionValue gives true
+		containerValue or
+		factoryValue or
+		boxedUnionValue gives true
 	end 'state'
 end 'declHoldsAnImageRecord'
 
@@ -3413,9 +3413,9 @@ function foldedConstScalarOf(folded ConstFoldedValue) returns ConstScalarLookup
 	match folded 'folded'
 		scalar(constant) then return ConstScalarLookup.scalar(constant)
 		managed or
-			arrayLiteral or
-			containerCreate or
-			boxedUnionCase then return ConstScalarLookup.notAScalar
+		arrayLiteral or
+		containerCreate or
+		boxedUnionCase then return ConstScalarLookup.notAScalar
 	end 'folded'
 end 'foldedConstScalarOf'
 
@@ -3686,11 +3686,11 @@ end 'TypeArgKindMatch'
 function kindIsARefusal(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
 		consumeMoved or
-			coOwnedTrivial or
-			retainedFeed then return false
+		coOwnedTrivial or
+		retainedFeed then return false
 		uncopyableElement or
-			managedElement or
-			greenThreadElement then return true
+		managedElement or
+		greenThreadElement then return true
 	end 'kind'
 end 'kindIsARefusal'
 
@@ -3710,11 +3710,11 @@ end 'kindIsARefusal'
 function kindFollowsADeclarationView(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
 		consumeMoved or
-			coOwnedTrivial or
-			retainedFeed then return true
+		coOwnedTrivial or
+		retainedFeed then return true
 		uncopyableElement or
-			managedElement or
-			greenThreadElement then return false
+		managedElement or
+		greenThreadElement then return false
 	end 'kind'
 end 'kindFollowsADeclarationView'
 
@@ -3748,23 +3748,23 @@ end 'kindFollowsADeclarationView'
 function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 	match tag 'reachable'
 		boolean or
-			integer or
-			float or
+		integer or
+		float or
 
-			// A payload-free enum or union case is the one `named` whose `.data` bytes are its value: its
-			// value is its tag, a number fixed at declaration (`evalConstNamed`), so the slot holds the
-			// ordinal and the machine word comes from `valueTagToStdType` below. That is the word
-			// `declaredAggregateSlotWidth` states for a field holding the same enum, which keeps a global
-			// and a field from storing one enum at two widths.
-			//
-			// ⚠ It is the evaluator's only `named`, and a second one would not be an int. A float ranged
-			// alias also carries this tag, and the i64 collapse below would be a wrong answer about it, so
-			// an `as` cast in a constant initializer owes this door an arm of its own rather than inheriting
-			// this one.
-			named then break
+		// A payload-free enum or union case is the one `named` whose `.data` bytes are its value: its
+		// value is its tag, a number fixed at declaration (`evalConstNamed`), so the slot holds the
+		// ordinal and the machine word comes from `valueTagToStdType` below. That is the word
+		// `declaredAggregateSlotWidth` states for a field holding the same enum, which keeps a global
+		// and a field from storing one enum at two widths.
+		//
+		// ⚠ It is the evaluator's only `named`, and a second one would not be an int. A float ranged
+		// alias also carries this tag, and the i64 collapse below would be a wrong answer about it, so
+		// an `as` cast in a constant initializer owes this door an arm of its own rather than inheriting
+		// this one.
+		named then break
 		exitCode or
-			unresolved or
-			void then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — the constant evaluator folds integers, bools, floats and payload-free enum or union cases only")
+		unresolved or
+		void then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — the constant evaluator folds integers, bools, floats and payload-free enum or union cases only")
 
 		// A `structRef` global IS its value — a declared type that packs inline into one word. Sound only
 		// because `foldedGlobalStdType` has already refused a declared type that does NOT pack: this tier
@@ -3779,7 +3779,7 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		// ⚠ ONE SENTENCE, not one per tag: the two differ by nothing the message does not already carry,
 		// because `typeTagName(tag)` names which of them arrived.
 		string or
-			genericInstance then panic("{recordSlotGlobalPanic(name, tag: tag)}")
+		genericInstance then panic("{recordSlotGlobalPanic(name, tag: tag)}")
 
 		// A FUNCTION global is unreachable: a global takes no type annotation and a function
 		// reference is not a constant initializer, so a global's inferred type is never `function` (a bare
@@ -4156,7 +4156,7 @@ function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns 
 
 		// A green thread is never co-owned — see the arm's own note.
 		greenThread or
-			none then return OwnershipCallee.inert
+		none then return OwnershipCallee.inert
 	end 'protocol'
 end 'retainCalleeForProtocol'
 
@@ -4185,19 +4185,19 @@ export function slotStorageType(signatures ProgramSignatures, declared MaxonType
 		// Character, function or generic-instance field stores a pointer, a type-parameter field an
 		// opaque i64, and a `cstring` slot the raw address.
 		boolean or
-			integer or
-			float or
-			exitCode or
-			structRef or
-			string or
+		integer or
+		float or
+		exitCode or
+		structRef or
+		string or
 
-			// `emitFieldLoad` functionizes a `named` function alias before this, so a function field arrives
-			// here concrete.
-			function or
-			typeParameter or
-			genericInstance or
-			character or
-			cstring then return declared
+		// `emitFieldLoad` functionizes a `named` function alias before this, so a function field arrives
+		// here concrete.
+		function or
+		typeParameter or
+		genericInstance or
+		character or
+		cstring then return declared
 		unresolved then panic("slotStorageType: a slot is declared `unresolved` — a DECLARED slot type comes from `parseTypeReference`, which produces only `named`, `structRef` and the three primitive keywords, a word slot typed by a VALUE (a cell, a closure's env slot) answers a deferred value at `Parser.wordSlotStorageType` without asking here, and a global's type comes from a top-level initializer, which admits no call to an undeclared function")
 
 		// ⭐ **AN INTERFACE-TYPED FIELD ACCESSES ITS VALUE HALF AS ONE MACHINE WORD**. The field occupies
@@ -4261,13 +4261,13 @@ end 'slotStorageType'
 export function classifyUnionPayload(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType, slotScopeFilePath FilePath) returns PayloadClass
 	match fieldType 'kind'
 		boolean or
-			integer or
-			exitCode or
+		integer or
+		exitCode or
 
-			// A `cstring` payload is a borrowed address: stored verbatim, moved out verbatim, and released
-			// by nobody.
-			cstring or
-			float then return PayloadClass.scalar(fieldType)
+		// A `cstring` payload is a borrowed address: stored verbatim, moved out verbatim, and released
+		// by nobody.
+		cstring or
+		float then return PayloadClass.scalar(fieldType)
 
 		// A String / struct reference is a managed heap pointer — unless the named type packs inline into
 		// a word, which owns no heap and moves as a scalar. A payload field of a struct's own name
@@ -4275,12 +4275,12 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// as `named` and is resolved below.
 		string or
 
-			// ⚠ A Character payload is the same owned byte record a `string` payload is, so it takes
-			// `isString: true`: `isString` selects the fused-record copy/drop protocol
-			// (`promoteToOwnedString` in, `__str_decref` out), a question about the representation and not
-			// the type. Answering `false` would take the aggregate path and co-own a record that has no
-			// `__mm_retain` owner.
-			character then return PayloadClass.managed(fieldType, isString: true)
+		// ⚠ A Character payload is the same owned byte record a `string` payload is, so it takes
+		// `isString: true`: `isString` selects the fused-record copy/drop protocol
+		// (`promoteToOwnedString` in, `__str_decref` out), a question about the representation and not
+		// the type. Answering `false` would take the aggregate path and co-own a record that has no
+		// `__mm_retain` owner.
+		character then return PayloadClass.managed(fieldType, isString: true)
 		function then return PayloadClass.managed(fieldType, isString: false)
 		structRef then return PayloadClass.scalar(fieldType) if signatures.nameIsInlineRecord(foreignNameOf(typeNames, id: typeNameIdOf(fieldType))) else PayloadClass.managed(fieldType, isString: false)
 		unresolved then panic("classifyUnionPayload: a payload field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no payload declaration can carry one")
@@ -4438,27 +4438,27 @@ end 'caseHasManagedField'
 export function payloadClassIsManaged(class PayloadClass) returns bool
 	return match class 'c'
 		managed or
-			nestedUnion or
+		nestedUnion or
 
-			// An existential owns its conformer's record — see `PayloadClass.existential` and
-			// `typeIsManaged`.
-			existential gives true
+		// An existential owns its conformer's record — see `PayloadClass.existential` and
+		// `typeIsManaged`.
+		existential gives true
 		scalar or
-			undeclaredName or
+		undeclaredName or
 
-			// ⚠ `false` is the declaration view's answer rather than the slot's. Every reader here is a
-			// declaration-view drop question — the base struct's own cascade, the usage gates,
-			// `caseHasManagedField` — and a `T` slot is dropped by none of them:
-			// `genericInstanceFieldIsManaged` answers the substituted question for the per-instance cascade
-			// that does drop it. Answering `true` would give `type Box uses T` a `__destruct_Box` that
-			// decrefs an opaque word, which for a trivial instantiation is a raw scalar. The store-side
-			// reference the slot does owe is taken by `Parser.moveInPayload`, which routes on this case by
-			// name and not through this predicate.
-			typeParam or
+		// ⚠ `false` is the declaration view's answer rather than the slot's. Every reader here is a
+		// declaration-view drop question — the base struct's own cascade, the usage gates,
+		// `caseHasManagedField` — and a `T` slot is dropped by none of them:
+		// `genericInstanceFieldIsManaged` answers the substituted question for the per-instance cascade
+		// that does drop it. Answering `true` would give `type Box uses T` a `__destruct_Box` that
+		// decrefs an opaque word, which for a trivial instantiation is a raw scalar. The store-side
+		// reference the slot does owe is taken by `Parser.moveInPayload`, which routes on this case by
+		// name and not through this predicate.
+		typeParam or
 
-			// "Managed" here licenses a retain and a clone, and a green thread has neither. What it does owe
-			// is a drop, which is `payloadClassOwesDrop` below.
-			greenThread gives false
+		// "Managed" here licenses a retain and a clone, and a green thread has neither. What it does owe
+		// is a drop, which is `payloadClassOwesDrop` below.
+		greenThread gives false
 	end 'c'
 end 'payloadClassIsManaged'
 
@@ -4475,11 +4475,11 @@ export function payloadClassIsAGreenThread(class PayloadClass) returns bool
 	return match class 'c'
 		greenThread gives true
 		managed or
-			scalar or
-			nestedUnion or
-			existential or
-			undeclaredName or
-			typeParam gives false
+		scalar or
+		nestedUnion or
+		existential or
+		undeclaredName or
+		typeParam gives false
 	end 'c'
 end 'payloadClassIsAGreenThread'
 
@@ -4516,12 +4516,12 @@ end 'payloadClassIsAGreenThread'
 export function payloadBindingAcceptsWrites(class PayloadClass) returns bool
 	return match class 'c'
 		scalar or
-			managed or
-			nestedUnion or
-			greenThread gives true
+		managed or
+		nestedUnion or
+		greenThread gives true
 		typeParam or
-			existential or
-			undeclaredName gives false
+		existential or
+		undeclaredName gives false
 	end 'c'
 end 'payloadBindingAcceptsWrites'
 
@@ -4533,11 +4533,11 @@ export function payloadClassIsExistential(class PayloadClass) returns bool
 	return match class 'c'
 		existential gives true
 		managed or
-			nestedUnion or
-			scalar or
-			undeclaredName or
-			typeParam or
-			greenThread gives false
+		nestedUnion or
+		scalar or
+		undeclaredName or
+		typeParam or
+		greenThread gives false
 	end 'c'
 end 'payloadClassIsExistential'
 
@@ -4550,11 +4550,11 @@ export function payloadClassIsTypeParam(class PayloadClass) returns bool
 	return match class 'c'
 		typeParam gives true
 		existential or
-			managed or
-			nestedUnion or
-			scalar or
-			undeclaredName or
-			greenThread gives false
+		managed or
+		nestedUnion or
+		scalar or
+		undeclaredName or
+		greenThread gives false
 	end 'c'
 end 'payloadClassIsTypeParam'
 
@@ -4565,23 +4565,23 @@ export function payloadClassIsString(class PayloadClass) returns bool
 	return match class 'c'
 		managed(_, isString) gives isString
 		scalar or
-			nestedUnion or
+		nestedUnion or
 
-			// ⚠ An existential's value half is a conformer's record, which may or may not be a String — the
-			// fact only its witness knows, and the reason its drop is `__drop_existential` and its
-			// co-ownership `__retain_existential`. `false` does not mean "the aggregate protocol applies":
-			// for a byte-record conformer the protocol is copy, never co-own
-			// (`ExistentialOwnershipProtocol`), since co-owning is an incref of read-only `.rdata` for a
-			// literal. `false` means only "do not take the static String route", because the choice belongs
-			// to the witness at run time.
-			existential or
-			undeclaredName or
+		// ⚠ An existential's value half is a conformer's record, which may or may not be a String — the
+		// fact only its witness knows, and the reason its drop is `__drop_existential` and its
+		// co-ownership `__retain_existential`. `false` does not mean "the aggregate protocol applies":
+		// for a byte-record conformer the protocol is copy, never co-own
+		// (`ExistentialOwnershipProtocol`), since co-owning is an incref of read-only `.rdata` for a
+		// literal. `false` means only "do not take the static String route", because the choice belongs
+		// to the witness at run time.
+		existential or
+		undeclaredName or
 
-			// An opaque `T` may be a String at some instantiation, which the shared body cannot know, so its
-			// store dispatches through the descriptor's `retainFunc@64`: `false` means the same as for an
-			// existential.
-			typeParam or
-			greenThread gives false
+		// An opaque `T` may be a String at some instantiation, which the shared body cannot know, so its
+		// store dispatches through the descriptor's `retainFunc@64`: `false` means the same as for an
+		// existential.
+		typeParam or
+		greenThread gives false
 	end 'c'
 end 'payloadClassIsString'
 
@@ -4654,7 +4654,7 @@ export function payloadStorageOf(class PayloadClass) returns MaxonType
 		// The value half's word, one of the fat pointer's two, and an error path's placeholder width. See
 		// the ⛔ above.
 		existential or
-			undeclaredName then return MaxonType.integer
+		undeclaredName then return MaxonType.integer
 	end 'c'
 end 'payloadStorageOf'
 
@@ -4678,15 +4678,15 @@ export function payloadValueTypeOf(class PayloadClass, declared MaxonType) retur
 	match class 'c'
 		scalar or
 
-			// The declared `interfaceRef`, so a loaded existential is recognised as one by every reader that
-			// dispatches on the tag (`witnessOfValue`'s pairing, the argument widening, the drop router).
-			existential or
-			undeclaredName or
+		// The declared `interfaceRef`, so a loaded existential is recognised as one by every reader that
+		// dispatches on the tag (`witnessOfValue`'s pairing, the argument widening, the drop router).
+		existential or
+		undeclaredName or
 
-			// A loaded `T` must read back as the opaque `typeParameter` its slot is declared at, which is
-			// what the caller's `retypeOpaqueMethodResult` substitutes and what `decrefCalleeFor` routes to
-			// `__drop_type_param` on.
-			typeParam then return declared
+		// A loaded `T` must read back as the opaque `typeParameter` its slot is declared at, which is
+		// what the caller's `retypeOpaqueMethodResult` substitutes and what `decrefCalleeFor` routes to
+		// `__drop_type_param` on.
+		typeParam then return declared
 		managed(storage, _) then return storage
 		nestedUnion(storage) then return storage
 		greenThread(storage) then return storage
@@ -4717,8 +4717,8 @@ function structBoxImageOf(built GlobalInitCall, columns ImmortalBoxColumnArray) 
 		construct(sizeBytes, fields) then return structBoxImageBytes(sizeBytes, fields: fields, columns: columns)
 		call then panic("structBoxImageOf: `globalStructConstruct` answered a `call` — it has one return statement and it is a `construct`")
 		mapLiteral or
-			arrayLiteral or
-			functionValue then panic("structBoxImageOf: `globalStructConstruct` answered a node that is no struct construction — it has one return statement and it is a `construct`")
+		arrayLiteral or
+		functionValue then panic("structBoxImageOf: `globalStructConstruct` answered a node that is no struct construction — it has one return statement and it is a `construct`")
 	end 'built'
 end 'structBoxImageOf'
 
@@ -4730,7 +4730,7 @@ function structBoxImageBytes(sizeBytes ByteOffset, fields GlobalStructFieldArray
 		match field.value 'produced'
 			scalar(payload) then writeImageSlot(image, offset: field.offset, value: payload, byteCount: stdTypeStorageBytes(maxonTypeToStdType(field.storageType)))
 			record or
-				call then requireImageSlotIsNamedByAColumn(field.offset, columns: columns)
+			call then requireImageSlotIsNamedByAColumn(field.offset, columns: columns)
 		end 'produced'
 	end 'eachSlot'
 
@@ -5704,7 +5704,7 @@ end 'foldCallability'
 function forwardCallSelfType(call ForwardCall) returns ByteArray
 	return match call 'c'
 		bare or
-			throughAReceiver gives EmptySourceText
+		throughAReceiver gives EmptySourceText
 		throughSelf(typeName, _) gives typeName
 	end 'c'
 end 'forwardCallSelfType'
@@ -6467,8 +6467,8 @@ function paramDefaultProducersAgree(producer ParamDefaultProducer, other ParamDe
 
 	return match producer 'produces'
 		required or
-			callerLine or
-			callerFile gives true
+		callerLine or
+		callerFile gives true
 		helper(name) gives name.equals(paramDefaultHelperNameOf(other))
 	end 'produces'
 end 'paramDefaultProducersAgree'
@@ -6478,8 +6478,8 @@ end 'paramDefaultProducersAgree'
 function paramDefaultHelperNameOf(producer ParamDefaultProducer) returns ByteArray
 	return match producer 'produces'
 		required or
-			callerLine or
-			callerFile panic("paramDefaultHelperNameOf: asked of a producer that synthesizes no function — the caller compares `defaultProducerMark` first, which is what establishes that both sides are helpers")
+		callerLine or
+		callerFile panic("paramDefaultHelperNameOf: asked of a producer that synthesizes no function — the caller compares `defaultProducerMark` first, which is what establishes that both sides are helpers")
 		helper(name) gives name
 	end 'produces'
 end 'paramDefaultHelperNameOf'
@@ -7615,9 +7615,9 @@ function managedNameRetainCallee(signatures ProgramSignatures, declaredName Byte
 		// their destruct is refcount-checked, that one because a plain box is a plain box. Same answer, two
 		// different reasons, and the day either reason changes only one arm should move.
 		managedFile or
-			managedDirectory or
-			managedSocket or
-			userDeclared gives plainBoxRetainCallee(result)
+		managedDirectory or
+		managedSocket or
+		userDeclared gives plainBoxRetainCallee(result)
 
 		// ONE entry for both shapes: it hands the box back (`MailboxRuntime.buildMboxHandleRetainBox`), so a
 		// caller wanting a fresh name uses the result and a caller retaining in place ignores it.
@@ -7643,7 +7643,7 @@ function plainBoxRetainCallee(result RetainResult) returns ByteArray
 	return match result 'shape'
 		discarded gives MmIncrefName
 		freshName or
-			sharedRead gives MmRetainName
+		sharedRead gives MmRetainName
 	end 'shape'
 end 'plainBoxRetainCallee'
 
@@ -7735,7 +7735,7 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		// different callees. See `unionHasManagedPayload` for the reachable compiler panic the
 		// layout-and-foreign-interner spelling this replaces produced.
 		enumType or
-			unionType then return signatures.unionBoxDropCallee(declaredName)
+		unionType then return signatures.unionBoxDropCallee(declaredName)
 
 		// An INTERFACE NAME reaching a 1-argument drop router is the `managedFieldDropCallee` guard's case one
 		// resolution further down: an existential is released through `__drop_existential(witness, value)`,
@@ -7794,8 +7794,8 @@ end 'GraphCascadePurpose'
 function purposeCrossesAFunctionValue(purpose GraphCascadePurpose) returns bool
 	return match purpose 'purpose'
 		deepClone or
-			transferWalkPastFunctionValues or
-			sourceClone gives true
+		transferWalkPastFunctionValues or
+		sourceClone gives true
 		transferWalk gives false
 	end 'purpose'
 end 'purposeCrossesAFunctionValue'
@@ -7803,9 +7803,9 @@ end 'purposeCrossesAFunctionValue'
 function purposeWalksThroughAWitness(purpose GraphCascadePurpose) returns bool
 	return match purpose 'purpose'
 		transferWalk or
-			transferWalkPastFunctionValues gives true
+		transferWalkPastFunctionValues gives true
 		deepClone or
-			sourceClone gives false
+		sourceClone gives false
 	end 'purpose'
 end 'purposeWalksThroughAWitness'
 
@@ -7813,8 +7813,8 @@ function purposeRefusesAGreenThread(purpose GraphCascadePurpose) returns bool
 	return match purpose 'purpose'
 		sourceClone gives true
 		deepClone or
-			transferWalk or
-			transferWalkPastFunctionValues gives false
+		transferWalk or
+		transferWalkPastFunctionValues gives false
 	end 'purpose'
 end 'purposeRefusesAGreenThread'
 
@@ -7846,7 +7846,7 @@ function cascadeUnsupportedEntry(action CascadeAction) returns ByteArray
 	return match action 'action'
 		clone gives MmCloneUncloneableName
 		soleWalk or
-			shareWalk gives MmWalkUnwalkableName
+		shareWalk gives MmWalkUnwalkableName
 	end 'action'
 end 'cascadeUnsupportedEntry'
 
@@ -8204,7 +8204,7 @@ function functionValueCascadeStrategy(action CascadeAction) returns ManagedCasca
 	return match action 'action'
 		clone gives ManagedCascadeStrategy.direct(MmRetainName)
 		soleWalk or
-			shareWalk gives ManagedCascadeStrategy.unsupported
+		shareWalk gives ManagedCascadeStrategy.unsupported
 	end 'action'
 end 'functionValueCascadeStrategy'
 
@@ -8232,8 +8232,8 @@ end 'functionValueCascadeStrategy'
 function managedNameCascadeStrategy(signatures ProgramSignatures, declaredName ByteArray, asElement bool, action CascadeAction) returns ManagedCascadeStrategy
 	match compilerOwnedAggregateOf(signatures, name: declaredName) 'compilerOwned'
 		managedFile or
-			managedDirectory or
-			managedSocket then return ManagedCascadeStrategy.unsupported
+		managedDirectory or
+		managedSocket then return ManagedCascadeStrategy.unsupported
 
 		// ⭐ **A HANDLE IS THE ONE COMPILER-OWNED AGGREGATE THAT CLONES**, and its clone is the design's own
 		// `handle.clone()`: a SECOND HANDLE to the same service, which steps both mailbox counts and mints a
@@ -8258,8 +8258,8 @@ function managedNameCascadeStrategy(signatures ProgramSignatures, declaredName B
 		// A scalar-only box still takes `__clone_<T>` (not the drop side's `__mm_decref`): the clone MUST
 		// allocate a fresh independent box, which only a synthesized cloner does.
 		structType or
-			enumType or
-			unionType then return ManagedCascadeStrategy.direct(perTypeCascadeSymbol(action, typeName: declaredName))
+		enumType or
+		unionType then return ManagedCascadeStrategy.direct(perTypeCascadeSymbol(action, typeName: declaredName))
 
 		// The three arms below mirror `managedNameDropCallee`'s exactly.
 		interfaceType then panic("managedNameCascadeStrategy: '{String.from(declaredName)}' is an interface, which no slot can be declared with (E3011), so no cascade strategy clones one")
@@ -8445,7 +8445,7 @@ function elementRecordCascadeStrategy(signatures ProgramSignatures, id GenericIn
 		// position, which would silently refuse every nested container again.
 		managedElements then panic("elementRecordCascadeStrategy: instance {id}'s element resolved to a 2-argument `managedElements` strategy at the ELEMENT position, where `asElement: true` mints the one-argument thunk")
 		throughWitness or
-			unsupported then return ManagedCascadeStrategy.unsupported
+		unsupported then return ManagedCascadeStrategy.unsupported
 	end 'element'
 end 'elementRecordCascadeStrategy'
 
@@ -14275,7 +14275,7 @@ export function extensionTargetIsAnInterface(target ExtensionTarget) returns boo
 	match target 'target'
 		interfaceExtension then return true
 		typeExtension or
-			undeclaredTarget then return false
+		undeclaredTarget then return false
 	end 'target'
 end 'extensionTargetIsAnInterface'
 
@@ -14762,9 +14762,9 @@ function constFoldedInfersItsInstance(folded ConstFoldedValue) returns bool
 	return match folded 'kind'
 		arrayLiteral gives true
 		scalar or
-			managed or
-			containerCreate or
-			boxedUnionCase gives false
+		managed or
+		containerCreate or
+		boxedUnionCase gives false
 	end 'kind'
 end 'constFoldedInfersItsInstance'
 
@@ -17999,7 +17999,7 @@ export type ProgramSignatures
 		match self.hashSource 'source'
 			library then self.insertMeantName(name)
 			author or
-				whole then break
+			whole then break
 		end 'source'
 	end 'noteMentionedName'
 
@@ -18618,7 +18618,7 @@ export type ProgramSignatures
 		match self.hashSource 'source'
 			whole then self.hash = mixBytes(Hasher.combined(self.hash, value: shape), bytes: bytes)
 			author or
-				library then self.wholeChainState = mixBytes(Hasher.combined(self.wholeChainState, value: shape), bytes: bytes)
+			library then self.wholeChainState = mixBytes(Hasher.combined(self.wholeChainState, value: shape), bytes: bytes)
 		end 'source'
 	end 'mixIntoWholeChain'
 
@@ -21458,7 +21458,7 @@ export type ProgramSignatures
 		return match self.resolveBareFunctionName(name, readerFilePath: readerFilePath) 'resolution'
 			declaration(key) gives self.declaredForwardTarget(key)
 			ambiguous or
-				undeclared gives FreshReturnForwardTarget.unnameable
+			undeclared gives FreshReturnForwardTarget.unnameable
 		end 'resolution'
 	end 'unqualifiedForwardTarget'
 
@@ -22609,7 +22609,7 @@ export type ProgramSignatures
 		return match self.resolveBareFunctionName(bareName, readerFilePath: readerFilePath) 'resolution'
 			declaration(name) gives name
 			ambiguous or
-				undeclared gives bareName
+			undeclared gives bareName
 		end 'resolution'
 	end 'nameABareCallBinds'
 
@@ -22685,7 +22685,7 @@ export type ProgramSignatures
 				match self.resolveFunctionName(layout.rawValueAt(index).toByteArray(), readerFilePath: layout.declFilePath) 'resolution'
 					declaration(name) then layout.nameCaseFunction(index, functionName: String.from(name))
 					ambiguous or
-						undeclared then break
+					undeclared then break
 				end 'resolution'
 			end 'eachCase'
 		end 'eachEnum'
@@ -22918,8 +22918,8 @@ export type ProgramSignatures
 			// nothing and `renameHelper` would invent a helper the drain never declared.
 			match info.producerFor(slot) 'produces'
 				required or
-					callerLine or
-					callerFile then continue
+				callerLine or
+				callerFile then continue
 				helper then break
 			end 'produces'
 
@@ -23161,13 +23161,13 @@ export type ProgramSignatures
 				// Already settled by an earlier decl's DFS — it referenced this one. A managed constant is
 				// settled too; it is simply not reachable BY a reference (see `evaluateDecl`).
 				value or
-					failed or
-					poisoned or
-					managedValue or
-					arrayValue or
-					containerValue or
-					factoryValue or
-					boxedUnionValue then break
+				failed or
+				poisoned or
+				managedValue or
+				arrayValue or
+				containerValue or
+				factoryValue or
+				boxedUnionValue then break
 				evaluating then panic("ProgramSignatures.evaluateInitializers: '{String.from(decl.name)}' is still marked `evaluating` between two top-level walks — every DFS pops what it pushes")
 				pending then self.startDecl(i, anchors: anchors)
 			end 'state'
@@ -23277,7 +23277,7 @@ export type ProgramSignatures
 		match decl.outcome 'state'
 			value(payload, tag, typeName) then return ConstEvalOutcome.value(payload, tag: tag, typeName: typeName)
 			failed or
-				poisoned then return ConstEvalOutcome.failed
+			poisoned then return ConstEvalOutcome.failed
 
 			// An ARRAY binding answers `notFound` for a managed literal's reason: the only
 			// caller reading this for a NAME is a reference from inside another initializer, and there is
@@ -23294,10 +23294,10 @@ export type ProgramSignatures
 			// array's record. `let A = MaxonType.unresolved` / `let B = A` is `Undefined constant 'A'`, in both
 			// declaration orders, exactly as every other record kind already is.
 			managedValue or
-				arrayValue or
-				containerValue or
-				factoryValue or
-				boxedUnionValue then return ConstEvalOutcome.notFound
+			arrayValue or
+			containerValue or
+			factoryValue or
+			boxedUnionValue then return ConstEvalOutcome.notFound
 
 			// Reached a decl already on this walk's stack: the reference chain has closed on itself.
 			evaluating then return self.recordCycle(index, stack: stack)
@@ -23367,10 +23367,10 @@ export type ProgramSignatures
 		match node 'node'
 			construct(typeName, _) then return typeName
 			call or
-				mapLiteral or
-				unionCase or
-				arrayLiteral or
-				functionValue then panic("ProgramSignatures.constNodeStructName: asked for the constructed type of a node that is not a struct construction — `constNodeFoldsToAnInlineWord` answers `true` only for `construct`")
+			mapLiteral or
+			unionCase or
+			arrayLiteral or
+			functionValue then panic("ProgramSignatures.constNodeStructName: asked for the constructed type of a node that is not a struct construction — `constNodeFoldsToAnInlineWord` answers `true` only for `construct`")
 		end 'node'
 	end 'constNodeStructName'
 
@@ -23378,10 +23378,10 @@ export type ProgramSignatures
 		return match node 'node'
 			construct(typeName, _) gives self.nameIsInlineRecord(typeName)
 			call or
-				mapLiteral or
-				unionCase or
-				arrayLiteral or
-				functionValue gives false
+			mapLiteral or
+			unionCase or
+			arrayLiteral or
+			functionValue gives false
 		end 'node'
 	end 'constNodeFoldsToAnInlineWord'
 
@@ -23389,10 +23389,10 @@ export type ProgramSignatures
 		match node 'node'
 			construct(typeName, fields) then return self.inlineRecordWordOf(typeName, fields: fields, declName: declName)
 			call or
-				mapLiteral or
-				unionCase or
-				arrayLiteral or
-				functionValue then panic("ProgramSignatures.inlineRecordWordOfNode: '{String.from(declName)}' reached the inline-record fold through a node that is not a struct construction — `constNodeFoldsToAnInlineWord` answers `true` only for `construct`")
+			mapLiteral or
+			unionCase or
+			arrayLiteral or
+			functionValue then panic("ProgramSignatures.inlineRecordWordOfNode: '{String.from(declName)}' reached the inline-record fold through a node that is not a struct construction — `constNodeFoldsToAnInlineWord` answers `true` only for `construct`")
 		end 'node'
 	end 'inlineRecordWordOfNode'
 
@@ -23421,9 +23421,9 @@ export type ProgramSignatures
 		match value 'folded'
 			scalar(constant) then return constant.payload
 			managed or
-				arrayLiteral or
-				containerCreate or
-				boxedUnionCase then panic("ProgramSignatures.foldedInlineFieldPayload: field {index} of `{String.from(typeName)}` in '{String.from(declName)}' folded to a managed value, and every field of an inline packed record is declared at a ranged integer alias or `bool`")
+			arrayLiteral or
+			containerCreate or
+			boxedUnionCase then panic("ProgramSignatures.foldedInlineFieldPayload: field {index} of `{String.from(typeName)}` in '{String.from(declName)}' folded to a managed value, and every field of an inline packed record is declared at a ranged integer alias or `bool`")
 		end 'folded'
 	end 'foldedInlineFieldPayload'
 
@@ -23562,11 +23562,11 @@ export type ProgramSignatures
 	function recordShapeHasAnImage(outcome TopLevelConstant, declName ByteArray, elementFilePath FilePath) returns bool
 		return match outcome 'shape'
 			pending or
-				evaluating or
-				value or
-				failed or
-				poisoned or
-				managedValue gives false
+			evaluating or
+			value or
+			failed or
+			poisoned or
+			managedValue gives false
 			arrayValue(elements, element) gives self.constArrayLiteralIsImageData(elements, element: element)
 			containerValue(giid, _, elements) gives self.emptyContainerIsImageData(giid, elements: elements)
 			factoryValue(calls, root, _) gives self.constStructIsImageData(calls, root: root, declName: declName, elementFilePath: elementFilePath)
@@ -23641,10 +23641,10 @@ export type ProgramSignatures
 		match factoryCallAt(calls, id: root) 'node'
 			construct(typeName, fields) then return self.describeConstStructBox(typeName, fields: fields, calls: calls, below: root, declName: declName, elementFilePath: elementFilePath, nodes: nodes)
 			call or
-				mapLiteral or
-				unionCase or
-				arrayLiteral or
-				functionValue then return ConstStructBoxOutcome.notImageable
+			mapLiteral or
+			unionCase or
+			arrayLiteral or
+			functionValue then return ConstStructBoxOutcome.notImageable
 		end 'node'
 	end 'constStructBoxNode'
 
@@ -23733,7 +23733,7 @@ export type ProgramSignatures
 		match value 'kind'
 			scalar then return ConstFieldImageSlot.scalar
 			managed or
-				arrayLiteral then return ConstFieldImageSlot.notImageable
+			arrayLiteral then return ConstFieldImageSlot.notImageable
 			containerCreate(giid, _, elements) then return self.emptyContainerFieldSlot(giid, elements: elements, nodes: nodes)
 			boxedUnionCase(typeName, caseName) then return self.boxedUnionCaseFieldSlot(typeName, caseName: caseName, nodes: nodes)
 		end 'kind'
@@ -23795,9 +23795,9 @@ export type ProgramSignatures
 			construct then return self.nestedConstStructFieldSlot(id, calls: calls, declName: declName, elementFilePath: elementFilePath, nodes: nodes)
 			call(callee, args) then return self.helperDefaultFieldSlot(callee, args: args, layout: layout, index: index, nodes: nodes)
 			mapLiteral or
-				unionCase or
-				arrayLiteral or
-				functionValue then return ConstFieldImageSlot.notImageable
+			unionCase or
+			arrayLiteral or
+			functionValue then return ConstFieldImageSlot.notImageable
 		end 'node'
 	end 'nodeFieldImageSlot'
 
@@ -23826,8 +23826,8 @@ export type ProgramSignatures
 		match layout.fieldDefault(index) 'declared'
 			bareCreateHelper(helperName) then return self.declaredContainerFieldSlot(callee, helperName: helperName, layout: layout, index: index, nodes: nodes)
 			none or
-				literal or
-				helper then return ConstFieldImageSlot.notImageable
+			literal or
+			helper then return ConstFieldImageSlot.notImageable
 		end 'declared'
 	end 'helperDefaultFieldSlot'
 
@@ -24040,8 +24040,8 @@ export type ProgramSignatures
 		return match managedNameCascadeStrategy(self, declaredName: typeName, asElement: false, action: CascadeAction.clone) 'strategy'
 			direct gives true
 			managedElements or
-				unsupported or
-				throughWitness gives false
+			unsupported or
+			throughWitness gives false
 		end 'strategy'
 	end 'structBoxHasADeepCloner'
 
@@ -24053,7 +24053,7 @@ export type ProgramSignatures
 			direct(callee) then return callee
 			managedElements then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` copies through an element-bearing record's 2-argument entry, which no box co-own can call — a declared struct's strategy is the `direct` per-type cloner")
 			unsupported or
-				throughWitness then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` has no deep cloner — `structBoxIsImageableWithSlots` asks the full-graph question and this same strategy before a value reaches this road")
+			throughWitness then panic("ProgramSignatures.structBoxCloneCallee: `type {String.from(typeName)}` has no deep cloner — `structBoxIsImageableWithSlots` asks the full-graph question and this same strategy before a value reaches this road")
 		end 'strategy'
 	end 'structBoxCloneCallee'
 
@@ -24070,7 +24070,7 @@ export type ProgramSignatures
 			// classified here rather than swallowed by a range whose text does not move with it.
 			let laysDownAsBytes = match self.containerBoxSlot(giid, layout: layout, index: i) 'slot'
 				scalar or
-					column gives true
+				column gives true
 				notImageable gives false
 			end 'slot'
 
@@ -24092,7 +24092,7 @@ export type ProgramSignatures
 	function containerBoxSlot(giid GenericInstanceId, layout StructLayout, index FieldIndex) returns ContainerBoxSlot
 		match layout.fieldDefault(index) 'declared'
 			none or
-				helper then return ContainerBoxSlot.notImageable
+			helper then return ContainerBoxSlot.notImageable
 			literal(payload, tag, writtenNegative) then return self.containerBoxScalarSlot(layout, index: index, payload: payload, tag: tag, writtenNegative: writtenNegative)
 			bareCreateHelper then return self.containerBoxColumnSlot(giid, layout: layout, index: index)
 		end 'declared'
@@ -24254,14 +24254,14 @@ export type ProgramSignatures
 		match decl.outcome 'state'
 			// `recordCycle` already ruled on this decl.
 			failed or
-				poisoned then break
+			poisoned then break
 			evaluating then decl.outcome = TopLevelConstant.poisoned
 			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a scalar value AND failed to evaluate — an initializer produces one or the other")
 			managedValue or
-				arrayValue or
-				containerValue or
-				factoryValue or
-				boxedUnionValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
+			arrayValue or
+			containerValue or
+			factoryValue or
+			boxedUnionValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
 			pending then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' is `pending` while unwinding its own evaluation — `evaluateDecl` marks it `evaluating` before the walk")
 		end 'state'
 	end 'poisonIfUndecided'
@@ -24382,8 +24382,8 @@ export type ProgramSignatures
 		match self.constantValueOf(name.toByteArray(), readerFilePath: filePath) 'lookup'
 			found(payload, tag, _) then return self.integerConstantPayload(payload, tag: tag, name: name, filePath: filePath)
 			foundManaged or
-				foundImageRecord or
-				foundImageBox then panic("ProgramSignatures.integerConstantIn: '{name}' in {filePath.toString()} is a managed or imaged constant, and the caller asked for a number")
+			foundImageRecord or
+			foundImageBox then panic("ProgramSignatures.integerConstantIn: '{name}' in {filePath.toString()} is a managed or imaged constant, and the caller asked for a number")
 			notFound then panic("ProgramSignatures.integerConstantIn: {filePath.toString()} declares no constant '{name}' that file can read")
 		end 'lookup'
 	end 'integerConstantIn'
@@ -24486,7 +24486,7 @@ export type ProgramSignatures
 			// parse resolves it through (`slotStorageType` on a read, `foreignNameOf` on a store).
 			value(_, tag, typeName) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: constantValueTypeIn(tag, typeName: typeName, into: into), brand: EmptySourceText, mutable: decl.mutable)
 			failed or
-				poisoned then return TopLevelGlobalLookup.notFound
+			poisoned then return TopLevelGlobalLookup.notFound
 
 			// ⭐ A MANAGED `var` reads exactly as a scalar one does — the slot is real, it
 			// is just a POINTER rather than a value. Its type is the literal's own, so a read of the name
@@ -24525,7 +24525,7 @@ export type ProgramSignatures
 			// load off an ordinary struct pointer.
 			factoryValue(_, _, returnType) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.adoptType(returnType, into: into), brand: EmptySourceText, mutable: decl.mutable)
 			pending or
-				evaluating then panic("ProgramSignatures.resolvedGlobalOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
+			evaluating then panic("ProgramSignatures.resolvedGlobalOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedGlobalOf'
 
@@ -24619,15 +24619,15 @@ export type ProgramSignatures
 
 		match decl.outcome 'shape'
 			arrayValue or
-				containerValue then return self.mangleGenericInstance(genericInstanceIdOf(self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
+			containerValue then return self.mangleGenericInstance(genericInstanceIdOf(self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
 			factoryValue(calls, root, _) then return self.constStructTypeName(calls, root: root, declName: decl.name)
 			boxedUnionValue(typeName, _) then return typeName
 			pending or
-				evaluating or
-				value or
-				failed or
-				poisoned or
-				managedValue then throw AbsentError.absent
+			evaluating or
+			value or
+			failed or
+			poisoned or
+			managedValue then throw AbsentError.absent
 		end 'shape'
 	end 'imagedRecordKindOf'
 
@@ -24683,7 +24683,7 @@ export type ProgramSignatures
 		if not decl.declaredByTheCorpus 'theProgramsOwnDeclaration'
 			match self.declInitializerCall(decl) 'initializer'
 				none or
-					namesFunctions then break
+				namesFunctions then break
 				calls then return true
 			end 'initializer'
 		end 'theProgramsOwnDeclaration'
@@ -24704,17 +24704,17 @@ export type ProgramSignatures
 	export function declInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
 		match decl.outcome 'state'
 			pending or
-				evaluating or
-				value or
-				failed or
-				poisoned or
-				managedValue or
-				arrayValue or
+			evaluating or
+			value or
+			failed or
+			poisoned or
+			managedValue or
+			arrayValue or
 
-				// A boxed union's payload-free case calls nothing: `__module_init` allocates the box and stores
-				// a tag it already knows, so there is no callee to root and nothing that can print, throw or
-				// mutate.
-				boxedUnionValue then return TopLevelInitializerCall.none
+			// A boxed union's payload-free case calls nothing: `__module_init` allocates the box and stores
+			// a tag it already knows, so there is no callee to root and nothing that can print, throw or
+			// mutate.
+			boxedUnionValue then return TopLevelInitializerCall.none
 			containerValue(giid, _, _) then return self.containerInitializerCall(giid)
 			factoryValue(calls, _, _) then return self.factoryInitializerCall(calls)
 		end 'state'
@@ -24825,13 +24825,13 @@ export type ProgramSignatures
 	function appendFoldedArgumentCallee(callees ByteArrayArray, folded ConstFoldedValue)
 		match folded 'value'
 			scalar or
-				managed or
-				arrayLiteral or
+			managed or
+			arrayLiteral or
 
-				// A boxed union's payload-free case contributes no callee: `__module_init` allocates its box
-				// and stores a tag the fold already knew, so there is no declared body for the reachability
-				// walk to root.
-				boxedUnionCase then return
+			// A boxed union's payload-free case contributes no callee: `__module_init` allocates its box
+			// and stores a tag the fold already knew, so there is no declared body for the reachability
+			// walk to root.
+			boxedUnionCase then return
 			containerCreate(giid, _, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
 		end 'value'
 	end 'appendFoldedArgumentCallee'
@@ -24940,14 +24940,14 @@ export type ProgramSignatures
 		for i in 0 upto self.settled.decls.count() 'each'
 			match self.declAt(i).outcome 'state'
 				pending or
-					evaluating or
-					value or
-					failed or
-					poisoned or
-					managedValue or
-					arrayValue or
-					containerValue or
-					boxedUnionValue then continue
+				evaluating or
+				value or
+				failed or
+				poisoned or
+				managedValue or
+				arrayValue or
+				containerValue or
+				boxedUnionValue then continue
 				factoryValue(calls, _, _) then self.appendConstructedFieldInterfaces(names, calls: calls)
 			end 'state'
 		end 'each'
@@ -24962,10 +24962,10 @@ export type ProgramSignatures
 			match call 'node'
 				construct(typeName, _) then self.appendFieldInterfacesOf(names, typeName: typeName)
 				call or
-					mapLiteral or
-					unionCase or
-					arrayLiteral or
-					functionValue then continue
+				mapLiteral or
+				unionCase or
+				arrayLiteral or
+				functionValue then continue
 			end 'node'
 		end 'eachNode'
 	end 'appendConstructedFieldInterfaces'
@@ -25016,7 +25016,7 @@ export type ProgramSignatures
 			match decl.outcome 'state'
 				value(payload, tag, typeName) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: self.foldedGlobalStdType(tag, typeName: typeName, name: decl.name), value: payload, reach: DataReach.declared))
 				failed or
-					poisoned then continue
+				poisoned then continue
 
 				// ⭐ EVERY RECORD BINDING reserves a POINTER slot holding NULL — a managed literal, an array
 				// literal, a container factory and a boxed union's payload-free case alike, `let` or `var`. The
@@ -25024,16 +25024,16 @@ export type ProgramSignatures
 				// compile-time VA under ASLR (`specs/static-variables.md`) — so the bytes are zero here and
 				// `__module_init` writes the address before `main` runs.
 				managedValue or
-					arrayValue or
-					containerValue or
-					boxedUnionValue then entries.push(self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
+				arrayValue or
+				containerValue or
+				boxedUnionValue then entries.push(self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
 
 				// ⭐ A FACTORY-CALL GLOBAL reserves the SAME null POINTER slot, for the same reason and one
 				// more: the record does not exist until the callee has RUN, which is strictly later than the
 				// image is written.
 				factoryValue(_, _, returnType) then entries.push(self.nullPointerSlot(decl, valueType: returnType))
 				pending or
-					evaluating then panic("ProgramSignatures.declaredGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
+				evaluating then panic("ProgramSignatures.declaredGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
 
@@ -25144,8 +25144,8 @@ export type ProgramSignatures
 
 			match decl.outcome 'state'
 				value or
-					failed or
-					poisoned then continue
+				failed or
+				poisoned then continue
 
 				// ⭐ A MANAGED LITERAL, AN ARRAY LITERAL, A CONTAINER FACTORY AND A BOXED UNION'S PAYLOAD-FREE
 				// CASE are managed globals whenever they still have a SLOT — the record is built before `main`
@@ -25155,15 +25155,15 @@ export type ProgramSignatures
 				// of the same shape routes through: a container factory IS an array literal with no elements,
 				// and that is a fact about the record rather than a shortcut.
 				managedValue or
-					arrayValue or
-					containerValue or
-					boxedUnionValue then entries.push(self.recordGlobalOf(decl))
+				arrayValue or
+				containerValue or
+				boxedUnionValue then entries.push(self.recordGlobalOf(decl))
 
 				// ⭐ A FACTORY-CALL GLOBAL's slot holds whatever the callee returns, so its construction is the
 				// CALL and its type is the callee's declared return type — settled when the outcome was.
 				factoryValue(calls, root, returnType) then entries.push(self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.factoryCall(self.globalInitCalls(calls, declName: decl.name, elementFilePath: decl.declFilePath), root: root), valueType: returnType))
 				pending or
-					evaluating then panic("ProgramSignatures.managedGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
+				evaluating then panic("ProgramSignatures.managedGlobals: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`")
 			end 'state'
 		end 'each'
 
@@ -25296,7 +25296,7 @@ export type ProgramSignatures
 	function declInitializerCallees(decl TopLevelDecl) returns ByteArrayArray
 		return match self.declInitializerCall(decl) 'initializer'
 			none or
-				namesFunctions gives ByteArrayArray.create()
+			namesFunctions gives ByteArrayArray.create()
 			calls(callees, _) gives callees
 		end 'initializer'
 	end 'declInitializerCallees'
@@ -25443,9 +25443,9 @@ export type ProgramSignatures
 		match folded 'kind'
 			scalar(value) then return GlobalInitValueAndType.create(GlobalInitArgumentValue.scalar(value.payload), valueType: self.foldedMintType(folded, elementFilePath: elementFilePath))
 			managed or
-				arrayLiteral or
-				containerCreate or
-				boxedUnionCase then break
+			arrayLiteral or
+			containerCreate or
+			boxedUnionCase then break
 		end 'kind'
 
 		let record = self.globalRecordOf(folded, elementFilePath: elementFilePath)
@@ -25588,7 +25588,7 @@ export type ProgramSignatures
 		return match self.containerCreateCall(giid).elementAdd 'add'
 			upsert(callee) gives callee
 			push or
-				unsupported panic("ProgramSignatures.declaredMapUpsertCallee: generic instance {giid} holds a map literal's pairs but `containerCreateCall` names no keyed add for it — `Parser.evalConstMapLiteralInto` interns the instance through `builtinInstanceForColumns(MapBuiltinBaseName, …)`, which `isMapShapedInstanceAt` answers for")
+			unsupported panic("ProgramSignatures.declaredMapUpsertCallee: generic instance {giid} holds a map literal's pairs but `containerCreateCall` names no keyed add for it — `Parser.evalConstMapLiteralInto` interns the instance through `builtinInstanceForColumns(MapBuiltinBaseName, …)`, which `isMapShapedInstanceAt` answers for")
 		end 'add'
 	end 'declaredMapUpsertCallee'
 
@@ -25777,7 +25777,7 @@ export type ProgramSignatures
 			// its i64 tag), so it is compared AS the `named` it is and every constant mismatches it by tag.
 			// That is the verdict the body path reaches through `requireFieldType`, in the same E3005.
 			enumType or
-				unionType then return ConstFieldSlotLookup.holds(denoted)
+			unionType then return ConstFieldSlotLookup.holds(denoted)
 
 			// ⛔ **UNREACHABLE WHILE THE CONSTANT EVALUATOR IS THIS DOOR'S ONLY ASKER, AND SAYING SO IS THE
 			// POINT.** `self.interfaces` is filled by `Queries.foldInterfaceDeclarations`, which runs AFTER
@@ -25789,11 +25789,11 @@ export type ProgramSignatures
 			// second-best one: the verdict on a fat pointer belongs to the door that can see one.
 			interfaceType or
 
-				// A GENERIC alias reaches here only when the cascade DECLINED to re-tag it, which
-				// `slotTypeOfGenericAlias` does for exactly one shape — an instance over an `interface` base,
-				// i.e. an existential wearing an alias's spelling. So it declines for `interfaceType`'s reason:
-				// a slot this door could not resolve is not a slot it may judge.
-				genericAlias then return ConstFieldSlotLookup.unresolvableHere
+			// A GENERIC alias reaches here only when the cascade DECLINED to re-tag it, which
+			// `slotTypeOfGenericAlias` does for exactly one shape — an instance over an `interface` base,
+			// i.e. an existential wearing an alias's spelling. So it declines for `interfaceType`'s reason:
+			// a slot this door could not resolve is not a slot it may judge.
+			genericAlias then return ConstFieldSlotLookup.unresolvableHere
 
 			// An INTEGER ranged alias, the one alias form the cascade deliberately leaves bare: its NAME
 			// carries the range and the signedness, and the RANGE is checked on its own
@@ -25882,9 +25882,9 @@ export type ProgramSignatures
 		match folded 'kind'
 			scalar(value) then return maxonTypeOfTag(value.tag, nameId: self.typeNames.intern(value.typeName))
 			managed or
-				arrayLiteral or
-				containerCreate or
-				boxedUnionCase then break
+			arrayLiteral or
+			containerCreate or
+			boxedUnionCase then break
 		end 'kind'
 
 		return self.foldedValueType(folded, elementFilePath: elementFilePath)
@@ -26112,10 +26112,10 @@ export type ProgramSignatures
 	function foldedValueOf(outcome TopLevelConstant, name ByteArray) returns ConstFoldedValue
 		match outcome 'o'
 			pending or
-				evaluating or
-				value or
-				failed or
-				poisoned then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to an outcome that stores no record — every caller filters on the stored-record arms first")
+			evaluating or
+			value or
+			failed or
+			poisoned then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to an outcome that stores no record — every caller filters on the stored-record arms first")
 			managedValue(bytes, kind) then return ConstFoldedValue.managed(bytes, kind: kind)
 			arrayValue(elements, element) then return ConstFoldedValue.arrayLiteral(elements, element: element)
 			containerValue(giid, brand, elements) then return ConstFoldedValue.containerCreate(giid, brand: brand, elements: elements)
@@ -26189,7 +26189,7 @@ export type ProgramSignatures
 			value(payload, tag, typeName) then return TopLevelConstantLookup.found(payload, tag: tag, typeName: typeName)
 			managedValue(bytes, kind) then return TopLevelConstantLookup.foundManaged(bytes, kind: kind)
 			failed or
-				poisoned then return TopLevelConstantLookup.notFound
+			poisoned then return TopLevelConstantLookup.notFound
 
 			// ⭐ **A RECORD BINDING IS A CONSTANT A USE CAN INLINE EXACTLY WHEN IT WAS IMAGED**, and this door
 			// is only ever asked about a binding with NO STORAGE (`constantDeclFor` filters on
@@ -26202,7 +26202,7 @@ export type ProgramSignatures
 			// `notFound` on a shape-by-shape test would be a second copy of `recordShapeHasAnImage`, silently
 			// stale the day a shape joins.
 			arrayValue or
-				containerValue then return TopLevelConstantLookup.foundImageRecord(self.imageRecordOf(decl))
+			containerValue then return TopLevelConstantLookup.foundImageRecord(self.imageRecordOf(decl))
 			factoryValue(calls, root, _) then return self.imageStructLookup(calls, root: root, decl: decl)
 
 			// ⭐ A BOXED UNION'S PAYLOAD-FREE CASE is the fourth imaged shape and the narrowest: its box is a
@@ -26211,7 +26211,7 @@ export type ProgramSignatures
 			// mints a body's box at, which is what lets a `match` on the read recognize it.
 			boxedUnionValue(typeName, caseName) then return self.imageUnionCaseLookup(typeName, caseName: caseName)
 			pending or
-				evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
+			evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
 
@@ -26239,7 +26239,7 @@ export type ProgramSignatures
 			arrayLiteral(elements, element) then return self.arrayLiteralImageOf(elements, element: element, giid: genericInstanceIdOf(valueType), valueType: valueType)
 			containerCreate(giid, brand, _) then return self.emptyContainerImageOf(giid, valueType: valueType, brand: brand)
 			scalar or
-				managed then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a scalar or a managed literal, neither of which is a record — `resolvedValueOf` answers both above and never reaches here")
+			managed then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a scalar or a managed literal, neither of which is a record — `resolvedValueOf` answers both above and never reaches here")
 			boxedUnionCase then panic("ProgramSignatures.imageRecordOf: '{String.from(decl.name)}' folded to a boxed union case, which is a BOX and not a `__ManagedMemory` record — it has no stride, count or element destructor for a `TopLevelImageRecord` to carry, so `resolvedValueOf` answers it with `foundImageBox` and never reaches here")
 		end 'folded'
 	end 'imageRecordOf'
@@ -26264,9 +26264,9 @@ export type ProgramSignatures
 			construct(typeName, _) then return typeName
 			call then panic("ProgramSignatures.constStructTypeName: '{String.from(declName)}' is imaged but its arena root is a `call` — `constStructBoxNode` describes only a `construct`, and it is the one thing that decides imaging")
 			mapLiteral or
-				unionCase or
-				arrayLiteral or
-				functionValue then panic("ProgramSignatures.constStructTypeName: '{String.from(declName)}' is imaged but its arena root is a container literal — `constStructBoxNode` describes only a `construct`, and it is the one thing that decides imaging")
+			unionCase or
+			arrayLiteral or
+			functionValue then panic("ProgramSignatures.constStructTypeName: '{String.from(declName)}' is imaged but its arena root is a container literal — `constStructBoxNode` describes only a `construct`, and it is the one thing that decides imaging")
 		end 'node'
 	end 'constStructTypeName'
 
@@ -26561,9 +26561,9 @@ export type ProgramSignatures
 			// mixed: the build fails either way, and no reader's code depends on which diagnostic it
 			// failed with.
 			failed or
-				poisoned then return Hasher.combined(keyed, value: ConstShapeNoValue)
+			poisoned then return Hasher.combined(keyed, value: ConstShapeNoValue)
 			pending or
-				evaluating then panic("ProgramSignatures.mixConstant: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` folds the hash only after every walk has finished")
+			evaluating then panic("ProgramSignatures.mixConstant: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` folds the hash only after every walk has finished")
 		end 'o'
 	end 'mixConstant'
 
@@ -26826,8 +26826,8 @@ export type ProgramSignatures
 			// That is exactly the failure this function's own header names two arms down.
 			named then return mixBytes(Hasher.combined(state, value: TypeShapeNamed), bytes: typeName)
 			exitCode or
-				unresolved or
-				void then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
+			unresolved or
+			void then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 
 			// Only an INLINE PACKED record reaches this arm: `settleConstFactoryCall` folds a heap record to
 			// a `factoryValue`, never to a scalar, so what is hashed here is the type's own word and never a
@@ -27077,9 +27077,9 @@ export type ProgramSignatures
 			match verdict 'linkWhenResolved'
 				resolved then self.recordImplementsLink(self.linkedToParentIdentity(clause))
 				cycle or
-					notARangedAlias or
-					rangeDoesNotFit or
-					primitiveDiffers then break
+				notARangedAlias or
+				rangeDoesNotFit or
+				primitiveDiffers then break
 			end 'linkWhenResolved'
 		end 'eachClause'
 
@@ -27626,7 +27626,7 @@ export type ProgramSignatures
 			none then return NamespaceDeclaration.none
 			several then return NamespaceDeclaration.several(self.namespaceCandidates(claims, member: member, readerFilePath: readerFilePath))
 			theLibrarys or
-				oneAuthors then return self.chosenNamespaceDeclaration(claims, at: chosenAt, member: member, moved: moved)
+			oneAuthors then return self.chosenNamespaceDeclaration(claims, at: chosenAt, member: member, moved: moved)
 		end 'reached'
 	end 'namespaceDeclarationIn'
 
@@ -28906,7 +28906,7 @@ export type ProgramSignatures
 		match self.namespaceDeclarationOf(qualified, readerFilePath: readerFilePath) 'declared'
 			one(_, declFilePath, _) then return WrittenAliasFile.declaredIn(declFilePath)
 			none or
-				several then return WrittenAliasFile.unspecified
+			several then return WrittenAliasFile.unspecified
 		end 'declared'
 	end 'declaringFileOfQualifiedAlias'
 
@@ -29022,7 +29022,7 @@ export type ProgramSignatures
 		match self.namespaceDeclarationOf(spelling, readerFilePath: readerFilePath) 'declaration'
 			one(kind, declFilePath, name) then return NamespaceAlias.declared(declFilePath, name: name, kind: kind) if self.wantsKind(wanted, kind: kind) else NamespaceAlias.notAnAlias
 			none or
-				several then return NamespaceAlias.notAnAlias
+			several then return NamespaceAlias.notAnAlias
 		end 'declaration'
 	end 'namespaceAliasOf'
 
@@ -29049,10 +29049,10 @@ export type ProgramSignatures
 			functionAlias then return self.functionAliasScopedName(key, readerFilePath: declFilePath)
 			genericAlias then return self.genericAliasIdentityOf(key, declFilePath: declFilePath)
 			tupleAlias or
-				structType or
-				enumType or
-				unionType or
-				interfaceType then panic("ProgramSignatures.declarationIdentityOf: '{String.from(name)}' is filed as a {kind.name} — `WantedAliasKinds.identityBearing` admits only a ranged, a function and a generic-instance alias, so every caller filtered the kind first")
+			structType or
+			enumType or
+			unionType or
+			interfaceType then panic("ProgramSignatures.declarationIdentityOf: '{String.from(name)}' is filed as a {kind.name} — `WantedAliasKinds.identityBearing` admits only a ranged, a function and a generic-instance alias, so every caller filtered the kind first")
 		end 'kind'
 	end 'declarationIdentityOf'
 
@@ -30951,7 +30951,7 @@ export type ProgramSignatures
 		for element in elements 'eachElement'
 			match self.tupleElementCitationOf(element) 'citation'
 				nestedTuple or
-					asSpelled then break
+				asSpelled then break
 				separatorBearing(spelling) then self.recordSeparatorBearingToken(spelling)
 			end 'citation'
 		end 'eachElement'
@@ -31529,15 +31529,15 @@ export type ProgramSignatures
 			// whole-program `GenericInstanceId` — so it crosses unchanged, exactly as `adoptType`'s own arms
 			// state.
 			boolean or
-				integer or
-				float or
-				exitCode or
-				unresolved or
-				string or
-				typeParameter or
-				genericInstance or
-				character or
-				cstring gives t
+			integer or
+			float or
+			exitCode or
+			unresolved or
+			string or
+			typeParameter or
+			genericInstance or
+			character or
+			cstring gives t
 
 			// An existential carries the INTERFACE's per-file interner id, so it arrives by NAME exactly as
 			// `named`/`structRef`/`function` do.
@@ -32375,10 +32375,10 @@ export type ProgramSignatures
 	export function arrayEqualityIsBitwise(id GenericInstanceId) returns bool
 		return match self.arrayElementClass(id) 'class'
 			integer or
-				namedValue or
-				booleanOrExitCode gives not self.elementDeclaresItsOwn(self.containerElementType(id), member: EqualsMethodName)
+			namedValue or
+			booleanOrExitCode gives not self.elementDeclaresItsOwn(self.containerElementType(id), member: EqualsMethodName)
 			floatValue or
-				notBitwise gives false
+			notBitwise gives false
 		end 'class'
 	end 'arrayEqualityIsBitwise'
 
@@ -32399,20 +32399,20 @@ export type ProgramSignatures
 
 		return match maxonTypeTag(element) 'tag'
 			boolean or
-				exitCode gives ArrayElementClass.booleanOrExitCode
+			exitCode gives ArrayElementClass.booleanOrExitCode
 			integer gives ArrayElementClass.integer
 			named gives self.namedElementClass(self.nameOfId(typeNameIdOf(element)))
 			float or
-				unresolved or
-				void or
-				structRef or
-				string or
-				function or
-				typeParameter or
-				genericInstance or
-				character or
-				interfaceRef or
-				cstring gives ArrayElementClass.notBitwise
+			unresolved or
+			void or
+			structRef or
+			string or
+			function or
+			typeParameter or
+			genericInstance or
+			character or
+			interfaceRef or
+			cstring gives ArrayElementClass.notBitwise
 		end 'tag'
 	end 'arrayElementClass'
 
@@ -34354,9 +34354,9 @@ export type ProgramSignatures
 			// it has been visited — the discipline `TopLevelConstant`'s arms state, applied to the one place
 			// that reduces this union to a bit.
 			scalar or
-				unbridgedRecord or
-				void or
-				undeclared then return false
+			unbridgedRecord or
+			void or
+			undeclared then return false
 		end 'returns'
 	end 'globalFactoryReturnsARecord'
 
@@ -35327,7 +35327,7 @@ export type ProgramSignatures
 		match rule 'rule'
 			contestScopedAlias then break
 			declaredStruct or
-				declaredInterface then throw MapError.keyNotFound
+			declaredInterface then throw MapError.keyNotFound
 		end 'rule'
 
 		var rebuilt = MaxonTypeArray.create()
@@ -37521,17 +37521,17 @@ export type ProgramSignatures
 			// No nominal identity: a scalar, a `String`, an opaque `T` and a function value all coerce by
 			// TAG (`checkDeclaredType`), so `Box with Integer` keeps accepting a plain `42`.
 			boolean or
-				integer or
-				float or
-				exitCode or
-				unresolved or
-				string or
-				function or
-				typeParameter or
+			integer or
+			float or
+			exitCode or
+			unresolved or
+			string or
+			function or
+			typeParameter or
 
-				// A Character argument carries no name — the builtin's identity is its tag, `string`'s answer.
-				character or
-				cstring then return EmptySourceText
+			// A Character argument carries no name — the builtin's identity is its tag, `string`'s answer.
+			character or
+			cstring then return EmptySourceText
 			named then return self.namedIdentityOf(self.nameOfId(typeNameIdOf(arg)), readerFilePath: readerFilePath)
 			void then panic("typeArgAggregateName: a type argument is `void` — a type argument is a TYPE, and the parser accepts no void one")
 
@@ -38637,17 +38637,17 @@ export type ProgramSignatures
 			named gives self.namedEqualityOperand(self.nameOfId(typeNameIdOf(declared)))
 			unresolved gives EqualityOperand.unknown
 			boolean or
-				integer or
-				exitCode or
-				float or
-				void or
-				structRef or
-				string or
-				function or
-				typeParameter or
-				character or
-				interfaceRef or
-				cstring gives EqualityOperand.noEdge
+			integer or
+			exitCode or
+			float or
+			void or
+			structRef or
+			string or
+			function or
+			typeParameter or
+			character or
+			interfaceRef or
+			cstring gives EqualityOperand.noEdge
 		end 'tag'
 	end 'fieldEqualityOperand'
 
@@ -38923,11 +38923,11 @@ export type ProgramSignatures
 		return match self.typeOwnershipProtocol(self.canonicalInstanceArg(id, position: position)) 'protocol'
 			none gives false
 			byteRecord or
-				aggregate or
-				greenThread or
-				bufferRecord or
-				serviceHandle or
-				sharedValue gives true
+			aggregate or
+			greenThread or
+			bufferRecord or
+			serviceHandle or
+			sharedValue gives true
 		end 'protocol'
 	end 'instanceArgOwesDrop'
 
@@ -39051,14 +39051,14 @@ export type ProgramSignatures
 			// A payload-free enum's value is its i64 tag — nothing to move. `isBoxed` is the same bit the
 			// drop side routes on, through the same reader.
 			enumType or
-				unionType then return self.declaredEnumIsBoxed(name)
+			unionType then return self.declaredEnumIsBoxed(name)
 
 			// An interface-typed slot is `E3011 Unknown type` before anything classifies it. A ranged alias
 			// IS its primitive and a function value is a bare code pointer; neither owns a record, so
 			// neither is ever moved into a box.
 			interfaceType or
-				rangedAlias or
-				functionAlias then return false
+			rangedAlias or
+			functionAlias then return false
 
 			// A SUPERSEDED spelling consumes nothing — no call site can name it. See
 			// `genericAliasSpellingIsSuperseded`, which records the two walks that reach this arm with one.
@@ -39423,9 +39423,9 @@ export type ProgramSignatures
 			greenThreadElement then return not self.arrayInstanceIsCopiedByAGenericBody(id)
 
 			consumeMoved or
-				coOwnedTrivial or
-				managedElement or
-				retainedFeed then return false
+			coOwnedTrivial or
+			managedElement or
+			retainedFeed then return false
 		end 'kind'
 	end 'kindExemptsAnUncopiedInstance'
 
@@ -39734,7 +39734,7 @@ export type ProgramSignatures
 			direct(callee) then return callee
 			managedElements then panic("ProgramSignatures.genericInstanceBoxCloneCallee: instance {id} copies through an element-bearing record's 2-argument entry, which no box co-own can call — `declaredContainerBoxIsImageData` admits no `Array`/chain box")
 			unsupported or
-				throughWitness then panic("ProgramSignatures.genericInstanceBoxCloneCallee: instance {id} has no deep cloner — `declaredContainerBoxIsImageData` requires the base layout that `__clone_<mangled>` cascades over")
+			throughWitness then panic("ProgramSignatures.genericInstanceBoxCloneCallee: instance {id} has no deep cloner — `declaredContainerBoxIsImageData` requires the base layout that `__clone_<mangled>` cascades over")
 		end 'strategy'
 	end 'genericInstanceBoxCloneCallee'
 
@@ -40369,21 +40369,21 @@ export type ProgramSignatures
 			// caller's fallthrough (an `adoptType` at `declaredSlotType`, an enum lookup at the payload
 			// classifier) is the rest of the answer rather than a recovery path.
 			enumType or
-				unionType or
+			unionType or
 
-				// ⛔ An interface name must stay a `throw` too, because this door is a read and the slot count
-				// is decided in the column. An interface-typed field is re-tagged once, by
-				// `normalizeSweptInterfaceTypes`, which goes through `StructLayout.retypeField` and so rebuilds
-				// the two-slot prefix sum with it. Answering `MaxonType.interfaceRef` here would hand
-				// `Parser.emitFieldLoad` an `interfaceRef` for a field the layout budgeted one slot for: the
-				// witness load at `offset + InterfaceWitnessHalfOffset` would read the next field, and every
-				// later field's offset would be one slot short — a wrong answer at run time with no compile
-				// error anywhere.
-				//
-				// The `functionAlias` arm below does re-tag, and is safe because it does not change a field's
-				// slot count. ⚠ The `genericAlias` arm is only conditionally safe — an instance over an
-				// `interface` base denotes an existential too, and that arm says so.
-				interfaceType then throw MapError.keyNotFound
+			// ⛔ An interface name must stay a `throw` too, because this door is a read and the slot count
+			// is decided in the column. An interface-typed field is re-tagged once, by
+			// `normalizeSweptInterfaceTypes`, which goes through `StructLayout.retypeField` and so rebuilds
+			// the two-slot prefix sum with it. Answering `MaxonType.interfaceRef` here would hand
+			// `Parser.emitFieldLoad` an `interfaceRef` for a field the layout budgeted one slot for: the
+			// witness load at `offset + InterfaceWitnessHalfOffset` would read the next field, and every
+			// later field's offset would be one slot short — a wrong answer at run time with no compile
+			// error anywhere.
+			//
+			// The `functionAlias` arm below does re-tag, and is safe because it does not change a field's
+			// slot count. ⚠ The `genericAlias` arm is only conditionally safe — an instance over an
+			// `interface` base denotes an existential too, and that arm says so.
+			interfaceType then throw MapError.keyNotFound
 
 			// ⭐ A RANGED alias splits, and it is the ONLY arm that does: the FORM is one declaration
 			// (`typealias X = <primitive>(range)`, which is why `TypeDeclKind` holds one case for both,
@@ -40524,9 +40524,9 @@ export type ProgramSignatures
 			// this door sees only non-generic names. The arms share a body rather than one panicking, because
 			// what an Array record's drop IS is exactly what an aggregate's is.
 			aggregate or
-				bufferRecord or
-				serviceHandle or
-				sharedValue then return OwnershipCallee.named(managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName)))
+			bufferRecord or
+			serviceHandle or
+			sharedValue then return OwnershipCallee.named(managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName)))
 
 			// A conformer whose value half is a green thread releases it the one way a green thread is
 			// released. Its `retainFunc@16` twin is 0 — see the protocol arm for why that pair is uneven here.
@@ -40593,11 +40593,11 @@ export type ProgramSignatures
 			// this hands back is already `__gt_promise_drop`. `bufferRecord` joins it for the same reason from
 			// the other end: an Array record's drop is an aggregate's, and only its RETAIN is its own.
 			byteRecord or
-				aggregate or
-				greenThread or
-				bufferRecord or
-				serviceHandle or
-				sharedValue gives OwnershipCallee.named(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id)))
+			aggregate or
+			greenThread or
+			bufferRecord or
+			serviceHandle or
+			sharedValue gives OwnershipCallee.named(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id)))
 		end 'protocol'
 	end 'instanceDropCallee'
 
@@ -40622,9 +40622,9 @@ export type ProgramSignatures
 			byteRecord then return OwnershipCallee.named(byteRecordCascadeCallee(action))
 			greenThread then return OwnershipCallee.named(cascadeUnsupportedEntry(action))
 			aggregate or
-				bufferRecord or
-				serviceHandle or
-				sharedValue then return OwnershipCallee.named(self.aggregateConformerCascadeCallee(self.denotedAggregateName(typeName), action: action))
+			bufferRecord or
+			serviceHandle or
+			sharedValue then return OwnershipCallee.named(self.aggregateConformerCascadeCallee(self.denotedAggregateName(typeName), action: action))
 		end 'protocol'
 	end 'existentialCascadeCallee'
 
@@ -40646,10 +40646,10 @@ export type ProgramSignatures
 			none then return OwnershipCallee.inert
 			greenThread then return OwnershipCallee.named(cascadeUnsupportedEntry(action))
 			byteRecord or
-				aggregate or
-				bufferRecord or
-				serviceHandle or
-				sharedValue then return OwnershipCallee.named(self.instanceConformerCascadeCallee(id, action: action))
+			aggregate or
+			bufferRecord or
+			serviceHandle or
+			sharedValue then return OwnershipCallee.named(self.instanceConformerCascadeCallee(id, action: action))
 		end 'protocol'
 	end 'instanceExistentialCascadeCallee'
 
@@ -40726,11 +40726,11 @@ export type ProgramSignatures
 			// See `instanceDropCallee` — the promise routes itself through `genericInstanceBoxDropCallee`, and
 			// an Array record's drop is an aggregate's.
 			byteRecord or
-				aggregate or
-				greenThread or
-				bufferRecord or
-				serviceHandle or
-				sharedValue gives OwnershipCallee.named(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position)))
+			aggregate or
+			greenThread or
+			bufferRecord or
+			serviceHandle or
+			sharedValue gives OwnershipCallee.named(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position)))
 		end 'protocol'
 	end 'typeParamDropCallee'
 
@@ -41561,12 +41561,12 @@ export type ProgramSignatures
 
 		return match try self.declaredFormInAnyFile(name) otherwise return false 'form'
 			structType or
-				enumType or
-				unionType or
-				interfaceType or
-				rangedAlias or
-				functionAlias or
-				tupleAlias gives false
+			enumType or
+			unionType or
+			interfaceType or
+			rangedAlias or
+			functionAlias or
+			tupleAlias gives false
 			genericAlias gives self.instanceIsPromiseHandle(self.bareGenericAliasInstance(name))
 		end 'form'
 	end 'declaredNameIsAGreenThreadHandle'
@@ -41611,13 +41611,13 @@ export type ProgramSignatures
 	export function nameIsDeclared(name ByteArray) returns bool
 		return match try self.declaredFormInAnyFile(name) otherwise return false 'form'
 			structType or
-				enumType or
-				unionType or
-				interfaceType or
-				rangedAlias or
-				functionAlias or
-				genericAlias or
-				tupleAlias gives true
+			enumType or
+			unionType or
+			interfaceType or
+			rangedAlias or
+			functionAlias or
+			genericAlias or
+			tupleAlias gives true
 		end 'form'
 	end 'nameIsDeclared'
 
@@ -41652,21 +41652,21 @@ export type ProgramSignatures
 		match try self.declaredFormInAnyFile(name) otherwise return false 'form'
 			interfaceType then return true
 			structType or
-				enumType or
-				unionType or
-				rangedAlias or
-				functionAlias or
+			enumType or
+			unionType or
+			rangedAlias or
+			functionAlias or
 
-				// ⚠ **`genericAlias` STAYS `false` EVEN THOUGH `IntegerSeq = Seq with Integer` DENOTES AN
-				// EXISTENTIAL, and the reason is that this door never meets that spelling.** Both callers pass
-				// a conformance's recorded `withArgs`, and `Parser.readConformanceWithArg` RENDERS what it read
-				// — an existential alias renders to its interface name, `Seq` — so the alias reaches the
-				// `interfaceType` arm above under the bare name. Answering it here as well would be a second
-				// reading of one fact, reachable by nothing;
-				// `parameterized-existential.error.associated-type-bound-to-an-existential-alias` pins the
-				// rendering this rests on.
-				genericAlias or
-				tupleAlias then return false
+			// ⚠ **`genericAlias` STAYS `false` EVEN THOUGH `IntegerSeq = Seq with Integer` DENOTES AN
+			// EXISTENTIAL, and the reason is that this door never meets that spelling.** Both callers pass
+			// a conformance's recorded `withArgs`, and `Parser.readConformanceWithArg` RENDERS what it read
+			// — an existential alias renders to its interface name, `Seq` — so the alias reaches the
+			// `interfaceType` arm above under the bare name. Answering it here as well would be a second
+			// reading of one fact, reachable by nothing;
+			// `parameterized-existential.error.associated-type-bound-to-an-existential-alias` pins the
+			// rendering this rests on.
+			genericAlias or
+			tupleAlias then return false
 		end 'form'
 	end 'declaredNameIsFatPointer'
 
@@ -41710,7 +41710,7 @@ export type ProgramSignatures
 			// is the same bit `unionBoxDropCallee` routes on, so what is called managed here is exactly what
 			// gets a drop there.
 			enumType or
-				unionType then return self.declaredEnumIsBoxed(name)
+			unionType then return self.declaredEnumIsBoxed(name)
 
 			// ⭐ An interface-typed slot owns its conformer's record — the same answer `typeIsManaged`'s
 			// `interfaceRef` arm gives, which is where the reasoning lives. This arm is reached by NAME
@@ -41718,11 +41718,11 @@ export type ProgramSignatures
 			// annotation `normalizeSweptInterfaceTypes` did not re-tag.
 			interfaceType or
 
-				// A tuple IS a struct box. `denotedAggregateName` above resolves a tuple alias to the tuple's own
-				// canonical name before this is asked, so this arm is reached only if that resolution is ever
-				// narrowed — and it must then still answer `true`, or the tuple leaks (exit 101).
-				tupleAlias or
-				functionAlias then return true
+			// A tuple IS a struct box. `denotedAggregateName` above resolves a tuple alias to the tuple's own
+			// canonical name before this is asked, so this arm is reached only if that resolution is ever
+			// narrowed — and it must then still answer `true`, or the tuple leaks (exit 101).
+			tupleAlias or
+			functionAlias then return true
 
 			// A ranged int or float alias IS its primitive — a scalar either way.
 			rangedAlias then return false
@@ -41836,9 +41836,9 @@ export type ProgramSignatures
 
 		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
 			managedFile or
-				managedDirectory or
-				managedSocket or
-				serviceHandle then return false
+			managedDirectory or
+			managedSocket or
+			serviceHandle then return false
 
 			userDeclared then break
 		end 'compilerOwned'
@@ -42235,11 +42235,11 @@ export type ProgramSignatures
 	function osHandleOwnedBy(name ByteArray, visited ClonerSet) returns OwnedOsHandle
 		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
 			managedFile or
-				managedDirectory or
-				managedSocket then return OwnedOsHandle.handle(name)
+			managedDirectory or
+			managedSocket then return OwnedOsHandle.handle(name)
 
 			serviceHandle or
-				userDeclared then break
+			userDeclared then break
 		end 'compilerOwned'
 
 		if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyInFlight'
@@ -42335,7 +42335,7 @@ export type ProgramSignatures
 		return match action 'action'
 			clone gives self.aggregateSupportsDeepClone(aggregateName)
 			soleWalk or
-				shareWalk gives self.aggregateSupportsTransferWalk(aggregateName)
+			shareWalk gives self.aggregateSupportsTransferWalk(aggregateName)
 		end 'action'
 	end 'aggregateSupportsCascade'
 
@@ -42343,7 +42343,7 @@ export type ProgramSignatures
 		return match action 'action'
 			clone gives self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone)
 			soleWalk or
-				shareWalk gives self.instanceSupportsTransferWalk(id)
+			shareWalk gives self.instanceSupportsTransferWalk(id)
 		end 'action'
 	end 'instanceSupportsCascade'
 
@@ -42579,8 +42579,8 @@ export type ProgramSignatures
 	function aggregateNameSupportsDeepClone(name ByteArray, visited ClonerSet, purpose GraphCascadePurpose) returns bool
 		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
 			managedFile or
-				managedDirectory or
-				managedSocket then return false
+			managedDirectory or
+			managedSocket then return false
 
 			// A handle's clone is a real entry (`managedNameCascadeStrategy`), so the GATE must admit what the
 			// STRATEGY answers — this arm and that one are the divergence this function exists to prevent.
@@ -42873,17 +42873,17 @@ export type ProgramSignatures
 
 		match form 'form'
 			structType or
-				tupleAlias then self.addRecordKindsOfAggregate(name, within: within, visited: visited, settledFree: settledFree)
+			tupleAlias then self.addRecordKindsOfAggregate(name, within: within, visited: visited, settledFree: settledFree)
 
 			enumType or
-				unionType then self.addRecordKindsOfUnion(name, within: within, visited: visited, settledFree: settledFree)
+			unionType then self.addRecordKindsOfUnion(name, within: within, visited: visited, settledFree: settledFree)
 
 			// A ranged alias IS its primitive.
 			rangedAlias then return
 
 			// An existential may hold any conformer, and a function value's environment any capture.
 			interfaceType or
-				functionAlias then within.anything = true
+			functionAlias then within.anything = true
 
 			genericAlias then self.addRecordKindsOfGenericAlias(name, within: within, visited: visited, settledFree: settledFree)
 		end 'form'
@@ -42932,9 +42932,9 @@ export type ProgramSignatures
 
 		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
 			managedFile or
-				managedDirectory or
-				managedSocket or
-				serviceHandle then within.anything = true
+			managedDirectory or
+			managedSocket or
+			serviceHandle then within.anything = true
 
 			userDeclared then self.addRecordKindsWithinDeclaration(name, within: within, visited: visited, settledFree: settledFree)
 		end 'compilerOwned'
@@ -43207,7 +43207,7 @@ export type ProgramSignatures
 		if self.isContestedFreeFunction(callee) 'severalDirectoriesDeclareIt'
 			return match self.resolveBareFunctionName(callee, readerFilePath: readerFilePath) 'resolution'
 				declaration or
-					ambiguous gives true
+				ambiguous gives true
 				undeclared gives false
 			end 'resolution'
 		end 'severalDirectoriesDeclareIt'
@@ -43353,33 +43353,33 @@ export type ProgramSignatures
 	function adoptValueReturn(rt MaxonReturnType, inner MaxonType, into TypeNameInterner) returns MaxonReturnType
 		return match inner 'r'
 			named or
-				structRef or
+			structRef or
 
-				// A function return type carries its governing name id, so it re-interns like `named`.
-				function or
+			// A function return type carries its governing name id, so it re-interns like `named`.
+			function or
 
-				// A type-parameter or generic-instance return type (`get() returns T`) carries no per-file
-				// interner id (a source-derived digest, a whole-program giid), so it crosses files unchanged;
-				// routing it through `adoptType` keeps the one crossing door.
-				typeParameter or
-				genericInstance or
+			// A type-parameter or generic-instance return type (`get() returns T`) carries no per-file
+			// interner id (a source-derived digest, a whole-program giid), so it crosses files unchanged;
+			// routing it through `adoptType` keeps the one crossing door.
+			typeParameter or
+			genericInstance or
 
-				// An existential return type carries the interface's per-file interner id, so it re-interns
-				// like `named`. This is the crossing that makes `let p = f.make()` in another file name the
-				// same interface the declaring file did — which is what the result's dispatch resolves its
-				// slot against.
-				interfaceRef gives MaxonReturnType.value(self.adoptType(inner, into: into))
+			// An existential return type carries the interface's per-file interner id, so it re-interns
+			// like `named`. This is the crossing that makes `let p = f.make()` in another file name the
+			// same interface the declaring file did — which is what the result's dispatch resolves its
+			// slot against.
+			interfaceRef gives MaxonReturnType.value(self.adoptType(inner, into: into))
 
 			// A `String`, `Character` or primitive return type carries no interned name, so it crosses files
 			// unchanged.
 			boolean or
-				integer or
-				float or
-				exitCode or
-				unresolved or
-				string or
-				character or
-				cstring gives rt
+			integer or
+			float or
+			exitCode or
+			unresolved or
+			string or
+			character or
+			cstring gives rt
 		end 'r'
 	end 'adoptValueReturn'
 
@@ -43410,19 +43410,19 @@ export type ProgramSignatures
 
 			// A `String`, a `Character` and a primitive carry no name id, so they pass through unchanged.
 			boolean or
-				integer or
-				float or
-				exitCode or
-				unresolved or
-				string or
+			integer or
+			float or
+			exitCode or
+			unresolved or
+			string or
 
-				// A type-parameter reference and a generic instance carry GLOBAL ids — a `(declaring type,
-				// parameter name)` DIGEST, a pure function of source text, and a `GenericInstanceId` keyed on
-				// THIS index's own registry — not per-file interner ids, so there is nothing to remap.
-				typeParameter or
-				genericInstance or
-				character or
-				cstring gives t
+			// A type-parameter reference and a generic instance carry GLOBAL ids — a `(declaring type,
+			// parameter name)` DIGEST, a pure function of source text, and a `GenericInstanceId` keyed on
+			// THIS index's own registry — not per-file interner ids, so there is nothing to remap.
+			typeParameter or
+			genericInstance or
+			character or
+			cstring gives t
 
 			// A FUNCTION value carries its governing name id, re-interned by NAME like `named`.
 			function(id) gives MaxonType.function(into.intern(self.nameOfId(id)))
@@ -44212,7 +44212,7 @@ export type ProgramSignatures
 		match self.rowSetAnswer(query) 'answer'
 			holds(value) then return value
 			noInstance or
-				instance then panic("ProgramSignatures.rowSetFlag: a flag query was answered with an instance match")
+			instance then panic("ProgramSignatures.rowSetFlag: a flag query was answered with an instance match")
 		end 'answer'
 	end 'rowSetFlag'
 

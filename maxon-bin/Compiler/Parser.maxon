@@ -33,7 +33,6 @@
 //      supplies its terminator (closeFunctionBody) — and reports E3013 when a
 //      value-returning body can fall off its end instead.
 
-
 // A column of token POSITIONS, kept where a diagnostic must be anchored at a token the parse has
 // already walked past. It carries the INDEX and never the `Token`: a `Token` owns its `value`
 // `ByteArray`, so a per-slot column of them would clone one managed record per argument on a path
@@ -122,8 +121,8 @@ function handOffIsAClosureCapture(door ThreadHandOffDoor) returns bool
 	return match door 'door'
 		closureCapture gives true
 		message or
-			publish or
-			coroutine gives false
+		publish or
+		coroutine gives false
 	end 'door'
 end 'handOffIsAClosureCapture'
 
@@ -2253,40 +2252,40 @@ typealias AsyncCalleeVisited = Set with ValueId
 function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLookup
 	return match op 'op'
 		call or
-			literal or
-			ret or
-			retVoid or
-			binOp or
-			unaryOp or
-			compare or
-			condBranch or
-			branch or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			stringLiteral or
-			tryCall or
-			throwError or
-			propagateError or
-			panicAbort or
-			functionRef or
-			indirectCall or
-			await or
-			tryAwait or
-			sizeofType or
-			constArrayLiteral or
-			switch or
-			witnessDispatch or
-			witnessTryDispatch or
-			panicAbortValue or
-			errorFlagEncode or
-			serviceSpawn or
-			serviceSend or
-			immortalStructRecord or
-			immortalStringTable or
-			covPoint or
-			rawIntrinsic or
-			existentialWitness gives AsyncCalleeLookup.none
+		literal or
+		ret or
+		retVoid or
+		binOp or
+		unaryOp or
+		compare or
+		condBranch or
+		branch or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		stringLiteral or
+		tryCall or
+		throwError or
+		propagateError or
+		panicAbort or
+		functionRef or
+		indirectCall or
+		await or
+		tryAwait or
+		sizeofType or
+		constArrayLiteral or
+		switch or
+		witnessDispatch or
+		witnessTryDispatch or
+		panicAbortValue or
+		errorFlagEncode or
+		serviceSpawn or
+		serviceSend or
+		immortalStructRecord or
+		immortalStringTable or
+		covPoint or
+		rawIntrinsic or
+		existentialWitness gives AsyncCalleeLookup.none
 		asyncCall(result, callee, _, _, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
 
 		// A reply cell mints a promise too; this arm is how `awaitedPromiseFacts` finds one.
@@ -2380,17 +2379,17 @@ function equalityOperandCannotDispatch(operand EqualityOperand) returns bool
 	return match operand 'operand'
 		noEdge gives true
 		unknown or
-			arrayOverParameters or
-			structOverParameters gives false
+		arrayOverParameters or
+		structOverParameters gives false
 	end 'operand'
 end 'equalityOperandCannotDispatch'
 
 function equalityOperandIsKnown(operand EqualityOperand) returns bool
 	return match operand 'operand'
 		arrayOverParameters or
-			structOverParameters gives true
+		structOverParameters gives true
 		unknown or
-			noEdge gives false
+		noEdge gives false
 	end 'operand'
 end 'equalityOperandIsKnown'
 
@@ -2648,9 +2647,9 @@ function firstSummedCaseIndex(column EnumCaseConstant) returns CaseIndex
 	return match column 'c'
 		declarationIndex gives FirstSummedCaseIndex
 		caseName or
-			declaredRawValue or
-			caseFunctionRef or
-			structBackingField gives FirstCaseIndex
+		declaredRawValue or
+		caseFunctionRef or
+		structBackingField gives FirstCaseIndex
 	end 'c'
 end 'firstSummedCaseIndex'
 
@@ -2687,11 +2686,11 @@ function enumInterpRendering(layout EnumLayout) returns EnumInterpRendering
 	// rendering nobody re-reads.
 	match layout.backing 'backing'
 		unresolved or
-			integer or
-			functionRef then break
+		integer or
+		functionRef then break
 		float then panic("enumInterpRendering: a float-backed enum reached the interpolation dispatch — `materializeInterpExpr` decodes one to a `float`-tagged value through `floatBehindEnumValue` before asking whether the hole is an enum, so its tag cannot still be `named` here. Rendering it as a number would print the IEEE bit pattern as a decimal integer")
 		character or
-			string then return EnumInterpRendering.declaredText
+		string then return EnumInterpRendering.declaredText
 		structRecord then return EnumInterpRendering.caseName
 	end 'backing'
 
@@ -3375,22 +3374,22 @@ function handOffTakeEndsTheWriteBlame(take HandOffTake) returns bool
 		cellOccupant(_, exclusivity) gives exclusivity == CellOccupantExclusivity.sole
 		movedOut(soleOwner) gives soleOwner
 		copied or
-			promiseMovedIn or
-			promotedLiteral or
-			aReferenceOfItsOwn or
-			anOpaqueReference gives false
+		promiseMovedIn or
+		promotedLiteral or
+		aReferenceOfItsOwn or
+		anOpaqueReference gives false
 	end 'take'
 end 'handOffTakeEndsTheWriteBlame'
 
 function handOffTakeMovesTheRecord(take HandOffTake) returns bool
 	return match take 'take'
 		cellOccupant or
-			movedOut or
-			promiseMovedIn gives true
+		movedOut or
+		promiseMovedIn gives true
 		copied or
-			promotedLiteral or
-			aReferenceOfItsOwn or
-			anOpaqueReference gives false
+		promotedLiteral or
+		aReferenceOfItsOwn or
+		anOpaqueReference gives false
 	end 'take'
 end 'handOffTakeMovesTheRecord'
 
@@ -3425,7 +3424,7 @@ function asyncArgumentMayRideInACell(passing ArgumentPassing, argTag ValueTypeTa
 	return match passing 'passing'
 		byValue gives false
 		byReference or
-			undecided gives parameterCellCrossesASpawn(argTag)
+		undecided gives parameterCellCrossesASpawn(argTag)
 	end 'passing'
 end 'asyncArgumentMayRideInACell'
 
@@ -3670,7 +3669,7 @@ function closureResultOf(offer ClosureParamOffer) returns ClosureResult
 	return match offer 'offer'
 		offered(_, result) gives result.clone()
 		deferred or
-			none gives ClosureResult.inferred
+		none gives ClosureResult.inferred
 	end 'offer'
 end 'closureResultOf'
 
@@ -3798,7 +3797,7 @@ function fieldDefaultHelpersIn(layout StructLayout) returns ByteArrayArray
 	for i in 0 upto layout.fieldCount() 'eachField'
 		match layout.fieldDefault(i) 'declared'
 			none or
-				literal then break
+			literal then break
 			helper(name) then helpers.push(name)
 			bareCreateHelper(name) then helpers.push(name)
 		end 'declared'
@@ -4241,9 +4240,9 @@ function tryChannelCallOf(op RoutableOp, opIndex ElementIndex, wanted TryChannel
 	return match op 'op'
 		tryChannelCall(result, callee) gives DiscardedCallee.named(callee, result: result, opIndex: opIndex) if tryChannelWants(wanted, result: result) else DiscardedCallee.notACall
 		notRoutable or
-			call or
-			witness or
-			await gives DiscardedCallee.notACall
+		call or
+		witness or
+		await gives DiscardedCallee.notACall
 	end 'op'
 end 'tryChannelCallOf'
 
@@ -4265,9 +4264,9 @@ function routableOpIsAwait(op RoutableOp) returns bool
 	return match op 'op'
 		await gives true
 		notRoutable or
-			call or
-			tryChannelCall or
-			witness gives false
+		call or
+		tryChannelCall or
+		witness gives false
 	end 'op'
 end 'routableOpIsAwait'
 
@@ -4482,7 +4481,7 @@ union CallArgTarget
 	function calleeName() returns ByteArray throws AbsentError
 		match self 'target'
 			witnessDispatch or
-				movedInto then throw AbsentError.absent
+			movedInto then throw AbsentError.absent
 			callee(name) then return name
 		end 'target'
 	end 'calleeName'
@@ -4743,7 +4742,7 @@ union TupleAliasOwner
 		return match self 'owner'
 			fileScope gives true
 			enclosingType or
-				unpublished gives false
+			unpublished gives false
 		end 'owner'
 	end 'isFileScope'
 end 'TupleAliasOwner'
@@ -4770,7 +4769,7 @@ end 'TupleAssignTarget'
 function tupleAssignTargetDiscards(target TupleAssignTarget) returns bool
 	return match target 'kind'
 		rebinds or
-			declares gives false
+		declares gives false
 		discards gives true
 	end 'kind'
 end 'tupleAssignTargetDiscards'
@@ -4782,7 +4781,7 @@ function tupleAssignTargetRebinds(target TupleAssignTarget) returns bool
 	return match target 'kind'
 		rebinds gives true
 		declares or
-			discards gives false
+		discards gives false
 	end 'kind'
 end 'tupleAssignTargetRebinds'
 
@@ -4791,7 +4790,7 @@ end 'tupleAssignTargetRebinds'
 function tupleAssignTargetDeclares(target TupleAssignTarget) returns bool
 	return match target 'kind'
 		rebinds or
-			discards gives false
+		discards gives false
 		declares gives true
 	end 'kind'
 end 'tupleAssignTargetDeclares'
@@ -4914,7 +4913,7 @@ union MethodSurface
 		match self 'surface'
 			declared(typeName, _) then return typeName
 			witnessDispatched or
-				none then throw AbsentError.absent
+			none then throw AbsentError.absent
 		end 'surface'
 	end 'declaredTypeName'
 end 'MethodSurface'
@@ -4922,7 +4921,7 @@ end 'MethodSurface'
 function methodSurfaceExists(surface MethodSurface) returns bool
 	return match surface 'k'
 		declared or
-			witnessDispatched gives true
+		witnessDispatched gives true
 		none gives false
 	end 'k'
 end 'methodSurfaceExists'
@@ -5237,7 +5236,7 @@ function requireNotACallerLocationDefault(name ByteArray, at Token) throws Sourc
 	match callerLocationNamed(name) 'keyword'
 		none then break
 		line or
-			file then throw SourceParseError.callerLocationOutsideDefault(String.from(name), line: at.line, column: at.column)
+		file then throw SourceParseError.callerLocationOutsideDefault(String.from(name), line: at.line, column: at.column)
 	end 'keyword'
 end 'requireNotACallerLocationDefault'
 
@@ -5267,8 +5266,8 @@ function producerIsRequired(producer ParamDefaultProducer) returns bool
 	return match producer 'produces'
 		required gives true
 		callerLine or
-			callerFile or
-			helper gives false
+		callerFile or
+		helper gives false
 	end 'produces'
 end 'producerIsRequired'
 
@@ -5278,7 +5277,7 @@ function isCallerLocationDefault(kind CallerLocationDefault) returns bool
 	return match kind 'kind'
 		none gives false
 		line or
-			file gives true
+		file gives true
 	end 'kind'
 end 'isCallerLocationDefault'
 
@@ -5359,39 +5358,39 @@ function nascentOpBranchesTo(op MaxonOp, target BlockId) returns bool
 		condBranch(_, thenBlockId, elseBlockId) gives thenBlockId == target or elseBlockId == target
 		switch(_, denseTargetBlockIds, defaultBlockId) gives defaultBlockId == target or blockIdsInclude(denseTargetBlockIds, target: target)
 		call or
-			literal or
-			ret or
-			retVoid or
-			binOp or
-			unaryOp or
-			compare or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			stringLiteral or
-			tryCall or
-			throwError or
-			propagateError or
-			panicAbort or
-			functionRef or
-			indirectCall or
-			asyncCall or
-			await or
-			tryAwait or
-			sizeofType or
-			constArrayLiteral or
-			witnessDispatch or
-			witnessTryDispatch or
-			panicAbortValue or
-			errorFlagEncode or
-			serviceSpawn or
-			serviceSend or
-			serviceReplyCell or
-			immortalStructRecord or
-			immortalStringTable or
-			covPoint or
-			rawIntrinsic or
-			existentialWitness gives false
+		literal or
+		ret or
+		retVoid or
+		binOp or
+		unaryOp or
+		compare or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		stringLiteral or
+		tryCall or
+		throwError or
+		propagateError or
+		panicAbort or
+		functionRef or
+		indirectCall or
+		asyncCall or
+		await or
+		tryAwait or
+		sizeofType or
+		constArrayLiteral or
+		witnessDispatch or
+		witnessTryDispatch or
+		panicAbortValue or
+		errorFlagEncode or
+		serviceSpawn or
+		serviceSend or
+		serviceReplyCell or
+		immortalStructRecord or
+		immortalStringTable or
+		covPoint or
+		rawIntrinsic or
+		existentialWitness gives false
 	end 'k'
 end 'nascentOpBranchesTo'
 
@@ -5523,7 +5522,7 @@ function opIsDirectCallTo(op MaxonOp, callee ByteArray) returns bool
 	return match maxonOpCalleeKind(op) 'kind'
 		direct gives maxonOpCalleeName(op).equals(callee)
 		functionValue or
-			noCallee gives false
+		noCallee gives false
 	end 'kind'
 end 'opIsDirectCallTo'
 
@@ -6872,7 +6871,7 @@ end 'pickBound'
 function isSizedTypeName(name ByteArray) returns bool
 	return match sizedTypeBound(name, wantMax: true) 'kind'
 		value or
-			floatBound gives true
+		floatBound gives true
 		notASizedType gives false
 	end 'kind'
 end 'isSizedTypeName'
@@ -7157,17 +7156,17 @@ function nascentSlotPlaceholderType(tag ValueTypeTag) returns NascentSlotPlaceho
 		boolean gives NascentSlotPlaceholder.value(MaxonType.boolean)
 		float gives NascentSlotPlaceholder.value(MaxonType.float)
 		integer or
-			named or
-			exitCode gives NascentSlotPlaceholder.value(MaxonType.integer)
+		named or
+		exitCode gives NascentSlotPlaceholder.value(MaxonType.integer)
 		structRef or
-			string or
-			function or
-			typeParameter or
-			genericInstance or
-			character or
-			interfaceRef or
-			unresolved or
-			void gives NascentSlotPlaceholder.ownsHeap
+		string or
+		function or
+		typeParameter or
+		genericInstance or
+		character or
+		interfaceRef or
+		unresolved or
+		void gives NascentSlotPlaceholder.ownsHeap
 
 		// A `cstring` owns nothing — it is a borrowed address — so a null placeholder is a value the scope
 		// exit leaves alone, exactly as a zero int is.
@@ -7181,7 +7180,7 @@ end 'nascentSlotPlaceholderType'
 function enumRawValueArgumentTag(backing EnumBacking) returns ValueTypeTag
 	return match backing 'b'
 		integer or
-			unresolved gives ValueTypeTag.integer
+		unresolved gives ValueTypeTag.integer
 		float gives ValueTypeTag.float
 		character gives ValueTypeTag.character
 		string gives ValueTypeTag.string
@@ -7199,10 +7198,10 @@ function enumBackingProduces(backing EnumBacking, tag ValueTypeTag) returns bool
 		character gives tag == ValueTypeTag.character
 		string gives tag == ValueTypeTag.string
 		unresolved or
-			integer or
-			float or
-			functionRef or
-			structRecord gives false
+		integer or
+		float or
+		functionRef or
+		structRecord gives false
 	end 'b'
 end 'enumBackingProduces'
 
@@ -8791,12 +8790,12 @@ let NanosPerMillisecond = 1000000
 function mintHeadIsTheCompilers(mint CalleeMint) returns bool
 	return match mint 'm'
 		notMinted or
-			primitiveStatic or
-			paramDefaultHelper or
-			stringLiteralInit or
-			fieldDefaultHelper gives false
+		primitiveStatic or
+		paramDefaultHelper or
+		stringLiteralInit or
+		fieldDefaultHelper gives false
 		resolvedTypeQualifier or
-			rangeOperator gives true
+		rangeOperator gives true
 	end 'm'
 end 'mintHeadIsTheCompilers'
 
@@ -9333,7 +9332,7 @@ end 'handOffDoorBlame'
 function handOffDoorMoveDisplay(door ThreadHandOffDoor) returns ByteArray
 	return match door 'door'
 		message or
-			publish gives handOffDoorBlame(door).toByteArray()
+		publish gives handOffDoorBlame(door).toByteArray()
 		coroutine(callee) gives "`async {String.from(callee)}(…)`".toByteArray()
 		closureCapture gives ClosureCaptureMoveDisplay
 	end 'door'
@@ -9342,8 +9341,8 @@ end 'handOffDoorMoveDisplay'
 function handOffDoorKind(door ThreadHandOffDoor) returns GreenThreadHandOff
 	return match door 'door'
 		message or
-			coroutine or
-			closureCapture gives GreenThreadHandOff.move
+		coroutine or
+		closureCapture gives GreenThreadHandOff.move
 		publish gives GreenThreadHandOff.share
 	end 'door'
 end 'handOffDoorKind'
@@ -9351,9 +9350,9 @@ end 'handOffDoorKind'
 function handOffLeavesThisGreenThread(door ThreadHandOffDoor) returns bool
 	return match door 'door'
 		message or
-			publish gives true
+		publish gives true
 		coroutine or
-			closureCapture gives false
+		closureCapture gives false
 	end 'door'
 end 'handOffLeavesThisGreenThread'
 
@@ -9374,9 +9373,9 @@ end 'OccupantHandOffRefusal'
 function handOffRefusesOccupantFrom(door ThreadHandOffDoor) returns OccupantHandOffRefusal
 	return match door 'door'
 		message or
-			publish gives OccupantHandOffRefusal.from(CellOccupantExclusivity.coOwned)
+		publish gives OccupantHandOffRefusal.from(CellOccupantExclusivity.coOwned)
 		coroutine or
-			closureCapture gives OccupantHandOffRefusal.never
+		closureCapture gives OccupantHandOffRefusal.never
 	end 'door'
 end 'handOffRefusesOccupantFrom'
 
@@ -10698,7 +10697,7 @@ function placeBlame(place PlaceArgument) returns WriteBlame
 	return match place.storage 'storage'
 		unreachable(blame) gives WriteBlame.blamed(blame, holder: WriteBlameHolder.closure)
 		handed or
-			notHanded gives WriteBlame.unblamed
+		notHanded gives WriteBlame.unblamed
 	end 'storage'
 end 'placeBlame'
 
@@ -11054,7 +11053,7 @@ function escapeByte(c Byte, kind LiteralEscapeKind) returns EscapeByte
 		return match kind 'interpolates'
 			stringInterpolation gives EscapeByte.byte(c)
 			characterLiteral or
-				byteStringLiteral gives EscapeByte.unknown
+			byteStringLiteral gives EscapeByte.unknown
 		end 'interpolates'
 	end 'interpolationBrace'
 
@@ -11779,21 +11778,21 @@ typealias BoxedUnionAnswerArray = Array with BoxedUnionAnswer
 module function tagIsAScalarWhateverIsDeclared(tag ValueTypeTag) returns bool
 	return match tag 'tag'
 		boolean or
-			integer or
-			float or
-			exitCode or
-			void or
-			cstring gives true
+		integer or
+		float or
+		exitCode or
+		void or
+		cstring gives true
 
 		named or
-			unresolved or
-			structRef or
-			string or
-			function or
-			typeParameter or
-			genericInstance or
-			character or
-			interfaceRef gives false
+		unresolved or
+		structRef or
+		string or
+		function or
+		typeParameter or
+		genericInstance or
+		character or
+		interfaceRef gives false
 	end 'tag'
 end 'tagIsAScalarWhateverIsDeclared'
 
@@ -14442,7 +14441,7 @@ function borrowLaunderDoorIsHandOff(door BorrowLaunderDoor) returns bool
 	return match door 'which'
 		binding gives false
 		returned or
-			merged gives true
+		merged gives true
 	end 'which'
 end 'borrowLaunderDoorIsHandOff'
 
@@ -14837,10 +14836,10 @@ end 'interfaceStoragePositionMessage'
 function storagePositionRemedy(position DeclaredStoragePosition) returns String
 	match position 'which'
 		unionPayload or
-			containerElement or
-			inferredTypeArgument then return "Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument"
+		containerElement or
+		inferredTypeArgument then return "Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument"
 		closureParameter or
-			functionTypeParameter then return "Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot"
+		functionTypeParameter then return "Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot"
 		interfaceRequirementParameter then return "Declare the parameter at a concrete type, or declare the requirement over a type parameter the interface constrains"
 		tupleElement then return "Declare the element at a concrete type, or pass the interface alongside the tuple as a PARAMETER of a named function, which carries its witness as an adjacent argument"
 
@@ -14849,8 +14848,8 @@ function storagePositionRemedy(position DeclaredStoragePosition) returns String
 		// `throws`.
 		throwingReturnType then return "Declare the function without `throws` — a non-throwing function returns the witness half in that same second register — or return a concrete type and report the error some other way"
 		functionTypeReturnType or
-			interfaceRequirementReturnType or
-			functionValueReturnType then return "Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half"
+		interfaceRequirementReturnType or
+		functionValueReturnType then return "Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half"
 
 		// It does NOT offer "take the interface as a PARAMETER", which every other storage position can: the
 		// binding already IS on an existential parameter, and the value that cannot travel is the one a
@@ -14885,7 +14884,7 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		containerElement then return "an element slot is one machine word"
 		inferredTypeArgument then return "a slot standing at a type parameter is one machine word"
 		closureParameter or
-			functionTypeParameter then return IndirectCallHasNoWitnessSlotReason
+		functionTypeParameter then return IndirectCallHasNoWitnessSlotReason
 
 		// Refused even for a parameter the impl never dispatches on: wasm traps on the call itself, so
 		// the formal is unrepresentable rather than merely unchecked.
@@ -14899,7 +14898,7 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		// A function value's signature has one result slot, while a requirement's return cannot be
 		// spelled as an interface: two different absences, so two different sentences.
 		functionTypeReturnType or
-			functionValueReturnType then return "a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped"
+		functionValueReturnType then return "a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped"
 		interfaceRequirementReturnType then return "a requirement is dispatched through a witness-table slot whose signature is rebuilt from the requirement's rendered return-type NAME, a spelling no interface has — so the second register is never read and the witness half is dropped"
 		associatedTypeBinding then return "a witness call carries one machine word per argument, so an argument's witness half is dropped — and unlike a result, whose conformer the impl that produces it pins statically, an argument's table is the CALLER's and differs per call site, so no slot of the callee's table can supply it"
 	end 'which'
@@ -15169,9 +15168,9 @@ function divisorProofZeroVerdict(proof DivisorProof) returns DivisorZeroVerdict
 	return match proof 'p'
 		provablyZero gives DivisorZeroVerdict.alwaysZero
 		nonZeroAndNotNegativeOne or
-			nonZeroButMaybeNegativeOne gives DivisorZeroVerdict.neverZero
+		nonZeroButMaybeNegativeOne gives DivisorZeroVerdict.neverZero
 		maybeZeroButNotNegativeOne or
-			maybeZeroAndMaybeNegativeOne gives DivisorZeroVerdict.possiblyZero
+		maybeZeroAndMaybeNegativeOne gives DivisorZeroVerdict.possiblyZero
 	end 'p'
 end 'divisorProofZeroVerdict'
 
@@ -15181,10 +15180,10 @@ function divisorProofMayBeNegativeOne(proof DivisorProof) returns bool
 		// `provablyZero` answers `false` as a FACT and not as a default: a divisor proven to be `0` is proven not
 		// to be `-1`. (It also never reaches a guard — E3103 refuses it first — so no caller depends on this.)
 		provablyZero or
-			nonZeroAndNotNegativeOne or
-			maybeZeroButNotNegativeOne gives false
+		nonZeroAndNotNegativeOne or
+		maybeZeroButNotNegativeOne gives false
 		nonZeroButMaybeNegativeOne or
-			maybeZeroAndMaybeNegativeOne gives true
+		maybeZeroAndMaybeNegativeOne gives true
 	end 'p'
 end 'divisorProofMayBeNegativeOne'
 
@@ -16100,7 +16099,7 @@ function hiddenWordParamInheritedFrom(enclosing HiddenWordParam) returns HiddenW
 	return match enclosing 'enclosing'
 		none gives HiddenWordParam.none
 		slot or
-			enclosingThroughEnv gives HiddenWordParam.enclosingThroughEnv
+		enclosingThroughEnv gives HiddenWordParam.enclosingThroughEnv
 	end 'enclosing'
 end 'hiddenWordParamInheritedFrom'
 
@@ -16124,7 +16123,7 @@ function hiddenWordParamIsCarried(param HiddenWordParam) returns bool
 	return match param 'param'
 		none gives false
 		slot or
-			enclosingThroughEnv gives true
+		enclosingThroughEnv gives true
 	end 'param'
 end 'hiddenWordParamIsCarried'
 
@@ -24807,7 +24806,7 @@ export type Parser
 				match callerLocationNamed(tok.value) 'keyword'
 					none then break
 					line or
-						file then throw SourceParseError.unsupported("'{String.from(tok.value)}' inside a larger default expression — a caller-location default is materialized AT THE CALL SITE, from the caller's own position, and the declaring file's expression is not available there to evaluate around it. The whole default must be the keyword alone; do the arithmetic in the body", line: tok.line, column: tok.column)
+					file then throw SourceParseError.unsupported("'{String.from(tok.value)}' inside a larger default expression — a caller-location default is materialized AT THE CALL SITE, from the caller's own position, and the declaring file's expression is not available there to evaluate around it. The whole default must be the keyword alone; do the arithmetic in the body", line: tok.line, column: tok.column)
 				end 'keyword'
 			end 'aName'
 
@@ -25640,7 +25639,7 @@ export type Parser
 			// A field with no default, and a LITERAL one, declare no function: the literal is emitted
 			// straight into the box (`Parser.fillFieldDefault`) and there is nothing to call.
 			none or
-				literal then return
+			literal then return
 			helper(helperName) then self.recordFieldDefaultHelperReturn(helperName, layout: layout, index: index, entries: entries)
 			bareCreateHelper(helperName) then self.recordFieldDefaultHelperReturn(helperName, layout: layout, index: index, entries: entries)
 		end 'declared'
@@ -26393,7 +26392,7 @@ export type Parser
 			// binding here to test: the constraints become witness parameters instead. An undeclared target
 			// has no conformers and never reaches here.
 			typeExtension or
-				undeclaredTarget then return ExtensionConstraintCheck.satisfied
+			undeclaredTarget then return ExtensionConstraintCheck.satisfied
 			interfaceExtension then break
 		end 'target'
 
@@ -26415,7 +26414,7 @@ export type Parser
 	function noteTypeExtensionWitnessConstraints(index ProgramSignatures, header ExtensionHeader, conformer ByteArray, methodName ByteArray)
 		match header.target 'target'
 			interfaceExtension or
-				undeclaredTarget then return
+			undeclaredTarget then return
 			typeExtension then break
 		end 'target'
 
@@ -26665,7 +26664,7 @@ export type Parser
 			character gives BoundGenericType.resolved(MaxonType.character)
 			record gives BoundGenericType.resolved(MaxonType.structRef(self.artifact.typeNames.intern(argument.name)))
 			rangedAlias or
-				enumeration gives BoundGenericType.byName
+			enumeration gives BoundGenericType.byName
 		end 'kind'
 	end 'boundTypeOfGenericArgument'
 
@@ -27647,15 +27646,15 @@ export type Parser
 			// value, a managed one as a pointer `__module_init` fills before `main`. `globalStdType` is the
 			// one home of that enumeration.
 			value or
-				poisoned or
-				managedValue or
-				arrayValue or
-				containerValue or
-				factoryValue or
-				boxedUnionValue then break
+			poisoned or
+			managedValue or
+			arrayValue or
+			containerValue or
+			factoryValue or
+			boxedUnionValue then break
 			failed(error) then try self.throwRecordedConstantError(error)
 			pending or
-				evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
+			evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'
 
@@ -27753,9 +27752,9 @@ export type Parser
 
 		match self.signatures.transferWalkOf(subject, action: CascadeAction.shareWalk, roots: TransferRoots.one, readerFilePath: self.filePath) 'walk'
 			closed or
-				walkedBy or
-				walkedAlone or
-				walkedThroughWitness then return
+			walkedBy or
+			walkedAlone or
+			walkedThroughWitness then return
 			refused(noun) then throw self.unshareableRegistryValueError(typeName, reason: "it is {noun}", anchor: anchor)
 		end 'walk'
 	end 'requireShareableRegistryValue'
@@ -28250,9 +28249,9 @@ export type Parser
 			tupleAlias then try self.readTupleAliasForm(nameTok, tupleOwner: tupleOwner, visibility: visibility)
 			rangedAlias then try self.readRangedAliasForm(writtenTok, nameTok: nameTok, rangedOut: rangedOut, tupleOwner: tupleOwner, recordFunctionSignature: recordFunctionSignature, visibility: visibility)
 			structType or
-				enumType or
-				unionType or
-				interfaceType then panic("Parser.readTypeAliasDeclaration: `aliasFormAt` answered the nominal kind {form.name}, and it answers only the four alias forms")
+			enumType or
+			unionType or
+			interfaceType then panic("Parser.readTypeAliasDeclaration: `aliasFormAt` answered the nominal kind {form.name}, and it answers only the four alias forms")
 		end 'form'
 
 		return form
@@ -28716,7 +28715,7 @@ export type Parser
 		match header.target 'target'
 			undeclaredTarget then break
 			interfaceExtension or
-				typeExtension then return
+			typeExtension then return
 		end 'target'
 
 		var depth = 1 as BlockDepth
@@ -29919,21 +29918,21 @@ export type Parser
 			// exactly as a `structRef` one does.
 			interfaceRef(id) gives self.internedName(id)
 			boolean or
-				integer or
-				float or
-				exitCode or
-				unresolved or
-				string or
+			integer or
+			float or
+			exitCode or
+			unresolved or
+			string or
 
-				// A type parameter's id is a token digest and a generic instance's a `GenericInstanceId`,
-				// neither re-internable, so each identity travels in its own column
-				// (`FunctionAliasParam.typeParamToken`, `.genericInstanceId`). The empty name here cannot be
-				// told from a primitive's and rebuilds as id 0; read alone it refuses the declaration for a
-				// type parameter and is a silent wrong answer for an instance (`NoGenericInstance`).
-				typeParameter or
-				genericInstance or
-				character or
-				cstring gives EmptySourceText
+			// A type parameter's id is a token digest and a generic instance's a `GenericInstanceId`,
+			// neither re-internable, so each identity travels in its own column
+			// (`FunctionAliasParam.typeParamToken`, `.genericInstanceId`). The empty name here cannot be
+			// told from a primitive's and rebuilds as id 0; read alone it refuses the declaration for a
+			// type parameter and is a silent wrong answer for an instance (`NoGenericInstance`).
+			typeParameter or
+			genericInstance or
+			character or
+			cstring gives EmptySourceText
 		end 'k'
 	end 'functionAliasTypeName'
 
@@ -30495,7 +30494,7 @@ export type Parser
 		match header.target 'target'
 			interfaceExtension then return InterfaceName.named(header.nameTok.value)
 			typeExtension or
-				undeclaredTarget then return InterfaceName.none
+			undeclaredTarget then return InterfaceName.none
 		end 'target'
 	end 'extendedInterfaceName'
 
@@ -30663,7 +30662,7 @@ export type Parser
 				// requirement's rendered type is already the type.
 				match try self.readNestedTypeAlias(try self.consumeOptionalVisibility(), recordFunctionSignature: false, tupleOwner: TupleAliasOwner.unpublished) 'nested'
 					ranged or
-						tupleAlias then break
+					tupleAlias then break
 					genericInstance(entry) then self.noteInterfaceAlias(entry)
 					functionAlias then throw SourceParseError.unsupported("a function typealias inside an `interface` body is not supported — the declaration sweep does not read an interface's members, so the alias would name a type only its own file could resolve; declare it at file scope", line: aliasTok.line, column: aliasTok.column)
 				end 'nested'
@@ -31918,11 +31917,11 @@ export type Parser
 	function enumBackingFieldTypeIdentity(fieldType MaxonType, domain EnumBackingFieldDomain) returns ByteArray
 		match domain 'd'
 			enumWord or
-				nestedRecord then return self.internedName(typeNameIdOf(fieldType))
+			nestedRecord then return self.internedName(typeNameIdOf(fieldType))
 			integerWord or
-				booleanWord or
-				floatBits or
-				unsupported then return EmptySourceText
+			booleanWord or
+			floatBits or
+			unsupported then return EmptySourceText
 		end 'd'
 	end 'enumBackingFieldTypeIdentity'
 
@@ -32035,8 +32034,8 @@ export type Parser
 	function requireEnumBackingFieldDomainIsAWord(step EnumBackingFieldStep, fieldType MaxonType, domain EnumBackingFieldDomain, anchor Token) throws SourceParseError
 		match domain 'd'
 			integerWord or
-				booleanWord or
-				enumWord then return
+			booleanWord or
+			enumWord then return
 			floatBits then panic("requireEnumBackingFieldDomainIsAWord: field '{String.from(step.fieldName)}' of `type {String.from(step.ownerName)}` is float-domained and reached the word route — the caller returns on `domainIsEnumBackingFloatBits` one branch above, so the two readings of one classifier have come apart")
 
 			// A NESTED RECORD is the domain that is never an answer: `resolveEnumBackingLeaf` either descends
@@ -32515,8 +32514,8 @@ export type Parser
 			// qualified key filed by the sweep alone would carry the return type and an empty parameter list.
 			match try self.readNestedTypeAlias(visibility, recordFunctionSignature: true, tupleOwner: TupleAliasOwner.unpublished) 'nested'
 				ranged or
-					genericInstance or
-					tupleAlias then return
+				genericInstance or
+				tupleAlias then return
 				functionAlias(alias) then self.publishNestedFunctionAlias(alias, into: self.artifact.functionTypeAliases)
 			end 'nested'
 
@@ -33294,7 +33293,7 @@ export type Parser
 		match self.scanBlockClosers(bodyStart, openingLabel: openingLabel) 'scan'
 			misclosed(expected, at) then self.misclosedBlock = MisclosedBlock.recorded(expected, got: self.tokenAt(at + 1).value, closer: at, bodyStart: bodyStart)
 			closed or
-				unterminated then return
+			unterminated then return
 		end 'scan'
 	end 'noteDeclarationCloser'
 
@@ -33825,14 +33824,14 @@ export type Parser
 			let waivable = match candidate.kind 'candidateKind'
 				parameter gives true
 				loopVariable or
-					mutableLocal or
-					immutableLocal or
+				mutableLocal or
+				immutableLocal or
 
-					// A catching form's `(e)` and a `match` arm's payload binder are the author's own and optional
-					// — no contract can force either to be declared, so there is nothing for the interface waiver
-					// to excuse.
-					caughtError or
-					payloadBinding gives false
+				// A catching form's `(e)` and a `match` arm's payload binder are the author's own and optional
+				// — no contract can force either to be declared, so there is nothing for the interface waiver
+				// to excuse.
+				caughtError or
+				payloadBinding gives false
 			end 'candidateKind'
 
 			if waivable and self.parametersAreInterfaceDictated(methodName) 'contractDictatedTheList'
@@ -34523,8 +34522,8 @@ export type Parser
 	function requireSweptHelperName(producer ParamDefaultProducer, ownerName ByteArray, paramIndex ParamCount) returns ByteArray
 		match producer 'produces'
 			required or
-				callerLine or
-				callerFile then panic("sweptParamDefaultHelperName: '{String.from(ownerName)}' declares a default on CALL-ALIGNED parameter {paramIndex} that the real parse captured as an expression, and the declaration sweep published no helper at that position — `recordScannedParamDefaults` and `parseFunctionParameters` walk the same parameter list and have come apart on whether it holds a `=`, on where the parameter sits in it, or on whether `callerLocationDefaultAt` calls that default a caller-location keyword")
+			callerLine or
+			callerFile then panic("sweptParamDefaultHelperName: '{String.from(ownerName)}' declares a default on CALL-ALIGNED parameter {paramIndex} that the real parse captured as an expression, and the declaration sweep published no helper at that position — `recordScannedParamDefaults` and `parseFunctionParameters` walk the same parameter list and have come apart on whether it holds a `=`, on where the parameter sits in it, or on whether `callerLocationDefaultAt` calls that default a caller-location keyword")
 			helper(name) then return name
 		end 'produces'
 	end 'requireSweptHelperName'
@@ -41229,9 +41228,9 @@ export type Parser
 			// Every kind of constant is immutable — assigning to a managed `let`, to an imaged record or to
 			// a scalar one is the same mistake and gets the same diagnostic.
 			found or
-				foundManaged or
-				foundImageRecord or
-				foundImageBox then throw assignToImmutableError(nameTok)
+			foundManaged or
+			foundImageRecord or
+			foundImageBox then throw assignToImmutableError(nameTok)
 			notFound then throw SourceParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'constant'
 	end 'rejectNonGlobalAssignment'
@@ -41553,9 +41552,9 @@ export type Parser
 
 		match self.transferWalkOfValue(value, handOff: GreenThreadHandOff.move) 'graph'
 			closed or
-				walkedBy or
-				walkedAlone or
-				walkedThroughWitness then break
+			walkedBy or
+			walkedAlone or
+			walkedThroughWitness then break
 			refused(noun) then throw self.unwalkableTransferGraphError(value, blame: serviceReplyBlame(typeName, methodName: methodName), noun: noun, anchor: anchor)
 		end 'graph'
 	end 'proveReplyCrossable'
@@ -42076,14 +42075,14 @@ export type Parser
 		return match target 'shape'
 			named(callee) gives self.signatures.functionAlwaysThrows(callee)
 			witness or
-				promise or
-				deferred or
+			promise or
+			deferred or
 
-				// ⚠ A reply always throws `ServiceError` and still answers `false`: this asks whether the
-				// target throws on every path — the fact that lets the ok edge be pruned — and a reply's
-				// transport failure is a fact about the service's state at delivery. A running service
-				// answers normally.
-				serviceReply gives false
+			// ⚠ A reply always throws `ServiceError` and still answers `false`: this asks whether the
+			// target throws on every path — the fact that lets the ok edge be pruned — and a reply's
+			// transport failure is a fact about the service's state at delivery. A running service
+			// answers normally.
+			serviceReply gives false
 		end 'shape'
 	end 'tryTargetAlwaysThrows'
 
@@ -42478,41 +42477,41 @@ export type Parser
 		return match try self.artifact.module.ops.get(idx) otherwise panic("opReinterpretsResultOf: opRef {idx} not in module.ops") 'reinterpretation'
 			unaryOp(_, operand, op) gives unaryOpProducesACallResult(op) and discardedCalleeIsACall(self.directCallDefining(producer, value: operand))
 			call or
-				literal or
-				ret or
-				retVoid or
-				binOp or
-				compare or
-				condBranch or
-				branch or
-				globalAddr or
-				loadIndirect or
-				storeIndirect or
-				stringLiteral or
-				tryCall or
-				throwError or
-				propagateError or
-				panicAbort or
-				functionRef or
-				indirectCall or
-				asyncCall or
-				await or
-				tryAwait or
-				sizeofType or
-				constArrayLiteral or
-				switch or
-				witnessDispatch or
-				witnessTryDispatch or
-				panicAbortValue or
-				errorFlagEncode or
-				serviceSpawn or
-				serviceSend or
-				serviceReplyCell or
-				immortalStructRecord or
-				immortalStringTable or
-				covPoint or
-				rawIntrinsic or
-				existentialWitness gives false
+			literal or
+			ret or
+			retVoid or
+			binOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			stringLiteral or
+			tryCall or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			indirectCall or
+			asyncCall or
+			await or
+			tryAwait or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			witnessDispatch or
+			witnessTryDispatch or
+			panicAbortValue or
+			errorFlagEncode or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			rawIntrinsic or
+			existentialWitness gives false
 		end 'reinterpretation'
 	end 'opReinterpretsResultOf'
 
@@ -42522,21 +42521,21 @@ export type Parser
 	function unaryOpProducesACallResult(op MaxonUnaryOp) returns bool
 		return match op 'o'
 			neg or
-				bitNot or
-				logicalNot or
-				trunc or
-				promoteToFloat or
-				floor or
-				ceil or
-				round or
-				sqrt or
-				abs or
-				fneg or
-				floatToBits gives false
+			bitNot or
+			logicalNot or
+			trunc or
+			promoteToFloat or
+			floor or
+			ceil or
+			round or
+			sqrt or
+			abs or
+			fneg or
+			floatToBits gives false
 			bitsToFloat or
-				signExtendI8 or
-				signExtendI16 or
-				signExtendI32 gives true
+			signExtendI8 or
+			signExtendI16 or
+			signExtendI32 gives true
 		end 'o'
 	end 'unaryOpProducesACallResult'
 
@@ -42544,9 +42543,9 @@ export type Parser
 		return match self.routableOpAt(idx) 'producer'
 			call(result, callee) gives DiscardedCallee.named(callee, result: result, opIndex: idx) if result == value else DiscardedCallee.notACall
 			notRoutable or
-				tryChannelCall or
-				witness or
-				await gives DiscardedCallee.notACall
+			tryChannelCall or
+			witness or
+			await gives DiscardedCallee.notACall
 		end 'producer'
 	end 'directCallDefining'
 
@@ -42575,10 +42574,10 @@ export type Parser
 
 		match op 'rewrite'
 			notRoutable or
-				tryChannelCall then return (try self.rejectNonRoutableTryTarget(opIdx, tryTok: tryTok), flag)
+			tryChannelCall then return (try self.rejectNonRoutableTryTarget(opIdx, tryTok: tryTok), flag)
 			call or
-				witness or
-				await then return (self.rewriteToTryChannel(opIdx, op: op, flag: flag), flag)
+			witness or
+			await then return (self.rewriteToTryChannel(opIdx, op: op, flag: flag), flag)
 		end 'rewrite'
 	end 'commitTryTargetRewrite'
 
@@ -42588,7 +42587,7 @@ export type Parser
 			witness gives self.commitWitnessTryDispatchRewrite(opIdx, flag: flag)
 			await (result, promise) gives self.commitTryAwaitRewrite(opIdx, result: result, flag: flag, promise: promise)
 			notRoutable or
-				tryChannelCall panic("rewriteToTryChannel: the op at {opIdx} is neither a call, a witness dispatch nor an await — both callers classify it with `routableOpAt` first")
+			tryChannelCall panic("rewriteToTryChannel: the op at {opIdx} is neither a call, a witness dispatch nor an await — both callers classify it with `routableOpAt` first")
 		end 'rewrite'
 	end 'rewriteToTryChannel'
 
@@ -42791,7 +42790,7 @@ export type Parser
 			// non-throwing reply for E3055 to refuse — `tryTargetThrows` answers `throwing` for every one. A
 			// `deferred` target is the undeclared callee above, left to E3004.
 			serviceReply or
-				deferred then break
+			deferred then break
 		end 'kind'
 	end 'requireThrowingTryTarget'
 
@@ -42821,7 +42820,7 @@ export type Parser
 			// The two `__checked_*` names are throwing and returned above; `notCheckedDivision` is every other
 			// builtin, which the sentence below is for.
 			quotient or
-				remainder then panic("requireThrowingNamedTryTarget: '{String.from(callee)}' is a THROWING division, so `isThrowingRuntimeCallee` must have accepted the `try` already — reaching here means `divisionKindThrows` and that predicate disagree")
+			remainder then panic("requireThrowingNamedTryTarget: '{String.from(callee)}' is a THROWING division, so `isThrowingRuntimeCallee` must have accepted the `try` already — reaching here means `divisionKindThrows` and that predicate disagree")
 			notCheckedDivision then break
 		end 'totalDivision'
 
@@ -44185,9 +44184,9 @@ export type Parser
 	function caughtErrorFormFor(target TryTarget, flag ValueId) returns CaughtErrorForm
 		match target 'kind'
 			named or
-				witness or
-				promise or
-				deferred then break
+			witness or
+			promise or
+			deferred then break
 			serviceReply(messageName, _) then return self.serviceReplyCaughtForm(messageName, flag: flag)
 		end 'kind'
 
@@ -44706,7 +44705,7 @@ export type Parser
 
 		match self.routableOpAt(opIdx) 'held'
 			notRoutable or
-				tryChannelCall then return
+			tryChannelCall then return
 			call(result, callee) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.signatures.throwsOf(callee), result: result)
 			witness(result) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.tryTargetThrows(recordedTryTargetOf(self.lastWitnessDispatch, opIdx: opIdx)), result: result)
 			await (result, _) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.heldAwaitClause(opIdx), result: result)
@@ -44732,38 +44731,38 @@ export type Parser
 			witnessDispatch(result, _, _, _, _, _, _) gives RoutableOp.witness(result)
 			await (result, promise) gives RoutableOp.await(result, promise: promise)
 			literal or
-				ret or
-				retVoid or
-				binOp or
-				unaryOp or
-				compare or
-				condBranch or
-				branch or
-				globalAddr or
-				loadIndirect or
-				storeIndirect or
-				stringLiteral or
-				throwError or
-				propagateError or
-				panicAbort or
-				functionRef or
-				indirectCall or
-				asyncCall or
-				tryAwait or
-				sizeofType or
-				constArrayLiteral or
-				switch or
-				witnessTryDispatch or
-				panicAbortValue or
-				errorFlagEncode or
-				serviceSpawn or
-				serviceSend or
-				serviceReplyCell or
-				immortalStructRecord or
-				immortalStringTable or
-				covPoint or
-				rawIntrinsic or
-				existentialWitness gives RoutableOp.notRoutable
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			stringLiteral or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			indirectCall or
+			asyncCall or
+			tryAwait or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			witnessTryDispatch or
+			panicAbortValue or
+			errorFlagEncode or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			rawIntrinsic or
+			existentialWitness gives RoutableOp.notRoutable
 		end 'op'
 	end 'routableOpAt'
 
@@ -46414,18 +46413,18 @@ export type Parser
 		match tag 'tag'
 			Untagged then return
 			StringRecord or
-				ArrayRecord or
-				ElementBuffer or
-				CString or
-				ListRecord or
-				ListNode or
-				CursorRecord or
-				FileBox or
-				DirectoryBox or
-				InterpolationScratch or
-				ClosureEnv or
-				ParameterCell or
-				WalkVisitTable then break
+			ArrayRecord or
+			ElementBuffer or
+			CString or
+			ListRecord or
+			ListNode or
+			CursorRecord or
+			FileBox or
+			DirectoryBox or
+			InterpolationScratch or
+			ClosureEnv or
+			ParameterCell or
+			WalkVisitTable then break
 		end 'tag'
 
 		self.artifact.recordAllocTagSite(tag)
@@ -49219,9 +49218,9 @@ export type Parser
 		match target 'kind'
 			deferred then return
 			named or
-				witness or
-				promise or
-				serviceReply then break
+			witness or
+			promise or
+			serviceReply then break
 		end 'kind'
 
 		let producesNothing = self.tagOf(result) == ValueTypeTag.void
@@ -51175,7 +51174,7 @@ export type Parser
 		// same value; the expensive half — walking the slot list per protocol name — is not repeated.
 		match self.methodSurfaceOf(source) 'sharedSentenceIsWrong'
 			declared or
-				none then break
+			none then break
 
 			// ⭐ **A DISPATCHED RECEIVER: the shared sentence ends *"any type DECLARING the cursor protocol"*,
 			// which is true of a struct source and false here.** A conformer may declare both methods and still
@@ -51662,9 +51661,9 @@ export type Parser
 	function namesImmutableTopLevelBinding(name ByteArray) returns bool
 		let isConstant = match self.signatures.constantValueOf(name, readerFilePath: self.filePath) 'constant'
 			found or
-				foundManaged or
-				foundImageRecord or
-				foundImageBox gives true
+			foundManaged or
+			foundImageRecord or
+			foundImageBox gives true
 			notFound gives false
 		end 'constant'
 
@@ -53594,7 +53593,7 @@ export type Parser
 		match try self.artifact.module.ops.get(from.terminatorIndex()) otherwise panic("edgeSourceFor: ops.get OOB at the terminator of '{String.from(from.label)}'") 'terminator'
 			branch then return from
 			condBranch or
-				switch then return self.splitEdge(func, from: from, to: to, label: b"loopedge")
+			switch then return self.splitEdge(func, from: from, to: to, label: b"loopedge")
 			default panic("edgeSourceFor: block '{String.from(from.label)}' carries phi arguments to block {to} but ends in no branch")
 		end 'terminator'
 	end 'edgeSourceFor'
@@ -60371,9 +60370,9 @@ export type Parser
 			genericAlias then return self.genericAliasDenotedType(self.signatures.aliasFamilyIdentity(name), readerFilePath: declFilePath)
 			tupleAlias then return MaxonType.structRef(self.artifact.typeNames.intern(self.signatures.tupleAliasTargetFrom(self.signatures.aliasFamilyIdentity(name), readerFilePath: declFilePath)))
 			structType or
-				enumType or
-				unionType or
-				interfaceType then return self.qualifiedNominalType(name, kind: kind)
+			enumType or
+			unionType or
+			interfaceType then return self.qualifiedNominalType(name, kind: kind)
 		end 'kind'
 	end 'namespaceQualifiedType'
 
@@ -60387,12 +60386,12 @@ export type Parser
 		match kind 'kind'
 			structType then return MaxonType.structRef(self.artifact.typeNames.intern(name))
 			enumType or
-				unionType then return MaxonType.named(self.artifact.typeNames.intern(name))
+			unionType then return MaxonType.named(self.artifact.typeNames.intern(name))
 			interfaceType then return MaxonType.interfaceRef(self.artifact.typeNames.intern(name))
 			rangedAlias or
-				functionAlias or
-				genericAlias or
-				tupleAlias then panic("Parser.qualifiedNominalType: '{String.from(name)}' is filed as a {kind.name} — a qualified nominal is one of the four nominal kinds")
+			functionAlias or
+			genericAlias or
+			tupleAlias then panic("Parser.qualifiedNominalType: '{String.from(name)}' is filed as a {kind.name} — a qualified nominal is one of the four nominal kinds")
 		end 'kind'
 	end 'qualifiedNominalType'
 
@@ -60479,13 +60478,13 @@ export type Parser
 	function namespaceQualifiedBaseName(qualified ByteArray, kind TypeDeclKind, declFilePath FilePath, name ByteArray) returns ByteArray
 		match kind 'kind'
 			rangedAlias or
-				functionAlias then return self.signatures.declarationIdentityOf(name, kind: kind, declFilePath: declFilePath)
+			functionAlias then return self.signatures.declarationIdentityOf(name, kind: kind, declFilePath: declFilePath)
 			genericAlias or
-				tupleAlias then return qualified
+			tupleAlias then return qualified
 			structType or
-				enumType or
-				unionType or
-				interfaceType then return name
+			enumType or
+			unionType or
+			interfaceType then return name
 		end 'kind'
 	end 'namespaceQualifiedBaseName'
 
@@ -60690,9 +60689,9 @@ export type Parser
 			// thing that could be built. Every other refusing arm is E3134: not what `spawn` means, ever, so
 			// they share one throw.
 			typeIsNotAStruct or
-				memberIsNotDeclared or
-				memberTakesAReceiver or
-				memberDoesNotReturnTheType then throw SourceParseError.serviceNotASpawnTarget(serviceTargetRefusalMessage(target, typeName: typeTok.value, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
+			memberIsNotDeclared or
+			memberTakesAReceiver or
+			memberDoesNotReturnTheType then throw SourceParseError.serviceNotASpawnTarget(serviceTargetRefusalMessage(target, typeName: typeTok.value, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
 			typeIsAConstrainedGeneric then throw SourceParseError.unsupported(serviceTargetRefusalMessage(target, typeName: typeTok.value, member: memberTok.value), line: spawnTok.line, column: spawnTok.column)
 		end 'target'
 
@@ -61905,18 +61904,18 @@ export type Parser
 	function typeIsFloatDomain(t MaxonType) returns bool
 		return match maxonTypeTag(t) 'k'
 			boolean or
-				integer or
-				exitCode or
-				unresolved or
-				void or
-				structRef or
-				string or
-				function or
-				typeParameter or
-				genericInstance or
-				character or
-				interfaceRef or
-				cstring gives false
+			integer or
+			exitCode or
+			unresolved or
+			void or
+			structRef or
+			string or
+			function or
+			typeParameter or
+			genericInstance or
+			character or
+			interfaceRef or
+			cstring gives false
 			float gives true
 			named gives self.namedIsFloatAlias(typeNameIdOf(t))
 		end 'k'
@@ -61995,7 +61994,7 @@ export type Parser
 		match zeroVerdict 'verdict'
 			alwaysZero then throw SourceParseError.divisionByProvableZero(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
 			neverZero or
-				possiblyZero then break
+			possiblyZero then break
 		end 'verdict'
 
 		// ⭐ **THE FLOAT-BACKED ENUM DECODE, PAID ONCE FOR BOTH ROUTES BELOW.** It sits past every
@@ -63061,9 +63060,9 @@ export type Parser
 			eq gives verdict
 			ne gives self.emitUnaryOp(verdict, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, range: range)
 			lt or
-				gt or
-				le or
-				ge gives self.emitOrderingVerdict(verdict, op: op, opTok: opTok)
+			gt or
+			le or
+			ge gives self.emitOrderingVerdict(verdict, op: op, opTok: opTok)
 		end 'op'
 	end 'emitStructComparisonCall'
 
@@ -63121,9 +63120,9 @@ export type Parser
 			// Unreachable: `arrayEqualityOperands` admits only `eq`/`ne`, and it is the one gate in front of
 			// this function.
 			lt or
-				gt or
-				le or
-				ge panic("emitArrayEqualityCall: reached with the ordering operator {comparisonOpSpelling(op)}, which `arrayEqualityOperands` refuses")
+			gt or
+			le or
+			ge panic("emitArrayEqualityCall: reached with the ordering operator {comparisonOpSpelling(op)}, which `arrayEqualityOperands` refuses")
 		end 'op'
 	end 'emitArrayEqualityCall'
 
@@ -63163,11 +63162,11 @@ export type Parser
 	function comparisonIsEquality(op MaxonCmpOp) returns bool
 		return match op 'op'
 			eq or
-				ne gives true
+			ne gives true
 			lt or
-				gt or
-				le or
-				ge gives false
+			gt or
+			le or
+			ge gives false
 		end 'op'
 	end 'comparisonIsEquality'
 
@@ -63195,9 +63194,9 @@ export type Parser
 			eq then return self.emitStrEqCall(lhs, rhs: rhs, opTok: opTok)
 			ne then return self.emitUnaryOp(self.emitStrEqCall(lhs, rhs: rhs, opTok: opTok), op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, range: SourceRange.ofToken(opTok))
 			lt or
-				gt or
-				le or
-				ge then return self.emitByteRecordOrdering(lhs, rhs: rhs, op: op, opTok: opTok)
+			gt or
+			le or
+			ge then return self.emitByteRecordOrdering(lhs, rhs: rhs, op: op, opTok: opTok)
 		end 'op'
 	end 'emitByteRecordCompare'
 
@@ -63294,9 +63293,9 @@ export type Parser
 			eq then return dispatchResult
 			ne then return self.emitUnaryOp(dispatchResult, op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, range: SourceRange.ofToken(opTok))
 			lt or
-				gt or
-				le or
-				ge then return self.emitOrderingVerdict(dispatchResult, op: op, opTok: opTok)
+			gt or
+			le or
+			ge then return self.emitOrderingVerdict(dispatchResult, op: op, opTok: opTok)
 		end 'verdict'
 	end 'emitTypeParamComparison'
 
@@ -63326,7 +63325,7 @@ export type Parser
 
 		match op 'ordinal'
 			eq or
-				ne then panic("emitOrderingVerdict: `==`/`!=` are the equality verdict, answered by each caller's own equality path (`emitTypeParamComparison`'s `Equatable` dispatch, `emitByteRecordCompare`'s `__str_eq`) before an ORDERING operator is routed here")
+			ne then panic("emitOrderingVerdict: `==`/`!=` are the equality verdict, answered by each caller's own equality path (`emitTypeParamComparison`'s `Equatable` dispatch, `emitByteRecordCompare`'s `__str_eq`) before an ORDERING operator is routed here")
 			lt then return self.emitCompareAgainstLiteral(orderingResult, literal: lessThanTag, op: MaxonCmpOp.eq, opTok: opTok)
 			gt then return self.emitCompareAgainstLiteral(orderingResult, literal: greaterThanTag, op: MaxonCmpOp.eq, opTok: opTok)
 			le then return self.emitCompareAgainstLiteral(orderingResult, literal: greaterThanTag, op: MaxonCmpOp.ne, opTok: opTok)
@@ -67515,7 +67514,7 @@ export type Parser
 		match rosterVerdict 'roster'
 			notADeclaredTypeMember then break
 			undeclaredMember or
-				hidden then try self.throwStaticRosterRefusal(rosterVerdict, baseTok: baseTok, memberTok: self.tokenAt(self.pos + TokensPerQualifierSegment))
+			hidden then try self.throwStaticRosterRefusal(rosterVerdict, baseTok: baseTok, memberTok: self.tokenAt(self.pos + TokensPerQualifierSegment))
 		end 'roster'
 
 		return try self.parseTypeQualifiedBoundExpression()
@@ -67803,9 +67802,9 @@ export type Parser
 	function namesTopLevelBinding(name ByteArray) returns bool
 		let isConstant = match self.signatures.constantValueOf(name, readerFilePath: self.filePath) 'constant'
 			found or
-				foundManaged or
-				foundImageRecord or
-				foundImageBox gives true
+			foundManaged or
+			foundImageRecord or
+			foundImageBox gives true
 			notFound gives false
 		end 'constant'
 
@@ -68343,10 +68342,10 @@ export type Parser
 	function requireFromRawValueBacking(layout EnumLayout, memberTok Token) throws SourceParseError
 		match layout.backing 'backing'
 			integer or
-				unresolved or
-				float or
-				character or
-				string then break
+			unresolved or
+			float or
+			character or
+			string then break
 			functionRef then throw SourceParseError.unsupported("`{String.from(EnumFromRawValueMemberName)}` on `{layout.kindWord()} {String.from(layout.name)}`, which is {enumBackingNoun(layout.backing, backingStruct: layout.backingStruct)}-backed — a code address has no literal spelling a program could look one up BY, which is why the reference refuses this backing here too", line: memberTok.line, column: memberTok.column)
 			structRecord then panic("requireFromRawValueBacking: `{layout.kindWord()} {String.from(layout.name)}` is struct-backed and reached the `{String.from(EnumFromRawValueMemberName)}` guard — `parseEnumLiteral` does not CLAIM the member for that backing, so such a call is an unknown case (E3034) and never arrives here")
 		end 'backing'
@@ -69317,7 +69316,7 @@ export type Parser
 			// first variant of `PayloadClass` and `typeParam` the last, so the range would swallow every
 			// case between.
 			scalar or
-				typeParam then return try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice)
+			typeParam then return try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice)
 			managed(storage, isString) then return try self.requireManagedPayloadArg(field, storage: storage, isString: isString, declared: declared, value: value, caseTok: caseTok, argTok: argTok, voice: voice)
 
 			// A nested boxed union takes the managed door, over its `named(<union>)` value type and not over
@@ -69963,8 +69962,8 @@ export type Parser
 
 			// A label no parameter carries, or a count no parameter list takes, is the argument check's refusal.
 			arityMismatch or
-				unknownLabel or
-				duplicateArg then return MemberFeed.unfilled
+			unknownLabel or
+			duplicateArg then return MemberFeed.unfilled
 		end 'slot'
 	end 'memberFeed'
 
@@ -71474,7 +71473,7 @@ export type Parser
 		match access 'gate'
 			methodCall then try self.requireMethodReachable(func, typeName: base.layout.name, visibility: base.layout.visibility, declFilePath: base.layout.declFilePath, methodName: memberTok.value, anchor: memberTok)
 			fieldRead or
-				missingField then try self.requireMembersReachable(base.layout.name, visibility: base.layout.visibility, declFilePath: base.layout.declFilePath, memberTok: memberTok)
+			missingField then try self.requireMembersReachable(base.layout.name, visibility: base.layout.visibility, declFilePath: base.layout.declFilePath, memberTok: memberTok)
 		end 'gate'
 
 		// ⭐⭐⭐ **A MEMBER CALL ON A `<T>.handle` IS A MESSAGE SEND, AND THAT IS THE WHOLE OF LOCATION
@@ -72638,7 +72637,7 @@ export type Parser
 
 		match self.bodyState.fixedElementCountParam 'hasOneToForward'
 			slot or
-				enclosingThroughEnv then return
+			enclosingThroughEnv then return
 			none then break
 		end 'hasOneToForward'
 
@@ -80882,7 +80881,7 @@ export type Parser
 		return match reference 'reference'
 			movedOut gives true
 			borrowed or
-				retained gives false
+			retained gives false
 		end 'reference'
 	end 'containerReadMovesTheElementOut'
 
@@ -81729,7 +81728,7 @@ export type Parser
 
 			match source 'known'
 				found or
-					serviceReply then return source
+				serviceReply then return source
 				none then break
 			end 'known'
 		end 'aSpawnOrAReply'
@@ -82639,7 +82638,7 @@ export type Parser
 				// through, so both take the `undefinedVariable` an unknown base (`none`) does, spelled at the
 				// QUALIFIED name because that is what this chain is rooted at.
 				constant or
-					none then break
+				none then break
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
 				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(nameTok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(nameTok)), name: nameTok.value, image: true), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
 				imageRecord(image) then return try self.resolveValueFieldChain(nameTok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(nameTok)), name: nameTok.value, image: true), valueType: image.valueType, mutable: false)
@@ -82667,7 +82666,7 @@ export type Parser
 				// through the value like every other base, and a member the record has not got is then the
 				// chain's own diagnostic rather than a claim that the base does not exist.
 				constant or
-					none then break
+				none then break
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
 				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(baseTok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(baseTok)), name: baseTok.value, image: true), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
 				imageRecord(image) then return try self.resolveValueFieldChain(baseTok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(baseTok)), name: baseTok.value, image: true), valueType: image.valueType, mutable: false)
@@ -83966,7 +83965,7 @@ export type Parser
 			file gives false
 			module gives self.signatures.isVisibleFrom(Visibility.module, declFilePath: layout.declFilePath, readerFilePath: self.filePath)
 			global or
-				public gives true
+			public gives true
 		end 'tier'
 	end 'fieldReachableFromOutsideItsType'
 
@@ -85704,7 +85703,7 @@ export type Parser
 			// that tells the lowering this site is imaged. Filed BEFORE the emit, off the count that IS the
 			// index the append will land at — `recordAllocTagSite`'s contract, for its reason.
 			constBlob or
-				emptyContainer then self.emitImagedConstArrayLiteral(result, image: image, range: range)
+			emptyContainer then self.emitImagedConstArrayLiteral(result, image: image, range: range)
 
 			// A table of ADDRESSES: N payloads, and no heap spelling to be told apart from — its own op.
 			stringTable(texts, elementDestroy) then self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.immortalStringTable(result, texts: texts, elementSize: image.elementSize, elementDestroy: elementDestroy.clone()), range: range)
@@ -86732,7 +86731,7 @@ export type Parser
 		match paramTypeOffer 'offer'
 			deferred(sourceFuncIndex, sourceId) then self.recordDeferredClosureParams(paramTypes, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
 			offered or
-				none then break
+			none then break
 		end 'offer'
 
 		// Parse the single body expression, then close the lifted function like a value `return`: the
@@ -86934,7 +86933,7 @@ export type Parser
 		match self.hiddenWordParamOf(word) 'inherited'
 			enclosingThroughEnv then break
 			none or
-				slot then return
+			slot then return
 		end 'inherited'
 
 		if self.closureBodyReads(lifted, word: word) 'readsIt'
@@ -86982,7 +86981,7 @@ export type Parser
 			call(result, callee, args, _, _, _, _, _) then return self.callReads(result, callee: callee, args: args, word: word)
 			tryCall(result, _, callee, args, _, _, _, _, _) then return self.callReads(result, callee: callee, args: args, word: word)
 			asyncCall or
-				serviceSend then return false
+			serviceSend then return false
 			default panic("opReads: maxonOpCalleeKind answers direct for an op that is not call, tryCall, asyncCall or serviceSend")
 		end 'reader'
 	end 'opReads'
@@ -87102,7 +87101,7 @@ export type Parser
 		match self.hiddenWordParamOf(ClosureHiddenWord.descriptor) 'inherited'
 			enclosingThroughEnv then break
 			none or
-				slot then return
+			slot then return
 		end 'inherited'
 
 		if self.someCaptureMayReleaseThroughTheDescriptor() 'mayReleaseThroughIt'
@@ -87708,7 +87707,7 @@ export type Parser
 		if self.at(TokenKind.leftBracket) 'bracketedLiteral'
 			return match self.constBracketedLiteral() 'literal'
 				mapLiteral or
-					recordArray gives true
+				recordArray gives true
 				constantImage gives false
 			end 'literal'
 		end 'bracketedLiteral'
@@ -87730,7 +87729,7 @@ export type Parser
 		return match self.signatures.resolveFunctionName(self.current().value, readerFilePath: self.filePath) 'resolution'
 			declaration(name) gives self.signatures.declaresCallee(name)
 			ambiguous or
-				undeclared gives false
+			undeclared gives false
 		end 'resolution'
 	end 'atConstFunctionReference'
 
@@ -91384,47 +91383,47 @@ export type Parser
 			ownFrame then try self.claimOwnFrame(func, calleeTok: calleeTok)
 			splicedAtEverySite then try self.claimSplicedAtEverySite(func, calleeTok: calleeTok)
 			osTickCountMs or
-				osReadWallClock or
-				osThreadCpuTicks or
-				osCpuCount or
-				osGetPid or
-				osEnterBackgroundPriority or
-				osProcessProbe or
-				osWaitHandle or
-				osCloseHandle or
-				osExit or
-				scratch or
-				schedNumProcsAddr or
-				schedMaxActiveWorkersAddr or
-				slabArenaListAddr or
-				slabArenaMapL1Addr or
-				slabStateAddr or
-				slabSizeToClass8Addr or
-				slabSizeToClass128Addr or
-				slabClassGeomAddr or
-				dsBaseAddr or
-				dsAllocIdAddr or
-				tlsSlotLoad or
-				loadWord or
-				storeWord or
-				loadByte or
-				storeByte or
-				atomicAddWord or
-				atomicCas or
-				memFill or
-				osAllocPages or
-				osReservePages or
-				osCommitPages or
-				osDecommitPages or
-				osFreePages or
-				osLockInit or
-				osLockEnter or
-				osLockLeave or
-				osThreadCreate or
-				schedTlsTebOffsetAddr or
-				schedAllMachinesAddr or
-				schedPreemptExtLockAddr or
-				schedLockAddr then break
+			osReadWallClock or
+			osThreadCpuTicks or
+			osCpuCount or
+			osGetPid or
+			osEnterBackgroundPriority or
+			osProcessProbe or
+			osWaitHandle or
+			osCloseHandle or
+			osExit or
+			scratch or
+			schedNumProcsAddr or
+			schedMaxActiveWorkersAddr or
+			slabArenaListAddr or
+			slabArenaMapL1Addr or
+			slabStateAddr or
+			slabSizeToClass8Addr or
+			slabSizeToClass128Addr or
+			slabClassGeomAddr or
+			dsBaseAddr or
+			dsAllocIdAddr or
+			tlsSlotLoad or
+			loadWord or
+			storeWord or
+			loadByte or
+			storeByte or
+			atomicAddWord or
+			atomicCas or
+			memFill or
+			osAllocPages or
+			osReservePages or
+			osCommitPages or
+			osDecommitPages or
+			osFreePages or
+			osLockInit or
+			osLockEnter or
+			osLockLeave or
+			osThreadCreate or
+			schedTlsTebOffsetAddr or
+			schedAllMachinesAddr or
+			schedPreemptExtLockAddr or
+			schedLockAddr then break
 		end 'row'
 	end 'recordFrameDirective'
 
@@ -92664,7 +92663,7 @@ export type Parser
 		match place.storage 'storage'
 			unreachable(blame) then blamed.push(ArgumentBlame.create(place.column, blame: blame))
 			handed or
-				notHanded then return
+			notHanded then return
 		end 'storage'
 	end 'bindPlaceStorage'
 
@@ -92699,7 +92698,7 @@ export type Parser
 		match place.storage 'storage'
 			handed(storage) then return storage
 			notHanded or
-				unreachable then return try self.materializeByRefScratchCell(place.value, cellType: self.typeOf(place.value), anchor: place.anchor)
+			unreachable then return try self.materializeByRefScratchCell(place.value, cellType: self.typeOf(place.value), anchor: place.anchor)
 		end 'storage'
 	end 'placeStorageFor'
 
@@ -92759,8 +92758,8 @@ export type Parser
 			match slotCallArgs(sweptSlotNames(decl), args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
 				ordered then slotted.push(decl)
 				arityMismatch or
-					unknownLabel or
-					duplicateArg then continue
+				unknownLabel or
+				duplicateArg then continue
 			end 'slot'
 		end 'eachDeclaration'
 
@@ -92982,13 +92981,13 @@ export type Parser
 		let firstArgMayBeNamed = match rule 'firstArgRegime'
 			ordinary gives false
 			firstMayBeNamed or
-				unknownMember gives true
+			unknownMember gives true
 			allPositional panic("consumeArgLabel: `allPositional` returns above — a builtin's label verdict is decided whole, before argIndex is consulted, so it must never reach the first-argument rule")
 		end 'firstArgRegime'
 
 		let laterArgMayBeUnlabelled = match rule 'laterArgRegime'
 			ordinary or
-				firstMayBeNamed gives false
+			firstMayBeNamed gives false
 			unknownMember gives true
 			allPositional panic("consumeArgLabel: `allPositional` returns above — a builtin's label verdict is decided whole, before argIndex is consulted, so it must never reach the later-argument rule")
 		end 'laterArgRegime'
@@ -93429,12 +93428,12 @@ export type Parser
 		match argument.kind 'kind'
 			rangedAlias then return self.signatures.declaredInNote(argument.name, shown: shown, otherShown: otherShown)
 			integer or
-				float or
-				boolean or
-				string or
-				character or
-				record or
-				enumeration then return ""
+			float or
+			boolean or
+			string or
+			character or
+			record or
+			enumeration then return ""
 		end 'kind'
 	end 'noteOfAlikeArgument'
 
@@ -93443,20 +93442,20 @@ export type Parser
 
 		match tag 'tag'
 			integer or
-				float or
-				named then return self.numericGenericArgumentOf(value, tag: tag)
+			float or
+			named then return self.numericGenericArgumentOf(value, tag: tag)
 			boolean then return GenericFunctionArgument.create(GenericArgumentKind.boolean, name: EmptySourceText)
 			string then return GenericFunctionArgument.create(GenericArgumentKind.string, name: EmptySourceText)
 			character then return GenericFunctionArgument.create(GenericArgumentKind.character, name: EmptySourceText)
 			structRef then return GenericFunctionArgument.create(GenericArgumentKind.record, name: self.internedName(self.valueNameId(value)))
 			exitCode or
-				unresolved or
-				void or
-				function or
-				typeParameter or
-				genericInstance or
-				interfaceRef or
-				cstring then throw SourceParseError.genericArgumentKindUnsupported(functionName, paramName: paramName, typeName: typeTagName(tag), line: anchor.line, column: anchor.column)
+			unresolved or
+			void or
+			function or
+			typeParameter or
+			genericInstance or
+			interfaceRef or
+			cstring then throw SourceParseError.genericArgumentKindUnsupported(functionName, paramName: paramName, typeName: typeTagName(tag), line: anchor.line, column: anchor.column)
 		end 'tag'
 	end 'genericArgumentOf'
 
@@ -93488,12 +93487,12 @@ export type Parser
 		return match argument.kind 'kind'
 			rangedAlias gives GenericArgumentKind.float if self.signatures.isFloatAliasFor(argument.name, readerFilePath: self.filePath) else GenericArgumentKind.integer
 			integer or
-				float or
-				boolean or
-				string or
-				character or
-				record or
-				enumeration gives argument.kind
+			float or
+			boolean or
+			string or
+			character or
+			record or
+			enumeration gives argument.kind
 		end 'kind'
 	end 'genericNumericClassOf'
 
@@ -93510,7 +93509,7 @@ export type Parser
 			string gives StringConformerName
 			character gives CharacterConformerName
 			record or
-				enumeration gives argument.name
+			enumeration gives argument.name
 			rangedAlias panic("genericConformerNameOf: `genericNumericClassOf` answers a numeric class for every ranged alias")
 		end 'class'
 	end 'genericConformerNameOf'
@@ -94568,11 +94567,11 @@ export type Parser
 		match self.compilerOwnedStaticSurface(typeTok.value, aliasName: aliasName) 'surface'
 			none then return
 			managedFile or
-				managedDirectory or
-				managedSocket or
-				managedMemory or
-				sharedValue or
-				containerAlias then throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it", line: typeTok.line, column: typeTok.column)
+			managedDirectory or
+			managedSocket or
+			managedMemory or
+			sharedValue or
+			containerAlias then throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it", line: typeTok.line, column: typeTok.column)
 		end 'surface'
 	end 'requireAsyncSpawnTargetIsLinkable'
 
@@ -94952,7 +94951,7 @@ export type Parser
 		// storage door proved the storage type describes the reply exactly.
 		match source 'reply'
 			found or
-				none then break
+			none then break
 			serviceReply(messageName, awaitedService) then return AwaitedPromise.create(self.serviceReplyResultType(messageName, cell: promise), tryTarget: TryTarget.serviceReply(messageName, awaitedService: awaitedService))
 		end 'reply'
 
@@ -95230,9 +95229,9 @@ export type Parser
 	function recordServiceReplyAwait(facts AwaitedPromise, awaitTok Token)
 		match facts.tryTarget 'target'
 			named or
-				witness or
-				promise or
-				deferred then return
+			witness or
+			promise or
+			deferred then return
 			serviceReply(_, awaitedService) then self.artifact.recordServiceAwaitSite(ServiceAwaitSite.create(awaitedService, line: awaitTok.line, column: awaitTok.column, declFilePath: self.filePath))
 		end 'target'
 	end 'recordServiceReplyAwait'
@@ -95895,7 +95894,7 @@ export type Parser
 	function requireCellOccupantMayBeTaken(value ValueId, door ThreadHandOffDoor, anchor Token) throws SourceParseError
 		match self.cellOccupantTakeOf(value) 'cell'
 			notACellOccupant or
-				takeable then return
+			takeable then return
 			readBeforeTheCellWasHandedOver(name) then throw SourceParseError.staleCellOccupantRead(String.from(name), door: handOffDoorClause(door), line: anchor.line, column: anchor.column)
 		end 'cell'
 	end 'requireCellOccupantMayBeTaken'
@@ -95987,7 +95986,7 @@ export type Parser
 			message(blame) then return serviceArgumentRefusal(blame, borrowed: true, sourceClause: self.transferSourceClause(value), at: SourceRange.ofToken(anchor))
 			publish(key) then return registryNotSolelyOwnedError(key, anchor: anchor)
 			coroutine or
-				closureCapture then panic("borrowedHandOffRefusal: a door that stays on this green thread takes a reference of its own to a borrowed value, so it never refuses one")
+			closureCapture then panic("borrowedHandOffRefusal: a door that stays on this green thread takes a reference of its own to a borrowed value, so it never refuses one")
 		end 'door'
 	end 'borrowedHandOffRefusal'
 
@@ -96005,9 +96004,9 @@ export type Parser
 	function requireTransferGraphWalkable(value ValueId, handOff GreenThreadHandOff, door ThreadHandOffDoor, anchor Token) throws SourceParseError
 		match self.transferWalkOfValue(value, handOff: handOff) 'graph'
 			closed or
-				walkedBy or
-				walkedAlone or
-				walkedThroughWitness then return
+			walkedBy or
+			walkedAlone or
+			walkedThroughWitness then return
 			refused(noun) then throw self.unwalkableTransferGraphError(value, blame: handOffDoorBlame(door), noun: noun, anchor: anchor)
 		end 'graph'
 	end 'requireTransferGraphWalkable'
@@ -96297,8 +96296,8 @@ export type Parser
 			// An arity mismatch, a label naming no parameter, or two arguments at one parameter: this call was
 			// not written against this candidate.
 			arityMismatch or
-				unknownLabel or
-				duplicateArg then return sharedOverloadIncompatible
+			unknownLabel or
+			duplicateArg then return sharedOverloadIncompatible
 		end 'slot'
 	end 'sweptOverloadFit'
 
@@ -98054,7 +98053,7 @@ export type Parser
 
 		return match self.staticRosterVerdictAt(index) 'roster'
 			notADeclaredTypeMember or
-				undeclaredMember gives false
+			undeclaredMember gives false
 			hidden gives true
 		end 'roster'
 	end 'staticStoreRefusedAt'
@@ -98502,7 +98501,7 @@ export type Parser
 			// `unresolved` is a declaration with no cases (`requireEnumBacking` is its only door), which
 			// cannot be read from; its raw value would be its declaration index, as for `integer`.
 			integer or
-				unresolved then return try self.enumTagAsANumber(tag, anchor: anchor, range: range)
+			unresolved then return try self.enumTagAsANumber(tag, anchor: anchor, range: range)
 			float then return self.emitUnaryOp(tag, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)
 			character then break
 			string then return try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.declaredRawValue, valueType: MaxonType.string, anchor: anchor, range: range)
@@ -99050,10 +99049,10 @@ export type Parser
 
 		return match self.managedReceiverBindingOf(baseTok) 'managed'
 			constant or
-				global or
-				inlineWord or
-				imageRecord or
-				imageBox gives true
+			global or
+			inlineWord or
+			imageRecord or
+			imageBox gives true
 			none gives false
 		end 'managed'
 	end 'methodCallsAt'

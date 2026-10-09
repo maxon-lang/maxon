@@ -71,7 +71,7 @@ function hoverRenderingOf(request LspRequest, document HoverDocument, cursor Ele
 	match inTheBuffer 'buffer'
 		present then return inTheBuffer
 		untyped or
-			absent then return hoverBeyondTheBuffer(request, document: document, cursor: cursor)
+		absent then return hoverBeyondTheBuffer(request, document: document, cursor: cursor)
 	end 'buffer'
 end 'hoverRenderingOf'
 
@@ -92,7 +92,7 @@ function hoverBeyondTheBuffer(request LspRequest, document HoverDocument, cursor
 
 	match inTheProject 'project'
 		present or
-			untyped then return inTheProject
+		untyped then return inTheProject
 		absent then return reservedWordRendering(document.tokenAt(cursor))
 	end 'project'
 end 'hoverBeyondTheBuffer'
@@ -107,7 +107,7 @@ function hoverAcrossFiles(request LspRequest, document HoverDocument, cursor Ele
 
 	match inTheBuffer 'buffer'
 		present or
-			untyped then return inTheBuffer
+		untyped then return inTheBuffer
 		absent then return readByTheProject.declarationInTheCorpus(cursor)
 	end 'buffer'
 end 'hoverAcrossFiles'
@@ -318,6 +318,7 @@ module type HoverDocument
 	let lines as LspLineIndex
 	let keywords as KeywordTable
 	let corpus as LspCorpus
+
 	// A stdlib document read to answer a hover elsewhere. Its bare names are the library's own, and a
 	// shadowed one is spelled differently for the compiler and for an author (`StdlibShadowSpelling`).
 	let consultedLibrary as bool
@@ -508,9 +509,9 @@ module type HoverDocument
 			match found 'hit'
 				none then step = step + 1
 				binding or
-					parameter or
-					routine or
-					typeName then return found
+				parameter or
+				routine or
+				typeName then return found
 			end 'hit'
 		end 'eachCandidate'
 
@@ -1048,7 +1049,7 @@ module type HoverDocument
 		match bareReceiverEndingAt(last, reach: reach) 'read'
 			value(inferred) then return HoverValue.spans(inferred, after: last + 1)
 			typeSurface or
-				nothing then return HoverValue.none
+			nothing then return HoverValue.none
 		end 'read'
 	end 'readValueEndingAt'
 
@@ -1284,9 +1285,9 @@ module type HoverDocument
 		match declarationOf(self.spelledInThisDocument(owner), near: FirstToken, scope: HoverDeclarationScope.everyDeclaration) 'declared'
 			typeName(head) then return typeParamPositionAt(head, name: name)
 			binding or
-				parameter or
-				routine or
-				none then return HoverTypeParamSite.none
+			parameter or
+			routine or
+			none then return HoverTypeParamSite.none
 		end 'declared'
 	end 'typeParamSiteIn'
 
@@ -1391,7 +1392,7 @@ module type HoverDocument
 		match lspVisibleFieldOf(signatures, owner: owner, member: member, readerPath: readerPath) 'aField'
 			declared(layout, index) then return brandedMemberType(signatures, spelling: layout.fieldSpelledName(index), owner: owner, declFilePath: layout.declFilePath)
 			hidden or
-				none then return HoverMemberType.none
+			none then return HoverMemberType.none
 		end 'aField'
 	end 'declaredFieldType'
 
@@ -1438,9 +1439,9 @@ module type HoverDocument
 		match declarationOf(name, near: FirstToken, scope: HoverDeclarationScope.everyDeclaration) 'declared'
 			typeName(head) then return aliasTargetAt(head)
 			binding or
-				parameter or
-				routine or
-				none then return HoverDeclarationSite.none
+			parameter or
+			routine or
+			none then return HoverDeclarationSite.none
 		end 'declared'
 	end 'aliasTargetHere'
 
@@ -1509,7 +1510,7 @@ module type HoverDocument
 		match enclosingContainerOf(index) 'inside'
 			container(at) then return declaredTypeNameAt(at)
 			routine or
-				none then return HoverType.unknown
+			none then return HoverType.unknown
 		end 'inside'
 	end 'enclosingTypeName'
 
@@ -1585,9 +1586,9 @@ module type HoverDocument
 	function declarationWasFound(declaration HoverDeclaration) returns bool
 		return match declaration 'resolved'
 			binding or
-				parameter or
-				routine or
-				typeName gives true
+			parameter or
+			routine or
+			typeName gives true
 			none gives false
 		end 'resolved'
 	end 'declarationWasFound'
@@ -1870,8 +1871,8 @@ function declarationSite(declaration HoverDeclaration, kind HoverDeclarationKind
 		binding(head) then return HoverDeclarationSite.at(head) if kind == HoverDeclarationKind.binding else HoverDeclarationSite.none
 		routine(head) then return HoverDeclarationSite.at(head) if kind == HoverDeclarationKind.routine else HoverDeclarationSite.none
 		parameter or
-			typeName or
-			none then return HoverDeclarationSite.none
+		typeName or
+		none then return HoverDeclarationSite.none
 	end 'resolved'
 end 'declarationSite'
 

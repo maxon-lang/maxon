@@ -636,37 +636,37 @@ type CycleTrace implements SummaryCallWalker
 			call(_, callee, _, _, _, _, _, _) then self.forgetAcrossACall(callee, known: known)
 			tryCall(_, _, callee, _, _, _, _, _, _) then self.forgetAcrossACall(callee, known: known)
 			asyncCall or
-				witnessDispatch or
-				witnessTryDispatch or
-				indirectCall or
-				await or
-				tryAwait or
-				serviceSpawn or
-				serviceSend or
-				serviceReplyCell then known.forget()
+			witnessDispatch or
+			witnessTryDispatch or
+			indirectCall or
+			await or
+			tryAwait or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell then known.forget()
 			literal or
-				ret or
-				retVoid or
-				binOp or
-				unaryOp or
-				compare or
-				condBranch or
-				branch or
-				stringLiteral or
-				throwError or
-				propagateError or
-				panicAbort or
-				functionRef or
-				sizeofType or
-				constArrayLiteral or
-				switch or
-				panicAbortValue or
-				errorFlagEncode or
-				immortalStructRecord or
-				immortalStringTable or
-				covPoint or
-				rawIntrinsic or
-				existentialWitness then break
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			stringLiteral or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			panicAbortValue or
+			errorFlagEncode or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			rawIntrinsic or
+			existentialWitness then break
 		end 'op'
 	end 'noteKnownStores'
 
@@ -745,13 +745,13 @@ type CycleTrace implements SummaryCallWalker
 			match try module.ops.get(block.terminatorIndex()) otherwise panic("CycleTrace.walkBlock: terminator not in module.ops") 'terminator'
 				ret(value) then self.returned.push(value)
 				retVoid or
-					branch or
-					condBranch or
-					switch or
-					throwError or
-					propagateError or
-					panicAbort or
-					panicAbortValue then break
+				branch or
+				condBranch or
+				switch or
+				throwError or
+				propagateError or
+				panicAbort or
+				panicAbortValue then break
 				default panic("CycleTrace.walkBlock: a block of '{String.from(self.traced.name)}' ends in an op that terminates nothing")
 			end 'terminator'
 		end 'terminated'
@@ -799,15 +799,15 @@ type CycleTrace implements SummaryCallWalker
 			rawIntrinsic(result, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
 			existentialWitness(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
 			ret or
-				retVoid or
-				condBranch or
-				branch or
-				throwError or
-				propagateError or
-				panicAbort or
-				switch or
-				panicAbortValue or
-				covPoint then break
+			retVoid or
+			condBranch or
+			branch or
+			throwError or
+			propagateError or
+			panicAbort or
+			switch or
+			panicAbortValue or
+			covPoint then break
 		end 'op'
 	end 'walkOp'
 
@@ -1196,9 +1196,9 @@ type CycleTrace implements SummaryCallWalker
 					holdings then self.row.resultHolds = maskWithParam(self.row.resultHolds, param: self.rootParamOf(held))
 					parameter then self.row.resultCaptures = maskWithParam(self.row.resultCaptures, param: self.rootParamOf(held))
 					field or
-						element then self.noteResultCapturesWithin(held)
+					element then self.noteResultCapturesWithin(held)
 					fresh or
-						global then continue
+					global then continue
 				end 'kind'
 			end 'eachHeld'
 		end 'eachReturned'
@@ -1382,7 +1382,7 @@ type CycleTrace implements SummaryCallWalker
 		match self.kindOf(origin) 'kind'
 			parameter then return CycleHolder.named(self.parameterNameOf(self.rootParamOf(origin)))
 			field or
-				element then return self.holderOf(self.parentOf(origin))
+			element then return self.holderOf(self.parentOf(origin))
 			global then return CycleHolder.named(self.checker.globalNameOf(self.globalLabelOf(origin)))
 			fresh then return self.freshHolderOf(origin)
 			holdings then return CycleHolder.heldBy(self.parameterNameOf(self.rootParamOf(origin)))

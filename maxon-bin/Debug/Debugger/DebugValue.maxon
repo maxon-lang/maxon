@@ -85,7 +85,7 @@ export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset
 	match symbols.localCoveringIn(locals, offset: offset, name: head) 'known'
 		undeclared then return DebugValueAnswer.unknownName(path)
 		notLiveHere or
-			live then break
+		live then break
 	end 'known'
 
 	var tree = DebugValueTree.create()
@@ -121,7 +121,7 @@ end 'childNamed'
 function renderNamedLocal(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, locals DebugLocalArray, offset DebugAddress, framePointer DebugAddress, name String, registers DebugRegisterAccess) returns ElementIndex
 	match symbols.localCoveringIn(locals, offset: offset, name: name) 'known'
 		undeclared or
-			notLiveHere then return tree.add(DebugValueNode.missing(name, typeName: "", kind: "", reason: DebugNotLiveHereReason))
+		notLiveHere then return tree.add(DebugValueNode.missing(name, typeName: "", kind: "", reason: DebugNotLiveHereReason))
 		live(local) then return renderLocalRecord(tree, memory: memory, symbols: symbols, local: local, framePointer: framePointer, name: name, registers: registers)
 	end 'known'
 end 'renderNamedLocal'
@@ -314,7 +314,7 @@ function renderStruct(tree DebugValueTree, memory DebugMemory, symbols DebugSymb
 		nowhere then return unreadable(tree, name: name, typeName: typeName, kind: kind)
 		folded(first) then return renderFoldedStruct(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, first: first)
 		word or
-			address then break
+		address then break
 	end 'held'
 
 	let base = try baseOf(source) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
@@ -404,7 +404,7 @@ function renderUnion(tree DebugValueTree, memory DebugMemory, symbols DebugSymbo
 		nowhere then return unreadable(tree, name: name, typeName: typeName, kind: kind)
 		folded(first) then return renderFoldedUnion(tree, memory: memory, symbols: symbols, name: name, typeName: typeName, kind: kind, record: record, first: first)
 		word or
-			address then break
+		address then break
 	end 'held'
 
 	let box = try baseOf(source) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
@@ -498,7 +498,7 @@ end 'unresolvedCaseDisplay'
 function baseOf(source DebugValueSource) returns DebugAddress throws DebugMemoryError
 	match source 'which'
 		nowhere or
-			folded then throw DebugMemoryError.notReadable
+		folded then throw DebugMemoryError.notReadable
 		word(bits) then return try addressOf(bits)
 		address(at) then return at
 	end 'which'
@@ -529,7 +529,7 @@ end 'countAt'
 function readRaw(memory DebugMemory, source DebugValueSource, width DebugWidth) returns DebuggeeWord throws DebugMemoryError
 	match source 'which'
 		nowhere or
-			folded then throw DebugMemoryError.notReadable
+		folded then throw DebugMemoryError.notReadable
 		word(bits) then return debugMaskedToWidth(bits, width: width)
 		address(at) then return try memory.readDebuggeeWord(at, width: width)
 	end 'which'

@@ -84,8 +84,8 @@ export union CommandOutcome
 		return match self 'which'
 			done gives true
 			nothingParked or
-				refused or
-				gone gives false
+			refused or
+			gone gives false
 		end 'which'
 	end 'accepted'
 
@@ -366,7 +366,7 @@ export type DebugEngine implements DebugMemory
 
 		match trace 'ring'
 			untraced or
-				noProducer then break
+			noProducer then break
 			ring(collector) then environment.upsert(DsActivationEnvVar, value: collector.segmentName())
 		end 'ring'
 
@@ -420,7 +420,7 @@ export type DebugEngine implements DebugMemory
 		match self.backend.waitForStop(WaitSliceMs as BackendWaitBudgetMs) 'seen'
 			timedOut then return EngineEntrySlice.keepWaiting
 			threadStarted or
-				threadExited then return EngineEntrySlice.keepWaiting
+			threadExited then return EngineEntrySlice.keepWaiting
 			signalled then return EngineEntrySlice.ended(self.close())
 			exited(code) then return EngineEntrySlice.ended(self.closedWith(TargetSettling.exitedWith(code as DebugExitCode)))
 			stopped(thread, reason, faultCode, address) then return self.entryLanded(thread, reason: reason, faultCode: faultCode, address: address)
@@ -525,7 +525,7 @@ export type DebugEngine implements DebugMemory
 	export function collectedOutput() returns CollectedLines
 		return match self.routing 'where'
 			verbatim or
-				allToStandardError gives CollectedLines.create()
+			allToStandardError gives CollectedLines.create()
 			collect(sink) gives sink.takeAll()
 		end 'where'
 	end 'collectedOutput'
@@ -541,7 +541,7 @@ export type DebugEngine implements DebugMemory
 	function pumpTrace()
 		match self.trace 'ring'
 			untraced or
-				noProducer then break
+			noProducer then break
 			ring(collector) then collector.pump()
 		end 'ring'
 	end 'pumpTrace'
@@ -676,7 +676,7 @@ export type DebugEngine implements DebugMemory
 		return match self.backend.plantTrap(address) 'planted'
 			planted gives true
 			unreadable or
-				unwritable gives false
+			unwritable gives false
 		end 'planted'
 	end 'plantTrapAt'
 
@@ -1100,7 +1100,7 @@ export type DebugEngine implements DebugMemory
 
 			match look 'seen'
 				stopped or
-					ended then return look
+				ended then return look
 				timedOut then continue
 			end 'seen'
 		end 'poll'
@@ -1124,7 +1124,7 @@ export type DebugEngine implements DebugMemory
 
 		match self.backend.waitForStop(WaitSliceMs as BackendWaitBudgetMs) 'seen'
 			timedOut or
-				threadStarted then return StopWait.timedOut
+			threadStarted then return StopWait.timedOut
 
 			threadExited then return self.departedThreadSettled()
 			signalled(status) then return StopWait.ended(self.settledWith(status as BackendExitCode))
@@ -1460,7 +1460,7 @@ export type DebugEngine implements DebugMemory
 			stands gives true
 
 			removed or
-				unreadable gives false
+			unreadable gives false
 		end 'presence'
 	end 'trapInstructionStandsAt'
 
@@ -1912,14 +1912,14 @@ end 'openedTraceRing'
 function refusedTraceRing(reason DecoderError) returns DebugTraceState
 	match reason 'why'
 		nameTablesUnreadable or
-			segmentUnavailable then return DebugTraceState.noProducer
+		segmentUnavailable then return DebugTraceState.noProducer
 	end 'why'
 end 'refusedTraceRing'
 
 function closeTraceRing(trace DebugTraceState)
 	match trace 'ring'
 		untraced or
-			noProducer then break
+		noProducer then break
 		ring(collector) then collector.close()
 	end 'ring'
 end 'closeTraceRing'

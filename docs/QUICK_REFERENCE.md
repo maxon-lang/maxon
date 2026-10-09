@@ -423,7 +423,7 @@ for (key, _) in pairs 'loop' ... end 'loop'   // discard value, keep key
 match value 'label'
 		1 then doSomething()
 		2 or
-			3 then doOther()           // one alternative per line
+		3 then doOther()           // one alternative per line
 		1 to 10 then inRange()         // range pattern: 1 to 10 inclusive
 		11 upto 20 then nearRange()    // range pattern: 11 to 19 (exclusive upper)
 		pattern then action() and fallthrough

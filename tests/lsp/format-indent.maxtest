@@ -85,7 +85,7 @@ function collectFormatting(client LspClient, source String, insertSpaces bool) r
 	end 'session' otherwise (e) 'failed'
 		match e 'reason'
 			transportFailed or
-				malformedResponse then probe = FormattingProbe.broke(e.explained())
+			malformedResponse then probe = FormattingProbe.broke(e.explained())
 			serverRefused(code, message) then probe = FormattingProbe.refused(code, message: message)
 		end 'reason'
 	end 'failed'
@@ -203,3 +203,13 @@ test 'formatting uses spaces when insertSpaces is true'
 	Expect.contains(text, needle: "    return x", message: "the `return` was not indented with four spaces.")
 	Expect.isFalse(text.contains("\tvar"), message: "a TAB survived a format the client asked to be done in spaces. An editor configured for spaces gets a file it will re-indent on the next save.")
 end 'formatting uses spaces when insertSpaces is true'
+
+test 'formatting an empty document answers no edit'
+	let probe = probeFormatting("", insertSpaces: false)
+
+	match probe 'probe'
+		formatted(editCount, _) then Expect.equal(editCount, expected: 0, message: "an empty document is already formatted, yet the server answered with an edit; applying it would write a newline into a file that holds nothing.")
+		refused(code, message) then Expect.fail(formattingRefusalSentence(code, message: message))
+		broke(detail) then Expect.fail("the session broke before an answer arrived: {detail}")
+	end 'probe'
+end 'formatting an empty document answers no edit'

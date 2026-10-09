@@ -3127,7 +3127,7 @@ export type SplitDriver
 			let slot = slotForSpillOf(index, valueId: victim, nextSlot: self.nextSlot)
 			let takesSlot = match choice 'countSlot'
 				none or
-					remat gives false
+				remat gives false
 				spill gives true
 			end 'countSlot'
 
@@ -3719,7 +3719,7 @@ function collectVictimRegion(topo FuncTopology, index UseIndex, liveness Livenes
 
 	match index.defKindOf(victim) 'kind'
 		opDef or
-			phiDef then dirty.add(index.defBlockOf(victim))
+		phiDef then dirty.add(index.defBlockOf(victim))
 		none then panic("collectVictimRegion: value {victim} has no def site — every victim tier requires one (`hasStoreAnchor`, `isRematerializable`, or a `storeFitsPool` that only a defined value can pass), so `chooseVictim` cannot have offered it, and neither can the colorer, which gets stuck at a DEF")
 	end 'kind'
 
@@ -3986,7 +3986,7 @@ function choiceFound(choice SpillChoice) returns bool
 	return match choice 'k'
 		none gives false
 		remat or
-			spill gives true
+		spill gives true
 	end 'k'
 end 'choiceFound'
 
@@ -5545,7 +5545,7 @@ function hasStoreAnchor(index UseIndex, valueId ValueId) returns bool
 	return match index.defKindOf(valueId) 'kind'
 		none gives false
 		opDef or
-			phiDef gives true
+		phiDef gives true
 	end 'kind'
 end 'hasStoreAnchor'
 
@@ -5575,29 +5575,29 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 		movRegImm gives true
 		movRegImm32 gives true
 		prologue or
-			epilogue or
-			ret or
-			jmp or
-			jcc gives false
+		epilogue or
+		ret or
+		jmp or
+		jcc gives false
 		movRegReg or
-			movReg32Reg32 or
-			subRegReg or
-			imulRegReg or
-			negReg or
-			cmpRegReg or
-			leaRegRegReg or
-			leaRegRegImm32 or
-			imulRegRegImm32 or
-			cmpRegImm32 or
-			xchgRegReg or
-			callDirect or
-			iatCall or
-			cqo or
-			divideReg gives false
+		movReg32Reg32 or
+		subRegReg or
+		imulRegReg or
+		negReg or
+		cmpRegReg or
+		leaRegRegReg or
+		leaRegRegImm32 or
+		imulRegRegImm32 or
+		cmpRegImm32 or
+		xchgRegReg or
+		callDirect or
+		iatCall or
+		cqo or
+		divideReg gives false
 		pushReg or
-			popReg or
-			storeSlotReg or
-			loadRegSlot gives false
+		popReg or
+		storeSlotReg or
+		loadRegSlot gives false
 
 		// The bit band. None of these is a constant materialization: every one reads at
 		// least one register (or, for `setccReg`, EFLAGS), so re-emitting it at a use site
@@ -5622,38 +5622,38 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 		// ARE an integer the compiler holds. `constValueOfDef` would panic. When someone
 		// generalizes remat to "an op with no register inputs", it buys BOTH of these at once.
 		andRegReg or
-			orRegReg or
-			xorRegReg or
-			notReg or
-			andRegImm32 or
-			orRegImm32 or
-			xorRegImm32 or
-			shlRegImm8 or
-			sarRegImm8 or
-			shrRegImm8 or
-			shlRegCl or
-			sarRegCl or
-			shrRegCl or
-			setccReg or
-			leaRegGlobal or
-			loadRegBaseDisp or
-			storeBaseDispReg or
-			addsdRegReg or
-			subsdRegReg or
-			mulsdRegReg or
-			divsdRegReg or
-			ucomisdRegReg or
-			movsdRegRip or
-			cvtsi2sdRegReg or
-			cvttsd2siRegReg or
-			sqrtsdRegReg or
-			roundsdRegReg or
-			movqGprXmm or
-			absF64RegReg or
-			leaRegRdata or
-			minMaxSdRegReg or
-			movqXmmGpr or
-			negF64RegReg gives false
+		orRegReg or
+		xorRegReg or
+		notReg or
+		andRegImm32 or
+		orRegImm32 or
+		xorRegImm32 or
+		shlRegImm8 or
+		sarRegImm8 or
+		shrRegImm8 or
+		shlRegCl or
+		sarRegCl or
+		shrRegCl or
+		setccReg or
+		leaRegGlobal or
+		loadRegBaseDisp or
+		storeBaseDispReg or
+		addsdRegReg or
+		subsdRegReg or
+		mulsdRegReg or
+		divsdRegReg or
+		ucomisdRegReg or
+		movsdRegRip or
+		cvtsi2sdRegReg or
+		cvttsd2siRegReg or
+		sqrtsdRegReg or
+		roundsdRegReg or
+		movqGprXmm or
+		absF64RegReg or
+		leaRegRdata or
+		minMaxSdRegReg or
+		movqXmmGpr or
+		negF64RegReg gives false
 
 		// The arm64 band. `arm64MovImm` IS the arm64 constant materialization (the `movz`/`movk` ladder),
 		// so it is rematerializable exactly as x64's `movRegImm`/`movRegImm32` are — `constDefInfo` reads
@@ -5661,57 +5661,57 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 		// register (or is control/frame/call), so it is not rematerializable, for the same reason the
 		// x64 ALU band above is not.
 		arm64Ret or
-			arm64Branch or
-			arm64CondBranch or
-			arm64Cbz or
-			arm64Cbnz gives false
+		arm64Branch or
+		arm64CondBranch or
+		arm64Cbz or
+		arm64Cbnz gives false
 		arm64MovImm gives true
 		arm64Prologue or
-			arm64Epilogue or
-			arm64Add or
-			arm64Sub or
-			arm64Mul or
-			arm64Sdiv or
-			arm64Udiv or
-			arm64Msub or
-			arm64And or
-			arm64Orr or
-			arm64Eor or
-			arm64Lslv or
-			arm64Asrv or
-			arm64Lsrv or
-			arm64Neg or
-			arm64Mvn or
-			arm64AddImm or
-			arm64SubImm or
-			arm64AndImm or
-			arm64OrrImm or
-			arm64EorImm or
-			arm64LslImm or
-			arm64AsrImm or
-			arm64LsrImm or
-			arm64Cmp or
-			arm64CmpImm or
-			arm64Cset or
-			arm64LeaFuncAddr or
-			arm64LeaRdata or
-			arm64LeaGlobal or
-			arm64BranchLink or
-			arm64BranchLinkReg or
-			arm64Fadd or
-			arm64Fsub or
-			arm64Fmul or
-			arm64Fdiv or
-			arm64Fcmp or
-			arm64Scvtf or
-			arm64Fcvtzs or
-			arm64Fsqrt or
-			arm64Frint or
-			arm64Fabs or
-			arm64FpLoadRdata or
-			arm64ImportCall or
-			arm64Syscall or
-			arm64Fcsel gives false
+		arm64Epilogue or
+		arm64Add or
+		arm64Sub or
+		arm64Mul or
+		arm64Sdiv or
+		arm64Udiv or
+		arm64Msub or
+		arm64And or
+		arm64Orr or
+		arm64Eor or
+		arm64Lslv or
+		arm64Asrv or
+		arm64Lsrv or
+		arm64Neg or
+		arm64Mvn or
+		arm64AddImm or
+		arm64SubImm or
+		arm64AndImm or
+		arm64OrrImm or
+		arm64EorImm or
+		arm64LslImm or
+		arm64AsrImm or
+		arm64LsrImm or
+		arm64Cmp or
+		arm64CmpImm or
+		arm64Cset or
+		arm64LeaFuncAddr or
+		arm64LeaRdata or
+		arm64LeaGlobal or
+		arm64BranchLink or
+		arm64BranchLinkReg or
+		arm64Fadd or
+		arm64Fsub or
+		arm64Fmul or
+		arm64Fdiv or
+		arm64Fcmp or
+		arm64Scvtf or
+		arm64Fcvtzs or
+		arm64Fsqrt or
+		arm64Frint or
+		arm64Fabs or
+		arm64FpLoadRdata or
+		arm64ImportCall or
+		arm64Syscall or
+		arm64Fcsel gives false
 
 		// The function-value band (x64). `leaRegFunc` is the third instance of the
 		// `leaRegGlobal`/`leaRegRdata`/`movsdRegRip` `false`: it reads no register and its `.text` address
@@ -5719,12 +5719,12 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 		// integer-remat predicate answers `false`. `callReg` reads its callee register and is a call —
 		// not a const materialization either. The Linux `x64Syscall` is a call, likewise `false`.
 		leaRegFunc or
-			callReg or
-			x64Syscall gives false
+		callReg or
+		x64Syscall gives false
 
 		// The jump tables are terminators, not constant materializations, so neither is rematerializable.
 		x64JumpTable or
-			arm64JumpTable gives false
+		arm64JumpTable gives false
 
 		// The witness call is a call, not a constant materialization — not rematerializable (like `callReg`).
 		callMem gives false
@@ -5732,11 +5732,11 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 		// A stack-argument store defines nothing; an incoming load's def is a MEMORY read whose address is a
 		// frame fact, not a constant this pass could re-materialize. Neither is rematerializable.
 		arm64StoreOutgoingArg or
-			arm64LoadIncomingArg gives false
+		arm64LoadIncomingArg gives false
 
 		// Both arm64 bit reinterpretations READ A REGISTER, so neither def can be rebuilt from a constant.
 		arm64FmovGprFp or
-			arm64FmovFpGpr gives false
+		arm64FmovFpGpr gives false
 
 		// A frame address is not a CONSTANT materialization: `constDefInfo` reconstructs a def from an
 		// immediate it carries, and this op carries a slot index, not the value it produces.
@@ -5744,25 +5744,25 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 
 		// A fill ladder DEFINES NOTHING, so there is no def for this pass to rematerialize.
 		x64MemFill or
-			arm64MemFill gives false
+		arm64MemFill gives false
 
 		// Every atomic READS MEMORY (or, for the two thread-token reads, the OS thread's own state), so no
 		// def here can be rebuilt from an immediate this pass carries. Not rematerializable.
 		x64LockCmpxchg or
-			x64LockXadd or
-			x64LockAdd or
-			x64TebSelfPointer or
-			x64GsLoadRegBase or
-			arm64AtomicCas or
-			arm64AtomicRmw or
-			arm64ThreadPointer gives false
+		x64LockXadd or
+		x64LockAdd or
+		x64TebSelfPointer or
+		x64GsLoadRegBase or
+		arm64AtomicCas or
+		arm64AtomicRmw or
+		arm64ThreadPointer gives false
 
 		// Every scaled-index form READS registers the pass cannot reconstruct — its immediates are a
 		// scale and a displacement, not the value it produces. Not rematerializable.
 		leaRegBaseIndexScale or
-			loadRegBaseIndexScale or
-			storeBaseIndexScaleReg or
-			arm64AddLsl gives false
+		loadRegBaseIndexScale or
+		storeBaseIndexScaleReg or
+		arm64AddLsl gives false
 
 		// The high multiply DEFINES NOTHING EXPLICIT — its product lands in the implicit RAX/RDX
 		// pair — and it reads a register besides. `divideReg`'s answer, for both halves of the reason.
@@ -5773,7 +5773,7 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 
 		// An ordered load reads MEMORY another thread writes — the opposite of rematerializable.
 		arm64LoadAcquire or
-			arm64StoreRelease gives false
+		arm64StoreRelease gives false
 
 		// `SMULH` reads two registers the pass cannot reconstruct. Not rematerializable.
 		arm64Mulh gives false
@@ -5783,7 +5783,7 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 
 		// A read-modify-write of memory defines no register either.
 		x64AluBaseDispReg or
-			x64AluBaseDispImm32 gives false
+		x64AluBaseDispImm32 gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -6737,165 +6737,165 @@ function constDefInfo(module TargetModule, opIdx ElementIndex) returns (MachineW
 		movRegImm32(_, value) gives (value, false)
 		arm64MovImm(_, value) gives (value, true)
 		prologue or
-			epilogue or
-			ret or
-			jmp or
-			jcc panic("constDefInfo: def is not a constant materialization")
+		epilogue or
+		ret or
+		jmp or
+		jcc panic("constDefInfo: def is not a constant materialization")
 		movRegReg or
-			movReg32Reg32 or
-			subRegReg or
-			imulRegReg or
-			negReg or
-			cmpRegReg or
-			leaRegRegReg or
-			leaRegRegImm32 or
-			imulRegRegImm32 or
-			cmpRegImm32 or
-			xchgRegReg or
-			callDirect or
-			iatCall or
-			cqo or
-			divideReg or
-			pushReg or
-			popReg or
-			storeSlotReg or
-			loadRegSlot or
-			andRegReg or
-			orRegReg or
-			xorRegReg or
-			notReg or
-			andRegImm32 or
-			orRegImm32 or
-			xorRegImm32 or
-			shlRegImm8 or
-			sarRegImm8 or
-			shrRegImm8 or
-			shlRegCl or
-			sarRegCl or
-			shrRegCl or
-			setccReg or
-			leaRegGlobal or
-			loadRegBaseDisp or
-			storeBaseDispReg or
-			addsdRegReg or
-			subsdRegReg or
-			mulsdRegReg or
-			divsdRegReg or
-			ucomisdRegReg or
-			movsdRegRip or
-			cvtsi2sdRegReg or
-			cvttsd2siRegReg or
-			sqrtsdRegReg or
-			roundsdRegReg or
-			movqGprXmm or
-			absF64RegReg or
-			leaRegRdata or
-			minMaxSdRegReg or
-			movqXmmGpr or
-			negF64RegReg panic("constDefInfo: def is not a constant materialization")
+		movReg32Reg32 or
+		subRegReg or
+		imulRegReg or
+		negReg or
+		cmpRegReg or
+		leaRegRegReg or
+		leaRegRegImm32 or
+		imulRegRegImm32 or
+		cmpRegImm32 or
+		xchgRegReg or
+		callDirect or
+		iatCall or
+		cqo or
+		divideReg or
+		pushReg or
+		popReg or
+		storeSlotReg or
+		loadRegSlot or
+		andRegReg or
+		orRegReg or
+		xorRegReg or
+		notReg or
+		andRegImm32 or
+		orRegImm32 or
+		xorRegImm32 or
+		shlRegImm8 or
+		sarRegImm8 or
+		shrRegImm8 or
+		shlRegCl or
+		sarRegCl or
+		shrRegCl or
+		setccReg or
+		leaRegGlobal or
+		loadRegBaseDisp or
+		storeBaseDispReg or
+		addsdRegReg or
+		subsdRegReg or
+		mulsdRegReg or
+		divsdRegReg or
+		ucomisdRegReg or
+		movsdRegRip or
+		cvtsi2sdRegReg or
+		cvttsd2siRegReg or
+		sqrtsdRegReg or
+		roundsdRegReg or
+		movqGprXmm or
+		absF64RegReg or
+		leaRegRdata or
+		minMaxSdRegReg or
+		movqXmmGpr or
+		negF64RegReg panic("constDefInfo: def is not a constant materialization")
 		arm64Ret or
-			arm64Branch or
-			arm64CondBranch or
-			arm64Cbz or
-			arm64Cbnz panic("constDefInfo: def is not a constant materialization")
+		arm64Branch or
+		arm64CondBranch or
+		arm64Cbz or
+		arm64Cbnz panic("constDefInfo: def is not a constant materialization")
 		arm64Prologue or
-			arm64Epilogue or
-			arm64Add or
-			arm64Sub or
-			arm64Mul or
-			arm64Sdiv or
-			arm64Udiv or
-			arm64Msub or
-			arm64And or
-			arm64Orr or
-			arm64Eor or
-			arm64Lslv or
-			arm64Asrv or
-			arm64Lsrv or
-			arm64Neg or
-			arm64Mvn or
-			arm64AddImm or
-			arm64SubImm or
-			arm64AndImm or
-			arm64OrrImm or
-			arm64EorImm or
-			arm64LslImm or
-			arm64AsrImm or
-			arm64LsrImm or
-			arm64Cmp or
-			arm64CmpImm or
-			arm64Cset or
-			arm64LeaFuncAddr or
-			arm64LeaRdata or
-			arm64LeaGlobal or
-			arm64BranchLink or
-			arm64BranchLinkReg or
-			arm64Fadd or
-			arm64Fsub or
-			arm64Fmul or
-			arm64Fdiv or
-			arm64Fcmp or
-			arm64Scvtf or
-			arm64Fcvtzs or
-			arm64Fsqrt or
-			arm64Frint or
-			arm64Fabs or
-			arm64FpLoadRdata or
-			arm64ImportCall or
-			arm64Syscall or
-			arm64Fcsel panic("constDefInfo: def is not a constant materialization")
+		arm64Epilogue or
+		arm64Add or
+		arm64Sub or
+		arm64Mul or
+		arm64Sdiv or
+		arm64Udiv or
+		arm64Msub or
+		arm64And or
+		arm64Orr or
+		arm64Eor or
+		arm64Lslv or
+		arm64Asrv or
+		arm64Lsrv or
+		arm64Neg or
+		arm64Mvn or
+		arm64AddImm or
+		arm64SubImm or
+		arm64AndImm or
+		arm64OrrImm or
+		arm64EorImm or
+		arm64LslImm or
+		arm64AsrImm or
+		arm64LsrImm or
+		arm64Cmp or
+		arm64CmpImm or
+		arm64Cset or
+		arm64LeaFuncAddr or
+		arm64LeaRdata or
+		arm64LeaGlobal or
+		arm64BranchLink or
+		arm64BranchLinkReg or
+		arm64Fadd or
+		arm64Fsub or
+		arm64Fmul or
+		arm64Fdiv or
+		arm64Fcmp or
+		arm64Scvtf or
+		arm64Fcvtzs or
+		arm64Fsqrt or
+		arm64Frint or
+		arm64Fabs or
+		arm64FpLoadRdata or
+		arm64ImportCall or
+		arm64Syscall or
+		arm64Fcsel panic("constDefInfo: def is not a constant materialization")
 
 		// `leaRegFunc`/`callReg` and the Linux `x64Syscall` are not const materializations —
 		// `opIsConstMaterialization` answers false for all, so none reaches here; named rather than swallowed.
 		leaRegFunc or
-			callReg or
-			x64Syscall panic("constDefInfo: def is not a constant materialization")
+		callReg or
+		x64Syscall panic("constDefInfo: def is not a constant materialization")
 
 		// The jump tables are not const materializations (`opIsConstMaterialization` gives false), so
 		// `constDefInfo` is never called on one — named rather than left to another arm.
 		x64JumpTable or
-			arm64JumpTable panic("constDefInfo: def is not a constant materialization")
+		arm64JumpTable panic("constDefInfo: def is not a constant materialization")
 		callMem panic("constDefInfo: a `callMem` def is not a constant materialization")
 
 		// `opIsConstMaterialization` answers false for both, so neither reaches here; named rather than swallowed.
 		arm64StoreOutgoingArg or
-			arm64LoadIncomingArg panic("constDefInfo: def is not a constant materialization")
+		arm64LoadIncomingArg panic("constDefInfo: def is not a constant materialization")
 
 		// `opIsConstMaterialization` answers false for both, so neither reaches here; named rather than swallowed.
 		arm64FmovGprFp or
-			arm64FmovFpGpr panic("constDefInfo: def is not a constant materialization")
+		arm64FmovFpGpr panic("constDefInfo: def is not a constant materialization")
 		leaRegSlot panic("constDefInfo: def is not a constant materialization")
 
 		// `opIsConstMaterialization` answers false for both, so neither reaches here; named rather than swallowed.
 		x64MemFill or
-			arm64MemFill panic("constDefInfo: def is not a constant materialization")
+		arm64MemFill panic("constDefInfo: def is not a constant materialization")
 
 		// `opIsConstMaterialization` answers false for every atomic, so none reaches here; named rather than swallowed.
 		x64LockCmpxchg or
-			x64LockXadd or
-			x64LockAdd or
-			x64TebSelfPointer or
-			x64GsLoadRegBase or
-			arm64AtomicCas or
-			arm64AtomicRmw or
-			arm64ThreadPointer panic("constDefInfo: def is not a constant materialization")
+		x64LockXadd or
+		x64LockAdd or
+		x64TebSelfPointer or
+		x64GsLoadRegBase or
+		arm64AtomicCas or
+		arm64AtomicRmw or
+		arm64ThreadPointer panic("constDefInfo: def is not a constant materialization")
 
 		// `opIsConstMaterialization` answers false for every scaled-index form, so none reaches here; named
 		// rather than swallowed.
 		leaRegBaseIndexScale or
-			loadRegBaseIndexScale or
-			storeBaseIndexScaleReg or
-			arm64AddLsl panic("constDefInfo: def is not a constant materialization")
+		loadRegBaseIndexScale or
+		storeBaseIndexScaleReg or
+		arm64AddLsl panic("constDefInfo: def is not a constant materialization")
 
 		// `opIsConstMaterialization` answers false, so this never reaches here; named rather than swallowed.
 		mulHighReg panic("constDefInfo: def is not a constant materialization")
 		arm64Fneg panic("constDefInfo: def is not a constant materialization")
 		arm64LoadAcquire or
-			arm64StoreRelease panic("constDefInfo: def is not a constant materialization")
+		arm64StoreRelease panic("constDefInfo: def is not a constant materialization")
 		arm64Mulh or
-			covInc or
-			x64AluBaseDispReg or
-			x64AluBaseDispImm32 panic("constDefInfo: def is not a constant materialization")
+		covInc or
+		x64AluBaseDispReg or
+		x64AluBaseDispImm32 panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -6986,10 +6986,10 @@ end 'substituteVReg'
 function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns TargetOp
 	match op 'rewrite'
 		prologue or
-			epilogue or
-			ret or
-			jmp or
-			jcc then return op
+		epilogue or
+		ret or
+		jmp or
+		jcc then return op
 		movRegImm(dest, value) then return TargetOp.movRegImm(substituteVReg(dest, from: from, to: to), value: value)
 		movRegImm32(dest, value) then return TargetOp.movRegImm32(substituteVReg(dest, from: from, to: to), value: value)
 		movRegReg(destReg, srcReg) then return TargetOp.movRegReg(substituteVReg(destReg, from: from, to: to), srcReg: substituteVReg(srcReg, from: from, to: to))
@@ -7003,12 +7003,12 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		imulRegRegImm32(dest, src, imm) then return TargetOp.imulRegRegImm32(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
 		cmpRegImm32(reg, imm) then return TargetOp.cmpRegImm32(substituteVReg(reg, from: from, to: to), imm: imm)
 		xchgRegReg or
-			callDirect or
-			iatCall then return op
+		callDirect or
+		iatCall then return op
 		cqo then return op
 		divideReg(divisor, signedness) then return TargetOp.divideReg(substituteVReg(divisor, from: from, to: to), signedness: signedness)
 		pushReg or
-			popReg then return op
+		popReg then return op
 		storeSlotReg(slot, srcReg) then return TargetOp.storeSlotReg(slot, srcReg: substituteVReg(srcReg, from: from, to: to))
 		loadRegSlot(destReg, slot) then return TargetOp.loadRegSlot(substituteVReg(destReg, from: from, to: to), slot: slot)
 		andRegReg(dest, lhs, rhs) then return TargetOp.andRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
@@ -7130,7 +7130,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// No register operand to substitute — both OS-call forms take their args pre-moved into x0..
 		// (like `arm64BranchLink` and `iatCall`).
 		arm64ImportCall or
-			arm64Syscall then return op
+		arm64Syscall then return op
 
 		// `fcsel` substitutes its three FP operands and carries its condition through. ⚠ `ifTrue` and
 		// `ifFalse` keep their own slots — exchanging them turns `min` into `max`.
@@ -7163,7 +7163,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 
 		// A fill ladder carries no virtual register, so there is nothing to substitute — returned verbatim.
 		x64MemFill or
-			arm64MemFill then return op
+		arm64MemFill then return op
 
 		// Every virtual operand of every atomic substitutes; the RMW's opcode is not a register and rides
 		// through, exactly as a jump table's block-id table does.

@@ -177,7 +177,7 @@ export function installNetpollRuntime(module StdModule, target Target)
 		completionPort then buildNetpollSourceKeyBand(module)
 
 		epoll or
-			kqueue then break
+		kqueue then break
 	end 'minters'
 
 	// The child-exit band. Every lane has it: a parked child is a source on the poller everywhere.
@@ -286,7 +286,7 @@ function emitNetpollFailed(module StdModule, block IrBlock, shape NetpollShape, 
 	return match shape 'failure'
 		completionPort gives emitCmp(module, block: block, a: answer, b: zero, pred: StdCmpPred.eq, ids: ids)
 		epoll or
-			kqueue gives emitCmp(module, block: block, a: answer, b: zero, pred: StdCmpPred.lt, ids: ids)
+		kqueue gives emitCmp(module, block: block, a: answer, b: zero, pred: StdCmpPred.lt, ids: ids)
 	end 'failure'
 end 'emitNetpollFailed'
 
@@ -457,7 +457,7 @@ end 'buildNetpollPoll'
 function emitNetpollDecodeSource(module StdModule, func IrFunction, cur IrBlock, shape NetpollShape, entryAddr ValueId, key ValueId, cont IrBlock, ids ValueMinter)
 	match shape 'shape'
 		epoll or
-			kqueue then emitNetpollSourceReady(module, func: func, cur: cur, shape: shape, entryAddr: entryAddr, fd: key, cont: cont, label: b"npsockwake", ids: ids)
+		kqueue then emitNetpollSourceReady(module, func: func, cur: cur, shape: shape, entryAddr: entryAddr, fd: key, cont: cont, label: b"npsockwake", ids: ids)
 
 		completionPort then emitNetpollDecodeCompletion(module, func: func, cur: cur, shape: shape, entryAddr: entryAddr, key: key, cont: cont, ids: ids)
 	end 'shape'
@@ -573,7 +573,7 @@ function emitNetpollWaitCount(module StdModule, func IrFunction, cur IrBlock, sh
 	match shape 'decode'
 		completionPort then emitNetpollCompletionCount(module, func: func, cur: cur, answer: answer, scratch: scratch, counted: counted, failed: failed, ids: ids)
 		epoll or
-			kqueue then emitBranchOnWaitFailure(module, cur: cur, failedTest: emitCmp(module, block: cur, a: answer, b: zero, pred: StdCmpPred.lt, ids: ids), failed: failed, counted: counted, count: answer)
+		kqueue then emitBranchOnWaitFailure(module, cur: cur, failedTest: emitCmp(module, block: cur, a: answer, b: zero, pred: StdCmpPred.lt, ids: ids), failed: failed, counted: counted, count: answer)
 	end 'decode'
 end 'emitNetpollWaitCount'
 
@@ -618,7 +618,7 @@ function emitNetpollConsumeBreak(module StdModule, func IrFunction, cur IrBlock,
 	match shape 'take'
 		epoll then emitNetpollDrain(module, func: func, cur: blocking, cont: cleared, ids: ids)
 		completionPort or
-			kqueue then module.setTerminator(blocking, op: StdOp.branch(cleared.id))
+		kqueue then module.setTerminator(blocking, op: StdOp.branch(cleared.id))
 	end 'take'
 
 	let won = emitNetpollClaimWakeSig(module, block: cleared, expected: WakeSigRaised, replacement: WakeSigClear, ids: ids)
@@ -629,7 +629,7 @@ function emitNetpollConsumeBreak(module StdModule, func IrFunction, cur IrBlock,
 	match shape 'pass'
 		epoll then module.setTerminator(passing, op: StdOp.branch(cont.id))
 		completionPort or
-			kqueue then emitNetpollRaise(module, func: func, cur: passing, shape: shape, cont: cont, ids: ids)
+		kqueue then emitNetpollRaise(module, func: func, cur: passing, shape: shape, cont: cont, ids: ids)
 	end 'pass'
 end 'emitNetpollConsumeBreak'
 
@@ -1701,7 +1701,7 @@ end 'buildNetpollPdReadyOne'
 function emitNetpollWakeIndex(module StdModule, block IrBlock, shape NetpollShape, key ValueId, ids ValueMinter) returns ValueId
 	return match shape 'shape'
 		epoll or
-			kqueue gives key
+		kqueue gives key
 
 		completionPort gives emitBin(module, block: block, a: key, b: emitConst(module, block: block, value: NetpollKeyIndexMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	end 'shape'
@@ -1715,7 +1715,7 @@ end 'emitNetpollWakeIndex'
 function emitNetpollWakeGenerationGate(module StdModule, block IrBlock, shape NetpollShape, key ValueId, pd ValueId, live IrBlock, stale IrBlock, noDebt ValueId, ids ValueMinter)
 	match shape 'shape'
 		epoll or
-			kqueue then module.setTerminator(block, op: StdOp.branch(live.id))
+		kqueue then module.setTerminator(block, op: StdOp.branch(live.id))
 
 		completionPort then emitNetpollWakeCompareGeneration(module, block: block, key: key, pd: pd, live: live, stale: stale, noDebt: noDebt, ids: ids)
 	end 'shape'
@@ -2021,7 +2021,7 @@ function buildNetpollChildOpen(module StdModule, target Target)
 		completionPort then emitNetpollSourceKeyFromAllocator(module, block: entry, cont: adopt, ids: ids)
 
 		epoll or
-			kqueue then emitNetpollChildSourceFromHost(module, func: func, cur: entry, target: target, childHandle: childHandle, cont: adopt, ids: ids)
+		kqueue then emitNetpollChildSourceFromHost(module, func: func, cur: entry, target: target, childHandle: childHandle, cont: adopt, ids: ids)
 	end 'mint'
 
 	module.appendOp(adopt, op: StdOp.call(ids.mint(), callee: NetpollPdAdoptName, args: argsOf(source)))
@@ -2081,7 +2081,7 @@ function buildNetpollChildArm(module StdModule, target Target)
 		completionPort then emitNetpollArmChildOnPort(module, block: entry, poller: poller, source: source, childHandle: childHandle, ids: ids)
 
 		epoll or
-			kqueue then emitNetpollArmChildOnPosix(module, func: func, cur: entry, poller: poller, source: source, childHandle: childHandle, ids: ids)
+		kqueue then emitNetpollArmChildOnPosix(module, func: func, cur: entry, poller: poller, source: source, childHandle: childHandle, ids: ids)
 	end 'arm'
 
 	module.functions.push(func)
@@ -2146,7 +2146,7 @@ function buildNetpollChildClose(module StdModule, target Target)
 		completionPort then emitNetpollCloseChildOnPort(module, block: entry, source: source, token: token, cont: doneBlock, ids: ids)
 
 		epoll or
-			kqueue then emitNetpollCloseChildOnPosix(module, block: entry, source: source, cont: doneBlock, ids: ids)
+		kqueue then emitNetpollCloseChildOnPosix(module, block: entry, source: source, cont: doneBlock, ids: ids)
 	end 'give'
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -2521,7 +2521,7 @@ end 'emitNetpollOpSettle'
 export function emitNetpollDescriptorIndex(module StdModule, block IrBlock, target Target, fd ValueId, ids ValueMinter) returns ValueId
 	return match netpollShape(target) 'shape'
 		epoll or
-			kqueue gives fd
+		kqueue gives fd
 
 		completionPort gives emitBin(module, block: block, a: fd, b: emitConst(module, block: block, value: 1, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
 	end 'shape'
@@ -2596,7 +2596,7 @@ function buildNetpollPipeOpen(module StdModule, target Target)
 		completionPort then module.setTerminator(havePipe, op: StdOp.branch(doneBlock.id))
 
 		epoll or
-			kqueue then emitNetpollArmPipe(module, func: func, cur: havePipe, target: target, fd: fd, cont: doneBlock, ids: ids)
+		kqueue then emitNetpollArmPipe(module, func: func, cur: havePipe, target: target, fd: fd, cont: doneBlock, ids: ids)
 	end 'shape'
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -2641,7 +2641,7 @@ function buildNetpollPipeClose(module StdModule, target Target)
 		completionPort then break
 
 		epoll or
-			kqueue then module.appendOp(havePipe, op: StdOp.call(ids.mint(), callee: NetpollPdReleaseName, args: argsOf(fd)))
+		kqueue then module.appendOp(havePipe, op: StdOp.call(ids.mint(), callee: NetpollPdReleaseName, args: argsOf(fd)))
 	end 'shape'
 
 	module.setTerminator(havePipe, op: StdOp.branch(doneBlock.id))

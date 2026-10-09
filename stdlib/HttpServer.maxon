@@ -344,17 +344,17 @@ function progressAfter(fault HttpServerError) returns ServeProgress
 		acceptFailed gives ServeProgress.ended(HttpServeEnd.listenerFailed)
 		acceptTimedOut gives ServeProgress.ended(HttpServeEnd.acceptDeadlinePassed)
 		acceptInterrupted or
-			malformedRequest or
-			headersTooLarge or
-			bodyTooLarge or
-			unsupportedTransferEncoding or
-			unsupportedMethod or
-			unsupportedVersion or
-			readTimedOut or
-			connectionClosed gives ServeProgress.serving
+		malformedRequest or
+		headersTooLarge or
+		bodyTooLarge or
+		unsupportedTransferEncoding or
+		unsupportedMethod or
+		unsupportedVersion or
+		readTimedOut or
+		connectionClosed gives ServeProgress.serving
 		sendFailed or
-			alreadyResponded or
-			invalidResponse panic("HttpServer.serve: `accept()` does not throw `{fault.name}`")
+		alreadyResponded or
+		invalidResponse panic("HttpServer.serve: `accept()` does not throw `{fault.name}`")
 	end 'which'
 end 'progressAfter'
 
@@ -418,11 +418,11 @@ end 'answerInsteadOfTheHandler'
 function protocolStatusFor(fault HttpServerError) returns StatusCode
 	return match fault 'which'
 		malformedRequest or
-			connectionClosed gives StatusCode.badRequest
+		connectionClosed gives StatusCode.badRequest
 		headersTooLarge gives StatusCode.headerFieldsTooLarge
 		bodyTooLarge gives StatusCode.payloadTooLarge
 		unsupportedTransferEncoding or
-			unsupportedMethod gives StatusCode.notImplemented
+		unsupportedMethod gives StatusCode.notImplemented
 		unsupportedVersion gives StatusCode.httpVersionNotSupported
 		readTimedOut gives StatusCode.requestTimeout
 		default panic("HttpServer.protocolStatusFor: `{fault.name}` is not a fault reading a request can end in")
@@ -498,7 +498,7 @@ function serverReadFault(cause NetworkError) returns HttpServerError
 	return match cause 'which'
 		timedOut gives HttpServerError.readTimedOut
 		connectionClosed or
-			recvFailed gives HttpServerError.connectionClosed
+		recvFailed gives HttpServerError.connectionClosed
 		default panic("HttpServer.serverReadFault: `TcpClient.recv` does not throw `{cause.name}`")
 	end 'which'
 end 'serverReadFault'

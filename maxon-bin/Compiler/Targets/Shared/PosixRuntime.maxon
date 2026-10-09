@@ -182,28 +182,28 @@ export function posixTraceChunk(service HostProcessCall) returns ByteArray
 		threadGroupSignal gives HostThreadSignalName
 		processSignal gives HostProcessSignalName
 		openProcess or
-			nextThread or
-			threadId or
-			suspendThread or
-			resumeThread or
-			threadContext or
-			queryRegion or
-			readProcessMemory or
-			createHighResTimer or
-			setAbsoluteTimer or
-			moduleSnapshot or
-			moduleFirst or
-			moduleNext or
-			writeProcessMemory or
-			writeThreadContext or
-			attachToProcess or
-			detachFromProcess or
-			waitForDebugEvent or
-			continueDebugEvent or
-			breakProcess or
-			protectRegion or
-			flushCode or
-			closeHandle panic("posixTraceChunk: `{service.name}` is a Windows debug-port or sampling service and no POSIX lane lays out a chunk for it — `installDebugHostRuntime` builds only the trace band's five entries where `debugHostShapeOf` answers `processTrace`")
+		nextThread or
+		threadId or
+		suspendThread or
+		resumeThread or
+		threadContext or
+		queryRegion or
+		readProcessMemory or
+		createHighResTimer or
+		setAbsoluteTimer or
+		moduleSnapshot or
+		moduleFirst or
+		moduleNext or
+		writeProcessMemory or
+		writeThreadContext or
+		attachToProcess or
+		detachFromProcess or
+		waitForDebugEvent or
+		continueDebugEvent or
+		breakProcess or
+		protectRegion or
+		flushCode or
+		closeHandle panic("posixTraceChunk: `{service.name}` is a Windows debug-port or sampling service and no POSIX lane lays out a chunk for it — `installDebugHostRuntime` builds only the trace band's five entries where `debugHostShapeOf` answers `processTrace`")
 	end 'service'
 end 'posixTraceChunk'
 
@@ -695,7 +695,7 @@ function posixBusSignalNumber(on Os) returns MachineWord
 		linux gives LinuxSigBus as MachineWord
 
 		windows or
-			wasi panic("posixBusSignalNumber: `{on.name}` carries no POSIX signal roster, and only a lane that reports a debuggee's stop as a signal number asks for one")
+		wasi panic("posixBusSignalNumber: `{on.name}` carries no POSIX signal roster, and only a lane that reports a debuggee's stop as a signal number asks for one")
 	end 'os'
 end 'posixBusSignalNumber'
 
@@ -705,7 +705,7 @@ export function posixStopSignalNumber(on Os) returns MachineWord
 		linux gives LinuxSigStop as MachineWord
 
 		windows or
-			wasi panic("posixStopSignalNumber: `{on.name}` carries no POSIX signal roster, and only a lane that halts a debuggee with a signal asks for one")
+		wasi panic("posixStopSignalNumber: `{on.name}` carries no POSIX signal roster, and only a lane that halts a debuggee with a signal asks for one")
 	end 'os'
 end 'posixStopSignalNumber'
 
@@ -735,10 +735,10 @@ end 'posixSignalIsAHardwareFault'
 export function posixFaultSignal(kind HardwareFaultKind, on Os) returns MachineWord
 	return match kind 'kind'
 		divideByZero or
-			overflow gives posixFaultSignalNumber(PosixFaultSignal.arithmetic, on: on)
+		overflow gives posixFaultSignalNumber(PosixFaultSignal.arithmetic, on: on)
 
 		accessViolation or
-			stackOverflow gives posixFaultSignalNumber(PosixFaultSignal.segmentation, on: on)
+		stackOverflow gives posixFaultSignalNumber(PosixFaultSignal.segmentation, on: on)
 	end 'kind'
 end 'posixFaultSignal'
 
@@ -1012,7 +1012,7 @@ export function posixNetpollChunk(verb NetpollVerb) returns ByteArray
 		raiseBreak gives HostNetpollRaiseBreakName
 		drainBreak gives HostNetpollDrainBreakName
 		sleepOnTimer or
-			shortSleep gives HostNetpollSleepName
+		shortSleep gives HostNetpollSleepName
 		armSource gives HostNetpollArmSourceName
 		openChildSource gives HostNetpollChildOpenName
 		armChildSource gives HostNetpollArmChildName
@@ -1021,11 +1021,11 @@ export function posixNetpollChunk(verb NetpollVerb) returns ByteArray
 		openTimer panic("posixNetpollChunk: `openTimer` has no chunk on a POSIX lane — a sleep needs no object there, so the isel answers `PosixNoTimerObject` inline")
 		postChildExit panic("posixNetpollChunk: `postChildExit` forwards a child's exit to a completion port, and these kernels make a child's source readable themselves — `NetpollRuntime` emits it only under `NetpollShape.completionPort`")
 		openPipeServer or
-			openPipeClient or
-			skipCompletionOnSuccess or
-			spawnAttributesInit or
-			spawnAttributesInheritOnly or
-			spawnAttributesDelete panic("posixNetpollChunk: the Windows verbs build a named pipe and a child's handle list in steps; a POSIX pipe is one anonymous `pipe2` (`StdOp.osPipeCreate`) and a POSIX spawn has no handle list — `GtRuntime` emits them only on x64-windows")
+		openPipeClient or
+		skipCompletionOnSuccess or
+		spawnAttributesInit or
+		spawnAttributesInheritOnly or
+		spawnAttributesDelete panic("posixNetpollChunk: the Windows verbs build a named pipe and a child's handle list in steps; a POSIX pipe is one anonymous `pipe2` (`StdOp.osPipeCreate`) and a POSIX spawn has no handle list — `GtRuntime` emits them only on x64-windows")
 	end 'v'
 end 'posixNetpollChunk'
 
@@ -1035,26 +1035,26 @@ export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 	return match verb 'v'
 		openPoller gives 0
 		openBreak or
-			drainBreak or
-			sleepOnTimer or
-			shortSleep or
-			openChildSource or
-			closeChildSource or
-			armPipeSource gives 1
+		drainBreak or
+		sleepOnTimer or
+		shortSleep or
+		openChildSource or
+		closeChildSource or
+		armPipeSource gives 1
 		wait gives 4
 		raiseBreak or
-			armSource or
+		armSource or
 
-			// The child handle is the third operand and only Windows reads it: these lanes register the SOURCE the
-			// open already answered.
-			armChildSource gives 2
+		// The child handle is the third operand and only Windows reads it: these lanes register the SOURCE the
+		// open already answered.
+		armChildSource gives 2
 		openTimer panic("posixNetpollOperandCount: `openTimer` has no chunk on a POSIX lane — see `posixNetpollChunk`")
 		postChildExit panic("posixNetpollOperandCount: `postChildExit` has no chunk on a POSIX lane — see `posixNetpollChunk`")
 		openPipeServer or
-			openPipeClient or
-			skipCompletionOnSuccess or
-			spawnAttributesInit or
-			spawnAttributesInheritOnly or
-			spawnAttributesDelete panic("posixNetpollOperandCount: the Windows pipe and handle-list verbs have no chunk on a POSIX lane — see `posixNetpollChunk`")
+		openPipeClient or
+		skipCompletionOnSuccess or
+		spawnAttributesInit or
+		spawnAttributesInheritOnly or
+		spawnAttributesDelete panic("posixNetpollOperandCount: the Windows pipe and handle-list verbs have no chunk on a POSIX lane — see `posixNetpollChunk`")
 	end 'v'
 end 'posixNetpollOperandCount'

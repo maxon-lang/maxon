@@ -147,12 +147,12 @@ end 'stdTypeIsUnsigned'
 export function signedStdTypeOf(t StdType) returns StdType
 	return match t 'u'
 		i1 or
-			i8 or
-			i16 or
-			i32 or
-			i64 or
-			f32 or
-			f64 gives t
+		i8 or
+		i16 or
+		i32 or
+		i64 or
+		f32 or
+		f64 gives t
 		u8 gives StdType.i8
 		u16 gives StdType.i16
 		u32 gives StdType.i32
@@ -172,11 +172,11 @@ export function unsignedStdTypeOf(t StdType) returns StdType
 		i32 then return StdType.u32
 		i64 then return StdType.u64
 		u8 or
-			u16 or
-			u32 or
-			u64 then return t
+		u16 or
+		u32 or
+		u64 then return t
 		f32 or
-			f64 then panic("unsignedStdTypeOf: a FLOAT compare has no signedness — `ucomisd` answers in ZF/PF/CF whatever the operands' signs — so the front end must never route one here (`comparisonSignedness` gates it)")
+		f64 then panic("unsignedStdTypeOf: a FLOAT compare has no signedness — `ucomisd` answers in ZF/PF/CF whatever the operands' signs — so the front end must never route one here (`comparisonSignedness` gates it)")
 	end 'u'
 end 'unsignedStdTypeOf'
 
@@ -561,19 +561,19 @@ end 'StdBinOpcode'
 export function stdBinOpcodeIsFloatOnly(opcode StdBinOpcode) returns bool
 	return match opcode 'k'
 		add or
-			sub or
-			mul or
-			bitAnd or
-			bitOr or
-			bitXor or
-			shl or
-			shr or
-			shrLogical or
-			mulHighSigned or
-			mulHighUnsigned gives false
+		sub or
+		mul or
+		bitAnd or
+		bitOr or
+		bitXor or
+		shl or
+		shr or
+		shrLogical or
+		mulHighSigned or
+		mulHighUnsigned gives false
 		div or
-			min or
-			max gives true
+		min or
+		max gives true
 	end 'k'
 end 'stdBinOpcodeIsFloatOnly'
 
@@ -710,21 +710,21 @@ end 'StdUnaryOpcode'
 export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
 	return match opcode 'k'
 		neg or
-			bitNot or
-			logicalNot or
-			siToFp or
+		bitNot or
+		logicalNot or
+		siToFp or
 
-			// ⚠ `bitcastI64ToF64`'s result is an f64, so anything reading the opcode's name for its answer
-			// gets `true` and colours the operand into an XMM register that holds an i64.
-			bitcastI64ToF64 gives false
+		// ⚠ `bitcastI64ToF64`'s result is an f64, so anything reading the opcode's name for its answer
+		// gets `true` and colours the operand into an XMM register that holds an i64.
+		bitcastI64ToF64 gives false
 		fpToSi or
-			floor or
-			ceil or
-			round or
-			sqrt or
-			abs or
-			fneg or
-			bitcastF64ToI64 gives true
+		floor or
+		ceil or
+		round or
+		sqrt or
+		abs or
+		fneg or
+		bitcastF64ToI64 gives true
 	end 'k'
 end 'stdUnaryOperandIsFloat'
 
@@ -3141,150 +3141,150 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// an address materialization each stay inside this process, so none of them can hold an OS thread in
 		// the kernel — a callee's OWN blocking op is bracketed at the callee's site, not at the call.
 		const or
-			binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod or
-			condBranch or
-			branch or
-			ret or
-			param or
-			call or
-			retVoid or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			rdataAddr or
-			tryCall or
-			errorReturn or
-			funcAddr or
-			callIndirect or
-			switch or
-			witnessCall or
-			witnessTryCall or
-			stackRecordAddr or
-			memFill or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			loadAcquire or
-			storeRelease or
+		binOp or
+		unaryOp or
+		cmp or
+		binOpImm or
+		cmpImm or
+		div or
+		mod or
+		condBranch or
+		branch or
+		ret or
+		param or
+		call or
+		retVoid or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		rdataAddr or
+		tryCall or
+		errorReturn or
+		funcAddr or
+		callIndirect or
+		switch or
+		witnessCall or
+		witnessTryCall or
+		stackRecordAddr or
+		memFill or
+		atomicCas or
+		atomicRmw or
+		currentThreadToken or
+		loadAcquire or
+		storeRelease or
 
-			// The `schedulerBound` OS ops: the scheduler's own machinery, and the bounded-and-short rest.
-			//
-			// The socket descriptor band leads them: the bracket exists so `__sysmon` can take a processor
-			// away from a machine stuck in the kernel, and around a call that cannot be stuck it costs a
-			// retake, which `specs/netpoll-socket.md`'s first case counts. `getsockopt`, the verdict of a
-			// non-blocking connect, reads a word the kernel already holds.
-			osSocketCreate or
-			osSocketConnect or
-			osSocketError or
-			osSocketSend or
-			osSocketRecv or
-			osSocketClose or
+		// The `schedulerBound` OS ops: the scheduler's own machinery, and the bounded-and-short rest.
+		//
+		// The socket descriptor band leads them: the bracket exists so `__sysmon` can take a processor
+		// away from a machine stuck in the kernel, and around a call that cannot be stuck it costs a
+		// retake, which `specs/netpoll-socket.md`'s first case counts. `getsockopt`, the verdict of a
+		// non-blocking connect, reads a word the kernel already holds.
+		osSocketCreate or
+		osSocketConnect or
+		osSocketError or
+		osSocketSend or
+		osSocketRecv or
+		osSocketClose or
 
-			// Every lane that consults this table lowers the startup to a constant and enters no kernel.
-			osSocketStartup or
+		// Every lane that consults this table lowers the startup to a constant and enters no kernel.
+		osSocketStartup or
 
-			// ⛔ The lock pair is the deadlock this header sets out. Do not move them.
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
+		// ⛔ The lock pair is the deadlock this header sets out. Do not move them.
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
 
-			// ⛔ The waits are the scheduler waiting for its own work: an idle machine's park and
-			// `__sched_syscall_regain`'s wait go through them holding no processor, so there is none for
-			// `__sysmon` to take.
-			osWaitHandle or
+		// ⛔ The waits are the scheduler waiting for its own work: an idle machine's park and
+		// `__sched_syscall_regain`'s wait go through them holding no processor, so there is none for
+		// `__sysmon` to take.
+		osWaitHandle or
 
-			// ⛔ The poller is the scheduler waiting for its own work too: its blocking `wait` is made by a
-			// machine holding no processor, and a bracketed wait would be unjoinable at teardown for as
-			// long as it blocked.
-			//
-			// ⚠ One verb can block and is issued by a green thread that does hold a processor:
-			// `closeChildSource`. On the completion-port shape it is `UnregisterWaitEx(wait,
-			// INVALID_HANDLE_VALUE)`, which waits for a callback already running to finish, and that
-			// callback's whole body is one `PostQueuedCompletionStatus` — a wait on this process's own
-			// thread pool, not on something outside the scheduler.
-			osNetpoll or
-			osSocketOverlapped or
+		// ⛔ The poller is the scheduler waiting for its own work too: its blocking `wait` is made by a
+		// machine holding no processor, and a bracketed wait would be unjoinable at teardown for as
+		// long as it blocked.
+		//
+		// ⚠ One verb can block and is issued by a green thread that does hold a processor:
+		// `closeChildSource`. On the completion-port shape it is `UnregisterWaitEx(wait,
+		// INVALID_HANDLE_VALUE)`, which waits for a callback already running to finish, and that
+		// callback's whole body is one `PostQueuedCompletionStatus` — a wait on this process's own
+		// thread pool, not on something outside the scheduler.
+		osNetpoll or
+		osSocketOverlapped or
 
-			// ⚠ The server band is `schedulerBound` including its `accept`, which rests on the descriptor
-			// being non-blocking before the call is made: `bind`, `listen` and `getsockname` answer out of
-			// the socket object the kernel already holds, and an `accept` on a non-blocking listener
-			// answers `EAGAIN`/`WSAEWOULDBLOCK` at once and parks on the poller.
-			// `specs/netpoll-socket.md`'s `n-concurrent-reads-do-not-serialise` demands zero retakes
-			// across a window that accepts four connections.
-			osSocketServe or
-			osPathQuery or
+		// ⚠ The server band is `schedulerBound` including its `accept`, which rests on the descriptor
+		// being non-blocking before the call is made: `bind`, `listen` and `getsockname` answer out of
+		// the socket object the kernel already holds, and an `accept` on a non-blocking listener
+		// answers `EAGAIN`/`WSAEWOULDBLOCK` at once and parks on the poller.
+		// `specs/netpoll-socket.md`'s `n-concurrent-reads-do-not-serialise` demands zero retakes
+		// across a window that accepts four connections.
+		osSocketServe or
+		osPathQuery or
 
-			// The page band: bounded, and every one of them is reachable under `__slab_lock`.
-			osAllocPages or
-			osFreePages or
-			osCommitPages or
-			osReservePages or
-			osDecommitPages or
+		// The page band: bounded, and every one of them is reachable under `__slab_lock`.
+		osAllocPages or
+		osFreePages or
+		osCommitPages or
+		osReservePages or
+		osDecommitPages or
 
-			// Process teardown and the two panics do not return, so there is no processor to hand back.
-			osExit or
-			osPanic or
-			osPanicValue or
+		// Process teardown and the two panics do not return, so there is no processor to hand back.
+		osExit or
+		osPanic or
+		osPanicValue or
 
-			// The clocks, the handles, the events and the machine queries: bounded and short, every one.
-			osReadClock or
-			osReadWallClock or
-			osTickCountMs or
-			osThreadCpuTicks or
-			osCpuCount or
-			osGetPid or
-			osStdHandle or
+		// The clocks, the handles, the events and the machine queries: bounded and short, every one.
+		osReadClock or
+		osReadWallClock or
+		osTickCountMs or
+		osThreadCpuTicks or
+		osCpuCount or
+		osGetPid or
+		osStdHandle or
 
-			// ⚠ Unlike the path-taking `osFileAttributes`, which can reach a cold disk, this answers the
-			// type of an already-open handle out of the file object the kernel is holding.
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osHandleSetInherit or
-			osCloseHandle or
-			osFileClose or
-			osFileFindClose or
-			osCancelIo or
-			osLastError or
-			osEventCreate or
-			osSetEvent or
+		// ⚠ Unlike the path-taking `osFileAttributes`, which can reach a cold disk, this answers the
+		// type of an already-open handle out of the file object the kernel is holding.
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osHandleSetInherit or
+		osCloseHandle or
+		osFileClose or
+		osFileFindClose or
+		osCancelIo or
+		osLastError or
+		osEventCreate or
+		osSetEvent or
 
-			// ⚠ `osThreadCreate`'s only emitter is `__sched_startm`'s spawn arm, which runs inside
-			// `__sched_lock`, so bracketing it would be this header's deadlock by a second road. It is
-			// bounded anyway: creating a thread commits a stack and returns.
-			osThreadCreate or
-			osProcessExitCode or
-			osProcessTerminate or
+		// ⚠ `osThreadCreate`'s only emitter is `__sched_startm`'s spawn arm, which runs inside
+		// `__sched_lock`, so bracketing it would be this header's deadlock by a second road. It is
+		// bounded anyway: creating a thread commits a stack and returns.
+		osThreadCreate or
+		osProcessExitCode or
+		osProcessTerminate or
 
-			// ⚠ Freeing an address-info list walks a structure this process already holds; the resolution
-			// that filled it is the blocking half.
-			osSocketFreeAddrInfo or
-			osCommandLine or
-			osExecutablePath or
-			osProcessNamespace or
-			osRandomFill or
-			osEnvRead or
-			osEnvBlock or
-			osEnvBlockFree or
-			osEnterBackgroundPriority or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
+		// ⚠ Freeing an address-info list walks a structure this process already holds; the resolution
+		// that filled it is the blocking half.
+		osSocketFreeAddrInfo or
+		osCommandLine or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osEnvRead or
+		osEnvBlock or
+		osEnvBlockFree or
+		osEnterBackgroundPriority or
+		tlsAlloc or
+		tlsSetValue or
+		tlsSlotLoad or
 
-			// The unmap tears a mapping down and the unpublish removes a directory entry; neither waits on
-			// anything, which is `osCloseHandle`'s position.
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
+		// The unmap tears a mapping down and the unpublish removes a directory entry; neither waits on
+		// anything, which is `osCloseHandle`'s position.
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
 
-			// A counter increment enters no kernel at all — it is one atomic instruction against a fixed
-			// address.
-			covPoint gives SyscallClass.schedulerBound
+		// A counter increment enters no kernel at all — it is one atomic instruction against a fixed
+		// address.
+		covPoint gives SyscallClass.schedulerBound
 
 		// --- `blocking`: the ops a green thread can sit inside for an unbounded time ---
 		//
@@ -3293,67 +3293,67 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// here because a write to a pipe whose reader has stopped reading blocks as long as the reader
 		// takes, which is a property of the far end.
 		osWriteStdout or
-			osWriteStderr or
-			osWriteFile or
+		osWriteStderr or
+		osWriteFile or
 
-			// `__con_read_stdin` is a plain synchronous read of standard input with no park
-			// (`ConsoleRuntime`), so a green thread inside it holds its OS thread in the kernel until the
-			// user presses return — which `specs/sched-syscall-handoff.md`'s ordering case measures. The
-			// overlapped spelling completes synchronously on every POSIX lane.
-			osReadFile or
-			osReadOverlapped or
+		// `__con_read_stdin` is a plain synchronous read of standard input with no park
+		// (`ConsoleRuntime`), so a green thread inside it holds its OS thread in the kernel until the
+		// user presses return — which `specs/sched-syscall-handoff.md`'s ordering case measures. The
+		// overlapped spelling completes synchronously on every POSIX lane.
+		osReadFile or
+		osReadOverlapped or
 
-			// The file-system family: every one of them can reach a cold disk, a network share or a
-			// stalled device.
-			osFileOpenRead or
-			osFileOpenWrite or
-			osFileOpenWriteExecutable or
-			osFileOpenCreateNew or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
+		// The file-system family: every one of them can reach a cold disk, a network share or a
+		// stalled device.
+		osFileOpenRead or
+		osFileOpenWrite or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
 
-			// The file-mapping pair, which fault pages in from the same devices.
-			osOpenNamedSegment or
-			osMapNamedSegment or
+		// The file-mapping pair, which fault pages in from the same devices.
+		osOpenNamedSegment or
+		osMapNamedSegment or
 
-			// Spawning a child image, making a pipe, peeking a child's pipe and waiting for a child all wait
-			// on another process.
-			osProcessSpawn or
-			osProcessSpawnInherit or
-			osPipeCreate or
-			osPipeCreateOutbound or
-			osPipePeek or
-			osWaitChild or
+		// Spawning a child image, making a pipe, peeking a child's pipe and waiting for a child all wait
+		// on another process.
+		osProcessSpawn or
+		osProcessSpawnInherit or
+		osPipeCreate or
+		osPipeCreateOutbound or
+		osPipePeek or
+		osWaitChild or
 
-			// The one socket call that really does wait on another party: resolution speaks to a resolver.
-			//
-			// ⚠ The descriptor ops are not here, and that is this table's one lane-shaped entry. Every lane
-			// that reaches `StdLoweringShared.opTakesSyscallBracket` drives its sockets non-blocking
-			// (`ManagedSocketRuntime.SocketWaitShape.polled`), so `socket`, `connect`, `send`, `recv` and
-			// `close` answer at once — `EAGAIN` rather than a wait — and the green thread suspends on the
-			// poller. x64-windows suspends on the poller too, one operation at a time, and classifies its
-			// own imports through `X64GtRuntime.gtShimSyscallClassOf`.
-			osSocketResolve or
+		// The one socket call that really does wait on another party: resolution speaks to a resolver.
+		//
+		// ⚠ The descriptor ops are not here, and that is this table's one lane-shaped entry. Every lane
+		// that reaches `StdLoweringShared.opTakesSyscallBracket` drives its sockets non-blocking
+		// (`ManagedSocketRuntime.SocketWaitShape.polled`), so `socket`, `connect`, `send`, `recv` and
+		// `close` answer at once — `EAGAIN` rather than a wait — and the green thread suspends on the
+		// poller. x64-windows suspends on the poller too, one operation at a time, and classifies its
+		// own imports through `X64GtRuntime.gtShimSyscallClassOf`.
+		osSocketResolve or
 
-			// A section create reaches the memory manager and can touch the page file, as the open and the
-			// map do.
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
+		// A section create reaches the memory manager and can touch the page file, as the open and the
+		// map do.
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
 
-			// ⚠ One op over the whole roster, so the answer must be the widest member's. Copying a stack
-			// window out of a suspended thread can fault a paged-out page, a module walk reads another
-			// process's loader data and a debug-event wait sits until the debuggee stops, all
-			// `osMapNamedSegment`'s position; the thread-control and timer
-			// services alone would be `schedulerBound`. The per-import table (`gtShimSyscallClassOf`) keys
-			// on a slot rather than an op and can afford that precision.
-			osHostProcess gives SyscallClass.blocking
+		// ⚠ One op over the whole roster, so the answer must be the widest member's. Copying a stack
+		// window out of a suspended thread can fault a paged-out page, a module walk reads another
+		// process's loader data and a debug-event wait sits until the debuggee stops, all
+		// `osMapNamedSegment`'s position; the thread-control and timer
+		// services alone would be `schedulerBound`. The per-import table (`gtShimSyscallClassOf`) keys
+		// on a slot rather than an op and can afford that precision.
+		osHostProcess gives SyscallClass.blocking
 	end 'k'
 end 'stdOpSyscallClassOf'
 
@@ -3379,124 +3379,124 @@ end 'StdOpLabelKind'
 export function stdOpLabelKindOf(op StdOp) returns StdOpLabelKind
 	match op 'op'
 		const or
-			binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod or
-			condBranch or
-			branch or
-			ret or
-			param or
-			call or
-			retVoid or
-			loadIndirect or
-			storeIndirect or
-			osAllocPages or
-			osWriteStdout or
-			tryCall or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osWaitChild or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osProcessNamespace or
-			osRandomFill or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketError or
-			osSocketSend or
-			osSocketRecv or
-			osSocketClose or
-			osPathQuery or
-			osSocketOverlapped or
-			osSocketServe or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osFileOpenCreateNew or
-			osEnvBlock or
-			osEnvBlockFree or
-			loadAcquire or
-			storeRelease or
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostProcess or
-			osNetpoll then return StdOpLabelKind.none
+		binOp or
+		unaryOp or
+		cmp or
+		binOpImm or
+		cmpImm or
+		div or
+		mod or
+		condBranch or
+		branch or
+		ret or
+		param or
+		call or
+		retVoid or
+		loadIndirect or
+		storeIndirect or
+		osAllocPages or
+		osWriteStdout or
+		tryCall or
+		errorReturn or
+		osExit or
+		funcAddr or
+		callIndirect or
+		osPanic or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osWaitHandle or
+		osWaitChild or
+		osFreePages or
+		switch or
+		witnessCall or
+		osPipeCreate or
+		osEventCreate or
+		osThreadCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osReadOverlapped or
+		osLastError or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osGetPid or
+		osPipeCreateOutbound or
+		osWriteFile or
+		osReadWallClock or
+		witnessTryCall or
+		osFileOpenRead or
+		osFileClose or
+		osReadFile or
+		osFileOpenWrite or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindClose or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
+		osPanicValue or
+		osCommandLine or
+		osStdHandle or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osWriteStderr or
+		stackRecordAddr or
+		osOpenNamedSegment or
+		osMapNamedSegment or
+		osTickCountMs or
+		osHandleSetInherit or
+		osPipePeek or
+		osEnvRead or
+		osProcessTerminate or
+		osSocketStartup or
+		osSocketResolve or
+		osSocketFreeAddrInfo or
+		osSocketCreate or
+		osSocketConnect or
+		osSocketError or
+		osSocketSend or
+		osSocketRecv or
+		osSocketClose or
+		osPathQuery or
+		osSocketOverlapped or
+		osSocketServe or
+		osCpuCount or
+		osThreadCpuTicks or
+		osDecommitPages or
+		memFill or
+		osCommitPages or
+		osReservePages or
+		atomicCas or
+		atomicRmw or
+		currentThreadToken or
+		tlsAlloc or
+		tlsSetValue or
+		tlsSlotLoad or
+		osSetEvent or
+		osEnterBackgroundPriority or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osEnvBlock or
+		osEnvBlockFree or
+		loadAcquire or
+		storeRelease or
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osHostProcess or
+		osNetpoll then return StdOpLabelKind.none
 		globalAddr then return StdOpLabelKind.dataSlot
 		rdataAddr then return StdOpLabelKind.rdata
 	end 'op'
@@ -3782,32 +3782,32 @@ end 'StdArithOperands'
 export function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
 	return match opcode 'o'
 		add or
-			mul or
-			bitAnd or
-			bitOr or
-			bitXor or
+		mul or
+		bitAnd or
+		bitOr or
+		bitXor or
 
-			// `mulhi(a, b)` is `mulhi(b, a)`: the 128-bit product is commutative and taking its top
-			// half does not change that. ⚠ Answering it here costs `commutesForCoalescing` nothing, because
-			// that reader asks `integerBinOpIsTwoAddress` as well and x64's `imul r/m64` is a FIXED-REGISTER
-			// form rather than a two-address one — so no swap is ever taken on this opcode today. The answer
-			// is still the opcode's own, and stating it any other way would make this roster lie.
-			mulHighSigned or
-			mulHighUnsigned gives true
+		// `mulhi(a, b)` is `mulhi(b, a)`: the 128-bit product is commutative and taking its top
+		// half does not change that. ⚠ Answering it here costs `commutesForCoalescing` nothing, because
+		// that reader asks `integerBinOpIsTwoAddress` as well and x64's `imul r/m64` is a FIXED-REGISTER
+		// form rather than a two-address one — so no swap is ever taken on this opcode today. The answer
+		// is still the opcode's own, and stating it any other way would make this roster lie.
+		mulHighSigned or
+		mulHighUnsigned gives true
 		sub or
-			shl or
-			shr or
-			shrLogical or
+		shl or
+		shr or
+		shrLogical or
 
-			// The three FLOAT-ONLY opcodes:
-			//   • `div` — `a / b` is not `b / a`.
-			//   • `min`/`max` — `min(a, b)` is `a` when `a < b` and `b` otherwise, `max(a, b)` is `a` when
-			//     `a > b` and `b` otherwise, and a STRICT comparison is FALSE on unordered — so `min(nan, 5.0)`
-			//     is `5.0` while `min(5.0, nan)` is `nan`, and `max` answers the same pair. A swap changes the
-			//     answer. See `StdBinOpcode`'s `min`/`max` header.
-			div or
-			min or
-			max gives false
+		// The three FLOAT-ONLY opcodes:
+		//   • `div` — `a / b` is not `b / a`.
+		//   • `min`/`max` — `min(a, b)` is `a` when `a < b` and `b` otherwise, `max(a, b)` is `a` when
+		//     `a > b` and `b` otherwise, and a STRICT comparison is FALSE on unordered — so `min(nan, 5.0)`
+		//     is `5.0` while `min(5.0, nan)` is `nan`, and `max` answers the same pair. A swap changes the
+		//     answer. See `StdBinOpcode`'s `min`/`max` header.
+		div or
+		min or
+		max gives false
 	end 'o'
 end 'binOpcodeIsCommutative'
 
@@ -3817,125 +3817,125 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 	match op 'b'
 		const or
 
-			// `div`/`mod` are `isPure: false` — x64 `idiv` faults on a zero divisor and on
-			// `i64.min / -1` — so they may be neither folded away, nor dropped when unread, nor answered
-			// once for two occurrences. Everything after them defines call returns, kernel answers and
-			// addresses, none of which is an arithmetic shape.
-			div or
-			mod or
-			condBranch or
-			branch or
-			ret or
-			param or
-			call or
-			retVoid or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			tryCall or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osWaitChild or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osProcessNamespace or
-			osRandomFill or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osFileOpenCreateNew or
-			osEnvBlock or
-			osEnvBlockFree or
-			loadAcquire or
-			storeRelease or
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostProcess or
-			osNetpoll or
-			osPathQuery or
-			osSocketOverlapped or
-			osSocketServe then operands.recordNeither()
+		// `div`/`mod` are `isPure: false` — x64 `idiv` faults on a zero divisor and on
+		// `i64.min / -1` — so they may be neither folded away, nor dropped when unread, nor answered
+		// once for two occurrences. Everything after them defines call returns, kernel answers and
+		// addresses, none of which is an arithmetic shape.
+		div or
+		mod or
+		condBranch or
+		branch or
+		ret or
+		param or
+		call or
+		retVoid or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		osAllocPages or
+		osWriteStdout or
+		rdataAddr or
+		tryCall or
+		errorReturn or
+		osExit or
+		funcAddr or
+		callIndirect or
+		osPanic or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osWaitHandle or
+		osWaitChild or
+		osFreePages or
+		switch or
+		witnessCall or
+		osPipeCreate or
+		osEventCreate or
+		osThreadCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osReadOverlapped or
+		osLastError or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osGetPid or
+		osPipeCreateOutbound or
+		osWriteFile or
+		osReadWallClock or
+		witnessTryCall or
+		osFileOpenRead or
+		osFileClose or
+		osReadFile or
+		osFileOpenWrite or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindClose or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
+		osPanicValue or
+		osCommandLine or
+		osStdHandle or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osWriteStderr or
+		stackRecordAddr or
+		osOpenNamedSegment or
+		osMapNamedSegment or
+		osTickCountMs or
+		osHandleSetInherit or
+		osPipePeek or
+		osEnvRead or
+		osProcessTerminate or
+		osSocketStartup or
+		osSocketResolve or
+		osSocketFreeAddrInfo or
+		osSocketCreate or
+		osSocketConnect or
+		osSocketSend or
+		osSocketError or
+		osSocketRecv or
+		osSocketClose or
+		osCpuCount or
+		osThreadCpuTicks or
+		osDecommitPages or
+		memFill or
+		osCommitPages or
+		osReservePages or
+		atomicCas or
+		atomicRmw or
+		currentThreadToken or
+		tlsAlloc or
+		tlsSetValue or
+		tlsSlotLoad or
+		osSetEvent or
+		osEnterBackgroundPriority or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osEnvBlock or
+		osEnvBlockFree or
+		loadAcquire or
+		storeRelease or
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osHostProcess or
+		osNetpoll or
+		osPathQuery or
+		osSocketOverlapped or
+		osSocketServe then operands.recordNeither()
 		binOp(resultId, lhs, rhs, opcode, operandType) then operands.recordBinOp(resultId, left: lhs, right: rhs, binOpcode: opcode, readType: operandType)
 		unaryOp(resultId, operand, opcode, operandType) then operands.recordUnaryOp(resultId, only: operand, unaryOpcodeRead: opcode, readType: operandType)
 		cmp(resultId, lhs, rhs, pred, operandType) then operands.recordCmp(resultId, left: lhs, right: rhs, cmpPred: pred, readType: operandType)
@@ -4070,118 +4070,118 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 		atomicRmw(resultId, addrId, _, _) then access.recordAtomic(resultId, address: addrId, kind: StdAtomicKind.readModifyWrite)
 		atomicCas(resultId, addrId, _, _) then access.recordAtomic(resultId, address: addrId, kind: StdAtomicKind.compareAndSwap)
 		binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod or
-			condBranch or
-			branch or
-			ret or
-			param or
-			call or
-			retVoid or
-			osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			tryCall or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osWaitChild or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osProcessNamespace or
-			osRandomFill or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osFileOpenCreateNew or
-			osEnvBlock or
-			osEnvBlockFree or
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostProcess or
-			osNetpoll or
-			osPathQuery or
-			osSocketOverlapped or
-			osSocketServe then access.recordNeither()
+		unaryOp or
+		cmp or
+		binOpImm or
+		cmpImm or
+		div or
+		mod or
+		condBranch or
+		branch or
+		ret or
+		param or
+		call or
+		retVoid or
+		osAllocPages or
+		osWriteStdout or
+		rdataAddr or
+		tryCall or
+		errorReturn or
+		osExit or
+		funcAddr or
+		callIndirect or
+		osPanic or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osWaitHandle or
+		osWaitChild or
+		osFreePages or
+		switch or
+		witnessCall or
+		osPipeCreate or
+		osEventCreate or
+		osThreadCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osReadOverlapped or
+		osLastError or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osGetPid or
+		osPipeCreateOutbound or
+		osWriteFile or
+		osReadWallClock or
+		witnessTryCall or
+		osFileOpenRead or
+		osFileClose or
+		osReadFile or
+		osFileOpenWrite or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindClose or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
+		osPanicValue or
+		osCommandLine or
+		osStdHandle or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osWriteStderr or
+		stackRecordAddr or
+		osOpenNamedSegment or
+		osMapNamedSegment or
+		osTickCountMs or
+		osHandleSetInherit or
+		osPipePeek or
+		osEnvRead or
+		osProcessTerminate or
+		osSocketStartup or
+		osSocketResolve or
+		osSocketFreeAddrInfo or
+		osSocketCreate or
+		osSocketConnect or
+		osSocketSend or
+		osSocketError or
+		osSocketRecv or
+		osSocketClose or
+		osCpuCount or
+		osThreadCpuTicks or
+		osDecommitPages or
+		memFill or
+		osCommitPages or
+		osReservePages or
+		currentThreadToken or
+		tlsAlloc or
+		tlsSetValue or
+		tlsSlotLoad or
+		osSetEvent or
+		osEnterBackgroundPriority or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osEnvBlock or
+		osEnvBlockFree or
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osHostProcess or
+		osNetpoll or
+		osPathQuery or
+		osSocketOverlapped or
+		osSocketServe then access.recordNeither()
 	end 'a'
 end 'classifyAccessOperands'
 
@@ -4387,124 +4387,124 @@ end 'StdCallOperands'
 module function classifyCallOperands(op StdOp, call StdCallOperands)
 	match op 'c'
 		const or
-			binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod or
-			condBranch or
-			branch or
-			ret or
-			param or
-			retVoid or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osWaitChild or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osProcessNamespace or
-			osRandomFill or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osFileOpenCreateNew or
-			osEnvBlock or
-			osEnvBlockFree or
-			loadAcquire or
-			storeRelease or
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostProcess or
-			osNetpoll or
-			osPathQuery or
-			osSocketOverlapped or
-			osSocketServe then call.recordOther()
+		binOp or
+		unaryOp or
+		cmp or
+		binOpImm or
+		cmpImm or
+		div or
+		mod or
+		condBranch or
+		branch or
+		ret or
+		param or
+		retVoid or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		osAllocPages or
+		osWriteStdout or
+		rdataAddr or
+		errorReturn or
+		osExit or
+		funcAddr or
+		callIndirect or
+		osPanic or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osWaitHandle or
+		osWaitChild or
+		osFreePages or
+		switch or
+		witnessCall or
+		osPipeCreate or
+		osEventCreate or
+		osThreadCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osReadOverlapped or
+		osLastError or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osGetPid or
+		osPipeCreateOutbound or
+		osWriteFile or
+		osReadWallClock or
+		witnessTryCall or
+		osFileOpenRead or
+		osFileClose or
+		osReadFile or
+		osFileOpenWrite or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindClose or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
+		osPanicValue or
+		osCommandLine or
+		osStdHandle or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osWriteStderr or
+		stackRecordAddr or
+		osOpenNamedSegment or
+		osMapNamedSegment or
+		osTickCountMs or
+		osHandleSetInherit or
+		osPipePeek or
+		osEnvRead or
+		osProcessTerminate or
+		osSocketStartup or
+		osSocketResolve or
+		osSocketFreeAddrInfo or
+		osSocketCreate or
+		osSocketConnect or
+		osSocketSend or
+		osSocketError or
+		osSocketRecv or
+		osSocketClose or
+		osCpuCount or
+		osThreadCpuTicks or
+		osDecommitPages or
+		memFill or
+		osCommitPages or
+		osReservePages or
+		atomicCas or
+		atomicRmw or
+		currentThreadToken or
+		tlsAlloc or
+		tlsSetValue or
+		tlsSlotLoad or
+		osSetEvent or
+		osEnterBackgroundPriority or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osEnvBlock or
+		osEnvBlockFree or
+		loadAcquire or
+		storeRelease or
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osHostProcess or
+		osNetpoll or
+		osPathQuery or
+		osSocketOverlapped or
+		osSocketServe then call.recordOther()
 		call(resultId, callee, args) then call.recordCall(resultId, name: callee, arguments: args)
 		tryCall(resultId, errorFlagId, callee, args) then call.recordTryCall(resultId, flag: errorFlagId, name: callee, arguments: args)
 	end 'c'
@@ -4887,26 +4887,26 @@ end 'collectFunctionValueUses'
 export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 	match op 'u'
 		const or
-			branch or
-			param or
-			retVoid or
-			globalAddr or
-			rdataAddr or
-			funcAddr or
-			osPanic or
-			osCommandLine or
-			osEventCreate or
-			osLastError or
-			osGetPid or
-			osEnvBlock or
-			covPoint or
-			stackRecordAddr or
-			osTickCountMs or
-			osSocketCreate or
-			osCpuCount or
-			currentThreadToken or
-			tlsAlloc or
-			osEnterBackgroundPriority then break
+		branch or
+		param or
+		retVoid or
+		globalAddr or
+		rdataAddr or
+		funcAddr or
+		osPanic or
+		osCommandLine or
+		osEventCreate or
+		osLastError or
+		osGetPid or
+		osEnvBlock or
+		covPoint or
+		stackRecordAddr or
+		osTickCountMs or
+		osSocketCreate or
+		osCpuCount or
+		currentThreadToken or
+		tlsAlloc or
+		osEnterBackgroundPriority then break
 		binOp(_, lhs, rhs, _, _) then insertUsePair(referenced, a: lhs, b: rhs)
 		cmp(_, lhs, rhs, _, _) then insertUsePair(referenced, a: lhs, b: rhs)
 		div(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
@@ -5211,43 +5211,43 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osEnterBackgroundPriority(resultId) then def.recordOne(resultId)
 		loadAcquire(resultId, _, _, _) then def.recordOne(resultId)
 		condBranch or
-			branch or
-			ret or
-			retVoid or
-			storeIndirect or
-			errorReturn or
-			osExit or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osFreePages or
-			switch or
-			osPipeCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osPipeCreateOutbound or
-			osReadWallClock or
-			osFileClose or
-			osEnvBlockFree or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osFileFindClose or
-			osPanicValue or
-			osHandleSetInherit or
-			osSocketFreeAddrInfo or
-			osSocketClose or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			tlsSetValue or
-			osSetEvent or
-			storeRelease then def.recordNone()
+		branch or
+		ret or
+		retVoid or
+		storeIndirect or
+		errorReturn or
+		osExit or
+		osPanic or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osFreePages or
+		switch or
+		osPipeCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osPipeCreateOutbound or
+		osReadWallClock or
+		osFileClose or
+		osEnvBlockFree or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osFileFindClose or
+		osPanicValue or
+		osHandleSetInherit or
+		osSocketFreeAddrInfo or
+		osSocketClose or
+		osThreadCpuTicks or
+		osDecommitPages or
+		memFill or
+		tlsSetValue or
+		osSetEvent or
+		storeRelease then def.recordNone()
 		tryCall(resultId, errorFlagId, _, _) then def.recordPair(resultId, errorFlagId: errorFlagId)
 		witnessTryCall(resultId, errorFlagId, _, _, _, _, _) then def.recordPair(resultId, errorFlagId: errorFlagId)
 	end 'r'
@@ -5326,26 +5326,26 @@ end 'insertUseCalleeAndArgs'
 function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 	return match op 'r'
 		const or
-			branch or
-			param or
-			retVoid or
-			globalAddr or
-			rdataAddr or
-			funcAddr or
-			osPanic or
-			osEventCreate or
-			osLastError or
-			osGetPid or
-			stackRecordAddr or
-			osTickCountMs or
-			covPoint or
-			osCommandLine or
-			osEnvBlock or
-			osSocketCreate or
-			osCpuCount or
-			currentThreadToken or
-			tlsAlloc or
-			osEnterBackgroundPriority gives op
+		branch or
+		param or
+		retVoid or
+		globalAddr or
+		rdataAddr or
+		funcAddr or
+		osPanic or
+		osEventCreate or
+		osLastError or
+		osGetPid or
+		stackRecordAddr or
+		osTickCountMs or
+		covPoint or
+		osCommandLine or
+		osEnvBlock or
+		osSocketCreate or
+		osCpuCount or
+		currentThreadToken or
+		tlsAlloc or
+		osEnterBackgroundPriority gives op
 		binOp(resultId, lhs, rhs, opcode, operandType) gives StdOp.binOp(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), opcode: opcode, operandType: operandType)
 		unaryOp(resultId, operand, opcode, operandType) gives StdOp.unaryOp(resultId, operand: remappedValue(operand, subst: subst), opcode: opcode, operandType: operandType)
 		cmp(resultId, lhs, rhs, pred, operandType) gives StdOp.cmp(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), pred: pred, operandType: operandType)
@@ -5698,94 +5698,94 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		loadIndirect(resultId, addrId, offset, valueType) gives StdOp.loadIndirect(clonedValue(resultId, subst: valueSubst), addrId: remappedValue(addrId, subst: valueSubst), offset: offset, valueType: valueType)
 		storeIndirect(addrId, offset, valueId, valueType) gives StdOp.storeIndirect(remappedValue(addrId, subst: valueSubst), offset: offset, valueId: remappedValue(valueId, subst: valueSubst), valueType: valueType)
 		osAllocPages or
-			osWriteStdout or
-			errorReturn or
-			osExit or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osWaitChild or
-			osFreePages or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osProcessNamespace or
-			osRandomFill or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			osCommitPages or
-			osReservePages or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osFileOpenCreateNew or
-			osEnvBlock or
-			osEnvBlockFree or
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostProcess or
-			osNetpoll or
-			osPathQuery or
-			osSocketOverlapped or
-			osSocketServe gives refuseUnclonable(op)
+		osWriteStdout or
+		errorReturn or
+		osExit or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osWaitHandle or
+		osWaitChild or
+		osFreePages or
+		osPipeCreate or
+		osEventCreate or
+		osThreadCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osReadOverlapped or
+		osLastError or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osGetPid or
+		osPipeCreateOutbound or
+		osWriteFile or
+		osReadWallClock or
+		osFileOpenRead or
+		osFileClose or
+		osReadFile or
+		osFileOpenWrite or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindClose or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
+		osCommandLine or
+		osStdHandle or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osWriteStderr or
+		stackRecordAddr or
+		osOpenNamedSegment or
+		osMapNamedSegment or
+		osTickCountMs or
+		osHandleSetInherit or
+		osPipePeek or
+		osEnvRead or
+		osProcessTerminate or
+		osSocketStartup or
+		osSocketResolve or
+		osSocketFreeAddrInfo or
+		osSocketCreate or
+		osSocketConnect or
+		osSocketSend or
+		osSocketError or
+		osSocketRecv or
+		osSocketClose or
+		osCpuCount or
+		osThreadCpuTicks or
+		osDecommitPages or
+		osCommitPages or
+		osReservePages or
+		currentThreadToken or
+		tlsAlloc or
+		tlsSetValue or
+		osSetEvent or
+		osEnterBackgroundPriority or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osEnvBlock or
+		osEnvBlockFree or
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osHostProcess or
+		osNetpoll or
+		osPathQuery or
+		osSocketOverlapped or
+		osSocketServe gives refuseUnclonable(op)
 		rdataAddr(resultId, label) gives StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: ownedBytes(label, payloads: payloads))
 		tryCall(resultId, errorFlagId, callee, args) gives StdOp.tryCall(clonedValue(resultId, subst: valueSubst), errorFlagId: clonedValue(errorFlagId, subst: valueSubst), callee: ownedBytes(callee, payloads: payloads), args: remappedArgs(args, subst: valueSubst))
 		funcAddr(resultId, funcName) gives StdOp.funcAddr(clonedValue(resultId, subst: valueSubst), funcName: ownedBytes(funcName, payloads: payloads))
@@ -6229,123 +6229,123 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 
 	match op 'term'
 		const or
-			binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod or
-			ret or
-			param or
-			call or
-			retVoid or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			tryCall or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osWaitChild or
-			osFreePages or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osProcessNamespace or
-			osRandomFill or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osFileOpenCreateNew or
-			osEnvBlock or
-			osEnvBlockFree or
-			loadAcquire or
-			storeRelease or
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostProcess or
-			osNetpoll or
-			osPathQuery or
-			osSocketOverlapped or
-			osSocketServe then break
+		binOp or
+		unaryOp or
+		cmp or
+		binOpImm or
+		cmpImm or
+		div or
+		mod or
+		ret or
+		param or
+		call or
+		retVoid or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		osAllocPages or
+		osWriteStdout or
+		rdataAddr or
+		tryCall or
+		errorReturn or
+		osExit or
+		funcAddr or
+		callIndirect or
+		osPanic or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osWaitHandle or
+		osWaitChild or
+		osFreePages or
+		witnessCall or
+		osPipeCreate or
+		osEventCreate or
+		osThreadCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osReadOverlapped or
+		osLastError or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osGetPid or
+		osPipeCreateOutbound or
+		osWriteFile or
+		osReadWallClock or
+		witnessTryCall or
+		osFileOpenRead or
+		osFileClose or
+		osReadFile or
+		osFileOpenWrite or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindClose or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
+		osPanicValue or
+		osCommandLine or
+		osStdHandle or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osWriteStderr or
+		stackRecordAddr or
+		osOpenNamedSegment or
+		osMapNamedSegment or
+		osTickCountMs or
+		osHandleSetInherit or
+		osPipePeek or
+		osEnvRead or
+		osProcessTerminate or
+		osSocketStartup or
+		osSocketResolve or
+		osSocketFreeAddrInfo or
+		osSocketCreate or
+		osSocketConnect or
+		osSocketSend or
+		osSocketError or
+		osSocketRecv or
+		osSocketClose or
+		osCpuCount or
+		osThreadCpuTicks or
+		osDecommitPages or
+		memFill or
+		osCommitPages or
+		osReservePages or
+		atomicCas or
+		atomicRmw or
+		currentThreadToken or
+		tlsAlloc or
+		tlsSetValue or
+		tlsSlotLoad or
+		osSetEvent or
+		osEnterBackgroundPriority or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osEnvBlock or
+		osEnvBlockFree or
+		loadAcquire or
+		storeRelease or
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osHostProcess or
+		osNetpoll or
+		osPathQuery or
+		osSocketOverlapped or
+		osSocketServe then break
 		condBranch(_, thenBlockId, elseBlockId) then pushBothTargets(out, thenBlockId: thenBlockId, elseBlockId: elseBlockId)
 		branch(targetBlockId) then out.push(targetBlockId)
 		switch(_, denseTargetBlockIds, defaultBlockId) then pushSwitchTargets(out, denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
@@ -6431,124 +6431,124 @@ end 'StdBranchOperands'
 module function classifyBranch(op StdOp, out StdBranchOperands)
 	match op 'term'
 		const or
-			binOp or
-			unaryOp or
-			cmp or
-			binOpImm or
-			cmpImm or
-			div or
-			mod or
-			ret or
-			param or
-			call or
-			retVoid or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			osAllocPages or
-			osWriteStdout or
-			rdataAddr or
-			tryCall or
-			errorReturn or
-			osExit or
-			funcAddr or
-			callIndirect or
-			osPanic or
-			osReadClock or
-			osProcessSpawn or
-			osProcessExitCode or
-			osCloseHandle or
-			osWaitHandle or
-			osWaitChild or
-			osFreePages or
-			switch or
-			witnessCall or
-			osPipeCreate or
-			osEventCreate or
-			osThreadCreate or
-			osLockInit or
-			osLockEnter or
-			osLockLeave or
-			osReadOverlapped or
-			osLastError or
-			osProcessSpawnInherit or
-			osCancelIo or
-			osGetPid or
-			osPipeCreateOutbound or
-			osWriteFile or
-			osReadWallClock or
-			witnessTryCall or
-			osFileOpenRead or
-			osFileClose or
-			osReadFile or
-			osFileOpenWrite or
-			osFileSize or
-			osFileDelete or
-			osFileRename or
-			osFileFindFirst or
-			osFileFindClose or
-			osFileFindNext or
-			osDirCreate or
-			osDirRemove or
-			osDirCurrentPath or
-			osFileAttributes or
-			osPanicValue or
-			osCommandLine or
-			osStdHandle or
-			osExecutablePath or
-			osProcessNamespace or
-			osRandomFill or
-			osWriteStderr or
-			stackRecordAddr or
-			osOpenNamedSegment or
-			osMapNamedSegment or
-			osTickCountMs or
-			osHandleSetInherit or
-			osPipePeek or
-			osEnvRead or
-			osProcessTerminate or
-			osSocketStartup or
-			osSocketResolve or
-			osSocketFreeAddrInfo or
-			osSocketCreate or
-			osSocketConnect or
-			osSocketSend or
-			osSocketError or
-			osSocketRecv or
-			osSocketClose or
-			osCpuCount or
-			osThreadCpuTicks or
-			osDecommitPages or
-			memFill or
-			osCommitPages or
-			osReservePages or
-			atomicCas or
-			atomicRmw or
-			currentThreadToken or
-			tlsAlloc or
-			tlsSetValue or
-			tlsSlotLoad or
-			osSetEvent or
-			osEnterBackgroundPriority or
-			osFileOpenWriteExecutable or
-			osFileOpenCreateNew or
-			osEnvBlock or
-			osEnvBlockFree or
-			loadAcquire or
-			storeRelease or
-			osHandleFileType or
-			osProcessProbe or
-			osProcessExitSignal or
-			osCreateNamedSegment or
-			osAdoptNamedSegment or
-			osUnmapNamedSegment or
-			osUnpublishNamedSegment or
-			covPoint or
-			osHostProcess or
-			osNetpoll or
-			osPathQuery or
-			osSocketOverlapped or
-			osSocketServe then out.recordOther()
+		binOp or
+		unaryOp or
+		cmp or
+		binOpImm or
+		cmpImm or
+		div or
+		mod or
+		ret or
+		param or
+		call or
+		retVoid or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		osAllocPages or
+		osWriteStdout or
+		rdataAddr or
+		tryCall or
+		errorReturn or
+		osExit or
+		funcAddr or
+		callIndirect or
+		osPanic or
+		osReadClock or
+		osProcessSpawn or
+		osProcessExitCode or
+		osCloseHandle or
+		osWaitHandle or
+		osWaitChild or
+		osFreePages or
+		switch or
+		witnessCall or
+		osPipeCreate or
+		osEventCreate or
+		osThreadCreate or
+		osLockInit or
+		osLockEnter or
+		osLockLeave or
+		osReadOverlapped or
+		osLastError or
+		osProcessSpawnInherit or
+		osCancelIo or
+		osGetPid or
+		osPipeCreateOutbound or
+		osWriteFile or
+		osReadWallClock or
+		witnessTryCall or
+		osFileOpenRead or
+		osFileClose or
+		osReadFile or
+		osFileOpenWrite or
+		osFileSize or
+		osFileDelete or
+		osFileRename or
+		osFileFindFirst or
+		osFileFindClose or
+		osFileFindNext or
+		osDirCreate or
+		osDirRemove or
+		osDirCurrentPath or
+		osFileAttributes or
+		osPanicValue or
+		osCommandLine or
+		osStdHandle or
+		osExecutablePath or
+		osProcessNamespace or
+		osRandomFill or
+		osWriteStderr or
+		stackRecordAddr or
+		osOpenNamedSegment or
+		osMapNamedSegment or
+		osTickCountMs or
+		osHandleSetInherit or
+		osPipePeek or
+		osEnvRead or
+		osProcessTerminate or
+		osSocketStartup or
+		osSocketResolve or
+		osSocketFreeAddrInfo or
+		osSocketCreate or
+		osSocketConnect or
+		osSocketSend or
+		osSocketError or
+		osSocketRecv or
+		osSocketClose or
+		osCpuCount or
+		osThreadCpuTicks or
+		osDecommitPages or
+		memFill or
+		osCommitPages or
+		osReservePages or
+		atomicCas or
+		atomicRmw or
+		currentThreadToken or
+		tlsAlloc or
+		tlsSetValue or
+		tlsSlotLoad or
+		osSetEvent or
+		osEnterBackgroundPriority or
+		osFileOpenWriteExecutable or
+		osFileOpenCreateNew or
+		osEnvBlock or
+		osEnvBlockFree or
+		loadAcquire or
+		storeRelease or
+		osHandleFileType or
+		osProcessProbe or
+		osProcessExitSignal or
+		osCreateNamedSegment or
+		osAdoptNamedSegment or
+		osUnmapNamedSegment or
+		osUnpublishNamedSegment or
+		covPoint or
+		osHostProcess or
+		osNetpoll or
+		osPathQuery or
+		osSocketOverlapped or
+		osSocketServe then out.recordOther()
 		condBranch(condId, thenBlockId, elseBlockId) then out.recordCondBranch(condId, thenTarget: thenBlockId, elseTarget: elseBlockId)
 		branch(targetBlockId) then out.recordBranch(targetBlockId)
 	end 'term'

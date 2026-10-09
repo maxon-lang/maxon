@@ -486,10 +486,10 @@ end 'Instruction'
 match instruction 'optimize'
 	add(dst, src) then optimizeAdd(dst, src: src)
 	sub or
-		load or
-		store or
-		nop or
-		halt then break
+	load or
+	store or
+	nop or
+	halt then break
 end 'optimize'
 ```
 
@@ -514,9 +514,9 @@ match severity 'filter'
 	error then handleError()
 	fatal then handleFatal()
 	trace or
-		debug or
-		info or
-		warning then break
+	debug or
+	info or
+	warning then break
 end 'filter'
 ```
 

@@ -445,7 +445,7 @@ end 'meaningsAfter'
 function libraryMeaningAfter(sofar MeaningsReached) returns MeaningsReached
 	match sofar 'sofar'
 		none or
-			theLibrarys then return MeaningsReached.theLibrarys
+		theLibrarys then return MeaningsReached.theLibrarys
 		oneAuthors then return MeaningsReached.oneAuthors
 		several then return MeaningsReached.several
 	end 'sofar'
@@ -454,9 +454,9 @@ end 'libraryMeaningAfter'
 function authorMeaningAfter(sofar MeaningsReached) returns MeaningsReached
 	match sofar 'sofar'
 		none or
-			theLibrarys then return MeaningsReached.oneAuthors
+		theLibrarys then return MeaningsReached.oneAuthors
 		oneAuthors or
-			several then return MeaningsReached.several
+		several then return MeaningsReached.several
 	end 'sofar'
 end 'authorMeaningAfter'
 
@@ -464,8 +464,8 @@ module function severalMeanings(reached MeaningsReached) returns bool
 	match reached 'reached'
 		several then return true
 		none or
-			theLibrarys or
-			oneAuthors then return false
+		theLibrarys or
+		oneAuthors then return false
 	end 'reached'
 end 'severalMeanings'
 
@@ -2632,8 +2632,8 @@ function exitCodeAliasHigh(os Os) returns ParsedInt
 	return match os 'os'
 		windows gives U32MaxBound
 		linux or
-			macos or
-			wasi gives PosixExitCodeAliasHigh
+		macos or
+		wasi gives PosixExitCodeAliasHigh
 	end 'os'
 end 'exitCodeAliasHigh'
 
@@ -3032,7 +3032,7 @@ end 'cacheReadModuleDirectoryByFile'
 export function visibleThroughModuleDirectories(directories ModuleDirectoryByFile, visibility Visibility, declPath String, readerPath String) returns bool
 	match visibility 'tier'
 		global or
-			public then return true
+		public then return true
 		file then return declPath.equals(readerPath)
 		module then break
 	end 'tier'
@@ -4207,9 +4207,9 @@ export function typeDeclKeyword(kind TypeDeclKind) returns String
 		unionType gives "union"
 		interfaceType gives "interface"
 		rangedAlias or
-			functionAlias or
-			genericAlias or
-			tupleAlias gives "typealias"
+		functionAlias or
+		genericAlias or
+		tupleAlias gives "typealias"
 	end 'k'
 end 'typeDeclKeyword'
 
@@ -4219,13 +4219,13 @@ end 'typeDeclKeyword'
 export function isTypeAliasDecl(kind TypeDeclKind) returns bool
 	return match kind 'k'
 		structType or
-			enumType or
-			unionType or
-			interfaceType gives false
+		enumType or
+		unionType or
+		interfaceType gives false
 		rangedAlias or
-			functionAlias or
-			genericAlias or
-			tupleAlias gives true
+		functionAlias or
+		genericAlias or
+		tupleAlias gives true
 	end 'k'
 end 'isTypeAliasDecl'
 
@@ -4735,9 +4735,9 @@ function heldRefusesEverythingTheNewcomerWould(held TypeNameClaim, newcomer Type
 	return match slot 'slot'
 		corpusAlias gives libraryAliasReachContains(held, inner: newcomer, directories: directories)
 		none or
-			corpusNominal or
-			userNominal or
-			userAlias gives true
+		corpusNominal or
+		userNominal or
+		userAlias gives true
 	end 'slot'
 end 'heldRefusesEverythingTheNewcomerWould'
 
@@ -4798,16 +4798,16 @@ end 'libraryAliasesSomeReaderNamesBoth'
 function libraryAliasReachContains(outer TypeNameClaim, inner TypeNameClaim, directories ModuleDirectoryByFile) returns bool
 	return match inner.visibility 'innerTier'
 		global or
-			public gives claimReachesEveryReader(outer, directories: directories)
+		public gives claimReachesEveryReader(outer, directories: directories)
 		file or
-			module gives visibleThroughModuleDirectories(directories, visibility: outer.visibility, declPath: outer.declFilePath.toString(), readerPath: inner.declFilePath.toString())
+		module gives visibleThroughModuleDirectories(directories, visibility: outer.visibility, declPath: outer.declFilePath.toString(), readerPath: inner.declFilePath.toString())
 	end 'innerTier'
 end 'libraryAliasReachContains'
 
 function claimReachesEveryReader(claim TypeNameClaim, directories ModuleDirectoryByFile) returns bool
 	return match claim.visibility 'tier'
 		global or
-			public gives true
+		public gives true
 		file gives false
 		module gives moduleDirectoryIn(directories, path: claim.declFilePath.toString()).isEmpty()
 	end 'tier'
@@ -8060,10 +8060,10 @@ export function domainIsEnumBackingFloatBits(domain EnumBackingFieldDomain) retu
 	match domain 'd'
 		floatBits then return true
 		integerWord or
-			booleanWord or
-			enumWord or
-			nestedRecord or
-			unsupported then return false
+		booleanWord or
+		enumWord or
+		nestedRecord or
+		unsupported then return false
 	end 'd'
 end 'domainIsEnumBackingFloatBits'
 
@@ -8074,10 +8074,10 @@ export function domainIsEnumBackingNestedRecord(domain EnumBackingFieldDomain) r
 	match domain 'd'
 		nestedRecord then return true
 		integerWord or
-			booleanWord or
-			enumWord or
-			floatBits or
-			unsupported then return false
+		booleanWord or
+		enumWord or
+		floatBits or
+		unsupported then return false
 	end 'd'
 end 'domainIsEnumBackingNestedRecord'
 
@@ -8088,10 +8088,10 @@ export function domainIsEnumBackingUnsupported(domain EnumBackingFieldDomain) re
 	match domain 'd'
 		unsupported then return true
 		integerWord or
-			booleanWord or
-			enumWord or
-			floatBits or
-			nestedRecord then return false
+		booleanWord or
+		enumWord or
+		floatBits or
+		nestedRecord then return false
 	end 'd'
 end 'domainIsEnumBackingUnsupported'
 
@@ -8127,8 +8127,8 @@ function enumBackingLiteralSuitsDomain(kind EnumBackingLiteralKind, domain EnumB
 		// constant (`Inner{…}` / `Inner.create(…)`): a record is not one word, and its constants are its
 		// leaves.
 		enumWord or
-			nestedRecord or
-			unsupported then return false
+		nestedRecord or
+		unsupported then return false
 	end 'd'
 end 'enumBackingLiteralSuitsDomain'
 
@@ -8169,9 +8169,9 @@ function enumBackingDomainTakesANamedValue(domain EnumBackingFieldDomain, wanted
 		enumWord then return wanted == EnumBackingFieldDomain.enumWord
 		nestedRecord then return wanted == EnumBackingFieldDomain.nestedRecord
 		integerWord or
-			booleanWord or
-			floatBits or
-			unsupported then return false
+		booleanWord or
+		floatBits or
+		unsupported then return false
 	end 'd'
 end 'enumBackingDomainTakesANamedValue'
 
@@ -8479,8 +8479,8 @@ end 'enumInstanceAccessorOf'
 export function namesAnEnumInstanceAccessor(accessor EnumInstanceAccessor) returns bool
 	match accessor 'a'
 		ordinal or
-			caseName or
-			rawValue then return true
+		caseName or
+		rawValue then return true
 		notAnAccessor then return false
 	end 'a'
 end 'namesAnEnumInstanceAccessor'
@@ -9223,10 +9223,10 @@ export type EnumLayout
 	export function rawValueIdentity() returns EnumRawValueIdentity
 		match self.backing 'backing'
 			integer or
-				float or
-				character then return EnumRawValueIdentity.theTag
+			float or
+			character then return EnumRawValueIdentity.theTag
 			string or
-				functionRef then return EnumRawValueIdentity.recordedText
+			functionRef then return EnumRawValueIdentity.recordedText
 			structRecord then return EnumRawValueIdentity.incomparable
 			unresolved then panic("EnumLayout.rawValueIdentity: `{self.kindWord()} {String.from(self.name)}` has no backing yet — both readers ask this about a case already read, and reading a case is what fixes the backing (`Parser.requireEnumBacking`)")
 		end 'backing'
@@ -11079,11 +11079,11 @@ export function functionTypeDoorNoun(door FunctionTypeDoor) returns String
 		// names no place at all. Every one of them is worded by `functionTypeDoorSite` without asking here, so
 		// reaching this arm means a caller asked the wrong question of the door.
 		cast or
-			returned or
-			payload or
-			enumCaseBacking or
-			containerElement or
-			tupleElement then panic("functionTypeDoorNoun: only the assignment-shaped doors name a place with a word — every other door words itself in `functionTypeDoorSite`")
+		returned or
+		payload or
+		enumCaseBacking or
+		containerElement or
+		tupleElement then panic("functionTypeDoorNoun: only the assignment-shaped doors name a place with a word — every other door words itself in `functionTypeDoorSite`")
 	end 'd'
 end 'functionTypeDoorNoun'
 
@@ -11108,14 +11108,14 @@ export function assignedPlacePhrase(door FunctionTypeDoor, name ByteArray, owner
 
 	match door 'd'
 		variable or
-			global then return place
+		global then return place
 		field then break
 		cast or
-			returned or
-			payload or
-			enumCaseBacking or
-			containerElement or
-			tupleElement then panic("assignedPlacePhrase: unreachable — `functionTypeDoorNoun` refused this door one line above")
+		returned or
+		payload or
+		enumCaseBacking or
+		containerElement or
+		tupleElement then panic("assignedPlacePhrase: unreachable — `functionTypeDoorNoun` refused this door one line above")
 	end 'd'
 
 	match owner 'owner'

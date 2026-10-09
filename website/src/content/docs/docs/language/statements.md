@@ -227,7 +227,7 @@ last alternative carries `then` and the body. Two alternatives on one line are *
 ```maxon
 match score 'grade'
 	90 to 100 or
-		85 to 89 then print("A\n")
+	85 to 89 then print("A\n")
 	70 to 84 then print("B\n")
 	default then print("C\n")
 end 'grade'
@@ -251,8 +251,8 @@ function report(level Level)
 	match level 'filter'
 		error then print("error!\n")
 		trace or
-			info or
-			warning then break
+		info or
+		warning then break
 	end 'filter'
 end 'report'
 ```

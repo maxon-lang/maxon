@@ -230,6 +230,40 @@ test 'an option ahead of the command word is still refused'
 	Expect.equal(after, expected: before, message: "`--emit-ir fmt` was refused but WROTE ANYWAY. The refusal has to happen before the walk, not after it: a non-zero status over an already-rewritten tree is the incident with a better exit code.")
 end 'an option ahead of the command word is still refused'
 
+test 'an empty source and an empty .maxproj are left empty and counted unchanged'
+	let stagingDirName = "{StagingRootDirName}/empty-files-stay-empty"
+	let staged = freshStagingDir(stagingDirName)
+	let empties = [staged.join("Empty.maxon"), staged.join("marker.maxproj")]
+
+	for path in empties 'eachStaged'
+		try File.writeText(path, content: "") otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {path.toString()}.")
+	end 'eachStaged'
+
+	let run = spawnFmtOverStagedTree(stagingDirName, what: "the empty-file walk")
+	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+	Expect.equal(run.exitCode(), expected: SuccessExitCode, message: "`{TestedCommandName} .` over two empty files did not succeed. {said}")
+	Expect.equal(lastNonBlankLine(run.stdout.replace(CarriageReturn, with: "")), expected: summaryLine(0, unchanged: 2), message: "`{TestedCommandName} .` must count both empty files unchanged. {said}")
+
+	for path in empties 'eachEmpty'
+		Expect.equal(fileBody(path), expected: "", message: "`{path.filename()}` was empty and must stay empty, but `fmt` wrote into it. {said}")
+	end 'eachEmpty'
+end 'an empty source and an empty .maxproj are left empty and counted unchanged'
+
+test 'a CRLF source formats to LF lines, inside a block comment too'
+	let stagingDirName = "{StagingRootDirName}/crlf-block-comment"
+	let staged = freshStagingDir(stagingDirName)
+	let source = staged.join("Crlf.maxon")
+
+	try File.writeText(source, content: "/* x\r\n   y */\r\nlet b = 2\r\n") otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {source.toString()}.")
+
+	let run = spawnFmtOverStagedTree(stagingDirName, what: "the CRLF block-comment walk")
+	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+	Expect.equal(run.exitCode(), expected: SuccessExitCode, message: "`{TestedCommandName} .` over a CRLF source did not succeed. {said}")
+	Expect.equal(fileBody(source), expected: "/* x\n   y */\nlet b = 2\n", message: "a CRLF source must come out with LF line endings everywhere, a block comment's interior included. {said}")
+end 'a CRLF source formats to LF lines, inside a block comment too'
+
 test 'a directory walk formats a .maxproj, a .maxtasks and a .maxtest beside its sources'
 	let stagingDirName = "{StagingRootDirName}/maxproj-and-maxtasks-walked"
 	let staged = freshStagingDir(stagingDirName)
@@ -1050,8 +1084,9 @@ test 'a raw bit-pattern alias round-trips through the formatter'
 end 'a raw bit-pattern alias round-trips through the formatter'
 
 // shebang-preserved — a `#!` at byte 0 is skipped by the lexer, so no token carries it and only the
-// formatter's raw-source comment path can put it back. The file around it IS reformatted, which is what
-// separates preservation from the tool having declined to touch the file at all.
+// formatter's comment path, fed the lexer's comment log, can put it back. The file around it IS
+// reformatted, which is what separates preservation from the tool having declined to touch the file
+// at all.
 //
 test 'a shebang line survives the file around it being reformatted'
 	checkFixture("shebang-preserved")
@@ -1102,8 +1137,9 @@ end 'a file the lexer rejects is left byte-identical while its neighbour is form
 // There is no `expected-tree/` and no `expected-stdout.txt`, and there could not be: the oracle would
 // have to be re-minted on every edit to any of the sources, which is a re-bless per commit and a gate
 // that means nothing by the second one. What is asserted instead is what must hold for ANY correctly
-// formatted version of ANY of these files — every comment line still a comment line, every doc comment
-// still a doc comment, every line of code still there, and a second run with nothing left to do.
+// formatted version of ANY of these files — every comment line still that one comment line, in
+// order, every doc comment still a doc comment, every code token still there (`contentChange`), and
+// a second run with nothing left to do.
 //
 // ⛔ **THE COPY IS FORMATTED, NEVER THE ORIGINAL.** `fmt` is spawned with its working directory in
 // gitignored `temp/`, and nothing here passes it a path inside the checkout's source tree.
@@ -1130,63 +1166,9 @@ let StagedTreeArgument = "."
 let CensusSpawnName = "the real-sources census"
 let CensusTreeDescription = "the real sources staged from the tree"
 
-// The two comment markers the census counts; `engine-cases.maxtest` finds comments by the first
-// too. They are NOT disjoint — a `///` line contains `//` and is counted by both — and that is the
-// point: a doc comment demoted to a plain comment moves one count and not the other, where a census
-// of "comment lines" alone would read the swap as no change at all.
-export let CommentMarker = "//"
-let DocCommentMarker = "///"
-
 // What a staged file is called: the source's path with its separators folded into one name, so a flat
 // staging directory holds sources from anywhere in the tree without two of them colliding.
 let StagedNameSeparator = "_"
-
-// How many lines of one kind a file holds. Named for what it measures rather than for the loop.
-typealias LineTally = int(0 to u64.max)
-
-// ⭐⭐ **WHAT MUST HOLD FOR ANY CORRECTLY FORMATTED VERSION OF ANY FILE.** The three counts are taken
-// together and reported together, because a failure in which two of them moved says something quite
-// different from one in which a single count did.
-//
-// ⚠ **THEY COUNT LINES, NOT COMMENTS, AND THAT IS THE HONEST BOUND FOR A CENSUS OVER ARBITRARY
-// SOURCE**: a `//` inside a string literal is counted too. It does not matter, because the question
-// asked is INVARIANCE — the identical rule is applied to both texts, and a formatter that neither
-// loses nor duplicates content leaves every one of these numbers exactly where it was.
-type Census
-	let commentLines as LineTally
-	let docCommentLines as LineTally
-	let nonBlankLines as LineTally
-
-	// ONE walk, so a file of several thousand lines is split into lines once rather than once per count.
-	static function of(text String) returns Census
-		var comments = 0 as LineTally
-		var docComments = 0 as LineTally
-		var nonBlank = 0 as LineTally
-
-		for line in text.split(LineFeed) 'eachLine'
-			if line.contains(CommentMarker) 'bearsAComment'
-				comments = comments + 1
-			end 'bearsAComment'
-
-			if line.contains(DocCommentMarker) 'bearsADocComment'
-				docComments = docComments + 1
-			end 'bearsADocComment'
-
-			if not line.trim().isEmpty() 'saysSomething'
-				nonBlank = nonBlank + 1
-			end 'saysSomething'
-		end 'eachLine'
-
-		return Self{commentLines: comments, docCommentLines: docComments, nonBlankLines: nonBlank}
-	end 'of'
-
-	// The whole census as one line, which is what the two sides are compared as: an equality on text
-	// puts all three numbers in front of the reader at once, where three separate assertions would stop
-	// at the first and hide the SHAPE of the loss.
-	function rendered() returns String
-		return "{self.commentLines} comment line(s), {self.docCommentLines} doc-comment line(s), {self.nonBlankLines} non-blank line(s)"
-	end 'rendered'
-end 'Census'
 
 // One roster entry: where it came from, where its copy is, and what it said before `fmt` saw it. The
 // three travel together because every assertion compares the last against the second and names the
@@ -1204,9 +1186,10 @@ type CensusSource
 	// than a loop body reading three fields, because what a failure has to name — the ORIGIN path — is
 	// the field a caller outside the type would have to be handed in order to say it.
 	function requireNothingWasLost() throws TestFailure
-		let observed = Census.of(fileBody(self.staged)).rendered()
-		let expected = Census.of(self.before).rendered()
-		try Expect.equal(observed, expected: expected, message: "formatting changed what {self.origin} CONTAINS, not merely how it is laid out. A comment line that stopped being one was destroyed; a doc-comment line that stopped being one was demoted; a missing non-blank line is code or prose that is gone. Layout is the formatter's to change, and not one of these three is layout.")
+		match contentChange(self.before, after: fileBody(self.staged)) 'verdict'
+			same then return
+			differs(detail) then try Expect.fail("formatting changed what {self.origin} CONTAINS, not merely how it is laid out: {detail}. A comment that was lost, duplicated, moved, joined or reordered, a word that was glued or dropped, or a code token that changed, shows here; moving whitespace around is the formatter's to do and nothing else is.")
+		end 'verdict'
 	end 'requireNothingWasLost'
 end 'CensusSource'
 

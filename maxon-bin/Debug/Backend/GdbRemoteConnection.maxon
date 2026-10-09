@@ -280,7 +280,7 @@ module type GdbRemoteConnection
 		match self.ask("QStartNoAckMode") 'noAck'
 			answered then self.acking = false
 			unsupported or
-				failed then break
+			failed then break
 			timedOut then return GdbHandshake.refused("the debug stub did not answer the debugger's request to stop acknowledging every packet")
 			broken(reason) then return GdbHandshake.refused(reason)
 		end 'noAck'
@@ -296,7 +296,7 @@ module type GdbRemoteConnection
 		match self.ask("qSupported:swbreak+;hwbreak+;no-resumed+;xmlRegisters=i386") 'supported'
 			answered(features) then self.readPayloadLimit(features)
 			unsupported or
-				failed then break
+			failed then break
 			timedOut then return GdbHandshake.refused("the debug stub did not answer which packets it supports")
 			broken(reason) then return GdbHandshake.refused(reason)
 		end 'supported'
@@ -310,7 +310,7 @@ module type GdbRemoteConnection
 	function threadsInEveryStopReply(registers GdbRegisterInfoArray) returns GdbHandshake
 		match self.ask("QListThreadsInStopReply") 'listed'
 			answered or
-				unsupported then return GdbHandshake.shook(registers)
+			unsupported then return GdbHandshake.shook(registers)
 			failed(code) then return GdbHandshake.refused("the debug stub refused to list every thread in a stop reply with {code}")
 			timedOut then return GdbHandshake.refused("the debug stub did not answer the debugger's request for every thread in a stop reply")
 			broken(reason) then return GdbHandshake.refused(reason)
@@ -340,7 +340,7 @@ module type GdbRemoteConnection
 			match self.ask("qRegisterInfo{number:x}") 'described'
 				answered(description) then gdbPushRegister(registers, number: number, description: description)
 				unsupported or
-					failed then break 'eachRegister'
+				failed then break 'eachRegister'
 				timedOut then return GdbRegisterRoster.refused("the debug stub did not answer what register {number} is")
 				broken(reason) then return GdbRegisterRoster.refused(reason)
 			end 'described'

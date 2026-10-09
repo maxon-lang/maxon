@@ -524,8 +524,8 @@ export union TestOutcome
 		return match self 'p'
 			pass gives true
 			fail or
-				skipped or
-				notRunHere gives false
+			skipped or
+			notRunHere gives false
 		end 'p'
 	end 'isPass'
 
@@ -536,9 +536,9 @@ export union TestOutcome
 	export function pinsEmittedCode() returns bool
 		return match self 'p'
 			pass or
-				notRunHere gives true
+			notRunHere gives true
 			fail or
-				skipped gives false
+			skipped gives false
 		end 'p'
 	end 'pinsEmittedCode'
 
@@ -671,7 +671,7 @@ module type CompileAnswer
 		return match self.verdict 'v'
 			built gives true
 			reportedDiagnostics or
-				driverFailed gives false
+			driverFailed gives false
 		end 'v'
 	end 'isBuilt'
 end 'CompileAnswer'
@@ -972,8 +972,8 @@ function noteFailedBatched(failed TestRunIndexArray, reasons BatchedFailureMap, 
 	match finishPendingRun(pending, observation: observationAt(observations, index: at), effectiveTarget: effectiveTarget).outcome 'outcome'
 		fail(reason) then noteBatchedFailure(failed, reasons: reasons, at: at, reason: reason)
 		pass or
-			skipped or
-			notRunHere then return
+		skipped or
+		notRunHere then return
 	end 'outcome'
 end 'noteFailedBatched'
 
@@ -1049,8 +1049,8 @@ function batchingGapVerdict(run TestRun, at ElementIndex, failures BatchedFailur
 	return match run.outcome 'outcome'
 		pass gives TestRun.create(TestOutcome.fail("passes alone but fails batched: {reason}\nThis is a batching gap: the case needs a process of its own (`<!-- process: own -->`) or a SoloReason the batching checks lack. The runner must keep it out of batches."), cpu: run.cpu, minted: run.minted)
 		fail or
-			skipped or
-			notRunHere gives run
+		skipped or
+		notRunHere gives run
 	end 'outcome'
 end 'batchingGapVerdict'
 
@@ -1072,7 +1072,7 @@ module union IrAction
 		return match self 'action'
 			none gives false
 			compare or
-				mint gives true
+			mint gives true
 		end 'action'
 	end 'needsIr'
 end 'IrAction'
@@ -1469,7 +1469,7 @@ end 'TargetRefusal'
 module function targetRefusalIn(compile CompileAnswer) returns TargetRefusal
 	let diagnosticsWereReported = match compile.verdict 'v'
 		built or
-			driverFailed gives false
+		driverFailed gives false
 		reportedDiagnostics gives true
 	end 'v'
 
@@ -1620,8 +1620,8 @@ export function reportTargetSkips(results SpecTestResultArray, effectiveTarget T
 	for result in results 'each'
 		match result.outcome 'verdict'
 			pass or
-				fail or
-				notRunHere then continue
+			fail or
+			notRunHere then continue
 			skipped(refusals) then entries.push(resultNoteEntry(result.specName, testName: result.testName, detail: indentedRefusals(refusals)))
 		end 'verdict'
 	end 'each'
@@ -1761,7 +1761,7 @@ end 'needsExternalRunner'
 export function emitsTargetIr(target Target) returns bool
 	return match target.cpu 'cpu'
 		x64 or
-			arm64 gives true
+		arm64 gives true
 		wasm32 gives false
 	end 'cpu'
 end 'emitsTargetIr'
@@ -2479,8 +2479,8 @@ function collectTraceRemint(reminted BlockRemintArray, test SpecTest, observatio
 	match observation 'observed'
 		completed(capture) then reminted.push(BlockRemint.create(traceSliceOf(test.traceCapture), fence: traceFenceOf(family), body: normalizeTrace(capture.stdout, family: family)))
 		notRequired or
-			failed or
-			notRunnableHere then break
+		failed or
+		notRunnableHere then break
 	end 'observed'
 end 'collectTraceRemint'
 
@@ -2559,7 +2559,7 @@ module function traceCaptureMode(test SpecTest) returns bool
 	return match test.traceCapture 'mode'
 		off gives false
 		unpinned or
-			pinned gives true
+		pinned gives true
 	end 'mode'
 end 'traceCaptureMode'
 
@@ -2742,7 +2742,7 @@ function checkCapturedStdout(stdout SpecStdout, actual String, traceCapture Spec
 	match traceCapture 'mode'
 		off then return checkRunStdout(stdout, actual: actual)
 		unpinned or
-			pinned then break
+		pinned then break
 	end 'mode'
 
 	return match stdout 'pin'
@@ -2766,7 +2766,7 @@ function childStdoutOf(monitorStdout String, traceCapture SpecTraceCapture) retu
 	return match traceCapture 'mode'
 		off gives monitorStdout
 		unpinned or
-			pinned gives linesWithoutMonitorPrefix(monitorStdout)
+		pinned gives linesWithoutMonitorPrefix(monitorStdout)
 	end 'mode'
 end 'childStdoutOf'
 
@@ -2776,7 +2776,7 @@ function childStderrOf(monitorStderr String, traceCapture SpecTraceCapture) retu
 	return match traceCapture 'mode'
 		off gives monitorStderr
 		unpinned or
-			pinned gives linesWithoutPrefix(monitorStderr, prefix: DebugStreamSummaryPrefix)
+		pinned gives linesWithoutPrefix(monitorStderr, prefix: DebugStreamSummaryPrefix)
 	end 'mode'
 end 'childStderrOf'
 
@@ -2827,14 +2827,14 @@ function withMonitorStderr(outcome TestOutcome, traceCapture SpecTraceCapture, m
 	match traceCapture 'mode'
 		off then return outcome
 		unpinned or
-			pinned then break
+		pinned then break
 	end 'mode'
 
 	return match outcome 'verdict'
 		fail(reason) gives TestOutcome.fail(withMonitorStderrText(reason, monitorStderr: monitorStderr))
 		pass or
-			skipped or
-			notRunHere gives outcome
+		skipped or
+		notRunHere gives outcome
 	end 'verdict'
 end 'withMonitorStderr'
 
@@ -3560,7 +3560,7 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 	match traceCapture 'underTheMonitor'
 		off then break
 		unpinned or
-			pinned then return buildMonitorRunCommand(modulePath, family: traceCaptureFamilyOf(traceCapture), programArgs: programArgs)
+		pinned then return buildMonitorRunCommand(modulePath, family: traceCaptureFamilyOf(traceCapture), programArgs: programArgs)
 	end 'underTheMonitor'
 
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
@@ -4108,9 +4108,9 @@ end 'soloPerformed'
 function wasExecuted(observation RunObservation) returns bool
 	return match observation 'observed'
 		completed or
-			failed gives true
+		failed gives true
 		notRequired or
-			notRunnableHere gives false
+		notRunnableHere gives false
 	end 'observed'
 end 'wasExecuted'
 
@@ -4123,8 +4123,8 @@ function batchedPerformed(program BatchProgram, ordinal ElementIndex, prepared P
 	let readings = match batchObservation 'observed'
 		completed(capture) gives readBatch(capture, caseCount: program.members.count(), selects: program.selects)
 		failed or
-			notRequired or
-			notRunnableHere gives unreadBatch(program.members.count(), selects: program.selects)
+		notRequired or
+		notRunnableHere gives unreadBatch(program.members.count(), selects: program.selects)
 	end 'observed'
 
 	var rerunCases = TestRunIndexArray.create()
@@ -4251,9 +4251,9 @@ function runFailureReason(e SubprocessError) returns String
 	return match e 'why'
 		timeout(_, out, err) gives "program {e.displayReason()}{partialOutputBeforeTheKill(out, stderr: err)}"
 		executableNotFound or
-			spawnFailed or
-			ioFailed or
-			inputTooLarge gives "program spawn failed: {e.displayReason()}"
+		spawnFailed or
+		ioFailed or
+		inputTooLarge gives "program spawn failed: {e.displayReason()}"
 		endOfStream gives "program output ended early: {e.displayReason()}"
 	end 'why'
 end 'runFailureReason'

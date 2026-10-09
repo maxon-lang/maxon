@@ -537,8 +537,10 @@ clone or worktree), so a run leaves another repository's files alone. As with `b
 is a second path.
 
 A file that is already canonical is not rewritten, so its modification time is untouched. A file that
-cannot be lexed is left as it is and counted as unchanged. The run prints one `formatted: <path>` line
-per rewritten file and a `fmt: N file(s) changed, M unchanged.` summary.
+cannot be lexed is left as it is and counted as unchanged. A file with no content, empty or only
+whitespace, formats to an empty file, so an empty marker such as a `.maxproj` stays empty and counts as
+unchanged. The run prints one `formatted: <path>` line per rewritten file and a
+`fmt: N file(s) changed, M unchanged.` summary.
 
 The formatter decides **blank lines** as well as indentation. Exactly one blank line separates adjacent
 groups in a scope, and none appears inside a group:
@@ -552,9 +554,26 @@ groups in a scope, and none appears inside a group:
 | a `match` body | the arms | — |
 | a multi-line `[`/`{` literal | *(never grouped: your blank lines are kept, at most one in a row)* | — |
 
-A `///` doc comment stays attached to the declaration below it. A whole-line `//` comment does too when
-there is no blank line between them; with a blank line it reads as a section heading. A blank line you
-put inside a group survives, at most one in a row.
+A `///` doc comment stays attached to the declaration below it, and two `///` blocks with a blank line
+between them keep it. A whole-line `//` comment attaches too when there is no blank line between them;
+with a blank line it reads as a section heading. A blank line you put inside a group survives, at most
+one in a row, and so does a blank line between two comments.
+
+**Comments keep their text and their place among the code.** A comment after code stays at the end of
+its line, two spaces after the code, and every comment sharing a line is kept, in order. A block comment
+between two pieces of code on one line, such as `f(a, /* why */ b)`, stays where it is. A block comment
+that ends before code on its line is written before that code. A block comment's first line takes the
+indentation of the code around it; its further lines are kept exactly as written.
+
+A match arm whose pattern is an `or` chain gets one alternative per line, each aligned with the first:
+
+```maxon
+match level 'filter'
+	trace or
+	info or
+	warning then break
+end 'filter'
+```
 
 ```bash
 maxon fmt              # the working directory

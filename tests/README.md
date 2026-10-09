@@ -54,8 +54,9 @@ them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 ```
 tests/
   fmt/
-    fixtures.maxtest             the fixture corpus: the harness, the guards and 29 tests
+    fixtures.maxtest             the fixture corpus: the harness, the guards and 30 tests
     engine-cases.maxtest         the engine corpus: 5 tests, on the staging and spawn the file above exports
+    content-gate.maxtest         the content gate both corpora compare with, and its 19 red checks
     generate-expectations.py     mints every expectation BY RUNNING THE COMPILER
     census-sources.txt           the real compiler files the scale case formats
     engine-cases/<Name>.in       formatter engine cases, with .expected beside them
@@ -600,13 +601,15 @@ reproduce it.**
 
 `test-command/` puts each spawning `test` in its own file because a file is what
 ONE process runs, under one deadline, and its fixtures each compile a project. These format a
-tiny staged tree. `fixtures.maxtest` holds the fixture corpus and the real-sources census (29
+tiny staged tree. `fixtures.maxtest` holds the fixture corpus and the real-sources census (30
 tests), and `engine-cases.maxtest` the engine corpus (5 tests); **both files together measured
 about 1.9 s**. A split would only buy back process startups, which are not where the time goes; if a
-corpus here ever does approach the deadline, shorten its slowest case.
+corpus here ever does approach the deadline, shorten its slowest case. `content-gate.maxtest` spawns
+nothing: it holds `contentChange`, which the census and the engine corpus both call, and the red checks
+that prove it catches each kind of loss.
 
-The engine corpus's parity, comment-multiplicity and idempotence checks share ONE test, because each
-reads the same two `fmt` runs, and two spawns fit the deadline where a test per property would not.
+The engine corpus's parity, content and idempotence checks share ONE test, because each reads the same
+two `fmt` runs, and two spawns fit the deadline where a test per property would not.
 
 The engine file declares no staging, spawning or run check of its own: it calls the ones
 `fixtures.maxtest` exports, and a second copy of a free function in this directory would not

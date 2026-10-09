@@ -661,8 +661,8 @@ export type GdbRemoteBackend
 			unsupported then self.threadStopInfoServed = false
 
 			failed or
-				timedOut or
-				broken then break
+			timedOut or
+			broken then break
 		end 'asked'
 	end 'queuedIfItTookATrapOfItsOwn'
 
@@ -1016,9 +1016,9 @@ export type GdbRemoteBackend
 		match self.askStub("D") 'letGo'
 			answered then return true
 			unsupported or
-				failed or
-				timedOut or
-				broken then return false
+			failed or
+			timedOut or
+			broken then return false
 		end 'letGo'
 	end 'detach'
 
@@ -1052,10 +1052,10 @@ export type GdbRemoteBackend
 		while not gone and read < GdbEndingRepliesRead 'eachReply'
 			match self.answerWithin(GdbBorrowedStopMs) 'seen'
 				timedOut or
-					broken then gone = true
+				broken then gone = true
 
 				unsupported or
-					failed then break
+				failed then break
 
 				answered(payload) then gone = self.endedOnTheWayOut(payload)
 			end 'seen'
@@ -1091,10 +1091,10 @@ export type GdbRemoteBackend
 		while true 'untilItStops'
 			match self.answerWithin(GdbBorrowedStopMs) 'seen'
 				timedOut or
-					broken then return false
+				broken then return false
 
 				unsupported or
-					failed then continue
+				failed then continue
 
 				answered(payload) then return self.settledBorrowedStop(payload)
 			end 'seen'
@@ -1131,9 +1131,9 @@ export type GdbRemoteBackend
 	function borrowedStopKeptWaiting() returns bool
 		match self.answerWithin(GdbBorrowedStopMs) 'seen'
 			timedOut or
-				broken or
-				unsupported or
-				failed then return false
+			broken or
+			unsupported or
+			failed then return false
 
 			answered(payload) then return self.settledBorrowedStop(payload)
 		end 'seen'
@@ -1171,9 +1171,9 @@ export type GdbRemoteBackend
 		match planted 'planted'
 			answered then break
 			unsupported or
-				failed or
-				timedOut or
-				broken then return BackendTrapPlant.unwritable
+			failed or
+			timedOut or
+			broken then return BackendTrapPlant.unwritable
 		end 'planted'
 
 		self.armed.push(address)
@@ -1197,9 +1197,9 @@ export type GdbRemoteBackend
 		match lifted 'lifted'
 			answered then break
 			unsupported or
-				failed or
-				timedOut or
-				broken then return false
+			failed or
+			timedOut or
+			broken then return false
 		end 'lifted'
 
 		self.forgetArmed(address)
@@ -1237,9 +1237,9 @@ export type GdbRemoteBackend
 		match seen 'read'
 			answered(payload) then return gdbMemoryOf(payload, bytes: bytes)
 			unsupported or
-				failed or
-				timedOut or
-				broken then return BackendMemoryRead.unreadable
+			failed or
+			timedOut or
+			broken then return BackendMemoryRead.unreadable
 		end 'read'
 	end 'readMemory'
 
@@ -1261,9 +1261,9 @@ export type GdbRemoteBackend
 		match written 'written'
 			answered then return true
 			unsupported or
-				failed or
-				timedOut or
-				broken then return false
+			failed or
+			timedOut or
+			broken then return false
 		end 'written'
 	end 'writeMemory'
 
@@ -1307,8 +1307,8 @@ export type GdbRemoteBackend
 			unsupported then self.threadStopInfoServed = false
 
 			failed or
-				timedOut or
-				broken then break
+			timedOut or
+			broken then break
 		end 'asked'
 
 		return GdbExpedited.none
@@ -1344,9 +1344,9 @@ export type GdbRemoteBackend
 		match self.askStub("p{info.number:x}{gdbThreadSuffix(thread, suffixed: self.threadSuffixSupported())}") 'read'
 			answered(payload) then return gdbRegisterHexRead(payload)
 			unsupported or
-				failed or
-				timedOut or
-				broken then return GdbRegisterRead.unreadable
+			failed or
+			timedOut or
+			broken then return GdbRegisterRead.unreadable
 		end 'read'
 	end 'registerRead'
 
@@ -1367,9 +1367,9 @@ export type GdbRemoteBackend
 			answered then break
 
 			unsupported or
-				failed or
-				timedOut or
-				broken then return false
+			failed or
+			timedOut or
+			broken then return false
 		end 'written'
 
 		// The reporter's registers are read out of its stop reply, which would otherwise go on answering the
@@ -1486,10 +1486,10 @@ function gdbStopCouldHaveHiddenAnother(event DebugStopEvent) returns bool
 		stopped(_, reason, _, _) gives reason == BackendStopReason.breakpoint or reason == BackendStopReason.singleStep
 
 		threadStarted or
-			threadExited or
-			exited or
-			signalled or
-			timedOut gives false
+		threadExited or
+		exited or
+		signalled or
+		timedOut gives false
 	end 'which'
 end 'gdbStopCouldHaveHiddenAnother'
 

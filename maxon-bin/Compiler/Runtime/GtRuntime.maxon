@@ -719,7 +719,7 @@ end 'gtStackGuardHeight'
 export function gtStackGuardMargin(target Target) returns ParsedInt
 	return match target.cpu 'cpu'
 		x64 or
-			arm64 gives GtStackGuardMarginBytes
+		arm64 gives GtStackGuardMarginBytes
 		wasm32 panic("gtStackGuardMargin: wasm32 has no stack guard — a WASI component's call stack is not addressable, so nothing can project a frame against a guard word. `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted scheduler op got past that gate")
 	end 'cpu'
 end 'gtStackGuardMargin'
@@ -759,7 +759,7 @@ end 'gtAsyncPreemptFloor'
 export function gtAsyncPreemptMargin(target Target) returns ParsedInt
 	return match target.cpu 'cpu'
 		x64 or
-			arm64 gives GtAsyncPreemptMarginBytes
+		arm64 gives GtAsyncPreemptMarginBytes
 		wasm32 panic("gtAsyncPreemptMargin: wasm32 has no addressable call stack to stop a thread on — `targetProvidesFacility` denies `greenThreads` there, and `targetStopsThreadsForPreemption` denies it twice over")
 	end 'cpu'
 end 'gtAsyncPreemptMargin'
@@ -2283,8 +2283,8 @@ export function ioCompletionShape(target Target) returns IoCompletionShape
 	return match target.os 'os'
 		windows gives IoCompletionShape.completionPort
 		linux or
-			macos or
-			wasi gives IoCompletionShape.inlineCompletion
+		macos or
+		wasi gives IoCompletionShape.inlineCompletion
 	end 'os'
 end 'ioCompletionShape'
 
@@ -2506,7 +2506,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	let owner = match kind 'ownerOf'
 		coroutine gives emitLoadField(module, block: initBlock, record: emitLoadCurrentGt(module, block: initBlock, ids: ids), offset: GtOffOwner, ids: ids)
 		greenThread or
-			mainThread gives gt
+		mainThread gives gt
 	end 'ownerOf'
 
 	emitStoreField(module, block: initBlock, record: gt, offset: GtOffOwner, value: owner)
@@ -2518,13 +2518,13 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	match kind 'strandRef'
 		coroutine then _ = emitFieldAccumulate(module, block: initBlock, record: owner, offset: GtOffStrandRefs, delta: oneRef, multiM: true, ids: ids)
 		greenThread or
-			mainThread then emitStoreField(module, block: initBlock, record: gt, offset: GtOffStrandRefs, value: oneRef)
+		mainThread then emitStoreField(module, block: initBlock, record: gt, offset: GtOffStrandRefs, value: oneRef)
 	end 'strandRef'
 
 	match kind 'markMain'
 		mainThread then emitStoreField(module, block: initBlock, record: gt, offset: GtOffIsMainThread, value: emitConst(module, block: initBlock, value: GtMainThreadMark, ids: ids))
 		coroutine or
-			greenThread then break
+		greenThread then break
 	end 'markMain'
 
 	// ⭐ COMMIT A FRESH SEED STACK, of the size the adaptive seed chose (`GtSeedBytesLabel`). The STACK is
@@ -2559,7 +2559,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 
 	match kind 'countedAndNamed'
 		coroutine or
-			greenThread then seeded = emitGtSpawnCountAndTraceId(module, func: func, block: seeded, gt: gt, tracing: tracing, ids: ids)
+		greenThread then seeded = emitGtSpawnCountAndTraceId(module, func: func, block: seeded, gt: gt, tracing: tracing, ids: ids)
 		mainThread then break
 	end 'countedAndNamed'
 
@@ -4839,9 +4839,9 @@ function collectCompletedWordDefs(access StdAccessOperands, completedConsts Valu
 		constant then pushIfCompletedConst(completedConsts, resultId: access.resultId, value: access.constValue)
 		load then pushIfPlainStatusLoad(plainStatusLoads, access: access)
 		neither or
-			globalAddress or
-			store or
-			atomic then break
+		globalAddress or
+		store or
+		atomic then break
 	end 'k'
 end 'collectCompletedWordDefs'
 
@@ -4869,10 +4869,10 @@ function requireOrderedCompletedAccess(access StdAccessOperands, arith StdArithO
 	match access.shape 'k'
 		store then requireOrderedCompletedStore(access, func: func, completedConsts: completedConsts)
 		neither or
-			constant or
-			globalAddress or
-			load or
-			atomic then break
+		constant or
+		globalAddress or
+		load or
+		atomic then break
 	end 'k'
 end 'requireOrderedCompletedAccess'
 
@@ -4915,12 +4915,12 @@ function requireOrderedObservation(func IrFunction, lhs ValueId, rhs ValueId, pr
 	// `status >= completed` would be meaningless against an enum whose order carries no meaning.
 	match pred 'asked'
 		eq or
-			ne then break
+		ne then break
 
 		lt or
-			gt or
-			le or
-			ge then return
+		gt or
+		le or
+		ge then return
 	end 'asked'
 
 	let lhsIsPlainRead = plainStatusLoads.contains(lhs) and completedConsts.contains(rhs)
@@ -6667,12 +6667,12 @@ end 'emitIoParkBranchOnRenounced'
 function ioParkRefusesARenouncedCoroutine(operation GtIoOperation) returns bool
 	return match operation 'operation'
 		fileExists or
-			netClose gives false
+		netClose gives false
 		netConnect or
-			netListen or
-			netAccept or
-			netSend or
-			netRecv gives true
+		netListen or
+		netAccept or
+		netSend or
+		netRecv gives true
 	end 'operation'
 end 'ioParkRefusesARenouncedCoroutine'
 

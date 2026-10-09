@@ -152,22 +152,22 @@ end 'collectFnRefThunkTargets'
 function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArray, funcSignatures FuncSignatureMap)
 	match op 'op'
 		call or
-			literal or
-			ret or
-			retVoid or
-			binOp or
-			unaryOp or
-			compare or
-			condBranch or
-			branch or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			stringLiteral or
-			tryCall or
-			throwError or
-			propagateError or
-			panicAbort then break
+		literal or
+		ret or
+		retVoid or
+		binOp or
+		unaryOp or
+		compare or
+		condBranch or
+		branch or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		stringLiteral or
+		tryCall or
+		throwError or
+		propagateError or
+		panicAbort then break
 		functionRef(_, funcName, form) then noteFnRefTarget(funcName, form: form, seen: seen, targets: targets, funcSignatures: funcSignatures)
 		indirectCall then break
 
@@ -175,8 +175,8 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 		// the uniform `(userargs, record)` ABI — the trampoline calls it with user args only), so it
 		// names no thunk target; `await`/`try await` reference no function value.
 		asyncCall or
-			await or
-			tryAwait then break
+		await or
+		tryAwait then break
 		sizeofType then break
 		constArrayLiteral then break
 
@@ -186,7 +186,7 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 		// A witness dispatch names no function value — it dispatches through a runtime witness table, not a
 		// `funcAddr` thunk target; nor does its throwing form.
 		witnessDispatch or
-			witnessTryDispatch then break
+		witnessTryDispatch then break
 
 		// A rendered panic names no function — its operand is a byte pointer.
 		panicAbortValue then break
@@ -199,12 +199,12 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 		// `StdOp.funcAddr`s the LOWERING mints, and every one is called through the uniform runtime ABI rather
 		// than through a function value's `(args, record)` one.
 		serviceSpawn or
-			serviceSend or
-			serviceReplyCell then break
+		serviceSend or
+		serviceReplyCell then break
 		immortalStructRecord or
-			immortalStringTable or
-			covPoint or
-			rawIntrinsic then break
+		immortalStringTable or
+		covPoint or
+		rawIntrinsic then break
 
 		// A witness table's slots are relocations to impls, never a function VALUE's thunk target.
 		existentialWitness then break

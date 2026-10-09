@@ -164,6 +164,7 @@ type CalleeFacts
 	var flags as BoolArray
 	var retMasks as ParamPositionMaskArray
 	var retBottoms as BoolArray
+
 	// For a returned minted record: the parameters whose own record, and whose graph beyond it, may
 	// sit directly in its fields, and whether anything else foreign may.
 	var directOwns as ParamPositionMaskArray
@@ -263,6 +264,7 @@ type ValueOrigins
 	var boxCode as FunctionRefNames
 	var ambiguousBoxes as ValueIdSet
 	var merges as MergeEdges
+
 	// Per minted record: the parameters whose graph it may hold, and whether it may hold a record from
 	// anywhere else. The `direct` columns say the same for what its own fields hold. Aliases of one
 	// record share all of them.
@@ -271,9 +273,11 @@ type ValueOrigins
 	var directOwns as ParamPositionMaskArray
 	var directDeeps as ParamPositionMaskArray
 	var directBottoms as BoolArray
+
 	// A call handed a foreign record to a record held below this one, so everything this one holds is
 	// no longer known to be minted here.
 	var belowForeign as BoolArray
+
 	// (holder, held) pairs: the held record's taint also belongs to its holder.
 	var containment as MergeEdges
 	var taintChanged as bool
@@ -386,40 +390,40 @@ type ValueOrigins
 			functionRef(result, funcName, form) then self.noteFunctionRef(result, name: funcName, form: form)
 			storeIndirect(addr, offset, value, _) then self.noteStore(addr, offset: offset, value: value)
 			call or
-				tryCall or
-				literal or
-				ret or
-				retVoid or
-				binOp or
-				unaryOp or
-				compare or
-				condBranch or
-				branch or
-				globalAddr or
-				loadIndirect or
-				stringLiteral or
-				throwError or
-				propagateError or
-				panicAbort or
-				indirectCall or
-				asyncCall or
-				await or
-				tryAwait or
-				sizeofType or
-				constArrayLiteral or
-				switch or
-				panicAbortValue or
-				errorFlagEncode or
-				serviceSpawn or
-				serviceSend or
-				serviceReplyCell or
-				immortalStructRecord or
-				immortalStringTable or
-				covPoint or
-				rawIntrinsic or
-				witnessDispatch or
-				witnessTryDispatch or
-				existentialWitness then break
+			tryCall or
+			literal or
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			loadIndirect or
+			stringLiteral or
+			throwError or
+			propagateError or
+			panicAbort or
+			indirectCall or
+			asyncCall or
+			await or
+			tryAwait or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			panicAbortValue or
+			errorFlagEncode or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			rawIntrinsic or
+			witnessDispatch or
+			witnessTryDispatch or
+			existentialWitness then break
 		end 'op'
 	end 'noteDefinition'
 
@@ -493,39 +497,39 @@ type ValueOrigins
 			tryCall(_, _, callee, _, _, _, _, _, _) gives OriginLocal if self.callReturnsAFreshRecord(callee) else OriginUnknown
 			loadIndirect(_, addr, _, _) gives self.withinOrigin(addr)
 			literal or
-				ret or
-				retVoid or
-				binOp or
-				unaryOp or
-				compare or
-				condBranch or
-				branch or
-				globalAddr or
-				storeIndirect or
-				stringLiteral or
-				throwError or
-				propagateError or
-				panicAbort or
-				functionRef or
-				indirectCall or
-				asyncCall or
-				await or
-				tryAwait or
-				sizeofType or
-				constArrayLiteral or
-				switch or
-				panicAbortValue or
-				errorFlagEncode or
-				serviceSpawn or
-				serviceSend or
-				serviceReplyCell or
-				immortalStructRecord or
-				immortalStringTable or
-				covPoint or
-				rawIntrinsic or
-				witnessDispatch or
-				witnessTryDispatch or
-				existentialWitness gives OriginUnknown
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			storeIndirect or
+			stringLiteral or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			indirectCall or
+			asyncCall or
+			await or
+			tryAwait or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			panicAbortValue or
+			errorFlagEncode or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			rawIntrinsic or
+			witnessDispatch or
+			witnessTryDispatch or
+			existentialWitness gives OriginUnknown
 		end 'op'
 	end 'derivedOriginOfResult'
 
@@ -806,8 +810,8 @@ type ValueOrigins
 			match block.terminator 'terminator'
 				opIndex(index) then self.noteReturn(try module.ops.get(index) otherwise panic("ValueOrigins.returnedValues: terminator op {index} not in module.ops"), into: returned)
 				unset or
-					dead or
-					fallthrough then break
+				dead or
+				fallthrough then break
 			end 'terminator'
 		end 'eachBlock'
 
@@ -830,41 +834,41 @@ type ValueOrigins
 		match op 'op'
 			ret(retVal) then into.push(retVal)
 			call or
-				tryCall or
-				literal or
-				retVoid or
-				binOp or
-				unaryOp or
-				compare or
-				condBranch or
-				branch or
-				globalAddr or
-				loadIndirect or
-				storeIndirect or
-				stringLiteral or
-				throwError or
-				propagateError or
-				panicAbort or
-				functionRef or
-				indirectCall or
-				asyncCall or
-				await or
-				tryAwait or
-				sizeofType or
-				constArrayLiteral or
-				switch or
-				panicAbortValue or
-				errorFlagEncode or
-				serviceSpawn or
-				serviceSend or
-				serviceReplyCell or
-				immortalStructRecord or
-				immortalStringTable or
-				covPoint or
-				rawIntrinsic or
-				witnessDispatch or
-				witnessTryDispatch or
-				existentialWitness then break
+			tryCall or
+			literal or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			loadIndirect or
+			storeIndirect or
+			stringLiteral or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			indirectCall or
+			asyncCall or
+			await or
+			tryAwait or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			panicAbortValue or
+			errorFlagEncode or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			rawIntrinsic or
+			witnessDispatch or
+			witnessTryDispatch or
+			existentialWitness then break
 		end 'op'
 	end 'noteReturn'
 
@@ -1388,36 +1392,36 @@ type EffectSummaryBuilder
 			witnessDispatch(_, args, _, _, _, _, _) then self.taintArguments(origins, args: args)
 			witnessTryDispatch(_, _, args, _, _, _, _) then self.taintArguments(origins, args: args)
 			literal or
-				ret or
-				retVoid or
-				binOp or
-				unaryOp or
-				compare or
-				condBranch or
-				branch or
-				globalAddr or
-				loadIndirect or
-				stringLiteral or
-				throwError or
-				propagateError or
-				panicAbort or
-				functionRef or
-				asyncCall or
-				await or
-				tryAwait or
-				sizeofType or
-				constArrayLiteral or
-				switch or
-				panicAbortValue or
-				errorFlagEncode or
-				serviceSpawn or
-				serviceSend or
-				serviceReplyCell or
-				immortalStructRecord or
-				immortalStringTable or
-				covPoint or
-				rawIntrinsic or
-				existentialWitness then break
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			loadIndirect or
+			stringLiteral or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			asyncCall or
+			await or
+			tryAwait or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			panicAbortValue or
+			errorFlagEncode or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			rawIntrinsic or
+			existentialWitness then break
 		end 'op'
 	end 'taintOp'
 
@@ -1697,36 +1701,36 @@ type EffectSummaryBuilder
 			witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then self.walkDispatch(node, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 			witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then self.walkDispatch(node, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 			asyncCall or
-				await or
-				tryAwait or
-				serviceSpawn or
-				serviceSend or
-				serviceReplyCell or
-				rawIntrinsic then self.markHard(node)
+			await or
+			tryAwait or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			rawIntrinsic then self.markHard(node)
 			literal or
-				ret or
-				retVoid or
-				binOp or
-				unaryOp or
-				compare or
-				condBranch or
-				branch or
-				globalAddr or
-				loadIndirect or
-				stringLiteral or
-				throwError or
-				propagateError or
-				panicAbort or
-				functionRef or
-				sizeofType or
-				constArrayLiteral or
-				switch or
-				panicAbortValue or
-				errorFlagEncode or
-				immortalStructRecord or
-				immortalStringTable or
-				existentialWitness or
-				covPoint then break
+			ret or
+			retVoid or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			loadIndirect or
+			stringLiteral or
+			throwError or
+			propagateError or
+			panicAbort or
+			functionRef or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			panicAbortValue or
+			errorFlagEncode or
+			immortalStructRecord or
+			immortalStringTable or
+			existentialWitness or
+			covPoint then break
 		end 'op'
 	end 'walkOp'
 
@@ -1775,8 +1779,8 @@ type EffectSummaryBuilder
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slotted'
 			ordered(argIds) then return argIds
 			arityMismatch or
-				unknownLabel or
-				duplicateArg then throw AbsentError.absent
+			unknownLabel or
+			duplicateArg then throw AbsentError.absent
 		end 'slotted'
 	end 'orderedArguments'
 

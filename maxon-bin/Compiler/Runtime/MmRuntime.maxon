@@ -4078,7 +4078,7 @@ export function noteCascadeUsage(usage RuntimeUsage, project Project, signatures
 			// would give the same layout's clone needs a second, redundant expansion. Each variant is named
 			// rather than spanned by a range, so a new variant is an unhandled case the compiler refuses.
 			structLayoutDictionary or
-				genericInstanceDictionary then continue
+			genericInstanceDictionary then continue
 		end 'node'
 	end 'drain'
 end 'noteCascadeUsage'
@@ -4429,7 +4429,7 @@ function synthesizeStructCascade(module StdModule, layout StructLayout, typeName
 	match action 'action'
 		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: layout.name, clones: specs, project: project)
 		soleWalk or
-			shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: layout.name), walks: specs, action: action)
+		shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: layout.name), walks: specs, action: action)
 	end 'action'
 end 'synthesizeStructCascade'
 
@@ -4478,7 +4478,7 @@ function synthesizeGenericInstanceCascade(module StdModule, id GenericInstanceId
 	match action 'action'
 		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(mangled), boxSize: signatures.genericInstanceBoxSize(id), tagName: mangled, clones: specs, project: project)
 		soleWalk or
-			shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: mangled), walks: specs, action: action)
+		shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: mangled), walks: specs, action: action)
 	end 'action'
 end 'synthesizeGenericInstanceCascade'
 
@@ -4588,7 +4588,7 @@ function emitFieldVisit(module StdModule, visit CascadeCursor, box ValueId, offs
 	match action 'action'
 		clone then return emitClonedFieldStore(module, visit: visit, box: box, offset: offset, oldPtr: oldPtr, strategy: strategy, ids: ids)
 		soleWalk or
-			shareWalk then return CascadeCursor.create(visit.block, carried: argsOf(emitFieldWalkCall(module, block: visit.block, box: box, offset: offset, ptr: oldPtr, visits: visit.visits(), strategy: strategy, ids: ids)))
+		shareWalk then return CascadeCursor.create(visit.block, carried: argsOf(emitFieldWalkCall(module, block: visit.block, box: box, offset: offset, ptr: oldPtr, visits: visit.visits(), strategy: strategy, ids: ids)))
 	end 'action'
 end 'emitFieldVisit'
 
@@ -4598,8 +4598,8 @@ function emitFieldWalkCall(module StdModule, block IrBlock, box ValueId, offset 
 	match strategy 'strategy'
 		throughWitness(entry) then return emitWitnessReadWalk(module, block: block, box: box, offset: offset, value: ptr, visits: visits, entry: entry, ids: ids)
 		direct or
-			managedElements or
-			unsupported then return emitWalkCall(module, block: block, ptr: ptr, visits: visits, strategy: strategy, ids: ids)
+		managedElements or
+		unsupported then return emitWalkCall(module, block: block, ptr: ptr, visits: visits, strategy: strategy, ids: ids)
 	end 'strategy'
 end 'emitFieldWalkCall'
 
@@ -4613,8 +4613,8 @@ function emitFieldCloneCall(module StdModule, block IrBlock, box ValueId, offset
 	match strategy 'strategy'
 		throughWitness(entry) then return emitWitnessReadClone(module, block: block, box: box, offset: offset, value: oldPtr, entry: entry, ids: ids)
 		direct or
-			managedElements or
-			unsupported then return emitCloneCall(module, block: block, oldPtr: oldPtr, strategy: strategy, ids: ids)
+		managedElements or
+		unsupported then return emitCloneCall(module, block: block, oldPtr: oldPtr, strategy: strategy, ids: ids)
 	end 'strategy'
 end 'emitFieldCloneCall'
 
@@ -4643,7 +4643,7 @@ function emitCloneCall(module StdModule, block IrBlock, oldPtr ValueId, strategy
 		direct(callee) then return emitDirectClone(module, block: block, oldPtr: oldPtr, callee: callee, ids: ids)
 		managedElements(containerClone, elementClone) then return emitManagedElementsFieldClone(module, block: block, oldPtr: oldPtr, containerClone: containerClone, elementClone: elementClone, ids: ids)
 		unsupported or
-			throughWitness then panic("emitCloneCall: an uncopyable managed field strategy reached the cloner synthesis — typeSupportsDeepClone gates the front end for `GraphCascadePurpose.deepClone`")
+		throughWitness then panic("emitCloneCall: an uncopyable managed field strategy reached the cloner synthesis — typeSupportsDeepClone gates the front end for `GraphCascadePurpose.deepClone`")
 	end 'strategy'
 end 'emitCloneCall'
 
@@ -4684,7 +4684,7 @@ function synthesizeUnionCascade(module StdModule, layout EnumLayout, project Pro
 	match action 'action'
 		clone then synthesizeUnionCloner(module, layout: layout, project: project, signatures: signatures)
 		soleWalk or
-			shareWalk then synthesizeUnionWalk(module, layout: layout, project: project, signatures: signatures, action: action)
+		shareWalk then synthesizeUnionWalk(module, layout: layout, project: project, signatures: signatures, action: action)
 	end 'action'
 end 'synthesizeUnionCascade'
 
@@ -4694,7 +4694,7 @@ function synthesizeElementRecordCascade(module StdModule, id GenericInstanceId, 
 	match action 'action'
 		clone then synthesizeElementRecordCloner(module, id: id, signatures: signatures)
 		soleWalk or
-			shareWalk then synthesizeElementRecordWalk(module, id: id, signatures: signatures, action: action)
+		shareWalk then synthesizeElementRecordWalk(module, id: id, signatures: signatures, action: action)
 	end 'action'
 end 'synthesizeElementRecordCascade'
 

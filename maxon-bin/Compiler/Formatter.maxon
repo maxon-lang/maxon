@@ -5,10 +5,12 @@
 // not LEX comes back byte for byte unchanged (`format`'s one `otherwise`), because the alternative is
 // writing a lexer's error text into the author's file.
 //
-// ⚠ **COMMENTS ARE NOT IN THE TOKEN STREAM, WITH ONE EXCEPTION**, so they are recovered from the RAW
-// SOURCE by `CommentScan` and re-attached by line number. The exception is `///`, which IS a token
-// (`TokenKind.docComment`) — and the raw scan must therefore SKIP it, or every doc comment in the tree
-// is written out twice. See `scanLineComment`.
+// ⚠ **COMMENTS ARE NOT IN THE TOKEN STREAM, WITH ONE EXCEPTION**, so the lexer logs them beside
+// it (`tokenizeWithComments`) and `CommentMapBuilder` re-attaches them by line number. Taking them
+// from the lexer means one scanner decides where a literal ends: a second scanner that disagrees
+// with it deletes or duplicates comments. The exception is `///`, which IS a token
+// (`TokenKind.docComment`) — and the lexer must therefore never log it, or every doc comment in the
+// tree is written out twice.
 //
 // `tests/fmt/` is the authority for every layout decision here: its expectations pin this emitter's
 // output byte for byte, so a divergence is a failure of this file rather than an improvement.
@@ -52,7 +54,8 @@ enum GroupKeyKind
 	none
 
 	// A `///` line. `forcedBlanksBefore` returns 0 after it, which FUSES a doc block to the declaration
-	// below it even across a blank line the author left.
+	// below it even across a blank line the author left. A blank between two `///` blocks is kept:
+	// fusing a file-level doc into the first declaration's changes what that declaration's doc says.
 	doc
 
 	// A whole-line `//`. It attaches to the line below the same way, but only when the author left NO
@@ -158,41 +161,56 @@ end 'FormatBlockKind'
 
 typealias FormatBlockKindArray = Array with FormatBlockKind
 
-// --- The raw-source comment scan -------------------------------------------------------------
+// --- Comments, filed by line ---------------------------------------------------------------------
 
-/// One captured comment, and whether it OWNS the line it sits on.
-///
-/// `wholeLine` true: only whitespace precedes its start and follows its end on that line, so it is
-/// re-emitted on a line of its own at the current indent. False: there is code on the line, so it is
-/// appended after that line's last token with two leading spaces.
-///
-/// A block comment with code BOTH before and after it on one line (`var y = /* note */ 5`) cannot be
-/// cleanly relocated by a formatter that does not parse; it comes out as a trailing comment. The
-/// comment is PRESERVED — only its position within the line is lost.
-export type SourceComment
-	export let text as String
-	export let wholeLine as bool
+type LineComments
+	export let leading as String
+	export let trailing as String
+	export let hasCode as bool
+	export let continuesBlock as bool
 
-	static function create(text String, wholeLine bool) returns SourceComment
-		return Self{text: text, wholeLine: wholeLine}
+	static function create(leading String, trailing String, hasCode bool, continuesBlock bool) returns LineComments
+		return Self{leading: leading, trailing: trailing, hasCode: hasCode, continuesBlock: continuesBlock}
 	end 'create'
-end 'SourceComment'
+end 'LineComments'
+
+enum CommentSlot
+	wholeLine
+	beforeCode
+	afterCode
+end 'CommentSlot'
+
+let TrailingCommentGap = "  "
+let CommentGap = " "
+let LinesInABlankSeparation = 2 as LineNumber
+let CodeFromLineStart = 1 as ColumnNumber
 
 // The comments of one file, keyed by the 1-based line they occupy. A block comment spanning several
 // lines contributes ONE ENTRY PER LINE it covers, so the per-line emit paths reproduce it on the lines
 // it had.
-export typealias SourceCommentMap = Map with (LineNumber, SourceComment)
+typealias SourceCommentMap = Map with (LineNumber, LineComments)
 
-// The lines whose comment has already been written out. A comment is reachable from two emit paths
-// (trailing, and the whole-line gap flush) and must be written by exactly one of them.
+function authorLeftBlankBetween(above LineNumber, below LineNumber) returns bool
+	return below >= above + LinesInABlankSeparation
+end 'authorLeftBlankBetween'
+
+function joinedWith(joined String, piece String) returns String
+	if joined.isEmpty() 'first'
+		return piece
+	end 'first'
+
+	return "{joined}{CommentGap}{piece}"
+end 'joinedWith'
+
+// The lines whose leading, or whose trailing, comments have already been written out. Each is
+// reachable from several emit paths and must be written by exactly one of them.
 typealias ConsumedLineSet = Set with LineNumber
 
 /// A source buffer addressed BY LINE — spans into the original bytes, never a `String` per line.
 ///
-/// Two readers want it and both ask the same three things the bytes alone do not answer: where a line
-/// stops, what a range within one says, and whether a range holds nothing but layout. `CommentScan`
-/// walks it to recover the comments; `findSectionSeparator` walks it to find the `---` line. Splitting
-/// into `String`s would materialize the whole file a second time to answer questions about byte offsets.
+/// Its readers ask what the bytes alone do not answer: where a line stops, which line an offset
+/// falls on, what a range says, and whether a range holds nothing but layout. Splitting into
+/// `String`s would materialize the whole file a second time to answer questions about byte offsets.
 type SourceLines
 	let bytes as ByteArray
 	let starts as ByteOffsetArray
@@ -238,13 +256,10 @@ type SourceLines
 		return try bytes.get(at as ElementIndex) otherwise panic("SourceLines.byteAt: byte {at} outside the {bytes.count()}-byte source")
 	end 'byteAt'
 
-	// The text of `[from, to)` within line `index`.
-	function textIn(index ElementIndex, from ByteOffset, to ByteOffset) returns String
-		let lo = self.startOf(index) + from
-		let hi = self.startOf(index) + to
-		let span = try bytes.slice(lo as ElementIndex, endIndex: hi as ElementIndex) otherwise panic("SourceLines.textIn: [{lo}, {hi}) outside the {bytes.count()}-byte source")
+	function textBetween(from ByteOffset, to ByteOffset) returns String
+		let span = try bytes.slice(from, endIndex: to) otherwise panic("SourceLines.textBetween: [{from}, {to}) outside the {bytes.count()}-byte source")
 		return String.from(span)
-	end 'textIn'
+	end 'textBetween'
 
 	// Is `[from, to)` within line `index` nothing but layout? The test that decides whether a comment
 	// owns its line.
@@ -266,6 +281,23 @@ type SourceLines
 		return try starts.get(index) otherwise panic("SourceLines.startOf: line {index} of {starts.count()}")
 	end 'startOf'
 
+	function lineOf(offset ByteOffset) returns LineNumber
+		var low = 0 as ElementIndex
+		var high = self.starts.count() - 1
+
+		while low < high 'narrow'
+			let middle = ((low + high + 1) shr 1) as ElementIndex
+
+			if self.startOf(middle) <= offset 'atOrAfter'
+				low = middle
+			end 'atOrAfter' else 'before'
+				high = (middle - 1) as Count
+			end 'before'
+		end 'narrow'
+
+		return (low + 1) as LineNumber
+	end 'lineOf'
+
 	function endOf(index ElementIndex) returns ByteOffset
 		return try ends.get(index) otherwise panic("SourceLines.endOf: line {index} of {ends.count()}")
 	end 'endOf'
@@ -277,201 +309,162 @@ function isLayoutByte(b Byte) returns bool
 	return b == AsciiByte.space or b == '\t' or b == '\r'
 end 'isLayoutByte'
 
-/// The raw-source scan that recovers `//` and `/* … */` comments, keyed by line.
-///
-/// ⛔⛔ **A NESTING STACK, NOT AN `inString` FLAG — A STRING CAN CONTAIN A STRING.** `"{f("//x")}"` is
-/// ONE literal: the interpolation's expression holds a second string. A single bool closes at the INNER
-/// quote, and the scanner then reads `//x")}"` as a trailing comment, which the emit path appends to the
-/// line as a phantom copy. Without the stack, and reported as a clean `formatted:`:
-///     let m = "{f("//x")}"     became     let m = "{f("//x")}"  //x")}"
-/// That is source corruption by DUPLICATION — which no comment-count check can catch, because nothing
-/// was lost, and which is perfectly idempotent on a rerun.
-///
-/// Each stack entry says what we are INSIDE: `"` a string, `'` a char literal, `{` an interpolation's
-/// expression. It persists ACROSS LINES, because a `b"…"` may span them. A comment is recognized ONLY
-/// when the stack is EMPTY: inside an interpolation the bytes are expression source, and reading a `//`
-/// there as prose is the same mistake one level down.
-type CommentScan
+typealias FirstCodeMap = Map with (LineNumber, ColumnNumber)
+
+// Block comments with code on both sides on one line, keyed by the index of the token after each,
+// so each is written back between the same two tokens rather than moved to the line's end.
+typealias InPlaceCommentMap = Map with (ElementIndex, String)
+
+type SourceComments
+	export let byLine as SourceCommentMap
+	export let inPlace as InPlaceCommentMap
+
+	static function create(byLine SourceCommentMap, inPlace InPlaceCommentMap) returns SourceComments
+		return Self{byLine: byLine, inPlace: inPlace}
+	end 'create'
+end 'SourceComments'
+
+type CommentMapBuilder
 	let lines as SourceLines
+	let tokens as TokenArray
+	let firstCode as FirstCodeMap
 	var comments as SourceCommentMap
-	var nesting as ByteArray
+	var inPlace as InPlaceCommentMap
+	var currentLine as LineNumber
+	var leadingText as String
+	var trailingText as String
+	var lineContinues as bool
 
-	// The line the scan is on, 0-based, and the offset within it. Both move inside the block-comment
-	// walk, which is why they are fields rather than loop variables.
-	var line as ElementIndex
-	var at as ByteOffset
-
-	static function create(lines SourceLines) returns CommentScan
-		return Self{lines: lines, comments: SourceCommentMap.create(), nesting: ByteArray.create(), line: 0, at: 0}
+	static function create(lines SourceLines, tokens TokenArray) returns CommentMapBuilder
+		return Self{lines: lines, tokens: tokens, firstCode: firstCodeColumns(lines, tokens: tokens), comments: SourceCommentMap.create(), inPlace: InPlaceCommentMap.create(), currentLine: 0, leadingText: "", trailingText: "", lineContinues: false}
 	end 'create'
 
-	export function run() returns SourceCommentMap
-		// The lexer skips a `#!` at byte 0 whole (`Lexer.skipShebang`), so no token carries it and the
-		// gap-emit path — which writes text no token carries — is the only thing that can put it back.
-		// Recorded as a whole-line comment on line 1, which is the only line it can legally occupy.
-		if self.opensWithShebang() 'shebang'
-			self.record(0, comment: SourceComment.create(lines.textIn(0, from: 0, to: lines.length(0)).trimEnd(), wholeLine: true))
-			self.line = 1
-		end 'shebang'
+	function build(spans CommentSpanArray) returns SourceComments
+		for span in spans 'eachSpan'
+			self.take(span)
+		end 'eachSpan'
 
-		while self.line < lines.count() 'eachLine'
-			self.at = 0
-			self.scanLine()
-			self.line = self.line + 1
+		self.finishLine()
+		return SourceComments.create(self.comments, inPlace: self.inPlace)
+	end 'build'
+
+	function take(span CommentSpan)
+		if span.kind == CommentSpanKind.block and self.sitsBetweenCode(span) 'betweenCode'
+			self.anchorToToken(span)
+			return
+		end 'betweenCode'
+
+		match span.kind 'byKind'
+			line then self.addPiece(span.startLine, text: self.lines.textBetween(span.startByte, to: span.endByte).trimEnd(), column: span.startColumn, continuation: false)
+			block then self.takeBlock(span)
+		end 'byKind'
+	end 'take'
+
+	function sitsBetweenCode(span CommentSpan) returns bool
+		if span.startLine != span.endLine or not self.codePrecedes(span.startLine, column: span.startColumn) 'notMidLine'
+			return false
+		end 'notMidLine'
+
+		let next = try self.tokens.get(span.followingToken) otherwise return false
+
+		return next.line == span.endLine and next.kind != TokenKind.newline and next.kind != TokenKind.docComment and next.kind != TokenKind.eof
+	end 'sitsBetweenCode'
+
+	function anchorToToken(span CommentSpan)
+		let text = self.lines.textBetween(span.startByte, to: span.endByte)
+		let before = try self.inPlace.get(span.followingToken) otherwise ""
+		self.inPlace.upsert(span.followingToken, value: joinedWith(before, piece: text))
+	end 'anchorToToken'
+
+	function takeBlock(span CommentSpan)
+		var line = span.startLine
+
+		while line <= span.endLine 'eachLine'
+			let index = (line - 1) as ElementIndex
+			let opens = line == span.startLine
+			let closes = line == span.endLine
+			let pieceStart = span.startByte if opens else self.lines.startOf(index)
+			let pieceEnd = span.endByte if closes else self.lines.endOf(index)
+			let text = self.lines.textBetween(pieceStart, to: pieceEnd)
+
+			self.addPiece(line, text: text if closes else text.trimEnd(), column: span.startColumn if opens else 0, continuation: not opens)
+			line = line + 1
 		end 'eachLine'
+	end 'takeBlock'
 
-		return self.comments
-	end 'run'
+	function addPiece(line LineNumber, text String, column ColumnNumber, continuation bool)
+		if line != self.currentLine 'newLine'
+			self.finishLine()
+			self.currentLine = line
+		end 'newLine'
 
-	function opensWithShebang() returns bool
-		if lines.count() == 0 or lines.length(0) < 2 'tooShort'
-			return false
-		end 'tooShort'
+		if not continuation and self.codePrecedes(line, column: column) 'afterCode'
+			self.trailingText = joinedWith(self.trailingText, piece: text)
+		end 'afterCode' else 'beforeCode'
+			self.leadingText = joinedWith(self.leadingText, piece: text)
+		end 'beforeCode'
 
-		return lines.byteAt(0, offset: 0) == AsciiByte.hash and lines.byteAt(0, offset: 1) == AsciiByte.bang
-	end 'opensWithShebang'
+		self.lineContinues = self.lineContinues or continuation
+	end 'addPiece'
 
-	function scanLine()
-		while self.line < lines.count() and self.at < lines.length(self.line) 'eachByte'
-			let c = lines.byteAt(self.line, offset: self.at)
+	function codePrecedes(line LineNumber, column ColumnNumber) returns bool
+		let first = try self.firstCode.get(line) otherwise return false
+		return first < column
+	end 'codePrecedes'
 
-			if self.nesting.count() > 0 'insideALiteral'
-				self.stepInsideLiteral(c)
-				continue
-			end 'insideALiteral'
+	function finishLine()
+		if self.currentLine > 0 'carriesComments'
+			self.comments.upsert(self.currentLine, value: LineComments.create(self.leadingText, trailing: self.trailingText, hasCode: self.firstCode.contains(self.currentLine), continuesBlock: self.lineContinues))
+		end 'carriesComments'
 
-			if c == AsciiByte.dquote or c == AsciiByte.quote 'opensALiteral'
-				self.nesting.push(c)
-				self.at = self.at + 1
-				continue
-			end 'opensALiteral'
+		self.currentLine = 0
+		self.leadingText = ""
+		self.trailingText = ""
+		self.lineContinues = false
+	end 'finishLine'
+end 'CommentMapBuilder'
 
-			if c == AsciiByte.slash and self.nextByteIs(AsciiByte.slash) 'lineComment'
-				// Either way the rest of the line belongs to the comment.
-				self.scanLineComment()
-				return
-			end 'lineComment'
+function firstCodeColumns(lines SourceLines, tokens TokenArray) returns FirstCodeMap
+	var firstCode = FirstCodeMap.create()
 
-			if c == AsciiByte.slash and self.nextByteIs(AsciiByte.star) 'blockComment'
-				self.scanBlockComment()
-				continue
-			end 'blockComment'
+	for token in tokens 'eachToken'
+		if token.kind == TokenKind.newline or token.kind == TokenKind.eof 'notCode'
+			continue
+		end 'notCode'
 
-			self.at = self.at + 1
-		end 'eachByte'
-	end 'scanLine'
+		noteCodeColumn(firstCode, line: token.line, column: token.column)
 
-	// One byte of a string, char literal or interpolation body. The three contexts differ only in what
-	// opens and closes them, which is why they share a step.
-	function stepInsideLiteral(c Byte)
-		let context = try self.nesting.get(self.nesting.count() - 1) otherwise panic("CommentScan.stepInsideLiteral: the count is non-zero at the call site")
+		var covered = token.line + 1
+		let endLine = tokenEndLine(token, lines: lines)
 
-		if context == AsciiByte.dquote or context == AsciiByte.quote 'quotedText'
-			if c == AsciiByte.backslash and self.at + 1 < lines.length(self.line) 'escape'
-				// The escaped byte is skipped whole, so `\"` does not close the literal and `\\` does
-				// not leave a lone backslash to be read as an escape lead.
-				self.at = self.at + 2
-				return
-			end 'escape'
+		while covered <= endLine 'eachCoveredLine'
+			noteCodeColumn(firstCode, line: covered, column: CodeFromLineStart)
+			covered = covered + 1
+		end 'eachCoveredLine'
+	end 'eachToken'
 
-			if c == context 'closes'
-				_ = try self.nesting.pop() otherwise panic("CommentScan.stepInsideLiteral: the count is non-zero at the call site")
-			end 'closes' else if c == '{' and context == AsciiByte.dquote 'opensInterpolation'
-				// `c` rather than a fresh `'{'`: the byte in hand IS the opener, and `AsciiByte` names no
-				// brace to spell it with.
-				self.nesting.push(c)
-			end 'opensInterpolation'
+	return firstCode
+end 'firstCodeColumns'
 
-			self.at = self.at + 1
-			return
-		end 'quotedText'
+function tokenEndLine(token Token, lines SourceLines) returns LineNumber
+	if tokenMayHoldLineBreaks(token.kind) 'closedByADelimiter'
+		return lines.lineOf(token.endByte)
+	end 'closedByADelimiter'
 
-		// An interpolation's expression: ordinary code, which may open a string of its own, and whose
-		// `}` closes back into the literal.
-		if c == AsciiByte.dquote or c == AsciiByte.quote 'opensNested'
-			self.nesting.push(c)
-		end 'opensNested' else if c == '}' 'closesInterpolation'
-			_ = try self.nesting.pop() otherwise panic("CommentScan.stepInsideLiteral: the count is non-zero at the call site")
-		end 'closesInterpolation'
+	return token.line
+end 'tokenEndLine'
 
-		self.at = self.at + 1
-	end 'stepInsideLiteral'
+function noteCodeColumn(firstCode FirstCodeMap, line LineNumber, column ColumnNumber)
+	let seen = try firstCode.get(line) otherwise column
 
-	// A `//` comment. Either way the rest of the line belongs to it, so the caller stops there.
-	//
-	// ⛔⛔ **`///` IS NOT CAPTURED HERE.** It is `TokenKind.docComment` and is round-tripped through the
-	// TOKEN STREAM; captured here as well, every doc comment in the tree would be written out TWICE —
-	// once by this index and once by the emit loop. This is the highest-blast-radius mistake available
-	// in this file.
-	function scanLineComment()
-		if self.at + 2 < lines.length(self.line) and lines.byteAt(self.line, offset: self.at + 2) == AsciiByte.slash 'docComment'
-			return
-		end 'docComment'
+	if column <= seen 'earlier'
+		firstCode.upsert(line, value: column)
+	end 'earlier'
+end 'noteCodeColumn'
 
-		let text = lines.textIn(self.line, from: self.at, to: lines.length(self.line)).trimEnd()
-		let ownsTheLine = lines.blankBetween(self.line, from: 0, to: self.at)
-		self.record(self.line, comment: SourceComment.create(text, wholeLine: ownsTheLine))
-	end 'scanLineComment'
-
-	// A `/* … */` comment, which may span lines. One entry is recorded per line it covers, so the
-	// gap-emit path can reproduce it on the lines it had. An UNTERMINATED one is not this scan's
-	// problem: `format` returns the source unchanged when the lexer rejects it, and it does.
-	function scanBlockComment()
-		let startLine = self.line
-		let startPrefixBlank = lines.blankBetween(startLine, from: 0, to: self.at)
-
-		// The segment is SLICED out of the source rather than rebuilt byte by byte: `/*` and `*/` are in
-		// the file already, so the span from the opener to the line end IS the text.
-		var segmentStart = self.at
-		self.at = self.at + 2
-
-		while true 'walk'
-			if self.at >= lines.length(self.line) 'lineRanOut'
-				// Store what this line carries and continue on the next. The text keeps the source's
-				// leading whitespace; the gap-emit path strips it before applying the formatter's indent,
-				// so an in-code block comment does not double-indent.
-				self.recordSegment(lines.textIn(self.line, from: segmentStart, to: lines.length(self.line)), startLine: startLine, startPrefixBlank: startPrefixBlank, ownsTheLine: true)
-				self.line = self.line + 1
-
-				if self.line >= lines.count() 'sourceRanOut'
-					return
-				end 'sourceRanOut'
-
-				self.at = 0
-				segmentStart = 0
-				continue
-			end 'lineRanOut'
-
-			if lines.byteAt(self.line, offset: self.at) == AsciiByte.star and self.nextByteIs(AsciiByte.slash) 'closes'
-				self.at = self.at + 2
-				let trailingBlank = lines.blankBetween(self.line, from: self.at, to: lines.length(self.line))
-				self.recordSegment(lines.textIn(self.line, from: segmentStart, to: self.at), startLine: startLine, startPrefixBlank: startPrefixBlank, ownsTheLine: trailingBlank)
-				return
-			end 'closes'
-
-			self.at = self.at + 1
-		end 'walk'
-	end 'scanBlockComment'
-
-	// One line's worth of a block comment. A segment owns its line when nothing follows it there AND
-	// either it is a continuation line or nothing preceded the `/*` on the opening one.
-	function recordSegment(text String, startLine ElementIndex, startPrefixBlank bool, ownsTheLine bool)
-		let wholeLine = ownsTheLine and (self.line != startLine or startPrefixBlank)
-		self.record(self.line, comment: SourceComment.create(text, wholeLine: wholeLine))
-	end 'recordSegment'
-
-	function record(index ElementIndex, comment SourceComment)
-		self.comments.upsert(((index + 1) as LineNumber), value: comment)
-	end 'record'
-
-	function nextByteIs(b Byte) returns bool
-		if self.at + 1 >= lines.length(self.line) 'noNextByte'
-			return false
-		end 'noNextByte'
-
-		return lines.byteAt(self.line, offset: self.at + 1) == b
-	end 'nextByteIs'
-end 'CommentScan'
+function tokenMayHoldLineBreaks(kind TokenKind) returns bool
+	return kind == TokenKind.stringLiteral or kind == TokenKind.byteStringLiteral or kind == TokenKind.charLiteral
+end 'tokenMayHoldLineBreaks'
 
 // --- Token classification ---------------------------------------------------------------------
 
@@ -647,16 +640,15 @@ type FormatState
 	let options as FormatOptions
 	let tokens as TokenArray
 
-	// The source bytes, for the one construct re-emitted from raw source rather than from tokens: an
-	// interpolated string literal. See `interpolatedLiteralLastFragment`.
-	let source as ByteArray
+	// The source, for what the tokens do not carry: the line a token ENDS on, and the one construct
+	// re-emitted from raw source rather than from tokens, an interpolated string literal. See
+	// `interpolatedLiteralLastFragment`.
+	let lines as SourceLines
 	let comments as SourceCommentMap
-
-	// How many lines the source has. The comment-only path walks the FILE rather than the map, because
-	// a `Map`'s iteration order is unspecified and that path must emit in LINE order.
-	let lineCount as LineNumber
+	let inPlace as InPlaceCommentMap
 	let keywords as KeywordTable
-	var consumed as ConsumedLineSet
+	var consumedLeading as ConsumedLineSet
+	var consumedTrailing as ConsumedLineSet
 	var blocks as FormatBlockKindArray
 
 	// ⭐ **PUSHED AND POPPED IN LOCKSTEP WITH `indentLevel`** — one frame per open level, and that
@@ -718,12 +710,13 @@ type FormatState
 	// before it.
 	var blankDecisionPending as bool
 
-	static function create(tokens TokenArray, options FormatOptions, source ByteArray, comments SourceCommentMap, lineCount LineNumber, keywords KeywordTable) returns FormatState
-		return Self{out: StringBuilder.create(), options: options, tokens: tokens, source: source, comments: comments, lineCount: lineCount, consumed: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), groupFrames: GroupFrameArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevValue: EmptySourceText, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, groupDepth: 0, inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, lineStartedWithEnd: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
+	static function create(tokens TokenArray, options FormatOptions, lines SourceLines, comments SourceComments, keywords KeywordTable) returns FormatState
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), groupFrames: GroupFrameArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevValue: EmptySourceText, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, groupDepth: 0, inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, lineStartedWithEnd: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
 	end 'create'
 
-	// Walk every token, then hand over the built text. A formatted file always ends with exactly one
-	// newline and no trailing layout.
+	// Walk every token, then hand over the built text. A formatted file with content ends with
+	// exactly one newline and no trailing layout; one without content is empty, so an empty
+	// `.maxproj` marker is left unchanged rather than rewritten to a newline.
 	export function run() returns String
 		var index = 0 as ElementIndex
 
@@ -731,7 +724,13 @@ type FormatState
 			index = self.emitToken(index)
 		end 'eachToken'
 
-		return "{self.out.build().trimEnd()}\n"
+		let body = self.out.build().trimEnd()
+
+		if body.isEmpty() 'noContent'
+			return ""
+		end 'noContent'
+
+		return "{body}\n"
 	end 'run'
 
 	// Emit the token at `index`; returns the index the walk resumes at.
@@ -745,7 +744,7 @@ type FormatState
 		end 'endOfFile'
 
 		if tok.kind == TokenKind.newline 'lineBreak'
-			self.emitNewline(tok)
+			self.emitNewline(index)
 			return index + 1
 		end 'lineBreak'
 
@@ -756,29 +755,16 @@ type FormatState
 
 	function emitEof()
 		if not self.hasEmitted 'nothingEmitted'
-			// A file of nothing but comments. Walked by LINE rather than over the map, so the order is
-			// the file's own.
-			var line = 1 as LineNumber
-
-			while line <= self.lineCount 'eachLine'
-				if self.pendingCommentOn(line, wholeLine: true) 'ownsItsLine'
-					self.out.append(self.commentTextOn(line))
-					self.out.append("\n")
-				end 'ownsItsLine'
-
-				line = line + 1
-			end 'eachLine'
+			self.emitHeadComments(self.lineCount() + 1)
 
 			return
 		end 'nothingEmitted'
 
-		if self.pendingCommentOn(self.lastEmittedSourceLine, wholeLine: false) 'trailingComment'
-			self.out.append("  ")
-			self.out.append(self.commentTextOn(self.lastEmittedSourceLine))
-		end 'trailingComment'
+		self.appendTrailingComments(self.lastEmittedSourceLine)
+		self.emitGapComments(self.lineCount(), branchFollows: false)
 	end 'emitEof'
 
-	function emitNewline(tok Token)
+	function emitNewline(index ElementIndex)
 		if not self.hasEmitted 'nothingEmittedYet'
 			self.atLineStart = true
 			return
@@ -799,19 +785,9 @@ type FormatState
 			self.pendingIndentIncrease = false
 		end 'blockBodyBegins'
 
-		if self.newlineRun == 1 and self.lastEmittedSourceLine > 0 and self.pendingCommentOn(self.lastEmittedSourceLine, wholeLine: false) 'trailingComment'
-			self.consumed.insert(self.lastEmittedSourceLine)
-			self.out.append("  ")
-			self.out.append(self.commentTextOn(self.lastEmittedSourceLine))
-		end 'trailingComment'
-
-		// Whole-line comments on this newline's line, OR on any source line a BLOCK COMMENT skipped
-		// between the last emitted line and this one. A `/* … */` emits no newline token for its
-		// interior lines, so the first newline after it is the only place its segments can be flushed.
-		if self.gapHoldsAWholeLineComment(tok.line) 'flushGap'
-			self.emitGapComments(tok.line)
-			return
-		end 'flushGap'
+		if self.newlineRun == 1 and self.lastEmittedSourceLine > 0 'firstNewline'
+			self.appendTrailingComments(self.lastEmittedSourceLine)
+		end 'firstNewline'
 
 		// The first newline terminates the content line; any further consecutive one is a blank the
 		// author wrote, whose effect the forced-blank rule decides later.
@@ -820,10 +796,18 @@ type FormatState
 			self.out.append("\n")
 		end 'writesTheTerminator'
 
+		// Whole-line comments on every line up to the next real token, including the lines a BLOCK
+		// COMMENT spans: a `/* … */` emits no newline token for its interior lines.
+		let nextToken = self.indexPastNewlinesFrom(index + 1)
+		self.emitGapComments(self.lastLineBeforeToken(nextToken), branchFollows: self.branchKeywordAt(nextToken))
 		self.atLineStart = true
 	end 'emitNewline'
 
 	function emitRealToken(index ElementIndex, tok Token) returns ElementIndex
+		if self.hasEmitted and self.atLineStart and tok.line > 1 'mayHaveCommentsAbove'
+			self.emitGapComments(tok.line - 1, branchFollows: self.branchKeywordAt(index))
+		end 'mayHaveCommentsAbove'
+
 		self.newlineRun = 0
 
 		if not self.hasEmitted and tok.line >= 1 'headComments'
@@ -899,10 +883,14 @@ type FormatState
 		if self.atLineStart 'indent'
 			self.openLine(tok, index: index, lineIsBlockCloser: lineIsBlockCloser)
 		end 'indent' else 'separate'
-			if needsSpaceBefore(tok.kind, prev: self.prevKind, prevWasDot: self.prevWasDot, inDataBlock: self.inDataBlock(), prevWasUnary: self.prevWasUnary, prevBeganLine: self.prevBeganLine) 'needsSpace'
+			if tok.line > self.lastEmittedSourceLine and self.pendingCommentOn(self.lastEmittedSourceLine, slot: CommentSlot.afterCode) 'commentSwallowedTheBreak'
+				self.emitCommentAcrossLineBreak(tok.line)
+			end 'commentSwallowedTheBreak' else if self.inPlaceCommentNeedsSpace(index) or needsSpaceBefore(tok.kind, prev: self.prevKind, prevWasDot: self.prevWasDot, inDataBlock: self.inDataBlock(), prevWasUnary: self.prevWasUnary, prevBeganLine: self.prevBeganLine) 'needsSpace'
 				self.out.append(" ")
 			end 'needsSpace'
 		end 'separate'
+
+		self.appendInPlaceComment(index, kind: tok.kind)
 
 		// The token's own text. Two kinds are re-assembled rather than printed: a doc comment, whose
 		// delimiter the lexer stripped, and an interpolated literal, which is several tokens here.
@@ -921,7 +909,7 @@ type FormatState
 			// — and **the `{` and `}` are not tokens at all**. Emitting token by token would lose both braces
 			// AND silently reformat the interior: `"{ x+1 }"` would come back as `"{x + 1}"`.
 			self.out.append("\"{self.sourceSpanBetween(index, last: last)}\"")
-			self.noteEmittedAt(tok.line)
+			self.noteEmittedAt(self.tokenAt(last))
 
 			// The whole literal is ONE operand. Nothing below this point applies to a string literal, so the
 			// walk resumes past the literal's final fragment.
@@ -931,7 +919,7 @@ type FormatState
 			self.out.append(tokenSourceSpelling(tok))
 		end 'ordinaryToken'
 
-		self.noteEmittedAt(tok.line)
+		self.noteEmittedAt(tok)
 
 		// Kept HERE, ahead of every early return below, so the depth cannot drift.
 		if tok.kind == TokenKind.leftParen or tok.kind == TokenKind.leftBracket or tok.kind == TokenKind.leftBrace 'opensGroup'
@@ -972,7 +960,8 @@ type FormatState
 		if tok.kind == TokenKind.identifier and self.inMatchBlock() and self.kindAt(index + 1) == TokenKind.leftParen 'maybeAllDiscarded'
 			let afterPattern = self.allDiscardedBindingsEndAt(index + 2)
 
-			if afterPattern > index + 2 and self.kindAt(afterPattern) == TokenKind.rightParen 'allDiscarded'
+			// A comment anchored inside the parentheses refuses the rewrite, which would drop it with them.
+			if afterPattern > index + 2 and self.kindAt(afterPattern) == TokenKind.rightParen and not self.inPlaceCommentWithin(index + 1, through: afterPattern) 'allDiscarded'
 				// The rewritten pattern is an operand, the same as the `)` it replaced. The rest of the
 				// left context is deliberately untouched: nothing between here and the `)` could have
 				// changed it.
@@ -1000,15 +989,13 @@ type FormatState
 		// `end 'X' else` / `end 'X' otherwise` stay on one line: the chain's next keyword is pulled up
 		// beside the label rather than starting a line of its own.
 		if tok.kind == TokenKind.charLiteral and self.prevKind == TokenKind.end 'maybeChainLabel'
-			let next = self.indexPastNewlinesFrom(index + 1)
-
-			if self.kindAt(next) == TokenKind.else or self.kindAt(next) == TokenKind.otherwise 'chains'
+			if self.chainsToNextBranch(index) 'chains'
 				self.prevKind = tok.kind
 				self.prevValue = tok.value
 				self.prevProducedValue = true
 				self.lineStartedWithEnd = false
 				self.lineHasLabeledOpener = true
-				return next
+				return self.indexPastNewlinesFrom(index + 1)
 			end 'chains'
 		end 'maybeChainLabel'
 
@@ -1041,10 +1028,7 @@ type FormatState
 		// A character literal opens a block only when a labeled-block opener appeared earlier on the same
 		// line — never after `break`, `continue`, `return` or an `end` that closed one.
 		if tok.kind == TokenKind.charLiteral and not self.lineStartedWithEnd and self.lineHasLabeledOpener 'maybeBlockLabel'
-			let next = self.indexPastNewlinesFrom(index + 1)
-			let chains = self.kindAt(next) == TokenKind.else or self.kindAt(next) == TokenKind.otherwise
-
-			if not chains 'opensABlock'
+			if not self.chainsToNextBranch(index) 'opensABlock'
 				self.blocks.push(FormatBlockKind.matchBody if self.lineHasMatch else FormatBlockKind.other)
 				self.beginBodyAfterThisLine(ScopeGrouping.matchArms if self.lineHasMatch else ScopeGrouping.statements)
 			end 'opensABlock'
@@ -1055,30 +1039,126 @@ type FormatState
 
 	// --- Line and blank-line bookkeeping ---
 
-	// Everything above the file's first real token. A non-comment line AFTER the first comment becomes a
-	// bare newline, which is how a blank line between two head comments survives.
+	// Everything above the file's first real token.
 	function emitHeadComments(firstTokenLine LineNumber)
-		var emittedAny = false
-		var line = 1 as LineNumber
+		let (previous, wroteAny) = self.walkCommentLines(1, through: firstTokenLine - 1, decidesBlanks: false, branchFollows: false)
 
-		while line < firstTokenLine 'eachLine'
-			if self.pendingCommentOn(line, wholeLine: true) 'ownsItsLine'
-				self.out.append(self.commentTextOn(line))
-				self.out.append("\n")
-				emittedAny = true
-			end 'ownsItsLine' else if emittedAny 'blankBetweenComments'
-				self.out.append("\n")
-			end 'blankBetweenComments'
+		if wroteAny and authorLeftBlankBetween(previous, below: firstTokenLine) 'blankBeforeTheCode'
+			self.out.append("\n")
+		end 'blankBeforeTheCode'
+	end 'emitHeadComments'
+
+	function walkCommentLines(first LineNumber, through LineNumber, decidesBlanks bool, branchFollows bool) returns (LineNumber, bool)
+		var settled = false
+		var previous = first - 1
+		var line = first
+
+		while line <= through 'eachLine'
+			if self.pendingCommentOn(line, slot: CommentSlot.wholeLine) 'ownsItsLine'
+				let blankAbove = settled and authorLeftBlankBetween(previous, below: line)
+
+				// A continuation line of a block comment opened by the code above is no group at all, so
+				// it decides nothing.
+				if decidesBlanks and not settled and not self.commentsOn(line).continuesBlock 'decides'
+					self.decideBlankBefore(line, previous: previous, branchFollows: branchFollows)
+					settled = true
+				end 'decides'
+
+				self.writeCommentLine(line, blankAbove: blankAbove)
+				settled = settled or not decidesBlanks
+				previous = line
+			end 'ownsItsLine'
 
 			line = line + 1
 		end 'eachLine'
-	end 'emitHeadComments'
+
+		return (previous, settled)
+	end 'walkCommentLines'
+
+	function commentsFormAGroup() returns bool
+		return self.currentGrouping() != ScopeGrouping.literal and not self.armContinuation
+	end 'commentsFormAGroup'
+
+	function decideBlankBefore(line LineNumber, previous LineNumber, branchFollows bool)
+		let userHadBlank = authorLeftBlankBetween(previous, below: line)
+
+		if self.blankDecisionPending 'decide'
+			if self.commentsFormAGroup() 'scopeGroups'
+				// A comment between a block's `end` and the `else` / `otherwise` that continues it sits
+				// inside that chain, so it packs with the `end` above it.
+				let commentKey = self.prevGroupKey if branchFollows else GroupKey.of(GroupKeyKind.comment)
+				self.appendBlanks(self.forcedBlanksBefore(commentKey, userHadBlank: userHadBlank))
+			end 'scopeGroups' else if userHadBlank 'keepsTheAuthorsOne'
+				self.out.append("\n")
+			end 'keepsTheAuthorsOne'
+
+			self.blankDecisionPending = false
+		end 'decide'
+	end 'decideBlankBefore'
+
+	function writeCommentLine(line LineNumber, blankAbove bool)
+		if blankAbove 'blankBetweenComments'
+			self.out.append("\n")
+		end 'blankBetweenComments'
+
+		self.appendLeadingComments(line)
+		self.out.append("\n")
+	end 'writeCommentLine'
+
+	function emitCommentAcrossLineBreak(tokenLine LineNumber)
+		self.appendTrailingComments(self.lastEmittedSourceLine)
+		self.out.append("\n")
+
+		var line = self.lastEmittedSourceLine + 1
+
+		while line < tokenLine 'eachSkippedLine'
+			if self.pendingCommentOn(line, slot: CommentSlot.wholeLine) 'continuesTheComment'
+				self.writeCommentLine(line, blankAbove: false)
+			end 'continuesTheComment'
+
+			line = line + 1
+		end 'eachSkippedLine'
+
+		self.beginCodeLine(tokenLine)
+	end 'emitCommentAcrossLineBreak'
+
+	function beginCodeLine(line LineNumber)
+		if self.pendingCommentOn(line, slot: CommentSlot.beforeCode) 'commentLeadsTheCode'
+			self.appendLeadingComments(line)
+			self.out.append(CommentGap)
+		end 'commentLeadsTheCode' else 'plainLine'
+			self.appendIndent()
+		end 'plainLine'
+	end 'beginCodeLine'
+
+	function appendLeadingComments(line LineNumber)
+		let onLine = self.commentsOn(line)
+
+		// A block comment's continuation line is the author's text, indentation included, so only its
+		// first line is re-indented.
+		if not onLine.continuesBlock 'startsItsOwnLine'
+			self.appendIndent()
+		end 'startsItsOwnLine'
+
+		self.out.append(onLine.leading)
+		self.consumedLeading.insert(line)
+	end 'appendLeadingComments'
+
+	function appendTrailingComments(line LineNumber)
+		if self.pendingCommentOn(line, slot: CommentSlot.afterCode) 'trails'
+			let onLine = self.commentsOn(line)
+
+			self.out.append(TrailingCommentGap)
+			self.out.append(onLine.trailing)
+			self.consumedTrailing.insert(line)
+		end 'trails'
+	end 'appendTrailingComments'
 
 	function gapHoldsAWholeLineComment(untilLine LineNumber) returns bool
 		var probe = self.lastEmittedSourceLine + 1
 
 		while probe <= untilLine 'eachLine'
-			if self.pendingCommentOn(probe, wholeLine: true) 'found'
+			if self.pendingCommentOn(probe, slot: CommentSlot.wholeLine) 'found'
 				return true
 			end 'found'
 
@@ -1089,57 +1169,14 @@ type FormatState
 	end 'gapHoldsAWholeLineComment'
 
 	// Write every unconsumed whole-line comment between the last emitted line and `untilLine`.
-	function emitGapComments(untilLine LineNumber)
-		// The line above was closed by `emitNewline`, this function's only caller.
-		if self.newlineRun == 1 'previousLineEnds'
-			self.blankDecisionPending = true
-			self.out.append("\n")
-		end 'previousLineEnds'
+	function emitGapComments(untilLine LineNumber, branchFollows bool)
+		if not self.gapHoldsAWholeLineComment(untilLine) 'nothingToFlush'
+			return
+		end 'nothingToFlush'
 
-		let commentIsAGroup = self.currentGrouping() != ScopeGrouping.literal and not self.armContinuation
-		var sawFirst = false
-		var lastCommentLine = self.lastEmittedSourceLine
-		var probe = self.lastEmittedSourceLine + 1
+		let (lastCommentLine, decided) = self.walkCommentLines(self.lastEmittedSourceLine + 1, through: untilLine, decidesBlanks: true, branchFollows: branchFollows)
 
-		while probe <= untilLine 'eachLine'
-			if self.pendingCommentOn(probe, wholeLine: true) 'ownsItsLine'
-				self.consumed.insert(probe)
-
-				if not sawFirst 'firstInTheGap'
-					// The forced-blank decision is made against the FIRST comment in the gap only. The
-					// ones after it are part of the same logical comment block and merely preserve the
-					// author's blanks between themselves.
-					let userHadBlank = probe >= self.lastEmittedSourceLine + 2
-
-					if self.blankDecisionPending 'decide'
-						if commentIsAGroup 'scopeGroups'
-							self.appendBlanks(self.forcedBlanksBefore(GroupKey.of(GroupKeyKind.comment), userHadBlank: userHadBlank))
-						end 'scopeGroups' else if userHadBlank 'keepsTheAuthorsOne'
-							self.out.append("\n")
-						end 'keepsTheAuthorsOne'
-
-						self.blankDecisionPending = false
-					end 'decide'
-
-					sawFirst = true
-				end 'firstInTheGap' else if probe >= lastCommentLine + 2 'blankBetweenComments'
-					self.out.append("\n")
-				end 'blankBetweenComments'
-
-				self.appendIndent()
-
-				// A continuation line of a multi-line block comment keeps its SOURCE indentation in the
-				// captured text. Stripping it here lets the comment line up with the surrounding code
-				// instead of double-indenting.
-				self.out.append(self.commentTextOn(probe).trimStart())
-				self.out.append("\n")
-				lastCommentLine = probe
-			end 'ownsItsLine'
-
-			probe = probe + 1
-		end 'eachLine'
-
-		if commentIsAGroup 'commentIsTheGroup'
+		if self.commentsFormAGroup() and decided 'commentIsTheGroup'
 			self.prevGroupKey = GroupKey.of(GroupKeyKind.comment)
 		end 'commentIsTheGroup'
 
@@ -1156,7 +1193,7 @@ type FormatState
 	// Decide the blank line before this line's first token, then write the indent.
 	function openLine(tok Token, index ElementIndex, lineIsBlockCloser bool)
 		let grouping = self.currentGrouping()
-		let userHadBlankBeforeLine = self.hasEmitted and tok.line >= self.lastEmittedSourceLine + 2
+		let userHadBlankBeforeLine = self.hasEmitted and authorLeftBlankBetween(self.lastEmittedSourceLine, below: tok.line)
 
 		if grouping == ScopeGrouping.literal 'literalKeepsOne'
 			// A literal's interior is preserve-with-cap: at most one of the author's blank lines survives.
@@ -1176,7 +1213,7 @@ type FormatState
 		end 'scopeGroups'
 
 		self.blankDecisionPending = false
-		self.appendIndent()
+		self.beginCodeLine(tok.line)
 
 		// An arm BEGINS a pattern region; a continuation line is already inside the one it continues.
 		if not self.armContinuation 'freshLine'
@@ -1196,7 +1233,7 @@ type FormatState
 			return 0
 		end 'noPreviousLine'
 
-		if self.prevGroupKey.kind == GroupKeyKind.doc 'docAttachesBelow'
+		if self.prevGroupKey.kind == GroupKeyKind.doc and not (thisKey.kind == GroupKeyKind.doc and userHadBlank) 'docAttachesBelow'
 			return 0
 		end 'docAttachesBelow'
 
@@ -1223,6 +1260,10 @@ type FormatState
 		if lineIsBlockCloser 'closesABlock'
 			return self.nextUniqueGroupKey()
 		end 'closesABlock'
+
+		if self.branchKeywordAt(index) 'continuesAChain'
+			return self.prevGroupKey
+		end 'continuesAChain'
 
 		// A whole-line `//` is not a token and never reaches here; the gap path assigns its key.
 		let declared = self.firstDeclaredIndexOnLine(index)
@@ -1359,29 +1400,60 @@ type FormatState
 		self.prevBeganLine = wasAtLineStart
 	end 'notePrevToken'
 
-	function noteEmittedAt(line LineNumber)
+	function noteEmittedAt(tok Token)
 		self.hasEmitted = true
-		self.lastEmittedSourceLine = line
+		self.lastEmittedSourceLine = tokenEndLine(tok, lines: self.lines)
 	end 'noteEmittedAt'
+
+	function inPlaceCommentNeedsSpace(index ElementIndex) returns bool
+		return self.inPlace.contains(index) and not tokenKindOpensABracket(self.prevKind)
+	end 'inPlaceCommentNeedsSpace'
+
+	function appendInPlaceComment(index ElementIndex, kind TokenKind)
+		let text = try self.inPlace.get(index) otherwise return
+		self.out.append(text)
+
+		if not (tokenKindClosesABracket(kind) or kind == TokenKind.comma) 'spaceBeforeTheToken'
+			self.out.append(CommentGap)
+		end 'spaceBeforeTheToken'
+	end 'appendInPlaceComment'
+
+	function inPlaceCommentWithin(first ElementIndex, through ElementIndex) returns bool
+		var index = first
+
+		while index <= through 'eachToken'
+			if self.inPlace.contains(index) 'anchored'
+				return true
+			end 'anchored'
+
+			index = index + 1
+		end 'eachToken'
+
+		return false
+	end 'inPlaceCommentWithin'
+
+	function lineCount() returns LineNumber
+		return self.lines.count() as LineNumber
+	end 'lineCount'
 
 	// --- Comment lookups ---
 
 	// Is there a comment on `line` that has not been written yet and that has the shape the caller wants
-	// — occupying the whole line, or trailing code on it? ONE predicate, because the two questions differ
-	// only in which of a captured comment's two shapes is being asked for.
-	function pendingCommentOn(line LineNumber, wholeLine bool) returns bool
-		if self.consumed.contains(line) 'alreadyWritten'
-			return false
-		end 'alreadyWritten'
-
+	// — occupying the whole line, leading the code on it, or trailing the code on it? ONE predicate,
+	// because the questions differ only in which of a captured line's shapes is being asked for.
+	function pendingCommentOn(line LineNumber, slot CommentSlot) returns bool
 		let found = try self.comments.get(line) otherwise return false
-		return found.wholeLine == wholeLine
+
+		return match slot 'which'
+			wholeLine gives not found.hasCode and not self.consumedLeading.contains(line)
+			beforeCode gives found.hasCode and not found.leading.isEmpty() and not self.consumedLeading.contains(line)
+			afterCode gives not found.trailing.isEmpty() and not self.consumedTrailing.contains(line)
+		end 'which'
 	end 'pendingCommentOn'
 
-	function commentTextOn(line LineNumber) returns String
-		let found = try self.comments.get(line) otherwise panic("FormatState.commentTextOn: line {line} carries no comment — every caller asks `pendingCommentOn` first")
-		return found.text
-	end 'commentTextOn'
+	function commentsOn(line LineNumber) returns LineComments
+		return try self.comments.get(line) otherwise panic("FormatState.commentsOn: line {line} carries no comment — every caller asks `pendingCommentOn` first")
+	end 'commentsOn'
 
 	// --- Block stack ---
 
@@ -1477,6 +1549,53 @@ type FormatState
 		return at
 	end 'indexPastNewlinesFrom'
 
+	function chainsToNextBranch(labelIndex ElementIndex) returns bool
+		let branch = self.indexPastNewlinesFrom(labelIndex + 1)
+
+		if not self.branchKeywordAt(branch) 'noBranchFollows'
+			return false
+		end 'noBranchFollows'
+
+		// Pulling the keyword up beside the label would leave a comment between them nowhere to go.
+		return not self.commentLiesBetween(self.tokenAt(labelIndex).line, below: self.tokenAt(branch).line)
+	end 'chainsToNextBranch'
+
+	function lastLineBeforeToken(index ElementIndex) returns LineNumber
+		if self.kindAt(index) == TokenKind.eof 'endOfFile'
+			return self.lineCount()
+		end 'endOfFile'
+
+		return self.tokenAt(index).line - 1
+	end 'lastLineBeforeToken'
+
+	function branchKeywordAt(index ElementIndex) returns bool
+		return self.kindAt(index) == TokenKind.else or self.kindAt(index) == TokenKind.otherwise
+	end 'branchKeywordAt'
+
+	function commentLiesBetween(above LineNumber, below LineNumber) returns bool
+		if above == below 'oneLine'
+			return false
+		end 'oneLine'
+
+		for line in above to below 'eachLine'
+			let found = try self.comments.get(line) otherwise continue
+
+			if line == above 'aboveLine'
+				if not found.trailing.isEmpty() 'trails'
+					return true
+				end 'trails'
+			end 'aboveLine' else if line == below 'belowLine'
+				if not found.leading.isEmpty() 'leads'
+					return true
+				end 'leads'
+			end 'belowLine' else 'between'
+				return true
+			end 'between'
+		end 'eachLine'
+
+		return false
+	end 'commentLiesBetween'
+
 	// Where a run of `_` bindings separated by commas stops, starting at `index`.
 	function allDiscardedBindingsEndAt(index ElementIndex) returns ElementIndex
 		var at = index
@@ -1542,23 +1661,18 @@ type FormatState
 	function sourceSpanBetween(first ElementIndex, last ElementIndex) returns String
 		let opening = try tokens.get(first) otherwise panic("FormatState.sourceSpanBetween: index {first} below the {tokens.count()}-token stream")
 		let closing = try tokens.get(last) otherwise panic("FormatState.sourceSpanBetween: index {last} below the {tokens.count()}-token stream")
-		let span = try source.slice(opening.startByte, endIndex: closing.endByte) otherwise panic("FormatState.sourceSpanBetween: [{opening.startByte}, {closing.endByte}) outside the {source.count()}-byte source")
-		return String.from(span)
+		return self.lines.textBetween(opening.startByte, to: closing.endByte)
 	end 'sourceSpanBetween'
 
 	// --- Output ---
 
-	// ⭐ THE ONE SITE THAT WRITES INDENTATION. The two comment paths that bypass it (`emitEof`'s
-	// comment-only file and `emitHeadComments`) are level-0 contexts by construction, which is what lets
-	// the indent unit be a single fact rather than one per emitter.
+	// ⭐ THE ONE SITE THAT WRITES INDENTATION, which is what lets the indent unit be a single fact
+	// rather than one per emitter. A pattern chain's continuation line takes its arm's indent,
+	// aligning with the first alternative.
 	function appendIndent()
-		// A pattern chain's continuation line sits one unit past its arm. `indentLevel` ITSELF is not
-		// touched: the closer dedent, the `end 'label'` dedent and the top-level test all read it and
-		// must see exactly what they would see without the wrap.
-		let target = (self.indentLevel + 1) if self.armContinuation else self.indentLevel
 		var level = 0 as IndentDepth
 
-		while level < target 'eachLevel'
+		while level < self.indentLevel 'eachLevel'
 			self.out.append(self.options.indentUnit)
 			level = level + 1
 		end 'eachLevel'
@@ -1688,11 +1802,10 @@ end 'format'
 
 function formatCore(source String, options FormatOptions) returns String
 	let keywords = KeywordTable.create()
-	let tokens = try tokenize(source, keywords: keywords) otherwise return source
-	let bytes = source.toByteArray()
-	let lines = SourceLines.of(bytes)
-	var scan = CommentScan.create(lines)
-	var state = FormatState.create(tokens, options: options, source: bytes, comments: scan.run(), lineCount: lines.count() as LineNumber, keywords: keywords)
+	let lexed = try tokenizeWithComments(source, keywords: keywords) otherwise return source
+	let lines = SourceLines.of(source.toByteArray())
+	var builder = CommentMapBuilder.create(lines, tokens: lexed.tokens)
+	var state = FormatState.create(lexed.tokens, options: options, lines: lines, comments: builder.build(lexed.comments), keywords: keywords)
 	return state.run()
 end 'formatCore'
 

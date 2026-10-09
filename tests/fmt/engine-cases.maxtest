@@ -9,10 +9,8 @@ let CaseExpectedExtension = ".expected"
 let StagedSourceExtension = ".maxon"
 
 let UnlexableCasePrefix = "Unterminated"
-let ShebangMarker = "#!"
 let NoSuchLine = "no such line"
 
-typealias CommentOccurrenceTally = int(0 to u64.max)
 typealias CaseLineNumber = int(1 to u64.max)
 typealias FormattedTextMap = Map with (String, String)
 
@@ -135,7 +133,7 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 
 	var firstPass = FormattedTextMap.create()
 	var diverged = StringArray.create()
-	var miscounted = StringArray.create()
+	var changedContent = StringArray.create()
 
 	for engineCase in staged 'eachCase'
 		let formatted = fileBody(engineCase.path)
@@ -149,14 +147,10 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 			end 'divergedFromTheOracle'
 		end 'hasOracle'
 
-		for comment in commentTextsIn(engineCase.source) 'eachComment'
-			let before = occurrencesOf(engineCase.source, needle: comment)
-			let after = occurrencesOf(formatted, needle: comment)
-
-			if after != before 'countMoved'
-				miscounted.push("{engineCase.name}: '{comment}' occurs {before} time(s) before formatting and {after} after")
-			end 'countMoved'
-		end 'eachComment'
+		match contentChange(engineCase.source, after: formatted) 'verdict'
+			same then continue
+			differs(detail) then changedContent.push("{engineCase.name}: {detail}")
+		end 'verdict'
 	end 'eachCase'
 
 	let secondRun = spawnFmtOverStagedTree(EngineStagingDirName, what: EngineSpawnName)
@@ -175,10 +169,10 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 
 	var report = ""
 	report.append(listedUnder(diverged, heading: "PARITY (formatted differently from its {CaseExpectedExtension})"))
-	report.append(listedUnder(miscounted, heading: "COMMENT MULTIPLICITY (a comment or shebang occurs a different number of times)"))
+	report.append(listedUnder(changedContent, heading: "CONTENT (a comment was lost, duplicated, moved or reordered, or a code token changed)"))
 	report.append(listedUnder(movedAgain, heading: "IDEMPOTENCE (a second run changed it again)"))
 
-	Expect.isEmpty(report, message: "`fmt` over {EngineTreeDescription} broke the engine corpus. PARITY compares against the committed oracle; COMMENT MULTIPLICITY counts every `//`-bearing text and a line-1 shebang, so a DUPLICATED comment is as red as a lost one; IDEMPOTENCE holds whoever re-mints an oracle.")
+	Expect.isEmpty(report, message: "`fmt` over {EngineTreeDescription} broke the engine corpus. PARITY compares against the committed oracle; CONTENT requires every comment line of the source to survive as that same line, and every code token to survive, so a DUPLICATED, MOVED, JOINED or REORDERED comment is as red as a lost one; IDEMPOTENCE holds whoever re-mints an oracle.")
 	requireSecondRunFoundNothingToDo(secondRun, stagedCount: staged.count() as FileTally, over: EngineTreeDescription)
 end 'formatting the engine corpus reproduces every oracle, keeps every comment and is a fixed point'
 
@@ -225,46 +219,3 @@ function stageEngineCases(corpus EngineCorpus) returns StagedEngineCaseArray
 
 	return staged
 end 'stageEngineCases'
-
-function commentTextsIn(source String) returns StringArray
-	var found = StringArray.create()
-	var onLineOne = true
-
-	for rawLine in source.split(LineFeed) 'eachLine'
-		if onLineOne 'lineOne'
-			onLineOne = false
-
-			if rawLine.startsWith(ShebangMarker) 'shebang'
-				found.push(rawLine.trimEnd())
-				continue
-			end 'shebang'
-		end 'lineOne'
-
-		let at = try rawLine.findFirst(CommentMarker) otherwise continue
-		let text = rawLine.slice(at, endIndex: rawLine.endIndex()).trimEnd()
-
-		if found.contains(text) 'alreadyListed'
-			continue
-		end 'alreadyListed'
-
-		found.push(text)
-	end 'eachLine'
-
-	return found
-end 'commentTextsIn'
-
-function occurrencesOf(haystack String, needle String) returns CommentOccurrenceTally
-	var seen = 0 as CommentOccurrenceTally
-	var atFirstPiece = true
-
-	for _ in haystack.split(needle) 'eachPiece'
-		if atFirstPiece 'firstPiece'
-			atFirstPiece = false
-			continue
-		end 'firstPiece'
-
-		seen = seen + 1
-	end 'eachPiece'
-
-	return seen
-end 'occurrencesOf'

@@ -248,6 +248,7 @@ end 'filteredHere'
 // the shared store — asked without counting, so the query that later answers is the one that counts.
 module function activeTokensAreHeld(project Project, path FilePath, buildKey BuildKey) returns bool throws CompileError
 	let entry = try sourceEntryOf(project, path: path)
+
 	if memoHolds(project.db.activeTokenCache, path: path, entry: entry) 'heldHere'
 		return true
 	end 'heldHere'
@@ -1929,7 +1930,7 @@ function parseStoppedInside(site MisclosedBlockSite, diagnostic Diagnostic) retu
 	return match diagnostic.anchor 'anchor'
 		at(_, line, column) gives site.encloses(positionKey(line, column: column))
 		programWide or
-			file gives false
+		file gives false
 	end 'anchor'
 end 'parseStoppedInside'
 
@@ -2167,7 +2168,7 @@ function foldEveryFileInto(project Project, pool FrontEndPool, merged MaxonModul
 		match try foldVerdict(project, pool: pool, signatures: signatures, into: merged, ledger: ledger, moved: moved, pathOrder: pathOrder, emissionOrder: emissionOrder) 'verdict'
 			stands then break 'untilTheFoldStands'
 			answersMoved or
-				indexMoved then folds = folds + 1
+			indexMoved then folds = folds + 1
 		end 'verdict'
 
 		// A new index when the one before it was settled without a type this fold filed; the same one otherwise.

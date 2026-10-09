@@ -310,23 +310,23 @@ export union DebugCommand
 	export function resumesTheProgram() returns bool
 		return match self 'which'
 			resume or
-				walk gives true
+			walk gives true
 			arm or
-				disarm or
-				pause or
-				detach or
-				backtrace or
-				locals or
-				print or
-				threads or
-				greenBacktrace or
-				greenSelect or
-				greenClear or
-				greenPark or
-				greenResume or
-				trace or
-				help or
-				quit gives false
+			disarm or
+			pause or
+			detach or
+			backtrace or
+			locals or
+			print or
+			threads or
+			greenBacktrace or
+			greenSelect or
+			greenClear or
+			greenPark or
+			greenResume or
+			trace or
+			help or
+			quit gives false
 		end 'which'
 	end 'resumesTheProgram'
 end 'DebugCommand'
@@ -721,21 +721,21 @@ export type DebugConversation
 			quit then self.leave(replies)
 			help then replies.push(DebugReply.spoken(debugHelpLines()))
 			arm or
-				disarm or
-				resume or
-				walk or
-				pause or
-				detach or
-				backtrace or
-				locals or
-				print or
-				threads or
-				greenBacktrace or
-				greenSelect or
-				greenClear or
-				greenPark or
-				greenResume or
-				trace then self.performIfReady(replies, command: command)
+			disarm or
+			resume or
+			walk or
+			pause or
+			detach or
+			backtrace or
+			locals or
+			print or
+			threads or
+			greenBacktrace or
+			greenSelect or
+			greenClear or
+			greenPark or
+			greenResume or
+			trace then self.performIfReady(replies, command: command)
 		end 'which'
 
 		return replies
@@ -1004,7 +1004,7 @@ export type DebugConversation
 			greenResume(thread) then self.releaseThread(replies, thread: thread)
 			trace(limit) then self.reportTrace(replies, limit: limit)
 			help or
-				quit then panic("DebugConversation.performLive: `help` and `quit` are answered by `perform` and never readied as a live command")
+			quit then panic("DebugConversation.performLive: `help` and `quit` are answered by `perform` and never readied as a live command")
 		end 'which'
 	end 'performLive'
 
@@ -1313,7 +1313,7 @@ export type DebugConversation
 	function reportMotion(replies DebugReplyArray, posted CommandOutcome, waitingFor String, verb String)
 		match posted 'posted'
 			done or
-				nothingParked then self.awaitStop(replies, waitingFor: waitingFor)
+			nothingParked then self.awaitStop(replies, waitingFor: waitingFor)
 			refused(reason) then replies.push(motionRefused(verb, reason: reason))
 			gone(ending) then self.reportOutcome(replies, ending: ending)
 		end 'posted'
@@ -1337,7 +1337,7 @@ export type DebugConversation
 	function interruptTheRun(replies DebugReplyArray)
 		match self.engine.requestPause() 'posted'
 			done or
-				nothingParked then break
+			nothingParked then break
 			refused(reason) then self.pauseRefusedMidWalk(replies, reason: reason)
 			gone(ending) then _ = self.walkEnded(replies, ending: ending)
 		end 'posted'
@@ -1654,7 +1654,7 @@ export type DebugConversation
 			match leaving 'tried'
 				declined then break
 				planted or
-					failed then return leaving
+				failed then return leaving
 			end 'tried'
 		end 'aPhysicalFrameReturns'
 
@@ -1763,7 +1763,7 @@ export type DebugConversation
 				planted then break
 
 				declined or
-					failed then return self.withdrawnAfter(planting)
+				failed then return self.withdrawnAfter(planting)
 			end 'tried'
 		end 'eachPoint'
 
@@ -1805,7 +1805,7 @@ export type DebugConversation
 			done gives ReturnPlanting.planted
 			refused gives ReturnPlanting.declined
 			nothingParked or
-				gone gives ReturnPlanting.failed(planted.inquiry())
+			gone gives ReturnPlanting.failed(planted.inquiry())
 		end 'answered'
 	end 'plantDecoded'
 
@@ -2132,7 +2132,7 @@ export type DebugConversation
 	function finishedARound(replies DebugReplyArray) returns bool
 		match self.engine.resume() 'posted'
 			done or
-				nothingParked then break
+			nothingParked then break
 			refused then return false
 			gone(ending) then return self.endedBy(replies, ending: ending)
 		end 'posted'
@@ -2163,7 +2163,7 @@ export type DebugConversation
 
 		match self.engine.detach() 'letGo'
 			done or
-				nothingParked then self.awaitDetachedEnd(replies)
+			nothingParked then self.awaitDetachedEnd(replies)
 			refused(reason) then replies.push(motionRefused(DetachVerb, reason: reason))
 			gone(ending) then self.reportOutcome(replies, ending: ending)
 		end 'letGo'
@@ -2198,7 +2198,7 @@ export type DebugConversation
 
 		match ending 'which'
 			running or
-				terminated then break
+			terminated then break
 			exited(code) then replies.push(DebugReply.exited(code))
 			crashed(status) then replies.push(DebugReply.crashed(status))
 		end 'which'
@@ -2211,8 +2211,8 @@ export type DebugConversation
 
 		match ending 'which'
 			running or
-				terminated or
-				exited then break
+			terminated or
+			exited then break
 			crashed then self.failed = true
 		end 'which'
 	end 'settle'

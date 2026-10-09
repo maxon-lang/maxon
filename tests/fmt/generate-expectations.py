@@ -122,8 +122,8 @@ def generate_engine_case_expectations(exe):
     """Mint `<Case>.expected` beside every `<Case>.in` by formatting it.
 
     These pin LAYOUT byte-exact. `tests/fmt/engine-cases.maxtest` compares
-    them, and also asks invariants that pin no layout (comment multiplicity,
-    idempotence): a golden says "the layout moved", the invariants say "something
+    them, and also asks invariants that pin no layout (content, idempotence):
+    a golden says "the layout moved", the invariants say "something
     was destroyed", and the second reads far better when it fires.
 
     A case the lexer REJECTS mints an `.expected` identical to its `.in` -- that is

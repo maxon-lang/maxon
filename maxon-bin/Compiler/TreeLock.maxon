@@ -701,8 +701,8 @@ export function discardLockUnlessInUse(lockPath FilePath) returns LockUse
 		held(claimToken) gives discardUnderClaim(lockPath, kind: lockKindOf(lockPath), claimPath: claimPath, claimToken: claimToken)
 		busy gives LockUse.inUse
 		contended or
-			failed or
-			directoryLost gives LockUse.unjudged
+		failed or
+		directoryLost gives LockUse.unjudged
 	end 'claim'
 end 'discardLockUnlessInUse'
 
@@ -734,7 +734,7 @@ function faultUse(kind FileFault) returns LockUse
 	return match kind 'fault'
 		gone gives LockUse.unused
 		contended or
-			failed gives LockUse.unjudged
+		failed gives LockUse.unjudged
 	end 'fault'
 end 'faultUse'
 
@@ -742,7 +742,7 @@ function useAfter(decision AcquireDecision) returns LockUse
 	return match decision 'decision'
 		busy gives LockUse.inUse
 		takeFresh or
-			takeOver gives LockUse.unused
+		takeOver gives LockUse.unused
 	end 'decision'
 end 'useAfter'
 
@@ -795,7 +795,7 @@ function settleRecordFaultUnderClaim(acquisition Acquisition, kind FileFault, re
 	return match kind 'kind'
 		gone gives settleUnderClaim(acquisition, decision: AcquireDecision.takeFresh, into: into)
 		contended or
-			failed gives releaseClaimThenFail(acquisition, reason: reason)
+		failed gives releaseClaimThenFail(acquisition, reason: reason)
 	end 'kind'
 end 'settleRecordFaultUnderClaim'
 
@@ -824,7 +824,7 @@ function decideOverExisting(lockPath FilePath, kind LockKind, record String, unt
 	return match liveness 'liveness'
 		ownerGone gives AcquireDecision.takeOver("warning: taking over the {kind.word()} at {lockPath.toString()} — the process that took it, {holderDescription(holder)}, has ended without releasing it. It said:\n{indentedRecord(record)}\n")
 		ownerAlive or
-			notOwned gives decideByHeartbeat(lockPath, kind: kind, record: record, untouchedSeconds: untouchedSeconds, holder: holder, liveness: liveness)
+		notOwned gives decideByHeartbeat(lockPath, kind: kind, record: record, untouchedSeconds: untouchedSeconds, holder: holder, liveness: liveness)
 	end 'liveness'
 end 'decideOverExisting'
 
@@ -1090,7 +1090,7 @@ end 'contend'
 function claimStepAfter(response FaultResponse) returns ClaimStep
 	return match response 'response'
 		gone or
-			retry gives ClaimStep.retry
+		retry gives ClaimStep.retry
 		exhausted(reason) gives ClaimStep.contended(reason)
 		failed(reason) gives ClaimStep.failed(reason)
 	end 'response'
@@ -1148,7 +1148,7 @@ function leftoverStamp(path FilePath, leftover LockLeftover, lockName String) re
 	return match leftover 'leftover'
 		setAsideClaim gives setAsideStamp(path, lockName: lockName)
 		clockProbe or
-			stagedRecord gives modifiedStamp(path, what: lockPartWhat(path, part: LockPart.leftover))
+		stagedRecord gives modifiedStamp(path, what: lockPartWhat(path, part: LockPart.leftover))
 	end 'leftover'
 end 'leftoverStamp'
 
@@ -1217,7 +1217,7 @@ function removeStaleClaim(claimPath FilePath, staleToken String, untouchedSecond
 	return match removeClaimHolding(claimPath, token: staleToken, startedMs: startedMs, clock: ClockSource.measured(nowSeconds)) 'removal'
 		removed gives staleClaimRemoved(claimPath, untouchedSeconds: untouchedSeconds)
 		gone or
-			another gives ClaimStep.retry
+		another gives ClaimStep.retry
 		contended(reason, _) gives ClaimStep.contended(reason)
 		failed(reason, _) gives ClaimStep.failed(reason)
 	end 'removal'
@@ -1275,9 +1275,9 @@ end 'removeSetAsideClaim'
 function discardUnreadAside(aside FilePath, step ClaimRemoval, startedMs InstantMs) returns ClaimRemoval
 	return match retriedChange(aside, change: ClaimFileChange.delete, startedMs: startedMs) 'deletion'
 		done or
-			gone gives ClaimRemoval.removed
+		gone gives ClaimRemoval.removed
 		contended or
-			failed gives step
+		failed gives step
 	end 'deletion'
 end 'discardUnreadAside'
 
@@ -1300,7 +1300,7 @@ end 'settleSetAsideClaim'
 function deleteSetAsideClaim(aside FilePath, startedMs InstantMs)
 	match retriedChange(aside, change: ClaimFileChange.delete, startedMs: startedMs) 'deletion'
 		done or
-			gone then return
+		gone then return
 		contended(reason) then warnClaimLeft(aside, reason: reason)
 		failed(reason) then warnClaimLeft(aside, reason: reason)
 	end 'deletion'

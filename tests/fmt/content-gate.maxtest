@@ -1,0 +1,475 @@
+let GateCommentMarker = "//"
+let GateDocCommentMarker = "///"
+let GateBlank = " "
+let GateCarriageReturn = "\r"
+
+enum ContentKind
+	code
+	comment
+	trailing
+end 'ContentKind'
+
+type ContentItem
+	export let kind as ContentKind
+	export let opener as String
+	export let text as String
+
+	static function create(kind ContentKind, opener String, text String) returns ContentItem
+		return Self{kind: kind, opener: opener, text: text}
+	end 'create'
+end 'ContentItem'
+
+typealias ContentItemArray = Array with ContentItem
+typealias ElementIndexArray = Array with ElementIndex
+
+export union ContentVerdict
+	same
+	differs(detail String)
+end 'ContentVerdict'
+
+// Reads literals and comments as `Lexer` does: byte strings, format specifiers, nested braces and
+// comments inside an interpolation. Where the two disagree on where a literal ends, the gate reads
+// a comment as code, or code as a comment, and passes a lost one.
+type ContentParser
+	var items as ContentItemArray
+	var chunk as ByteArray
+	var nesting as ByteArray
+	var groupDepths as ElementIndexArray
+	var inBlock as bool
+	var pendingSpace as bool
+	var afterWord as bool
+
+	static function create() returns ContentParser
+		return Self{items: ContentItemArray.create(), chunk: ByteArray.create(), nesting: ByteArray.create(), groupDepths: ElementIndexArray.create(), inBlock: false, pendingSpace: true, afterWord: false}
+	end 'create'
+
+	function parse(text String) returns ContentItemArray
+		for line in text.split(LineFeed) 'eachLine'
+			self.takeLine(withoutFinalCarriageReturn(line))
+		end 'eachLine'
+
+		self.flush()
+		return self.items
+	end 'parse'
+
+	function takeLine(line String)
+		let trimmed = line.trimStart()
+
+		if self.nesting.isEmpty() and not self.inBlock 'atTopLevel'
+			if trimmed.startsWith(GateCommentMarker) 'wholeLineComment'
+				self.flush()
+				self.items.push(commentItem(ContentKind.comment, fromOpener: trimmed))
+				return
+			end 'wholeLineComment'
+
+			if trimmed.isEmpty() 'blankLine'
+				self.pendingSpace = true
+				return
+			end 'blankLine'
+		end 'atTopLevel'
+
+		self.pendingSpace = true
+		let bytes = line.toByteArray()
+		var at = 0 as ElementIndex
+
+		while at < bytes.count() 'eachByte'
+			at = self.step(bytes, at: at)
+		end 'eachByte'
+
+		if self.nesting.isEmpty() and not self.inBlock 'lineEnds'
+			self.pendingSpace = true
+		end 'lineEnds' else 'rawContinues'
+			self.chunk.push('\n')
+		end 'rawContinues'
+	end 'takeLine'
+
+	function step(bytes ByteArray, at ElementIndex) returns ElementIndex
+		let b = gateByteIn(bytes, at: at)
+
+		if self.inBlock 'insideABlock'
+			return self.stepInBlock(bytes, at: at, b: b)
+		end 'insideABlock'
+
+		if not self.nesting.isEmpty() 'insideALiteral'
+			return self.stepInLiteral(bytes, at: at, b: b)
+		end 'insideALiteral'
+
+		return self.stepInCode(bytes, at: at, b: b)
+	end 'step'
+
+	function stepInLiteral(bytes ByteArray, at ElementIndex, b Byte) returns ElementIndex
+		self.chunk.push(b)
+		self.afterWord = false
+
+		let context = self.topContext()
+
+		if context == '"' or context == '\'' or context == 'B' 'quotedText'
+			return self.stepInQuoted(bytes, at: at, b: b, context: context)
+		end 'quotedText'
+
+		return self.stepInExpression(bytes, at: at, b: b, context: context)
+	end 'stepInLiteral'
+
+	function stepInQuoted(bytes ByteArray, at ElementIndex, b Byte, context Byte) returns ElementIndex
+		if b == '\\' and at + 1 < bytes.count() 'escape'
+			self.chunk.push(gateByteIn(bytes, at: at + 1))
+			return at + 2
+		end 'escape'
+
+		if (b == '"' and context != '\'') or (b == '\'' and context == '\'') 'closes'
+			self.popContext()
+		end 'closes' else if b == '{' and context == '"' 'opensInterpolation'
+			self.pushContext("I")
+		end 'opensInterpolation'
+
+		return at + 1
+	end 'stepInQuoted'
+
+	function stepInExpression(bytes ByteArray, at ElementIndex, b Byte, context Byte) returns ElementIndex
+		if b == '/' and nextByteIs(bytes, at: at, expected: "*") 'opensBlock'
+			self.chunk.push('*')
+			self.inBlock = true
+			return at + 2
+		end 'opensBlock'
+
+		if b == '/' and nextByteIs(bytes, at: at, expected: "/") 'opensLineComment'
+			return self.copyUntil(bytes, startingAt: at + 1, stop: "\n")
+		end 'opensLineComment'
+
+		if b == 'b' and nextByteIs(bytes, at: at, expected: "\"") and not previousIsWord(bytes, at: at) 'opensByteString'
+			self.chunk.push('"')
+			self.pushContext("B")
+			return at + 2
+		end 'opensByteString'
+
+		if b == '"' or b == '\'' 'opensQuoted'
+			self.pushContext("\"" if b == '"' else "'")
+		end 'opensQuoted' else if b == '{' 'opensNested'
+			self.pushContext("\{")
+		end 'opensNested' else if b == '}' 'closesNested'
+			self.popContext()
+		end 'closesNested' else if b == ':' and context == 'I' and self.groupDepthOfTop() == 0 'formatSpecifier'
+			return self.copyUntil(bytes, startingAt: at + 1, stop: "}")
+		end 'formatSpecifier' else if b == '(' or b == '[' 'opensGroup'
+			self.adjustGroupDepth(true)
+		end 'opensGroup' else if b == ')' or b == ']' 'closesGroup'
+			self.adjustGroupDepth(false)
+		end 'closesGroup'
+
+		return at + 1
+	end 'stepInExpression'
+
+	function copyUntil(bytes ByteArray, startingAt ElementIndex, stop String) returns ElementIndex
+		let stopByte = gateByteIn(stop.toByteArray(), at: 0)
+		var at = startingAt
+
+		while at < bytes.count() and gateByteIn(bytes, at: at) != stopByte 'copied'
+			self.chunk.push(gateByteIn(bytes, at: at))
+			at = at + 1
+		end 'copied'
+
+		return at
+	end 'copyUntil'
+
+	function topContext() returns Byte
+		return try self.nesting.get(self.nesting.count() - 1) otherwise panic("content-gate: a literal is open")
+	end 'topContext'
+
+	function pushContext(context String)
+		self.nesting.push(gateByteIn(context.toByteArray(), at: 0))
+		self.groupDepths.push(0)
+	end 'pushContext'
+
+	function popContext()
+		_ = try self.nesting.pop() otherwise panic("content-gate: a literal is open")
+		_ = try self.groupDepths.pop() otherwise panic("content-gate: a literal is open")
+	end 'popContext'
+
+	function nearestInterpolation() returns ElementIndex
+		var at = self.nesting.count() - 1
+
+		while gateByteIn(self.nesting, at: at) != 'I' 'walkDown'
+			at = at - 1
+		end 'walkDown'
+
+		return at
+	end 'nearestInterpolation'
+
+	function groupDepthOfTop() returns ElementIndex
+		return try self.groupDepths.get(self.nesting.count() - 1) otherwise panic("content-gate: a literal is open")
+	end 'groupDepthOfTop'
+
+	function adjustGroupDepth(opens bool)
+		let owner = self.nearestInterpolation()
+		let depth = try self.groupDepths.get(owner) otherwise panic("content-gate: an interpolation is open")
+
+		if opens 'opening'
+			try self.groupDepths.set(owner, value: depth + 1) otherwise panic("content-gate: an interpolation is open")
+		end 'opening' else if depth > 0 'closes'
+			try self.groupDepths.set(owner, value: depth - 1) otherwise panic("content-gate: an interpolation is open")
+		end 'closes'
+	end 'adjustGroupDepth'
+
+	function stepInBlock(bytes ByteArray, at ElementIndex, b Byte) returns ElementIndex
+		self.chunk.push(b)
+		self.afterWord = false
+
+		if b == '*' and nextByteIs(bytes, at: at, expected: "/") 'closes'
+			self.chunk.push('/')
+			self.inBlock = false
+			return at + 2
+		end 'closes'
+
+		return at + 1
+	end 'stepInBlock'
+
+	function stepInCode(bytes ByteArray, at ElementIndex, b Byte) returns ElementIndex
+		if b == '/' and nextByteIs(bytes, at: at, expected: "/") 'trailingComment'
+			let rest = try bytes.slice(at, endIndex: bytes.count()) otherwise panic("content-gate: the comment starts inside the line")
+			self.flush()
+			self.items.push(commentItem(ContentKind.trailing, fromOpener: String.from(rest)))
+			return bytes.count()
+		end 'trailingComment'
+
+		if b == '/' and nextByteIs(bytes, at: at, expected: "*") 'opensBlock'
+			self.inBlock = true
+			self.emitSymbols("/*")
+			return at + 2
+		end 'opensBlock'
+
+		if b == 'b' and nextByteIs(bytes, at: at, expected: "\"") and not previousIsWord(bytes, at: at) 'opensByteString'
+			self.emit(b, word: true)
+			self.chunk.push('"')
+			self.pushContext("B")
+			return at + 2
+		end 'opensByteString'
+
+		if b == '"' or b == '\'' 'opensLiteral'
+			self.pushContext("\"" if b == '"' else "'")
+			self.emit(b, word: false)
+			return at + 1
+		end 'opensLiteral'
+
+		if b == ' ' or b == '\t' or b == '\r' 'layout'
+			self.pendingSpace = true
+			return at + 1
+		end 'layout'
+
+		self.emit(b, word: isWordByte(b))
+		return at + 1
+	end 'stepInCode'
+
+	function emitSymbols(text String)
+		for b in text.bytes() 'eachByte'
+			self.emit(b, word: false)
+		end 'eachByte'
+	end 'emitSymbols'
+
+	function emit(b Byte, word bool)
+		if word and self.afterWord and self.pendingSpace 'keepsOneSpace'
+			self.chunk.push(' ')
+		end 'keepsOneSpace'
+
+		self.chunk.push(b)
+		self.afterWord = word
+		self.pendingSpace = false
+	end 'emit'
+
+	function flush()
+		if self.chunk.count() > 0 'holdsCode'
+			self.items.push(ContentItem.create(ContentKind.code, opener: "", text: String.from(self.chunk)))
+			self.chunk.clear()
+			self.afterWord = false
+			self.pendingSpace = true
+		end 'holdsCode'
+	end 'flush'
+end 'ContentParser'
+
+function commentItem(kind ContentKind, fromOpener String) returns ContentItem
+	let opener = GateDocCommentMarker if fromOpener.startsWith(GateDocCommentMarker) else GateCommentMarker
+	return ContentItem.create(kind, opener: opener, text: collapsedWords(gateDroppedPrefix(fromOpener, length: opener.byteLength())))
+end 'commentItem'
+
+function withoutFinalCarriageReturn(line String) returns String
+	if line.endsWith(GateCarriageReturn) 'crlf'
+		return line.slice(line.startIndex(), length: line.count() - 1)
+	end 'crlf'
+
+	return line
+end 'withoutFinalCarriageReturn'
+
+function previousIsWord(bytes ByteArray, at ElementIndex) returns bool
+	return at > 0 and isWordByte(gateByteIn(bytes, at: at - 1))
+end 'previousIsWord'
+
+function nextByteIs(bytes ByteArray, at ElementIndex, expected String) returns bool
+	let wanted = gateByteIn(expected.toByteArray(), at: 0)
+	return at + 1 < bytes.count() and gateByteIn(bytes, at: at + 1) == wanted
+end 'nextByteIs'
+
+function gateByteIn(bytes ByteArray, at ElementIndex) returns Byte
+	return try bytes.get(at) otherwise panic("content-gate: byte {at} below the {bytes.count()}-byte line")
+end 'gateByteIn'
+
+function isWordByte(b Byte) returns bool
+	return (b >= '0' and b <= '9') or (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or b == '_' or b >= 128
+end 'isWordByte'
+
+function gateDroppedPrefix(text String, length BytePos) returns String
+	let bytes = text.toByteArray()
+	let rest = try bytes.slice(length, endIndex: bytes.count()) otherwise panic("content-gate: a {length}-byte prefix of a {bytes.count()}-byte text")
+	return String.from(rest)
+end 'gateDroppedPrefix'
+
+function collapsedWords(text String) returns String
+	var joined = ""
+
+	for word in text.replace("\t", with: GateBlank).replace("\r", with: GateBlank).split(GateBlank) 'eachWord'
+		if word.isEmpty() 'skipped'
+			continue
+		end 'skipped'
+
+		joined = word if joined.isEmpty() else "{joined}{GateBlank}{word}"
+	end 'eachWord'
+
+	return joined
+end 'collapsedWords'
+
+// Blind to two statements joined onto one line, because code is compared squashed, and to
+// whitespace changed inside a `//` comment, because one is compared word by word.
+export function contentChange(before String, after String) returns ContentVerdict
+	let wanted = ContentParser.create().parse(before)
+	let got = ContentParser.create().parse(after)
+	var at = 0 as ElementIndex
+
+	for item in wanted 'eachItem'
+		let seen = try got.get(at) otherwise return ContentVerdict.differs("the output ran out where {item.text} was due")
+
+		if not (seen.kind == item.kind and seen.opener.equals(item.opener) and seen.text.equals(item.text)) 'moved'
+			return ContentVerdict.differs("before holds [{item.opener}] {item.text} and after holds [{seen.opener}] {seen.text}")
+		end 'moved'
+
+		at = at + 1
+	end 'eachItem'
+
+	if at != got.count() 'extra'
+		return ContentVerdict.differs("the output holds {got.count() - at} item(s) the input does not")
+	end 'extra'
+
+	return ContentVerdict.same
+end 'contentChange'
+
+function requireSame(before String, after String, message String) throws TestFailure
+	match contentChange(before, after: after) 'verdict'
+		same then return
+		differs(detail) then try Expect.fail("{message} ({detail})")
+	end 'verdict'
+end 'requireSame'
+
+function requireDifferent(before String, after String, message String) throws TestFailure
+	match contentChange(before, after: after) 'verdict'
+		same then try Expect.fail(message)
+		differs then return
+	end 'verdict'
+end 'requireDifferent'
+
+test 'moved blank lines and re-broken code hold the same content'
+	requireSame("let a = 1\n\n\nlet b = 2\n", after: "let a = 1\n\nlet b = 2\n", message: "blank lines are layout.")
+	requireSame("add or sub or mul then x\n", after: "add or\nsub or\nmul then x\n", message: "a chain re-broken into lines is layout.")
+	requireSame("function f()\n\treturn x\nend 'f'\n", after: "function f()\n  return   x\nend 'f'\n", message: "indentation is layout.")
+end 'moved blank lines and re-broken code hold the same content'
+
+test 'literals and carriage returns reformatted around hold the same content'
+	requireSame("let a = \"http://x\"\n", after: "let   a=\"http://x\"\n", message: "a URL inside a string literal is not a comment.")
+	requireSame("let c = '\"'\n", after: "let  c='\"'\n", message: "a double quote inside a character literal is not a string.")
+	requireSame("let a = \"\{f(\"x\")\}\"\n", after: "let a   = \"\{f(\"x\")\}\"\n", message: "an interpolation reformatted around is layout.")
+	requireSame("let a = \"one\ntwo\"\nlet b = 2\n", after: "let a = \"one\r\ntwo\"\nlet b = 2\n", message: "a carriage return before a line break inside a literal is layout.")
+	requireSame("/* one\n   two */\nlet b = 2\n", after: "/* one\r\n   two */\nlet b = 2\n", message: "a carriage return before a line break inside a block comment is layout.")
+end 'literals and carriage returns reformatted around hold the same content'
+
+test 'a nested brace inside an interpolation does not end the literal'
+	requireDifferent("let a = \"\{Pt\{x: 1\}.f(\"//a  b\")\}\"\n", after: "let a = \"\{Pt\{x: 1\}.f(\"//a b\")\}\"\n", message: "a struct literal inside an interpolation must not close it early: the tail is a string, not a comment whose spaces collapse.")
+	requireDifferent("let a = \"\{Pt\{x: 1\}.f(\"//\")\}\"\n", after: "let a = \"\{Pt\{x: 1\}.f(\"//\")\}\"  //\")\}\"\n", message: "a duplicated tail turned into a comment went unreported.")
+end 'a nested brace inside an interpolation does not end the literal'
+
+test 'two comment lines joined into one are caught'
+	requireDifferent("// a\n// b\n", after: "// a b\n", message: "a join of two comment lines went unreported.")
+end 'two comment lines joined into one are caught'
+
+test 'a comment line that lost its opener is caught'
+	requireDifferent("// a\n// b\n", after: "// a\nb\n", message: "a comment line that became code went unreported.")
+end 'a comment line that lost its opener is caught'
+
+test 'an empty comment line dropped or added is caught'
+	requireDifferent("// a\n//\n// b\n", after: "// a\n// b\n", message: "a dropped empty comment line went unreported.")
+	requireDifferent("// a\n// b\n", after: "// a\n//\n// b\n", message: "an added empty comment line went unreported.")
+end 'an empty comment line dropped or added is caught'
+
+test 'a quote marker lost on a line is caught'
+	requireDifferent("// > a\n// > b\n", after: "// > a\n// b\n", message: "a dropped quote marker went unreported.")
+end 'a quote marker lost on a line is caught'
+
+test 'a comment line split in two is caught'
+	requireDifferent("// aaa bbb ccc\n", after: "// aaa bbb\n// ccc\n", message: "a long comment line that was split went unreported.")
+	requireDifferent("/// aaa bbb\n", after: "/// aaa\n/// bbb\n", message: "a doc comment line that was split went unreported.")
+end 'a comment line split in two is caught'
+
+test 'two words of code glued together are caught'
+	requireDifferent("function f()\n\treturn x\nend 'f'\n", after: "function f()\n\treturnx\nend 'f'\n", message: "return x became returnx and went unreported.")
+end 'two words of code glued together are caught'
+
+test 'a changed string literal is caught'
+	requireDifferent("let a = \"x  y\"\n", after: "let a = \"x y\"\n", message: "a space changed inside a string literal went unreported.")
+	requireDifferent("let a = \"\{f(\"x  y\")\}\"\n", after: "let a = \"\{f(\"x y\")\}\"\n", message: "a space changed inside an interpolation went unreported.")
+end 'a changed string literal is caught'
+
+test 'two words of a trailing comment glued together are caught'
+	requireDifferent("let a = 1 // foo bar\n", after: "let a = 1 // foobar\n", message: "a glued trailing comment went unreported.")
+	requireSame("let a = 1 // foo bar\n", after: "let a = 1  // foo   bar\n", message: "re-spacing a trailing comment is layout.")
+end 'two words of a trailing comment glued together are caught'
+
+test 'a duplicated or reordered comment line is caught'
+	requireDifferent("// a\nlet x = 1\n", after: "// a\n// a\nlet x = 1\n", message: "a duplicated comment line went unreported.")
+	requireDifferent("// a\n// b\n", after: "// b\n// a\n", message: "two comment lines reordered went unreported.")
+end 'a duplicated or reordered comment line is caught'
+
+test 'a demoted doc comment is caught'
+	requireDifferent("/// a doc line\nlet x = 1\n", after: "// a doc line\nlet x = 1\n", message: "a doc comment demoted to a plain comment went unreported.")
+end 'a demoted doc comment is caught'
+
+test 'a trailing comment moved to its own line is caught'
+	requireDifferent("let a = 1 // note\n", after: "let a = 1\n// note\n", message: "a trailing comment moved to its own line went unreported.")
+end 'a trailing comment moved to its own line is caught'
+
+test 'a dropped code token is caught'
+	requireDifferent("let a = 1\nlet b = 2\n", after: "let a = 1\nlet = 2\n", message: "a dropped identifier went unreported.")
+	requireDifferent("function f()\n\treturn 1\nend 'f'\n", after: "function f()\n\treturn\nend 'f'\n", message: "a dropped operand went unreported.")
+end 'a dropped code token is caught'
+
+test 'a changed block comment interior is caught'
+	requireDifferent("/* one\n   two */\nlet b = 2\n", after: "/* one\n  two */\nlet b = 2\n", message: "a re-indented block comment went unreported.")
+	requireDifferent("let a = 1 /* one  two */\n", after: "let a = 1 /* one two */\n", message: "a changed space inside a block comment went unreported.")
+end 'a changed block comment interior is caught'
+
+test 'the lexer reads a byte string, a format specifier and a block comment as the gate does'
+	requireSame("let a = b\"\{\"\n// keep  me\n", after: "let a = b\"\{\"\n// keep me\n", message: "a brace in a byte string is not an interpolation, so the comment after it is a comment.")
+	requireSame("let a = \"\{n:'\}\"\n// keep  me\n", after: "let a = \"\{n:'\}\"\n// keep me\n", message: "a quote in a format specifier is not a literal, so the comment after it is a comment.")
+	requireSame("let a = \"\{n /* \" */ \}\"\n// keep  me\n", after: "let a = \"\{n /* \" */ \}\"\n// keep me\n", message: "a block comment in an interpolation hides its quote, so the comment after it is a comment.")
+	requireDifferent("let a = b\"\{\"\n// keep me\n", after: "let a = b\"\{\"\n", message: "a comment dropped after a byte string went unreported.")
+	requireDifferent("let a = \"\{n:'\}\"\n// keep me\n", after: "let a = \"\{n:'\}\"\n", message: "a comment dropped after a format specifier went unreported.")
+	requireDifferent("let a = \"\{n /* \" */ \}\"\n// keep me\n", after: "let a = \"\{n /* \" */ \}\"\n", message: "a comment dropped after a block comment in an interpolation went unreported.")
+	requireDifferent("let a = \"\{n /* x  y */ \}\"\n", after: "let a = \"\{n /* x y */ \}\"\n", message: "a changed space inside a block comment in an interpolation went unreported.")
+	requireSame("let b = ab\"x\"\n", after: "let b   = ab\"x\"\n", message: "a quote after an identifier ending in b is an ordinary string.")
+end 'the lexer reads a byte string, a format specifier and a block comment as the gate does'
+
+test 'a line comment inside an interpolation is read as the lexer reads it'
+	requireSame("let a = \"\{x // it's\n\}\"\nlet   b = 1\n", after: "let a = \"\{x // it's\n\}\"\nlet b = 1\n", message: "a quote inside a line comment in an interpolation does not open a literal, so the code after it is code.")
+	requireDifferent("let a = \"\{x // a  b\n\}\"\n", after: "let a = \"\{x // a b\n\}\"\n", message: "a changed space inside a line comment in an interpolation went unreported.")
+end 'a line comment inside an interpolation is read as the lexer reads it'
+
+test 'a block comment moved off the middle of a line is caught'
+	requireDifferent("var y = /* note */ 5\n", after: "var y = 5  /* note */\n", message: "a block comment moved from before a literal to after it went unreported.")
+	requireDifferent("f(a, /* b */ c)\n", after: "f(a, c)  /* b */\n", message: "a block comment moved from between two arguments to after the call went unreported.")
+	requireDifferent("if /* why */ x 'l'\n", after: "if x 'l'  /* why */\n", message: "a block comment moved from inside a condition to after it went unreported.")
+	requireSame("var y = /* note */ 5\n", after: "var   y=/* note */   5\n", message: "re-spacing around an in-place block comment is layout.")
+end 'a block comment moved off the middle of a line is caught'

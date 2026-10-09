@@ -370,7 +370,7 @@ end 'LibraryReach'
 module function reachedLibraryNamesOf(reach LibraryReach) returns FunctionNameSet
 	return match reach 'reach'
 		noLibrarySource or
-			unreferenced gives FunctionNameSet.create()
+		unreferenced gives FunctionNameSet.create()
 		walked(_, _, reachable) gives reachable
 	end 'reach'
 end 'reachedLibraryNamesOf'
@@ -430,7 +430,7 @@ end 'libraryReachOf'
 module function growStdlibBodyDemand(project Project, reach LibraryReach) returns bool throws CompileError
 	match reach 'reach'
 		noLibrarySource or
-			unreferenced then return false
+		unreferenced then return false
 
 		walked(_, _, reachable) then return try demandEveryReachedLibraryFile(project, reachable: reachable)
 	end 'reach'
@@ -1373,7 +1373,7 @@ end 'markMaxonCallees'
 module function markMaxonCalleeEdge(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match maxonOpCalleeKind(op) 'kind'
 		direct or
-			functionValue then markReachable(maxonOpCalleeName(op), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		functionValue then markReachable(maxonOpCalleeName(op), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		noCallee then break
 	end 'kind'
 end 'markMaxonCalleeEdge'
@@ -1772,7 +1772,7 @@ end 'anyServiceHandlerReachesStdlib'
 function opNamesStdlibCallee(op MaxonOp, project Project, stdlib FunctionNameSet) returns bool
 	return match maxonOpCalleeKind(op) 'kind'
 		direct or
-			functionValue gives nameReachesStdlib(maxonOpCalleeName(op), project: project, stdlib: stdlib)
+		functionValue gives nameReachesStdlib(maxonOpCalleeName(op), project: project, stdlib: stdlib)
 		noCallee gives false
 	end 'kind'
 end 'opNamesStdlibCallee'
@@ -2010,31 +2010,31 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 	match op 'op'
 		call(_, callee, _, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		literal or
-			ret or
-			retVoid or
-			binOp or
-			unaryOp or
-			compare or
-			condBranch or
-			branch or
-			globalAddr or
-			loadIndirect or
-			storeIndirect or
-			stringLiteral then break
+		ret or
+		retVoid or
+		binOp or
+		unaryOp or
+		compare or
+		condBranch or
+		branch or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		stringLiteral then break
 		tryCall(_, _, callee, _, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		throwError or
-			propagateError or
-			panicAbort then break
+		propagateError or
+		panicAbort then break
 		functionRef(_, funcName, _) then noteSubstrateCallee(funcName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		indirectCall then break
 		asyncCall(_, callee, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		await or
-			tryAwait or
-			sizeofType or
-			constArrayLiteral or
-			switch or
-			witnessDispatch or
-			witnessTryDispatch then break
+		tryAwait or
+		sizeofType or
+		constArrayLiteral or
+		switch or
+		witnessDispatch or
+		witnessTryDispatch then break
 
 		// A panic names no callee at all, so it reaches no stdlib substrate.
 		panicAbortValue then break
@@ -2053,8 +2053,8 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		// the edge to that message, and noting it twice would credit one call graph edge to two ops.
 		serviceReplyCell then break
 		immortalStructRecord or
-			immortalStringTable or
-			covPoint then break
+		immortalStringTable or
+		covPoint then break
 
 		// ⭐⭐ **A `__Raw` OP IS A SEED WITH NO CALLEE TO NAME IT, AND IT IS THE ONLY KIND THERE IS.** Every
 		// other seed here is a CALL to a runtime entry, which the crossing can meet by name; a raw row has no
