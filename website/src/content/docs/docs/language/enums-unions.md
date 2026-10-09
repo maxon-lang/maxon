@@ -61,8 +61,9 @@ end 'main'
 
 - A method carries its own visibility — `export`, `module` or `public` — and is file-private without one,
   whatever the enum's own visibility. Calling a private method from another file is **E3008**.
-- An enum declares no fields, so `self.something` inside a method is **E2015** — `self.name`,
-  `self.ordinal` and `self.rawValue` included; use `match self`.
+- Inside a method, `self.name`, `self.ordinal` and `self.rawValue` read the case, and a
+  [struct-backed](#struct-backed-enums) enum's backing field reads through `self` (`self.latency`). Any other
+  `self.x`, and any assignment through `self`, is **E2015**.
 - `static function` is not supported on an enum (**E2015**).
 
 ### Enum Properties
@@ -138,6 +139,9 @@ end 'main'
 - Field values are compile-time constants: numbers, booleans, enum cases, top-level constants.
 - The enum is stored as its ordinal; `.rawValue` builds the record on demand. `fromRawValue` is not
   available for a struct-backed enum.
+- A backing field also reads directly off the value: `op.latency` is `op.rawValue.latency`. A field named
+  `name`, `ordinal` or `rawValue` is reached only as `op.rawValue.name`, because the case accessors take
+  those spellings.
 
 ### Enum Interface Conformance
 
@@ -519,7 +523,10 @@ function main() returns ExitCode
 end 'main'
 ```
 
-As with enums, a method carries its own visibility, and `static function` is not supported.
+As with enums, a method carries its own visibility, and `static function` is not supported. Through
+`self`, a method reads `self.name`, `self.ordinal`, `self.rawValue` and a
+[struct-backed](#struct-backed-unions) union's backing field; a case's payload (`self.radius`) is
+**E2015**, and `match self` binds it.
 
 ### Union Interface Conformance
 

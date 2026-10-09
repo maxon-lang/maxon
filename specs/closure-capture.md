@@ -1421,6 +1421,470 @@ end 'main'
 0
 ```
 
+<!-- test: closure-capture.a-captured-enum-value-calls-its-method -->
+A captured enum value answers its own methods inside the closure, captured from a parameter or from a local.
+```maxon
+typealias Message = function() returns String
+
+enum Family
+	alpha
+	beta
+
+	function prefix() returns String
+		return match self 'family'
+			alpha gives "a-"
+			beta gives "b-"
+		end 'family'
+	end 'prefix'
+end 'Family'
+
+function describe(family Family) returns Message
+	return function() gives "{family.prefix()}param"
+end 'describe'
+
+function main() returns ExitCode
+	let local = Family.alpha
+	let fromLocal = function() gives "{local.prefix()}local"
+	let fromParam = describe(Family.beta)
+	print("{fromLocal()} {fromParam()}\n")
+	return 0
+end 'main'
+```
+```stdout
+a-local b-param
+```
+
+<!-- test: closure-capture.a-captured-enum-value-answers-its-raw-value -->
+A captured enum value with a raw type answers its `rawValue` inside the closure.
+```maxon
+typealias Message = function() returns String
+
+enum Token
+	pass = "PASS"
+	fail = "FAIL"
+end 'Token'
+
+function spell(token Token) returns Message
+	return function() gives token.rawValue
+end 'spell'
+
+function main() returns ExitCode
+	print("{spell(Token.fail)()}\n")
+	return 0
+end 'main'
+```
+```stdout
+FAIL
+```
+
+<!-- test: closure-capture.a-captured-enum-value-answers-its-name-ordinal-and-record -->
+A captured enum value answers `name`, `ordinal` and a struct-backed record's fields inside the closure.
+```maxon
+typealias Latency = int(0 to 50)
+typealias Message = function() returns String
+
+type OpMeta
+	export let latency as Latency
+	export let isMemory as bool
+end 'OpMeta'
+
+enum Instruction
+	add = OpMeta{latency: 1, isMemory: false}
+	load = OpMeta{latency: 4, isMemory: true}
+end 'Instruction'
+
+function describe(op Instruction) returns Message
+	return function() gives "{op.name} {op.ordinal} {op.rawValue.latency} {op.rawValue.isMemory}"
+end 'describe'
+
+function main() returns ExitCode
+	print("{describe(Instruction.load)()}\n")
+	return 0
+end 'main'
+```
+```stdout
+load 1 4 true
+```
+
+<!-- test: closure-capture.a-captured-union-value-calls-its-method -->
+A captured union value answers its own methods inside the closure, and the closure releases the payload.
+```maxon
+typealias Message = function() returns String
+
+union Shape
+	circle(label String)
+	square(side String)
+
+	function describe() returns String
+		return match self 'shape'
+			circle(label) gives "circle {label}"
+			square(side) gives "square {side}"
+		end 'shape'
+	end 'describe'
+end 'Shape'
+
+function describer(shape Shape) returns Message
+	return function() gives shape.describe()
+end 'describer'
+
+function main() returns ExitCode
+	let fromParam = describer(Shape.circle("a label padded long enough to heap allocate"))
+	let local = Shape.square("another label padded long enough to heap allocate")
+	let fromLocal = function() gives local.describe()
+	print("{fromParam()}\n{fromLocal()}\n")
+	return 0
+end 'main'
+```
+```stdout
+circle a label padded long enough to heap allocate
+square another label padded long enough to heap allocate
+```
+
+<!-- test: closure-capture.a-captured-var-enum-and-a-capture-of-a-capture-call-methods -->
+An enum captured from a `var`, and one a nested closure captures through its parent, answer their members.
+```maxon
+enum Family
+	alpha
+	beta
+
+	function prefix() returns String
+		return match self 'family'
+			alpha gives "a-"
+			beta gives "b-"
+		end 'family'
+	end 'prefix'
+end 'Family'
+
+function main() returns ExitCode
+	var current = Family.alpha
+	current = Family.beta
+	let fromVar = function() gives current.prefix()
+	let outer = function() gives function() gives "{current.prefix()}{current.name}"
+	let inner = outer()
+	print("{fromVar()} {inner()}\n")
+	return 0
+end 'main'
+```
+```stdout
+b- b-beta
+```
+
+<!-- test: closure-capture.a-captured-enum-value-answers-its-granted-equals -->
+```maxon
+typealias Message = function() returns String
+
+enum Family
+	alpha
+	beta
+end 'Family'
+
+function compare(left Family, right Family) returns Message
+	return function() gives "{left.equals(left)} {left.equals(right)}"
+end 'compare'
+
+function main() returns ExitCode
+	print("{compare(Family.alpha, right: Family.beta)()}\n")
+	return 0
+end 'main'
+```
+```stdout
+true false
+```
+
+<!-- test: closure-capture.a-captured-union-answers-its-payload-on-every-call -->
+A captured union's method hands back its managed payload each time the closure runs, and nothing leaks.
+```maxon
+typealias Message = function() returns String
+
+union Shape
+	circle(label String)
+	square(side String)
+
+	function text() returns String
+		return match self 'shape'
+			circle(label) gives label
+			square(side) gives side
+		end 'shape'
+	end 'text'
+end 'Shape'
+
+function reader(shape Shape) returns Message
+	return function() gives shape.text()
+end 'reader'
+
+function main() returns ExitCode
+	let read = reader(Shape.circle("a label padded long enough to heap allocate"))
+	print("{read()}\n{read()}\n")
+	return 0
+end 'main'
+```
+```stdout
+a label padded long enough to heap allocate
+a label padded long enough to heap allocate
+```
+```exitcode
+0
+```
+
+<!-- test: closure-capture.a-captured-enum-self-answers-its-members -->
+```maxon
+typealias Message = function() returns String
+
+enum Family
+	alpha
+	beta
+
+	function prefix() returns String
+		return match self 'family'
+			alpha gives "a-"
+			beta gives "b-"
+		end 'family'
+	end 'prefix'
+
+	function now() returns String
+		return "{self.name} {self.prefix()}"
+	end 'now'
+
+	function later() returns Message
+		return function() gives "{self.name} {self.prefix()}"
+	end 'later'
+end 'Family'
+
+function main() returns ExitCode
+	print("{Family.beta.now()}\n{Family.beta.later()()}\n")
+	return 0
+end 'main'
+```
+```stdout
+beta b-
+beta b-
+```
+
+<!-- test: closure-capture.a-captured-self-answers-its-record-and-a-union-self-its-name -->
+`self` in a struct-backed enum's method answers its record's fields, and `self` in a union's method answers
+`name` and `ordinal`, directly and captured.
+```maxon
+typealias Latency = int(0 to 50)
+typealias Message = function() returns String
+
+type OpMeta
+	export let latency as Latency
+end 'OpMeta'
+
+enum Instruction
+	add = OpMeta{latency: 1}
+	load = OpMeta{latency: 4}
+
+	function cost() returns String
+		return "{self.name} {self.rawValue.latency}"
+	end 'cost'
+
+	function later() returns Message
+		return function() gives "{self.ordinal} {self.rawValue.latency}"
+	end 'later'
+end 'Instruction'
+
+union Outcome
+	pass
+	fail(reason String)
+
+	function label() returns String
+		return "{self.name} {self.ordinal}"
+	end 'label'
+
+	function later() returns Message
+		return function() gives self.name
+	end 'later'
+end 'Outcome'
+
+function main() returns ExitCode
+	print("{Instruction.load.cost()} {Instruction.load.later()()}\n")
+	let failed = Outcome.fail("a reason padded long enough to heap allocate")
+	print("{failed.label()} {failed.later()()}\n")
+	return 0
+end 'main'
+```
+```stdout
+load 4 1 4
+fail 1 fail
+```
+```exitcode
+0
+```
+
+<!-- test: closure-capture.self-in-a-struct-backed-union-reads-its-backing-field -->
+`self` in a struct-backed union's method reads a backing field by its short name, as a binding does, directly
+and captured.
+```maxon
+typealias Latency = int(0 to 50)
+typealias Slot = int(0 to 255)
+typealias Message = function() returns String
+
+type OpMeta
+	export let latency as Latency
+end 'OpMeta'
+
+union Instruction
+	add(dest Slot) = OpMeta{latency: 1}
+	load(dest Slot) = OpMeta{latency: 4}
+
+	function cost() returns Latency
+		return self.latency
+	end 'cost'
+
+	function later() returns Message
+		return function() gives "{self.latency} {self.rawValue.latency}"
+	end 'later'
+end 'Instruction'
+
+function main() returns ExitCode
+	let op = Instruction.load(7)
+	print("{op.cost()} {op.later()()}\n")
+	return 0
+end 'main'
+```
+```stdout
+4 4 4
+```
+
+<!-- test: closure-capture.error.self-in-a-struct-backed-union-still-reads-no-payload -->
+A payload name stays unreadable through `self`, backing or not.
+```maxon
+typealias Latency = int(0 to 50)
+typealias Slot = int(0 to 255)
+
+type OpMeta
+	export let latency as Latency
+end 'OpMeta'
+
+union Instruction
+	add(dest Slot) = OpMeta{latency: 1}
+	load(dest Slot) = OpMeta{latency: 4}
+
+	function target() returns Slot
+		return self.dest
+	end 'target'
+end 'Instruction'
+
+function main() returns ExitCode
+	return Instruction.load(7).target() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:14:10: Unsupported: a field access through `self` in a method of `enum`/`union` `Instruction` — an enum/union declares no fields; a case's PAYLOAD is bound by a pattern (`match self 'k' … fail(reason) then …`), never read through the receiver
+```
+
+<!-- test: closure-capture.a-bare-union-field-answers-its-name-and-ordinal -->
+```maxon
+union Outcome
+	pass
+	fail(reason String)
+end 'Outcome'
+
+type Holder
+	export let outcome as Outcome
+
+	static function create(outcome Outcome) returns Self
+		return Self{outcome: outcome}
+	end 'create'
+
+	function label() returns String
+		return "{outcome.name} {outcome.ordinal}"
+	end 'label'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create(Outcome.fail("a reason padded long enough to heap allocate"))
+	print("{h.label()}\n")
+	return 0
+end 'main'
+```
+```stdout
+fail 1
+```
+```exitcode
+0
+```
+
+<!-- test: closure-capture.a-bare-struct-backed-enum-field-reads-its-record -->
+```maxon
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency as Latency
+end 'OpMeta'
+
+enum Instruction
+	add = OpMeta{latency: 1}
+	load = OpMeta{latency: 4}
+end 'Instruction'
+
+type Holder
+	export let kind as Instruction
+
+	static function create(kind Instruction) returns Self
+		return Self{kind: kind}
+	end 'create'
+
+	function cost() returns String
+		return "{kind.latency} {kind.rawValue.latency}"
+	end 'cost'
+end 'Holder'
+
+function main() returns ExitCode
+	print("{Holder.create(Instruction.load).cost()}\n")
+	return 0
+end 'main'
+```
+```stdout
+4 4
+```
+
+<!-- test: closure-capture.a-bare-enum-field-answers-its-members-directly-and-captured -->
+A bare enum field answers its accessors and methods the same way read directly in a method and captured by
+a closure inside one.
+```maxon
+typealias Message = function() returns String
+
+enum Family
+	alpha
+	beta
+
+	function prefix() returns String
+		return match self 'family'
+			alpha gives "a-"
+			beta gives "b-"
+		end 'family'
+	end 'prefix'
+end 'Family'
+
+type Holder
+	export let kind as Family
+
+	static function create(kind Family) returns Self
+		return Self{kind: kind}
+	end 'create'
+
+	function direct() returns String
+		return "{kind.name} {kind.ordinal} {kind.prefix()}"
+	end 'direct'
+
+	function later() returns Message
+		return function() gives "{kind.name} {kind.ordinal} {kind.prefix()}"
+	end 'later'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create(Family.alpha)
+	print("{holder.direct()}\n{holder.later()()}\n")
+	return 0
+end 'main'
+```
+```stdout
+alpha 0 a-
+alpha 0 a-
+```
+
 <!-- test: closure-capture.a-cell-resident-var-hands-its-occupant-to-the-closure -->
 A `var` handed to a parameter its callee reassigns lives in a cell, and a capture takes what the cell holds.
 ```maxon

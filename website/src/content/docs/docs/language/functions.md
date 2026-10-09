@@ -304,6 +304,8 @@ it. Two names for one record that only exist at run time are beyond what the com
 - Closure parameters must be used (**E3012**); write `_` for an unused one.
 - Inside an instance method a closure may use `self`; elsewhere `self` is **E2001**.
 - Assigning to a captured `let` is an error, as it is outside the closure.
+- A captured value answers the same fields, methods and enum or union accessors it answers outside the
+  closure.
 
 ## Function Purity and Discarded Results
 

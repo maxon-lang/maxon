@@ -12372,6 +12372,12 @@ union CaptureScopeResult
 	end 'isFound'
 end 'CaptureScopeResult'
 
+union EnumAccessorBase
+	thisFrame
+	receiver
+	captured(scope Scope, frame ElementIndex)
+end 'EnumAccessorBase'
+
 // ⭐ **WHAT A TOP-LEVEL MANAGED NAME DENOTES AT A METHOD-RECEIVER POSITION** — `managedReceiverBindingOf`'s
 // answer, and the reason it is a union rather than two booleans: the two kinds of managed binding need
 // DIFFERENT payloads to build a receiver from (a `let` needs the bytes it re-materializes; a `var` needs
@@ -14117,6 +14123,10 @@ module function tokenCanBeAName(tok Token) returns bool
 
 	return not tokenIsLiteralKind(tok.kind)
 end 'tokenCanBeAName'
+
+function tokenIsTheSelfType(tok Token) returns bool
+	return tok.kind == TokenKind.selfType
+end 'tokenIsTheSelfType'
 
 // ⭐⭐ **DOES A `test` DECLARATION OPEN AT `index`?** — `atModuleModifier`'s shape one construct over, and
 // its exactness argument transferred: the word `test` is the declaration opener iff the very next token
@@ -23361,7 +23371,7 @@ export type Parser
 
 	function tokenNamesTheEnclosingTypeAt(q ElementIndex) returns bool
 		let tok = self.tokenAt(q)
-		return tok.kind == TokenKind.selfType or (tok.kind == TokenKind.identifier and self.namesEnclosingType(tok.value))
+		return tokenIsTheSelfType(tok) or (tok.kind == TokenKind.identifier and self.namesEnclosingType(tok.value))
 	end 'tokenNamesTheEnclosingTypeAt'
 
 	// The two TOKEN SHAPES that construct the container an alias at `aliasPos` names: the static call
@@ -23578,7 +23588,7 @@ export type Parser
 			throw MapError.keyNotFound
 		end 'notANamedCursor'
 
-		// `localTypeName`, because `returnTypeOf` ADOPTED the cursor type into this artifact's interner — so
+		// `internedName`, because `returnTypeOf` ADOPTED the cursor type into this artifact's interner — so
 		// the id is one this table holds, which is exactly that helper's precondition.
 		//
 		// ⭐⭐ **THROUGH `denotedGenericBaseName`, BECAUSE A CURSOR HAS TWO SPELLINGS AND ONLY ONE OF THEM IS A
@@ -23588,7 +23598,7 @@ export type Parser
 		// then refused at `stdlib/Interfaces.maxon`. The corpus writes it the second way
 		// (`stdlib/List.maxon:147`, `Set.maxon:15`, `Array.maxon:497`, `Vector.maxon:8`); `stdlib/Map.maxon:18`
 		// writes it the first. See there for why the resolution is deliberately ungated.
-		return self.signatures.denotedGenericBaseName(self.localTypeName(cursor, asker: "cursorTypeNameOf"), readerFilePath: self.filePath)
+		return self.signatures.denotedGenericBaseName(self.internedName(typeNameIdOf(cursor)), readerFilePath: self.filePath)
 	end 'cursorTypeNameOf'
 
 	// ⭐ **THE `self . <field> =` REASSIGNMENT HEAD — ONE token-shape recognizer.** Both the
@@ -30853,7 +30863,7 @@ export type Parser
 		let tag = maxonTypeTag(t)
 
 		if tag == ValueTypeTag.structRef 'structRefType'
-			let refName = self.localTypeName(t, asker: "renderInterfaceTypeName")
+			let refName = self.internedName(typeNameIdOf(t))
 
 			if refName.equals(interfaceName) 'selfRef'
 				return InterfaceSelfTypeName
@@ -37776,7 +37786,7 @@ export type Parser
 	// own subject and `SemanticCheck.checkDiscardedResults` reports it under the name it is keyed by.
 	function recordDiscardOf(producer DiscardedCallee, anchor Token, door DiscardDoor)
 		match producer 'usedNothing'
-				named(_, result, opIndex) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(opIndex, door: door, subject: self.runtimeReadSubjectOf(result), line: anchor.line, column: anchor.column, filePath: self.filePath))
+			named(_, result, opIndex) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(opIndex, door: door, subject: self.runtimeReadSubjectOf(result), line: anchor.line, column: anchor.column, filePath: self.filePath))
 			notACall then break
 		end 'usedNothing'
 	end 'recordDiscardOf'
@@ -38552,7 +38562,7 @@ export type Parser
 	// ⭐⭐ **THE CELL VALUE IS TYPED AS WHAT IT HOLDS, NOT AS THE POINTER IT IS — AND THAT IS THE DECISION
 	// THAT KEEPS EVERY TYPE RULE IN THE COMPILER WORKING ON A CELL-RESIDENT BINDING.** The cell stands for the
 	// binding, and the binding's type is its declared one, so `SemanticCheck.checkArgTypes` compares a `Node`
-	// against a `Node` at a by-reference argument, `enumAccessorFieldAt` still sees a `named` value where an
+	// against a `Node` at a by-reference argument, `enumMemberReadableOff` still sees a `named` value where an
 	// enum accessor is legal, and `requireStructBase` still finds a layout. MEASURED as the alternative:
 	// tagged `integer`, every one of those read the ADDRESS's type and answered about the wrong thing —
 	// `argument type mismatch for 'cur': expected 'Node', got 'int'` on six cases and
@@ -56620,12 +56630,16 @@ export type Parser
 	// added to one spelling and not the other would answer "not an enum" at one door and "enum" at the
 	// next, which is a wrong answer at a use site rather than an error anywhere.
 	function enumMatchFor(scrut ValueId) returns DeclaredEnum
-		if self.tagOf(scrut) != ValueTypeTag.named 'notNamed'
+		return self.declaredEnumOfType(self.tagOf(scrut), nameId: self.valueNameId(scrut))
+	end 'enumMatchFor'
+
+	function declaredEnumOfType(tag ValueTypeTag, nameId TypeNameId) returns DeclaredEnum
+		if tag != ValueTypeTag.named 'notNamed'
 			return DeclaredEnum.undeclared
 		end 'notNamed'
 
-		return self.signatures.enumFor(self.internedName(self.valueNameId(scrut)), readerFilePath: self.filePath)
-	end 'enumMatchFor'
+		return self.signatures.enumFor(self.internedName(nameId), readerFilePath: self.filePath)
+	end 'declaredEnumOfType'
 
 	// Is `value` a `union` value — a `named(X)` whose type is a declared `union`? The E3066 gate
 	// (`emitCompare`), keyed on the SAME `enumMatchFor` a `match` reads its scrutinee's enum through,
@@ -67333,24 +67347,28 @@ export type Parser
 			return try self.parseMethodCall(func, resultUsed: resultUsed)
 		end 'methodCall'
 
-		// A base that names a VALUE — a local binding, or a CAPTURED enclosing one (`level.rawValue` inside a
-		// closure, which `parseFieldAccess` reads out of the env via `resolveFieldChain`'s captured
-		// arm). ONE arm and ONE predicate for the two, because they have one BODY between them: two `if`s
-		// returning the same `parseFieldAccess()` call, whose tests were also the two `methodCallsAt` spells out
-		// for the statement door. See `baseNamesAValueInScope` — it is where the shadowing rule lives, and
-		// where `Self` is excluded from it.
-		// `s.ordinal` on an enum-typed binding — asked BEFORE the field arm and never instead of it. The two
-		// are disjoint by the member name, and the order is what matters: an enum binding reaching
-		// `parseFieldAccess` is refused by `requireStructBase` (a declared enum erases to `integer`, so it
-		// has no struct layout to find), which is the E2015 this arm exists to route past. See
-		// `enumAccessorFieldAt`.
-		if self.enumAccessorFieldAt(self.pos) 'enumAccessor'
-			return try self.parseEnumAccessor()
-		end 'enumAccessor'
+		// A base that names a VALUE — a this-frame binding, or a CAPTURED enclosing one, whose field read
+		// `parseFieldAccess` takes out of the env via `resolveFieldChain`'s captured arm. The two halves are
+		// asked separately because each hands the accessor door a different `EnumAccessorBase`; together they
+		// are `baseNamesAValueInScope`, which is where the shadowing rule lives and `Self` is excluded.
+		// `s.ordinal` on an enum or union value — asked BEFORE the field arm on both routes and never instead
+		// of it. The two are disjoint by the member name, and the order is what matters: an enum base
+		// reaching `parseFieldAccess` is refused by `requireStructBase` (a declared enum has no struct layout
+		// to find), which is the E2015 this arm exists to route past. See `enumMemberReadableOff`.
+		let valueBaseTok = self.current()
 
-		if self.baseNamesAValueInScope(self.current()) 'valueBase'
+		if self.baseNamesAThisFrameValue(valueBaseTok) 'aThisFrameBase'
+			if self.enumMemberReadableOff(self.bodyState.scope.getInfo(self.baseBindingName(valueBaseTok)), atBase: self.pos) 'enumAccessor'
+				return try self.parseEnumAccessor(EnumAccessorBase.thisFrame)
+			end 'enumAccessor'
+
 			return try self.parseFieldAccess(func)
-		end 'valueBase'
+		end 'aThisFrameBase'
+
+		match self.capturedValueBaseOf(valueBaseTok) 'captured'
+			found(enclosing, frame) then return try self.parseCapturedDottedPrimary(func, enclosing: enclosing, frame: frame)
+			notCaptured then break
+		end 'captured'
 
 		try self.enterNamespaceQualifiedTypeBase()
 
@@ -68055,7 +68073,7 @@ export type Parser
 	end 'parseEnumLiteralMember'
 
 	// ⭐⭐ **`. <member>` — THE TWO-TOKEN SHAPE ITSELF, WRITTEN ONCE FOR BOTH SPELLINGS OF AN ENUM ACCESSOR.**
-	// A binding's (`op.rawValue`, `enumAccessorFieldAt`) and a type-qualified case's (`Op.doubleOp.rawValue`,
+	// A binding's (`op.rawValue`, `enumMemberReadableOfType`) and a type-qualified case's (`Op.doubleOp.rawValue`,
 	// `atEnumInstanceAccessor`) read the identical dot-then-member test at two different offsets, and the
 	// OFFSET ARITHMETIC is what must be written once: `index` is the dot and `index + 1` is the member, and a
 	// door that spells that itself is free to classify the wrong token.
@@ -68109,13 +68127,13 @@ export type Parser
 	//
 	// ⚠⚠ **IT ANSWERS `bool` AND NEVER TOUCHES `enumMatchFor`, AND THE LADDER IS WHY.** A `DeclaredEnum` is a
 	// union VALUE that heap-allocates even to say `undeclared` — the cost `valueIsUnion` and
-	// `enumAccessorFieldAt` both arrange their gates around — and this is asked at EVERY `.` in every postfix
+	// `enumMemberReadableOfType` both arrange their gates around — and this is asked at EVERY `.` in every postfix
 	// chain in the program. Written to RETURN one, it charged **+288 allocations at rung 0 of the scale
 	// ladder, doubling at every rung**; the same reading survived putting `containsEnum` in front of the
 	// lookup, because the box was the RETURN and not the query. So the three cheap tests — token shape, the
 	// value's scalar tag column, and a set membership over bytes already in hand — stand in front, and the
 	// only allocating call left is `enumOf` on a value that really is an enum. The caller re-derives the
-	// LAYOUT on the taken path, which is `enumAccessorFieldAt`'s own arrangement with `parseEnumAccessor`.
+	// LAYOUT on the taken path, which is `enumMemberReadableOfType`'s own arrangement with `parseEnumAccessor`.
 	function atEnumAccessorHopOn(value ValueId) returns bool
 		if not self.enumMemberReadFollowsAt(self.pos) 'noMemberFollows'
 			return false
@@ -70974,12 +70992,16 @@ export type Parser
 		// Character, Array and Set receiver — so the interner read and the registry probe behind it are paid
 		// only by a receiver that is an enum or a ranged alias, and a ranged alias reaching here was already
 		// on its way to the struct fallthrough's refusal.
-		if recv.tag == ValueTypeTag.named and self.signatures.containsEnumFor(self.internedName(recv.nameId), readerFilePath: self.filePath) 'enumMethod'
+		if self.typeIsEnumOrUnion(recv.tag, nameId: recv.nameId) 'enumMethod'
 			return try self.dispatchEnumMethod(func, recv: recv, resultUsed: resultUsed)
 		end 'enumMethod'
 
 		return try self.dispatchMethodOnBase(func, base: try self.structBaseOfReceiver(recv), baseTok: recv.anchor, resultUsed: resultUsed)
 	end 'dispatchReceiverMember'
+
+	function typeIsEnumOrUnion(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.named and self.signatures.containsEnumFor(self.internedName(nameId), readerFilePath: self.filePath)
+	end 'typeIsEnumOrUnion'
 
 	// Is the member about to be dispatched `cancel` on a promise? The cursor sits on the method NAME (the
 	// `.` is consumed), so this peeks rather than consuming — `emitPromiseCancel` takes the token.
@@ -72700,12 +72722,11 @@ export type Parser
 		return SourceParseError.unsupported(noWitnessTablesSentence(methodName, arrival: arrival), line: anchor.line, column: anchor.column)
 	end 'noWitnessTablesRefusal'
 
-	// ⭐ **A METHOD CALL ON A CAPTURED STRUCT RECEIVER.** `b.doubled()` where `b` is an enclosing
-	// struct captured by the closure. The receiver box is READ OUT OF THE ENV (`emitCaptureRead` — a borrowed
-	// pointer copy), its layout resolved from the enclosing binding's struct type, then dispatched exactly as a
-	// local receiver: the borrowed box is passed as `__self` (the method borrows its receiver). A captured
-	// non-struct is refused (only a struct carries methods here; a captured String's builtin methods are not
-	// reached by any case).
+	// ⭐ **A METHOD CALL ON A CAPTURED RECEIVER.** `b.doubled()` where `b` is an enclosing binding captured
+	// by the closure. The receiver is READ OUT OF THE ENV (`emitCaptureRead` — a borrowed pointer copy) and
+	// dispatched exactly as a local receiver: it is passed as `__self` (the method borrows its receiver).
+	// An existential, enum or union receiver has no struct layout, so it dispatches as a receiver
+	// value; anything else resolves through `capturedStructBase`, which refuses a non-struct.
 	function capturedMethodCall(func IrFunction, baseTok Token, enclosing Scope, frame ElementIndex, resultUsed bool) returns ValueId throws SourceParseError
 		self.advance()
 
@@ -72717,17 +72738,20 @@ export type Parser
 			none then break
 		end 'deferredBase'
 
-		if maxonTypeTag(binding.varType) == ValueTypeTag.interfaceRef 'anExistentialReceiver'
+		let capturedTag = maxonTypeTag(binding.varType)
+		let capturedNameId = typeNameIdOf(binding.varType)
+
+		if capturedTag == ValueTypeTag.interfaceRef or self.typeIsEnumOrUnion(capturedTag, nameId: capturedNameId) 'aReceiverWithoutAStructLayout'
 			let value = try self.emitCaptureRead(baseName, enclosing: enclosing, frame: frame, anchor: baseTok)
-			return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(value, tag: ValueTypeTag.interfaceRef, nameId: typeNameIdOf(binding.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: BorrowSubject.none, owner: NoParamPositions, selfFieldName: SelfFieldAlias.none), resultUsed: resultUsed)
-		end 'anExistentialReceiver'
+			return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(value, tag: capturedTag, nameId: capturedNameId, anchor: baseTok, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: BorrowSubject.none, owner: NoParamPositions, selfFieldName: SelfFieldAlias.none), resultUsed: resultUsed)
+		end 'aReceiverWithoutAStructLayout'
 
 		try self.consume(TokenKind.dot)
 		return try self.dispatchMethodOnBase(func, base: try self.capturedStructBase(baseTok, enclosing: enclosing, frame: frame), baseTok: baseTok, resultUsed: resultUsed)
 	end 'capturedMethodCall'
 
 	// ⭐ **RESOLVE A CAPTURED STRUCT BASE TO ITS (box, layout)** — the shared resolution behind a
-	// captured field access (`level.rawValue`) and a captured method call (`b.doubled()`). The box is READ OUT
+	// captured field access (`b.width`) and a captured method call (`b.doubled()`). The box is READ OUT
 	// OF THE ENV (`emitCaptureRead` — a borrowed pointer copy, one `loadIndirect`, cursor-independent so a
 	// caller may have already consumed the base token), and its layout is resolved from the enclosing binding's
 	// struct type exactly as `requireStructBase` does for a local base. A captured value with no struct layout
@@ -81164,22 +81188,8 @@ export type Parser
 			return SignExtendSlot.notASignExtension
 		end 'onlyANamedLeafCanBeNarrowAndSigned'
 
-		return self.signatures.narrowSignedSlotOf(self.localTypeName(valueType, asker: "narrowSignedSlotOfLocalType"))
+		return self.signatures.narrowSignedSlotOf(self.internedName(typeNameIdOf(valueType)))
 	end 'narrowSignedSlotOfLocalType'
-
-	// ⭐ **THE NAME BEHIND A LEAF TYPE'S ID, READ THROUGH THIS FILE'S INTERNER** — the one spelling of a
-	// lookup that had grown three verbatim copies whose `otherwise` clauses said the same thing three ways.
-	// A MISS is an invariant break and not a case: every id reaching a caller of this was minted by
-	// `intern` against this same table or adopted into it (`adoptType`), so the panic names the ASKER rather
-	// than guessing at which of those two routes failed.
-	//
-	// ⚠ Sites whose `otherwise` carries a REAL derivation — `fieldStorageType`, `readTypeAliasDeclaration`,
-	// `requireThrownTypeFitsEnclosing` — deliberately keep their own message: the
-	// explanation is the value there, and collapsing three different invariants onto one sentence would be
-	// deduplication that loses the thing being deduplicated.
-	function localTypeName(t MaxonType, asker String) returns ByteArray
-		return try self.artifact.typeNames.nameOf(typeNameIdOf(t)) otherwise panic("{asker}: a leaf type's id ({typeNameIdOf(t)}) is not in this file's interner — every id reaching here was interned into that table or adopted into it")
-	end 'localTypeName'
 
 	// ⭐⭐ **IS THIS ARGUMENT AN ENUM VALUE? — the gate that keeps `enum-narrow-storage`'s constant enum tags
 	// out of the range-check ARG SITES.** Recording a case's tag as a known constant (`emitEnumTagLiteral`)
@@ -81197,13 +81207,7 @@ export type Parser
 	// ⚠ It asks whether the name is a DECLARED ENUM and not merely whether the tag is `named`, because a
 	// ranged-alias value is `named` too (`7 as Byte`) and its site is the one this door exists for.
 	function argIsAnEnumValue(argValue ValueId) returns bool
-		let argType = self.typeOf(argValue)
-
-		if maxonTypeTag(argType) != ValueTypeTag.named 'notANamedLeaf'
-			return false
-		end 'notANamedLeaf'
-
-		return self.signatures.containsEnumFor(self.localTypeName(argType, asker: "argIsAnEnumValue"), readerFilePath: self.filePath)
+		return self.typeIsEnumOrUnion(self.tagOf(argValue), nameId: self.valueNameId(argValue))
 	end 'argIsAnEnumValue'
 
 	// ⭐⭐ **SIGN-EXTEND A VALUE READ OUT OF A NARROW SIGNED SLOT — ONE compiler-only unary op.** The width
@@ -81491,7 +81495,7 @@ export type Parser
 			// two lookups cannot disagree: `adoptType` re-interns by the SAME name string, so the artifact table's
 			// spelling and the index's are one. A live-looking copy of an arm the shared door owns may not survive one
 			// door down from the door that owns it.
-			let name = self.localTypeName(declared, asker: "containerSlotValueType")
+			let name = self.internedName(typeNameIdOf(declared))
 
 			// ⭐⭐ **A RANGED-ALIAS ELEMENT KEEPS ITS NAME, AND THAT IS A TYPE-IDENTITY FIX, NOT A
 			// REFINEMENT.** `classifyUnionPayload` below answers a STORAGE question — what width does this
@@ -82316,15 +82320,15 @@ export type Parser
 
 	// ⭐⭐ **DOES A DOTTED BASE NAME A VALUE IN SCOPE — a local BINDING or a closure CAPTURE?** The one
 	// answer to the "a value outranks a type name" question, and therefore the one place the shadowing
-	// door) and `parseDottedPrimary` (the EXPRESSION door) both ask it. Spelled out at each it is one
-	// fact written twice, where a clause added to either copy alone re-points a name at a different
-	// declaration and earns no compile error anywhere.
+	// rule is written. It is defined as its two halves, `baseNamesAThisFrameValue` and
+	// `capturedValueBaseOf`, which `parseDottedPrimary` asks one at a time; a clause added to a hand-spelled
+	// copy alone re-points a name at a different declaration and earns no compile error anywhere.
 	//
 	// ⚠ **`Self` IS EXCLUDED, AND THAT EXCLUSION *IS* THE RULE THAT `Self` NAMES A TYPE AND NEVER A
 	// VALUE.** It is not a shortcut for a lookup that would have missed: a declaration CAN bind the
 	// name — `function twin(Self Num)` is admitted, because a parameter's name may be spelled with a
-	// name — `function twin(Self Num)` is admitted, because a parameter's name may be spelled with a
 	// keyword (`consumeNameToken`) — and the scope test would then find it and hand `Self.make(v)`
+	// to `parseMethodCall` on that parameter. Without the exclusion, `Self.make(41)` inside `twin(Self
 	// Num)` reports *"'int' has no method named 'make'"*, `Self.on` inside an `enum` reports *"a field
 	// access on 'Self', which is declared 'int' and not a struct type"*, and `Self{n: 42}` in the SAME
 	// body still means the type, because `parsePrimary`'s `selfType` arm claims `{` ahead of any scope
@@ -82338,13 +82342,20 @@ export type Parser
 	// is wrong is not the declaration — it is a base position consulting the VALUE namespace about a
 	// token that cannot be in it.
 	function baseNamesAValueInScope(tok Token) returns bool
-		if tok.kind == TokenKind.selfType 'alwaysAType'
-			return false
+		return self.baseNamesAThisFrameValue(tok) or self.capturedValueBaseOf(tok).isFound()
+	end 'baseNamesAValueInScope'
+
+	function baseNamesAThisFrameValue(tok Token) returns bool
+		return not tokenIsTheSelfType(tok) and self.bodyState.scope.contains(self.baseBindingName(tok))
+	end 'baseNamesAThisFrameValue'
+
+	function capturedValueBaseOf(tok Token) returns CaptureScopeResult
+		if tokenIsTheSelfType(tok) 'alwaysAType'
+			return CaptureScopeResult.notCaptured
 		end 'alwaysAType'
 
-		let name = self.baseBindingName(tok)
-		return self.nameBindsOrIsCaptured(name)
-	end 'baseNamesAValueInScope'
+		return self.captureScopeOf(self.baseBindingName(tok))
+	end 'capturedValueBaseOf'
 
 	// ⭐ **DOES THE BASE AT `index` NAME A VALUE A FIELD CHAIN CAN START FROM?** `baseNamesAValueInScope`
 	// plus the one base that is neither a local nor a capture: a TOP-LEVEL MANAGED BINDING (spec-port
@@ -83031,7 +83042,9 @@ export type Parser
 
 	// `self.x` / `self.m(…)` — the receiver named explicitly. `self` is its own KEYWORD token, so it
 	// cannot ride the identifier paths; what it can do is resolve to the same two destinations they
-	// do, which is what this routine is for.
+	// do, which is what this routine is for. In an enum or union method, an accessor or backing field
+	// (`self.name`, `self.latency`) is read by `parseEnumAccessor` under the rule a binding's `p.latency`
+	// follows (`enumMemberReadableOfType`).
 	//
 	// The `(` at +3 splits the method call from the field read, exactly as `parseDottedPrimary` splits `p.x`
 	// from `p.m(…)`. A `self.a.b` whose last field is a by-reference argument's anchor takes the chain door
@@ -83083,8 +83096,16 @@ export type Parser
 			return try self.parseFieldAccess(func)
 		end 'chainedFieldCell'
 
+		if self.selfNamesAnEnumAccessor() 'enumAccessor'
+			return try self.parseEnumAccessor(EnumAccessorBase.receiver)
+		end 'enumAccessor'
+
 		return try self.parseExplicitSelfFieldRead()
 	end 'parseSelfPrimary'
+
+	function selfNamesAnEnumAccessor() returns bool
+		return self.enclosingTypeIsEnum and self.enumMemberReadableOfType(ValueTypeTag.named, nameId: self.artifact.typeNames.intern(self.enclosingTypeName()), dotIndex: self.pos + 1)
+	end 'selfNamesAnEnumAccessor'
 
 	// `self.x` in value position, and the first hop of a longer self chain that hands over no storage — the
 	// hops after it are `parsePostfix`'s. It asks
@@ -83741,7 +83762,9 @@ export type Parser
 		// family has to say so at, because both spellings of a receiver field access come through it
 		// (`parseExplicitSelfFieldRead`
 		// and `parseExplicitSelfFieldAssignment`; the bare-name spellings cannot arrive, since `parseFunction`
-		// declares no self-field aliases for an enum). Without it, `self.reason` inside a `union` method — the
+		// declares no self-field aliases for an enum). A readable accessor or backing field is claimed first
+		// by `selfNamesAnEnumAccessor`, so what arrives is a payload name or a write. Without it,
+		// `self.reason` inside a `union` method — the
 		// first thing a reader tries on a payload-bearing case — reached the `undeclared` panic below and took
 		// the compiler down while blaming the declaration sweep for a disagreement that never happened.
 		//
@@ -89785,7 +89808,7 @@ export type Parser
 
 	// ⭐ **DOES `<tok>.<memberTok>` NAME A CASE OF A DECLARED ENUM OR UNION WHOSE LAYOUT MATCHES `boxed`?**
 	// The admission rule BOTH constant-initializer readers share, split out so a test and its fold cannot come
-	// to disagree about which members exist — the shape `enumAccessorFieldAt` and its dispatch already use one
+	// to disagree about which members exist — the shape `enumMemberReadableOfType` and its dispatch already use one
 	// construct over.
 	//
 	// ⭐⭐ **THE TWO READERS DIFFER IN EXACTLY THIS BIT, WHICH IS WHY IT IS A PARAMETER AND NOT A SECOND COPY.**
@@ -98131,22 +98154,21 @@ export type Parser
 	//
 	// `.ordinal` is a FIELD read: no parentheses, so `methodCallsAt` (which requires a `(` at +3) declines
 	// it and the expression dispatcher falls through to the field path — where an enum-typed binding is
-	// refused, because `TypeResolution` erases a declared `enum` to `integer` and `requireStructBase` finds
-	// no struct. That is the E2015 the corpus reported: *"a field access on 's', which is declared 'int' and
-	// not a struct type"*. It is pure routing; nothing about the access is ill-formed.
+	// refused, because `requireStructBase` finds no struct layout for a declared enum. It is pure routing;
+	// nothing about the access is ill-formed.
 	//
-	// ⭐ **THE ENUM IS READ OFF THE VALUE, NOT OFF THE DECLARED TYPE, AND THAT IS THE WHOLE TRICK.**
-	// `enumMatchFor` already answers "which enum does this value belong to?" from the value's `named(X)`
-	// TAG, which the parser stamps and no later pass rewrites — which is why `match s` works on the very
-	// binding whose `varType` reads `integer`. This asks the identical question through the identical door,
-	// so the accessor and the `match` can never come to disagree about what `s` is.
+	// ⭐ **THE ENUM IS READ OFF THE BINDING'S DECLARED `varType`.** During parsing that holds `named(X)` for
+	// every binding kind — a `let`, a parameter, a cell `var`, a capture and a self-field alias alike;
+	// `TypeResolution` erases an enum to `integer` only later, over the finished module. A self-field
+	// alias's `boundValue` is the RECEIVER, so its tag would answer about the enclosing struct.
 	//
 	// ⚠ **IT IS NARROW ON PURPOSE, exactly as the `.managed` predicate is.** The member must classify as one
 	// of the THREE the language defines on an enum VALUE (`enumInstanceAccessorOf`) — or, on a STRUCT-BACKED
 	// enum alone, as a FIELD of its backing struct (see `enumBackingFieldMember`). Every other member of an
-	// enum keeps `requireStructBase`'s refusal. And the base must be a binding in THIS function's scope: a
-	// captured or top-level enum's accessor stays refused rather than reaching a door built for a local's
-	// `boundValue`.
+	// enum keeps `requireStructBase`'s refusal.
+	//
+	// It takes a `VarInfo` rather than an `EnumAccessorBase` because that union is a heap object and this
+	// is asked of every value-based `<name>.<name>`; the base is built only once an accessor is emitted.
 	//
 	// It asks the CLASSIFIER through the DERIVED predicate `namesAnEnumInstanceAccessor` — which of the
 	// three it got is the whole of what this door does not need to know; `parseEnumAccessor` asks the same
@@ -98155,44 +98177,37 @@ export type Parser
 	//
 	// ⚠⚠ **THE MEMBER TEST SITS *BELOW* THE SCOPE TEST, AND THAT IS A COST TRADE MADE ON PURPOSE.** The
 	// backing-field member set is a property of the LAYOUT, so it cannot be classified before the layout is
-	// in hand — which means every `<name> . <name>` in the program pays a scope probe here rather than
-	// rejecting a name like `push` on the spot.
-	// base one line earlier at the only call site (`parseDottedPrimary`), so it is a repeat of a live map
-	// read rather than new work — and the ALLOCATING half (`enumMatchFor`, a boxed `DeclaredEnum`) is still
-	// behind the scalar tag test, which is the guard `valueIsUnion`'s header argues for.
-	function enumAccessorFieldAt(index ElementIndex) returns bool
-		if not tokenCanBeAName(self.tokenAt(index)) 'notABase'
-			return false
-		end 'notABase'
+	// in hand — which means every `<name> . <name>` in the program pays a scope probe in
+	// `parseDottedPrimary` rather than rejecting a name like `push` on the spot.
+	function enumMemberReadableOff(binding VarInfo, atBase ElementIndex) returns bool
+		return self.enumMemberReadableOfType(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType), dotIndex: atBase + 1)
+	end 'enumMemberReadableOff'
 
-		if not self.enumMemberReadFollowsAt(index + 1) 'notAMemberRead'
-			return false
-		end 'notAMemberRead'
+	function parseCapturedDottedPrimary(func IrFunction, enclosing Scope, frame ElementIndex) returns ValueId throws SourceParseError
+		if self.enumMemberReadableOff(enclosing.getInfo(self.baseBindingName(self.current())), atBase: self.pos) 'enumAccessor'
+			return try self.parseEnumAccessor(EnumAccessorBase.captured(enclosing, frame: frame))
+		end 'enumAccessor'
 
-		let baseName = self.baseBindingName(self.tokenAt(index))
+		return try self.parseFieldAccess(func)
+	end 'parseCapturedDottedPrimary'
 
-		if not self.bodyState.scope.contains(baseName) 'notALocalBinding'
-			return false
-		end 'notALocalBinding'
-
-		// The tag test FIRST, for `valueIsUnion`'s stated reason: `enumMatchFor` returns a `DeclaredEnum`,
-		// a union VALUE that heap-allocates even for its `undeclared` case, and this predicate is asked of
-		// every `<name>.<name>` in the program. A value can only belong to an enum if its tag is `named`,
-		// and that test is a scalar column read that allocates nothing.
-		let boundValue = self.bodyState.scope.getInfo(baseName).boundValue
-
-		if self.tagOf(boundValue) != ValueTypeTag.named 'notAnEnumValue'
+	// The tag test FIRST, for `valueIsUnion`'s stated reason: `declaredEnumOfType` returns a `DeclaredEnum`,
+	// a union VALUE that heap-allocates even for its `undeclared` case, and this predicate is asked of
+	// every value-based `<name>.<name>` and every `self.<name>` in an enum. A value can only belong to an
+	// enum if its tag is `named`, and that test is a scalar column read that allocates nothing.
+	function enumMemberReadableOfType(tag ValueTypeTag, nameId TypeNameId, dotIndex ElementIndex) returns bool
+		if tag != ValueTypeTag.named 'notAnEnumValue'
 			return false
 		end 'notAnEnumValue'
 
-		let declaredEnum = self.enumMatchFor(boundValue)
+		let declaredEnum = self.declaredEnumOfType(tag, nameId: nameId)
 
 		if not enumMatchIsDeclared(declaredEnum) 'notADeclaredEnum'
 			return false
 		end 'notADeclaredEnum'
 
-		return self.enumMemberIsReadable(requireEnumLayout(declaredEnum), memberTok: self.enumMemberTokenAt(index + 1))
-	end 'enumAccessorFieldAt'
+		return self.enumMemberIsReadable(requireEnumLayout(declaredEnum), memberTok: self.enumMemberTokenAt(dotIndex))
+	end 'enumMemberReadableOfType'
 
 	// ⭐⭐ **DOES `member` NAME SOMETHING READABLE OFF A VALUE OF THIS ENUM?** — the door's admission rule and
 	// the accessor's dispatch, asked of ONE function so they cannot come to disagree (which is what
@@ -98235,8 +98250,8 @@ export type Parser
 	end 'enumBackingFieldMember'
 
 	// ⭐⭐ **THE BINDING SPELLING OF AN ENUM MEMBER READ — `s.ordinal`, `s.name`, `s.rawValue`, `p.width`.**
-	// Guarded by `enumAccessorFieldAt`, so the base is a local binding whose value belongs to a declared
-	// enum; this consumes `<base> . <member>`.
+	// Guarded by `enumMemberReadableOfType`, so the base — a this-frame binding, a capture or the receiver,
+	// as `base` says — belongs to a declared enum or union; this consumes `<base> . <member>`.
 	//
 	// ⭐ **WHAT IT CONTRIBUTES IS THE ONE THING THIS SPELLING KNOWS AND THE TYPE-QUALIFIED ONE DOES NOT: that
 	// there IS a value.** So it answers "where is the tag" through `emitEnumTagOf` and hands the tag on;
@@ -98245,29 +98260,41 @@ export type Parser
 	//
 	// It takes no `IrFunction`: the emitters it calls append to `self.bodyState.currentBlock`, exactly as the
 	// `.managed` field door's do. A parameter kept for symmetry would be an unused one (E3012).
-	function parseEnumAccessor() returns ValueId throws SourceParseError
+	function parseEnumAccessor(base EnumAccessorBase) returns ValueId throws SourceParseError
 		let baseTok = try self.consumeChainBaseToken()
 		try self.consume(TokenKind.dot)
 		let memberTok = try self.consumeMemberNameToken()
-
-		var baseBinding = self.bodyState.scope.getInfo(self.baseBindingName(baseTok))
-
-		// The base is a USE of the binding, so it takes the same liveness/move guard every other read of a
-		// name takes — a moved-from enum binding is dead here exactly as it is at `requireStructBase`.
-		try self.requireBindingLive(baseBinding, nameTok: baseTok)
 
 		let range = SourceRange.between(baseTok, last: memberTok)
 
 		// ONE read of the binding, serving both questions below: a cell-resident base would otherwise be
 		// loaded twice, and the second load is not merely wasteful — the two would be different SSA values
 		// describing one enum.
-		let baseValue = self.bindingValue(baseBinding, range: range)
+		let baseValue = try self.enumAccessorBaseValue(base, baseTok: baseTok)
 		let layout = requireEnumLayout(self.enumMatchFor(baseValue))
 
 		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through, and the
 		// one thing this spelling knows that the type-qualified one does not: there IS a value here.
 		return try self.emitEnumInstanceAccessor(layout, tag: try self.emitEnumTagOf(baseValue, layout: layout, anchor: memberTok, range: range), memberTok: memberTok, range: range)
 	end 'parseEnumAccessor'
+
+	function enumAccessorBaseValue(base EnumAccessorBase, baseTok Token) returns ValueId throws SourceParseError
+		match base 'base'
+			thisFrame then return try self.thisFrameEnumBaseValue(baseTok)
+			receiver then return try self.requireReceiverValue(baseTok)
+			captured(enclosing, frame) then return try self.emitCaptureRead(self.baseBindingName(baseTok), enclosing: enclosing, frame: frame, anchor: baseTok)
+		end 'base'
+	end 'enumAccessorBaseValue'
+
+	function thisFrameEnumBaseValue(baseTok Token) returns ValueId throws SourceParseError
+		var baseBinding = self.bodyState.scope.getInfo(self.baseBindingName(baseTok))
+
+		// The base is a USE of the binding, so it takes the same liveness/move guard every other read of a
+		// name takes — a moved-from enum binding is dead here exactly as it is at `requireStructBase`.
+		try self.requireBindingLive(baseBinding, nameTok: baseTok)
+
+		return try self.baseBoxOf(baseBinding, baseTok: baseTok)
+	end 'thisFrameEnumBaseValue'
 
 	// ⭐⭐ **THE ANSWER ITSELF, ONCE THE TAG IS IN HAND — shared by the two SPELLINGS of an enum member read.**
 	// A BINDING's (`op.rawValue`, above) and a type-qualified CASE's (`Op.doubleOp.rawValue`,
@@ -98332,7 +98359,7 @@ export type Parser
 			ordinal then break
 
 			// ⭐ **THE ONE MEMBER THAT IS NOT ONE OF THE THREE AND IS STILL A READ: a STRUCT-BACKED enum's
-			// BACKING FIELD** (`p.width`, the shorthand for `p.rawValue.width`). `enumAccessorFieldAt` admits it
+			// BACKING FIELD** (`p.width`, the shorthand for `p.rawValue.width`). `enumMemberReadableOfType` admits it
 			// through `enumMemberIsReadable`, which is the same function this arm's refusal comes from — so the
 			// door and the answer stay one rule, exactly as the three accessors are.
 			//
@@ -98493,7 +98520,7 @@ export type Parser
 	end 'emitEnumRawValue'
 
 	// ⭐ **`p.width` — THE SHORTHAND SPELLING, WHERE THE MEMBER IS THE FIELD AND THERE IS NO `.rawValue` HOP
-	// TO CONSUME.** The assertion is what makes the door and this dispatch one rule: `enumAccessorFieldAt`
+	// TO CONSUME.** The assertion is what makes the door and this dispatch one rule: `enumMemberReadableOfType`
 	// admits a member through `enumMemberIsReadable`, whose second half is the very predicate re-asked here,
 	// so a member it admitted cannot be one this refuses — and a member it did NOT admit never arrives,
 	// because `parseDottedPrimary` falls through to `parseFieldAccess`'s refusal instead.
@@ -99297,7 +99324,7 @@ export type Parser
 		// Anything else is the mismatch `consume(TokenKind.identifier)` reported before this reader existed,
 		// on the same token and in the same words — a base position admits a type NAME and the one keyword
 		// that stands for one, and nothing else.
-		if tok.kind != TokenKind.selfType 'notATypeName'
+		if not tokenIsTheSelfType(tok) 'notATypeName'
 			throw SourceParseError.unexpectedToken(TokenKind.identifier.rawValue, got: tokenDisplayText(tok), line: tok.line, column: tok.column)
 		end 'notATypeName'
 
