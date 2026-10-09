@@ -1,0 +1,24 @@
+diff --git a/maxon-bin/Compiler/Mcp/McpTools.maxon b/maxon-bin/Compiler/Mcp/McpTools.maxon
+index 5d59c347ad..70b3b620bb 100644
+--- a/maxon-bin/Compiler/Mcp/McpTools.maxon
++++ b/maxon-bin/Compiler/Mcp/McpTools.maxon
+@@ -181,6 +181,10 @@ enum StagedFamily
+ 	end 'reserveIn'
+ end 'StagedFamily'
+ 
++function seedLivenessOf(family StagedFamily, entry String) returns OwnerLiveness
++	return family.livenessOf(entry)
++end 'seedLivenessOf'
++
+ export function sweepStaleSnippets()
+ 	let root = try hostCacheRoot() otherwise return
+ 	sweepLeftoversOfEndedOwners(StagedFamily.snippet.directoryUnder(root), livenessOf: function(name) gives StagedFamily.snippet.livenessOf(name), keyOf: snippetSourceOf, discardKeyed: discardSnippet)
+@@ -709,7 +713,7 @@ function runWithResultDocument(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContex
+ 		return toolErrorText(reqDoc, idNode: idNode, message: "{what}: could not reserve a name for the run's result document in {resultDir.path} ({e.name}).", repoRoot: ctx.repoRootLabel)
+ 	end 'unreserved'
+ 
+-	sweepLeftoversOfEndedOwners(resultDir, livenessOf: function(entry) gives family.livenessOf(entry), keyOf: function(entry) gives entry, discardKeyed: removeOwnedFile)
++	sweepLeftoversOfEndedOwners(resultDir, livenessOf: function(entry) gives seedLivenessOf(family, entry: entry), keyOf: function(entry) gives entry, discardKeyed: removeOwnedFile)
+ 
+ 	var ranArgv = StringArray.create()
+ 	ranArgv.append(argv)
