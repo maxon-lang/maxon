@@ -280,7 +280,7 @@ function main() returns ExitCode
 	var total = 0 as Wide
 	for _ in 0 upto 4 'each'
 		let n = try make().get(0) otherwise ByteArray.create()
-		total = total + n.count()
+		total = total + (n.count() as Wide)
 	end 'each'
 	return total
 end 'main'
@@ -503,7 +503,7 @@ end 'make'
 
 function main() returns ExitCode
 	var n = 0 as Wide
-	while n < (try make().get(0) otherwise ByteArray.create()).count() * 100 'loop'
+	while n < ((try make().get(0) otherwise ByteArray.create()).count() as Wide) * 100 'loop'
 		n = n + 1
 	end 'loop'
 	return n / 100

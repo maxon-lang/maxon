@@ -11,7 +11,7 @@ category: semantics
 Every field of a struct must be initialized when the struct is constructed. A
 field is considered initialized if any of the following is true:
 
-1. The field declaration supplies a default value: `var count = 0`.
+1. The field declaration supplies a default value: `var count = 0 as Integer`.
 2. The struct literal provides a value for the field: `Counter{count: 5}`.
 3. The literal appears as the direct return expression of a `static` factory
    function whose return type is the enclosing type, and the field is assigned
@@ -25,7 +25,7 @@ non-default, non-self-assigned field is also E3086.
 
 ```text
 type Counter
-	export var value = 0       // default: rule 1
+	export var value = 0 as Integer // default: rule 1
 	export var version as Integer // no default
 end 'Counter'
 ```
@@ -82,9 +82,11 @@ end 'main'
 
 <!-- test: all-defaults -->
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 type Defaults
-	export var a = 10
-	export var b = 32
+	export var a = 10 as Integer
+	export var b = 32 as Integer
 
 	static function make() returns Self
 		return Self{}
@@ -103,7 +105,7 @@ end 'main'
 <!-- test: literal-overrides-default -->
 ```maxon
 type Thing
-	export var value = 7
+	export var value = 7 as Integer
 
 	static function make(value Integer) returns Self
 		return Self{value: value}
@@ -127,7 +129,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Mixed
-	export var a = 10
+	export var a = 10 as Integer
 	export var b as Integer
 
 	static function make(b Integer) returns Self
@@ -144,17 +146,9 @@ end 'main'
 42
 ```
 
-<!-- test: string-literal-field-default-errors -->
-An UNANNOTATED field default supplies the field's type as well as its value, so it may only be a
-literal the type can be read off — `= 5`, `= 50.0`, `= true`, optionally signed. A STRING literal is
-not one of them: signed numbers, bools and a registered enum's case are admitted here and everything
-else is refused, following `specs/field-defaults.md`, whose documentation says "numeric, boolean, and
-enum-case" and nothing more. The cure the message names — an explicit annotation — makes it legal, because an
-ANNOTATED default may be any expression at all (`specs/field-defaults.md`).
-
-It is a pure PARSE error, so the compiler tears its half-built parse down on the error path; the
-always-on leak gate makes this case a standing guard that the rejection frees everything it allocated
-(a leak there would flip the suite to exit 101).
+<!-- test: string-literal-field-default -->
+A field default supplies the field's type as well as its value, so a string-literal default types the
+field `String` (`specs/field-defaults.md` lists every shape a default may take).
 ```maxon
 
 type Box
@@ -167,11 +161,15 @@ end 'Box'
 
 function main() returns ExitCode
 	let b = Box.create()
+	print("{b.name}")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2004: specs/field-initialization/string-literal-field-default-errors.maxon:4:20: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.
+```exitcode
+0
+```
+```stdout
+hello
 ```
 
 ### Error: a field declared at a TYPE PARAMETER may not carry a default, of either form
@@ -192,7 +190,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias StrBox = Box with String
 
 type Box uses T
-	export var value as T = makeIt()
+	export var value = makeIt() as T
 
 	static function create() returns Self
 		return Self{}
@@ -210,18 +208,18 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/field-initialization/type-parameter-field-expression-default-errors.maxon:6:24: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
+error E2015: specs/field-initialization/type-parameter-field-expression-default-errors.maxon:6:19: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
 ```
 
-The LITERAL form is the identical fault and pre-dates expression defaults entirely, so the rule is stated
-once, against the field's declared TYPE, before either form of default is read.
+A cast LITERAL is the identical fault, so the rule is stated once, against the field's TYPE, before the
+default's expression is read.
 
 <!-- test: type-parameter-field-literal-default-errors -->
 ```maxon
 typealias StrBox = Box with String
 
 type Box uses T
-	export var value as T = 0
+	export var value = 0 as T
 
 	static function create() returns Self
 		return Self{}
@@ -235,7 +233,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/field-initialization/type-parameter-field-literal-default-errors.maxon:5:24: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
+error E2015: specs/field-initialization/type-parameter-field-literal-default-errors.maxon:5:19: Unsupported: a default value on field 'value' of `type Box`, whose declared type is the type parameter 'T' — a default is produced by a function compiled ONCE from this type's shared body, where 'T' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of 'Box'
 ```
 
 <!-- test: empty-literal-no-defaults-errors -->

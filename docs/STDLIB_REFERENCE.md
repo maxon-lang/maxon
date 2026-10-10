@@ -53,7 +53,7 @@ end 'main'
 | `ParsedInt` / `ParsedIntArray` | `int(i64.min to i64.max)` / `Array with ParsedInt` | Builtins |
 | `ParsedFloat` | `float(f64.min to f64.max)` | Builtins |
 | `IndentDepth` | `int(0 to u64.max)` — a nesting depth while `Json` renders | Json |
-| `RandomDraw` / `RandomBound` | `int(0 to i64.max)` / `int(1 to i64.max)` | Random |
+| `RandomDraw` / `RandomBound` | `int(0 to u64.max)` / `int(1 to u64.max)` | Random |
 | `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
 | `Codepoint` | `int(0 to 1114111)` | Character |
 | `CodepointDelta` | `int(-1114111 to 1114111)` | Character |
@@ -67,7 +67,7 @@ end 'main'
 | `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
 | `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
-| `SchedulerProcessorCount` | `int(1 to i64.max)` | Scheduler |
+| `SchedulerProcessorCount` | `int(1 to u64.max)` | Scheduler |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient; also `URL.port()` |
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
@@ -86,17 +86,19 @@ A signature may not name a type less visible than the function itself, so every 
 library signature mentions is `public` too and can be written down in your own code — as a cast target, or
 to declare a value you are about to pass in. They are listed here because they are part of the surface, not
 because a program normally spells them: a value cast to the alias the signature asks for is the usual reason
-to name one.
+to name one. Float aliases are distinct types as integer aliases are, so a value of a program's own float
+alias reaches a `Real`, `JsonFloat` or `ParsedFloat` parameter through `as`; a float literal needs no cast.
 
 | Name | Definition | Declared by |
 |------|------------|-------------|
 | `ElementIndex` | `int(0 to u64.max)` | Array |
 | `ReportedCapacity` | `int(i64.min to i64.max)` | Array |
-| `EntryCount` | `int(0 to 4611686018427387904)` | Map |
-| `MemberCount` | `int(0 to 4611686018427387904)` | Set |
+| `EntryCount` | `int(0 to 9223372036854775808)` | Map |
+| `MemberCount` | `int(0 to 9223372036854775808)` | Set |
 | `IterPos` | `int(0 to u64.max)` | Range |
 | `ElementTransform`, `ElementPredicate` | `function(Element) returns Element` / `returns bool`, on the `Iterable` extension | Interfaces |
-| `TableCapacity` | `int(0 to 4611686018427387904)` | Map, Set |
+| `TableCapacity` | `int(0 to 9223372036854775808)` | Map, Set |
+| `GreenThreadHandle` | `int(0 to u64.max)` — the handle a `Promise` holds | Builtins |
 | `JsonInt` | `int(i64.min to i64.max)` | Json |
 | `JsonFloat` | `float(f64.min to f64.max)` | Json |
 | `Milliseconds` | `int(0 to u64.max)` | Sleep |
@@ -2472,13 +2474,13 @@ refers to its children by `JsonNodeId`. Walk a document through the `JsonDoc` ac
 |--------|-------------|
 | `kind` | `JsonKind` |
 | `boolValue` | Set for `jsonBool` |
-| `numberValue` | Set for `jsonNumber` (a `float`) |
+| `numberValue` | Set for `jsonNumber` (a `JsonFloat`) |
 | `stringValue` | Set for `jsonString` |
 | `children` | `JsonNodeIdArray`, for `jsonArray` and `jsonObject` |
 | `keys` | `StringArray`, parallel to `children`, for `jsonObject` |
 | `JsonNode.nullNode()` | A `null` |
 | `JsonNode.boolNode(value bool)` | A boolean |
-| `JsonNode.numberNode(value float)` | A number |
+| `JsonNode.numberNode(value JsonFloat)` | A number |
 | `JsonNode.stringNode(value String)` | A string |
 | `JsonNode.arrayNode(children JsonNodeIdArray)` | An array of already-added nodes |
 | `JsonNode.objectNode(keys StringArray, children JsonNodeIdArray)` | An object; `keys[i]` names `children[i]` |
@@ -2658,7 +2660,7 @@ Output: `2024-10-04 11017`, then `2023-11-14T22:13:20.123Z`.
 | Method | Description |
 |--------|-------------|
 | `Scheduler.yield()` | Let the next runnable green thread run. The caller resumes behind everything that was already runnable. When nothing else is runnable it returns promptly, so a loop that yields is a busy wait that lets others progress. It uses no timer, unlike `sleep(0)`, and is safe in a program that never starts a green thread. |
-| `Scheduler.processorCount()` | The number of processors the scheduler runs services on, as a `SchedulerProcessorCount` (`int(1 to i64.max)`, a `Count`, so it compares with a collection's `count()` with no cast): the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets (1 to 2147483647, above the machine's count as well as below it). The count is resolved before `main` runs, so it is the same before the first `spawn` as after it. |
+| `Scheduler.processorCount()` | The number of processors the scheduler runs services on, as a `SchedulerProcessorCount` (`int(1 to u64.max)`, a `Count`, so it compares with a collection's `count()` with no cast): the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets (1 to 2147483647, above the machine's count as well as below it). The count is resolved before `main` runs, so it is the same before the first `spawn` as after it. |
 
 Both are refused on `wasm32-wasi` (E3104). Green threads, `async` and `await` are described under Concurrency in
 [LANGUAGE_REFERENCE.md](LANGUAGE_REFERENCE.md).
@@ -2732,13 +2734,13 @@ Output: `1 false true 5`.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `Random.draw()` | `RandomDraw` | `RandomError` | A uniformly distributed integer from 0 to `i64.max`. |
-| `Random.below(bound RandomBound)` | `RandomDraw` | `RandomError` | A uniformly distributed integer from 0 to `bound - 1`. |
+| `Random.draw()` | `RandomDraw` | `RandomError` | A uniformly distributed integer from 0 to `u64.max` — all 64 bits random. |
+| `Random.below(bound RandomBound)` | `RandomDraw` | `RandomError` | A uniformly distributed integer from 0 to `bound - 1`, for any bound up to `u64.max`. |
 
 | Name | Definition |
 |------|------------|
-| `RandomDraw` | `int(0 to i64.max)` |
-| `RandomBound` | `int(1 to i64.max)`, implementing `RandomDraw` |
+| `RandomDraw` | `int(0 to u64.max)` |
+| `RandomBound` | `int(1 to u64.max)`, implementing `RandomDraw` |
 
 `RandomError` has one case, `unavailable`: the operating system refused to supply random bytes.
 

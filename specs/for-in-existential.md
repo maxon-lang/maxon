@@ -730,7 +730,7 @@ end 'Numbered'
 function returnsOutOfTheBody(source Lines) returns Integer
 	for text in source 'walk'
 		if text.byteLength() > 0 'theFirst'
-			return text.byteLength()
+			return text.byteLength() as Integer
 		end 'theFirst'
 	end 'walk'
 	return 0
@@ -739,7 +739,7 @@ end 'returnsOutOfTheBody'
 function breaksOutOfTheBody(source Lines) returns Integer
 	var total = 0 as Integer
 	for text in source 'walk'
-		total = total + text.byteLength()
+		total = total + (text.byteLength() as Integer)
 		if total > 100 'enough'
 			break
 		end 'enough'

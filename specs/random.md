@@ -11,8 +11,8 @@ category: stdlib
 
 | Call | Meaning |
 |---|---|
-| `Random.draw()` | a uniformly random `RandomDraw` in `0 to i64.max` |
-| `Random.below(bound)` | a uniformly random `RandomDraw` in `0 upto bound`; `bound` is a `RandomBound`, `1 to i64.max` |
+| `Random.draw()` | a uniformly random `RandomDraw` in `0 to u64.max` |
+| `Random.below(bound)` | a uniformly random `RandomDraw` in `0 upto bound`; `bound` is a `RandomBound`, `1 to u64.max` |
 | `__Builtins.fillRandom(managed)` | fills the buffer's live length from the OS; `0` when every byte was filled |
 
 Both `Random` calls throw `RandomError.unavailable` when the operating system refuses to supply random bytes.
@@ -56,7 +56,7 @@ end 'main'
 ```
 
 <!-- test: random.two-draws-differ -->
-Two 63-bit draws are equal with probability 2^-63, so two equal draws mean the source is not random.
+Two 64-bit draws are equal with probability 2^-64, so two equal draws mean the source is not random.
 ```maxon
 function main() returns ExitCode
 	let first = try Random.draw() otherwise return 1
@@ -71,6 +71,66 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: random.draw-reaches-the-top-bit -->
+A draw is 64 random bits, so 256 draws all below 2^63 happen with probability 2^-256.
+```maxon
+typealias DrawTally = int(0 to 256)
+
+function main() returns ExitCode
+	var topBitDraws = 0 as DrawTally
+
+	for _ in 0 upto 256 'eachDraw'
+		let value = try Random.draw() otherwise return 1
+
+		if value >= 9223372036854775808 as RandomDraw 'topBit'
+			topBitDraws = topBitDraws + 1
+		end 'topBit'
+	end 'eachDraw'
+
+	if topBitDraws > 0 'seen'
+		print("top bit seen\n")
+	end 'seen'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+top bit seen
+```
+
+<!-- test: random.below-a-bound-above-i64-max-reaches-the-top-half -->
+A bound above `i64.max` is admitted, and 256 draws below `u64.max` all under 2^63 happen with probability about 2^-256.
+```maxon
+typealias DrawTally = int(0 to 256)
+
+function main() returns ExitCode
+	var topHalfDraws = 0 as DrawTally
+
+	for _ in 0 upto 256 'eachDraw'
+		let value = try Random.below(18446744073709551615) otherwise return 1
+
+		if value >= 9223372036854775808 as RandomDraw 'topHalf'
+			topHalfDraws = topHalfDraws + 1
+		end 'topHalf'
+	end 'eachDraw'
+
+	if topHalfDraws > 0 'seen'
+		print("top half seen\n")
+	end 'seen'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+top half seen
 ```
 
 <!-- test: random.below-one-is-zero -->
@@ -94,7 +154,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:24: Value 0 is outside the range of 'RandomBound' (int(1 to 9223372036854775807))
+error E3005: <fragment>:3:24: Value 0 is outside the range of 'RandomBound' (int(1 to 18446744073709551615))
 ```
 
 <!-- test: random.fill-random-fills-a-buffer-longer-than-one-request -->
@@ -139,4 +199,46 @@ end 'main'
 ```
 ```maxoncstderr
 error E3036: <fragment>:3:20: '__Builtins.fillRandom' takes exactly 1 argument, but 0 were given
+```
+
+<!-- test: random.below-stays-below-large-bounds -->
+Draws below assorted bounds stay below them, and a bound of three quarters of 2^64 reaches its top quarter.
+```maxon
+typealias Tally = int(0 to 100000)
+
+function main() returns ExitCode
+	for _ in 0 upto 400 'each'
+		let a = try Random.below(3) otherwise return 1
+		let b = try Random.below(10) otherwise return 2
+		let c = try Random.below(9223372036854775809) otherwise return 3
+		let d = try Random.below(18446744073709551614) otherwise return 4
+		let e = try Random.below(13835058055282163712) otherwise return 5
+		let f = try Random.below(18446744073709551615) otherwise return 6
+		let g = try Random.below(4294967297) otherwise return 7
+		let h = try Random.below(6148914691236517205) otherwise return 8
+
+		if a >= 3 or b >= 10 or c >= 9223372036854775809 or d >= 18446744073709551614 or e >= 13835058055282163712 or f >= 18446744073709551615 or g >= 4294967297 or h >= 6148914691236517205 'tooBig'
+			return 9
+		end 'tooBig'
+	end 'each'
+
+	var top = 0 as Tally
+
+	for _ in 0 upto 400 'quarter'
+		let e = try Random.below(13835058055282163712) otherwise return 10
+
+		if e >= 10376293541461622784 'inTheTopQuarter'
+			top = top + 1
+		end 'inTheTopQuarter'
+	end 'quarter'
+
+	if top == 0 'neverReached'
+		return 11
+	end 'neverReached'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
 ```

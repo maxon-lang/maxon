@@ -133,7 +133,7 @@ function textOrList(name String, description String, required bool = false, devO
 end 'textOrList'
 
 function workersProperty() returns McpProperty
-	return whole(WorkersOption, description: "Number of worker subprocesses (--workers=<n>), {MinWorkerCount}-{MaxWorkerCount}. A debugging tool; the suite's own count is the default.", least: MinWorkerCount, most: MaxWorkerCount, devOnly: true)
+	return whole(WorkersOption, description: "Number of worker subprocesses (--workers=<n>), {MinWorkerCount}-{MaxWorkerCount}. A debugging tool; the suite's own count is the default.", least: MinWorkerCount as JsonInt, most: MaxWorkerCount as JsonInt, devOnly: true)
 end 'workersProperty'
 
 function childTimeoutProperty() returns McpProperty
@@ -212,15 +212,15 @@ export function mcpToolRoster() returns McpToolSpecArray
 	specProps.push(flag("network", description: "Pass --network to ALSO run live network fragments.", devOnly: true))
 	specProps.push(str(TargetOption, description: "Cross-compile target passed to --target=<value> (e.g. 'wasm32-wasi').", devOnly: true))
 	specProps.push(workersProperty())
-	specProps.push(whole(MaxFailuresOption, description: "Most failing cases listed in `failures` ({LowestFailureLimit}-{HighestFailureLimit}, default {DefaultFailureLimit}); the rest are counted in `failuresOmitted`.", least: LowestFailureLimit, most: HighestFailureLimit, devOnly: true))
+	specProps.push(whole(MaxFailuresOption, description: "Most failing cases listed in `failures` ({LowestFailureLimit}-{HighestFailureLimit}, default {DefaultFailureLimit}); the rest are counted in `failuresOmitted`.", least: LowestFailureLimit as JsonInt, most: HighestFailureLimit as JsonInt, devOnly: true))
 	specProps.push(flag(CasesOption, description: "Also answer `cases`: every case the run covered, in run order, as `spec`, `test` and `status` ({spelledVerdictTokens()}). Not capped by `maxFailures`.", devOnly: true))
 	specProps.push(childTimeoutProperty())
 	specProps.push(repoRootProperty(RepoRootDefaultsToOwnCheckout))
 	tools.push(McpToolSpec.create(SpecTestToolName, description: "Run the Maxon spec-test suite, optionally filtered, returning structured pass/fail counts.", properties: specProps, devOnly: true))
 
 	var scaleProps = McpPropertyArray.create()
-	scaleProps.push(whole(RungsOption, description: "How many rungs of the ladder to climb ({MinRungCount}-{MaxRungCount}, default {DefaultRungCount}). Each rung DOUBLES the program.", least: MinRungCount, most: MaxRungCount, devOnly: true))
-	scaleProps.push(whole(RepeatOption, description: "How many times each rung is compiled ({MinRepeatCount}-{MaxRepeatCount}, default {DefaultRepeatCount}). CPU takes minimum; memory cross-checks.", least: MinRepeatCount, most: MaxRepeatCount, devOnly: true))
+	scaleProps.push(whole(RungsOption, description: "How many rungs of the ladder to climb ({MinRungCount}-{MaxRungCount}, default {DefaultRungCount}). Each rung DOUBLES the program.", least: MinRungCount as JsonInt, most: MaxRungCount as JsonInt, devOnly: true))
+	scaleProps.push(whole(RepeatOption, description: "How many times each rung is compiled ({MinRepeatCount}-{MaxRepeatCount}, default {DefaultRepeatCount}). CPU takes minimum; memory cross-checks.", least: MinRepeatCount as JsonInt, most: MaxRepeatCount as JsonInt, devOnly: true))
 	scaleProps.push(str(NoteOption, description: "Record this run in docs/optimization-log.md with this text as the reason.", devOnly: true))
 	scaleProps.push(str(EmitCorpusOption, description: "Write the generated corpus to this directory and compile nothing.", devOnly: true))
 	scaleProps.push(str(LogOption, description: "Passed to --log=<value>.", devOnly: true))
@@ -245,7 +245,7 @@ function pushDebugTools(tools McpToolSpecArray)
 	startProps.push(list("env", description: "Environment variables for the program being debugged, each spelled NAME=VALUE"))
 	startProps.push(seconds(DebugStopTimeoutOption, description: "Seconds a command waits for the program to stop before reporting a timeout (default {DefaultStopTimeoutSeconds:.0}, {targetSecondsRange()})."))
 	startProps.push(flag("trace", description: "Record the DebugStream ring, so `debug_trace` has events to report. A `source` is then built with --debugstream; an `executable` must already have been."))
-	startProps.push(whole(DebugMaxProcsOption, description: "Pin the debuggee's scheduler to this many processors, through MAXON_MAX_PROCS.", least: FewestRequestedProcessors, most: MostRequestedProcessors))
+	startProps.push(whole(DebugMaxProcsOption, description: "Pin the debuggee's scheduler to this many processors, through MAXON_MAX_PROCS.", least: FewestRequestedProcessors as JsonInt, most: MostRequestedProcessors as JsonInt))
 	startProps.push(childTimeoutProperty())
 	tools.push(McpToolSpec.create(DebugStartToolName, description: "Launch a program under the debugger, parked before `main`. {DebugAnswerShape}", properties: startProps))
 
@@ -280,7 +280,7 @@ function pushDebugTools(tools McpToolSpecArray)
 	tools.push(McpToolSpec.create(DebugGreenThreadToolName, description: "Select, hold, release or walk one green thread. {DebugAnswerShape}", properties: greenProps))
 
 	var traceProps = McpPropertyArray.create()
-	traceProps.push(whole(TraceCountArgument, description: "How many of the most recent DebugStream events to report (default {DebugDefaultTraceEvents}). Needs a session started with `trace`.", least: LowestDebugTraceTally, most: HighestDebugTraceTally))
+	traceProps.push(whole(TraceCountArgument, description: "How many of the most recent DebugStream events to report (default {DebugDefaultTraceEvents}). Needs a session started with `trace`.", least: LowestDebugTraceTally as JsonInt, most: HighestDebugTraceTally as JsonInt))
 	tools.push(McpToolSpec.create(DebugTraceToolName, description: "Report the DebugStream events committed before the stop. {DebugAnswerShape}", properties: traceProps))
 
 	tools.push(McpToolSpec.create(DebugStopToolName, description: "End the debug session and REAP the debuggee. {DebugAnswerShape}", properties: McpPropertyArray.create()))

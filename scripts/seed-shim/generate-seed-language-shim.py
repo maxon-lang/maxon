@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
-"""generate-seed-language-shim.py - write the seed shim that withdraws every language form the seed cannot parse.
+"""generate-seed-language-shim.py - write the seed shim that withdraws every language form the seed
+cannot parse.
 
-Two forms: a `typealias ... implements` clause and a generic function (`function f(...) uses T`). The seed
-enforces every ranged typealias nominally, so once the clauses are gone each widening crossing the tree
-relies on is an E3005/E2028 there; a generic function is withdrawn whole, which the tree affords because
-the compiler calls none. This script copies the tree's `maxon-bin/`, `stdlib/` and `runtime/` into a
-scratch directory, stages every other patch in `scripts/seed-shim/` in sorted order, strips both forms, and
-then builds with the seed until it is clean, writing at every site the seed refuses the cast to the parent
-it names. A `Compiler.`-qualified name is written bare, which the seed resolves to the same declaration;
-an E3078 its borrow checker raises gets the `.clone()` it asks for, and a loop it reads as still borrowing
-what its body mutates iterates a clone held in a local. The difference is the patch.
+Three forms: a `typealias ... implements` clause, a generic function (`function f(...) uses T`), and
+a type body's inferred field (`var x = e as T`, `var x = Type.member(...)`, `var x = "text"`, which
+the seed reads only as `var x as T = e`). The seed enforces every ranged typealias nominally, so
+once the clauses are gone each widening crossing the tree relies on is an E3005/E2028 there; a
+generic function is withdrawn whole, which the tree affords because the compiler calls none; an
+inferred field is written back with the type its initializer names. This script copies the tree's
+`maxon-bin/`, `stdlib/` and `runtime/` into a scratch directory, stages every other patch in
+`scripts/seed-shim/` in sorted order, strips all three forms, and then builds with the seed until
+it is clean, writing at every site the seed refuses the cast to the parent it names: on each arm of
+a match whose arms disagree, after an `otherwise` fallback, and, where one operand of a binary
+operator is a number literal, on the other operand, cast to the literal's alias. A cast the seed
+calls unneeded (E3010) is dropped. A `Compiler.`-qualified name is written bare, which the seed
+resolves to the same declaration; an E3078 its borrow checker raises gets the `.clone()` it asks
+for, and a loop it reads as still borrowing what its body mutates iterates a clone held in a local;
+a decimal integer literal above i64.max is written in hex, and a typealias range bound above it as
+i64.max. The difference is the patch.
 
 Usage:
-  python scripts/seed-shim/generate-seed-language-shim.py [--tree DIR] [--seed PATH] [--work DIR] [--output PATH]
+  python scripts/seed-shim/generate-seed-language-shim.py [--tree DIR] [--seed PATH] [--work DIR]
+      [--output PATH] [--resume]
 
---work must be empty, and defaults to a fresh system temp directory. Keep it outside the checkout, whose
-`temp/` carries a `.maxonignore`. --output defaults to the committed patch in `scripts/seed-shim/`.
+--work must be empty, and defaults to a fresh system temp directory; with --resume it is the
+directory a previous run left, and the build loop continues there. Keep it outside the checkout,
+whose `temp/` carries a `.maxonignore`. --output defaults to the committed patch in
+`scripts/seed-shim/`.
 
-Exit codes: 0 the patch was written; 1 the tree holds what this script cannot shim: a `Compiler.` qualifier
-it cannot write bare without changing the declaration it names, or a seed refusal it does not cast,
-including a loop it cannot prove leaves its iterated collection unmutated.
+Exit codes: 0 the patch was written; 1 the tree holds what this script cannot shim: an integer
+literal it cannot rewrite in a form the seed lexes, a `Compiler.` qualifier it cannot write bare
+without changing the declaration it names, a field default with no inferable type, or a seed refusal
+it does not cast, including a loop it cannot prove leaves its iterated collection unmutated.
 """
 import argparse
 import hashlib
@@ -30,15 +42,24 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "library-cache"))
+
+from maxon_source import FieldDefaultShapeError, field_default_type
+
 PATCH_NAME = "0016-withdraw-the-language-forms-the-seed-cannot-parse-from-the-first-build.patch"
 SOURCE_DIRS = ["maxon-bin", "stdlib", "runtime"]
-MAX_ROUNDS = 500
+MAX_ROUNDS = 800
+MAX_ATTEMPTS_PER_SITE = 10
 
 HEADER = """# The seed cannot parse a generic function, so each is withdrawn whole; the compiler calls none of them.
 # The seed cannot parse a `typealias X = int(range) implements Parent` clause either, and it enforces every ranged
 # typealias nominally at every crossing. Each clause is withdrawn, and every place the tree widens a subtype
 # to its parent without a cast gets the cast the seed names. A divisor cast to a parent that admits 0 makes the
 # division throwing to the seed, so it is written `try (…) otherwise panic`; the tree proved it nonzero.
+# The seed cannot infer a field's type from its initializer, so each type-body `var x = e as T`, `var x = Type.member(...)`
+# and `var x = "text"` is written `var x as T = e`.
+# The seed cannot lex a decimal integer literal above i64.max, so each is written in hex, and a typealias range bound is
+# written i64.max.
 # The declarations, their ranges and every table stay, so `C1` knows the clause and compiles the unshimmed tree
 # into `C2`. An `export` whose only reach beyond its file was through such a crossing is an E3092 to the seed
 # once the crossing is a cast, so it is withdrawn too.
@@ -50,9 +71,15 @@ HEADER = """# The seed cannot parse a generic function, so each is withdrawn who
 
 DECLARATION = re.compile(r"^(?P<head>(?:[a-z]+ )*typealias (?P<name>[A-Za-z0-9_]+) = [^\r\n]*?) implements (?P<parent>[A-Za-z0-9_]+)[ \t]*(?P<eol>\r?)$", re.M)
 GENERIC_FUNCTION = re.compile(r"^(?P<indent>[ \t]*)(?:[a-z]+ )*function (?P<name>[A-Za-z0-9_]+)\(.*\) uses [A-Z][^\r\n]*$")
+RANGE_DECLARATION = re.compile(r"^(?:[a-z]+ )*typealias (?P<name>[A-Za-z0-9_]+) = int\((?P<range>[^)\r\n]*)\)", re.M)
+RANGE_UPPER_BOUND_PREFIX = re.compile(r"^[ \t]*(?:[a-z]+ )*typealias [A-Za-z0-9_]+ = int\([^)]* to $")
+WIDE_DECIMAL_LITERAL = re.compile(r"(?<![A-Za-z0-9_.])(?P<digits>[0-9]{19,20})(?![A-Za-z0-9_.])")
 DIAGNOSTIC = re.compile(r"^error (?P<code>E\d+): (?P<path>.+?):(?P<line>\d+):(?P<column>\d+): (?P<message>.*)$")
 BINARY = re.compile(r"^operator '(?P<op>[^']+)' requires both operands to be the same type: '(?P<left>[A-Za-z0-9_]+)' and '(?P<right>[A-Za-z0-9_]+)' are different typealiases")
 MISMATCH = re.compile(r"^type mismatch: 'expected (?P<expected>[A-Za-z0-9_]+), got (?P<got>[A-Za-z0-9_]+)'")
+MATCH_ARMS = re.compile(r"^match arms give incompatible types: '(?P<first>[A-Za-z0-9_]+)' vs '(?P<second>[A-Za-z0-9_]+)'")
+UNNEEDED_CAST = re.compile(r"^unneeded cast: '(?P<source>[A-Za-z0-9_]+)' already fits in '(?P<target>[A-Za-z0-9_]+)'")
+OTHERWISE = re.compile(r"^type mismatch: 'otherwise type '(?P<got>[A-Za-z0-9_]+)' does not match expected type '(?P<expected>[A-Za-z0-9_]+)'")
 TERNARY = re.compile(r"^ternary expression type mismatch: true branch is '(?P<whenTrue>[A-Za-z0-9_]+)' but false branch is '(?P<whenFalse>[A-Za-z0-9_]+)'")
 UNUSED_EXPORT = re.compile(r"^exported [a-z]+ '(?P<name>[A-Za-z0-9_]+)' is never referenced outside its declaring file")
 ARGUMENT = re.compile(r"^argument type mismatch for '(?P<label>[A-Za-z0-9_]+)': expected '(?P<expected>[A-Za-z0-9_]+)', got '(?P<got>[A-Za-z0-9_]+)'")
@@ -81,14 +108,29 @@ READ_ONLY_COLLECTION_METHODS = {"capacity", "clone", "contains", "count", "equal
 MEMBER_DECLARATION = re.compile(r"^[ \t]*(?:[a-z]+ )*(?:function|let|var) (?P<name>[A-Za-z_][A-Za-z0-9_]*)", re.M)
 TOP_LEVEL_DECLARATION = re.compile(r"^(?:[a-z]+ )*(?P<keyword>type|extension|interface|enum|union|function|typealias|let|var) (?P<name>[A-Za-z_][A-Za-z0-9_]*)")
 
+TYPE_BODY_OPENER = re.compile(r"^(?P<indent>\t*)(?:[a-z]+ )*(?P<keyword>type|function) ")
+BLOCK_CLOSE = re.compile(r"^(?P<indent>\t*)end '")
+FIELD_DECLARATION = re.compile(r"^(?P<indent>\t+)(?P<modifiers>(?:[a-z]+ )*)(?:var|let) (?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P<separator> = )(?P<value>.*)$")
+BARE_LITERAL = re.compile(r"^(?:true|false|-?(?:0x[0-9A-Fa-f_]+|[0-9][0-9_]*(?:\.[0-9][0-9_]*)?))$")
+STATIC_MODIFIER = "static"
+TYPE_KEYWORD = "type"
+
 KEYWORDS = {"if", "else", "while", "return", "not", "and", "or", "then", "gives", "let", "var", "for", "in", "upto", "downto", "match", "try", "otherwise", "throw", "as"}
 IDENT = re.compile(r"[A-Za-z0-9_]")
 OPENERS = {"(": ")", "[": "]", "{": "}"}
 CLOSERS = {v: k for k, v in OPENERS.items()}
-ARITHMETIC = ["+", "-", "*", "/", "%"]
+OPERATOR_LEVEL = {"+": 1, "-": 1, "*": 2, "/": 2, "%": 2, "mod": 2}
 COMPARISON = {"==", "!=", "<", "<=", ">", ">="}
 DIVISION_WITHOUT_TRY = re.compile(r"^throwing division requires try")
 DIVISION_OPERATORS = ["/", "mod"]
+RANGE_KEYWORDS = ("upto", "downto")
+SEED_INT_LITERAL_MAX = 2**63 - 1
+U64_MAX = 2**64 - 1
+SEED_RANGE_MAX = "i64.max"
+ARM_SEPARATOR = " gives "
+OTHERWISE_KEYWORD = " otherwise "
+NUMBER_LITERAL = re.compile(r"-?[0-9][0-9_]*(?:\.[0-9][0-9_]*)?")
+CAST_SUFFIX = re.compile(r"\s+as\s+[A-Za-z_][A-Za-z0-9_.]*")
 MULTIPLICATIVE_OPERATORS = ["*", "/", "%", " mod"]
 DIVISOR_NEVER_ZERO = "the tree's divisor type excludes 0; only the cast to its parent admits it"
 
@@ -154,8 +196,24 @@ def maxon_sources(work, directories):
 					yield os.path.join(dirpath, name)
 
 
-def strip_clauses(work):
+def collect_aliases(root):
 	parents = {}
+	ranges = {}
+
+	for path in maxon_sources(root, SOURCE_DIRS):
+		text = read(path)
+
+		for m in DECLARATION.finditer(text):
+			parents[m.group("name")] = m.group("parent")
+
+		for m in RANGE_DECLARATION.finditer(text):
+			ranges[m.group("name")] = m.group("range")
+
+	return parents, ranges
+
+
+def strip_clauses(work):
+	stripped_count = 0
 
 	for path in maxon_sources(work, SOURCE_DIRS):
 		text = read(path)
@@ -163,15 +221,59 @@ def strip_clauses(work):
 		if " implements " not in text:
 			continue
 
-		for m in DECLARATION.finditer(text):
-			parents[m.group("name")] = m.group("parent")
-
 		stripped = DECLARATION.sub(lambda m: m.group("head") + m.group("eol"), text)
 
 		if stripped != text:
+			stripped_count += len(DECLARATION.findall(text))
 			write(path, stripped)
 
-	return parents
+	return stripped_count
+
+
+def write_wide_literals_in_hex(work):
+	rewritten_count = 0
+	refused = []
+
+	for path in maxon_sources(work, SOURCE_DIRS):
+		text = read(path)
+
+		if WIDE_DECIMAL_LITERAL.search(text) is None:
+			continue
+
+		lines = text.split("\n")
+
+		try:
+			regions = CodeRegions(lines).per_line
+		except Unhandled as e:
+			refused.append(f"{os.path.relpath(path, work)}: {e}")
+			continue
+
+		for index, line in enumerate(lines):
+			out = []
+			last = 0
+
+			for start, end in regions[index]:
+				for m in WIDE_DECIMAL_LITERAL.finditer(line, start, end):
+					value = int(m.group("digits"))
+
+					if value <= SEED_INT_LITERAL_MAX:
+						continue
+
+					if value > U64_MAX:
+						refused.append(f"{os.path.relpath(path, work)}:{index + 1}: the literal {value} is wider than any integer type")
+						continue
+
+					out.append(line[last:m.start()])
+					out.append(SEED_RANGE_MAX if RANGE_UPPER_BOUND_PREFIX.match(line[:m.start()]) else f"0x{value:X}")
+					last = m.end()
+					rewritten_count += 1
+
+			out.append(line[last:])
+			lines[index] = "".join(out)
+
+		write(path, "\n".join(lines))
+
+	return rewritten_count, refused
 
 
 def strip_generic_functions(work):
@@ -484,6 +586,75 @@ def strip_namespace_qualifiers(work):
 	return unqualified, refused
 
 
+def field_annotation(value):
+	if BARE_LITERAL.fullmatch(value):
+		return None
+
+	try:
+		return field_default_type(value)
+	except FieldDefaultShapeError as e:
+		raise Unhandled(str(e))
+
+
+def annotate_inferred_fields(work):
+	annotated = 0
+	refused = []
+
+	for path in maxon_sources(work, SOURCE_DIRS):
+		text = read(path)
+		lines = text.split("\n")
+
+		try:
+			regions = CodeRegions(lines)
+		except Unhandled as e:
+			refused.append(f"{os.path.relpath(path, work)}: {e}")
+			continue
+
+		enclosing = []
+
+		for index, line in enumerate(lines):
+			close = BLOCK_CLOSE.match(line)
+
+			if close:
+				depth = len(close.group("indent"))
+				enclosing = [entry for entry in enclosing if entry[0] < depth]
+				continue
+
+			field = FIELD_DECLARATION.match(line)
+
+			if field and enclosing and enclosing[-1] == (len(field.group("indent")) - 1, TYPE_KEYWORD) and STATIC_MODIFIER not in field.group("modifiers").split():
+				comments = regions.comments_per_line[index]
+				value_start = field.start("value")
+				value_end = min((start for start, _ in comments), default=len(line))
+				value = line[value_start:value_end].rstrip()
+				value_end = value_start + len(value)
+
+				try:
+					inferred = field_annotation(value)
+				except Unhandled as e:
+					refused.append(f"{os.path.relpath(path, work)}:{index + 1}: {e}")
+					continue
+
+				if inferred is not None:
+					target, initializer = inferred
+					lines[index] = line[:field.end("name")] + f" as {target}" + line[field.end("name"):value_start] + initializer + line[value_end:]
+					annotated += 1
+
+				continue
+
+			opener = TYPE_BODY_OPENER.match(line)
+
+			if opener:
+				enclosing.append((len(opener.group("indent")), opener.group("keyword")))
+
+		rewritten = "\n".join(lines)
+
+		if rewritten != text:
+			write(path, rewritten)
+
+	return annotated, refused
+
+
 def read(path):
 	with open(path, "r", encoding="utf-8", newline="") as f:
 		return f.read()
@@ -632,10 +803,18 @@ def atom_after(line, start):
 	return begin, i
 
 
+def operator_level(op):
+	if op in COMPARISON:
+		return 0
+
+	return OPERATOR_LEVEL.get(op)
+
+
 def binary_operand_before(line, end, op):
 	start, stop = atom_before(line, end)
+	level = operator_level(op)
 
-	if op not in COMPARISON:
+	if level is None:
 		return start, stop
 
 	while True:
@@ -644,7 +823,7 @@ def binary_operand_before(line, end, op):
 		while i > 0 and line[i - 1] == " ":
 			i -= 1
 
-		prior = next((a for a in ARITHMETIC if line[:i].endswith(" " + a)), None)
+		prior = next((a for a in OPERATOR_LEVEL if line[:i].endswith(" " + a) and OPERATOR_LEVEL[a] >= level), None)
 
 		if prior is None:
 			return start, stop
@@ -654,13 +833,14 @@ def binary_operand_before(line, end, op):
 
 def binary_operand_after(line, start, op):
 	begin, end = atom_after(line, start)
+	level = operator_level(op)
 
-	if op not in COMPARISON:
+	if level is None:
 		return begin, end
 
 	while True:
 		rest = line[end:]
-		following = next((a for a in ARITHMETIC if rest.startswith(" " + a + " ")), None)
+		following = next((a for a in OPERATOR_LEVEL if rest.startswith(" " + a + " ") and OPERATOR_LEVEL[a] > level), None)
 
 		if following is None:
 			return begin, end
@@ -707,30 +887,111 @@ def cast(line, start, end, target):
 
 	if re.fullmatch(r"\([A-Za-z0-9_.]+\)", inner):
 		inner = inner[1:-1]
+	elif not is_member_chain(inner):
+		inner = f"({inner})"
 
 	return line[:start] + f"({inner} as {target})" + line[end:]
 
 
-def fix_line(line, column, code, message, parents):
+def find_operand(find, line, position, op):
+	try:
+		return find(line, position, op)
+	except Unhandled as e:
+		return e
+
+
+def operand_text(line, span):
+	if isinstance(span, Unhandled):
+		return ""
+
+	return line[span[0]:span[1]]
+
+
+def require_operand(span):
+	if isinstance(span, Unhandled):
+		raise span
+
+	return span
+
+
+def require_castable(parents, ranges, source, target):
+	if source == target or target in ancestors(parents, source)[1:]:
+		return
+
+	if source in ranges and ranges[source] == ranges.get(target):
+		return
+
+	raise Unhandled(f"'{source}' neither implements '{target}' nor shares its range, so casting to it could change a value")
+
+
+def cast_match_arms(lines, line_number, message, parents):
+	m = MATCH_ARMS.match(message)
+	target = ancestors(parents, common_ancestor(parents, m.group("first"), m.group("second")))[-1]
+	opener = lines[line_number - 1]
+	indent = re.match(r"\t*", opener).group(0)
+	label = re.search(r"'[A-Za-z0-9_]+'\r?$", opener)
+
+	if label is None:
+		raise Unhandled("a match expression whose label does not end its line")
+
+	end = indent + "end " + label.group(0).rstrip("\r")
+	close = next((j for j in range(line_number, len(lines)) if lines[j].rstrip("\r") == end), None)
+
+	if close is None:
+		raise Unhandled(f"the match {label.group(0)} has no `end {label.group(0)}`")
+
+	for j in range(line_number, close):
+		arm = lines[j]
+
+		if not arm.startswith(indent + "\t") or arm.startswith(indent + "\t\t"):
+			continue
+
+		at = arm.find(ARM_SEPARATOR)
+
+		if at < 0 or "//" in arm:
+			raise Unhandled(f"the match arm `{arm.strip()}` is not a one-line `pattern gives value`")
+
+		start = at + len(ARM_SEPARATOR)
+		stop = len(arm.rstrip("\r"))
+		lines[j] = cast(arm, start, stop, target)
+
+
+def fix_line(line, column, code, message, parents, ranges):
 	at = column - 1
 	m = BINARY.match(message)
 
 	if code == "E3005" and m:
 		op = m.group("op")
+		range_keyword = next((k for k in RANGE_KEYWORDS if line.startswith(k, at)), None)
+
+		left, right = m.group("left"), m.group("right")
+
+		if range_keyword is not None:
+			require_castable(parents, ranges, right, left)
+			start, end = binary_operand_after(line, at + len(range_keyword), op)
+			return cast(line, start, end, left)
 
 		if not line.startswith(op, at):
 			raise Unhandled(f"operator '{op}' is not at the reported column")
 
-		left, right = m.group("left"), m.group("right")
+		right_span = find_operand(binary_operand_after, line, at + len(op), op)
+		left_span = find_operand(binary_operand_before, line, at, op)
+
+		if NUMBER_LITERAL.fullmatch(operand_text(line, right_span)):
+			require_castable(parents, ranges, left, right)
+			return cast(line, *require_operand(left_span), right)
+
+		if NUMBER_LITERAL.fullmatch(operand_text(line, left_span)):
+			require_castable(parents, ranges, right, left)
+			return cast(line, *require_operand(right_span), left)
+
 		target = common_ancestor(parents, left, right)
 
 		if right != target:
-			start, end = binary_operand_after(line, at + len(op), op)
-			line = cast(line, start, end, target)
+			line = cast(line, *require_operand(right_span), target)
 
 		if left != target:
-			start, end = binary_operand_before(line, at, op)
-			line = cast(line, start, end, target)
+			line = cast(line, *require_operand(left_span), target)
 
 		return line
 
@@ -784,6 +1045,18 @@ def fix_line(line, column, code, message, parents):
 		start, end = statement_value(line, at + len(field) + separator.end())
 		return cast(line, start, end, m.group("expected"))
 
+	m = OTHERWISE.match(message)
+
+	if code == "E3059" and m:
+		require_widening(parents, m.group("got"), m.group("expected"))
+		keyword = line.find(OTHERWISE_KEYWORD, at)
+
+		if keyword < 0:
+			raise Unhandled("no `otherwise` after the reported column")
+
+		start, end = statement_value(line, keyword + len(OTHERWISE_KEYWORD))
+		return line[:end] + f" as {m.group('expected')}" + line[end:]
+
 	m = UNUSED_EXPORT.match(message)
 
 	if code == "E3092" and m:
@@ -815,6 +1088,14 @@ def fix_line(line, column, code, message, parents):
 			raise Unhandled(f"the dividend is the right operand of a tighter or equal-binding operator, so `{op}` does not head its own expression")
 
 		return line[:start] + f"(try ({line[start:end]}) otherwise panic(\"{DIVISOR_NEVER_ZERO}\"))" + line[end:]
+
+	if code == "E3010" and UNNEEDED_CAST.match(message):
+		cast_at = CAST_SUFFIX.match(line, at - 1)
+
+		if cast_at is None or not line.startswith("as ", at):
+			raise Unhandled("no cast at the reported column")
+
+		return line[:cast_at.start()] + line[cast_at.end():]
 
 	m = IMMUTABLE_TO_MUTABLE.match(message)
 
@@ -1127,6 +1408,7 @@ def main():
 	parser.add_argument("--seed")
 	parser.add_argument("--work")
 	parser.add_argument("--output")
+	parser.add_argument("--resume", action="store_true")
 	args = parser.parse_args()
 
 	tree = os.path.abspath(args.tree)
@@ -1137,25 +1419,41 @@ def main():
 	if not os.path.isfile(seed):
 		raise SystemExit(f"generate-seed-language-shim.py: no seed at {seed} - run scripts/fetch-seed.sh")
 
-	if os.path.exists(work) and os.listdir(work):
-		raise SystemExit(f"generate-seed-language-shim.py: {work} is not empty")
+	if args.resume != (os.path.exists(work) and bool(os.listdir(work))):
+		raise SystemExit(f"generate-seed-language-shim.py: {work} must be {'a work directory a previous run left' if args.resume else 'empty'}")
 
-	os.makedirs(work, exist_ok=True)
-	stage_work(tree, work, seed, output)
-	generics = strip_generic_functions(work)
-	print(f"withdrew {generics} generic functions", flush=True)
-	parents = strip_clauses(work)
-	print(f"stripped {len(parents)} implements clauses", flush=True)
-	unqualified, refused = strip_namespace_qualifiers(work)
+	parents, ranges = collect_aliases(tree)
 
-	if refused:
-		return report_refusals("a qualifier this script cannot write bare without changing the declaration it names", refused, work)
+	if not args.resume:
+		os.makedirs(work, exist_ok=True)
+		stage_work(tree, work, seed, output)
+		generics = strip_generic_functions(work)
+		print(f"withdrew {generics} generic functions", flush=True)
+		print(f"stripped {strip_clauses(work)} implements clauses", flush=True)
+		widened, refused = write_wide_literals_in_hex(work)
 
-	print(f"unqualified {unqualified} lines naming a `{NAMESPACE_QUALIFIER}` declaration", flush=True)
+		if refused:
+			return report_refusals("an integer literal this script cannot write in a form the seed lexes", refused, work)
+
+		print(f"wrote {widened} integer literals past the seed's decimal range in hex", flush=True)
+		unqualified, refused = strip_namespace_qualifiers(work)
+
+		if refused:
+			return report_refusals("a qualifier this script cannot write bare without changing the declaration it names", refused, work)
+
+		print(f"unqualified {unqualified} lines naming a `{NAMESPACE_QUALIFIER}` declaration", flush=True)
+
+		annotated, refused = annotate_inferred_fields(work)
+
+		if refused:
+			return report_refusals("a field default whose type this script cannot write back as an annotation", refused, work)
+
+		print(f"annotated {annotated} inferred fields", flush=True)
 
 	members = MemberDeclarations(work)
 	casts = 0
 	seen = set()
+	attempts = {}
 
 	for round_number in range(1, MAX_ROUNDS + 1):
 		code, log = build(work, os.path.basename(seed))
@@ -1191,7 +1489,10 @@ def main():
 			for line_number, column, d, rel in sorted(sites, key=lambda s: (s[0], s[1]), reverse=True):
 				key = (rel, line_number, lines[line_number - 1], d.group("message"))
 
-				if key in seen:
+				site = (rel, line_number, d.group("message"))
+				attempts[site] = attempts.get(site, 0) + 1
+
+				if key in seen or attempts[site] > MAX_ATTEMPTS_PER_SITE:
 					refused.append(f"{d.group(0)}\n    the cast written for it did not answer it")
 					continue
 
@@ -1204,7 +1505,11 @@ def main():
 					continue
 
 				try:
-					lines[line_number - 1] = fix_line(lines[line_number - 1], column, d.group("code"), d.group("message"), parents)
+					if d.group("code") == "E3005" and MATCH_ARMS.match(d.group("message")):
+						cast_match_arms(lines, line_number, d.group("message"), parents)
+					else:
+						lines[line_number - 1] = fix_line(lines[line_number - 1], column, d.group("code"), d.group("message"), parents, ranges)
+
 					casts += 1
 				except Unhandled as e:
 					refused.append(f"{d.group(0)}\n    {e}")

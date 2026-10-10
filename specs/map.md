@@ -1378,7 +1378,7 @@ function main() returns ExitCode
 	end 'eachRound'
 
 	let survivor = try m.get(Rounds * Live + 1) otherwise 0
-	return 7 if m.count() == Live and survivor == 1 else 1
+	return 7 if m.count() == (Live as EntryCount) and survivor == 1 else 1
 end 'main'
 ```
 ```exitcode
@@ -1419,4 +1419,24 @@ end 'main'
 ```stdout
 original 2: apples 3, pears 5, plums false
 copy 2: apples 30, plums 7, pears false
+```
+
+<!-- test: table-aliases-admit-two-to-the-63 -->
+The hashtable's capacity, slot-index and entry-count aliases are unsigned and reach 2^63, the largest power of two a u64 holds.
+```maxon
+function main() returns ExitCode
+	let capacity = 9223372036854775808 as TableCapacity
+	let slot = 9223372036854775808 as TableSlotIndex
+	let entries = 9223372036854775808 as EntryCount
+	let members = 9223372036854775808 as MemberCount
+	let reached = capacity == 9223372036854775808 as TableCapacity and slot == 9223372036854775808 as TableSlotIndex
+	let counted = entries == 9223372036854775808 as EntryCount and members == 9223372036854775808 as MemberCount
+	if reached and counted 'reached'
+		return 7
+	end 'reached'
+	return 3
+end 'main'
+```
+```exitcode
+7
 ```

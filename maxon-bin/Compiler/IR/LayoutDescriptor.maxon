@@ -546,7 +546,7 @@ function packConstantElements(values ParsedIntArray, packedBits PackedBitWidth) 
 
 	for i in 0 upto values.count() 'eachElement'
 		let value = try values.get(i) otherwise panic("packConstantElements: values.get({i}) failed inside its own upto bound")
-		let bitPos = (i as ParsedInt) * packedBits
+		let bitPos = (i as ParsedInt) * (packedBits as ParsedInt)
 		let byteIndex = (bitPos / BitsPerByte) as ElementIndex
 		let shift = bitPos mod BitsPerByte
 		let occupied = (try out.get(byteIndex) otherwise panic("packConstantElements: byte {byteIndex} is past a buffer sized to hold every element — `elementsByteLen` and this walk disagree about the layout")) as ParsedInt
@@ -597,7 +597,7 @@ export function slotUnsignedMax(slotBytes ByteOffset) returns ParsedInt
 	end 'fourBytes'
 
 	if slotBytes == MachineWordBytes 'theWholeWord'
-		return u64.max as ParsedInt
+		return UnsignedFullUpperPattern
 	end 'theWholeWord'
 
 	panic("slotUnsignedMax: {slotBytes} is not a width `rangedAliasStorageBytes` hands out — a slot sized from somewhere other than that ladder, which no value set here can honestly describe")

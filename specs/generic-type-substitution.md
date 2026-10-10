@@ -1190,7 +1190,7 @@ typealias Integer = int(i64.min to i64.max)
 type Walker uses T
 	export typealias TArr = Array with T
 	var items as TArr
-	var at = 0
+	var at = 0 as Count
 
 	static function create(items TArr) returns Self
 		return Self{items: items}
@@ -1316,7 +1316,7 @@ function main() returns ExitCode
 	a.push(39)
 	let l = IntLabeller.create(a)
 	let (name, v) = l.tagged()
-	return v + name.count()
+	return v + (name.count() as Integer)
 end 'main'
 ```
 ```exitcode
@@ -1331,7 +1331,7 @@ typealias Integer = int(i64.min to i64.max)
 type BoxIter uses T implements Iterator with T
 	export typealias TArr = Array with T
 	var items as TArr
-	var at = 0
+	var at = 0 as Count
 
 	static function create(items TArr) returns Self throws IterationError
 		if items.count() == 0 'empty'

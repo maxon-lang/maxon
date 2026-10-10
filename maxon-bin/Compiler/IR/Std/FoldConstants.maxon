@@ -272,8 +272,9 @@ end 'operandsAreFoldableFloats'
 // the language spells a NaN CONSTANT (there is no NaN literal, `__Builtins.bitsToFloat` is reserved, and
 // the corpus's `inf - inf` idiom declines right here). One rule, no roster.
 //
-// The two REINTERPRETATIONS and `siToFp` do not come through here and must not: a bitcast computes
-// nothing, so there is no machine choice to fear, and `siToFp` cannot produce a NaN from an integer.
+// The two REINTERPRETATIONS and the two promotions do not come through here and must not: a bitcast
+// computes nothing, so there is no machine choice to fear, and `siToFp`/`uiToFp` cannot produce a
+// NaN from an integer.
 //
 // ⛔ **NO SPEC CASE CAN MEASURE THIS GUARD, AND THAT IS A PROPERTY OF THE THING RATHER THAN A GAP IN
 // THE SUITE.** MEASURED with the decline removed: the whole suite stays green on x64 AND on
@@ -401,7 +402,7 @@ end 'evaluateFloatCmp'
 //
 // ⭐⭐ **THE SPLIT IS ON THE OPCODE, NOT ON `operandType`, AND THAT IS `StdUnaryOpcode`'s OWN RULE.**
 // `stdUnaryOperandIsFloat` is the one place the question "what register file does this instruction's
-// SOURCE come out of" is answered, and on the two conversions and the two bitcasts the operand's domain
+// SOURCE come out of" is answered, and on the conversions and the two bitcasts the operand's domain
 // and the RESULT's differ — a `siToFp` reads an integer and answers a float, a `fpToSi` the reverse.
 // Asking the opcode routes each to the folder that speaks for it; the operand TYPE is then asked by the
 // admission rule on that side, which is also the check that the two agree (`LowerMaxonToStd`'s
@@ -425,19 +426,20 @@ function evaluateUnaryOp(op StdOp, resultId ValueId, operand ValueId, opcode Std
 end 'evaluateUnaryOp'
 
 // `<opcode> const` where the OPERAND is an integer — `neg`/`bitNot`/`logicalNot`, the sign-extension
-// family, and the two ops that leave the integer domain.
+// family, and the three ops that leave the integer domain.
 //
-// ⭐ **THREE OPCODES ARE ANSWERED HERE BECAUSE ONLY THIS TIER HOLDS WHAT SETTLES THEM**, and they are
+// ⭐ **FOUR OPCODES ARE ANSWERED HERE BECAUSE ONLY THIS TIER HOLDS WHAT SETTLES THEM**, and they are
 // three different "only":
 //
-//   • `siToFp` and `bitcastI64ToF64` — `foldIntUnaryOp` declines both, and it is RIGHT to, for the reason
-//     its own arms give: a `ParsedInt` column that cannot say which of its entries is a bit pattern may
-//     not assert of one that it holds an encoding. A Std op carries `valueType`, so this pass CAN. The
-//     first is a real conversion, computed once in `TypeRules.foldSiToFp` (the parser's own promotion
-//     calls the same function, so `1 + 2.0` in a `let` and `1 + 2.0` past the inliner cannot disagree);
-//     the second is a REINTERPRETATION whose fold is the identity on the payload — the same `ParsedInt`,
-//     re-minted at f64. Neither goes through `foldedFloatConst`, deliberately: an integer has no NaN to
-//     carry into a conversion, and a bitcast asked for exactly those bits.
+//   • `siToFp`, `uiToFp` and `bitcastI64ToF64` — `foldIntUnaryOp` declines all three, and it is
+//     RIGHT to, for the reason its own arms give: a `ParsedInt` column that cannot say which of its
+//     entries is a bit pattern may not assert of one that it holds an encoding. A Std op carries
+//     `valueType`, so this pass CAN. The first two are real conversions, computed once in
+//     `TypeRules.foldSiToFp` / `foldUiToFp` (the parser's own promotion calls the same functions,
+//     so `1 + 2.0` in a `let` and `1 + 2.0` past the inliner cannot disagree); the third is a
+//     REINTERPRETATION whose fold is the identity on the payload — the same `ParsedInt`, re-minted
+//     at f64. None goes through `foldedFloatConst`, deliberately: an integer has no NaN to carry
+//     into a conversion, and a bitcast asked for exactly those bits.
 //   • ⭐⭐ **`logicalNot` — because THE OPCODE IS WHICH `not` THE SOURCE MEANT, and only this tier has
 //     it.** `TypeRules` has TWO `not` folders and its own rule for choosing between them
 //     (`notOperatorFor`): `foldIntUnaryOp` is the INTEGER one and answers `notFoldable` for
@@ -458,6 +460,10 @@ function evaluateIntSourceUnaryOp(op StdOp, resultId ValueId, opcode StdUnaryOpc
 	if opcode == StdUnaryOpcode.siToFp 'promotion'
 		return StdOp.const(resultId, value: foldSiToFp(bits), valueType: FoldedFloatType)
 	end 'promotion'
+
+	if opcode == StdUnaryOpcode.uiToFp 'unsignedPromotion'
+		return StdOp.const(resultId, value: foldUiToFp(bits), valueType: FoldedFloatType)
+	end 'unsignedPromotion'
 
 	if opcode == StdUnaryOpcode.bitcastI64ToF64 'reinterpretation'
 		return StdOp.const(resultId, value: bits, valueType: FoldedFloatType)
@@ -575,7 +581,7 @@ let FoldedFloatType = StdType.f64
 // immediate against, and asking it once covers both signs instead of adding a second negative-only
 // test that would have to be kept in step. Declining costs one unfolded shift inside a cascade that is
 // already six ops.
-function evaluateIntBinOp(opcode StdBinOpcode, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+module function evaluateIntBinOp(opcode StdBinOpcode, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
 	// ⚠ **THE HIGH MULTIPLY IS DECLINED BEFORE THE BRIDGE, NOT INSIDE IT.** Two independent facts
 	// say no and it needs only the first: its answer is bits 64..127 of a 128-bit product, which a
 	// 64-bit `ParsedInt` cannot hold, so this pass has no arithmetic for it; and it has no `MaxonBinOp`

@@ -19,7 +19,6 @@ export typealias SourceLine = int(1 to u32.max)
 export typealias JsonDocArray = Array with JsonDoc
 
 typealias DapSequenceNumber = int(1 to i64.max)
-typealias FrameByteCount = int(0 to i64.max)
 typealias StashedMessageTally = int(0 to i64.max)
 typealias PathArray = Array with FilePath
 
@@ -512,7 +511,7 @@ export type DapClient
 
 	// The body has no terminator, so it is read by count; a line reader would block for ever on it.
 	function readFrame() returns String throws DapClientError
-		var contentLength = 0 as FrameByteCount
+		var contentLength = 0 as ByteLimit
 		var haveContentLength = false
 		var inHeaders = true
 
@@ -533,9 +532,15 @@ export type DapClient
 
 				if name == ContentLengthHeaderName 'contentLengthField'
 					let raw = (try parts.get(1) otherwise "").trim()
-					contentLength = try int.fromString(raw) otherwise 'notACount'
+					let parsed = try int.fromString(raw) otherwise 'notACount'
 						throw DapClientError.transportFailed
 					end 'notACount'
+
+					if parsed < 0 'negativeCount'
+						throw DapClientError.transportFailed
+					end 'negativeCount'
+
+					contentLength = parsed as ByteLimit
 
 					haveContentLength = true
 				end 'contentLengthField'
@@ -546,7 +551,7 @@ export type DapClient
 			throw DapClientError.transportFailed
 		end 'bodyReadFailed'
 
-		if body.byteLength() != contentLength 'truncated'
+		if (body.byteLength() as ByteLimit) != contentLength 'truncated'
 			throw DapClientError.transportFailed
 		end 'truncated'
 

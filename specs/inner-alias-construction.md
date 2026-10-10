@@ -224,7 +224,7 @@ typealias Count = int(0 to u64.max)
 type Holder
 	typealias Nums = Array with ExitCode
 
-	export var seed = 0
+	export var seed = 0 as Seed
 
 	static function create() returns Self
 		return Self{}
@@ -245,6 +245,7 @@ function main() returns ExitCode
 	end 'ok'
 	return 1
 end 'main'
+typealias Seed = int(0 to u64.max) implements ElementIndex
 ```
 ```exitcode
 0

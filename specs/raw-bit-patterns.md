@@ -837,9 +837,9 @@ Stack trace:
 ```
 
 <!-- test: a-signed-counter-through-a-function-value-to-an-unsigned-quantity-parameter-panics -->
-### …and at a call through a FUNCTION VALUE, where the callee keeps its entry guard
-A function taken as a value can be called from anywhere, so no set of call sites is known to have
-checked its argument, and the callee guards itself.
+### …and at a call through a FUNCTION VALUE, where the call site guards it
+A call through a function value checks its argument at the call, where the argument's domain is known, so
+the entry of the callee takes no sign test that would refuse a large unsigned word.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -860,9 +860,8 @@ end 'main'
 1
 ```
 ```stderr
-panic at a-signed-counter-through-a-function-value-to-an-unsigned-quantity-parameter-panics.test:4: Range check failed: value outside typealias 'Count'
+panic at a-signed-counter-through-a-function-value-to-an-unsigned-quantity-parameter-panics.test:12: Range check failed: value outside typealias 'Count'
 Stack trace:
-  in show
   in main
   in mrt_start
 ```
@@ -962,7 +961,7 @@ Stack trace:
 ```
 
 <!-- test: a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics -->
-### …and at a call through an INTERFACE, where the conformer keeps its entry guard
+### …and at a call through an INTERFACE, where the call site guards it
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -999,16 +998,15 @@ end 'main'
 1
 ```
 ```stderr
-panic at a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics.test:17: Range check failed: value outside typealias 'Count'
+panic at a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics.test:24: Range check failed: value outside typealias 'Count'
 Stack trace:
-  in Plain.show
   in drive
   in main
   in mrt_start
 ```
 
 <!-- test: a-signed-counter-into-an-async-unsigned-quantity-parameter-panics -->
-### …and at an `async` call, where the callee keeps its entry guard
+### …and at an `async` call, where the call site guards it
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias Integer = int(i64.min to i64.max)
@@ -1030,10 +1028,10 @@ end 'main'
 1
 ```
 ```stderr
-panic at a-signed-counter-into-an-async-unsigned-quantity-parameter-panics.test:5: Range check failed: value outside typealias 'Count'
+panic at a-signed-counter-into-an-async-unsigned-quantity-parameter-panics.test:12: Range check failed: value outside typealias 'Count'
 Stack trace:
-  in half
-  in __gt_trampoline
+  in main
+  in mrt_start
 ```
 
 <!-- test: a-signed-counter-through-an-associated-type-to-an-unsigned-quantity-parameter-panics -->
@@ -1187,8 +1185,8 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: a-folded-negative-into-an-async-unsigned-quantity-parameter-panics-at-the-entry -->
-### …and at an `async` call, where the callee's entry guard refuses it
+<!-- test: a-folded-negative-into-an-async-unsigned-quantity-parameter-panics-at-the-call -->
+### …and at an `async` call, where the call site refuses it
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias Integer = int(i64.min to i64.max)
@@ -1208,16 +1206,17 @@ end 'main'
 1
 ```
 ```stderr
-panic at a-folded-negative-into-an-async-unsigned-quantity-parameter-panics-at-the-entry.test:5: Range check failed: value outside typealias 'Count'
+panic at a-folded-negative-into-an-async-unsigned-quantity-parameter-panics-at-the-call.test:11: Range check failed: value outside typealias 'Count'
 Stack trace:
-  in half
-  in __gt_trampoline
+  in main
+  in mrt_start
 ```
 
 <!-- test: folded-unsigned-constants-reach-an-unsigned-quantity-parameter -->
 ### A constant folded from unsigned operands is the unsigned value it names, at a PARAMETER
 A folded constant takes its sign from how it was produced: unsigned operands give the exact unsigned
-value, whatever its bit pattern, and a literal written above `i64.max` is unsigned too.
+value, whatever its bit pattern. A literal written above `i64.max` takes part only once an alias that
+admits it receives it, so each one here is cast to `Count`.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1229,9 +1228,9 @@ function main() returns ExitCode
 	print("{take(u64.max - 1)}\n")
 	print("{take(u64.max xor 1)}\n")
 	print("{take((u64.max as Count) / 1)}\n")
-	print("{take(0xcbf29ce484222325 * 1)}\n")
-	print("{take(0x8000000000000000 or 1)}\n")
-	print("{take(0xcbf29ce484222325 xor 5)}\n")
+	print("{take((0xcbf29ce484222325 as Count) * 1)}\n")
+	print("{take((0x8000000000000000 as Count) or 1)}\n")
+	print("{take((0xcbf29ce484222325 as Count) xor 5)}\n")
 	return 0
 end 'main'
 ```
@@ -1255,10 +1254,10 @@ typealias Count = int(0 to u64.max)
 function main() returns ExitCode
 	let a = (u64.max - 1) as Count
 	let b = (u64.max xor 1) as Count
-	let c = ((u64.max as Count) / 1) as Count
-	let d = (0xcbf29ce484222325 * 1) as Count
-	let e = (0x8000000000000000 or 1) as Count
-	let h = (0xcbf29ce484222325 xor 5) as Count
+	let c = (u64.max as Count) / 1
+	let d = (0xcbf29ce484222325 as Count) * 1
+	let e = ((0x8000000000000000 as Count) or 1) as Count
+	let h = ((0xcbf29ce484222325 as Count) xor 5) as Count
 	print("{a} {b} {c}\n")
 	print("{d} {e} {h}\n")
 	return 0
@@ -1289,9 +1288,9 @@ type Tally
 		var t = Self{a: u64.max - 1, b: 0, c: 0, d: 0, e: 0, h: 0}
 		t.b = u64.max xor 1
 		t.c = (u64.max as Count) / 1
-		t.d = 0xcbf29ce484222325 * 1
-		t.e = 0x8000000000000000 or 1
-		t.h = 0xcbf29ce484222325 xor 5
+		t.d = (0xcbf29ce484222325 as Count) * 1
+		t.e = (0x8000000000000000 as Count) or 1
+		t.h = (0xcbf29ce484222325 as Count) xor 5
 		return t
 	end 'create'
 end 'Tally'
@@ -1375,9 +1374,9 @@ function take(c Count) returns Count
 end 'take'
 
 function main() returns ExitCode
-	print("{take(0xFFFFFFFFFFFFFFFF + 1)}\n")
+	print("{take((0xFFFFFFFFFFFFFFFF as Count) + 1)}\n")
 	print("{take(0x100000000 * 0x100000000)}\n")
-	print("{take(0 - 0xFFFFFFFFFFFFFFFF)}\n")
+	print("{take(0 - (0xFFFFFFFFFFFFFFFF as Count))}\n")
 	return 0
 end 'main'
 ```
@@ -1415,10 +1414,10 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: signed-division-over-a-top-bit-literal-folds-as-signed -->
-### `/` over a top-bit literal with no unsigned type is signed, folded or not
-A literal carries no unsigned type, so `/` over it is the signed division at run time, and the fold
-computes the same signed answer.
+<!-- test: error.a-top-bit-literal-in-arithmetic-needs-an-alias -->
+### E2011 — a top-bit literal beside another bare literal has no type to be
+A literal above `i64.max` is legal only where a type that admits it receives it; a bare `2` admits
+nothing, so `/` over the pair is refused rather than given a sign.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1431,11 +1430,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-0
+```maxoncstderr
+error E2011: specs/raw-bit-patterns/error.a-top-bit-literal-in-arithmetic-needs-an-alias.maxon:9:15: Integer literal '0xFFFFFFFFFFFFFFFF' is above i64.max, so it needs an alias whose range admits it: write '0xFFFFFFFFFFFFFFFF as <alias>'
 ```
 
 <!-- test: an-unsigned-subtraction-without-a-borrow-reaches-every-unsigned-quantity-door -->

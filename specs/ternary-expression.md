@@ -482,7 +482,7 @@ function splice(lst IdxList, anchor Idx, after bool)
 		end 'eachOpRef'
 		if insertPos >= 0 'doInsert'
 			let target = insertPos + 1 if after else insertPos
-			try lst.insert(target, value: 99) otherwise panic("insert oob")
+			try lst.insert(target as ElementIndex, value: 99) otherwise panic("insert oob")
 			return
 		end 'doInsert'
 	end 'eachBlock'

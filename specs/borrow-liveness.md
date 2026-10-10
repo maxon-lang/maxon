@@ -361,7 +361,7 @@ function main() returns ExitCode
 	var n = 0 as Integer
 	if n == 0 'inner'
 		let s = try arr.get(0) otherwise ""
-		n = s.byteLength()
+		n = s.byteLength() as Integer
 	end 'inner'
 	arr.clear()
 	print("{n}\n")
@@ -426,7 +426,7 @@ function main() returns ExitCode
 	var total = 0 as Integer
 	for it in b.items 'scan'
 		wipe(b.items)
-		total = total + it.byteLength()
+		total = total + (it.byteLength() as Integer)
 	end 'scan'
 	print("{total}\n")
 	return 0
@@ -470,7 +470,7 @@ function main() returns ExitCode
 	let b = Bag.create()
 	var total = 0 as Integer
 	for it in b.items 'scan'
-		total = total + it.byteLength()
+		total = total + (it.byteLength() as Integer)
 		wipe(b.items)
 	end 'scan'
 	print("{total}\n")
@@ -505,7 +505,7 @@ function main() returns ExitCode
 	let b = Bag.create()
 	var total = 0 as Integer
 	for it in b.items 'scan'
-		total = total + it.byteLength()
+		total = total + (it.byteLength() as Integer)
 	end 'scan'
 	wipe(b.items)
 	print("{total}\n")
@@ -866,7 +866,7 @@ function main() returns ExitCode
 	var s = "an initial string long enough for the heap allocation"
 	var i = 0 as Integer
 	while i < 2 'scan'
-		s = try arr.get(i) otherwise ""
+		s = try arr.get(i as ElementIndex) otherwise ""
 		i = i + 1
 	end 'scan'
 	arr.clear()
@@ -1013,7 +1013,7 @@ function main() returns ExitCode
 	var total = 0 as Integer
 	for it in b.items 'scan'
 		b.wipe()
-		total = total + it.byteLength()
+		total = total + (it.byteLength() as Integer)
 	end 'scan'
 	print("{total}\n")
 	return 0
@@ -1504,7 +1504,7 @@ function main() returns ExitCode
 	var total = 0 as Integer
 	for it in g 'scan'
 		g.clear()
-		total = total + it.byteLength()
+		total = total + (it.byteLength() as Integer)
 	end 'scan'
 	print("{total}\n")
 	return 0
@@ -2408,7 +2408,7 @@ end 'Decl'
 typealias DeclArray = Array with Decl
 
 type Holder
-	export var items as DeclArray = DeclArray.create()
+	export var items = DeclArray.create()
 
 	static function create() returns Holder
 		return Holder{}
@@ -2418,7 +2418,7 @@ end 'Holder'
 type Driver
 	var holder as Holder
 	var other as Holder
-	var flag as bool = true
+	var flag = true
 
 	static function create() returns Driver
 		return Driver{holder: Holder.create(), other: Holder.create()}
@@ -2492,7 +2492,7 @@ end 'Decl'
 typealias DeclArray = Array with Decl
 
 type Holder
-	export var items as DeclArray = DeclArray.create()
+	export var items = DeclArray.create()
 
 	static function create() returns Holder
 		return Holder{}

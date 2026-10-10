@@ -49,7 +49,7 @@ A type was required here and the token stream had something else. The compiler e
 
 ### E2004 — `parserExpressionError`
 
-An expression is not well formed, or is well formed and not usable where only a constant is. Broader than its name suggests: five distinct message families report under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand; and a top-level binding's initializer does not fold to a compile-time constant.
+An expression is not well formed, or is well formed and not usable where only a constant is. Broader than its name suggests: six distinct message families report under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand; a top-level binding's initializer does not fold to a compile-time constant; and a field default names no type. A field with a default takes its type from the default, which is a `true`/`false` or string literal, `Type.member` or `Type.member(...)` (typed `Type`), or an expression whose outermost node is a cast (`var count = 0 as Tally`). A bare number (`var count = 0`), a bare global, and `a + 1 as Tally` (which is `a + (1 as Tally)`) are refused: cast the whole default, `(a + 1) as Tally`.
 
 ### E2007 — `parserUnexpectedEof`
 
@@ -61,11 +61,11 @@ A block's 'end' label does not match the label its header opened.
 
 ### E2010 — `parserExpectedToken`
 
-A specific token was required here. Reports as: Expected 'X' but got 'Y'.
+A specific token was required here. Reports as: Expected 'X' but got 'Y'. A declaration never writes a type before its `=`, so `var x as T = e` is refused here in every declaration: a field reports `Expected newline but got '='`. Write `var x = e as T`; a field with no default keeps `var x as T`.
 
 ### E2011 — `parserLiteralOverflow`
 
-An integer literal does not fit the range of its type.
+A literal is outside every type it could have: an integer below `i64.min` or above `u64.max`, or a float beyond the float range. An integer literal above `i64.max` is legal only where a type whose range admits it receives it -- a cast, a typed parameter, field, slot or return, a range bound, an operand beside such an alias, an arm or `otherwise` fallback merged with one, or a float slot. Anywhere else it is refused here: write it with a cast, `18446744073709551615 as Quantity` for a `typealias Quantity = int(0 to u64.max)`. Into a signed or narrower alias it is E3005.
 
 ### E2012 — `parserCircularDependency`
 
@@ -241,7 +241,7 @@ A call names a function that does not exist -- a typo, or a callee not visible f
 
 ### E3005 — `typeMismatch`
 
-A value's type does not match the type required at this position. The required type is named as its declaration wrote it, except that a ranged alias met by a primitive value is named by its class (`expected 'int', got 'bool'`). Every typealias declaration is its own type, whatever its form: two aliases over one range are two types, and so are two declarations of ONE name in two files, even over the same range, shape or instance. Mixing them -- an operator, an argument, a store -- needs an explicit `as`; a `return` converts as it does between any two aliases. A type is named as source would qualify it: the standard library's as `stdlib.Name`, another directory's as `dir.Name`, the root's bare. Where the two sides would still print alike, each is followed by `(declared in <file>)`, and a buffer view reads `__ManagedMemory with <element>` followed by `(the view of 'Name')`.
+A value's type does not match the type required at this position. The required type is named as its declaration wrote it, except that a ranged alias met by a primitive value is named by its class (`expected 'int', got 'bool'`). Every typealias declaration is its own type, whatever its form: two aliases over one range are two types, and so are two declarations of ONE name in two files, even over the same range, shape or instance. Mixing them -- an operator, an argument, a store -- needs an explicit `as`; a `return` converts as it does between any two aliases. A type is named as source would qualify it: the standard library's as `stdlib.Name`, another directory's as `dir.Name`, the root's bare. Where the two sides would still print alike, each is followed by `(declared in <file>)`, and a buffer view reads `__ManagedMemory with <element>` followed by `(the view of 'Name')`. A constant outside an alias's range is reported here too, including an integer literal above `i64.max` written into a signed or narrower alias (`9223372036854775808 as Offset` for an `int(i64.min to i64.max)` Offset). So is a range that cannot be declared: an empty one (`int(0 to -1)`), one whose lower bound is above `i64.max`, or one spanning negative values and values above `i64.max`.
 
 ### E3006 — `duplicateDefinition`
 
@@ -261,7 +261,7 @@ A conversion that cannot be proven safe: an explicit cast whose source range doe
 
 ### E3010 — `semanticUnneededCast`
 
-A cast converts nothing: it names the value's own typealias (`b as Byte` on a `Byte`), or it casts a numeric literal that fits to the very typealias its destination declares -- a call argument, a `return`, a struct-literal field or a store to a declared field (`open(8080 as Port)` where `open` takes a `Port`). Remove the cast. A literal cast stays legal where it is what fixes the type: an unannotated `let`/`var`, an array-literal element, a generic parameter, an operator operand. At an overloaded call the casts are reported only when removing all of them still selects the same overload. A cast to an alias the value's own alias implements, directly or through its parents, is unneeded too: the value already widens to it. A cast between two declarations of one name in two files converts, and is never unneeded.
+A cast converts nothing: it names the type the value already has -- its own typealias (`b as Byte` on a `Byte`), a full-range alias included, or its own struct, enum, union, `bool` or `String` -- or it casts a numeric literal that fits to the very typealias its destination declares -- a call argument, a `return`, a struct-literal field or a store to a declared field (`open(8080 as Port)` where `open` takes a `Port`). Remove the cast. A literal cast stays legal where it is what fixes the type: an unannotated `let`/`var`, a field default whose cast gives the field its type (`var count = 0 as Tally`), an array-literal element, a generic parameter, an operator operand. A field default that already names its type takes no cast to it: `var gauge = Gauge.make() as Gauge` is refused. At an overloaded call the casts are reported only when removing all of them still selects the same overload. A cast to an alias the value's own alias implements, directly or through its parents, is unneeded too: the value already widens to it. A cast between two declarations of one name in two files converts, and is never unneeded.
 
 ### E3011 — `unknownType`
 

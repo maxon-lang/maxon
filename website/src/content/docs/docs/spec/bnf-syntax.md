@@ -70,6 +70,9 @@ hex_int       = '0x' hex_digit { hex_digit | '_' }
 bin_int       = '0b' bin_digit { bin_digit | '_' }
 oct_int       = '0o' oct_digit { oct_digit | '_' }
 
+                (* An INTEGER's value is at most u64.max (with a leading '-', at least i64.min).
+                   One above i64.max needs a type that admits it where it is used (E2011). *)
+
 FLOAT         = digit { digit } '.' digit { digit } [ ('e' | 'E') ['+' | '-'] digit { digit } ]
 
 STRING        = '"' { string_char | escape_seq } '"'
@@ -269,18 +272,22 @@ type_member   = field_decl
               | typealias_decl
 
 field_decl    = visibility_prefix ('var' | 'let') IDENTIFIER
-                ( 'as' type_ref [ '=' expression ]
-                | '=' literal_default )
+                ( 'as' type_ref
+                | '=' field_default )
                 NEWLINE
 
-                (* literal_default is the shorthand form — type is inferred from the literal.
-                   Accepts: signed integer, signed float, or bool. For any other default — an enum
-                   case, a factory call — the 'as' type_ref form is required. *)
+                (* A field with a default takes its type from the default: bool from 'true'/'false',
+                   String from a STRING, TypeName from a member head, and the cast's type_ref from
+                   a cast. A cast_default's outermost node is the cast: '1 + 2 as T' is
+                   '1 + (2 as T)', which is no field_default. Any other default, a bare number
+                   included, is E2004; '=' after 'as' type_ref is E2010. *)
 
-literal_default
-              = [ '-' ] INTEGER
-              | [ '-' ] FLOAT
-              | 'true' | 'false'
+field_default = 'true' | 'false'
+              | STRING
+              | IDENTIFIER { '.' IDENTIFIER } '.' IDENTIFIER [ '(' [ arg_list ] ')' ]   (* enum case or static factory, the head may be qualified *)
+              | cast_default
+
+cast_default  = expression 'as' type_ref
 
 method_decl   = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 [ 'returns' type_ref ] [ throws_clause ] NEWLINE
@@ -419,6 +426,7 @@ sized_type_ref
 - When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`)
 - A type-qualified bound may be paired with a literal (`0 to u32.max`, `0 to i64.max`)
 - Integer ranges cannot span both negative values and values above `i64.max`
+- An integer lower bound is at most `i64.max`; an upper bound above `i64.max` makes the range unsigned
 
 ```
 generic_type  = generic_base 'with' [ INTEGER ] alias_type_args

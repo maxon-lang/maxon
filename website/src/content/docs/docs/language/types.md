@@ -65,8 +65,9 @@ typealias Tally = int(0 to u64.max)
 ```
 
 - **Literals** are decimal, hexadecimal (`0xff`), binary (`0b1010`) or octal (`0o777`), with optional `_`
-  separators. An unannotated literal is a signed 64-bit value; one outside that range is **E2011**. A
-  literal carries no alias, so it fits any integer alias it is in range for.
+  separators, from `i64.min` to `u64.max`. A literal above `i64.max` needs a type that admits it (see
+  [Integer Literals](/docs/language/overview/#integer-literals)). A literal carries no alias, so it fits any integer alias it is in
+  range for.
 - **Arithmetic** is `+ - * / mod`, always computed at 64 bits. `/` truncates toward zero (`-7 / 2` is
   `-3`). A divisor that might be zero makes the division throw — see
   [Division by Zero](/docs/language/expressions/#division-by-zero).
@@ -75,8 +76,10 @@ typealias Tally = int(0 to u64.max)
   alias (see [Range Checks](/docs/language/ranged-typealiases/#range-checks)).
 - **Bitwise** operations use the word operators `and`, `or`, `xor`, `not`, `shl` and `shr` (see
   [Expressions](/docs/language/expressions/#logical-and-bitwise-operators)).
-- An alias whose lower bound is `0` is **unsigned**: `shr` zero-fills it rather than extending the sign,
-  and its range check refuses a negative value from a signed source. `int(0 to u64.max)` holds every
+- An alias whose lower bound is `0` is **unsigned**: `shr` zero-fills it, and its range check refuses a
+  negative value from a signed source. An alias whose upper bound is above `i64.max` — `int(0 to u64.max)`,
+  or `int(0 to 9223372036854775808)` — reads every value as unsigned: it compares, divides, range-checks and
+  prints unsigned, and converts to a float as the unsigned value. `int(0 to u64.max)` holds every
   value up to `u64.max`: a value from an unsigned source — an unsigned alias, `u64.max`, a literal above
   `i64.max`, or arithmetic over unsigned operands — passes its door unchecked (see
   [Range Checks](/docs/language/ranged-typealiases/#range-checks)). A value that is a pattern rather than a count is a
@@ -213,7 +216,8 @@ a primitive with an [extension](/docs/language/composite-types/#extensions-over-
 ### Explicit Conversions (`as`)
 
 `value as Alias` converts to a named alias. The target is always an alias (or `bool`); a bare `int` or
-`float` target is **E3005**.
+`float` target is **E3005**. The result has the alias as its type, a full-range one included: `10 as Integer`
+is an `Integer`, and it reaches a place declared with another alias over the same range only through a cast.
 
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -233,12 +237,13 @@ end 'main'
 | Cast | Result |
 |------|--------|
 | integer alias → integer alias | legal; widening emits no check, narrowing panics if the value is out of range |
-| integer alias or literal → float alias | legal |
+| integer alias or literal → float alias | legal; a value of an unsigned alias converts as the unsigned value |
+| float alias → float alias | legal; the value is checked against the target's range |
 | integer alias ↔ `bits(n)` | legal (see [Bit Patterns](#bit-patterns--bitsn)) |
 | literal → alias | checked at compile time: `256 as Byte` is **E3005** (`Value 256 is outside the range of 'Byte'`) |
 | float → integer | **E3009** `Cannot cast from float to int` — use a rounding function |
 | `bool` ↔ number, `String` → number, struct ↔ anything | **E3009** |
-| a value to its own alias (`b as Byte` when `b` is a `Byte`) | **E3010** `unneeded cast` |
+| a value to the type it already has (`b as Byte` when `b` is a `Byte`; a struct, enum, union, `bool` or `String` to itself) | **E3010** `unneeded cast` |
 | a literal to the alias its destination declares (`open(8080 as Port)` for a `Port` parameter) | **E3010** `unneeded cast: the literal 8080 already fits in 'Port'` — see [Construction](/docs/language/ranged-typealiases/#construction) |
 | one container instance to a different one | **E3131**, unless the elements are same-named declarations of one layout, which re-brands the container |
 
@@ -263,7 +268,8 @@ Maxon converts implicitly in only these places:
 
 - **Integer to float in mixed arithmetic and float slots.** `let x = 5` then `x + 2.0` is `7.0`, and an
   unaliased integer (a literal, or a local initialized from one) is accepted where a float is expected. A
-  value of a *named* integer alias still needs `as` to reach a float-alias parameter.
+  value of a *named* integer alias reaches a float-alias parameter through `as`, and so does a value of one
+  float alias at a place declared with another — the standard library's `Real` among them.
 - **A character literal beside an integer** is that character's codepoint:
 
   ```maxon

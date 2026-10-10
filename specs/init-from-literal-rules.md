@@ -340,7 +340,7 @@ type Digits implements InitableFromArrayLiteral with Digit
 		var total = 0 as Number
 
 		for d in digits 'each'
-			total = total * 10 + d
+			total = total * 10 + (d as Number)
 		end 'each'
 
 		return Self{value: total, length: digits.count() as Number}
@@ -376,7 +376,7 @@ type Digits implements InitableFromArrayLiteral with Digit
 		var total = 0 as Number
 
 		for d in digits 'each'
-			total = total * 10 + d
+			total = total * 10 + (d as Number)
 		end 'each'
 
 		return Self{value: total, length: digits.count() as Number}
@@ -413,7 +413,7 @@ type Digits implements InitableFromArrayLiteral with Digit
 		var total = 0 as Number
 
 		for d in digits 'each'
-			total = total * 10 + d
+			total = total * 10 + (d as Number)
 		end 'each'
 
 		return Self{value: total, length: digits.count() as Number}

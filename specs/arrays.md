@@ -2930,7 +2930,7 @@ typealias Measure = int(0 to 100)
 typealias Items = Array with Measure
 
 type Bag
-	export var items as Items = [11, 12]
+	export var items = [11, 12] as Items
 
 	static function create() returns Self
 		return Self{}

@@ -2050,7 +2050,7 @@ union McpOptionNumberParse
 	refused
 end 'McpOptionNumberParse'
 
-typealias McpOptionWhole = int(1 to i64.max)
+typealias McpOptionWhole = int(1 to u64.max)
 
 let LowestMcpOptionNumber = 1 as McpOptionWhole
 let HighestMcpPort = 65535 as NetworkPort
@@ -2074,7 +2074,7 @@ end 'refusedMcpOption'
 function mcpOptionNumberOf(spelling String, atMost McpOptionWhole) returns McpOptionNumberParse
 	let parsed = try int.fromString(spelling) otherwise return McpOptionNumberParse.refused
 
-	if parsed < LowestMcpOptionNumber or parsed > (atMost as ParsedInt) 'outOfRange'
+	if parsed < (LowestMcpOptionNumber as ParsedInt) or parsed > (atMost as ParsedInt) 'outOfRange'
 		return McpOptionNumberParse.refused
 	end 'outOfRange'
 
@@ -2391,7 +2391,7 @@ function printHelpEntry(label String, text String)
 	// Bytes here and graphemes in the wrap, deliberately: this asks `padRight`'s question, which
 	// counts bytes, while the wrap asks how wide the line looks, where an em-dash is one column and
 	// three bytes.
-	if label.byteLength() >= UsageEntryColumnWidth 'theLabelFillsItsColumn'
+	if label.byteLength() >= (UsageEntryColumnWidth as BytePos) 'theLabelFillsItsColumn'
 		print("{label}\n")
 		firstPrefix = indent.clone()
 	end 'theLabelFillsItsColumn'

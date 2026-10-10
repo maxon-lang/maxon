@@ -850,18 +850,22 @@ export union TargetOp
 	// inputs". Not taken here. Recorded rather than silently ranged over.
 	movsdRegRip(dest TargetVReg, label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// ⚠⚠ TWO OF THE DIALECT'S THREE CROSS-CLASS OPS — they read one file and write the other.
-	// `cvtsi2sd xmm, r64` (int → f64, `float-promotion`'s widening) and `cvttsd2si r64, xmm`
-	// (f64 → int, TRUNCATING toward zero — the `trunc()` builtin, and the `t` in its mnemonic
-	// is the whole reason it is the right instruction for a spec that says `3.99` gives `3`).
-	// Both are PLAIN defs (dest independent of src), so no seed copy is emitted. The THIRD is
-	// `movqGprXmm` below, which crosses the same boundary while CONVERTING NOTHING.
+	// ⚠⚠ THREE OF THE DIALECT'S FOUR CROSS-CLASS OPS — they read one file and write the other.
+	// `cvtsi2sd xmm, r64` (int → f64, `float-promotion`'s widening), its unsigned twin `cvtu64sd`, and
+	// `cvttsd2si r64, xmm` (f64 → int, TRUNCATING toward zero — the `trunc()` builtin, and the `t` in
+	// its mnemonic is the whole reason it is the right instruction for a spec that says `3.99` gives
+	// `3`). All three are PLAIN defs (dest independent of src), so no seed copy is emitted. The FOURTH
+	// is `movqGprXmm` below, which crosses the same boundary while CONVERTING NOTHING.
+	//
+	// x64 has no unsigned 64-bit int → f64 instruction, so `cvtu64sd` is a sequence the encoder
+	// expands (`encodeCvtu64sdRegReg`). Its scratch is r11 (0x800), inline for `x64MemFill`'s reason.
 	//
 	// They need NO special class machinery: a value's class comes from its Std type, and these
 	// ops sit exactly where the type changes — `cvtsi2sd`'s operand IS an i64 value (gpr) and
 	// its result IS an f64 value (xmm). The operand model states the two registers; the class
 	// column answers each from its own value. This is what the class-per-value design buys.
 	cvtsi2sdRegReg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	cvtu64sdRegReg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0x800}
 	cvttsd2siRegReg(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// The MATH INTRINSICS (`specs/{floor,ceil,round,sqrt}.md`), APPENDED AT THE END OF
@@ -1180,16 +1184,17 @@ export union TargetOp
 
 	// Float ALU / compare / int↔float conversion. The four ALU ops are 3-address PLAIN defs (arm64
 	// FP has a real 3-operand form, so no reuse — cleaner than x64's two-address SSE). `fcmp` sets
-	// NZCV and defines nothing. `scvtf` reads a GPR and writes an FP reg; `fcvtzs` the reverse
-	// (TRUNCATING toward zero) — their classes come from each VALUE's Std type, as with x64's
-	// cvtsi2sd/cvttsd2si. The FP reg-reg move is the shared `movRegReg` (encoded `fmov`), so it does
-	// not appear here.
+	// NZCV and defines nothing. `scvtf` (and its unsigned twin `ucvtf`) reads a GPR and writes an FP
+	// reg; `fcvtzs` the reverse (TRUNCATING toward zero) — their classes come from each VALUE's Std
+	// type, as with x64's cvtsi2sd/cvttsd2si. The FP reg-reg move is the shared `movRegReg` (encoded
+	// `fmov`), so it does not appear here.
 	arm64Fadd(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Fsub(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Fmul(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Fdiv(dest TargetVReg, lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Fcmp(lhs TargetVReg, rhs TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Scvtf(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	arm64Ucvtf(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	arm64Fcvtzs(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
 	// The MATH INTRINSICS, APPENDED AT THE END OF THIS arm64 FLOAT BAND — for the reason

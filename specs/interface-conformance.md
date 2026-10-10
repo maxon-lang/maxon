@@ -2130,7 +2130,7 @@ tagged `string`/`character` and dropped through `__str_decref` — never through
 type Wrapped implements BuiltinStringLiteral
 	var managed as __ManagedMemory
 	var flag as bool
-	var label as String = "tag"
+	var label = "tag"
 
 	static function init(value __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}
@@ -2158,7 +2158,7 @@ because there is exactly one producer of a fused wrapper value.
 type Wrapped implements BuiltinStringLiteral
 	var managed as __ManagedMemory
 	var flag as bool
-	var label as String = "tag"
+	var label = "tag"
 
 	static function init(value __ManagedMemory) returns Self
 		return Self{managed: value, flag: false}

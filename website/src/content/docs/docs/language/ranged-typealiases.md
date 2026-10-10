@@ -33,6 +33,9 @@ typealias Offset = int(0 to i64.max)
   (`Mismatched type bounds`). A qualified bound may pair with a literal (`0 to u32.max`).
 - A range cannot reach both below zero and above `i64.max`: `int(-1 to u64.max)` is refused. Use
   `i64.min to i64.max` or `0 to u64.max`.
+- A lower bound above `i64.max` (`int(9223372036854775808 to u64.max)`) is **E3005**, and so is an empty
+  range whose lower bound is non-negative and whose upper bound is negative (`int(0 to -1)`).
+- An upper bound above `i64.max` makes the range unsigned (see [Integers](/docs/language/types/#integers)).
 - `typealias X = i64` is **E2003**; the sized names exist only as bounds.
 - A typealias nothing uses is **E3062**.
 
@@ -74,6 +77,10 @@ end 'main'
 - A value with **no** alias fits any alias of its kind: a literal, a counted-loop counter, a `var`
   initialized from a literal, the raw value of a payload-free enum case. A named value also fits an
   unnamed slot. Two *different* names conflict unless one implements the other (next section).
+- A value keeps its alias wherever it is held: a local or global initialized by a cast has the cast's alias,
+  and each tuple element keeps its own, so `(Tally, Tally)` and `(Score, Score)` are two types. Float
+  aliases follow these rules exactly as integer aliases do — through locals, parameters, fields, captures
+  and array elements.
 - Two declarations of one alias name, in two files, are two types too, even over the same range. An
   operator, an argument, a store or a join that mixes them is **E3005** (**E2028** for a join) until one side
   is cast; `as` between them converts, and `return` converts as it does for any two aliases. The rule holds
@@ -160,8 +167,9 @@ parameter declared with another file's `Item = int(0 to 255)`, or an alias neste
 body at a place declared with a file-scope one.
 
 A literal cast is how a type is fixed where nothing declares one, and there it is legal: an unannotated
-`let`/`var` (`let p = 8080 as Port`), an array-literal element, an argument or field of a generic type
-parameter, an operator operand, and a value joined by `if`/`else`, `gives` or `otherwise`. At an overloaded
+`let`/`var` (`let p = 8080 as Port`), a field default whose type the cast gives (`var port = 8080 as Port`),
+an array-literal element, an argument or field of a generic type parameter, an operator operand, and a value
+joined by `if`/`else`, `gives` or `otherwise`. At an overloaded
 call, the unneeded literal casts of one call are reported together, and only when removing all of them
 still selects the same overload — a cast that decides which overload runs is needed.
 
@@ -220,8 +228,10 @@ an interface is checked at compile time against the interface's own parameter ty
   borrows (the left operand is smaller than the right); its difference passed through a merge or further
   arithmetic is tested for a negative. A constant expression folds with the same two's-complement
   wrapping as the run time and is judged by that same rule.
-- A full-unsigned parameter is checked at each direct call. Its function checks it on entry when it is
-  called as a function value, as an interface method, as `async`, or from code the compiler generates.
+- A full-unsigned parameter is checked at the call: a direct call, a call through a function value, an
+  interface method call, an `async` call and a service send each check the argument they pass, so a
+  negative is refused there and a value above `i64.max` passes. Its function checks it on entry as well
+  when some call that reaches it carries no such check.
 - A failed run-time check is a **panic**, not a recoverable error: the program prints
   `panic at <file>:<line>: Range check failed: value outside typealias '<Name>'` and a stack trace, and exits
   with code 1. No `try` is involved.

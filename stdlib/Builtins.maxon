@@ -121,8 +121,10 @@ public type Promise uses Element, ErrorType
 	// `inner` is exported (read-only via `let`) so non-blocking pollers like the spec
 	// test dispatcher can peek at the underlying GT's status. Don't mutate; the field
 	// is a raw GT pointer and the compiler depends on its stability through await.
-	public let inner = 0
+	public let inner = 0 as GreenThreadHandle
 end 'Promise'
+
+public typealias GreenThreadHandle = int(0 to u64.max)
 
 // Parsable - types that can be initialized from a string representation.
 public interface Parsable
@@ -452,8 +454,8 @@ let __ExponentBias = 1023
 let __ImplicitLeadingBit = 0x0010000000000000
 let __InfinityBits = 0x7FF0000000000000
 
-// Bit 63. Spelled `i64.min` because a `ParsedInt` is SIGNED and that is the only way Maxon can write a
-// set top bit — the mirror of `NumberParsing.FloatSignBit`. `__FloatMagnitudeMask` below is its complement and
+// Bit 63. Spelled `i64.min` because a `ParsedInt` is SIGNED and a literal above `i64.max` does not fit
+// it — the mirror of `NumberParsing.FloatSignBit`. `__FloatMagnitudeMask` below is its complement and
 // is derived from it, so the two cannot come to disagree about where the sign lives.
 let __FloatSignBit = i64.min as ParsedInt
 
@@ -1685,7 +1687,7 @@ function __roundedToLength(digits DigitString, kept ElementIndex, scale DecimalP
 
 		if digit != __MaxDecimalDigit 'noCarryOut'
 			try prefix.set(carry, value: digit + 1) otherwise panic("__roundedToLength: set({carry}) failed at an index get just accepted")
-			let carried = try prefix.slice(0, endIndex: (carry + 1) as ElementIndex) otherwise panic("__roundedToLength: carry + 1 <= kept = prefix.count() but slice(0, {carry + 1}) failed")
+			let carried = try prefix.slice(0, endIndex: carry + 1) otherwise panic("__roundedToLength: carry + 1 <= kept = prefix.count() but slice(0, {carry + 1}) failed")
 			return __ScaledDigits.create(__withoutTrailingZeros(carried), scale: scale)
 		end 'noCarryOut'
 	end 'propagate'
@@ -1780,10 +1782,7 @@ function __digitSlice(digits DigitString, start ElementIndex, endIndex ElementIn
 end '__digitSlice'
 
 // How many times a fill unit is repeated: a run of zeros inside a number, or the padding of a
-// right-aligned field. Both are "this text, `count` times", so they share one loop. The widest is a
-// program-written field width, which the parser caps at `u32.max`; the result is one `String`, whose
-// bytes live in a `__ManagedMemory` sized by a signed machine word, so `i64.max` is the honest
-// ceiling and a narrowed upper is what makes the door checked.
+// right-aligned field. Both are "this text, `count` times", so they share one loop.
 typealias RepeatCount = int(0 to u64.max)
 
 // The fill of a run of zeros — inside a fixed-notation float, inside a scientific exponent, and in
@@ -2073,7 +2072,7 @@ typealias RadixDigit = int(0 to 15)
 //     bitfield, read by masking, never ordered as a magnitude.
 //   • `NodePowerWord`        (`helpers/sort/driftsort.maxon`)     — `nodePowerBetween`'s scale
 //     arithmetic: `scale * x` is designed to reach ~2^63 without wrapping, and the leading-zero scan
-//     builds the top bit as `2^62 * 2`. ⚠ **IT IS SCOPED TO THAT ONE FORMULA, AND THAT IS THE POINT.**
+//     starts from the top bit, 2^63. ⚠ **IT IS SCOPED TO THAT ONE FORMULA, AND THAT IS THE POINT.**
 //     `ElementIndex` types every `lo`, `hi`, `pivotIndex`, `scratchCap` and
 //     run coordinate in the sort, and those are array COORDINATES: a checked quantity, which is what
 //     an index is. Typing them by the one formula that needs the top bit would make patterns of all
@@ -2173,5 +2172,7 @@ end '__radixDigitText'
 public type SharedValue uses Value
 	// The runtime cell's address, at the offset `ServiceRegistryRuntime` reads; every operation is a
 	// call the compiler emits.
-	let cell = 0
+	let cell = 0 as SharedValueCellAddress
 end 'SharedValue'
+
+typealias SharedValueCellAddress = int(0 to u64.max)

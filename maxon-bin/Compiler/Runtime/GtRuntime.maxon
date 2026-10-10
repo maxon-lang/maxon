@@ -7655,7 +7655,7 @@ end 'emitSubpSlotOf'
 // The shift between a handle's slot index and its generation (`SubpHandleSlotSpan`), shared by the spawn's
 // encode and the entries' decode so the two cannot disagree.
 function emitSubpHandleGenerationShift(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	return emitConst(module, block: block, value: log2OfPowerOfTwo(SubpHandleSlotSpan as ParsedInt) as ParsedInt, ids: ids)
+	return emitConst(module, block: block, value: log2OfPowerOfTwo(SubpHandleSlotSpan as MachineWord) as ParsedInt, ids: ids)
 end 'emitSubpHandleGenerationShift'
 
 // The handle a slot claimed at generation `generation` names: `generation * SubpHandleSlotSpan + slotIdx`.
@@ -8806,7 +8806,7 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	let scratchSizeConst = emitConst(module, block: pipeMake, value: SubpPipeScratchBytes as ParsedInt, ids: ids)
 	let scratch = ids.mint()
 	module.appendOp(pipeMake, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
-	let eight = emitConst(module, block: pipeMake, value: SubpPipeScratchSecondWord as ParsedInt, ids: ids)
+	let eight = emitConst(module, block: pipeMake, value: SubpPipeScratchSecondWord, ids: ids)
 	let scratchB = emitBin(module, block: pipeMake, a: scratch, b: eight, opcode: StdBinOpcode.add, ids: ids)
 
 	if subpPipesAreNamed(module) 'named'

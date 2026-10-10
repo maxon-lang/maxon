@@ -728,13 +728,13 @@ type ConstructorScan
 			return false
 		end 'hasADestructorCascade'
 
-		if size <= 0 or (size mod SpillSlotBytes) != 0 'notAWholeNumberOfSlots'
+		if size <= 0 or ((size as StackSize) mod SpillSlotBytes) != 0 'notAWholeNumberOfSlots'
 			return false
 		end 'notAWholeNumberOfSlots'
 
 		self.allocSize = size as ByteOffset
 		self.allocSeen = true
-		self.slotWritten.growFilled(((self.allocSize / SpillSlotBytes) as ElementIndex), value: false)
+		self.slotWritten.growFilled((((self.allocSize as StackSize) / SpillSlotBytes) as ElementIndex), value: false)
 		return true
 	end 'admitAlloc'
 
@@ -745,11 +745,11 @@ type ConstructorScan
 			return false
 		end 'notAFieldOfTheBox'
 
-		if valueType.rawValue.storageBytes != SpillSlotBytes or (offset mod SpillSlotBytes) != 0 or offset >= self.allocSize 'notAWholeSlotOfTheRecord'
+		if valueType.rawValue.storageBytes != (SpillSlotBytes as BytePos) or (offset mod (SpillSlotBytes as ByteOffset)) != 0 or offset >= self.allocSize 'notAWholeSlotOfTheRecord'
 			return false
 		end 'notAWholeSlotOfTheRecord'
 
-		let slot = offset / SpillSlotBytes
+		let slot = offset / (SpillSlotBytes as ByteOffset)
 		let already = try self.slotWritten.get(slot as ElementIndex) otherwise panic("ConstructorScan.admitStore: slotWritten.get OOB at {slot} — the column is sized to the record's slot count")
 
 		if already 'writtenTwice'

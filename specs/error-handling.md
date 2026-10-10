@@ -751,7 +751,7 @@ callee via `resolvedCallees` and reports E3055 when it is registered non-throwin
 typealias Int = int(i64.min to i64.max)
 
 type Counter
-	export var value = 0
+	export var value = 0 as Int
 
 	static function create() returns Self
 		return Self{}

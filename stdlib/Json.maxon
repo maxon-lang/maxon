@@ -73,10 +73,10 @@ end 'JsonKind'
 public type JsonNode
 	public var kind as JsonKind
 	public var boolValue = false
-	public var numberValue = 0.0
-	public var stringValue as String = ""
-	public var keys as StringArray = StringArray.create()
-	public var children as JsonNodeIdArray = JsonNodeIdArray.create()
+	public var numberValue = 0.0 as JsonFloat
+	public var stringValue = ""
+	public var keys = StringArray.create()
+	public var children = JsonNodeIdArray.create()
 
 	public static function nullNode() returns JsonNode
 		return Self{kind: JsonKind.jsonNull}
@@ -119,8 +119,8 @@ public typealias StringArray = Array with String
 // (other than `create`/`add`/`get`/`rootKind`, which the parser needs) are
 // instance-callable through inferred receiver types without a visibility modifier.
 public type JsonDoc
-	public var nodes as JsonNodeArray = JsonNodeArray.create()
-	public var root as JsonNodeId = 0
+	public var nodes = JsonNodeArray.create()
+	public var root = 0 as JsonNodeId
 
 	public static function create() returns JsonDoc
 		return Self{}
@@ -294,7 +294,7 @@ end 'findKeyInNode'
 
 type JsonParser
 	var bytes as ByteArray
-	var pos as BytePos = 0
+	var pos = 0 as BytePos
 	public var doc as JsonDoc
 
 	static function create(bytes ByteArray, doc JsonDoc) returns JsonParser
@@ -841,7 +841,7 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 			signedExp = -expValue
 		end 'negExp'
 
-		let factor = Math.pow(10.0, exponent: signedExp as JsonFloat)
+		let factor = Math.pow(10.0, exponent: signedExp as Real)
 		result = result * factor
 	end 'applyExp'
 
@@ -1205,7 +1205,7 @@ function writeNumber(n JsonFloat, out ByteArray)
 			// `-0.0 == 0.0`, so the integral shortcut cannot see a negative zero's sign and would emit `0`,
 			// losing what `numberFromBytes` just preserved for `-0`. RFC 8259's grammar admits `-0`
 			// (`[ minus ] int`), so the sign is written back as the one character it is.
-			if asInt == 0 and Math.hasNegativeSignBit(n) 'negativeZero'
+			if asInt == 0 and Math.hasNegativeSignBit(n as Real) 'negativeZero'
 				writeBytes(out, src: "-0".toByteArray())
 				return
 			end 'negativeZero'

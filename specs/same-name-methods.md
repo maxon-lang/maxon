@@ -107,7 +107,7 @@ returns — is not a fact about the other, whichever file each is in.
 ```maxon
 // --- file: box.maxon
 module type Box
-	var tag = 0
+	var tag = 0 as Count
 
 	module static function create() returns Box
 		return Box{}

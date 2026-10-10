@@ -719,7 +719,7 @@ export type SplitEdits
 			// Its LEAF is vacated first, while `at` still names it: freeing it afterwards would resolve the
 			// position against a block the op has already left.
 			pressure.removeOp(blockLocal, slot: pressure.slotOfPosition(blockLocal, pos: at))
-			_ = try block.opRefs.remove(at as ElementIndex) otherwise panic("SplitEdits.commitBlock: opRefs.remove OOB at {at} of block {blockLocal}")
+			_ = try block.opRefs.remove(at) otherwise panic("SplitEdits.commitBlock: opRefs.remove OOB at {at} of block {blockLocal}")
 			index.removeOp()
 		end 'dropTheDeadDef'
 
@@ -1200,7 +1200,7 @@ export type PressureIndex
 
 			// The run length is a power of two so its aligned subtree is one node, which is also what
 			// lets `alignUp` place it.
-			let run = roundUpToPowerOfTwo(((ops + 1) * SlotGap + 1) as BytePos) as PressureSlot
+			let run = roundUpToPowerOfTwo((((ops + 1) as PressureSlot) * SlotGap + 1) as BytePos) as PressureSlot
 			let first = alignUp(next as BytePos, alignment: run as BytePos) as PressureSlot
 			try self.blockFirst.set(b, value: first) otherwise panic("PressureIndex.placeRuns: blockFirst.set OOB for block {b}")
 			try self.blockLen.set(b, value: run) otherwise panic("PressureIndex.placeRuns: blockLen.set OOB for block {b}")
@@ -1225,12 +1225,12 @@ export type PressureIndex
 
 		self.holdsOp.refill(self.slotCount, value: false)
 		self.opAt.refill(self.slotCount, value: 0)
-		self.leafDelta.refill(((self.slotCount * RegClassCount) as ElementIndex), value: 0)
-		self.leafTransient.refill(((self.slotCount * RegClassCount) as ElementIndex), value: 0)
-		self.nodeOps.refill(((self.slotCount + self.slotCount) as ElementIndex), value: 0)
-		self.nodeSum.refill((((self.slotCount + self.slotCount) * RegClassCount) as ElementIndex), value: 0)
-		self.nodeBest.refill((((self.slotCount + self.slotCount) * RegClassCount) as ElementIndex), value: NoOpInSubtree)
-		self.nodeClobber.refill(((self.slotCount + self.slotCount) as ElementIndex), value: 0)
+		self.leafDelta.refill(self.slotCount * RegClassCount, value: 0)
+		self.leafTransient.refill(self.slotCount * RegClassCount, value: 0)
+		self.nodeOps.refill(self.slotCount + self.slotCount, value: 0)
+		self.nodeSum.refill((self.slotCount + self.slotCount) * RegClassCount, value: 0)
+		self.nodeBest.refill((self.slotCount + self.slotCount) * RegClassCount, value: NoOpInSubtree)
+		self.nodeClobber.refill(self.slotCount + self.slotCount, value: 0)
 	end 'placeRuns'
 
 	// Size the index for a function, from the IR's own op counts.
@@ -5645,6 +5645,7 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 		ucomisdRegReg or
 		movsdRegRip or
 		cvtsi2sdRegReg or
+		cvtu64sdRegReg or
 		cvttsd2siRegReg or
 		sqrtsdRegReg or
 		roundsdRegReg or
@@ -5704,6 +5705,7 @@ function opIsConstMaterialization(module TargetModule, opIdx ElementIndex) retur
 		arm64Fdiv or
 		arm64Fcmp or
 		arm64Scvtf or
+		arm64Ucvtf or
 		arm64Fcvtzs or
 		arm64Fsqrt or
 		arm64Frint or
@@ -6784,6 +6786,7 @@ function constDefInfo(module TargetModule, opIdx ElementIndex) returns (MachineW
 		ucomisdRegReg or
 		movsdRegRip or
 		cvtsi2sdRegReg or
+		cvtu64sdRegReg or
 		cvttsd2siRegReg or
 		sqrtsdRegReg or
 		roundsdRegReg or
@@ -6836,6 +6839,7 @@ function constDefInfo(module TargetModule, opIdx ElementIndex) returns (MachineW
 		arm64Fdiv or
 		arm64Fcmp or
 		arm64Scvtf or
+		arm64Ucvtf or
 		arm64Fcvtzs or
 		arm64Fsqrt or
 		arm64Frint or
@@ -7041,6 +7045,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		ucomisdRegReg(lhs, rhs) then return TargetOp.ucomisdRegReg(substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
 		movsdRegRip(dest, label) then return TargetOp.movsdRegRip(substituteVReg(dest, from: from, to: to), label: label)
 		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		cvtu64sdRegReg(dest, src) then return TargetOp.cvtu64sdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 
 		// The MATH INTRINSICS — two XMM operands each; the rounding MODE is not a register
@@ -7121,6 +7126,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64Fdiv(dest, lhs, rhs) then return TargetOp.arm64Fdiv(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
 		arm64Fcmp(lhs, rhs) then return TargetOp.arm64Fcmp(substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
 		arm64Scvtf(dest, src) then return TargetOp.arm64Scvtf(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64Ucvtf(dest, src) then return TargetOp.arm64Ucvtf(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64Fcvtzs(dest, src) then return TargetOp.arm64Fcvtzs(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64Fsqrt(dest, src) then return TargetOp.arm64Fsqrt(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64Fabs(dest, src) then return TargetOp.arm64Fabs(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))

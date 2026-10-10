@@ -588,25 +588,25 @@ end 'stdBinOpcodeIsFloatOnly'
 // truthy either way. The Maxon tier has already resolved which one the source `not`
 // meant (see MaxonUnaryOp).
 //
-// ⭐⭐ THE CONVERSION PAIR, without which a float could neither enter nor leave the
+// ⭐⭐ THE CONVERSIONS, without which a float could neither enter nor leave the
 // float domain. This is the band that makes `trunc()` — the f64→ExitCode
 // bridge nearly every case in specs/float-type.md ends on — expressible at all, and
 // the band that lets `5 + 2.0` promote. A conversion has a unary op's exact shape — one operand
 // in, one result out, non-trapping, pure — so per the header's rule it is an opcode, not a
 // variant.
 //
-// ⚠⚠ THESE TWO, AND THE `bitcastF64ToI64`/`bitcastI64ToF64` PAIR APPENDED AT THE END OF THE ENUM,
-// ARE THE ONLY
-// OPCODES WHOSE RESULT TYPE DIFFERS FROM THEIR `operandType`, and that is the fact to hold on
-// to. For `neg`/`bitNot`/`logicalNot` the two coincide, so nothing has ever had to distinguish
-// them. Here they cannot: **`operandType` is always the
-// SOURCE — what the instruction reads — and the OPCODE names the result.** `siToFp` reads
-// an integer and produces f64; `fpToSi` reads f64 and produces an integer. Read
-// `operandType` as "the result type" on these and you get exactly the wrong register file.
+// ⚠⚠ THESE TWO, `uiToFp` (`siToFp` reading its operand UNSIGNED, appended at the end of the enum
+// past every band) AND THE `bitcastF64ToI64`/`bitcastI64ToF64` PAIR ARE THE ONLY OPCODES WHOSE
+// RESULT TYPE DIFFERS FROM THEIR `operandType`, and that is the fact to hold on to. For
+// `neg`/`bitNot`/`logicalNot` the two coincide, so nothing has ever had to distinguish them. Here
+// they cannot: **`operandType` is always the SOURCE — what the instruction reads — and the OPCODE
+// names the result.** `siToFp` reads an integer and produces f64; `fpToSi` reads f64 and produces
+// an integer. Read `operandType` as "the result type" on these and you get exactly the wrong
+// register file.
 //
-// ⚠ `siToFp` with a float `operandType`, or `fpToSi` with an integer one, is ILLEGAL — it
-// would name a conversion from a type to itself, and the x64 instruction for it does not
-// exist. Throw rather than emit.
+// ⚠ `siToFp` or `uiToFp` with a float `operandType`, or `fpToSi` with an integer one, is ILLEGAL —
+// it would name a conversion from a type to itself, and the x64 instruction for it does not exist.
+// Throw rather than emit.
 //
 // ⭐ `fpToSi` TRUNCATES TOWARD ZERO, and the `t` in its instruction (`cvttsd2si`, not
 // `cvtsd2si`) is the whole reason it is the right one: `cvtsd2si` rounds under MXCSR's
@@ -615,7 +615,7 @@ end 'stdBinOpcodeIsFloatOnly'
 //
 // ⭐ THE MATH INTRINSICS — `floor`/`ceil`/`round`/`sqrt`, and (with `specs/abs.md`)
 // `abs`, FIVE in all. They are the
-// mirror image of the conversion pair above and the reason to read the two bands together:
+// mirror image of the conversions above and the reason to read the two bands together:
 // a conversion's operand and result are in DIFFERENT files, these two are in the SAME one, and
 // neither is `operandType`'s naive reading. **All five read an f64 and produce an f64**, so
 // `operandType` happens to name the result as well — but only because the domains coincide, and a
@@ -626,7 +626,8 @@ end 'stdBinOpcodeIsFloatOnly'
 // `frint{n,p,m}`, wasm `f64.{sqrt,nearest,ceil,floor}`.
 //
 // ⚠ `abs` IS THE EXCEPTION, ON x64 ONLY, and — with `fneg`, its sign-flipping twin appended after it —
-// one of the two opcodes in this enum a backend does have to SYNTHESIZE. arm64 has `fabs`/`fneg` and
+// one of the opcodes in this enum a backend does have to SYNTHESIZE (`uiToFp` is the third, on x64
+// too: `TargetOp.cvtu64sdRegReg`). arm64 has `fabs`/`fneg` and
 // wasm has `f64.abs`/`f64.neg`; SSE2 has neither a scalar float absolute value nor a negate, so the
 // x64 isel clears the sign bit with a `psllq`/`psrlq` pair (`TargetOp.absF64RegReg`, where the full
 // reasoning is recorded) and flips it with an
@@ -650,9 +651,9 @@ end 'stdBinOpcodeIsFloatOnly'
 // it is one instruction on every target: x64 `movq xmm, r64` (66 REX.W 0F 6E), arm64 `fmov d, x`,
 // wasm `f64.reinterpret_i64`.
 //
-// ⚠ **IT IS THE ONE MEMBER OF THIS ENUM PAST `fpToSi` THAT READS A GPR**, which is why
-// `stdUnaryOperandIsFloat` has to give it an arm of its own answering FALSE — every other member
-// from `fpToSi` down reads the float file, so a range extended to reach this one would invert its
+// ⚠ **IT AND `uiToFp` ARE THE MEMBERS OF THIS ENUM PAST `fpToSi` THAT READ A GPR**, which is why
+// `stdUnaryOperandIsFloat` has to give them arms answering FALSE — every other member
+// from `fpToSi` down reads the float file, so a range extended to reach either would invert its
 // answer. The DOMAIN follows the SOURCE, and this opcode's source is the integer side.
 //
 // ITS PRODUCER is `stdlib/Builtins.maxon`'s `__float_fromString`, reached through the Maxon-tier
@@ -698,6 +699,7 @@ export enum StdUnaryOpcode
 	fneg
 	bitcastF64ToI64
 	bitcastI64ToF64
+	uiToFp
 end 'StdUnaryOpcode'
 
 // The one answer to "does this unary opcode read a float?", beside the enum because it is a
@@ -705,14 +707,16 @@ end 'StdUnaryOpcode'
 // the Maxon→Std boundary asserts the operand it was handed agrees (`assertUnaryOperandDomain`), and
 // the x64 and arm64 isels each refuse an integer-only instruction over an f64 register.
 //
-// ⚠ It is the operand's domain, not the result's, and on the conversion pair those differ:
-// `siToFp` answers false (it reads the integer side; its result is the float) and `fpToSi` true.
+// ⚠ It is the operand's domain, not the result's, and on the conversions those differ:
+// `siToFp`/`uiToFp` answer false (they read the integer side; the result is the float) and `fpToSi`
+// true.
 export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
 	return match opcode 'k'
 		neg or
 		bitNot or
 		logicalNot or
 		siToFp or
+		uiToFp or
 
 		// ⚠ `bitcastI64ToF64`'s result is an f64, so anything reading the opcode's name for its answer
 		// gets `true` and colours the operand into an XMM register that holds an i64.
@@ -728,12 +732,11 @@ export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
 	end 'k'
 end 'stdUnaryOperandIsFloat'
 
-// The Std-tier comparison predicates carried by `StdOp.cmp`. Signed integer
-// comparisons: the x64 lowering maps each to a signed setcc/jcc condition (`lt`→JL,
-// `gt`→JG, …). A separate op (not a `binOp` opcode) because a compare carries
-// DIFFERENT metadata (`isCmp: true`) the per-variant `StdOpMeta` backing cannot
-// reach through an opcode field — see the StdOp header's "flat does NOT mean one
-// variant per opcode" rule.
+// The Std-tier comparison predicates carried by `StdOp.cmp`. A predicate carries no signedness; the
+// compare's `operandType` does (`stdTypeIsUnsigned`), and each backend picks the signed or unsigned
+// condition from it. A separate op (not a `binOp` opcode) because a compare carries DIFFERENT
+// metadata (`isCmp: true`) the per-variant `StdOpMeta` backing cannot reach through an opcode field
+// — see the StdOp header's "flat does NOT mean one variant per opcode" rule.
 export enum StdCmpPred
 	eq
 	ne

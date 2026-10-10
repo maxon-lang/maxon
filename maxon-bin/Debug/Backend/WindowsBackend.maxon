@@ -139,9 +139,9 @@ export type WindowsBackend
 			end 'nothingArrived'
 
 			let header = self.scratch.word((EventOffset + EventCodeAndPidOffset) as BackendPageOffset)
-			let code = header and DwordMask
-			self.pendingProcessId = (header shr HighDwordShift) and DwordMask
-			self.pendingThreadId = self.scratch.word((EventOffset + EventThreadIdOffset) as BackendPageOffset) and DwordMask
+			let code = header and BackendDwordMask
+			self.pendingProcessId = (header shr HighDwordShift) and BackendDwordMask
+			self.pendingThreadId = self.scratch.word((EventOffset + EventThreadIdOffset) as BackendPageOffset) and BackendDwordMask
 
 			match self.classified(code) 'event'
 				bookkeeping then continue
@@ -208,7 +208,7 @@ export type WindowsBackend
 		end 'aThreadLeft'
 
 		if code == DebugEventCodeExitProcess 'theProcessLeft'
-			let ending = self.scratch.word((EventOffset + EventPayloadOffset) as BackendPageOffset) and DwordMask
+			let ending = self.scratch.word((EventOffset + EventPayloadOffset) as BackendPageOffset) and BackendDwordMask
 			self.status = BackendExitStatus.ended(ending as BackendExitCode)
 			self.stepping.clear()
 			self.suspended = BackendThreadIdArray.create()
@@ -239,7 +239,7 @@ export type WindowsBackend
 	// ⭐ The breakpoint address is `ExceptionRecord.ExceptionAddress` and never arithmetic on the reported
 	// program counter: the two conventions differ by one byte and this field is authoritative on both.
 	function exceptionStop() returns BackendEventClass
-		let excCode = self.scratch.word((EventOffset + EventPayloadOffset) as BackendPageOffset) and DwordMask
+		let excCode = self.scratch.word((EventOffset + EventPayloadOffset) as BackendPageOffset) and BackendDwordMask
 		let address = debugAddressOrZero(self.scratch.word((EventOffset + EventExceptionAddressOffset) as BackendPageOffset) as DebuggeeWord)
 		let thread = self.pendingThreadId as BackendThreadId
 		self.stopOutstanding = true
@@ -298,7 +298,7 @@ export type WindowsBackend
 			read then break
 		end 'read'
 
-		return self.scratch.word(TransferOffset as BackendPageOffset) and DwordMask
+		return self.scratch.word(TransferOffset as BackendPageOffset) and BackendDwordMask
 	end 'imageDwordAt'
 
 	// --- resuming ---
@@ -345,7 +345,7 @@ export type WindowsBackend
 				continue
 			end 'itRunsOrIsHeldAlready'
 
-			let previous = hostDebugCall(HostDebugVerb.suspendThread, a0: entry.handle as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) and DwordMask
+			let previous = hostDebugCall(HostDebugVerb.suspendThread, a0: entry.handle as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) and BackendDwordMask
 
 			if previous != SuspendCountRefused 'theKernelSuspendedIt'
 				self.suspended.push(entry.id)
@@ -381,7 +381,7 @@ export type WindowsBackend
 			return
 		end 'itHasLeft'
 
-		let previous = hostDebugCall(HostDebugVerb.resumeThread, a0: handle as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) and DwordMask
+		let previous = hostDebugCall(HostDebugVerb.resumeThread, a0: handle as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) and BackendDwordMask
 
 		if previous == SuspendCountRefused 'theKernelRefused'
 			panic("WindowsBackend.threadResumed: ResumeThread refused thread {thread}, which this backend suspended to hold it through a step, so it would stay frozen for the rest of the session")
@@ -434,7 +434,7 @@ export type WindowsBackend
 
 		let handle = self.knownHandleOf(thread)
 
-		if handle == 0 or (hostDebugCall(HostDebugVerb.suspendThread, a0: handle as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) and DwordMask) == SuspendCountRefused 'itHasLeft'
+		if handle == 0 or (hostDebugCall(HostDebugVerb.suspendThread, a0: handle as BackendWord, a1: 0, a2: 0, a3: 0, a4: 0) and BackendDwordMask) == SuspendCountRefused 'itHasLeft'
 			self.stepping.forget(thread)
 
 			return
@@ -508,7 +508,7 @@ export type WindowsBackend
 			return BackendMemoryRead.unreadable
 		end 'notMapped'
 
-		if (self.scratch.word(OutWordOffset as BackendPageOffset) and DwordMask) < (bytes as BackendWord) 'aShortRead'
+		if (self.scratch.word(OutWordOffset as BackendPageOffset) and BackendDwordMask) < (bytes as BackendWord) 'aShortRead'
 			return BackendMemoryRead.unreadable
 		end 'aShortRead'
 
@@ -536,7 +536,7 @@ export type WindowsBackend
 		let wrote = hostDebugCall(HostDebugVerb.writeMemory, a0: self.process as BackendWord, a1: address as BackendWord, a2: self.transferAddress(), a3: count as BackendWord, a4: self.outWordAddress()) == Win32True
 
 		if lifted 'protectionWasChanged'
-			_ = hostDebugCall(HostDebugVerb.protectRegion, a0: self.process as BackendWord, a1: address as BackendWord, a2: count as BackendWord, a3: self.scratch.word(SecondOutWordOffset as BackendPageOffset) and DwordMask, a4: self.outWordAddress())
+			_ = hostDebugCall(HostDebugVerb.protectRegion, a0: self.process as BackendWord, a1: address as BackendWord, a2: count as BackendWord, a3: self.scratch.word(SecondOutWordOffset as BackendPageOffset) and BackendDwordMask, a4: self.outWordAddress())
 		end 'protectionWasChanged'
 
 		_ = hostDebugCall(HostDebugVerb.flushCode, a0: self.process as BackendWord, a1: address as BackendWord, a2: count as BackendWord, a3: 0, a4: 0)
@@ -564,7 +564,7 @@ export type WindowsBackend
 		end 'eachGeneralRegister'
 
 		file.setValue(BackendRegSlotPc as BackendRegisterNumber, value: self.scratch.word((ContextOffset + Win64ContextRipOffset) as BackendPageOffset))
-		file.setValue(BackendRegSlotFlags as BackendRegisterNumber, value: (self.scratch.word((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset) shr HighDwordShift) and DwordMask)
+		file.setValue(BackendRegSlotFlags as BackendRegisterNumber, value: (self.scratch.word((ContextOffset + Win64ContextSegWordOffset) as BackendPageOffset) shr HighDwordShift) and BackendDwordMask)
 
 		return BackendRegisterRead.read(file)
 	end 'readRegisters'
@@ -648,7 +648,7 @@ export type WindowsBackend
 		self.scratch.setWord(ContextOffset as BackendPageOffset, value: 0)
 
 		let held = self.scratch.word((ContextOffset + Win64ContextFlagsOffset) as BackendPageOffset)
-		self.scratch.setWord((ContextOffset + Win64ContextFlagsOffset) as BackendPageOffset, value: (held - (held and DwordMask)) or ((Win64ContextControl or Win64ContextInteger or Win64ContextFloatingPoint) as BackendWord))
+		self.scratch.setWord((ContextOffset + Win64ContextFlagsOffset) as BackendPageOffset, value: (held - (held and BackendDwordMask)) or ((Win64ContextControl or Win64ContextInteger or Win64ContextFloatingPoint) as BackendWord))
 
 		return hostDebugCall(HostDebugVerb.readContext, a0: handle as BackendWord, a1: self.contextAddress(), a2: 0, a3: 0, a4: 0) == Win32True
 	end 'contextRead'

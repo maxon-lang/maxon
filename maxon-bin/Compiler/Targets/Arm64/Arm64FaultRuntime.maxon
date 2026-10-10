@@ -36,8 +36,8 @@
 // Slots: 0.. = the output buffer. Nothing is live across the one call, which is the last instruction.
 function buildArm64WriteHexChunk() returns FunctionCodeChunk
 	let SlotBuffer = 0 as StackSize
-	let bufferSlots = alignUp(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
-	var asm = Arm64RuntimeAsm.beginFunction(bufferSlots as StackSize)
+	let bufferSlots = alignUpStack(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
+	var asm = Arm64RuntimeAsm.beginFunction(bufferSlots)
 
 	let loop = asm.newLabel()
 	let isDigit = asm.newLabel()
@@ -362,7 +362,7 @@ end 'buildArm64FaultHandlerChunk'
 // Slots: 0..2 = the `stack_t`.
 function buildArm64SignalStackInstallChunk(os Os) returns FunctionCodeChunk
 	let SlotSigstack = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction((Arm64SigstackBytes / SpillSlotBytes) as StackSize)
+	var asm = Arm64RuntimeAsm.beginFunction(Arm64SigstackBytes / SpillSlotBytes)
 
 	let done = asm.newLabel()
 
@@ -489,7 +489,7 @@ end 'arm64SigstackLayout'
 // Slots: 0..2 = the `struct sigaction`.
 function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction((DarwinSigactionBytes / SpillSlotBytes) as StackSize)
+	var asm = Arm64RuntimeAsm.beginFunction(DarwinSigactionBytes / SpillSlotBytes)
 
 	arm64EmitProgramStartedMark(asm)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)

@@ -410,7 +410,7 @@ function show(m M) returns Integer
 	var seen = 0 as Integer
 	while i < 10 'spin'
 		match m 'k'
-			text(s) then seen = s.byteLength() and fallthrough
+			text(s) then seen = (s.byteLength() as Integer) and fallthrough
 			silent then break 'spin'
 		end 'k'
 		i = i + 1
@@ -1647,7 +1647,7 @@ end 'M'
 function grab(m M) returns Integer
 	return match m 'g'
 		silent gives 0 as Integer
-		text(s) gives s.byteLength()
+		text(s) gives s.byteLength() as Integer
 	end 'g'
 end 'grab'
 
@@ -1655,7 +1655,7 @@ function main() returns ExitCode
 	let m = M.text("an owned payload string, long enough to be a real heap allocation")
 	var n = 0 as Integer
 	match m 'k'
-		text(s) then n = s.byteLength() and fallthrough
+		text(s) then n = (s.byteLength() as Integer) and fallthrough
 		silent then n = n + grab(m)
 	end 'k'
 	print("n={n}")
@@ -1903,7 +1903,7 @@ end 'M'
 function grab(m M) returns Integer
 	return match m 'g'
 		silent gives 0 as Integer
-		text(s) gives s.byteLength()
+		text(s) gives s.byteLength() as Integer
 	end 'g'
 end 'grab'
 
@@ -1941,7 +1941,7 @@ function main() returns ExitCode
 		silent gives 0 as Integer
 		text(s) gives match m 'again'
 			silent gives 1 as Integer
-			text(t) gives t.byteLength()
+			text(t) gives t.byteLength() as Integer
 		end 'again'
 	end 'k'
 	print("r={r}")
@@ -2009,7 +2009,7 @@ end 'M'
 function grab(m M) returns Integer
 	return match m 'g'
 		silent gives 0 as Integer
-		text(s) gives s.byteLength()
+		text(s) gives s.byteLength() as Integer
 	end 'g'
 end 'grab'
 
@@ -2018,7 +2018,7 @@ function main() returns ExitCode
 	let r = match m 'outer'
 		text gives match m 'inner'
 			silent gives 0 as Integer
-			text(t) gives t.byteLength()
+			text(t) gives t.byteLength() as Integer
 		end 'inner'
 		silent gives 0 as Integer
 	end 'outer'
@@ -2050,7 +2050,7 @@ function show(m M) returns Integer
 	while i < 200 'spin'
 		i = i + 1
 		match m 'k'
-			text(s) then seen = s.byteLength() and fallthrough
+			text(s) then seen = (s.byteLength() as Integer) and fallthrough
 			silent then continue
 		end 'k'
 		n = n + 2
@@ -2091,7 +2091,7 @@ end 'M'
 function show(m M) returns Integer throws Boom
 	var seen = 0 as Integer
 	match m 'k'
-		text(s) then seen = s.byteLength() and fallthrough
+		text(s) then seen = (s.byteLength() as Integer) and fallthrough
 		silent then throw Boom.bad
 	end 'k'
 	return 3 if seen > 0 else 0
@@ -2131,7 +2131,7 @@ function show(m M) returns Integer
 	var seen = 0 as Integer
 	while i < 200 'spin'
 		match m 'k'
-			text(s) then seen = s.byteLength() and fallthrough
+			text(s) then seen = (s.byteLength() as Integer) and fallthrough
 			silent then break
 		end 'k'
 		n = n + 7
@@ -2182,7 +2182,7 @@ function main() returns ExitCode
 	while i < 200 'spin'
 		match h.m 'k'
 			silent then n = n + 1
-			text(s) then n = n + s.byteLength()
+			text(s) then n = n + (s.byteLength() as Integer)
 		end 'k'
 		i = i + 1
 	end 'spin'
@@ -2940,7 +2940,7 @@ function main() returns ExitCode
 	var first = 0 as Integer
 	try boom(h) otherwise (e) 'caught'
 		first = match e 'm'
-			bad(why) gives why.byteLength() as ExitCode
+			bad(why) gives why.byteLength() as Integer
 		end 'm'
 	end 'caught'
 	let second = whyLen(h.e)

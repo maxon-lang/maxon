@@ -25,6 +25,10 @@ typealias Handle = int(0 to u32.max)         // full u32 range
 typealias Tally = int(0 to u64.max)          // unsigned QUANTITY — doors refuse a negative
 ```
 
+An upper bound above `i64.max` makes a range unsigned: it compares, divides, range-checks and prints
+unsigned. An integer literal reaches `u64.max`; one above `i64.max` needs a type that admits it
+(`18446744073709551615 as Tally`, or a `Tally` parameter), and is **E2011** anywhere else.
+
 A raw bit pattern is a different thing from a quantity and has its own spelling. `bits(n)` admits
 every value `n` bits can hold, so `bits(64)` is unguarded — which is what an address, a hash or a
 mask needs — while any narrower width is checked like a narrow range. Legal widths: 1, 2, 4, 8, 16,
@@ -495,8 +499,8 @@ end 'Describable'
 type Point implements Hashable, Describable   // interface conformance
 		export var x as Coord                 // public mutable field
 		export var y as Coord
-		export let name as String = "point"   // public immutable with default
-		var internal as Coord = 0             // private field
+		export let name = "point"             // public immutable with default
+		var internal = 0 as Coord             // private field
 
 		static var count = 0               // static mutable field
 		static let MAX = 100               // static immutable constant
@@ -540,7 +544,7 @@ typealias Tally = int(0 to u64.max)
 
 type Counter
 	export var value as Tally        // no default
-	export var version = 0         // default
+	export var version = 0 as Tally  // default
 
 	static function create(initial Tally) returns Self
 		self.value = initial         // proof of initialization
@@ -550,15 +554,18 @@ end 'Counter'
 ```
 
 Literals can only construct from within the type's own methods; external code
-calls a factory. Field declarations accept three forms:
+calls a factory. A field either names its type or takes it from its default:
 
 - `var x as Type` — no default; the field must be provided in the literal or
   via `self.field = expr` in a factory.
-- `var x = literal` — shorthand; type inferred from the literal (integer,
-  float, `true`/`false`, or enum case).
-- `var x as Type = expression` — type annotation plus arbitrary default
-  expression (e.g. `var items as IntArray = IntArray.create()`). The expression
-  is re-evaluated at every struct literal that omits the field.
+- `var x = true` / `var x = "text"` — a `bool` or `String` field with that default.
+- `var x = Type.member` / `var x = Type.member(...)` — an enum case or static
+  factory, typed `Type` (e.g. `var items = IntArray.create()`).
+- `var x = expression as Type` — any default whose outermost node is a cast,
+  typed `Type` (e.g. `var count = 0 as Tally`). A bare number default
+  (`var x = 0`) is **E2004**, and `var x as Type = expression` is **E2010**.
+
+A default is re-evaluated at every struct literal that omits the field.
 
 ## Interfaces
 
@@ -1090,7 +1097,7 @@ Math.pow(base, exponent: e)  // base raised to exponent
 
 // Explicit with 'as' — a bare `int`/`float` target is rejected (E3005);
 // route every primitive cast through a named ranged typealias.
-// Narrowing is checked at run time; a cast to the value's own alias is E3010,
+// Narrowing is checked at run time; a cast to the type the value already has is E3010,
 // and so is a literal cast to the alias its destination declares (f(8080 as Port)).
 typealias Real = float(f64.min to f64.max)
 typealias Octet = int(0 to u8.max)

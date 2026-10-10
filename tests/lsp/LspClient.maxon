@@ -89,7 +89,7 @@ public typealias ProcessExitCode = int(i64.min to i64.max)
 
 // The `kind` a server may omit. LSP numbers both `SymbolKind` and `CompletionItemKind` from 1, so 0 is
 // outside either enumeration and cannot be mistaken for one of its members.
-public let UnspecifiedKind = 0 as JsonInteger
+public let UnspecifiedKind = 0 as JsonInt
 
 // An outcome starts broken with one of these, so a path that never reports fails, never passes.
 public let UnreportedSessionEnding = "the session ended without saying how"
@@ -196,7 +196,7 @@ let AbsentServerInfoDetail = "the initialize reply carries no `serverInfo`, so a
 // What the server advertised in its `initialize` response. A real multi-root client reads the two
 // `workspace.workspaceFolders` flags before it names a second folder or sends a folder change at all.
 public type InitializeResult
-	public var serverIdentity as ServerIdentity = ServerIdentity.absent
+	public var serverIdentity = ServerIdentity.absent
 	public var hasTextDocumentSync = false
 	public var hasHoverProvider = false
 	public var hasCompletionProvider = false
@@ -221,7 +221,7 @@ end 'InitializeResult'
 // can be absent say so the same way.
 public type HoverResult
 	public var isPresent = false
-	public var contents as String = ""
+	public var contents = ""
 
 	static function nothing() returns HoverResult
 		return Self{}
@@ -234,8 +234,8 @@ end 'HoverResult'
 
 public type DefinitionResult
 	public var isPresent = false
-	public var uri as String = ""
-	public var range as LspRange = LspRange.nowhere()
+	public var uri = ""
+	public var range = LspRange.nowhere()
 
 	static function nothing() returns DefinitionResult
 		return Self{}
@@ -670,7 +670,7 @@ public type LspClient
 		var item = JsonObjectBuilder.create(doc)
 		item.putString(UriKey, value: uri)
 		item.putString(LanguageIdKey, value: MaxonLanguageId)
-		item.putInt(VersionKey, value: InitialDocumentVersion)
+		item.putInt(VersionKey, value: InitialDocumentVersion as JsonInteger)
 		item.putString(TextKey, value: content)
 
 		var params = JsonObjectBuilder.create(doc)

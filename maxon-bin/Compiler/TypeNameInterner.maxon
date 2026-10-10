@@ -166,12 +166,12 @@ export type TypeIdRemap
 	var names as TypeNameIdArray
 	let namesBase as TypeNameId
 	var instances as GenericInstanceIdMap
-	var interfaces as InterfaceIndexMap = InterfaceIndexMap.create()
+	var interfaces = InterfaceIndexMap.create()
 
-	var observing as bool = false
-	export var seenInstances as GenericInstanceIdSet = GenericInstanceIdSet.create()
-	export var seenNames as ObservedNameSet = ObservedNameSet.create()
-	export var seenInterfaces as ObservedInterfaceSet = ObservedInterfaceSet.create()
+	var observing = false
+	export var seenInstances = GenericInstanceIdSet.create()
+	export var seenNames = ObservedNameSet.create()
+	export var seenInterfaces = ObservedInterfaceSet.create()
 
 	export static function create(names TypeNameIdArray, namesBase TypeNameId, instances GenericInstanceIdMap) returns TypeIdRemap
 		return Self{names: names, namesBase: namesBase, instances: instances}
@@ -323,10 +323,18 @@ end 'remapMaxonTypes'
 // copy of "which tags bear names": `typeNameIdOf` already encodes it, and this is its exact inverse
 // composed with the remap. `void` names no value (its slot is filler too) and `maxonTypeOfTag` panics
 // on it, so it short-circuits.
+//
+// ⚠ `float` is the one tag whose slot may hold either: a float alias's name rides the column
+// while `MaxonType.float` carries none, so the reconstruction would drop it and the alias's name
+// is remapped directly.
 module function remapValueNameId(tag ValueTypeTag, nameId TypeNameId, remap TypeIdRemap) returns TypeNameId
 	if tag == ValueTypeTag.void 'void'
 		return nameId
 	end 'void'
+
+	if tag == ValueTypeTag.float and nameId != UnnamedTypeId 'aFloatWearingItsAlias'
+		return remap.applyName(nameId)
+	end 'aFloatWearingItsAlias'
 
 	return typeNameIdOf(remapMaxonType(maxonTypeOfTag(tag, nameId: nameId), remap: remap))
 end 'remapValueNameId'

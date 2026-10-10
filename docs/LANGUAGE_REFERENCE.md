@@ -205,8 +205,13 @@ let octal = 0o17         // 15
 let million = 1_000_000  // underscores separate digits
 ```
 
-An integer literal is a signed 64-bit value, `-9223372036854775808` to `9223372036854775807`; one outside that
-range is **E2011**. A literal has no typealias of its own, so it fits any integer alias it is in range for.
+An integer literal in any radix lies between `-9223372036854775808` (`i64.min`) and `18446744073709551615`
+(`u64.max`); one outside that range is **E2011**. A literal has no typealias of its own, so it fits any integer
+alias it is in range for. A literal above `i64.max` is the unsigned value, and it is legal only where a type
+that admits it receives it: an `as` cast, a typed parameter, field, return or slot, a range bound, an operand
+beside an alias that admits it, a merge arm or `otherwise` fallback of such a type, or a float slot. Anywhere
+else it is **E2011** (`Integer literal '9223372036854775808' is above i64.max, so it needs an alias whose
+range admits it: write '9223372036854775808 as <alias>'`); into a signed or narrower alias it is **E3005**.
 
 ### Float Literals
 
@@ -400,8 +405,9 @@ typealias Tally = int(0 to u64.max)
 ```
 
 - **Literals** are decimal, hexadecimal (`0xff`), binary (`0b1010`) or octal (`0o777`), with optional `_`
-  separators. An unannotated literal is a signed 64-bit value; one outside that range is **E2011**. A
-  literal carries no alias, so it fits any integer alias it is in range for.
+  separators, from `i64.min` to `u64.max`. A literal above `i64.max` needs a type that admits it (see
+  [Integer Literals](#integer-literals)). A literal carries no alias, so it fits any integer alias it is in
+  range for.
 - **Arithmetic** is `+ - * / mod`, always computed at 64 bits. `/` truncates toward zero (`-7 / 2` is
   `-3`). A divisor that might be zero makes the division throw — see
   [Division by Zero](#division-by-zero).
@@ -410,8 +416,10 @@ typealias Tally = int(0 to u64.max)
   alias (see [Range Checks](#range-checks)).
 - **Bitwise** operations use the word operators `and`, `or`, `xor`, `not`, `shl` and `shr` (see
   [Expressions](#logical-and-bitwise-operators)).
-- An alias whose lower bound is `0` is **unsigned**: `shr` zero-fills it rather than extending the sign,
-  and its range check refuses a negative value from a signed source. `int(0 to u64.max)` holds every
+- An alias whose lower bound is `0` is **unsigned**: `shr` zero-fills it, and its range check refuses a
+  negative value from a signed source. An alias whose upper bound is above `i64.max` — `int(0 to u64.max)`,
+  or `int(0 to 9223372036854775808)` — reads every value as unsigned: it compares, divides, range-checks and
+  prints unsigned, and converts to a float as the unsigned value. `int(0 to u64.max)` holds every
   value up to `u64.max`: a value from an unsigned source — an unsigned alias, `u64.max`, a literal above
   `i64.max`, or arithmetic over unsigned operands — passes its door unchecked (see
   [Range Checks](#range-checks)). A value that is a pattern rather than a count is a
@@ -548,7 +556,8 @@ a primitive with an [extension](#extensions-over-primitives).
 #### Explicit Conversions (`as`)
 
 `value as Alias` converts to a named alias. The target is always an alias (or `bool`); a bare `int` or
-`float` target is **E3005**.
+`float` target is **E3005**. The result has the alias as its type, a full-range one included: `10 as Integer`
+is an `Integer`, and it reaches a place declared with another alias over the same range only through a cast.
 
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -568,12 +577,13 @@ end 'main'
 | Cast | Result |
 |------|--------|
 | integer alias → integer alias | legal; widening emits no check, narrowing panics if the value is out of range |
-| integer alias or literal → float alias | legal |
+| integer alias or literal → float alias | legal; a value of an unsigned alias converts as the unsigned value |
+| float alias → float alias | legal; the value is checked against the target's range |
 | integer alias ↔ `bits(n)` | legal (see [Bit Patterns](#bit-patterns--bitsn)) |
 | literal → alias | checked at compile time: `256 as Byte` is **E3005** (`Value 256 is outside the range of 'Byte'`) |
 | float → integer | **E3009** `Cannot cast from float to int` — use a rounding function |
 | `bool` ↔ number, `String` → number, struct ↔ anything | **E3009** |
-| a value to its own alias (`b as Byte` when `b` is a `Byte`) | **E3010** `unneeded cast` |
+| a value to the type it already has (`b as Byte` when `b` is a `Byte`; a struct, enum, union, `bool` or `String` to itself) | **E3010** `unneeded cast` |
 | a literal to the alias its destination declares (`open(8080 as Port)` for a `Port` parameter) | **E3010** `unneeded cast: the literal 8080 already fits in 'Port'` — see [Construction](#construction) |
 | one container instance to a different one | **E3131**, unless the elements are same-named declarations of one layout, which re-brands the container |
 
@@ -598,7 +608,8 @@ Maxon converts implicitly in only these places:
 
 - **Integer to float in mixed arithmetic and float slots.** `let x = 5` then `x + 2.0` is `7.0`, and an
   unaliased integer (a literal, or a local initialized from one) is accepted where a float is expected. A
-  value of a *named* integer alias still needs `as` to reach a float-alias parameter.
+  value of a *named* integer alias reaches a float-alias parameter through `as`, and so does a value of one
+  float alias at a place declared with another — the standard library's `Real` among them.
 - **A character literal beside an integer** is that character's codepoint:
 
   ```maxon
@@ -647,6 +658,9 @@ typealias Offset = int(0 to i64.max)
   (`Mismatched type bounds`). A qualified bound may pair with a literal (`0 to u32.max`).
 - A range cannot reach both below zero and above `i64.max`: `int(-1 to u64.max)` is refused. Use
   `i64.min to i64.max` or `0 to u64.max`.
+- A lower bound above `i64.max` (`int(9223372036854775808 to u64.max)`) is **E3005**, and so is an empty
+  range whose lower bound is non-negative and whose upper bound is negative (`int(0 to -1)`).
+- An upper bound above `i64.max` makes the range unsigned (see [Integers](#integers)).
 - `typealias X = i64` is **E2003**; the sized names exist only as bounds.
 - A typealias nothing uses is **E3062**.
 
@@ -688,6 +702,10 @@ end 'main'
 - A value with **no** alias fits any alias of its kind: a literal, a counted-loop counter, a `var`
   initialized from a literal, the raw value of a payload-free enum case. A named value also fits an
   unnamed slot. Two *different* names conflict unless one implements the other (next section).
+- A value keeps its alias wherever it is held: a local or global initialized by a cast has the cast's alias,
+  and each tuple element keeps its own, so `(Tally, Tally)` and `(Score, Score)` are two types. Float
+  aliases follow these rules exactly as integer aliases do — through locals, parameters, fields, captures
+  and array elements.
 - Two declarations of one alias name, in two files, are two types too, even over the same range. An
   operator, an argument, a store or a join that mixes them is **E3005** (**E2028** for a join) until one side
   is cast; `as` between them converts, and `return` converts as it does for any two aliases. The rule holds
@@ -774,8 +792,9 @@ parameter declared with another file's `Item = int(0 to 255)`, or an alias neste
 body at a place declared with a file-scope one.
 
 A literal cast is how a type is fixed where nothing declares one, and there it is legal: an unannotated
-`let`/`var` (`let p = 8080 as Port`), an array-literal element, an argument or field of a generic type
-parameter, an operator operand, and a value joined by `if`/`else`, `gives` or `otherwise`. At an overloaded
+`let`/`var` (`let p = 8080 as Port`), a field default whose type the cast gives (`var port = 8080 as Port`),
+an array-literal element, an argument or field of a generic type parameter, an operator operand, and a value
+joined by `if`/`else`, `gives` or `otherwise`. At an overloaded
 call, the unneeded literal casts of one call are reported together, and only when removing all of them
 still selects the same overload — a cast that decides which overload runs is needed.
 
@@ -834,8 +853,10 @@ an interface is checked at compile time against the interface's own parameter ty
   borrows (the left operand is smaller than the right); its difference passed through a merge or further
   arithmetic is tested for a negative. A constant expression folds with the same two's-complement
   wrapping as the run time and is judged by that same rule.
-- A full-unsigned parameter is checked at each direct call. Its function checks it on entry when it is
-  called as a function value, as an interface method, as `async`, or from code the compiler generates.
+- A full-unsigned parameter is checked at the call: a direct call, a call through a function value, an
+  interface method call, an `async` call and a service send each check the argument they pass, so a
+  negative is refused there and a value above `i64.max` passes. Its function checks it on entry as well
+  when some call that reaches it carries no such check.
 - A failed run-time check is a **panic**, not a recoverable error: the program prints
   `panic at <file>:<line>: Range check failed: value outside typealias '<Name>'` and a stack trace, and exits
   with code 1. No `try` is involved.
@@ -1029,8 +1050,9 @@ end 'main'
 ```
 
 - `var` fields can be written after construction; `let` fields cannot.
-- A field's type is written after `as` and is an alias, `bool`, a type, or another named type — never a bare
-  `int` or `float`.
+- A field without a default names its type after `as` (`var x as Coord`); a field with a default takes its
+  type from the default (see [Required Field Initialization](#required-field-initialization)). The type is an
+  alias, `bool`, a type, or another named type — a bare `int` or `float` is refused.
 - **Fields are private to the type** unless marked `export`, `module` or `public`. The boundary is the type,
   not the file: another type in the same file reading a private field is **E3014** (`cannot access
   unexported field`). A type's own methods may read the private fields of any instance of that type.
@@ -1049,9 +1071,19 @@ method instead`).
 
 Every field must have a value when a record is constructed. A field is initialized when:
 
-1. **The declaration supplies a default.** `var count = 0` infers the type from an integer, float or
-   `true`/`false` literal. `var items as IntArray = IntArray.create()` gives the type explicitly and may use
-   any expression — an enum case, a factory call — evaluated each time a literal omits the field.
+1. **The declaration supplies a default**, evaluated each time a literal omits the field. The field's type
+   comes from the default, which takes one of three shapes:
+   - a `true`/`false` literal (`bool`) or a string literal (`String`): `var enabled = true`;
+   - `Type.member` or `Type.member(...)` — an enum case or a static factory — typed `Type` and checked
+     against it: `var level = Priority.low`, `var items = IntArray.create()`;
+   - an expression whose outermost node is a cast, typed by the cast: `var count = 0 as Tally`,
+     `var span = NoSpan as SpanId`, `var total = (1 + 2) as Tally`.
+
+   A number has no type of its own, so `var count = 0` is **E2004**, as is any other default, such as a
+   bare global (`var span = NoSpan`) or `1 + 2 as Tally` (whose outermost node is the `+`). A field declares
+   its type after `as` only when it has no default: `var count as Tally = 0` is **E2010**. A cast that gives
+   the field its type is legal even on a value that already has it (`NoSpan as SpanId`); a cast on a default
+   whose shape already gives the type (`var g = Gauge.make() as Gauge`) is **E3010**.
 2. **The literal supplies it**: `Counter{value: 5}`. A supplied value always wins over the default.
 3. **A static factory assigns it** with `self.field = expr` on every path before `return Self{}` (or the
    type's own literal).
@@ -1063,7 +1095,7 @@ typealias Tally = int(0 to u64.max)
 
 type Counter
 	export var value as Tally
-	export var version = 0
+	export var version = 0 as Tally
 
 	static function create(initial Tally) returns Self
 		self.value = initial     // rule 3
@@ -1837,6 +1869,9 @@ end 'main'
 - A tuple literal written where a tuple type is declared — a parameter, a field, a variable, a return, an
   element of a typed array literal, a `match` or ternary arm, or an element of an enclosing tuple — takes
   that type's element types, so a closure literal as an element takes the declared function type.
+- Each element keeps its own alias, so a tuple type is its element aliases in order: `(Tally, Tally)` and
+  `(Score, Score)` are two types even over one range, an element is checked against its alias's range,
+  and an element of an unsigned alias stays unsigned through a parameter, a nested tuple or a destructuring.
 
 ### Destructuring Declarations
 
@@ -2532,7 +2567,8 @@ end 'main'
 ### Rules
 
 - Every variable is initialized where it is declared, and its type is inferred from the initializer.
-  Local declarations take no type annotation.
+  A declaration takes no type annotation: `var x as Tally = 0` is **E2010** (`Expected '=' but got 'as'`).
+  A cast names the type instead — `var x = 0 as Tally` declares a `Tally`, locally and at file scope.
 - Variables are block-scoped.
 - **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
   instead of 'var'`).

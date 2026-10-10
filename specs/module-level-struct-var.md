@@ -111,8 +111,8 @@ typealias CountArray = Array with Count
 typealias NameArray = Array with String
 
 type Facts
-	export var counts as CountArray = CountArray.create()
-	export var names as NameArray = NameArray.create()
+	export var counts = CountArray.create()
+	export var names = NameArray.create()
 	static function create() returns Facts
 		return Self{}
 	end 'create'
@@ -149,7 +149,7 @@ what makes the value worth pinning beside the diagnostic.
 typealias Tag = int(0 to 1000)
 
 type Inner
-	export var n as Tag = 5
+	export var n = 5 as Tag
 	static function create() returns Inner
 		return Self{}
 	end 'create'
@@ -159,8 +159,8 @@ type Inner
 end 'Inner'
 
 type Outer
-	export var inner as Inner = Inner.create()
-	export var extra as Tag = 100
+	export var inner = Inner.create()
+	export var extra = 100 as Tag
 	static function create() returns Outer
 		return Self{}
 	end 'create'
@@ -201,7 +201,7 @@ typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
 
 type Facts
-	export var counts as CountArray = CountArray.create()
+	export var counts = CountArray.create()
 
 	static function create() returns Facts
 		return Self{}

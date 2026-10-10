@@ -566,7 +566,7 @@ enum ParseError implements Error
 end 'ParseError'
 
 function parseNum(s String) returns Integer throws ParseError
-	counter = counter + s.byteLength()
+	counter = counter + (s.byteLength() as Integer)
 	throw ParseError.invalidFormat
 end 'parseNum'
 

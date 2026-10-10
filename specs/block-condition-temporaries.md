@@ -103,14 +103,13 @@ end 'main'
 
 <!-- test: while-condition-temp-per-iteration -->
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var i = 0 as Integer
+	var i = 0 as Count
 	while i < [1, 2, 3].count() 'loop'
 		i = i + 1
 	end 'loop'
-	return i
+	return i as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -263,14 +262,13 @@ A `try` whose own fork temporaries are re-created on every trip round the loop,
 inside a condition that is itself re-evaluated per iteration.
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var i = 0 as Integer
+	var i = 0 as ElementIndex
 	while (try [10, 20, 30].get(i) otherwise 0) > 0 'loop'
 		i = i + 1
 	end 'loop'
-	return i
+	return i as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -333,7 +331,7 @@ typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
 	var total = 0 as Integer
 	for i in 0 upto 200 'spin'
-		total = total + i - i + ["alpha a fairly long heap string": "beta another long heap string", "gamma a third long heap string": "delta a fourth long heap string"].count()
+		total = total + i - i + (["alpha a fairly long heap string": "beta another long heap string", "gamma a third long heap string": "delta a fourth long heap string"].count() as Integer)
 	end 'spin'
 	return (total / 100) as ExitCode
 end 'main'

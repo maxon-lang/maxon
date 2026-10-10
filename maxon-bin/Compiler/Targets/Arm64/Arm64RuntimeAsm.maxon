@@ -217,24 +217,24 @@ export let OneOutgoingArgWord = StackFrameAlignment as StackSize
 // `str Xt, [x29, #slot]` / `ldr Xt, [x29, #slot]` — a runtime chunk's locals. Slot offsets are
 // positive and 8-aligned by construction, so the scaled unsigned form always encodes.
 export function arm64EmitStoreSlot(asm Arm64RuntimeAsm, reg Arm64Register, slot StackSize)
-	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(reg), baseReg: arm64RuntimeReg(Arm64Register.x29), byteOffset: asm.slotOffset(slot), scale: SpillSlotBytes)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(reg), baseReg: arm64RuntimeReg(Arm64Register.x29), byteOffset: asm.slotOffset(slot), scale: Arm64SlotScale)
 end 'arm64EmitStoreSlot'
 
 export function arm64EmitLoadSlot(asm Arm64RuntimeAsm, reg Arm64Register, slot StackSize)
-	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(reg), baseReg: arm64RuntimeReg(Arm64Register.x29), byteOffset: asm.slotOffset(slot), scale: SpillSlotBytes)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(reg), baseReg: arm64RuntimeReg(Arm64Register.x29), byteOffset: asm.slotOffset(slot), scale: Arm64SlotScale)
 end 'arm64EmitLoadSlot'
 
 // `ldr Xt, [Xn, #byteOffset]` — a 64-bit load through an arbitrary base (a frame record's two words,
 // a chain link).
 export function arm64EmitLoadWord64At(asm Arm64RuntimeAsm, dest Arm64Register, base Arm64Register, byteOffset MachineWord)
-	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: SpillSlotBytes)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(dest), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: Arm64SlotScale)
 end 'arm64EmitLoadWord64At'
 
 // `str Xt, [Xn, #byteOffset]` — the 64-bit STORE twin. Every hand-assembled arm64 runtime writes through a
 // pointer it was handed: the Darwin host surface's out-params, the green-thread chunks' GT struct fields and
 // the relocating grower's chain links. It lives beside its load rather than three times over.
 export function arm64EmitStoreWord64At(asm Arm64RuntimeAsm, src Arm64Register, base Arm64Register, byteOffset MachineWord)
-	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: SpillSlotBytes)
+	arm64EmitScaledMem(asm.code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(base), byteOffset: byteOffset, scale: Arm64SlotScale)
 end 'arm64EmitStoreWord64At'
 
 // ⭐⭐⭐ **THE STORE-RELEASE TWIN — `add scratch, Xn, #byteOffset` then `stlr Xt, [scratch]`.** A plain

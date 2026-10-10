@@ -53,7 +53,7 @@ type Holder uses Element
 	typealias EArray = Array with Element
 	export typealias Entry = (Element, Integer)
 
-	var items as EArray = EArray.create()
+	var items = EArray.create()
 
 	static function create() returns Self
 		return Self{}
@@ -1667,7 +1667,7 @@ A generic type's own name, written as a literal in its `Self`-returning static, 
 ```maxon
 type Bag uses T
 	typealias TArray = Array with T
-	export var items as TArray = TArray.create()
+	export var items = TArray.create()
 
 	static function make() returns Self
 		return Bag{}
@@ -2810,7 +2810,7 @@ type Holder uses Element
 	typealias EArray = Array with Element
 	export typealias Entry = (Element, Integer)
 
-	var items as EArray = EArray.create()
+	var items = EArray.create()
 
 	static function create() returns Self
 		return Self{}
@@ -2858,7 +2858,7 @@ type Holder uses Element
 	typealias EArray = Array with Element
 	export typealias Entry = (Element, Integer)
 
-	var items as EArray = EArray.create()
+	var items = EArray.create()
 
 	static function create() returns Self
 		return Self{}
@@ -3079,7 +3079,7 @@ typealias StrBox = Box with String
 
 type Bag
 	typealias BoxArray = Array with StrBox
-	var items as BoxArray = BoxArray.create()
+	var items = BoxArray.create()
 
 	static function create() returns Self
 		return Self{}

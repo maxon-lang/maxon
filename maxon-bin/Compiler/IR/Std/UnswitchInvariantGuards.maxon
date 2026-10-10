@@ -407,7 +407,7 @@ typealias ElementStoreSiteArray = Array with ElementStoreSite
 
 type UnswitchPlan
 	export var header as ElementIndex
-	export var preheader as ElementIndex = 0
+	export var preheader = 0 as ElementIndex
 
 	// Whether the loop is copied and its guards folded, or only its invariant fields hoisted.
 	export var versioned = false
@@ -434,7 +434,7 @@ type UnswitchPlan
 	export var hoistedWalk as ValueIdArray
 	export var hoistedCanonical as ValueIdArray
 	export var hasExit = false
-	export var exit as ElementIndex = 0
+	export var exit = 0 as ElementIndex
 
 	// The loop's block args read after it, their types, and (once applied) the phis the exit takes.
 	export var escaping as ValueIdArray
@@ -543,7 +543,7 @@ function analyzeLoop(module StdModule, func IrFunction, analysis UnswitchFunctio
 		return false
 	end 'aStoreRefuses'
 
-	if plan.guards.count() > MaxGuardsPerLoop 'tooManyGuards'
+	if (plan.guards.count() as GuardSiteCount) > MaxGuardsPerLoop 'tooManyGuards'
 		return refuse(UnswitchRefusal.tooManyGuards, scratch: scratch)
 	end 'tooManyGuards'
 
@@ -1200,7 +1200,7 @@ function hoistFitsBudget(module StdModule, func IrFunction, plan UnswitchPlan, b
 		end 'eachEdge'
 	end 'eachBlock'
 
-	if scratch.readHoisted.insertedIdCount() > HoistedValueBudget 'overBudget'
+	if (scratch.readHoisted.insertedIdCount() as HoistedValueCount) > HoistedValueBudget 'overBudget'
 		return refuse(UnswitchRefusal.hoistBudgetExceeded, scratch: scratch)
 	end 'overBudget'
 
@@ -1921,7 +1921,7 @@ module type UnswitchScratch
 
 	// The preheader load `preheaderLoadOf` found, meaningful only when it answered true — and the def
 	// record its scan fills, kept apart from `def`, which its caller is still reading.
-	export var reusedLoad as ValueId = 0
+	export var reusedLoad = 0 as ValueId
 	export var preheaderDef as StdDefinedValues
 
 	module static function create(tally StdPassTally) returns UnswitchScratch

@@ -1,0 +1,31 @@
+typealias Step = int(0 to 1000)
+typealias Wide = int(0 to u64.max)
+typealias Signed = int(i64.min to i64.max)
+
+function widened(i Step) returns Wide
+	return (u64.max as Wide) if i == 3 else (i as Wide)
+end 'widened'
+
+function narrowed(i Step) returns Signed
+	return -1 if i == 3 else (i as Signed)
+end 'narrowed'
+
+function hit(i Step, wide Wide, narrow Signed) returns Step
+	let marker = i + 1 // anchor: hit-body
+	print("hit {i} {wide} {narrow} {marker}\n")
+
+	return i
+end 'hit'
+
+function main() returns ExitCode
+	var total = 0
+
+	for j in 0 upto 6 'loop'
+		total = total + hit(j, wide: widened(j), narrow: narrowed(j))
+	end 'loop'
+
+	total = total + hit(1, wide: widened(1), narrow: narrowed(1))
+	print("total {total}\n")
+
+	return 0
+end 'main'

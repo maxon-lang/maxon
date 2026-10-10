@@ -33,8 +33,9 @@ end 'main'
 ```
 
 - `var` fields can be written after construction; `let` fields cannot.
-- A field's type is written after `as` and is an alias, `bool`, a type, or another named type — never a bare
-  `int` or `float`.
+- A field without a default names its type after `as` (`var x as Coord`); a field with a default takes its
+  type from the default (see [Required Field Initialization](#required-field-initialization)). The type is an
+  alias, `bool`, a type, or another named type — a bare `int` or `float` is refused.
 - **Fields are private to the type** unless marked `export`, `module` or `public`. The boundary is the type,
   not the file: another type in the same file reading a private field is **E3014** (`cannot access
   unexported field`). A type's own methods may read the private fields of any instance of that type.
@@ -53,9 +54,19 @@ method instead`).
 
 Every field must have a value when a record is constructed. A field is initialized when:
 
-1. **The declaration supplies a default.** `var count = 0` infers the type from an integer, float or
-   `true`/`false` literal. `var items as IntArray = IntArray.create()` gives the type explicitly and may use
-   any expression — an enum case, a factory call — evaluated each time a literal omits the field.
+1. **The declaration supplies a default**, evaluated each time a literal omits the field. The field's type
+   comes from the default, which takes one of three shapes:
+   - a `true`/`false` literal (`bool`) or a string literal (`String`): `var enabled = true`;
+   - `Type.member` or `Type.member(...)` — an enum case or a static factory — typed `Type` and checked
+     against it: `var level = Priority.low`, `var items = IntArray.create()`;
+   - an expression whose outermost node is a cast, typed by the cast: `var count = 0 as Tally`,
+     `var span = NoSpan as SpanId`, `var total = (1 + 2) as Tally`.
+
+   A number has no type of its own, so `var count = 0` is **E2004**, as is any other default, such as a
+   bare global (`var span = NoSpan`) or `1 + 2 as Tally` (whose outermost node is the `+`). A field declares
+   its type after `as` only when it has no default: `var count as Tally = 0` is **E2010**. A cast that gives
+   the field its type is legal even on a value that already has it (`NoSpan as SpanId`); a cast on a default
+   whose shape already gives the type (`var g = Gauge.make() as Gauge`) is **E3010**.
 2. **The literal supplies it**: `Counter{value: 5}`. A supplied value always wins over the default.
 3. **A static factory assigns it** with `self.field = expr` on every path before `return Self{}` (or the
    type's own literal).
@@ -67,7 +78,7 @@ typealias Tally = int(0 to u64.max)
 
 type Counter
 	export var value as Tally
-	export var version = 0
+	export var version = 0 as Tally
 
 	static function create(initial Tally) returns Self
 		self.value = initial     // rule 3
@@ -839,6 +850,9 @@ end 'main'
 - A tuple literal written where a tuple type is declared — a parameter, a field, a variable, a return, an
   element of a typed array literal, a `match` or ternary arm, or an element of an enclosing tuple — takes
   that type's element types, so a closure literal as an element takes the declared function type.
+- Each element keeps its own alias, so a tuple type is its element aliases in order: `(Tally, Tally)` and
+  `(Score, Score)` are two types even over one range, an element is checked against its alias's range,
+  and an element of an unsigned alias stays unsigned through a parameter, a nested tuple or a destructuring.
 
 ### Destructuring Declarations
 

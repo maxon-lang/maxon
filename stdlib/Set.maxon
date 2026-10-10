@@ -1,9 +1,9 @@
 /// Hash set with open addressing for storing unique elements.
 /// @category Collections
 // Occupied slots. A member needs a slot, so this is bounded by the table's capacity and carries the
-// capacity's bound for the reason stated once on `TableCapacity`: 2^62 is the last capacity a doubling
+// capacity's bound for the reason stated once on `TableCapacity`: 2^63 is the last capacity a doubling
 // from 16 can mint.
-public typealias MemberCount = int(0 to 4611686018427387904) implements EntryCount
+public typealias MemberCount = int(0 to 9223372036854775808) implements EntryCount
 
 // The slot vocabulary is `helpers/hashtable/slotScan.maxon`'s, shared with `Map`. A private
 // `SetSlotState` beside that module's `SlotState`, or a private `findNextOccupiedSet` beside its
@@ -17,15 +17,15 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 	typealias HashSlotArray = Array with HashValue
 	public typealias SetIter = SetIterator with Element
 
-	var elements as ElementArray = ElementArray.create()  // Element storage
-	var states as StateArray = StateArray.create()  // Slot states
-	var hashes as HashSlotArray = HashSlotArray.create()  // Cached element hashes, parallel to elements
-	var count = 0  // Number of occupied entries
-	var capacity = 0  // Total slots
+	var elements = ElementArray.create()  // Element storage
+	var states = StateArray.create()  // Slot states
+	var hashes = HashSlotArray.create()  // Cached element hashes, parallel to elements
+	var count = 0 as MemberCount  // Number of occupied entries
+	var capacity = 0 as TableCapacity  // Total slots
 
 	/// Slots a removal emptied, which a probe walks over rather than stopping at — `Map.tombstones`
 	/// states what reading them as occupancy is for, and `insert` below reads occupancy the same way.
-	var tombstones = 0
+	var tombstones = 0 as TableCapacity
 
 	/// Create an empty set
 	public static function create() returns Self
@@ -117,12 +117,12 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		// `and (capacity - 1)` selects the low bits — identical to `mod capacity` for the
 		// non-negative HashValue range, but cheaper. It is the SPREAD hash that is masked,
 		// never the raw one: see `spreadHash` for the measured quadratic that costs.
-		let mask = capacity - 1
-		var index = (spreadHash(hash) and mask) as TableSlotIndex
+		let mask = (capacity - 1) as TableSlotIndex
+		var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
 		// ⚠ A LOCAL SENTINEL, and it must STAY a plain untyped local. `-1` means "no tombstone seen
 		// yet", so this binding legitimately holds a negative and its `>= 0` / `< 0` tests must read
-		// SIGNED. Annotating it `TableSlotIndex` is now a COMPILE ERROR rather than a latent hazard:
+		// SIGNED. Annotating it `TableSlotIndex` is a COMPILE ERROR:
 		// that alias is non-negative, so the `-1` initializer is an out-of-range constant (E3005).
 		// Every use of it below sits inside a `>= 0` test, so the value that reaches an `elements`/
 		// `states`/`hashes` slot is always a real one. `Map.findSlot` carries the identical local for
@@ -214,8 +214,8 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		// capacity is always a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).
-		let mask = capacity - 1
-		var index = (spreadHash(hash) and mask) as TableSlotIndex
+		let mask = (capacity - 1) as TableSlotIndex
+		var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
 		var probes = 0
 
@@ -269,8 +269,8 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		// capacity is always a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).
-		let mask = capacity - 1
-		var index = (spreadHash(hash) and mask) as TableSlotIndex
+		let mask = (capacity - 1) as TableSlotIndex
+		var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
 		var probes = 0
 
@@ -366,7 +366,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		// newCapacity is a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).
-		let mask = capacity - 1
+		let mask = (capacity - 1) as TableSlotIndex
 
 		// Rehash all occupied entries from old arrays, reusing the cached hash
 		// instead of re-calling element.hash().
@@ -383,7 +383,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				// Re-insert into new arrays using insert logic
 				if let element = try oldElements.get(i) 'get_elem'
 					let hash = try oldHashes.get(i) otherwise element.hash()
-					var index = (spreadHash(hash) and mask) as TableSlotIndex
+					var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
 					// Find empty slot (no deleted slots in fresh array)
 					var currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty

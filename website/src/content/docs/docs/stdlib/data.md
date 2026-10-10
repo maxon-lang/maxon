@@ -43,13 +43,13 @@ refers to its children by `JsonNodeId`. Walk a document through the `JsonDoc` ac
 |--------|-------------|
 | `kind` | `JsonKind` |
 | `boolValue` | Set for `jsonBool` |
-| `numberValue` | Set for `jsonNumber` (a `float`) |
+| `numberValue` | Set for `jsonNumber` (a `JsonFloat`) |
 | `stringValue` | Set for `jsonString` |
 | `children` | `JsonNodeIdArray`, for `jsonArray` and `jsonObject` |
 | `keys` | `StringArray`, parallel to `children`, for `jsonObject` |
 | `JsonNode.nullNode()` | A `null` |
 | `JsonNode.boolNode(value bool)` | A boolean |
-| `JsonNode.numberNode(value float)` | A number |
+| `JsonNode.numberNode(value JsonFloat)` | A number |
 | `JsonNode.stringNode(value String)` | A string |
 | `JsonNode.arrayNode(children JsonNodeIdArray)` | An array of already-added nodes |
 | `JsonNode.objectNode(keys StringArray, children JsonNodeIdArray)` | An object; `keys[i]` names `children[i]` |

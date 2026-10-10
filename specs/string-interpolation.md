@@ -1401,9 +1401,7 @@ end 'show'
 
 function main() returns ExitCode
 	show(u64.max)
-	// Bit 63 alone — the value a SIGNED reading calls i64.min. Written as a shift because a bare
-	// literal is an `int`, and 9223372036854775808 is past the end of one (E2011).
-	show(1 shl 63)
+	show(9223372036854775808)
 	show(42)
 	return 0
 end 'main'

@@ -45,24 +45,20 @@
 // ⛔⛔ **THE DIVISORS THIS PASS REFUSES, AND EACH REFUSAL IS A CORRECTNESS ARGUMENT RATHER THAN A
 // MISSING FEATURE.** `StdOp.div`/`mod` carry `isPure: false` because x64's `idiv` FAULTS, and
 // replacing one with pure arithmetic DELETES that fault. That is sound only where the fault provably
-// cannot happen, which is what these refusals establish (the last one is about something else again —
-// it is the only one that prevents a wrong ANSWER rather than a deleted trap):
+// cannot happen, which is what these refusals establish:
 //
 //   • **`K == 0`.** The fault IS the answer. `Parser.emitDivOrMod` refuses a provably-zero divisor in
 //     source (E3103), and a compiler-authored builder that divides by a literal zero is a bug the
 //     `#DE` reports; reducing it would silently compute a number instead.
-//   • **`|K| == 1`.** `x / 1` is `x` and `x mod 1` is `0` — an ALGEBRAIC IDENTITY, not a strength
-//     reduction, and it belongs to `foldConstOperands`' identity move (which cannot reach it today
-//     because `div`/`mod` have no `binOpImm` form). `x / -1` additionally FAULTS at `i64.min`, and
-//     `specs/division.md` pins that fault as deliberate — a reduction would answer `i64.min`.
-//     Refusing the whole magnitude keeps one rule where two would need to agree.
-//   • **`K == i64.min`.** The derivation works in `|K|`, which is not representable.
-//   • **UNSIGNED by a divisor at or above `2^63`** — i.e. one whose `ParsedInt` is NEGATIVE. This is
-//     the only refusal here that prevents a WRONG answer rather than an unsound trap deletion; see
-//     `classifyDivision`, which states it where the magnitude is taken.
+//   • **`K == 1`, and a SIGNED `K == -1`.** `x / 1` is `x` and `x mod 1` is `0` — an ALGEBRAIC
+//     IDENTITY, not a strength reduction, and it belongs to `foldConstOperands`' identity move
+//     (which cannot reach it today because `div`/`mod` have no `binOpImm` form). `x / -1`
+//     additionally FAULTS at `i64.min`, and `specs/division.md` pins that fault as deliberate — a
+//     reduction would answer `i64.min`. Refusing the whole signed magnitude keeps one rule where
+//     two would need to agree. An UNSIGNED `-1` pattern is `u64.max`, which is reduced.
 //
-// ⇒ For every divisor that IS reduced, `2 <= |K| <= i64.max`, so the `idiv` it replaces could not have
-// faulted on either operand — the trap is removed along with the only inputs that could raise it.
+// ⇒ For every divisor that IS reduced, `|K| >= 2`, so the divide it replaces could not have faulted
+// on either operand — the trap is removed along with the only inputs that could raise it.
 //
 // ⚠ **THE ANSWER MUST AGREE WITH `idiv` ON EVERY EDGE, NOT APPROXIMATELY.** Signed division TRUNCATES
 // TOWARD ZERO, which neither the magic multiply nor an arithmetic shift does on its own: `x / 2` for a
@@ -88,11 +84,9 @@ let ReducedWordBits = 64
 
 let AddIndicatorHalvingShift = 1
 
-// The largest `q1` the magic refinement can hold and still DOUBLE without leaving i64 — see
-// `deriveSignedMagic`, whose one decline is this bound. It is `floor(i64.max / 2)`, spelled as a SHIFT
-// because a literal `/ 2` at file scope is folded in the FLOAT domain and the comparison against a
-// `ParsedInt` then does not type-check.
-let MaxRefinableQuotient = i64.max shr 1
+typealias DivisionWord = int(0 to u64.max)
+
+let TwoToThe63 = 9223372036854775808 as DivisionWord
 
 // The refinement provably converges by `p = 2 * 64 - 1` (Granlund–Montgomery), i.e. within 64 steps of
 // its `p = 63` seed. The loop is written with that bound so a derivation that did NOT converge is a
@@ -105,7 +99,7 @@ let MaxMagicRefinements = 64
 // Declaring the narrower type makes the divide total, and the cast at each call site is where the
 // caller's own proof is checked — at compile time where the compiler can see it, and by a range guard
 // where it cannot.
-typealias PositiveModulus = int(1 to i64.max)
+typealias PositiveModulus = int(1 to u64.max) implements DivisionWord
 
 // Whether this CPU's instruction selection lowers `StdBinOpcode.mulHighSigned`.
 //
@@ -129,7 +123,7 @@ end 'targetLowersMulHigh'
 // payload-bearing union, for `StdArithOperands`' measured reason: a union heap-boxes every case,
 // payload-free ones included.
 enum DivisionReductionKind
-	// Keep the `div`/`mod` exactly as it is — see the four refusals in this file's header.
+	// Keep the `div`/`mod` exactly as it is — see the refusals in this file's header.
 	notReducible
 
 	// `|K|` is `2^shift`: an arithmetic shift with a bias that makes it truncate toward zero (signed),
@@ -139,6 +133,10 @@ enum DivisionReductionKind
 	// The general case: multiply by `magic` and take the high half, then the tail its signedness owes —
 	// a shift and the sign bit (signed), or the round-up fixup and a logical shift (unsigned).
 	magicMultiply
+
+	// An UNSIGNED `K` from `2^63` up, which neither derivation accepts: the quotient is 0 or 1, the
+	// borrow-free bit of `x - K`.
+	comparisonBit
 end 'DivisionReductionKind'
 
 // What one `div`/`mod` op reduces to, written into a caller-owned record refilled per site.
@@ -149,8 +147,8 @@ end 'DivisionReductionKind'
 module type DivisionReduction
 	export var kind as DivisionReductionKind
 
-	// `|K|`, always in `2 .. i64.max` when `kind` is not `notReducible`.
-	export var divisorMagnitude as ParsedInt
+	// `|K|`, or an unsigned `K`'s own pattern; always at least 2 when `kind` is not `notReducible`.
+	export var divisorMagnitude as MachineWord
 
 	// Whether the emitted QUOTIENT must be negated. True exactly for a `/` by a NEGATIVE constant: the
 	// sequences below compute `x / |K|`, and truncating division is odd, so `x / K` is `-(x / |K|)`.
@@ -191,7 +189,7 @@ module type DivisionReduction
 		self.kind = DivisionReductionKind.notReducible
 	end 'recordNotReducible'
 
-	function recordPowerOfTwo(magnitude ParsedInt, negate bool, unsigned bool)
+	function recordPowerOfTwo(magnitude MachineWord, negate bool, unsigned bool)
 		self.kind = DivisionReductionKind.powerOfTwo
 		self.divisorMagnitude = magnitude
 		self.shift = log2OfPowerOfTwo(magnitude)
@@ -202,7 +200,7 @@ module type DivisionReduction
 		self.addIndicator = false
 	end 'recordPowerOfTwo'
 
-	function recordMagic(magnitude ParsedInt, multiplier ParsedInt, postShift ShiftCount, negate bool, unsigned bool, carriesImplicitBit bool)
+	function recordMagic(magnitude MachineWord, multiplier ParsedInt, postShift ShiftCount, negate bool, unsigned bool, carriesImplicitBit bool)
 		self.kind = DivisionReductionKind.magicMultiply
 		self.divisorMagnitude = magnitude
 		self.magic = multiplier
@@ -213,43 +211,47 @@ module type DivisionReduction
 		self.addIndicator = carriesImplicitBit
 	end 'recordMagic'
 
+	function recordComparisonBit(divisor MachineWord)
+		self.kind = DivisionReductionKind.comparisonBit
+		self.divisorMagnitude = divisor
+		self.shift = 0
+		self.negateQuotient = false
+		self.isUnsigned = true
+		self.magic = 0
+		self.magicIsNegative = false
+		self.addIndicator = false
+	end 'recordComparisonBit'
+
 	function isReducible() returns bool
 		return self.kind != DivisionReductionKind.notReducible
 	end 'isReducible'
 end 'DivisionReduction'
 
-// The `(multiplier, postShift)` pair either derivation answers with, plus whether it found one at all.
-// Caller-owned and refilled, for `DivisionReduction`'s reason.
-//
-// ⚠ `found` is the SIGNED derivation's alone, and `classifyDivision` reads it only there. The signed
-// derivation SEARCHES for the scale and can run out of signed range on the way; the unsigned one takes
-// a fixed number of doublings and always answers, with the 65th bit carried by `addIndicator`.
+// The `(multiplier, postShift)` pair either derivation answers with. Caller-owned and refilled, for
+// `DivisionReduction`'s reason.
 module type DivisionMagic
-	export var found as bool
 	export var multiplier as ParsedInt
 	export var postShift as ShiftCount
 	export var addIndicator as bool
 
 	module static function create() returns DivisionMagic
-		return Self{found: false, multiplier: 0, postShift: 0, addIndicator: false}
+		return Self{multiplier: 0, postShift: 0, addIndicator: false}
 	end 'create'
 end 'DivisionMagic'
 
 // `floor(2^p / m)` and `2^p mod m` for a `p` the caller raises one bit at a time — the shared state of
 // both derivations, seeded at `p = 63` by `divideTwoToThe63`.
 type FixedPointRatio
-	export var quotient as ParsedInt
-	export var remainder as ParsedInt
+	export var quotient as DivisionWord
+	export var remainder as DivisionWord
 
-	static function seeded(seedQuotient ParsedInt, seedRemainder ParsedInt) returns FixedPointRatio
+	static function seeded(seedQuotient DivisionWord, seedRemainder DivisionWord) returns FixedPointRatio
 		return Self{quotient: seedQuotient, remainder: seedRemainder}
 	end 'seeded'
 
-	// ⚠ The carry is tested as `r >= m - r` and applied as `r - (m - r)` rather than as the `2r >= m` /
-	// `2r - m` the arithmetic reads as. `r` and `m` are both below `2^63` but `2r` need not be, and a
-	// `ParsedInt` that wraps past `i64.max` compares NEGATIVE — which would take the wrong branch and
-	// answer a plausible, wrong magic. Only `quotient` is allowed to wrap here.
-	function raiseByOneBit(modulus ParsedInt)
+	// ⚠ Only `quotient` is allowed to wrap here: `r` and `m` are both below `2^63`, so every remainder
+	// term is exact.
+	function raiseByOneBit(modulus DivisionWord)
 		if self.remainder >= modulus - self.remainder 'carry'
 			self.quotient = self.quotient * 2 + 1
 			self.remainder = self.remainder - (modulus - self.remainder)
@@ -281,42 +283,29 @@ end 'FixedPointRatio'
 // `specs/strength-reduction.md`, which divides by these constants and by a runtime divisor of the
 // same value and asserts the two agree.**
 //
-// ⚠⚠ **ONE VALUE IS ALLOWED TO WRAP AND EVERY OTHER ONE MUST NOT, AND THAT IS THE WHOLE OF WHAT MAKES
-// THIS EXPRESSIBLE IN A LANGUAGE WITH NO u64 ARITHMETIC.** The published algorithm computes in UNSIGNED
-// 64-bit; a `ParsedInt` is SIGNED 64-bit and the compiler's comparisons are signed, so a value above `2^63`
-// would compare as negative and the loop would take the wrong branch. Term by term:
+// ⚠⚠ **ONE VALUE IS ALLOWED TO WRAP AND EVERY OTHER ONE MUST NOT.** The arithmetic is UNSIGNED
+// 64-bit (`DivisionWord`), as the published algorithm's is. Term by term:
 //
-//   • `d`, `anc`, `r1`, `r2`, `delta` are remainders or magnitudes below `2^63` and are EXACT. The
-//     doublings are written `r >= m - r` / `r - (m - r)` rather than `2*r >= m` / `2*r - m` so that no
-//     intermediate leaves the range either.
-//   • `q1` must be exact, because the exit condition COMPARES it. It stays below `2^63` for every
-//     divisor the loop converges on — but not for every divisor: MEASURED, it first exceeds i64 for
-//     divisors around `2^62.5`, and for none below `2^61` at all. The routine tests the bound BEFORE
-//     each doubling and answers `found: false`, which is the fifth refusal and the only one that is
-//     about this file's arithmetic rather than about the language's.
+//   • `d`, `anc`, `r1`, `r2`, `delta` are remainders or magnitudes below `2^63` and are EXACT.
+//   • `q1` must be exact, because the exit condition COMPARES it.
 //   • `q2` is the ONLY term allowed to wrap, and its wrapped value is precisely the answer wanted:
 //     `M = q2 + 1` is a 64-bit multiplier whose top bit may legitimately be set (that is what
 //     `magicIsNegative` and the `+ n` fixup are for), and `+` and `*2` are exact modulo 2^64, so the
-//     signed value computed here IS the bit pattern the instruction must hold.
-//
-// ⚠ `2^63` itself is not representable, so the two seeds are computed through `i64.max` with the
-// missing `+ 1` carried by hand — see `divideTwoToThe63`.
+//     value computed here IS the bit pattern the instruction must hold.
 //
 // ⭐ **THE DIVISOR IS ALWAYS POSITIVE HERE (`|K|`), AND THAT SIMPLIFICATION IS LOAD-BEARING.** The
 // published algorithm handles a negative `d` by biasing `anc` and negating `M`; working in `|K|` and
 // negating the QUOTIENT instead is exact (truncating division is odd) and removes the one case in
 // which `anc` reaches `2^63` and stops fitting — a negative `d` whose magnitude divides `2^63 + 1`,
 // of which `x / -3` is the smallest.
-function deriveSignedMagic(divisor ParsedInt, out DivisionMagic)
-	if divisor < 2 'notADerivableDivisor'
-		panic("deriveSignedMagic: divisor {divisor} — the derivation is defined for a magnitude of 2 or more, and `classifyDivision` refuses 0, 1 and i64.min before asking")
+function deriveSignedMagic(divisor DivisionWord, out DivisionMagic)
+	if divisor < 2 or divisor >= TwoToThe63 'notADerivableDivisor'
+		panic("deriveSignedMagic: divisor {divisor} — the derivation is defined for a magnitude from 2 to 2^63 - 1, and `classifyDivision` refuses 0 and 1 and takes every power of two before asking")
 	end 'notADerivableDivisor'
-
-	out.found = false
 
 	// `anc` = 2^63 - 1 - (2^63 mod divisor): the largest n below 2^63 that is -1 modulo the divisor.
 	var divisorRatio = divideTwoToThe63(divisor as PositiveModulus)
-	let anc = i64.max - divisorRatio.remainder
+	let anc = TwoToThe63 - 1 - divisorRatio.remainder
 
 	var ancRatio = divideTwoToThe63(anc as PositiveModulus)
 
@@ -324,10 +313,6 @@ function deriveSignedMagic(divisor ParsedInt, out DivisionMagic)
 
 	for _ in 0 upto MaxMagicRefinements 'refine'
 		p = p + 1
-
-		if ancRatio.quotient > MaxRefinableQuotient 'wouldLeaveTheSignedRange'
-			return
-		end 'wouldLeaveTheSignedRange'
 
 		// q1 = floor(2^p / anc), r1 = 2^p mod anc — one doubling with a remainder correction.
 		ancRatio.raiseByOneBit(anc)
@@ -344,8 +329,7 @@ function deriveSignedMagic(divisor ParsedInt, out DivisionMagic)
 		let keepRefining = ancRatio.quotient < delta or (ancRatio.quotient == delta and ancRatio.remainder == 0)
 
 		if not keepRefining 'converged'
-			out.found = true
-			out.multiplier = divisorRatio.quotient + 1
+			out.multiplier = ((divisorRatio.quotient + 1) as MachineWord) as ParsedInt
 			out.postShift = (p - ReducedWordBits) as ShiftCount
 			return
 		end 'converged'
@@ -354,23 +338,21 @@ function deriveSignedMagic(divisor ParsedInt, out DivisionMagic)
 	panic("deriveSignedMagic: the refinement for divisor {divisor} did not converge within {MaxMagicRefinements} steps — Granlund-Montgomery proves it converges by p = 2*64 - 1, so either the exit condition or one of the doublings has been transcribed wrongly")
 end 'deriveSignedMagic'
 
-// ⭐ **THE UNSIGNED RECIPROCAL, IN THE ROUND-UP FORM (libdivide's `u64_gen`) AND NOT HACKER'S DELIGHT
-// FIG 10-2 — because a `ParsedInt` CANNOT DERIVE FIG 10-2 AT ALL.** That figure's track runs through
-// `nc = 2^64 - 1 - (2^64 mod d)`, which exceeds `2^63` for every admissible `d`, and its `r1` ranges
-// over `[0, nc)`; every comparison on either is an UNSIGNED one, and this compiler's arithmetic is
-// signed 64-bit throughout. The round-up form needs only `floor(2^(64+s)/d)` and its remainder, where
-// `r < d < 2^63` holds at every step, so the same discipline the file header states for the signed `q2`
-// carries the whole derivation: the quotient is the one term allowed to wrap.
+// ⭐ **THE UNSIGNED RECIPROCAL, IN THE ROUND-UP FORM (libdivide's `u64_gen`).** It needs only
+// `floor(2^(64+s)/d)` and its remainder, where `r < d < 2^63` holds at every step, so the
+// discipline `deriveSignedMagic`'s header states for `q2` carries the whole derivation: the
+// quotient is the one term allowed to wrap. A divisor from `2^63` up never reaches it
+// (`DivisionReductionKind.comparisonBit`).
 //
 // `s` is `floor(log2 K)` and is fixed rather than searched, which is why there is no decline. When the
 // rounded-up reciprocal needs a 65th bit, the multiplier stored is that value minus `2^64` and
 // `addIndicator` says the sequence owes the fixup that restores it.
-function deriveUnsignedMagic(divisor ParsedInt, out DivisionMagic)
-	if divisor < 2 or isPowerOfTwo(divisor) 'notADerivableDivisor'
-		panic("deriveUnsignedMagic: divisor {divisor} — the derivation is defined for a magnitude of 2 or more that is NOT a power of two, and `classifyDivision` refuses 0, 1 and i64.min and takes every power of two before asking")
+function deriveUnsignedMagic(divisor DivisionWord, out DivisionMagic)
+	if divisor < 2 or divisor >= TwoToThe63 or isPowerOfTwo(divisor as MachineWord) 'notADerivableDivisor'
+		panic("deriveUnsignedMagic: divisor {divisor} — the derivation is defined for a divisor from 2 to 2^63 - 1 that is NOT a power of two, and `classifyDivision` refuses 0 and 1 and takes every power of two and every divisor from 2^63 up before asking")
 	end 'notADerivableDivisor'
 
-	let scale = floorLog2(divisor)
+	let scale = floorLog2(divisor as MachineWord)
 
 	var ratio = divideTwoToThe63(divisor as PositiveModulus)
 
@@ -378,104 +360,66 @@ function deriveUnsignedMagic(divisor ParsedInt, out DivisionMagic)
 		ratio.raiseByOneBit(divisor)
 	end 'raiseToTheMagicScale'
 
-	out.found = true
 	out.postShift = scale
 
-	let roundUpBound = (1 as ParsedInt) shl (scale as ParsedInt)
+	let roundUpBound = (1 as DivisionWord) shl (scale as DivisionWord)
 
 	if divisor - ratio.remainder < roundUpBound 'roundUpFitsSixtyFourBits'
-		out.multiplier = ratio.quotient + 1
+		out.multiplier = ((ratio.quotient + 1) as MachineWord) as ParsedInt
 		out.addIndicator = false
 		return
 	end 'roundUpFitsSixtyFourBits'
 
 	ratio.raiseByOneBit(divisor)
-	out.multiplier = ratio.quotient + 1
+	out.multiplier = ((ratio.quotient + 1) as MachineWord) as ParsedInt
 	out.addIndicator = true
 end 'deriveUnsignedMagic'
 
-// `floor(2^63 / m)` and `2^63 mod m`, for `1 <= m <= i64.max`, in SIGNED 64-bit arithmetic alone.
-//
-// ⚠ `2^63` is one past `i64.max` and cannot be written down here at all, so it is spelled `i64.max + 1`
-// and the `+ 1` is carried through the division by hand: `i64.max = q0*m + r0` gives
-// `2^63 = q0*m + (r0 + 1)`, which is already the answer unless the incremented remainder has reached
-// `m`, in which case one more `m` comes out of it. Both outputs are written into caller-supplied
-// variables because these two are one division and a function answers with one value.
+// `floor(2^63 / m)` and `2^63 mod m`.
 //
 // ⚠ `m` is a `PositiveModulus` rather than a `ParsedInt`, which is what makes the two divides below
 // TOTAL — see that typealias. Both call sites pass a magnitude the classifier has already proven to be
 // at least 2, or an `anc` derived from one.
 function divideTwoToThe63(m PositiveModulus) returns FixedPointRatio
-	let modulus = m as ParsedInt
-	let q0 = (i64.max / m) as ParsedInt
-	let r0 = i64.max - q0 * modulus
-
-	if r0 + 1 == modulus 'theIncrementCompletesOneMoreDivisor'
-		return FixedPointRatio.seeded(q0 + 1, seedRemainder: 0)
-	end 'theIncrementCompletesOneMoreDivisor'
-
-	return FixedPointRatio.seeded(q0, seedRemainder: r0 + 1)
+	return FixedPointRatio.seeded(TwoToThe63 / m, seedRemainder: TwoToThe63 mod m)
 end 'divideTwoToThe63'
 
 // ⭐ **THE ONE ADMISSION RULE — what one `div`/`mod` site reduces to, written into `out`.** Every
 // refusal in this file's header is decided here and nowhere else, so the emitters below may assume
-// `2 <= divisorMagnitude <= i64.max` unconditionally.
+// `divisorMagnitude >= 2` unconditionally.
 function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRemainder bool, magic DivisionMagic, out DivisionReduction)
 	out.recordNotReducible()
 
-	// `0` keeps its fault; `i64.min`'s magnitude is not representable; `|K| == 1` is an identity rather
-	// than a strength reduction, and `x / -1` must keep faulting at `i64.min`. See the header.
-	if divisor == 0 or divisor == i64.min or divisor == 1 or divisor == -1 'refusedDivisor'
+	let unsigned = signedness == IntegerSignedness.unsigned
+
+	if divisor == 0 or divisor == 1 or (divisor == -1 and not unsigned) 'refusedDivisor'
 		return
 	end 'refusedDivisor'
 
-	let unsigned = signedness == IntegerSignedness.unsigned
+	// A signed `i64.min` negates back to itself, and its pattern is its true magnitude, `2^63`.
+	let readable = divisor if unsigned or divisor > 0 else -divisor
+	let pattern = readable as MachineWord
+	let magnitude = pattern as DivisionWord
+	let negate = divisor < 0 and not unsigned and not isRemainder
 
-	// ⛔⛔ **THE ONE PLACE THE TWO SIGNEDNESSES DISAGREE ABOUT WHAT THE SAME 64 BITS MEAN, AND READING
-	// IT WRONG IS A WRONG ANSWER RATHER THAN A MISSED REDUCTION.** `magnitude` below is `|K|` read as a
-	// SIGNED number; for an UNSIGNED divide, a `K` with its top bit set is not a small negative number
-	// at all but a value of at least `2^63`. `x /u 0xFFFF_FFFF_FFFF_FFF0` is `0` for every dividend
-	// below `2^64 - 16`, while its signed magnitude is `16` — a power of two, which would have answered
-	// `x shrLogical 4`. It IS reachable from source: a `let` whose declared type is `int(0 to u64.max)`
-	// and whose folded value wraps past `i64.max` is an unsigned divisor by both operands' declared
-	// types and a negative `ParsedInt` here.
-	//
-	// ⇒ Refused outright. Every such divisor is at least `2^63`, so `x /u K` is `0` or `1` and
-	// `x modu K` is `x` or `x - K` — three shapes worth their own pass if one ever pays, and none of
-	// them is what the sequences below compute. `specs/strength-reduction.md`'s
-	// `an-unsigned-divisor-above-the-signed-range-is-refused` is the pin.
-	if unsigned and divisor < 0 'unsignedDivisorAboveTheSignedRange'
-		return
-	end 'unsignedDivisorAboveTheSignedRange'
-
-	let magnitude = divisor if divisor > 0 else -divisor
-
-	// A `mod` never negates: a truncating remainder's magnitude is `|x| mod |K|` and its sign is the
-	// DIVIDEND's, so the divisor's sign cannot reach the answer.
-	//
-	// ⚠ There is deliberately no `and not unsigned` here, though it would read as the safer spelling:
-	// an unsigned divisor is POSITIVE by the refusal directly above, so the two conditions would be one
-	// fact stated twice — and the copy that went stale would be this one.
-	let negate = divisor < 0 and not isRemainder
-
-	if isPowerOfTwo(magnitude) 'shiftSequence'
-		out.recordPowerOfTwo(magnitude, negate: negate, unsigned: unsigned)
+	if isPowerOfTwo(pattern) 'shiftSequence'
+		out.recordPowerOfTwo(pattern, negate: negate, unsigned: unsigned)
 		return
 	end 'shiftSequence'
 
+	if unsigned and magnitude >= TwoToThe63 'comparisonSequence'
+		out.recordComparisonBit(pattern)
+		return
+	end 'comparisonSequence'
+
 	if unsigned 'unsignedMagic'
 		deriveUnsignedMagic(magnitude, out: magic)
-		out.recordMagic(magnitude, multiplier: magic.multiplier, postShift: magic.postShift, negate: negate, unsigned: true, carriesImplicitBit: magic.addIndicator)
+		out.recordMagic(pattern, multiplier: magic.multiplier, postShift: magic.postShift, negate: negate, unsigned: true, carriesImplicitBit: magic.addIndicator)
 		return
 	end 'unsignedMagic'
 
 	deriveSignedMagic(magnitude, out: magic)
-
-	if not magic.found 'outsideTheDerivableRange'
-		return
-	end 'outsideTheDerivableRange'
-
-	out.recordMagic(magnitude, multiplier: magic.multiplier, postShift: magic.postShift, negate: negate, unsigned: false, carriesImplicitBit: magic.addIndicator)
+	out.recordMagic(pattern, multiplier: magic.multiplier, postShift: magic.postShift, negate: negate, unsigned: false, carriesImplicitBit: false)
 end 'classifyDivision'
 
 // ==================================================================================================
@@ -861,6 +805,7 @@ function emitReducedQuotient(module StdModule, resultId ValueId, dividend ValueI
 		notReducible then panic("emitReducedQuotient: reached with a division `classifyDivision` refused — `reduceOneDivision` tests `isReducible` first")
 		powerOfTwo then emitPowerOfTwoQuotient(module, resultId: chainResult, dividend: dividend, reduction: reduction, mint: mint, rebuilt: rebuilt)
 		magicMultiply then emitMagicQuotient(module, resultId: chainResult, dividend: dividend, reduction: reduction, mint: mint, rebuilt: rebuilt)
+		comparisonBit then emitComparisonBitQuotient(module, resultId: chainResult, dividend: dividend, reduction: reduction, mint: mint, rebuilt: rebuilt)
 	end 'shape'
 
 	if reduction.negateQuotient 'negate'
@@ -883,7 +828,7 @@ end 'emitReducedQuotient'
 // reduced remainder there is (`x mod 2` in a halving loop).
 function emitReducedRemainder(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
 	if reduction.isUnsigned and reduction.kind == DivisionReductionKind.powerOfTwo 'lowBitsMask'
-		let mask = emitReducedConst(module, value: reduction.divisorMagnitude - 1, mint: mint, rebuilt: rebuilt)
+		let mask = emitReducedConst(module, value: (reduction.divisorMagnitude - 1) as ParsedInt, mint: mint, rebuilt: rebuilt)
 		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: mask, opcode: StdBinOpcode.bitAnd, operandType: ReducedOperandType)))
 		return
 	end 'lowBitsMask'
@@ -891,7 +836,7 @@ function emitReducedRemainder(module StdModule, resultId ValueId, dividend Value
 	let quotient = mint.mint()
 	emitReducedQuotient(module, resultId: quotient, dividend: dividend, reduction: reduction, mint: mint, rebuilt: rebuilt)
 
-	let divisorValue = emitReducedConst(module, value: reduction.divisorMagnitude, mint: mint, rebuilt: rebuilt)
+	let divisorValue = emitReducedConst(module, value: reduction.divisorMagnitude as ParsedInt, mint: mint, rebuilt: rebuilt)
 	let product = mint.mint()
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(product, lhs: quotient, rhs: divisorValue, opcode: StdBinOpcode.mul, operandType: ReducedOperandType)))
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: product, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
@@ -931,6 +876,22 @@ function emitPowerOfTwoQuotient(module StdModule, resultId ValueId, dividend Val
 	let quotientCount = emitReducedConst(module, value: reduction.shift as ParsedInt, mint: mint, rebuilt: rebuilt)
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: biased, rhs: quotientCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 end 'emitPowerOfTwoQuotient'
+
+function emitComparisonBitQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
+	let divisorValue = emitReducedConst(module, value: reduction.divisorMagnitude as ParsedInt, mint: mint, rebuilt: rebuilt)
+
+	let difference = mint.mint()
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(difference, lhs: dividend, rhs: divisorValue, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
+
+	let inverted = mint.mint()
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.unaryOp(inverted, operand: difference, opcode: StdUnaryOpcode.bitNot, operandType: ReducedOperandType)))
+
+	let noBorrow = mint.mint()
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(noBorrow, lhs: dividend, rhs: inverted, opcode: StdBinOpcode.bitAnd, operandType: ReducedOperandType)))
+
+	let signBitCount = emitReducedConst(module, value: SignBitIndex, mint: mint, rebuilt: rebuilt)
+	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: noBorrow, rhs: signBitCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
+end 'emitComparisonBitQuotient'
 
 // ⭐⭐ **DIVISION BY A GENERAL CONSTANT: MULTIPLY BY THE RECIPROCAL, IN FIXED POINT.** `M / 2^(64+s)`
 // approximates `1 / K` closely enough that the high half of `x * M`, shifted right by `s`, is exactly

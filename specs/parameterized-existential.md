@@ -226,7 +226,7 @@ typealias IntegerLines = Lines with Integer
 function widthOf(source IntegerLines) returns Integer
 	var total = 0 as Integer
 	for text in source 'walk'
-		total = total + text.byteLength()
+		total = total + (text.byteLength() as Integer)
 	end 'walk'
 	return total + source.tag()
 end 'widthOf'
@@ -291,7 +291,7 @@ typealias IntegerLines = Lines with Integer
 function returnsOutOfTheBody(source IntegerLines) returns Integer
 	for text in source 'walk'
 		if text.byteLength() > 0 'theFirst'
-			return text.byteLength()
+			return text.byteLength() as Integer
 		end 'theFirst'
 	end 'walk'
 	return 0
@@ -300,7 +300,7 @@ end 'returnsOutOfTheBody'
 function breaksOutOfTheBody(source IntegerLines) returns Integer
 	var total = 0 as Integer
 	for text in source 'walk'
-		total = total + text.byteLength()
+		total = total + (text.byteLength() as Integer)
 		if total > 100 'enough'
 			break
 		end 'enough'
@@ -455,7 +455,7 @@ typealias TextSeq = Seq with Text
 function total(source TextSeq) returns Integer
 	var sum = 0 as Integer
 	for item in source 'walk'
-		sum = sum + item
+		sum = sum + (item as Integer)
 	end 'walk'
 	return sum
 end 'total'

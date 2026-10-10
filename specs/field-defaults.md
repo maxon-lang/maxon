@@ -13,29 +13,31 @@ A struct field can declare an arbitrary default expression — not just a litera
 When a struct literal omits that field, the default expression is evaluated and
 used as the field's value.
 
-For numeric, boolean, and enum-case defaults, the field's type is inferred from
-the literal and can be omitted:
+A field with a default carries no `as Type` annotation: its type is read off the
+default, which takes one of these shapes:
+
+- a `true` or `false` literal (`bool`), or a string literal (`String`);
+- `Type.member` or `Type.member(...)` — an enum case or a static factory — typed
+  `Type`, and the default is checked against `Type`;
+- an expression whose outermost node is a cast, `expr as Type`, typed `Type`.
+
+A bare number has no type of its own, so a numeric default is cast: `0 as Tally`.
+`1 + 2 as Tally` is `1 + (2 as Tally)`, whose outermost node is the addition, so it
+is not a cast default. Any other default is refused (E2004). An `as Type` written
+before the `=` is refused too (E2010): a field with a default is written `var x = e`.
 
 ```text
-type Counter
-	export var count = 0              // inferred as int
-	var enabled = true         // inferred as bool
-	var level = Priority.low   // inferred as Priority
-end 'Counter'
-```
-
-For any other default expression (function calls, struct literals, string
-interpolations, etc.), the field declaration must include an explicit type
-annotation, because the type cannot be inferred from the raw tokens alone:
-
-```text
+typealias Tally = int(0 to 1000)
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-type Container
-	export var items as IntArray = IntArray.create()
-	var name as String = "default"
-end 'Container'
+type Counter
+	export var count = 0 as Tally
+	var enabled = true
+	var name = "default"
+	var level = Priority.low
+	export var items = IntArray.create()
+end 'Counter'
 ```
 
 A default expression is re-evaluated at every struct literal that omits the
@@ -51,7 +53,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items as IntArray = IntArray.create()
+	export var items = IntArray.create()
 
 	static function create() returns Self
 		return Self{}
@@ -84,7 +86,7 @@ type Bag
 		return Self{}
 	end 'create'
 
-	export var items as IntArray = IntArray.create()
+	export var items = IntArray.create()
 end 'Bag'
 
 function main() returns ExitCode
@@ -104,7 +106,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items as IntArray = IntArray.create()
+	export var items = IntArray.create()
 
 	static function createWith(items IntArray) returns Self
 		return Self{items: items}
@@ -129,7 +131,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items as IntArray = IntArray.create()
+	export var items = IntArray.create()
 
 	static function create() returns Self
 		return Self{}
@@ -163,7 +165,7 @@ type Point
 end 'Point'
 
 type Shape
-	export var origin as Point = Point.create(3, y: 4)
+	export var origin = Point.create(3, y: 4)
 
 	static function create() returns Self
 		return Self{}
@@ -182,7 +184,7 @@ end 'main'
 <!-- test: field-defaults.string-default -->
 ```maxon
 type Person
-	export var name as String = "anon"
+	export var name = "anon"
 
 	static function create() returns Self
 		return Self{}
@@ -202,14 +204,137 @@ end 'main'
 anon
 ```
 
+<!-- test: field-defaults.cast-literal-default -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Report
+	export var lines = 0 as Tally
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Report'
+
+function showLines(count Tally)
+	print("{count}")
+end 'showLines'
+
+function main() returns ExitCode
+	let r = Report.create()
+	showLines(r.lines)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: field-defaults.cast-constant-default -->
+```maxon
+typealias SpanId = int(0 to 4095)
+
+let NoSpan = 0 as SpanId
+
+type Mark
+	export var span = NoSpan as SpanId
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Mark'
+
+function showSpan(id SpanId)
+	print("{id}")
+end 'showSpan'
+
+function main() returns ExitCode
+	let m = Mark.create()
+	showSpan(m.span)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: field-defaults.inferred-static-call-default -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Counts
+	export var n = 7 as Tally
+
+	static function zero() returns Self
+		return Self{}
+	end 'zero'
+end 'Counts'
+
+type Ledger
+	export var total = Counts.zero()
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Ledger'
+
+function main() returns ExitCode
+	let l = Ledger.create()
+	return l.total.n
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: field-defaults.inferred-enum-case-default -->
+```maxon
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+type Swatch
+	export var shade = Color.green
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Swatch'
+
+function main() returns ExitCode
+	let s = Swatch.create()
+	let name = match s.shade 'shade'
+		red gives "red"
+		green gives "green"
+		blue gives "blue"
+	end 'shade'
+	print(name)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+green
+```
+
 <!-- test: field-defaults.mixed-with-literal-field -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	export var items as IntArray = IntArray.create()
-	export var total = 0
+	export var items = IntArray.create()
+	export var total = 0 as Integer
 
 	static function createWithTotal(t Integer) returns Self
 		return Self{total: t}
@@ -219,20 +344,20 @@ end 'Bag'
 function main() returns ExitCode
 	var b = Bag.createWithTotal(5)
 	b.items.push(10)
-	return b.total + b.items.count()
+	return b.total + (b.items.count() as Integer)
 end 'main'
 ```
 ```exitcode
 6
 ```
 
-<!-- test: field-defaults.missing-type-annotation-errors -->
+<!-- test: field-defaults.inferred-factory-default -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Bag
-	var items = IntArray.create()
+	export var items = IntArray.create()
 
 	static function create() returns Self
 		return Self{}
@@ -240,26 +365,169 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.items.count()
 end 'main'
 ```
+```exitcode
+0
+```
+
+### Error: a field default outside the inferable shapes
+
+<!-- test: field-defaults.error.annotation-with-default -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Report
+	export var lines as Tally = 0
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Report'
+
+function main() returns ExitCode
+	let r = Report.create()
+	return r.lines
+end 'main'
+```
 ```maxoncstderr
-error E2004: specs/field-defaults/field-defaults.missing-type-annotation-errors.maxon:6:14: Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.
+error E2010: specs/field-defaults/field-defaults.error.annotation-with-default.maxon:5:28: Expected newline but got '='
+```
+
+<!-- test: field-defaults.error.uncast-number-default -->
+```maxon
+type Report
+	export var lines = 0
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Report'
+
+function main() returns ExitCode
+	let r = Report.create()
+	return r.lines
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/field-defaults/field-defaults.error.uncast-number-default.maxon:3:21: Expected default value: a bool or string literal, 'Type.member', 'Type.member(...)', or an expression cast with 'as': 'var name = expr as Type'.
+```
+
+<!-- test: field-defaults.error.uncast-float-default -->
+```maxon
+type Report
+	export var ratio = 0.5
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Report'
+
+function main() returns ExitCode
+	_ = Report.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/field-defaults/field-defaults.error.uncast-float-default.maxon:3:21: Expected default value: a bool or string literal, 'Type.member', 'Type.member(...)', or an expression cast with 'as': 'var name = expr as Type'.
+```
+
+<!-- test: field-defaults.error.cast-not-outermost -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Report
+	export var lines = 1 + 2 as Tally
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Report'
+
+function main() returns ExitCode
+	let r = Report.create()
+	return r.lines
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/field-defaults/field-defaults.error.cast-not-outermost.maxon:5:21: Expected default value: a bool or string literal, 'Type.member', 'Type.member(...)', or an expression cast with 'as': 'var name = expr as Type'.
+```
+
+<!-- test: field-defaults.error.bare-global-default -->
+```maxon
+typealias SpanId = int(0 to 4095)
+
+let NoSpan = 0 as SpanId
+
+type Mark
+	export var span = NoSpan
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Mark'
+
+function main() returns ExitCode
+	let m = Mark.create()
+	return m.span
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/field-defaults/field-defaults.error.bare-global-default.maxon:7:20: Expected default value: a bool or string literal, 'Type.member', 'Type.member(...)', or an expression cast with 'as': 'var name = expr as Type'.
+```
+
+A `Type.member(...)` default is typed `Type` and checked against it, so a factory that returns another
+type is a type mismatch.
+
+<!-- test: field-defaults.error.inferred-head-mismatch -->
+```maxon
+type Other
+	export var ready = true
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Other'
+
+type Maker
+	export var ready = true
+
+	static function build() returns Other
+		return Other.create()
+	end 'build'
+end 'Maker'
+
+type Holder
+	export var made = Maker.build()
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	_ = Holder.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/field-defaults/field-defaults.error.inferred-head-mismatch.maxon:19:20: type mismatch: 'expected Maker, got Other'
 ```
 
 ### Error: A field default must consume everything up to the end of its line
 
 A field default is captured by the same walk a parameter default is, and re-parsed through the same
-sub-parse, so it inherited the same silent drop: `var v as Integer = 7 zzz` initialized `v` to 7 and
-said nothing.
+sub-parse, so a token left over after the expression, as in `var v = 7 as Integer zzz`, is refused rather
+than dropped.
 
 <!-- test: field-defaults.error.trailing-tokens -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-	var v as Integer = 7 zzz
+	var v = 7 as Integer zzz
 
 	static function create() returns Self
 		return Self{}
@@ -294,8 +562,8 @@ typealias Count = int(0 to u64.max)
 
 type Bag uses Element
 	typealias ElementArray = Array with Element
-	var items as ElementArray = ElementArray.create()
-	var seen = 0
+	var items = ElementArray.create()
+	var seen = 0 as Count
 
 	static function create() returns Self
 		return Self{}
@@ -336,9 +604,9 @@ typealias Count = int(0 to u64.max)
 type Pairs uses Key, Value
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
-	var keys as KeyArray = KeyArray.create()
-	var values as ValueArray = ValueArray.create()
-	var seen = 0
+	var keys = KeyArray.create()
+	var values = ValueArray.create()
+	var seen = 0 as Count
 
 	static function create() returns Self
 		return Self{}
@@ -382,8 +650,8 @@ typealias Integer = int(i64.min to i64.max)
 
 type Basket uses Element
 	typealias ElementArray = Array with Element
-	var items as ElementArray = ElementArray.create()
-	var seen = 0
+	var items = ElementArray.create()
+	var seen = 0 as Count
 
 	static function create() returns Self
 		return Self{}
@@ -431,8 +699,8 @@ typealias Integer = int(i64.min to i64.max)
 type Pairs uses Key, Value
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
-	var keys as KeyArray = KeyArray.create()
-	var values as ValueArray = ValueArray.create()
+	var keys = KeyArray.create()
+	var values = ValueArray.create()
 
 	static function create() returns Self
 		return Self{}
@@ -473,8 +741,8 @@ typealias Integer = int(i64.min to i64.max)
 type Pairs uses Key, Value
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
-	var keys as KeyArray = KeyArray.create()
-	var values as ValueArray = ValueArray.create()
+	var keys = KeyArray.create()
+	var values = ValueArray.create()
 
 	static function create() returns Self
 		return Self{}
@@ -515,8 +783,8 @@ typealias Count = int(0 to u64.max)
 type Pairs uses Key, Value
 	typealias KeyArray = Array with Key
 	typealias ValueArray = Array with Value
-	var keys as KeyArray = KeyArray.create()
-	var values as ValueArray = ValueArray.create()
+	var keys = KeyArray.create()
+	var values = ValueArray.create()
 
 	static function create() returns Self
 		return Self{}
@@ -543,4 +811,79 @@ end 'main'
 ```
 ```exitcode
 4
+```
+
+<!-- test: error.a-redundant-cast-on-an-inferable-field-default-is-unneeded -->
+A member-head default already gives the field its type, so a cast to that same type is unneeded.
+```maxon
+type Gauge
+	export var level = 0 as Count
+
+	static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Gauge'
+
+type Panel
+	export var gauge = Gauge.make() as Gauge
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Panel'
+
+function main() returns ExitCode
+	let p = Panel.create()
+	return p.gauge.level as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/field-defaults/error.a-redundant-cast-on-an-inferable-field-default-is-unneeded.maxon:11:34: unneeded cast: 'Gauge' already fits in 'Gauge'
+```
+
+<!-- test: a-field-default-above-i64-max -->
+```maxon
+typealias Wide = int(0 to u64.max)
+
+type Holder
+	export var top = 18446744073709551615 as Wide
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	print("{h.top}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615
+```
+
+<!-- test: error.a-field-default-above-i64-max-into-a-signed-alias -->
+```maxon
+typealias Offset = int(i64.min to i64.max)
+
+type Holder
+	export var top = 9223372036854775808 as Offset
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	print("{h.top}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/field-defaults/error.a-field-default-above-i64-max-into-a-signed-alias.maxon:8:10: Value 9223372036854775808 is outside the range of 'Offset' (int(-9223372036854775808 to 9223372036854775807))
 ```

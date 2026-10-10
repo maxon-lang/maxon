@@ -518,3 +518,423 @@ q=0
 ```exitcode
 0
 ```
+
+<!-- test: bits64-divides-by-a-divisor-above-i64-max -->
+A non-zero range reaching `u64.max` divides unsigned, and a divisor above `i64.max` is a large positive number: `u64.max / (2^63 + 1)` is `1`, remainder `2^63 - 2`.
+```maxon
+typealias NonZeroWord = int(1 to u64.max)
+
+function word(d NonZeroWord) returns NonZeroWord
+	return d
+end 'word'
+
+function main() returns ExitCode
+	let n = word(18446744073709551615)
+	let d = word(9223372036854775809)
+	print("q={n / d}\n")
+	print("r={n mod d}\n")
+	return 0
+end 'main'
+```
+```stdout
+q=1
+r=9223372036854775806
+```
+```exitcode
+0
+```
+
+<!-- test: bits64-divides-by-a-divisor-whose-upper-is-below-u64-max -->
+A range whose upper bound is above `i64.max` is unsigned even when that bound is not `u64.max`, so its divide is unsigned: `(2^63 + 1) / 2` is `2^62`, remainder `1`.
+```maxon
+typealias Divisor = int(1 to 9223372036854775809)
+
+function divisor(d Divisor) returns Divisor
+	return d
+end 'divisor'
+
+function main() returns ExitCode
+	let n = divisor(9223372036854775809)
+	let d = divisor(2)
+	print("q={n / d}\n")
+	print("r={n mod d}\n")
+	return 0
+end 'main'
+```
+```stdout
+q=4611686018427387904
+r=1
+```
+```exitcode
+0
+```
+
+<!-- test: unsigned-divisors-at-or-above-two-to-the-63 -->
+Unsigned constant divisors from 2^63 up agree with the hardware divide.
+```maxon
+typealias Unsigned = bits(64)
+typealias UnsignedArray = Array with Unsigned
+typealias UBigDivisor = int(2 to u64.max)
+
+function refUDiv(n Unsigned, d UBigDivisor) returns Unsigned
+	return try (n / (d as Unsigned)) otherwise panic("d is never zero")
+end 'refUDiv'
+
+function refUMod(n Unsigned, d UBigDivisor) returns Unsigned
+	return try (n mod (d as Unsigned)) otherwise panic("d is never zero")
+end 'refUMod'
+
+function dividendsAround(d UBigDivisor) returns UnsignedArray
+	var ns = UnsignedArray.create()
+	let top = (9223372036854775807 as Unsigned) + 1
+	let dw = d as Unsigned
+	ns.push(0)
+	ns.push(1)
+	ns.push(top - 1)
+	ns.push(top)
+	ns.push(top + 1)
+	ns.push(dw - 1)
+	ns.push(dw)
+	ns.push(dw + 1)
+	ns.push(u64.max as Unsigned)
+	ns.push((u64.max as Unsigned) - 1)
+	ns.push(dw + dw)
+	return ns
+end 'dividendsAround'
+
+function main() returns ExitCode
+	for u in dividendsAround(9223372036854775808) 'd9223372036854775808'
+		if u / 9223372036854775808 != refUDiv(u, d: 9223372036854775808) 'q9223372036854775808'
+			return 1
+		end 'q9223372036854775808'
+		if u mod 9223372036854775808 != refUMod(u, d: 9223372036854775808) 'r9223372036854775808'
+			return 2
+		end 'r9223372036854775808'
+	end 'd9223372036854775808'
+	for u in dividendsAround(9223372036854775809) 'd9223372036854775809'
+		if u / 9223372036854775809 != refUDiv(u, d: 9223372036854775809) 'q9223372036854775809'
+			return 3
+		end 'q9223372036854775809'
+		if u mod 9223372036854775809 != refUMod(u, d: 9223372036854775809) 'r9223372036854775809'
+			return 4
+		end 'r9223372036854775809'
+	end 'd9223372036854775809'
+	for u in dividendsAround(13835058055282163711) 'd13835058055282163711'
+		if u / 13835058055282163711 != refUDiv(u, d: 13835058055282163711) 'q13835058055282163711'
+			return 5
+		end 'q13835058055282163711'
+		if u mod 13835058055282163711 != refUMod(u, d: 13835058055282163711) 'r13835058055282163711'
+			return 6
+		end 'r13835058055282163711'
+	end 'd13835058055282163711'
+	for u in dividendsAround(18446744073709551600) 'd18446744073709551600'
+		if u / 18446744073709551600 != refUDiv(u, d: 18446744073709551600) 'q18446744073709551600'
+			return 7
+		end 'q18446744073709551600'
+		if u mod 18446744073709551600 != refUMod(u, d: 18446744073709551600) 'r18446744073709551600'
+			return 8
+		end 'r18446744073709551600'
+	end 'd18446744073709551600'
+	for u in dividendsAround(18446744073709551614) 'd18446744073709551614'
+		if u / 18446744073709551614 != refUDiv(u, d: 18446744073709551614) 'q18446744073709551614'
+			return 9
+		end 'q18446744073709551614'
+		if u mod 18446744073709551614 != refUMod(u, d: 18446744073709551614) 'r18446744073709551614'
+			return 10
+		end 'r18446744073709551614'
+	end 'd18446744073709551614'
+	for u in dividendsAround(18446744073709551615) 'd18446744073709551615'
+		if u / 18446744073709551615 != refUDiv(u, d: 18446744073709551615) 'q18446744073709551615'
+			return 11
+		end 'q18446744073709551615'
+		if u mod 18446744073709551615 != refUMod(u, d: 18446744073709551615) 'r18446744073709551615'
+			return 12
+		end 'r18446744073709551615'
+	end 'd18446744073709551615'
+	for u in dividendsAround(13835058055282163712) 'd13835058055282163712'
+		if u / 13835058055282163712 != refUDiv(u, d: 13835058055282163712) 'q13835058055282163712'
+			return 13
+		end 'q13835058055282163712'
+		if u mod 13835058055282163712 != refUMod(u, d: 13835058055282163712) 'r13835058055282163712'
+			return 14
+		end 'r13835058055282163712'
+	end 'd13835058055282163712'
+	for u in dividendsAround(10000000000000000000) 'd10000000000000000000'
+		if u / 10000000000000000000 != refUDiv(u, d: 10000000000000000000) 'q10000000000000000000'
+			return 15
+		end 'q10000000000000000000'
+		if u mod 10000000000000000000 != refUMod(u, d: 10000000000000000000) 'r10000000000000000000'
+			return 16
+		end 'r10000000000000000000'
+	end 'd10000000000000000000'
+	for u in dividendsAround(12345678901234567891) 'd12345678901234567891'
+		if u / 12345678901234567891 != refUDiv(u, d: 12345678901234567891) 'q12345678901234567891'
+			return 17
+		end 'q12345678901234567891'
+		if u mod 12345678901234567891 != refUMod(u, d: 12345678901234567891) 'r12345678901234567891'
+			return 18
+		end 'r12345678901234567891'
+	end 'd12345678901234567891'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: signed-divisors-near-two-to-the-62-point-5-and-i64-min -->
+Signed constant divisors where the old refinement declined agree with the hardware divide.
+```maxon
+typealias Word = int(i64.min to i64.max)
+typealias WordArray = Array with Word
+typealias PosDivisor = int(2 to i64.max)
+typealias NegDivisor = int(i64.min to -2)
+
+function refDiv(n Word, d PosDivisor) returns Word
+	return try (n / (d as Word)) otherwise panic("d is never zero")
+end 'refDiv'
+
+function refMod(n Word, d PosDivisor) returns Word
+	return try (n mod (d as Word)) otherwise panic("d is never zero")
+end 'refMod'
+
+function refDivNeg(n Word, d NegDivisor) returns Word
+	return try (n / (d as Word)) otherwise panic("d is never zero")
+end 'refDivNeg'
+
+function refModNeg(n Word, d NegDivisor) returns Word
+	return try (n mod (d as Word)) otherwise panic("d is never zero")
+end 'refModNeg'
+
+function dividends(d Word) returns WordArray
+	var ns = WordArray.create()
+	let m = i64.min as Word
+	let x = i64.max as Word
+	ns.push(0)
+	ns.push(1)
+	ns.push(-1)
+	ns.push(m)
+	ns.push(m + 1)
+	ns.push(x)
+	ns.push(x - 1)
+	ns.push(d)
+	ns.push(d - 1)
+	ns.push(d + 1)
+	ns.push(0 - d)
+	ns.push(1 - d)
+	ns.push(-1 - d)
+	ns.push(x - d)
+	ns.push(m + d)
+	ns.push(d + d)
+	ns.push(m / 2)
+	ns.push(x / 2)
+	return ns
+end 'dividends'
+
+function main() returns ExitCode
+	for n in dividends(6521908912666391107) 'p6521908912666391107'
+		if n / 6521908912666391107 != refDiv(n, d: 6521908912666391107) 'q6521908912666391107'
+			return 1
+		end 'q6521908912666391107'
+		if n mod 6521908912666391107 != refMod(n, d: 6521908912666391107) 'r6521908912666391107'
+			return 2
+		end 'r6521908912666391107'
+	end 'p6521908912666391107'
+	for n in dividends(6521908912666391106) 'p6521908912666391106'
+		if n / 6521908912666391106 != refDiv(n, d: 6521908912666391106) 'q6521908912666391106'
+			return 3
+		end 'q6521908912666391106'
+		if n mod 6521908912666391106 != refMod(n, d: 6521908912666391106) 'r6521908912666391106'
+			return 4
+		end 'r6521908912666391106'
+	end 'p6521908912666391106'
+	for n in dividends(6521908912666391109) 'p6521908912666391109'
+		if n / 6521908912666391109 != refDiv(n, d: 6521908912666391109) 'q6521908912666391109'
+			return 5
+		end 'q6521908912666391109'
+		if n mod 6521908912666391109 != refMod(n, d: 6521908912666391109) 'r6521908912666391109'
+			return 6
+		end 'r6521908912666391109'
+	end 'p6521908912666391109'
+	for n in dividends(4611686018427387905) 'p4611686018427387905'
+		if n / 4611686018427387905 != refDiv(n, d: 4611686018427387905) 'q4611686018427387905'
+			return 7
+		end 'q4611686018427387905'
+		if n mod 4611686018427387905 != refMod(n, d: 4611686018427387905) 'r4611686018427387905'
+			return 8
+		end 'r4611686018427387905'
+	end 'p4611686018427387905'
+	for n in dividends(4611686018427387907) 'p4611686018427387907'
+		if n / 4611686018427387907 != refDiv(n, d: 4611686018427387907) 'q4611686018427387907'
+			return 9
+		end 'q4611686018427387907'
+		if n mod 4611686018427387907 != refMod(n, d: 4611686018427387907) 'r4611686018427387907'
+			return 10
+		end 'r4611686018427387907'
+	end 'p4611686018427387907'
+	for n in dividends(9223372036854775807) 'p9223372036854775807'
+		if n / 9223372036854775807 != refDiv(n, d: 9223372036854775807) 'q9223372036854775807'
+			return 11
+		end 'q9223372036854775807'
+		if n mod 9223372036854775807 != refMod(n, d: 9223372036854775807) 'r9223372036854775807'
+			return 12
+		end 'r9223372036854775807'
+	end 'p9223372036854775807'
+	for n in dividends(9223372036854775806) 'p9223372036854775806'
+		if n / 9223372036854775806 != refDiv(n, d: 9223372036854775806) 'q9223372036854775806'
+			return 13
+		end 'q9223372036854775806'
+		if n mod 9223372036854775806 != refMod(n, d: 9223372036854775806) 'r9223372036854775806'
+			return 14
+		end 'r9223372036854775806'
+	end 'p9223372036854775806'
+	for n in dividends(9223372036854775805) 'p9223372036854775805'
+		if n / 9223372036854775805 != refDiv(n, d: 9223372036854775805) 'q9223372036854775805'
+			return 15
+		end 'q9223372036854775805'
+		if n mod 9223372036854775805 != refMod(n, d: 9223372036854775805) 'r9223372036854775805'
+			return 16
+		end 'r9223372036854775805'
+	end 'p9223372036854775805'
+	for n in dividends(7766279631452241920) 'p7766279631452241920'
+		if n / 7766279631452241920 != refDiv(n, d: 7766279631452241920) 'q7766279631452241920'
+			return 17
+		end 'q7766279631452241920'
+		if n mod 7766279631452241920 != refMod(n, d: 7766279631452241920) 'r7766279631452241920'
+			return 18
+		end 'r7766279631452241920'
+	end 'p7766279631452241920'
+	for n in dividends(3037000500) 'p3037000500'
+		if n / 3037000500 != refDiv(n, d: 3037000500) 'q3037000500'
+			return 19
+		end 'q3037000500'
+		if n mod 3037000500 != refMod(n, d: 3037000500) 'r3037000500'
+			return 20
+		end 'r3037000500'
+	end 'p3037000500'
+	for n in dividends(4294967297) 'p4294967297'
+		if n / 4294967297 != refDiv(n, d: 4294967297) 'q4294967297'
+			return 21
+		end 'q4294967297'
+		if n mod 4294967297 != refMod(n, d: 4294967297) 'r4294967297'
+			return 22
+		end 'r4294967297'
+	end 'p4294967297'
+	for n in dividends(6148914691236517205) 'p6148914691236517205'
+		if n / 6148914691236517205 != refDiv(n, d: 6148914691236517205) 'q6148914691236517205'
+			return 23
+		end 'q6148914691236517205'
+		if n mod 6148914691236517205 != refMod(n, d: 6148914691236517205) 'r6148914691236517205'
+			return 24
+		end 'r6148914691236517205'
+	end 'p6148914691236517205'
+	for n in dividends(-6521908912666391107) 'n6521908912666391107'
+		if n / (-6521908912666391107) != refDivNeg(n, d: -6521908912666391107) 'qn6521908912666391107'
+			return 25
+		end 'qn6521908912666391107'
+		if n mod (-6521908912666391107) != refModNeg(n, d: -6521908912666391107) 'rn6521908912666391107'
+			return 26
+		end 'rn6521908912666391107'
+	end 'n6521908912666391107'
+	for n in dividends(-6521908912666391106) 'n6521908912666391106'
+		if n / (-6521908912666391106) != refDivNeg(n, d: -6521908912666391106) 'qn6521908912666391106'
+			return 27
+		end 'qn6521908912666391106'
+		if n mod (-6521908912666391106) != refModNeg(n, d: -6521908912666391106) 'rn6521908912666391106'
+			return 28
+		end 'rn6521908912666391106'
+	end 'n6521908912666391106'
+	for n in dividends(-6521908912666391109) 'n6521908912666391109'
+		if n / (-6521908912666391109) != refDivNeg(n, d: -6521908912666391109) 'qn6521908912666391109'
+			return 29
+		end 'qn6521908912666391109'
+		if n mod (-6521908912666391109) != refModNeg(n, d: -6521908912666391109) 'rn6521908912666391109'
+			return 30
+		end 'rn6521908912666391109'
+	end 'n6521908912666391109'
+	for n in dividends(-4611686018427387905) 'n4611686018427387905'
+		if n / (-4611686018427387905) != refDivNeg(n, d: -4611686018427387905) 'qn4611686018427387905'
+			return 31
+		end 'qn4611686018427387905'
+		if n mod (-4611686018427387905) != refModNeg(n, d: -4611686018427387905) 'rn4611686018427387905'
+			return 32
+		end 'rn4611686018427387905'
+	end 'n4611686018427387905'
+	for n in dividends(-4611686018427387907) 'n4611686018427387907'
+		if n / (-4611686018427387907) != refDivNeg(n, d: -4611686018427387907) 'qn4611686018427387907'
+			return 33
+		end 'qn4611686018427387907'
+		if n mod (-4611686018427387907) != refModNeg(n, d: -4611686018427387907) 'rn4611686018427387907'
+			return 34
+		end 'rn4611686018427387907'
+	end 'n4611686018427387907'
+	for n in dividends(-9223372036854775807) 'n9223372036854775807'
+		if n / (-9223372036854775807) != refDivNeg(n, d: -9223372036854775807) 'qn9223372036854775807'
+			return 35
+		end 'qn9223372036854775807'
+		if n mod (-9223372036854775807) != refModNeg(n, d: -9223372036854775807) 'rn9223372036854775807'
+			return 36
+		end 'rn9223372036854775807'
+	end 'n9223372036854775807'
+	for n in dividends(-9223372036854775806) 'n9223372036854775806'
+		if n / (-9223372036854775806) != refDivNeg(n, d: -9223372036854775806) 'qn9223372036854775806'
+			return 37
+		end 'qn9223372036854775806'
+		if n mod (-9223372036854775806) != refModNeg(n, d: -9223372036854775806) 'rn9223372036854775806'
+			return 38
+		end 'rn9223372036854775806'
+	end 'n9223372036854775806'
+	for n in dividends(-9223372036854775805) 'n9223372036854775805'
+		if n / (-9223372036854775805) != refDivNeg(n, d: -9223372036854775805) 'qn9223372036854775805'
+			return 39
+		end 'qn9223372036854775805'
+		if n mod (-9223372036854775805) != refModNeg(n, d: -9223372036854775805) 'rn9223372036854775805'
+			return 40
+		end 'rn9223372036854775805'
+	end 'n9223372036854775805'
+	for n in dividends(-7766279631452241920) 'n7766279631452241920'
+		if n / (-7766279631452241920) != refDivNeg(n, d: -7766279631452241920) 'qn7766279631452241920'
+			return 41
+		end 'qn7766279631452241920'
+		if n mod (-7766279631452241920) != refModNeg(n, d: -7766279631452241920) 'rn7766279631452241920'
+			return 42
+		end 'rn7766279631452241920'
+	end 'n7766279631452241920'
+	for n in dividends(-3037000500) 'n3037000500'
+		if n / (-3037000500) != refDivNeg(n, d: -3037000500) 'qn3037000500'
+			return 43
+		end 'qn3037000500'
+		if n mod (-3037000500) != refModNeg(n, d: -3037000500) 'rn3037000500'
+			return 44
+		end 'rn3037000500'
+	end 'n3037000500'
+	for n in dividends(-4294967297) 'n4294967297'
+		if n / (-4294967297) != refDivNeg(n, d: -4294967297) 'qn4294967297'
+			return 45
+		end 'qn4294967297'
+		if n mod (-4294967297) != refModNeg(n, d: -4294967297) 'rn4294967297'
+			return 46
+		end 'rn4294967297'
+	end 'n4294967297'
+	for n in dividends(-6148914691236517205) 'n6148914691236517205'
+		if n / (-6148914691236517205) != refDivNeg(n, d: -6148914691236517205) 'qn6148914691236517205'
+			return 47
+		end 'qn6148914691236517205'
+		if n mod (-6148914691236517205) != refModNeg(n, d: -6148914691236517205) 'rn6148914691236517205'
+			return 48
+		end 'rn6148914691236517205'
+	end 'n6148914691236517205'
+	for n in dividends(-9223372036854775808) 'n9223372036854775808'
+		if n / (-9223372036854775808) != refDivNeg(n, d: -9223372036854775808) 'qn9223372036854775808'
+			return 49
+		end 'qn9223372036854775808'
+		if n mod (-9223372036854775808) != refModNeg(n, d: -9223372036854775808) 'rn9223372036854775808'
+			return 50
+		end 'rn9223372036854775808'
+	end 'n9223372036854775808'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```

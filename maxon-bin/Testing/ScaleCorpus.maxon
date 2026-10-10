@@ -183,7 +183,7 @@ export function parseRungCount(raw String) returns RungCountArg
 		return RungCountArg.invalid
 	end 'notANumber'
 
-	if value < MinRungCount or value > MaxRungCount 'outOfRange'
+	if value < (MinRungCount as ParsedCount) or value > (MaxRungCount as ParsedCount) 'outOfRange'
 		return RungCountArg.invalid
 	end 'outOfRange'
 
@@ -678,7 +678,7 @@ function fillerLocalsDecl(localCount KnobSize, tracked TrackedValueArray) return
 	var out = StringBuilder.create()
 
 	for v in 0 upto localCount 'fill'
-		let slot = v mod WorkingLocalsPerFunction
+		let slot = (v mod WorkingLocalsPerFunction) as KnobIndex
 
 		// ⚠ **DECLARED EMPTY AND ASSIGNED, RATHER THAN INITIALIZED — because a `var` that is never
 		// reassigned is now E3077**, and this filler MUST stay a `var` or the whole V dimension above
@@ -1992,9 +1992,9 @@ function longFunctionSource(ifCount KnobSize, localCount KnobSize) returns Strin
 	out.append(scopedLocalsDecl(localCount, tracked: tracked))
 
 	for i in 0 upto ifCount 'eachIf'
-		let p = i mod WorkingLocalsPerFunction
-		let q = (i + 1) mod WorkingLocalsPerFunction
-		let r = (i + 2) mod WorkingLocalsPerFunction
+		let p = (i mod WorkingLocalsPerFunction) as KnobIndex
+		let q = ((i + 1) mod WorkingLocalsPerFunction) as KnobIndex
+		let r = ((i + 2) mod WorkingLocalsPerFunction) as KnobIndex
 		out.append("\tif w{p} > {i} and w{q} < w{r} 'c{i}'\n")
 		out.append("\t\tw{p} = w{p} + {i mod 5 + 1}\n")
 		out.append("\t\tw{q} = w{q} + w{r}\n")
@@ -2031,8 +2031,8 @@ function deepBlocksSource(ifElseCount KnobSize, localCount KnobSize) returns Str
 	out.append(scopedLocalsDecl(localCount, tracked: tracked))
 
 	for i in 0 upto ifElseCount 'eachIfElse'
-		let p = i mod WorkingLocalsPerFunction
-		let q = (i + 1) mod WorkingLocalsPerFunction
+		let p = (i mod WorkingLocalsPerFunction) as KnobIndex
+		let q = ((i + 1) mod WorkingLocalsPerFunction) as KnobIndex
 		out.append("\tif w{p} > {i} 'd{i}'\n")
 		out.append("\t\tw{p} = w{p} + {i mod 3 + 1}\n")
 		out.append("\tend 'd{i}' else 'e{i}'\n")
@@ -2485,9 +2485,9 @@ function floatOpsSource(groupCount KnobSize) returns String
 	out.append(floatWorkingDecl(tracked))
 
 	for i in 0 upto groupCount 'eachGroup'
-		let p = i mod WorkingFloatsPerFunction
-		let q = (i + 1) mod WorkingFloatsPerFunction
-		let r = (i + 2) mod WorkingFloatsPerFunction
+		let p = (i mod WorkingFloatsPerFunction) as KnobIndex
+		let q = ((i + 1) mod WorkingFloatsPerFunction) as KnobIndex
+		let r = ((i + 2) mod WorkingFloatsPerFunction) as KnobIndex
 
 		out.append("\tf{p} = f{p} + f{q}\n")
 		trackedFloatSet(tracked, slot: p, value: trackedFloatAt(tracked, slot: p) + trackedFloatAt(tracked, slot: q))
@@ -3898,8 +3898,8 @@ end 'matchSitesSource'
 
 // The two pickers this knob's sites dispatch on, by the salt each was emitted with — read back here so
 // every shape below knows which ordinal reaches its arms.
-let MatchDenseSalt = 2 as KnobSize
-let MatchSparseSalt = 5 as KnobSize
+let MatchDenseSalt = 2 as KnobIndex
+let MatchSparseSalt = 5 as KnobIndex
 
 // SHAPE 0 — a STATEMENT match whose arms assign: dense contiguous ordinals, so a jump table.
 function matchDenseStatementSite(index KnobIndex) returns String
@@ -3937,7 +3937,7 @@ function matchRangeExpressionSite(index KnobIndex) returns String
 
 	var given = index mod 9 + 1
 
-	if enumPickerCase(MatchDenseSalt) == EnumCasesPerType - 1 'lastCase'
+	if enumPickerCase(MatchDenseSalt) == (EnumCasesPerType as KnobIndex) - 1 'lastCase'
 		given = index mod 6 + 2
 	end 'lastCase'
 
@@ -4132,7 +4132,7 @@ function stringSearchOpsSource(groupCount KnobSize) returns String
 
 		// The replacement is LONGER than the needle on purpose. Equal widths would witness a `replace` that
 		// found every match and one that found none identically, since both answer at the receiver's length.
-		rewrites.append("\t\tacc = acc + {asScaleInt("rv{i}.replace(\"{SearchNeedle}\", with: \"{SearchReplacement}\").byteLength()")}{neutralizeText(payloadBytes + SearchNeedleOccurrences * searchReplacementDelta())}\n")
+		rewrites.append("\t\tacc = acc + {asScaleInt("rv{i}.replace(\"{SearchNeedle}\", with: \"{SearchReplacement}\").byteLength()")}{neutralizeText(payloadBytes + (SearchNeedleOccurrences as TrackedValue) * searchReplacementDelta())}\n")
 		rewrites.append(accProbe("\t\t"))
 		rewrites.append("\t\tacc = acc + {asScaleInt("rv{i}.replaceFirst(\"{SearchNeedle}\", with: \"{SearchReplacement}\").byteLength()")}{neutralizeText(payloadBytes + searchReplacementDelta())}\n")
 		rewrites.append(accProbe("\t\t"))
@@ -4940,7 +4940,8 @@ let TryCoOwnConsumerFallbackValue = 47
 // founding reason: a third spelling would otherwise leave the cycle behind at two and silently stop
 // generating one of the four combinations.
 function tryCoOwnTakesErrorEdge(index KnobIndex) returns bool
-	return (index mod (TryCoOwnSpellingCount + TryCoOwnSpellingCount)) >= TryCoOwnSpellingCount
+	let spellings = TryCoOwnSpellingCount as KnobIndex
+	return (index mod (spellings + spellings)) >= spellings
 end 'tryCoOwnTakesErrorEdge'
 
 // The opaque bool a site hands `fetch`/a consumer. It is written against `a` and never as `true` /
@@ -5402,8 +5403,8 @@ function writeInterfaceTypes(dir FilePath, count KnobSize, written StringArray, 
 				break
 			end 'past'
 
-			out.append(interfaceConformancePair("{InterfacePrefix}{index}", typeName: "{ConformerPrefix}{index}", salt: index))
-			body.append(interfaceDispatchSite(index, typeName: "{ConformerPrefix}{index}", binding: "uv{index}", label: "ic{index}", salt: index))
+			out.append(interfaceConformancePair("{InterfacePrefix}{index}", typeName: "{ConformerPrefix}{index}", salt: index as KnobIndex))
+			body.append(interfaceDispatchSite(index as KnobIndex, typeName: "{ConformerPrefix}{index}", binding: "uv{index}", label: "ic{index}", salt: index as KnobIndex))
 		end 'eachInterface'
 
 		body.append(accWitnessTail(driverName))
@@ -5504,7 +5505,7 @@ function ifaceDispatchSource(siteCount KnobSize) returns String
 	out.append(witnessedDriverHeader(IfaceDispatchDriver))
 
 	for i in 0 upto siteCount 'eachSite'
-		out.append(interfaceDispatchSite(i, typeName: "{DispatchConformerPrefix}{i mod IfaceDispatchTypeCount}", binding: "dv{i}", label: "id{i}", salt: i mod IfaceDispatchTypeCount))
+		out.append(interfaceDispatchSite(i, typeName: "{DispatchConformerPrefix}{i mod IfaceDispatchTypeCount}", binding: "dv{i}", label: "id{i}", salt: (i mod IfaceDispatchTypeCount) as KnobIndex))
 	end 'eachSite'
 
 	out.append(accWitnessTail(IfaceDispatchDriver))

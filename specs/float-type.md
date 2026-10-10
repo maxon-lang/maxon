@@ -268,7 +268,7 @@ reach the slot as `3.0` and `2.5` respectively. Break the tag and exactly one of
 typealias Weight = float(f64.min to f64.max)
 
 type Particle
-	export var mass as Weight = 3
+	export var mass = 3 as Weight
 
 	static function make() returns Self
 		return Self{}
@@ -299,7 +299,7 @@ recorded tag answers, so neither half stands on the other.
 typealias Weight = float(f64.min to f64.max)
 
 type Particle
-	export var mass as Weight = 2.5
+	export var mass = 2.5 as Weight
 
 	static function make() returns Self
 		return Self{}
@@ -328,8 +328,8 @@ rather than inferred. Both must reach the slot as `0.0`.
 typealias Weight = float(f64.min to f64.max)
 
 type Particle
-	export var mass as Weight = 0
-	export var vel as Weight = 0.0
+	export var mass = 0 as Weight
+	export var vel = 0.0 as Weight
 
 	static function make() returns Self
 		return Self{}
@@ -414,4 +414,190 @@ typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
 42
+```
+
+<!-- test: error.a-float-alias-local-does-not-pass-as-another-alias -->
+A float alias is nominal: a local of one alias does not pass where another is expected.
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+typealias Weight = float(0.0 to 1.0)
+
+function show(w Weight)
+	print("{w}\n")
+end 'show'
+
+function main() returns ExitCode
+	let half = 0.5 as Ratio
+	show(half)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/float-type/error.a-float-alias-local-does-not-pass-as-another-alias.maxon:11:2: argument type mismatch for 'w': expected 'Weight', got 'Ratio'
+```
+
+<!-- test: error.a-float-alias-parameter-does-not-pass-as-another-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+typealias Weight = float(0.0 to 1.0)
+
+function show(w Weight)
+	print("{w}\n")
+end 'show'
+
+function relay(r Ratio)
+	show(r)
+end 'relay'
+
+function main() returns ExitCode
+	relay(0.5)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/float-type/error.a-float-alias-parameter-does-not-pass-as-another-alias.maxon:10:2: argument type mismatch for 'w': expected 'Weight', got 'Ratio'
+```
+
+<!-- test: error.a-float-alias-field-does-not-pass-as-another-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+typealias Weight = float(0.0 to 1.0)
+
+type Mix
+	export var share = 0.5 as Ratio
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Mix'
+
+function show(w Weight)
+	print("{w}\n")
+end 'show'
+
+function main() returns ExitCode
+	let m = Mix.create()
+	show(m.share)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/float-type/error.a-float-alias-field-does-not-pass-as-another-alias.maxon:19:2: argument type mismatch for 'w': expected 'Weight', got 'Ratio'
+```
+
+<!-- test: error.a-float-alias-mutated-parameter-does-not-pass-as-another-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+typealias Weight = float(0.0 to 1.0)
+
+function show(w Weight)
+	print("{w}\n")
+end 'show'
+
+function settle(r Ratio)
+	r = 0.25
+	show(r)
+end 'settle'
+
+var level = 0.5 as Ratio
+
+function main() returns ExitCode
+	settle(level)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/float-type/error.a-float-alias-mutated-parameter-does-not-pass-as-another-alias.maxon:11:2: argument type mismatch for 'w': expected 'Weight', got 'Ratio'
+```
+
+<!-- test: error.a-captured-float-alias-does-not-pass-as-another-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+typealias Weight = float(0.0 to 1.0)
+
+function describe(w Weight) returns String
+	return "{w}"
+end 'describe'
+
+function main() returns ExitCode
+	let half = 0.5 as Ratio
+	let later = function() gives describe(half)
+	print("{later()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/float-type/error.a-captured-float-alias-does-not-pass-as-another-alias.maxon:11:31: argument type mismatch for 'w': expected 'Weight', got 'Ratio'
+```
+
+<!-- test: error.a-float-alias-array-element-does-not-pass-as-another-alias -->
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+typealias Weight = float(0.0 to 1.0)
+typealias RatioArray = Array with Ratio
+
+function show(w Weight)
+	print("{w}\n")
+end 'show'
+
+function main() returns ExitCode
+	var rs = RatioArray.create()
+	rs.push(0.5)
+	let first = try rs.get(0) otherwise return 1
+	show(first)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/float-type/error.a-float-alias-array-element-does-not-pass-as-another-alias.maxon:14:2: argument type mismatch for 'w': expected 'Weight', got 'Ratio'
+```
+
+<!-- test: unsigned-values-convert-to-float-at-runtime -->
+A runtime value of an unsigned range converts to float as its unsigned value, rounding to nearest even.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Real = float(f64.min to f64.max)
+
+function widen(w Wide) returns Real
+	return w as Real
+end 'widen'
+
+function main() returns ExitCode
+	if widen(u64.max) != 18446744073709551616.0 'top'
+		return 1
+	end 'top'
+	if widen(9223372036854776832) != 9223372036854775808.0 'tieToEven'
+		return 2
+	end 'tieToEven'
+	if widen(9223372036854776833) != 9223372036854777856.0 'pastTheTie'
+		return 3
+	end 'pastTheTie'
+	if widen(5) != 5.0 'small'
+		return 4
+	end 'small'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: an-unsigned-literal-argument-to-a-float-parameter-stays-positive -->
+A literal above `i64.max` handed to a float parameter converts as the unsigned value it is.
+```maxon
+typealias Real = float(f64.min to f64.max)
+
+function positive(r Real) returns bool
+	return r > 0.0
+end 'positive'
+
+function main() returns ExitCode
+	if positive(9223372036854775808) 'p'
+		return 7
+	end 'p'
+	return 3
+end 'main'
+```
+```exitcode
+7
 ```

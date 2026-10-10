@@ -34,7 +34,7 @@ let SingleImplicitBit = 8388608 as DebuggeeWord
 let SingleSignBit = 2147483648 as DebuggeeWord
 let DoubleInfinityBits = 9218868437227405312 as DebuggeeWord
 let DoubleQuietNaNBits = 9221120237041090560 as DebuggeeWord
-let SingleSubnormalScale = -149.0 as DebugRealValue
+let SingleSubnormalScale = -149.0 as Real
 let SingleNormalScale = -150.0 as DebugRealValue
 
 let BoolTypeName = "i1"
@@ -219,6 +219,8 @@ function renderTyped(tree DebugValueTree, memory DebugMemory, symbols DebugSymbo
 	return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
 end 'renderTyped'
 
+typealias UnsignedDisplayWord = bits(64)
+
 function renderNumberOrCase(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, name String, typeName String, kind String, record MxdbgTypeInfo, source DebugValueSource) returns ElementIndex
 	let width = widthOf(record)
 	let raw = try readRaw(memory, source: source, width: width) otherwise return unreadable(tree, name: name, typeName: typeName, kind: kind)
@@ -227,7 +229,11 @@ function renderNumberOrCase(tree DebugValueTree, memory DebugMemory, symbols Deb
 		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: caseNameOf(symbols, record: record, tag: raw)))
 	end 'aDeclaredCase'
 
-	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{debugSignExtended(raw, width: width) if record.isSigned() else raw}"))
+	if record.isSigned() 'aSignedNumber'
+		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{debugSignExtended(raw, width: width)}"))
+	end 'aSignedNumber'
+
+	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{raw as UnsignedDisplayWord}"))
 end 'renderNumberOrCase'
 
 function renderFlag(tree DebugValueTree, memory DebugMemory, name String, typeName String, kind String, source DebugValueSource) returns ElementIndex

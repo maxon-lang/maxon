@@ -446,8 +446,8 @@ typealias Ver = int(0 to 100)
 
 type Bag uses T
 	typealias Items = Array with T
-	export var items as Items = Items.create()
-	export var version as Ver = 7
+	export var items = Items.create()
+	export var version = 7 as Ver
 	static function create() returns Self
 		return Self{}
 	end 'create'

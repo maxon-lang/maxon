@@ -77,13 +77,13 @@ let Utf8ThreeByteLength = 3 as ParsedInt
 let Utf8FourByteLength = 4 as ParsedInt
 
 // ⭐ **`GraphemeState` PACKED INTO ONE MACHINE WORD**, because a Std runtime function returns exactly one
-// value and the reference's state is a two-field struct (`GraphemeState{riCount, inEmojiSeq}`,
-// `grapheme.maxon:496-503`). Bit 0 is `inEmojiSeq`; the remaining bits are `riCount`.
+// value and the state has two fields, `riCount` and `inEmojiSeq` (`grapheme.maxon`'s `GraphemeStateBits`
+// packs them the same way). Bit 0 is `inEmojiSeq`; the remaining bits are `riCount`.
 //
 // The COUNT is carried in full rather than just its parity, even though `isGraphemeBreak` reads only
-// `riCount mod 2`: keeping the reference's own field means a future GB rule that needs the count finds it,
-// and a shift costs exactly what a parity toggle would. A run long enough to overflow the shift is a run
-// of 2^62 regional indicators.
+// `riCount mod 2`: keeping the field the rules are written against means a future GB rule that needs the
+// count finds it, and a shift costs exactly what a parity toggle would. A run long enough to overflow the
+// shift is a run of 2^63 regional indicators.
 
 // ⭐ **THE ENTRY POINTS.** All `__`-prefixed compiler-internal (`isCompilerInternalCallee` — no E3004, no
 // signature slotting) but NOT `__mm_`-prefixed, so none of them widens the heap decision by its prefix;

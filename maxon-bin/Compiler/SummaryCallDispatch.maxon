@@ -2,12 +2,16 @@
 // summary or, for a body no summary describes, the store shape of the runtime entry it is; a witness dispatch
 // or a call through a function value reaches every body it may land on.
 
-typealias WitnessSlotKey = int(0 to u64.max)
+module typealias WitnessSlotKey = int(0 to u64.max)
 typealias WitnessImplsMemo = Map with (WitnessSlotKey, CallLandingBodies)
 typealias FunctionValueBodiesMemo = Map with (ParamCount, CallLandingBodies)
 typealias InstanceRecordMemo = Map with (GenericInstanceId, bool)
 
 let WitnessSlotKeyShift = 16 as WitnessSlotKey
+
+module function witnessSlotKeyOf(interfaceDeclIndex ElementIndex, methodIndex WitnessMethodIndex) returns WitnessSlotKey
+	return ((interfaceDeclIndex as WitnessSlotKey) shl WitnessSlotKeyShift) or (methodIndex as WitnessSlotKey)
+end 'witnessSlotKeyOf'
 
 module interface SummaryCallWalker
 	function callSiteCursor() returns CallSiteCursor
@@ -296,12 +300,12 @@ module type CallSummaryIndex
 	end 'signatureOf'
 
 	module function witnessMethodName(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns String
-		let slot = witnessSlotAt(self.signatures, witnessSlots: self.witnessSlots, dispatched: dispatchedInterfaceAt(self.signatures, interfaceDeclIndex: interfaceDeclIndex), interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
+		let slot = witnessSlotAt(self.signatures, interfaces: self.signatures.interfaceMap(), witnessSlots: self.witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
 		return String.from(slot.method.name)
 	end 'witnessMethodName'
 
 	module function implsOf(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns CallLandingBodies
-		let key = ((interfaceDeclIndex as WitnessSlotKey) shl WitnessSlotKeyShift) or (methodIndex as WitnessSlotKey)
+		let key = witnessSlotKeyOf(interfaceDeclIndex, methodIndex: methodIndex)
 
 		if let memoized = try self.witnessImpls.get(key) 'asked'
 			return memoized

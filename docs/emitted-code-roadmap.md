@@ -1105,16 +1105,14 @@ no division after the seeds — until the loop's own exit condition holds. **Tha
 obligation**, so the first `p` that satisfies it gives the smallest exact multiplier; there is nothing
 to trust beyond the transcription.
 
-⚠⚠ **ONE VALUE IS ALLOWED TO WRAP AND EVERY OTHER ONE MUST NOT, AND THAT IS WHAT MAKES A u64
-ALGORITHM EXPRESSIBLE IN A LANGUAGE WITH NO u64 ARITHMETIC.** The compiler's `ParsedInt` is signed 64-bit and
-its comparisons are signed, so a value above `2^63` would compare as negative and the loop would take
-the wrong branch. `anc`, `r1`, `r2` and `delta` are remainders below `2^63` and are exact — their
-doublings are written `r >= m - r` / `r - (m - r)` so no intermediate leaves the range. `q1` must be
-exact because the exit condition COMPARES it, and it is tested against `i64.max/2` before each
-doubling: MEASURED, it first exceeds i64 for divisors around **2^62.5** and for none below **2^61**,
-so that bound is a FIFTH refusal that costs nothing real. `q2` is the only term allowed to wrap, and
-its wrapped value IS the answer — a 64-bit multiplier whose top bit may legitimately be set, which is
-what the `+ dividend` fixup exists for.
+⚠⚠ **THE DERIVATION RUNS IN UNSIGNED 64-BIT ARITHMETIC, AND ONE VALUE IS ALLOWED TO WRAP.** Every
+term is a `DivisionWord` (`int(0 to u64.max)`), whose comparisons are unsigned, so a value at or above
+`2^63` compares as the number it is and the loop takes the right branch for every magnitude from 2 to
+`2^63 - 1`. `anc`, `r1`, `r2` and `delta` lie below `2^63` and are exact — their
+doublings are written `r >= m - r` / `r - (m - r)` so no intermediate leaves the range. `q2` is the only
+term allowed to wrap, and its wrapped
+value IS the answer — a 64-bit multiplier whose top bit may legitimately be set, which is what the
+`+ dividend` fixup exists for.
 
 ⭐ **AND THE DIVISOR IS ALWAYS TAKEN POSITIVE, WHICH IS A DELIBERATE DEPARTURE FROM THE PUBLISHED
 ALGORITHM.** It handles `d < 0` by biasing `anc` and negating `M`; working in `|K|` and negating the
@@ -1149,7 +1147,7 @@ ones worth reading.**
 | make the floor→truncate correction a `mul` instead of an `add` | **RED, exit 5**, and the range-check control flips too |
 | shift the unsigned quotient ARITHMETICALLY | **RED, exit 1** on the unsigned case only |
 | HALVE `anc` in `deriveSignedMagic` | **RED, exit 5** — but ONLY on the seventh case, which exists because of this |
-| invert the do-while sense, or set `anc` to `i64.max` | **GREEN, and correctly so**: both make the refinement stop LATER, and a later `p` is still an EXACT multiplier (the loop finds the smallest, not the only one), so either the magic merely changes or `q1` trips its bound and the site declines. Only an EARLY exit is a wrong answer. |
+| invert the do-while sense, or set `anc` to `i64.max` | **GREEN, and correctly so**: both make the refinement stop LATER, and a later `p` is still an EXACT multiplier (the loop finds the smallest of several), so the magic merely changes. Only an EARLY exit is a wrong answer. |
 
 ⛔⛔ **AND THE SEVENTH CASE EXISTS BECAUSE THE FIRST SIX COULD NOT SEE A MIS-DERIVED MAGIC AT ALL.**
 With `anc` halved — a provably too-coarse reciprocal — the gate's twelve dividends against eleven
@@ -1166,10 +1164,10 @@ but a value of at least `2^63`. `x /u 18446744073709551600` is `0` for every div
 signed magnitude is `16`, a power of two, which the first cut answered with `shrLogical 4`. MEASURED
 on a program that reaches it from source — a `let` typed `int(0 to u64.max)` whose folded value has
 wrapped past `i64.max` — **`9223372036854776807 / 18446744073709551600` printed `576460752303423550`
-where `0` is correct.** Refused now, and pinned by
-`an-unsigned-divisor-above-the-signed-range-is-refused`. ⇒ **the sign of a `ParsedInt` divisor means
-two different things to the two signednesses, and it is the ONE refusal here that prevents a wrong
-answer rather than a deleted trap.**
+where `0` is correct.** An unsigned divisor's magnitude is read as the unsigned word, and one at or
+above `2^63` takes the comparison-bit quotient — `x /u K` is `(x and not (x - K)) shrLogical 63`, the
+`0` or `1` it can only be — pinned by `an-unsigned-divisor-above-the-signed-range-keeps-its-answer`.
+⇒ **the sign of a `ParsedInt` divisor means two different things to the two signednesses.**
 
 ⭐⭐ **THE TIMED A/B — AND IT IS THE SECOND NON-ZERO RESULT THIS WORKSTREAM HAS HAD, ON THE PROGRAM
 THE ROW WAS DESIGNED AROUND.** Two compilers from ONE tree differing in the one line that turns the
@@ -1221,18 +1219,17 @@ test against the hardware `idiv` rather than a table of expected quotients:
 | `the-hardest-dividend-for-a-divisor-is-the-one-the-derivation-is-ABOUT` | the DERIVATION, at `anc` and its neighbours, computed per divisor at run time |
 | `a-signed-power-of-two-truncates-toward-zero` | the bias that makes `-7 / 2` be `-3` and not `-4` |
 | `an-unsigned-power-of-two-reads-the-whole-bit-pattern` | the logical shift, over three dividends past `i64.max` |
-| `an-unsigned-divisor-above-the-signed-range-is-refused` | the live wrong answer review found |
-| `the-refused-divisors-keep-their-answers` | `i64.min mod -1`, `x / 1`, `x mod 1`, `x / i64.min` |
+| `an-unsigned-divisor-above-the-signed-range-keeps-its-answer` | the live wrong answer review found |
+| `the-refused-divisors-keep-their-answers` | `i64.min mod -1`, `x / 1`, `x mod 1`, and `x / i64.min`, which reduces to a shift |
 | `a-reduced-division-still-meets-its-range-check` | that the rewrite keeps the division's RESULT VALUE ID, which the guard `insertRangeChecks` emitted names |
 
 **Since closed**: the **UNSIGNED magic sequence** — `deriveUnsignedMagic` takes libdivide's round-up
-(`u64_gen`) form rather than Hacker's Delight fig 10-2, because fig 10-2's `nc` track needs unsigned
-comparisons a signed `ParsedInt` cannot make, and the 65th bit rides the `addIndicator` fixup; and the
+(`u64_gen`) form, and the 65th bit rides the `addIndicator` fixup; an unsigned divisor at or above
+`2^63` takes the comparison-bit quotient, and a signed one of any magnitude up to `2^63` reduces; and the
 **arm64 `SMULH`/`UMULH` ops**, so both lanes execute the row.
 
 **Left open**: the `mul` → `shl` half (`EC16` left six multiplies in the whole corpus and no site has
-been shown to pay); a divisor at or above **2^62.5**, where the derivation leaves i64 range and declines;
-`|K| == 1`, an identity `foldConstOperands` cannot reach because `div`/`mod` have no `binOpImm` form;
+been shown to pay); `|K| == 1`, an identity `foldConstOperands` cannot reach because `div`/`mod` have no `binOpImm` form;
 and — measured rather than assumed — **`const` UNIFICATION, which would buy this row a second time**.
 `(n / 8) + (n mod 8)` emits its four-op quotient chain ONCE because CSE merges the two; the same
 program over `10` emits it TWICE, because there is no constant interning and the two sites mint two

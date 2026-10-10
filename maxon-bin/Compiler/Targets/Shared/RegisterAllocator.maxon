@@ -802,16 +802,16 @@ function assertArm64CallClobbers(pool RegMask)
 	assertOneCallClobber(TargetOp.arm64Syscall(0), name: "arm64Syscall", pool: pool, calleeWitness: 19, calleeName: "x19")
 end 'assertArm64CallClobbers'
 
-// ⭐⭐ **EVERY MACRO-OP WHOSE ENCODER WRITES FIXED REGISTERS, AGAINST THE `implicitDefs` LITERAL THAT IS
-// WHAT KEEPS A LIVE VALUE OUT OF THEM.** Four families now answer here — the jump tables (r10/r11 on x64,
-// x16/x17 on arm64), the byte-fill ladders (rax/rcx/rdx/rdi, x0..x3), the arm64 LL/SC atomics
-// (x16/x17) and the x64 f64 negate's mask register (xmm5) — and they share ONE guard because they share
-// one hazard, stated once: the inline
-// `TargetOpMeta` literal is what `forbidOperandsFromImplicit` and the liveness clobber census read, the
-// ENCODER is what actually writes those registers, and a drift between the two is a silent miscompile — a
-// live value coloured onto a register the encoder then destroys. Two byte-identical helpers and two
-// per-target dispatchers would differ only in the sentence in the panic, which is a parameter here
-// instead.
+// ⭐⭐ **EVERY MACRO-OP WHOSE ENCODER WRITES FIXED REGISTERS, AGAINST THE `implicitDefs` LITERAL THAT
+// IS WHAT KEEPS A LIVE VALUE OUT OF THEM.** Five families answer here — the jump tables (r10/r11 on
+// x64, x16/x17 on arm64), the byte-fill ladders (rax/rcx/rdx/rdi, x0..x3), the arm64 LL/SC atomics
+// (x16/x17), the x64 f64 negate's mask register (xmm5) and the x64 unsigned int → f64 sequence
+// (r11) — and they share ONE guard because they share one hazard, stated once: the inline
+// `TargetOpMeta` literal is what `forbidOperandsFromImplicit` and the liveness clobber census read,
+// the ENCODER is what actually writes those registers, and a drift between the two is a silent
+// miscompile — a live value coloured onto a register the encoder then destroys. Two byte-identical
+// helpers and two per-target dispatchers would differ only in the sentence in the panic, which is a
+// parameter here instead.
 //
 // ⛔ **THE FILL LADDER's x64 HALF IS THE ONE THAT WOULD BITE.** rdi is an ARGUMENT register in this
 // ABI, so it is allocatable and a live
@@ -829,6 +829,7 @@ end 'assertEncoderScratchMasks'
 function assertX64EncoderScratchMasks()
 	assertEncoderScratchMask(TargetOp.x64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "x64JumpTable", expected: x64JumpTableScratchMask(), hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
 	assertEncoderScratchMask(TargetOp.x64MemFill(0), name: "x64MemFill", expected: x64MemFillScratchMask(), hazard: "a value live across the fill could be colored onto a register the ladder clobbers")
+	assertEncoderScratchMask(TargetOp.cvtu64sdRegReg(TargetVReg.virtual(0), src: TargetVReg.virtual(0)), name: "cvtu64sdRegReg", expected: x64UnsignedToFloatScratchMask(), hazard: "the source could be colored onto the register the halving sequence clobbers before its last read")
 
 	// The f64 negate's mask register is ALLOCATABLE (xmm5 is a float argument register), so this is the
 	// fill ladder's case rather than the jump table's: the declaration genuinely reserves it at the op.
@@ -1998,6 +1999,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		ucomisdRegReg or
 		movsdRegRip or
 		cvtsi2sdRegReg or
+		cvtu64sdRegReg or
 		cvttsd2siRegReg or
 		sqrtsdRegReg or
 		roundsdRegReg or
@@ -2051,6 +2053,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		arm64Fdiv or
 		arm64Fcmp or
 		arm64Scvtf or
+		arm64Ucvtf or
 		arm64Fcvtzs or
 		arm64Fsqrt or
 		arm64Frint or
@@ -3023,6 +3026,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		ucomisdRegReg(lhs, rhs) then return TargetOp.ucomisdRegReg(colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 		movsdRegRip(dest, label) then return TargetOp.movsdRegRip(colorVRegWith(dest, alloc: alloc), label: label)
 		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		cvtu64sdRegReg(dest, src) then return TargetOp.cvtu64sdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		sqrtsdRegReg(dest, src) then return TargetOp.sqrtsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		roundsdRegReg(dest, src, mode) then return TargetOp.roundsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), mode: mode)
@@ -3075,6 +3079,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64Fdiv(dest, lhs, rhs) then return TargetOp.arm64Fdiv(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 		arm64Fcmp(lhs, rhs) then return TargetOp.arm64Fcmp(colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 		arm64Scvtf(dest, src) then return TargetOp.arm64Scvtf(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		arm64Ucvtf(dest, src) then return TargetOp.arm64Ucvtf(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64Fcvtzs(dest, src) then return TargetOp.arm64Fcvtzs(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64Fsqrt(dest, src) then return TargetOp.arm64Fsqrt(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64Fabs(dest, src) then return TargetOp.arm64Fabs(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))

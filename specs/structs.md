@@ -294,8 +294,8 @@ end 'main'
 <!-- test: struct-field-default -->
 ```maxon
 type Counter
-	export var value = 0
-	export var step = 1
+	export var value = 0 as CounterValue
+	export var step = 1 as CounterStep
 
 	static function create() returns Self
 		return Self{}
@@ -313,7 +313,7 @@ function main() returns ExitCode
 	let c1 = Counter.create()
 	let c2 = Counter.create(40, step: 1)
 	let c3 = Counter.create(10, step: 2)
-	return c1.value + c2.value + c3.step
+	return c1.value + c2.value + (c3.step as CounterValue)
 end 'main'
 ```
 ```exitcode
@@ -323,8 +323,8 @@ end 'main'
 <!-- test: struct-field-inferred-type -->
 ```maxon
 type Settings
-	export let maxRetries = 5
-	export var timeout = 50.0
+	export let maxRetries = 5 as Retries
+	export var timeout = 50.0 as Seconds
 
 	static function create() returns Self
 		return Self{}
@@ -335,6 +335,8 @@ function main() returns ExitCode
 	let s = Settings.create()
 	return s.maxRetries + trunc(s.timeout)
 end 'main'
+typealias Retries = int(0 to u64.max)
+typealias Seconds = float(f64.min to f64.max)
 ```
 ```exitcode
 55

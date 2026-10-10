@@ -257,6 +257,8 @@ tests/
     repl-script-over-stdin.maxtest          the REPL reads stdin and answers in text, never in JSON
     cond-int-equals.maxtest                 an integer condition stops on the one iteration that satisfies it
     cond-bool.maxtest                       a bool condition is one byte wide, and stops where the fixture sets it
+    cond-u64-max.maxtest                    a condition naming u64.max on an unsigned local stops only on the iteration that holds it
+    cond-u64-literal-against-a-signed-local-is-invalid.maxtest   the same literal against a signed local is refused as invalid, and the breakpoint is not armed
     cond-never-true-exits.maxtest           a condition nothing satisfies stops nothing and costs one trap a hit
     cond-replaced-by-unconditional.maxtest      a plain `break` over a conditional one drops the condition
     cond-float-refused.maxtest              a float local is refused by name, and the breakpoint is not armed

@@ -54,15 +54,13 @@ fold. Without it this spec would test the sequence and take the constants on tru
 That is sound only where the fault provably cannot happen:
 
 - **`0`** — the fault IS the answer. `x / 0` written in source is E3103 at compile time.
-- **`|K| == 1`** — an algebraic identity rather than a strength reduction, and `x / -1` must keep
-  faulting at `i64.min`, which `specs/division.md` pins as deliberate.
-- **`i64.min`** — the derivation works in `|K|`, which is not representable.
-- ⛔ **an UNSIGNED divisor at or above `2^63`** — and this one is not about a deleted fault at all, it
-  is the only refusal here that stands between the pass and a WRONG ANSWER. The pass reads a divisor
-  as a signed `ParsedInt`, so `18446744073709551600` arrives as `-16`, whose *magnitude* is a power of
-  two. `x /u 18446744073709551600` is `0` for every dividend below it; `x shrLogical 4` is not. The
-  case below is its pin, and the shape is reachable from source through a `let` whose declared type is
-  `int(0 to u64.max)` and whose folded value has wrapped past `i64.max`.
+- **`1`, and a signed `-1`** — an algebraic identity rather than a strength reduction, and `x / -1`
+  must keep faulting at `i64.min`, which `specs/division.md` pins as deliberate.
+
+Every other divisor is reduced. A signed `i64.min` is a power of two and takes the shift. An unsigned
+divisor at or above `2^63` takes `(x & ~(x - K)) shrLogical 63` for its quotient, because the quotient
+of such a division is `0` or `1`; the derivation reads the divisor as the unsigned value it is, so
+`18446744073709551600` is never mistaken for `-16`.
 
 ### What the emitted code looks like
 
@@ -389,13 +387,12 @@ end 'main'
 0
 ```
 
-<!-- test: an-unsigned-divisor-above-the-signed-range-is-refused -->
-⛔ **THE REFUSAL THAT PREVENTS A WRONG ANSWER.** `huge` is `2^64 - 16`; a `ParsedInt` holds it as `-16`,
-whose magnitude is `16` — a power of two a reduction would answer with `shrLogical 4`. The right
-answer is `0`, because the dividend is smaller than the divisor. Both operands' declared types are
-`int(0 to u64.max)`, so the division is genuinely UNSIGNED, and the divisor is folded, so it genuinely
-reaches the classifier as a constant. Restore the reduction for a negative unsigned divisor and this
-case answers `576460752303423550`.
+<!-- test: an-unsigned-divisor-above-the-signed-range-keeps-its-answer -->
+`huge` is `2^64 - 16`. Read as a signed word it is `-16`, whose magnitude is a power of two a
+reduction would answer with `shrLogical 4`; the right answer is `0`, because the dividend is smaller
+than the divisor. Both operands' declared types are `int(0 to u64.max)`, so the division is UNSIGNED,
+and the divisor is folded, so it reaches the classifier as a constant and takes the large-divisor
+quotient. A reduction that read it as `-16` would answer `576460752303423550`.
 ```maxon
 typealias Unsigned = bits(64)
 typealias UPosDivisor = int(2 to u64.max)
@@ -409,8 +406,8 @@ function refUMod(n Unsigned, d UPosDivisor) returns Unsigned
 end 'refUMod'
 
 function main() returns ExitCode
-	let huge = ((9223372036854775807 as Unsigned) + (9223372036854775793 as Unsigned)) as Unsigned
-	let a = ((9223372036854775807 as Unsigned) + 1000) as Unsigned
+	let huge = (9223372036854775807 as Unsigned) + (9223372036854775793 as Unsigned)
+	let a = (9223372036854775807 as Unsigned) + 1000
 	if a / huge != refUDiv(a, d: huge as UPosDivisor) 'quotient'
 		return 1
 	end 'quotient'
@@ -431,7 +428,7 @@ end 'main'
 ```
 
 <!-- test: the-refused-divisors-keep-their-answers -->
-The three magnitudes the pass declines, each still answered by the instruction it left in place.
+The divisors the pass declines keep their answers, and so does `i64.min`, which it reduces to a shift.
 `i64.min mod -1` is `0` — the parser's own overflow guard is what makes it so, and a reduction that
 took `-1` would have had to reproduce it. `x / 1` and `x mod 1` are identities the pass deliberately
 does not spell, and `x / i64.min` is `0` for every dividend but one.

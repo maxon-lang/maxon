@@ -2380,27 +2380,46 @@ end 'CallLandingBodies'
 // module declares; a conformer's implementation it does not declare is compiler-synthesized. See
 // `addWitnessParamEdges` for why the union over them is the answer.
 module function witnessDispatchImpls(project Project, signatures ProgramSignatures, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, funcIndexByName FuncIndexByName, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex) returns CallLandingBodies
-	let slot = witnessSlotAt(signatures, witnessSlots: witnessSlots, dispatched: dispatchedInterfaceAt(signatures, interfaceDeclIndex: interfaceDeclIndex), interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
-	let requirement = slot.method.name
-	let sourceInterface = slot.sourceInterfaceName
+	let slot = witnessSlotAt(signatures, interfaces: signatures.interfaceMap(), witnessSlots: witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
+	let landing = witnessRequirementImplNames(project, signatures: signatures, slot: slot, conformers: conformers)
 	var found = CallLandingBodies.create()
+	found.unresolved = landing.unselected
 
-	for conformer in conformersOfMemoized(signatures, interfaceName: sourceInterface, memo: conformers) 'eachConformer'
-		let impl = try project.witnessSlotImpls.get(witnessSlotImplKey(conformer, interfaceName: sourceInterface, methodName: requirement)) otherwise 'noDeclaredImpl'
-			found.unresolved = true
-			continue
-		end 'noDeclaredImpl'
-
+	for impl in landing.names 'eachImpl'
 		let calleeIndex = try funcIndexByName.get(impl) otherwise 'notInThisModule'
 			found.unresolved = true
 			continue
 		end 'notInThisModule'
 
 		found.impls.push(calleeIndex)
-	end 'eachConformer'
+	end 'eachImpl'
 
 	return found
 end 'witnessDispatchImpls'
+
+module type WitnessImplNames
+	module var names as ByteArrayArray
+	module var unselected as bool
+
+	module static function create() returns WitnessImplNames
+		return Self{names: ByteArrayArray.create(), unselected: false}
+	end 'create'
+end 'WitnessImplNames'
+
+module function witnessRequirementImplNames(project Project, signatures ProgramSignatures, slot CollectedInterfaceMethod, conformers ConformersByInterface) returns WitnessImplNames
+	var found = WitnessImplNames.create()
+
+	for conformer in conformersOfMemoized(signatures, interfaceName: slot.sourceInterfaceName, memo: conformers) 'eachConformer'
+		let impl = try project.witnessSlotImpls.get(witnessSlotImplKey(conformer, interfaceName: slot.sourceInterfaceName, methodName: slot.method.name)) otherwise 'noDeclaredImpl'
+			found.unselected = true
+			continue
+		end 'noDeclaredImpl'
+
+		found.names.push(impl)
+	end 'eachConformer'
+
+	return found
+end 'witnessRequirementImplNames'
 
 // `conformersOf`, asked once per interface per compile — see `ConformersByInterface`.
 function conformersOfMemoized(signatures ProgramSignatures, interfaceName ByteArray, memo ConformersByInterface) returns ByteArrayArray
@@ -3124,12 +3143,6 @@ function deferredParseErrorDiagnostic(project Project, module MaxonModule, signa
 end 'deferredParseErrorDiagnostic'
 
 function checkCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, throwsMap FuncThrowsMap, mutationSummary ParamMutationSummary, provenance ProvenanceTracer) throws CompileError
-	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION** — the note `LowerMaxonToStd.witnessSlotsOf` carries, one pass
-	// over. `interfaceWitnessSlots` walks the `extends` graph and builds a fresh array plus a visited set on
-	// every call; asked once per dispatch OP that is a quadratic in a program's dispatch count. The list is a
-	// pure function of the interface, which is fixed before any body is parsed, so it is built on the FIRST
-	// dispatch through each interface and held. Declared here rather than inside the walk because the walk is
-	// per op and this must outlive every one of them.
 	var witnessSlots = WitnessSlotsByDeclIndex.create()
 
 	for funcIndex in 0 upto module.functions.count() 'eachFunc'
@@ -3357,10 +3370,6 @@ function requireTriedWitnessDispatch(project Project, func IrFunction, opIndex E
 	reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing interface method requires try: wrap the witness dispatch as `try <receiver>.<method>(…)` — a bare call drops the error flag the method returns", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 end 'requireTriedWitnessDispatch'
 
-// The witness slot list per dispatched interface, keyed by the declaration-order handle a `witnessDispatch`
-// op carries. See `checkCalls`, where the one instance is created, for why it exists.
-module typealias WitnessSlotsByDeclIndex = Map with (ElementIndex, CollectedInterfaceMethodArray)
-
 // What an interface FORMAL denotes at the argument check. `opaque` is a real answer — see
 // `witnessFormalDeclaredType` for its four sources and for why each is a position where comparing would be
 // WRONG rather than merely unimplemented. `preErasedAggregate` rides with the type for
@@ -3403,8 +3412,7 @@ end 'checkWitnessDispatchOp'
 // parser's arity check ran before the op was emitted — so a short `args` is a compiler defect and panics
 // rather than being absorbed.
 function checkWitnessArgTypes(project Project, func IrFunction, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, opIndex ElementIndex, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, provenance ProvenanceTracer)
-	let dispatched = dispatchedInterfaceAt(signatures, interfaceDeclIndex: interfaceDeclIndex)
-	let slot = witnessSlotAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
+	let slot = witnessSlotAt(signatures, interfaces: signatures.interfaceMap(), witnessSlots: witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
 	let requirement = slot.method
 	let declaring = signatures.declaringInterface(slot.sourceInterfaceName)
 	let callRange = project.opRanges.get(opIndex)
@@ -3461,39 +3469,6 @@ end 'argumentIsRefused'
 function witnessFormalName(requirement InterfaceMethodSig, position ParamCount) returns ByteArray
 	return try requirement.paramNames.get(position) otherwise panic("witnessFormalName: paramNames.get OOB at {position} — an InterfaceMethodSig's paramNames and paramTypeNames are parallel by construction ({requirement.paramNames.count()} names, {requirement.paramTypeNames.count()} types)")
 end 'witnessFormalName'
-
-// The interface a dispatch's handle names, resolved through the ONE rule (`lookupInterface`) over the SAME
-// store the parser numbered the dispatch against (`ProgramSignatures.interfaceMap()`, which
-// `Parser.witnessSlotsOf` also walks). Reading the merged `project.interfaces` instead would be a second
-// writer of what must be one declaration, and `LowerMaxonToStd.interfaceAtDeclIndex` has to assert that seam
-// precisely because it reads the other store; asking the numbering's own store leaves nothing to assert.
-module function dispatchedInterfaceAt(signatures ProgramSignatures, interfaceDeclIndex ElementIndex) returns IrInterface
-	let name = signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
-
-	match lookupInterface(signatures.interfaceMap(), name: name) 'resolve'
-		found(iface) then return iface
-		notFound then panic("dispatchedInterfaceAt: interface '{String.from(name)}' holds position {interfaceDeclIndex} in the signature index but resolves to nothing in it — a witness dispatch was numbered against a declaration the index does not carry")
-	end 'resolve'
-end 'dispatchedInterfaceAt'
-
-// `interfaceDeclIndex`'s transitive witness slot list, walked once per INTERFACE — see `checkCalls`, where
-// the memo is created, for why that is a correctness-shaped concern rather than a speed one.
-function witnessSlotsAt(signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, dispatched IrInterface, interfaceDeclIndex ElementIndex) returns CollectedInterfaceMethodArray
-	if let memoized = try witnessSlots.get(interfaceDeclIndex) 'alreadyWalked'
-		return memoized
-	end 'alreadyWalked'
-
-	let slots = interfaceWitnessSlots(signatures.interfaceMap(), iface: dispatched)
-	witnessSlots.upsert(interfaceDeclIndex, value: slots)
-	return slots
-end 'witnessSlotsAt'
-
-// The requirement a witness dispatch names: slot `methodIndex` of the one list every reader of the op's
-// `(interfaceDeclIndex, methodIndex)` pair numbers it against.
-module function witnessSlotAt(signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, dispatched IrInterface, interfaceDeclIndex ElementIndex, methodIndex WitnessMethodIndex) returns CollectedInterfaceMethod
-	let slots = witnessSlotsAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex)
-	return try slots.get(methodIndex) otherwise panic("witnessSlotAt: slot {methodIndex} is outside the {slots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")
-end 'witnessSlotAt'
 
 // ⭐⭐ **WHAT AN INTERFACE FORMAL DENOTES AT THE ARGUMENT CHECK, or that there is nothing here to compare
 // against.** An interface stores its formals as RENDERED SOURCE NAMES (`IrInterface`'s header), so this door
@@ -4613,7 +4588,7 @@ typealias WitnessTargetsByRequirement = Map with (ByteArray, ByteArrayArray)
 
 // The two MEMOS and the two stores they are derived from, carried together because both must outlive the
 // per-op walk: one transitive slot walk per interface and one candidate scan per requirement, never one per
-// dispatch (`checkCalls` keeps the slot memo for that exact reason, stated there).
+// dispatch (see `WitnessSlotsByDeclIndex` for why the slot memo is owed).
 export type WitnessDispatchTargets
 	let signatures as ProgramSignatures
 	let functions as IrFunctionArray
@@ -4660,7 +4635,7 @@ export type WitnessDispatchTargets
 	// The requirement's declared name, off the SAME slot list `checkWitnessArgTypes` reads — so the candidate
 	// set and the argument check cannot come to name different requirements for one op.
 	module function requirementNameAt(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns ByteArray
-		return witnessSlotAt(self.signatures, witnessSlots: self.slots, dispatched: dispatchedInterfaceAt(self.signatures, interfaceDeclIndex: interfaceDeclIndex), interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex).method.name
+		return witnessSlotAt(self.signatures, interfaces: self.signatures.interfaceMap(), witnessSlots: self.slots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex).method.name
 	end 'requirementNameAt'
 
 	// Every declared member wearing that name — the requirement's own spelling, which is what `create`
@@ -6171,6 +6146,10 @@ function brandedTypeDisplayName(project Project, tag ValueTypeTag, nameId TypeNa
 	return typeDisplayName(project, tag: tag, nameId: nameId, readerFilePath: readerFilePath)
 end 'brandedTypeDisplayName'
 
+function reservedCalleeStatesAShape(project Project, callee ByteArray, declaredAggregate ByteArray) returns bool
+	return isCompilerReservedName(callee) and programSignaturesIn(project, asker: "reservedCalleeStatesAShape").isRangedAliasIdentity(declaredAggregate)
+end 'reservedCalleeStatesAShape'
+
 function checkArgTypes(project Project, func IrFunction, result ValueId, callee ByteArray, sig FuncSignature, argIds ValueIdArray, argDefaultSlots ParamCountArray, callRange SourceRange, filePath FilePath, provenance ProvenanceTracer, overloadRefused bool)
 	// ⭐⭐ **A CALL THROUGH A CONCRETE INSTANCE JUDGES ITS ARGUMENTS AGAINST THE INSTANCE VIEW OF EACH
 	// PARAMETER, NOT AGAINST THE SHARED BODY'S DECLARATION VIEW.** The compiler compiles one body per
@@ -6213,8 +6192,9 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, callee 
 		//
 		// The two pre-erasure columns a DIRECT call's signature carries — the UNION/ENUM identity and the
 		// DECLARED SPELLING; see `checkOneArgType`.
-		let preErasedAggregate = try sig.paramAggregateNames.get(i) otherwise panic("checkArgTypes: paramAggregateNames.get OOB at {i} — a signature's param columns (names, types, aggregate names) are built in lockstep")
+		let declaredAggregate = try sig.paramAggregateNames.get(i) otherwise panic("checkArgTypes: paramAggregateNames.get OOB at {i} — a signature's param columns (names, types, aggregate names) are built in lockstep")
 		let declaredParamName = try sig.paramDeclaredNames.get(i) otherwise panic("checkArgTypes: paramDeclaredNames.get OOB at {i} — a signature's param columns (names, types, aggregate names, declared names) are built in lockstep")
+		let preErasedAggregate = EmptySourceText if reservedCalleeStatesAShape(project, callee: callee, declaredAggregate: declaredAggregate) else declaredAggregate
 
 		if reportIrreparableSuppliedDefault(project, func: func, callee: callee, position: i, argId: argId, paramType: paramType, argDefaultSlots: argDefaultSlots, callRange: callRange, filePath: filePath) 'theOverloadsDisagreeOnThisSlot'
 			return
@@ -7352,7 +7332,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			// never reaches the tag rule below — measured on `takeMsg(t)` with a `union Message` formal. Same
 			// fault, same reader, so the same explanation: `argMismatchWithOpaqueTail` appends nothing unless the
 			// ARGUMENT is the opaque one, which leaves every nominal-vs-nominal refusal here spelled as before.
-			let expectedDisplay = paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag, readerFilePath: filePath)
+			let expectedDisplay = paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag, argNameId: argNameId, readerFilePath: filePath)
 			let gotDisplay = valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath)
 			var argSignatures = programSignaturesIn(project, asker: "checkOneArgType")
 			let declaredParamBrandOfCall = declaredBrandOf(declaredParamName, paramTag: paramTag)
@@ -7466,7 +7446,7 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNam
 
 	match verdict 'declared'
 		ok then break
-		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(param, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag, argNameId: argNameId, readerFilePath: filePath), got: typeDisplayName(project, tag: argTag, nameId: argNameId, readerFilePath: filePath)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath, cause: provenance.causeOfArguments(singletonArgs(argId)))
 
 		// ⚠ **THE TWO ARMS BELOW SPELL THE PARAMETER BY ITS RESOLVED CLASS WORD AND NOT BY ITS DECLARATION,
 		// AND THAT IS THE CANONICAL COROLLARY OF THE DISPLAY RULE RATHER THAN AN EXCEPTION TO IT.** Each is
@@ -7563,9 +7543,9 @@ end 'argAggregateCannotDecay'
 
 // The whole-program twin of `Parser.aggregateNameOf`: the same tag dispatch, over the merged
 // `project.typeNames`. It asks on a file's behalf because a name TWO KINDS hold carries a nominal identity
-// in one file and none in another (`typeNamePairMayCoexist`); the `named` arm is
-// `ProgramSignatures.namedIdentityOf`, the door the parser asks too, so the two tiers cannot disagree
-// about one name.
+// in one file and none in another (`typeNamePairMayCoexist`); the arm for a value wearing an alias
+// is `ProgramSignatures.namedIdentityOf`, the door the parser asks too, so the two tiers cannot
+// disagree about one name.
 function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns ByteArray
 	if tagNamesADeclaredType(tag) 'struct'
 		return try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: structRef id {nameId} is not in the project interner — a structRef's name id is remapped project-global at merge (mergeArtifact)")
@@ -7590,9 +7570,9 @@ function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId, 
 		return programSignaturesIn(project, asker: "aggregateNameFor").canonicalInstanceName(nameId as GenericInstanceId)
 	end 'genericInstance'
 
-	if tag != ValueTypeTag.named 'notNamed'
+	if not valueTagWearsAnAlias(tag, nameId: nameId) 'namesNoAlias'
 		return EmptySourceText
-	end 'notNamed'
+	end 'namesNoAlias'
 
 	let name = try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: named id {nameId} is not in the project interner — a named value's name id is remapped project-global at merge (mergeArtifact)")
 	return programSignaturesIn(project, asker: "aggregateNameFor").namedIdentityOf(name, readerFilePath: readerFilePath)
@@ -7659,7 +7639,7 @@ end 'typeDisplayName'
 // fallback is useless: `typeTagName(genericInstance)` is the bare word `struct`, so `expected 'IntegerArray',
 // got 'int'` (`specs/type-checking.md`, an `int` argument — a tag that admits no aggregate) would degrade to
 // `expected 'struct'`. The ranged arm's fallback is `int`, which is the type.
-function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTypeTag, aggregate ByteArray, declaredName ByteArray, argTag ValueTypeTag, readerFilePath FilePath) returns String
+function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTypeTag, aggregate ByteArray, declaredName ByteArray, argTag ValueTypeTag, argNameId TypeNameId, readerFilePath FilePath) returns String
 	if paramTag == ValueTypeTag.genericInstance 'genericInstance'
 		return brandedTypeDisplayName(project, tag: paramTag, nameId: typeNameIdOf(paramType), brand: declaredName, readerFilePath: readerFilePath)
 	end 'genericInstance'
@@ -7675,7 +7655,7 @@ function paramDisplayName(project Project, paramType MaxonType, paramTag ValueTy
 		return programSignaturesIn(project, asker: "paramDisplayName").displayNameOfAggregate(paramTag, aggregate: aggregate)
 	end 'nominal'
 
-	if not declaredName.isEmpty() and not tagAdmitsNoAggregate(argTag) 'declaredAliasAgainstANamedArgument'
+	if not declaredName.isEmpty() and (not tagAdmitsNoAggregate(argTag) or valueTagWearsAnAlias(argTag, nameId: argNameId)) 'declaredAliasAgainstANamedArgument'
 		return programSignaturesIn(project, asker: "paramDisplayName").aliasIdentityDisplay(declaredName)
 	end 'declaredAliasAgainstANamedArgument'
 

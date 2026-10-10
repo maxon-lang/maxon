@@ -252,9 +252,10 @@ let opF64Div = 0xA3
 
 // int ↔ f64 conversions. `i64.trunc_f64_s` truncates an f64 toward zero to a signed i64 — the
 // `_s`/TRUNCATING form (not a rounding one), which is why it is right for `trunc()`.
-// `f64.convert_i64_s` widens a signed i64 to f64.
+// `f64.convert_i64_s` / `f64.convert_i64_u` widen a signed / unsigned i64 to f64.
 let opI64TruncF64S = 0xB0
 let opF64ConvertI64S = 0xB9
+let opF64ConvertI64U = 0xBA
 
 // The MATH INTRINSICS (`abs` with `specs/abs.md`), f64 → f64 — on wasm the whole family is these five
 // opcodes: wasm has each as a NATIVE instruction, so there is nothing to synthesize and no
@@ -694,12 +695,16 @@ export type WasmBody
 		self.buf.push(opF64Ge)
 	end 'f64Ge'
 
-	// int <-> f64 conversions. `f64ConvertI64S` reads a signed i64 and produces f64 (siToFp);
-	// `i64TruncF64S` reads an f64 and produces a signed i64, TRUNCATING toward zero (fpToSi /
-	// `trunc()`).
+	// int <-> f64 conversions. `f64ConvertI64S` reads a signed i64 and produces f64 (siToFp),
+	// `f64ConvertI64U` an unsigned one (uiToFp); `i64TruncF64S` reads an f64 and produces a signed
+	// i64, TRUNCATING toward zero (fpToSi / `trunc()`).
 	export function f64ConvertI64S()
 		self.buf.push(opF64ConvertI64S)
 	end 'f64ConvertI64S'
+
+	export function f64ConvertI64U()
+		self.buf.push(opF64ConvertI64U)
+	end 'f64ConvertI64U'
 
 	export function i64TruncF64S()
 		self.buf.push(opI64TruncF64S)

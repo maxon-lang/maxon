@@ -363,7 +363,7 @@ def declaration_schema(declaration, emitter):
         lines.append("size %d" % emitter.record_size_bytes(declaration))
 
         for field in declaration.fields:
-            lines.append("field %s as %s" % (field.name, field.type_text if field.type_text is not None else "inferred from %s" % field.default))
+            lines.append("field %s as %s" % (field.name, emitter.field_type_text(declaration, field)))
 
     for case in declaration.cases:
         lines.append("case %s" % case)

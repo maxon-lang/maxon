@@ -592,17 +592,17 @@ public function isExtendedPictographic(cp Codepoint) returns bool
 	return false
 end 'isExtendedPictographic'
 
-// ⭐⭐ **THE SCAN STATE IS ONE PACKED WORD, AND IT USED TO BE A HEAP OBJECT ALLOCATED PER CODEPOINT.**
-// `GraphemeState` was a two-field `type` — i.e. a heap box — and `graphemeStateUpdate` minted a fresh one
-// for EVERY codepoint of every scan, so `"…".count()`, `for c in s`, `trim()` and every byte↔grapheme
-// conversion cost one allocation and one release per codepoint. Nothing in the algorithm needs an object:
+// ⭐⭐ **THE SCAN STATE IS ONE PACKED WORD, NOT A HEAP OBJECT.**
+// A state `type` is a heap box, and a fresh one per codepoint would cost `"…".count()`, `for c in s`,
+// `trim()` and every byte↔grapheme conversion one allocation and one release per codepoint. Nothing in
+// the algorithm needs an object:
 // the state is two bits' worth of information (a running count and a flag), it is purely local to a single
 // scan, and it never escapes the loop that threads it.
 //
 // Bit 0 is `inEmojiSeq`; the remaining bits are the regional-indicator count. The COUNT is carried in full
 // rather than just its parity, even though `isGraphemeBreak` reads only `riCount mod 2`: keeping the
 // field the rules are written against means a future GB rule that needs the count finds it, and a shift
-// costs exactly what a parity toggle would. A run long enough to overflow the shift is a run of 2^62
+// costs exactly what a parity toggle would. A run long enough to overflow the shift is a run of 2^63
 // regional indicators.
 //
 // ⚠ **THE ENCODING IS SHARED WITH THE COMPILER'S OWN SYNTHESIZED SEGMENTER AND MUST STAY BIT-FOR-BIT

@@ -546,7 +546,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-tuple-field.maxon:11:2: Unsupported: the constant written for field 'pair' of the `Meta` backing, which is declared `__Tuple2.int.int` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
+error E2015: specs/enum-nested-struct-backing/error.nested-struct-backing-tuple-field.maxon:11:2: Unsupported: the constant written for field 'pair' of the `Meta` backing, which is declared `__Tuple2.Wide.Wide` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
 ```
 
 ### Error: a field typed by a LISTED STDLIB record

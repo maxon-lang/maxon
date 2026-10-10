@@ -4151,7 +4151,7 @@ end 'Maker'
 
 type Bag uses Element implements Holder with Element, Maker
 	typealias ElementArray = Array with Element
-	var items as ElementArray = ElementArray.create()
+	var items = ElementArray.create()
 
 	static function spawn() returns Self
 		return Self{}
@@ -4195,7 +4195,7 @@ end 'Holder'
 typealias NumStore = Array with Num
 
 type Crate implements Holder with Num
-	var items as NumStore = NumStore.create()
+	var items = NumStore.create()
 
 	static function create() returns Self
 		return Self{}
@@ -4247,7 +4247,7 @@ end 'Sink'
 
 type Log implements Sink
 	typealias Bytes = Array with Byte
-	var kept as Bytes = Bytes.create()
+	var kept = Bytes.create()
 
 	static function create() returns Self
 		return Self{}
@@ -4302,7 +4302,7 @@ typealias NumStore = Array with Num
 typealias NumStoreStore = Array with NumStore
 
 type Crate implements Holder with Num
-	var items as NumStoreStore = NumStoreStore.create()
+	var items = NumStoreStore.create()
 
 	static function create() returns Self
 		return Self{}
@@ -4394,7 +4394,7 @@ end 'Holder'
 typealias OtherStore = Array with Other
 
 type Crate implements Holder with Num
-	var items as OtherStore = OtherStore.create()
+	var items = OtherStore.create()
 
 	static function create() returns Self
 		return Self{}

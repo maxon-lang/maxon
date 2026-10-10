@@ -1175,7 +1175,7 @@ error E3004: <fragment>:3:12: call to undefined function 'frobnicate'
 <!-- test: unknown-function-result-compared-by-identity -->
 ```maxon
 type Box
-	export var n = 0
+	export var n = 0 as Count
 
 	static function create() returns Box
 		return Box{}
@@ -1283,7 +1283,7 @@ error E3005: <fragment>:28:3: field type mismatch for 'Frame.shape': type 'unkno
 <!-- test: unknown-function-result-returned-at-a-struct -->
 ```maxon
 type Box
-	export var n = 0
+	export var n = 0 as Count
 
 	static function create() returns Box
 		return Box{}
@@ -1306,7 +1306,7 @@ error E3005: <fragment>:11:2: Cannot return 'unknown' from function declared to 
 <!-- test: unknown-function-result-assigned-to-a-struct-variable -->
 ```maxon
 type Box
-	export var n = 0
+	export var n = 0 as Count
 
 	static function create() returns Box
 		return Box{}
@@ -1367,7 +1367,7 @@ error E3004: <fragment>:3:16: call to undefined function 'frobnicate'
 <!-- test: unknown-function-result-as-an-otherwise-fallback -->
 ```maxon
 type Box
-	export var n = 0
+	export var n = 0 as Count
 
 	static function create() returns Box
 		return Box{}
@@ -1413,7 +1413,7 @@ error E3004: <fragment>:7:9: call to undefined function 'frobnicate'
 <!-- test: unknown-function-result-as-a-match-arm-give -->
 ```maxon
 type Box
-	export var n = 0
+	export var n = 0 as Count
 
 	static function create() returns Box
 		return Box{}
@@ -1502,7 +1502,7 @@ error E3004: <fragment>:7:10: call to undefined function 'frobnicate'
 <!-- test: unknown-function-result-after-a-managed-array-literal-element -->
 ```maxon
 type Box
-	export var n = 0
+	export var n = 0 as Count
 
 	static function create() returns Box
 		return Box{}
@@ -1521,7 +1521,7 @@ error E3004: <fragment>:11:26: call to undefined function 'frobnicate'
 <!-- test: unknown-function-result-as-a-later-map-literal-value -->
 ```maxon
 type Box
-	export var n = 0
+	export var n = 0 as Count
 
 	static function create() returns Box
 		return Box{}
@@ -1540,7 +1540,7 @@ error E3004: <fragment>:11:35: call to undefined function 'frobnicate'
 <!-- test: unknown-function-result-as-a-first-arm-give-beside-mismatched-known-arms -->
 ```maxon
 type Box
-	export var n = 0
+	export var n = 0 as Count
 
 	static function create() returns Box
 		return Box{}

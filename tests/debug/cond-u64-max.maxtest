@@ -1,0 +1,51 @@
+let CondU64MaxCaseLabel = "cond-u64-max"
+
+let AnchorName = "hit-body"
+let HitFunctionName = "hit"
+let CountedLinePrefix = "hit "
+let WideLocalName = "wide"
+let WideMaxText = "18446744073709551615"
+let ConditionText = "wide == 18446744073709551615"
+let ContinuesPastEveryHit = 60
+
+test 'a condition naming u64.max on an unsigned local stops only on the iteration that holds it'
+	let staged = builtFixture(CondU64MaxCaseLabel, fixture: WideConditionFixtureName)
+	let undebugged = runBuiltProgram(staged)
+	let hitLine = anchorLine(staged, anchor: AnchorName)
+	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
+
+	Expect.atLeast(iterations, than: 2, message: "the fixture must run the anchored line more than once, or a condition that fires on one iteration says nothing. It ran it {iterations} times.")
+
+	var armings = StringArray.create()
+	armings.push(conditionalBreak(lineTarget(hitLine), condition: ConditionText))
+	armings.push(RunCommand)
+	armings.push("{PrintCommand} {WideLocalName}")
+
+	let commands = debugCommandLine(appendedCommands(armings, rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryHit)))
+	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
+	let events = batchEvents(session.stdout)
+	let said = renderedEvents(session.stdout, stderr: session.stderr)
+
+	let armed = eventAt(eventsOfKind(events, kind: BreakpointEventName), index: 0)
+	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "a literal as large as u64.max is a condition the driver can evaluate against an unsigned local, so the breakpoint must be ARMED. {said}")
+
+	let stops = eventsOfKind(events, kind: StopEventName)
+	Expect.equal(stops.count(), expected: 1, message: "the local holds u64.max on one of the {iterations} iterations, so the session must stop exactly once. A condition that read the literal as -1 or as a refusal stops never or every time. It stopped {stops.count()} times. {said}")
+
+	let stopped = eventAt(stops, index: 0)
+	Expect.equal(textOf(stopped, node: stopped.root, key: FunctionKey), expected: HitFunctionName, message: "the stop does not name the function the anchored line is in. {said}")
+	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey), expected: hitLine as EventNumber, message: "the stop is not on the anchored line. {said}")
+
+	let printed = eventsOfKind(events, kind: ValueEventName)
+	Expect.equal(printed.count(), expected: 1, message: "`{PrintCommand} {WideLocalName}` at the stop printed no `{ValueEventName}` event. {said}")
+
+	let value = eventAt(printed, index: 0)
+	let read = memberOf(value, node: value.root, key: ValueKey)
+	Expect.equal(textOf(value, node: nodeAt(read, index: 0), key: DisplayKey), expected: WideMaxText, message: "the stop is on the iteration whose local holds u64.max, so the local it was written against must read {WideMaxText} there. {said}")
+
+	let exits = eventsOfKind(events, kind: ExitEventName)
+	Expect.equal(exits.count(), expected: 1, message: "the session did not run the program to its end. {said}")
+
+	let exited = eventAt(exits, index: 0)
+	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "the conditionally debugged program answered a different exit code than the same program run with nothing attached. {said}")
+end 'a condition naming u64.max on an unsigned local stops only on the iteration that holds it'

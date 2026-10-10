@@ -243,7 +243,7 @@ typealias MoveSiteIndexArray = Array with ElementIndex
 
 // The token a root is taken to be moved at when no door moved it: past every token of any body. A door asking
 // about every root, moved or not, asks before the first token.
-let NeverMovedToken = i64.max as ElementIndex
+let NeverMovedToken = u64.max as ElementIndex
 let AskAboutEveryRoot = 0 as ElementIndex
 
 // One refusal a door made, held until the function's doors have all asked so they report in source order.
@@ -299,17 +299,17 @@ end 'ProvenanceColumn'
 
 // What one trace of a function found, in the summary's bit order — the row `ProvenanceSummary.widen` ORs in.
 export type TracedSummaryRow
-	export var shares as ParamPositionMask = NoParamPositions
-	export var identity as ParamPositionMask = NoParamPositions
-	export var holds as ParamPositionMask = NoParamPositions
-	export var inside as ParamPositionMask = NoParamPositions
-	export var holdsWithin as ParamPositionMask = NoParamPositions
-	export var placedWithin as ParamPositionMask = NoParamPositions
-	export var escapes as ParamPositionMask = NoParamPositions
-	export var binds as ParamPositionMask = NoParamPositions
-	export var moduleLets as ParamPositionMask = NoParamPositions
-	export var stores as ParamPositionMaskArray = ParamPositionMaskArray.create()
-	export var deepStores as ParamPositionMaskArray = ParamPositionMaskArray.create()
+	export var shares = NoParamPositions as ParamPositionMask
+	export var identity = NoParamPositions as ParamPositionMask
+	export var holds = NoParamPositions as ParamPositionMask
+	export var inside = NoParamPositions as ParamPositionMask
+	export var holdsWithin = NoParamPositions as ParamPositionMask
+	export var placedWithin = NoParamPositions as ParamPositionMask
+	export var escapes = NoParamPositions as ParamPositionMask
+	export var binds = NoParamPositions as ParamPositionMask
+	export var moduleLets = NoParamPositions as ParamPositionMask
+	export var stores = ParamPositionMaskArray.create()
+	export var deepStores = ParamPositionMaskArray.create()
 
 	static function create() returns TracedSummaryRow
 		return Self{}
@@ -1382,7 +1382,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.begin(func)
 		self.tracingImmutableBindings = true
 		self.writableRank = self.rootValues.count()
-		let wordCount = ((self.writableRank + RootBitIndexMask + 1) shr RootWordShift) as ElementIndex
+		let wordCount = (self.writableRank + RootBitIndexMask + 1) shr RootWordShift
 		self.mutablePlaceWords.refill(wordCount, value: NoParamPositions)
 		self.parameterRankWords.refill(wordCount, value: NoParamPositions)
 		let writtenParams = func.writtenParamMask or func.writesThroughParamMask or func.storageWrittenParamMask
@@ -5147,7 +5147,7 @@ end 'moveSitesInTokenOrder'
 
 // Set rank `rank`'s bit in a dense per-word mask column.
 function addRankToWords(words ParamPositionMaskArray, rank ElementIndex)
-	let word = (rank shr RootWordShift) as ElementIndex
+	let word = rank shr RootWordShift
 	let before = try words.get(word) otherwise panic("addRankToWords: words.get OOB at {word}")
 	try words.set(word, value: maskWithParam(before, param: (rank and RootBitIndexMask) as ParamCount)) otherwise panic("addRankToWords: words.set OOB at {word}")
 end 'addRankToWords'

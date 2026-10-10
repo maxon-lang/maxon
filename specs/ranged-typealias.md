@@ -1829,6 +1829,75 @@ end 'main'
 7
 ```
 
+### An upper bound above `i64.max` that is not `u64.max` is unsigned
+
+Any upper bound above `i64.max` makes the range unsigned, so its compares, range checks and literal checks read every value as unsigned.
+
+<!-- test: unsigned-upper-below-u64-max-admits-its-top -->
+```maxon
+typealias Half = int(0 to 9223372036854775808)
+
+function main() returns ExitCode
+	let v = 9223372036854775808 as Half
+	if v > (1 as Half) 'above'
+		print("{v}\n")
+		return 0
+	end 'above'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775808
+```
+
+<!-- test: error.unsigned-upper-below-u64-max-refuses-a-literal-above -->
+```maxon
+typealias Half = int(0 to 9223372036854775808)
+
+function main() returns ExitCode
+	let v = 9223372036854775809 as Half
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/ranged-typealias/error.unsigned-upper-below-u64-max-refuses-a-literal-above.maxon:5:30: Value 9223372036854775809 is outside the range of 'Half' (int(0 to 9223372036854775808))
+```
+
+<!-- test: unsigned-upper-below-u64-max-runtime-check -->
+```maxon
+typealias Half = int(0 to 9223372036854775808)
+typealias Wide = int(0 to u64.max)
+
+function narrow(w Wide) returns Half
+	return w as Half
+end 'narrow'
+
+function main() returns ExitCode
+	let top = narrow(9223372036854775808)
+	print("{top}\n")
+	let past = narrow(9223372036854775809)
+	print("{past}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+9223372036854775808
+```
+```stderr
+panic at unsigned-upper-below-u64-max-runtime-check.test:6: Range check failed: value outside typealias 'Half'
+Stack trace:
+  in narrow
+  in main
+  in mrt_start
+```
+
 ### Error: unsigned-max upper literal below the low bound
 
 A small non-negative literal below the low bound is still out of range for
@@ -1847,17 +1916,17 @@ end 'main'
 error E3005: specs/ranged-typealias/error.unsigned-max-upper-literal-out-of-range.maxon:5:12: Value 3 is outside the range of 'Big' (int(5 to 18446744073709551615))
 ```
 
-### ⭐⭐ A NEGATIVE UPPER BOUND IS A REAL BOUND — only the UNSIGNED-MAX shape has an unbounded one
+### ⭐⭐ A NEGATIVE UPPER BOUND IS A REAL BOUND — only an UNSIGNED range has an upper above `i64.max`
 
-⚠⚠ **A `-1` STORED UPPER MEANS `u64.max` IN EXACTLY ONE SHAPE.** `int(N>=0 to u64.max)` above rides its upper as the signed `-1` and is
-genuinely unbounded upwards, so its upper compare is elided on purpose. A **wholly NEGATIVE** range —
-`int(-100 to -1)`, `int(i64.min to -2)` — also stores a negative upper, and there the bound is
-ordinary: `-1` is the largest value it admits and `0` is out of range. `rangeIsUnsignedMaxUpper` (low
-`>= 0` **and** high `== -1`) is what tells the two apart, and both halves of the rule ask it — the
-COMPILE-TIME literal check and the RUNTIME check alike. A runtime check that tested only the bound's
-sign would disagree with the literal check about the same alias: a literal `0 as int(-100 to -1)` is
-**E3005**, while a runtime `0` cast into it would be admitted, and `-1` would reach an
-`int(i64.min to -2)` binding through a plain `as`.
+⚠⚠ **AN UPPER BOUND STORED WITH BIT 63 SET IS UNSIGNED ONLY WHEN THE LOWER BOUND IS `>= 0`.** An
+`int(N>=0 to H)` with `H` above `i64.max` is unsigned: its bounds compare unsigned, and `u64.max` needs
+no upper compare at all. A **wholly NEGATIVE** range — `int(-100 to -1)`, `int(i64.min to -2)` — also
+has an upper with bit 63 set, and there the bound is ordinary and signed: `-1` is the largest value it
+admits and `0` is out of range. `rangeIsUnsignedTopped` (low `>= 0` **and** high stored negative) tells
+the two apart, and both halves of the rule ask it — the COMPILE-TIME literal check and the RUNTIME
+check alike. A runtime check that tested only the bound's sign would disagree with the literal check
+about the same alias: a literal `0 as int(-100 to -1)` is **E3005**, while a runtime `0` cast into it
+would be admitted, and `-1` would reach an `int(i64.min to -2)` binding through a plain `as`.
 
 ⚠ It matters beyond the binding, because `specs/safety.md`'s division proof reads a divisor's
 DECLARED range: `int(-100 to -1)` excludes `0` (so `/` earns a bare `idiv`) and `int(i64.min to -2)`
@@ -2057,7 +2126,7 @@ file being parsed.
 typealias Percent = int(0 to 100)
 
 type Box
-	export var v as Percent = 500
+	export var v = 500 as Percent
 
 	static function create() returns Self
 		return Self{}
@@ -2698,7 +2767,7 @@ typealias Percent = int(0 to 100)
 typealias PA = Array with Percent
 
 type Box
-	export var v as Percent = 7
+	export var v = 7 as Percent
 
 	static function create() returns Self
 		return Self{}
@@ -2786,7 +2855,7 @@ typealias Percent = int(0 to 100)
 typealias Wide = int(0 to 100000)
 
 type Box
-	export var v as Percent = 1
+	export var v = 1 as Percent
 
 	static function make() returns Box
 		return Self{}
@@ -2909,7 +2978,7 @@ typealias NonZero = int(1 to 1000)
 typealias Wide = int(0 to 100000)
 
 type Box
-	export var v as Percent = 7
+	export var v = 7 as Percent
 
 	static function make() returns Box
 		return Self{}
@@ -3066,30 +3135,30 @@ typealias Small = int(0 to 1000)
 typealias Wide = int(0 to 100000)
 
 type Box
-	export var f0 as Small = 1
-	export var f1 as Small = 1
-	export var f2 as Small = 1
-	export var f3 as Small = 1
-	export var f4 as Small = 1
-	export var f5 as Small = 1
-	export var f6 as Small = 1
-	export var f7 as Small = 1
-	export var f8 as Small = 1
-	export var f9 as Small = 1
-	export var f10 as Small = 1
-	export var f11 as Small = 1
-	export var f12 as Small = 1
-	export var f13 as Small = 1
-	export var f14 as Small = 1
-	export var f15 as Small = 1
-	export var f16 as Small = 1
-	export var f17 as Small = 1
-	export var f18 as Small = 1
-	export var f19 as Small = 1
-	export var f20 as Small = 1
-	export var f21 as Small = 1
-	export var f22 as Small = 1
-	export var f23 as Small = 1
+	export var f0 = 1 as Small
+	export var f1 = 1 as Small
+	export var f2 = 1 as Small
+	export var f3 = 1 as Small
+	export var f4 = 1 as Small
+	export var f5 = 1 as Small
+	export var f6 = 1 as Small
+	export var f7 = 1 as Small
+	export var f8 = 1 as Small
+	export var f9 = 1 as Small
+	export var f10 = 1 as Small
+	export var f11 = 1 as Small
+	export var f12 = 1 as Small
+	export var f13 = 1 as Small
+	export var f14 = 1 as Small
+	export var f15 = 1 as Small
+	export var f16 = 1 as Small
+	export var f17 = 1 as Small
+	export var f18 = 1 as Small
+	export var f19 = 1 as Small
+	export var f20 = 1 as Small
+	export var f21 = 1 as Small
+	export var f22 = 1 as Small
+	export var f23 = 1 as Small
 
 	static function make() returns Box
 		return Self{}

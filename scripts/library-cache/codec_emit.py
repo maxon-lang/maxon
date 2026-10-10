@@ -1,7 +1,7 @@
 import re
 
 import codec_config as config
-from maxon_source import parse_union_case, split_top_level
+from maxon_source import FieldDefaultShapeError, field_default_type, parse_union_case, split_top_level
 
 CONTAINER_KINDS = ("array", "list", "set", "map")
 RESOLUTION_DEPTH_LIMIT = 20
@@ -132,13 +132,18 @@ class Emitter:
         if (declaration.name, field.name) in config.SKIPPED_FIELDS:
             return None
 
-        if field.type_text is None:
-            if field.default in ("true", "false"):
-                return Node("bool", text="bool")
+        return self.resolve(self.field_type_text(declaration, field))
 
-            raise Unresolved("shorthand field %s.%s = %s" % (declaration.name, field.name, field.default))
+    def field_type_text(self, declaration, field):
+        if field.type_text is not None:
+            return field.type_text
 
-        return self.resolve(field.type_text)
+        try:
+            type_text, _ = field_default_type(field.default)
+        except FieldDefaultShapeError as e:
+            raise Unresolved("field %s.%s: %s" % (declaration.name, field.name, e))
+
+        return type_text
 
     def write_statement(self, node, value, indent):
         tabs = "\t" * indent
@@ -478,7 +483,7 @@ class Emitter:
                 reads.append((field.name, None))
                 continue
 
-            node = self.resolve(field.type_text)
+            node = self.resolve(self.field_type_text(declaration, field))
             out.append(self.write_statement(node, "value.%s" % field.name, 1))
             reads.append((field.name, node))
 

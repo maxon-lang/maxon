@@ -526,7 +526,7 @@ function subjectBesideAnchor(tokens TokenArray, anchor ElementIndex) returns Dia
 	let anchored = try tokens.get(anchor) otherwise panic("subjectBesideAnchor: {anchor} is the index the walk above stopped at, inside [0, {tokens.count()})")
 
 	if anchored.kind == TokenKind.as 'aCastTarget'
-		return identifierSubjectAt(tokens, index: (anchor + 1) as ElementIndex)
+		return identifierSubjectAt(tokens, index: anchor + 1)
 	end 'aCastTarget'
 
 	if not lspCursorNamesAMember(tokens, cursor: anchor) 'aBareName'
@@ -597,7 +597,7 @@ end 'unbuiltProjectNode'
 function errorItemAt(doc JsonDoc, span LspSpan, message String, source String, index LspLineIndex) returns LspJsonObject
 	var item = LspJsonObject.create(doc)
 	item.putNode(LspRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: span))
-	item.put(DiagnosticSeverityKey, value: JsonNode.numberNode(LspErrorSeverity))
+	item.put(DiagnosticSeverityKey, value: JsonNode.numberNode(LspErrorSeverity as JsonFloat))
 	item.put(DiagnosticSourceKey, value: JsonNode.stringNode(DiagnosticSourceName))
 	item.put(DiagnosticMessageKey, value: JsonNode.stringNode(message))
 	return item

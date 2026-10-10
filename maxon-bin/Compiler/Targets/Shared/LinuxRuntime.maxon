@@ -19,7 +19,7 @@
 // here, which is what makes it the plain call it replaces. It is `linux/fcntl.h`'s, not an arch header's, and
 // each lane's `openat` was invoked BY NUMBER through it and answered a live descriptor for a real path.
 // (`MachineWord` is unsigned — `MmapAnonFd` is the same spelling one file over, for the same reason.)
-export let LinuxAtFdCwd = 0xFFFFFFFFFFFFFF9C
+export let LinuxAtFdCwd = 0xFFFFFFFFFFFFFF9C as MachineWord
 
 // --- `open` flags, from `asm-generic/fcntl.h` ---
 //
@@ -327,7 +327,7 @@ export let LinuxCpuSetBytes = 128
 // `runtime/CpuParallel.maxon`'s `__cpu_count` clamps `< 1` to 1 with a SIGNED test written to cover both
 // Windows's 0 and `sysconf`'s -1, so each Linux lane reports its own failure as that same -1 rather than
 // inventing a floor here — which would be one contract in two places (`lowerOsCpuCount` states the rule).
-export let LinuxCpuCountUnavailable = 0xFFFFFFFFFFFFFFFF
+export let LinuxCpuCountUnavailable = 0xFFFFFFFFFFFFFFFF as MachineWord
 
 // `sched_getaffinity`'s `pid` argument. 0 means the CALLING thread, which is the only process either chunk
 // may ask about — and is why the syscall needs no `getpid` ahead of it.
@@ -539,7 +539,7 @@ export let LinuxMutexFirstEntry = 1
 // ⚠ **THE OWNER AND DEPTH ARE CLEARED BEFORE THIS DECREMENT, NEVER AFTER.** The instant the futex word goes
 // free another thread may take it and write its own tid there; clearing afterwards would erase the new
 // owner's claim and let a third thread believe it holds a lock it does not.
-export let LinuxMutexReleaseStep = 0xFFFFFFFFFFFFFFFF
+export let LinuxMutexReleaseStep = 0xFFFFFFFFFFFFFFFF as MachineWord
 
 // ⭐⭐ **THE PER-OS-THREAD SLOT BLOCK, WHOSE BASE IS THE ARCH's OWN THREAD POINTER** — `TPIDR_EL0` on AArch64,
 // the FS base on x86-64. A static image links no libc, so there is no `pthread_getspecific` to call and no
@@ -738,7 +738,7 @@ export let LinuxWaitOnDescriptorMessage = b"panic: WaitForSingleObject was reach
 // says so, but a COMMENT cannot keep that true — so this is the check, at chunk-build time, on the lane that
 // would be corrupted.
 export function assertLinuxLockFits()
-	let needed = (LinuxLockOffDepth as ParsedInt) + SpillSlotBytes
+	let needed = (LinuxLockOffDepth as ParsedInt) + (SpillSlotBytes as ParsedInt)
 
 	if OsLockBytes < needed 'tooSmall'
 		panic("LinuxRuntime: `OsLockBytes` is {OsLockBytes} but this lane's recursive futex mutex needs {needed} bytes — `osLockInit` would write the owner and depth words past the region the allocator gave it and corrupt whatever it placed after, with no diagnostic anywhere")

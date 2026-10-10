@@ -58,7 +58,7 @@ end 'main'
 | `ParsedInt` / `ParsedIntArray` | `int(i64.min to i64.max)` / `Array with ParsedInt` | Builtins |
 | `ParsedFloat` | `float(f64.min to f64.max)` | Builtins |
 | `IndentDepth` | `int(0 to u64.max)` — a nesting depth while `Json` renders | Json |
-| `RandomDraw` / `RandomBound` | `int(0 to i64.max)` / `int(1 to i64.max)` | Random |
+| `RandomDraw` / `RandomBound` | `int(0 to u64.max)` / `int(1 to u64.max)` | Random |
 | `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
 | `Codepoint` | `int(0 to 1114111)` | Character |
 | `CodepointDelta` | `int(-1114111 to 1114111)` | Character |
@@ -72,7 +72,7 @@ end 'main'
 | `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
 | `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
-| `SchedulerProcessorCount` | `int(1 to i64.max)` | Scheduler |
+| `SchedulerProcessorCount` | `int(1 to u64.max)` | Scheduler |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient; also `URL.port()` |
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |
@@ -91,17 +91,19 @@ A signature may not name a type less visible than the function itself, so every 
 library signature mentions is `public` too and can be written down in your own code — as a cast target, or
 to declare a value you are about to pass in. They are listed here because they are part of the surface, not
 because a program normally spells them: a value cast to the alias the signature asks for is the usual reason
-to name one.
+to name one. Float aliases are distinct types as integer aliases are, so a value of a program's own float
+alias reaches a `Real`, `JsonFloat` or `ParsedFloat` parameter through `as`; a float literal needs no cast.
 
 | Name | Definition | Declared by |
 |------|------------|-------------|
 | `ElementIndex` | `int(0 to u64.max)` | Array |
 | `ReportedCapacity` | `int(i64.min to i64.max)` | Array |
-| `EntryCount` | `int(0 to 4611686018427387904)` | Map |
-| `MemberCount` | `int(0 to 4611686018427387904)` | Set |
+| `EntryCount` | `int(0 to 9223372036854775808)` | Map |
+| `MemberCount` | `int(0 to 9223372036854775808)` | Set |
 | `IterPos` | `int(0 to u64.max)` | Range |
 | `ElementTransform`, `ElementPredicate` | `function(Element) returns Element` / `returns bool`, on the `Iterable` extension | Interfaces |
-| `TableCapacity` | `int(0 to 4611686018427387904)` | Map, Set |
+| `TableCapacity` | `int(0 to 9223372036854775808)` | Map, Set |
+| `GreenThreadHandle` | `int(0 to u64.max)` — the handle a `Promise` holds | Builtins |
 | `JsonInt` | `int(i64.min to i64.max)` | Json |
 | `JsonFloat` | `float(f64.min to f64.max)` | Json |
 | `Milliseconds` | `int(0 to u64.max)` | Sleep |

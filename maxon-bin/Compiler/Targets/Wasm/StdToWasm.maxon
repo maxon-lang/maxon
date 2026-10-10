@@ -1499,6 +1499,7 @@ function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns 
 		bitNot gives wasmMachineValTypeOf(operandType)
 		logicalNot gives WasmValType.i32
 		siToFp or
+		uiToFp or
 		floor or
 		ceil or
 		round or
@@ -2772,7 +2773,8 @@ type WasmFuncEmitter
 			neg then self.emitNegExpr(operand, operandType: operandType)
 			bitNot then self.emitBitNotExpr(operand, operandType: operandType)
 			logicalNot then self.emitLogicalNotExpr(operand)
-			siToFp then self.emitSiToFp(operand, operandType: operandType)
+			siToFp or
+			uiToFp then self.emitIntToFp(operand, operandType: operandType, opcode: opcode)
 			fpToSi then self.emitFpToSi(operand, operandType: operandType)
 
 			// The MATH INTRINSICS and the sign flip. Each is ONE native wasm instruction over the same f64
@@ -2790,19 +2792,24 @@ type WasmFuncEmitter
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitUnaryOp'
 
-	// int -> f64 (`promoteToFloat`). ⚠ `operandType` is the SOURCE, an INTEGER — the opcode names
-	// the RESULT (see StdUnaryOpcode's header). `f64.convert_i64_s` reads a signed i64, so a
-	// narrower int source (a promoted i32 ExitCode literal, say) is widened first — the same
-	// width-gap `pushOperandAt` closes for a mixed-width binOp. The result is f64 (the valtype
-	// table records `siToFp` -> f64).
-	function emitSiToFp(operand ValueId, operandType StdType)
+	// int -> f64 (`promoteToFloat`, or `promoteUnsignedToFloat` as `uiToFp`). ⚠ `operandType` is the
+	// SOURCE, an INTEGER — the opcode names the RESULT (see StdUnaryOpcode's header). Both
+	// `f64.convert_i64_*` forms read an i64, so a narrower int source (a promoted i32 ExitCode
+	// literal, say) is widened first — the same width-gap `pushOperandAt` closes for a mixed-width
+	// binOp. The result is f64 (the valtype table records both opcodes -> f64).
+	function emitIntToFp(operand ValueId, operandType StdType, opcode StdUnaryOpcode)
 		if stdTypeIsFloat(operandType) 'notInt'
-			panic("wasm: `siToFp` with a FLOAT operand type — a conversion's operandType is its SOURCE, which for siToFp is an integer (the Maxon tier's assertConversionCrossesDomain enforces this)")
+			panic("wasm: `{opcode.name}` with a FLOAT operand type — a conversion's operandType is its SOURCE, which for {opcode.name} is an integer (the Maxon tier's assertConversionCrossesDomain enforces this)")
 		end 'notInt'
 
 		self.pushOperandAt(operand, targetVt: WasmValType.i64)
-		self.body.f64ConvertI64S()
-	end 'emitSiToFp'
+
+		match opcode 'conversion'
+			siToFp then self.body.f64ConvertI64S()
+			uiToFp then self.body.f64ConvertI64U()
+			default panic("emitIntToFp: `{opcode.name}` is not an int -> f64 conversion — `emitUnaryOp` routes only siToFp/uiToFp here")
+		end 'conversion'
+	end 'emitIntToFp'
 
 	// f64 -> int, TRUNCATING toward zero — the `trunc()` bridge nearly every float test ends on.
 	// `operandType` is the SOURCE, an f64. `i64.trunc_f64_s` (the `_s`/trunc form, NOT a rounding
@@ -2841,6 +2848,7 @@ type WasmFuncEmitter
 			bitNot or
 			logicalNot or
 			siToFp or
+			uiToFp or
 			fpToSi then panic("emitMathIntrinsic: Std unary opcode {opcode.name} is not a math intrinsic — `emitUnaryOp` routes only floor/ceil/round/sqrt/abs/fneg here")
 
 			// ONE arm for both directions: a reinterpretation computes nothing whichever way the bits
@@ -2865,7 +2873,7 @@ type WasmFuncEmitter
 	// result is a float without a conversion having happened.
 	//
 	// ⚠ IT REFUSES A NARROWER SOURCE rather than widening one, which is where it parts company with
-	// `emitSiToFp` beside it. A conversion of an i32 to f64 is a well-defined number-preserving
+	// `emitIntToFp` beside it. A conversion of an i32 to f64 is a well-defined number-preserving
 	// operation, so widening first is right there; a reinterpretation of an i32 is not a smaller
 	// version of anything — the missing 32 bits ARE the resulting double's sign and exponent, and
 	// `pushOperandAt` would invent them as zeros. `isWideInt` already refuses a float source.

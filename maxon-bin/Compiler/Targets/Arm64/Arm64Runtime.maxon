@@ -320,7 +320,7 @@ end 'emitArm64ArgvFromEntryRegisters'
 function emitArm64ArgvFromEntryStack(code ByteArray, rdataRelocs RdataRelocationArray)
 	let stackTop = arm64RuntimeReg(Arm64Register.x17)
 	arm64EmitMovFromSp(code, dest: stackTop)
-	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(Arm64Register.x0), baseReg: stackTop, byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: arm64RuntimeReg(Arm64Register.x0), baseReg: stackTop, byteOffset: 0, scale: Arm64SlotScale)
 	arm64EmitAddImmSigned(code, rd: arm64RuntimeReg(Arm64Register.x1), rn: stackTop, imm: LinuxEntryArgvOffset)
 	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgcLabel, src: Arm64Register.x0)
 	emitArm64ArgvStore(code, rdataRelocs: rdataRelocs, label: CommandLineArgvLabel, src: Arm64Register.x1)
@@ -352,7 +352,7 @@ function emitArm64EnvpFromEntryStack(code ByteArray, rdataRelocs RdataRelocation
 	let envp = arm64RuntimeReg(Arm64Register.x0)
 
 	arm64EmitMovFromSp(code, dest: stackTop)
-	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: envp, baseReg: stackTop, byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: envp, baseReg: stackTop, byteOffset: 0, scale: Arm64SlotScale)
 	arm64EmitAddImmSigned(code, rd: envp, rn: envp, imm: LinuxEntryEnvpSkippedWords)
 	arm64EmitLslImm(code, rd: envp, rn: envp, sh: LinuxEntryWordScaleBits)
 	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: envp, rn: stackTop, rm: envp)
@@ -366,5 +366,5 @@ let LinuxEntryWordScaleBits = 3 as ShiftCount
 // One captured register into one `.data` word.
 function emitArm64ArgvStore(code ByteArray, rdataRelocs RdataRelocationArray, label ByteArray, src Arm64Register)
 	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: arm64RuntimeReg(Arm64Register.x16), label: label, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
-	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(Arm64Register.x16), byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: arm64RuntimeReg(src), baseReg: arm64RuntimeReg(Arm64Register.x16), byteOffset: 0, scale: Arm64SlotScale)
 end 'emitArm64ArgvStore'

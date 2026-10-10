@@ -770,8 +770,8 @@ end 'main'
 0
 ```
 
-<!-- test: range-check-panic.a-nested-full-unsigned-alias-parameter-through-an-interface-keeps-the-entry-check -->
-Through an interface the conformer keeps its entry check, and that check is the signed test, so `u64.max` panics there.
+<!-- test: range-check-panic.a-nested-full-unsigned-alias-parameter-through-an-interface-takes-a-large-unsigned-word -->
+A large unsigned word reaches a full-unsigned nested-alias parameter through an interface: the call site checks the argument, and the conformer takes no sign test at its entry.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -814,15 +814,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-1
-```
-```stderr
-panic at range-check-panic.a-nested-full-unsigned-alias-parameter-through-an-interface-keeps-the-entry-check.test:25: Range check failed: value outside typealias 'Wide'
-Stack trace:
-  in Meter.take
-  in drive
-  in main
-  in mrt_start
+0
 ```
 
 <!-- test: range-check-panic.error.a-nested-alias-index-on-an-array-conformer-is-checked -->
@@ -1022,7 +1014,7 @@ function scale(r Ratio) returns Real
 end 'scale'
 
 function main() returns ExitCode
-  let big = widen(0.5)
+  let big = widen(0.5) * 1.0
   return trunc(scale(big))
 end 'main'
 typealias Real = float(f64.min to f64.max)
@@ -1554,7 +1546,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for r in 0 upto 64 'scan'
     let g = r as RegNum
-    total = total + g
+    total = total + (g as Integer)
   end 'scan'
   print("total={total}\n")
   return 0
@@ -1577,7 +1569,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for r in 0 upto 65 'scan'
     let g = r as RegNum
-    total = total + g
+    total = total + (g as Integer)
   end 'scan'
   print("total={total}\n")
   return 0
@@ -1605,7 +1597,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for r in 0 to 63 'scan'
     let g = r as RegNum
-    total = total + g
+    total = total + (g as Integer)
   end 'scan'
   print("total={total}\n")
   return 0
@@ -1628,7 +1620,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for r in 0 to 64 'scan'
     let g = r as RegNum
-    total = total + g
+    total = total + (g as Integer)
   end 'scan'
   print("total={total}\n")
   return 0
@@ -1660,7 +1652,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for r in 0 upto opaque(100) 'scan'
     let g = r as RegNum
-    total = total + g
+    total = total + (g as Integer)
   end 'scan'
   print("total={total}\n")
   return 0
@@ -1707,7 +1699,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for i in 0 upto opaque(3) 'each'
     let g = i as NonNeg
-    total = total + g
+    total = total + (g as Integer)
   end 'each'
   print("total={total}\n")
   return 0
@@ -1734,7 +1726,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for i in 0 upto xs.count() 'each'
     let g = i as NonNeg
-    total = total + g
+    total = total + (g as Integer)
   end 'each'
   print("total={total}\n")
   return 0
@@ -1760,7 +1752,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for i in 0 upto opaque(3) 'each'
     let g = i as Small
-    total = total + g
+    total = total + (g as Integer)
   end 'each'
   print("total={total}\n")
   return 0
@@ -1791,7 +1783,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for i in opaque(-2) upto opaque(3) 'each'
     let g = i as NonNeg
-    total = total + g
+    total = total + (g as Integer)
   end 'each'
   print("total={total}\n")
   return 0
@@ -1829,7 +1821,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for i in 0 upto opaque(3) 'each'
     let g = i as NonNeg
-    total = total + g
+    total = total + (g as Integer)
   end 'each'
   print("total={total}\n")
   return 0
@@ -1858,7 +1850,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for i in 0 upto opaque(3) 'each'
     let g = i as NonNeg
-    total = total + g
+    total = total + (g as Integer)
   end 'each'
   print("total={total}\n")
   return 0
@@ -1884,7 +1876,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for i in 0 to opaque(3) 'each'
     let g = i as NonNeg
-    total = total + g
+    total = total + (g as Integer)
   end 'each'
   print("total={total}\n")
   return 0
@@ -1941,7 +1933,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for r in 5 upto 5 'none'
     let g = r as RegNum
-    total = total + g
+    total = total + (g as Integer)
   end 'none'
   print("total={total}\n")
   return 0
@@ -1965,7 +1957,7 @@ function main() returns ExitCode
   var total = 0 as Integer
   for r in 0 to i64.max 'forever'
     let g = r as NonNeg
-    total = total + g
+    total = total + (g as Integer)
     break
   end 'forever'
   print("total={total}\n")
@@ -2116,7 +2108,7 @@ function main() returns ExitCode
   var last = 0 as Integer
   for i in ((0 - 5) as Big) to u64.max 'wrap'
     let g = i as Neg
-    last = g
+    last = g as Integer
     n = n + 1
     if n > 6 'enough'
       break
@@ -2228,7 +2220,7 @@ function main() returns ExitCode
     end 'high' else 'low'
       x = 1
     end 'low'
-    t = t + (x as Small)
+    t = t + ((x as Small) as Integer)
   end 'l'
   print("t={t}\n")
   return 0
@@ -2449,6 +2441,224 @@ end 'main'
 panic at range-check-panic.a-guarded-return-whose-only-drop-was-promoted-away.test:22: Range check failed: value outside typealias 'Percent'
 Stack trace:
   in scale
+  in main
+  in mrt_start
+```
+
+<!-- test: a-large-count-reaches-a-function-value-through-a-generic-cell -->
+A `Count` above `i64.max` stored in a generic cell is checked where it enters the cell, so the cell's call through a function value passes it on.
+```maxon
+type Cell uses T
+	export var v as T
+	export var pick as Pick
+
+	typealias Pick = function(T) returns T
+
+	static function make(v T, pick Pick) returns Self
+		return Self{v: v, pick: pick}
+	end 'make'
+
+	export function run() returns T
+		return self.pick(self.v)
+	end 'run'
+end 'Cell'
+
+typealias CountCell = Cell with Count
+
+function echo(c Count) returns Count
+	return c
+end 'echo'
+
+function top(one Count) returns Count
+	return one shl 63
+end 'top'
+
+function main() returns ExitCode
+	let cell = CountCell.make(top(1), pick: echo)
+	print("{cell.run()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775808
+```
+
+<!-- test: a-negative-value-into-a-generic-cell-is-refused-where-it-enters -->
+```maxon
+type Cell uses T
+	export var v as T
+	export var pick as Pick
+
+	typealias Pick = function(T) returns T
+
+	static function make(v T, pick Pick) returns Self
+		return Self{v: v, pick: pick}
+	end 'make'
+
+	export function run() returns T
+		return self.pick(self.v)
+	end 'run'
+end 'Cell'
+
+typealias CountCell = Cell with Count
+
+function echo(c Count) returns Count
+	return c
+end 'echo'
+
+function main() returns ExitCode
+	var n = 3
+
+	for i in 0 upto 2 'each'
+		n = i - 1
+		let cell = CountCell.make(n, pick: echo)
+		print("{cell.run()}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-negative-value-into-a-generic-cell-is-refused-where-it-enters.test:28: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-large-count-reaches-a-service-handler -->
+```maxon
+function top(one Count) returns Count
+	return one shl 63
+end 'top'
+
+type Sink
+	var seen = 0 as Count
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function put(c Count)
+		self.seen = c
+	end 'put'
+
+	export function get() returns Count
+		return self.seen
+	end 'get'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create()
+	h.put(top(1))
+	let got = try await h.get() otherwise 0
+	print("{got}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775808
+```
+
+<!-- test: a-negative-value-sent-to-a-service-handler-is-refused-at-the-send -->
+```maxon
+type Sink
+	var seen = 0 as Count
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function put(c Count)
+		self.seen = c
+	end 'put'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create()
+
+	for i in 0 upto 2 'each'
+		h.put(i - 1)
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-negative-value-sent-to-a-service-handler-is-refused-at-the-send.test:18: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-large-count-through-a-generic-instances-function-field -->
+Calling a concrete instance's function-typed field substitutes its parameter type, so a large `Count` passes through it.
+```maxon
+type Cell uses T
+	export var pick as Pick
+
+	typealias Pick = function(T) returns T
+
+	static function make(pick Pick) returns Self
+		return Self{pick: pick}
+	end 'make'
+end 'Cell'
+
+typealias CountCell = Cell with Count
+
+function echo(c Count) returns Count
+	return c
+end 'echo'
+
+function top(one Count) returns Count
+	return one shl 63
+end 'top'
+
+function main() returns ExitCode
+	let cell = CountCell.make(echo)
+	print("{cell.pick(top(1))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9223372036854775808
+```
+
+<!-- test: a-negative-value-through-a-closure-is-refused-at-the-call -->
+A negative value handed to a closure's `Count` parameter is refused where the closure is called.
+```maxon
+function main() returns ExitCode
+	let f = function(tag String, c Count) gives c if tag == "x" else c
+	var n = 3
+
+	for i in 0 upto 2 'each'
+		n = i - 1
+		print("{f("x", n)}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-negative-value-through-a-closure-is-refused-at-the-call.test:8: Range check failed: value outside typealias 'Count'
+Stack trace:
   in main
   in mrt_start
 ```

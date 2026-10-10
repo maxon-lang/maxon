@@ -94,7 +94,7 @@ end 'registerFunctionRecord'
 
 function functionRecordSeedBytes() returns ByteArray
 	var record = ByteArray.create()
-	record.growFilled(FunctionRecordCaptureBase as ElementIndex, value: 0)
+	record.growFilled(FunctionRecordCaptureBase, value: 0)
 	return record
 end 'functionRecordSeedBytes'
 
@@ -211,6 +211,200 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 	end 'op'
 end 'noteIfFunctionRef'
 
+// The functions a call left unchecked at its call site may reach: an indirect call, an async
+// spawn, a service send or a witness dispatch whose result carries no `checkedCalls` mark.
+// ⚠ Every answer must over-approximate: `EntryGuardWaivers` keeps an unsigned-full parameter's
+// entry guard wherever `mayReach` answers true, so a callee missed here can receive an unchecked
+// argument with no guard at all.
+export type UncheckedCallPaths
+	var indirectArities as ParamCountArray
+	var indirectlyReachable as CalleeNameSet
+	var witnessMemberRuns as WitnessMemberRunSet
+	var notedWitnessSlots as WitnessSlotKeySet
+	var calleeNames as CalleeNameSet
+	var serviceHandlers as CalleeNameSet
+
+	export static function none() returns UncheckedCallPaths
+		return Self{indirectArities: ParamCountArray.create(), indirectlyReachable: CalleeNameSet.create(), witnessMemberRuns: WitnessMemberRunSet.create(), notedWitnessSlots: WitnessSlotKeySet.create(), calleeNames: CalleeNameSet.create(), serviceHandlers: CalleeNameSet.create()}
+	end 'none'
+
+	export function mayReach(callee ByteArray) returns bool
+		if self.calleeNames.contains(callee) 'namedByAnUncheckedCall'
+			return true
+		end 'namedByAnUncheckedCall'
+
+		if self.namesAServiceHandler(callee) 'onlyAMessageReachesIt'
+			return false
+		end 'onlyAMessageReachesIt'
+
+		return self.indirectlyReachable.contains(callee) or self.anUncheckedWitnessMethodIsNamedBy(callee)
+	end 'mayReach'
+
+	export function namesAServiceHandler(callee ByteArray) returns bool
+		return self.serviceHandlers.contains(callee)
+	end 'namesAServiceHandler'
+
+	function anUncheckedWitnessMethodIsNamedBy(impl ByteArray) returns bool
+		for memberRun in self.witnessMemberRuns 'eachMethod'
+			if bytesContainRun(impl, run: memberRun) 'namesTheMember'
+				return true
+			end 'namesTheMember'
+		end 'eachMethod'
+
+		return false
+	end 'anUncheckedWitnessMethodIsNamedBy'
+
+	function noteIndirectArity(userArity ParamCount)
+		if not self.indirectArities.contains(userArity) 'aNewArity'
+			self.indirectArities.push(userArity)
+		end 'aNewArity'
+	end 'noteIndirectArity'
+
+	function noteFunctionValuesOfAnUncheckedArity(module MaxonModule)
+		if self.indirectArities.isEmpty() 'noUncheckedIndirectCall'
+			return
+		end 'noUncheckedIndirectCall'
+
+		for func in module.functions 'eachFunc'
+			if self.indirectArities.contains(functionValueUserArity(func)) 'anUncheckedCallFitsIt'
+				self.indirectlyReachable.insert(func.name.clone())
+			end 'anUncheckedCallFitsIt'
+		end 'eachFunc'
+	end 'noteFunctionValuesOfAnUncheckedArity'
+
+	function noteUncheckedWitnessDispatch(project Project, signatures ProgramSignatures, interfaceDeclIndex ElementIndex, methodIndex WitnessMethodIndex, conformers ConformersByInterface, witnessSlots WitnessSlotsByDeclIndex)
+		let key = witnessSlotKeyOf(interfaceDeclIndex, methodIndex: methodIndex)
+
+		if self.notedWitnessSlots.contains(key) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		self.notedWitnessSlots.insert(key)
+		let slot = witnessSlotAt(signatures, interfaces: signatures.interfaceMap(), witnessSlots: witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
+		let landing = witnessRequirementImplNames(project, signatures: signatures, slot: slot, conformers: conformers)
+
+		for impl in landing.names 'eachImpl'
+			self.calleeNames.insert(impl.clone())
+		end 'eachImpl'
+
+		if landing.unselected or signatures.interfaceMap().namesALibraryProtocol(slot.sourceInterfaceName) 'anImplIsUnnamed'
+			self.witnessMemberRuns.insert(qualifiedMethodName(EmptySourceText, methodName: slot.method.name))
+		end 'anImplIsUnnamed'
+	end 'noteUncheckedWitnessDispatch'
+
+	export static function collect(module MaxonModule, project Project, signatures ProgramSignatures) returns UncheckedCallPaths
+		var paths = UncheckedCallPaths.none()
+		var tableSendUnchecked = false
+		var conformers = ConformersByInterface.create()
+		var witnessSlots = WitnessSlotsByDeclIndex.create()
+
+		for func in module.functions 'eachFunc'
+			if signatures.namesAServiceMessage(func.name) 'aServiceHandler'
+				paths.serviceHandlers.insert(func.name.clone())
+			end 'aServiceHandler'
+
+			if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
+				continue
+			end 'notInTheProgram'
+
+			let marks = checkedCallMarksOf(project, name: func.name)
+
+			for blockRef in func.blockRefs 'eachBlock'
+				let block = try module.blocks.get(blockRef) otherwise panic("UncheckedCallPaths.collect: blockRef from func.blockRefs not in module.blocks")
+
+				for opIdx in block.opRefs 'eachOp'
+					let op = try module.ops.get(opIdx) otherwise panic("UncheckedCallPaths.collect: opIdx {opIdx} not in module.ops")
+
+					match uncheckedCallPathOf(op, marks: marks) 'path'
+						none then break
+						indirect(userArity) then paths.noteIndirectArity(userArity)
+						named(callee) then paths.calleeNames.insert(callee.clone())
+						witness(interfaceDeclIndex, methodIndex) then paths.noteUncheckedWitnessDispatch(project, signatures: signatures, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex, conformers: conformers, witnessSlots: witnessSlots)
+						tableSend then tableSendUnchecked = true
+					end 'path'
+				end 'eachOp'
+			end 'eachBlock'
+		end 'eachFunc'
+
+		paths.noteFunctionValuesOfAnUncheckedArity(module)
+
+		if tableSendUnchecked 'everyHandlerIsReachable'
+			for handler in paths.serviceHandlers 'eachHandler'
+				paths.calleeNames.insert(handler.clone())
+			end 'eachHandler'
+		end 'everyHandlerIsReachable'
+
+		return paths
+	end 'collect'
+end 'UncheckedCallPaths'
+
+typealias CalleeNameSet = Set with ByteArray
+typealias WitnessMemberRunSet = Set with ByteArray
+typealias WitnessSlotKeySet = Set with WitnessSlotKey
+
+function functionValueUserArity(func IrFunction) returns ParamCount
+	if isLiftedClosureName(func.name) 'takesItsOwnRecord'
+		return func.paramCount - FunctionRecordArgCount
+	end 'takesItsOwnRecord'
+
+	return func.paramCount
+end 'functionValueUserArity'
+
+union CallPath
+	none
+	indirect(userArity ParamCount)
+	named(callee ByteArray)
+	witness(interfaceDeclIndex ElementIndex, methodIndex WitnessMethodIndex)
+	tableSend
+end 'CallPath'
+
+export function checkedCallMarksOf(project Project, name ByteArray) returns ValueMarkColumn
+	let checks = try project.rangeChecks.get(name) otherwise return noValueMarks
+	return checks.checkedCalls
+end 'checkedCallMarksOf'
+
+function uncheckedCallPathOf(op MaxonOp, marks ValueMarkColumn) returns CallPath
+	return match op 'op'
+		indirectCall(result, _, args) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.indirect(args.count() as ParamCount - FunctionRecordArgCount)
+		asyncCall(result, callee, _, _, _, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.named(callee)
+		serviceSend(result, callee, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.named(callee)
+		witnessDispatch(result, _, _, methodIndex, interfaceDeclIndex, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.witness(interfaceDeclIndex, methodIndex: methodIndex)
+		witnessTryDispatch(result, _, _, _, methodIndex, interfaceDeclIndex, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.witness(interfaceDeclIndex, methodIndex: methodIndex)
+		call(result, callee, _, _, _, _, _, _) gives CallPath.tableSend if callee.equals(MboxInterfaceSendName) and not valueIsMarked(marks, value: result) else CallPath.none
+		literal or
+		ret or
+		retVoid or
+		binOp or
+		unaryOp or
+		compare or
+		condBranch or
+		branch or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		stringLiteral or
+		tryCall or
+		throwError or
+		propagateError or
+		panicAbort or
+		functionRef or
+		await or
+		tryAwait or
+		sizeofType or
+		constArrayLiteral or
+		switch or
+		panicAbortValue or
+		errorFlagEncode or
+		serviceSpawn or
+		serviceReplyCell or
+		immortalStructRecord or
+		immortalStringTable or
+		covPoint or
+		rawIntrinsic or
+		existentialWitness gives CallPath.none
+	end 'op'
+end 'uncheckedCallPathOf'
+
 // A target that needs the thunk (`functionValueNeedsFnRefThunk` — the one place that rule lives) joins the
 // ordered thunk list the first time it is seen. A `__` name that IS in `funcSignatures` reaches
 // `synthesizeFnRefThunk` from here and finds the signature that routine panics without.
@@ -262,7 +456,7 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	let sig = try project.funcSignatures.get(targetName) otherwise panic("synthesizeFnRefThunk: no signature for '{String.from(targetName)}' — a functionRef must name a registered function")
 	let ret = try project.funcReturnTypes.get(targetName) otherwise panic("synthesizeFnRefThunk: no return type for '{String.from(targetName)}'")
 	let userParamCount = sig.paramCount()
-	let thunkParamCount = (userParamCount + FunctionRecordArgCount) as ParamCount
+	let thunkParamCount = userParamCount + FunctionRecordArgCount
 	let targetReturn = maxonReturnTypeToStdReturnType(ret)
 
 	// ⭐⭐ **EACH FORWARDED USER PARAMETER IS DECLARED THROUGH `maxonTypeToStdType` — THE SAME COLLAPSE THE CALL

@@ -6,17 +6,17 @@ public enum RandomError implements Error
 	unavailable  // the operating system refused to supply random bytes
 end 'RandomError'
 
-public typealias RandomDraw = int(0 to i64.max)
-public typealias RandomBound = int(1 to i64.max) implements RandomDraw
+public typealias RandomDraw = int(0 to u64.max)
+public typealias RandomBound = int(1 to u64.max) implements RandomDraw
 
 let RandomWordBytes = 8
 let RandomFillSucceeded = 0
 let RandomByteRadix = 256
-let RandomTopByteMask = 0x7F
-let HighestRandomDraw = 9223372036854775807 as RandomDraw
+let RandomHalfWordBits = 32
+let RandomHalfWordMask = 4294967295
 
 public type Random
-	/// A uniformly distributed integer from 0 to `i64.max`.
+	/// A uniformly distributed integer from 0 to `u64.max`.
 	public static function draw() returns RandomDraw throws RandomError
 		var bytes = ByteArray.create()
 		bytes.resize(RandomWordBytes)
@@ -27,9 +27,8 @@ public type Random
 
 		var value = 0 as RandomDraw
 
-		for (iter, byte) in bytes.withIterator() 'eachByte'
-			let bits = byte and RandomTopByteMask if iter.index() == 0 else byte
-			value = value * RandomByteRadix + bits
+		for byte in bytes 'eachByte'
+			value = value * RandomByteRadix + (byte as RandomDraw)
 		end 'eachByte'
 
 		return value
@@ -37,15 +36,41 @@ public type Random
 
 	/// A uniformly distributed integer from 0 to `bound - 1`.
 	public static function below(bound RandomBound) returns RandomDraw throws RandomError
-		// The top `biasedTail` draws would make the low remainders likelier, so they are drawn again.
-		let biasedTail = ((HighestRandomDraw mod bound + 1) mod bound) as RandomDraw
+		let mask = (bound - 1) as RandomDraw
 
-		var candidate = try draw()
+		if (bound and mask) == 0 'powerOfTwo'
+			let word = try draw()
 
-		while biasedTail != 0 and candidate > HighestRandomDraw - biasedTail 'inTheBiasedTail'
-			candidate = try draw()
+			return word and mask
+		end 'powerOfTwo'
+
+		// The answer is the high half of the 128-bit product `word * bound`, and `word * bound` itself
+		// wraps to the low half. A draw whose low half is below `2^64 mod bound` is drawn again, or the
+		// low answers would be likelier; testing `< bound` first spares that division, because the
+		// threshold is below it.
+		var word = try draw()
+
+		while word * bound < bound and word * bound < rejectionThreshold(bound) 'inTheBiasedTail'
+			word = try draw()
 		end 'inTheBiasedTail'
 
-		return (candidate mod bound) as RandomDraw
+		return highHalfOfProduct(word, factor: bound)
 	end 'below'
+
+	static function rejectionThreshold(bound RandomBound) returns RandomDraw
+		return ((u64.max - bound + 1) mod bound) as RandomDraw
+	end 'rejectionThreshold'
+
+	static function highHalfOfProduct(left RandomDraw, factor RandomDraw) returns RandomDraw
+		let leftLow = left and RandomHalfWordMask
+		let leftHigh = left shr RandomHalfWordBits
+		let factorLow = factor and RandomHalfWordMask
+		let factorHigh = factor shr RandomHalfWordBits
+
+		let lowProduct = leftLow * factorLow
+		let crossCarry = leftHigh * factorLow + (lowProduct shr RandomHalfWordBits)
+		let crossLow = (crossCarry and RandomHalfWordMask) + leftLow * factorHigh
+
+		return leftHigh * factorHigh + (crossCarry shr RandomHalfWordBits) + (crossLow shr RandomHalfWordBits)
+	end 'highHalfOfProduct'
 end 'Random'

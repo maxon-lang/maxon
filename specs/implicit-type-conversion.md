@@ -357,7 +357,7 @@ The same field, reached by a WRITE rather than by construction. It is the same r
 answer differently for the way the source spelled it.
 ```maxon
 type Reading
-	export var value as Real = 0.0
+	export var value = 0.0 as Real
 
 	static function make() returns Self
 		return Self{}
@@ -382,7 +382,7 @@ typealias Real = float(f64.min to f64.max)
 And the third spelling of that one write: the bare field name inside an instance method.
 ```maxon
 type Reading
-	export var value as Real = 0.0
+	export var value = 0.0 as Real
 
 	function bump() returns Integer
 		value = 3
@@ -414,7 +414,7 @@ A field DEFAULT is a coercion site too, and the one that holds a parse-time cons
 value: `as float = 3` records the f64 bit pattern of 3.0, not the integer 3.
 ```maxon
 type Reading
-	export var value as Real = 3
+	export var value = 3 as Real
 
 	static function make() returns Self
 		return Self{}
@@ -497,7 +497,7 @@ error E3009: specs/implicit-type-conversion/float-to-int-field-literal-rejected.
 <!-- test: float-to-int-field-write-rejected -->
 ```maxon
 type Reading
-	export var value as Integer = 0
+	export var value = 0 as Integer
 
 	static function make() returns Self
 		return Self{}
@@ -518,7 +518,7 @@ error E3009: specs/implicit-type-conversion/float-to-int-field-write-rejected.ma
 <!-- test: float-to-int-self-field-rejected -->
 ```maxon
 type Reading
-	export var value as Integer = 0
+	export var value = 0 as Integer
 
 	function bump() returns Integer
 		value = 3.7
@@ -543,7 +543,7 @@ error E3009: specs/implicit-type-conversion/float-to-int-self-field-rejected.max
 <!-- test: float-to-int-field-default-rejected -->
 ```maxon
 type Reading
-	export var value as Integer = 3.7
+	export var value = 3.7 as Integer
 
 	static function make() returns Self
 		return Self{}
@@ -571,7 +571,7 @@ construction site mentions the value at all.
 typealias Count = int(i64.min to i64.max)
 
 type Bag
-	export var n as Count = 2.5
+	export var n = 2.5 as Count
 
 	static function make() returns Self
 		return Self{}

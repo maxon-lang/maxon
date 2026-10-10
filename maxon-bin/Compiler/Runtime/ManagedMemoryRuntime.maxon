@@ -239,7 +239,7 @@ end 'ImmortalStringTable'
 // its elements, and every element is a String — so two byte-identical records cannot name different
 // destructors.
 export function registerImmortalStringTableRecord(globalData GlobalDataTable, texts ByteArrayArray, elementSize ElementStride, debugStream bool) returns ImmortalStringTable
-	if elementSize != (ManagedArrayElementBytes as ElementStride) 'notAPointerSlot'
+	if elementSize != ManagedArrayElementBytes 'notAPointerSlot'
 		panic("registerImmortalStringTableRecord: a table of addresses is being registered at element stride {elementSize}, not the {ManagedArrayElementBytes}-byte pointer slot a managed element occupies — the buffer this lays down and the stride the record is stamped with would describe different geometry")
 	end 'notAPointerSlot'
 
@@ -3351,7 +3351,7 @@ function emitViewRecordHead(module StdModule, block IrBlock, srcBuffer ValueId, 
 	let viewBuffer = emitSlotAddr(module, block: block, buffer: srcBuffer, index: start, elementSize: elementSize, ids: ids)
 	emitStoreField(module, block: block, record: newRec, offset: ManagedRecordBufferOffset, value: viewBuffer)
 	emitStoreField(module, block: block, record: newRec, offset: ManagedRecordLengthOffset, value: sliceLen)
-	let sentinel = emitConst(module, block: block, value: ViewBufferCapacity, ids: ids)
+	let sentinel = emitConst(module, block: block, value: ViewBufferCapacity as ParsedInt, ids: ids)
 	emitStoreField(module, block: block, record: newRec, offset: ManagedRecordCapacityOffset, value: sentinel)
 
 	return newRec

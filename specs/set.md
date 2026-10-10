@@ -350,7 +350,7 @@ function main() returns ExitCode
 		end 'eachKey'
 	end 'eachRound'
 
-	return 7 if s.count() == Live and s.contains(Rounds * Live + 1) else 1
+	return 7 if s.count() == (Live as MemberCount) and s.contains(Rounds * Live + 1) else 1
 end 'main'
 ```
 ```exitcode

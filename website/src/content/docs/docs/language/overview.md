@@ -208,8 +208,13 @@ let octal = 0o17         // 15
 let million = 1_000_000  // underscores separate digits
 ```
 
-An integer literal is a signed 64-bit value, `-9223372036854775808` to `9223372036854775807`; one outside that
-range is **E2011**. A literal has no typealias of its own, so it fits any integer alias it is in range for.
+An integer literal in any radix lies between `-9223372036854775808` (`i64.min`) and `18446744073709551615`
+(`u64.max`); one outside that range is **E2011**. A literal has no typealias of its own, so it fits any integer
+alias it is in range for. A literal above `i64.max` is the unsigned value, and it is legal only where a type
+that admits it receives it: an `as` cast, a typed parameter, field, return or slot, a range bound, an operand
+beside an alias that admits it, a merge arm or `otherwise` fallback of such a type, or a float slot. Anywhere
+else it is **E2011** (`Integer literal '9223372036854775808' is above i64.max, so it needs an alias whose
+range admits it: write '9223372036854775808 as <alias>'`); into a signed or narrower alias it is **E3005**.
 
 ### Float Literals
 

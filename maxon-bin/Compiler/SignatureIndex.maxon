@@ -414,13 +414,15 @@ let FieldShapeDefaultHelper = 75 as HashDigest
 // `IntArray.withCapacity(4)` changes what every reader emits and must move every reader's memo.
 let FieldShapeDefaultBareCreate = 115 as HashDigest
 
-// ⭐ Whether a LITERAL default's number was written with a leading minus — two constants beside the pair
-// above for their exact reason, one step further out: `= -1` and `= 0xFFFFFFFFFFFFFFFE` store the same kind
-// of negative `ParsedInt` and accept different programs (the first is E3005 in an `int(0 to u64.max)` field
-// and the second is not, `FieldDefault.literal`), so the payload alone cannot discriminate them and an edit
-// between the two spellings must move every reader's memo.
+// ⭐ Whether a LITERAL default's number was written with a leading minus, above `i64.max`, or
+// neither — three constants beside the pair above for their exact reason, one step further out:
+// `= -1` and `= 0xFFFFFFFFFFFFFFFE` store the same kind of negative `ParsedInt` and accept
+// different programs (the first is E3005 in an `int(0 to u64.max)` field and the second is not,
+// `FieldDefault.literal`), so the payload alone cannot discriminate them and an edit between the
+// two spellings must move every reader's memo.
 let FieldDefaultWrittenNegative = 110 as HashDigest
 let FieldDefaultWrittenPlain = 111 as HashDigest
+let FieldDefaultWrittenAboveSignedMax = 134 as HashDigest
 
 // The two shapes a top-level constant's ANSWER hashes under: it evaluated to a value, or it did
 // not. Their own discriminators for `DeclShapeAlias`'s reason — a name that stops being a function
@@ -2768,8 +2770,9 @@ export type ConstValue
 	// fold means nothing where it is read. Bytes cross that boundary; the reader interns them into its own
 	// table, exactly as `fieldTypeOf(…, into:)` re-interns a field's type for its caller.
 	//
-	// EMPTY for every other tag, which is the truth about them rather than a sentinel: an `integer`,
-	// `boolean` or `float` constant names no type.
+	// For an `integer` or `float` constant it is the alias a cast named (`let A = 5 as Tally`), so
+	// the constant keeps that nominal identity at its use sites. EMPTY otherwise, which is the truth
+	// rather than a sentinel: an uncast number and a `boolean` name no type.
 	export var typeName as ByteArray
 
 	// ⭐⭐ **DID THE SOURCE WRITE THIS PAYLOAD AS A NEGATIVE NUMBER?** — the const evaluator's spelling of
@@ -2784,33 +2787,49 @@ export type ConstValue
 	// number, not one the source wrote a minus in front of.
 	export var writtenNegative as bool
 
-	export static function create(payload ParsedInt, tag ValueTypeTag, typeName ByteArray = EmptySourceText, writtenNegative bool = false) returns ConstValue
-		return Self{payload: payload, tag: tag, typeName: typeName, writtenNegative: writtenNegative}
+	// `writtenNegative`'s mirror: the source wrote a literal (or a `u64.max` bound) above
+	// `i64.max`, so the negative payload is an unsigned number. Without it the range check reads
+	// the value as negative and the int-to-float conversion signs it. Set where that literal or
+	// bound is read and, likewise, rides no fold.
+	export var aboveSignedMax as bool
+
+	export static function create(payload ParsedInt, tag ValueTypeTag, typeName ByteArray = EmptySourceText, writtenNegative bool = false, aboveSignedMax bool = false) returns ConstValue
+		return Self{payload: payload, tag: tag, typeName: typeName, writtenNegative: writtenNegative, aboveSignedMax: aboveSignedMax}
 	end 'create'
+
+	export static function ofIntLiteral(value ParsedInt, negated bool) returns ConstValue
+		return ConstValue.create(value, tag: ValueTypeTag.integer, writtenNegative: negated and value < 0, aboveSignedMax: not negated and value < 0)
+	end 'ofIntLiteral'
+
+	module function fitsAlias(alias RangedTypeAlias, isFloat bool) returns bool
+		return literalInRange(self.payload, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: self.writtenNegative, writtenAboveSignedMax: self.aboveSignedMax)
+	end 'fitsAlias'
 
 	export static function ofBool(value bool) returns ConstValue
 		return ConstValue.create(BoolTrueValue if value else BoolFalseValue, tag: ValueTypeTag.boolean)
 	end 'ofBool'
 
 	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
+	module function cacheWrite(writer LibraryCacheWriter)
 		writer.signed(self.payload as CacheSigned)
 		writer.unsigned(self.tag.ordinal as CacheUnsigned)
 		writer.bytes(self.typeName)
 		writer.flag(self.writtenNegative)
+		writer.flag(self.aboveSignedMax)
 	end 'cacheWrite'
 
-	static function cacheRead(reader LibraryCacheReader) returns ConstValue throws LibraryCacheDamage
+	module static function cacheRead(reader LibraryCacheReader) returns ConstValue throws LibraryCacheDamage
 		let f_payload = (try reader.signed()) as ParsedInt
 		let f_tag = try cacheReadValueTypeTag(reader)
 		let f_typeName = try reader.bytes()
 		let f_writtenNegative = try reader.flag()
+		let f_aboveSignedMax = try reader.flag()
 
-		return Self{payload: f_payload, tag: f_tag, typeName: f_typeName, writtenNegative: f_writtenNegative}
+		return Self{payload: f_payload, tag: f_tag, typeName: f_typeName, writtenNegative: f_writtenNegative, aboveSignedMax: f_aboveSignedMax}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize32
-		return sizeof(ConstValue) as CacheSize32
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(ConstValue) as CacheSize40
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -3914,6 +3933,20 @@ export function requireDeclaredAlias(resolved DeclaredAlias) returns RangedTypeA
 		undeclared then throw MapError.keyNotFound
 	end 'resolved'
 end 'requireDeclaredAlias'
+
+function declaredAliasIsDeclared(resolved DeclaredAlias) returns bool
+	return match resolved 'resolved'
+		declared gives true
+		undeclared gives false
+	end 'resolved'
+end 'declaredAliasIsDeclared'
+
+function preferredQuantityAlias(found DeclaredAlias, candidate DeclaredAlias) returns DeclaredAlias
+	return match candidate 'candidate'
+		undeclared gives found
+		declared(alias) gives candidate if aliasIsUnsignedFullQuantity(alias) or not declaredAliasIsDeclared(found) else found
+	end 'candidate'
+end 'preferredQuantityAlias'
 
 // What the index knows about a FUNCTION typealias — `DeclaredAlias`'s twin, and a union for
 // the identical reason: "no file declares a function alias of this name" is an ANSWER, not a failure.
@@ -8942,7 +8975,7 @@ end 'throwingClauseTypeName'
 // `sizeof`: the STORAGE width of a managed element is the pointer — a `String` element's slot is 8, where
 // its `sizeof` is the whole record (`StringRuntime.StringRecordBytes`) — and the drop walk /
 // accessors move exactly that pointer.
-module let ManagedArrayElementBytes = 8 as ByteOffset
+module let ManagedArrayElementBytes = 8 as ElementStride
 
 // ⭐ **A `bool` ELEMENT IS ONE BIT** — the width `Array with bool` packs at, and the only element whose
 // packed width is not read off a declared range (`bool` is a TAG, not a ranged alias, so it has no `low`/
@@ -10548,11 +10581,11 @@ end 'internedNameIsATupleTypeName'
 // what settles a SWEEP-minted spelling, whose elements are still bare names), and `fieldTypeOf` scopes an
 // element read through it. Visibility is `global` — a tuple is nameable wherever its
 // elements are, and the path is read for SCOPING, never for reach.
-function tupleStructLayout(name ByteArray, elements MaxonTypeArray, declFilePath FilePath) returns StructLayout
+function tupleStructLayout(name ByteArray, elements MaxonTypeArray, brands ByteArrayArray, declFilePath FilePath) returns StructLayout
 	var layout = StructLayout.create(name, visibility: Visibility.global, declFilePath: declFilePath)
 
 	for i in 0 upto elements.count() 'eachElement'
-		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, tier: Visibility.global, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
+		layout.addField(tupleFieldName("{i}".toByteArray()), declaredType: try elements.get(i) otherwise panic("tupleStructLayout: elements.get OOB at {i} below count {elements.count()}"), mutable: true, tier: Visibility.global, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: try brands.get(i) otherwise panic("tupleStructLayout: brands.get OOB at {i} below count {brands.count()}"), spelledName: SpelledFieldName.unnamed)
 	end 'eachElement'
 
 	return layout
@@ -16187,7 +16220,7 @@ end 'cacheReadMisclosedBlockSiteArray'
 // one frozen copy of it once `ProgramSignatures.publishedDeclarations` runs, so nothing past the
 // parse baseline may write here (`ProgramSignatures.requireBeforeTheBaseline`).
 export type SettledDeclarations
-	module var misclosedBlocks as MisclosedBlockSiteArray = MisclosedBlockSiteArray.create()
+	module var misclosedBlocks = MisclosedBlockSiteArray.create()
 
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
@@ -16424,11 +16457,7 @@ export type SettledDeclarations
 	// before `insertionSort.maxon`'s would resolve `SortComparator` differently from one folded after it, and the
 	// answer would be the directory walk's order (`StdlibLoader`'s header rules that out). This set is filled by
 	// a pre-pass over every extension site before the first body is read, which is what makes the answer a
-	// property of the program. ⚠ **THAT PRE-PASS IS NOT NAME-ONLY.** A name settles *is `X` a
-	// member of `Array`?* and leaves *what does `Array.X` MEAN?* to the walk order — a question
-	// `canonicalTupleElement` asks of every tuple element — so the pre-pass also KEYS each RANGED nested alias
-	// it walks past. See `ProgramSignatures.recordPreVerdictInnerAliasRange` for the measurement and for why the ranged form is
-	// the only one that can be settled ahead of the fold.
+	// property of the program.
 	//
 	// ⚠ **PER-INSTANCE FORMS ONLY — a nested FUNCTION alias is deliberately absent**, for the reason
 	// `readNestedTypeAlias` keeps one out of `Parser.enclosingInnerAliases`: it is a file-scope name written
@@ -16451,11 +16480,6 @@ export type SettledDeclarations
 	// that report and describe a plain typo as a compiler bug. The narrower map is the honest one, so this
 	// comment states its scope rather than letting `hasDroppedSignatures` be read as *nothing was dropped*.
 	module var droppedSignatures as DroppedSignatureMap
-
-	// ⭐ **THE RANGES THE EXTENSION PRE-PASS READ, BEFORE ANY VERDICT WAS COMPUTABLE** — a registry of its own
-	// and NOT `innerAliases`. See `recordPreVerdictInnerAliasRange` for the measurement that says why the
-	// separation is load-bearing and for the ONE reader it has.
-	module var preVerdictInnerAliasRanges as RangedTypeAliasMap
 
 	// ⭐ Per-method INNER-ALIAS PARAMETER info — for a method/factory that declares a parameter
 	// whose type is a bare inner alias of the enclosing generic type (`setTag(t Idx)`), the source
@@ -16968,16 +16992,16 @@ export type SettledDeclarations
 	// that keeps the slot alive instead — see `initCalleesOfCorpusSlot`.
 	export var corpusSlotInitCallees as SlotInitCalleeMap
 
-	module var inlineRecordByTypeNameId as BoolArray = BoolArray.create()
+	module var inlineRecordByTypeNameId = BoolArray.create()
 
 	// ⭐ **THE `--define`s THIS COMPILE WAS GIVEN**, stamped by `Queries.queryProgramSignatures` before any
 	// initializer is folded. They live here for `rootIsUnderStdlibDirectory`'s reason: this index is the one
 	// thing built once per compile that every constant's fold goes through.
-	export var defines as DefineArray = DefineArray.create()
+	export var defines = DefineArray.create()
 
 	// The `--define`s that could not bind, kept rather than reported: this index is memoized and settled more
 	// than once per compile, and a problem belongs to the compile (`Compiler.reportDefineProblems`).
-	export var defineProblems as DefineProblemArray = DefineProblemArray.create()
+	export var defineProblems = DefineProblemArray.create()
 
 	// ⭐ **THE TYPE NAMES TOP-LEVEL CONSTANT INITIALIZERS CAST TO** — the one `use` neither export
 	// check can get from the parser, which skips an initializer's tokens wholesale. Written by
@@ -17082,12 +17106,12 @@ export type SettledDeclarations
 	// loop shifted its flag by.
 	module var serviceReplyErrorOwners as ServiceReplyErrorOwnerMap
 
-	module var defaultDeclarationList as DefaultDeclarationArray = DefaultDeclarationArray.create()
+	module var defaultDeclarationList = DefaultDeclarationArray.create()
 
-	module var serviceMessages as ServiceMessageIndex = ServiceMessageIndex.create()
-	module var interfaceHandleOwners as ServiceHandleOwnerMap = ServiceHandleOwnerMap.create()
-	module var interfaceHandleRepresentatives as ServiceHandleOwnerMap = ServiceHandleOwnerMap.create()
-	module var interfaceHandleOrder as ByteArrayArray = ByteArrayArray.create()
+	module var serviceMessages = ServiceMessageIndex.create()
+	module var interfaceHandleOwners = ServiceHandleOwnerMap.create()
+	module var interfaceHandleRepresentatives = ServiceHandleOwnerMap.create()
+	module var interfaceHandleOrder = ByteArrayArray.create()
 
 	// ⭐⭐ **THE NAME A LISTED STDLIB MODULE DECLARES THE RECORD UNDER — the fold target for every
 	// `__ManagedMemory` written OUTSIDE a conformer's own body.** `stdlib/Array.maxon:101` gives it today, so
@@ -17105,7 +17129,7 @@ export type SettledDeclarations
 	module var qualifiedNominalHeads as DeclaredTypeNameSet
 	module var topLevelBindingSites as TopLevelBindingSiteMap
 	module var writtenTypeClaims as CrossKindContestMap
-	module var claimedTypeClaims as CrossKindContestMap = CrossKindContestMap.create()
+	module var claimedTypeClaims = CrossKindContestMap.create()
 
 	module var aliasFamiliesBesideNominals as DeclaredTypeNameSet
 	module var headerTypeNameDecls as TypeNameDeclArray
@@ -17227,16 +17251,16 @@ export type SettledDeclarations
 	// The generic types an earlier fold of these sources found a parse instantiating that no declaration did
 	// (`QueryDatabase.InstantiatedByAParse`) — instantiated for every question this index answers, the descriptor
 	// scan's included.
-	module var instantiatedByAParse as InstantiatedTypeNameSet = InstantiatedTypeNameSet.create()
+	module var instantiatedByAParse = InstantiatedTypeNameSet.create()
 
-	module var genericTemplates as GenericFunctionTemplateMap = GenericFunctionTemplateMap.create()
-	module var genericInstancesBySite as GenericFunctionInstancesBySite = GenericFunctionInstancesBySite.create()
-	module var genericInstancesByName as GenericFunctionInstanceMap = GenericFunctionInstanceMap.create()
+	module var genericTemplates = GenericFunctionTemplateMap.create()
+	module var genericInstancesBySite = GenericFunctionInstancesBySite.create()
+	module var genericInstancesByName = GenericFunctionInstanceMap.create()
 
 	export static function create(os Os) returns SettledDeclarations
 		let interfaces = IrInterfaceMap.create()
 
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), preVerdictInnerAliasRanges: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, speculativeDescriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), byRefForwardingLive: ByRefForwardingMap.create(), byRefBareNames: ByRefBareNameSet.create(), opaqueByRefBareNames: ByRefBareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowSpellings: StdlibShadowSpellingArray.create(), authorQualifiedNominals: QualifiedNominalMap.create(), libraryQualifiedNominals: QualifiedNominalMap.create(), qualifiedNominalHeads: DeclaredTypeNameSet.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: CrossKindContestMap.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionAliasRegistry.create(), nestedFunctionAliasMembers: NestedFunctionAliasNameSet.create(), pendingImplementsClauses: AliasImplementsClauseArray.create(), implementsParents: AliasImplementsParentMap.create(), implementsVerdicts: AliasImplementsVerdictMap.create(), structLayouts: StructLayoutArray.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(interfaces), genericAliasDecls: GenericAliasEntryArray.create(), genericAliasDeclIndexByName: GenericAliasDeclIndexMap.create(), genericAliasDeclsIndexedThrough: 0, instanceDisplayNames: InstanceDisplayNameMap.create(), funcReturnAliasNames: FuncReturnAliasNameMap.create(), typeParamOwners: TypeParamOwnerMap.create(), crossKindContests: noCrossKindContests, typeNameClaimIndex: TypeNameClaimIndex.unsettled, vectorFromSizes: FixedSizeArray.create(), fromHeadNames: FromHeadNameSet.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: noGenericAliasContests, multiplyDeclaredGenericAliases: noDisagreeingAliasNames, sharedInstanceGenericAliases: DisagreeingAliasNameSet.create(), genericAliasMints: GenericAliasMintTable.create(), runtimeFilePaths: LibraryFilePathSet.create(), genericAliasSites: GenericInstantiationSiteArray.create(), constLiteralSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), droppedSignatures: DroppedSignatureMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: interfaces, interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), interfaceDeclSiteNames: InterfaceNameSet.create(), interfaceDeclSiteIndexByName: InterfaceDeclSiteIndexMap.create(), interfaceDeclSitesIndexedThrough: 0, extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, speculativeDescriptorNeeds: sharedEmptyDescriptorNeeds, fixedElementCountNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), declParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefSitesOfKey: DeclarationSitesByKeyMap.create(), byRefForwardingLive: ByRefForwardingMap.create(), byRefBareNames: ByRefBareNameSet.create(), opaqueByRefBareNames: ByRefBareNameSet.create(), genericInstanceNameMarker: genericInstanceNameMarker(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcDiverges: DeclaredBodyFactNameSet.create(), funcDivergingDeclarationCounts: FunctionDeclarationCountMap.create(), funcAlwaysThrows: DeclaredBodyFactNameSet.create(), funcAlwaysThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcReturnsFreshRecord: DeclaredBodyFactNameSet.create(), funcFreshReturnForwards: FreshReturnForwardMap.create(), funcFreshReturningDeclarationCounts: FunctionDeclarationCountMap.create(), funcConstructsFromParams: DeclaredBodyFactNameSet.create(), funcConstructingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), interfaceExtensionMembers: InterfaceExtensionMemberMap.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), authorDeclaredNames: HashDigestSet.create(), libraryMeantNames: HashDigestSet.create(), managedTopLevelNames: ManagedTopLevelNameSet.create(), corpusSlotInitCallees: SlotInitCalleeMap.create(), constInitializerTypeNames: ConstInitializerTypeNameSet.create(), constInitializerTypeSites: NameInFileArray.create(), bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), serviceSpawnCandidateList: ServiceSpawnCandidateArray.create(), serviceHandleOwners: ServiceHandleOwnerMap.create(), serviceReplyErrorOwners: ServiceReplyErrorOwnerMap.create(), corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowSpellings: StdlibShadowSpellingArray.create(), authorQualifiedNominals: QualifiedNominalMap.create(), libraryQualifiedNominals: QualifiedNominalMap.create(), qualifiedNominalHeads: DeclaredTypeNameSet.create(), topLevelBindingSites: TopLevelBindingSiteMap.create(), writtenTypeClaims: CrossKindContestMap.create(), aliasFamiliesBesideNominals: DeclaredTypeNameSet.create(), headerTypeNameDecls: TypeNameDeclArray.create(), nominalNameCollisions: TypeNameCollisionArray.create(), fileModuleDirectories: ModuleDirectoryByFile.create(), libraryFilePaths: LibraryFilePathSet.create(), declTokenStreams: DeclTokenStreamMap.create(), declaredTests: DiscoveredTestArray.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'create'
 
 	// @generated library-cache begin
@@ -17275,7 +17299,6 @@ export type SettledDeclarations
 		cacheWriteRangedTypeAliasMap(writer, value: self.innerAliases)
 		cacheWriteExtensionInnerAliasNameSet(writer, value: self.extensionInnerAliasMembers)
 		cacheWriteDroppedSignatureMap(writer, value: self.droppedSignatures)
-		cacheWriteRangedTypeAliasMap(writer, value: self.preVerdictInnerAliasRanges)
 		cacheWriteInnerAliasParamInfoMap(writer, value: self.methodInnerAliasParams)
 		self.interfaces.cacheWrite(writer)
 		cacheWriteByteArrayArray(writer, value: self.interfaceNamesInDeclOrder)
@@ -17426,7 +17449,6 @@ export type SettledDeclarations
 		let f_innerAliases = try cacheReadRangedTypeAliasMap(reader)
 		let f_extensionInnerAliasMembers = try cacheReadExtensionInnerAliasNameSet(reader)
 		let f_droppedSignatures = try cacheReadDroppedSignatureMap(reader)
-		let f_preVerdictInnerAliasRanges = try cacheReadRangedTypeAliasMap(reader)
 		let f_methodInnerAliasParams = try cacheReadInnerAliasParamInfoMap(reader)
 		let f_interfaces = try IrInterfaceMap.cacheRead(reader)
 		let f_interfaceNamesInDeclOrder = try cacheReadByteArrayArray(reader)
@@ -17541,11 +17563,11 @@ export type SettledDeclarations
 		let f_genericInstancesBySite = try cacheReadGenericFunctionInstancesBySite(reader)
 		let f_genericInstancesByName = try cacheReadGenericFunctionInstanceMap(reader)
 
-		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, vectorFromSizes: f_vectorFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, droppedSignatures: f_droppedSignatures, preVerdictInnerAliasRanges: f_preVerdictInnerAliasRanges, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, descriptorNeeds: f_descriptorNeeds, speculativeDescriptorNeeds: f_speculativeDescriptorNeeds, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, unconstrainedExtensionMethods: f_unconstrainedExtensionMethods, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, byRefForwardingLive: f_byRefForwardingLive, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, disagreeingThrows: f_disagreeingThrows, funcThrowingDeclarationCounts: f_funcThrowingDeclarationCounts, funcDiverges: f_funcDiverges, funcDivergingDeclarationCounts: f_funcDivergingDeclarationCounts, funcAlwaysThrows: f_funcAlwaysThrows, funcAlwaysThrowingDeclarationCounts: f_funcAlwaysThrowingDeclarationCounts, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcFreshReturningDeclarationCounts: f_funcFreshReturningDeclarationCounts, funcConstructsFromParams: f_funcConstructsFromParams, funcConstructingDeclarationCounts: f_funcConstructingDeclarationCounts, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, contestedOpaqueParams: f_contestedOpaqueParams, disagreeingParamDefaults: f_disagreeingParamDefaults, funcDeclarationCounts: f_funcDeclarationCounts, funcDefaultingDeclarationCounts: f_funcDefaultingDeclarationCounts, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, overloadedDecls: f_overloadedDecls, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, contestedExtensionMethods: f_contestedExtensionMethods, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, stdlibExtensionMethodsBeatenByUser: f_stdlibExtensionMethodsBeatenByUser, staticInstanceContests: f_staticInstanceContests, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defines: f_defines, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, bareTypeParamReturnerNames: f_bareTypeParamReturnerNames, bareTypeParamReturnerNamesComputed: f_bareTypeParamReturnerNamesComputed, typeParamFeederNames: f_typeParamFeederNames, typeParamFeederNamesComputed: f_typeParamFeederNamesComputed, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceHandleOwners: f_serviceHandleOwners, serviceReplyErrorOwners: f_serviceReplyErrorOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, corpusArrayRecordName: f_corpusArrayRecordName, stdlibShadowSpellings: f_stdlibShadowSpellings, authorQualifiedNominals: f_authorQualifiedNominals, libraryQualifiedNominals: f_libraryQualifiedNominals, qualifiedNominalHeads: f_qualifiedNominalHeads, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, fileModuleDirectories: f_fileModuleDirectories, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, contestedRegistrationNames: f_contestedRegistrationNames, contestedKeysAnotherDeclarationHolds: f_contestedKeysAnotherDeclarationHolds, freeFunctionDeclFiles: f_freeFunctionDeclFiles, crossFileOverloadedFreeFunctions: f_crossFileOverloadedFreeFunctions, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName}
+		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, vectorFromSizes: f_vectorFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, descriptorNeeds: f_descriptorNeeds, speculativeDescriptorNeeds: f_speculativeDescriptorNeeds, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, unconstrainedExtensionMethods: f_unconstrainedExtensionMethods, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, byRefForwardingLive: f_byRefForwardingLive, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, disagreeingThrows: f_disagreeingThrows, funcThrowingDeclarationCounts: f_funcThrowingDeclarationCounts, funcDiverges: f_funcDiverges, funcDivergingDeclarationCounts: f_funcDivergingDeclarationCounts, funcAlwaysThrows: f_funcAlwaysThrows, funcAlwaysThrowingDeclarationCounts: f_funcAlwaysThrowingDeclarationCounts, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcFreshReturningDeclarationCounts: f_funcFreshReturningDeclarationCounts, funcConstructsFromParams: f_funcConstructsFromParams, funcConstructingDeclarationCounts: f_funcConstructingDeclarationCounts, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, contestedOpaqueParams: f_contestedOpaqueParams, disagreeingParamDefaults: f_disagreeingParamDefaults, funcDeclarationCounts: f_funcDeclarationCounts, funcDefaultingDeclarationCounts: f_funcDefaultingDeclarationCounts, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, overloadedDecls: f_overloadedDecls, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, contestedExtensionMethods: f_contestedExtensionMethods, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, stdlibExtensionMethodsBeatenByUser: f_stdlibExtensionMethodsBeatenByUser, staticInstanceContests: f_staticInstanceContests, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defines: f_defines, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, bareTypeParamReturnerNames: f_bareTypeParamReturnerNames, bareTypeParamReturnerNamesComputed: f_bareTypeParamReturnerNamesComputed, typeParamFeederNames: f_typeParamFeederNames, typeParamFeederNamesComputed: f_typeParamFeederNamesComputed, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceHandleOwners: f_serviceHandleOwners, serviceReplyErrorOwners: f_serviceReplyErrorOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, corpusArrayRecordName: f_corpusArrayRecordName, stdlibShadowSpellings: f_stdlibShadowSpellings, authorQualifiedNominals: f_authorQualifiedNominals, libraryQualifiedNominals: f_libraryQualifiedNominals, qualifiedNominalHeads: f_qualifiedNominalHeads, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, fileModuleDirectories: f_fileModuleDirectories, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, contestedRegistrationNames: f_contestedRegistrationNames, contestedKeysAnotherDeclarationHolds: f_contestedKeysAnotherDeclarationHolds, freeFunctionDeclFiles: f_freeFunctionDeclFiles, crossFileOverloadedFreeFunctions: f_crossFileOverloadedFreeFunctions, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize1200
-		return sizeof(SettledDeclarations) as CacheSize1200
+	static function cacheLayoutBytes() returns CacheSize1192
+		return sizeof(SettledDeclarations) as CacheSize1192
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -17602,9 +17624,9 @@ export typealias IndexTemplateCell = SharedValue with IndexTemplate
 
 export type ProgramSignatures
 	module var settled as SettledDeclarations
-	var structSlots as StructSlotMap = StructSlotMap.create()
-	var mintedTupleLayouts as StructLayoutArray = StructLayoutArray.create()
-	var published as SettledCellArray = SettledCellArray.create()
+	var structSlots = StructSlotMap.create()
+	var mintedTupleLayouts = StructLayoutArray.create()
+	var published = SettledCellArray.create()
 
 	// ⭐ Generic-instance interner — `Box with Integer` ⇒ a `GenericInstanceId`, id ⇒
 	// `(baseId, argTypes)`. LIKE `structLayouts` IT CARRIES IDS (an arg is a `MaxonType`), so `foldFile`
@@ -17876,15 +17898,15 @@ export type ProgramSignatures
 
 	var spawnsAnyServiceSettled = false
 	var spawnsAnyServiceAnswer = false
-	var liveDefaultKeyNames as DefaultKeyNameSet = DefaultKeyNameSet.create()
-	var liveKeyAdoptions as LiveKeysRevision = 0
+	var liveDefaultKeyNames = DefaultKeyNameSet.create()
+	var liveKeyAdoptions = 0 as LiveKeysRevision
 
 	// Does any declaration OTHER than the corpus's carry the marker? The gate `isArrayBaseName` puts in front
 	// of the scan — false for every program that declares no container of its own, which is the whole
 	// existing corpus.
 	var hasNonCorpusArrayConformer as bool
 
-	var recordsTypeClaims as bool = false
+	var recordsTypeClaims = false
 
 	// ⭐⭐ **THE SETTLED INDEX EVERY PARSE READS, AND WHAT HAS BEEN WRITTEN SINCE (B2).** A parse's output must
 	// not depend on which other files were parsed first, so each one reads exactly this baseline plus its own
@@ -17900,7 +17922,7 @@ export type ProgramSignatures
 	// Whether a fold's merge has written this index since it was settled or last restored (`openParseBand`).
 	var holdsAMerge = false
 
-	var genericInstancesDigest as HashDigest = 0
+	var genericInstancesDigest = 0 as HashDigest
 
 	// ⚠ **`os` IS THE COMPILE TARGET'S, AND IT IS HERE FOR EXACTLY ONE INDEX** — the
 	// `RangedAliasRegistry` below, whose builtin `ExitCode` bound is platform-shaped and must be resolved
@@ -18039,7 +18061,7 @@ export type ProgramSignatures
 	end 'mixInstanceRows'
 
 	function mixInstanceRow(state HashDigest, id GenericInstanceId) returns HashDigest
-		return Hasher.combined(Hasher.combined(self.mixGenericInstance(Hasher.combined(state, value: DeclShapeInstanceRow), id: id), value: (try self.genericInstances.instanceFixedCount(id) otherwise UnsizedHashWord) as HashDigest), value: SpeculativeRowMark if self.genericInstances.instanceIsSpeculative(id) else NamedRowMark)
+		return Hasher.combined(Hasher.combined(self.mixGenericInstance(Hasher.combined(state, value: DeclShapeInstanceRow), id: id), value: self.genericInstances.instanceFixedSize(id).hashWord()), value: SpeculativeRowMark if self.genericInstances.instanceIsSpeculative(id) else NamedRowMark)
 	end 'mixInstanceRow'
 
 	export function footprintOf(instances GenericInstanceIdSet, names ObservedNameSet, dispatchedInterfaces ObservedInterfaceSet) returns ParseFootprint
@@ -18714,6 +18736,10 @@ export type ProgramSignatures
 	module function serviceMessageOf(callee ByteArray) returns ServiceMessage throws MapError
 		return try self.settled.serviceMessages.get(callee)
 	end 'serviceMessageOf'
+
+	export function namesAServiceMessage(callee ByteArray) returns bool
+		return self.settled.serviceMessages.contains(callee)
+	end 'namesAServiceMessage'
 
 	export function liveDefaultKeys() returns LiveDefaultKeys
 		var keys = LiveDefaultKeys.create()
@@ -22239,7 +22265,7 @@ export type ProgramSignatures
 	function mixFieldDefault(state HashDigest, defaultValue FieldDefault) returns HashDigest
 		return match defaultValue 'shape'
 			none gives Hasher.combined(state, value: FieldShapeNoDefault)
-			literal(payload, tag, writtenNegative) gives self.mixDefaultLiteral(state, payload: payload, tag: tag, writtenNegative: writtenNegative)
+			literal(given) gives self.mixDefaultLiteral(state, given: given)
 			helper gives Hasher.combined(state, value: FieldShapeDefaultHelper)
 			bareCreateHelper gives Hasher.combined(state, value: FieldShapeDefaultBareCreate)
 		end 'shape'
@@ -22262,18 +22288,17 @@ export type ProgramSignatures
 	// the enum's ordinal — see the shape constants' own header: an ordinal is not a value in Maxon, and a
 	// hash that moved when `ValueTypeTag`'s arms were REORDERED would invalidate every parse memo in the
 	// project for a change that means nothing.
-	// ⚠ **`writtenNegative` RIDES FOR THE TAG'S OWN REASON, and the payload cannot stand in for it either:**
-	// `= -1` and `= 0xFFFFFFFFFFFFFFFE` store the SAME KIND of negative `ParsedInt` and differ only in
-	// whether the source wrote a minus, which is what decides whether the default fits an
-	// `int(0 to u64.max)` field (`FieldDefault.literal`). Editing one spelling into the other must
-	// invalidate the memo, so it is mixed.
-	function mixDefaultLiteral(state HashDigest, payload ParsedInt, tag ValueTypeTag, writtenNegative bool) returns HashDigest
-		let payloadBits = payload as HashDigest
-		let sign = FieldDefaultWrittenNegative if writtenNegative else FieldDefaultWrittenPlain
+	// ⚠ **`writtenNegative` and `aboveSignedMax` RIDE FOR THE TAG'S OWN REASON, and the payload cannot
+	// stand in for them either:** `= -1` and `= 0xFFFFFFFFFFFFFFFE` store the SAME KIND of negative
+	// `ParsedInt` and differ only in what the source wrote, which is what decides whether the default
+	// fits an `int(0 to u64.max)` field (`FieldDefault.literal`). Editing one spelling into the other
+	// must invalidate the memo, so the marks are mixed.
+	function mixDefaultLiteral(state HashDigest, given ConstValue) returns HashDigest
+		let payloadBits = given.payload as HashDigest
+		let sign = FieldDefaultWrittenNegative if given.writtenNegative else FieldDefaultWrittenAboveSignedMax if given.aboveSignedMax else FieldDefaultWrittenPlain
 
-		// A field default names no TYPE — this door is the three-literal question its header describes, and
-		// the `named` arm `mixValueTag` grew is the top-level evaluator's alone.
-		return Hasher.combined(Hasher.combined(self.mixValueTag(Hasher.combined(state, value: FieldShapeDefaulted), tag: tag, typeName: EmptySourceText), value: payloadBits), value: sign)
+		// The ConstValue's `typeName` is not mixed: a field default's literal never carries one.
+		return Hasher.combined(Hasher.combined(self.mixValueTag(Hasher.combined(state, value: FieldShapeDefaulted), tag: given.tag, typeName: EmptySourceText), value: payloadBits), value: sign)
 	end 'mixDefaultLiteral'
 
 	// Add one ranged typealias to the index AND fold it into the hash. The hash carries the RANGE
@@ -22328,58 +22353,6 @@ export type ProgramSignatures
 		let named = mixBytes(Hasher.combined(self.hash, value: DeclShapeInnerAlias), bytes: qualified)
 		self.hash = mixDeclaringTier(Hasher.combined(Hasher.combined(named, value: low), value: high), visibility: alias.visibility, declFilePath: alias.declFilePath)
 	end 'recordInnerAlias'
-
-	// ⭐⭐ **WHAT THE PRE-PASS KNOWS ABOUT AN `extension` BODY'S RANGED NESTED ALIASES *BEFORE* ANY VERDICT IS
-	// COMPUTABLE — a REGISTRY OF ITS OWN, and the separation is the whole correctness argument.**
-	//
-	// ⚠⚠ **THE PRE-PASS PUBLISHES NAMES, AND THAT IS NOT ENOUGH.**
-	// `extensionInnerAliasMembers` makes *"does this type declare a nested alias called `X`?"*
-	// order-independent, which is what `parseTypeReference` needs to spell `named("Array.X")`. It
-	// settles nothing about what that name MEANS, and `canonicalTupleElement` — which collapses an inner
-	// ranged alias to its underlying primitive so a tuple's identity is keyed on RESOLVED types — asks exactly
-	// that, of a registry only the fold fills. ⛔ **A tuple element naming a ranged alias a SIBLING
-	// `extension` declares in another file** is keyed, without this registry, on the unresolved `Array.X`
-	// by a walk reaching its file first — a different type from the one every other reader resolves,
-	// decided by directory order.
-	//
-	// ⛔⛔ **AND IT MAY NOT BE WRITTEN INTO `innerAliases`, WHICH IS WHAT THE FIRST CURE DID.** The pre-pass
-	// runs before `extensionConformerVerdict` can be taken, so it publishes for EVERY conformer including one
-	// a CONDITIONAL extension withholds its members from. The NAME set's excess is bounded by exactly this
-	// registry — a withheld conformer got a spelling and nothing carried its meaning, so the compile stopped
-	// at **E3011 Unknown type 'Box.Slot'**. Keying the RANGE removed that stop: **MEASURED, an
-	// `extension Holder where Item is Equatable` declaring `typealias Slot = int(0 to 7)` withheld from a
-	// `Box` whose binding is not `Equatable` — baseline `E3011`, first cure COMPILED AND RAN** — so the
-	// compiler withheld the extension's METHODS from `Box` while handing it the extension's TYPES, which is
-	// precisely what `Parser.foldExtensionDeclarationInto`'s withheld-alias rule forbids.
-	//
-	// ⇒ **ONE READER, NAMED HERE: `canonicalTupleElement`, as a FALLBACK AFTER `innerAliases`.** It is the
-	// only consumer that needs a range while the fold is still running — verified against the code, not
-	// assumed: `parseTypeReference`'s inner-alias arm reads `declaresInnerAlias` (the name OR, already
-	// order-independent); `innerAliasMember`'s method-return retype, `perInstanceAliasFromParts` and
-	// `qualifiedAliasOf` all run in the real parse or later, with every fold complete. So the FOLD remains the
-	// single party that decides what a conformer may NAME, and this map only decides what a tuple's identity
-	// is keyed on — which is a fact about the DECLARATION and not about any conformer's membership.
-	//
-	// ⚠ **THE RANGED FORM IS THE ONLY NESTED ALIAS FORM THAT CAN BE KNOWN AHEAD OF THE FOLD, AND THAT IS A
-	// PROPERTY OF THE FORM RATHER THAN A LIMIT OF THE PRE-PASS.** A ranged alias's meaning is a pure function
-	// of its own tokens — a primitive keyword and two bounds, neither of which can name another declaration —
-	// so reading it needs no registry. A generic-instance, tuple or function alias names OTHER declarations,
-	// so its meaning cannot be settled before the fold that settles them; publishing those ahead would move
-	// the ordering hazard down one level rather than remove it.
-	//
-	// ⚠ It folds nothing into `self.hash`, for `recordExtensionInnerAliasMember`'s reason: the fold records
-	// the same declaration a moment later, under the same qualified name, through `recordInnerAlias`.
-	export function recordPreVerdictInnerAliasRange(baseName ByteArray, alias RangedTypeAlias)
-		self.settled.preVerdictInnerAliasRanges.upsert(joinQualifiedName(baseName, member: alias.name), value: alias)
-	end 'recordPreVerdictInnerAliasRange'
-
-	// The range the pre-pass read for `qualified`, or `undeclared`. `canonicalTupleElement`'s fallback and
-	// NOBODY else's — see `recordPreVerdictInnerAliasRange` for why widening the readership would hand a
-	// withheld conformer a type it may not name.
-	function preVerdictInnerAliasOf(qualified ByteArray) returns DeclaredAlias
-		let alias = try self.settled.preVerdictInnerAliasRanges.get(qualified) otherwise return DeclaredAlias.undeclared
-		return DeclaredAlias.declared(alias)
-	end 'preVerdictInnerAliasOf'
 
 	// ⭐ **NOTE THAT AN `extension` BODY DECLARES A PER-INSTANCE NESTED `typealias` CALLED `qualified`** — see
 	// `extensionInnerAliasMembers`. NAMES ONLY: the declaration itself is recorded a moment later by
@@ -24093,7 +24066,7 @@ export type ProgramSignatures
 		match layout.fieldDefault(index) 'declared'
 			none or
 			helper then return ContainerBoxSlot.notImageable
-			literal(payload, tag, writtenNegative) then return self.containerBoxScalarSlot(layout, index: index, payload: payload, tag: tag, writtenNegative: writtenNegative)
+			literal(given) then return self.containerBoxScalarSlot(layout, index: index, given: given)
 			bareCreateHelper then return self.containerBoxColumnSlot(giid, layout: layout, index: index)
 		end 'declared'
 	end 'containerBoxSlot'
@@ -24102,8 +24075,8 @@ export type ProgramSignatures
 	// payload is widened where a construction is folded (`Parser.requireConstFieldValueFits`), and this door
 	// has no construction to widen against — laying its raw `ParsedInt` down would write an integer's bits
 	// where the slot holds a double.
-	function containerBoxScalarSlot(layout StructLayout, index FieldIndex, payload ParsedInt, tag ValueTypeTag, writtenNegative bool) returns ContainerBoxSlot
-		if writtenNegative or not tagIsIntegral(tag) 'notAPlainIntegralLiteral'
+	function containerBoxScalarSlot(layout StructLayout, index FieldIndex, given ConstValue) returns ContainerBoxSlot
+		if given.writtenNegative or not tagIsIntegral(given.tag) 'notAPlainIntegralLiteral'
 			return ContainerBoxSlot.notImageable
 		end 'notAPlainIntegralLiteral'
 
@@ -24113,7 +24086,7 @@ export type ProgramSignatures
 			return ContainerBoxSlot.notImageable
 		end 'notAnIntegralSlot'
 
-		return ContainerBoxSlot.scalar(GlobalStructField.create(layout.offsetOfField(index), storageType: slotStorageType(self, declared: fieldType, typeNames: self.typeNames, readerFilePath: layout.declFilePath), value: GlobalInitArgumentValue.scalar(payload), valueType: fieldType))
+		return ContainerBoxSlot.scalar(GlobalStructField.create(layout.offsetOfField(index), storageType: slotStorageType(self, declared: fieldType, typeNames: self.typeNames, readerFilePath: layout.declFilePath), value: GlobalInitArgumentValue.scalar(given.payload), valueType: fieldType))
 	end 'containerBoxScalarSlot'
 
 	// ⭐⭐ **A COLUMN SLOT, IN THE TERMS THE SHARED BODY BUILDS IT** — which is the one thing this whole shape
@@ -26802,22 +26775,22 @@ export type ProgramSignatures
 	// which `mixFieldDefault` hashes as a presence bit and never as a value. This door stays the
 	// three-literal question.
 	//
-	// `let PI = 3.14` and `var ratio = 2.5` are constants, so a float tag is REACHABLE and gets
-	// the one thing a content hash owes it — a distinct key. It reuses `TypeShapeFloat`, the shape
-	// `mixType` already gives a float from the `MaxonType` side: the two functions hash one lattice
-	// from two directions, and a float that hashed differently depending on which door it came
-	// through is a cache that answers a stale parse for a changed file.
+	// `let PI = 3.14` and `var ratio = 2.5 as Ratio` are constants, so a float tag is REACHABLE and
+	// gets the one thing a content hash owes it — a distinct key. It reuses `TypeShapeFloat`, the
+	// shape `mixType` already gives a float from the `MaxonType` side: the two functions hash one
+	// lattice from two directions, and a float that hashed differently depending on which door it
+	// came through is a cache that answers a stale parse for a changed file.
 	function mixValueTag(state HashDigest, tag ValueTypeTag, typeName ByteArray) returns HashDigest
 		match tag 'k'
-			integer then return Hasher.combined(state, value: TypeShapeInteger)
+			// An `integer` or `float` constant's `typeName` is the alias its cast named, mixed for the
+			// `named` arm's reason: `5 as Tally` and `5 as Count` are different values.
+			integer then return mixBytes(Hasher.combined(state, value: TypeShapeInteger), bytes: typeName)
 			boolean then return Hasher.combined(state, value: TypeShapeBoolean)
-			float then return Hasher.combined(state, value: TypeShapeFloat)
+			float then return mixBytes(Hasher.combined(state, value: TypeShapeFloat), bytes: typeName)
 
-			// ⭐⭐ **`named` IS REACHABLE, AND THE NAME RIDES WITH THE SHAPE.** *"A constant's type is
-			// inferred from a bare initializer, so it is never a ranged alias (that needs an `as` cast)"*
-			// is true of a ranged alias and false of a
-			// PAYLOAD-FREE ENUM CASE, whose value is its tag and whose type is the enum
-			// (`let JumpTableBaseReg = X64Register.r10`), so this arm may not panic.
+			// ⭐⭐ **`named` IS REACHABLE, AND THE NAME RIDES WITH THE SHAPE.** A PAYLOAD-FREE ENUM CASE's
+			// value is its tag and its type is the enum (`let JumpTableBaseReg = X64Register.r10`), so this
+			// arm may not panic.
 			//
 			// ⚠ **THE BYTES ARE MIXED, NOT ONLY THE SHAPE, and leaving them out would be a stale-cache bug
 			// rather than a coarse key.** Two enums' cases collide constantly — every enum's first case has
@@ -27317,19 +27290,46 @@ export type ProgramSignatures
 	end 'mayTakeUnsignedQuantityAt'
 
 	function declarationTakesUnsignedQuantityAt(decl OverloadedDecl, argIndex ParamCount, label ByteArray) returns bool
-		if decl.takesReceiver and argIndex == 0 'theReceiver'
-			return false
-		end 'theReceiver'
-
-		let sourceIndex = argIndex - 1 if decl.takesReceiver else argIndex
-
-		let position = try argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label) otherwise return false
-
-		return match self.declaredParamAliasAt(decl, position: position) 'slotAlias'
+		return match self.declaredAliasAtArgument(decl, argIndex: argIndex, label: label) 'slotAlias'
 			declared(alias) gives aliasIsUnsignedFullQuantity(alias)
 			undeclared gives false
 		end 'slotAlias'
 	end 'declarationTakesUnsignedQuantityAt'
+
+	export function parameterIsARangedAliasAt(callee ByteArray, argIndex ParamCount, label ByteArray) returns bool
+		return match self.parameterAliasAt(callee, argIndex: argIndex, label: label) 'slotAlias'
+			declared gives true
+			undeclared gives false
+		end 'slotAlias'
+	end 'parameterIsARangedAliasAt'
+
+	export function parameterAliasAt(callee ByteArray, argIndex ParamCount, label ByteArray) returns DeclaredAlias
+		var found = DeclaredAlias.undeclared
+
+		for decl in self.overloadedDeclsOf(callee) 'eachDeclaration'
+			let slot = self.declaredAliasAtArgument(decl, argIndex: argIndex, label: label)
+
+			if not declaredAliasIsDeclared(slot) 'aDeclarationNamesNoAlias'
+				return DeclaredAlias.undeclared
+			end 'aDeclarationNamesNoAlias'
+
+			found = preferredQuantityAlias(found, candidate: slot)
+		end 'eachDeclaration'
+
+		return found
+	end 'parameterAliasAt'
+
+	export function declaredAliasAtArgument(decl OverloadedDecl, argIndex ParamCount, label ByteArray) returns DeclaredAlias
+		if decl.takesReceiver and argIndex == 0 'theReceiver'
+			return DeclaredAlias.undeclared
+		end 'theReceiver'
+
+		let sourceIndex = argIndex - 1 if decl.takesReceiver else argIndex
+
+		let position = try argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label) otherwise return DeclaredAlias.undeclared
+
+		return self.declaredParamAliasAt(decl, position: position)
+	end 'declaredAliasAtArgument'
 
 	// ⭐⭐ **THE `Array` INSTANCE `callee` DECLARES AT ONE ARGUMENT POSITION — what an array literal written
 	// there has to be BUILT at (`Parser.stateArrayLiteralTargetForArgument`, the only asker).** An element
@@ -27376,12 +27376,29 @@ export type ProgramSignatures
 	export function tupleTypeNameDeclaredAtParam(callee ByteArray, sourceIndex ParamCount, label ByteArray) returns ByteArray throws AbsentError
 		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label)
 
-		if maxonTypeTag(param.declared) != ValueTypeTag.structRef 'notARecord'
+		let resolved = self.declaredSlotType(param.declared, into: self.typeNames, slotScopeFilePath: param.declFilePath)
+
+		if maxonTypeTag(resolved) == ValueTypeTag.named and self.isAliasOfFormFor(self.nameOfId(typeNameIdOf(resolved)), readerFilePath: param.declFilePath, wanted: FormAliasKind.tuple) 'aQualifiedTupleAlias'
+			return self.tupleAliasTargetFrom(self.nameOfId(typeNameIdOf(resolved)), readerFilePath: param.declFilePath)
+		end 'aQualifiedTupleAlias'
+
+		if maxonTypeTag(resolved) != ValueTypeTag.structRef 'notARecord'
 			throw AbsentError.absent
 		end 'notARecord'
 
-		return self.indexSpaceTypeName(param.declared)
+		return self.indexSpaceTypeName(resolved)
 	end 'tupleTypeNameDeclaredAtParam'
+
+	export function tupleTypeNameDeclaredAtParamOfReceiver(callee ByteArray, sourceIndex ParamCount, label ByteArray, receiver GenericInstanceId) returns ByteArray throws AbsentError
+		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label)
+		let substituted = self.substituteThroughInstanceInterned(param.declared, id: receiver, interner: self.typeNames)
+
+		if maxonTypeTag(substituted) != ValueTypeTag.structRef 'notARecord'
+			throw AbsentError.absent
+		end 'notARecord'
+
+		return self.indexSpaceTypeName(substituted)
+	end 'tupleTypeNameDeclaredAtParamOfReceiver'
 
 	function soleDeclaredParam(callee ByteArray, sourceIndex ParamCount, label ByteArray) returns DeclaredParam throws AbsentError
 		if not self.allFilesFolded 'theAliasRegistriesAreStillFilling'
@@ -30852,10 +30869,9 @@ export type ProgramSignatures
 	// is minted through — a `(a, b)` literal, a `(T, U)` type annotation, a `typealias Pair = (…)` — so every
 	// spelling of one tuple type lands on ONE layout.
 	//
-	// ⭐⭐ **IT CANONICALIZES, AND ONLY ONCE THE WHOLE PROGRAM IS FOLDED.** A ranged alias collapses to its
-	// underlying primitive, which is what makes `sum(t (Integer, Integer))` accept the `(10, 32)` a caller
-	// built. It cannot be
-	// done during the SWEEP: `Integer`'s own declaration may be below the function, or in a file not yet
+	// ⭐⭐ **IT CANONICALIZES, AND ONLY ONCE THE WHOLE PROGRAM IS FOLDED.** A ranged alias is keyed
+	// on the declaration its spelling's file sees (`canonicalTupleElement`). It cannot be done
+	// during the SWEEP: `Integer`'s own declaration may be below the function, or in a file not yet
 	// folded, so the alias registry has no answer yet. A sweep-minted name is therefore the SOURCE spelling
 	// (`__Tuple2.Integer.Integer`), and `adoptType` — the ONE door this index's types cross out of — rewrites
 	// it to the canonical one at every read. That is the identical arrangement `declaredSlotType`'s three
@@ -30937,12 +30953,38 @@ export type ProgramSignatures
 
 		// The layout owns its copies: a parse hands in its own types and path, and a layout the journal later removes stays
 		// in its map slot.
-		self.addRegisteredLayout(tupleStructLayout(name, elements: elements.clone(), declFilePath: declFilePath.clone()))
+		self.addRegisteredLayout(tupleStructLayout(name, elements: elements.clone(), brands: self.tupleElementBrands(elements, declFilePath: declFilePath), declFilePath: declFilePath.clone()))
 		self.recordTupleElementToken(name)
 		self.recordSeparatorBearingElementTokens(elements)
 
 		return name
 	end 'registerTupleLayout'
+
+	export function settleSweptTupleElementBrands()
+		for (name, slot) in self.structSlots 'eachLayout'
+			if not isTupleTypeName(name) 'notATuple'
+				continue
+			end 'notATuple'
+
+			let layout = self.layoutAtSlot(slot)
+			let brands = self.tupleElementBrands(layout.fieldTypes, declFilePath: layout.declFilePath)
+
+			for i in 0 upto brands.count() 'eachElement'
+				let brand = try brands.get(i) otherwise panic("ProgramSignatures.settleSweptTupleElementBrands: brands.get OOB at {i} below count {brands.count()}")
+				layout.rebrandField(i as FieldIndex, declaredBrand: brand)
+			end 'eachElement'
+		end 'eachLayout'
+	end 'settleSweptTupleElementBrands'
+
+	function tupleElementBrands(elements MaxonTypeArray, declFilePath FilePath) returns ByteArrayArray
+		var brands = ByteArrayArray.create()
+
+		for element in elements 'eachElement'
+			brands.push(self.nameOfId(typeNameIdOf(element)) if self.typeIsARangedAlias(element, slotScopeFilePath: declFilePath) else (ExitCodeBuiltinName if maxonTypeTag(element) == ValueTypeTag.exitCode else EmptySourceText))
+		end 'eachElement'
+
+		return brands
+	end 'tupleElementBrands'
 
 	// The ledger half of a separator-bearing element's citation: `tupleElementName` derives the token and
 	// never writes, so the collision check lives at the one mutation site a tuple type has. One spelling cited
@@ -31214,13 +31256,15 @@ export type ProgramSignatures
 
 	// ⭐ **THE CANONICAL FORM OF ONE TUPLE ELEMENT — what a tuple's IDENTITY is keyed on.**
 	//
-	// It routes through `declaredSlotType`, the SAME door a struct FIELD's declared type comes out of, so a
-	// tuple element and a field of the same declared type can never be classified differently — a function
-	// alias becomes `function`, a generic-instance alias becomes `genericInstance`, a ranged float alias
-	// becomes `float`. Then a ranged INT alias collapses through `canonicalizeRangedAlias` (which
-	// `declaredSlotType` deliberately leaves alone, because a `named` int alias carries its range and
-	// signedness for the shift rule), and an INNER ranged alias (`Wrapper.Idx`) collapses the same way, so
-	// `(Wrapper.Idx, int)` and `(int, int)` are one tuple exactly as `(Integer, int)` and `(int, int)` are.
+	// A ranged alias, int or float, stays `named`: every tuple element keeps its alias as a struct
+	// field does, so `(Tally, int)` and `(int, int)` are two tuples. It is keyed on the declaration
+	// the spelling's own file sees (`rangeScopedDeclaredName`), so two files' same-named aliases stay
+	// two elements.
+	//
+	// Every other element routes through `declaredSlotType`, the SAME door a struct FIELD's declared
+	// type comes out of, so a tuple element and a field of the same declared type can never be
+	// classified differently — a function alias becomes `function`, a generic-instance alias becomes
+	// `genericInstance`.
 	//
 	// A `named` denoting a declared `type` is re-tagged `structRef` by `declaredSlotType` itself, so the
 	// tuple's field type routes to the struct's own drop — and, the re-tag happening THERE rather than at the
@@ -31232,10 +31276,7 @@ export type ProgramSignatures
 	// compiler-synthesized, so it has no honest file, so every
 	// element resolves as a file declaring none of the name would"* is true of the tuple's IDENTITY and
 	// false of its element SPELLINGS — `(Bag, Num)` is written in one file, and where `Bag` is a contested
-	// generic alias the stranger's reading is a THIRD answer, agreeing with neither declaration. ⛔ MEASURED:
-	// a file declaring `Bag = Array with Num` and `Pair = (Bag, Num)` cannot construct its own field —
-	// `E3005: cannot assign '__Tuple2.Array_Num.int' to variable 'Keeper.p' of type
-	// '__Tuple2.Array_String.int'`, at the declaring file's own line, naming another file's `Bag`.
+	// generic alias the stranger's reading is a THIRD answer, agreeing with neither declaration.
 	//
 	// ⭐ **THE CANONICAL NAME STAYS A WHOLE-PROGRAM KEY, and per-file resolution is what makes it one.** The
 	// key is derived from the RESOLVED elements, so two files that mean the same thing by `(Bag, Num)` walk to
@@ -31244,33 +31285,48 @@ export type ProgramSignatures
 	// one type but the two types the program always had. `__ManagedMemory` inside a tuple therefore means what
 	// the SPELLING'S OWN FILE means by `Byte`, exactly as the same spelling in a struct field does.
 	function canonicalTupleElement(element MaxonType, slotScopeFilePath FilePath) returns MaxonType
-		let resolved = self.canonicalizeRangedAlias(self.declaredSlotType(element, into: self.typeNames, slotScopeFilePath: slotScopeFilePath), slotScopeFilePath: slotScopeFilePath)
+		if self.typeIsARangedAlias(element, slotScopeFilePath: slotScopeFilePath) 'aRangedAlias'
+			return self.rangeScopedTupleElement(element, slotScopeFilePath: slotScopeFilePath)
+		end 'aRangedAlias'
 
-		if maxonTypeTag(resolved) != ValueTypeTag.named 'notNamed'
-			return self.canonicalTupleStructRef(resolved)
+		let declared = self.declaredSlotType(element, into: self.typeNames, slotScopeFilePath: slotScopeFilePath)
+
+		if maxonTypeTag(declared) != ValueTypeTag.named 'notNamed'
+			return self.canonicalTupleStructRef(declared)
 		end 'notNamed'
 
-		let name = self.nameOfId(typeNameIdOf(resolved))
-
-		match self.innerAliasOf(name) 'inner'
-			declared(alias) then return alias.underlying
-			undeclared then break
-		end 'inner'
-
-		// ⭐⭐ **AND THE PRE-PASS'S ANSWER IF THE FOLD HAS NOT REACHED THE DECLARATION YET — the ONE reader of
-		// `preVerdictInnerAliasRanges`, which is why the fallback is written here and not inside `innerAliasOf`.**
-		// `foldExtensionDeclarations` fills `innerAliases` one site at a time WHILE reading each body's
-		// signatures, so a tuple element naming a sibling `extension` body's ranged alias resolves here or
-		// nowhere; that door's own header carries what happened when it resolved nowhere. Every OTHER reader of
-		// an inner alias keeps asking `innerAliases` alone, so a conformer a conditional extension withholds
-		// these declarations from still cannot NAME them (E3011) — the verdict stays the fold's to take.
-		match self.preVerdictInnerAliasOf(name) 'beforeTheFold'
-			declared(alias) then return alias.underlying
-			undeclared then break
-		end 'beforeTheFold'
-
-		return resolved
+		return declared
 	end 'canonicalTupleElement'
+
+	function rangeScopedTupleElement(element MaxonType, slotScopeFilePath FilePath) returns MaxonType
+		let name = self.nameOfId(typeNameIdOf(element))
+		let scoped = self.rangeScopedDeclaredName(name, readerFilePath: slotScopeFilePath)
+
+		if scoped.equals(name) 'thisFileNamesTheBareDeclaration'
+			return element
+		end 'thisFileNamesTheBareDeclaration'
+
+		return MaxonType.named(self.typeNames.intern(scoped))
+	end 'rangeScopedTupleElement'
+
+	export function typeIsARangedAlias(t MaxonType, slotScopeFilePath FilePath) returns bool
+		if maxonTypeTag(t) != ValueTypeTag.named 'notAnAlias'
+			return false
+		end 'notAnAlias'
+
+		return self.aliasNamedIsRanged(self.nameOfId(typeNameIdOf(t)), slotScopeFilePath: slotScopeFilePath)
+	end 'typeIsARangedAlias'
+
+	export function typeNamesANumericIdentity(t MaxonType, slotScopeFilePath FilePath) returns bool
+		return maxonTypeTag(t) == ValueTypeTag.exitCode or self.typeIsARangedAlias(t, slotScopeFilePath: slotScopeFilePath)
+	end 'typeNamesANumericIdentity'
+
+	export function aliasNamedIsRanged(name ByteArray, slotScopeFilePath FilePath) returns bool
+		match self.fileScopedOrInnerAliasNamed(name, readerFilePath: slotScopeFilePath) 'alias'
+			declared then return true
+			undeclared then return false
+		end 'alias'
+	end 'aliasNamedIsRanged'
 
 	// ⭐ **THE `MaxonType`-LEVEL TWIN OF `canonicalNameOfStruct`: a tuple `structRef` under a SWEEP spelling
 	// answered as the canonical one, everything else itself.** One derivation, two readers — a NESTED tuple
@@ -31510,7 +31566,7 @@ export type ProgramSignatures
 			adopted.push(self.adoptType(element, into: into))
 		end 'eachElement'
 
-		return tupleStructLayout(name, elements: adopted, declFilePath: layout.declFilePath)
+		return tupleStructLayout(name, elements: adopted, brands: layout.fieldDeclaredBrands.clone(), declFilePath: layout.declFilePath)
 	end 'adoptTupleLayout'
 
 	// ⭐ **THE MIRROR OF `adoptType`: re-intern an id-bearing type INTO this index's own table.** `adoptType`
@@ -33332,7 +33388,7 @@ export type ProgramSignatures
 		// ⚠ **THE STORAGE QUESTION AND NOT THE REFCOUNT ONE** — see `containerElementOccupiesAPointerSlot`,
 		// whose header carries the compiler panic that measured the difference.
 		if self.containerElementOccupiesAPointerSlot(id) 'storedAsAnAddress'
-			return ManagedArrayElementBytes as ElementStride
+			return ManagedArrayElementBytes
 		end 'storedAsAnAddress'
 
 		let element = self.containerElementType(id)
@@ -33471,7 +33527,7 @@ export type ProgramSignatures
 	//
 	// The (tag, id) pair is asked through `isArrayInstanceAt`, which is where the tag half's reason lives.
 	export function isBytePackedArrayInstance(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return self.isArrayInstanceAt(tag, nameId: nameId) and self.arrayElementSize(nameId as GenericInstanceId) == ByteStringElementSize
+		return self.isArrayInstanceAt(tag, nameId: nameId) and self.arrayElementSize(nameId as GenericInstanceId) == (ByteStringElementSize as ElementStride)
 	end 'isBytePackedArrayInstance'
 
 	function arrayElementIsNamed(tag ValueTypeTag, nameId TypeNameId, name ByteArray) returns bool
@@ -44335,7 +44391,6 @@ export type ProgramSignatures
 		fingerprint.note("implementsParents", value: self.settled.implementsParents.count())
 		fingerprint.note("implementsVerdicts", value: self.settled.implementsVerdicts.count())
 		fingerprint.note("droppedSignatures", value: self.settled.droppedSignatures.count())
-		fingerprint.note("preVerdictInnerAliasRanges", value: self.settled.preVerdictInnerAliasRanges.count())
 		fingerprint.note("methodInnerAliasParams", value: self.settled.methodInnerAliasParams.count())
 		fingerprint.note("interfaces", value: self.settled.interfaces.entries.count())
 		fingerprint.note("interfaceNamesInDeclOrder", value: self.settled.interfaceNamesInDeclOrder.count() as EntryCount)

@@ -211,7 +211,7 @@ let GtTrampFuncPtrReg = X64Register.r11
 // `XmmSaveSlotBytes` slot per register of `calleeSavedXmmOrder`, which IS the width the prologue's slots use
 // because it is the same constant.
 function gtXmmSaveAreaBytes() returns StackSize
-	return calleeSavedXmmOrder.count() * XmmSaveSlotBytes
+	return (calleeSavedXmmOrder.count() as StackSize) * XmmSaveSlotBytes
 end 'gtXmmSaveAreaBytes'
 
 // ⭐ Enforce the ONE fact the Std-tier frame builder (`__gt_spawn` in GtRuntime, which lays `GtInitialFrameBytes`)
@@ -1380,7 +1380,7 @@ end 'GtRegisterBlockDirection'
 function emitGtRegisterBlock(code ByteArray, gprs X64RegisterArray, stackedBytes StackSize, direction GtRegisterBlockDirection) returns StackSize
 	let pushedBytes = (gprs.count() * StackWordBytes) as StackSize
 	let aboveFrame = stackedBytes + pushedBytes
-	let frameBytes = alignUpStack(aboveFrame + ShadowSpaceBytes + (argFpRegisters.count() * XmmSaveSlotBytes) as StackSize, alignment: StackFrameAlignment) - aboveFrame
+	let frameBytes = alignUpStack(aboveFrame + ShadowSpaceBytes + (argFpRegisters.count() as StackSize) * XmmSaveSlotBytes, alignment: StackFrameAlignment) - aboveFrame
 
 	if direction == GtRegisterBlockDirection.save 'save'
 		for reg in gprs 'push'
@@ -1407,7 +1407,7 @@ end 'emitGtRegisterBlock'
 function emitGtFpArgumentSlots(code ByteArray, direction GtRegisterBlockDirection)
 	for k in 0 upto argFpRegisters.count() 'fps'
 		let reg = try argFpRegisters.get(k) otherwise panic("emitGtFpArgumentSlots: index derived from count is in range")
-		let disp = (ShadowSpaceBytes + ((k as RegCount) * XmmSaveSlotBytes)) as Imm32
+		let disp = (ShadowSpaceBytes + ((k as StackSize) * XmmSaveSlotBytes)) as Imm32
 
 		match direction 'dir'
 			save then encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: disp, srcReg: reg)
@@ -1572,7 +1572,7 @@ function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	// release call to find rsp aligned.
 	let stackedBytes = (1 + calleeSavedOrder.count()) * StackWordBytes
 
-	if (stackedBytes + ShadowSpaceBytes) mod StackFrameAlignment != 0 'alignment'
+	if ((stackedBytes as StackSize) + ShadowSpaceBytes) mod StackFrameAlignment != 0 'alignment'
 		panic("__gt_stack_relocate misaligned: the return address + {calleeSavedOrder.count()} callee-saved pushes = {stackedBytes} bytes plus {ShadowSpaceBytes} of shadow space is not a multiple of {StackFrameAlignment} — rsp must be 16-aligned at the release call")
 	end 'alignment'
 
@@ -2201,7 +2201,7 @@ end 'asyncPreemptGprBytes'
 // The whole block: the shadow space the park's own callees may clobber, then a slot per register, rounded so
 // rsp is 16-aligned at the `call`.
 function asyncPreemptBlockBytes() returns StackSize
-	return alignUpStack(ShadowSpaceBytes + asyncPreemptGprBytes() + ((vectorRegisterCount(x64RegisterFile()) * XmmSaveSlotBytes) as StackSize), alignment: StackFrameAlignment)
+	return alignUpStack(ShadowSpaceBytes + asyncPreemptGprBytes() + ((vectorRegisterCount(x64RegisterFile()) as StackSize) * XmmSaveSlotBytes), alignment: StackFrameAlignment)
 end 'asyncPreemptBlockBytes'
 
 // ⭐ **WHAT AN ASYNCHRONOUS STOP COSTS THE GREEN THREAD's STACK BELOW THE INTERRUPTED RSP, BEFORE

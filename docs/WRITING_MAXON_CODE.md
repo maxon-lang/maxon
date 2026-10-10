@@ -300,9 +300,13 @@ end 'check'
 ### 17. Every struct field MUST be initialized (E3086)
 
 A struct literal must supply a value for every field, unless the field:
-1. has a default on its declaration — two forms:
-   - shorthand: `var count = 0` (literal only: int/float/bool/enum case), OR
-   - full form: `var items as IntArray = IntArray.create()` (type annotation + arbitrary expression, re-evaluated at every literal that omits the field)
+1. has a default on its declaration, re-evaluated at every literal that omits the field. The default
+   gives the field its type, so it takes one of three shapes:
+   - a `bool` or string literal: `var enabled = true`, `var name = "anon"`;
+   - `Type.member` or `Type.member(...)`, typed `Type`: `var items = IntArray.create()`, `var level = Priority.low`;
+   - an expression cast with `as`, typed by the cast: `var count = 0 as Tally`.
+
+   A bare number default (`var count = 0`) is E2004 — cast it. `var count as Tally = 0` is E2010.
 2. is assigned via `self.field = expr` on every control-flow path of a
    `static` factory whose return type is the enclosing type, and the literal
    is the direct `return` expression.
@@ -321,18 +325,18 @@ type P
 	end 'create'
 end 'P'
 
-// CORRECT — declaration default (shorthand)
+// CORRECT — declaration default (a cast gives the type)
 type Counter
-	export var value = 0
+	export var value = 0 as Integer
 
 	export static function create() returns Self
 		return Self{}           // OK — value defaults to 0
 	end 'create'
 end 'Counter'
 
-// CORRECT — declaration default (full form with expression)
+// CORRECT — declaration default (a factory call gives the type)
 type Bag
-	export var items as IntArray = IntArray.create()
+	export var items = IntArray.create()
 
 	export static function create() returns Self
 		return Self{}           // OK — items gets a fresh empty array per construction
@@ -435,7 +439,7 @@ typealias VisitCount = int(0 to u64.max)
 type Point
 	export var x as Coord           // readable and writable outside the type
 	export var y as Coord
-	var visits as VisitCount = 0    // private to the type, declaration default
+	var visits = 0 as VisitCount    // private to the type, declaration default
 
 	static function create(x Coord, y Coord) returns Point
 		return Point{x: x, y: y}
@@ -972,22 +976,21 @@ Math.pow(base, exponent: e)  // base raised to exponent
 Type casting:
 ```maxon
 typealias Real = float(f64.min to f64.max)
-typealias Tally = int(0 to i64.max)
+typealias Tally = int(0 to u64.max)
 typealias Octet = int(0 to u8.max)
 
 5 as Real            // integer to a ranged float typealias
 42 as Octet          // a literal is range-checked at compile time (256 as Octet is E3005)
 o as Tally           // widening: no run-time check
 t as Octet           // narrowing: checked at run time, panics when out of range
-true as bool         // bool stays bare; no range to declare
 // Float to int — use: trunc(), round(), floor(), ceil() (a cast is E3009)
 ```
 
 A bare `int` or `float` cast target is rejected (**E3005**) — every primitive cast travels through a named
 ranged typealias. `bool` is unranged and stays bare.
 
-A cast to the value's own alias (`x as Integer` when `x` is already an `Integer`) is **E3010
-"unneeded cast"**: it converts nothing. So is a literal cast to the alias its destination already declares —
+A cast to the type the value already has (`x as Integer` when `x` is already an `Integer`, `flag as bool`,
+a struct, enum, union or `String` to itself) is **E3010 "unneeded cast"**: it converts nothing. So is a literal cast to the alias its destination already declares —
 a call argument, a `return`, a struct-literal field or a field store (`open(8080 as Port)` for a `Port`
 parameter, `return 0 as ExitCode` from `main`): write the bare literal there.
 

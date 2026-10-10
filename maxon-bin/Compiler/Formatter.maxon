@@ -26,9 +26,9 @@ typealias GroupDepth = int(0 to u64.max)
 typealias IndentWidth = int(1 to 64)
 
 // ⚠ `IndentWidth`'s OWN BOUNDS, spelled here because a range's endpoints cannot be read back off the
-// alias (`IndentWidth.min` is E2010 — only sized numeric types carry those). They are `IndentWidth`
-// VALUES, so a bound the alias would refuse does not compile — which is what keeps the two spellings
-// from drifting apart. `spacesIndent` is the only reader.
+// alias (`IndentWidth.min` is E2010 — only sized numeric types carry those). Typed `IndentWidth`,
+// so a pair outside its range is a compile error; `spacesIndent` widens them to compare with the
+// request.
 let NarrowestIndentWidth = 1 as IndentWidth
 let WidestIndentWidth = 64 as IndentWidth
 
@@ -286,7 +286,7 @@ type SourceLines
 		var high = self.starts.count() - 1
 
 		while low < high 'narrow'
-			let middle = ((low + high + 1) shr 1) as ElementIndex
+			let middle = (low + high + 1) shr 1
 
 			if self.startOf(middle) <= offset 'atOrAfter'
 				low = middle
@@ -1772,7 +1772,7 @@ end 'IndentWidthError'
 /// ⭐ **REFUSED, NEVER CLAMPED.** A client asking for an indent no editor offers has a bug, and
 /// formatting to a width it did not ask for would hide that bug inside a file its author then commits.
 module function spacesIndent(width RequestedIndentWidth) returns FormatOptions throws IndentWidthError
-	if width < NarrowestIndentWidth or width > WidestIndentWidth 'noEditorAsksForThis'
+	if width < NarrowestIndentWidth as RequestedIndentWidth or width > WidestIndentWidth as RequestedIndentWidth 'noEditorAsksForThis'
 		throw IndentWidthError.unspendable
 	end 'noEditorAsksForThis'
 

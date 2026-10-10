@@ -59,7 +59,7 @@ export let Arm64CalleeSavedFpEnd = 16
 export function insertArm64FrameForFunction(module TargetModule, func IrFunction) returns StackSize
 	let usedCallee = arm64UsedCalleeSaved(module, func: func)
 	let spillSlotCount = func.stackSize / SpillSlotBytes
-	let calleeBytes = usedCallee.count() * SpillSlotBytes
+	let calleeBytes = (usedCallee.count() as StackSize) * SpillSlotBytes
 
 	// ⭐ **THE OUTGOING STACK-ARGUMENT REGION SITS AT THE VERY BOTTOM OF THE FRAME**, below the frame
 	// record, because AAPCS64 fixes where it must be: a callee reads its first stack argument at its OWN
@@ -69,7 +69,7 @@ export function insertArm64FrameForFunction(module TargetModule, func IrFunction
 	// (`BacktraceFormat.FrameRecordAlignment`); `alignUp` below keeps the frame as a whole, and so SP,
 	// 16-aligned. It is 0 for every function whose calls fit the eight register slots of each file.
 	let recordOffset = func.outgoingArgSize
-	let frameSize = alignUpStack(recordOffset + Arm64FrameRecordBytes + func.stackSize + calleeBytes as StackSize, alignment: StackFrameAlignment)
+	let frameSize = alignUpStack(recordOffset + Arm64FrameRecordBytes + func.stackSize + calleeBytes, alignment: StackFrameAlignment)
 
 	// Resolve the isel's slot-only `arm64LoadIncomingArg`s now that BOTH terms of their displacement are
 	// known — this is the pass that knows them, and the reason the op exists at all.
@@ -181,6 +181,7 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				ucomisdRegReg or
 				movsdRegRip or
 				cvtsi2sdRegReg or
+				cvtu64sdRegReg or
 				cvttsd2siRegReg or
 				sqrtsdRegReg or
 				roundsdRegReg or
@@ -234,6 +235,7 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				arm64Fdiv or
 				arm64Fcmp or
 				arm64Scvtf or
+				arm64Ucvtf or
 				arm64Fcvtzs or
 				arm64Fsqrt or
 				arm64Frint or

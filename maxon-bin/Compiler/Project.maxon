@@ -778,7 +778,7 @@ export type VarInfo
 	// is the one the merge minted rather than the one the declaration produced. `Parser.recordDebugRebind`
 	// is what keeps the whole sequence, and this is what tells it which record to keep it in.
 	export var debugLocalRecorded = false
-	export var debugLocalSlot as DebugLocalSlot = 0
+	export var debugLocalSlot = 0 as DebugLocalSlot
 
 	// ⭐ **THE ONE BIT WAVE C READS (static single-owner MOVES).** Set true when this binding has been
 	// MOVED FROM — its owned heap value was transferred to another binding by a `let u = t` / `s = t`
@@ -892,7 +892,7 @@ export type VarInfo
 	// The last token at which the program itself reads this name — `lastUseToken` without the lexical extent a
 	// `for … in` element's borrow is seeded with. A mutable door asks whether an immutable name is READ after it
 	// (`StorageProvenance`), and the iteration reading the container is no read of the element's record.
-	export var lastReadToken as ElementIndex = 0
+	export var lastReadToken = 0 as ElementIndex
 
 	// ⭐ **DOES THIS NAME DENOTE MODULE STORAGE — a top-level `var` — RATHER THAN A BINDING OF THIS
 	// FRAME?** True only for the E3070 subject stand-in `Parser.topLevelBorrowSubjectOf` mints.
@@ -996,7 +996,7 @@ export type VarInfo
 
 	// A cell binding's `boundValue` never changes, so what a move mark records for it is this epoch,
 	// which a store into the cell re-mints and a merge settles (`moveStateValue`).
-	export var cellEpoch as CellEpoch = CellEpoch.notACell
+	export var cellEpoch = CellEpoch.notACell
 
 	// ⭐ **AN OWNED ENTRY THAT OWNS NOTHING: THE PROMISE TO MATCH A COMBINED ERROR EXACTLY ONCE.** A handler whose
 	// caught error may be a boxed member's box leaves the release to the arm of the one `match e` that runs, so
@@ -1015,11 +1015,11 @@ export type VarInfo
 	// Path-sensitive like `movedFrom`, and carried by `Parser.MoveMark` for the same reason: a door on one branch
 	// of an `if` is not before a read on the other. An index rather than the list, so a binding holds no record a
 	// parse worker would share.
-	export var awaitingMoveReads as ElementIndex = NoMoveSiteList
+	export var awaitingMoveReads = NoMoveSiteList as ElementIndex
 
 	// The merge renumbering that last rewrote this binding's type ids (`ParseStaging.renumberArtifact`). One
 	// binding is filed in several places, and a name renumbering applied twice moves an id it already moved.
-	export var renumberedIn as RenumberingEpoch = 0
+	export var renumberedIn = 0 as RenumberingEpoch
 
 	// ⭐⭐ **THE ONE PLACE A `VarInfo` LITERAL IS SPELLED.** Every constructor below names ONLY the fields
 	// its binding kind actually differs on; everything else — the whole inert tail, and every per-path bit
@@ -4085,9 +4085,7 @@ end 'rangeHoldsEveryByte'
 
 // ⭐ **DOES THIS RANGE SPAN EVERY `int` — i.e. is the alias declaring it a pure second NAME for `int`?**
 // EXACT on both ends, for the reason `spansEveryIntInEveryFile` states: the bounds are raw 64-bit patterns,
-// so anything looser reads a bound above `i64.max` as one below zero. `I64MinBound`/`I64MaxBound` are the
-// very constants `Parser.parseInt` enforces, so what "every int" means here cannot drift from what the lexer
-// admits.
+// so anything looser reads a bound above `i64.max` as one below zero.
 function rangeSpansEveryInt(low ParsedInt, high ParsedInt) returns bool
 	return low == I64MinBound and high == I64MaxBound
 end 'rangeSpansEveryInt'
@@ -5228,26 +5226,26 @@ export union ArgSiteParameter
 	// SAME bare name resolving to two members share this field as well as the value, which is exactly the
 	// case that cannot be told apart and the one the diagnostic is about.
 	ofCallee(bareCallee ByteArray, callee ByteArray, argIndex ParamCount, label ByteArray)
-	interfaceFormal(alias RangedTypeAlias)
+	slotAlias(alias RangedTypeAlias)
 
 	export function bareCalleeIs(callee ByteArray) returns bool
 		return match self 'parameter'
 			ofCallee(bareCallee, _, _, _) gives bareCallee.equals(callee)
-			interfaceFormal gives false
+			slotAlias gives false
 		end 'parameter'
 	end 'bareCalleeIs'
 
 	export function resolvedCallee() returns ByteArray
 		match self 'parameter'
 			ofCallee(_, callee, _, _) then return callee
-			interfaceFormal then panic("ArgSiteParameter.resolvedCallee: a witness dispatch's site names no callee, and the retarget reaches only the sites of a named call")
+			slotAlias then panic("ArgSiteParameter.resolvedCallee: a site checked against its slot's alias names no callee, and the retarget reaches only the sites of a named call")
 		end 'parameter'
 	end 'resolvedCallee'
 
 	export function retargetedTo(member ByteArray) returns ArgSiteParameter
 		match self 'parameter'
 			ofCallee(bareCallee, _, argIndex, label) then return ArgSiteParameter.ofCallee(bareCallee.clone(), callee: member.clone(), argIndex: argIndex, label: label.clone())
-			interfaceFormal then panic("ArgSiteParameter.retargetedTo: a witness dispatch's site names no callee, and the retarget reaches only the sites of a named call")
+			slotAlias then panic("ArgSiteParameter.retargetedTo: a site checked against its slot's alias names no callee, and the retarget reaches only the sites of a named call")
 		end 'parameter'
 	end 'retargetedTo'
 end 'ArgSiteParameter'
@@ -5258,7 +5256,7 @@ function cacheWriteArgSiteParameter(writer LibraryCacheWriter, value ArgSitePara
 
 	match value 'payload'
 		ofCallee(a0, a1, a2, a3) then cacheWriteArgSiteParameterOfCallee(writer, a0: a0, a1: a1, a2: a2, a3: a3)
-		interfaceFormal(a0) then cacheWriteArgSiteParameterInterfaceFormal(writer, a0: a0)
+		slotAlias(a0) then cacheWriteArgSiteParameterSlotAlias(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteArgSiteParameter'
 
@@ -5269,16 +5267,16 @@ function cacheWriteArgSiteParameterOfCallee(writer LibraryCacheWriter, a0 ByteAr
 	writer.bytes(a3)
 end 'cacheWriteArgSiteParameterOfCallee'
 
-function cacheWriteArgSiteParameterInterfaceFormal(writer LibraryCacheWriter, a0 RangedTypeAlias)
+function cacheWriteArgSiteParameterSlotAlias(writer LibraryCacheWriter, a0 RangedTypeAlias)
 	a0.cacheWrite(writer)
-end 'cacheWriteArgSiteParameterInterfaceFormal'
+end 'cacheWriteArgSiteParameterSlotAlias'
 
 function cacheReadArgSiteParameter(reader LibraryCacheReader) returns ArgSiteParameter throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
 		0 gives try cacheReadArgSiteParameterOfCallee(reader)
-		1 gives try cacheReadArgSiteParameterInterfaceFormal(reader)
+		1 gives try cacheReadArgSiteParameterSlotAlias(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadArgSiteParameter'
@@ -5292,11 +5290,11 @@ function cacheReadArgSiteParameterOfCallee(reader LibraryCacheReader) returns Ar
 	return ArgSiteParameter.ofCallee(a0, callee: a1, argIndex: a2, label: a3)
 end 'cacheReadArgSiteParameterOfCallee'
 
-function cacheReadArgSiteParameterInterfaceFormal(reader LibraryCacheReader) returns ArgSiteParameter throws LibraryCacheDamage
+function cacheReadArgSiteParameterSlotAlias(reader LibraryCacheReader) returns ArgSiteParameter throws LibraryCacheDamage
 	let a0 = try RangedTypeAlias.cacheRead(reader)
 
-	return ArgSiteParameter.interfaceFormal(a0)
-end 'cacheReadArgSiteParameterInterfaceFormal'
+	return ArgSiteParameter.slotAlias(a0)
+end 'cacheReadArgSiteParameterSlotAlias'
 
 // @generated library-cache end
 
@@ -5741,11 +5739,14 @@ export type FunctionRangeChecks
 	//
 	// Empty (the parser's shared read-only anchor) for every function that writes no negative literal.
 	export var writtenNegativeLiterals as ValueMarkColumn
+	export var unsignedMaxLiterals as ValueMarkColumn
+	export var unsignedPatternValues as ValueMarkColumn
+	export var checkedCalls as ValueMarkColumn
 
 	export var borrowOperands as BorrowOperandsColumn
 
-	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAlias DeclaredAlias, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeColumn, writtenNegativeLiterals ValueMarkColumn, borrowOperands BorrowOperandsColumn) returns FunctionRangeChecks
-		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAlias: returnAlias, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, writtenNegativeLiterals: writtenNegativeLiterals, borrowOperands: borrowOperands}
+	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAlias DeclaredAlias, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeColumn, writtenNegativeLiterals ValueMarkColumn, unsignedMaxLiterals ValueMarkColumn, unsignedPatternValues ValueMarkColumn, checkedCalls ValueMarkColumn, borrowOperands BorrowOperandsColumn) returns FunctionRangeChecks
+		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAlias: returnAlias, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, writtenNegativeLiterals: writtenNegativeLiterals, unsignedMaxLiterals: unsignedMaxLiterals, unsignedPatternValues: unsignedPatternValues, checkedCalls: checkedCalls, borrowOperands: borrowOperands}
 	end 'create'
 
 	export function paramAliasAt(slot ParamCount) returns RangedTypeAlias throws MapError
@@ -5769,6 +5770,9 @@ export type FunctionRangeChecks
 		cacheWriteRangeCheckParamSiteArray(writer, value: self.paramSites)
 		cacheWriteProvenIntRangeColumn(writer, value: self.provenValueRanges)
 		cacheWriteValueMarkColumn(writer, value: self.writtenNegativeLiterals)
+		cacheWriteValueMarkColumn(writer, value: self.unsignedMaxLiterals)
+		cacheWriteValueMarkColumn(writer, value: self.unsignedPatternValues)
+		cacheWriteValueMarkColumn(writer, value: self.checkedCalls)
 		cacheWriteBorrowOperandsColumn(writer, value: self.borrowOperands)
 	end 'cacheWrite'
 
@@ -5782,13 +5786,16 @@ export type FunctionRangeChecks
 		let f_paramSites = try cacheReadRangeCheckParamSiteArray(reader)
 		let f_provenValueRanges = try cacheReadProvenIntRangeColumn(reader)
 		let f_writtenNegativeLiterals = try cacheReadValueMarkColumn(reader)
+		let f_unsignedMaxLiterals = try cacheReadValueMarkColumn(reader)
+		let f_unsignedPatternValues = try cacheReadValueMarkColumn(reader)
+		let f_checkedCalls = try cacheReadValueMarkColumn(reader)
 		let f_borrowOperands = try cacheReadBorrowOperandsColumn(reader)
 
-		return Self{filePath: f_filePath, sites: f_sites, positionsResolved: f_positionsResolved, argSites: f_argSites, returnAlias: f_returnAlias, returnSites: f_returnSites, paramSites: f_paramSites, provenValueRanges: f_provenValueRanges, writtenNegativeLiterals: f_writtenNegativeLiterals, borrowOperands: f_borrowOperands}
+		return Self{filePath: f_filePath, sites: f_sites, positionsResolved: f_positionsResolved, argSites: f_argSites, returnAlias: f_returnAlias, returnSites: f_returnSites, paramSites: f_paramSites, provenValueRanges: f_provenValueRanges, writtenNegativeLiterals: f_writtenNegativeLiterals, unsignedMaxLiterals: f_unsignedMaxLiterals, unsignedPatternValues: f_unsignedPatternValues, checkedCalls: f_checkedCalls, borrowOperands: f_borrowOperands}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize80
-		return sizeof(FunctionRangeChecks) as CacheSize80
+	static function cacheLayoutBytes() returns CacheSize104
+		return sizeof(FunctionRangeChecks) as CacheSize104
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -6640,20 +6647,18 @@ export union FieldDefault
 	// E3086, and that is the rule field defaults exist to relax.
 	none
 
-	// `tag` is the LITERAL's own type as the source wrote it (`int` for `= 3`, `float` for `= 3.0`) —
-	// NOT the field's declared type, which `StructLayout.fieldTypes` holds and which may still be an
-	// unresolved alias name here. The pair travels together for `ConstValue`'s reason: a payload
-	// without its tag is a number whose meaning has been thrown away.
-	// ⚠ **`writtenNegative` IS THE THIRD MEMBER FOR THE REASON THE TAG IS THE SECOND**, one question
+	// The value's `tag` is the LITERAL's own type as the source wrote it (`int` for `= 3 as T`,
+	// `float` for `= 3.0 as T`) — NOT the field's declared type, which `StructLayout.fieldTypes` holds
+	// and which may still be an unresolved alias name here.
+	// ⚠ Its `writtenNegative` and `aboveSignedMax` marks ride along for the same reason, one question
 	// further out: `= -1` and `= 0xFFFFFFFFFFFFFFFE` both store a negative `ParsedInt`, and only the first
 	// is a negative NUMBER — so whether a default fits an `int(0 to u64.max)` field cannot be judged from
-	// the payload at all. `ConstValue.writtenNegative` is where the fact is decided and `literalInRange` is
-	// what spends it; this member is how it reaches the reader, which may be another file entirely. It is a
-	// declaration's own fact and therefore rides the layout's content hash beside the pair.
-	literal(payload ParsedInt, tag ValueTypeTag, writtenNegative bool)
+	// the payload at all. This arm is how those facts reach the reader, which may be another file
+	// entirely, and they ride the layout's content hash beside the payload and tag.
+	literal(value ConstValue)
 
 	// ⭐⭐ **ANY OTHER DEFAULT IS A SYNTHESIZED NULLARY FUNCTION, AND THIS IS ITS NAME.**
-	// `export var items as IntArray = IntArray.create()` declares a second function,
+	// `export var items = IntArray.create()` declares a second function,
 	// `__fieldDefault#Bag#items`, whose whole body is `return IntArray.create()`; a `Self{…}` that omits
 	// the field emits an ordinary call to it and stores the result. That is the SAME mechanism a
 	// PARAMETER default is, reached through a second door — see `SignatureIndex.ParamDefaultInfo`, whose
@@ -6692,16 +6697,14 @@ function cacheWriteFieldDefault(writer LibraryCacheWriter, value FieldDefault)
 
 	match value 'payload'
 		none then break
-		literal(a0, a1, a2) then cacheWriteFieldDefaultLiteral(writer, a0: a0, a1: a1, a2: a2)
+		literal(a0) then cacheWriteFieldDefaultLiteral(writer, a0: a0)
 		helper(a0) then cacheWriteFieldDefaultHelper(writer, a0: a0)
 		bareCreateHelper(a0) then cacheWriteFieldDefaultBareCreateHelper(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteFieldDefault'
 
-function cacheWriteFieldDefaultLiteral(writer LibraryCacheWriter, a0 ParsedInt, a1 ValueTypeTag, a2 bool)
-	writer.signed(a0 as CacheSigned)
-	writer.unsigned(a1.ordinal as CacheUnsigned)
-	writer.flag(a2)
+function cacheWriteFieldDefaultLiteral(writer LibraryCacheWriter, a0 ConstValue)
+	a0.cacheWrite(writer)
 end 'cacheWriteFieldDefaultLiteral'
 
 function cacheWriteFieldDefaultHelper(writer LibraryCacheWriter, a0 ByteArray)
@@ -6725,11 +6728,9 @@ function cacheReadFieldDefault(reader LibraryCacheReader) returns FieldDefault t
 end 'cacheReadFieldDefault'
 
 function cacheReadFieldDefaultLiteral(reader LibraryCacheReader) returns FieldDefault throws LibraryCacheDamage
-	let a0 = (try reader.signed()) as ParsedInt
-	let a1 = try cacheReadValueTypeTag(reader)
-	let a2 = try reader.flag()
+	let a0 = try ConstValue.cacheRead(reader)
 
-	return FieldDefault.literal(a0, tag: a1, writtenNegative: a2)
+	return FieldDefault.literal(a0)
 end 'cacheReadFieldDefaultLiteral'
 
 function cacheReadFieldDefaultHelper(reader LibraryCacheReader) returns FieldDefault throws LibraryCacheDamage
@@ -7178,8 +7179,8 @@ export type StructLayout
 	// The file this type was declared in — the anchor both wider tiers measure a reader against. Empty for a
 	// compiler-synthesized layout, whose `visibility` is `global` and never consults it.
 	export var declFilePath as FilePath
-	export var declLine as LineNumber = 0
-	export var declColumn as ColumnNumber = 0
+	export var declLine = 0 as LineNumber
+	export var declColumn = 0 as ColumnNumber
 
 	// An EMPTY layout, filled by `addField` (and, for a generic type, `recordTypeParams`). It does not
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
@@ -8554,7 +8555,7 @@ end 'serviceHandleCompanionName'
 
 // The member half of the DISPATCH LOOP's symbol — `__`-prefixed for `ServiceShutdownCaseName`'s reason: no
 // source may declare it (E2051) and no author may call it.
-let ServiceLoopMemberName = b"__loop"
+module let ServiceLoopMemberName = b"__loop"
 
 // ⭐⭐ **`<T>.__loop` — THE SYNTHESIZED DISPATCH LOOP'S SYMBOL, SPELLED ONCE FOR ITS THREE READERS.**
 // `ServiceLoop.installServiceLoops` BUILDS the function under this name,
@@ -9045,8 +9046,8 @@ export type EnumLayout
 	// layouts (`Ordering`, the builtin error enums), which no file declares and none may be refused.
 	export var visibility as Visibility
 	export var declFilePath as FilePath
-	export var declLine as LineNumber = 0
-	export var declColumn as ColumnNumber = 0
+	export var declLine = 0 as LineNumber
+	export var declColumn = 0 as ColumnNumber
 
 	// ⭐ **WHAT KIND OF NUMBER `caseTags` HOLDS** (see `EnumBacking`). Written by the case reader as each
 	// case fixes or re-confirms it (`Parser.requireIntBacking`/`requireFloatBacking`, which raise E3032 on a
@@ -11870,6 +11871,7 @@ export type Project
 	// before the thunk exists: a callee spliced away on the strength of its one visible site would leave
 	// the thunk calling an emptied body.
 	export var functionValueTargets as ByteArrayArray
+	export var uncheckedCallPaths as UncheckedCallPaths
 
 	// The calls the entry stub makes by name in THIS build (`DeadFunctionElimination.EntryStubCalls`), set
 	// once from the usage record before the lowering pipeline runs: the reachability roots and the
@@ -11915,16 +11917,16 @@ export type Project
 	// one per `Project`: `queryProgramSignatures` hands these to the index that folds every top-level
 	// constant, and its memo lives on `project.db` rather than in any process-wide store — so two
 	// compiles differing only in their defines cannot serve each other a folded value.
-	export var defines as DefineArray = DefineArray.create()
+	export var defines = DefineArray.create()
 
 	// ⭐ WHAT THE BUILD MANIFEST SAID THIS PROGRAM'S VERSION IS, for the binary's own metadata: a Windows
 	// `VS_VERSIONINFO` resource and a Mach-O `LC_SOURCE_VERSION`, already checked against this target's field
 	// (`productVersionFor`). Empty when nobody said, which is most programs, and the writers then stamp a zero
 	// version.
-	export var productVersion as VersionComponentArray = VersionComponentArray.create()
+	export var productVersion = VersionComponentArray.create()
 
 	// The last merge renumbering this project walked an artifact with. See `VarInfo.renumberedIn`.
-	export var lastRenumbering as RenumberingEpoch = 0
+	export var lastRenumbering = 0 as RenumberingEpoch
 
 	// Where each source file's block of counter slots begins in `covPoints` — the FILE-LOCAL id a
 	// `MaxonOp.covPoint` carries plus this file's base is the whole-program id. Written by `mergeArtifact`
@@ -12006,7 +12008,7 @@ export type Project
 
 	// The calls `SemanticCheck.reportAmbiguousOverload` refused (E3007), by op index — reset with the
 	// other op-keyed tables each fold round.
-	export var refusedOverloadCalls as RefusedOverloadCallSet = RefusedOverloadCallSet.create()
+	export var refusedOverloadCalls = RefusedOverloadCallSet.create()
 
 	// ⭐ Every author-written READ OR WRITE of mutable module storage in the program, by op index (E3143) —
 	// the candidate set of the shared-global rule. Folded from the per-file artifact with the merge's op
@@ -12253,6 +12255,7 @@ export type Project
 			rendersTargetIr: false,
 			compilesOnceAndExits: false,
 			functionValueTargets: ByteArrayArray.create(),
+			uncheckedCallPaths: UncheckedCallPaths.none(),
 			entryStubCalls: EntryStubCalls.none(),
 			coverage: false,
 			samplesResidency: false,

@@ -83,7 +83,7 @@ compiler where you are.
 ```text
 let here = __line__                     // E2060
 type Marker
-	let at as SourceLineNumber = __line__   // E2060 — a field default is not a parameter default
+	let at = __line__ as SourceLineNumber   // E2060 — a field default is not a parameter default
 end 'Marker'
 ```
 
@@ -322,7 +322,7 @@ error E2060: specs/source-location-defaults/error.file-outside-default.maxon:3:1
 <!-- test: error.field-default -->
 ```maxon
 type Marker
-	let at as SourceLineNumber = __line__
+	let at = __line__ as SourceLineNumber
 end 'Marker'
 
 function main() returns ExitCode
@@ -330,5 +330,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2060: specs/source-location-defaults/error.field-default.maxon:3:31: '__line__' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.
+error E2060: specs/source-location-defaults/error.field-default.maxon:3:11: '__line__' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.
 ```

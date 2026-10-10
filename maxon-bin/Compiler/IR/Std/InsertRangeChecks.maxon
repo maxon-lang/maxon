@@ -17,7 +17,8 @@
 // WRITTEN lands past the call with the callee already run. The cure is that the argument door's runtime
 // half belongs to the CALLEE'S ENTRY — one guard per narrowed parameter per function, in front of every
 // caller including the indirect ones — so the argument site owes only the compile-time half and the
-// premise is enforced all the same. See `guardRangedParams`.
+// premise is enforced all the same. See `guardRangedParams`, which also names the one exception, a
+// full-unsigned parameter checked at its call sites.
 //
 // The guard is emitted at the Std tier because it needs a primitive the Maxon dialect lacks —
 // "abort with a symbolized backtrace and exit 1" — and adding one there is a new `MaxonOp` variant,
@@ -30,15 +31,18 @@
 // ⭐ ONE GUARD EMITTER, one unsigned strategy, one panic-message builder, serving BOTH the cast sites and
 // the return sites (`emitGuardAt`). Two emitters drift on unsigned handling; here there is one.
 //
-// ⚠ SIGNED COMPARES, in a CASCADE — and the CASCADE's reason and the SIGNED's reason are two different
-// facts. The cascade is because the Std tier has no `setcc`: a bound's verdict can only be a `cmp` fused
-// into a `condBranch`, one block per bound, never a `cmp`+`cmp`+`or` over materialized bools.
+// ⚠ SIGNED COMPARES (but one shape), in a CASCADE — and the CASCADE's reason and the SIGNED's
+// reason are two different facts. The cascade is because the Std tier has no `setcc`: a bound's
+// verdict can only be a `cmp` fused into a `condBranch`, one block per bound, never a
+// `cmp`+`cmp`+`or` over materialized bools.
 //
-// ⛔ **THE STD TIER DOES HAVE AN UNSIGNED INTEGER COMPARE — "`StdCmpPred` is signed only" IS FALSE.**
-// `StdCmpPred` carries no signedness either way; the compare's
-// `operandType` does (`StdDialect.stdTypeIsUnsigned` / `unsignedStdTypeOf`), and
-// all three backends read it. What is true is that the checks below CHOOSE signed, and the choice is
-// deliberate — see the paragraph after next for the `int(N>0 to u64.max)` shape that depends on it.
+// ⛔ **THE STD TIER DOES HAVE AN UNSIGNED INTEGER COMPARE — "`StdCmpPred` is signed only" IS
+// FALSE.** `StdCmpPred` carries no signedness either way; the compare's `operandType` does
+// (`StdDialect.stdTypeIsUnsigned` / `unsignedStdTypeOf`), and all three backends read it. What is
+// true is that the checks below CHOOSE signed, and the choice is deliberate — see the paragraph
+// after next for the `int(N>0 to u64.max)` shape that depends on it. The one shape that chooses
+// unsigned is an unsigned-topped range below `u64.max` (`boundChecks`), whose stored upper is a
+// negative pattern no signed compare can test against.
 //
 // ⚠ **AND THAT MAKES A ONE-COMPARE FORM POSSIBLE FOR THE ORDINARY SHAPE, WHICH THIS PASS DOES NOT TAKE
 // AND WHICH IS FILED RATHER THAN ASSUMED.** For a range whose bounds are both representable,
@@ -52,7 +56,7 @@
 // A check usually branches to the shared panic on violation; the one exception is the unsigned-max-upper
 // shape's sign check, whose TRUE edge is IN RANGE (see `RangeCheckEdge`). Signed compares give the
 // correct in/out verdict for every ordinary range, and for the `int(N>0 to u64.max)` shape they give the
-// correct UNSIGNED verdict — see `TypeRules.rangeIsUnsignedMaxUpper` / `boundChecks`.
+// correct UNSIGNED verdict — see `TypeRules.rangeIsUnsignedTopped` / `boundChecks`.
 
 // Where a cascade check's TRUE edge (the predicate SATISFIED) goes. Almost every check means
 // "out of range past this bound", so its true edge is the shared `panic`. The one exception is
@@ -72,13 +76,18 @@ type RangeBoundCheck
 	export var pred as StdCmpPred
 	export var bound as ParsedInt
 	export var onTrue as RangeCheckEdge
+	export var unsigned as bool
 
 	static function create(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
-		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.panic}
+		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.panic, unsigned: false}
 	end 'create'
 
+	static function createUnsigned(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
+		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.panic, unsigned: true}
+	end 'createUnsigned'
+
 	static function createInRange(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
-		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.inRange}
+		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.inRange, unsigned: false}
 	end 'createInRange'
 end 'RangeBoundCheck'
 
@@ -289,6 +298,7 @@ type RangeCheckEmitter
 	// stashed in `run` beside `collectConsts`, for the same reason: `needsRuntimeGuard` asks it per value
 	// and does not otherwise hold the function's checks. See `Parser.writtenNegativeLiterals`.
 	var writtenNegativeLiterals as ValueMarkColumn
+	var unsignedMaxLiterals as ValueMarkColumn
 
 	var borrowOperands as BorrowOperandsColumn
 
@@ -325,7 +335,7 @@ type RangeCheckEmitter
 	var waivers as EntryGuardWaivers
 
 	static function create(project Project, module StdModule, func IrFunction, funcIndex ElementIndex, waivers EntryGuardWaivers) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, borrowOperands: noBorrowOperands, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
+		return Self{project: project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, unsignedMaxLiterals: noValueMarks, borrowOperands: noBorrowOperands, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -350,13 +360,15 @@ type RangeCheckEmitter
 	// (`retBlockOf`). The literal/const map is built ONCE over the original ops — the values a site checks
 	// are original, never the guard consts this pass appends afterward.
 	export function run(checks FunctionRangeChecks)
-		self.collectConsts()
-
-		// The parser's answer to the one question a constant's 64 bits cannot answer — stashed beside the
-		// const maps because `needsRuntimeGuard` asks both per value and holds neither otherwise. See
-		// `writtenNegativeLiterals`.
+		// The parser's answers to what a constant's 64 bits cannot say — stashed beside the const maps
+		// because `needsRuntimeGuard` asks both per value and holds neither otherwise. See
+		// `writtenNegativeLiterals`. Loaded BEFORE `collectConsts`, which reads `unsignedMaxLiterals` to
+		// record the folds the parser marked; loaded after, those folds reach their sites as runtime
+		// values rather than literals.
 		self.writtenNegativeLiterals = checks.writtenNegativeLiterals
+		self.unsignedMaxLiterals = checks.unsignedMaxLiterals
 		self.borrowOperands = checks.borrowOperands
+		self.collectConsts()
 
 		// A site's `stdOpPos` is `lowerMaxonToStd`'s answer rather than the parser's (see `RangeSiteWalk`),
 		// and 0 is a legitimate one — so the promise is checked HERE, once per function, rather than
@@ -468,10 +480,12 @@ type RangeCheckEmitter
 	// needs no argument-list restructuring, and costs ONE guard per narrowed parameter per FUNCTION rather
 	// than one per CALL.
 	//
-	// ⭐ **IT IS ALSO THE ONLY PLACE THAT CAN COVER EVERY CALLER.** A call through a function value has no
-	// callee name at the call site to look a parameter's range up by (`callIndirect`/`witnessCall`), so a
-	// call-site rule would leave the indirect door open for ever. One guard behind the entry covers direct
-	// calls, indirect calls and witness dispatch with nothing to enumerate.
+	// ⭐ **IT ALSO COVERS EVERY CALLER WITH NOTHING TO ENUMERATE.** A call through a function value has
+	// no callee name at the call site to look a parameter's range up by
+	// (`callIndirect`/`witnessCall`); one guard behind the entry covers direct calls, indirect calls
+	// and witness dispatch alike. A full-unsigned parameter is the exception: its argument is checked
+	// at every kind of call site, and its entry guard is waived only when every path reaching the
+	// callee is checked (`EntryGuardWaivers`).
 	//
 	// ⚠ **WHY THIS IS NOT COSMETIC.** `specs/safety.md` promises that `/` and `mod` are THROWING
 	// operations, and that a divisor "proven non-zero — a non-zero literal, or a ranged type whose range
@@ -789,7 +803,7 @@ type RangeCheckEmitter
 	function paramAliasOf(site RangeCheckArgSite) returns RangedTypeAlias throws MapError
 		match site.parameter 'parameter'
 			ofCallee(_, callee, argIndex, label) then return try self.calleeParamAliasOf(callee, argIndex: argIndex, label: label)
-			interfaceFormal(alias) then return alias
+			slotAlias(alias) then return alias
 		end 'parameter'
 	end 'paramAliasOf'
 
@@ -867,10 +881,10 @@ type RangeCheckEmitter
 	//   4. **THE PARAMETER IS GUARDED.** Both sites route through the same `needsRuntimeGuard` with
 	//      the same value and the same alias, and `guardReturns` asks it BEFORE this — so this is
 	//      reached only on the answer that made the entry guard fire. A full-unsigned parameter whose
-	//      entry guard is waived (`EntryGuardWaivers`) is in range on entry all the same: every direct
-	//      caller checked its argument or passed an unsigned source. The one remaining way a guard can
-	//      be skipped is shared too: `emitGuardAt`'s both-bounds-elided return is a function of the
-	//      alias alone, so it fires at neither site or both.
+	//      entry guard is waived (`EntryGuardWaivers`) is in range on entry all the same: every path
+	//      reaching it checked its argument or passed an unsigned source. The one remaining way a
+	//      guard can be skipped is shared too: `emitGuardAt`'s both-bounds-elided return is a function
+	//      of the alias alone, so it fires at neither site or both.
 	//
 	// ⚠ **A LINEAR SCAN, AND BOUNDED BY THE ARITY** — `paramSites` is SPARSE (one entry per RANGED
 	// parameter, never per parameter), so this walks at most the function's ranged parameters, which
@@ -912,9 +926,10 @@ type RangeCheckEmitter
 
 		if literals.contains(value) 'literal'
 			let v = literals.constantOf(value)
+			let writtenNegative = valueIsMarked(self.writtenNegativeLiterals, value: value)
 
-			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: valueIsMarked(self.writtenNegativeLiterals, value: value)) 'outOfRange'
-				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath), low: alias.low, high: alias.high, isFloat: isFloat, domain: alias.domain), line: line, column: column, filePath: filePath)
+			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: writtenNegative, writtenAboveSignedMax: valueIsMarked(self.unsignedMaxLiterals, value: value)) 'outOfRange'
+				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath), low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: writtenNegative, domain: alias.domain), line: line, column: column, filePath: filePath)
 			end 'outOfRange'
 
 			return false
@@ -1214,7 +1229,8 @@ type RangeCheckEmitter
 			let boundId = self.mintDerived(value)
 			self.module.appendOp(current, op: StdOp.const(boundId, value: check.bound, valueType: operandType))
 			let condId = self.mintDerived(value)
-			self.module.appendOp(current, op: StdOp.cmp(condId, lhs: value, rhs: boundId, pred: check.pred, operandType: operandType))
+			let compareType = unsignedStdTypeOf(operandType) if check.unsigned else operandType
+			self.module.appendOp(current, op: StdOp.cmp(condId, lhs: value, rhs: boundId, pred: check.pred, operandType: compareType))
 
 			let trueTarget = okId if check.onTrue == RangeCheckEdge.inRange else panicId
 
@@ -1395,18 +1411,19 @@ type RangeCheckEmitter
 		return panicMessageLine(filePath, line: line, text: textAsItsReaderSpellsIt(self.project, path: filePath, text: "Range check failed: value outside typealias '{aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath)}'"))
 	end 'rangeCheckMessage'
 
-	// Map each `const` result value id to its constant — the literals whose out-of-range use is the
-	// compile-time E3005 and whose in-range use needs no runtime code. Built once per function over the
-	// pre-guard ops, and PARTITIONED BY THE CONST'S OWN TYPE (see the `intConsts`/`floatConsts` fields):
-	// the payloads are numbers on one side and IEEE-754 bit patterns on the other, and nothing
-	// downstream could tell them apart from the payload alone.
+	// Map each `const` result value id to its constant, and each integer `binOp` of two constants that
+	// the parser marked in `unsignedMaxLiterals` to its fold — the literals whose out-of-range use is
+	// the compile-time E3005 and whose in-range use needs no runtime code. Built once per function
+	// over the pre-guard ops, and PARTITIONED BY THE CONST'S OWN TYPE (see the
+	// `intConsts`/`floatConsts` fields): the payloads are numbers on one side and IEEE-754 bit
+	// patterns on the other, and nothing downstream could tell them apart from the payload alone.
 	function collectConsts()
 		for opIdx in self.module.liveOpIndices(self.func) 'eachOp'
 			let op = try self.module.ops.get(opIdx) otherwise panic("collectConsts: live op index {opIdx} not in module.ops")
 
 			match op 'c'
 				const(resultId, value, valueType) then self.recordConst(resultId, value: value, valueType: valueType)
-				binOp or
+				binOp(resultId, lhs, rhs, opcode, operandType) then self.recordUnsignedFold(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType)
 				cmp or
 				binOpImm or
 				cmpImm or
@@ -1536,6 +1553,17 @@ type RangeCheckEmitter
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
+
+	function recordUnsignedFold(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType)
+		if stdTypeIsFloat(operandType) or not valueIsMarked(self.unsignedMaxLiterals, value: resultId) or not self.intConsts.contains(lhs) or not self.intConsts.contains(rhs) 'notAnUnsignedFold'
+			return
+		end 'notAnUnsignedFold'
+
+		match evaluateIntBinOp(opcode, lhs: self.intConsts.constantOf(lhs), rhs: self.intConsts.constantOf(rhs)) 'fold'
+			folded(value) then self.intConsts.upsert(resultId, value: value)
+			notFoldable then break
+		end 'fold'
+	end 'recordUnsignedFold'
 
 	function recordConst(resultId ValueId, value ParsedInt, valueType StdType)
 		if stdTypeIsFloat(valueType) 'float'
@@ -1702,11 +1730,20 @@ function boundChecks(low ParsedInt, high ParsedInt, isFloat bool) returns RangeB
 	// ⚠ A FLOAT IS NEVER ELIGIBLE. The shape reinterprets a signed bound as an unsigned one; IEEE-754
 	// ordering is sign-and-magnitude and matches neither, so a float bound whose pattern happens to
 	// equal -1 (which is a NaN, not `u64.max`) must take the ordinary two-bound path.
-	if not isFloat and low > SignBoundary and rangeIsUnsignedMaxUpper(low, high: high) 'unsignedMaxUpper'
+	if not isFloat and low > SignBoundary and high == UnsignedFullUpperPattern 'unsignedMaxUpper'
 		checks.push(RangeBoundCheck.createInRange(StdCmpPred.lt, bound: SignBoundary))
 		checks.push(RangeBoundCheck.create(StdCmpPred.lt, bound: low))
 		return checks
 	end 'unsignedMaxUpper'
+
+	if not isFloat and rangeIsUnsignedTopped(low, high: high) and high != UnsignedFullUpperPattern 'unsignedCapped'
+		if low > SignBoundary 'aFloorAboveZero'
+			checks.push(RangeBoundCheck.createUnsigned(StdCmpPred.lt, bound: low))
+		end 'aFloorAboveZero'
+
+		checks.push(RangeBoundCheck.createUnsigned(StdCmpPred.gt, bound: high))
+		return checks
+	end 'unsignedCapped'
 
 	// ⚠ A NaN PASSES a float guard, deliberately rather than by oversight. `lt`/`gt` lower to the
 	// NaN-correct SWAPPED `ucomisd`+`ja` form, which answers FALSE for an unordered compare — so neither
@@ -1915,9 +1952,12 @@ union WaivableParamLookup
 	found(param WaivableParam)
 end 'WaivableParamLookup'
 
-// A full-unsigned parameter's entry guard is waived only when every direct call records its argument
-// site, because that call-site guard is then the one check. It fails closed: a callee taken as a
-// function value, referenced from data, or called by a call that recorded no site keeps its entry guard.
+// A full-unsigned parameter's entry guard is waived only when every path reaching the callee checks
+// the argument, because that call-site guard is then the one check. A direct call checks by
+// recording its argument site; an indirect call, async spawn, witness dispatch or service send
+// checks when the parser marked it (`checkedCallMarksOf`), and `project.uncheckedCallPaths` answers
+// whether an unmarked one may reach a callee taken as a value, referenced from data or forwarded by
+// a service loop. It fails closed: a direct call that recorded no site keeps the entry guard.
 type EntryGuardWaivers
 	var candidates as WaivableParamsByCallee
 	var callTargets as CallTargetsByFunction
@@ -1934,11 +1974,11 @@ type EntryGuardWaivers
 		end 'nothingToWaive'
 
 		for reloc in project.globalData.pendingRdataRelocs 'eachDataReference'
-			waivers.denyAll(reloc.funcName)
+			waivers.denyIfAnUncheckedPathReaches(project, callee: reloc.funcName)
 		end 'eachDataReference'
 
 		for target in project.functionValueTargets 'eachFunctionValue'
-			waivers.denyAll(target)
+			waivers.denyIfAnUncheckedPathReaches(project, callee: target)
 		end 'eachFunctionValue'
 
 		waivers.denyCallsThatDidNotRecord(project, module: module)
@@ -1967,6 +2007,12 @@ type EntryGuardWaivers
 		self.candidates.upsert(callee, value: params)
 	end 'addCandidateIfUnsignedFull'
 
+	function denyIfAnUncheckedPathReaches(project Project, callee ByteArray)
+		if project.uncheckedCallPaths.mayReach(callee) 'anUncheckedPathReachesIt'
+			self.denyAll(callee)
+		end 'anUncheckedPathReachesIt'
+	end 'denyIfAnUncheckedPathReaches'
+
 	function denyAll(callee ByteArray)
 		let params = try self.candidates.get(callee) otherwise return
 
@@ -1991,6 +2037,7 @@ type EntryGuardWaivers
 			end 'notInTheProgram'
 
 			var recorded = RecordedCallArguments.create()
+			let checkedMarks = checkedCallMarksOf(project, name: func.name)
 
 			if let checks = try project.rangeChecks.get(func.name) 'recordsSites'
 				for site in checks.sites 'eachSite'
@@ -2012,14 +2059,25 @@ type EntryGuardWaivers
 					continue
 				end 'noWaivableParam'
 
+				if functionIsAServiceLoop(func.name) and project.uncheckedCallPaths.namesAServiceHandler(callee) 'theLoopForwardsCheckedMessages'
+					self.denyIfAnUncheckedPathReaches(project, callee: callee)
+					continue
+				end 'theLoopForwardsCheckedMessages'
+
 				classifyCallOperands(op, call: call)
 
 				if not call.namesACallee() 'takenAsAValue'
-					self.denyAll(callee)
+					self.denyIfAnUncheckedPathReaches(project, callee: callee)
+
 					continue
 				end 'takenAsAValue'
 
 				self.recordCallTarget(position.index(), callResult: call.resultId, callee: callee)
+
+				if valueIsMarked(checkedMarks, value: call.resultId) 'anIndirectCallTheParserChecked'
+					continue
+				end 'anIndirectCallTheParserChecked'
+
 				self.denyParamsTheCallDidNotRecord(project, callee: callee, sites: try recorded.get(call.resultId) otherwise sharedNoCallArgumentSites)
 			end 'eachOp'
 		end 'eachCaller'
@@ -2110,5 +2168,12 @@ function denyParamAt(params WaivableParamArray, at ElementIndex)
 	var denied = try params.get(at) otherwise panic("denyParamAt: params.get OOB at {at}")
 	denied.waived = false
 end 'denyParamAt'
+
+function functionIsAServiceLoop(name ByteArray) returns bool
+	return match splitQualifiedName(name) 'split'
+		notQualified gives false
+		parts(_, member) gives member.equals(ServiceLoopMemberName)
+	end 'split'
+end 'functionIsAServiceLoop'
 
 let sharedNoBorrowOperands = BorrowOperandsMap.create()

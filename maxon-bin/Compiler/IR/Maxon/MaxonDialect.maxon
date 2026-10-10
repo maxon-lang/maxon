@@ -1051,7 +1051,7 @@ end 'cacheTableAgreesMaxonBinOp'
 // by operand type anyway — a bool one is control flow — so classifying `not` in the same place costs
 // nothing and keeps ONE type oracle.
 //
-// THE CONVERSION PAIR moves a value BETWEEN the integer and float domains, and is the reason a
+// THE CONVERSIONS move a value BETWEEN the integer and float domains, and are the reason a
 // float can be computed with at all. They are unary ops rather
 // than a dedicated `MaxonOp.convert` variant because a conversion has a unary op's exact shape
 // (one operand in, one result out, non-trapping), and the dialect's rule is that shape decides.
@@ -1068,6 +1068,10 @@ end 'cacheTableAgreesMaxonBinOp'
 //   • `promoteToFloat` — COMPILER-INSERTED, never written by a user: int → f64 (x64 `cvtsi2sd`).
 //                        It is what makes `5 + 2.0` mean 7.0, and `TypeRules.arithResultTag`
 //                        answering `float` is the promise this op keeps.
+//   • `promoteUnsignedToFloat` — `promoteToFloat` for an operand the parser reads UNSIGNED
+//                        (`Parser.valueConvertsAsUnsigned`), so a value above `i64.max` converts as
+//                        itself rather than as a negative (x64 `cvtu64sdRegReg`, arm64 `ucvtf`,
+//                        wasm `f64.convert_i64_u`).
 //
 // THE ARITY-1 FLOAT MATH INTRINSICS are `floor`, `ceil`, `round`, `sqrt`, and (with
 // specs/abs.md) `abs`, FIVE in all (specs/{floor,ceil,round,sqrt,abs}.md). They are unary ops for the
@@ -1164,10 +1168,11 @@ export enum MaxonUnaryOp
 	signExtendI8
 	signExtendI16
 	signExtendI32
+	promoteUnsignedToFloat
 end 'MaxonUnaryOp'
 
 // @generated library-cache begin
-let CacheCasesMaxonUnaryOp = [MaxonUnaryOp.neg, MaxonUnaryOp.bitNot, MaxonUnaryOp.logicalNot, MaxonUnaryOp.trunc, MaxonUnaryOp.promoteToFloat, MaxonUnaryOp.floor, MaxonUnaryOp.ceil, MaxonUnaryOp.round, MaxonUnaryOp.sqrt, MaxonUnaryOp.abs, MaxonUnaryOp.fneg, MaxonUnaryOp.floatToBits, MaxonUnaryOp.bitsToFloat, MaxonUnaryOp.signExtendI8, MaxonUnaryOp.signExtendI16, MaxonUnaryOp.signExtendI32]
+let CacheCasesMaxonUnaryOp = [MaxonUnaryOp.neg, MaxonUnaryOp.bitNot, MaxonUnaryOp.logicalNot, MaxonUnaryOp.trunc, MaxonUnaryOp.promoteToFloat, MaxonUnaryOp.floor, MaxonUnaryOp.ceil, MaxonUnaryOp.round, MaxonUnaryOp.sqrt, MaxonUnaryOp.abs, MaxonUnaryOp.fneg, MaxonUnaryOp.floatToBits, MaxonUnaryOp.bitsToFloat, MaxonUnaryOp.signExtendI8, MaxonUnaryOp.signExtendI16, MaxonUnaryOp.signExtendI32, MaxonUnaryOp.promoteUnsignedToFloat]
 
 function cacheReadMaxonUnaryOp(reader LibraryCacheReader) returns MaxonUnaryOp throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -1222,7 +1227,8 @@ export function signExtendSlotOf(op MaxonUnaryOp) returns SignExtendSlot
 		abs or
 		fneg or
 		floatToBits or
-		bitsToFloat gives SignExtendSlot.notASignExtension
+		bitsToFloat or
+		promoteUnsignedToFloat gives SignExtendSlot.notASignExtension
 		signExtendI8 gives SignExtendSlot.fromBytes(1)
 		signExtendI16 gives SignExtendSlot.fromBytes(2)
 		signExtendI32 gives SignExtendSlot.fromBytes(4)

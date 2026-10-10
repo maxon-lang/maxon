@@ -32,10 +32,15 @@ such as `typealias X = int(range) implements Parent` is an E2001 to a release th
 withdrawing it is not enough: the seed then judges every crossing the clause licensed by its older rule,
 so the patch also writes each cast that rule demands, and wraps a division whose divisor such a cast widened to
 admit 0 in the `try … otherwise panic` the seed then requires. A generic function (`function f(...) uses T`) is
-withdrawn whole, which is sound because the compiler calls none. Only those forms and the casts go; the
-declarations and every table stay, so `C1` knows the forms and compiles the unshimmed tree. The casts are
+withdrawn whole, which is sound because the compiler calls none. A type-body field whose type comes from its
+initializer (`var x = e as T`, `var x = Type.member(...)`, `var x = "text"`) is written `var x as T = e`, and a
+decimal integer literal above `i64.max` is written in hex (a typealias range bound as `i64.max`). Only those
+forms and the casts go; the declarations and every table stay, so `C1` knows the forms and compiles the unshimmed tree. The casts are
 found by building with the seed until it is clean, so the one patch for every such form is written by
 `generate-seed-language-shim.py` and not by hand — regenerate it whenever the sources it touches move.
+The seed also compiles a comparison against a literal from 2^63 up as a signed one, so a `C1` it builds derives
+wrong division constants and panics in `deriveSignedMagic`; the hand-written `0015-c1-declines-every-division-strength-reduction.patch`
+makes `classifyDivision` decline every divisor, so `C1` emits plain divides and builds the unshimmed tree into a correct `C2`.
 
 ⭐ **THE LIBRARY LINKED INTO `C1` IS THE FIFTH CASE.** The first build compiles the tree's `stdlib/` into
 `C1` as it would into any program, so a library body that calls a `__ManagedFile` method or a `__Builtins`

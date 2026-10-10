@@ -242,7 +242,7 @@ end 'arm64RegisterArgCapacity'
 // behind that one and their advice is not the first thing to do. Recorded here rather than at any of the
 // three, because this is the number a reader who is raising the ceiling comes to find.
 export function arm64OutgoingArgRegionBytes() returns StackSize
-	return ((MaxAbiArgs - arm64RegisterArgCapacity()) as StackSize) * SpillSlotBytes
+	return ((MaxAbiArgs as StackSize) - (arm64RegisterArgCapacity() as StackSize)) * SpillSlotBytes
 end 'arm64OutgoingArgRegionBytes'
 
 // The physical register integer argument slot `index` occupies. A slot past the file means the placement
@@ -1446,8 +1446,9 @@ export type StdToArm64Lowering
 	//   • `neg`        — `neg dest, src` (two's complement).
 	//   • `bitNot`     — `mvn dest, src` (one's complement of all 64 bits): `not 5` == -6.
 	//   • `logicalNot` — `eor dest, src, #1`: a bool is 0/1, so flipping bit 0 negates it.
-	// The two conversions cross files: `siToFp` → `scvtf` (int → f64), `fpToSi` → `fcvtzs` (f64 → int,
-	// TRUNCATING toward zero — the `z`, which is why it is right for `trunc()`).
+	// The three conversions cross files: `siToFp` → `scvtf` and `uiToFp` → `ucvtf` (int → f64),
+	// `fpToSi` → `fcvtzs` (f64 → int, TRUNCATING toward zero — the `z`, which is why it is right for
+	// `trunc()`).
 	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, dstRef ElementIndex)
 		if stdTypeIsFloat(operandType) != stdUnaryOperandIsFloat(opcode) 'domain'
 			panic("lowerUnaryOp: no arm64 form of {opcode.name} over Std type {operandType.name} — an opcode's operand DOMAIN is part of the opcode (`stdUnaryOperandIsFloat`); an f64 negate in particular is `fneg` (a sign-bit flip, the `fneg` instruction), never the integer `neg`")
@@ -1461,6 +1462,7 @@ export type StdToArm64Lowering
 			bitNot then self.emit(dstRef, op: TargetOp.arm64Mvn(dest, src: src))
 			logicalNot then self.emit(dstRef, op: TargetOp.arm64EorImm(dest, src: src, imm: Arm64LogicalNotMask))
 			siToFp then self.emit(dstRef, op: TargetOp.arm64Scvtf(dest, src: src))
+			uiToFp then self.emit(dstRef, op: TargetOp.arm64Ucvtf(dest, src: src))
 			fpToSi then self.emit(dstRef, op: TargetOp.arm64Fcvtzs(dest, src: src))
 
 			// The MATH INTRINSICS: `fsqrt` is its own instruction, and `frintm`/`frintp`/`frintn` are ONE
@@ -1565,7 +1567,7 @@ export type StdToArm64Lowering
 	// carries the reason the ADMISSION rule upstream is deliberately not narrowed to match.
 	function lowerMulImm(dest TargetVReg, src TargetVReg, imm Imm32, dstRef ElementIndex)
 		match arm64MulImmForm(imm, scale: self.mulScale) 'form'
-			shiftLeft then self.emit(dstRef, op: TargetOp.arm64LslImm(dest, src: src, imm: log2OfPowerOfTwo(imm as ParsedInt)))
+			shiftLeft then self.emit(dstRef, op: TargetOp.arm64LslImm(dest, src: src, imm: log2OfPowerOfTwo(imm as MachineWord)))
 
 			// `src * (2^k + 1)` is `src + (src << k)` — both operands of the shifted-register add name
 			// the SAME register, which is what makes one address op a multiply.

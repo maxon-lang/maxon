@@ -326,7 +326,7 @@ export function patchJumpTables(rdata ByteArray, relocs JumpTableRelocArray, glo
 
 		for (iter, targetTextOffset) in reloc.targetTextOffsets.withIterator() 'eachSlot'
 			let slotIndex = iter.index()
-			let targetAddr = textAddr + targetTextOffset
+			let targetAddr = textAddr + (targetTextOffset as MachineWord)
 			let entry = jumpTableEntry(targetAddr, tableBaseAddr: tableBaseAddr, tableLabel: reloc.tableLabel, slotIndex: slotIndex)
 
 			// The blob already holds `JumpTableSlotBytes` zero placeholder bytes here (reserved by
@@ -799,7 +799,7 @@ export type CodeResult
 	export var inlineSites as InlineSiteArray
 	export var inlineRanges as InlineRangeArray
 
-	export var imagePlacement as ImagePlacement = ImagePlacement.unplaced
+	export var imagePlacement = ImagePlacement.unplaced
 
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, stdModule StdModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray) returns CodeResult
 		return Self{

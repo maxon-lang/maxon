@@ -30,7 +30,7 @@ self-compiles `maxon-bin/AGENTS.md` describes.
 | `SlabArena.maxon` | `__slab_assert_os_alloc`, `__slab_arena_new`, `__slab_arena_alloc_chunks`, `__slab_arena_free_chunks`, `__slab_arena_of`, `__slab_arena_scavenge`, `__slab_arena_committed_bytes`, `__slab_arena_map_ensure`, `__slab_arena_map_set` | calls `installSlabRuntime`'s builders mint, and calls from the two slab tier files — compiler-called roster |
 | `SlabRuntime.maxon` | `__slab_os_direct_alloc`, `__slab_os_direct_free`, `__slab_state_base`, `__slab_meta_alloc`, `__slab_meta_free`, `__slab_census`, `__slab_census_tally_walk`, `__slab_census_bucket_count`, `__slab_census_bucket_bytes` | calls `installSlabRuntime`'s builders mint (the census entries from the locked `__slab_live_bytes`-family wrappers) — compiler-called roster |
 | `WideText.maxon` | `__wt_widen`, `__wt_narrow`, `__wt_narrow_ascii`, `__wt_text_length`, `__wt_block_extent` (Windows only) | calls `HostTextRuntime`'s builders mint at every UTF-8⇄UTF-16 boundary of x64-windows — compiler-called roster |
-| `Word.maxon` | none: the shared `module typealias`es `MachineWord`, `NonZeroWord`, `BufferCoordinate`, `ElementStride`, `RefCountDelta` | — |
+| `Word.maxon` | none: the shared `module typealias`es `MachineWord`, `BufferCoordinate`, `ElementStride`, `RefCountDelta` | — |
 
 A `__Builtins` row is lowered by the parser to a call naming the entry, from whatever file wrote the
 construct (`stdlib/Clock.maxon`'s `nowUnixSeconds` is one such caller). That call is an ordinary edge in an

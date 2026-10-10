@@ -542,8 +542,8 @@ typealias CountArray = Array with Count
 typealias NameArray = Array with String
 
 type Facts
-	export var counts as CountArray = CountArray.create()
-	export var names as NameArray = NameArray.create()
+	export var counts = CountArray.create()
+	export var names = NameArray.create()
 	static function create() returns Facts
 		return Self{}
 	end 'create'
@@ -583,8 +583,8 @@ typealias CountArray = Array with Count
 typealias NameArray = Array with String
 
 type Facts
-	export var counts as CountArray = CountArray.create()
-	export var names as NameArray = NameArray.create()
+	export var counts = CountArray.create()
+	export var names = NameArray.create()
 	static function create() returns Facts
 		return Self{}
 	end 'create'

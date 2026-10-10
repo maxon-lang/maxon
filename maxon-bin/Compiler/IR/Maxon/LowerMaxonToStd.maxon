@@ -18,11 +18,6 @@
 // and the Std passes downstream grow their dense columns to fit, so a monotonic counter is all that is
 // needed (no per-function object).
 
-// An interface's transitive witness-slot list, held per interface for the module being lowered — keyed by
-// the declaration-order handle a `witnessDispatch` names its interface by, so the memo is asked with the
-// very scalar the op carries and needs no name round-trip. See `MaxonToStdLowering.witnessSlotsOf`.
-typealias WitnessSlotListMemo = Map with (ElementIndex, CollectedInterfaceMethodArray)
-
 // The `.rdata` label prefix a module-level constructed-struct `let`'s box registers under — distinct from
 // `__str_rec_` and `__barr_rec_` so a reader of the section can tell a user struct from the two
 // `__ManagedMemory`-shaped records beside it.
@@ -205,11 +200,12 @@ function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
 		bitNot then return StdUnaryOpcode.bitNot
 		logicalNot then return StdUnaryOpcode.logicalNot
 
-		// The conversion pair — still a 1:1 rename, and still no decision made here: the parser
-		// chose the DIRECTION (it is the tier that knows the operand is a float), and the Std
-		// opcode only renames it. `trunc` is the source builtin; `promoteToFloat` is inserted.
+		// The conversions — still a 1:1 rename, and still no decision made here: the parser
+		// chose the DIRECTION and the signedness (it is the tier that knows the operand's type), and
+		// the Std opcode only renames it. `trunc` is the source builtin; the two promotions are inserted.
 		trunc then return StdUnaryOpcode.fpToSi
 		promoteToFloat then return StdUnaryOpcode.siToFp
+		promoteUnsignedToFloat then return StdUnaryOpcode.uiToFp
 
 		// The math intrinsics — a 1:1 rename like the rest, and the only reason they are spelled
 		// separately from the conversions above is that they are NOT conversions: they stay inside
@@ -366,6 +362,7 @@ export function maxonUnaryOpOfStdOpcode(opcode StdUnaryOpcode) returns MaxonUnar
 		bitNot gives MaxonUnaryOp.bitNot
 		logicalNot gives MaxonUnaryOp.logicalNot
 		siToFp gives MaxonUnaryOp.promoteToFloat
+		uiToFp gives MaxonUnaryOp.promoteUnsignedToFloat
 		fpToSi gives MaxonUnaryOp.trunc
 		floor gives MaxonUnaryOp.floor
 		ceil gives MaxonUnaryOp.ceil
@@ -1274,9 +1271,10 @@ type MaxonToStdLowering
 	// cannot come to describe one argument differently.
 	var conformances as ConformanceDeclArray
 
-	// The transitive witness-slot list of each interface a dispatch in this module goes through, built on
-	// first use — see `witnessSlotsOf` for why it is memoized rather than re-walked per dispatch op.
-	var witnessSlotMemo as WitnessSlotListMemo
+	// The transitive witness-slot list of each interface a dispatch in this module goes through, built
+	// on first use — see `WitnessSlotsByDeclIndex` for why it is memoized rather than re-walked per
+	// dispatch op.
+	var witnessSlotMemo as WitnessSlotsByDeclIndex
 
 	// The witness tables already emitted — the dedup gate for the blob's relocations + root.
 	var emittedWitnessTables as WitnessTableLabelSet
@@ -1522,7 +1520,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), pendingNullLayoutArgs: NullLayoutArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), pendingNullLayoutArgs: NullLayoutArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -2352,7 +2350,7 @@ type MaxonToStdLowering
 
 		// capacity@16 = the rdata sentinel (< 0) — tells `__managed_decref` the buffer is immortal.
 		let capacityId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(capacityId, value: RdataBufferCapacity, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(capacityId, value: RdataBufferCapacity as ParsedInt, valueType: StdType.i64))
 		self.emitConstArrayField(result, offset: ManagedRecordCapacityOffset, value: capacityId, dstBlock: dstBlock)
 
 		// element_size@24 — 1 for a `b"…"` (a byte is one byte, so `.get(i)` strides by 1), a NEGATIVE bit
@@ -2908,7 +2906,7 @@ type MaxonToStdLowering
 		// it, so widening this word would move every reader's idea of where the methods end.
 		var blob = ByteArray.create()
 		blob.append(scalarImage(methodCount as ParsedInt, byteCount: WitnessSlotBytes as BytePos))
-		blob.growFilled((WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + associatedCount)) as ElementIndex, value: 0)
+		blob.growFilled(WitnessTableHeaderBytes + WitnessSlotBytes * (methodCount + associatedCount), value: 0)
 		_ = self.globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
 
 		// ⭐ **`destroyFunc@8` — HOW AN OWNED EXISTENTIAL OF THIS CONFORMER IS RELEASED — and `retainFunc@16`,
@@ -4574,10 +4572,10 @@ type MaxonToStdLowering
 			// that answers EMPTY when the argument owns no record, so the two words are non-zero together by
 			// construction — see `ProgramSignatures.typeParamDropCallee` for the measured exit-101 a
 			// FIELD-shaped drop gate beside this ARGUMENT-shaped retain gate produces.
-			self.stampOwnershipWord(self.signatures.typeParamDropCallee(gid, position: position), label: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_DESTROY_FUNC) as ByteOffset)
+			self.stampOwnershipWord(self.signatures.typeParamDropCallee(gid, position: position), label: label, offsetInLabel: blockBase + LAYOUT_OFFSET_DESTROY_FUNC)
 
 			if self.signatures.genericInstanceOpaqueArrayElementIsCopyable(gid, position: position, uses: self.instanceParameterUses) 'copyableOpaqueElement'
-				self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid, position: position, uses: self.instanceParameterUses), rdataLabel: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_COPY_FUNC) as ByteOffset)
+				self.globalData.recordFuncAbs64InRdata(self.signatures.managedOpaqueArrayElementCloneCallee(gid, position: position, uses: self.instanceParameterUses), rdataLabel: label, offsetInLabel: blockBase + LAYOUT_OFFSET_COPY_FUNC)
 			end 'copyableOpaqueElement'
 
 			// ⭐⭐ **THE `retainFunc@64` STAMP — how a shared body takes the reference a record it BUILDS owes on
@@ -4586,7 +4584,7 @@ type MaxonToStdLowering
 			// `Array` FIELD, because a clone is about that column and not about the argument.
 			// `typeParamRetainCallee` answers EMPTY for an argument owning no record and `stampOwnershipWord`
 			// then leaves the zero `__retain_type_param` treats as inert.
-			self.stampOwnershipWord(self.signatures.typeParamRetainCallee(gid, position: position), label: label, offsetInLabel: (blockBase + LAYOUT_OFFSET_RETAIN_FUNC) as ByteOffset)
+			self.stampOwnershipWord(self.signatures.typeParamRetainCallee(gid, position: position), label: label, offsetInLabel: blockBase + LAYOUT_OFFSET_RETAIN_FUNC)
 		end 'eachTypeParam'
 
 		for entry in 0 upto table.count() 'eachTableEntry'
@@ -5418,8 +5416,8 @@ type MaxonToStdLowering
 	// answer on another. That is refused by E3119, on every target, because the register targets are the
 	// half that fails quietly.
 	function witnessFormalTypes(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, receiver ValueId) returns MaxonTypeArray
-		let slot = self.witnessRequirementSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
-		let types = self.witnessSlotFormalTypes(slot, dispatched: self.interfaceAtDeclIndex(interfaceDeclIndex), site: FormalSite.dispatchedFrom(receiver))
+		let slot = witnessSlotIn(self.witnessSlotsOf(interfaceDeclIndex), methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		let types = self.witnessSlotFormalTypes(slot, dispatched: interfaceAtDeclIndex(self.signatures, interfaces: self.interfaces, interfaceDeclIndex: interfaceDeclIndex), site: FormalSite.dispatchedFrom(receiver))
 
 		// The CHECK between the two copies of one number: this list's length IS the slot's ABI arity, and
 		// `witnessSlotAbiArity` — which an adapter's parameter list is cut to, without a receiver value to
@@ -5567,69 +5565,24 @@ type MaxonToStdLowering
 		return try bindings.get(position) otherwise panic("receiverSiteBinding: bindings.get OOB at {position} below count {bindings.count()}")
 	end 'receiverSiteBinding'
 
-	// Witness slot `methodIndex` of the interface `interfaceDeclIndex` names — the same `(interface, slot)` pair
-	// `Parser.appendInterfaceDispatchCandidates` numbered the dispatch by, so the requirement this recovers is
-	// the one the call was resolved against.
-	function witnessRequirementSlot(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns CollectedInterfaceMethod
-		let slots = self.witnessSlotsOf(interfaceDeclIndex)
-		return try slots.get(methodIndex) otherwise panic("witnessRequirementSlot: slot {methodIndex} is outside the {slots.count()} witness slots of interface {interfaceDeclIndex} — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")
-	end 'witnessRequirementSlot'
-
-	// ⭐ **THE INTERFACE A DISPATCH'S HANDLE NAMES, RESOLVED THROUGH THE ONE RULE** — `lookupInterface`, over
-	// the merged registry this pass holds, so a synthesized protocol answers before any user declaration
-	// exactly as it does at every other reader. `ProgramSignatures` stores the NAME rather than the
-	// declaration precisely so this resolution happens here (see `interfaceNamesInDeclOrder`).
-	//
-	// ⚠⚠ **THE HANDLE IS MINTED AGAINST ONE STORE AND RESOLVED AGAINST ANOTHER, AND THAT SEAM IS ASSERTED.**
-	// `Parser.appendInterfaceDispatchCandidates` numbers the dispatch against `ProgramSignatures`, whose
-	// interfaces `foldInterfaceDeclarations` writes; this resolves against `project.interfaces`, which
-	// `ParseStaging.mergeArtifact` writes. Two writers of what must be one declaration. If they ever
-	// disagreed about `methods` or `extendsInterfaces`, `methodIndex` would recover a DIFFERENT requirement
-	// and set a wrong ABI for the call — a wrong answer, not a compile error, on every target. The slot COUNT
-	// is the cheap witness of that agreement (it is exactly what `methodIndex` is an index into), so it is
-	// compared here rather than hoped for: one `interfaceWitnessSlots` walk of the signature-index
-	// declaration against the memoized walk of the merged one, on the FIRST dispatch through each interface
-	// and never again.
-	function interfaceAtDeclIndex(interfaceDeclIndex ElementIndex) returns IrInterface
-		let name = self.signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
-
-		match lookupInterface(self.interfaces, name: name) 'resolve'
-			found(iface) then return iface
-			notFound then panic("interfaceAtDeclIndex: interface '{String.from(name)}' holds position {interfaceDeclIndex} in the signature index but resolves to nothing in the merged registry — a witness dispatch was numbered against a declaration the merge did not carry")
-		end 'resolve'
-	end 'interfaceAtDeclIndex'
-
 	// The slot-count agreement `interfaceAtDeclIndex`'s header states, asked once per interface at the moment
 	// its slot list is first built. It walks the SIGNATURE-INDEX declaration — the one the parser numbered
 	// against — and compares its slot count with the merged one's, which is the only property `methodIndex`
 	// rests on.
 	function requireSlotNumberingAgrees(interfaceDeclIndex ElementIndex, mergedSlots CollectedInterfaceMethodArray)
-		let name = self.signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
-
-		match lookupInterface(self.signatures.interfaceMap(), name: name) 'asTheParserSawIt'
-			// A synthesized protocol is in NEITHER map — `lookupInterface` builds it fresh from the same
-			// constants on both sides, so there is no second writer to disagree with and nothing to compare.
-			notFound then return
-			found(parserIface) then requireSameSlotNumbering(name, parserSlots: interfaceWitnessSlots(self.signatures.interfaceMap(), iface: parserIface), mergedSlots: mergedSlots)
-		end 'asTheParserSawIt'
+		let parserInterfaces = self.signatures.interfaceMap()
+		let parserIface = interfaceAtDeclIndex(self.signatures, interfaces: parserInterfaces, interfaceDeclIndex: interfaceDeclIndex)
+		requireSameSlotNumbering(self.signatures.interfaceNameAtDeclIndex(interfaceDeclIndex), parserSlots: interfaceWitnessSlots(parserInterfaces, iface: parserIface), mergedSlots: mergedSlots)
 	end 'requireSlotNumberingAgrees'
 
-	// `interfaceDeclIndex`'s transitive witness slot list, built on the FIRST dispatch through that interface
-	// and held after — the lowering's twin of `Parser.witnessSlotsOf`, memoized for the reason stated there.
-	//
-	// ⚠ **THE MEMO IS NOT AN OPTIMIZATION.** `interfaceWitnessSlots` walks the `extends` graph and builds a
-	// fresh array plus a visited set on every call; asked once per dispatch OP that is the measured quadratic
-	// the parser's memo exists to remove, ported into a second pass. Keyed the same way, on the same property:
-	// the list is a pure function of the interface, which is fixed before any body is parsed. The two-store
-	// agreement check rides the same first walk, so it costs one extra walk per INTERFACE, not per dispatch.
 	function witnessSlotsOf(interfaceDeclIndex ElementIndex) returns CollectedInterfaceMethodArray
-		if let memoized = try self.witnessSlotMemo.get(interfaceDeclIndex) 'alreadyWalked'
-			return memoized
-		end 'alreadyWalked'
+		let firstWalk = not self.witnessSlotMemo.contains(interfaceDeclIndex)
+		let slots = witnessSlotsAt(self.signatures, interfaces: self.interfaces, witnessSlots: self.witnessSlotMemo, interfaceDeclIndex: interfaceDeclIndex)
 
-		let slots = interfaceWitnessSlots(self.interfaces, iface: self.interfaceAtDeclIndex(interfaceDeclIndex))
-		self.requireSlotNumberingAgrees(interfaceDeclIndex, mergedSlots: slots)
-		self.witnessSlotMemo.upsert(interfaceDeclIndex, value: slots)
+		if firstWalk 'seamNotYetAsserted'
+			self.requireSlotNumberingAgrees(interfaceDeclIndex, mergedSlots: slots)
+		end 'seamNotYetAsserted'
+
 		return slots
 	end 'witnessSlotsOf'
 
@@ -6136,8 +6089,9 @@ type MaxonToStdLowering
 	// `assertConversionCrossesDomain` satisfied in both directions.
 	//
 	// ⭐⭐ **WHICH CONVERSION IS NOT THE SAME QUESTION AS WHETHER.** An ordinary integer WIDENS
-	// (`promoteToFloat` → `siToFp`); a FLOAT-BACKED ENUM's i64 is already the double's IEEE-754 encoding and
-	// is REINTERPRETED (`bitsToFloat` → `bitcastI64ToF64`). MEASURED with only the widening here:
+	// (`promoteToFloat` → `siToFp`, or `promoteUnsignedToFloat` → `uiToFp` for one marked unsigned); a
+	// FLOAT-BACKED ENUM's i64 is already the double's IEEE-754 encoding and is REINTERPRETED
+	// (`bitsToFloat` → `bitcastI64ToF64`). MEASURED with only the widening here:
 	// `takesFloat(Weight.light)` for `light = 2.5` printed **4612811918334231000.0**.
 	//
 	// ⚠ **AND THIS IS THE ONE SUCH SITE THE PARSER CANNOT OWN**, which is why the fix lands at this tier
@@ -6165,8 +6119,21 @@ type MaxonToStdLowering
 			return MaxonUnaryOp.floatToBits
 		end 'intoTheOpaqueWord'
 
-		return MaxonUnaryOp.bitsToFloat if self.argIsFloatBackedEnum(argId) else MaxonUnaryOp.promoteToFloat
+		if self.argIsFloatBackedEnum(argId) 'anEncodedDouble'
+			return MaxonUnaryOp.bitsToFloat
+		end 'anEncodedDouble'
+
+		return MaxonUnaryOp.promoteUnsignedToFloat if self.argConvertsAsUnsigned(argId) else MaxonUnaryOp.promoteToFloat
 	end 'floatDomainCrossingOp'
+
+	function argConvertsAsUnsigned(value ValueId) returns bool
+		if not self.rangeChecks.contains(self.currentFuncName()) 'noEntry'
+			return false
+		end 'noEntry'
+
+		let checks = try self.rangeChecks.get(self.currentFuncName()) otherwise panic("argConvertsAsUnsigned: rangeChecks.contains said yes but get failed for '{String.from(self.currentFuncName())}'")
+		return valueIsMarkedUnsigned(value, literals: checks.unsignedMaxLiterals, patterns: checks.unsignedPatternValues)
+	end 'argConvertsAsUnsigned'
 
 	// Is `value` a FLOAT-BACKED enum's — the question `floatDomainCrossingOp` picks its conversion by. The
 	// Maxon-tier twin of `Parser.valueIsFloatBackedEnum`, reading the very columns that parser published,
@@ -6314,7 +6281,7 @@ type MaxonToStdLowering
 	// shifts' immediate forms, so the emitted code is two shift-immediates and no register for the count.
 	function lowerSignExtend(result ValueId, operand ValueId, slotBytes ByteOffset, dstBlock IrBlock)
 		let count = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(count, value: ((MachineWordBytes - slotBytes) * BitsPerByte) as ParsedInt, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(count, value: ((MachineWordBytes - slotBytes) as ParsedInt) * BitsPerByte, valueType: StdType.i64))
 
 		let raised = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(raised, lhs: operand, rhs: count, opcode: StdBinOpcode.shl, operandType: StdType.i64))
@@ -6769,10 +6736,10 @@ type MaxonToStdLowering
 
 		// THE REMAINDER OVERFLOW GUARD — asked of the KIND rather than of the channel, because both remainders need it: a possibly-zero
 		// divisor is a possibly-`-1` divisor too (`emitDivOrMod`'s proof rules out neither), and the quotient
-		// needs it never.
+		// needs it never. Only a SIGNED remainder: an unsigned divide has no overflowing pair.
 		var safeDividend = dividend
 
-		if divisionKindReadsRemainder(kind) 'remainderOverflow'
+		if divisionKindReadsRemainder(kind) and signedness == IntegerSignedness.signed 'remainderOverflow'
 			safeDividend = self.emitRemainderOverflowSafeDividend(dividend, divisor: divisor, operandType: operandType, dstBlock: dstBlock)
 		end 'remainderOverflow'
 

@@ -1204,9 +1204,9 @@ function buildX64LinuxFillFindDataChunk(layout PosixStatLayout) returns Function
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rdx, disp: FindDataAttributesOffset as Imm32, srcReg: X64Register.rax, wide: true)
 
-	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.creationTimeOffset as Imm32, findOffset: FindDataCreationTimeOffset)
-	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.accessTimeOffset as Imm32, findOffset: FindDataLastAccessTimeOffset)
-	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.modifyTimeOffset as Imm32, findOffset: FindDataLastWriteTimeOffset)
+	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.creationTimeOffset as Imm32, findOffset: FindDataCreationTimeOffset as Imm32)
+	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.accessTimeOffset as Imm32, findOffset: FindDataLastAccessTimeOffset as Imm32)
+	x64LinuxFillFindDataTime(asm, statSlot: SlotStat, findSlot: SlotFindData, statOffset: layout.modifyTimeOffset as Imm32, findOffset: FindDataLastWriteTimeOffset as Imm32)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStat), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: layout.sizeOffset as Imm32, wide: true)
@@ -3431,7 +3431,7 @@ end 'buildX64LinuxProcTerminateChunk'
 // THE PROCESS-TRACE BAND
 // ==========================================================================
 
-export let HostTraceeReadOutIncomingSlot = 0 as StackSize
+export let HostTraceeReadOutIncomingSlot = 0 as MachineWord
 
 function buildX64LinuxTraceRequestChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(1)
@@ -3875,8 +3875,8 @@ end 'buildX64LinuxSpawnChunk'
 // The two arguments past the Win64 register file, in the order `StdOp.osProcessSpawn` names its operands.
 // Named because the WRITER (`StdToX64Conversion.lowerOsProcessSpawnLinux`) and the READER above are in
 // different files and a bare 0 and 1 at two sites is the one fact that pair must agree on.
-export let SpawnProcInfoIncomingSlot = 0 as StackSize
-export let SpawnEnvironmentIncomingSlot = 1 as StackSize
+export let SpawnProcInfoIncomingSlot = 0 as MachineWord
+export let SpawnEnvironmentIncomingSlot = 1 as MachineWord
 
 // Close the spawn's working-directory descriptor, when it opened one — the parent's half of the rule
 // `buildX64LinuxSpawnChunk`'s header states. Clobbers rax, rdi, and the syscall's rcx and r11.

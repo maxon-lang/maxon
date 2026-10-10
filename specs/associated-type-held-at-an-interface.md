@@ -341,7 +341,7 @@ typealias LineDoc = Doc with Lines
 function widthOf(source LineDoc) returns Integer
 	var total = 0 as Integer
 	for text in source 'walk'
-		total = total + text.byteLength()
+		total = total + (text.byteLength() as Integer)
 	end 'walk'
 	return total
 end 'widthOf'

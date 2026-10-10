@@ -428,9 +428,9 @@ export type X64RuntimeAsm
 	// The rule itself is `win64OutgoingArgDisp`'s and is not restated: this adds the certificate, not a
 	// second addressing convention.
 	export function outgoingArgDisp(index MachineWord) returns Imm32
-		let regionEnd = (index + 1) * SpillSlotBytes
+		let regionEnd = ((index as StackSize) + 1) * SpillSlotBytes
 
-		if (regionEnd as StackSize) > self.outgoingArgBytes 'outOfRegion'
+		if regionEnd > self.outgoingArgBytes 'outOfRegion'
 			panic("X64RuntimeAsm.outgoingArgDisp: outgoing stack-argument slot {index} ends at byte {regionEnd} of the outgoing region but `beginFunction` reserved only {self.outgoingArgBytes} — the store would land on spill slot 0 and corrupt a live value. Raise the chunk's `outgoingStackArgBytes` to cover the widest call it makes")
 		end 'outOfRegion'
 
@@ -646,7 +646,7 @@ end 'writeStreamOutgoingArgWords'
 
 // The 8-byte slots the UTF-16 buffer occupies.
 function writeStreamWideSlots() returns StackSize
-	return (alignUp(ConsoleWideBufferUnits * Utf16UnitBytes, alignment: SpillSlotBytes) / SpillSlotBytes) as StackSize
+	return alignUpStack((ConsoleWideBufferUnits * Utf16UnitBytes) as StackSize, alignment: SpillSlotBytes) / SpillSlotBytes
 end 'writeStreamWideSlots'
 
 // The two words a `call` and the prologue's `push rbp` put below a chunk's own frame — what a footprint
@@ -686,7 +686,7 @@ end 'requireWriteStreamFitsGreenThreadStack'
 // Clobbers rax and r11, so `dest` may be neither.
 function emitConsoleCellPtr(asm X64RuntimeAsm, dest X64Register)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSelector), wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.r11, value: StdInputHandleSelector)
+	encodeMovRegImm32(asm.code, dest: X64Register.r11, value: StdInputHandleSelector as MachineWord)
 	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.r11, src: X64Register.rax, wide: true)
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: dest, label: ConsoleProbeStdinLabel)
 	encodeLeaRegBaseIndexScale(asm.code, dest: dest, base: dest, index: X64Register.r11, scale: MemoryIndexScale.byOne)
@@ -726,12 +726,12 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	end 'bufferTooSmallToBackOff'
 
 	let wideSlots = writeStreamWideSlots()
-	var asm = X64RuntimeAsm.beginFunction(((WriteStreamSlotWide + wideSlots) as StackSize), outgoingStackArgBytes: ((writeStreamOutgoingArgWords() * SpillSlotBytes) as StackSize))
+	var asm = X64RuntimeAsm.beginFunction(WriteStreamSlotWide + wideSlots, outgoingStackArgBytes: (writeStreamOutgoingArgWords() as StackSize) * SpillSlotBytes)
 	requireWriteStreamFitsGreenThreadStack(asm, target: target)
 
 	// The buffer grows UPWARD in memory from the LAST of the slots it occupies, because slots grow downward
 	// from rbp — `mrt_write_hex64`'s idiom.
-	let wideDisp = asm.slotDisp(((WriteStreamSlotWide + wideSlots - 1) as StackSize))
+	let wideDisp = asm.slotDisp((WriteStreamSlotWide + wideSlots - 1) as StackSize)
 
 	let done = asm.newLabel()
 	let cellReady = asm.newLabel()
@@ -972,8 +972,8 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 	let SlotValue = 0
 	let SlotIndex = 1
 	let SlotBuffer = 2
-	let bufferSlots = alignUp(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
-	var asm = X64RuntimeAsm.beginFunction(((SlotBuffer + bufferSlots) as StackSize))
+	let bufferSlots = alignUpStack(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
+	var asm = X64RuntimeAsm.beginFunction(SlotBuffer + bufferSlots)
 
 	let loop = asm.newLabel()
 	let loopDone = asm.newLabel()
@@ -982,7 +982,7 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 
 	// The buffer occupies slots SlotBuffer.. upward in memory, so its first byte is at the
 	// LOWEST of them — slots grow downward from rbp, so that is the LAST slot index.
-	let bufferDisp = asm.slotDisp(((SlotBuffer + bufferSlots - 1) as StackSize))
+	let bufferDisp = asm.slotDisp((SlotBuffer + bufferSlots - 1) as StackSize)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rcx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
@@ -2082,7 +2082,7 @@ function buildWindowsProcessNamespaceChunk(usesGt bool) returns FunctionCodeChun
 	let SlotBuffer = 0 as StackSize
 	let SlotCapacity = 1 as StackSize
 	let SlotBytes = 2 as StackSize
-	var asm = X64RuntimeAsm.beginFunction(3, outgoingStackArgBytes: ((RegGetValueStackArgWords * SpillSlotBytes) as StackSize))
+	var asm = X64RuntimeAsm.beginFunction(3, outgoingStackArgBytes: ((RegGetValueStackArgWords as StackSize) * SpillSlotBytes))
 
 	let read = asm.newLabel()
 	let tooSmall = asm.newLabel()

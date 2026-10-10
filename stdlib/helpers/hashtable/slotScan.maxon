@@ -28,33 +28,30 @@ end 'SlotState'
 
 public typealias SlotStateArray = Array with SlotState
 
-/// A slot's position in the table, and the table's total slot count. Both are non-negative and both were
-/// declared, identically, in `Map.maxon` and `Set.maxon`; they are the parameter types of the scan below,
-/// so they belong with it.
+/// A slot's position in the table, and the table's total slot count. Both are non-negative, and they are
+/// the parameter types of the scan below, so they belong with it.
 ///
-/// ⚠ **THE UPPER BOUND IS 2^62 AND IT IS A REAL BOUND, NOT A ROUND NUMBER.** A capacity is zero or a
+/// ⚠ **THE UPPER BOUND IS 2^63 AND IT IS A REAL BOUND, NOT A ROUND NUMBER.** A capacity is zero or a
 /// power of two minted only by doubling from 16, so the mintable capacities are 16, 32, … and the LAST
-/// of them is 2^62: `2^63` does not fit the signed 64-bit cell a magnitude lives in, so `capacity * 2`
+/// of them is 2^63: `2^64` does not fit the 64-bit cell a magnitude lives in, so `capacity * 2`
 /// can never legitimately produce it. The INDEX shares the capacity's bound rather than taking
 /// `capacity - 1`, because a slot cursor legitimately holds `capacity` itself one past the end — that is
 /// what `MapIterator.advance`/`SetIterator.advance` hand to `findNextOccupied` as `from` after the last
 /// occupied slot.
 ///
 /// ⭐ **A NARROWED BOUND IS THE ENFORCEMENT, AND THAT IS THE POINT.** `int(0 to u64.max)` spans every
-/// pattern, so its door has nothing left to reject once the source is itself proven or unsigned-declared
-/// — which made these two aliases a place a negative could travel undetected, and made every `<`/`>` on
-/// them ambiguous between the signed and unsigned readings. Below `i64.max` the doors (parameters,
-/// returns, `as` casts, field stores) carry a real runtime check and the comparisons pin to the signed
-/// reading.
+/// pattern, so its door has nothing left to reject once the source is itself proven or unsigned-declared,
+/// which would make these two aliases a place a bad value could travel undetected. Under 2^63 the doors
+/// (parameters, returns, `as` casts, field stores) carry a real runtime check.
 ///
-/// ⚠ **THEY ARE SPELLED `Table…` RATHER THAN THE CONTAINERS' OLD BARE `SlotIndex`/`BucketCapacity`, AND
+/// ⚠ **THEY ARE SPELLED `Table…` RATHER THAN A BARE `SlotIndex`/`BucketCapacity`, AND
 /// THAT IS A COLLISION CHECK RATHER THAN A PREFERENCE.** A listed module's exported names are visible to
 /// EVERY program the compiler builds — the compiler's OWN sources included, since the bootstrap loads all
 /// of `stdlib/` — and `SlotIndex` is already a local binding inside
 /// `maxon-bin/Compiler/Targets/X64/X64Runtime.maxon`. A shared home has to be checked against the whole
 /// tree, not only against the two files it is being shared by (`StdlibLoader`'s collision rule).
-public typealias TableSlotIndex = int(0 to 4611686018427387904)
-public typealias TableCapacity = int(0 to 4611686018427387904) implements Count
+public typealias TableSlotIndex = int(0 to 9223372036854775808)
+public typealias TableCapacity = int(0 to 9223372036854775808) implements Count
 
 /// Find the next slot index >= `from` whose state is Occupied. Throws `IterationError.exhausted` if no
 /// occupied slot is found before `capacity`.

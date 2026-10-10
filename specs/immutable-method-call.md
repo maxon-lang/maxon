@@ -429,7 +429,7 @@ typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
 
 type Facts
-	export var counts as CountArray = CountArray.create()
+	export var counts = CountArray.create()
 
 	static function create() returns Facts
 		return Self{}

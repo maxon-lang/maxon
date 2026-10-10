@@ -1,0 +1,41 @@
+// ⚠ Not an optimization: `interfaceWitnessSlots` walks the `extends` graph and builds a fresh
+// array and visited set per call, so asking it per dispatch op is quadratic in a program's
+// dispatch count. Sound because the list is a pure function of the declaration index, which
+// `ProgramSignatures` fixes before any body is parsed. The key omits the store, so one memo is
+// only ever asked against one `interfaces`.
+module typealias WitnessSlotsByDeclIndex = Map with (ElementIndex, CollectedInterfaceMethodArray)
+
+module function witnessSlotsAt(signatures ProgramSignatures, interfaces IrInterfaceMap, witnessSlots WitnessSlotsByDeclIndex, interfaceDeclIndex ElementIndex) returns CollectedInterfaceMethodArray
+	if let memoized = try witnessSlots.get(interfaceDeclIndex) 'alreadyWalked'
+		return memoized
+	end 'alreadyWalked'
+
+	let slots = interfaceWitnessSlots(interfaces, iface: interfaceAtDeclIndex(signatures, interfaces: interfaces, interfaceDeclIndex: interfaceDeclIndex))
+	witnessSlots.upsert(interfaceDeclIndex, value: slots)
+	return slots
+end 'witnessSlotsAt'
+
+module function witnessSlotAt(signatures ProgramSignatures, interfaces IrInterfaceMap, witnessSlots WitnessSlotsByDeclIndex, interfaceDeclIndex ElementIndex, methodIndex WitnessMethodIndex) returns CollectedInterfaceMethod
+	return witnessSlotIn(witnessSlotsAt(signatures, interfaces: interfaces, witnessSlots: witnessSlots, interfaceDeclIndex: interfaceDeclIndex), methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+end 'witnessSlotAt'
+
+module function witnessSlotIn(slots CollectedInterfaceMethodArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns CollectedInterfaceMethod
+	return try slots.get(methodIndex) otherwise panic("witnessSlotIn: slot {methodIndex} is outside the {slots.count()} witness slots of interface {interfaceDeclIndex} — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")
+end 'witnessSlotIn'
+
+// ⚠ A dispatch's `(interfaceDeclIndex, methodIndex)` is numbered against `ProgramSignatures`,
+// whose interfaces `Queries.foldInterfaceDeclarations` writes, and the lowering resolves it
+// against `project.interfaces`, which `ParseStaging.mergeArtifact` writes: two writers of one
+// declaration. If they disagreed about `methods` or `extendsInterfaces`, `methodIndex` would
+// recover a different requirement and set a wrong call ABI on every target, so the lowering
+// compares the two slot lists (`requireSameSlotNumbering`). A reader passing
+// `signatures.interfaceMap()` reads the store the dispatch was numbered against and has nothing
+// to assert.
+module function interfaceAtDeclIndex(signatures ProgramSignatures, interfaces IrInterfaceMap, interfaceDeclIndex ElementIndex) returns IrInterface
+	let name = signatures.interfaceNameAtDeclIndex(interfaceDeclIndex)
+
+	match lookupInterface(interfaces, name: name) 'resolve'
+		found(iface) then return iface
+		notFound then panic("interfaceAtDeclIndex: interface '{String.from(name)}' holds position {interfaceDeclIndex} in the signature index but resolves to nothing in the interface store this phase reads — a witness dispatch was numbered against a declaration that store does not carry")
+	end 'resolve'
+end 'interfaceAtDeclIndex'

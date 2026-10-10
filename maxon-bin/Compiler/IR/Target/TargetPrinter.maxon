@@ -286,7 +286,7 @@ function printChunkBytes(chunk FunctionCodeChunk) returns String
 			sb.append(ChunkByteSeparator)
 		end 'continuesOne'
 
-		sb.append(hexByte(b))
+		sb.append(hexByte(b as MachineWord))
 
 		// The last byte of a full line, or the last byte of the chunk — a short final line is closed by
 		// the same test rather than by a second one after the loop, which could disagree about whether
@@ -830,6 +830,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		ucomisdRegReg or
 		movsdRegRip or
 		cvtsi2sdRegReg or
+		cvtu64sdRegReg or
 		cvttsd2siRegReg or
 		sqrtsdRegReg or
 		roundsdRegReg or
@@ -905,6 +906,7 @@ function opIsArm64Band(op TargetOp) returns bool
 		arm64Fdiv or
 		arm64Fcmp or
 		arm64Scvtf or
+		arm64Ucvtf or
 		arm64Fcvtzs or
 		arm64Fsqrt or
 		arm64Frint or
@@ -1021,6 +1023,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		ucomisdRegReg(lhs, rhs) gives "ucomisdRegReg {vregName(lhs)}, {vregName(rhs)}"
 		movsdRegRip(dest, label) gives "movsdRegRip {vregName(dest)}, [rip + {String.from(label)}]"
 		cvtsi2sdRegReg(dest, src) gives "cvtsi2sdRegReg {vregName(dest)}, {vregName(src)}"
+		cvtu64sdRegReg(dest, src) gives "cvtu64sdRegReg {vregName(dest)}, {vregName(src)}"
 		cvttsd2siRegReg(dest, src) gives "cvttsd2siRegReg {vregName(dest)}, {vregName(src)}"
 
 		// The MATH INTRINSICS. `roundsd`'s MODE is printed by its `FloatRoundMode` member name rather
@@ -1120,6 +1123,7 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 		arm64Fdiv(dest, lhs, rhs) gives "fdiv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		arm64Fcmp(lhs, rhs) gives "fcmp {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		arm64Scvtf(dest, src) gives "scvtf {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64Ucvtf(dest, src) gives "ucvtf {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Fcvtzs(dest, src) gives "fcvtzs {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Fsqrt(dest, src) gives "fsqrt {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Fabs(dest, src) gives "fabs {arm64VregName(dest)}, {arm64VregName(src)}"

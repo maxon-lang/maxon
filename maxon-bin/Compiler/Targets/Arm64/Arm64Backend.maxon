@@ -475,6 +475,7 @@ let Arm64OpFmulD = 0x1E600800
 let Arm64OpFdivD = 0x1E601800
 let Arm64OpFcmpD = 0x1E602000
 let Arm64OpScvtfD = 0x9E620000
+let Arm64OpUcvtfD = 0x9E630000
 let Arm64OpFcvtzsD = 0x9E780000
 let Arm64OpFmovD = 0x1E604000
 
@@ -861,7 +862,7 @@ let Arm64AddShiftedMulMin = 3 as Imm32
 // caller-owned record for that type's own measured reason, since this is asked at every constant
 // multiply the backend lowers.
 export function arm64MulImmForm(imm Imm32, scale MemoryIndexScaleMatch) returns Arm64MulImmForm
-	if isPowerOfTwo(imm as ParsedInt) 'shiftLeft'
+	if isPowerOfTwo(imm as MachineWord) 'shiftLeft'
 		return Arm64MulImmForm.shiftLeft
 	end 'shiftLeft'
 
@@ -1132,7 +1133,7 @@ end 'arm64EmitVectorEor'
 // prologue pass's callee-save slots and the hand-assembled runtime chunks' locals
 // (`Arm64PanicRuntime.slotOffset`) — all three address the same frame the same way.
 export function arm64SlotDisplacement(slot SpillSlot) returns MachineWord
-	return Arm64FrameRecordBytes + (slot as MachineWord) * SpillSlotBytes
+	return Arm64FrameRecordBytes + ((slot as StackSize) * SpillSlotBytes) as MachineWord
 end 'arm64SlotDisplacement'
 
 // Access a frame slot at `[x29 + byteOffset]`. Below 256 bytes an unscaled STUR/LDUR encodes the
@@ -1149,8 +1150,8 @@ end 'arm64SlotDisplacement'
 function arm64EmitFrameSlot(code ByteArray, rt MachineWord, byteOffset MachineWord, unscaledOp MachineWord, scaledOp MachineWord)
 	if byteOffset < Arm64UnscaledSpillThreshold 'unscaled'
 		arm64EmitUnscaledMem(code, opcode: unscaledOp, rt: rt, baseReg: Arm64Fp, byteOffset: byteOffset as Imm32)
-	end 'unscaled' else if arm64ByteOffsetFitsScaledImm12(byteOffset, scale: SpillSlotBytes) 'scaled'
-		arm64EmitScaledMem(code, opcode: scaledOp, rt: rt, baseReg: Arm64Fp, byteOffset: byteOffset, scale: SpillSlotBytes)
+	end 'unscaled' else if arm64ByteOffsetFitsScaledImm12(byteOffset, scale: Arm64SlotScale) 'scaled'
+		arm64EmitScaledMem(code, opcode: scaledOp, rt: rt, baseReg: Arm64Fp, byteOffset: byteOffset, scale: Arm64SlotScale)
 	end 'scaled' else 'wide'
 		arm64EmitWideFrameSlot(code, rt: rt, byteOffset: byteOffset, scaledOp: scaledOp)
 	end 'wide'
@@ -1185,7 +1186,7 @@ end 'arm64EmitFrameSlot'
 function arm64EmitWideFrameSlot(code ByteArray, rt MachineWord, byteOffset MachineWord, scaledOp MachineWord)
 	let scratchBase = arm64WideFrameScratchBase(byteOffset)
 	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: Arm64Ip1, rn: Arm64Fp, imm: scratchBase)
-	arm64EmitScaledMem(code, opcode: scaledOp, rt: rt, baseReg: Arm64Ip1, byteOffset: byteOffset - scratchBase, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: scaledOp, rt: rt, baseReg: Arm64Ip1, byteOffset: byteOffset - scratchBase, scale: Arm64SlotScale)
 end 'arm64EmitWideFrameSlot'
 
 // ⭐ **A SIGNED BYTE OFFSET AS ITS `bits`-WIDE TWO'S-COMPLEMENT FIELD, IN `scale`-BYTE UNITS.** The one
@@ -1360,17 +1361,17 @@ end 'arm64EmitDataStore'
 // offset is scaled by 8 (both widths are 8 bytes).
 function arm64EmitWord64Load(code ByteArray, dest TargetVReg, base MachineWord, byteOffset MachineWord)
 	if arm64VRegIsGpr(dest) 'gpr'
-		arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: SpillSlotBytes)
+		arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOffset, scale: Arm64SlotScale)
 	end 'gpr' else 'fp'
-		arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: arm64FpField(dest), baseReg: base, byteOffset: byteOffset, scale: SpillSlotBytes)
+		arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: arm64FpField(dest), baseReg: base, byteOffset: byteOffset, scale: Arm64SlotScale)
 	end 'fp'
 end 'arm64EmitWord64Load'
 
 function arm64EmitWord64Store(code ByteArray, base MachineWord, byteOffset MachineWord, src TargetVReg)
 	if arm64VRegIsGpr(src) 'gpr'
-		arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: SpillSlotBytes)
+		arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: arm64GprField(src), baseReg: base, byteOffset: byteOffset, scale: Arm64SlotScale)
 	end 'gpr' else 'fp'
-		arm64EmitScaledMem(code, opcode: Arm64OpStrD, rt: arm64FpField(src), baseReg: base, byteOffset: byteOffset, scale: SpillSlotBytes)
+		arm64EmitScaledMem(code, opcode: Arm64OpStrD, rt: arm64FpField(src), baseReg: base, byteOffset: byteOffset, scale: Arm64SlotScale)
 	end 'fp'
 end 'arm64EmitWord64Store'
 
@@ -1658,6 +1659,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		ucomisdRegReg or
 		movsdRegRip or
 		cvtsi2sdRegReg or
+		cvtu64sdRegReg or
 		cvttsd2siRegReg or
 		sqrtsdRegReg or
 		roundsdRegReg or
@@ -1715,6 +1717,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		arm64Fdiv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpFdivD, rd: arm64FpField(dest), rn: arm64FpField(lhs), rm: arm64FpField(rhs))
 		arm64Fcmp(lhs, rhs) then emitArm64Insn(code, insn: Arm64OpFcmpD or (arm64FpField(rhs) shl Arm64RmShift) or (arm64FpField(lhs) shl Arm64RnShift))
 		arm64Scvtf(dest, src) then emitArm64Rr(code, opcode: Arm64OpScvtfD, rd: arm64FpField(dest), rn: arm64GprField(src))
+		arm64Ucvtf(dest, src) then emitArm64Rr(code, opcode: Arm64OpUcvtfD, rd: arm64FpField(dest), rn: arm64GprField(src))
 		arm64Fcvtzs(dest, src) then emitArm64Rr(code, opcode: Arm64OpFcvtzsD, rd: arm64GprField(dest), rn: arm64FpField(src))
 
 		// The MATH INTRINSICS — all three are FP-to-FP 2-register forms, so all three ride `emitArm64Rr`
@@ -1963,7 +1966,7 @@ function arm64EmitMemFill(code ByteArray, fillByte ParsedInt)
 	// 8..15: one word from each end. A PAIR does not fit twice here, so this is the one band the STP run
 	// above cannot serve — hence the STR/STUR spelling, and hence `Arm64MemFillWordBytes` existing at all.
 	arm64PatchBranch19(code, codeOffset: toOneWord, targetOffset: codeHere(code))
-	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillCursor, byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillCursor, byteOffset: 0, scale: Arm64SlotScale)
 	arm64EmitUnscaledMem(code, opcode: Arm64OpSturX, rt: Arm64MemFillPattern, baseReg: Arm64MemFillEnd, byteOffset: -(Arm64MemFillWordBytes as Imm32))
 	let doneFromOneWord = arm64EmitLocalBranch(code)
 
@@ -2249,7 +2252,7 @@ end 'arm64EmitImportCall'
 export function arm64EmitLoadImportAddress(code ByteArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex)
 	iatRelocs.push(Relocation.create(codeHere(code), slotIndex: slotIndex))
 	emitArm64Insn(code, insn: Arm64OpAdrp or Arm64Ip0)
-	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: Arm64Ip0, baseReg: Arm64Ip0, byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: Arm64Ip0, baseReg: Arm64Ip0, byteOffset: 0, scale: Arm64SlotScale)
 end 'arm64EmitLoadImportAddress'
 
 // The register `arm64EmitLoadImportAddress` leaves the import's address in. EXPORTED for the door that
@@ -2321,6 +2324,8 @@ export function arm64EmitPopPairFp(code ByteArray, rt1 MachineWord, rt2 MachineW
 	arm64EmitPairOffset(code, opcode: Arm64OpLdpPostD, rt1: rt1, rt2: rt2, baseReg: Arm64SpBaseField, byteOffset: Arm64GtPairBytes as Imm32)
 end 'arm64EmitPopPairFp'
 
+export let Arm64SlotScale = SpillSlotBytes as MachineWord
+
 // The bytes ONE pushed register pair moves SP by — two 8-byte registers. Named because it is the stride the
 // context switch's frame is DERIVED from (`Arm64GtRuntime.assertArm64GtFrameConsistent` multiplies it by the
 // pair count), and a bare 16 in that derivation would be indistinguishable from the stack's 16-byte ALIGNMENT,
@@ -2336,20 +2341,20 @@ export let Arm64GtPairBytes = 2 * SpillSlotBytes
 // ⚠ Its one caller is `__gt_morestack`, the single runtime chunk with a frame and no frame RECORD: it
 // switches to the P's system stack itself, so there is no x29 for `arm64EmitStoreSlot` to address off.
 export function arm64EmitStoreWord64Sp(code ByteArray, src MachineWord, byteOffset MachineWord)
-	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: src, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: src, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: Arm64SlotScale)
 end 'arm64EmitStoreWord64Sp'
 
 export function arm64EmitLoadWord64Sp(code ByteArray, dest MachineWord, byteOffset MachineWord)
-	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: dest, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: dest, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: Arm64SlotScale)
 end 'arm64EmitLoadWord64Sp'
 
 // The SIMD twins, for the relocating grower's float-argument save area.
 export function arm64EmitStoreFpSp(code ByteArray, src MachineWord, byteOffset MachineWord)
-	arm64EmitScaledMem(code, opcode: Arm64OpStrD, rt: src, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: Arm64OpStrD, rt: src, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: Arm64SlotScale)
 end 'arm64EmitStoreFpSp'
 
 export function arm64EmitLoadFpSp(code ByteArray, dest MachineWord, byteOffset MachineWord)
-	arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: dest, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: dest, baseReg: Arm64SpBaseField, byteOffset: byteOffset, scale: Arm64SlotScale)
 end 'arm64EmitLoadFpSp'
 
 // `BLR Xn` — an indirect call through a register. The trampoline calls the spawned function through a pointer
@@ -2411,7 +2416,7 @@ end 'arm64EmitAdrpAddPair'
 // which `patchArm64PageOff` already handles.
 function arm64EmitFpLoadRdata(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, label ByteArray)
 	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: Arm64Ip0, label: label, adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
-	arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: dest, baseReg: Arm64Ip0, byteOffset: 0, scale: SpillSlotBytes)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: dest, baseReg: Arm64Ip0, byteOffset: 0, scale: Arm64SlotScale)
 end 'arm64EmitFpLoadRdata'
 
 // leaFuncAddr materialises a FUNCTION's `.text` address into `dest` as the mandated ADRP+ADD pair
@@ -2496,9 +2501,9 @@ end 'arm64EmitEpilogue'
 // So this message states the field it guards and sends the reader THERE rather than proposing a fix for
 // a door that opens second.
 function arm64EmitStoreOutgoingArg(code ByteArray, slot SpillSlot, srcReg TargetVReg)
-	let byteOffset = slot * SpillSlotBytes
+	let byteOffset = (slot as StackSize) * SpillSlotBytes
 
-	if not arm64ByteOffsetFitsScaledImm12(byteOffset as MachineWord, scale: SpillSlotBytes) 'unencodable'
+	if not arm64ByteOffsetFitsScaledImm12(byteOffset as MachineWord, scale: Arm64SlotScale) 'unencodable'
 		panic("arm64EmitStoreOutgoingArg: outgoing argument slot {slot} sits at byte {byteOffset} of this frame's argument region, past the {Arm64LoadStoreImm12Mask} 8-byte units the scaled STR field reaches — the region can hold at most {arm64OutgoingArgRegionBytes()} bytes while `MaxAbiArgs` caps a signature. Reaching THIS door before `arm64EmitFrameRecordPair`'s 504-byte STP/LDP imm7, which binds the same region 65x sooner from the prologue, means the frame record no longer rides that field — so read `arm64OutgoingArgRegionBytes`'s header for which ceiling moved, and expect the answer to be `arm64EmitWideFrameSlot`'s x17 fold rewritten against SP")
 	end 'unencodable'
 

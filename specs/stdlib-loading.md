@@ -1164,7 +1164,7 @@ function main() returns ExitCode
 	let negativeZero = try Json.parse("-0") otherwise 'parseNegativeZero'
 		panic("Json.parse rejected -0")
 	end 'parseNegativeZero'
-	if not Math.hasNegativeSignBit(negativeZero.get(negativeZero.root).numberValue) 'signLost'
+	if not Math.hasNegativeSignBit(negativeZero.get(negativeZero.root).numberValue as Real) 'signLost'
 		return 1
 	end 'signLost'
 	print("{Json.stringify(negativeZero)}\n")

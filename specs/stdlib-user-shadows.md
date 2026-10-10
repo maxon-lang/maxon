@@ -843,7 +843,7 @@ the reporting file's own tokens spell, which is why `error.the-mint-is-not-reach
 ```maxon
 
 type FileInfo
-	var size = 0
+	var size = 0 as Num
 
 	static function make() returns Self
 		return Self{}

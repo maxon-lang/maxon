@@ -327,14 +327,14 @@ end 'secondKeyOf'
 // It walks `blockRefs` -> `opRefs.count()` rather than `liveOpIndices`, which allocates a fresh column
 // of every op index in the function to answer a question that is a sum of counts.
 function bucketCountFor(module StdModule, func IrFunction) returns CseBucketCount
-	var buckets = SmallestUsefulBucketCount
+	var buckets = SmallestUsefulBucketCount as Count
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("bucketCountFor: blockRef from func.blockRefs not in module.blocks")
 		buckets = buckets + block.opRefs.count()
 	end 'eachBlock'
 
-	return buckets
+	return buckets as CseBucketCount
 end 'bucketCountFor'
 
 // The floor the count is built up from. Below it there is nothing to spread — a function with a

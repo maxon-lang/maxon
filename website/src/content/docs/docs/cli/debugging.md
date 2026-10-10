@@ -125,9 +125,12 @@ preemption back and lets the program run on under its own steam; the session the
 own ending and reports it. `quit` ends the program.
 
 `break <target> if <local> <op> <literal>` arms a conditional breakpoint the driver judges at the stop, so a
-hit that does not satisfy it is resumed without a stop; a condition over a float, a `String`, a field path,
-a constant or a local the breakpoint's pc has no record for is refused `condition-unsupported` and the
-breakpoint is NOT armed, and a literal that does not parse is `condition-invalid`.
+hit that fails it resumes at once; a condition over a float, a `String`, a field path, a constant or a local
+the breakpoint's pc has no record for is refused `condition-unsupported` and leaves the breakpoint unarmed,
+and a literal that fails to parse is `condition-invalid`. A literal is decimal or `0x` hex, optionally led
+by `-`, from `i64.min` to `u64.max`; one above `i64.max` is `condition-invalid` against a signed local.
+A local of an integer alias whose lower bound is `0` or above prints and compares as its unsigned value,
+so a `Count` above `i64.max` reads as the number it holds.
 
 `pause` interrupts a program that stops on nothing and publishes a `pause` stop. `threads` lists the
 program's green threads, `gt-backtrace <id>` walks one, `gt <id>` selects the thread that `print`,

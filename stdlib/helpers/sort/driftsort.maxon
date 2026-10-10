@@ -27,7 +27,7 @@
 let EagerRunLengthLimit = SmallSortThreshold * 2
 
 // `nodePowerBetween`'s arithmetic is a raw 64-bit word: `scale * x` reaches ~2^63 and the
-// leading-zero scan builds the top bit as `2^62 * 2`, so a value with bit 63 set is a real value,
+// leading-zero scan starts from the top bit, 2^63, so a value with bit 63 set is a real value,
 // not an overflow.
 typealias NodePowerWord = bits(64)
 
@@ -232,11 +232,10 @@ public extension Array
 			return 64
 		end 'noDiff'
 
-		// Count leading zeros of `diff` over the full 64-bit width. The top bit
-		// (2^63) exceeds the signed-i64 literal range, so build it as 2^62 * 2 —
-		// which `NodePowerWord` admits and orders unsigned.
+		// Count leading zeros of `diff` over the full 64-bit width; `NodePowerWord` orders
+		// the top bit unsigned, so `bit > 0` holds until it has shifted out.
 		var lz = 0 as NodePower
-		var bit = twoTo62 * 2  // 2^63 (top bit)
+		var bit = 9223372036854775808 as NodePowerWord  // 2^63 (top bit)
 
 		while bit > 0 'lzScan'
 			if (diff and bit) != 0 'foundHigh'

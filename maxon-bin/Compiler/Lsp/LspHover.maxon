@@ -912,7 +912,9 @@ module type HoverDocument
 	// `"out.bin".toByteArray().managed` opens with a string literal and is not a `String`; reading the head
 	// token alone put that wrong type in front of a reader who had no way to tell it from a right one. So
 	// `valueAt` reports where the leading value ENDS, and anything applied to it after that — a `.`, a `(`,
-	// a `[`, an operator, an `as` — leaves the answer `unknown`, which a rendering says out loud.
+	// a `[`, an operator — leaves the answer `unknown`, which a rendering says out loud. The one
+	// exception is that value cast to a named type at the end of the line (`= 0 as Tally`), which is
+	// that type.
 	//
 	// ⚠ **STILL NO ARITHMETIC AND NO TYPECHECKING.** A call is answered from its callee's DECLARED
 	// return type, which is a fact sitting in the token stream; nothing here infers a type from how a value
@@ -929,8 +931,22 @@ module type HoverDocument
 			return inferred
 		end 'nothingAppliedToIt'
 
+		if tokenAt(after).kind == TokenKind.as 'aCast'
+			return castTargetType(after + 1)
+		end 'aCast'
+
 		return HoverType.unknown
 	end 'typeOfWholeExpression'
+
+	function castTargetType(target ElementIndex) returns HoverType
+		let afterTarget = tokenAt(dottedNameEnd(target) + 1).kind
+
+		if not tokenCanBeAName(tokenAt(target)) or (afterTarget != TokenKind.newline and afterTarget != TokenKind.eof) 'notTheWholeExpression'
+			return HoverType.unknown
+		end 'notTheWholeExpression'
+
+		return declaredTypeAt(target)
+	end 'castTargetType'
 
 	// What the expression starting at `index` is, and where it stops.
 	function valueAt(index ElementIndex, reach HoverReceiverReach) returns HoverValue
@@ -1971,7 +1987,7 @@ let LoopVariableSubject = "Loop variable"
 
 // `LspLineIndex.offsetOf` clamps a character past a line's content to exactly where that content stops,
 // which is how the end of a line is asked for without walking its bytes.
-let PastEveryLine = i64.max as LspCharacter
+let PastEveryLine = u64.max as LspCharacter
 
 // The primitive and container names a hover infers from a literal. Byte slices because that is what a
 // token's text is, and what a method lookup compares against.

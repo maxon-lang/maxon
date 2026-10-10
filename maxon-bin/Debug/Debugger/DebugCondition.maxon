@@ -25,11 +25,15 @@ let NegativeSign = "-"
 let HexLiteralPrefix = "0x"
 
 typealias LiteralBase = int(2 to 16)
-typealias LiteralQuotient = int(1 to i64.max)
+typealias LiteralMagnitude = int(0 to u64.max)
+typealias LiteralQuotient = int(1 to u64.max) implements LiteralMagnitude
+typealias LiteralPattern = bits(64)
 
 let HexLiteralBase = 16 as LiteralBase
 let DecimalLiteralBase = 10 as LiteralBase
-let MaxLiteralMagnitude = 9223372036854775807 as DebuggeeWord
+let MaxLiteralMagnitude = u64.max as LiteralMagnitude
+let MaxNegatedLiteralMagnitude = 9223372036854775808 as LiteralMagnitude
+let MaxSignedLiteralMagnitude = 9223372036854775807 as LiteralMagnitude
 
 let AsciiZero = 48
 let AsciiNine = 57
@@ -37,7 +41,7 @@ let AsciiLowerA = 97
 let AsciiLowerF = 102
 let AsciiUpperA = 65
 let AsciiUpperF = 70
-let LetterDigitBase = 10 as DebuggeeWord
+let LetterDigitBase = 10 as LiteralMagnitude
 
 export type DebugConditionRecord
 	export let kind as DebugAddress
@@ -299,6 +303,8 @@ function compiledWithWidth(local MxdbgLocalInfo, signedCompare DebugAddress, op 
 	match conditionLiteralOf(literalSpelling, isABool: isABool) 'read'
 		none then return DebugConditionCompile.invalid
 		value(literal) then return compiledWithLiteral(local, signedCompare: signedCompare, op: op, width: width, literal: literal)
+		// A signed compare reads the word as a negative, so it would stop on a value nobody wrote.
+		aboveSignedRange(literal) then return compiledWithLiteral(local, signedCompare: signedCompare, op: op, width: width, literal: literal) if signedCompare == UnsignedCompare else DebugConditionCompile.invalid
 	end 'read'
 end 'compiledWithWidth'
 
@@ -377,7 +383,13 @@ end 'conditionOperatorOf'
 union ConditionLiteralLookup
 	none
 	value(word DebuggeeWord)
+	aboveSignedRange(word DebuggeeWord)
 end 'ConditionLiteralLookup'
+
+union ConditionMagnitudeLookup
+	none
+	value(magnitude LiteralMagnitude)
+end 'ConditionMagnitudeLookup'
 
 function conditionLiteralOf(spelling String, isABool bool) returns ConditionLiteralLookup
 	if isABool 'aFlag'
@@ -395,58 +407,68 @@ function conditionLiteralOf(spelling String, isABool bool) returns ConditionLite
 
 	match unsignedLiteralOf(digits) 'read'
 		none then return ConditionLiteralLookup.none
-		value(magnitude) then return ConditionLiteralLookup.value(0 - magnitude if negative else magnitude)
+		value(magnitude) then return conditionLiteralOfMagnitude(magnitude, negative: negative)
 	end 'read'
 end 'conditionLiteralOf'
 
-function unsignedLiteralOf(spelling String) returns ConditionLiteralLookup
+function conditionLiteralOfMagnitude(magnitude LiteralMagnitude, negative bool) returns ConditionLiteralLookup
+	let word = (magnitude as LiteralPattern) as DebuggeeWord
+
+	if negative 'belowZero'
+		return ConditionLiteralLookup.value(0 - word) if magnitude <= MaxNegatedLiteralMagnitude else ConditionLiteralLookup.none
+	end 'belowZero'
+
+	return ConditionLiteralLookup.value(word) if magnitude <= MaxSignedLiteralMagnitude else ConditionLiteralLookup.aboveSignedRange(word)
+end 'conditionLiteralOfMagnitude'
+
+function unsignedLiteralOf(spelling String) returns ConditionMagnitudeLookup
 	let hex = spelling.startsWith(HexLiteralPrefix)
 	let base = HexLiteralBase if hex else DecimalLiteralBase
 	let digits = spelling.replaceFirst(HexLiteralPrefix, with: "") if hex else spelling
 
 	if digits.isEmpty() 'nothingToRead'
-		return ConditionLiteralLookup.none
+		return ConditionMagnitudeLookup.none
 	end 'nothingToRead'
 
-	var value = 0 as DebuggeeWord
+	var value = 0 as LiteralMagnitude
 
 	for character in digits 'eachDigit'
 		match nextLiteralValue(value, character: character, base: base) 'read'
-			none then return ConditionLiteralLookup.none
+			none then return ConditionMagnitudeLookup.none
 			value(next) then value = next
 		end 'read'
 	end 'eachDigit'
 
-	return ConditionLiteralLookup.value(value)
+	return ConditionMagnitudeLookup.value(value)
 end 'unsignedLiteralOf'
 
-function nextLiteralValue(value DebuggeeWord, character Character, base LiteralBase) returns ConditionLiteralLookup
+function nextLiteralValue(value LiteralMagnitude, character Character, base LiteralBase) returns ConditionMagnitudeLookup
 	match literalDigitOf(character, base: base) 'read'
-		none then return ConditionLiteralLookup.none
-		digit(read) then return ConditionLiteralLookup.value(value * (base as DebuggeeWord) + read) if value <= (((MaxLiteralMagnitude - read) as LiteralQuotient) / (base as LiteralQuotient)) as DebuggeeWord else ConditionLiteralLookup.none
+		none then return ConditionMagnitudeLookup.none
+		digit(read) then return ConditionMagnitudeLookup.value(value * (base as LiteralMagnitude) + read) if value <= ((MaxLiteralMagnitude - read) as LiteralQuotient) / (base as LiteralQuotient) else ConditionMagnitudeLookup.none
 	end 'read'
 end 'nextLiteralValue'
 
 union ConditionDigitLookup
 	none
-	digit(read DebuggeeWord)
+	digit(read LiteralMagnitude)
 end 'ConditionDigitLookup'
 
 function literalDigitOf(character Character, base LiteralBase) returns ConditionDigitLookup
 	let code = try character.asciiValue() otherwise return ConditionDigitLookup.none
-	var read = 0 as DebuggeeWord
+	var read = 0 as LiteralMagnitude
 
 	if code >= AsciiZero and code <= AsciiNine 'aDecimalDigit'
-		read = (code - AsciiZero) as DebuggeeWord
+		read = (code - AsciiZero) as LiteralMagnitude
 	end 'aDecimalDigit' else if code >= AsciiLowerA and code <= AsciiLowerF 'aLowerCaseLetter'
-		read = ((code - AsciiLowerA) as DebuggeeWord) + LetterDigitBase
+		read = ((code - AsciiLowerA) as LiteralMagnitude) + LetterDigitBase
 	end 'aLowerCaseLetter' else if code >= AsciiUpperA and code <= AsciiUpperF 'anUpperCaseLetter'
-		read = ((code - AsciiUpperA) as DebuggeeWord) + LetterDigitBase
+		read = ((code - AsciiUpperA) as LiteralMagnitude) + LetterDigitBase
 	end 'anUpperCaseLetter' else 'notADigitAtAll'
 		return ConditionDigitLookup.none
 	end 'notADigitAtAll'
 
-	return ConditionDigitLookup.digit(read) if read < base else ConditionDigitLookup.none
+	return ConditionDigitLookup.digit(read) if read < (base as LiteralMagnitude) else ConditionDigitLookup.none
 end 'literalDigitOf'
 
 function conditionWordsOf(text String) returns StringArray

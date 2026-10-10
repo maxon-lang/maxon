@@ -840,7 +840,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: <fragment>:21:13: unneeded cast: the literal 1 already fits in 'Real'
+error E3005: <fragment>:21:9: argument type mismatch for 'y': expected 'Real', got 'Other'
 ```
 
 <!-- test: error.unneeded.same-alias-name-with-a-contested-range -->
@@ -1429,4 +1429,117 @@ end 'main'
 ```
 ```stdout
 n=5 back=5
+```
+
+<!-- test: error.a-full-range-cast-names-its-value -->
+A cast gives its value the alias even when the alias spans the full range.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Other = int(i64.min to i64.max)
+
+function show(o Other)
+	print("{o}\n")
+end 'show'
+
+function main() returns ExitCode
+	let x = 10 as Integer
+	show(x)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/type-casting/error.a-full-range-cast-names-its-value.maxon:11:2: argument type mismatch for 'o': expected 'Other', got 'Integer'
+```
+
+<!-- test: error.a-struct-cast-to-its-own-type-is-unneeded -->
+```maxon
+type Gauge
+	export var level = 0 as Count
+
+	static function make() returns Self
+		return Self{}
+	end 'make'
+end 'Gauge'
+
+function main() returns ExitCode
+	let g = Gauge.make() as Gauge
+	return g.level as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/type-casting/error.a-struct-cast-to-its-own-type-is-unneeded.maxon:11:23: unneeded cast: 'Gauge' already fits in 'Gauge'
+```
+
+<!-- test: error.an-enum-cast-to-its-own-type-is-unneeded -->
+```maxon
+enum Shade
+	light
+	dark
+end 'Shade'
+
+function main() returns ExitCode
+	let s = Shade.dark as Shade
+	print("{s.name}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/type-casting/error.an-enum-cast-to-its-own-type-is-unneeded.maxon:8:21: unneeded cast: 'Shade' already fits in 'Shade'
+```
+
+<!-- test: error.a-bool-cast-to-bool-is-unneeded -->
+```maxon
+function main() returns ExitCode
+	let b = true as bool
+	print("{b}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/type-casting/error.a-bool-cast-to-bool-is-unneeded.maxon:3:15: unneeded cast: 'bool' already fits in 'bool'
+```
+
+<!-- test: error.a-string-cast-to-string-is-unneeded -->
+```maxon
+function main() returns ExitCode
+	let t = "x" as String
+	print("{t}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/type-casting/error.a-string-cast-to-string-is-unneeded.maxon:3:14: unneeded cast: 'String' already fits in 'String'
+```
+
+<!-- test: error.a-union-cast-to-its-own-type-is-unneeded -->
+```maxon
+union Signal
+	idle
+	busy
+end 'Signal'
+
+function main() returns ExitCode
+	let s = Signal.idle as Signal
+	print("{s.name}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/type-casting/error.a-union-cast-to-its-own-type-is-unneeded.maxon:8:22: unneeded cast: 'Signal' already fits in 'Signal'
+```
+
+<!-- test: error.a-top-level-cast-to-the-type-a-global-already-has-is-unneeded -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+let base = 5 as Tally
+let again = base as Tally
+
+function main() returns ExitCode
+	print("{again}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/type-casting/error.a-top-level-cast-to-the-type-a-global-already-has-is-unneeded.maxon:5:18: unneeded cast: 'Tally' already fits in 'Tally'
 ```

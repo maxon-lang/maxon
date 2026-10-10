@@ -606,7 +606,7 @@ typealias Count = int(0 to u64.max)
 
 type Pair
 	export var a as Count
-	export var b as Count = 7
+	export var b = 7 as Count
 
 	static var origin = Pair{a: 1}
 

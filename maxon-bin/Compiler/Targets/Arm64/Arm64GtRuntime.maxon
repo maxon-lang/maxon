@@ -380,7 +380,7 @@ end 'buildArm64GtTrampolineChunk'
 // and the assertion that keeps it honest — this is the same read, one tier down.
 module function emitArm64LoadCurrentGtOrBail(asm Arm64RuntimeAsm, mDest Arm64Register, gtDest Arm64Register, scratch Arm64Register, bail BlockId, os Os)
 	emitArm64LoadCurrentMOrBail(asm, dest: mDest, scratch: scratch, bail: bail, os: os)
-	arm64EmitLoadWord64At(asm, dest: gtDest, base: mDest, byteOffset: MOffCurrentGt)
+	arm64EmitLoadWord64At(asm, dest: gtDest, base: mDest, byteOffset: MOffCurrentGt as MachineWord)
 	arm64EmitCbzTo(asm, reg: gtDest, label: bail)
 end 'emitArm64LoadCurrentGtOrBail'
 
@@ -407,7 +407,7 @@ end 'emitArm64DarwinLoadMachineOnItsOwnStackOrBail'
 
 module function emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm Arm64RuntimeAsm, bail BlockId)
 	emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm, bail: bail)
-	arm64EmitLoadWord64At(asm, dest: Arm64DoorGtReg, base: Arm64DoorMReg, byteOffset: MOffCurrentGt)
+	arm64EmitLoadWord64At(asm, dest: Arm64DoorGtReg, base: Arm64DoorMReg, byteOffset: MOffCurrentGt as MachineWord)
 end 'emitArm64DarwinLoadGtOnItsOwnStackOrBail'
 
 // ⭐⭐ **A FOURTH NULL, AND IT EXISTS ON ONE LANE ONLY.** On Darwin the thread pointer is written by the
@@ -664,12 +664,12 @@ end 'arm64GtLoadSp'
 // The SP offset of slot `index` of a register block laid from `base`: `gprs` first, then the float argument
 // registers.
 function arm64RegisterBlockSlot(base MachineWord, index RegCount) returns MachineWord
-	return base + (index as MachineWord) * SpillSlotBytes
+	return base + ((index as StackSize) * SpillSlotBytes) as MachineWord
 end 'arm64RegisterBlockSlot'
 
 // The bytes a register block of `gprs` spans.
 function arm64RegisterBlockBytes(gprs Arm64RegisterArray) returns StackSize
-	return ((gprs.count() + arm64FpArgRegisters.count()) * SpillSlotBytes) as StackSize
+	return ((gprs.count() + arm64FpArgRegisters.count()) as StackSize) * SpillSlotBytes
 end 'arm64RegisterBlockBytes'
 
 // ⭐ **SAVE OR RESTORE `gprs` AND EVERY FLOAT ARGUMENT REGISTER AT CONSECUTIVE SP SLOTS FROM `base`, FROM ONE WALK
@@ -907,7 +907,7 @@ export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray,
 	// the OTHER part of the contract — and the hot path must not spend a register to save a load on the cold one.
 	arm64EmitMovRuntimeReg(asm, dest: Arm64MorestackEntryProjectedSpReg, src: Arm64MorestackEntrySysTopReg)
 	emitArm64LoadCurrentMOrBailless(asm, dest: Arm64MorestackEntrySysTopReg, scratch: Arm64GuardScratchReg, os: target.os)
-	arm64EmitLoadWord64At(asm, dest: Arm64MorestackEntrySysTopReg, base: Arm64MorestackEntrySysTopReg, byteOffset: MOffSystemStackSP)
+	arm64EmitLoadWord64At(asm, dest: Arm64MorestackEntrySysTopReg, base: Arm64MorestackEntrySysTopReg, byteOffset: MOffSystemStackSP as MachineWord)
 
 	if mayPark 'mayPark'
 		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtGuardTrippedName)
@@ -1057,7 +1057,7 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 
 		// The green thread's SP goes in the system stack's top pair — twice, because a pair is what keeps SP
 		// 16-aligned — and the frame record under it.
-		arm64EmitLoadWord64At(asm, dest: Arm64DoorGtReg, base: Arm64DoorMReg, byteOffset: MOffSystemStackSP)
+		arm64EmitLoadWord64At(asm, dest: Arm64DoorGtReg, base: Arm64DoorMReg, byteOffset: MOffSystemStackSP as MachineWord)
 		arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64DoorGtReg))
 		emitArm64ShimLockDepthStep(asm, m: Arm64DoorMReg, delta: OneFewer, scratch: Arm64DoorLowReg)
 		arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64DoorSpReg), rt2: arm64RuntimeReg(Arm64DoorSpReg))
@@ -1068,9 +1068,9 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 		let outgoingPairs = OneOutgoingArgWord / Arm64GtPairBytes
 
 		for pair in 0 upto outgoingPairs 'copyOutgoingArgs'
-			let pairOffset = (outgoingPairs - 1 - pair) * Arm64GtPairBytes
+			let pairOffset = ((outgoingPairs - 1 - pair) * Arm64GtPairBytes) as MachineWord
 			arm64EmitLoadWord64At(asm, dest: Arm64DoorLowReg, base: Arm64DoorSpReg, byteOffset: pairOffset)
-			arm64EmitLoadWord64At(asm, dest: Arm64DoorHighReg, base: Arm64DoorSpReg, byteOffset: pairOffset + SpillSlotBytes)
+			arm64EmitLoadWord64At(asm, dest: Arm64DoorHighReg, base: Arm64DoorSpReg, byteOffset: pairOffset + (SpillSlotBytes as MachineWord))
 			arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64DoorLowReg), rt2: arm64RuntimeReg(Arm64DoorHighReg))
 		end 'copyOutgoingArgs'
 
@@ -1098,9 +1098,9 @@ end 'buildArm64DarwinLibcCallChunk'
 // running on that same thread — so there is no interleaving for an exclusive pair to prevent, and an
 // exclusive pair here would be a reservation the stop itself could break.
 function emitArm64ShimLockDepthStep(asm Arm64RuntimeAsm, m Arm64Register, delta ParsedInt, scratch Arm64Register)
-	arm64EmitLoadWord64At(asm, dest: scratch, base: m, byteOffset: MOffLocks)
+	arm64EmitLoadWord64At(asm, dest: scratch, base: m, byteOffset: MOffLocks as MachineWord)
 	arm64EmitAddRuntimeImm(asm, dest: scratch, base: scratch, imm: delta as Imm32)
-	arm64EmitStoreWord64At(asm, src: scratch, base: m, byteOffset: MOffLocks)
+	arm64EmitStoreWord64At(asm, src: scratch, base: m, byteOffset: MOffLocks as MachineWord)
 end 'emitArm64ShimLockDepthStep'
 
 // The door's scratch — caller-saved, non-argument, and neither x16 (the callee's address) nor x9 (the
@@ -1202,11 +1202,11 @@ end 'arm64AsyncPreemptGprs'
 
 // The trampoline's block, in slots: every general register above, the flags, then the whole SIMD file.
 function arm64AsyncPreemptFlagsSlot() returns MachineWord
-	return (arm64AsyncPreemptGprs().count() as MachineWord) * SpillSlotBytes
+	return ((arm64AsyncPreemptGprs().count() as StackSize) * SpillSlotBytes) as MachineWord
 end 'arm64AsyncPreemptFlagsSlot'
 
 function arm64AsyncPreemptVectorBase() returns MachineWord
-	return arm64AsyncPreemptFlagsSlot() + SpillSlotBytes
+	return arm64AsyncPreemptFlagsSlot() + (SpillSlotBytes as MachineWord)
 end 'arm64AsyncPreemptVectorBase'
 
 // ⚠ **EIGHT BYTES PER VECTOR REGISTER, NOT SIXTEEN, AND THAT IS THIS COMPILER'S OWN INVARIANT rather than a
@@ -1214,7 +1214,7 @@ end 'arm64AsyncPreemptVectorBase'
 // every argument and the context switch's own callee-saved block are 8-byte `STR Dt` / `LDR Dt` — so no
 // upper half is ever live and a `d`-width save is the whole of what an interrupted function can lose.
 function arm64AsyncPreemptBlockBytes() returns StackSize
-	return alignUpStack((arm64AsyncPreemptVectorBase() as StackSize) + ((vectorRegisterCount(arm64RegisterFile()) * SpillSlotBytes) as StackSize), alignment: StackFrameAlignment)
+	return alignUpStack((arm64AsyncPreemptVectorBase() as StackSize) + ((vectorRegisterCount(arm64RegisterFile()) as StackSize) * SpillSlotBytes), alignment: StackFrameAlignment)
 end 'arm64AsyncPreemptBlockBytes'
 
 // ⭐ **WHAT AN ASYNCHRONOUS STOP COSTS THE GREEN THREAD's STACK BELOW THE INTERRUPTED SP, BEFORE
@@ -1262,7 +1262,7 @@ end 'buildArm64GtAsyncPreemptChunk'
 // Where the interrupted PC lands in the block: x30's slot, because the injection handed it over IN x30.
 function arm64AsyncPreemptResumePcSlot() returns MachineWord
 	let gprs = arm64AsyncPreemptGprs()
-	return ((gprs.count() - 1) as MachineWord) * SpillSlotBytes
+	return (((gprs.count() - 1) as StackSize) * SpillSlotBytes) as MachineWord
 end 'arm64AsyncPreemptResumePcSlot'
 
 // The register block, laid and lifted from ONE list in both directions — `emitArm64GtSavedBlock`'s reason,
@@ -1281,7 +1281,7 @@ function emitArm64AsyncPreemptBlock(asm Arm64RuntimeAsm, direction Arm64GtBlockD
 
 	for k in 0 upto vectorRegisterCount(arm64RegisterFile()) 'vectors'
 		let reg = try Arm64Register.fromRawValue((Arm64FirstVectorRegister + k) as RegNum) otherwise panic("emitArm64AsyncPreemptBlock: {k} vector registers past the boundary is inside a file of {vectorRegisterCount(arm64RegisterFile())}")
-		let slot = arm64AsyncPreemptVectorBase() + (k as MachineWord) * SpillSlotBytes
+		let slot = arm64AsyncPreemptVectorBase() + ((k as StackSize) * SpillSlotBytes) as MachineWord
 
 		match direction 'dir'
 			push then arm64EmitStoreFpSp(asm.code, src: arm64RuntimeFpReg(reg), byteOffset: slot)
@@ -1317,7 +1317,7 @@ function emitArm64AsyncPreemptGprs(asm Arm64RuntimeAsm, gprs Arm64RegisterArray,
 
 	for k in 0 upto restored 'gprs'
 		let reg = try gprs.get(k) otherwise panic("emitArm64AsyncPreemptGprs: index derived from count is in range")
-		let slot = (k as MachineWord) * SpillSlotBytes
+		let slot = ((k as StackSize) * SpillSlotBytes) as MachineWord
 
 		match direction 'dir'
 			push then arm64GtStoreSp(asm, src: reg, byteOffset: slot)
@@ -1342,7 +1342,7 @@ function buildArm64PreemptSelfRegisterChunk(os Os) returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
 	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.pthreadSelf, syscallNumber: Arm64LinuxSyscallGettid)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotMachine)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: MOffOsThreadId)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: MOffOsThreadId as MachineWord)
 
 	match arm64OsCallKind(os) 'identity'
 		importCall then emitArm64DarwinUniqueThreadId(asm, machineSlot: SlotMachine, idSlot: SlotUniqueId)
@@ -1364,7 +1364,7 @@ function emitArm64DarwinUniqueThreadId(asm Arm64RuntimeAsm, machineSlot StackSiz
 	arm64DarwinCallImport(asm, slot: OsImportSlot.pthreadThreadidNp)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: idSlot)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: machineSlot)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: MOffOsThreadUniqueId)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x1, byteOffset: MOffOsThreadUniqueId as MachineWord)
 end 'emitArm64DarwinUniqueThreadId'
 
 // `__gt_preempt_m(x0 = m)` — see `SchedRuntime.PreemptMachineName`. Go's `preemptM` (`signal_unix.go`).
@@ -1398,7 +1398,7 @@ function buildArm64PreemptMachineChunk(os Os) returns FunctionCodeChunk
 
 	// A machine that has not adopted its thread yet has no identity to address, and keeps the cooperative
 	// path until it has.
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: MOffOsThreadId)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: MOffOsThreadId as MachineWord)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: giveBack)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotThread)
 
@@ -1410,7 +1410,7 @@ function buildArm64PreemptMachineChunk(os Os) returns FunctionCodeChunk
 	asm.placeLabel(giveBack)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PreemptClaimFree)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: MOffSignalPending)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: MOffSignalPending as MachineWord)
 
 	asm.placeLabel(done)
 	return asm.finishFunction(PreemptMachineName)
@@ -1494,7 +1494,7 @@ function buildArm64PreemptHandlerChunk(os Os) returns FunctionCodeChunk
 	asm.placeLabel(decline)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PreemptClaimFree)
-	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: MOffSignalPending)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: MOffSignalPending as MachineWord)
 
 	// A SIGURG this runtime did not send — see the header. There is no claim of ours to hand back.
 	asm.placeLabel(noMachine)

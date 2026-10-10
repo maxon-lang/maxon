@@ -1,6 +1,6 @@
 import os
 
-from maxon_source import ROOT
+from maxon_source import FIELD_BOOL_TYPE, FIELD_STRING_TYPE, ROOT
 
 COMPILER_DIRECTORY = os.path.join(ROOT, "maxon-bin", "Compiler")
 
@@ -78,7 +78,7 @@ SLOT_BYTES = 8
 
 SPACED_PAYLOAD_CASES = {"await"}
 
-BUILTIN_STRING = "String"
+BUILTIN_STRING = FIELD_STRING_TYPE
 BUILTIN_PATH = "FilePath"
 BUILTIN_BYTES = "ByteArray"
-BUILTIN_BOOL = "bool"
+BUILTIN_BOOL = FIELD_BOOL_TYPE

@@ -163,6 +163,94 @@ def split_default(text):
     return text.strip(), None
 
 
+FIELD_BOOL_LITERALS = ("true", "false")
+FIELD_BOOL_TYPE = "bool"
+FIELD_STRING_TYPE = "String"
+FIELD_STRING_LITERAL = re.compile(r'"(?:[^"\\]|\\.)*"')
+FIELD_MEMBER_HEAD = re.compile(r"(?P<head>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\.[A-Za-z_][A-Za-z0-9_]*")
+FIELD_CAST_TARGET = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
+FIELD_CAST_KEYWORD = " as "
+OPENING_BRACKETS = "([{"
+CLOSING_BRACKETS = ")]}"
+
+
+class FieldDefaultShapeError(Exception):
+    pass
+
+
+def masked_strings(text):
+    out = []
+    quoted = False
+    escaped = False
+
+    for ch in text:
+        if quoted and not escaped and ch == '"':
+            quoted = False
+            out.append(ch)
+        elif quoted:
+            escaped = ch == "\\" and not escaped
+            out.append(" ")
+        else:
+            quoted = ch == '"'
+            out.append(ch)
+
+    return "".join(out)
+
+
+def trailing_cast_at(masked):
+    depth = 0
+    at = None
+
+    for index, ch in enumerate(masked):
+        if ch in OPENING_BRACKETS:
+            depth += 1
+        elif ch in CLOSING_BRACKETS:
+            depth -= 1
+        elif depth == 0 and masked.startswith(FIELD_CAST_KEYWORD, index):
+            at = index
+
+    if at is None or depth != 0 or FIELD_CAST_TARGET.fullmatch(masked[at + len(FIELD_CAST_KEYWORD):]) is None:
+        return None
+
+    return at
+
+
+def closes_at_end(masked, open_index):
+    depth = 0
+
+    for index in range(open_index, len(masked)):
+        if masked[index] in OPENING_BRACKETS:
+            depth += 1
+        elif masked[index] in CLOSING_BRACKETS:
+            depth -= 1
+
+            if depth == 0:
+                return index == len(masked) - 1
+
+    return False
+
+
+def field_default_type(default):
+    if default in FIELD_BOOL_LITERALS:
+        return FIELD_BOOL_TYPE, default
+
+    if FIELD_STRING_LITERAL.fullmatch(default):
+        return FIELD_STRING_TYPE, default
+
+    masked = masked_strings(default)
+    cast_at = trailing_cast_at(masked)
+
+    if cast_at is not None:
+        return default[cast_at + len(FIELD_CAST_KEYWORD):], default[:cast_at]
+
+    member = FIELD_MEMBER_HEAD.match(masked)
+
+    if member is not None and (member.end() == len(masked) or (masked[member.end()] == "(" and closes_at_end(masked, member.end()))):
+        return member.group("head"), default
+
+    raise FieldDefaultShapeError(f"the field default `{default}` is none of the shapes the compiler infers a type from")
+
+
 def strip_comment(text):
     index = text.find("//")
 

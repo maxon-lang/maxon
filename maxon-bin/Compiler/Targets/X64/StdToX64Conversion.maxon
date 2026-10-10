@@ -551,7 +551,7 @@ end 'hostProcessCallSlot'
 // spelling of the sum can disagree about the STRIDE, and a disagreement here is uninitialised KERNEL
 // arguments on a path where no test fails, because the corpus combines no `async` with OS calls.
 export function win64OutgoingArgDisp(slot MachineWord) returns Imm32
-	return (ShadowSpaceBytes + slot * SpillSlotBytes) as Imm32
+	return (ShadowSpaceBytes + (slot as StackSize) * SpillSlotBytes) as Imm32
 end 'win64OutgoingArgDisp'
 
 // The two words a `call` and the prologue's `push rbp` put between the CALLER's rsp-at-the-call and the
@@ -589,7 +589,7 @@ end 'win64IncomingArgDisp'
 // const so the `SpillSlotBytes` read is at runtime (see above). NOT exported: this is an x64 frame fact, set
 // here in the x64 isel — the target-neutral runtimes deliberately do not set `outgoingArgSize`.
 function win64OutgoingArgBytes(slotCount MachineWord) returns StackSize
-	return (slotCount * SpillSlotBytes) as StackSize
+	return (slotCount as StackSize) * SpillSlotBytes
 end 'win64OutgoingArgBytes'
 
 // The frame bytes ONE compiler-to-compiler call needs for the arguments that overflow the register files — the
@@ -2146,10 +2146,10 @@ export type StdToX64Lowering
 			bitNot then self.targetModule.appendOp(dstBlock, op: TargetOp.notReg(dest, src: src))
 			logicalNot then self.targetModule.appendOp(dstBlock, op: TargetOp.xorRegImm32(dest, lhs: src, imm: LogicalNotMask))
 
-			// The CONVERSION PAIR — two of the three ops in the dialect that read one register file
-			// and write the other (`bitcastF64ToI64` below is the third, and converts nothing).
+			// The CONVERSIONS — three of the four ops in the dialect that read one register file
+			// and write the other (`bitcastF64ToI64` below is the fourth, and converts nothing).
 			// `operandType` is the SOURCE, and the OPCODE names the result:
-			// `siToFp` reads a GPR and writes an XMM, `fpToSi` the reverse. Both are PLAIN defs
+			// `siToFp`/`uiToFp` read a GPR and write an XMM, `fpToSi` the reverse. All are PLAIN defs
 			// (dest independent of src), so no seed copy is emitted.
 			//
 			// ⭐ `cvtTsd2si` — the second `t` is TRUNCATE, and it is why this is the right
@@ -2157,6 +2157,7 @@ export type StdToX64Lowering
 			// rounding by default), so `trunc(3.99)` would answer 4. The spec says 3. Two
 			// mnemonics one letter apart, and a wrong answer between them.
 			siToFp then self.targetModule.appendOp(dstBlock, op: TargetOp.cvtsi2sdRegReg(dest, src: src))
+			uiToFp then self.targetModule.appendOp(dstBlock, op: TargetOp.cvtu64sdRegReg(dest, src: src))
 			fpToSi then self.targetModule.appendOp(dstBlock, op: TargetOp.cvttsd2siRegReg(dest, src: src))
 
 			// The MATH INTRINSICS. `sqrtsd` is its own instruction; the other three are ONE
@@ -3087,7 +3088,7 @@ export type StdToX64Lowering
 
 	// Win32 has no signals: an abnormal end is an NTSTATUS exit code, which the exit-code read reports.
 	function lowerWin64ExitSignal(resultId ValueId, dstBlock IrBlock)
-		let noSignal = SubpNoExitSignal as Imm32
+		let noSignal = SubpNoExitSignal as MachineWord
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(TargetVReg.virtual(resultId), value: noSignal))
 	end 'lowerWin64ExitSignal'
 

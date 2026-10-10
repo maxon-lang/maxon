@@ -700,7 +700,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3017: <fragment>:21:14: Type 'int' does not satisfy constraint 'Sized' required by type parameter 'T' of 'Box'
+error E3017: <fragment>:21:14: Type 'Whole' does not satisfy constraint 'Sized' required by type parameter 'T' of 'Box'
 ```
 
 <!-- test: where-clauses.error.witness-arg-missing-label -->
@@ -3130,7 +3130,7 @@ typealias Step = int(0 to u64.max)
 type Ticks uses T where T is Hashable and Equatable
 	export typealias Items = Array with T
 	var items as Items
-	var at = 0
+	var at = 0 as Count
 
 	static function create(items Items) returns Self throws IterationError
 		if items.count() == 0 'empty'

@@ -9,9 +9,9 @@ public enum MapError implements Error
 end 'MapError'
 
 // Occupied entries. An entry needs a slot, so this is bounded by the table's capacity and carries the
-// capacity's bound for the reason stated once on `TableCapacity`: 2^62 is the last capacity a doubling
+// capacity's bound for the reason stated once on `TableCapacity`: 2^63 is the last capacity a doubling
 // from 16 can mint.
-public typealias EntryCount = int(0 to 4611686018427387904) implements Count
+public typealias EntryCount = int(0 to 9223372036854775808) implements Count
 
 // The slot vocabulary is `helpers/hashtable/slotScan.maxon`'s, shared with `Set`: `SlotState`,
 // `TableSlotIndex`, `TableCapacity` and the `findNextOccupied` scan both iterators advance through.
@@ -27,12 +27,12 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	typealias KeyMemory = __ManagedMemory with Key
 	typealias ValueMemory = __ManagedMemory with Value
 
-	var keys as KeyArray = KeyArray.create()  // Key storage
-	var values as ValueArray = ValueArray.create()  // Value storage
-	var states as StateArray = StateArray.create()  // Slot states
-	var hashes as HashSlotArray = HashSlotArray.create()  // Cached key hashes, parallel to keys
-	var count = 0  // Number of occupied entries
-	var capacity = 0  // Total slots
+	var keys = KeyArray.create()  // Key storage
+	var values = ValueArray.create()  // Value storage
+	var states = StateArray.create()  // Slot states
+	var hashes = HashSlotArray.create()  // Cached key hashes, parallel to keys
+	var count = 0 as EntryCount  // Number of occupied entries
+	var capacity = 0 as TableCapacity  // Total slots
 
 	/// ⭐⭐ **A TOMBSTONE OCCUPIES A PROBE PATH, SO THE LOAD FACTOR HAS TO COUNT IT.** A probe stops at an
 	/// EMPTY slot and walks over a tombstone, and a removal turns an occupied slot into one without ever
@@ -40,7 +40,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	/// empty slots one at a time and ends up probing its whole capacity for every key it does not hold,
 	/// while `count` never moves and a load factor reading `count` alone never rehashes. `ensureCapacity`
 	/// reads occupancy as `count + tombstones` for that reason, and a rehash clears them.
-	var tombstones = 0
+	var tombstones = 0 as TableCapacity
 
 	/// Create an empty map
 	public static function create() returns Self
@@ -253,12 +253,12 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		// `and (capacity - 1)` selects the low bits — identical to `mod capacity` for the
 		// non-negative HashValue range, but cheaper. It is the SPREAD hash that is masked,
 		// never the raw one: see `spreadHash` for the measured quadratic that costs.
-		let mask = capacity - 1
-		var index = (spreadHash(hash) and mask) as TableSlotIndex
+		let mask = (capacity - 1) as TableSlotIndex
+		var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
 		// ⚠ A LOCAL SENTINEL, and it must STAY a plain untyped local. `-1` means "no tombstone seen
 		// yet", so this binding legitimately holds a negative and its `>= 0` / `< 0` tests must read
-		// SIGNED. Annotating it `TableSlotIndex` is now a COMPILE ERROR rather than a latent hazard:
+		// SIGNED. Annotating it `TableSlotIndex` is a COMPILE ERROR:
 		// that alias is non-negative, so the `-1` initializer is an out-of-range constant (E3005).
 		// Neither `return` below hands this binding back un-tested — each sits inside a `>= 0` test,
 		// so the value crossing the narrowed return door is always a real slot. `Set.maxon` carries
@@ -394,7 +394,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 		// newCapacity is a power of two, so masking the SPREAD hash selects the low bits
 		// (see `spreadHash`).
-		let mask = capacity - 1
+		let mask = (capacity - 1) as TableSlotIndex
 
 		// Rehash all occupied entries from old arrays. The new table is fresh
 		// (no tombstones), so we can place each entry with a plain empty-slot
@@ -421,7 +421,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 					continue
 				end 'skip_hash'
 
-				var index = (spreadHash(hash) and mask) as TableSlotIndex
+				var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 				var currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
 				var isNotEmpty = match currentState 'ns1'
 					Empty gives false

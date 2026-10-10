@@ -222,7 +222,7 @@ export type PtraceBackend
 			return BackendEventClass.ended(DebugStopEvent.timedOut)
 		end 'nothingArrived'
 
-		return self.classified(reporter, waited: self.scratch.word(PtraceStatusOffset as BackendPageOffset) and DwordMask)
+		return self.classified(reporter, waited: self.scratch.word(PtraceStatusOffset as BackendPageOffset) and BackendDwordMask)
 	end 'oneWaitStatus'
 
 	function takenWaitStatus(reporter BackendWord, waited BackendWord) returns PtraceWaitStatus
@@ -396,7 +396,7 @@ export type PtraceBackend
 			return false
 		end 'theKernelRefused'
 
-		return (self.scratch.word((PtraceSigInfoOffset + SigInfoCodeOffset) as BackendPageOffset) and DwordMask) == SignalCodeSentByKill
+		return (self.scratch.word((PtraceSigInfoOffset + SigInfoCodeOffset) as BackendPageOffset) and BackendDwordMask) == SignalCodeSentByKill
 	end 'trapCameFromTheDriversSignal'
 
 	function hold(stop PtraceHeldStop)
@@ -632,7 +632,7 @@ export type PtraceBackend
 			return false
 		end 'nothingCameBack'
 
-		self.settleGroupStop(reporter, waited: self.scratch.word(PtraceStatusOffset as BackendPageOffset) and DwordMask)
+		self.settleGroupStop(reporter, waited: self.scratch.word(PtraceStatusOffset as BackendPageOffset) and BackendDwordMask)
 
 		return true
 	end 'settledOneReport'
@@ -998,9 +998,9 @@ export type PtraceBackend
 
 		while written < count 'eachWord'
 			let target = (address as BackendWord) + written
-			let aligned = target - (target mod DebuggeeWordBytes)
+			let aligned = target - (target mod (DebuggeeWordBytes as BackendWord))
 			let inWord = target - aligned
-			let room = DebuggeeWordBytes - inWord
+			let room = (DebuggeeWordBytes as BackendWord) - inWord
 			let left = count - written
 			let take = room if left > room else left
 

@@ -846,9 +846,9 @@ end 'encodeRoundsdRegReg'
 // (`OpcodeGrp14ShiftQImm8`'s comment carries the argument). IN PLACE, on one register — the op is
 // two-address, so the allocator has already put the source there.
 //
-// It is the ONE encoder in this file that emits TWO instructions, and that is the shape the dialect
-// deliberately chose: two Target ops would define one vreg twice, which the SSA the allocator runs on
-// forbids. See `TargetOp.absF64RegReg`.
+// It emits TWO instructions for one op, and that is the shape the dialect deliberately chose: two
+// Target ops would define one vreg twice, which the SSA the allocator runs on forbids. See
+// `TargetOp.absF64RegReg`.
 function encodeAbsF64Reg(code ByteArray, reg X64Register)
 	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsllq, reg: reg, count: SignBitShiftCount)
 	encodeSseShiftQRegImm8(code, ext: Grp14ExtPsrlq, reg: reg, count: SignBitShiftCount)
@@ -871,8 +871,8 @@ end 'x64NegF64ScratchMask'
 // two-address, so the allocator has already put the source there — against a mask built in
 // `NegF64MaskReg`: `pcmpeqd m, m` (all ones), `psllq m, 63` (bit 63 alone, both lanes), `xorpd reg, m`.
 // Why a mask register rather than an `.rdata` constant, or a shift trick
-// like `abs`'s, is recorded in full on `TargetOp.negF64RegReg`. It is the second encoder in this file
-// that emits more than one instruction, for the SSA reason `encodeAbsF64Reg` gives.
+// like `abs`'s, is recorded in full on `TargetOp.negF64RegReg`. It emits more than one instruction
+// for the SSA reason `encodeAbsF64Reg` gives.
 function encodeNegF64Reg(code ByteArray, reg X64Register)
 	assertOperandOffEncoderScratch(reg, scratch: x64NegF64ScratchMask(), opName: "negF64RegReg")
 	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodePcmpeqd, dest: NegF64MaskReg, src: NegF64MaskReg, wide: false)
@@ -880,17 +880,48 @@ function encodeNegF64Reg(code ByteArray, reg X64Register)
 	encodeSseRegReg(code, prefix: SseMandatoryPrefix.packedDouble, opcode: OpcodeXorpd, dest: reg, src: NegF64MaskReg, wide: false)
 end 'encodeNegF64Reg'
 
-// ⭐ **ONE GUARD FOR EVERY ENCODER IN THIS FILE THAT OWNS FIXED REGISTERS** — the jump table's r10/r11 and
-// the f64 negate's xmm5 — because they share one hazard: a colored operand that landed on a register the
-// encoder clobbers would be destroyed before it is read. `TargetOp`'s `implicitDefs` forbids exactly this
-// through `forbidOperandsFromImplicit`, and `assertEncoderScratchMasks` holds that literal equal to
-// `scratch`, so a violation here is an ALLOCATOR bug, never a user program's. `opName` is carried because
-// a union case cannot name itself, and the panic must send the reader to the right declaration.
+// ⭐ **ONE GUARD FOR EVERY ENCODER IN THIS FILE THAT OWNS FIXED REGISTERS** — the jump table's
+// r10/r11, the f64 negate's xmm5 and the unsigned int → f64 sequence's r11 — because they share one
+// hazard: a colored operand that landed on a register the encoder clobbers would be destroyed
+// before it is read. `TargetOp`'s `implicitDefs` forbids exactly this through
+// `forbidOperandsFromImplicit`, and `assertEncoderScratchMasks` holds that literal equal to
+// `scratch`, so a violation here is an ALLOCATOR bug, never a user program's. `opName` is carried
+// because a union case cannot name itself, and the panic must send the reader to the right
+// declaration.
 function assertOperandOffEncoderScratch(reg X64Register, scratch RegMask, opName String)
 	if regMaskContains(scratch, regNum: reg.rawValue as RegNum) 'aliasesScratch'
 		panic("{opName}: an operand was colored to {registerName(reg)}, a register its encoder clobbers (scratch mask {scratch}) — `TargetOp.{opName}`'s implicitDefs must forbid its operands those registers (`forbidOperandsFromImplicit`)")
 	end 'aliasesScratch'
 end 'assertOperandOffEncoderScratch'
+
+let UnsignedToFloatScratchReg = X64Register.r11
+
+let UnsignedHalvingShift = 1 as ShiftCount
+
+let UnsignedRoundingStickyBit = 1 as Imm32
+
+export function x64UnsignedToFloatScratchMask() returns RegMask
+	return regMaskOf(UnsignedToFloatScratchReg)
+end 'x64UnsignedToFloatScratchMask'
+
+function encodeCvtu64sdRegReg(code ByteArray, dest X64Register, src X64Register)
+	assertOperandOffEncoderScratch(src, scratch: x64UnsignedToFloatScratchMask(), opName: "cvtu64sdRegReg")
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: src, src: src, wide: true)
+	let toAboveSignedMax = encodeJccPlaceholder(code, cond: X64CondCode.less)
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvtsi2sd, dest: dest, src: src, wide: true)
+	let doneFromSigned = encodeJmpPlaceholder(code)
+
+	patchLocalForwardBranch(code, dispOffset: toAboveSignedMax, what: PatchSite.x64UnsignedToFloatRel32)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: UnsignedToFloatScratchReg, src: src, wide: true)
+	encodeGrp2RegImm8(code, ext: Grp2ExtShr, reg: UnsignedToFloatScratchReg, count: UnsignedHalvingShift)
+	let lowBitClear = encodeJccPlaceholder(code, cond: X64CondCode.aboveEqual)
+	encodeGrp1RegImm32(code, ext: Grp1ExtOr, reg: UnsignedToFloatScratchReg, imm: UnsignedRoundingStickyBit)
+	patchLocalForwardBranch(code, dispOffset: lowBitClear, what: PatchSite.x64UnsignedToFloatRel32)
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvtsi2sd, dest: dest, src: UnsignedToFloatScratchReg, wide: true)
+	encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeAddsd, dest: dest, src: dest, wide: false)
+
+	patchLocalForwardBranch(code, dispOffset: doneFromSigned, what: PatchSite.x64UnsignedToFloatRel32)
+end 'encodeCvtu64sdRegReg'
 
 // One group-14 SSE shift-by-immediate (`66 0F 73 /ext ib`) — the opcode-extension form of an SSE
 // instruction, which is why it can ride neither `encodeSseRegReg` (whose reg field is a REGISTER) nor
@@ -2208,6 +2239,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// for an SSE instruction, because here it selects the GPR half's width rather than an
 		// operand size the mandatory prefix already chose.
 		cvtsi2sdRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvtsi2sd, dest: resolveXmm(dest), src: resolveGpr(src), wide: true)
+		cvtu64sdRegReg(dest, src) then encodeCvtu64sdRegReg(code, dest: resolveXmm(dest), src: resolveGpr(src))
 		cvttsd2siRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvttsd2si, dest: resolveGpr(dest), src: resolveXmm(src), wide: true)
 
 		// The MATH INTRINSICS. `sqrtsd` is an ordinary two-byte SSE form and rides the
@@ -2297,6 +2329,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		arm64Fdiv or
 		arm64Fcmp or
 		arm64Scvtf or
+		arm64Ucvtf or
 		arm64Fcvtzs or
 		arm64Fsqrt or
 		arm64Frint or
@@ -2570,6 +2603,7 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		ucomisdRegReg or
 		movsdRegRip or
 		cvtsi2sdRegReg or
+		cvtu64sdRegReg or
 		cvttsd2siRegReg or
 		sqrtsdRegReg or
 		roundsdRegReg or
@@ -2623,6 +2657,7 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		arm64Fdiv or
 		arm64Fcmp or
 		arm64Scvtf or
+		arm64Ucvtf or
 		arm64Fcvtzs or
 		arm64Fsqrt or
 		arm64Frint or
@@ -2681,13 +2716,13 @@ end 'isBranchWindowUnit'
 // Rolling a unit back truncates all seven, so its first attempt leaves nothing behind. One per chunk,
 // rewritten per unit, so a rollback allocates nothing.
 type EmitMark
-	var codeCount as ElementIndex = 0
-	var covCount as ElementIndex = 0
-	var callCount as ElementIndex = 0
-	var iatCount as ElementIndex = 0
-	var rdataCount as ElementIndex = 0
-	var rel32Count as ElementIndex = 0
-	var jumpTableCount as ElementIndex = 0
+	var codeCount = 0 as ElementIndex
+	var covCount = 0 as ElementIndex
+	var callCount = 0 as ElementIndex
+	var iatCount = 0 as ElementIndex
+	var rdataCount = 0 as ElementIndex
+	var rel32Count = 0 as ElementIndex
+	var jumpTableCount = 0 as ElementIndex
 
 	static function create() returns EmitMark
 		return Self{}

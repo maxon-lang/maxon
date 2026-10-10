@@ -3358,7 +3358,7 @@ typealias Names = Array with Integer
 let sharedEmptyNames = Names.create()
 
 type Holder
-	export var names as Names = sharedEmptyNames
+	export var names = sharedEmptyNames as Names
 
 	static function make() returns Holder
 		return Self{}
@@ -3371,7 +3371,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:30: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in the compiler, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+error E2015: <fragment>:8:21: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in the compiler, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
 ```
 
 ### `<Type> from "…"` AS A TOP-LEVEL INITIALIZER

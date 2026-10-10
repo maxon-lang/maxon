@@ -79,8 +79,8 @@ type Tbl uses Key where Key is Hashable and Equatable
 	var values as ValueArray
 	var states as StateArray
 	var hashes as HashSlotArray
-	var count = 0
-	var capacity = 0
+	var count = 0 as Cap
+	var capacity = 0 as Cap
 
 	static function create() returns Self
 		return Self{keys: KeyArray{}, values: ValueArray{}, states: StateArray{}, hashes: HashSlotArray{}}
@@ -129,7 +129,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 		capacity = newCapacity
 		count = 0
 
-		let mask = newCapacity - 1
+		let mask = (newCapacity - 1) as HashValue
 
 		for i in 0 upto oldCapacity 'rehash'
 			let state = try oldStates.get(i) otherwise SlotState.Empty

@@ -95,8 +95,7 @@ function sum(t (Integer, Integer)) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-	let t = (10, 32)
-	return sum(t)
+	return sum((10, 32))
 end 'main'
 ```
 ```exitcode
@@ -231,8 +230,8 @@ end 'main'
 11 22
 ```
 ```mm-trace
-mm_alloc InterpolationScratch #1 size=21
-mm_alloc InterpolationScratch #2 size=21
+mm_alloc InterpolationScratch #1 size=20
+mm_alloc InterpolationScratch #2 size=20
 mm_alloc StringRecord #3 size=62
 mm_decref InterpolationScratch #1 rc=0
 mm_free InterpolationScratch #1
@@ -470,7 +469,7 @@ true 751
 ```
 ```mm-trace
 mm_alloc InterpolationScratch #1 size=5
-mm_alloc InterpolationScratch #2 size=21
+mm_alloc InterpolationScratch #2 size=20
 mm_alloc StringRecord #3 size=65
 mm_decref InterpolationScratch #1 rc=0
 mm_free InterpolationScratch #1
@@ -514,9 +513,9 @@ end 'main'
 11 false 701 true
 ```
 ```mm-trace
-mm_alloc InterpolationScratch #1 size=21
+mm_alloc InterpolationScratch #1 size=20
 mm_alloc InterpolationScratch #2 size=5
-mm_alloc InterpolationScratch #3 size=21
+mm_alloc InterpolationScratch #3 size=20
 mm_alloc InterpolationScratch #4 size=5
 mm_alloc StringRecord #5 size=74
 mm_decref InterpolationScratch #1 rc=0
@@ -676,7 +675,7 @@ end 'Thing'
 function pick(t Thing) returns ExitCode
 	let (slot, flag) = match t 'm'
 		alpha(s, f) gives (s, f)
-		beta gives (0, false)
+		beta gives (0 as Slot, false)
 	end 'm'
 	if slot != 5 'notFive'
 		return 1
@@ -826,34 +825,6 @@ typealias Integer = int(i64.min to i64.max)
 37
 ```
 
-<!-- test: ranged-alias-elements-are-one-tuple-type -->
-`(Num, Num)` and `(Integer, Integer)` are ONE tuple type: a tuple's identity is its elements' UNDERLYING
-types, so two ranged aliases over the same primitive collapse alike. (A bare `(int, int)` is not a legal
-parameter type — a numeric domain must be declared — so the widest DECLARED range stands in for it, which
-tests the same collapse.) That is what lets a caller hand a bare
-`(10, 32)` to a `(Num, Num)` parameter. Both functions therefore read the same record and return the
-same sum, so their difference is 0.
-```maxon
-typealias Num = int(0 to 1000)
-
-function f(t (Num, Num)) returns Num
-	return t.0 + t.1
-end 'f'
-
-function g(t (Integer, Integer)) returns Integer
-	return t.0 + t.1
-end 'g'
-
-function main() returns ExitCode
-	let t = (10, 32)
-	return (f(t) - (g(t) as Num)) as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```exitcode
-0
-```
-
 <!-- test: tuple-var-field-write-with-string-element -->
 A `var` tuple holding a MANAGED element, written through `.1` and read back. The write rides the same
 `storeIndirect` a struct field write does, and the String is released by the tuple's drop cascade at
@@ -933,7 +904,7 @@ function main() returns ExitCode
 	xs.push((2, "world"))
 	let r = try xs.get(1) otherwise panic("pushed")
 	print("{r.1}\n")
-	return r.0 + xs.count()
+	return (r.0 as Count) + xs.count()
 end 'main'
 ```
 ```exitcode
@@ -1165,12 +1136,20 @@ function echoManaged(t (String, Num)) returns (String, Num)
 	return t
 end 'echoManaged'
 
+function seedTrivial() returns (Num, Num)
+	return (1, 2)
+end 'seedTrivial'
+
+function seedManaged() returns (String, Num)
+	return ("a heap allocated tuple element", 3)
+end 'seedManaged'
+
 function main() returns ExitCode
-	var a = (1, 2)
+	var a = seedTrivial()
 	var b = echoTrivial(a)
 	b.1 = 99
 
-	var m = ("a heap allocated tuple element", 3)
+	var m = seedManaged()
 	var n = echoManaged(m)
 	n.1 = 99
 
@@ -1224,16 +1203,20 @@ function viaBinding(t (Num, Num)) returns Num
 	return 0
 end 'viaBinding'
 
+function seedTrivial() returns (Num, Num)
+	return (1, 2)
+end 'seedTrivial'
+
 function main() returns ExitCode
-	var a = (1, 2)
+	var a = seedTrivial()
 	var b = viaMerge(a, c: true)
 	b.1 = 99
 
-	var m = (1, 2)
+	var m = seedTrivial()
 	var n = viaFallback(m)
 	n.1 = 99
 
-	var g = (1, 2)
+	var g = seedTrivial()
 	let z = viaBinding(g)
 
 	print("merged a.1={a.1} fallback m.1={m.1} binding g.1={g.1} z={z}")
@@ -1501,7 +1484,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:2: Cannot return '((int, int), int)' from function declared to return 'P'
+error E3005: <fragment>:6:2: Cannot return '((int, Int), Int)' from function declared to return 'P'
 ```
 
 <!-- test: error.self-referential-tuple-alias-with-an-unrelated-tuple-interned-alongside -->
@@ -1536,7 +1519,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:14:2: Cannot return '((int, int), int)' from function declared to return 'P'
+error E3005: <fragment>:14:2: Cannot return '((int, Int), Int)' from function declared to return 'P'
 ```
 
 <!-- test: error.a-tuple-over-a-contested-alias-is-named-in-source-form -->
@@ -1647,8 +1630,12 @@ end 'Box'
 
 typealias BoxA = Box with Pair
 
+function sixAndThree() returns Pair
+	return (6, 3)
+end 'sixAndThree'
+
 function main() returns ExitCode
-	let b = BoxA.create((6, 3))
+	let b = BoxA.create(sixAndThree())
 
 	return (b.item.0 - b.item.1) as ExitCode
 end 'main'
@@ -1676,8 +1663,12 @@ end 'Box'
 
 typealias BoxA = Box with Pair
 
+function sixAndThree() returns Pair
+	return (6, 3)
+end 'sixAndThree'
+
 function main() returns ExitCode
-	let b = BoxA.create((6, 3))
+	let b = BoxA.create(sixAndThree())
 
 	return (b.item.0 - b.item.1) as ExitCode
 end 'main'
@@ -2530,21 +2521,21 @@ function measure(n Integer) returns (Integer, Integer)
 	let b = "bb{n}"
 
 	if n == 1 'one'
-		return (n, a.byteLength())
+		return (n, a.byteLength() as Integer)
 	end 'one'
 
 	let c = "ccc{n}"
 
 	if n == 2 'two'
-		return (n, b.byteLength())
+		return (n, b.byteLength() as Integer)
 	end 'two'
 
 	if n == 3 'three'
-		return (n, c.byteLength())
+		return (n, c.byteLength() as Integer)
 	end 'three'
 
 	print("{a} {b} {c}\n")
-	return (0, a.byteLength() + b.byteLength() + c.byteLength())
+	return (0, (a.byteLength() + b.byteLength() + c.byteLength()) as Integer)
 end 'measure'
 
 function main() returns ExitCode
@@ -2565,4 +2556,180 @@ end 'main'
 3 4
 a4 bb4 ccc4
 0 9
+```
+
+<!-- test: a-tuple-element-above-i64-max-keeps-its-unsigned-alias -->
+A tuple element of an unsigned alias keeps that alias, so a value above `i64.max` passes its range check when destructured or read by position.
+```maxon
+typealias Wide = int(0 to u64.max)
+
+function pair(a Wide, b Wide) returns (Wide, Wide)
+	return (a, b)
+end 'pair'
+
+function first(a Wide) returns Wide
+	let (h, _) = pair(a, b: 1)
+	return h
+end 'first'
+
+function second(b Wide) returns Wide
+	let t = pair(1, b: b)
+	return t.1
+end 'second'
+
+function main() returns ExitCode
+	print("{first(18446744073709551615)} {second(9223372036854775808)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615 9223372036854775808
+```
+
+<!-- test: a-tuple-parameter-and-a-nested-tuple-keep-their-unsigned-alias -->
+A tuple literal passed to a tuple parameter, and a nested tuple destructured, both hold values above i64.max under their alias.
+```maxon
+typealias Wide = int(0 to u64.max)
+
+function second(t (Wide, Wide)) returns Wide
+	return t.1
+end 'second'
+
+function innermost(t (Wide, (Wide, Wide))) returns Wide
+	let (_, inner) = t
+	return inner.1
+end 'innermost'
+
+function main() returns ExitCode
+	print("{second((1, 18446744073709551615))} {innermost((1, (2, 9223372036854775808)))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615 9223372036854775808
+```
+
+<!-- test: a-signed-element-and-an-unsigned-element-each-keep-their-reading -->
+A signed element reads negative and an unsigned element reads above i64.max, in one tuple; the unsigned elements divide and order unsigned.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+function mixed(a Integer, b Wide) returns (Integer, Wide)
+	return (a, b)
+end 'mixed'
+
+function main() returns ExitCode
+	let (x, y) = mixed(-1, b: 18446744073709551615)
+	let t = mixed(-1, b: 18446744073709551614)
+	print("{x} {y} {t.1 / 2} {y > t.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-1 18446744073709551615 9223372036854775807 true
+```
+
+<!-- test: an-iterator-pair-keeps-the-elements-unsigned-alias -->
+The element of a `withIterator` pair over an unsigned alias keeps its alias.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias WideArray = Array with Wide
+
+function top(values WideArray) returns Wide
+	var best = 0 as Wide
+
+	for (_, item) in values.withIterator() 'each'
+		if item > best 'bigger'
+			best = item
+		end 'bigger'
+	end 'each'
+
+	return best
+end 'top'
+
+function main() returns ExitCode
+	var values = WideArray.create()
+	values.push(5)
+	values.push(18446744073709551615)
+	values.push(9223372036854775808)
+	print("{top(values)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615
+```
+
+<!-- test: error.a-signed-value-into-an-unsigned-column-is-refused -->
+A tuple literal's unsigned column is a door like a struct field of that alias: a value of another alias is refused there.
+```maxon
+typealias Wide = int(0 to u64.max)
+typealias Integer = int(i64.min to i64.max)
+
+function pair(a Integer) returns (Wide, Wide)
+	return (a, 1)
+end 'pair'
+
+function main() returns ExitCode
+	let (x, _) = pair(1)
+	print("{x}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:6:9: cannot assign a value of type 'Integer' to field '_0' of '__Tuple2.Wide.Wide', which holds 'Wide'
+```
+
+<!-- test: error.a-tuple-of-one-alias-does-not-pass-as-another -->
+Every tuple element keeps its alias, so a tuple of one alias is not a tuple of another.
+```maxon
+typealias Tally = int(0 to 1000)
+typealias Score = int(0 to 1000)
+
+function pair() returns (Tally, Tally)
+	return (1, 2)
+end 'pair'
+
+function total(p (Score, Score)) returns Score
+	return p.0 + p.1
+end 'total'
+
+function main() returns ExitCode
+	print("{total(pair())}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/tuples/error.a-tuple-of-one-alias-does-not-pass-as-another.maxon:14:10: argument type mismatch for 'p': expected '(Score, Score)', got '(Tally, Tally)'
+```
+
+<!-- test: error.a-tuple-element-keeps-its-range -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+function pair() returns (Tally, Tally)
+	return (1, 2000)
+end 'pair'
+
+function main() returns ExitCode
+	let (a, b) = pair()
+	print("{a} {b}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/tuples/error.a-tuple-element-keeps-its-range.maxon:5:13: Value 2000 is outside the range of 'Tally' (int(0 to 1000))
 ```

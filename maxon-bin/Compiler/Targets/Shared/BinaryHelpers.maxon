@@ -211,30 +211,28 @@ export function roundUpToPowerOfTwo(n BytePos) returns BytePos
 	return p
 end 'roundUpToPowerOfTwo'
 
-// ⚠ `v < 1` is refused first because `v and (v - 1)` answers `0` for `i64.min` too, whose magnitude is
-// not representable.
-export function isPowerOfTwo(v ParsedInt) returns bool
-	return v >= 1 and (v and (v - 1)) == 0
+export function isPowerOfTwo(v MachineWord) returns bool
+	return v != 0 and (v and (v - 1)) == 0
 end 'isPowerOfTwo'
 
 // The shift a power of two reduces to; asked only of a `v` that `isPowerOfTwo` admits.
-export function log2OfPowerOfTwo(v ParsedInt) returns ShiftCount
+export function log2OfPowerOfTwo(v MachineWord) returns ShiftCount
 	if not isPowerOfTwo(v) 'notAPowerOfTwo'
 		panic("log2OfPowerOfTwo: {v} is not a power of two — ask `isPowerOfTwo` first")
 	end 'notAPowerOfTwo'
 
-	return trailingZeroCount(v as MachineWord) as ShiftCount
+	return trailingZeroCount(v) as ShiftCount
 end 'log2OfPowerOfTwo'
 
-export function floorLog2(value ParsedInt) returns ShiftCount
-	if value < 1 'notAMagnitude'
+export function floorLog2(value MachineWord) returns ShiftCount
+	if value == 0 'notAMagnitude'
 		panic("floorLog2: {value} — defined for a positive value only")
 	end 'notAMagnitude'
 
 	var bit = 0 as ShiftCount
-	var remaining = value
+	var remaining = value shr 1
 
-	while remaining > 1 'halve'
+	while remaining != 0 'halve'
 		remaining = remaining shr 1
 		bit = bit + 1
 	end 'halve'
@@ -273,6 +271,7 @@ export enum PatchSite
 	// block, so it is patched the instant the arm it selects has been laid down, and the ±2 GiB guard
 	// needs a name for the site.
 	x64MemFillRel32
+	x64UnsignedToFloatRel32
 	arm64Adr
 	arm64LdrLiteral
 	arm64Adrp

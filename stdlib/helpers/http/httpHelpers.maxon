@@ -139,7 +139,7 @@ public function httpBuildRequest(request HttpRequest, target HttpConnectTarget) 
 end 'httpBuildRequest'
 
 public function httpStatusAllowsContent(code StatusCode) returns bool
-	let number = code.number()
+	let number = code.number() as StatusNumber
 
 	return number > LastInterimStatus and number != NoContentStatus and number != NotModifiedStatus
 end 'httpStatusAllowsContent'
@@ -510,7 +510,7 @@ public function httpResponseStatusOf(head String) returns HttpResponseStatus thr
 		throw HttpError.invalidResponse
 	end 'notThreeDigits'
 
-	let codeInt = try int.fromString(codeText) otherwise panic("httpResponseStatusOf: three decimal digits parse as an integer")
+	let codeInt = (try int.fromString(codeText) otherwise panic("httpResponseStatusOf: three decimal digits parse as an integer")) as StatusNumber
 
 	var headers = HttpHeaders.create()
 	try parseHeaderLines(lines, from: 1, into: headers, side: HttpMessageSide.response) otherwise throw HttpError.invalidResponse

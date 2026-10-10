@@ -1505,7 +1505,7 @@ module function buildServiceHandleStruct(signatures ProgramSignatures, typeName 
 	// and neither can ask a layout anything — they are Std-tier bodies built after the pipeline. A second
 	// field added here would leave them reading and writing past the record's end, silently; this makes it a
 	// compile-time stop at the line that caused it.
-	if handle.sizeBytes() != ServiceHandleBoxSize or handle.offsetOfField(0) != ServiceHandleMailboxOffset 'geometryDrifted'
+	if handle.sizeBytes() != (ServiceHandleBoxSize as ByteOffset) or handle.offsetOfField(0) != ServiceHandleMailboxOffset 'geometryDrifted'
 		panic("buildServiceHandleStruct: `{String.from(serviceHandleCompanionName(typeName))}` lays out {handle.sizeBytes()} byte(s) with its mailbox at {handle.offsetOfField(0)}, against the `ServiceHandleBoxSize`/`ServiceHandleMailboxOffset` the mailbox runtime spells ({ServiceHandleBoxSize}/{ServiceHandleMailboxOffset}) — `__mbox_handle_clone_box` and `__mbox_handle_drop_box` are Std-tier bodies with no layout to ask, so the two numbers must be one fact")
 	end 'geometryDrifted'
 
@@ -1887,7 +1887,7 @@ function buildInterfaceHandleStruct(interfaceName ByteArray, visibility Visibili
 	handle.addField(ServiceHandleMailboxFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
 	handle.addField(InterfaceHandleTableFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
 
-	if handle.sizeBytes() != InterfaceHandleBoxSize or handle.offsetOfField(0) != ServiceHandleMailboxOffset or handle.offsetOfField(1) != InterfaceHandleTableOffset 'geometryDrifted'
+	if handle.sizeBytes() != (InterfaceHandleBoxSize as ByteOffset) or handle.offsetOfField(0) != ServiceHandleMailboxOffset or handle.offsetOfField(1) != InterfaceHandleTableOffset 'geometryDrifted'
 		panic("buildInterfaceHandleStruct: `{String.from(handle.name)}` lays out {handle.sizeBytes()} byte(s) with its mailbox at {handle.offsetOfField(0)} and its send table at {handle.offsetOfField(1)}, against the {InterfaceHandleBoxSize}/{ServiceHandleMailboxOffset}/{InterfaceHandleTableOffset} the registry runtime spells")
 	end 'geometryDrifted'
 

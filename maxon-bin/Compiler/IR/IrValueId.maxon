@@ -197,6 +197,13 @@ function markSetOf(column ValueMarkColumn) returns ValueMarkSet
 	end 'state'
 end 'markSetOf'
 
+export function valueMarksWritten(column ValueMarkColumn) returns bool
+	return match column 'state'
+		unwritten gives false
+		entries gives true
+	end 'state'
+end 'valueMarksWritten'
+
 // Is `value` in this column? A column nothing has written answers without hashing.
 export function valueIsMarked(column ValueMarkColumn, value ValueId) returns bool
 	match column 'state'
@@ -204,6 +211,10 @@ export function valueIsMarked(column ValueMarkColumn, value ValueId) returns boo
 		entries(marked) then return marked.contains(value)
 	end 'state'
 end 'valueIsMarked'
+
+export function valueIsMarkedUnsigned(value ValueId, literals ValueMarkColumn, patterns ValueMarkColumn) returns bool
+	return valueIsMarked(literals, value: value) or valueIsMarked(patterns, value: value)
+end 'valueIsMarkedUnsigned'
 
 // The DISTINCT case targets of a dense `switch`'s block-id table, in FIRST-APPEARANCE order, with
 // `exclude` (the default) removed — the "which successors does this table actually have?" question

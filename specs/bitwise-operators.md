@@ -1068,10 +1068,10 @@ function main() returns ExitCode
 	if viaParam(u64.max) != 15 'declaredParam'
 		return 1
 	end 'declaredParam'
-	if viaCast(u64.max) != 15 'castLocal'
+	if viaCast(-1) != 15 'castLocal'
 		return 2
 	end 'castLocal'
-	if viaCast(u64.max) != viaParam(u64.max) 'twoRoutesOneType'
+	if viaCast(-1) != viaParam(u64.max) 'twoRoutesOneType'
 		return 3
 	end 'twoRoutesOneType'
 	return 42
@@ -1110,7 +1110,7 @@ function castToSigned(v Wide) returns Num
 end 'castToSigned'
 
 function main() returns ExitCode
-	if sourceKeepsItsOwnType(u64.max) != 16 'sourceKeeps'
+	if sourceKeepsItsOwnType(-1) != 16 'sourceKeeps'
 		return 1
 	end 'sourceKeeps'
 	if castToSigned(u64.max) != -1 'toSigned'

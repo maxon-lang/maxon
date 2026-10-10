@@ -40,7 +40,8 @@ end 'main'
 ## Rules
 
 - Every variable is initialized where it is declared, and its type is inferred from the initializer.
-  Local declarations take no type annotation.
+  A declaration takes no type annotation: `var x as Tally = 0` is **E2010** (`Expected '=' but got 'as'`).
+  A cast names the type instead — `var x = 0 as Tally` declares a `Tally`, locally and at file scope.
 - Variables are block-scoped.
 - **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
   instead of 'var'`).

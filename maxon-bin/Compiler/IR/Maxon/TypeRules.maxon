@@ -520,12 +520,13 @@ end 'checkDeclaredType'
 // from a `returns float` handed the backend an i64 in a GPR (a cross-register-file panic), a `p.v = 3`
 // stored 3 raw bytes into an XMM slot. Six doors, one omission.
 //
-// It is stated HERE, once, beside the verdict it qualifies, because the obligation is a property of the
-// RULE and not of any site — a site that restated it is a site that can forget it. The two CONVERSIONS
-// are per-REPRESENTATION and live where their representation does: `Parser.coerceToDeclared` for an SSA
-// value (a `cvtsi2sd` via `MaxonUnaryOp.promoteToFloat`) and `Parser.constFloatBits` for a parse-time
-// literal (the host's own int→f64). Both are idempotent, so neither caller has to work out whether it is
-// already holding a float.
+// It is stated HERE, once, beside the verdict it qualifies, because the obligation is a property of
+// the RULE and not of any site — a site that restated it is a site that can forget it. The two
+// CONVERSIONS are per-REPRESENTATION and live where their representation does:
+// `Parser.coerceToDeclared` for an SSA value (`MaxonUnaryOp.promoteToFloat`, or
+// `promoteUnsignedToFloat` for an unsigned one) and `Parser.constFloatBits` for a parse-time
+// literal (the host's own int→f64). Both are idempotent, so neither caller has to work out whether
+// it is already holding a float.
 //
 // ⚠ **PRECONDITION 1: the verdict is already `ok`.** This asks the DIRECTION and nothing else, so it must
 // never be the gate on its own. Asked ahead of the verdict, it would convert values the language rejects
@@ -1029,6 +1030,10 @@ export function tagIsFloat(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.float
 end 'tagIsFloat'
 
+export function valueTagWearsAnAlias(tag ValueTypeTag, nameId TypeNameId) returns bool
+	return tag == ValueTypeTag.named or (tag == ValueTypeTag.float and nameId != UnnamedTypeId)
+end 'valueTagWearsAnAlias'
+
 // ⭐ **THE TAGS A BARE NUMERIC KEYWORD IS MINTED UNDER** — `int` and `float`, the two spellings
 // `Parser.parseTypeReference` answers with a CONCRETE numeric arm rather than a `named` one. The
 // compiler twin of the oracle's `IrType.IsBarePrimitive`, which likewise names only the numerics.
@@ -1429,13 +1434,14 @@ end 'divisionOpcodeFor'
 // the reason `int(1 to 1000)` is the language's escape hatch from a checked divide. A range excludes 0 iff it
 // lies WHOLLY above it or WHOLLY below it; anything spanning 0 admits it and its divides are throwing.
 //
-// ⚠ **THE `low < 0` GUARD IS WHAT KEEPS THE UNSIGNED QUIRK OUT OF THE NEGATIVE ARM**, and it is load-bearing
-// rather than defensive. `int(0 to u64.max)` rides with `high == -1` (the u64.max PATTERN, see
-// `rangeIsUnsignedMaxUpper`), so a bare `high < 0` would read it as "wholly negative" and elide the guard on
-// a range that plainly contains 0. Its `low == 0` never reaches that test, so it reads — correctly — as
-// admitting zero. The mixed shape that WOULD defeat the guard (`int(-10 to u64.max)`, indistinguishable in
-// this representation from `int(-10 to -1)`) is unrepresentable by construction:
-// `Parser.requireRepresentableRange` rejects a negative low with a `u64.max` upper outright.
+// ⚠ **THE `low < 0` GUARD IS WHAT KEEPS THE UNSIGNED QUIRK OUT OF THE NEGATIVE ARM**, and it is
+// load-bearing rather than defensive. `int(0 to u64.max)` rides with `high == -1` (the u64.max
+// PATTERN, see `rangeIsUnsignedTopped`), so a bare `high < 0` would read it as "wholly negative"
+// and elide the guard on a range that plainly contains 0. Its `low == 0` never reaches that test,
+// so it reads — correctly — as admitting zero. The mixed shape that WOULD defeat the guard
+// (`int(-10 to u64.max)`, indistinguishable in this representation from `int(-10 to -1)`) is
+// unrepresentable by construction: `Parser.requireRepresentableRange` rejects a negative low with
+// an upper above `i64.max` outright.
 //
 // FLOAT: the bounds are IEEE-754 patterns, so the comparison goes through `floatOrderKey` — which maps both
 // `+0.0` and `-0.0` to 0, so a range whose bound IS a zero of either sign admits zero, which is what a
@@ -1461,27 +1467,28 @@ end 'rangeExcludesZero'
 // `±inf`, which is why the zero test needs a float arm and this one has nothing to say. Its callers ask
 // it only on the integer path.
 //
-// ⚠⚠ **THE UNSIGNED-MAX-UPPER SHAPE MUST ANSWER `false`, AND A NAIVE `low > -1` WOULD SAY `true`.**
+// ⚠⚠ **AN UNSIGNED-TOPPED RANGE MUST ANSWER `false`, AND A NAIVE `low > -1` WOULD SAY `true`.**
 // `int(0 to u64.max)` rides with `high == UnsignedFullUpperPattern` — the `-1` PATTERN — so it admits
 // the bit pattern `-1` as the huge unsigned `u64.max`, and a signed `idiv` reads that pattern as `-1`
 // and faults on it. `low == 0` would otherwise place the range "wholly above -1" and elide the guard on
 // the one range that most plainly contains the hazard. It is the exact dual of the `low < 0` guard in
 // `rangeExcludesZero`, and it is load-bearing for the same reason: the representation, not the range,
-// is what makes the naive test wrong. `rangeIsUnsignedMaxUpper` is the ONE place that shape is
+// is what makes the naive test wrong. `rangeIsUnsignedTopped` is the ONE place that shape is
 // recognized, so this asks it rather than restating it.
 export function rangeExcludesNegativeOne(low ParsedInt, high ParsedInt) returns bool
-	if rangeIsUnsignedMaxUpper(low, high: high) 'admitsTheMinusOnePattern'
+	if rangeIsUnsignedTopped(low, high: high) 'admitsTheMinusOnePattern'
 		return false
 	end 'admitsTheMinusOnePattern'
 
 	return low > OverflowingDivisorPattern or high < OverflowingDivisorPattern
 end 'rangeExcludesNegativeOne'
 
-// ⭐ **CAN A VALUE OF THIS RANGE BE `i64.min`?** — the dividend's half of the signed quotient's overflow pair,
-// beside the divisor's. The unsigned-max-upper shape admits the `i64.min` BIT PATTERN as `2^63`, which a
-// signed divide reads as `i64.min`, so it answers `false` for `rangeExcludesNegativeOne`'s reason.
+// ⭐ **CAN A VALUE OF THIS RANGE BE `i64.min`?** — the dividend's half of the signed quotient's
+// overflow pair, beside the divisor's. An unsigned-topped range admits the `i64.min` BIT PATTERN as
+// `2^63`, which a signed divide reads as `i64.min`, so it answers `false` for
+// `rangeExcludesNegativeOne`'s reason.
 export function rangeExcludesIntMin(low ParsedInt, high ParsedInt) returns bool
-	if rangeIsUnsignedMaxUpper(low, high: high) 'admitsTheIntMinPattern'
+	if rangeIsUnsignedTopped(low, high: high) 'admitsTheIntMinPattern'
 		return false
 	end 'admitsTheIntMinPattern'
 
@@ -1522,9 +1529,9 @@ end 'rangeExcludesIntMin'
 //
 //     Every other range answers the same either way, and that is worth knowing rather than
 //     relying on: a value of `int(0 to 100)` is provably non-negative, so an arithmetic and a
-//     logical shift of it agree bit for bit. `int(0 to u64.max)` is the ONLY range on which the
-//     two readings can be told apart — which is exactly why it went unnoticed, and why the spec
-//     case that pins it must use it.
+//     logical shift of it agree bit for bit. A non-negative range whose upper is above `i64.max`
+//     (`int(0 to u64.max)`) is the ONLY kind on which the two readings can be told apart — which
+//     is why the spec case that pins it must use one.
 //
 //   • **A NEGATIVE COUNT IS AN ERROR**, never a shift the other way — masked, `a shl -1` silently
 //     computed `a shl 63`, the MAXIMUM LEFT shift, a wrong answer with the opposite sign. A
@@ -1662,17 +1669,11 @@ end 'rangeIsUnsigned'
 // comparison it takes part in, which is the question `rangeIsUnsigned` alone cannot answer.
 //
 // The HIGH bound is what carries it, and `high >= 0` IS the load-bearing half rather than a
-// belt-and-braces one. `int(0 to u64.max)` is unsigned and its top half are NEGATIVE signed patterns,
-// so `comparisonSignedness` runs a `<` against it UNSIGNED and a counter tested by it climbs through
-// `i64.max` into those patterns. That upper rides as the wrapped `-1`, so refusing a negative high
-// refuses exactly it; and in two's complement `high >= 0` says `high <= i64.max`, which is the whole
-// claim.
-//
-// ⚠ **IT IS STATED HERE RATHER THAN AS `not rangeIsUnsignedMaxUpper`, WHICH IT CURRENTLY AGREES WITH
-// ON EVERY SHAPE THE LANGUAGE CAN SPELL** — a literal above `i64.max` is E2011, so `u64.max` is the
-// only route to a negative high. The two are not the same rule: that one recognises ONE encoding, this
-// one asks a bound question that stays right whatever new spelling a bound acquires. Widen what a
-// bound may be written as and this function needs no edit; that is why it is not derived from it.
+// belt-and-braces one. `int(0 to u64.max)` is unsigned and its top half are NEGATIVE signed
+// patterns, so `comparisonSignedness` runs a `<` against it UNSIGNED and a counter tested by it
+// climbs through `i64.max` into those patterns. Every upper above `i64.max` rides as a negative
+// pattern, so refusing a negative high refuses exactly those; and in two's complement `high >= 0`
+// says `high <= i64.max`, which is the whole claim.
 //
 // ⚠ **INTEGER BOUNDS ONLY.** A float alias carries IEEE bit patterns, so `float(1.0 to 5.0)` has two
 // positive ones and would answer `true` about a question it was never asked. Its one caller excludes
@@ -1713,34 +1714,26 @@ end 'rangeIsClosedUnderBitAnd'
 // whether a NARROWING conversion (`as` cast / ranged `return`) needs a runtime guard and
 // which bounds it must test.
 //
-// ⚠ SIGNED COMPARES, in a CASCADE, and that is a compiler constraint, not a design choice: the
-// Std/Maxon tiers carry ONLY signed integer compares (`StdCmpPred` has no `ugt`/`ult`) and
-// there is no `setcc`, so `InsertRangeChecks` emits a CASCADE of fused signed compare+branch —
-// one block per needed bound, each `cmp` fused with its `condBranch` — never a `cmp`+`cmp`+`or` over
-// materialized bools. For every range the enabled corpus uses, and every range with a `0` (or
-// negative) low bound, a value fails the signed lower/upper check exactly where its unsigned image
+// ⚠ A CASCADE, and that is a compiler constraint, not a design choice: there is no `setcc`, so
+// `InsertRangeChecks` emits a CASCADE of fused compare+branch — one block per needed bound, each
+// `cmp` fused with its `condBranch` — never a `cmp`+`cmp`+`or` over materialized bools. The
+// compares are SIGNED except for an unsigned-topped range (below). For every range whose upper is
+// at most `i64.max`, a value fails the signed lower/upper check exactly where its unsigned image
 // would, so the verdict is the same.
 //
-// ⭐ THE UNSIGNED-MAX UPPER SHAPE — `int(N>0 to u64.max)` — IS THE ONE RANGE SIGNED COMPARES
-// CANNOT EXPRESS DIRECTLY, and it is handled by a two-check cascade rather than left as a gap.
-// Its upper rides as `-1`, so `rangeNeedsUpperCheck` elides the upper and a naive single lower
-// check `value < N` (signed) wrongly REJECTS a bit-63-set value that is unsigned-in-range
-// (`1 shl 63 as int(5 to u64.max)` is a HUGE unsigned, in range). The fix stays within signed
-// compares: out-of-range for this shape is `value >= 0 AND value < N` (a non-negative value
-// below the low bound), so `boundChecks` emits `value < 0 → IN RANGE, value < N → panic` and
-// `literalInRange` reads `value < 0 OR value >= low`. This makes the runtime check agree with the
-// literal check. `rangeIsUnsignedMaxUpper` is the one place the shape is recognized.
+// ⭐ AN UNSIGNED-TOPPED RANGE — a non-negative low under an upper above `i64.max`, which rides as a
+// negative pattern — CANNOT BE TESTED BY SIGNED COMPARES AGAINST ITS STORED BOUNDS: a signed
+// `value < N` wrongly REJECTS a bit-63-set value that is unsigned-in-range
+// (`1 shl 63 as int(5 to u64.max)`). `boundChecks` handles it in two shapes. A `u64.max` upper has
+// nothing to test, so a positive low takes the signed cascade `value < 0 → IN RANGE, value < N →
+// panic`; any lower upper compares UNSIGNED against both bounds. `literalInRange` reads the same
+// set, so the runtime check agrees with the literal check. `rangeIsUnsignedTopped` is the one place
+// the shape is recognized.
 
 // The i64 pattern an unsigned `u64.max` upper bound rides as — named so the `-1`-means-
 // `u64.max` reinterpretation is not a bare literal (see RangedTypeAlias, and the sentinel case
 // in specs/ranged-typealias.md).
 export let UnsignedFullUpperPattern = -1 as ParsedInt
-
-// The unsigned-decimal spelling of that same sentinel, for display. `ParsedInt` is a signed i64
-// with no unsigned-render helper, and `u64.max` is the only writable bound that stores negative
-// (every `uN.max` for N<64 is positive; a negative low is unwritable) — so this one named
-// constant is correct and sufficient.
-let UnsignedFullUpperDecimal = "18446744073709551615"
 
 // The finite extremes `f32`/`f64`'s `.min` / `.max` denote in a `float(...)` range declaration,
 // carried as the IEEE-754 **f64** bit pattern the `ParsedInt` bound field holds. A float alias
@@ -1855,22 +1848,22 @@ function rangeIsFull(low ParsedInt, high ParsedInt, isFloat bool) returns bool
 	return low == 0 and high == UnsignedFullUpperPattern
 end 'rangeIsFull'
 
-// **THE UNSIGNED-MAX UPPER SHAPE** — a range whose upper is `u64.max` (riding as the signed
-// `-1`) over a non-negative low bound: `int(0 to u64.max)`, `int(5 to u64.max)`. THE one place
-// this shape is recognized, shared by the runtime cascade (`InsertRangeChecks.boundChecks`) and
-// the compile-time literal check (`literalInRange`) so they cannot come to disagree about it.
+// **THE UNSIGNED-TOPPED SHAPE** — a range whose upper is above `i64.max` (riding as a negative
+// pattern) over a non-negative low bound: `int(0 to u64.max)`, `int(5 to u64.max)`. THE one place
+// this shape is recognized, shared by the runtime cascade (`InsertRangeChecks.boundChecks`) and the
+// compile-time literal check (`literalInRange`) so they cannot come to disagree about it.
 //
 // A non-negative low bound (`rangeIsUnsigned`) is what makes the range purely UNSIGNED: every
-// admissible value is non-negative in unsigned terms, and a bit-63-set value (negative signed)
-// is a huge unsigned that the range ADMITS. The full-unsigned `int(0 to u64.max)` (low == 0)
-// is included, and it REACHES the runtime cascade rather than being elided ahead of it:
-// `aliasAdmitsEveryValue` deliberately excludes it, because it is a QUANTITY whose door must
-// refuse a value arriving from a signed domain, so `boundChecks` gives it the one test its
-// bounds ask for — `value < 0`. The literal check calls this directly with no gate at all, and
-// there the low == 0 reading — in range for every value — is exactly right.
-export function rangeIsUnsignedMaxUpper(low ParsedInt, high ParsedInt) returns bool
-	return high == UnsignedFullUpperPattern and rangeIsUnsigned(low)
-end 'rangeIsUnsignedMaxUpper'
+// admissible value is non-negative in unsigned terms, and a bit-63-set value (negative signed) up
+// to the upper is a huge unsigned that the range ADMITS. The full-unsigned `int(0 to u64.max)` (low
+// == 0) is included, and it REACHES the runtime cascade rather than being elided ahead of it:
+// `aliasAdmitsEveryValue` deliberately excludes it, because it is a QUANTITY whose door must refuse
+// a value arriving from a signed domain, so `boundChecks` gives it the one test its bounds ask for
+// — `value < 0`. The literal check calls this directly with no gate at all, and there the low == 0
+// reading — in range for every value — is exactly right.
+export function rangeIsUnsignedTopped(low ParsedInt, high ParsedInt) returns bool
+	return high < 0 and rangeIsUnsigned(low)
+end 'rangeIsUnsignedTopped'
 
 // ⭐⭐ **DOES AN *INCLUSIVE* COUNTED LOOP'S TOP BOUND MAKE ITS STEP WRAP INSTEAD OF ITS TEST FAIL?**
 // `for i in a to b` runs the body AT `b`, steps past it, and tests again — so at the top of the domain the
@@ -1878,14 +1871,14 @@ end 'rangeIsUnsignedMaxUpper'
 // counter then takes values no interval over `[a, b]` contains, which is why `Parser.mintCountedBodyCounter`
 // states no interval for such a loop rather than one that stops being true after a wrap.
 //
-// ⚠⚠ **THERE ARE TWO TOPS, BECAUSE THE TEST HAS TWO READINGS — AND REFUSING ONLY THE SIGNED ONE WAS A
-// MEASURED WRONG ANSWER.** `Parser.comparisonSignedness` picks a signedness valid for both
-// operands, so `i64.max` is the top under the SIGNED reading and `u64.max` — riding as the same `-1` pattern
-// this file's unsigned-upper shape is recognized by — is the top under the UNSIGNED one. MEASURED with only
-// `i64.max` refused: `for i in ((0 - 5) as int(0 to u64.max)) to u64.max` compiled its test as `jcc above`,
-// walked past `-1` into `0, 1, …`, and an `as int(-5 to -1)` inside the body was elided against the interval
-// `[-5, -1]` — a value outside its declared range, no panic, exit 0, where every compiler without the
-// elision panics on the sixth trip.
+// ⚠⚠ **THERE ARE TWO TOPS, BECAUSE THE TEST HAS TWO READINGS — AND REFUSING ONLY THE SIGNED ONE WAS
+// A MEASURED WRONG ANSWER.** `Parser.comparisonSignedness` picks a signedness valid for both
+// operands, so `i64.max` is the top under the SIGNED reading and `u64.max` — riding as the `-1`
+// pattern — is the top under the UNSIGNED one. MEASURED with only `i64.max` refused:
+// `for i in ((0 - 5) as int(0 to u64.max)) to u64.max` compiled its test as `jcc above`, walked
+// past `-1` into `0, 1, …`, and an `as int(-5 to -1)` inside the body was elided against the
+// interval `[-5, -1]` — a value outside its declared range, no panic, exit 0, where every compiler
+// without the elision panics on the sixth trip.
 //
 // ⚠ The EXCLUSIVE form needs no such rule and it is not an oversight: `upto` stops the first time the test
 // fails, which it does at `bound` itself under either reading, so its counter never reaches a step that
@@ -1911,35 +1904,32 @@ end 'rangeNeedsLowerCheck'
 
 // Does the UPPER bound need a runtime compare?
 //
-// INTEGER: only below i64.max — an upper of i64.max can never be violated — and only when the bound
-// is a REAL one rather than the wrapped `u64.max`, which is unbounded in signed space and whose
-// compare `boundChecks` replaces with the sign-plus-lower cascade (see `rangeIsUnsignedMaxUpper`).
+// INTEGER: only below i64.max — an upper of i64.max can never be violated. An unsigned-topped upper
+// (`rangeIsUnsignedTopped`) needs one unless it is `u64.max`, which nothing exceeds.
 //
-// ⚠⚠ **A NEGATIVE STORED UPPER IS THE `u64.max` SENTINEL IN EXACTLY ONE SHAPE, SO A RULE THAT ASKS ONLY
+// ⚠⚠ **A NEGATIVE STORED UPPER IS AN UNSIGNED BOUND IN EXACTLY ONE SHAPE, SO A RULE THAT ASKS ONLY
 // THE BOUND'S SIGN GIVES A WHOLLY NEGATIVE RANGE NO UPPER COMPARE AT ALL.** A `high >= 0 and high <
-// i64.max` test elides the compare for `int(-100 to -1)` and `int(i64.min to -2)` — ranges whose upper
-// is ordinary: `-1` is the largest value `int(-100 to -1)` admits and `0` is outside it.
-// `int(i64.min to -2)` is the total case, because its `low == i64.min` needs no compare either, so the
-// range carries an EMPTY check list and a plain `as` cast admits anything. **MEASURED: `0 as
-// int(-100 to -1)` admitted at runtime while the LITERAL `0 as int(-100 to -1)` was E3005** — the two
-// halves of one rule disagreeing about one alias, because `literalInRange` asks
-// `rangeIsUnsignedMaxUpper` and a sign test does not. The consequences reach past the binding into
-// `Parser.divisorProof`, which trusts a declared range: `int(-100 to -1)` excludes 0 so `100 / d` is a
-// bare `idiv` (an uncatchable `integer divide by zero`), and `int(i64.min to -2)` excludes -1 so
-// `i64.min mod d` is one too (`integer overflow`). Pinned by
-// `ranged-typealias.md`'s `negative-upper-bound-cast-is-checked` and `safety.md`'s two
-// `negative-range-cast-guard-fires-before-the-*` cases.
+// i64.max` test elides the compare for `int(-100 to -1)` and `int(i64.min to -2)` — ranges whose
+// upper is ordinary: `-1` is the largest value `int(-100 to -1)` admits and `0` is outside it.
+// `int(i64.min to -2)` is the total case, because its `low == i64.min` needs no compare either, so
+// the range carries an EMPTY check list and a plain `as` cast admits anything, while
+// `literalInRange`, which asks `rangeIsUnsignedTopped`, refuses the literal `0 as int(-100 to -1)`.
+// The consequences reach past the binding into `Parser.divisorProof`, which trusts a declared
+// range: `int(-100 to -1)` excludes 0 so `100 / d` is a bare `idiv` (an uncatchable `integer divide
+// by zero`), and `int(i64.min to -2)` excludes -1 so `i64.min mod d` is one too (`integer
+// overflow`). Pinned by `ranged-typealias.md`'s `negative-upper-bound-cast-is-checked` and
+// `safety.md`'s two `negative-range-cast-guard-fires-before-the-*` cases.
 //
-// ⇒ the sentinel question is DELEGATED, not restated: `rangeIsUnsignedMaxUpper` is the one place the
-// shape is recognized, and it is `high == -1 AND low >= 0`. The pairing cannot be ambiguous, because a
-// negative low beside a `u64.max` upper is refused at DECLARATION (`int(-1 to u64.max)` is
-// "not representable in 64 bits"), so a stored `high == -1` under a negative low is always a real `-1`.
+// ⇒ the sentinel question is DELEGATED, not restated: `rangeIsUnsignedTopped` is the one place the
+// shape is recognized, and it is `high < 0 AND low >= 0`. The pairing cannot be ambiguous, because
+// a negative low beside an upper above `i64.max` is refused at DECLARATION (`int(-1 to u64.max)` is
+// "not representable in 64 bits"), so a stored negative `high` under a negative low is always a
+// real one.
 //
-// ⚠ It takes `low` for that reason, unlike `rangeNeedsLowerCheck`, whose rule genuinely reads one bound.
-// Asking the shape here rather than leaning on `boundChecks`'s earlier `rangeIsUnsignedMaxUpper` arm is
-// deliberate: this predicate is EXPORTED and states a rule, and a second caller reading it without that
-// arm in front would elide `int(5 to u64.max)`'s cascade or emit a compare that rejects what the range
-// admits.
+// ⚠ It takes `low` for that reason, unlike `rangeNeedsLowerCheck`, whose rule genuinely reads one
+// bound. It answers whether an upper compare is NEEDED, not how to make one: an unsigned-topped
+// upper must be compared UNSIGNED, as `boundChecks`'s `unsignedCapped` arm does, and a signed
+// `value > high` there rejects every non-negative value.
 //
 // FLOAT: only below the largest finite double. A sign test is meaningless on a bit pattern —
 // `float(-1.0 to -0.5)`'s upper is a NEGATIVE i64 and is a perfectly real bound that must be checked —
@@ -1949,9 +1939,9 @@ export function rangeNeedsUpperCheck(low ParsedInt, high ParsedInt, isFloat bool
 		return high != F64MaxBound
 	end 'float'
 
-	if rangeIsUnsignedMaxUpper(low, high: high) 'unsignedUpperIsUnbounded'
-		return false
-	end 'unsignedUpperIsUnbounded'
+	if rangeIsUnsignedTopped(low, high: high) 'unsignedUpper'
+		return high != UnsignedFullUpperPattern
+	end 'unsignedUpper'
 
 	return high < i64.max
 end 'rangeNeedsUpperCheck'
@@ -1963,11 +1953,13 @@ end 'rangeNeedsUpperCheck'
 // `float(-100.0 to -1.0)` would admit nothing and reject everything — which is precisely why
 // `ranged-typealias.md` pins a negative range and a zero-straddling one.
 //
-// For the unsigned-max upper shape the range is UNSIGNED and its upper is unbounded, so in-range
-// is `value < 0 OR value >= low`: a bit-63-set value (negative signed) is a huge unsigned that
-// the range admits, and a non-negative value is in range iff it is at least `low`. Every OTHER
-// integer range is the ordinary inclusive `[low, high]` — correct because a negative literal fails
-// the signed lower bound exactly as its huge unsigned image would fail a modest positive upper.
+// For an unsigned-topped range the bit-63-set patterns (negative signed) are its values above
+// `i64.max`: one is in range iff it is at most `high`, an order two such patterns share under both
+// readings, and a non-negative value is in range iff it is at least `low`. Every OTHER integer
+// range is the ordinary inclusive `[low, high]` — correct because a negative literal fails the
+// signed lower bound exactly as its huge unsigned image would fail a modest positive upper. A
+// literal WRITTEN above `i64.max` (`writtenAboveSignedMax`) fits none of them: its pattern is
+// negative, and a range with a negative low would otherwise admit it as a negative number.
 //
 // ⭐⭐ **`writtenNegative` IS WHAT THE 64 BITS CANNOT SAY, AND WITHOUT IT THE UNSIGNED ARM ADMITS A
 // WRITTEN `-1` INTO A RANGE WHOSE LOWER BOUND IS 0.** `-1`, `u64.max` and `0xFFFFFFFFFFFFFFFE` are all
@@ -1985,15 +1977,23 @@ end 'rangeNeedsUpperCheck'
 //
 // ⚠ The `-0` case is why this is a CLAUSE and not an early `return false`: `-0` is written negative and
 // denotes 0, which `int(0 to u64.max)` admits — so the non-negative arm still decides it.
-export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt, isFloat bool, writtenNegative bool) returns bool
+export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt, isFloat bool, writtenNegative bool, writtenAboveSignedMax bool) returns bool
 	if isFloat 'float'
 		let key = floatOrderKey(value)
 		return key >= floatOrderKey(low) and key <= floatOrderKey(high)
 	end 'float'
 
-	if rangeIsUnsignedMaxUpper(low, high: high) 'unsignedUpper'
-		return (value < 0 and not writtenNegative) or value >= low
+	if rangeIsUnsignedTopped(low, high: high) 'unsignedUpper'
+		if value < 0 'aboveTheSignedTop'
+			return not writtenNegative and value <= high
+		end 'aboveTheSignedTop'
+
+		return value >= low
 	end 'unsignedUpper'
+
+	if writtenAboveSignedMax 'aboveASignedRange'
+		return false
+	end 'aboveASignedRange'
 
 	return value >= low and value <= high
 end 'literalInRange'
@@ -2023,13 +2023,14 @@ end 'literalInRange'
 // sign-and-magnitude trap `floatOrderKey`'s header describes, and it silently inverts the verdict for a
 // negative bound (`float(-100.0 to -1.0)`).
 //
-// INTEGER, and the UNSIGNED-MAX-UPPER shape is why this is not two `<=`s: `int(0 to u64.max)` rides with
-// `high == -1`, so a plain signed compare would call it a SUBSET of `int(i64.min to i64.max)` and report
-// the genuinely-narrowing `Word as Integer` as unneeded. The shape is recognized by the one predicate that
-// recognizes it everywhere else; two ranges that disagree about carrying it are reported NOT covered
-// (their union is unrepresentable in 64 bits, and over-reporting coverage is a FALSE REJECTION of a valid
-// program). When BOTH carry it the uppers are equal by construction and both lows are non-negative
-// (`rangeIsUnsigned` holds inside the shape), so the lows decide under an ordinary signed compare.
+// INTEGER, and the UNSIGNED-TOPPED shape is why this is not two `<=`s: `int(0 to u64.max)` rides
+// with `high == -1`, so a plain signed compare would call it a SUBSET of `int(i64.min to i64.max)`
+// and report the genuinely-narrowing `Word as Integer` as unneeded. The shape is recognized by the
+// one predicate that recognizes it everywhere else; two ranges that disagree about carrying it are
+// reported NOT covered (their union is unrepresentable in 64 bits, and over-reporting coverage is a
+// FALSE REJECTION of a valid program). When BOTH carry it both uppers are negative patterns, which
+// order the same signed and unsigned, and both lows are non-negative (`rangeIsUnsigned` holds
+// inside the shape), so the ordinary signed compares decide.
 export function rangeCoversRange(target RangedTypeAlias, source RangedTypeAlias) returns bool
 	let targetIsFloat = aliasIsFloat(target)
 
@@ -2100,27 +2101,25 @@ export function rangeCoversIntBounds(target RangedTypeAlias, low ParsedInt, high
 	// refuses is a SIGNED source into an unsigned-topped target: a negative is not a value
 	// that target holds as a quantity, so the door guards. The reverse — an unsigned-topped source into a
 	// signed-full target — is answered `true` above, because there the target really does span the source.
-	let targetIsUnsignedMaxUpper = rangeIsUnsignedMaxUpper(target.low, high: target.high)
+	let targetIsUnsignedTopped = rangeIsUnsignedTopped(target.low, high: target.high)
 
-	// ⭐⭐ **AN UNSIGNED-TOPPED TARGET SPANS EVERY WHOLLY NON-NEGATIVE SOURCE, AND SAYING SO IS WHAT KEEPS
-	// THE SHAPE TEST FROM OVER-REFUSING.** `int(0 to 65535)` is plainly inside `int(0 to u64.max)`, but the
-	// two disagree about carrying the unsigned-max upper, so the clause below would call them mixed and
-	// refuse a containment that is simply true. Every non-negative quantity is spelled that way, so the
-	// over-refusal reaches ordinary cross-alias comparisons — three of them in this compiler.
+	// ⭐⭐ **AN UNSIGNED-TOPPED TARGET SPANS EVERY WHOLLY NON-NEGATIVE SOURCE, AND SAYING SO IS WHAT
+	// KEEPS THE SHAPE TEST FROM OVER-REFUSING.** `int(0 to 65535)` is plainly inside `int(0 to
+	// u64.max)`, but the two disagree about carrying an unsigned-topped upper, so the clause below
+	// would call them mixed and refuse a containment that is simply true. Every non-negative quantity
+	// is spelled that way, so the over-refusal reaches ordinary cross-alias comparisons — three of
+	// them in this compiler.
 	//
 	// The source must be non-negative at BOTH ends: that is what makes its whole value set a subset of
-	// `target.low … u64.max`, with no reading of either bound under which it is not.
-	if targetIsUnsignedMaxUpper and rangeIsWithinSignedNonNegative(low, high: high) 'targetSpansEveryNonNegative'
+	// `target.low … target.high` (an upper above `i64.max`), with no reading of either bound under
+	// which it is not.
+	if targetIsUnsignedTopped and rangeIsWithinSignedNonNegative(low, high: high) 'targetSpansEveryNonNegative'
 		return target.low <= low
 	end 'targetSpansEveryNonNegative'
 
-	if targetIsUnsignedMaxUpper != rangeIsUnsignedMaxUpper(low, high: high) 'mixedRepresentation'
+	if targetIsUnsignedTopped != rangeIsUnsignedTopped(low, high: high) 'mixedRepresentation'
 		return false
 	end 'mixedRepresentation'
-
-	if targetIsUnsignedMaxUpper 'bothUnbounded'
-		return target.low <= low
-	end 'bothUnbounded'
 
 	return target.low <= low and target.high >= high
 end 'rangeCoversIntBounds'
@@ -2162,9 +2161,17 @@ end 'rangeCoversDenotedRange'
 // tier, so neither can quote a declaration the program does not contain — MEASURED as
 // `outside the range of 'Byte$0_1000' (int(0 to 1000))`, which names no line the author wrote and prints
 // the real bounds beside the suffix that was supposed to carry them.
-export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
-	return "Value {scalarConstantText(value, isFloat: isFloat)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat, domain: domain)}"
+export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, writtenNegative bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
+	return "Value {literalValueText(value, isFloat: isFloat, writtenNegative: writtenNegative)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat, domain: domain)}"
 end 'literalOutOfRangeMessage'
+
+function literalValueText(value ParsedInt, isFloat bool, writtenNegative bool) returns String
+	if not isFloat and value < 0 and not writtenNegative 'aboveTheSignedTop'
+		return unsignedScalarText(value)
+	end 'aboveTheSignedTop'
+
+	return scalarConstantText(value, isFloat: isFloat)
+end 'literalValueText'
 
 // The E3005 an out-of-range `otherwise` DEFAULT reports — the sentence above with its own subject, since
 // what is out of range is the handler's value and not a narrowing. Worded HERE, beside its twin, because
@@ -2178,12 +2185,8 @@ end 'literalOutOfRangeMessage'
 // 'Byte$300_1000' (int(300 to 1000))`: a declaration the program does not contain, with the real
 // bounds printed in the same sentence. One alias, two spellings, decided by which of two E3005s the
 // value happens to meet.
-//
-// ⚠ The VALUE is spelled plainly and deliberately NOT through `scalarConstantText`: an `otherwise`
-// default is an integer LITERAL the author wrote, never the wrapped `u64.max` sentinel that helper exists
-// to un-wrap, and the oracle prints it plainly too.
-export function otherwiseOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
-	return "otherwise value {value} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: false, domain: domain)}"
+export function otherwiseOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, writtenNegative bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
+	return "otherwise value {literalValueText(value, isFloat: false, writtenNegative: writtenNegative)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: false, domain: domain)}"
 end 'otherwiseOutOfRangeMessage'
 
 // ⭐ **THE E3005 A `b"…"` BYTE-STRING LITERAL'S OWN BYTE REPORTS** — the third subject of the one
@@ -2291,14 +2294,14 @@ export function rangedAliasValueSetDisplay(aliasName String, low ParsedInt, high
 	end 'domain'
 end 'rangedAliasValueSetDisplay'
 
-// ⚠⚠ **THE `u64.max` SENTINEL IS SPELLED HERE AND NOWHERE BELOW.** Rendering ANY `-1` as
-// `18446744073709551615` is the same one-shape mistake a sign test makes in `rangeNeedsUpperCheck`: a
-// stored `-1` means `u64.max` only in the `rangeIsUnsignedMaxUpper` shape. A renderer holding ONE number
-// cannot tell which it has, so it produces sentences that contradict themselves — `int(-1 to -1)` reported
-// as `int(18446744073709551615 to 18446744073709551615)` (a declaration nobody wrote), and a `-1` VALUE
-// reported as `Value 18446744073709551615` beside signed bounds on the same line. This function holds
-// BOTH bounds and is the only party that can ask, so the reinterpretation lives here and the offending
-// VALUE — which is a signed i64 the author wrote — never receives it.
+// ⚠⚠ **AN UNSIGNED UPPER BOUND IS SPELLED HERE AND NOWHERE BELOW.** Rendering ANY `-1` as
+// `18446744073709551615` is the same one-shape mistake a sign test makes in `rangeNeedsUpperCheck`:
+// a stored negative upper is unsigned only in the `rangeIsUnsignedTopped` shape. A renderer holding
+// ONE number cannot tell which it has, so it produces sentences that contradict themselves —
+// `int(-1 to -1)` reported as `int(18446744073709551615 to 18446744073709551615)` (a declaration
+// nobody wrote). This function holds BOTH bounds and is the only party that can ask, so the bounds'
+// reinterpretation lives here; an offending VALUE is spelled by its own written sign
+// (`literalValueText`).
 //
 // The `int(<lo> to <hi>)` / `float(<lo> to <hi>)` spelling for an E3005 message (`Value N is outside
 // the range of 'Alias' (int(lo to hi))`). Each bound renders through `scalarConstantText`, so a float bound
@@ -2306,11 +2309,11 @@ end 'rangedAliasValueSetDisplay'
 // exclusive `upto` alias is normalized to `high - 1` at parse and no enabled case surfaces one here, so
 // the `to` spelling is the only one reached.
 //
-// It applies to the UPPER alone: a negative low paired with a `u64.max` upper is refused at declaration,
-// so a low bound never carries the sentinel.
+// It applies to the UPPER alone: a low above `i64.max`, and a negative low under an upper above it,
+// are refused at declaration, so a low bound is never unsigned.
 function formatRangeDisplay(low ParsedInt, high ParsedInt, isFloat bool) returns String
 	let keyword = "float" if isFloat else "int"
-	let upper = UnsignedFullUpperDecimal if not isFloat and rangeIsUnsignedMaxUpper(low, high: high) else scalarConstantText(high, isFloat: isFloat)
+	let upper = unsignedScalarText(high) if not isFloat and rangeIsUnsignedTopped(low, high: high) else scalarConstantText(high, isFloat: isFloat)
 
 	return "{keyword}({scalarConstantText(low, isFloat: isFloat)} to {upper})"
 end 'formatRangeDisplay'
@@ -2609,21 +2612,22 @@ end 'foldFloatBinOp'
 // `round` is ties-to-even on `roundsd 0` / `frintn` / `f64.nearest` alike), which is what makes the
 // host's answer the instruction's answer.
 //
-// ⚠ **THE THREE CONVERSIONS ARE THE CALLER'S, NOT THIS FUNCTION'S**, and they decline here rather than
-// being absent: `trunc` (`fpToSi`) needs a RANGE decided before the host may be asked, and
-// `promoteToFloat` and the two reinterpretations have no float operand to read at all. `foldFpToSi` and
-// `foldSiToFp` below are where those live.
+// ⚠ **THE CONVERSIONS ARE THE CALLER'S, NOT THIS FUNCTION'S**, and they decline here rather than
+// being absent: `trunc` (`fpToSi`) needs a RANGE decided before the host may be asked, and the two
+// promotions and the two reinterpretations have no float operand to read at all. `foldFpToSi`,
+// `foldSiToFp` and `foldUiToFp` below are where those live.
 export function foldFloatUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns FoldedInt
 	return match op 'o'
-		// The integer/bool operators, plus BOTH conversions — and the two conversions decline for
-		// opposite reasons, which is why neither is answered here. `promoteToFloat` reads an INTEGER, so
+		// The integer/bool operators, plus the conversions — which decline for opposite reasons, which
+		// is why none is answered here. The two promotions read an INTEGER, so
 		// there is no float operand to take apart. `trunc` reads a float and could be answered, but only
 		// once a RANGE has been decided first: see `foldFpToSi`, which is where it lives.
 		neg or
 		bitNot or
 		logicalNot or
 		trunc or
-		promoteToFloat gives FoldedInt.notFoldable
+		promoteToFloat or
+		promoteUnsignedToFloat gives FoldedInt.notFoldable
 		floor gives FoldedInt.folded(__Builtins.floatToBits(floor(__Builtins.bitsToFloat(operand))))
 		ceil gives FoldedInt.folded(__Builtins.floatToBits(ceil(__Builtins.bitsToFloat(operand))))
 		round gives FoldedInt.folded(__Builtins.floatToBits(round(__Builtins.bitsToFloat(operand))))
@@ -2652,12 +2656,25 @@ end 'foldFloatUnaryOp'
 // the property that makes folding one sound: `2^53 + 1` has no exact double and every one of them
 // answers `9007199254740992`.
 //
-// Two callers, in two tiers, and neither may restate it: `Parser.constFloatBits` promotes a constant
-// for the parser's own domain (`1 + 2.0`, an `as float = 3` field default), and
-// `IR/Std/FoldConstants.evaluateFloatUnaryOp` folds a `siToFp` the inliner made constant.
+// Every signed int→f64 fold in both tiers asks it and none may restate it: the parser's constant
+// promotion (`Parser.constFloatBits`), `IR/Std/FoldConstants.evaluateIntSourceUnaryOp`'s `siToFp`,
+// and `foldUiToFp` for an unsigned value below `2^63`.
 export function foldSiToFp(value ParsedInt) returns ParsedInt
 	return __Builtins.floatToBits(0.0 + value)
 end 'foldSiToFp'
+
+// Above `i64.max` the pattern is halved with its dropped bit kept as a sticky low bit, so the
+// convert's one rounding lands where a direct unsigned conversion's does (the doubling is exact). A
+// plain halving can fold a constant one ulp away from what every target computes.
+export function foldUiToFp(value ParsedInt) returns ParsedInt
+	if value >= 0 'withinTheSignedRange'
+		return foldSiToFp(value)
+	end 'withinTheSignedRange'
+
+	let pattern = value as UnsignedScalarPattern
+	let rounded = ((pattern shr 1) or (pattern and 1)) as ParsedInt
+	return __Builtins.floatToBits((0.0 + rounded) * 2.0)
+end 'foldUiToFp'
 
 // ⭐⭐ **THE COMPILE-TIME `cvttsd2si`, AND IT DECLINES EVERYWHERE THE THREE TARGETS DISAGREE.** `trunc`
 // rounds toward zero, which inside the `i64` range is one answer the host and every target compute
@@ -2715,7 +2732,7 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		// stream has a float operand — whose `ParsedInt` is an IEEE BIT PATTERN, not the number.
 		// Folding it as an integer is precisely the wrong answer this column is gated against.
 		//
-		// `promoteToFloat` is unreachable for the structural reason: this folder runs only when
+		// The two promotions are unreachable for the structural reason: this folder runs only when
 		// `tagIsInteger(resultTag)` (see `Parser.emitUnaryOp`), and a promotion's result tag is
 		// float by construction. Constant-folding a promotion would mean computing an IEEE
 		// encoding at compile time — a real thing to want, and a `ParsedInt` column that cannot
@@ -2744,6 +2761,7 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		// would go on carrying as a number.
 		trunc or
 		promoteToFloat or
+		promoteUnsignedToFloat or
 		floor or
 		ceil or
 		round or

@@ -801,10 +801,15 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// Left unnormalized this would be a wrong SIZE, not just a wrong name: an existential field
 	// occupies two slots and a `named` one.
 	signatures.normalizeSweptInterfaceTypes()
+
+	// After the whole sweep: a tuple registered mid-sweep may name an alias declared in a file not yet
+	// swept, and an element's alias brand is what keeps two aliases from mixing.
+	signatures.settleSweptTupleElementBrands()
 	synthesizeInterfaceRequestUnions(signatures)
 
-	// Strictly after the two lines above: the interface fold fills the registry this reads a `with`
-	// argument against, and the normalization settles the one spelling an argument arrives in. Before
+	// Strictly after the interface fold and `normalizeSweptInterfaceTypes` above: the interface fold
+	// fills the registry this reads a `with` argument against, and the normalization settles the one
+	// spelling an argument arrives in. Before
 	// the parse, because the parse types a dispatch whose result is a held associated type as an
 	// existential, and no later pass can retype a value.
 	signatures.settleAssociatedTypeHoldings()
@@ -3161,10 +3166,9 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// not CONSTANT. Pinned byte-for-byte by `lexer-edge-cases.md`.
 		expectedConstantExpression(got, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Expected constant expression, got '{got}'", line: line, column: column, filePath: path)
 
-		// A shorthand field default whose raw tokens name no type — one more E2004 family than the
-		// registry's `doc` enumerates, a stale count there rather than a wrong code here. Pinned
-		// byte-for-byte by `field-defaults.missing-type-annotation-errors`.
-		uninferrableFieldDefault(line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type with 'as': 'var name as Type = expr'.", line: line, column: column, filePath: path)
+		// A field default whose tokens fit none of the shapes a field takes its type from. Pinned
+		// byte-for-byte by `specs/field-defaults.md`'s refusal cases.
+		uninferrableFieldDefault(line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Expected default value: a bool or string literal, 'Type.member', 'Type.member(...)', or an expression cast with 'as': 'var name = expr as Type'.", line: line, column: column, filePath: path)
 
 		// E2060, pinned byte-for-byte by `source-location-defaults`' three refusal cases. The cure it
 		// names is the feature's only legal spelling, which is why it names both keywords whichever one
@@ -3173,10 +3177,11 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		unexpectedEof(line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
 
 		// The literal is quoted VERBATIM — separators and radix prefix intact — because the source's own
-		// spelling is what the reader has to find, and the decoded value does not exist. The span is
-		// `I64MinBound`/`I64MaxBound`, the very constants `parseInt` enforces, so the limit the message
-		// names cannot drift from the limit that fired.
-		integerOverflow(literal, line, column) gives Diagnostic.create(ErrorCode.parserLiteralOverflow, message: "Integer literal '{literal}' is outside the range of int ({I64MinBound} to {I64MaxBound})", line: line, column: column, filePath: path)
+		// spelling is what the reader has to find, and the decoded value does not exist. Pinned
+		// byte-for-byte by `specs/literals.md`'s overflow cases.
+		integerOverflow(literal, line, column) gives Diagnostic.create(ErrorCode.parserLiteralOverflow, message: "Integer literal '{literal}' is outside the range of int ({I64MinBound} to {unsignedScalarText(UnsignedFullUpperPattern)})", line: line, column: column, filePath: path)
+
+		unsignedLiteralWithoutAlias(literal, line, column) gives Diagnostic.create(ErrorCode.parserLiteralOverflow, message: unsignedLiteralWithoutAliasMessage(literal), line: line, column: column, filePath: path)
 
 		// The same code as its integer twin — a literal outside its type's range is one meaning — with a
 		// message naming the right type and limit. `1e400`'s limit is `f64.max`, which no i64 span
@@ -3339,7 +3344,9 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// E3005 for a top-level `let` cast whose literal is outside its ranged alias — the same code, the
 		// same words and the same anchor a body cast gets from `InsertRangeChecks`; only the tier that
 		// noticed differs.
-		constantCastOutOfRange(value, aliasName, low, high, isFloat, domain, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: literalOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, isFloat: isFloat, domain: domain), line: line, column: column, filePath: path)
+		constantCastOutOfRange(value, aliasName, low, high, isFloat, writtenNegative, domain, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: literalOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, isFloat: isFloat, writtenNegative: writtenNegative, domain: domain), line: line, column: column, filePath: path)
+
+		unneededConstantCast(sourceName, targetName, line, column) gives Diagnostic.create(ErrorCode.semanticUnneededCast, message: unneededAliasCastMessage(sourceName, targetName: targetName), line: line, column: column, filePath: path)
 
 		// E3005 for a `b"…"` byte the element's declared range does not admit — the same code and range
 		// fact as the arm above, with the OFFSET its subject needs.
@@ -3623,11 +3630,13 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		barePrimitiveType(spelling, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: barePrimitiveTypeMessage(spelling), line: line, column: column, filePath: path)
 		barePrimitiveCastTarget(spelling, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: barePrimitiveCastMessage(spelling), line: line, column: column, filePath: path)
 		mismatchedRangeBoundTypes(low, high, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Mismatched type bounds: '{low}' and '{high}' must reference the same type", line: line, column: column, filePath: path)
-		unrepresentableIntegerRange(low, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Integer range cannot span both negative values and above i64.max: 'int({low} to u64.max)' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead", line: line, column: column, filePath: path)
+		unrepresentableIntegerRange(low, high, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Integer range cannot span both negative values and above i64.max: 'int({low} to {high})' is not representable in 64 bits; use 'i64.min to i64.max' or '0 to u64.max' instead", line: line, column: column, filePath: path)
+		integerRangeLowerBoundAboveSignedMax(low, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Integer range lower bound {low} is above i64.max: a range's lower bound must be at most i64.max, and only its upper bound may reach u64.max", line: line, column: column, filePath: path)
+		emptyIntegerRange(low, high, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "Integer range 'int({low} to {high})' is empty: its upper bound is below its lower bound", line: line, column: column, filePath: path)
 
 		// Worded beside its narrowing twin rather than inline here, so the two E3005s that quote one
 		// alias's bounds share the range renderer and the name strip.
-		otherwiseOutsideRangedReturn(value, aliasName, low, high, domain, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: otherwiseOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, domain: domain), line: line, column: column, filePath: path)
+		otherwiseOutsideRangedReturn(value, aliasName, low, high, writtenNegative, domain, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: otherwiseOutOfRangeMessage(value, aliasName: aliasName, low: low, high: high, writtenNegative: writtenNegative, domain: domain), line: line, column: column, filePath: path)
 		uninferrableClosureParam(paramName, line, column) gives Diagnostic.create(ErrorCode.parserExpectedType, message: "Cannot infer type for closure parameter '{paramName}'. Add an explicit type annotation.", line: line, column: column, filePath: path)
 
 		// The SENTENCE arrives rendered — see the three arms' own note in `SourceParseError`. These mapper
