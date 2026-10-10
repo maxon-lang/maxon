@@ -17622,6 +17622,73 @@ end 'IndexTemplate'
 
 export typealias IndexTemplateCell = SharedValue with IndexTemplate
 
+// Keyed by `FilePath` so membership agrees with `FilePath.equals` (case-insensitive on Windows); a
+// string key would miss the asking file's own claim there and count it as its own rival.
+typealias NameableDeclarationFiles = Set with FilePath
+typealias NameableFilesByNamespace = Map with (String, Count)
+
+type DeclarationQualifiers
+	var nameableFiles as NameableDeclarationFiles
+	var nameableFilesByNamespace as NameableFilesByNamespace
+
+	static function create() returns DeclarationQualifiers
+		return Self{nameableFiles: NameableDeclarationFiles.create(), nameableFilesByNamespace: NameableFilesByNamespace.create()}
+	end 'create'
+
+	// A file counts once however many claims it holds, because `tellsApart` discounts the asking
+	// file's own entry exactly once.
+	function noteNameableFile(file FilePath, namespace String)
+		if self.nameableFiles.contains(file) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		self.nameableFiles.insert(file)
+
+		let sharing = try self.nameableFilesByNamespace.get(namespace) otherwise 0
+		self.nameableFilesByNamespace.upsert(namespace, value: sharing + 1)
+	end 'noteNameableFile'
+
+	// `namespace` must be `file`'s own namespace key. True when another nameable file claims the name
+	// and none of those others shares that namespace.
+	function tellsApart(file FilePath, namespace String) returns bool
+		let isOneOfThem = self.nameableFiles.contains(file)
+		let rivals = self.nameableFiles.count() - 1 if isOneOfThem else self.nameableFiles.count()
+
+		if rivals == 0 'noRival'
+			return false
+		end 'noRival'
+
+		let sharing = try self.nameableFilesByNamespace.get(namespace) otherwise 0
+		let sharingRivals = sharing - 1 if isOneOfThem else sharing
+
+		return sharingRivals == 0
+	end 'tellsApart'
+end 'DeclarationQualifiers'
+
+typealias DeclarationQualifiersByName = Map with (ByteArray, DeclarationQualifiers)
+
+// Never invalidated, so valid for one pass over one `ProgramSignatures` snapshot. It is held by the
+// pass and not by `ProgramSignatures`, which the parallel front end shares and the library cache's
+// hand codecs serialize.
+export type DeclarationQualifierMemo
+	var byName as DeclarationQualifiersByName
+
+	export static function create() returns DeclarationQualifierMemo
+		return Self{byName: DeclarationQualifiersByName.create()}
+	end 'create'
+
+	function qualifiersFor(signatures ProgramSignatures, base ByteArray) returns DeclarationQualifiers
+		if let known = try self.byName.get(base) 'memoized'
+			return known
+		end 'memoized'
+
+		let built = signatures.qualifiersOf(base)
+		self.byName.upsert(base.clone(), value: built)
+
+		return built
+	end 'qualifiersFor'
+end 'DeclarationQualifierMemo'
+
 export type ProgramSignatures
 	module var settled as SettledDeclarations
 	var structSlots = StructSlotMap.create()
@@ -26935,31 +27002,22 @@ export type ProgramSignatures
 		return StdlibDirName if self.declaredInTheStdlib(declFilePath) else self.moduleDirectoryOf(declFilePath)
 	end 'namespaceKeyOf'
 
-	function declarationQualifierTellsApart(base ByteArray, declFilePath FilePath) returns bool
-		let key = self.namespaceKeyOf(declFilePath)
-		var hasARival = false
+	function qualifiersOf(base ByteArray) returns DeclarationQualifiers
+		var qualifiers = DeclarationQualifiers.create()
 
 		for claim in self.ambiguityClaimsOf(base) 'eachClaim'
-			if claim.declFilePath.equals(declFilePath) 'thisDeclaration'
-				continue
-			end 'thisDeclaration'
-
-			if not self.nameableByAuthors(claim.declFilePath) 'aRivalNoAuthorCanName'
-				continue
-			end 'aRivalNoAuthorCanName'
-
-			if self.namespaceKeyOf(claim.declFilePath).equals(key) 'aRivalInTheSameNamespace'
-				return false
-			end 'aRivalInTheSameNamespace'
-
-			hasARival = true
+			if self.nameableByAuthors(claim.declFilePath) 'nameable'
+				qualifiers.noteNameableFile(claim.declFilePath, namespace: self.namespaceKeyOf(claim.declFilePath))
+			end 'nameable'
 		end 'eachClaim'
 
-		return hasARival
-	end 'declarationQualifierTellsApart'
+		return qualifiers
+	end 'qualifiersOf'
 
-	export function contestedDeclarationSpelling(base ByteArray, declFilePath FilePath) returns String
-		if not self.declarationQualifierTellsApart(base, declFilePath: declFilePath) 'noQualifierTellsItApart'
+	// The default memo walks every claimant of `base` on each call. A pass that spells many sites
+	// passes one memo for its whole run, or it costs sites x claimants.
+	export function contestedDeclarationSpelling(base ByteArray, declFilePath FilePath, memo DeclarationQualifierMemo = DeclarationQualifierMemo.create()) returns String
+		if not memo.qualifiersFor(self, base: base).tellsApart(declFilePath, namespace: self.namespaceKeyOf(declFilePath)) 'noQualifierTellsItApart'
 			return String.from(base)
 		end 'noQualifierTellsItApart'
 

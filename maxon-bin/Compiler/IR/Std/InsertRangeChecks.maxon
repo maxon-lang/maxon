@@ -218,6 +218,7 @@ export function insertRangeChecks(project Project, module StdModule)
 	end 'debugging'
 
 	let waivers = EntryGuardWaivers.derive(project, module: module)
+	var spellings = DeclarationQualifierMemo.create()
 
 	// An INDEX loop: the function's position is the key its minted ids are filed under
 	// (`ValueOriginTable.recordDerived`).
@@ -249,7 +250,7 @@ export function insertRangeChecks(project Project, module StdModule)
 		end 'noChecks'
 
 		let checks = try project.rangeChecks.get(func.name) otherwise panic("insertRangeChecks: rangeChecks.contains said yes but get failed for '{String.from(func.name)}'")
-		var emitter = RangeCheckEmitter.create(project, module: module, func: func, funcIndex: funcIndex, waivers: waivers)
+		var emitter = RangeCheckEmitter.create(project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, spellings: spellings)
 		emitter.run(checks)
 	end 'eachFunc'
 end 'insertRangeChecks'
@@ -333,9 +334,10 @@ type RangeCheckEmitter
 	var guardChainSource as PreSplitOpsByBlock
 
 	var waivers as EntryGuardWaivers
+	var spellings as DeclarationQualifierMemo
 
-	static function create(project Project, module StdModule, func IrFunction, funcIndex ElementIndex, waivers EntryGuardWaivers) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, unsignedMaxLiterals: noValueMarks, borrowOperands: noBorrowOperands, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource}
+	static function create(project Project, module StdModule, func IrFunction, funcIndex ElementIndex, waivers EntryGuardWaivers, spellings DeclarationQualifierMemo) returns RangeCheckEmitter
+		return Self{project: project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, unsignedMaxLiterals: noValueMarks, borrowOperands: noBorrowOperands, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource, spellings: spellings}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -929,7 +931,7 @@ type RangeCheckEmitter
 			let writtenNegative = valueIsMarked(self.writtenNegativeLiterals, value: value)
 
 			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: writtenNegative, writtenAboveSignedMax: valueIsMarked(self.unsignedMaxLiterals, value: value)) 'outOfRange'
-				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath), low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: writtenNegative, domain: alias.domain), line: line, column: column, filePath: filePath)
+				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath, memo: self.spellings), low: alias.low, high: alias.high, isFloat: isFloat, writtenNegative: writtenNegative, domain: alias.domain), line: line, column: column, filePath: filePath)
 			end 'outOfRange'
 
 			return false
@@ -1408,7 +1410,7 @@ type RangeCheckEmitter
 	// cannot panic naming a typealias no file declares, and one alias reads the same whether it guards
 	// an array ELEMENT or a plain PARAMETER.
 	function rangeCheckMessage(filePath FilePath, line LineNumber, alias RangedTypeAlias) returns ByteArray
-		return panicMessageLine(filePath, line: line, text: textAsItsReaderSpellsIt(self.project, path: filePath, text: "Range check failed: value outside typealias '{aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath)}'"))
+		return panicMessageLine(filePath, line: line, text: textAsItsReaderSpellsIt(self.project, path: filePath, text: "Range check failed: value outside typealias '{aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath, memo: self.spellings)}'"))
 	end 'rangeCheckMessage'
 
 	// Map each `const` result value id to its constant, and each integer `binOp` of two constants that

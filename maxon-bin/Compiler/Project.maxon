@@ -12495,12 +12495,12 @@ module function textAsItsReaderSpellsIt(project Project, path FilePath, text Str
 	return respelledText(text, respellings: shadowRespellingsFor(project, path: path))
 end 'textAsItsReaderSpellsIt'
 
-module function aliasSpelledForReader(project Project, alias RangedTypeAlias, readerFilePath FilePath) returns String
+module function aliasSpelledForReader(project Project, alias RangedTypeAlias, readerFilePath FilePath, memo DeclarationQualifierMemo) returns String
 	let base = aliasBaseName(alias.name)
 	let signatures = programSignaturesIn(project, asker: "aliasSpelledForReader")
 
 	if isMintName(alias.name) 'aMintNamesItsDeclaration'
-		return signatures.contestedDeclarationSpelling(base, declFilePath: alias.declFilePath)
+		return signatures.contestedDeclarationSpelling(base, declFilePath: alias.declFilePath, memo: memo)
 	end 'aMintNamesItsDeclaration'
 
 	if base.equals(sourceSpelledAliasName(alias.name)) or not signatures.declaredInTheStdlib(alias.declFilePath) or signatures.declaredInTheStdlib(readerFilePath) 'theBareNameIsTheReadersSpelling'
