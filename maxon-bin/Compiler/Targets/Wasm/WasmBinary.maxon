@@ -983,7 +983,6 @@ function writeLocalDecls(buf ByteArray, localTypes WasmValTypeArray)
 			let lastType = try groupTypes.get(n - 1) otherwise panic("writeLocalDecls: groupTypes.get(last) OOB with count {n}")
 
 			if lastType == t 'sameRun'
-				// Primitive read is a copy, so this get/set pair has no borrow conflict.
 				let lastCount = try groupCounts.get(n - 1) otherwise panic("writeLocalDecls: groupCounts.get(last) OOB with count {n}")
 				try groupCounts.set(n - 1, value: (lastCount + 1) as Wasm32Index) otherwise panic("writeLocalDecls: groupCounts.set(last) OOB with count {n}")
 				extended = true
@@ -1008,7 +1007,7 @@ end 'writeLocalDecls'
 // One export entry, held until finish() so exports emit in the order StdToWasm declared them (which
 // determinism requires and the component tooling expects: memory before the run function).
 type WasmExport
-	export var name as ByteArray
+	export let name as ByteArray
 	export var kind as MachineWord
 	export var index as Wasm32Index
 
@@ -1051,20 +1050,20 @@ export type WasmModuleBuilder
 	// Interned functype encodings, position = type index. Deduplicated so identical signatures
 	// share one entry; `funcTypeDedup` keys the encoded bytes → index so the dedup is O(1), not a
 	// scan of every prior entry per interned type.
-	var funcTypes as ByteArrayArray
+	var funcTypes as ByteBlobArray
 
 	// Encoded functype bytes → their interned type index (the dedup index for `funcTypes`).
 	var funcTypeDedup as FuncTypeDedupMap
 
 	// Imports, in call order: parallel columns of module name, field name, and type index.
-	var importModules as ByteArrayArray
-	var importFields as ByteArrayArray
+	var importModules as NameRoster
+	var importFields as NameRoster
 	var importTypeIndices as Wasm32IndexArray
 
 	// Defined functions, in call order: the type index and the FRAMED body (local decls +
 	// instruction bytes + trailing `end`) of each.
 	var funcTypeIndices as Wasm32IndexArray
-	var funcBodies as ByteArrayArray
+	var funcBodies as ByteBlobArray
 
 	// ⭐ **ONE DEBUG NAME PER FUNCTION, AT POSITION == ITS FUNCTION INDEX** — the "name" section's
 	// `namemap`, collected as the functions are added rather than reconstructed afterwards.
@@ -1078,7 +1077,7 @@ export type WasmModuleBuilder
 	//
 	// The index-space contract (all imports before any defined function) is what lets ONE array serve
 	// both bands, and `requireDebugNameSlot` asserts it at every add rather than trusting it.
-	var funcDebugNames as ByteArrayArray
+	var funcDebugNames as NameRoster
 
 	// Exports, in declaration order.
 	var exportEntries as WasmExportArray
@@ -1100,7 +1099,7 @@ export type WasmModuleBuilder
 	var funcrefTable as bool
 
 	export static function create() returns WasmModuleBuilder
-		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), funcDebugNames: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0, dataSegments: WasmDataSegmentArray.create(), funcrefTable: false}
+		return Self{funcTypes: ByteBlobArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: NameRoster.create(), importFields: NameRoster.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteBlobArray.create(), funcDebugNames: NameRoster.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0, dataSegments: WasmDataSegmentArray.create(), funcrefTable: false}
 	end 'create'
 
 	// Intern a functype, returning its (deduplicated) type index. The dedup is an O(1) map lookup on
@@ -1164,7 +1163,7 @@ export type WasmModuleBuilder
 		end 'slotDrift'
 	end 'requireDebugNameSlot'
 
-	export function functionDebugNames() returns ByteArrayArray
+	export function functionDebugNames() returns NameRoster
 		return self.funcDebugNames
 	end 'functionDebugNames'
 

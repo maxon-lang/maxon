@@ -203,9 +203,6 @@ end 'StdPassWorker'
 // `runStdPassesOverTheBand` over a real index of the whole module. A second spelling of this match would be
 // two schedules free to drift.
 //
-// The function is read through `getFunc` at every call rather than held across them, for the borrow rule
-// `elimTrivialBlockArgs`' canonical note states: each pass writes the module it reads the function out of.
-//
 // It RETURNS the versioning answer because that is the one fact one step hands the next —
 // `refineVersionedRanges` visits exactly the functions `unswitchInvariantGuards` rewrote. A driver that
 // cannot carry the answer between two steps of one function hands `unasked` and earns the panic naming the
@@ -301,9 +298,9 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 			workers.push(spawn StdPassWorker.create(project.target.cpu, os: project.target.os, steps: members.clone()))
 		end 'eachWorker'
 
-		let stealsBefore = __Builtins.schedStealCount()
+		let stealsBefore = Scheduler.counters().steals
 		drainTheStdPool(module, workers: workers, workerCount: poolSize, landedOrigins: landedOrigins, slots: slots)
-		let stealsAfter = __Builtins.schedStealCount()
+		let stealsAfter = Scheduler.counters().steals
 
 		if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
 			compilerLogger(CompilerLogGroup.codegen).debug("stdFanOut pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
@@ -360,7 +357,6 @@ export function runStdPassesOverTheBand(project Project, module StdModule, membe
 		var workspace = workspaceFor(step, tally: tally)
 		announceStep(step, into: irLog, firstFuncIndex: firstFuncIndex, funcCount: funcCount, reducesDivision: reducesDivision)
 
-		// An INDEX loop over a range this driver was handed, for the borrow rule `runFanOutStep` states.
 		for funcIndex in firstFuncIndex upto funcCount 'eachFunc'
 			var origins = DerivedOrigins.create()
 			var answer = VersioningAnswer.unasked
@@ -439,7 +435,7 @@ function foldWorkerReport(project Project, report StdPassWorkerReport, members S
 	for k in 0 upto members.count() 'eachStep'
 		let step = try members.get(k) otherwise panic("foldWorkerReport: members.get OOB at {k}")
 		foldPoolPhaseDelta(project, phase: compilePhaseOfPass(passKindOfFanOutStep(step)), driver: CompilePhase.stdFanOut, delta: report.costs.accumulated(k))
-		let tally = try tallies.get(k) otherwise panic("foldWorkerReport: tallies.get OOB at {k}")
+		var tally = try tallies.get(k) otherwise panic("foldWorkerReport: tallies.get OOB at {k}")
 		tally.absorb(try report.tallies.get(k) otherwise panic("foldWorkerReport: report.tallies.get OOB at {k} after the count check"))
 	end 'eachStep'
 end 'foldWorkerReport'
@@ -464,7 +460,7 @@ function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, wor
 	end 'fillThePipeline'
 
 	while replies.count() > 0 'serveWhoeverFinishedFirst'
-		let ready = __Builtins.awaitAny(replies)
+		let ready = replies.awaitAny()
 		let freedWorker = dispatch.workerAt(ready)
 		let job = dispatch.land(ready, outstanding: replies.count())
 		let funcIndex = job

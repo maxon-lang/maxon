@@ -43,8 +43,8 @@ module function filesRemoved(project Project, paths MaxonSourcePathSet)
 
 	var kept = FilePathArray.create()
 
-	// `path` is a borrow of an element of the array being walked, so nothing here may write
-	// `project.db.sourcePaths` — the kept list replaces it only once the walk is over.
+	// Nothing here may write `project.db.sourcePaths`: the walk re-reads its live count each step, so a
+	// removal in place would skip the element after it. The kept list replaces it once the walk is over.
 	for path in project.db.sourcePaths 'eachRegistered'
 		if not paths.contains(path) 'stillRegistered'
 			kept.push(path)
@@ -192,7 +192,9 @@ end 'rawTokensAreHeldInMemory'
 function viewsPackName(project Project) returns String throws CompileError
 	let state = try libraryStateKeyOf(project)
 
-	return libraryEntryName(LibraryEntryKind.views, parts: [state])
+	let entryClass = project.session.fileMemos.library.entryClassOf(project)
+
+	return libraryEntryName(LibraryEntryKind.views, entryClass: entryClass, parts: [state])
 end 'viewsPackName'
 
 type OpenViewsPack
@@ -217,7 +219,7 @@ end 'viewsPackFor'
 
 function loadedView(project Project, contentHash HashDigest, buildKey BuildKey) returns ViewEntry throws SharedMemoMiss
 	let opened = try viewsPackFor(project, contentHash: contentHash)
-	let reader = try opened.pack.section(contentHash, second: NoRowQualifier, third: NoRowQualifier) otherwise throw SharedMemoMiss.notHeld
+	var reader = try opened.pack.section(contentHash, second: NoRowQualifier, third: NoRowQualifier) otherwise throw SharedMemoMiss.notHeld
 
 	return try decodedViewSection(reader, buildKey: buildKey) otherwise (damage) 'damaged'
 		project.session.fileMemos.library.rejectDecoded(project.target, name: opened.name, damage: damage, tally: project.db.libraryTally)
@@ -241,7 +243,7 @@ function heldViewFor(project Project, contentHash HashDigest, buildKey BuildKey)
 		return view
 	end 'inMemory'
 
-	let entry = try loadedView(project, contentHash: contentHash, buildKey: buildKey)
+	var entry = try loadedView(project, contentHash: contentHash, buildKey: buildKey)
 	var memo = memoOrNew(project, contentHash: contentHash)
 	memo.learnRawStreamFacts(entry.facts)
 	memo.addView(entry.view)
@@ -451,7 +453,7 @@ function heldParseFor(project Project, contentHash HashDigest, variant HashDiges
 	loadParseIfAbsent(project, memo: memo, contentHash: contentHash, variant: variant, key: key, libraryHash: signatures.libraryHash)
 
 	let consuming = not project.session.fileMemos.library.retainsWhatItLoads()
-	let rebased = try memo.parseOf(variant, key: key, signatures: signatures, overrides: overrides, consuming: consuming) otherwise (miss) 'notHeld'
+	var rebased = try memo.parseOf(variant, key: key, signatures: signatures, overrides: overrides, consuming: consuming) otherwise (miss) 'notHeld'
 		signatures.restoreBaseline()
 		project.db.sharedParseMisses = project.db.sharedParseMisses + 1
 
@@ -476,7 +478,9 @@ let MostKeysPerLibraryParse = 6 as ElementIndex
 function parsesPackName(project Project, libraryHash HashDigest) returns String throws CompileError
 	let state = try libraryStateKeyOf(project)
 
-	return libraryEntryName(LibraryEntryKind.parses, parts: [state, libraryHash])
+	let entryClass = project.session.fileMemos.library.entryClassOf(project)
+
+	return libraryEntryName(LibraryEntryKind.parses, entryClass: entryClass, parts: [state, libraryHash])
 end 'parsesPackName'
 
 function loadParseIfAbsent(project Project, memo SharedFileMemo, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest)
@@ -484,10 +488,10 @@ function loadParseIfAbsent(project Project, memo SharedFileMemo, contentHash Has
 		return
 	end 'inMemory'
 
-	let library = project.session.fileMemos.library
+	var library = project.session.fileMemos.library
 	let name = try parsesPackName(project, libraryHash: libraryHash) otherwise return
 	let pack = try library.openPack(project.target, name: name, tally: project.db.libraryTally) otherwise return
-	let reader = try pack.section(contentHash, second: variant, third: key) otherwise return
+	var reader = try pack.section(contentHash, second: variant, third: key) otherwise return
 
 	let parse = try decodedParseSection(reader, variant: variant, key: key) otherwise (damage) 'damaged'
 		library.rejectDecoded(project.target, name: name, damage: damage, tally: project.db.libraryTally)
@@ -498,9 +502,10 @@ function loadParseIfAbsent(project Project, memo SharedFileMemo, contentHash Has
 end 'loadParseIfAbsent'
 
 export function persistSharedEntries(project Project)
-	let library = project.session.fileMemos.library
+	var library = project.session.fileMemos.library
+	let entryClass = library.entryClassOf(project)
 
-	if not library.isAvailable(project.target) 'noDiskTier'
+	if not library.persistsFor(project) 'noDiskTier'
 		return
 	end 'noDiskTier'
 
@@ -532,7 +537,7 @@ export function persistSharedEntries(project Project)
 		return
 	end 'notWritten'
 
-	library.trimEntries(project.target, kind: LibraryEntryKind.views, kept: name, most: MostEntriesOfAKind)
+	library.trimEntries(project.target, kind: LibraryEntryKind.views, entryClass: entryClass, kept: name, most: MostEntriesOfAKind)
 
 	for contentHash in project.db.shareableTokenHashes 'eachWritten'
 		var view = try memoViewOf(project, contentHash: contentHash, buildKey: buildKey) otherwise continue
@@ -543,7 +548,8 @@ end 'persistSharedEntries'
 export function persistStashedParses(project Project)
 	var stashed = project.db.stashedParsePacks
 	project.db.stashedParsePacks = StashedParsePackMap.create()
-	let library = project.session.fileMemos.library
+	var library = project.session.fileMemos.library
+	let entryClass = library.entryClassOf(project)
 
 	for (libraryHash, _) in stashed 'eachLibraryState'
 		var pack = try stashed.get(libraryHash) otherwise panic("persistStashedParses: the map iterated {libraryHash} and does not hold it")
@@ -558,7 +564,7 @@ export function persistStashedParses(project Project)
 		end 'anEarlierPack'
 
 		if library.write(project.target, name: name, image: pack.sealed(), tally: project.db.libraryTally) 'written'
-			library.trimEntries(project.target, kind: LibraryEntryKind.parses, kept: name, most: MostParsePacks)
+			library.trimEntries(project.target, kind: LibraryEntryKind.parses, entryClass: entryClass, kept: name, most: MostParsePacks)
 		end 'written'
 	end 'eachLibraryState'
 end 'persistStashedParses'
@@ -575,9 +581,9 @@ function stashShareableParse(project Project, contentHash HashDigest, variant Ha
 		return artifact
 	end 'carriesFaults'
 
-	let signatures = programSignaturesIn(project, asker: "stashShareableParse")
+	var signatures = programSignaturesIn(project, asker: "stashShareableParse")
 	let footprint = footprintOf(project, artifact: artifact, signatures: signatures)
-	let held = SharedLibraryParse.create(variant, key: key, footprint: footprint, artifact: artifact)
+	var held = SharedLibraryParse.create(variant, key: key, footprint: footprint, artifact: artifact)
 
 	let retains = project.session.fileMemos.library.retainsWhatItLoads()
 
@@ -601,9 +607,9 @@ end 'stashShareableParse'
 // (`tests/cli/library-cache-warm-build-is-byte-identical`). `LibraryBaseline.persistedBaseline`
 // does the same for the baseline.
 function persistedCanonicalParse(project Project, held SharedLibraryParse, contentHash HashDigest, libraryHash HashDigest) returns SharedLibraryParse throws LibraryEntryMiss
-	let library = project.session.fileMemos.library
+	var library = project.session.fileMemos.library
 
-	if not library.isAvailable(project.target) 'noDiskTier'
+	if not library.persistsFor(project) 'noDiskTier'
 		throw LibraryEntryMiss.unavailable
 	end 'noDiskTier'
 

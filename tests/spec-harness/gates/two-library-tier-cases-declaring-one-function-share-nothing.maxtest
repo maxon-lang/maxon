@@ -1,0 +1,16 @@
+let TierTwinsSpecName = "tier-twins"
+let TierTwinsWorkersFlag = "--workers=1"
+
+test 'two library-tier cases declaring one function compile in turn, and a third sees neither'
+	let run = runGateFixtureOnce([TierTwinsWorkersFlag])
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: TierTwinsSpecName, testNames: ["tier-twins.first", "tier-twins.second", "tier-twins.neither-is-still-there"], broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "library-tier cases share one staged directory and leak nothing into each other")
+end 'two library-tier cases declaring one function compile in turn, and a third sees neither'

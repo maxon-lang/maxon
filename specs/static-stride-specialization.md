@@ -217,6 +217,7 @@ end 'main'
 ```
 
 <!-- test: a-packed-element-is-not-inlined-at-all -->
+<!-- tier: stdlib -->
 A NEGATIVE `element_size@24` IS A WIDTH, NOT AN ERROR. `int(0 to 3)` packs four elements to the byte
 and stamps `-2`, which selects NEITHER single-op arm — so the compiler knows, at compile time, that
 every fast arm this pass could emit is dead, and emits none of them. The emitted code (`--emit-ir`)
@@ -335,6 +336,7 @@ end 'main'
 ```
 
 <!-- test: a-substituted-container-field-is-word-strided-however-it-is-typed -->
+<!-- tier: stdlib -->
 ⛔⛔ **THE RED-GATE CONTROL, AND THE PROGRAM THAT PINS THE RULE.** `Bag with Byte`'s `items` is
 declared `Array with Element` inside a SHARED generic body, so its record was created at the opaque
 machine-word slot and stamps `element_size@24` with **8**. Read from OUTSIDE that body it wears the

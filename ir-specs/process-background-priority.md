@@ -12,6 +12,7 @@ The cases of `specs/process-background-priority.md` whose subject is the emitted
 ## Tests
 
 <!-- test: process-background-priority.priority-body-is-runtime-source -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE PRIORITY WRITE'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE
 THAT SEES IT.** `runtime/Process.maxon` writes `__proc_bg_priority` against the `__Raw` floor, and the block
 below renders what the back end made of that source. It is the one place in this file where the SET is

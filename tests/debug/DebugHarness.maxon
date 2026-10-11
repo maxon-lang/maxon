@@ -29,6 +29,11 @@ let FixturesDirName = "tests/debug/fixtures"
 export let SpansFixtureName = "spans"
 export let GreenThreadFixtureName = "greenthread"
 let StagingRootDirName = "temp/debug"
+let StdlibDirName = "stdlib"
+let LibraryTierDirName = "tier"
+let LibraryTierBinDirName = "bin"
+let LibraryTierProgramDirName = "__fixture__"
+let StageLibraryTierCommandName = "stage-library-tier"
 
 // The stored-name mapping, `tests/README.md` rule 1: `<name>.fixture -> <name>`.
 let StoredFixtureSuffix = ".fixture"
@@ -124,7 +129,7 @@ end 'stageStoredTree'
 
 // Compile `source` — one staged file, or the staged directory as one project — with whatever extra flag this
 // build is asking about.
-export function spawnBuild(source FilePath, staged FilePath, label String, extraArguments StringArray) returns CollectedOutput
+export function spawnBuild(source FilePath, staged FilePath, label String, extraArguments StringArray, binary FilePath = testedCompilerPath()) returns CollectedOutput
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
 	arguments.push(source.toString())
@@ -134,14 +139,12 @@ export function spawnBuild(source FilePath, staged FilePath, label String, extra
 		arguments.push(extra)
 	end 'eachExtra'
 
-	return spawnCompiler(arguments, staged: staged, what: "the '{label}' build")
+	return spawnCompiler(arguments, staged: staged, what: "the '{label}' build", binary: binary)
 end 'spawnBuild'
 
 // One child compiler, run in the staging tree. A binary that is not there and a spawn that never happened
 // both stop a case running at all, so both panic naming what was being asked for.
-export function spawnCompiler(arguments StringArray, staged FilePath, what String) returns CollectedOutput
-	let binary = testedCompilerPath()
-
+export function spawnCompiler(arguments StringArray, staged FilePath, what String, binary FilePath = testedCompilerPath()) returns CollectedOutput
 	if not File.exists(binary) 'noBinary'
 		panic("debug tests: the gate could not run — {what} needs a compiler at {binary.toString()} and there is none. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
 	end 'noBinary'
@@ -1025,6 +1028,56 @@ export function builtFixture(caseLabel String, fixture String, extraArguments St
 
 	return staged
 end 'builtFixture'
+
+export function builtLibraryTierFixture(caseLabel String, fixture String) returns FilePath
+	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
+	clearStagedFiles(staged)
+
+	let compiler = stagedLibraryTier(staged)
+	let program = libraryTierProgramDir(staged)
+	createDirectory(program)
+	stageStoredTree(fixtureDir("{FixturesDirName}{PathSeparator}{fixture}"), into: program)
+
+	let build = spawnBuild(program, staged: staged, label: fixture, extraArguments: StringArray.create(), binary: compiler)
+
+	if build.exitCode() != 0 'didNotBuild'
+		panic("debug tests: the gate could not run — the library-tier '{fixture}' build for case '{caseLabel}' exited {build.exitCode()}, so there is no program to debug. It wrote to stderr: {build.stderr}")
+	end 'didNotBuild'
+
+	return staged
+end 'builtLibraryTierFixture'
+
+export function libraryTierProgramFile() returns String
+	return "{LibraryTierDirName}{PathSeparator}{StdlibDirName}{PathSeparator}{LibraryTierProgramDirName}{PathSeparator}{StagedProgramFileName}"
+end 'libraryTierProgramFile'
+
+function libraryTierProgramDir(staged FilePath) returns FilePath
+	return staged.join(LibraryTierDirName).join(StdlibDirName).join(LibraryTierProgramDirName)
+end 'libraryTierProgramDir'
+
+function stagedLibraryTier(staged FilePath) returns FilePath
+	let tier = staged.join(LibraryTierDirName)
+	let compiler = testedCompilerPath()
+	let absolute = Directory.currentPath()
+
+	var arguments = StringArray.create()
+	arguments.push(StageLibraryTierCommandName)
+	arguments.push(tier.resolve(absolute).toString())
+
+	let stager = spawnCompiler(arguments, staged: staged, what: "the library-tier stager", binary: compiler)
+
+	if stager.exitCode() != 0 'didNotStage'
+		panic("debug tests: the gate could not run — staging the library tier exited {stager.exitCode()}. It wrote to stderr: {stager.stderr}")
+	end 'didNotStage'
+
+	return tier.join(LibraryTierBinDirName).join(compiler.filename())
+end 'stagedLibraryTier'
+
+function createDirectory(path FilePath)
+	if not Directory.create(path) and not Directory.isDirectory(path) 'couldNotCreate'
+		panic("debug tests: the gate could not run — could not create {path.toString()}.")
+	end 'couldNotCreate'
+end 'createDirectory'
 
 export function builtTestBinary(caseLabel String, staged FilePath) returns FilePath
 	let listing = spawnCompiler([TestCommandName, TestListOption, TestBuildOption, TestJsonOption], staged: staged, what: "the '{caseLabel}' test build")

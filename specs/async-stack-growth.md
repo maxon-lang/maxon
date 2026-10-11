@@ -1275,7 +1275,7 @@ depth=2000000
 **A STACK THAT GREW FOR ONE DEEP CALL IS GIVEN BACK ONCE THE THREAD HAS BEEN IDLE.** Go halves a goroutine's
 stack when less than a quarter of it is in use (`vendor/go/src/runtime/stack.go`, `shrinkstack`). A coroutine
 recurses twenty thousand deep, returns, and parks twice: the first park follows the growth too closely to
-shrink, the second comes after the shrink window and halves the stack. `__Builtins.gtStackBytes()` is the
+shrink, the second comes after the shrink window and halves the stack. `Scheduler.currentStackBytes()` is the
 calling green thread's current stack size. The same recursion then runs again on the shrunk stack, which must
 grow back correctly.
 ```maxon
@@ -1290,10 +1290,10 @@ end 'down'
 
 function deepThenIdle() returns Integer
 	let depth = down(20000)
-	let grown = __Builtins.gtStackBytes()
+	let grown = Scheduler.currentStackBytes()
 	sleep(1100)
 	sleep(1)
-	let after = __Builtins.gtStackBytes()
+	let after = Scheduler.currentStackBytes()
 	let again = down(20000)
 	print("depth={depth} shrunk={after < grown} again={again}\n")
 	return 0
@@ -1329,9 +1329,9 @@ end 'down'
 
 function deepThenPark() returns Integer
 	let depth = down(20000)
-	let grown = __Builtins.gtStackBytes()
+	let grown = Scheduler.currentStackBytes()
 	sleep(1)
-	let after = __Builtins.gtStackBytes()
+	let after = Scheduler.currentStackBytes()
 	print("depth={depth} shrunk={after < grown}\n")
 	return 0
 end 'deepThenPark'
@@ -1370,7 +1370,7 @@ end 'down'
 
 function seedBytes() returns Integer
 	Scheduler.yield()
-	return __Builtins.gtStackBytes()
+	return Scheduler.currentStackBytes() as Integer
 end 'seedBytes'
 
 function deep(n Integer) returns Integer
@@ -1440,10 +1440,10 @@ end 'first'
 
 function deepThenIdle() returns Integer
 	let depth = down(20000)
-	let grown = __Builtins.gtStackBytes()
+	let grown = Scheduler.currentStackBytes()
 	sleep(1100)
 	sleep(1)
-	let after = __Builtins.gtStackBytes()
+	let after = Scheduler.currentStackBytes()
 	print("depth={depth} shrunk={after < grown}\n")
 	return first(depth)
 end 'deepThenIdle'
@@ -1627,7 +1627,7 @@ end 'down'
 
 function seedBytes() returns Integer
 	Scheduler.yield()
-	return __Builtins.gtStackBytes()
+	return Scheduler.currentStackBytes() as Integer
 end 'seedBytes'
 
 function deep(n Integer) returns Integer

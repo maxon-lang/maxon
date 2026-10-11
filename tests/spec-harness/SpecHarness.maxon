@@ -284,7 +284,7 @@ function expectedRefusalIn(fixture HarnessFixture) returns String
 end 'expectedRefusalIn'
 
 function stagedCopyOf(fixture HarnessFixture) returns FilePath
-	let staged = hostTempDir().join("{StagingDirNamePrefix}-{__Builtins.currentProcessId()}-{fixture.kind}-{fixture.caseName}").resolve(Directory.currentPath())
+	let staged = hostTempDir().join("{StagingDirNamePrefix}-{Process.id()}-{fixture.kind}-{fixture.caseName}").resolve(Directory.currentPath())
 	createFreshDirectory(staged)
 	copyFixtureInto(fixture, staged: staged)
 	return staged
@@ -292,14 +292,14 @@ end 'stagedCopyOf'
 
 module function stagedRunCacheRoot(caller String = __file__) returns FilePath
 	let fixture = fixtureOf(caller, kind: GatesDirName)
-	let root = hostTempDir().join("{StagingDirNamePrefix}-{__Builtins.currentProcessId()}-{RunCacheRootDirName}-{fixture.caseName}").resolve(Directory.currentPath())
+	let root = hostTempDir().join("{StagingDirNamePrefix}-{Process.id()}-{RunCacheRootDirName}-{fixture.caseName}").resolve(Directory.currentPath())
 	createFreshDirectory(root)
 	return root
 end 'stagedRunCacheRoot'
 
 module function runGateFixtureBelowAnIgnoredDirectory(caller String = __file__) returns CollectedOutput
 	let fixture = fixtureOf(caller, kind: GatesDirName)
-	let wrapper = hostTempDir().join("{StagingDirNamePrefix}-{__Builtins.currentProcessId()}-{IgnoredWrapperDirName}").resolve(Directory.currentPath())
+	let wrapper = hostTempDir().join("{StagingDirNamePrefix}-{Process.id()}-{IgnoredWrapperDirName}").resolve(Directory.currentPath())
 	createFreshDirectory(wrapper)
 	writeStagedText(wrapper.join(IgnoreMarkerFileName), content: "")
 

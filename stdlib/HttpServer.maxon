@@ -87,8 +87,6 @@ public type HttpServerLimits
 	end 'create'
 end 'HttpServerLimits'
 
-// A box rather than a field of `HttpServer`: `accept`, `serve` and `close` are called on a `let`
-// server, and writing a field of `self` would make each a mutating method its caller cannot reach.
 type ServerClosing
 	export var asked as bool
 
@@ -115,7 +113,7 @@ end 'ExchangeProgress'
 public type HttpExchange
 	let connection as TcpClient
 	let parsed as HttpRequest
-	let progress as ExchangeProgress
+	var progress as ExchangeProgress
 	let writeDeadlineMs as SocketDeadlineMs
 	let leftoverArrived as bool
 
@@ -186,7 +184,7 @@ end 'ArrivedBody'
 public type HttpServer
 	let listener as TcpListener
 	var limits as HttpServerLimits
-	let closing as ServerClosing
+	var closing as ServerClosing
 	let boundPort as NetworkPort
 
 	/// Bind and begin listening. `port: 0` takes whichever free port the kernel gives.
@@ -250,7 +248,7 @@ public type HttpServer
 		var retryMs = NoAcceptRetryMs
 
 		while stillServing(progress) 'acceptLoop'
-			let exchange = try self.accept() otherwise (fault) 'refused'
+			var exchange = try self.accept() otherwise (fault) 'refused'
 				progress = progressAfter(fault)
 				retryMs = acceptRetryAfter(fault, previous: retryMs)
 

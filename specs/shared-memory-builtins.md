@@ -25,6 +25,9 @@ name the section is published under — the one a second process needs in order 
 Every accessor is bounds-checked against the size the section was created with: a `readWord` or
 `writeWord` whose 8 bytes, or a `copyOut` whose `offset + byteCount`, would reach past the end throws
 `SharedMemoryError.outOfBounds`, so the three carry `throws SharedMemoryError` and are called with `try`.
+After `close()` the mapping is gone, and each of the three throws `SharedMemoryError.closed` rather than
+touching the address the mapping used to occupy. A `clone()` of a segment is another name for the same
+mapping, so closing either one closes it under both.
 
 ⛔ **A NAME IS HELD TO WHAT EVERY LANE CAN PUBLISH, ON EVERY LANE.** `create` throws
 `SharedMemoryError.invalidName` before any host call for a name that is empty, longer than 31 bytes, or
@@ -163,7 +166,8 @@ function createOutcome(name String) returns ExitCode
 			invalidName gives 7
 			createFailed gives 3
 			mapFailed or
-			outOfBounds gives 4
+			outOfBounds or
+			closed gives 4
 		end 'why'
 	end 'refused'
 
@@ -202,7 +206,8 @@ function main() returns ExitCode
 			outOfBounds gives 7
 			createFailed or
 			mapFailed or
-			invalidName gives 4
+			invalidName or
+			closed gives 4
 		end 'why'
 	end 'refused'
 
@@ -227,7 +232,8 @@ function main() returns ExitCode
 			outOfBounds gives 7
 			createFailed or
 			mapFailed or
-			invalidName gives 4
+			invalidName or
+			closed gives 4
 		end 'why'
 	end 'refused'
 
@@ -251,7 +257,8 @@ function main() returns ExitCode
 			outOfBounds gives 7
 			createFailed or
 			mapFailed or
-			invalidName gives 4
+			invalidName or
+			closed gives 4
 		end 'why'
 	end 'refused'
 
@@ -262,6 +269,100 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: shared-memory-builtins.every-accessor-throws-closed-after-close -->
+⛔ **A CLOSED SEGMENT HAS NO MAPPING, SO EVERY ACCESSOR THROWS `closed` INSTEAD OF REACHING THE ADDRESS IT
+USED TO HAVE.** The offset is inside the 4096 bytes the segment was created with, so the bound passes; only
+the `closed` arm can answer each of the three, and a read, write or copy that reached the unmapped view
+prints `read`, `wrote` or `copied` instead.
+```maxon
+function verdict(e SharedMemoryError) returns String
+	return match e 'why'
+		closed gives "closed"
+		createFailed or
+		mapFailed or
+		invalidName or
+		outOfBounds gives "other"
+	end 'why'
+end 'verdict'
+
+function readAfterClose(segment SharedSegment) returns String
+	let word = try segment.readWord(0) otherwise (e) 'refused'
+		return verdict(e)
+	end 'refused'
+
+	return "read {word}"
+end 'readAfterClose'
+
+function writeAfterClose(segment SharedSegment) returns String
+	try segment.writeWord(8, value: 7) otherwise (e) 'refused'
+		return verdict(e)
+	end 'refused'
+
+	return "wrote"
+end 'writeAfterClose'
+
+function copyAfterClose(segment SharedSegment) returns String
+	let octets = try segment.copyOut(0, byteCount: 16) otherwise (e) 'refused'
+		return verdict(e)
+	end 'refused'
+
+	return "copied {octets.count()}"
+end 'copyAfterClose'
+
+function main() returns ExitCode
+	var segment = try SharedSegment.create("maxon-spec-shm-after-close", bytes: 4096) otherwise return 3
+	try segment.writeWord(0, value: 42) otherwise return 4
+	segment.close()
+	print("read={readAfterClose(segment)} write={writeAfterClose(segment)} copy={copyAfterClose(segment)}\n")
+	return 0
+end 'main'
+```
+```stdout
+read=closed write=closed copy=closed
+```
+```exitcode
+0
+```
+
+<!-- test: shared-memory-builtins.a-clone-of-a-closed-segment-is-closed-too -->
+⛔ **A COPY OF A SEGMENT IS A SECOND NAME FOR ONE MAPPING, NOT A SECOND MAPPING.** `clone()` copies the
+record, and the record holds the mapping's address; closing the original unmaps it under every copy. Every
+copy therefore shares the one owner state that says whether the mapping is still there, so the clone's
+`readWord` throws `closed` rather than reading through an address that no longer maps anything — which prints
+`read` and a stale word, or faults.
+```maxon
+function verdict(e SharedMemoryError) returns String
+	return match e 'why'
+		closed gives "closed"
+		createFailed or
+		mapFailed or
+		invalidName or
+		outOfBounds gives "other"
+	end 'why'
+end 'verdict'
+
+function main() returns ExitCode
+	var segment = try SharedSegment.create("maxon-spec-shm-clone-closed", bytes: 4096) otherwise return 3
+	try segment.writeWord(0, value: 42) otherwise return 4
+	let copy = segment.clone()
+	segment.close()
+
+	let word = try copy.readWord(0) otherwise (e) 'refused'
+		print("{verdict(e)}\n")
+		return 0
+	end 'refused'
+
+	print("read {word}\n")
+	return 1
+end 'main'
+```
+```stdout
+closed
+```
+```exitcode
+0
 ```
 
 <!-- test: shared-memory-builtins.an-adopter-closing-keeps-the-publishers-name -->
@@ -303,7 +404,8 @@ function publishOutcome(name String) returns ExitCode
 			createFailed gives 3
 			invalidName or
 				mapFailed or
-				outOfBounds gives 4
+				outOfBounds or
+				closed gives 4
 		end 'why'
 	end 'refused'
 
@@ -338,7 +440,8 @@ function createOutcome(name String, bytes SegmentByteCount) returns ExitCode
 			createFailed gives 3
 			invalidName or
 				mapFailed or
-				outOfBounds gives 4
+				outOfBounds or
+				closed gives 4
 		end 'why'
 	end 'refused'
 

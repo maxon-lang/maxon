@@ -30,16 +30,8 @@ public extension Array
 	// into scratch, then sweeps left-to-right merging scratch + right into
 	// the output range. Stable (when picking equal, left wins).
 	//
-	// The pick tests "take the RIGHT one" first, which is the arm order the
-	// borrow of `managed` dictates: `rv` reads `managed[r]`, and the ONLY store
-	// that may follow a read of `managed` is the one consuming that very read.
-	// Tested the other way round, `rv` is still named one arm below a
-	// `managed.set` — sound here (the invariant `out < r` holds for the whole
-	// sweep, so the store never lands on the slot `rv` borrows) but sound by an
-	// index argument rather than by construction, and refused by E3070, which
-	// cannot see that the two arms exclude each other. `mergeBufferedRight`
-	// below already reads this way round; `driftQuicksort.stablePartition`
-	// carries the same note and the reason the distinction is not cosmetic.
+	// The pick tests "take the RIGHT one" first, so `rv`, read from `managed[r]`, is last named by the
+	// `managed.set` that consumes it. `mergeBufferedRight` below reads the same way round.
 	function mergeBufferedLeft(lo ElementIndex, mid ElementIndex, hi ElementIndex, scratch MergeScratchArray, cmp SortComparator)
 		let leftLen = mid - lo
 		var i = 0 as ElementIndex

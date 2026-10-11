@@ -34,7 +34,7 @@
 
 // Per-file memo: the tokenized form, stamped with the source hash it came from.
 export type TokenMemo
-	export var value as TokenArray
+	export let value as TokenArray
 	export var keyHash as HashDigest
 
 	export static function create(value TokenArray, keyHash HashDigest) returns TokenMemo
@@ -195,12 +195,12 @@ export type FootprintRow
 	export let id as GenericInstanceId
 	export let baseId as TypeNameId
 	export let args as MaxonTypeArray
-	export let fixedSize as InstanceSize
+	export let shape as InstanceShape
 	export let speculative as bool
 	export let compiledName as ByteArray
 
-	export static function create(id GenericInstanceId, baseId TypeNameId, args MaxonTypeArray, fixedSize InstanceSize, speculative bool, compiledName ByteArray) returns FootprintRow
-		return Self{id: id, baseId: baseId, args: args, fixedSize: fixedSize, speculative: speculative, compiledName: compiledName}
+	export static function create(id GenericInstanceId, baseId TypeNameId, args MaxonTypeArray, shape InstanceShape, speculative bool, compiledName ByteArray) returns FootprintRow
+		return Self{id: id, baseId: baseId, args: args, shape: shape, speculative: speculative, compiledName: compiledName}
 	end 'create'
 
 	// @generated library-cache begin
@@ -208,7 +208,7 @@ export type FootprintRow
 		writer.unsigned(self.id as CacheUnsigned)
 		writer.unsigned(self.baseId as CacheUnsigned)
 		cacheWriteMaxonTypeArray(writer, value: self.args)
-		cacheWriteInstanceSize(writer, value: self.fixedSize)
+		cacheWriteInstanceShape(writer, value: self.shape)
 		writer.flag(self.speculative)
 		writer.bytes(self.compiledName)
 	end 'cacheWrite'
@@ -217,11 +217,11 @@ export type FootprintRow
 		let f_id = (try reader.unsigned()) as GenericInstanceId
 		let f_baseId = (try reader.unsigned()) as TypeNameId
 		let f_args = try cacheReadMaxonTypeArray(reader)
-		let f_fixedSize = try cacheReadInstanceSize(reader)
+		let f_shape = try cacheReadInstanceShape(reader)
 		let f_speculative = try reader.flag()
 		let f_compiledName = try reader.bytes()
 
-		return Self{id: f_id, baseId: f_baseId, args: f_args, fixedSize: f_fixedSize, speculative: f_speculative, compiledName: f_compiledName}
+		return Self{id: f_id, baseId: f_baseId, args: f_args, shape: f_shape, speculative: f_speculative, compiledName: f_compiledName}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize48
@@ -314,25 +314,25 @@ end 'cacheReadFootprintInterfaceArray'
 export type ParseFootprint
 	export var rows as FootprintRowArray
 	export var nameIds as FootprintNameIdArray
-	export var nameBytes as ByteArrayArray
+	export var nameBytes as NameRoster
 	export var interfaces as FootprintInterfaceArray
 
 	export static function create() returns ParseFootprint
-		return Self{rows: FootprintRowArray.create(), nameIds: FootprintNameIdArray.create(), nameBytes: ByteArrayArray.create(), interfaces: FootprintInterfaceArray.create()}
+		return Self{rows: FootprintRowArray.create(), nameIds: FootprintNameIdArray.create(), nameBytes: NameRoster.create(), interfaces: FootprintInterfaceArray.create()}
 	end 'create'
 
 	// @generated library-cache begin
 	module function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteFootprintRowArray(writer, value: self.rows)
 		cacheWriteFootprintNameIdArray(writer, value: self.nameIds)
-		cacheWriteByteArrayArray(writer, value: self.nameBytes)
+		cacheWriteNameRoster(writer, value: self.nameBytes)
 		cacheWriteFootprintInterfaceArray(writer, value: self.interfaces)
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns ParseFootprint throws LibraryCacheDamage
 		let f_rows = try cacheReadFootprintRowArray(reader)
 		let f_nameIds = try cacheReadFootprintNameIdArray(reader)
-		let f_nameBytes = try cacheReadByteArrayArray(reader)
+		let f_nameBytes = try cacheReadNameRoster(reader)
 		let f_interfaces = try cacheReadFootprintInterfaceArray(reader)
 
 		return Self{rows: f_rows, nameIds: f_nameIds, nameBytes: f_nameBytes, interfaces: f_interfaces}
@@ -357,7 +357,7 @@ export type ParseRebase
 end 'ParseRebase'
 
 export type RebasedParse
-	export let artifact as FileParseArtifact
+	export var artifact as FileParseArtifact
 	export let rebase as ParseRebase
 
 	export static function create(artifact FileParseArtifact, rebase ParseRebase) returns RebasedParse
@@ -369,7 +369,7 @@ export type SharedLibraryParse
 	let variant as HashDigest
 	let key as HashDigest
 	module let footprint as ParseFootprint
-	module let artifact as FileParseArtifact
+	module var artifact as FileParseArtifact
 
 	export static function create(variant HashDigest, key HashDigest, footprint ParseFootprint, artifact FileParseArtifact) returns SharedLibraryParse
 		return Self{variant: variant, key: key, footprint: footprint, artifact: artifact}
@@ -449,21 +449,26 @@ export type ParseStamp
 end 'ParseStamp'
 
 export type RawStreamFacts
-	export let declaredTypeNames as ByteArrayArray
-	export let reservedSpellings as ByteArrayArray
+	export let declaredTypeNames as NameRoster
+	export let reservedSpellings as NameRoster
 
-	export static function create(declaredTypeNames ByteArrayArray, reservedSpellings ByteArrayArray) returns RawStreamFacts
+	export static function create(declaredTypeNames NameRoster, reservedSpellings NameRoster) returns RawStreamFacts
 		return Self{declaredTypeNames: declaredTypeNames, reservedSpellings: reservedSpellings}
 	end 'create'
 
 	export static function nothing() returns RawStreamFacts
-		return Self{declaredTypeNames: ByteArrayArray.create(), reservedSpellings: ByteArrayArray.create()}
+		return Self{declaredTypeNames: NameRoster.create(), reservedSpellings: NameRoster.create()}
 	end 'nothing'
 
 	export static function of(tokens TokenArray) returns RawStreamFacts
 		return Self{declaredTypeNames: declaredTypeNamesIn(tokens), reservedSpellings: reservedSpellingsIn(tokens)}
 	end 'of'
 end 'RawStreamFacts'
+
+union RawTokensHold
+	absent
+	held(let tokens TokenArray)
+end 'RawTokensHold'
 
 // What one file's BYTES lex to, plus one view per build key this process has been asked about.
 //
@@ -472,8 +477,7 @@ end 'RawStreamFacts'
 // other key component is the `debugStream` flag, so the walk is over at most two elements and a
 // `Map` would cost a hash to answer a question a compare answers.
 export type SharedFileMemo
-	var rawTokens as TokenArray
-	var rawHeld as bool
+	var raw as RawTokensHold
 	var facts as RawStreamFacts
 	var factsKnown as bool
 	export var views as SharedBuildViewArray
@@ -484,28 +488,29 @@ export type SharedFileMemo
 	end 'parseCount'
 
 	export static function create(tokens TokenArray) returns SharedFileMemo
-		return Self{rawTokens: tokens, rawHeld: true, facts: RawStreamFacts.of(tokens), factsKnown: true, views: SharedBuildViewArray.create(), parses: SharedLibraryParseArray.create()}
+		return Self{raw: RawTokensHold.held(tokens), facts: RawStreamFacts.of(tokens), factsKnown: true, views: SharedBuildViewArray.create(), parses: SharedLibraryParseArray.create()}
 	end 'create'
 
 	export static function holdingNothingYet() returns SharedFileMemo
-		return Self{rawTokens: TokenArray.create(), rawHeld: false, facts: RawStreamFacts.nothing(), factsKnown: false, views: SharedBuildViewArray.create(), parses: SharedLibraryParseArray.create()}
+		return Self{raw: RawTokensHold.absent, facts: RawStreamFacts.nothing(), factsKnown: false, views: SharedBuildViewArray.create(), parses: SharedLibraryParseArray.create()}
 	end 'holdingNothingYet'
 
 	export function holdsRawTokens() returns bool
-		return self.rawHeld
+		return match self.raw 'raw'
+			held gives true
+			absent gives false
+		end 'raw'
 	end 'holdsRawTokens'
 
 	export function rawTokensHeld() returns TokenArray throws SharedMemoMiss
-		if not self.rawHeld 'notHere'
-			throw SharedMemoMiss.notHeld
-		end 'notHere'
-
-		return self.rawTokens
+		match self.raw 'raw'
+			held(tokens) then return tokens
+			absent then throw SharedMemoMiss.notHeld
+		end 'raw'
 	end 'rawTokensHeld'
 
 	export function holdRawTokens(tokens TokenArray)
-		self.rawTokens = tokens
-		self.rawHeld = true
+		self.raw = RawTokensHold.held(tokens)
 
 		if not self.factsKnown 'factsStillToLearn'
 			self.facts = RawStreamFacts.of(tokens)
@@ -532,7 +537,7 @@ export type SharedFileMemo
 
 	export function parseOf(variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable, consuming bool) returns RebasedParse throws SharedMemoMiss
 		let position = try self.positionAnswering(variant, key: key)
-		let held = try self.parses.get(position) otherwise panic("SharedFileMemo.parseOf: parses.get OOB at {position}, the position just found")
+		var held = try self.parses.get(position) otherwise panic("SharedFileMemo.parseOf: parses.get OOB at {position}, the position just found")
 		let rebased = try held.rebasedOnto(signatures, overrides: overrides, consuming: consuming)
 
 		if consuming 'noLaterCompileWillAsk'
@@ -601,9 +606,10 @@ export typealias SharedFileMemoEntryMap = Map with (HashDigest, SharedFileMemo)
 export type SharedFileMemoMap
 	export var entries as SharedFileMemoEntryMap
 	export var library as LibraryCache
+	module var libraryNames as LibraryNameRosterMap
 
 	static function over(library LibraryCache) returns SharedFileMemoMap
-		return Self{entries: SharedFileMemoEntryMap.create(), library: library}
+		return Self{entries: SharedFileMemoEntryMap.create(), library: library, libraryNames: LibraryNameRosterMap.create()}
 	end 'over'
 
 	export static function create() returns SharedFileMemoMap
@@ -698,6 +704,34 @@ module type SourceFileStamp
 end 'SourceFileStamp'
 
 module typealias SourceFileStampMap = Map with (FilePath, SourceFileStamp)
+
+module type LibraryNameRoster
+	let stamps as SourceFileStampMap
+	export let names as NameRoster
+
+	module static function create(stamps SourceFileStampMap, names NameRoster) returns LibraryNameRoster
+		return Self{stamps: stamps, names: names}
+	end 'create'
+
+	module function describes(paths MaxonSourcePathArray) returns bool
+		if paths.count() != self.stamps.count() 'anotherFileSet'
+			return false
+		end 'anotherFileSet'
+
+		for path in paths 'eachFile'
+			let stamp = try self.stamps.get(path) otherwise return false
+			let info = try File.info(path) otherwise return false
+
+			if not stamp.describes(info) 'rewritten'
+				return false
+			end 'rewritten'
+		end 'eachFile'
+
+		return true
+	end 'describes'
+end 'LibraryNameRoster'
+
+module typealias LibraryNameRosterMap = Map with (String, LibraryNameRoster)
 
 export typealias SourceFileMap = Map with (FilePath, SourceFileEntry)
 export typealias TokenCacheMap = Map with (FilePath, TokenMemo)
@@ -929,8 +963,8 @@ export type QueryDatabase
 	end 'releaseFrontEndCaches'
 end 'QueryDatabase'
 
-function declaredTypeNamesIn(tokens TokenArray) returns ByteArrayArray
-	var names = ByteArrayArray.create()
+function declaredTypeNamesIn(tokens TokenArray) returns NameRoster
+	var names = NameRoster.create()
 
 	for i in 0 upto tokens.count() 'eachToken'
 		let token = try tokens.get(i) otherwise panic("declaredTypeNamesIn: tokens.get OOB at {i} below count {tokens.count()}")
@@ -949,8 +983,8 @@ function declaredTypeNamesIn(tokens TokenArray) returns ByteArrayArray
 	return names
 end 'declaredTypeNamesIn'
 
-module function reservedSpellingsIn(tokens TokenArray) returns ByteArrayArray
-	var spellings = ByteArrayArray.create()
+module function reservedSpellingsIn(tokens TokenArray) returns NameRoster
+	var spellings = NameRoster.create()
 
 	for token in tokens 'eachToken'
 		if token.kind == TokenKind.identifier and isCompilerReservedName(token.value) 'aReservedSpelling'

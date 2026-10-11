@@ -248,6 +248,11 @@ export type RuntimeUsage
 	// turns on `usesStrClone`/`usesStrCopy`/`usesIncref`/`usesHeap` too (`recordCallUsage`).
 	export var usesStrRetain as bool
 
+	// The program unshares a String (`__str_unshare`), whose body calls `__str_clone` and
+	// `__str_decref`, so a reference turns on `usesStrClone`/`usesStrCopy`/`usesStrDecref`/`usesHeap`
+	// too (`recordCallUsage`).
+	export var usesStrUnshare as bool
+
 	// The String-from-bytes entry point, with its OWN bit under this file's one-bit-per-entry-point
 	// discipline: a program that builds no String from bytes must not carry the classifying scan.
 	export var usesStrFromBytes as bool
@@ -538,7 +543,7 @@ export type RuntimeUsage
 	export var neededInterfaceConversions = InterfaceConversionNameSet.create()
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -608,7 +613,9 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		immortalStructRecord or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness then break
+		existentialWitness or
+		holdValue or
+		holdEnd then break
 
 		tryCall(_, _, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
 
@@ -801,6 +808,10 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isProfileRuntimeCallee(callee) 'processSampling'
 		usage.usesProcessSampling = true
 	end 'processSampling'
+
+	if isHostResourceBoxRuntimeCallee(callee) 'hostResourceBox'
+		usage.usesHeap = true
+	end 'hostResourceBox'
 
 	if isDebugHostRuntimeCallee(callee) 'processDebug'
 		usage.usesProcessDebug = true
@@ -1183,6 +1194,14 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesIncref = true
 		usage.usesHeap = true
 	end 'strretain'
+
+	if callee.equals(StrUnshareName) 'strunshare'
+		usage.usesStrUnshare = true
+		usage.usesStrClone = true
+		usage.usesStrCopy = true
+		usage.usesStrDecref = true
+		usage.usesHeap = true
+	end 'strunshare'
 
 	// The `General_Category` family (the two raw table loads). It declares NOTHING else — see
 	// `usesUcdCategory` — which makes it the second family, beside `__clock_*`, whose bodies call

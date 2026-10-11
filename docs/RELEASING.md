@@ -34,7 +34,7 @@ restores every file before `C1` builds `C2`.
 than a way of shipping a hobbled compiler: the seed accepts the compiler's own parser arm, runtime
 installer and name constants, so `C1` knows the builtin and compiles the unshimmed tree.
 
-There are four things a patch may withdraw. One is a `stdlib/` or `runtime/` declaration the seed refuses
+There are five things a patch may withdraw or rewrite. One is a `stdlib/` or `runtime/` declaration the seed refuses
 outright; only `C1`'s own copy of that function is then stubbed, and nothing in a build calls it. Another
 is a CALL SITE in the compiler's own source — the compiler is a Maxon program too, so it can call
 an intrinsic this tree adds and the seed refuses it there with E3004 rather than at the declaration.
@@ -48,12 +48,18 @@ those tiers by the older one and reports E3092/E3093/E3094 at every declaration 
 Withdrawing the modifier leaves the declaration, its body and every table standing, so `C1` is unaffected
 and compiles the unshimmed tree; what the first build loses is the wider tier and no code.
 
-The fourth is a LANGUAGE FORM the seed cannot parse, such as a typealias's `implements` clause or a generic
-function. The patch withdraws the form and writes whatever the seed's older rule then demands in its place
-(for `implements`, a cast at every crossing the clause licensed; a generic function is withdrawn whole,
-since the compiler calls none), leaving every table standing. The casts are found by building with the seed until
-it is clean, so that patch is generated (`scripts/seed-shim/generate-seed-language-shim.py`) and regenerated
-whenever the sources it touches move.
+The fourth is a LANGUAGE FORM the seed cannot parse, such as a `readonly` element type
+(`Array with readonly T`) or a `let` union payload (`case(let name T)`). The patch withdraws the form and
+writes whatever the seed's older rules then demand in its place (a `.clone()` where the seed still holds a
+borrow across a mutation, an index loop where it will not let a loop element be assigned through, a `let`
+where it sees no assignment to a `var`), leaving every table standing. The sites are found by building with the
+seed for each native target until every build is clean, so that patch is generated
+(`scripts/seed-shim/generate-seed-language-shim.py`) and regenerated whenever the sources it touches move,
+and after the comments of the change have been written.
+
+The fifth is the LIBRARY linked into `C1`: a `stdlib/` body that names a type or an intrinsic the seed does not
+know is rewritten to calls it does, for the first build only. Only `C1`'s own behaviour is weaker, because the
+restore runs before `C1` builds `C2` against the unshimmed library.
 
 ⛔ **Delete the patch in the release after the one that ships the entry.** It is inert from the moment a
 published seed accepts the declaration — the plain build succeeds and the directory is never read — and

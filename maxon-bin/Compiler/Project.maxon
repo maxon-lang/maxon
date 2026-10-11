@@ -28,6 +28,32 @@ end 'cacheReadBoolArray'
 
 // @generated library-cache end
 
+export typealias NameRoster = Array with readonly ByteArray
+
+// @generated library-cache begin
+module function cacheWriteNameRoster(writer LibraryCacheWriter, value NameRoster)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.bytes(item)
+	end 'eachItem'
+end 'cacheWriteNameRoster'
+
+module function cacheReadNameRoster(reader LibraryCacheReader) returns NameRoster throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = NameRoster.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.bytes()
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadNameRoster'
+
+// @generated library-cache end
+
 // Visibility tier of a top-level declaration. Stamped by the parser at
 // declaration time; consumed by cross-file name resolution and the unused-export
 // check. `file` is the default (positively widened to `module`/`global`).
@@ -143,7 +169,7 @@ export function visibilityModifierSpelling(word VisibilityModifierWord) returns 
 end 'visibilityModifierSpelling'
 
 export union SpelledFieldName
-	named(name ByteArray)
+	named(let name ByteArray)
 	unnamed
 end 'SpelledFieldName'
 
@@ -225,6 +251,7 @@ end 'cacheReadSpelledFieldNameArray'
 // `.`-joined spelling the language shows a user is DERIVED from this one
 // (`namespaceForModuleDirectory`) and is never what a visibility question is asked on.
 let ModuleDirectorySeparator = "/"
+let NoModuleDirectoryPrefix = ""
 
 // The one spelling that has to be rewritten: `FilePath` normalizes to the PLATFORM separator on
 // construction, so a Windows host hands back `feature\sub` where a POSIX host hands back `feature/sub`,
@@ -294,52 +321,9 @@ export type Define
 	export static function create(name String, value String) returns Define
 		return Self{name: name, value: value}
 	end 'create'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		writer.text(self.name)
-		writer.text(self.value)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns Define throws LibraryCacheDamage
-		let f_name = try reader.text()
-		let f_value = try reader.text()
-
-		return Self{name: f_name, value: f_value}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(Define) as CacheSize16
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
 end 'Define'
 
 export typealias DefineArray = Array with Define
-
-// @generated library-cache begin
-module function cacheWriteDefineArray(writer LibraryCacheWriter, value DefineArray)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for item in value 'eachItem'
-		item.cacheWrite(writer)
-	end 'eachItem'
-end 'cacheWriteDefineArray'
-
-module function cacheReadDefineArray(reader LibraryCacheReader) returns DefineArray throws LibraryCacheDamage
-	let count = try reader.count()
-	var result = DefineArray.create()
-	result.reserve(count)
-
-	for _ in 0 upto count 'eachItem'
-		let item = try Define.cacheRead(reader)
-		result.push(item)
-	end 'eachItem'
-
-	return result
-end 'cacheReadDefineArray'
-
-// @generated library-cache end
 
 // One reason a `--define` could not be honoured, carrying the wording as well as the code: the facts a
 // message needs — which declarations a name reached, and where they are — are known only where the
@@ -420,6 +404,28 @@ export function moduleDirectoryContains(outer String, inner String) returns bool
 
 	return inner.startsWith("{outer}{ModuleDirectorySeparator}")
 end 'moduleDirectoryContains'
+
+export function moduleDirectoryRelativeTo(root String, directory String) returns String
+	if root.isEmpty() or not moduleDirectoryContains(root, inner: directory) 'notUnderTheRoot'
+		return directory
+	end 'notUnderTheRoot'
+
+	if directory.equals(root) 'theRootItself'
+		return NoModuleDirectoryPrefix
+	end 'theRootItself'
+
+	let prefixBytes = "{root}{ModuleDirectorySeparator}".byteLength()
+	let directoryBytes = directory.toByteArray()
+	return String.from(try directoryBytes.slice(prefixBytes, endIndex: directoryBytes.count()) otherwise panic("moduleDirectoryRelativeTo: '{directory}' lies under '{root}' by `moduleDirectoryContains`, so it is longer than the `{root}{ModuleDirectorySeparator}` prefix"))
+end 'moduleDirectoryRelativeTo'
+
+export function moduleDirectoryOfRootPath(root FilePath, anchor FilePath) returns String
+	let relative = try root.relativeTo(anchor) otherwise 'outsideTheCone'
+		return NoModuleDirectoryPrefix
+	end 'outsideTheCone'
+
+	return relative.toString().replace(WindowsPathSeparatorText, with: ModuleDirectorySeparator)
+end 'moduleDirectoryOfRootPath'
 
 module enum CandidateReach
 	hidden
@@ -758,7 +764,7 @@ end 'cacheReadCellEpochCurrent'
 export type VarInfo
 	// A zero-copy slice of the source, straight off the declaring token — names are
 	// KEYS, and ByteArray hashes/compares by content, so no String is ever built for one.
-	export var name as ByteArray
+	export let name as ByteArray
 	export var varType as MaxonType
 	export var mutable as bool
 	export var slot as VarSlot
@@ -857,45 +863,23 @@ export type VarInfo
 	// a different question, and a parameter's answer is YES: it is a borrowed reference to the
 	// caller's record, and `dest.append(src)` inside a helper is ordinary Maxon.
 	//
-	// **MEASURED against the runnable oracle**: a mutating `String`/`Array`/`Set` method is accepted on a
-	// PARAMETER receiver and rejected (E3019) on a `let` LOCAL — including a `let` that merely aliases a
-	// field, another local, or THE PARAMETER ITSELF. Read by `Parser.immutableReceiverNameOf`, the one
-	// home of that rule; without it every container-mutating helper in the corpus is rejected (measured:
-	// 3 `array-append-managed-elements` cases).
+	// A mutating method is accepted on a PARAMETER receiver and refused (E3159) on a `let` local —
+	// including a `let` that merely aliases a field, another local, or the parameter itself. Read by
+	// `Parser.immutableReceiverNameOf`, the one home of that rule; without it every container-mutating
+	// helper is refused.
 	//
 	// ⚠ It is deliberately NOT derived from the parameter ValueId convention (`boundValue < paramCount`,
 	// `requireReceiverValue`), which looks like the same fact and is not: `let a = p` carries the
-	// PARAMETER's ValueId while being a `let`, and `a.push(9)` is still E3019. See
+	// PARAMETER's ValueId while being a `let`, and `a.push(9)` is still E3159. See
 	// `Parser.immutableReceiverNameOf`.
 	export var isParameter as bool
 
-	// ⭐ **THE TOKEN OF THIS BINDING'S LAST USE — the NON-LEXICAL half of E3070** (`BorrowCheck`).
-	// Written at `Parser.requireBindingLive`, the one chokepoint every USE of a local binding funnels
-	// through (a bare read, a field read or write through it, a method call on it), so "was this name
-	// read?" is answered exactly once in the parser and never re-derived.
-	//
-	// ⭐ It lives on the BINDING and not on the borrow record because a borrow is recorded when it is
-	// TAKEN and the last use happens later: a name copied onto the record at record time would be a
-	// second fact, free to disagree with the binding it describes. A `BorrowRecord` therefore holds
-	// the `VarInfo` itself and reads this through it.
-	//
-	// ⚠ **BOTH WRITERS MOVE IT FORWARD ONLY, AND THAT IS A CORRECTNESS RULE RATHER THAN TIDINESS.**
-	// `requireBindingLive` records an ordinary use at the cursor; `attachPendingBorrows` SEEDS it when a
-	// borrow is taken — to the activation for a `let`/`var` (so a name never read again is dead the instant
-	// it is bound, which is what makes `borrow-checker.md:borrow-nll-allowed` compile) and to the LOOP'S
-	// `end` for a `for … in` element, whose liveness is lexical. A writer that moved it BACKWARDS would
-	// expire a borrow the program is still holding — a use-after-free with no diagnostic anywhere.
-	//
-	// Constructed 0, and left 0 for every binding kind no borrow can name, where nothing reads it.
-	export var lastUseToken as ElementIndex
-
-	// The last token at which the program itself reads this name — `lastUseToken` without the lexical extent a
-	// `for … in` element's borrow is seeded with. A mutable door asks whether an immutable name is READ after it
-	// (`StorageProvenance`), and the iteration reading the container is no read of the element's record.
+	// The last token at which the program reads this name. A mutable door asks whether an immutable name is
+	// READ after it (`StorageProvenance`).
 	export var lastReadToken = 0 as ElementIndex
 
 	// ⭐ **DOES THIS NAME DENOTE MODULE STORAGE — a top-level `var` — RATHER THAN A BINDING OF THIS
-	// FRAME?** True only for the E3070 subject stand-in `Parser.topLevelBorrowSubjectOf` mints.
+	// FRAME?** True only for the storage-subject stand-in `Parser.topLevelStorageSubjectOf` mints.
 	//
 	// ⚠ **IT IS READ TO SUPPRESS THE `boundValue` TEST, NOT MERELY TO LABEL THE BINDING.** A stand-in
 	// has no SSA value at all, so its `boundValue` is 0 — and 0 is `self`'s own parameter id, the very
@@ -915,13 +899,6 @@ export type VarInfo
 	// `referencedNames`, the per-function list of names a mention has recorded. The two cannot disagree:
 	// `Parser.markBindingReferenced` is the SINGLE writer of both, and it appends the name exactly where it
 	// flips this bit. This bit is what makes that append once-per-binding rather than once-per-mention.
-	//
-	// ⚠ **IT IS A SECOND BIT BESIDE `lastUseToken` RATHER THAN THAT FIELD TESTED AGAINST 0, and the two are
-	// NOT the same question.** `attachPendingBorrows` SEEDS a last use ahead of any read — to the activation
-	// for a `let`/`var`, to the loop's `end` for a `for … in` element — so a binding that is never read can
-	// carry a non-zero `lastUseToken`, and E3012 would then wave through exactly the declarations it exists
-	// to catch. The forward-only rule that field is written under is a BORROW's lifetime rule; this bit
-	// answers "did the source mention it", and only a real mention sets it.
 	//
 	// ⭐ **THREE DOORS, BECAUSE A NAME CAN BE MENTIONED IN EXACTLY THREE PLACES THE OTHERS CANNOT SEE** — each
 	// measured to matter, and all three routed through `Parser.markBindingReferenced` so the bit and the
@@ -946,8 +923,8 @@ export type VarInfo
 	//
 	// Set at every door that REQUIRES a binding to be writable and lets the program through: the assignment
 	// / field-assignment door (`Parser.requireMutableBinding`), the method RECEIVER door (the dispatchers,
-	// where a `let` receiver of a mutating method is E3019) and the call-ARGUMENT door (`parseCallArgs`,
-	// where a `let` argument to a mutating parameter is E3019). A `var` none of them ever admitted could
+	// where a `let` receiver of a mutating method is E3159) and the call-ARGUMENT door (`parseCallArgs`,
+	// where a `let` argument to a mutating parameter is E3159). A `var` none of them ever admitted could
 	// have been written `let`, which is precisely what E3077 says.
 	//
 	// ⚠ **A RECEIVER AND AN ARGUMENT ARE MARKED WITHOUT ASKING WHETHER THE CALLEE ACTUALLY WRITES.**
@@ -993,6 +970,8 @@ export type VarInfo
 	// the incoming parameter value itself. That is the one cell this frame does not own and must not drop.
 	export var isCellBinding as bool
 	export var cellCrossesByReference as bool
+	export var elementWritable = false
+	export var rootKind = ReadOnlyRootKind.letBinding
 
 	// A cell binding's `boundValue` never changes, so what a move mark records for it is this epoch,
 	// which a store into the cell re-mints and a merge settles (`moveStateValue`).
@@ -1017,6 +996,9 @@ export type VarInfo
 	// parse worker would share.
 	export var awaitingMoveReads = NoMoveSiteList as ElementIndex
 
+	export var isEnrolled = false
+	export var enrolledAt = 0 as ElementIndex
+
 	// The merge renumbering that last rewrote this binding's type ids (`ParseStaging.renumberArtifact`). One
 	// binding is filed in several places, and a name renumbering applied twice moves an id it already moved.
 	export var renumberedIn = 0 as RenumberingEpoch
@@ -1030,7 +1012,7 @@ export type VarInfo
 	// binding that quietly claims to be a parameter in exactly one code path. A new field is one
 	// default and one line, and the kinds that care name it.
 	//
-	// `ownership`, `movedFrom`, `partiallyMoved`, `payloadSlotVacated`, `lastUseToken`, `referenced` and
+	// `ownership`, `movedFrom`, `partiallyMoved`, `payloadSlotVacated`, `referenced` and
 	// `mutabilityExercised` take no parameter at all: they are per-path STATE the parser writes as it goes,
 	// and every binding starts with them clear. A constructor argument for one of them would be a way to
 	// start a binding already moved-from, which nothing means.
@@ -1038,7 +1020,7 @@ export type VarInfo
 	// The type is the binding's own copy: a binding rides its body's artifact, and its type is often a record the
 	// signature index holds (`ParseStaging.artifactOwnedOp`).
 	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, payload PayloadBindingSlot = PayloadBindingSlot.unbound, isParameter bool = false, namesModuleStorage bool = false, isCellBinding bool = false, cellCrossesByReference bool = false, brandId TypeNameId = UnnamedTypeId, isErrorMatchObligation bool = false) returns VarInfo
-		return Self{name: name, varType: varType.clone(), mutable: mutable, slot: slot, boundValue: boundValue, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, payload: payload, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, cellCrossesByReference: cellCrossesByReference, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
+		return Self{name: name, varType: varType.clone(), mutable: mutable, slot: slot, boundValue: boundValue, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, payload: payload, payloadSlotVacated: false, isParameter: isParameter, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, cellCrossesByReference: cellCrossesByReference, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
 	end 'make'
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
@@ -1057,8 +1039,8 @@ export type VarInfo
 		self.brandId = remap.applyName(self.brandId)
 	end 'renumberTypeIds'
 
-	// ⭐⭐ **THE E3070 SUBJECT STAND-IN FOR A TOP-LEVEL `var`** — the ONE object a global's name is keyed
-	// on, minted and interned by `Parser.topLevelBorrowSubjectOf`.
+	// ⭐⭐ **THE STORAGE-SUBJECT STAND-IN FOR A TOP-LEVEL `var`** — the ONE object a global's name is keyed
+	// on, minted and interned by `Parser.topLevelStorageSubjectOf`.
 	//
 	// It exists because a global has no `VarInfo` anywhere: `Scope` holds this frame's bindings, and the
 	// parser mints a FRESH receiver `VarInfo` at every access to a global (`dispatchOnManagedReceiver`,
@@ -1067,7 +1049,7 @@ export type VarInfo
 	// `Scope` cures for a local by holding ONE object per name.
 	//
 	// ⚠ Its `boundValue`/`slot` are 0 and MUST NOT be read: `namesModuleStorage` is what says so, and it
-	// is the bit every reader of `boundValue` in the E3070 path tests first.
+	// is the bit every reader of `boundValue` on the storage-subject path tests first.
 	export static function createModuleStorageSubject(name ByteArray, varType MaxonType) returns VarInfo
 		return Self.make(name, varType: varType, mutable: true, namesModuleStorage: true)
 	end 'createModuleStorageSubject'
@@ -1085,8 +1067,8 @@ export type VarInfo
 	// to disagree with it; a `false` states the honest fact that no reassignment of the alias
 	// itself is ever legal, and leaves the field's own answer where it lives.
 	//
-	// The name is the alias's own copy: it is read off a layout the signature index may hold, and an alias a body
-	// borrows through rides that body's artifact (`BorrowFacts.subjects`). `make` copies the type.
+	// The name is the alias's own copy: it is read off a layout the signature index may hold. `make` copies the
+	// type.
 	export static function createSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex) returns VarInfo
 		return Self.make(name.clone(), varType: varType, mutable: false, isSelfField: true, fieldIndex: fieldIndex)
 	end 'createSelfField'
@@ -1110,6 +1092,10 @@ export type VarInfo
 			inBox gives true
 		end 'slot'
 	end 'isPayloadBinding'
+
+	export function isLetPayloadBinding() returns bool
+		return self.isPayloadBinding() and self.rootKind == ReadOnlyRootKind.letPayload
+	end 'isLetPayloadBinding'
 
 	export function payloadScrutBox() returns ValueId
 		match self.payload 'slot'
@@ -1195,7 +1181,7 @@ export type VarInfo
 	end 'isLiveNameOf'
 
 	// @generated library-cache begin
-	module function cacheWrite(writer LibraryCacheWriter)
+	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.name)
 		cacheWriteMaxonType(writer, value: self.varType)
 		writer.flag(self.mutable)
@@ -1210,13 +1196,14 @@ export type VarInfo
 		cacheWritePayloadBindingSlot(writer, value: self.payload)
 		writer.flag(self.payloadSlotVacated)
 		writer.flag(self.isParameter)
-		writer.unsigned(self.lastUseToken as CacheUnsigned)
 		writer.unsigned(self.lastReadToken as CacheUnsigned)
 		writer.flag(self.namesModuleStorage)
 		writer.flag(self.referenced)
 		writer.flag(self.mutabilityExercised)
 		writer.flag(self.isCellBinding)
 		writer.flag(self.cellCrossesByReference)
+		writer.flag(self.elementWritable)
+		writer.unsigned(self.rootKind.ordinal as CacheUnsigned)
 		cacheWriteCellEpoch(writer, value: self.cellEpoch)
 		writer.flag(self.isErrorMatchObligation)
 		writer.unsigned(self.brandId as CacheUnsigned)
@@ -1224,7 +1211,7 @@ export type VarInfo
 		writer.unsigned(self.renumberedIn as CacheUnsigned)
 	end 'cacheWrite'
 
-	module static function cacheRead(reader LibraryCacheReader) returns VarInfo throws LibraryCacheDamage
+	static function cacheRead(reader LibraryCacheReader) returns VarInfo throws LibraryCacheDamage
 		let f_name = try reader.bytes()
 		let f_varType = try cacheReadMaxonType(reader)
 		let f_mutable = try reader.flag()
@@ -1239,24 +1226,25 @@ export type VarInfo
 		let f_payload = try cacheReadPayloadBindingSlot(reader)
 		let f_payloadSlotVacated = try reader.flag()
 		let f_isParameter = try reader.flag()
-		let f_lastUseToken = (try reader.unsigned()) as ElementIndex
 		let f_lastReadToken = (try reader.unsigned()) as ElementIndex
 		let f_namesModuleStorage = try reader.flag()
 		let f_referenced = try reader.flag()
 		let f_mutabilityExercised = try reader.flag()
 		let f_isCellBinding = try reader.flag()
 		let f_cellCrossesByReference = try reader.flag()
+		let f_elementWritable = try reader.flag()
+		let f_rootKind = try cacheReadReadOnlyRootKind(reader)
 		let f_cellEpoch = try cacheReadCellEpoch(reader)
 		let f_isErrorMatchObligation = try reader.flag()
 		let f_brandId = (try reader.unsigned()) as TypeNameId
 		let f_awaitingMoveReads = (try reader.unsigned()) as ElementIndex
 		let f_renumberedIn = (try reader.unsigned()) as RenumberingEpoch
 
-		return Self{name: f_name, varType: f_varType, mutable: f_mutable, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, payloadSlotVacated: f_payloadSlotVacated, isParameter: f_isParameter, lastUseToken: f_lastUseToken, lastReadToken: f_lastReadToken, namesModuleStorage: f_namesModuleStorage, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, awaitingMoveReads: f_awaitingMoveReads, renumberedIn: f_renumberedIn}
+		return Self{name: f_name, varType: f_varType, mutable: f_mutable, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, payloadSlotVacated: f_payloadSlotVacated, isParameter: f_isParameter, lastReadToken: f_lastReadToken, namesModuleStorage: f_namesModuleStorage, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, rootKind: f_rootKind, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, awaitingMoveReads: f_awaitingMoveReads, isEnrolled: false, enrolledAt: 0, renumberedIn: f_renumberedIn}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize208
-		return sizeof(VarInfo) as CacheSize208
+	static function cacheLayoutBytes() returns CacheSize232
+		return sizeof(VarInfo) as CacheSize232
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1431,139 +1419,6 @@ end 'cacheReadServiceAwaitSiteMap'
 // @generated library-cache end
 
 export typealias RefusedOverloadCallSet = Set with ElementIndex
-
-// ⭐⭐ **WHAT THE SHARED-GLOBAL RULE NEEDS ABOUT ONE ACCESS TO MODULE STORAGE, AND CANNOT GET AT ITS OWN
-// TIER (E3143).** A global's write lowers to `globalAddr` + `storeIndirect` and its read to `globalAddr` +
-// `loadIndirect` — so the two are told apart only by the op that FOLLOWS the address, and the `globalAddr`
-// op itself carries a mangled LABEL rather than the name the author wrote. Worse, the same ops are emitted
-// for storage nobody touched in source: `ModuleInit`'s initializing store, a lazy static's first-access
-// fill, and `emitCheckedGlobalStore`'s decref LOAD of the value a write is discarding. Refusing any of those
-// would refuse every program that has a global at all.
-//
-// ⇒ the parser records the two doors an AUTHOR-WRITTEN access to MUTABLE module storage passes through —
-// `Parser.storeToGlobal` (past the immutability refusal, so every write reaching it is to a `var`) and
-// `Parser.emitGlobalLoad` (whose `reader` parameter is what excludes the compiler's own load) — keyed by the
-// op that door is about to emit, exactly as `ServiceAwaitSite` is. The op index is what tells the check
-// which FUNCTION the access sits in, so nothing here carries a function name.
-//
-// ⚠ It is the STORAGE name and not a service name that distinguishes this from `ServiceAwaitSite`: a static
-// member's target is `Counter.count`, which no single token spells (`Parser.moduleStorageSubjectName` is the
-// one place that name is formed), and the diagnostic quotes it back at the author.
-export type ModuleVarAccessSite
-	// The module slot this statement touches, spelled as the author would name it.
-	export let storageName as ByteArray
-
-	// Which direction — the one thing the two `globalAddr` shapes cannot say for themselves.
-	export let access as ModuleVarAccess
-	export let line as LineNumber
-	export let column as ColumnNumber
-	export let declFilePath as FilePath
-
-	export static function create(storageName ByteArray, access ModuleVarAccess, line LineNumber, column ColumnNumber, declFilePath FilePath) returns ModuleVarAccessSite
-		return Self{storageName: storageName, access: access, line: line, column: column, declFilePath: declFilePath}
-	end 'create'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		writer.bytes(self.storageName)
-		cacheWriteModuleVarAccess(writer, value: self.access)
-		writer.unsigned(self.line as CacheUnsigned)
-		writer.unsigned(self.column as CacheUnsigned)
-		writer.text(self.declFilePath.toString())
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns ModuleVarAccessSite throws LibraryCacheDamage
-		let f_storageName = try reader.bytes()
-		let f_access = try cacheReadModuleVarAccess(reader)
-		let f_line = (try reader.unsigned()) as LineNumber
-		let f_column = (try reader.unsigned()) as ColumnNumber
-		let f_declFilePath = try reader.path()
-
-		return Self{storageName: f_storageName, access: f_access, line: f_line, column: f_column, declFilePath: f_declFilePath}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize40
-		return sizeof(ModuleVarAccessSite) as CacheSize40
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'ModuleVarAccessSite'
-
-// ⭐ **ONE RULE, TWO DIRECTIONS.** ⚖ A message may not WRITE a module `var` (its update is a load-add-store
-// two Ms interleave) and may not READ one either (the writer's store decrefs the record the reader has
-// already loaded — a use-after-free rather than a stale word). The kind exists only so the diagnostic can
-// name what the author actually wrote; the rule, the reachability and the cure are identical.
-export union ModuleVarAccess
-	read
-	write
-end 'ModuleVarAccess'
-
-// @generated library-cache begin
-function cacheWriteModuleVarAccess(writer LibraryCacheWriter, value ModuleVarAccess)
-	writer.unsigned(value.ordinal as CacheUnsigned)
-end 'cacheWriteModuleVarAccess'
-
-function cacheReadModuleVarAccess(reader LibraryCacheReader) returns ModuleVarAccess throws LibraryCacheDamage
-	let tag = try reader.unsigned()
-
-	return match tag 'case'
-		0 gives ModuleVarAccess.read
-		1 gives ModuleVarAccess.write
-		default throws LibraryCacheDamage.unknownTag(tag)
-	end 'case'
-end 'cacheReadModuleVarAccess'
-
-// @generated library-cache end
-
-// Who is loading a module slot. A UNION rather than an optional token, because "not this rule's business"
-// is a real answer and an empty token would be a sentinel every reader had to know to test.
-export union ModuleSlotReader
-	// NOT an access the shared-global rule is about, for either of the two reasons there are:
-	//   • it is the COMPILER's own load — `Parser.emitCheckedGlobalStore`'s decref of the value a write is
-	//     discarding, which is half of a WRITE; filing it as a read would report `total = 5` as reading
-	//     `total`;
-	//   • the slot is a `let`, which the rule declares legal to read and is the escape hatch every
-	//     configuration constant takes.
-	//
-	// ⛔⛔ **THE `let` HALF WAS MISSING FOR ONE BUILD AND IT REFUSED THE STDLIB.** `emitGlobalLoad` recorded
-	// every read whatever the slot's mutability, so `CharacterSet.whitespaces()` — which returns the
-	// `static let cachedWhitespaces` — read as a shared-global access, and both
-	// `sched-syscall-handoff` cases died on **E3143 pointing into `stdlib/CharacterSet.maxon`**. The write
-	// door cannot have this bug (`storeToGlobal` refuses an immutable slot before recording anything), which
-	// is exactly why the read door has to state the exemption itself.
-	notASharedAccess
-
-	// An author naming a MUTABLE module slot in an expression, at the token they spelled it with.
-	source(nameTok Token)
-end 'ModuleSlotReader'
-
-// An op index inside the accessing statement ⇒ the module slot it touches. See `ModuleVarAccessSite`.
-export typealias ModuleVarAccessSiteMap = Map with (ElementIndex, ModuleVarAccessSite)
-
-// @generated library-cache begin
-module function cacheWriteModuleVarAccessSiteMap(writer LibraryCacheWriter, value ModuleVarAccessSiteMap)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for (key, entry) in value 'eachEntry'
-		writer.unsigned(key as CacheUnsigned)
-		entry.cacheWrite(writer)
-	end 'eachEntry'
-end 'cacheWriteModuleVarAccessSiteMap'
-
-module function cacheReadModuleVarAccessSiteMap(reader LibraryCacheReader) returns ModuleVarAccessSiteMap throws LibraryCacheDamage
-	let count = try reader.count()
-	var result = ModuleVarAccessSiteMap.create()
-
-	for _ in 0 upto count 'eachEntry'
-		let key = (try reader.unsigned()) as ElementIndex
-		let entry = try ModuleVarAccessSite.cacheRead(reader)
-		result.upsert(key, value: entry)
-	end 'eachEntry'
-
-	return result
-end 'cacheReadModuleVarAccessSiteMap'
-
-// @generated library-cache end
 
 export typealias SynthesizedOpFileMap = Map with (ElementIndex, FilePath)
 
@@ -1745,7 +1600,7 @@ export union ImmortalRecordKind
 	// table to say which of the two a site is; a string table has no heap spelling and its payload is N
 	// separate literals, so `Parser.emitImageRecordRead` emits `MaxonOp.immortalStringTable` for it and
 	// `LowerMaxonToStd.lowerConstArrayLiteral` panics if this shape reaches the mark.
-	stringTable(texts ByteArrayArray, elementDestroy OwnershipCallee)
+	stringTable(texts ByteBlobArray, elementDestroy OwnershipCallee)
 
 	// ⭐⭐ **A DECLARED CONTAINER'S BOX — a `Map`/`Set` `let` whose `create()` is nothing but `Self{}`.**
 	// `nodes` is the whole record tree and `root` names its outermost box; each node's `columns` name the
@@ -1776,8 +1631,8 @@ function cacheWriteImmortalRecordKindEmptyContainer(writer LibraryCacheWriter, a
 	cacheWriteOwnershipCallee(writer, value: a0)
 end 'cacheWriteImmortalRecordKindEmptyContainer'
 
-function cacheWriteImmortalRecordKindStringTable(writer LibraryCacheWriter, a0 ByteArrayArray, a1 OwnershipCallee)
-	cacheWriteByteArrayArray(writer, value: a0)
+function cacheWriteImmortalRecordKindStringTable(writer LibraryCacheWriter, a0 ByteBlobArray, a1 OwnershipCallee)
+	cacheWriteByteBlobArray(writer, value: a0)
 	cacheWriteOwnershipCallee(writer, value: a1)
 end 'cacheWriteImmortalRecordKindStringTable'
 
@@ -1805,7 +1660,7 @@ function cacheReadImmortalRecordKindEmptyContainer(reader LibraryCacheReader) re
 end 'cacheReadImmortalRecordKindEmptyContainer'
 
 function cacheReadImmortalRecordKindStringTable(reader LibraryCacheReader) returns ImmortalRecordKind throws LibraryCacheDamage
-	let a0 = try cacheReadByteArrayArray(reader)
+	let a0 = try cacheReadByteBlobArray(reader)
 	let a1 = try cacheReadOwnershipCallee(reader)
 
 	return ImmortalRecordKind.stringTable(a0, elementDestroy: a1)
@@ -1823,7 +1678,7 @@ end 'cacheReadImmortalRecordKindContainerBox'
 // ⭐ The `constArrayLiteral` op indices whose record is IMAGE DATA rather than an allocation, each carrying
 // which shape it is — `constBlob` or `emptyContainer`, never `stringTable`. See
 // `Project.immortalConstArraySites`.
-export typealias ImmortalConstArraySiteMap = Map with (ElementIndex, ImmortalRecordKind)
+export typealias ImmortalConstArraySiteMap = Map with (ElementIndex, readonly ImmortalRecordKind)
 
 // @generated library-cache begin
 module function cacheWriteImmortalConstArraySiteMap(writer LibraryCacheWriter, value ImmortalConstArraySiteMap)
@@ -1968,7 +1823,7 @@ end 'UnusedBindingKind'
 // as should-be-let" is one list scanned twice in a fixed order, not two lists that could disagree about
 // which declarations exist.
 export type UnusedBindingCandidate
-	export let binding as VarInfo
+	export var binding as VarInfo
 	export let nameRange as SourceRange
 	export let kind as UnusedBindingKind
 	export let declToken as ElementIndex
@@ -2082,7 +1937,7 @@ end 'cacheReadRangedAliasDomainPattern'
 // @generated library-cache end
 
 export type RangedTypeAlias
-	export var name as ByteArray
+	export let name as ByteArray
 
 	// The primitive the alias resolves to — the `int` / `float` keyword it was
 	// declared over. What TypeResolution substitutes for `named(alias)`.
@@ -2198,8 +2053,8 @@ end 'cacheReadRangedTypeAliasArray'
 // @generated library-cache end
 
 export type AliasImplementsClause
-	export var name as ByteArray
-	export var parentName as ByteArray
+	export let name as ByteArray
+	export let parentName as ByteArray
 	export var visibility as Visibility
 	export var declFilePath as FilePath
 	export var isFloat as bool
@@ -2505,7 +2360,7 @@ end 'cacheReadDeclarationIdentityMap'
 
 // @generated library-cache end
 
-export typealias MintByDeclaringFile = Map with (String, ByteArray)
+export typealias MintByDeclaringFile = Map with (String, readonly ByteArray)
 
 // @generated library-cache begin
 module function cacheWriteMintByDeclaringFile(writer LibraryCacheWriter, value MintByDeclaringFile)
@@ -2538,7 +2393,7 @@ typealias SharersBySpelling = Map with (ByteArray, StringArray)
 // of each. A strict SUBSET of `MultiplyDeclaredAliasMap`'s keys, and EMPTY for every program in the
 // corpus — see `RangedAliasRegistry.settleRangeContests` for why that emptiness is what keeps every
 // element name and every mangled symbol where it was.
-typealias RangeContestedAliasMap = Map with (ByteArray, ByteArrayArray)
+typealias RangeContestedAliasMap = Map with (ByteArray, NameRoster)
 
 // @generated library-cache begin
 function cacheWriteRangeContestedAliasMap(writer LibraryCacheWriter, value RangeContestedAliasMap)
@@ -2546,7 +2401,7 @@ function cacheWriteRangeContestedAliasMap(writer LibraryCacheWriter, value Range
 
 	for (key, entry) in value 'eachEntry'
 		writer.bytes(key)
-		cacheWriteByteArrayArray(writer, value: entry)
+		cacheWriteNameRoster(writer, value: entry)
 	end 'eachEntry'
 end 'cacheWriteRangeContestedAliasMap'
 
@@ -2556,7 +2411,7 @@ function cacheReadRangeContestedAliasMap(reader LibraryCacheReader) returns Rang
 
 	for _ in 0 upto count 'eachEntry'
 		let key = try reader.bytes()
-		let entry = try cacheReadByteArrayArray(reader)
+		let entry = try cacheReadNameRoster(reader)
 		result.upsert(key, value: entry)
 	end 'eachEntry'
 
@@ -2564,14 +2419,6 @@ function cacheReadRangeContestedAliasMap(reader LibraryCacheReader) returns Rang
 end 'cacheReadRangeContestedAliasMap'
 
 // @generated library-cache end
-
-// ⭐ THE ONE EMPTY contest map every registry is born holding — so a program with no contest, which is every
-// program in the corpus, allocates NO index for a question whose answer is "none". Measured: a real map per
-// registry cost a FLAT ~432 allocations per compile in `phase:load`, paid by every build. Copy-on-write off
-// this handle at the single writer (`settleRangeContests`); NEVER mutated.
-let sharedEmptyRangeContests = RangeContestedAliasMap.create()
-
-let sharedEmptyDeclarationIdentities = DeclarationIdentityMap.create()
 
 // ⭐ **THE RANGED-ALIAS REGISTRY — file-scoped resolution.** Two files may each declare `Limit` over
 // a different range (`specs/duplicate-typealias.md`), and each file's uses must be checked against
@@ -2674,8 +2521,8 @@ end 'requireExitCodeRangeFitsItsWidth'
 // answers with one platform's range by construction rather than by every caller remembering to ask.
 //
 // ⚠ `public`, not `global`: a `public` library signature names `ExitCode`, and at `global` E3167 would refuse it.
-function builtinExitCodeAlias(name ByteArray, readerFilePath FilePath, high ParsedInt) returns RangedTypeAlias
-	return RangedTypeAlias.create(name, underlying: MaxonType.integer, low: ExitCodeAliasLow, high: high, visibility: Visibility.public, declFilePath: readerFilePath, nameLine: 0, nameColumn: 0)
+function builtinExitCodeAlias(readerFilePath FilePath, high ParsedInt) returns RangedTypeAlias
+	return RangedTypeAlias.create(ExitCodeBuiltinName, underlying: MaxonType.integer, low: ExitCodeAliasLow, high: high, visibility: Visibility.public, declFilePath: readerFilePath, nameLine: 0, nameColumn: 0)
 end 'builtinExitCodeAlias'
 
 typealias ScopedAliasTier = int(0 to 3)
@@ -2827,17 +2674,14 @@ export type ClaimantProvenance
 		var minted = MintByDeclaringFile.create()
 
 		for (declPath, spelling) in spellings 'eachMint'
-			minted.upsert(declPath, value: self.ordinalMintName(spelling, sharers: try sharersOfSpelling.get(spelling) otherwise panic("ClaimantProvenance.ordinalMints: the spelling of '{declPath}' was grouped in the pass above"), declPath: declPath))
+			let sharers = try sharersOfSpelling.get(spelling) otherwise panic("ClaimantProvenance.ordinalMints: the spelling of '{declPath}' was grouped in the pass above")
+			minted.upsert(declPath, value: spelling if sharers.count() < 2 else ordinalMintSpelling(spelling, place: self.ordinalMintPlace(declPath, sharers: sharers)))
 		end 'eachMint'
 
 		return minted
 	end 'ordinalMints'
 
-	function ordinalMintName(spelling ByteArray, sharers StringArray, declPath String) returns ByteArray
-		if sharers.count() < 2 'theSpellingAloneNamesIt'
-			return spelling
-		end 'theSpellingAloneNamesIt'
-
+	function ordinalMintPlace(declPath String, sharers StringArray) returns ElementIndex
 		var place = 1 as ElementIndex
 
 		for other in sharers 'eachSharer'
@@ -2846,8 +2690,8 @@ export type ClaimantProvenance
 			end 'foldsAfterAnotherSharer'
 		end 'eachSharer'
 
-		return ordinalMintSpelling(spelling, place: place)
-	end 'ordinalMintName'
+		return place
+	end 'ordinalMintPlace'
 
 	export function claimOf(kind TypeDeclKind, declFilePath FilePath, visibility Visibility) returns TypeNameClaim
 		return TypeNameClaim.create(kind, declFilePath: declFilePath, visibility: visibility, declaredByTheCorpus: self.declaresInTheCorpus(declFilePath.toString()))
@@ -2909,7 +2753,7 @@ end 'ClaimantProvenance'
 
 type FoldRankedAlias
 	module let position as FoldPosition
-	module let alias as RangedTypeAlias
+	module var alias as RangedTypeAlias
 
 	static function create(position FoldPosition, alias RangedTypeAlias) returns FoldRankedAlias
 		return Self{position: position, alias: alias}
@@ -3132,7 +2976,7 @@ export type RangedAliasRegistry
 	export static function create(os Os) returns RangedAliasRegistry
 		let exitCodeHigh = exitCodeAliasHigh(os)
 		requireExitCodeRangeFitsItsWidth(exitCodeHigh)
-		return Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), provenance: ClaimantProvenance.create(), underlyingContested: UnderlyingContestedAliasSet.create(), rangeContested: sharedEmptyRangeContests, identities: sharedEmptyDeclarationIdentities, exitCodeHigh: exitCodeHigh}
+		return Self{byName: RangedTypeAliasMap.create(), multiplyDeclared: MultiplyDeclaredAliasMap.create(), storageBytes: AliasStorageBytesMap.create(), packedBits: AliasPackedBitsMap.create(), provenance: ClaimantProvenance.create(), underlyingContested: UnderlyingContestedAliasSet.create(), rangeContested: RangeContestedAliasMap.create(), identities: DeclarationIdentityMap.create(), exitCodeHigh: exitCodeHigh}
 	end 'create'
 
 	export function noteFingerprint(fingerprint IndexFingerprint, group String)
@@ -3271,7 +3115,7 @@ export type RangedAliasRegistry
 		// table's compares are paid only on a lookup that was about to answer `undeclared`, never on the
 		// hot path.
 		if builtinTypeNameTag(name) == ValueTypeTag.exitCode 'theBuiltin'
-			return DeclaredAlias.declared(builtinExitCodeAlias(name, readerFilePath: readerFilePath, high: self.exitCodeHigh))
+			return DeclaredAlias.declared(builtinExitCodeAlias(readerFilePath, high: self.exitCodeHigh))
 		end 'theBuiltin'
 
 		return DeclaredAlias.undeclared
@@ -3294,8 +3138,8 @@ export type RangedAliasRegistry
 	// handing a caller a live handle to it is how a reader becomes a writer.
 	//
 	// It allocates once per compile, on a walk that already visits every declaration in the program.
-	export function declaredNames() returns ByteArrayArray
-		var names = ByteArrayArray.create()
+	export function declaredNames() returns NameRoster
+		var names = NameRoster.create()
 
 		for (name, _) in self.byName 'eachDeclaredName'
 			names.push(name)
@@ -3304,8 +3148,8 @@ export type RangedAliasRegistry
 		return names
 	end 'declaredNames'
 
-	export function multiplyDeclaredNames() returns ByteArrayArray
-		var names = ByteArrayArray.create()
+	export function multiplyDeclaredNames() returns NameRoster
+		var names = NameRoster.create()
 
 		for (name, _) in self.multiplyDeclared 'eachMultiplyDeclaredName'
 			names.push(name)
@@ -3665,7 +3509,7 @@ export type RangedAliasRegistry
 	// share.** A range contest needs two claimants by definition — one range is no disagreement — while a
 	// KIND contest's alias side is very often a single declaration, and it is precisely that declaration the
 	// container's element must be pinned to. The `< 2` test therefore belongs to the range walk alone.
-	export function settleRangeContests(alsoScope ByteArrayArray)
+	export function settleRangeContests(alsoScope NameRoster)
 		var mints = RangedTypeAliasArray.create()
 		var declarationIdentities = DeclarationIdentityMap.create()
 
@@ -3679,12 +3523,6 @@ export type RangedAliasRegistry
 			declarationIdentities.upsert(name, value: mintsOfDeclarations(name, claimants: claimants, mints: mints, provenance: self.provenance))
 		end 'eachNameWhoseDeclarationsMayMeet'
 
-		// ⚠ **BUILT OWNED, AND THE SHARED EMPTY HANDLE IS WHAT THE FIELD KEEPS WHEN NOTHING IS CONTESTED.**
-		// Starting AS `sharedEmptyRangeContests` and copying on write at the first contest, guarded by an
-		// `is`-identity test, is a mutable name reaching a module-level `let`'s record, which single
-		// ownership refuses (E3019 at the `upsert`) — the guard that would make it safe is invisible to the
-		// rule, and the rule is about what the name CAN reach. The publish below is gated on `count() > 0`,
-		// so an uncontested program never touches the field; the cost is one empty map.
 		var settled = RangeContestedAliasMap.create()
 
 		for (name, _) in self.multiplyDeclared 'eachMultiplyDeclaredName'
@@ -4007,8 +3845,8 @@ end 'RangedAliasRegistry'
 // ⚠ **ITS MINTS ARE `public`, WHERE THE CLAIMANT MAY BE `file`.** A range mint is compiler-supplied,
 // exactly like the builtin `ExitCode`, and its NAME is unspellable in source
 // (`CompilerQualifiedAliasSeparator`), so no reader can be admitted or refused by the tier anyway.
-function scopedSpellingsOf(name ByteArray, claimants RangedTypeAliasArray, mints RangedTypeAliasArray) returns ByteArrayArray
-	var spellings = ByteArrayArray.create()
+function scopedSpellingsOf(name ByteArray, claimants RangedTypeAliasArray, mints RangedTypeAliasArray) returns NameRoster
+	var spellings = NameRoster.create()
 
 	for claimant in claimants 'eachDistinctRange'
 		let spelling = rangeQualifiedAliasName(name, alias: claimant)
@@ -5811,7 +5649,7 @@ export typealias RangeCheckPlanMap = Map with (ByteArray, FunctionRangeChecks)
 // knowable in the arm that produced the types, and two walks over one source list is a pair nothing
 // keeps in step.
 export type FunctionValueShape
-	export let paramTypes as MaxonTypeArray
+	export var paramTypes as MaxonTypeArray
 	export let returnType as MaxonReturnType
 	export let scopeFilePath as FilePath
 
@@ -6255,8 +6093,8 @@ export type FunctionAliasRegistry
 		return try self.multiplyDeclared.get(name) otherwise sharedEmptyFunctionAliasDeclarations
 	end 'contestedDeclarations'
 
-	export function declaredNames() returns ByteArrayArray
-		var names = ByteArrayArray.create()
+	export function declaredNames() returns NameRoster
+		var names = NameRoster.create()
 
 		for (name, _) in self.byName 'eachDeclaredName'
 			names.push(name)
@@ -6286,8 +6124,8 @@ export type FunctionAliasRegistry
 		return environments
 	end 'shapeContestEnvironments'
 
-	export function multiplyDeclaredNames() returns ByteArrayArray
-		var names = ByteArrayArray.create()
+	export function multiplyDeclaredNames() returns NameRoster
+		var names = NameRoster.create()
 
 		for (name, _) in self.multiplyDeclared 'eachMultiplyDeclaredName'
 			names.push(name)
@@ -6324,7 +6162,7 @@ export type FunctionAliasRegistry
 		return sole
 	end 'declarationsOf'
 
-	export function shapeContestNames(otherFormNames ByteArrayArray) returns ByteArrayArray
+	export function shapeContestNames(otherFormNames NameRoster) returns NameRoster
 		var names = self.multiplyDeclaredNames()
 
 		for name in otherFormNames 'eachNameAnotherFormHolds'
@@ -6336,7 +6174,7 @@ export type FunctionAliasRegistry
 		return names
 	end 'shapeContestNames'
 
-	export function settleShapeContests(keys FunctionAliasShapeKeyMap, names ByteArrayArray)
+	export function settleShapeContests(keys FunctionAliasShapeKeyMap, names NameRoster)
 		var scoped = MultiplyDeclaredFunctionAliasMap.create()
 
 		for name in names 'eachContestedName'
@@ -6461,7 +6299,7 @@ end 'FunctionAliasRegistry'
 // (`TypeResolution.parsedFunctionTypeRegistryOf`), where a ranged alias is still `named`; asked of
 // resolved shapes it would let `fn(Small)` merge with `fn(Integer)`.
 export type FunctionShape
-	export let paramTypes as MaxonTypeArray
+	export var paramTypes as MaxonTypeArray
 	export let returnType as MaxonReturnType
 
 	// ⭐⭐ **THE ONE IDENTITY `paramTypes` CANNOT CARRY — a boxed union/enum parameter's NAME — parallel to
@@ -6484,13 +6322,13 @@ export type FunctionShape
 	// but its completion: two positions agree when their REPRESENTATION agrees AND the identity that
 	// representation destroyed agrees. The two halves are disjoint by construction, which is what
 	// makes the conjunction safe — see the parameter loop in `TypeResolution.shapesAgreeUnder`.
-	export let paramAggregateNames as ByteArrayArray
+	export var paramAggregateNames as NameRoster
 
 	// The RETURN slot's half of the same column, one name rather than an array. See
 	// `FuncSignature.returnAggregateName` for the measurement that made it necessary.
-	export let returnAggregateName as ByteArray
+	export var returnAggregateName as ByteArray
 
-	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, paramAggregateNames ByteArrayArray, returnAggregateName ByteArray) returns FunctionShape
+	export static function create(paramTypes MaxonTypeArray, returnType MaxonReturnType, paramAggregateNames NameRoster, returnAggregateName ByteArray) returns FunctionShape
 		return Self{paramTypes: paramTypes, returnType: returnType, paramAggregateNames: paramAggregateNames, returnAggregateName: returnAggregateName}
 	end 'create'
 end 'FunctionShape'
@@ -6674,7 +6512,7 @@ export union FieldDefault
 	// deliberate divergence from the parameter twin's "one mechanism, one place a default is produced".
 	// `Parser.fillFieldDefault` states the reason: a literal is folded away entirely by `InsertRangeChecks`
 	// and a call result cannot be.
-	helper(name ByteArray)
+	helper(let name ByteArray)
 
 	// ⭐⭐ **THE DEFAULT IS A BARE `<Type>.create()`, AND THAT IS THE ONE EXPRESSION SHAPE A READER IN
 	// ANOTHER FILE CAN DESCRIBE WITHOUT RUNNING IT.** It synthesizes the same helper the arm above does, and
@@ -6688,7 +6526,7 @@ export union FieldDefault
 	// lays down, so it must change the hash.
 	//
 	// ⚠ Declared after `helper`.
-	bareCreateHelper(name ByteArray)
+	bareCreateHelper(let name ByteArray)
 end 'FieldDefault'
 
 // @generated library-cache begin
@@ -6815,9 +6653,9 @@ end 'cacheReadFieldDefaultArray'
 export type WhereConstraint
 	export let typeParamIndex as ElementIndex
 	export let interfaceName as ByteArray
-	export let associatedBindings as ByteArrayArray
+	export let associatedBindings as NameRoster
 
-	export static function create(typeParamIndex ElementIndex, interfaceName ByteArray, associatedBindings ByteArrayArray = sharedEmptyDeclaredConformances) returns WhereConstraint
+	export static function create(typeParamIndex ElementIndex, interfaceName ByteArray, associatedBindings NameRoster = sharedEmptyDeclaredConformances) returns WhereConstraint
 		return Self{typeParamIndex: typeParamIndex, interfaceName: interfaceName, associatedBindings: associatedBindings}
 	end 'create'
 
@@ -6825,13 +6663,13 @@ export type WhereConstraint
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.unsigned(self.typeParamIndex as CacheUnsigned)
 		writer.bytes(self.interfaceName)
-		cacheWriteByteArrayArray(writer, value: self.associatedBindings)
+		cacheWriteNameRoster(writer, value: self.associatedBindings)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns WhereConstraint throws LibraryCacheDamage
 		let f_typeParamIndex = (try reader.unsigned()) as ElementIndex
 		let f_interfaceName = try reader.bytes()
-		let f_associatedBindings = try cacheReadByteArrayArray(reader)
+		let f_associatedBindings = try cacheReadNameRoster(reader)
 
 		return Self{typeParamIndex: f_typeParamIndex, interfaceName: f_interfaceName, associatedBindings: f_associatedBindings}
 	end 'cacheRead'
@@ -6933,7 +6771,7 @@ export function conditionalExtensionWithheldMessage(typeName String, methodName 
 	return "Type '{typeName}' has no field named '{methodName}' ('{methodName}' is available as a conditional extension {clause}, but '{bindingName}' does not implement '{unmetInterfaceName}')"
 end 'conditionalExtensionWithheldMessage'
 
-export function renderWhereConstraints(constraints WhereConstraintArray, paramNames ByteArrayArray) returns String
+export function renderWhereConstraints(constraints WhereConstraintArray, paramNames NameRoster) returns String
 	var text = "where "
 	var previousParam = 0 as ElementIndex
 
@@ -6961,12 +6799,6 @@ end 'renderWhereConstraints'
 // `interfaces`/`conformances` use to keep the per-struct parse path allocation-free.
 let sharedEmptyWhereConstraints = WhereConstraintArray.create()
 
-// The SHARED EMPTY `messageMethodNames` every type that is not a service carries — which is every type in
-// every program that never writes `spawn`. `recordMessageMethods` replaces it wholesale on the one
-// declaration that has a roster and this is never mutated, exactly as `sharedEmptyWhereConstraints` above:
-// a per-type array here would be one allocation per declared `type` to hold a list only a service has.
-let sharedEmptyMessageMethods = ByteArrayArray.create()
-
 export typealias BitWidthArray = Array with BitWidth
 
 // @generated library-cache begin
@@ -6993,8 +6825,6 @@ end 'cacheReadBitWidthArray'
 
 // @generated library-cache end
 
-let sharedEmptyInlineBitWidths = BitWidthArray.create()
-
 export union EqualityOperand
 	unknown
 	noEdge
@@ -7003,7 +6833,7 @@ export union EqualityOperand
 end 'EqualityOperand'
 
 export type StructLayout
-	export var name as ByteArray
+	export let name as ByteArray
 
 	// Parallel arrays, in DECLARATION order: field `i` is called `fieldNames[i]`, is declared
 	// `fieldTypes[i]`, accepts a write iff `fieldMutable[i]`, is reachable from outside the type
@@ -7017,7 +6847,7 @@ export type StructLayout
 	// reader indexes every one of them by one `FieldIndex`, so a caller that pushed a name and forgot
 	// a default would shift every later field's default onto the wrong field: a silent wrong answer
 	// with no crash to find it by.
-	export var fieldNames as ByteArrayArray
+	export var fieldNames as NameRoster
 	export var fieldTypes as MaxonTypeArray
 	export var fieldMutable as BoolArray
 
@@ -7053,7 +6883,7 @@ export type StructLayout
 	// tokens at the declaration, whether that spelling is a single bare name. A field declared through a generic-instance alias brands what it holds and what
 	// is read out of it; the reader (`Parser.declaredBrand`) decides whether the spelling is such an alias,
 	// because this column is written by the declaration sweep, before the alias registry can say.
-	export var fieldDeclaredBrands as ByteArrayArray
+	export var fieldDeclaredBrands as NameRoster
 	export var fieldSpelledNames as SpelledFieldNameArray
 
 	// ⭐ **THE DERIVED SLOT GEOMETRY — the PREFIX SUM over `fieldSlotCount`, and
@@ -7101,7 +6931,7 @@ export type StructLayout
 	// — see `ProgramSignatures.typeParamTokenFor`. This list is what a position is READ OUT OF (a token
 	// re-spells against it at `typeParamPositionIn`, and `recordStruct` files the pairing at the fold), which
 	// is why it stays in declaration order and why it stays on the layout.
-	export var typeParamNames as ByteArrayArray
+	export var typeParamNames as NameRoster
 
 	// The `where T is <Interface> …` CONSTRAINTS this generic type declares, IN SOURCE
 	// ORDER — empty for an unconstrained (or non-generic) type. The order is the witness-slot order the
@@ -7124,7 +6954,7 @@ export type StructLayout
 	// relation is exactly this project's signature bug, so the split is stated rather than assumed: this one
 	// is the SWEEP's answer to "which interfaces does this type name?", used only to expand extensions, and
 	// nothing verifies a conformance from it.
-	export var conformsTo as ByteArrayArray
+	export var conformsTo as NameRoster
 
 	// ⭐ **THE `with <TypeArgs>` EACH NAME IN `conformsTo` BINDS** — the associated-type bindings a
 	// CONDITIONAL extension's `where` clause is evaluated against: `extension Holder where Item is Comparable`
@@ -7133,9 +6963,8 @@ export type StructLayout
 	// interface's associated type `j`, which is the position a `WhereConstraint.typeParamIndex` names.
 	//
 	// ⚠ **IT IS EITHER EMPTY OR EXACTLY AS LONG AS `conformsTo`**, and `recordConformances` is the one writer
-	// that can establish that. Empty means the clause wrote no `with` anywhere — the common case, which
-	// allocates nothing (`sharedEmptyConformanceBindings`); otherwise every name has an entry, the shared
-	// empty list standing at each position that bound nothing. A column that could be SHORT would make the
+	// that can establish that. Empty means the clause wrote no `with` anywhere; otherwise every name has an
+	// entry, the shared empty list standing at each position that bound nothing. A column that could be SHORT would make the
 	// pairing a search over two lengths, which is the shape that answers with a neighbour's binding.
 	//
 	// ⚠ **IT IS A LIST PER NAME AND NOT ONE LIST BELONGING TO THE LAST NAME.** A reader that stops the
@@ -7165,7 +6994,7 @@ export type StructLayout
 	// input to this list — each method's NAME, its `visibility`, its `takesReceiver` and its declaration ORDER —
 	// is already folded into `self.hash` by `mixDeclaration`, one entry per declared function, in fold order. A
 	// second mix would be the same bytes hashed twice under a different shape.
-	export var messageMethodNames as ByteArrayArray
+	export var messageMethodNames as NameRoster
 
 	// ⭐ **THE DECLARATION'S OWN VISIBILITY** — `type Point` vs `module type Point` vs `export type
 	// Point`. Read by `Parser.requireMembersReachable`, which meets it at a field or method access on
@@ -7186,7 +7015,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldDeclaredBrands: ByteArrayArray.create(), fieldSpelledNames: SpelledFieldNameArray.create(), fieldOffsets: ByteOffsetArray.create(), fieldBitWidths: sharedEmptyInlineBitWidths, fieldBitOffsets: sharedEmptyInlineBitWidths, slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyConformanceBindings, messageMethodNames: sharedEmptyMessageMethods, visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: NameRoster.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldDeclaredBrands: NameRoster.create(), fieldSpelledNames: SpelledFieldNameArray.create(), fieldOffsets: ByteOffsetArray.create(), fieldBitWidths: BitWidthArray.create(), fieldBitOffsets: BitWidthArray.create(), slotBytes: 0, typeParamNames: NameRoster.create(), whereConstraints: WhereConstraintArray.create(), conformsTo: NameRoster.create(), conformanceBindings: ConformanceBindingArray.create(), messageMethodNames: NameRoster.create(), visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -7198,7 +7027,7 @@ export type StructLayout
 	// Record the type's `uses` parameter names, in declaration order. Replaces the column
 	// wholesale rather than appending per name — the whole list is known at once (the `uses` clause is
 	// parsed as a unit), and the parser and the tolerant sweep must record the SAME list.
-	export function recordTypeParams(names ByteArrayArray)
+	export function recordTypeParams(names NameRoster)
 		self.typeParamNames = names
 	end 'recordTypeParams'
 
@@ -7222,7 +7051,7 @@ export type StructLayout
 	// `recordTypeParams`' reason — the whole list is known at one moment, once every member has been read —
 	// and a roster that turned out EMPTY (every type in every program that declares no service) keeps the
 	// SHARED empty rather than retaining a per-type array of nothing.
-	export function recordMessageMethods(methodNames ByteArrayArray)
+	export function recordMessageMethods(methodNames NameRoster)
 		if methodNames.count() == 0 'noMessages'
 			return
 		end 'noMessages'
@@ -7240,7 +7069,7 @@ export type StructLayout
 		return try self.messageMethodNames.get(index) otherwise panic("StructLayout.messageMethodAt: index {index} is out of range for `type {String.from(self.name)}`, whose roster holds {self.messageMethodNames.count()} message(s)")
 	end 'messageMethodAt'
 
-	export function recordConformances(names ByteArrayArray, bindings ConformanceBindingArray)
+	export function recordConformances(names NameRoster, bindings ConformanceBindingArray)
 		if bindings.count() != 0 and bindings.count() != names.count() 'columnsDisagree'
 			panic("StructLayout.recordConformances: `type {String.from(self.name)}` records {names.count()} interface name(s) against {bindings.count()} binding list(s) — the two columns are paired by INDEX, so a reader of the shorter one answers with the wrong conformance's `with` arguments")
 		end 'columnsDisagree'
@@ -7253,7 +7082,7 @@ export type StructLayout
 	// nothing at that interface (see `conformanceBindings`). The pairing is checked rather than assumed: a
 	// caller that asked about an interface this type does not name must get "no bindings", never a
 	// neighbour's.
-	export function bindingsForInterface(interfaceName ByteArray) returns ByteArrayArray
+	export function bindingsForInterface(interfaceName ByteArray) returns NameRoster
 		// Bounded by the BINDINGS column and not the names one, which is what makes the walk correct for both
 		// admitted shapes: a declaration with no `implements` clause at all carries the shared empty here and
 		// never enters the loop, while a declaration that has one carries an entry per name.
@@ -7568,7 +7397,7 @@ export type StructLayout
 	// A linear scan: field counts are tiny, and a per-layout name→index map would be a heap object per
 	// declared type bought to serve a handful of lookups.
 	export function indexOfField(wanted ByteArray) returns FieldIndex throws MapError
-		return (try namePositionIn(self.fieldNames, name: wanted)) as FieldIndex
+		return (try self.fieldNames.positionOfName(wanted)) as FieldIndex
 	end 'indexOfField'
 
 	// The name of field `index` — `EnumLayout.caseNameAt`'s twin, and here so the OOB panic is written once
@@ -7606,24 +7435,24 @@ export type StructLayout
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.name)
-		cacheWriteByteArrayArray(writer, value: self.fieldNames)
+		cacheWriteNameRoster(writer, value: self.fieldNames)
 		cacheWriteMaxonTypeArray(writer, value: self.fieldTypes)
 		cacheWriteBoolArray(writer, value: self.fieldMutable)
 		cacheWriteVisibilityArray(writer, value: self.fieldVisibility)
 		cacheWriteFieldDefaultArray(writer, value: self.fieldDefaults)
 		cacheWriteDeclaredSurfaceArray(writer, value: self.fieldDeclaredSurfaces)
-		cacheWriteByteArrayArray(writer, value: self.fieldDeclaredBrands)
+		cacheWriteNameRoster(writer, value: self.fieldDeclaredBrands)
 		cacheWriteSpelledFieldNameArray(writer, value: self.fieldSpelledNames)
 		cacheWriteByteOffsetArray(writer, value: self.fieldOffsets)
 		writer.flag(self.packsInlineIntoAWord)
 		cacheWriteBitWidthArray(writer, value: self.fieldBitWidths)
 		cacheWriteBitWidthArray(writer, value: self.fieldBitOffsets)
 		writer.unsigned(self.slotBytes as CacheUnsigned)
-		cacheWriteByteArrayArray(writer, value: self.typeParamNames)
+		cacheWriteNameRoster(writer, value: self.typeParamNames)
 		cacheWriteWhereConstraintArray(writer, value: self.whereConstraints)
-		cacheWriteByteArrayArray(writer, value: self.conformsTo)
+		cacheWriteNameRoster(writer, value: self.conformsTo)
 		cacheWriteConformanceBindingArray(writer, value: self.conformanceBindings)
-		cacheWriteByteArrayArray(writer, value: self.messageMethodNames)
+		cacheWriteNameRoster(writer, value: self.messageMethodNames)
 		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
 		writer.text(self.declFilePath.toString())
 		writer.unsigned(self.declLine as CacheUnsigned)
@@ -7632,24 +7461,24 @@ export type StructLayout
 
 	static function cacheRead(reader LibraryCacheReader) returns StructLayout throws LibraryCacheDamage
 		let f_name = try reader.bytes()
-		let f_fieldNames = try cacheReadByteArrayArray(reader)
+		let f_fieldNames = try cacheReadNameRoster(reader)
 		let f_fieldTypes = try cacheReadMaxonTypeArray(reader)
 		let f_fieldMutable = try cacheReadBoolArray(reader)
 		let f_fieldVisibility = try cacheReadVisibilityArray(reader)
 		let f_fieldDefaults = try cacheReadFieldDefaultArray(reader)
 		let f_fieldDeclaredSurfaces = try cacheReadDeclaredSurfaceArray(reader)
-		let f_fieldDeclaredBrands = try cacheReadByteArrayArray(reader)
+		let f_fieldDeclaredBrands = try cacheReadNameRoster(reader)
 		let f_fieldSpelledNames = try cacheReadSpelledFieldNameArray(reader)
 		let f_fieldOffsets = try cacheReadByteOffsetArray(reader)
 		let f_packsInlineIntoAWord = try reader.flag()
 		let f_fieldBitWidths = try cacheReadBitWidthArray(reader)
 		let f_fieldBitOffsets = try cacheReadBitWidthArray(reader)
 		let f_slotBytes = (try reader.unsigned()) as ByteOffset
-		let f_typeParamNames = try cacheReadByteArrayArray(reader)
+		let f_typeParamNames = try cacheReadNameRoster(reader)
 		let f_whereConstraints = try cacheReadWhereConstraintArray(reader)
-		let f_conformsTo = try cacheReadByteArrayArray(reader)
+		let f_conformsTo = try cacheReadNameRoster(reader)
 		let f_conformanceBindings = try cacheReadConformanceBindingArray(reader)
-		let f_messageMethodNames = try cacheReadByteArrayArray(reader)
+		let f_messageMethodNames = try cacheReadNameRoster(reader)
 		let f_visibility = try cacheReadVisibility(reader)
 		let f_declFilePath = try reader.path()
 		let f_declLine = (try reader.unsigned()) as LineNumber
@@ -7690,6 +7519,7 @@ module function cacheReadStructLayoutArray(reader LibraryCacheReader) returns St
 end 'cacheReadStructLayoutArray'
 
 // @generated library-cache end
+export typealias SettledStructLayoutArray = Array with readonly StructLayout
 
 // Registry: struct-type name -> its declaration. The twin of `RangedTypeAliasMap`, filled from
 // each file's artifact by `mergeArtifact` and read by TypeResolution to turn `MaxonType.named` for
@@ -7719,9 +7549,10 @@ export type PayloadField
 	// without this column the `match` binding was minted with no surface, i.e. the `Array` one. Read through
 	// `ProgramSignatures.payloadSurfaceOf`, which ORs in the element bit the sweep could not answer.
 	export let declaredSurface as DeclaredSurface
+	export let isLet as bool
 
-	export static function create(name ByteArray, declaredType MaxonType, declaredSurface DeclaredSurface, declaredBrand ByteArray) returns PayloadField
-		return Self{name: name, declaredType: declaredType, declaredSurface: declaredSurface, declaredBrand: declaredBrand}
+	export static function create(name ByteArray, declaredType MaxonType, declaredSurface DeclaredSurface, declaredBrand ByteArray, isLet bool) returns PayloadField
+		return Self{name: name, declaredType: declaredType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, isLet: isLet}
 	end 'create'
 
 	// @generated library-cache begin
@@ -7730,6 +7561,7 @@ export type PayloadField
 		cacheWriteMaxonType(writer, value: self.declaredType)
 		writer.bytes(self.declaredBrand)
 		cacheWriteDeclaredSurface(writer, value: self.declaredSurface)
+		writer.flag(self.isLet)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns PayloadField throws LibraryCacheDamage
@@ -7737,12 +7569,13 @@ export type PayloadField
 		let f_declaredType = try cacheReadMaxonType(reader)
 		let f_declaredBrand = try reader.bytes()
 		let f_declaredSurface = try cacheReadDeclaredSurface(reader)
+		let f_isLet = try reader.flag()
 
-		return Self{name: f_name, declaredType: f_declaredType, declaredBrand: f_declaredBrand, declaredSurface: f_declaredSurface}
+		return Self{name: f_name, declaredType: f_declaredType, declaredBrand: f_declaredBrand, declaredSurface: f_declaredSurface, isLet: f_isLet}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize32
-		return sizeof(PayloadField) as CacheSize32
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(PayloadField) as CacheSize40
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -8143,7 +7976,7 @@ end 'enumBackingLiteralSuitsDomain'
 // in a bool field, a float literal in a float field (parsed as its IEEE pattern by `floatLiteralBits`).
 export function enumBackingLiteralBits(bits ParsedInt, kind EnumBackingLiteralKind, domain EnumBackingFieldDomain) returns ParsedInt
 	if domainIsEnumBackingFloatBits(domain) and kind == EnumBackingLiteralKind.integerLiteral 'promoteToFloat'
-		return __Builtins.floatToBits(0.0 + bits)
+		return foldSiToFp(bits)
 	end 'promoteToFloat'
 
 	return bits
@@ -8202,7 +8035,7 @@ end 'cacheReadEnumBackingFieldArray'
 
 // @generated library-cache end
 
-export typealias EnumBackingFieldArrayArray = Array with EnumBackingFieldArray
+export typealias EnumBackingFieldArrayArray = Array with readonly EnumBackingFieldArray
 
 // @generated library-cache begin
 function cacheWriteEnumBackingFieldArrayArray(writer LibraryCacheWriter, value EnumBackingFieldArrayArray)
@@ -8241,33 +8074,21 @@ export let sharedEmptyEnumBackingFields = EnumBackingFieldArray.create()
 export let UnionTagOffset = 0 as ByteOffset
 let UnionTagBytes = 8 as ByteOffset
 
-// The conformance list of a declaration that writes no `implements` clause — ONE shared empty for the
-// whole compile, following `sharedEmptyWhereConstraints` and its family: nearly every declaration in the corpus
-// declares nothing, and a fresh empty array per declaration would be an allocation for a fact that is the
-// absence of one. Read-only; `Parser.readOptionalImplementsClause` builds a real list only for a real clause.
-//
-// ⚠ **IT LIVES BESIDE THE FIELD IT IS THE EMPTY OF, AND THAT IS WHY IT MOVED HERE.**
-// It was declared in `Parser.maxon` while the three `builtin…Enum()` seeds below — the other constructors of
-// an `EnumLayout` — could not see it and each spelled `ByteArrayArray.create()` instead. Three spellings of
-// "this enum declares nothing", one of them in the file that owns the field.
-//
-// ⚠ It is not the ENUM's alone: `StructLayout.conformsTo` (interface extensions) is the same column on
-// the other declaration kind, filled by the same reader, and its absence is the same fact.
-export let sharedEmptyDeclaredConformances = ByteArrayArray.create()
+export let sharedEmptyDeclaredConformances = NameRoster.create()
 
 // ⭐ **ONE `with` ARGUMENT LIST PER INTERFACE NAMED, POSITIONAL AGAINST `conformsTo`.** A clause may
 // bind at more than one of its names — `implements Tagged with Integer, Held with Integer` binds at both —
 // so the bindings are a column beside the names and not a single list belonging to the last of them. A name
 // that wrote no `with` carries `sharedEmptyDeclaredConformances` at its position, which is what keeps the
 // two columns the same length and makes the pairing index arithmetic rather than a search.
-export typealias ConformanceBindingArray = Array with ByteArrayArray
+export typealias ConformanceBindingArray = Array with NameRoster
 
 // @generated library-cache begin
 function cacheWriteConformanceBindingArray(writer LibraryCacheWriter, value ConformanceBindingArray)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
-		cacheWriteByteArrayArray(writer, value: item)
+		cacheWriteNameRoster(writer, value: item)
 	end 'eachItem'
 end 'cacheWriteConformanceBindingArray'
 
@@ -8277,7 +8098,7 @@ function cacheReadConformanceBindingArray(reader LibraryCacheReader) returns Con
 	result.reserve(count)
 
 	for _ in 0 upto count 'eachItem'
-		let item = try cacheReadByteArrayArray(reader)
+		let item = try cacheReadNameRoster(reader)
 		result.push(item)
 	end 'eachItem'
 
@@ -8312,29 +8133,21 @@ end 'cacheReadWrittenTypeNameEnds'
 
 // @generated library-cache end
 
-// The bindings column of a declaration whose `implements` clause writes NO `with` anywhere — and of one
-// that writes no clause at all. Shared for `sharedEmptyDeclaredConformances`' reason, which is the same
-// reason one column over: nearly every declaration in the corpus binds nothing, and a fresh empty array per
-// declaration would be an allocation for the absence of a fact. Read-only.
-let sharedEmptyConformanceBindings = ConformanceBindingArray.create()
-
 // ⭐ **WHAT ONE `implements` CLAUSE CONTRIBUTES: the interface NAMES, and the `with` arguments EACH of
 // them binds.** `Parser.readOptionalImplementsClause` returns the pair rather than the names alone because
 // they are one read — see `StructLayout.conformanceBindings` for how the two columns pair — and a bindings
 // list handed over without the names it is positional against indexes nothing. An `enum`/`union` takes the
 // names half and ignores the other: it has no conditional extension to evaluate.
 export type ScannedConformanceClause
-	export let names as ByteArrayArray
-	export let bindings as ConformanceBindingArray
+	export var names as NameRoster
+	export var bindings as ConformanceBindingArray
 
-	export static function create(names ByteArrayArray, bindings ConformanceBindingArray) returns ScannedConformanceClause
+	export static function create(names NameRoster, bindings ConformanceBindingArray) returns ScannedConformanceClause
 		return Self{names: names, bindings: bindings}
 	end 'create'
 
-	// A declaration with no `implements` clause at all — both halves the shared empty, so the common case
-	// allocates nothing.
 	export static function declaringNothing() returns ScannedConformanceClause
-		return Self{names: sharedEmptyDeclaredConformances, bindings: sharedEmptyConformanceBindings}
+		return Self{names: NameRoster.create(), bindings: ConformanceBindingArray.create()}
 	end 'declaringNothing'
 end 'ScannedConformanceClause'
 
@@ -8345,7 +8158,7 @@ end 'ScannedConformanceClause'
 //
 // Nominal and direct, matching `ConformanceCheck.typeDeclaresInterface`'s model: the compiler's conformance is
 // DECLARED, never inferred. A linear scan of a list that holds one entry per name in one clause.
-export function conformanceListDeclares(conformsTo ByteArrayArray, interfaceName ByteArray) returns bool
+export function conformanceListDeclares(conformsTo NameRoster, interfaceName ByteArray) returns bool
 	for declaredInterface in conformsTo 'each'
 		if declaredInterface.equals(interfaceName) 'declaresIt'
 			return true
@@ -8369,8 +8182,8 @@ end 'conformanceListDeclares'
 // ⚠ `module`: `ServiceCompanions.buildServiceReplyErrorEnum` synthesizes an error enum too,
 // and it owes `implements Error` for the reason this header gives — a `throws Calc.divide.errors` clause is
 // checked by `ConformanceCheck.requireImplErrorConformsAndIsScalar` like any other.
-module function builtinErrorConformance(interfaces IrInterfaceMap) returns ByteArrayArray
-	var conformsTo = ByteArrayArray.create()
+module function builtinErrorConformance(interfaces IrInterfaceMap) returns NameRoster
+	var conformsTo = NameRoster.create()
 	conformsTo.push(interfaces.spellingOf(BuiltinInterfaceKind.error))
 	return conformsTo
 end 'builtinErrorConformance'
@@ -8884,7 +8697,7 @@ end 'cacheTableAgreesEnumBacking'
 
 export union EnumBackingStruct
 	none
-	declared(typeName ByteArray)
+	declared(let typeName ByteArray)
 
 	export function isDeclared() returns bool
 		return match self 'backingStruct'
@@ -9003,7 +8816,7 @@ export enum EnumRawValueIdentity
 end 'EnumRawValueIdentity'
 
 export type EnumLayout
-	export var name as ByteArray
+	export let name as ByteArray
 
 	// `union U` vs `enum E`. The lowering is identical; this bit only chooses the word a diagnostic
 	// prints ("union" vs "enum"), which is exactly what `/specs` says separates the two for a
@@ -9013,7 +8826,7 @@ export type EnumLayout
 	// Parallel arrays, in DECLARATION order: case `i` is named `caseNames[i]`, carries tag
 	// `caseTags[i]` and declares payload fields `casePayloads[i]` (empty for a payload-free case).
 	// NEVER appended to directly — `addCase` is the one writer (see the header).
-	export var caseNames as ByteArrayArray
+	export var caseNames as NameRoster
 	export var caseTags as ParsedIntArray
 
 	// ⭐ **HOW EACH CASE's RAW VALUE WAS WRITTEN** — `"200"`, `"1.1"`, `"application/json"`, `"n"` — the
@@ -9038,7 +8851,7 @@ export type EnumLayout
 	// `with` arguments ride the `ConformanceDecl` the real parse files, which is their only reader
 	// (`checkConformance` substitutes them into a requirement); a conditional extension is expanded over
 	// declared types alone (`ProgramSignatures.conformersOf`), so a column here would have nothing to answer.
-	export var conformsTo as ByteArrayArray
+	export var conformsTo as NameRoster
 
 	// ⭐ **THE DECLARATION'S OWN VISIBILITY** — `enum Color` vs `module enum Color` vs
 	// `export enum Color`, with `declFilePath` the anchor both wider tiers measure a reader against. The
@@ -9086,8 +8899,8 @@ export type EnumLayout
 	// caller that pushed a name and forgot this would shift every later case's backing onto the wrong case.
 	export var caseBackingFields as EnumBackingFieldArrayArray
 
-	export static function create(name ByteArray, isUnion bool, conformsTo ByteArrayArray, visibility Visibility, declFilePath FilePath, backing EnumBacking) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStruct: EnumBackingStruct.none, caseBackingFields: EnumBackingFieldArrayArray.create()}
+	export static function create(name ByteArray, isUnion bool, conformsTo NameRoster, visibility Visibility, declFilePath FilePath, backing EnumBacking) returns EnumLayout
+		return Self{name: name, isUnion: isUnion, caseNames: NameRoster.create(), caseTags: ParsedIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStruct: EnumBackingStruct.none, caseBackingFields: EnumBackingFieldArrayArray.create()}
 	end 'create'
 
 	// The `EnumLayout` twin of `StructLayout.createCompilerOwned`, for the same reason and with the same
@@ -9097,13 +8910,13 @@ export type EnumLayout
 	// `addBuiltinEnumCase` — which bypasses the case READER that would otherwise fix the backing — and every
 	// one of them is a declaration-index tag. An `unresolved` builtin would be a layout whose tag column
 	// exists and whose reading rule does not.
-	export static function createCompilerOwned(name ByteArray, conformsTo ByteArrayArray) returns EnumLayout
+	export static function createCompilerOwned(name ByteArray, conformsTo NameRoster) returns EnumLayout
 		return EnumLayout.create(name, isUnion: false, conformsTo: conformsTo, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'createCompilerOwned'
 
 	// The whole-program re-read's answer replacing the sweep's, which is a SUBSET of the clause when a `with`
 	// stopped the reader early (`Queries.foldConformanceClauses`). It takes no bindings — see `conformsTo`.
-	export function recordConformances(names ByteArrayArray)
+	export function recordConformances(names NameRoster)
 		self.conformsTo = names
 	end 'recordConformances'
 
@@ -9175,6 +8988,18 @@ export type EnumLayout
 	export function isBoxed() returns bool
 		return self.maxPayloadArity() > 0
 	end 'isBoxed'
+
+	export function everyPayloadIsLet() returns bool
+		for caseIndex in 0 upto self.caseCount() 'eachCase'
+			for field in self.payloadsAt(caseIndex) 'eachPayload'
+				if not field.isLet 'aVarPayload'
+					return false
+				end 'aVarPayload'
+			end 'eachPayload'
+		end 'eachCase'
+
+		return true
+	end 'everyPayloadIsLet'
 
 	// The payload bytes `__mm_alloc` must be asked for: the tag word plus one slot per payload field
 	// of the widest case. THE one place the box size is computed, so the allocation and the stores
@@ -9291,7 +9116,7 @@ export type EnumLayout
 
 	// A linear scan for `StructLayout.indexOfField`'s reason: case counts are tiny.
 	export function indexOfCase(wanted ByteArray) returns CaseIndex throws MapError
-		return (try namePositionIn(self.caseNames, name: wanted)) as CaseIndex
+		return (try self.caseNames.positionOfName(wanted)) as CaseIndex
 	end 'indexOfCase'
 
 	// Does this enum declare a case named `wanted`?
@@ -9320,11 +9145,11 @@ export type EnumLayout
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.name)
 		writer.flag(self.isUnion)
-		cacheWriteByteArrayArray(writer, value: self.caseNames)
+		cacheWriteNameRoster(writer, value: self.caseNames)
 		cacheWriteParsedIntArray(writer, value: self.caseTags)
 		cacheWriteStringArray(writer, value: self.caseRawValues)
 		cacheWritePayloadFieldArrayArray(writer, value: self.casePayloads)
-		cacheWriteByteArrayArray(writer, value: self.conformsTo)
+		cacheWriteNameRoster(writer, value: self.conformsTo)
 		writer.unsigned(self.visibility.ordinal as CacheUnsigned)
 		writer.text(self.declFilePath.toString())
 		writer.unsigned(self.declLine as CacheUnsigned)
@@ -9338,11 +9163,11 @@ export type EnumLayout
 	static function cacheRead(reader LibraryCacheReader) returns EnumLayout throws LibraryCacheDamage
 		let f_name = try reader.bytes()
 		let f_isUnion = try reader.flag()
-		let f_caseNames = try cacheReadByteArrayArray(reader)
+		let f_caseNames = try cacheReadNameRoster(reader)
 		let f_caseTags = try cacheReadParsedIntArray(reader)
 		let f_caseRawValues = try cacheReadStringArray(reader)
 		let f_casePayloads = try cacheReadPayloadFieldArrayArray(reader)
-		let f_conformsTo = try cacheReadByteArrayArray(reader)
+		let f_conformsTo = try cacheReadNameRoster(reader)
 		let f_visibility = try cacheReadVisibility(reader)
 		let f_declFilePath = try reader.path()
 		let f_declLine = (try reader.unsigned()) as LineNumber
@@ -9623,7 +9448,7 @@ module type BuiltinErrorOrdinalCheck
 	var installer as ByteArray
 
 	// The diagnostic sink a `declared` disagreement is reported against. Carried by every check rather than
-	// by the `declared` arm alone, because a `match` binds a union payload IMMUTABLY (E3019) and reporting
+	// by the `declared` arm alone, because a `match` binds a union payload IMMUTABLY (E3159) and reporting
 	// mutates the project — so the arm could hold it but could not use it. The `synthesized` path never
 	// reads it: it panics, which is exactly the difference `source` records.
 	var project as Project
@@ -10066,7 +9891,7 @@ end 'cacheReadParamExistentialSiteArray'
 // honest empty column) name them. Never mutated: a writer builds a fresh array and returns it whole.
 export let sharedEmptyParamExistentialSites = ParamExistentialSiteArray.create()
 export let sharedEmptyReturnExistentialSites = GenericInstanceIdArray.create()
-export let sharedEmptyWrittenTypeNames = WrittenTypeNames.create(ByteArrayArray.create(), ends: WrittenTypeNameEnds.create())
+export let sharedEmptyWrittenTypeNames = WrittenTypeNames.create(NameRoster.create(), ends: WrittenTypeNameEnds.create())
 
 // The `Base with Args` instance parameter `position` was declared at, or `MapError.keyNotFound` for a parameter
 // that named no generic alias — which is every parameter of almost every function, and is why the column is
@@ -10085,15 +9910,15 @@ end 'paramExistentialSiteAt'
 // Where a method's receiver sits in its parameter list — the position `parseTypeMember` binds `__self` at,
 // named so the rules that treat the receiver differently from every other parameter read as the one fact they
 // share rather than as a repeated `0`.
-export let ReceiverParamPosition = 0 as ParamCount
+let ReceiverParamPosition = 0 as ParamCount
 
 // The type names a signature WROTE, in its declaring file's spelling — what E3167 and the unused-export
 // audit judge. Empty for a library file's signature and for a file-private function's.
 export type WrittenTypeNames
-	export let names as ByteArrayArray
+	export let names as NameRoster
 	export let ends as WrittenTypeNameEnds
 
-	export static function create(names ByteArrayArray, ends WrittenTypeNameEnds) returns WrittenTypeNames
+	export static function create(names NameRoster, ends WrittenTypeNameEnds) returns WrittenTypeNames
 		return Self{names: names, ends: ends}
 	end 'create'
 
@@ -10119,12 +9944,12 @@ export type WrittenTypeNames
 
 	// @generated library-cache begin
 	module function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteByteArrayArray(writer, value: self.names)
+		cacheWriteNameRoster(writer, value: self.names)
 		cacheWriteWrittenTypeNameEnds(writer, value: self.ends)
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns WrittenTypeNames throws LibraryCacheDamage
-		let f_names = try cacheReadByteArrayArray(reader)
+		let f_names = try cacheReadNameRoster(reader)
 		let f_ends = try cacheReadWrittenTypeNameEnds(reader)
 
 		return Self{names: f_names, ends: f_ends}
@@ -10145,7 +9970,7 @@ end 'WrittenTypeNames'
 // (`add(2, b: 3)`) to the callee's declaration order by matching each `name:` label
 // to the parameter position holding that name. Param TYPES back arity/type checking.
 export type FuncSignature
-	export var paramNames as ByteArrayArray
+	export var paramNames as NameRoster
 	export var paramTypes as MaxonTypeArray
 
 	// ⭐ **THE PRE-ERASURE AGGREGATE IDENTITY A UNION PARAMETER LOSES.** One entry
@@ -10158,7 +9983,7 @@ export type FuncSignature
 	// The parser fills this at `recordFuncSignature`, BEFORE resolution runs, where the union is still
 	// `named`; it travels by NAME (a `ByteArray`, no interner id) so the merge fold needs no
 	// remap and `syncResolvedSignature` carries it through untouched.
-	export var paramAggregateNames as ByteArrayArray
+	export var paramAggregateNames as NameRoster
 
 	// ⭐ **THE PRE-ERASURE *SPELLING* OF A `named` PARAMETER — what an author WROTE, for diagnostics alone
 	// (user ruling, 2026-08-04).** One entry per parameter: the interned name of any `named` parameter,
@@ -10176,7 +10001,7 @@ export type FuncSignature
 	//
 	// Travels by NAME like its sibling (a `ByteArray`, no interner id), so the merge needs no remap and
 	// `syncResolvedSignature` carries it through untouched.
-	export var paramDeclaredNames as ByteArrayArray
+	export var paramDeclaredNames as NameRoster
 
 	// ⭐ **THE RETURN SLOT'S HALF OF THE IDENTITY COLUMN.** `funcReturnTypes` is RESOLVED — the same
 	// `resolveTypes` that erases a union PARAMETER erases a union RETURN — so a function value handed to a
@@ -10241,7 +10066,7 @@ export type FuncSignature
 
 	export var writtenTypeNames as WrittenTypeNames
 
-	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray, paramDeclaredNames ByteArrayArray, returnAggregateName ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames) returns FuncSignature
+	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames) returns FuncSignature
 		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames}
 	end 'create'
 
@@ -10258,13 +10083,6 @@ export type FuncSignature
 	export function takesReceiver() returns bool
 		return self.paramNames.count() > 0 and (try self.paramNames.get(ReceiverParamPosition) otherwise panic("FuncSignature.takesReceiver: paramNames.count() > 0 but get(0) failed")).equals(SelfParamName)
 	end 'takesReceiver'
-
-	// Does parameter `pos` name the receiver? `takesReceiver`'s per-POSITION twin, and the one home of "this
-	// argument fills the `self` slot" — E3019's call-site rule and the mutation summary's exemption column
-	// both decide about the receiver, and a second spelling is a second chance for them to disagree.
-	export function paramIsTheReceiver(pos ParamCount) returns bool
-		return pos == ReceiverParamPosition and self.takesReceiver()
-	end 'paramIsTheReceiver'
 
 	// Does any parameter declare a bare type parameter (`create(v T)`) — i.e. is this the SHARED body of a
 	// generic type's method, whose signature cannot say what its arguments must be? The
@@ -10305,10 +10123,10 @@ export type FuncSignature
 
 	// @generated library-cache begin
 	module function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteByteArrayArray(writer, value: self.paramNames)
+		cacheWriteNameRoster(writer, value: self.paramNames)
 		cacheWriteMaxonTypeArray(writer, value: self.paramTypes)
-		cacheWriteByteArrayArray(writer, value: self.paramAggregateNames)
-		cacheWriteByteArrayArray(writer, value: self.paramDeclaredNames)
+		cacheWriteNameRoster(writer, value: self.paramAggregateNames)
+		cacheWriteNameRoster(writer, value: self.paramDeclaredNames)
 		writer.bytes(self.returnAggregateName)
 		cacheWriteParamExistentialSiteArray(writer, value: self.paramExistentialSites)
 		cacheWriteGenericInstanceIdArray(writer, value: self.returnExistentialSites)
@@ -10317,10 +10135,10 @@ export type FuncSignature
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns FuncSignature throws LibraryCacheDamage
-		let f_paramNames = try cacheReadByteArrayArray(reader)
+		let f_paramNames = try cacheReadNameRoster(reader)
 		let f_paramTypes = try cacheReadMaxonTypeArray(reader)
-		let f_paramAggregateNames = try cacheReadByteArrayArray(reader)
-		let f_paramDeclaredNames = try cacheReadByteArrayArray(reader)
+		let f_paramAggregateNames = try cacheReadNameRoster(reader)
+		let f_paramDeclaredNames = try cacheReadNameRoster(reader)
 		let f_returnAggregateName = try reader.bytes()
 		let f_paramExistentialSites = try cacheReadParamExistentialSiteArray(reader)
 		let f_returnExistentialSites = try cacheReadGenericInstanceIdArray(reader)
@@ -10368,7 +10186,7 @@ export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 // that deleted it. (The resolver's `funcSignatures` filter still makes such a leftover harmless — see
 // `SemanticCheck.overloadCandidates` — but "harmless because a second mechanism catches it" is the
 // arrangement this compiler keeps paying for.)
-export typealias OverloadSetMap = Map with (ByteArray, ByteArrayArray)
+export typealias OverloadSetMap = Map with (ByteArray, NameRoster)
 
 // @generated library-cache begin
 function cacheWriteOverloadSetMap(writer LibraryCacheWriter, value OverloadSetMap)
@@ -10376,7 +10194,7 @@ function cacheWriteOverloadSetMap(writer LibraryCacheWriter, value OverloadSetMa
 
 	for (key, entry) in value 'eachEntry'
 		writer.bytes(key)
-		cacheWriteByteArrayArray(writer, value: entry)
+		cacheWriteNameRoster(writer, value: entry)
 	end 'eachEntry'
 end 'cacheWriteOverloadSetMap'
 
@@ -10386,7 +10204,7 @@ function cacheReadOverloadSetMap(reader LibraryCacheReader) returns OverloadSetM
 
 	for _ in 0 upto count 'eachEntry'
 		let key = try reader.bytes()
-		let entry = try cacheReadByteArrayArray(reader)
+		let entry = try cacheReadNameRoster(reader)
 		result.upsert(key, value: entry)
 	end 'eachEntry'
 
@@ -10463,7 +10281,7 @@ export let noOverloadSets = OverloadSetTable.unwritten
 // come to describe different programs. Within a single compile nothing changes: the map starts empty and
 // `checkConformance` fills it before the pipeline runs, which is why no spec case moves — the corpus
 // compiles each test in a fresh `Project` and has no mid-session source edit to express this with.
-export typealias WitnessSlotImplMap = Map with (ByteArray, ByteArray)
+export typealias WitnessSlotImplMap = Map with (ByteArray, readonly ByteArray)
 
 // ⭐ **THE CHARACTER AN OVERLOAD'S REGISTRATION NAME JOINS WITH — and the reason it is not `$`.** The lexer
 // admits only `[A-Za-z0-9_]` inside an identifier, so a `#` cannot appear in any name the source can write:
@@ -10482,6 +10300,7 @@ export typealias WitnessSlotImplMap = Map with (ByteArray, ByteArray)
 // than by that argument: `Parser.overloadRegistrationNameFor` will not hand back a name this file has
 // already registered.
 let OverloadNameSeparator = "#"
+let OverloadNameSeparatorByte = 35 as Byte
 
 let OverloadParameterListSeparator = ", "
 
@@ -10583,8 +10402,16 @@ end 'overloadRegistrationName'
 // answers no interface requirement. Kept beside the join for the reason every inverse in this file is: the
 // separator has one speller.
 export function overloadRegistrationBaseName(registered ByteArray) returns ByteArray
-	let segments = String.from(registered).split(OverloadNameSeparator)
-	return (try segments.get(0) otherwise String.from(registered)).toByteArray()
+	var stop = registered.count()
+
+	for position in 0 upto registered.count() 'eachByte'
+		if (try registered.get(position) otherwise panic("overloadRegistrationBaseName: get OOB at {position} below count()")) == OverloadNameSeparatorByte 'atTheSeparator'
+			stop = position
+			break
+		end 'atTheSeparator'
+	end 'eachByte'
+
+	return try registered.slice(0, endIndex: stop) otherwise panic("overloadRegistrationBaseName: slice [0, {stop}) of a {registered.count()}-byte name is in range by the scan above")
 end 'overloadRegistrationBaseName'
 
 // ⭐ **THE SUFFIX THAT MARKS A CONTESTED `static` MEMBER, AND WHY IT IS IN THE RESERVED SPACE.** A suffix part
@@ -10879,10 +10706,10 @@ end 'overloadSuffixPart'
 // that asks the question needs all four: SemanticCheck's doors, its indirect-call check, and the lowering's
 // argument widening. Three loose parameters at each of those sites is three chances to pass a stale half.
 export type FunctionTypeRegistry
-	export let funcSignatures as FuncSignatureMap
-	export let funcReturnTypes as FuncReturnTypeMap
-	export let aliasShapes as FunctionShapeMap
-	export let typeNames as TypeNameInterner
+	export var funcSignatures as FuncSignatureMap
+	export var funcReturnTypes as FuncReturnTypeMap
+	export var aliasShapes as FunctionShapeMap
+	export var typeNames as TypeNameInterner
 
 	export static function create(funcSignatures FuncSignatureMap, funcReturnTypes FuncReturnTypeMap, aliasShapes FunctionShapeMap, typeNames TypeNameInterner) returns FunctionTypeRegistry
 		return Self{funcSignatures: funcSignatures, funcReturnTypes: funcReturnTypes, aliasShapes: aliasShapes, typeNames: typeNames}
@@ -10916,19 +10743,19 @@ export typealias FunctionTypePairArray = Array with FunctionTypePair
 // BEFORE `resolveTypes` erases the alias names the diagnostic prints. The NAMES travel plain (no interner
 // id — like `paramAggregateNames`), so the record survives the merge with no remap.
 export type PendingFnMergeCheck
-	export var armNames as ByteArrayArray
+	export var armNames as NameRoster
 	export var line as LineNumber
 	export var column as ColumnNumber
 	export var filePath as FilePath
 	export var isTernary as bool
 
-	export static function create(armNames ByteArrayArray, line LineNumber, column ColumnNumber, filePath FilePath, isTernary bool) returns PendingFnMergeCheck
+	export static function create(armNames NameRoster, line LineNumber, column ColumnNumber, filePath FilePath, isTernary bool) returns PendingFnMergeCheck
 		return Self{armNames: armNames, line: line, column: column, filePath: filePath, isTernary: isTernary}
 	end 'create'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteByteArrayArray(writer, value: self.armNames)
+		cacheWriteNameRoster(writer, value: self.armNames)
 		writer.unsigned(self.line as CacheUnsigned)
 		writer.unsigned(self.column as CacheUnsigned)
 		writer.text(self.filePath.toString())
@@ -10936,7 +10763,7 @@ export type PendingFnMergeCheck
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns PendingFnMergeCheck throws LibraryCacheDamage
-		let f_armNames = try cacheReadByteArrayArray(reader)
+		let f_armNames = try cacheReadNameRoster(reader)
 		let f_line = (try reader.unsigned()) as LineNumber
 		let f_column = (try reader.unsigned()) as ColumnNumber
 		let f_filePath = try reader.path()
@@ -11139,11 +10966,11 @@ end 'assignedPlacePhrase'
 // `SemanticCheck.checkFunctionTypeDoors` drains them.
 export type PendingFunctionTypeDoor
 	// The governing name of the VALUE that arrived — a function, a lifted closure, or a function alias.
-	export var gotName as ByteArray
+	export let gotName as ByteArray
 
 	// The governing name of the function TYPE the place declares — a function alias, or (for a place
 	// typed by a `functionRef` value's own name) that function.
-	export var declaredName as ByteArray
+	export let declaredName as ByteArray
 	export var door as FunctionTypeDoor
 
 	// The NAME of the place written into, for an assignment-shaped door. `unnamed` for a cast, a `return`
@@ -11525,10 +11352,10 @@ end 'argDuplicateMessage'
 // It is factored out because the mutation summary needs the mapping WITHOUT the slotted array
 // (`SemanticCheck.addCallParamEdges` asks "which parameter does source argument `i` fill?" for a handful
 // of arguments and would otherwise pay `slotCallArgs`'s two per-call buffers for every call in the
-// program) — and because a second hand-written copy of `label.isEmpty() ? i : namePositionIn(label)` is
+// program) — and because a second hand-written copy of `label.isEmpty() ? i : positionOfName(label)` is
 // exactly the drift that would let a call be summarised against one slotting and checked against another.
 // ⭐⭐ **THE LABEL USUALLY NAMES THE PARAMETER AT ITS OWN POSITION, AND TESTING THAT FIRST IS WHAT
-// KEEPS A CALL LINEAR IN ITS ARGUMENT COUNT.** `namePositionIn` is a scan of the whole name list, so a
+// KEEPS A CALL LINEAR IN ITS ARGUMENT COUNT.** `positionOfName` is a scan of the whole name list, so a
 // call written `f(a, b: b, c: c)` — Maxon's own spelling, labels in declaration order — costs
 // `1 + 2 + … + P` comparisons, i.e. **O(P²) per call**, and this mapping is asked once per argument by
 // `slotCallArgs`, again by `SemanticCheck.addCallParamEdges`, and again by
@@ -11538,7 +11365,7 @@ end 'argDuplicateMessage'
 //
 // ⚠ **IT IS EXACTLY EQUIVALENT, NOT AN APPROXIMATION, AND THE REASON IS THAT PARAMETER NAMES ARE
 // UNIQUE** — a repeated one is E2014 at the DECLARATION (`duplicate parameter name`, measured), so if
-// `paramNames[argIndex]` equals the label then `namePositionIn` cannot answer any position but
+// `paramNames[argIndex]` equals the label then `positionOfName` cannot answer any position but
 // `argIndex`: there is no earlier match for it to find. A signature that DID carry a duplicate belongs
 // to an already-refused program, so the tie-break could only change which diagnostic that program
 // gets — the same reasoning `SemanticCheck.indexModuleFunctionsByName` states for first-index-wins.
@@ -11552,7 +11379,7 @@ end 'argDuplicateMessage'
 // at the CALL and nothing at the declaration.
 // A call that does not label `_` never asks about it at all — a positional argument returns at the
 // `label.isEmpty()` line above.
-export function argSlotPosition(paramNames ByteArrayArray, argIndex ParamCount, label ByteArray) returns ParamCount throws MapError
+export function argSlotPosition(paramNames NameRoster, argIndex ParamCount, label ByteArray) returns ParamCount throws MapError
 	if label.isEmpty() 'positional'
 		if argIndex >= paramNames.count() 'pastTheLastParameter'
 			throw MapError.keyNotFound
@@ -11567,7 +11394,7 @@ export function argSlotPosition(paramNames ByteArrayArray, argIndex ParamCount, 
 		end 'labelsInDeclarationOrder'
 	end 'aParameterAtItsOwnPosition'
 
-	return (try namePositionIn(paramNames, name: label)) as ParamCount
+	return (try paramNames.positionOfName(label)) as ParamCount
 end 'argSlotPosition'
 
 // ⭐ **`argDefaultSlots` IS THE COMPILER'S OWN ANSWER FOR THE ARGUMENTS IT SUPPLIED** — see `MaxonOp.call`.
@@ -11575,7 +11402,7 @@ end 'argSlotPosition'
 // `sourceCount + k` fills slot `argDefaultSlots[k]` and no name is consulted for it. Everything before
 // `sourceCount` is the author's and resolves through `argSlotPosition`. A caller with no synthesized
 // defaults (every witness dispatch, every lowering) passes the shared empty array.
-export function slotCallArgs(paramNames ByteArrayArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray) returns ArgSlotResult
+export function slotCallArgs(paramNames NameRoster, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns ArgSlotResult
 	let paramCount = paramNames.count()
 
 	if args.count() != paramCount 'arity'
@@ -11625,7 +11452,7 @@ end 'slotCallArgs'
 
 // A synthesized default's slot is checked against `paramNames` because the parser filled the defaults
 // from one overload member, and the member resolved later can declare fewer parameters.
-function callArgSlot(paramNames ByteArrayArray, argDefaultSlots ParamCountArray, sourceCount ElementIndex, argIndex ParamCount, label ByteArray) returns ParamCount throws MapError
+function callArgSlot(paramNames NameRoster, argDefaultSlots ParamCountArray, sourceCount ElementIndex, argIndex ParamCount, label ByteArray) returns ParamCount throws MapError
 	if argIndex < sourceCount 'sourceWritten'
 		return try argSlotPosition(paramNames, argIndex: argIndex, label: label)
 	end 'sourceWritten'
@@ -11870,7 +11697,7 @@ export type Project
 	// installed after the pipeline and `call`s it directly, so the inliner's census must count that call
 	// before the thunk exists: a callee spliced away on the strength of its one visible site would leave
 	// the thunk calling an emptied body.
-	export var functionValueTargets as ByteArrayArray
+	export var functionValueTargets as NameRoster
 	export var uncheckedCallPaths as UncheckedCallPaths
 
 	// The calls the entry stub makes by name in THIS build (`DeadFunctionElimination.EntryStubCalls`), set
@@ -11878,6 +11705,7 @@ export type Project
 	// inliner's called-once census both read it, and the census runs mid-pipeline where no usage record is
 	// in reach.
 	export var entryStubCalls as EntryStubCalls
+	export var hostContext as HostContextLayout
 
 	// ⭐ Whether this build instruments for code coverage (`--coverage`). Set by the driver right after the
 	// project is loaded, exactly as `debugInfo` is, and a per-BUILD switch for the same reason.
@@ -11917,13 +11745,13 @@ export type Project
 	// one per `Project`: `queryProgramSignatures` hands these to the index that folds every top-level
 	// constant, and its memo lives on `project.db` rather than in any process-wide store — so two
 	// compiles differing only in their defines cannot serve each other a folded value.
-	export var defines = DefineArray.create()
+	export var defines as DefineArray
 
 	// ⭐ WHAT THE BUILD MANIFEST SAID THIS PROGRAM'S VERSION IS, for the binary's own metadata: a Windows
 	// `VS_VERSIONINFO` resource and a Mach-O `LC_SOURCE_VERSION`, already checked against this target's field
 	// (`productVersionFor`). Empty when nobody said, which is most programs, and the writers then stamp a zero
 	// version.
-	export var productVersion = VersionComponentArray.create()
+	export var productVersion as VersionComponentArray
 
 	// The last merge renumbering this project walked an artifact with. See `VarInfo.renumberedIn`.
 	export var lastRenumbering = 0 as RenumberingEpoch
@@ -11947,15 +11775,15 @@ export type Project
 	// wearing an entry point's clothes: the entry stub, the two reachability walks, E3001 and the
 	// unused-export audit could each come to mean a different function.
 	//
-	// ⭐ **IT IS A PER-BUILD SWITCH, EXACTLY AS `asyncTrace` AND `debugStream` ARE** — set by the driver
-	// right after the project is loaded and never per file, so it lives here beside `target`.
+	// ⭐ **IT IS A PER-BUILD SWITCH, EXACTLY AS `asyncTrace` AND `debugStream` ARE** — given when the
+	// project is created and never per file, so it lives here beside `target`.
 	//
 	// ⚠ **A NON-`main` ENTRY DOES NOT REMOVE THE PROGRAM'S OWN `main`; IT STOPS REACHING IT.** Both
 	// reachability walks seed from this name alone, so an unnamed `main` is simply pruned — which is what
 	// lets `maxon test` compile a project that HAS a `main` and enter at the generated dispatcher instead.
 	// `main` also keeps its unqualified registration name whatever the entry is
 	// (`Parser.recordScannedSignature`): that exclusion is about the NAME `main`, not about the entry.
-	export var entryFunctionName as ByteArray
+	export let entryFunctionName as ByteArray
 
 	// The source files this compile itself wrote, and the reserved names it minted into each: the
 	// third provenance the reserved-name doors read. Empty for every ordinary build; filled only by a
@@ -11982,9 +11810,8 @@ export type Project
 	// rewrite happens at the sink and not at the load.
 	export var stagedSourceOrigins as StagedOriginIndex
 
-	export var stdlibShadowSpellings as StdlibShadowSpellingArray
+	export var shadowRoster as ShadowSpellingRoster
 	export var shadowRespellingMemos as ShadowRespellingMemoMap
-	export var shadowMints as WrittenMintSet
 
 	// ⭐ The SOURCE TEXT of every `async <call>` spawn, keyed by its `asyncCall` op index — what E3073 quotes
 	// back at the author (`'async heavyCompute(5)'`). SPARSE, unlike `opRanges`: only spawn sites have an
@@ -12009,12 +11836,6 @@ export type Project
 	// The calls `SemanticCheck.reportAmbiguousOverload` refused (E3007), by op index — reset with the
 	// other op-keyed tables each fold round.
 	export var refusedOverloadCalls = RefusedOverloadCallSet.create()
-
-	// ⭐ Every author-written READ OR WRITE of mutable module storage in the program, by op index (E3143) —
-	// the candidate set of the shared-global rule. Folded from the per-file artifact with the merge's op
-	// offset, exactly as `asyncSpawnSites` is. EMPTY for every program that names no module `var`, and the
-	// check reads that count as its own gate. See `ModuleVarAccessSite`.
-	export var moduleVarAccessSites as ModuleVarAccessSiteMap
 
 	// The source file an op was synthesized on behalf of, by op index (`ModuleInit.recordOpTables`) —
 	// what `authoredFileOf` answers for an op the function holding it was not written in.
@@ -12207,7 +12028,7 @@ export type Project
 	// folds and the constant evaluator. A real parse builds its own (`ParseStaging.parseFile`).
 	export var readerAnchors as ParserAnchors
 
-	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool, session CompileSession) returns Project
+	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool, session CompileSession, entryFunction ByteArray, defines DefineArray, productVersion VersionComponentArray) returns Project
 		let interfaces = IrInterfaceMap.create()
 
 		return Self{
@@ -12254,9 +12075,10 @@ export type Project
 			requestedRuntimeBodies: RuntimeFunctionNameArray.create(),
 			rendersTargetIr: false,
 			compilesOnceAndExits: false,
-			functionValueTargets: ByteArrayArray.create(),
+			functionValueTargets: NameRoster.create(),
 			uncheckedCallPaths: UncheckedCallPaths.none(),
 			entryStubCalls: EntryStubCalls.none(),
+			hostContext: HostContextLayout.unread(),
 			coverage: false,
 			samplesResidency: false,
 			censusByTag: false,
@@ -12267,18 +12089,15 @@ export type Project
 			coverageDataPath: "",
 			covPointBases: CovPointBaseMap.create(),
 			debugSpanTable: DebugSpanTable.create(),
-			// The DEFAULT entry, read off the one constant that also states which name stays unqualified —
-			// so `checkMainFunction`, the entry stub and the parser's exclusion cannot come to name three
-			// different functions. A caller that enters somewhere else overwrites it after the load.
-			entryFunctionName: MainFunctionName,
+			entryFunctionName: entryFunction,
+			defines: defines,
+			productVersion: productVersion,
 			compilerWrittenSources: CompilerWrittenIndex.empty(),
 			stagedSourceOrigins: StagedOriginIndex.empty(),
-			stdlibShadowSpellings: StdlibShadowSpellingArray.create(),
+			shadowRoster: ShadowSpellingRoster.none(),
 			shadowRespellingMemos: ShadowRespellingMemoMap.create(),
-			shadowMints: WrittenMintSet.create(),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
-			moduleVarAccessSites: ModuleVarAccessSiteMap.create(),
 			synthesizedOpFiles: SynthesizedOpFileMap.create(),
 			registryUseSites: RegistryUseSiteMap.create(),
 			allocTagSites: AllocTagSiteMap.create(),
@@ -12310,8 +12129,8 @@ end 'Project'
 // Both library roots are passed IN rather than located here so the project is born
 // with valid ones: the library loader reads them before the first pass runs, and a
 // field that is briefly wrong is a field something can read while it is wrong.
-export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool, session CompileSession) returns Project
-	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, debugStream: debugStream, session: session)
+export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool, session CompileSession, entryFunction ByteArray = MainFunctionName, defines DefineArray = DefineArray.create(), productVersion VersionComponentArray = VersionComponentArray.create()) returns Project
+	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
 end 'createProject'
 
 // Asking a `whileCurrent` interest is a round trip to the stdout writer's service, and the checkpoints
@@ -12453,11 +12272,11 @@ end 'reportDiagnostic'
 // (`ProgramSignatures.contestStdlibTypeName`), so every diagnostic is respelled for the reader of
 // each file it names, and an author never sees the rename.
 function respelledForItsReaders(project Project, diagnostic Diagnostic) returns Diagnostic
-	if project.stdlibShadowSpellings.isEmpty() 'nothingIsRenamed'
+	if project.shadowRoster.spellings.isEmpty() 'nothingIsRenamed'
 		return diagnostic
 	end 'nothingIsRenamed'
 
-	return diagnostic.respelledFor(authorCodeRespellings(project.stdlibShadowSpellings), respellingsOf: function(path) gives shadowRespellingsFor(project, path: path))
+	return diagnostic.respelledFor(authorCodeRespellings(project.shadowRoster.spellings), respellingsOf: function(path) gives shadowRespellingsFor(project, path: path))
 end 'respelledForItsReaders'
 
 function shadowRespellingsFor(project Project, path FilePath) returns ShadowRespellingArray
@@ -12473,22 +12292,22 @@ function shadowRespellingsFor(project Project, path FilePath) returns ShadowResp
 	var written = WrittenMintSet.create()
 
 	for spelling in spellings 'eachSpelling'
-		if project.shadowMints.contains(spelling) 'theAuthorWroteAMint'
+		if project.shadowRoster.mints.contains(spelling) 'theAuthorWroteAMint'
 			written.insert(spelling)
 		end 'theAuthorWroteAMint'
 	end 'eachSpelling'
 
-	let respellings = shadowRespellingsGiven(project, path: path, written: written)
-	project.shadowRespellingMemos.upsert(path.toString(), value: ShadowRespellingMemo.create(entry.contentHash, respellings: respellings))
-	return respellings
+	let memo = ShadowRespellingMemo.create(entry.contentHash, respellings: shadowRespellingsGiven(project, path: path, written: written))
+	project.shadowRespellingMemos.upsert(path.toString(), value: memo)
+	return memo.respellings
 end 'shadowRespellingsFor'
 
 function shadowRespellingsGiven(project Project, path FilePath, written WrittenMintSet) returns ShadowRespellingArray
-	return shadowRespellings(project.stdlibShadowSpellings, reader: shadowSpellingReaderOf(project, path: path), written: written)
+	return shadowRespellings(project.shadowRoster.spellings, reader: shadowSpellingReaderOf(project, path: path), written: written)
 end 'shadowRespellingsGiven'
 
 module function textAsItsReaderSpellsIt(project Project, path FilePath, text String) returns String
-	if project.stdlibShadowSpellings.isEmpty() 'nothingIsRenamed'
+	if project.shadowRoster.spellings.isEmpty() 'nothingIsRenamed'
 		return text
 	end 'nothingIsRenamed'
 
@@ -12497,7 +12316,7 @@ end 'textAsItsReaderSpellsIt'
 
 module function aliasSpelledForReader(project Project, alias RangedTypeAlias, readerFilePath FilePath, memo DeclarationQualifierMemo) returns String
 	let base = aliasBaseName(alias.name)
-	let signatures = programSignaturesIn(project, asker: "aliasSpelledForReader")
+	var signatures = programSignaturesIn(project, asker: "aliasSpelledForReader")
 
 	if isMintName(alias.name) 'aMintNamesItsDeclaration'
 		return signatures.contestedDeclarationSpelling(base, declFilePath: alias.declFilePath, memo: memo)
@@ -12514,15 +12333,8 @@ module function shadowSpellingReaderOf(project Project, path FilePath) returns S
 	return ShadowSpellingReader.libraryCode if not path.isEmpty() and isStdlibSourceFile(project, path: path) else ShadowSpellingReader.authorCode
 end 'shadowSpellingReaderOf'
 
-export function adoptShadowSpellings(project Project, spellings StdlibShadowSpellingArray)
-	var mints = WrittenMintSet.create()
-
-	for spelling in spellings 'eachSpelling'
-		mints.insert(spelling.minted)
-	end 'eachSpelling'
-
-	project.stdlibShadowSpellings = spellings
-	project.shadowMints = mints
+export function adoptShadowSpellings(project Project, roster ShadowSpellingRoster)
+	project.shadowRoster = roster
 	project.shadowRespellingMemos = ShadowRespellingMemoMap.create()
 end 'adoptShadowSpellings'
 

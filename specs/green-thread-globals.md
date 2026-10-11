@@ -5,124 +5,95 @@ keywords: [spawn, services, globals, module-level, data-race, green-threads, han
 category: concurrency
 ---
 
-# A service handler may not touch a module-level `var`
+# A service's messages touch no module-level or `static` `var`
 
 ## Documentation
 
-⚖ **A MODULE-LEVEL `var` IS ONE WORD, AND A SERVICE HANDLER IS A GREEN THREAD THE SCHEDULER MAY PUT ON
-ANY OS THREAD.** Those two facts cannot both hold in a program that compiles, so one of them has to be
-refused, and it is the ACCESS: **a message handler — and anything reachable from one — may neither WRITE
-nor READ a module-level `var`. A module-level `let` stays fully legal**, and it is the whole of the escape
-hatch: a word written once before any green thread exists has no second writer for anybody to race.
+⚖ **A MODULE-LEVEL `var` IS ONE WORD, AND A SERVICE MESSAGE RUNS ON A GREEN THREAD THE SCHEDULER MAY PUT ON
+ANY OS THREAD.** So code a message can run — the message itself, and every function it calls, through a
+closure value or a witness dispatch included — neither reads nor writes a module-level `var` or a `static var`
+(E3143). The refusal is anchored at the ACCESS, names the message that reaches it, and carries a note at the
+`spawn` that makes its type a service. **A module-level `let` and a `static let` stay legal**, and they are the
+escape hatch: a word written once before any green thread exists has no second writer to race.
 
-⚠ **THE WRITE HALF AND THE READ HALF ARE ONE RULE.** Each rests on its own hazard below, but they share a
-reachability question, a cure and an error code — only the diagnostic's subject clause differs — because
-splitting them would be one rule written down twice.
+```text
+error E3143: <fragment>:12:3: the message `Counter.add` uses the module-level `var total` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
+note: <fragment>:17:10: the `spawn` that makes `Counter` a service
+```
 
-**THE WRITE HAZARD IS AN ARITHMETIC FAILURE RATHER THAN A CRASH.** A service whose `export` handler does
-`done = done + 1` on a module-level `var`, driven to a fixed total of 1200 sends, run ten times at
-`MAXON_MAX_PROCS=16`:
+A `static var` is named with its type: ``the static `var Counter.count` ``.
+
+**The rule asks what a message can run, not whether the program spawns.** A `var` that only `main` and the
+functions `main` calls touch is legal in a program that spawns services — `Log`'s sink included — because
+`main` and its own coroutines are one strand. A function a message reaches by name, one a closure call in the
+message could land on, and one a witness dispatch could land on are all refused alike, because a `var` any
+of them touches is a `var` another OS thread can be using.
+
+### What makes a type a service
+
+| shape | a service |
+|---|---|
+| `spawn T.create()` anywhere in the program | **yes** |
+| a registry `default Key = spawn …` the program reaches | **yes** |
+| a call into `Log` — `default LogSink` spawns the log handler | **yes** |
+| `async f()` with no service anywhere | **no** — a coroutine shares its spawner's strand |
+
+### The two hazards
+
+**A WRITE LOSES UPDATES.** A service whose `export` handler does `done = done + 1` on a module-level `var`,
+driven to a fixed total of 1200 sends, run ten times at `MAXON_MAX_PROCS=16`:
 
 | run | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `done` | 1200 | 1200 | 1199 | 1199 | 1198 | 1199 | 1199 | 1200 | 1199 | 1200 |
 
-**Five of ten runs lose an update, and every one of them exits 0.** `done = done + 1` is a load, an add
-and a store; two Ms that interleave those six steps write each other's stale value back. Nothing
-crashes, nothing leaks, no gate anywhere goes red — the program simply answers a number that is too
-small, sometimes. ⇒ **the cure cannot be a runtime check, because there is no moment at which the runtime
-could notice.** It has to be a compile error, and the write is the only place the compiler can stand.
+Five of ten runs lose an update, and every one of them exits 0: `done = done + 1` is a load, an add and a
+store, and two Ms that interleave those six steps write each other's stale value back. There is no moment at
+which a runtime check could notice, so the cure is a compile error.
 
-**AND THE READ IS THE HALF WITH TEETH — A USE-AFTER-FREE, NOT A LOST UPDATE.** A write to a module `var`
-RELEASES the record the slot was holding before it stores the new one, so a green thread that has already
-loaded the pointer reads on into freed memory. Twelve services spinning on `label.count()` while `main` runs
-`label = "bravo-{r}"` four thousand times — **interpolated**, so every store frees a real heap record rather
-than an immortal `.rdata` one:
+**A READ FOLLOWS A FREED RECORD.** A write to a module `var` releases the record the slot held before it
+stores the new one, so a green thread that has already loaded the pointer reads on into freed memory. Twelve
+services spinning on `label.count()` while `main` runs `label = "bravo-{r}"` four thousand times:
 
 | processors | outcome |
 |---|---|
-| `MAXON_MAX_PROCS=1` | **8 of 8 clean**, `worst=0` |
-| `MAXON_MAX_PROCS=16` | **20 of 20 exit 139**, several panicking inside `String.count` → `utf8DecodeAt` with *"Range check failed: value outside typealias 'Codepoint'"* — decoding a record freed under them |
+| `MAXON_MAX_PROCS=1` | **8 of 8 clean** |
+| `MAXON_MAX_PROCS=16` | **20 of 20 exit 139**, several panicking inside `String.count` → `utf8DecodeAt` on a record freed under them |
 
-⛔ **A CHEAPER PROBE ANSWERS CLEANLY, AND KNOWING THAT IS WHAT KEEPS THE MEASUREMENT HONEST.** A handler
-that reads the global ONCE, with `main`'s single store on either side of it, exits normally every time — it
-never holds the pointer across a store. The hazard needs the reader to be INSIDE the load while the writer
-is freeing, which is exactly what the spin and the four thousand stores buy. A rule argued from the cheap
-probe would have concluded there was nothing here.
+At one processor every green thread runs on the one M and the steps cannot interleave; `DefaultMaxProcs` is
+more than one.
 
-⚠ **AND THE SAME PROGRAM IS PERFECTLY CORRECT AT ONE PROCESSOR**: every green thread runs on the one M, so
-the six steps cannot interleave. **That reason expires the moment there is more than one P, and
-`DefaultMaxProcs` is more than one.** The refusal is what makes the hazard visible at the source rather
-than in a tally that is occasionally short.
+⇒ **The cure is always available: keep the value in a field of the service that owns it and hand it back
+through a reply, pass it as an argument, or make it a `let`.** A reply is a `Promise` the awaiter owns, so
+the answer does not depend on how many processors serviced the work (`specs/sched-default-procs.md`).
 
-### What is refused, and what is not
-
-The rule is about **who writes**, not about what is written, and not about globals as such:
+### What a service program may hold
 
 | shape | verdict |
 |---|---|
-| a handler assigns to a module-level `var` | **refused** — the lost update above |
-| a handler READS a module-level `var` | **refused** — the use-after-free above; the writer need not be another handler, `main` will do |
-| a function a handler CALLS touches a module-level `var` | **refused** — transitive through the call graph, exactly as a service's blocking edge is (`services.md`'s `cycle-through-a-free-function-is-refused`) |
-| a handler writes `self.<field>` | **legal** — a service's fields are the service's, reached by one green thread, which is the whole point of putting state there |
-| a handler READS a module-level `let` | **legal** — an immortal, never-written word has no second writer to race, and this is the escape hatch every configuration constant takes. A `let` record `__module_init` has to BUILD is marked shared before `main`, so the counts every handler steps on it are atomic |
+| a handler writes `self.<field>` | **legal** — a service's fields are reached by one green thread |
+| a handler reads a module-level `let` | **legal** — a `let` record `__module_init` builds is marked shared before `main`, so the counts every handler steps on it are atomic |
 | a handler — or a function one reaches — reads a `let` whose graph no share walk can mark (an OS handle) | **refused** (E3163) — nothing could make the counts the handlers step on it atomic |
 | the same `let`, read only by functions no handler reaches | **legal** — only `main` counts it, so it stays unmarked |
 | a global initializer reaches a `spawn` | **refused** (E3164) — the `let`s are marked only once the last initializer returns, so no other green thread may exist before then |
-| a `let` initializer reaches a module-level `var` holding a record | **refused** (E3165), spawn or no spawn — a record the `var` owns has an owner no `let` holds, so no mark could make it shared |
-| a `var` initializer may be handed a `let`'s record, or one holding it | **refused** (E3166), spawn or no spawn — the `var` would be that owner |
-| a plain function, not reachable from any handler, touches a module-level `var` | **legal** — the program spawning a service somewhere else does not make `main`'s own bookkeeping concurrent |
-| a handler CALLS A CLOSURE VALUE, and a function whose ADDRESS IS TAKEN assigns to a module-level `var` | **refused** — the target is chosen at run time, so no edge can be followed and every function the call could land on is treated as reachable |
-| a handler reaches a WITNESS dispatch, and a function wearing the dispatched requirement's name assigns to a module-level `var` | **refused**, for the same reason — a witness table holds the members of a conformance, so every member wearing that name is treated as reachable |
-| the same, but the assigning function's address is taken nowhere and it wears no name a dispatch the handler reaches is for | **legal** — no dispatch can reach it. Marking it anyway would refuse `stdlib/TraceCapture.maxon` in every service program that uses an interface, and a closure in `main` in every service program that keeps a `Map` |
+| a `let` initializer reaches a module-level `var` holding a record | **refused** (E3165, `static-variables.md`), spawn or no spawn |
+| a `var` initializer may be handed a `let`'s record, or one holding it | **refused** (E3078, `static-variables.md`), spawn or no spawn |
+| a `var` only `main` and the functions it calls touch, in a program that spawns | **legal** — no other thread can reach it |
+| the same `var` read or written by a handler, or by a function a handler reaches | **refused** (E3143) |
 
-⛔⛔ **THAT LAST ROW IS THIS RULE'S REFUSING DIRECTION, AND IT IS THE EXACT OPPOSITE OF `services.md`'s
-DEADLOCK RULE ON THE SAME EDGES.** `ServiceCallCycleCheck`'s header says an unknown callee *"contributes no
-edge … that is the ACCEPTING direction, deliberately"*, and it is right to: a missed cycle costs a guarantee
-for a program shape nobody writes, while a false refusal is unworkaroundable. Here a missed edge costs a
-**silently wrong answer at run time** — the failure with no gate anywhere — so the same silence resolves the
-other way. The diagnostic says which road it took rather than claiming a call path the author cannot find:
-*"the message `X` dispatches through a closure or a witness whose target this compiler cannot name, so it may
-land here"*.
-
-⚠ **An unresolvable NAMED callee is not one of those.** A name no function in the program declares is a
-runtime entry point — `__mm_retain`, `__write_stdout`, the `__mf_*` band — with no body that could touch a
-module slot and no route back into user code. Counting those as unknowns would mark every handler that prints
-or allocates as blind and refuse essentially every service program there is.
-
-⚠ **AND EVERY REFUSAL CARRIES THE `spawn` AS A NOTE**, on `specs/services.md`'s standing requirement for a
-whole-program service rule and for its reason: whether `Counter` is a service is decided by a `spawn` that may
-be in another file entirely, so a diagnostic that named only the write would leave the reader with no way to
-find out why an ordinary-looking assignment is illegal. The primary line is the WRITE — the one place the
-program can be repaired — and the note answers the question that line raises.
-
-⇒ the cure for a refused program is the same in both directions and is always available: **keep the value
-in `self` and hand it back through a reply.** A reply is a `Promise` the awaiter owns, so the sum is accumulated by
-one green thread from values each computed by one green thread, and the answer does not depend on how
-many processors serviced the work. `specs/sched-default-procs.md` is that shape run at three
-processor counts for exactly one answer.
-
-⚠ **NO CASE HERE IS RESTRICTED FOR NEEDING A `spawn`.** All four native lanes have the green thread's
-context switch, and wasm32-wasi is refused with E3104 — which the harness REPORTS as a counted SKIP
-naming the case, where a marker removes it from the run in silence.
-
-⛔ **THE FOUR `error.*` CASES DO EXCLUDE wasm32-wasi, AND FOR A REASON THAT IS ABOUT THE DIAGNOSTIC AND
-NOT ABOUT THE RULE.** E3143 is target-neutral and would be reached everywhere, but on wasm the same
-program earns E3104 for `__svc_spawn` and `__mbox_send` FIRST, so the pinned stderr is not what the
-compiler emits there. The exclusion expires the day wasm grows a service substrate — not the day the rule changes.
+⚠ **THE `error.*` CASES EXCLUDE wasm32-wasi FOR A REASON ABOUT THE DIAGNOSTIC, NOT THE RULE.** On wasm the
+same program earns E3104 for `__svc_spawn` and `__mbox_send` first, so the pinned stderr is not what the
+compiler emits there. Every accepted case that spawns is left unmarked: wasm32-wasi answers it with E3104,
+which the harness counts as a SKIP naming the case.
 
 ## Tests
 
-<!-- test: error.a-handler-may-not-write-a-module-global -->
+<!-- test: error.a-module-var-a-handler-writes -->
 <!-- unsupported-targets: wasm32-wasi -->
-**THE DIRECT SHAPE — the measurement above, reduced to the one statement that makes it possible.**
-`Counter.add` is an `export` instance method of a type this program `spawn`s, so it is a MESSAGE, so it
-runs on a green thread; `total = total + by` is the load/add/store that two Ms can interleave. The
-refusal is anchored at the WRITE, which is where the program can be repaired; the `spawn` appears only as
-the NOTE, because it is what makes the type a service and yet there is nothing to change there.
-
-⚠ **WITHOUT THE REFUSAL, THIS PROGRAM EXITS 0 AT ONE PROCESSOR**, which is not a passing case but the
-defect itself: a single M is the only reason it looks harmless.
+**THE WRITE HAZARD'S PROGRAM.** `Counter.add` is a message, and `total = total + by` is the load/add/store
+two Ms can interleave. The refusal is anchored at the ACCESS — the line the cure changes — and the
+`spawn` rides as the note, because it is what makes `Counter` a service.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var total = 0
 
@@ -146,23 +117,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:12:3: the message `Counter.add` writes the module-level `total` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. So `total = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
+error E3143: <fragment>:12:11: the message `Counter.add` uses the module-level `var total` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
 note: <fragment>:17:10: the `spawn` that makes `Counter` a service
 ```
 
-<!-- test: error.a-function-called-by-a-handler-may-not-write-a-module-global -->
+<!-- test: error.a-module-var-a-function-called-by-a-handler-writes -->
 <!-- unsupported-targets: wasm32-wasi -->
-**THE SAME REFUSAL ONE HOP OUT, AND IT IS THE ONE THAT DECIDES WHETHER THE RULE IS WORTH ANYTHING.** A
-rule keyed on writes SYNTACTICALLY INSIDE a handler body refuses only the shape an author would have
-spotted anyway; the race does not care which frame the store instruction sits in. `Counter.add` names no
-global at all — it calls `record`, and `record` is what stores. The edge is transitive through the call
-graph, exactly as a service's BLOCKING edge is in `services.md`'s
-`cycle-through-a-free-function-is-refused`.
-
-⚠ The refusal is anchored at `record`'s write, and the message is named as the route that reaches it —
-`record` on its own is an ordinary function and an ordinary function may store to a global all it likes
-(`a-plain-function-may-write-a-module-global` below is that case, run). It is the REACHABILITY that
-refuses, so the site and the reason live at different lines and the message has to carry both.
+`Counter.add` names no global; it calls `record`, and `record` stores. The refusal names the message that
+reaches the access: the race does not care which frame the store sits in.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var total = 0
 
@@ -190,38 +153,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:5:2: `record` writes the module-level `total`, and the message `Counter.add` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. So `total = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
+error E3143: <fragment>:5:10: `record` uses the module-level `var total`, and the message `Counter.add` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `total` a `let`
 note: <fragment>:21:10: the `spawn` that makes `Counter` a service
 ```
 
-<!-- test: error.a-dispatch-the-compiler-cannot-follow-widens-the-rule -->
+<!-- test: error.a-module-var-only-a-closure-call-in-a-handler-could-reach -->
 <!-- unsupported-targets: wasm32-wasi -->
-⛔⛔ **THE REFUSING DIRECTION, RUN — AND IT IS THE ROW ABOVE THAT NOTHING ELSE IN THIS FILE CAN SEE.**
-`a-plain-function-may-write-a-module-global` below is this program with ONE difference: there, `Counter.add`
-calls nothing the walk cannot follow, and `bookKeeping`'s write is legal. Here `Counter.add` calls
-`callIndirect`, which calls a **closure value** — a target chosen at the call site rather than named at the
-callee — so the call graph records no edge out of it and no walk can say where control lands. Whether
-`bookKeeping` is reachable from a message is therefore genuinely unknown, and this rule answers unknown with
-**refused**.
-
-⚠ **AND `bookKeeping`'s ADDRESS IS TAKEN, WHICH IS WHAT MAKES THE UNKNOWN GENUINE RATHER THAN ASSUMED.**
-`main` hands it to `callIndirect` as a `Step` instead of calling it by name, so `bookKeeping` really is one
-of the bodies a `Step` in this program can denote — and the indirect call in the handler's cone really could
-be the one that runs it. The widening is narrowed to exactly that set: a function whose address is taken
-nowhere and which satisfies no witness slot has no address in the image at all, so no dispatch can land on
-it, and marking it anyway would be a REFUSAL OF THE STDLIB (see `an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib`).
-
-⚠ **AND THE SENTENCE SAYS SO RATHER THAN CLAIMING A CALL PATH.** *"the message `Counter.add` dispatches
-through a closure or a witness whose target this compiler cannot name, so it may land here"* — an author
-sent looking for a call from `Counter.add` to `bookKeeping` would not find one, because there is none. It is
-the reachability that is unknown, not established.
-
-⭐ **THE PAIR IS THE EVIDENCE.** This case and `a-plain-function-may-write-a-module-global` differ by one
-indirect call and by nothing else, and they answer opposite verdicts — which is what makes the widening an
-observable behaviour rather than a claim in a comment. `services.md`'s
-`a-blocking-cycle-through-an-indirect-call-aborts` is the same silence read the OTHER way one rule over: a
-cycle through a closure is ACCEPTED at compile time (and aborts at run time), because a missed refusal there
-costs a guarantee and here it costs a wrong answer nothing can notice.
+`Counter.add` calls a closure value through `callIndirect`, and `bookKeeping`, whose address `main` takes,
+writes `ledger`. No named call runs from the message to the write, and the program is refused all the same:
+a target chosen at run time may land on any function whose address the program takes, so the rule reads the
+message as reaching all of them.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var ledger = 0
 
@@ -232,8 +174,6 @@ function bookKeeping(by Integer) returns Integer
 	return ledger
 end 'bookKeeping'
 
-// The indirection. It calls the function it was HANDED, so no walk keyed on a callee's NAME can say which
-// body runs here — `services.md`'s `callIndirect`, doing the same job for the deadlock rule.
 function callIndirect(f Step, n Integer) returns Integer
 	return f(n)
 end 'callIndirect'
@@ -260,33 +200,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:7:2: `bookKeeping` writes the module-level `ledger`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. So `ledger = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
-note: <fragment>:30:10: the `spawn` that makes `Counter` a service
+error E3143: <fragment>:7:11: `bookKeeping` uses the module-level `var ledger`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
+note: <fragment>:28:10: the `spawn` that makes `Counter` a service
 ```
 
-<!-- test: error.a-handler-may-not-read-a-module-global -->
+<!-- test: error.a-module-var-a-handler-reads -->
 <!-- unsupported-targets: wasm32-wasi -->
-⛔⛔ **THE READ HALF, AND THIS IS THE PROGRAM THE MEASUREMENT WAS TAKEN ON — VERBATIM.** `Reader.size`
-names no global on the left of anything; it only *reads* `label`, four thousand times, while `main`
-reassigns it four thousand times from another green thread. Under the write rule alone this compiled and
-ran, and at `MAXON_MAX_PROCS=16` it **exited 139 twenty times out of twenty**, several of those panicking
-inside `String.count` → `utf8DecodeAt` with *"Range check failed: value outside typealias 'Codepoint'"* —
-`String.count` walking a record `main`'s store had already released. At one processor the identical binary
-was **clean 8 times out of 8**.
-
-⚠ **THE THREE THINGS THAT MAKE IT BITE ARE ALL DELIBERATE, AND A "SIMPLER" VERSION OF THIS CASE MEASURES
-NOTHING.** The value is **interpolated** (`"bravo-{r}"`), so every store frees a real heap record — a bare
-literal is immortal `.rdata` and frees nothing at all. The handler **spins**, so it is inside the load when
-the store lands. And there are **twelve** readers against four thousand stores, so the window is hit rather
-than merely existing. A handler that read the global once, between two stores, exits normally every time.
-
-⚠ The anchor is the READ, exactly as the write cases anchor at the write: it is the line the author has to
-change. The `spawn` rides as the note, because whether `Reader` is a service is decided elsewhere.
+**THE READ HAZARD'S PROGRAM.** Twelve `Reader.size` messages spin on `label.count()` while `main` stores
+four thousand interpolated strings into `label`; at `MAXON_MAX_PROCS=16` the program would exit 139 reading
+records the stores freed. A READ is refused like a write.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
-// Does a handler READING a module-level managed `var` while `main` reassigns it produce a
-// use-after-free, or merely a stale word? The store decrefs the record the slot held; an
-// interpolated value is a fresh HEAP record each time (a bare literal would be immortal
-// .rdata and free nothing, which would make this probe vacuous).
 typealias ReaderHandleArray = Array with Reader.handle
 typealias IntPromise = Promise with (Integer, ServiceError)
 typealias IntPromiseArray = Array with IntPromise
@@ -354,17 +278,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:23:12: the message `Reader.size` reads the module-level `label` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. A reader gets whichever side of a concurrent write the scheduler happened to interleave — and when `label` holds a String, an array or a struct that is not a stale word but a FREED ONE, because the write RELEASES the record the slot was holding while the reader is still following the pointer it already loaded. Nothing traps at the store. Keep it in a field of `self` and hand it back through a reply, or make `label` a `let`
-note: <fragment>:37:11: the `spawn` that makes `Reader` a service
+error E3143: <fragment>:19:12: the message `Reader.size` uses the module-level `var label` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `label` a `let`
+note: <fragment>:33:11: the `spawn` that makes `Reader` a service
 ```
 
-<!-- test: error.a-function-a-handler-reaches-may-not-read-a-module-global -->
+<!-- test: error.a-module-var-used-as-a-shared-empty-anchor -->
 <!-- unsupported-targets: wasm32-wasi -->
-**THE READ HALF TWO HOPS OUT, AND IT IS THE SHAPE A COPY-ON-WRITE ANCHOR TAKES.** `Counter.count` names no
-global; it calls `entryCount`, which calls `holdsNothing`, and only that asks whether a column IS the shared
-empty `noEntries` — an identity test, which READS the slot. A work function run from a handler is refused for
-exactly this, however deep in its call graph the test sits: the anchor has to belong to the work, not to the
-module, which is why the compiler's own parser holds its anchors per parser (`ParserAnchors`).
+**THE SHAPE A COPY-ON-WRITE ANCHOR TAKES.** `holdsNothing` asks whether a column IS the shared empty
+`noEntries` — an identity test, which reads the slot — two calls below a message. In a service program the
+anchor belongs to the work rather than the module, which is why the compiler's own parser holds its anchors
+per parser (`ParserAnchors`).
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var noEntries = IntArray.create()
 
@@ -403,7 +327,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 ```
 ```maxoncstderr
-error E3143: <fragment>:5:19: `holdsNothing` reads the module-level `noEntries`, and the message `Counter.count` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. A reader gets whichever side of a concurrent write the scheduler happened to interleave — and when `noEntries` holds a String, an array or a struct that is not a stale word but a FREED ONE, because the write RELEASES the record the slot was holding while the reader is still following the pointer it already loaded. Nothing traps at the store. Keep it in a field of `self` and hand it back through a reply, or make `noEntries` a `let`
+error E3143: <fragment>:5:19: `holdsNothing` uses the module-level `var noEntries`, and the message `Counter.count` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `noEntries` a `let`
 note: <fragment>:31:10: the `spawn` that makes `Counter` a service
 ```
 
@@ -608,7 +532,7 @@ let RoundsPerChurner = 200000
 
 typealias Integer = int(i64.min to i64.max)
 typealias NameArray = Array with String
-typealias HeldNamesArray = Array with NameArray
+typealias HeldNamesArray = Array with readonly NameArray
 typealias ChurnReplyArray = Array with Promise with (Integer, ServiceError)
 ```
 ```stdout
@@ -828,109 +752,10 @@ error E3164: <fragment>:35:11: `Box.start` spawns `Reader`, and a module-level g
 note: <fragment>:41:5: the initializer of `box`, which reaches it
 ```
 
-<!-- test: error.a-let-initializer-may-not-read-a-managed-var-beside-a-spawn -->
-<!-- unsupported-targets: wasm32-wasi -->
-**A `let` THAT HOLDS WHAT A `var` OWNS CANNOT BE MARKED SHARED.** `l` is the record `g` owns, so marking `l`'s
-graph before `main` would meet an owner no `let` holds. The program is refused at compile time (E3165, owned
-by `static-variables.md`) rather than stopping before `main` runs.
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return g
-	end 'current'
-end 'Box'
-
-var g = Box.create()
-let l = Box.current()
-
-type Reader
-	var asked as Integer
-
-	static function create() returns Self
-		return Self{asked: 0}
-	end 'create'
-
-	export function read() returns Integer
-		self.asked = self.asked + 1
-		return l.n
-	end 'read'
-end 'Reader'
-
-function main() returns ExitCode
-	let h = spawn Reader.create()
-	let n = try await h.read() otherwise 0
-	print("n={n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3165: <fragment>:10:10: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
-note: <fragment>:14:5: `g` is declared here
-```
-
-<!-- test: error.a-var-initializer-may-not-take-a-lets-record-beside-a-spawn -->
-<!-- unsupported-targets: wasm32-wasi -->
-**AND A `var` MAY NOT TAKE WHAT A `let` HOLDS.** `v` would be an owner of `a`'s record that no `let` is, so marking
-`a` shared before `main` would meet it. Refused at compile time (E3166, owned by `static-variables.md`).
-```maxon
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function current() returns Self
-		return a
-	end 'current'
-end 'Box'
-
-let a = Box.create()
-var v = Box.current()
-
-type Reader
-	var asked as Integer
-
-	static function create() returns Self
-		return Self{asked: 0}
-	end 'create'
-
-	export function read() returns Integer
-		self.asked = self.asked + 1
-		return a.n
-	end 'read'
-end 'Reader'
-
-function main() returns ExitCode
-	let h = spawn Reader.create()
-	let n = try await h.read() otherwise 0
-	print("n={n} v={v.n}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3166: <fragment>:15:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
-```
-
-<!-- test: a-plain-function-may-write-a-module-global -->
-**THE SCOPE GUARD — a `spawn` anywhere does not make the whole program concurrent.** Whether a type is a
-service is a WHOLE-PROGRAM property (`services.md`, *"a `spawn` anywhere makes the type a service"*), and
-the tempting cheap implementation of this rule inherits that shape: refuse every global write in any
-program that spawns. This program spawns one, and `bookKeeping` is still reached from `main` alone — one
-green thread, before and after an await that is fully ordered. Its two writes are as safe as
-they are in a program with no `spawn` in it at all.
-
-⚠ **THE SECOND CALL IS PAST THE `await` ON PURPOSE.** A reachability walk that stopped at the first
-suspension point, or that treated everything after an `await` as "concurrent", would refuse the second
-`bookKeeping(n)` and not the first — so the case puts one on each side of it and pins the sum, `10 + 5`.
+<!-- test: a-module-var-only-main-touches-in-a-service-program -->
+**NO MESSAGE TOUCHES `ledger`, SO IT IS LEGAL.** `bookKeeping` is reached from `main` alone, and `main` runs on
+the program's own strand: no other OS thread can reach the word, whether or not the program spawns a service.
+The twin below reads the same `ledger` from a handler and is refused.
 ```maxon
 var ledger = 0
 
@@ -972,28 +797,74 @@ ledger=15 count=5
 15
 ```
 
-<!-- test: an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib -->
-⭐⭐ **THE OVER-REFUSAL THAT WOULD MAKE THIS RULE UNUSABLE, PINNED — one ordinary interface method in a
-handler's cone must not refuse every program that so much as MENTIONS `TraceCapture`.**
-
-A `witnessDispatch` chooses its target at run time, so it triggers the same widening the case above pins.
-A widening that marked EVERY function in the program would refuse this one: `stdlib/TraceCapture.maxon`
-holds a module-level `var capturing` that `TraceCapture.startCapture` writes, so the refusal would read
-*"`TraceCapture.startCapture` writes the module-level `capturing` … make `capturing` a `let`"*. **That cure
-names a file the author does not own**, `stdlib/Testing.maxon` has the same shape, and interfaces are not
-exotic: essentially every service program that uses one would be refused.
-
-⭐ **THE NARROWING, AND WHY IT IS SOUND.** A function value in this language comes from exactly two places —
-a `functionRef` (a closure literal, or a named function used as a value) and a witness slot, whose accepted
-member the conformance check files by name. A function that is in neither has no address anywhere in the
-emitted image, so no `indirectCall` and no `witnessDispatch` can reach it. `TraceCapture.startCapture` is neither, so
-it is not implicated here; `Polite.greet` IS a witness member and remains in the widened set, which is what
-keeps the refusing direction intact for the target the dispatch can genuinely land on.
-
-⚠ **`TraceCapture` IS NAMED FROM `main` AND NOT FROM THE HANDLER, and that distinction is the whole case.** A handler
-that CALLS `TraceCapture.trace` is still refused, correctly and by a NAMED call path — `TraceCapture.trace` reads `capturing`,
-and a message reaches it. What this case pins is that a handler which calls neither is left alone.
+<!-- test: error.the-same-module-var-read-by-a-handler-in-a-service-program -->
+<!-- unsupported-targets: wasm32-wasi -->
+**THE REFUSED TWIN OF THE CASE ABOVE.** The program differs only in `total`, which now reads `ledger`: a message
+runs on a green thread the scheduler may put on any OS thread, while `main` writes the same word.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
+var ledger = 0
+
+function bookKeeping(by Integer)
+	ledger = ledger + by
+end 'bookKeeping'
+
+type Counter
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function add(by Integer)
+		self.count = self.count + by
+	end 'add'
+
+	export function total() returns Integer
+		return self.count + ledger
+	end 'total'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	bookKeeping(10)
+	h.add(5)
+	let n = try await h.total() otherwise 0
+	bookKeeping(n)
+	print("ledger={ledger} count={n}\n")
+	return ledger as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3143: <fragment>:20:23: the message `Counter.total` uses the module-level `var ledger` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
+note: <fragment>:25:10: the `spawn` that makes `Counter` a service
+```
+
+<!-- test: a-service-program-may-use-the-stdlibs-trace-capture -->
+⭐⭐ **THE RULE COUNTS THE STANDARD LIBRARY'S `var`s TOO, SO THE LIBRARY CODE A MESSAGE RUNS TOUCHES NONE.**
+`TraceCapture` keeps its state in a service of its own and a `SharedValue`, and this program — which spawns
+`Counter` and starts and stops a capture from `main` — compiles and runs. A module `var` a message of
+`TraceCapture` reached would refuse it, naming a file the author does not own.
+
+⭐ **AND AN INTERFACE IN THE HANDLER'S CONE DOES NOT IMPLICATE ANYTHING BUT THE REQUIREMENT'S MEMBERS.** The
+handler dispatches `greet` through `Greeter`, so the dispatch can land on `Polite.greet` and on no other function;
+`bookKeeping` writes a module `var` and has its address taken in `main`, but it is no member of the requirement, so
+no dispatch reaches it and the `var` is legal.
+```maxon
+var ledger = 0
+
+typealias Step = function(Integer) returns Integer
+
+function bookKeeping(by Integer) returns Integer
+	ledger = ledger + by
+	return ledger
+end 'bookKeeping'
+
+function callIndirect(f Step, n Integer) returns Integer
+	return f(n)
+end 'callIndirect'
+
 interface Greeter
 	function greet() returns String
 end 'Greeter'
@@ -1032,28 +903,24 @@ function main() returns ExitCode
 	TraceCapture.startCapture()
 	let h = spawn Counter.create()
 	let n = try await h.add(5) otherwise 0
+	let booked = callIndirect(bookKeeping, n: n)
 	let keys = TraceCapture.stopCapture()
-	print("n={n} keys={keys.count()}\n")
+	print("n={n} booked={booked} keys={keys.count()}\n")
 	return n as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
-n=10 keys=0
+n=10 booked=10 keys=0
 ```
 ```exitcode
 10
 ```
 
-<!-- test: a-witness-dispatch-in-a-handlers-cone-does-not-implicate-a-closure -->
-⭐⭐ **A WITNESS DISPATCH LANDS ON A MEMBER WEARING ITS REQUIREMENT'S NAME, AND NEVER ON A CLOSURE.** The
-handler looks a key up in a `Map`, and a `Map` hashes and compares its key through a witness slot — so every
-handler that keeps a map is a handler whose cone holds a run-time dispatch. `bookKeeping` writes a module
-global and its address is taken, exactly as in `error.a-dispatch-the-compiler-cannot-follow-widens-the-rule`;
-what differs is that no closure is CALLED anywhere a message can run. A witness table holds a conformance's
-members and nothing else, so the dispatch can reach every `hash` and every `equals` the program declares, and
-cannot reach `bookKeeping`. Widened to every address-taken function, the rule would refuse this program, and
-every service a compiler's own pool runs, whose handlers index maps throughout.
+<!-- test: a-module-var-beside-a-handler-that-keeps-a-map -->
+The handler hashes and compares its keys through a `Map`'s witness slots and calls no closure; `bookKeeping`,
+whose address `main` takes, writes `ledger`. Nothing a message runs can land on `bookKeeping`, so the `var` is
+legal.
 ```maxon
 var ledger = 0
 
@@ -1100,12 +967,11 @@ n=5 l=1
 5
 ```
 
-<!-- test: error.a-member-a-witness-dispatch-can-land-on-may-not-write-a-module-global -->
+<!-- test: error.a-module-var-a-witness-member-writes -->
 <!-- unsupported-targets: wasm32-wasi -->
-The refusing twin of the case above, and of `an-interface-in-a-handlers-cone-does-not-implicate-the-stdlib`:
-the handler dispatches `greet` through an interface value, and the one member wearing that requirement's
-name writes a module global. No named call runs from `Counter.add` to `Loud.greet`, so the sentence names
-the dispatch rather than a call path.
+The handler dispatches `greet` through an interface value, and `Loud.greet` writes `greetings`. The refusal
+names the member the dispatch could land on, as for every other road to the `var`.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var greetings = 0
 
@@ -1153,7 +1019,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3143: <fragment>:16:3: `Loud.greet` writes the module-level `greetings`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. So `greetings = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small. Keep it in a field of `self` and hand it back through a reply, or make `greetings` a `let`
+error E3143: <fragment>:16:15: `Loud.greet` uses the module-level `var greetings`, and the message `Counter.add` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `greetings` a `let`
 note: <fragment>:40:10: the `spawn` that makes `Counter` a service
 ```
 
@@ -1249,4 +1115,301 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-program-with-only-async-keeps-its-module-var -->
+**`async` ALONE DOES NOT MAKE A SERVICE PROGRAM.** `triple` runs on a green thread of its own twice, and
+`main` folds each awaited answer into `total`. Nothing is spawned, so `total` is a legal declaration.
+```maxon
+var total = 0
+
+function triple(n Integer) returns Integer
+	sleep(1)
+	return n * 3
+end 'triple'
+
+function main() returns ExitCode
+	let first = async triple(5)
+	let a = await first
+	total = total + a
+	let second = async triple(4)
+	let b = await second
+	total = total + b
+	print("total={total}\n")
+	return total as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+total=27
+```
+```exitcode
+27
+```
+
+<!-- test: a-module-var-only-main-touches-beside-a-log-sink -->
+**A PROGRAM THAT LOGS SPAWNS A SERVICE, AND ITS `var` IS STILL `main`'S.** The log handler is a service, so
+`Log.info` runs on a green thread of its own, but nothing it runs touches `calls`: `main` alone counts it.
+```maxon
+var calls = 0
+
+function main() returns ExitCode
+	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
+	let levels = LogLevelVar.create(LogLevels.minimum(LogLevel.info))
+	Log.setDefault(LogSink.create(spawn TextLogHandler.create(options), levels: levels))
+	calls = calls + 1
+	Log.info("started {calls}")
+	return calls as ExitCode
+end 'main'
+```
+```stdout
+level=INFO msg="started 1"
+```
+```exitcode
+1
+```
+
+<!-- test: a-module-var-only-main-touches-beside-a-registry-default-that-spawns -->
+A `default` whose value is a `spawn` starts its service before `main` once anything reaches its key, so the
+program has a service. `lookups` is touched by `main` alone, so it is legal.
+```maxon
+var lookups = 0
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Polite implements Greeter
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function greet() returns Integer
+		self.calls = self.calls + 1
+		return 7
+	end 'greet'
+end 'Polite'
+
+default Greeter = spawn Polite.create()
+
+function main() returns ExitCode
+	lookups = lookups + 1
+	let answer = try await Greeter.current().greet() otherwise 0
+	return (answer + lookups) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+8
+```
+
+<!-- test: a-static-var-only-main-touches-in-a-program-that-spawns-a-service -->
+**A `static var` IS A MODULE `var` WITH A TYPE'S NAME ON IT.** `spawn` calls the factory on the spawner's own
+strand, so `Counter.created` is `main`'s and the program is legal.
+```maxon
+type Counter
+	static var created = 0
+
+	var n as Integer
+
+	static function create() returns Self
+		Counter.created = Counter.created + 1
+		return Self{n: 0}
+	end 'create'
+
+	export function add(by Integer)
+		self.n = self.n + by
+	end 'add'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	h.add(5)
+	return Counter.created as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+1
+```
+
+<!-- test: error.a-static-var-a-handler-reads -->
+<!-- unsupported-targets: wasm32-wasi -->
+The refused twin: a handler reads the `static var`, so it is one word another OS thread uses, and it is named
+with its type.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+type Counter
+	static var created = 0
+
+	var n as Integer
+
+	static function create() returns Self
+		Counter.created = Counter.created + 1
+		return Self{n: 0}
+	end 'create'
+
+	export function add(by Integer) returns Integer
+		self.n = self.n + by + Counter.created
+		return self.n
+	end 'add'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	let n = try await h.add(5) otherwise 0
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3143: <fragment>:13:26: the message `Counter.add` uses the static `var Counter.created` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `Counter.created` a `let`
+note: <fragment>:19:10: the `spawn` that makes `Counter` a service
+```
+
+<!-- test: a-static-let-in-a-program-that-spawns-a-service -->
+The `let` twin of the case above: a `static let` is written once before any green thread exists, so a
+message may read it.
+```maxon
+type Counter
+	static let step = 6
+
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function add(times Integer) returns Integer
+		self.n = self.n + times * Counter.step
+		return self.n
+	end 'add'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	let n = try await h.add(7) otherwise 0
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+
+<!-- test: error.a-registry-default-that-spawns-is-refused-when-its-message-touches-the-var -->
+<!-- unsupported-targets: wasm32-wasi -->
+A `default` whose value is a `spawn` starts its service before `main`, so a module `var` the service's own message
+touches is shared by two threads. The note points at the `spawn` inside the `default`.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+var lookups = 0
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Polite implements Greeter
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function greet() returns Integer
+		lookups = lookups + 1
+		self.calls = self.calls + 1
+		return 7
+	end 'greet'
+end 'Polite'
+
+default Greeter = spawn Polite.create()
+
+function main() returns ExitCode
+	let answer = try await Greeter.current().greet() otherwise 0
+	return (answer + lookups) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3143: <fragment>:16:13: the message `Polite.greet` uses the module-level `var lookups` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `lookups` a `let`
+note: <fragment>:22:19: the `spawn` that makes `Polite` a service
+```
+
+<!-- test: error.a-log-sink-default-that-spawns-is-refused-when-its-handler-touches-the-var -->
+<!-- unsupported-targets: wasm32-wasi -->
+A program that logs spawns the handler the `LogSink` `default` names. A module `var` that handler's own message
+touches is shared by two threads, and the note points at the `spawn` inside the `default`.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+var calls = 0
+
+type CountingHandler implements LogHandler
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function handle(record LogRecord) returns bool
+		calls = calls + 1
+		self.seen = self.seen + 1
+		return true
+	end 'handle'
+end 'CountingHandler'
+
+default LogSink = LogSink.create(spawn CountingHandler.create(), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info)))
+
+function main() returns ExitCode
+	Log.info("started")
+	return calls as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3143: <fragment>:12:11: the message `CountingHandler.handle` uses the module-level `var calls` — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `calls` a `let`
+note: <fragment>:18:34: the `spawn` that makes `CountingHandler` a service
+```
+
+<!-- test: error.a-coroutine-a-handler-starts-shares-the-handlers-strand -->
+<!-- unsupported-targets: wasm32-wasi -->
+A handler that runs `async` work starts a coroutine on the handler's own strand, so a module `var` the coroutine
+touches is reached by a message and is refused.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+var ledger = 0
+
+function book(by Integer) returns Integer
+	sleep(1)
+	ledger = ledger + by
+	return ledger
+end 'book'
+
+type Counter
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function add(by Integer) returns Integer
+		let pending = async book(by)
+		let booked = await pending
+		self.count = self.count + booked
+		return self.count
+	end 'add'
+end 'Counter'
+
+function main() returns ExitCode
+	let h = spawn Counter.create()
+	let n = try await h.add(5) otherwise 0
+	return n as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3143: <fragment>:6:11: `book` uses the module-level `var ledger`, and the message `Counter.add` reaches it — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `ledger` a `let`
+note: <fragment>:26:10: the `spawn` that makes `Counter` a service
 ```

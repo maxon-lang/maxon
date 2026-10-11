@@ -12,7 +12,9 @@ category: strings
 `stdlib/String.maxon`'s `cstr()` is the language's one producer of a `cstring`: a raw byte pointer with
 no length, no capacity and no refcount, whose purpose is to hand a `__Builtins.*` intrinsic something to
 `strlen`. It forwards to `managed.toCString()`, which the compiler lowers to `__mm_to_cstring`
-(`StringRuntime.buildMmToCString`).
+(`StringRuntime.buildMmToCString`). `cstr()` and the `cstring` type are library-tier: only a source file
+under `stdlib/` or `runtime/` may name them, so every case below compiles as a library-tier source
+(`<!-- tier: stdlib -->`).
 
 The answer is **always the receiver's own buffer**, and there are exactly two ways to get there:
 
@@ -59,11 +61,12 @@ The two halves do not catch the same thing:
   does not own, found a zero there, and handed back a pointer that is not terminated by anything. That the
   case goes red is real but incidental — the discriminating byte is precisely the byte NOTHING KEEPS
   ZERO, so a different allocator state would let the sabotage pass. ⛔ **A case here can never pin the
-  read directly, because no user-reachable consumer of a `cstring` exists in this language.**
+  read directly, because no consumer of a `cstring` exists outside the library tiers.**
 
 ## Tests
 
 <!-- test: terminates-a-packed-receiver-without-leaking -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE FIVE LINES THAT A COPY PATH WOULD EXIT 101 ON.** A first `append` onto `""` leaves `capacity == length`, which is
 exactly the shape whose terminator slot the record cannot vouch for — so this receiver takes the second
 path on every run, deterministically, and is not relying on any allocator coincidence to do so. The
@@ -86,6 +89,7 @@ hello world len=11
 ```
 
 <!-- test: terminates-an-exactly-full-receiver-without-leaking -->
+<!-- tier: stdlib -->
 The same shape at the length that lands exactly full in its slab slot: `HeaderBytes(24) + 8` is 32, a
 whole size class, so `buffer[8]` is past the end of the record's allocation entirely and belongs to the
 allocator. Its own case beside the eleven-byte one because the two differ in WHOSE byte an unguarded
@@ -109,6 +113,7 @@ xxxxxxxx len=8
 ```
 
 <!-- test: packed-receiver-pays-once-and-only-once -->
+<!-- tier: stdlib -->
 ⭐ **THE COST, PINNED AS A NUMBER — and the case that says not every receiver pays.** A
 String LITERAL's blob is NUL-terminated in `.rdata` by construction, so it vouches, probes, and costs
 **nothing**. A packed receiver pays **one** reallocation. And asking the SAME receiver again costs

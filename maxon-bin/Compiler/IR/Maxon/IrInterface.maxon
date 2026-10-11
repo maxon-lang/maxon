@@ -458,8 +458,8 @@ export let OrderingGreaterThanCaseName = b"greaterThan"
 // rendered SOURCE strings (see the header). `paramNames`/`paramTypeNames` are parallel.
 export type InterfaceMethodSig
 	export let name as ByteArray
-	export let paramNames as ByteArrayArray
-	export let paramTypeNames as ByteArrayArray
+	export let paramNames as NameRoster
+	export let paramTypeNames as NameRoster
 	export let returnTypeName as ByteArray
 
 	// A `static function` in an interface body carries no receiver, so a conforming type
@@ -516,15 +516,15 @@ export type InterfaceMethodSig
 
 	export let written as WrittenTypeNames
 
-	export static function create(name ByteArray, paramNames ByteArrayArray, paramTypeNames ByteArrayArray, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray, nameLine LineNumber, nameColumn ColumnNumber, written WrittenTypeNames) returns InterfaceMethodSig
+	export static function create(name ByteArray, paramNames NameRoster, paramTypeNames NameRoster, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray, nameLine LineNumber, nameColumn ColumnNumber, written WrittenTypeNames) returns InterfaceMethodSig
 		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer, nameLine: nameLine, nameColumn: nameColumn, written: written}
 	end 'create'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.name)
-		cacheWriteByteArrayArray(writer, value: self.paramNames)
-		cacheWriteByteArrayArray(writer, value: self.paramTypeNames)
+		cacheWriteNameRoster(writer, value: self.paramNames)
+		cacheWriteNameRoster(writer, value: self.paramTypeNames)
 		writer.bytes(self.returnTypeName)
 		writer.flag(self.isStatic)
 		cacheWriteThrowsClause(writer, value: self.throwsClause)
@@ -536,8 +536,8 @@ export type InterfaceMethodSig
 
 	static function cacheRead(reader LibraryCacheReader) returns InterfaceMethodSig throws LibraryCacheDamage
 		let f_name = try reader.bytes()
-		let f_paramNames = try cacheReadByteArrayArray(reader)
-		let f_paramTypeNames = try cacheReadByteArrayArray(reader)
+		let f_paramNames = try cacheReadNameRoster(reader)
+		let f_paramTypeNames = try cacheReadNameRoster(reader)
 		let f_returnTypeName = try reader.bytes()
 		let f_isStatic = try reader.flag()
 		let f_throwsClause = try cacheReadThrowsClause(reader)
@@ -597,7 +597,7 @@ end 'cacheReadInterfaceMethodSigArray'
 // diagnostic in one phase describing a requirement differently from a diagnostic in the other. The columns
 // stay four PARAMETERS and not one `InterfaceMethodSig`, because `formatActualSignature`'s caller renders an
 // IMPL, which has no `InterfaceMethodSig` to hand it.
-export function assembleMethodSignature(name ByteArray, paramNames ByteArrayArray, paramTypes ByteArrayArray, returnType ByteArray, isStatic bool, signatures ProgramSignatures) returns String
+export function assembleMethodSignature(name ByteArray, paramNames NameRoster, paramTypes NameRoster, returnType ByteArray, isStatic bool, signatures ProgramSignatures) returns String
 	var rendered = "static {String.from(name)}(" if isStatic else "{String.from(name)}("
 
 	for i in 0 upto paramNames.count() 'eachParam'
@@ -658,7 +658,7 @@ end 'assembleMethodSignature'
 // a display column that the name-keyed substitution silently skipped would be a WRONG signature in a message
 // rather than an ugly one. That is scoped work of its own. Both halves of every such message spell the type
 // the SAME way, which is what keeps it merely ugly.
-export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, typeParamNames ByteArrayArray, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
+export function renderDeclaredTypeName(t MaxonType, declarationName ByteArray, typeParamNames NameRoster, typeNames TypeNameInterner, signatures ProgramSignatures) returns ByteArray
 	let tag = maxonTypeTag(t)
 
 	// ⚠ **THE TOKEN IS RE-SPELLED AGAINST THIS DECLARATION'S OWN NAMES, NOT LOOKED UP.** Both callers
@@ -713,12 +713,12 @@ end 'renderTypeNameOutsideAnyDeclaration'
 // reported from.
 export type IrInterface
 	export let name as ByteArray
-	export let methods as InterfaceMethodSigArray
-	export let extendsInterfaces as ByteArrayArray
-	export let associatedTypeNames as ByteArrayArray
+	export var methods as InterfaceMethodSigArray
+	export let extendsInterfaces as NameRoster
+	export var associatedTypeNames as NameRoster
 	export let declFilePath as FilePath
 
-	export static function create(name ByteArray, methods InterfaceMethodSigArray, extendsInterfaces ByteArrayArray, associatedTypeNames ByteArrayArray, declFilePath FilePath) returns IrInterface
+	export static function create(name ByteArray, methods InterfaceMethodSigArray, extendsInterfaces NameRoster, associatedTypeNames NameRoster, declFilePath FilePath) returns IrInterface
 		return Self{name: name, methods: methods, extendsInterfaces: extendsInterfaces, associatedTypeNames: associatedTypeNames, declFilePath: declFilePath}
 	end 'create'
 
@@ -726,16 +726,16 @@ export type IrInterface
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.name)
 		cacheWriteInterfaceMethodSigArray(writer, value: self.methods)
-		cacheWriteByteArrayArray(writer, value: self.extendsInterfaces)
-		cacheWriteByteArrayArray(writer, value: self.associatedTypeNames)
+		cacheWriteNameRoster(writer, value: self.extendsInterfaces)
+		cacheWriteNameRoster(writer, value: self.associatedTypeNames)
 		writer.text(self.declFilePath.toString())
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns IrInterface throws LibraryCacheDamage
 		let f_name = try reader.bytes()
 		let f_methods = try cacheReadInterfaceMethodSigArray(reader)
-		let f_extendsInterfaces = try cacheReadByteArrayArray(reader)
-		let f_associatedTypeNames = try cacheReadByteArrayArray(reader)
+		let f_extendsInterfaces = try cacheReadNameRoster(reader)
+		let f_associatedTypeNames = try cacheReadNameRoster(reader)
 		let f_declFilePath = try reader.path()
 
 		return Self{name: f_name, methods: f_methods, extendsInterfaces: f_extendsInterfaces, associatedTypeNames: f_associatedTypeNames, declFilePath: f_declFilePath}
@@ -748,45 +748,19 @@ export type IrInterface
 	// @generated library-cache end
 end 'IrInterface'
 
-// ⭐ **WHERE `name` SITS IN A LIST OF DECLARED NAMES** — the compiler's ONE positional scan over one, and the
-// POSITION is what every caller spends, each on a different registry:
-//
-//   • `ConformanceCheck.boundTypeName` — an interface's `uses` names, to pick the argument a conformance
-//     bound at that position;
-//   • `LowerMaxonToStd.witnessFormalType` — the same list, to ask `associatedAbiBindingOf` what the conformers
-//     bound THAT position to; the formal's type is the binding's, and the interface cannot state it;
-//   • `Parser.instanceBoundAssociatedType` — the same list again, against the receiver's own instantiation;
-//   • `SemanticCheck.conformerBindingThroughInstance` — a generic type's declared TYPE PARAMETERS, because a
-//     conformance's `withArgs` are source spellings and a generic conformer's names its own parameter
-//     (`type Array uses Element implements Iterable with Element`), which only its instance can reduce.
-//
-// ⚠ **IT IS NAMED FOR THE NAME LIST AND NOT FOR ANY ONE REGISTRY, BECAUSE THE LAST OF THOSE IS NOT AN
-// ASSOCIATED-TYPE LIST.** The body looks at nothing but a name list, exactly as its sibling `namesInclude`
-// does; a specifically-named copy beside a generally-named one is this file's duplication back again.
-//
-// A linear scan and not a map: a declaration names
-// a handful at most, so the scan is cheaper than building a map would be and it allocates nothing. Absence is a
-// THROW rather than a sentinel index or a `count()`-means-no answer, both of which are exactly the shape this
-// project forbids; `MapError.keyNotFound` is the absence channel every other registry here already speaks.
-export function namePositionIn(names ByteArrayArray, name ByteArray) returns ElementIndex throws MapError
-	for i in 0 upto names.count() 'eachName'
-		if (try names.get(i) otherwise panic("namePositionIn: names.get OOB at {i} below count {names.count()}")).equals(name) 'isThisOne'
-			return i
-		end 'isThisOne'
-	end 'eachName'
+export extension Array where Element is Equatable
+	export function positionOfName(name Element) returns ElementIndex throws MapError
+		for i in 0 upto self.count() 'eachName'
+			let item = try self.get(i) otherwise panic("Array.positionOfName: get OOB at {i} below count {self.count()}")
 
-	throw MapError.keyNotFound
-end 'namePositionIn'
+			if item == name 'isThisOne'
+				return i
+			end 'isThisOne'
+		end 'eachName'
 
-// The yes/no asker of `namePositionIn`, built on it so the two cannot disagree. It exists because
-// `namePositionIn` is PURE, and a pure function's result may not be dropped in any spelling: `_ = f()` and
-// `if let _ = try f()` are both E3064, and the bare `if try f()` is E3124. Every yes/no twin of a
-// where-is-it lookup in the compiler (`declaresField`, `hasCase`, `hasLiveOwner`, …) calls its lookup for
-// the same reason.
-export function namesInclude(names ByteArrayArray, name ByteArray) returns bool
-	try namePositionIn(names, name: name) otherwise return false
-	return true
-end 'namesInclude'
+		throw MapError.keyNotFound
+	end 'positionOfName'
+end 'Array'
 
 // ⭐⭐ **THE ABI-BEARING TYPE A RENDERED TYPE NAME DENOTES — the one collapse for every place a type is
 // held only as the bytes the source wrote.** `builtinTypeNameTag` answers for the five builtins whose tag
@@ -835,12 +809,12 @@ export union AssociatedAbiBinding
 	// resolved formal type that name denotes (ready for the same `paramFloatMask` collapse a function value's
 	// declared parameters go through), and `conformer` the declaration that settled it —
 	// carried so a reporter has a POSITION without re-walking the store this fold just walked.
-	agreed(conformer ConformanceDecl, binding ByteArray, declaredType MaxonType)
+	agreed(conformer ConformanceDecl, let binding ByteArray, declaredType MaxonType)
 
 	// Two conformers bind DIFFERENT types. Both claimants ride WITH their declarations, so the diagnostic can
 	// name them and anchor on one; the FIRST is the one that settled the binding in source order, exactly as
 	// `checkTypeSymbolNamespace` reports a contested name.
-	disagreed(first ConformanceDecl, firstBinding ByteArray, second ConformanceDecl, secondBinding ByteArray)
+	disagreed(first ConformanceDecl, let firstBinding ByteArray, second ConformanceDecl, let secondBinding ByteArray)
 
 	// No type in the program conforms at all, so no dispatch through this requirement can ever be made and
 	// nothing constrains the type. A body that mentions it still has to lower, so the caller supplies the
@@ -964,7 +938,7 @@ end 'declAssociatedBinding'
 // the identical reason: `__` is a prefix no declaration may take, so the moved name cannot contest anything
 // and no user program can reach it. Re-probed rather than prefixed once, and ON CONTEST ONLY — a program
 // that shadows nothing renames nothing and compiles to the bytes it would with no rename at all.
-export typealias StdlibShadowRenameMap = Map with (ByteArray, ByteArray)
+export typealias StdlibShadowRenameMap = Map with (ByteArray, readonly ByteArray)
 
 // @generated library-cache begin
 function cacheWriteStdlibShadowRenameMap(writer LibraryCacheWriter, value StdlibShadowRenameMap)
@@ -1078,7 +1052,8 @@ export type IrInterfaceMap
 	end 'isMintedLibraryName'
 
 	export function spellingOf(protocol BuiltinInterfaceKind) returns ByteArray
-		return self.libraryNameOf(canonicalProtocolName(protocol))
+		let canonical = canonicalProtocolName(protocol)
+		return try self.libraryRenames.get(canonical) otherwise canonical
 	end 'spellingOf'
 
 	// Under a contest the bare name is the author's own interface and the library's protocol answers only to
@@ -1154,12 +1129,13 @@ end 'cacheReadIrInterfaceArray'
 // @generated library-cache end
 
 // The SHARED EMPTY `with` argument list every conformance that writes no `with` clause holds —
-// which is every conformance in the corpus but the associated-type specs. `InterfaceConformance` binds
-// it with `let` and the substitution only READS it, so one allocation serves them all, the discipline
-// `Project.sharedEmptyWhereConstraints` states in full. It is the reason `withoutBindings` exists as a
-// second constructor rather than each caller spelling `ByteArrayArray.create()`: a caller that allocated
-// its own empty list would pay one heap object per declared conformance and nothing would notice.
-let sharedEmptyWithArgs = ByteArrayArray.create()
+// which is every conformance in the corpus but the associated-type specs. `InterfaceConformance`
+// binds it with `let` and the substitution only READS it, so one allocation serves them all, the
+// discipline `Parser.sharedEmptyWhereConstraints` states in full. It is the reason
+// `withoutBindings` exists as a second constructor rather than each caller spelling
+// `NameRoster.create()`: a caller that allocated its own empty list would pay one heap object per
+// declared conformance and nothing would notice.
+let sharedEmptyWithArgs = NameRoster.create()
 
 // ⭐ **ONE `I [with A, B]` ENTRY OF AN `implements` CLAUSE.** The interface NAME and this
 // conformance's POSITIONAL bindings for that interface's `uses` names, kept together because they mean
@@ -1171,10 +1147,10 @@ let sharedEmptyWithArgs = ByteArrayArray.create()
 // result — `implements Typed with Float` must print `expected make() returns Float`.
 export type InterfaceConformance
 	export let interfaceName as ByteArray
-	export let withArgs as ByteArrayArray
-	export let withArgSpellings as ByteArrayArray
+	export let withArgs as NameRoster
+	export let withArgSpellings as NameRoster
 
-	export static function create(interfaceName ByteArray, withArgs ByteArrayArray, withArgSpellings ByteArrayArray) returns InterfaceConformance
+	export static function create(interfaceName ByteArray, withArgs NameRoster, withArgSpellings NameRoster) returns InterfaceConformance
 		return Self{interfaceName: interfaceName, withArgs: withArgs, withArgSpellings: withArgSpellings}
 	end 'create'
 
@@ -1186,14 +1162,14 @@ export type InterfaceConformance
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		writer.bytes(self.interfaceName)
-		cacheWriteByteArrayArray(writer, value: self.withArgs)
-		cacheWriteByteArrayArray(writer, value: self.withArgSpellings)
+		cacheWriteNameRoster(writer, value: self.withArgs)
+		cacheWriteNameRoster(writer, value: self.withArgSpellings)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns InterfaceConformance throws LibraryCacheDamage
 		let f_interfaceName = try reader.bytes()
-		let f_withArgs = try cacheReadByteArrayArray(reader)
-		let f_withArgSpellings = try cacheReadByteArrayArray(reader)
+		let f_withArgs = try cacheReadNameRoster(reader)
+		let f_withArgSpellings = try cacheReadNameRoster(reader)
 
 		return Self{interfaceName: f_interfaceName, withArgs: f_withArgs, withArgSpellings: f_withArgSpellings}
 	end 'cacheRead'
@@ -1423,7 +1399,7 @@ export type WitnessDispatchTarget
 	// per-argument ABI widths from the CALLEE's signature rather than from the actuals.
 	export let interfaceDeclIndex as ElementIndex
 	export let returnTypeName as ByteArray
-	export let paramTypeNames as ByteArrayArray
+	export let paramTypeNames as NameRoster
 
 	// ⭐ **THE AUTHORITATIVE `name:` LABEL VOCABULARY OF THIS DISPATCH** — parallel to
 	// `paramTypeNames`, and the list `Project.slotCallArgs` slots the call's arguments against. It is the
@@ -1431,7 +1407,7 @@ export type WitnessDispatchTarget
 	// body has no concrete callee to ask, and `ConformanceCheck.signatureMatches` compares arity and TYPES
 	// only (it reads `paramNames` to format E3016 and never compares it), so several conformers may spell
 	// their parameters differently and only the interface's names are common to all of them.
-	export let paramNames as ByteArrayArray
+	export let paramNames as NameRoster
 
 	// The interface method's declared `throws` — carried through the resolution so the
 	// dispatch site picks the throwing or non-throwing witness ABI, and so the `try` desugar can type the
@@ -1457,7 +1433,7 @@ export type WitnessDispatchTarget
 	// the last field of the requirement the two ambiguity/arity rejects need and the only one nothing else reads.
 	export let isStatic as bool
 
-	export static function create(witnessValue ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, returnTypeName ByteArray, paramTypeNames ByteArrayArray, throwsClause ThrowsClause, methodName ByteArray, paramNames ByteArrayArray, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
+	export static function create(witnessValue ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, returnTypeName ByteArray, paramTypeNames NameRoster, throwsClause ThrowsClause, methodName ByteArray, paramNames NameRoster, declaringInterfaceName ByteArray, isStatic bool) returns WitnessDispatchTarget
 		return Self{witnessValue: witnessValue, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, returnTypeName: returnTypeName, paramTypeNames: paramTypeNames, throwsClause: throwsClause, methodName: methodName, paramNames: paramNames, declaringInterfaceName: declaringInterfaceName, isStatic: isStatic}
 	end 'create'
 end 'WitnessDispatchTarget'
@@ -1844,16 +1820,17 @@ end 'witnessTargetIsProtocol'
 // non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
 // runtime chunks with no error channel — so the throws clause is `none` at both helpers.
 function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
-	return InterfaceMethodSig.create(name, paramNames: ByteArrayArray.create(), paramTypeNames: ByteArrayArray.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+	return InterfaceMethodSig.create(name, paramNames: NameRoster.create(), paramTypeNames: NameRoster.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
 end 'nullaryInterfaceMethod'
 
 // A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
 function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
-	var paramNames = ByteArrayArray.create()
+	var paramNames = NameRoster.create()
 	paramNames.push(paramName)
-	var paramTypeNames = ByteArrayArray.create()
+	var paramTypeNames = NameRoster.create()
 	paramTypeNames.push(paramTypeName)
-	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(paramNames.count() as ParamCount), nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+	let paramIsBuffer = InterfaceMethodSig.noBufferParams(paramNames.count() as ParamCount)
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: paramIsBuffer, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
 end 'unaryInterfaceMethod'
 
 // An interface with exactly one method and no `extends`/`uses` — every synthesized
@@ -1861,13 +1838,13 @@ end 'unaryInterfaceMethod'
 function singleMethodInterface(name ByteArray, method InterfaceMethodSig) returns IrInterface
 	var methods = InterfaceMethodSigArray.create()
 	methods.push(method)
-	return IrInterface.create(name, methods: methods, extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create(), declFilePath: CompilerOwnedDeclFilePath)
+	return IrInterface.create(name, methods: methods, extendsInterfaces: NameRoster.create(), associatedTypeNames: NameRoster.create(), declFilePath: CompilerOwnedDeclFilePath)
 end 'singleMethodInterface'
 
 // A marker interface with NO methods (`Error`). A type conforms to it by declaring
 // `implements Error` alone; there is nothing to check.
 function markerInterface(name ByteArray) returns IrInterface
-	return IrInterface.create(name, methods: InterfaceMethodSigArray.create(), extendsInterfaces: ByteArrayArray.create(), associatedTypeNames: ByteArrayArray.create(), declFilePath: CompilerOwnedDeclFilePath)
+	return IrInterface.create(name, methods: InterfaceMethodSigArray.create(), extendsInterfaces: NameRoster.create(), associatedTypeNames: NameRoster.create(), declFilePath: CompilerOwnedDeclFilePath)
 end 'markerInterface'
 
 // ⭐⭐ **THE Std RESULT TYPE OF A SYNTHESIZED PROTOCOL METHOD — ONE FACT, READ BY EVERY BUILDER THAT MUST
@@ -1946,8 +1923,8 @@ end 'canonicalProtocolName'
 // ⚠ Each name is asserted to classify back to its own kind, so `canonicalProtocolName` and
 // `builtinInterfaceKind` disagreeing fails at the first `ProgramSignatures.create` rather than silently
 // giving one protocol no index.
-export function builtinInterfaceNames() returns ByteArrayArray
-	var names = ByteArrayArray.create()
+export function builtinInterfaceNames() returns NameRoster
+	var names = NameRoster.create()
 
 	for protocol in BuiltinInterfaceKind.allCases 'eachKind'
 		if protocol == BuiltinInterfaceKind.notABuiltin 'classifiesRatherThanNames'
@@ -2648,6 +2625,10 @@ end 'conformanceSelfTypeNameOf'
 // way, because a predicate with one arm reasoning from a keyword and another from a lookup is how the two
 // come to disagree the next time a reservation moves.
 export function isBuiltinConformanceImplName(name ByteArray) returns bool
+	if not (nameIsQualifiedBy(name, qualifier: IntConformerName) or nameIsQualifiedBy(name, qualifier: FloatConformerName) or nameIsQualifiedBy(name, qualifier: BoolConformerName) or nameIsQualifiedBy(name, qualifier: StringConformerName)) 'notUnderAConformer'
+		return false
+	end 'notUnderAConformer'
+
 	return match splitQualifiedName(name) 'parts'
 		notQualified gives false
 		parts(conformer, method) gives isSynthesizedConformerImpl(conformer, methodName: method)
@@ -2820,13 +2801,11 @@ end 'builtinConformerMethod'
 //
 // ⚠ It carries no array row for the reason `builtinConformerMethod` states in full — the walk it is derived
 // from serves the four reserved direct-dispatch conformers and nothing else.
-export function builtinConformerMethodNameList(typeName ByteArray) returns ByteArrayArray
-	var names = ByteArrayArray.create()
+export function builtinConformerMethodNameList(typeName ByteArray) returns NameRoster
+	var names = NameRoster.create()
 
 	for protocol in intrinsicConformanceProtocols(typeName, discovered: DiscoveredConformer.none) 'eachProtocol'
-		let iface = canonicalProtocolDeclaration(protocol)
-
-		for method in iface.methods 'eachMethod'
+		for method in canonicalProtocolDeclaration(protocol).methods 'eachMethod'
 			names.push(method.name)
 		end 'eachMethod'
 	end 'eachProtocol'
@@ -2855,8 +2834,8 @@ end 'builtinConformerMethodNameList'
 //
 // It is a LIST rather than two appended lines so that the advertisement and the arms grow together: a third
 // lowering joins here and is named by the refusal in the same edit.
-function builtinConformerLoweredMethodNames() returns ByteArrayArray
-	var names = ByteArrayArray.create()
+function builtinConformerLoweredMethodNames() returns NameRoster
+	var names = NameRoster.create()
 	names.push(ToStringMethodName)
 	names.push(CloneMethodName)
 	return names

@@ -431,13 +431,13 @@ emit_data_program() {
 	echo -e "\tvar total = 0"
 	echo -e "\tlet subject = grown(\"$(seed_bytes)\", doublings: $N)"
 	echo -e "\tlet units = subject.byteLength()"
-	echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+	echo -e "\tlet t0 = Clock.nowNanos()"
 	echo -e "\tvar r = 0"
 	echo -e "\twhile r < $REPS 'rep'"
 	emit_data_body
 	echo -e "\t\tr = r + 1"
 	echo -e "\tend 'rep'"
-	echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+	echo -e "\tlet t1 = Clock.nowNanos()"
 	echo -e "\tprint(\"$MODE-$SEED,{subject.byteLength()},{units},{t1 - t0},$REPS\\\\n\")"
 	echo -e "\treturn 0 if total >= 0 else 1"
 	echo "end 'main'"
@@ -451,7 +451,7 @@ emit_loop_program() {
 	echo -e "\tlet subject = \"$(seed_bytes)ij\""
 	echo -e "\tlet trips = $((1 << N))"
 	echo -e "\tlet units = trips"
-	echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+	echo -e "\tlet t0 = Clock.nowNanos()"
 	echo -e "\tvar i = 0"
 	echo -e "\twhile i < trips 'trip'"
 	case "$MODE" in
@@ -465,7 +465,7 @@ emit_loop_program() {
 	esac
 	echo -e "\t\ti = i + 1"
 	echo -e "\tend 'trip'"
-	echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+	echo -e "\tlet t1 = Clock.nowNanos()"
 	echo -e "\tprint(\"$MODE-$SEED,{subject.byteLength()},{units},{t1 - t0},1\\\\n\")"
 	echo -e "\treturn 0 if total >= 0 else 1"
 	echo "end 'main'"

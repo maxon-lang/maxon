@@ -48,9 +48,14 @@ than conventions:
   other's stride cannot produce an answer, only a wrong one — so the pairing is checked, not
   assumed (`E2070`).
 
+Every `__Builtins` member is library-tier: only a source file under `stdlib/` or `runtime/` may call one,
+and a call from anywhere else is E3185. The cases below call the intrinsics themselves, so they compile in
+the library tier (`<!-- tier: stdlib -->`). These two have no public replacement.
+
 ## Tests
 
 <!-- test: builtins-ucd.bmp-byte-load -->
+<!-- tier: stdlib -->
 `ucdByteAt` indexes the BMP table directly by codepoint and answers that codepoint's
 `General_Category`: `A` is `Lu` (1), `z` is `Ll` (2), `5` is `Nd` (9) and a plain space is
 `Zs` (23).
@@ -77,6 +82,7 @@ end 'main'
 ```
 
 <!-- test: builtins-ucd.bmp-byte-load-is-zero-extended -->
+<!-- tier: stdlib -->
 A table byte is UNSIGNED. A sign-extending load would answer a negative number for every category
 byte above 127, and the whole BMP table is scanned here rather than one entry because which byte
 carries a high bit is a property of the checked-in data, not of the program.
@@ -101,6 +107,7 @@ end 'main'
 ```
 
 <!-- test: builtins-ucd.supp-i64-load -->
+<!-- tier: stdlib -->
 `ucdI64At` loads one packed supplementary entry, striding by eight bytes. Entry 0 is the first
 supplementary range in the checked-in table: U+10000..U+1000B, category `Lo` (5).
 
@@ -141,6 +148,7 @@ end 'main'
 ```
 
 <!-- test: builtins-ucd.supp-binary-search -->
+<!-- tier: stdlib -->
 The two intrinsics together are the whole of `unicodeGeneralCategory`: a BMP codepoint is one
 indexed byte, and a supplementary one is a binary search over the sorted range table. U+10400
 (DESERET CAPITAL LETTER LONG I) is `Lu` (1); U+1F600 (GRINNING FACE) is `So` (22).
@@ -195,6 +203,7 @@ end 'main'
 ```
 
 <!-- test: builtins-ucd.offset-must-be-labelled -->
+<!-- tier: stdlib -->
 **The case this whole family exists for.** `ucdByteAt` has a declaration, so its second argument
 is bound by the ordinary label rule and an unlabelled one is refused — the same `E2053` any
 user-declared call gets, from the same door. It is NOT `E2067`: that code says a callee has no
@@ -209,6 +218,7 @@ error E2053: <fragment>:3:43: the second and later arguments must be named ('nam
 ```
 
 <!-- test: builtins-ucd.index-must-be-labelled -->
+<!-- tier: stdlib -->
 The sibling door, refused identically. `ucdI64At` is the same shape one name over, and a rule
 enforced at only one of the two names would leave the defect class alive at the other.
 ```maxon
@@ -221,6 +231,7 @@ error E2053: <fragment>:3:43: the second and later arguments must be named ('nam
 ```
 
 <!-- test: builtins-ucd.label-cannot-be-named -->
+<!-- tier: stdlib -->
 The FIRST argument stays positional, which is not an exception granted to these two: it is the
 language's rule for the first argument of every call (`E2052`).
 ```maxon
@@ -233,6 +244,7 @@ error E2052: <fragment>:3:30: the first argument cannot be named; only the secon
 ```
 
 <!-- test: builtins-ucd.offset-label-must-be-the-declared-name -->
+<!-- tier: stdlib -->
 A label that matches no parameter of the declaration is refused with `E3037`, the same code a
 user-declared call's unknown label gets. The declaration is the authority for what the name is.
 ```maxon
@@ -245,6 +257,7 @@ error E3037: <fragment>:3:43: '__Builtins.ucdByteAt' has no parameter named 'ind
 ```
 
 <!-- test: builtins-ucd.label-must-be-a-string-literal -->
+<!-- tier: stdlib -->
 The table label is resolved while the call is parsed, so it must be written as a literal. A
 computed one is refused at the token, not accepted and mis-resolved later.
 ```maxon
@@ -258,6 +271,7 @@ error E2010: <fragment>:4:30: Expected 'string literal' but got 'name'
 ```
 
 <!-- test: builtins-ucd.label-must-name-a-readable-table -->
+<!-- tier: stdlib -->
 A literal that names no table this intrinsic reads is refused with `E2070`, however it is spelled.
 ```maxon
 function main() returns ExitCode
@@ -269,6 +283,7 @@ error E2070: <fragment>:3:30: '__Builtins.ucdByteAt' reads the compiler-owned ta
 ```
 
 <!-- test: builtins-ucd.tables-are-not-interchangeable -->
+<!-- tier: stdlib -->
 The pairing is checked in both directions. `ucdByteAt` strides by one byte and `ucdI64At` by
 eight, so reading a table with the other's stride cannot produce an answer — only a wrong one.
 ```maxon
@@ -281,6 +296,7 @@ error E2070: <fragment>:3:29: '__Builtins.ucdI64At' reads the compiler-owned tab
 ```
 
 <!-- test: builtins-ucd.arity-is-exactly-two -->
+<!-- tier: stdlib -->
 Both take exactly two arguments. A call that stops after the label is refused at the `)` it found,
 before anything tries to read a table. It is not an arity diagnostic: the compiler has none for a
 builtin whose arguments it parses itself.

@@ -17,12 +17,14 @@ let IrErrorColumnKey = "column"
 // The panel shows positions to a reader, counting from 1; LSP's coordinates count from 0.
 let ExplorerPositionBase = 1
 
-module function generateIrAnswer(incoming JsonDoc, params JsonNodeId) returns LspExtensionOutcome throws LspParamsError
+module function generateIrAnswer(workspace LspWorkspaceState, incoming JsonDoc, params JsonNodeId) returns LspExtensionOutcome throws LspParamsError
 	let source = try lspMemberText(incoming, of: params, key: SourceKey)
 	let filename = try lspMemberText(incoming, of: params, key: FilenameKey)
 	let path = try FilePath.from(filename) otherwise throw LspParamsError.malformed
 
-	return match lspDocumentProject(path, content: source) 'explorer'
+	var explored = lspDocumentProject(workspace, path: path, content: source)
+
+	return match explored 'explorer'
 		loaded(project, _) gives LspExtensionOutcome.answered(project.generatedIr(path, source: source))
 		unavailable gives LspExtensionOutcome.compilerUnavailable
 	end 'explorer'

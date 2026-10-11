@@ -130,7 +130,7 @@ end 'asyncResultConsumedFlag'
 // below has one loop instead of three.
 type AsyncManagedSlot
 	export let offset as ByteOffset
-	export let drop as FieldDropKind
+	export var drop as FieldDropKind
 
 	static function create(offset ByteOffset, drop FieldDropKind) returns AsyncManagedSlot
 		return Self{offset: offset, drop: drop}
@@ -146,7 +146,7 @@ end 'AsyncCellContent'
 
 type AsyncCellSlot
 	export let offset as ByteOffset
-	export let content as AsyncCellContent
+	export var content as AsyncCellContent
 
 	static function create(offset ByteOffset, content AsyncCellContent) returns AsyncCellSlot
 		return Self{offset: offset, content: content}
@@ -179,11 +179,11 @@ export typealias AsyncSpawnTargetArray = Array with AsyncSpawnTarget
 // `consumedArgSlots` are the arguments the callee takes over when it runs (it moves them into what it
 // keeps), so they are released only for a thread that never ran (`emitUnranSlotReleases`).
 type AsyncReleasePlan
-	export let argSlots as AsyncManagedSlotArray
-	export let consumedArgSlots as AsyncManagedSlotArray
-	export let cellSlots as AsyncCellSlotArray
-	export let resultSlots as AsyncManagedSlotArray
-	export let errorSlots as AsyncManagedSlotArray
+	export var argSlots as AsyncManagedSlotArray
+	export var consumedArgSlots as AsyncManagedSlotArray
+	export var cellSlots as AsyncCellSlotArray
+	export var resultSlots as AsyncManagedSlotArray
+	export var errorSlots as AsyncManagedSlotArray
 	export let calleeThrows as bool
 
 	static function create(argSlots AsyncManagedSlotArray, consumedArgSlots AsyncManagedSlotArray, cellSlots AsyncCellSlotArray, resultSlots AsyncManagedSlotArray, errorSlots AsyncManagedSlotArray, calleeThrows bool) returns AsyncReleasePlan
@@ -263,9 +263,9 @@ end 'serviceReplyReleasePlanFor'
 
 // Every MESSAGE a reply cell is minted for anywhere in the module, in first-seen source order, deduped —
 // `collectAsyncSpawnTargets`' twin, over the op that mints a cell rather than the one that spawns a thread.
-export function collectServiceReplyTargets(module MaxonModule) returns ByteArrayArray
+export function collectServiceReplyTargets(module MaxonModule) returns NameRoster
 	var seen = AsyncReleaserSet.create()
-	var targets = ByteArrayArray.create()
+	var targets = NameRoster.create()
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -280,7 +280,7 @@ export function collectServiceReplyTargets(module MaxonModule) returns ByteArray
 	return targets
 end 'collectServiceReplyTargets'
 
-function noteIfServiceReplyCell(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayArray)
+function noteIfServiceReplyCell(op MaxonOp, seen AsyncReleaserSet, targets NameRoster)
 	match op 'op'
 		serviceReplyCell(_, messageName, _) then noteAsyncCallee(messageName, seen: seen, targets: targets)
 
@@ -321,13 +321,15 @@ function noteIfServiceReplyCell(op MaxonOp, seen AsyncReleaserSet, targets ByteA
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness then break
+		existentialWitness or
+		holdValue or
+		holdEnd then break
 	end 'op'
 end 'noteIfServiceReplyCell'
 
 // The reply releasers' half of `declareAsyncReleaserNeeds` — see there for why a body built after the
 // pipeline has to declare what it will call before `noteDestructorUsage` runs its fixpoint.
-export function declareServiceReplyReleaserNeeds(usage RuntimeUsage, targets ByteArrayArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
+export function declareServiceReplyReleaserNeeds(usage RuntimeUsage, targets NameRoster, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
 	for messageName in targets 'eachMessage'
 		declareSlotDropNeeds(usage, slots: serviceReplyReleasePlanFor(messageName, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames).resultSlots)
 	end 'eachMessage'
@@ -335,7 +337,7 @@ end 'declareServiceReplyReleaserNeeds'
 
 // Install the reply releaser for every message that needs one, through the SAME synthesis the async plans
 // go through — the two differ in their plan and in their symbol, and in nothing else.
-export function installServiceReplyReleasers(module StdModule, targets ByteArrayArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
+export function installServiceReplyReleasers(module StdModule, targets NameRoster, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
 	for messageName in targets 'eachMessage'
 		let plan = serviceReplyReleasePlanFor(messageName, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
 
@@ -532,7 +534,7 @@ end 'asyncErasedUnionIsBoxed'
 // installer applies `asyncCalleeNeedsReleaser`.
 export function collectAsyncSpawnTargets(module MaxonModule, funcNames FunctionNameIndex) returns AsyncSpawnTargetArray
 	var seen = AsyncReleaserSet.create()
-	var callees = ByteArrayArray.create()
+	var callees = NameRoster.create()
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -558,7 +560,7 @@ export function asyncSpawnTargetOf(callee ByteArray, funcNames FunctionNameIndex
 	return AsyncSpawnTarget.create(callee, byReference: member.reassignedParamMask, declarationSite: member.declarationSite())
 end 'asyncSpawnTargetOf'
 
-function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayArray)
+function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets NameRoster)
 	match op 'op'
 		asyncCall(_, callee, _, _, _, _, _) then noteAsyncCallee(callee, seen: seen, targets: targets)
 
@@ -604,11 +606,13 @@ function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayAr
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness then break
+		existentialWitness or
+		holdValue or
+		holdEnd then break
 	end 'op'
 end 'noteIfAsyncSpawn'
 
-function noteAsyncCallee(callee ByteArray, seen AsyncReleaserSet, targets ByteArrayArray)
+function noteAsyncCallee(callee ByteArray, seen AsyncReleaserSet, targets NameRoster)
 	if seen.contains(callee) 'alreadySeen'
 		return
 	end 'alreadySeen'
@@ -693,7 +697,7 @@ end 'installAsyncReleasers'
 // second copy of the guard order — arguments always, result under `resultConsumed`, success under
 // `threw == 0` — would be the one place a wrong copy is a double free.
 function synthesizeReleaser(module StdModule, name ByteArray, plan AsyncReleasePlan)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

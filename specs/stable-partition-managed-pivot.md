@@ -46,6 +46,7 @@ refcount model the hazard lives in. Keep them in step with it.
 ## Tests
 
 <!-- test: a-partition-parks-its-pivot-out-of-its-own-write-range -->
+<!-- tier: stdlib -->
 ### Both buffering branches, with a pivot no store can displace
 `stablePartition` transcribed whole. `bufferGe` buffers the `>= pivot` class and compacts `< pivot`
 in place; `bufferLess` buffers `< pivot`, compacts `>= pivot`, then shifts it right. Both drive the
@@ -202,6 +203,7 @@ less p=1 lens= 1 20 10 30 40 50
 ```
 
 <!-- test: a-parked-pivot-keeps-the-partition-stable -->
+<!-- tier: stdlib -->
 ### … and the two classes keep their input order
 Soundness is not enough on its own: `sort()` is the STABLE entry, and the partition is where its
 stability comes from. Six records with three distinct keys, each key carried twice, and a tag in

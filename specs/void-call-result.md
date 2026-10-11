@@ -247,6 +247,7 @@ error E4006: <fragment>:8:12: Type 'Set' has no method named 'frobnicate'
 ```
 
 <!-- test: error.unknown-buffer-member-in-value-position -->
+<!-- tier: stdlib -->
 The `__ManagedMemory` buffer surface has its own roster, and it is the one the reader needs — the two
 method sets differ, so naming the `Array`'s here would send them to the wrong question.
 ```maxon
@@ -435,6 +436,7 @@ error E2004: <fragment>:8:14: Function 'append' does not return a value
 ```
 
 <!-- test: error.buffer-setlength-in-value-position -->
+<!-- tier: stdlib -->
 ⭐ The buffer's three void mutators are THROWING, and a `try` around one makes the result unused — so
 this reachable spelling is the one WITHOUT the `try`, which is exactly where the guard fires.
 ```maxon
@@ -449,6 +451,7 @@ error E2004: <fragment>:4:13: Function 'setLength' does not return a value
 ```
 
 <!-- test: error.buffer-setbyte-in-value-position -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -461,6 +464,7 @@ error E2004: <fragment>:4:13: Function 'setByte' does not return a value
 ```
 
 <!-- test: error.buffer-grow-in-value-position -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -473,6 +477,7 @@ error E2004: <fragment>:4:13: Function 'grow' does not return a value
 ```
 
 <!-- test: error.buffer-append-in-value-position -->
+<!-- tier: stdlib -->
 `append` is the one name with TWO void arms — the buffer's throwing one and the `Array`'s — so it needs
 a control on each receiver, or a guard lost from either arm passes on the other's case.
 ```maxon
@@ -533,6 +538,7 @@ error E3059: <fragment>:8:10: type mismatch: ''set' does not return a value'
 ```
 
 <!-- test: error.buffer-set-in-value-position -->
+<!-- tier: stdlib -->
 ⭐ The buffer's `set` is a SECOND callee (`__managed_mem_set`, capacity-bounded where the `Array`'s is
 length-bounded), reached through the same arm — so it needs its own case for the reason the two `append`
 arms do.
@@ -601,6 +607,7 @@ return a value`), by the arm's own `resultUsed` guard. **Two codes, two checks, 
 and they must both be here, because a guard lost from either arm passes on the other's case.
 
 <!-- test: error.buffer-try-setlength-in-value-position -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -613,6 +620,7 @@ error E3059: <fragment>:4:10: type mismatch: ''setLength' does not return a valu
 ```
 
 <!-- test: error.buffer-try-setbyte-in-value-position -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -625,6 +633,7 @@ error E3059: <fragment>:4:10: type mismatch: ''setByte' does not return a value'
 ```
 
 <!-- test: error.buffer-try-grow-in-value-position -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -637,6 +646,7 @@ error E3059: <fragment>:4:10: type mismatch: ''grow' does not return a value'
 ```
 
 <!-- test: error.buffer-try-append-in-value-position -->
+<!-- tier: stdlib -->
 
 ⚖ **`append` IS NOT IN THIS ENUMERATION, AND THIS IS THE CASE THAT SAYS SO.** The four above it are void
 THROWING members, and a `try` on one is well-formed until the value position is asked about — which is the
@@ -660,6 +670,7 @@ error E3055: <fragment>:5:10: try requires a throwing function: this builtin cal
 ```
 
 <!-- test: error.file-try-delete-in-value-position -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE THREE CASES BELOW ARE THE ONES THE "SIX" MISSED, AND THEY ARE HERE RATHER THAN IN
 `managed-file.md`/`managed-directory.md` FOR THE REASON THIS WHOLE BLOCK EXISTS: the roster E3059 can reach
 is not any one family's roster, so it has to be enumerated in ONE place.** `delete`, `rename` and `create`
@@ -681,6 +692,7 @@ error E3059: <fragment>:3:10: type mismatch: ''delete' does not return a value'
 ```
 
 <!-- test: error.file-try-rename-in-value-position -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let x = try __ManagedFile.rename("no_such_a_xyz.txt".toByteArray().managed, "no_such_b_xyz.txt".toByteArray().managed) otherwise return 1
@@ -692,6 +704,7 @@ error E3059: <fragment>:3:10: type mismatch: ''rename' does not return a value'
 ```
 
 <!-- test: error.dir-try-create-in-value-position -->
+<!-- tier: stdlib -->
 ⚠ `create` is spelled by THREE unrelated constants (`Parser.CreateMethod` for `Array`/`Set`,
 `ManagedMemoryCreateMethod`, `ManagedDirectoryCreateMethod`) because three unrelated surfaces happen to use
 the word. This case pins the DIRECTORY one, which is the only one of the three that is void and throwing.

@@ -258,6 +258,7 @@ FileAFileB
 ```
 
 <!-- test: async-filesystem.async-read-through-a-handle-holding-struct -->
+<!-- tier: stdlib -->
 ### A struct holding a `__ManagedFile`, spawned as an `async` argument
 ⭐ **AN `async` ARGUMENT MOVES, NEVER DEEP-COPIED, AND A HANDLE BOX IS WHY THAT DISTINCTION IS
 LOAD-BEARING.** Duplicating an OS handle would hand two owners a handle whose `__mf_destruct` closes it

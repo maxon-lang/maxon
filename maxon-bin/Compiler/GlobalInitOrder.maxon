@@ -81,7 +81,7 @@ typealias GlobalInitVisitArray = Array with GlobalInitVisit
 // `markConformerWitnessImpls` skips conformers a SEED owns, because in `StdlibSource`'s walk something else
 // credits them. Nothing seeds this walk, so it owns every conformer it meets and the skip list is empty —
 // which over-credits, and over-crediting is the safe direction for the only set that reads it.
-let noSeededConformers = ByteArrayArray.create()
+let noSeededConformers = NameRoster.create()
 
 // ⭐ **THE GLOBALS, REORDERED SO THAT EVERY GLOBAL FOLLOWS THE ONES ITS INITIALIZER READS**, or a refusal.
 // Called once per compile, on the merged Maxon module, immediately before `installManagedGlobalInit` — the
@@ -118,8 +118,8 @@ export function dependencyOrderedDefaults(module MaxonModule, project Project, s
 	var nodes = InitOrderNodeArray.create()
 
 	for slot in defaults 'eachDefault'
-		var roots = ByteArrayArray.create()
-		roots.push(slot.initializer)
+		var roots = NameRoster.create()
+		roots.push(defaultInitializerName(slot.declaration.key))
 		nodes.push(InitOrderNode.create(slot.label, initCallees: roots))
 	end 'eachDefault'
 
@@ -134,9 +134,9 @@ end 'dependencyOrderedDefaults'
 
 type InitOrderNode
 	export let label as ByteArray
-	export let initCallees as ByteArrayArray
+	export let initCallees as NameRoster
 
-	static function create(label ByteArray, initCallees ByteArrayArray) returns InitOrderNode
+	static function create(label ByteArray, initCallees NameRoster) returns InitOrderNode
 		return Self{label: label, initCallees: initCallees}
 	end 'create'
 end 'InitOrderNode'
@@ -360,7 +360,7 @@ end 'clearReached'
 
 // Every global slot named by any function reachable from `roots` at this confidence — the initializer's own
 // call tree, walked to a fixpoint.
-function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, roots ByteArrayArray, slotOf GlobalInitIndexByLabel, reached BoolArray, names FunctionNameSet, edges EdgeConfidence) returns GlobalInitIndexArray
+function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, roots NameRoster, slotOf GlobalInitIndexByLabel, reached BoolArray, names FunctionNameSet, edges EdgeConfidence) returns GlobalInitIndexArray
 	var found = GlobalInitIndexArray.create()
 	var claimed = GlobalInitIndexSet.create()
 	var worklist = FuncIndexArray.create()
@@ -560,7 +560,7 @@ function refuseDefaultCycle(arc GlobalInitIndexArray, defaults DefaultSlotArray,
 	end 'eachMember'
 
 	members.sort()
-	var keys = ByteArrayArray.create()
+	var keys = NameRoster.create()
 
 	for member in members 'eachDeclared'
 		keys.push((try defaults.get(member) otherwise panic("refuseDefaultCycle: defaults.get OOB at {member}, a position this walk minted")).declaration.key)

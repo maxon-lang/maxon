@@ -24,7 +24,7 @@ and neither alone is the property: a loop that merely spun would also arm no tim
 on the poller and then woke on a period of its own would still be a poll.
 
 ⚠ **THE PARK-WAKE COUNT IS WHAT A PER-PASS YIELD ACTUALLY COSTS, WHICH IS WHY IT IS THE ONE READ.**
-`__Builtins.schedTimerStartCount()` counts the machines the system monitor starts for an overdue timer,
+`Scheduler.counters().timerStarts` counts the machines the system monitor starts for an overdue timer,
 not the timers a program arms, and a drain whose own machine wakes at each deadline gives the monitor
 nothing to rescue — 0 over this second, against well over a thousand park wakes. A bound on the monitor's count
 would therefore hold whatever the drain does.
@@ -40,44 +40,22 @@ of the generation the member carries from the build against the record's own bef
 member whose record was closed and reissued between the build and the lock is refused rather than stamped into
 the next owner's record.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-
-// The whole second the child takes to answer. A drain parked on the poller returns a handful of times;
-// one that yields a millisecond per idle pass returns about two thousand.
 let quietWakes = 16
 
-// The collect wait is a park on the poller — at least the one this program makes.
 let pollerParks = 1
 
-function appendToken(out ByteArray, token String)
-	let bytes = token.toByteArray()
-	let n = bytes.count()
-	for i in 0 upto n 'byteLoop'
-		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
-	end 'byteLoop'
-	out.push(0)
-end 'appendToken'
-
 function main() returns ExitCode
-	var argv = ByteArray.create()
-	appendToken(argv, token: "/bin/sh")
-	appendToken(argv, token: "-c")
-	appendToken(argv, token: "sleep 1; echo hi")
-	let empty = ""
-	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	let beforeWakes = __Builtins.schedParkWakeCount()
-	let beforeParks = __Builtins.schedNetpollBlockCount()
-	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 2, empty.cstr(), 0, 0)
-	let r = __Builtins.subprocessWaitCollect(h, 0)
-	let wakes = __Builtins.schedParkWakeCount() - beforeWakes
-	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
-	let out = String.init(__Builtins.subprocessResultStdout(r))
-	let n = out.byteLength()
-	let matches = out.startsWith("hi")
+	var argv = StringArray.create()
+	argv.push("-c")
+	argv.push("sleep 1; echo hi")
+	let before = Scheduler.counters()
+	let result = try Subprocess.run(Executable.name("/bin/sh"), arguments: argv) otherwise panic("/bin/sh runs on every POSIX lane")
+	let after = Scheduler.counters()
+	let wakes = after.parkWakes - before.parkWakes
+	let parks = after.netpollBlocks - before.netpollBlocks
+	let n = result.stdout.byteLength()
+	let matches = result.stdout.startsWith("hi")
 	print("timerpolls={wakes <= quietWakes} onpoller={parks >= pollerParks} outLen={n} matches={matches}\n")
-	__Builtins.subprocessResultRelease(r)
-	__Builtins.subprocessReleaseHandle(h)
 	return n as ExitCode
 end 'main'
 ```

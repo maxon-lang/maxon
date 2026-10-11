@@ -4,6 +4,35 @@
 /// logical processor count is the only ceiling.
 public typealias SchedulerProcessorCount = int(1 to u64.max) implements Count
 
+public typealias SchedulerEventCount = int(0 to u64.max)
+
+public typealias StackByteCount = int(0 to u64.max)
+
+public typealias GreenThreadCount = int(0 to u64.max)
+
+public typealias MachineIndex = int(0 to u64.max)
+
+public type SchedulerCounters
+	public let steals as SchedulerEventCount
+	public let retakes as SchedulerEventCount
+	public let maxActiveWorkers as SchedulerEventCount
+	public let recycledThreads as SchedulerEventCount
+	public let timerStarts as SchedulerEventCount
+	public let syscalls as SchedulerEventCount
+	public let slices as SchedulerEventCount
+	public let preempts as SchedulerEventCount
+	public let parkWakes as SchedulerEventCount
+	public let netpollBlocks as SchedulerEventCount
+	public let idleProcessors as SchedulerEventCount
+	public let threadRecordsCarved as SchedulerEventCount
+	public let timerScanSteps as SchedulerEventCount
+	public let globalPushes as SchedulerEventCount
+
+	static function create(steals SchedulerEventCount, retakes SchedulerEventCount, maxActiveWorkers SchedulerEventCount, recycledThreads SchedulerEventCount, timerStarts SchedulerEventCount, syscalls SchedulerEventCount, slices SchedulerEventCount, preempts SchedulerEventCount, parkWakes SchedulerEventCount, netpollBlocks SchedulerEventCount, idleProcessors SchedulerEventCount, threadRecordsCarved SchedulerEventCount, timerScanSteps SchedulerEventCount, globalPushes SchedulerEventCount) returns Self
+		return Self{steals: steals, retakes: retakes, maxActiveWorkers: maxActiveWorkers, recycledThreads: recycledThreads, timerStarts: timerStarts, syscalls: syscalls, slices: slices, preempts: preempts, parkWakes: parkWakes, netpollBlocks: netpollBlocks, idleProcessors: idleProcessors, threadRecordsCarved: threadRecordsCarved, timerScanSteps: timerScanSteps, globalPushes: globalPushes}
+	end 'create'
+end 'SchedulerCounters'
+
 /// Controls over the green-thread scheduler the program is already running on.
 ///
 /// `Scheduler` is a namespace for scheduler-level operations rather than a value: it has no fields and is never
@@ -34,4 +63,43 @@ public type Scheduler
 	public static function processorCount() returns SchedulerProcessorCount
 		return __Builtins.schedProcessorCount()
 	end 'processorCount'
+
+	/// The machine's logical processor count.
+	public static function machineCpuCount() returns SchedulerProcessorCount
+		return __Builtins.cpuCount()
+	end 'machineCpuCount'
+
+	public static function counters() returns SchedulerCounters
+		return SchedulerCounters.create(__Builtins.schedStealCount(), retakes: __Builtins.schedRetakeCount(), maxActiveWorkers: __Builtins.schedMaxActiveWorkers(), recycledThreads: __Builtins.schedGtRecycleCount(), timerStarts: __Builtins.schedTimerStartCount(), syscalls: __Builtins.schedSyscallCount(), slices: __Builtins.schedSliceCount(), preempts: __Builtins.schedPreemptCount(), parkWakes: __Builtins.schedParkWakeCount(), netpollBlocks: __Builtins.schedNetpollBlockCount(), idleProcessors: __Builtins.schedIdleProcessorCount(), threadRecordsCarved: __Builtins.schedGtRecordsCarved(), timerScanSteps: __Builtins.schedTimerScanStepCount(), globalPushes: __Builtins.schedGlobalPushCount())
+	end 'counters'
+
+	public static function currentStackBytes() returns StackByteCount
+		return __Builtins.gtStackBytes()
+	end 'currentStackBytes'
+
+	/// Park `main` until every other green thread has finished, and answer how many have not.
+	public static function quiesce() returns GreenThreadCount
+		return __Builtins.gtQuiesce()
+	end 'quiesce'
+
+	/// Does nothing at run time. A CPU-bound function calls it to mark a spawn of itself as deliberate
+	/// (E3073 refuses spawning a function that never gives up its green thread).
+	public static function parallelBoundary()
+		__Builtins.parallelBoundary()
+	end 'parallelBoundary'
+
+	/// Bind the calling green thread to the machine running it, and answer whether it did. A pinned
+	/// thread resumes on the machine it parked on.
+	public static function pinToMachine() returns bool
+		return __Builtins.pinToMachine() != 0
+	end 'pinToMachine'
+
+	public static function unpinFromMachine()
+		__Builtins.unpinFromMachine()
+	end 'unpinFromMachine'
+
+	/// The machine running the calling green thread; 0 is no machine.
+	public static function currentMachine() returns MachineIndex
+		return __Builtins.currentMachine()
+	end 'currentMachine'
 end 'Scheduler'

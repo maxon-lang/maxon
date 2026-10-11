@@ -1,0 +1,117 @@
+// Why a case that stages its own source tiers could not be staged. A one-arm union implementing `Error`,
+// so the staging steps below read as a `try` chain and every failure carries its own sentence rather than
+// a boolean the caller has to explain.
+export union TierStagingError implements Error
+	refused(reason String)
+end 'TierStagingError'
+
+// A union arm is how the reason travels, and unwrapping it belongs at the boundary rather than at every
+// `throw`.
+export function tierStagingErrorText(error TierStagingError) returns String
+	return match error 'e'
+		refused(reason) gives reason
+	end 'e'
+end 'tierStagingErrorText'
+
+module type StagedTierDirs
+	module let stdlib as FilePath
+	module let runtime as FilePath
+
+	module static function create(stdlib FilePath, runtime FilePath) returns StagedTierDirs
+		return Self{stdlib: stdlib, runtime: runtime}
+	end 'create'
+
+	module static function beneath(tierRoot FilePath) returns StagedTierDirs throws TierStagingError
+		// Interpolated so the argument is a committed `String` — see `specTempRootDir` for why a bare
+		// module-`let` constant is ambiguous between `join`'s two overloads.
+		let stagedStdlib = tierRoot.join("{StdlibDirName}")
+		let stagedRuntime = try runtimeDirBeside(stagedStdlib) otherwise throw TierStagingError.refused("could not derive the staged runtime tier beside {stagedStdlib.toString()}")
+
+		return Self{stdlib: stagedStdlib, runtime: stagedRuntime}
+	end 'beneath'
+end 'StagedTierDirs'
+
+module function copiedTiers(tierRoot FilePath, sourceStdlib FilePath, sourceRuntime FilePath, written FilePathArray) returns StagedTierDirs throws TierStagingError
+	if not Directory.create(tierRoot) 'noRoot'
+		throw TierStagingError.refused("could not create source-tier directory {tierRoot.toString()}")
+	end 'noRoot'
+
+	purgeFilesIn(tierRoot)
+
+	let staged = try StagedTierDirs.beneath(tierRoot)
+
+	try copySourceTier(sourceStdlib, into: staged.stdlib, written: written)
+	try copyUnicodeTables(sourceStdlib, into: staged.stdlib, written: written)
+	try copySourceTier(sourceRuntime, into: staged.runtime, written: written)
+
+	return staged
+end 'copiedTiers'
+
+// Copy every file the compiler would LOAD from `from` into `into`, preserving the tree. ONE routine for
+// both tiers: "stage a private copy of a directory the compiler loads" is one operation, and two copies
+// of it would be free to drift on what a source is or on where the tree lands.
+//
+// ⚠ **THE SET OF FILES IS ASKED OF `Compiler.collectMaxonSources`, WHICH IS THE COMPILER'S OWN ANSWER
+// TO "WHAT IS A SOURCE UNDER A DIRECTORY?"** A copy built from a second rule here — every `.maxon`,
+// say — would drift the day that walk grows a clause, and the drift would show up as a case compiling
+// against a tier subtly unlike the one the same compiler loads everywhere else.
+//
+// ⚠ **WHAT THE WALK FINDS IS EXACTLY WHAT THE COMPILER LOADS, AND THE TWO GUARDS BELOW REST ON THAT
+// COINCIDENCE.** `applyOverlaySections` refuses an overlay naming "not a file the compiler loads from
+// <stdlib>" and `writeRuntimeFileSections` refuses a name that IS one, and both enforce that by asking
+// whether the name is in THIS copy. A file copied here but not loaded by the compiler would pass the
+// first and trip the second, either way delivering an answer about a file nothing reads.
+function copySourceTier(from FilePath, into FilePath, written FilePathArray) throws TierStagingError
+	var sources = MaxonSourcePathArray.create()
+	_ = try collectMaxonSources(from, into: sources) otherwise throw TierStagingError.refused("could not walk {from.toString()} to stage a private copy of it")
+
+	for source in sources 'eachSource'
+		let relative = try source.relativeTo(from) otherwise throw TierStagingError.refused("{source.toString()} is not under {from.toString()}, though that walk is what found it")
+
+		let destination = into.join(relative)
+		let parent = try destination.parent() otherwise throw TierStagingError.refused("could not derive a directory for {destination.toString()}")
+
+		if not Directory.create(parent) 'noSubdir'
+			throw TierStagingError.refused("could not create directory {parent.toString()}")
+		end 'noSubdir'
+
+		let content = try File.readText(source) otherwise throw TierStagingError.refused("could not read {source.toString()}")
+		try File.writeText(destination, content: content) otherwise throw TierStagingError.refused("could not write {destination.toString()}")
+		written.push(destination)
+	end 'eachSource'
+end 'copySourceTier'
+
+function copyUnicodeTables(from FilePath, into FilePath, written FilePathArray) throws TierStagingError
+	let sources = ucdTablePaths(from)
+	let destinations = ucdTablePaths(into)
+
+	for (iter, source) in sources.withIterator() 'eachTable'
+		let destination = try destinations.get(iter.index()) otherwise panic("copyUnicodeTables: ucdTablePaths answered {sources.count()} source path(s) and {destinations.count()} destination path(s) for one roster")
+		let parent = try destination.parent() otherwise throw TierStagingError.refused("could not derive a directory for {destination.toString()}")
+
+		if not Directory.create(parent) 'noSubdir'
+			throw TierStagingError.refused("could not create directory {parent.toString()}")
+		end 'noSubdir'
+
+		let content = try File.readBinary(source) otherwise throw TierStagingError.refused("could not read {source.toString()}")
+		try File.writeBinary(destination, content: content) otherwise throw TierStagingError.refused("could not write {destination.toString()}")
+		written.push(destination)
+	end 'eachTable'
+end 'copyUnicodeTables'
+
+export let LibraryTierBinDirName = "bin"
+
+function copyCompilerInto(compiler FilePath, binDir FilePath) throws TierStagingError
+	if not Directory.create(binDir) 'noBinDir'
+		throw TierStagingError.refused("could not create directory {binDir.toString()}")
+	end 'noBinDir'
+
+	let destination = binDir.join(compiler.filename())
+	let content = try File.readBinary(compiler) otherwise throw TierStagingError.refused("could not read {compiler.toString()}")
+	try File.writeBinary(destination, content: content, mode: FilePermission.executable) otherwise throw TierStagingError.refused("could not write {destination.toString()}")
+end 'copyCompilerInto'
+
+export function stageLibraryTierWithCompiler(tierRoot FilePath, sourceStdlib FilePath, sourceRuntime FilePath, compiler FilePath) throws TierStagingError
+	_ = try copiedTiers(tierRoot, sourceStdlib: sourceStdlib, sourceRuntime: sourceRuntime, written: FilePathArray.create())
+	try copyCompilerInto(compiler, binDir: tierRoot.join(LibraryTierBinDirName))
+end 'stageLibraryTierWithCompiler'

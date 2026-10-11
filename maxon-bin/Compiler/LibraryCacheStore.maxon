@@ -12,6 +12,25 @@ export enum LibraryEntryKind
 	coreBaseline
 end 'LibraryEntryKind'
 
+export enum LibraryEntryClass
+	installed
+	staged
+end 'LibraryEntryClass'
+
+let StagedEntryPrefix = "staged"
+
+union InstalledTiers
+	found(stdlib FilePath, runtime FilePath)
+	absent
+end 'InstalledTiers'
+
+function resolvedInstalledTiers() returns InstalledTiers
+	let stdlib = try locateStdlibDir() otherwise return InstalledTiers.absent
+	let runtime = try runtimeDirBeside(stdlib) otherwise return InstalledTiers.absent
+
+	return InstalledTiers.found(stdlib, runtime: runtime)
+end 'resolvedInstalledTiers'
+
 export enum LibraryBaselineState
 	loaded
 	built
@@ -65,7 +84,7 @@ export let MostParsePacks = 16 as ElementIndex
 type HeldBaseline
 	export let key as HashDigest
 	export let kind as LibraryEntryKind
-	export let declarations as LibraryDeclarations
+	export var declarations as LibraryDeclarations
 
 	static function create(key HashDigest, kind LibraryEntryKind, declarations LibraryDeclarations) returns HeldBaseline
 		return Self{key: key, kind: kind, declarations: declarations}
@@ -79,13 +98,21 @@ export type LibraryCache
 	var baselines as HeldBaselineArray
 	var packs as LibraryPackMap
 	var absent as AbsentPackSet
+	let installed as InstalledTiers
 	let onDisk as bool
 	let retains as bool
 	export var totals as LibraryCacheTally
 
 	static function holding(onDisk bool, retains bool) returns LibraryCache
-		return Self{directories: LibraryDirectoryMap.create(), baselines: HeldBaselineArray.create(), packs: LibraryPackMap.create(), absent: AbsentPackSet.create(), onDisk: onDisk, retains: retains, totals: LibraryCacheTally.create()}
+		return Self{directories: LibraryDirectoryMap.create(), baselines: HeldBaselineArray.create(), packs: LibraryPackMap.create(), absent: AbsentPackSet.create(), installed: resolvedInstalledTiers(), onDisk: onDisk, retains: retains, totals: LibraryCacheTally.create()}
 	end 'holding'
+
+	export function entryClassOf(project Project) returns LibraryEntryClass
+		return match self.installed 'installed'
+			found(stdlib, runtime) gives LibraryEntryClass.installed if stdlib.equals(project.stdlibDir) and runtime.equals(project.runtimeDir) else LibraryEntryClass.staged
+			absent gives LibraryEntryClass.staged
+		end 'installed'
+	end 'entryClassOf'
 
 	export static function create() returns LibraryCache
 		return Self.holding(true, retains: true)
@@ -173,12 +200,14 @@ export type LibraryCache
 		end 'directory'
 	end 'entriesFor'
 
-	export function isAvailable(target Target) returns bool
-		return match self.directoryFor(target) 'directory'
+	export function persistsFor(project Project) returns bool
+		let diskTierServes = match self.directoryFor(project.target) 'directory'
 			available gives true
 			unavailable gives false
 		end 'directory'
-	end 'isAvailable'
+
+		return diskTierServes and not rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: Directory.currentPath())
+	end 'persistsFor'
 
 	export function holds(target Target, name String) returns bool
 		let entries = try self.entriesFor(target) otherwise return false
@@ -251,9 +280,9 @@ export type LibraryCache
 		try File.delete(path) otherwise ignore
 	end 'discardRejected'
 
-	export function trimEntries(target Target, kind LibraryEntryKind, kept String, most ElementIndex)
+	export function trimEntries(target Target, kind LibraryEntryKind, entryClass LibraryEntryClass, kept String, most ElementIndex)
 		let entries = try self.entriesFor(target) otherwise return
-		let prefix = "{libraryEntryPrefix(kind)}{LibraryEntryNameSeparator}"
+		let prefix = "{libraryEntryPrefix(kind, entryClass: entryClass)}{LibraryEntryNameSeparator}"
 
 		discardAllButNewestIn(entries, kept: most - 1, admits: function(path) gives path.filename().startsWith(prefix) and path.filename().endsWith(LibraryEntryExtension) and path.filename() != kept)
 	end 'trimEntries'
@@ -273,17 +302,22 @@ export type LibraryCache
 	end 'write'
 end 'LibraryCache'
 
-function libraryEntryPrefix(kind LibraryEntryKind) returns String
-	return match kind 'prefix'
+function libraryEntryPrefix(kind LibraryEntryKind, entryClass LibraryEntryClass) returns String
+	let kindPrefix = match kind 'prefix'
 		views gives "views"
 		parses gives "parses"
 		baseline gives "baseline"
 		coreBaseline gives "core"
 	end 'prefix'
+
+	return match entryClass 'class'
+		installed gives kindPrefix
+		staged gives "{StagedEntryPrefix}{LibraryEntryNameSeparator}{kindPrefix}"
+	end 'class'
 end 'libraryEntryPrefix'
 
-export function libraryEntryName(kind LibraryEntryKind, parts LibraryEntryKeyArray) returns String
-	var name = libraryEntryPrefix(kind)
+export function libraryEntryName(kind LibraryEntryKind, entryClass LibraryEntryClass, parts LibraryEntryKeyArray) returns String
+	var name = libraryEntryPrefix(kind, entryClass: entryClass)
 
 	for part in parts 'eachPart'
 		name.append("{LibraryEntryNameSeparator}{part:016x}")

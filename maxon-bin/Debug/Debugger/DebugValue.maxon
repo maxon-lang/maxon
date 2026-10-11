@@ -32,8 +32,6 @@ let SingleMantissaMask = 8388607 as DebuggeeWord
 let SingleExponentMask = 255 as DebuggeeWord
 let SingleImplicitBit = 8388608 as DebuggeeWord
 let SingleSignBit = 2147483648 as DebuggeeWord
-let DoubleInfinityBits = 9218868437227405312 as DebuggeeWord
-let DoubleQuietNaNBits = 9221120237041090560 as DebuggeeWord
 let SingleSubnormalScale = -149.0 as Real
 let SingleNormalScale = -150.0 as DebugRealValue
 
@@ -249,7 +247,7 @@ function renderReal(tree DebugValueTree, memory DebugMemory, name String, typeNa
 		return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{singleFrom(raw)}"))
 	end 'aSingle'
 
-	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{__Builtins.bitsToFloat(raw)}"))
+	return tree.add(DebugValueNode.rendered(name, typeName: typeName, kind: kind, display: "{Math.fromBits(raw as FloatBits)}"))
 end 'renderReal'
 
 // A 32-bit float widened by ARITHMETIC rather than by reassembling a 64-bit pattern: the significand and
@@ -265,7 +263,7 @@ end 'singleFrom'
 
 function singleMagnitude(exponent DebuggeeWord, mantissa DebuggeeWord) returns DebugRealValue
 	if exponent == SingleExponentMask 'infiniteOrNotANumber'
-		return __Builtins.bitsToFloat(DoubleInfinityBits if mantissa == 0 else DoubleQuietNaNBits)
+		return (Math.positiveInfinity() if mantissa == 0 else Math.quietNaN()) as DebugRealValue
 	end 'infiniteOrNotANumber'
 
 	if exponent == 0 'subnormalOrZero'

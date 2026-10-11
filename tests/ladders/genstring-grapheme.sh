@@ -44,7 +44,7 @@
 #
 #   `data-*`  — a RUN ladder. `<n>` is a number of DOUBLINGS of the subject string, so the DATA doubles
 #              and the SOURCE does not, and the program brackets ONLY the operation with
-#              `__Builtins.currentTimeNanos()` and prints a CSV line. It answers what no compile ladder
+#              `Clock.nowNanos()` and prints a CSV line. It answers what no compile ladder
 #              can: are the emitted runtime GRAPHS linear in the data? `__gr_end` re-scanning from byte 0
 #              would be quadratic in `for c in s`; a `for` loop that recomputed the cluster end in the
 #              step block would double the constant; `__gr_count` is O(n) BY DESIGN, so `data-countloop`
@@ -273,7 +273,7 @@ emit_data_program() {
 		# this reads ×4 per doubling. `units` is the CLUSTER count, which is what the loop's trip count is
 		# and therefore what its cost should be linear in.
 		echo -e "\tvar units = 0"
-		echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tvar r = 0"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tunits = 0"
@@ -283,21 +283,21 @@ emit_data_program() {
 		echo -e "\t\ttotal = total + units"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
-		echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t1 = Clock.nowNanos()"
 		echo -e "\tprint(\"$MODE,{subject.byteLength()},{units},{t1 - t0},$REPS\\\\n\")"
 		;;
 	data-count-*)
 		# `String.count()` — `__gr_count`, which is `__gr_end` in a loop. O(n) PER CALL by design, so this
 		# ladder should read ×2 per doubling and a ×4 would mean the scan restarts.
 		echo -e "\tvar units = 0"
-		echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tvar r = 0"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tunits = subject.count()"
 		echo -e "\t\ttotal = total + units"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
-		echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t1 = Clock.nowNanos()"
 		echo -e "\tprint(\"$MODE,{subject.byteLength()},{units},{t1 - t0},$REPS\\\\n\")"
 		;;
 	data-countloop)
@@ -306,12 +306,12 @@ emit_data_program() {
 		# what `String.count`'s own doc warns about. It is here so a future O(1)-on-ASCII `count()` has a
 		# before to be measured against.
 		echo -e "\tvar units = 0"
-		echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tfor c in subject 'walk'"
 		echo -e "\t\ttotal = total + subject.count()"
 		echo -e "\t\tunits = units + 1"
 		echo -e "\tend 'walk'"
-		echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t1 = Clock.nowNanos()"
 		echo -e "\tprint(\"$MODE,{subject.byteLength()},{units},{t1 - t0},1\\\\n\")"
 		;;
 	data-bytes)
@@ -319,7 +319,7 @@ emit_data_program() {
 		# array grows by `Array`'s own doubling, so this is linear; it is measured because it is the one
 		# member of the rung that allocates per BYTE rather than per CLUSTER.
 		echo -e "\tvar units = 0"
-		echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tvar r = 0"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tlet bs = subject.bytes()"
@@ -327,7 +327,7 @@ emit_data_program() {
 		echo -e "\t\ttotal = total + units"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
-		echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t1 = Clock.nowNanos()"
 		echo -e "\tprint(\"$MODE,{subject.byteLength()},{units},{t1 - t0},$REPS\\\\n\")"
 		;;
 	esac

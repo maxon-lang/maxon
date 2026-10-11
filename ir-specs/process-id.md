@@ -12,6 +12,7 @@ The cases of `specs/process-id.md` whose subject is the emitted code. Each pins 
 ## Tests
 
 <!-- test: process-id.pid-body-is-runtime-source -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE PID'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE THAT SEES
 IT.** `runtime/Process.maxon` writes `__proc_pid` against the `__Raw` floor — one host read answered
 straight back — and the block below renders what the back end made of that source. Every other case here

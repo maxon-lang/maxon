@@ -876,13 +876,6 @@ function buildX64LinuxThreadCpuChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostThreadCpuName)
 end 'buildX64LinuxThreadCpuChunk'
 
-// What one call of `mrt_host_thread_cpu` costs a green thread's stack: its frame and entry words, and nothing
-// below them, because its clock read is a raw `syscall`. EXPORTED for
-// `PreemptionDepth.requirePreemptionFitsTheGuardMargin`, which reaches it from a park's clock read.
-export function x64LinuxThreadCpuStackBytes() returns StackSize
-	return X64RuntimeAsm.beginFunction(LinuxClockChunkSlots).stackBytesPerCall()
-end 'x64LinuxThreadCpuStackBytes'
-
 // ==========================================================================
 // mrt_host_exe_path / mrt_host_proc_ns(rcx = bufPtr, rdx = bufLen) -> rax = bytes written
 // ==========================================================================
@@ -2195,7 +2188,7 @@ end 'encodeX64MmapAnon'
 // `munmap(base, length)` with the base already in rdi — the only argument whose source genuinely differs
 // (a register at the morestack site, a reloaded frame slot at every object close). The answer is never
 // captured: nothing a caller could do about a refused release, and the mapping is unreachable either way.
-export function encodeX64MunmapBaseInRdi(code ByteArray, length X64MapLength)
+function encodeX64MunmapBaseInRdi(code ByteArray, length X64MapLength)
 	encodeX64MoveLengthToRsi(code, length: length)
 	encodeX64Syscall(code, number: X64LinuxSyscallMunmap)
 end 'encodeX64MunmapBaseInRdi'

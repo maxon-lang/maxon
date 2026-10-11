@@ -190,10 +190,10 @@ end 'main'
 ⭐ **THE SIGN OF A ZERO, in all eight zero combinations.** IEEE 754 requires `atan2` to carry the sign of `y`
 through every zero case — `atan2(-0.0, x: -1.0)` is `-π`, not `+π` — and the case is easy to get wrong because
 **no comparison can see it**: `-0.0 == 0.0`, so `y < 0.0` and `y >= 0.0` both answer as though every
-zero were positive. `stdlib/Math.maxon` reads the sign from the bits (`__Builtins.floatToBits`)
+zero were positive. `stdlib/Math.maxon` reads the sign from the bits (`Math.bitsOf`)
 exactly once and branches on that.
 
-The rows returning a **zero** are pinned through `floatToBits` rather than printed: `+0.0` and `-0.0`
+The rows returning a **zero** are pinned through `Math.bitsOf` rather than printed: `+0.0` and `-0.0`
 are equal, so no comparison can tell them apart, and pinning the bits makes this case INDEPENDENT of
 `__float_toString`'s treatment of the sign of zero instead of resting on it. That formatter does carry
 the sign — `stdlib/Builtins.maxon:1592` keeps it deliberately, and that is exactly what lets
@@ -207,15 +207,15 @@ Seven of the eight zero combinations are pinned below; the eighth, `atan2(0.0, x
 ```maxon
 function main() returns ExitCode
 	// Sign of y is carried into a zero result, where no comparison can show it.
-	print("{__Builtins.floatToBits(Math.atan2(-0.0, x: 1.0))}\n")
-	print("{__Builtins.floatToBits(Math.atan2(0.0, x: 1.0))}\n")
+	print("{Math.bitsOf(Math.atan2(-0.0, x: 1.0))}\n")
+	print("{Math.bitsOf(Math.atan2(0.0, x: 1.0))}\n")
 
 	// Negative x reflects by a half turn whose DIRECTION is the sign of y.
 	print("{Math.atan2(-0.0, x: -1.0)}\n")
 	print("{Math.atan2(0.0, x: -1.0)}\n")
 
 	// Both coordinates zero: the sign of x picks ±0 vs ±π, the sign of y picks the sign.
-	print("{__Builtins.floatToBits(Math.atan2(-0.0, x: 0.0))}\n")
+	print("{Math.bitsOf(Math.atan2(-0.0, x: 0.0))}\n")
 	print("{Math.atan2(-0.0, x: -0.0)}\n")
 
 	// The mirror of the row above: a branch that read the sign of x and ignored the sign of y

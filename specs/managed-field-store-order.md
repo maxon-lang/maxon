@@ -28,16 +28,12 @@ Both halves of "acquire" are affected, because both read the source record:
   bytes* of a record release-first has already freed.
 
 No static check substitutes for the order. The lexical no-op `self.f = self.f`
-is refused as E3067, and that refusal is precisely what hid this: it masks the
-spelling while leaving the aliasing routes below untouched. Those routes are
-genuine stores whose operands merely coincide at run time, which nothing
+is refused as E3067, but that refusal sees a spelling, not records. The routes
+below are genuine stores whose operands coincide at run time, which nothing
 whole-program can decide in general. The store protocol itself has to be safe.
 
-Every other durable-storage write in the compiler already states this rule in
-its own header — the cell rebind, the module-global store and the local
-binding rebind all settle the new value before releasing the old. The field
-store was the one door that did not, and these cases exist so it cannot drift
-back.
+The cell rebind, the module-global store and the local binding rebind settle the
+new value before releasing the old in the same way.
 
 ⛔ **Every case below pins `exitcode 0`, and that pin is what catches the OPPOSITE
 error.** A store that acquires without ever releasing leaks, the program exits
@@ -55,8 +51,8 @@ and these three cases go on passing while the release is gone.**
 ### One Record Passed As Both Parameters of a Field-Store Helper
 `assign(a, src: a)` hands the same struct to both parameters, so `dst` and `src`
 name one heap box and `dst.args = src.args` stores an array onto itself. The
-array must survive the store with its element intact. Release-first frees it and
-then increfs freed memory, which faulted with an access violation.
+array must survive the store with its element intact; a release-first store frees
+it and then increfs freed memory.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 typealias NumArray = Array with Num
@@ -154,7 +150,7 @@ function copyName(dst Rec, src Rec)
 end 'copyName'
 
 function main() returns ExitCode
-	var r = Rec.create("hello")
+	var r = Rec.create("hello {40 + 2}")
 	copyName(r, src: r)
 	print("name={r.name}")
 	return 0
@@ -164,5 +160,5 @@ end 'main'
 0
 ```
 ```stdout
-name=hello
+name=hello 42
 ```

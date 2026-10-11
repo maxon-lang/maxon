@@ -226,15 +226,15 @@ export type GenericFunctionTemplate
 	export let declFilePath as FilePath
 	export let line as LineNumber
 	export let column as ColumnNumber
-	export let typeParamNames as ByteArrayArray
-	export let paramNames as ByteArrayArray
+	export let typeParamNames as NameRoster
+	export let paramNames as NameRoster
 	export let paramSlots as GenericParamSlotArray
 	export let paramTypeParams as TypeParamIndexArray
 	export let constraints as WhereConstraintArray
 	export let takesReceiver as bool
 	export let visibility as Visibility
 
-	export static function create(key ByteArray, declFilePath FilePath, line LineNumber, column ColumnNumber, typeParamNames ByteArrayArray, paramNames ByteArrayArray, paramSlots GenericParamSlotArray, paramTypeParams TypeParamIndexArray, constraints WhereConstraintArray, takesReceiver bool, visibility Visibility) returns Self
+	export static function create(key ByteArray, declFilePath FilePath, line LineNumber, column ColumnNumber, typeParamNames NameRoster, paramNames NameRoster, paramSlots GenericParamSlotArray, paramTypeParams TypeParamIndexArray, constraints WhereConstraintArray, takesReceiver bool, visibility Visibility) returns Self
 		return Self{key: key, declFilePath: declFilePath, line: line, column: column, typeParamNames: typeParamNames, paramNames: paramNames, paramSlots: paramSlots, paramTypeParams: paramTypeParams, constraints: constraints, takesReceiver: takesReceiver, visibility: visibility}
 	end 'create'
 
@@ -267,8 +267,8 @@ export type GenericFunctionTemplate
 		writer.text(self.declFilePath.toString())
 		writer.unsigned(self.line as CacheUnsigned)
 		writer.unsigned(self.column as CacheUnsigned)
-		cacheWriteByteArrayArray(writer, value: self.typeParamNames)
-		cacheWriteByteArrayArray(writer, value: self.paramNames)
+		cacheWriteNameRoster(writer, value: self.typeParamNames)
+		cacheWriteNameRoster(writer, value: self.paramNames)
 		cacheWriteGenericParamSlotArray(writer, value: self.paramSlots)
 		cacheWriteTypeParamIndexArray(writer, value: self.paramTypeParams)
 		cacheWriteWhereConstraintArray(writer, value: self.constraints)
@@ -281,8 +281,8 @@ export type GenericFunctionTemplate
 		let f_declFilePath = try reader.path()
 		let f_line = (try reader.unsigned()) as LineNumber
 		let f_column = (try reader.unsigned()) as ColumnNumber
-		let f_typeParamNames = try cacheReadByteArrayArray(reader)
-		let f_paramNames = try cacheReadByteArrayArray(reader)
+		let f_typeParamNames = try cacheReadNameRoster(reader)
+		let f_paramNames = try cacheReadNameRoster(reader)
 		let f_paramSlots = try cacheReadGenericParamSlotArray(reader)
 		let f_paramTypeParams = try cacheReadTypeParamIndexArray(reader)
 		let f_constraints = try cacheReadWhereConstraintArray(reader)

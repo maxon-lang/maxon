@@ -1,0 +1,22 @@
+let TierNameSpecName = "tier-name"
+let TierNameSharingCase = "tier-name.shares-the-tiers"
+let TierNameClashingCase = "__shared__"
+let TierNameRefusal = "would stage its private source tiers"
+
+test 'a case whose private tiers would land on the shared tiers is refused and the sharing case still passes'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: TierNameSpecName, testNames: [TierNameSharingCase], broken: broken)
+
+	if not said.contains(failVerdictPrefix(testLabel(TierNameSpecName, testName: TierNameClashingCase))) 'notFailed'
+		broken.push("'{TierNameClashingCase}' did not FAIL, so it was staged into the shared tiers. The run said:\n{said}\n")
+	end 'notFailed'
+
+	if not said.contains(TierNameRefusal) 'notRefusedByName'
+		broken.push("'{TierNameClashingCase}' failed, but not with the refusal that says '{TierNameRefusal}'. The run said:\n{said}\n")
+	end 'notRefusedByName'
+
+	requireNothingBroken(broken, headline: "a case cannot stage its private tiers over the shared ones")
+end 'a case whose private tiers would land on the shared tiers is refused and the sharing case still passes'

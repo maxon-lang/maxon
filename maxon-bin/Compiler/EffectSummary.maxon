@@ -1,13 +1,13 @@
 typealias ValueOriginCode = int(0 to u64.max)
 typealias ValueOriginColumn = Array with ValueOriginCode
 typealias ValueIdSet = Set with ValueId
-typealias FunctionRefNames = Map with (ValueId, ByteArray)
+typealias FunctionRefNames = Map with (ValueId, readonly ByteArray)
 typealias ClosureBindingArray = Array with ClosureBinding
 typealias SpecializedNodeArray = Array with SpecializedNode
 typealias SpecializedNodeKeys = Map with (String, ElementIndex)
 typealias ElementIndexArray = Array with ElementIndex
 typealias ResourceByInstance = Map with (GenericInstanceId, bool)
-typealias ResourceByName = Map with (ByteArray, bool)
+typealias ResourceByTypeName = Map with (TypeNameId, bool)
 
 // What a value is, as far as writes through it go: a record this body minted (`OriginLocal`), or a
 // parameter's record, a record loaded out of it, or one loaded out of that (three levels encoded from
@@ -255,9 +255,9 @@ type CalleeFacts
 end 'CalleeFacts'
 
 type ValueOrigins
-	let signatures as ProgramSignatures
-	let typeNames as TypeNameInterner
-	let calleeFacts as CalleeFacts
+	var signatures as ProgramSignatures
+	var typeNames as TypeNameInterner
+	var calleeFacts as CalleeFacts
 	var codes as ValueOriginColumn
 	var valueRefs as FunctionRefNames
 	var codeRefs as FunctionRefNames
@@ -423,7 +423,9 @@ type ValueOrigins
 			rawIntrinsic or
 			witnessDispatch or
 			witnessTryDispatch or
-			existentialWitness then break
+			existentialWitness or
+			holdValue or
+			holdEnd then break
 		end 'op'
 	end 'noteDefinition'
 
@@ -466,10 +468,8 @@ type ValueOrigins
 	end 'refine'
 
 	function refineOp(op MaxonOp, func IrFunction, soleKept bool) returns bool
-		match maxonOpResultValue(op) 'result'
-			none then return false
-			value(id) then return self.settle(id, after: self.originOfResult(op, result: id, func: func, soleKept: soleKept))
-		end 'result'
+		let id = try maxonOpDefinedValue(op) otherwise return false
+		return self.settle(id, after: self.originOfResult(op, result: id, func: func, soleKept: soleKept))
 	end 'refineOp'
 
 	function settle(value ValueId, after ValueOriginCode) returns bool
@@ -496,6 +496,7 @@ type ValueOrigins
 			call(_, callee, args, _, _, _, _, _) gives self.callResultOrigin(callee, args: args)
 			tryCall(_, _, callee, _, _, _, _, _, _) gives OriginLocal if self.callReturnsAFreshRecord(callee) else OriginUnknown
 			loadIndirect(_, addr, _, _) gives self.withinOrigin(addr)
+			holdValue(_, held, _, _, _) gives self.raw(held)
 			literal or
 			ret or
 			retVoid or
@@ -529,7 +530,8 @@ type ValueOrigins
 			rawIntrinsic or
 			witnessDispatch or
 			witnessTryDispatch or
-			existentialWitness gives OriginUnknown
+			existentialWitness or
+			holdEnd gives OriginUnknown
 		end 'op'
 	end 'derivedOriginOfResult'
 
@@ -868,7 +870,9 @@ type ValueOrigins
 			rawIntrinsic or
 			witnessDispatch or
 			witnessTryDispatch or
-			existentialWitness then break
+			existentialWitness or
+			holdValue or
+			holdEnd then break
 		end 'op'
 	end 'noteReturn'
 
@@ -1001,9 +1005,9 @@ function ownerTypeOf(qualified ByteArray) returns ByteArray throws AbsentError
 end 'ownerTypeOf'
 
 type EffectNodes
-	let signatures as ProgramSignatures
-	export let functions as IrFunctionArray
-	export let dispatch as WitnessDispatchTargets
+	var signatures as ProgramSignatures
+	export var functions as IrFunctionArray
+	export var dispatch as WitnessDispatchTargets
 	var keys as SpecializedNodeKeys
 	var specialized as SpecializedNodeArray
 	export var current as EffectContext
@@ -1160,7 +1164,7 @@ type EffectNodes
 
 	// The conformer's own members for the concrete type argument; absent whenever the instance, the
 	// conformer or a member is in doubt, so the caller falls back to every candidate of that name.
-	function contextualTargets(func IrFunction, args ValueIdArray, requirement ByteArray, candidates ByteArrayArray, funcIndexByName FuncIndexByName, runtimeTier FunctionNameSet) returns ElementIndexArray throws AbsentError
+	function contextualTargets(func IrFunction, args ValueIdArray, requirement ByteArray, candidates NameRoster, funcIndexByName FuncIndexByName, runtimeTier FunctionNameSet) returns ElementIndexArray throws AbsentError
 		let outer = try self.current.instanceId()
 		let receiver = try args.get(0) otherwise throw AbsentError.absent
 		let token = (try func.valueNameIds.get(receiver) otherwise throw AbsentError.absent) as TypeParamId
@@ -1214,15 +1218,15 @@ module function buildEffectFreeSummary(project Project, module MaxonModule, sign
 end 'buildEffectFreeSummary'
 
 type EffectSummaryBuilder
-	let funcSignatures as FuncSignatureMap
-	let signatures as ProgramSignatures
-	let typeNames as TypeNameInterner
+	var funcSignatures as FuncSignatureMap
+	var signatures as ProgramSignatures
+	var typeNames as TypeNameInterner
 	var ownersByInstance as ResourceByInstance
-	var ownersByName as ResourceByName
+	var ownersByName as ResourceByTypeName
 	let funcIndexByName as FuncIndexByName
 	let runtimeTier as FunctionNameSet
 	var nodes as EffectNodes
-	let calleeFacts as CalleeFacts
+	var calleeFacts as CalleeFacts
 	var facts as ValueOrigins
 	var hard as BoolArray
 	var taintEnabled as bool
@@ -1245,10 +1249,10 @@ type EffectSummaryBuilder
 	var siteOrigins as ValueOriginColumn
 
 	static function create(funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner, funcNames FunctionNameIndex, runtimeTier FunctionNameSet) returns EffectSummaryBuilder
-		let dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
-		let calleeFacts = CalleeFacts.create(funcNames.byName, functionCount: funcNames.functions.count())
+		var dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
+		var calleeFacts = CalleeFacts.create(funcNames.byName, functionCount: funcNames.functions.count())
 
-		return Self{funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames, ownersByInstance: ResourceByInstance.create(), ownersByName: ResourceByName.create(), funcIndexByName: funcNames.byName, runtimeTier: runtimeTier, nodes: EffectNodes.create(signatures, functions: funcNames.functions, dispatch: dispatch), calleeFacts: calleeFacts, facts: ValueOrigins.empty(signatures, typeNames: typeNames, calleeFacts: calleeFacts), hard: BoolArray.create(), taintEnabled: false, imports: ParamPositionMaskArray.create(), importsBelow: ParamPositionMaskArray.create(), shallow: ParamPositionMaskArray.create(), near: ParamPositionMaskArray.create(), far: ParamPositionMaskArray.create(), siteCallers: CsrColumn.create(), siteCallees: CsrColumn.create(), siteFirstOrigins: CsrColumn.create(), siteOriginCounts: CsrColumn.create(), siteOrigins: ValueOriginColumn.create()}
+		return Self{funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames, ownersByInstance: ResourceByInstance.create(), ownersByName: ResourceByTypeName.create(), funcIndexByName: funcNames.byName, runtimeTier: runtimeTier, nodes: EffectNodes.create(signatures, functions: funcNames.functions, dispatch: dispatch), calleeFacts: calleeFacts, facts: ValueOrigins.empty(signatures, typeNames: typeNames, calleeFacts: calleeFacts), hard: BoolArray.create(), taintEnabled: false, imports: ParamPositionMaskArray.create(), importsBelow: ParamPositionMaskArray.create(), shallow: ParamPositionMaskArray.create(), near: ParamPositionMaskArray.create(), far: ParamPositionMaskArray.create(), siteCallers: CsrColumn.create(), siteCallees: CsrColumn.create(), siteFirstOrigins: CsrColumn.create(), siteOriginCounts: CsrColumn.create(), siteOrigins: ValueOriginColumn.create()}
 	end 'create'
 
 	// The first walk settles every node's imports; the second reads them to tell which minted records
@@ -1391,6 +1395,7 @@ type EffectSummaryBuilder
 			indirectCall then self.taintIndirectCall(origins, op: op)
 			witnessDispatch(_, args, _, _, _, _, _) then self.taintArguments(origins, args: args)
 			witnessTryDispatch(_, _, args, _, _, _, _) then self.taintArguments(origins, args: args)
+			holdValue(result, held, _, _, _) then self.taintHeldAlias(origins, result: result, held: held)
 			literal or
 			ret or
 			retVoid or
@@ -1421,9 +1426,16 @@ type EffectSummaryBuilder
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness then break
+			existentialWitness or
+			holdEnd then break
 		end 'op'
 	end 'taintOp'
+
+	function taintHeldAlias(origins ValueOrigins, result ValueId, held ValueId)
+		if originIsLocal(origins.originOf(result)) 'aSecondNameForARecordOfThisBody'
+			origins.unify(result, b: held)
+		end 'aSecondNameForARecordOfThisBody'
+	end 'taintHeldAlias'
 
 	function taintIndirectCall(origins ValueOrigins, op MaxonOp)
 		match op 'indirect'
@@ -1440,7 +1452,7 @@ type EffectSummaryBuilder
 		end 'eachArgument'
 	end 'taintArguments'
 
-	function taintCall(origins ValueOrigins, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray)
+	function taintCall(origins ValueOrigins, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray)
 		if retainsItsOperand(callee) and originIsLocal(origins.originOf(result)) 'aSecondNameForARecordOfThisBody'
 			origins.unify(result, b: try args.get(0) otherwise panic("EffectSummaryBuilder.taintCall: '{String.from(callee)}' retains an operand but the call carries none"))
 			return
@@ -1610,7 +1622,7 @@ type EffectSummaryBuilder
 			return true
 		end 'opaque'
 
-		return self.aggregateMayOwnAResource(try self.typeNames.nameOf(nameId) otherwise return true)
+		return self.aggregateMayOwnAResource(nameId)
 	end 'valueMayOwnAResource'
 
 	function instanceMayOwnAResource(declared GenericInstanceId) returns bool
@@ -1625,13 +1637,14 @@ type EffectSummaryBuilder
 		return owns
 	end 'instanceMayOwnAResource'
 
-	function aggregateMayOwnAResource(name ByteArray) returns bool
-		if let known = try self.ownersByName.get(name) 'asked'
+	function aggregateMayOwnAResource(nameId TypeNameId) returns bool
+		if let known = try self.ownersByName.get(nameId) 'asked'
 			return known
 		end 'asked'
 
+		let name = try self.typeNames.nameOf(nameId) otherwise return true
 		let owns = self.signatures.recordKindsWithinAggregate(name).anything
-		self.ownersByName.upsert(name, value: owns)
+		self.ownersByName.upsert(nameId, value: owns)
 		return owns
 	end 'aggregateMayOwnAResource'
 
@@ -1666,7 +1679,7 @@ type EffectSummaryBuilder
 	function walkNode(node ElementIndex, functionIndex ElementIndex, module MaxonModule, functions IrFunctionArray)
 		let func = try functions.get(functionIndex) otherwise panic("EffectSummaryBuilder.walkNode: functions.get OOB at {functionIndex}")
 
-		if bodyIsUnreadable(func) or func.writesModuleStorage 'hardFromTheStart'
+		if bodyIsUnreadable(func) or func.writesModuleStorage or self.signatures.functionNeverReturns(func.name) 'hardFromTheStart'
 			self.markHard(node)
 			return
 		end 'hardFromTheStart'
@@ -1730,11 +1743,13 @@ type EffectSummaryBuilder
 			immortalStructRecord or
 			immortalStringTable or
 			existentialWitness or
+			holdValue or
+			holdEnd or
 			covPoint then break
 		end 'op'
 	end 'walkOp'
 
-	function walkCall(node ElementIndex, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray)
+	function walkCall(node ElementIndex, func IrFunction, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray)
 		if self.releasesWhatItMayNotOwn(func, callee: callee, args: args) 'dropsAResource'
 			self.markHard(node)
 			return
@@ -1773,7 +1788,7 @@ type EffectSummaryBuilder
 		self.recordSite(node, callee: self.calleeNode(calleeIndex, callee: callee, ordered: ordered, func: func, result: result, origins: self.facts), args: ordered)
 	end 'walkCall'
 
-	function orderedArguments(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray) returns ValueIdArray throws AbsentError
+	function orderedArguments(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns ValueIdArray throws AbsentError
 		let sig = try self.funcSignatures.get(callee) otherwise return args
 
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slotted'

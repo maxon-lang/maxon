@@ -29,7 +29,7 @@ below the machine's count lowers it, and a request above the machine's count rai
 32-bit signed integer, the test Go's `schedinit` makes with `strconv.ParseInt(…, 10, 32)` and `n > 0`;
 anything else is ignored and the machine's count applies. On a 16-processor host:
 
-| `MAXON_MAX_PROCS` | `schedProcessorCount()` | why |
+| `MAXON_MAX_PROCS` | `Scheduler.processorCount()` | why |
 |---|---|---|
 | unset | 16 | `osEnvRead` answers 0 characters |
 | `1` | 1 | taken exactly — a lowering |
@@ -72,8 +72,8 @@ processors.
 
 ### ⛔⛔ THESE CASES ASSERT THE PROCESSOR COUNT, NOT THE WORKER COUNT — WHICH READS EITHER WAY DEPENDING ON MACHINE LOAD
 
-`__Builtins.schedMaxActiveWorkers()` is the scheduler's own high-water mark of concurrently-active
-worker Ms, and a case asserting `schedMaxActiveWorkers() > 1` passes under `--filter=sched-default-procs`
+`Scheduler.counters().maxActiveWorkers` is the scheduler's own high-water mark of concurrently-active
+worker Ms, and a case asserting `Scheduler.counters().maxActiveWorkers > 1` passes under `--filter=sched-default-procs`
 and fails in the full suite with nothing wrong with the scheduler. Under a full run — spec workers
 competing for the cores — a short spawn-driven program can drain its own ring and finish before
 `__sched_wake_or_spawn` ever needs a second M, so at four processors the mark legitimately stays 1.
@@ -85,7 +85,7 @@ than believe it.
 `MAXON_MAX_PROCS` settles `__sched_num_procs` to the requested count in `emitResolveMaxProcs`,
 once, inside `__sched_init_procs`, before a single green thread runs and without consulting the workload.
 How many worker Ms get built out of those Ps is a consequence of the WORK — the scheduler's business, not
-the marker's promise. `schedMaxActiveWorkers()` is honest about what it is, a
+the marker's promise. `Scheduler.counters().maxActiveWorkers` is honest about what it is, a
 measurement of an outcome; it belongs in cases that can tolerate one, like
 `builtins-cpu-parallel.md`'s `sched-max-active-workers-is-one-under-async`, whose program builds no second M
 unless the system monitor starts one, and reads the monitor's counters to say which.
@@ -95,7 +95,7 @@ unless the system monitor starts one, and reads the monitor's counters to say wh
 One program, four processor counts — the machine's, one, four, and four again. It spawns 8 services, sends
 each a chunk of index-derived integer work, and collects the eight partial sums through **awaited replies**:
 
-- **`procs=`** is `__Builtins.schedProcessorCount()` — a direct read of `__sched_num_procs`, the word the
+- **`procs=`** is `Scheduler.processorCount()` — a direct read of `__sched_num_procs`, the word the
   marker decides. It is not an inference and it is not a race: that word is written once at scheduler
   bring-up and never again. Asking installs the scheduler, so no program reads the word's `.data` seed of
   **0** — `Scheduler.processorCount()` is the public spelling of the same read (`scheduler-processor-count.md`).
@@ -117,9 +117,9 @@ above): more backlog only moves the odds, it does not remove the race, which is 
 processor count.
 
 ⚠ **NO CASE HERE CARRIES A LANE RESTRICTION.** A `spawn` runs on all four native lanes and is refused on
-wasm32-wasi by `SemanticCheck.requireTargetSupportsServiceEntry`; the first case's `cpuCount()` is an OS
+wasm32-wasi by `SemanticCheck.requireTargetSupportsServiceEntry`; the first case's `Scheduler.machineCpuCount()` is an OS
 call refused there with E3104. Both refusals are REPORTED as counted SKIPs naming the case, so a marker
-would state what the run already says and hide the case while doing it. `schedProcessorCount()` is refused
+would state what the run already says and hide the case while doing it. `Scheduler.processorCount()` is refused
 there with E3104 too, as a query about a scheduler that lane does not have.
 
 ## Tests
@@ -131,7 +131,7 @@ absent — and asserts that this is the machine's own processor count. It is the
 the default ever quietly returns to a constant.
 
 ⚠ **IT ASSERTS AN AGREEMENT AND NOT A NUMBER, FOR ITS SIBLINGS' REASON.** `every=1` is
-`schedProcessorCount() == cpuCount()`, two independent readings — a `.data` word `__sched_init_procs`
+`Scheduler.processorCount() == Scheduler.machineCpuCount()`, two independent readings — a `.data` word `__sched_init_procs`
 settled, and an OS call — so it holds on a 2-core CI box exactly as it holds on this 16-way one. A bare
 `procs=16` would have been a claim about one machine, and would have made every other box's green run a
 lie about this one.
@@ -202,7 +202,7 @@ function main() returns ExitCode
 	// ⭐ The default's contract, as a comparison this program can make on any machine: with no
 	// `MAXON_MAX_PROCS` in the environment, the scheduler built one P per processor the OS reports.
 	var every = 0
-	if __Builtins.schedProcessorCount() == __Builtins.cpuCount() 'agrees'
+	if Scheduler.processorCount() == Scheduler.machineCpuCount() 'agrees'
 		every = 1
 	end 'agrees'
 
@@ -280,7 +280,7 @@ function main() returns ExitCode
 		n = n + 1
 	end 'collect'
 
-	print("procs={__Builtins.schedProcessorCount()}\n")
+	print("procs={Scheduler.processorCount()}\n")
 	print("aggregate={aggregate}\n")
 	return 0
 end 'main'
@@ -430,7 +430,7 @@ function main() returns ExitCode
 		n = n + 1
 	end 'collect'
 
-	print("procs={__Builtins.schedProcessorCount()}\n")
+	print("procs={Scheduler.processorCount()}\n")
 	print("aggregate={aggregate}\n")
 	return 0
 end 'main'

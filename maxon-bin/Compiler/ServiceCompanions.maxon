@@ -109,7 +109,7 @@ end 'cacheReadServiceSpawnCandidateArray'
 
 export union SpawnGate
 	always
-	defaultOf(declaration DefaultDeclaration)
+	defaultOf(let declaration DefaultDeclaration)
 end 'SpawnGate'
 
 // @generated library-cache begin
@@ -349,7 +349,7 @@ module function registryMemberIsNamed(member ByteArray) returns bool
 	return member.equals(RegistryCurrentMemberName) or member.equals(RegistryRegisterMemberName)
 end 'registryMemberIsNamed'
 
-module function defaultsReachEachOtherMessage(keys ByteArrayArray) returns String
+module function defaultsReachEachOtherMessage(keys NameRoster) returns String
 	if keys.count() == 1 'readsItself'
 		return "the `default` for {quotedKeyList(keys)} reaches itself — build it without looking it up"
 	end 'readsItself'
@@ -357,7 +357,7 @@ module function defaultsReachEachOtherMessage(keys ByteArrayArray) returns Strin
 	return "the `default`s for {quotedKeyList(keys)} reach each other — build one of them without looking up the other"
 end 'defaultsReachEachOtherMessage'
 
-function quotedKeyList(keys ByteArrayArray) returns String
+function quotedKeyList(keys NameRoster) returns String
 	var listed = ""
 
 	for (position, key) in keys.withIterator() 'eachKey'
@@ -956,6 +956,7 @@ end 'untransferableParameterNoun'
 // its value is a bare INTEGER handle, so `keep(n Integer)` accepts one without a word from the type checker.
 // `Parser.handOffTakeOf` therefore asks about the VALUE, and it says the same thing this does.
 module let PromiseParameterNoun = "a Promise, which is a green-thread handle its awaiter owns"
+module let PromiseSharedNoun = "a promise, which owns a green thread that exactly one owner may reclaim"
 module let FunctionValueCrossingNoun = "a function value, a closure record that owns what it captures and does not cross to another thread"
 
 // ⭐ **THE OPAQUE-LAYOUT NOUN, shared by the bare `T` and by any instance whose arguments still name one** —
@@ -1137,19 +1138,21 @@ end 'serviceRosterRefusalMessage'
 // ⚠ **BOTH CURES ARE NAMED AND BOTH ARE PINNED**, because they are not interchangeable: `.clone()` needs the
 // type to have one, and building at the send needs nothing (`specs/services.md`'s
 // `a-borrowed-parameter-may-be-sent-as-a-clone` and `a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation`).
-module let ServiceTransferLesson = "A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name"
-
-module let CoroutineTransferLesson = "An `async` call moves this value: the coroutine takes over the reference this frame held and releases it when it ends, so a reader holding no reference of its own would go on reading a record the coroutine may already have released. Pass a `.clone()`, or build the value at the call: an INTERPOLATION over it is a record nothing else can name"
-
-module function uncountedAliasMessage(blame String, sourceClause String, lesson String) returns String
-	return "{blame} is also read through a name that holds no reference of its own{sourceClause}: a second name for the same record. {lesson}"
-end 'uncountedAliasMessage'
+module let ServiceTransferLesson = "A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name"
 
 // The BORROWED half: this frame does not own the value at all. It names no type, because the rule is uniform
 // over borrows whatever their type (`Parser.handOffTakeOf`, ⚖ user ruling).
 module function serviceBorrowedTransferMessage(blame String, sourceClause String) returns String
 	return "{blame} is BORROWED{sourceClause} — read out of a field, an element or a parameter — so this frame does not own it. {ServiceTransferLesson}"
 end 'serviceBorrowedTransferMessage'
+
+module function serviceSharedParameterWrittenMessage(blame String) returns String
+	return "{blame} is a PARAMETER this function writes. A parameter nothing here writes is shared with the service — both threads read one record and every count in it steps atomically — but a record this function writes would change under the service while it reads. Send a `.clone()`, or stop writing the parameter"
+end 'serviceSharedParameterWrittenMessage'
+
+module function serviceSharedValueHandledMessage(blame String, handler String, parameter String, shared String) returns String
+	return "{blame} is {shared} shared with the service, and the handler `{handler}` writes or keeps its parameter `{parameter}`. A record both threads reach may be written by neither. Send a `.clone()`, or make `{handler}` only read `{parameter}`"
+end 'serviceSharedValueHandledMessage'
 
 // The CO-OWNED half: this frame owns a reference, but not provably the only one. Both arrivals are named
 // because the cure differs between them — a second reference taken HERE is one the author can see and remove,
@@ -1303,7 +1306,7 @@ module function buildServiceRequestUnion(signatures ProgramSignatures, typeName 
 	// nothing declares what `shutdown` hands back — so the slot is filled and completed and never read. See
 	// there for the argument; a uniform variant shape is what this file owes, not a reachable reply.
 	var shutdownPayloads = PayloadFieldArray.create()
-	shutdownPayloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
+	shutdownPayloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
 	addServiceRequestCase(request, caseName: ServiceShutdownCaseName, payloads: shutdownPayloads)
 
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
@@ -1328,15 +1331,15 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
 		let paramName = serviceParamName(decl, index: p)
 		let slotType = serviceParamSlotType(signatures, declared: declared, into: into, declFilePath: declFilePath)
-		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
+		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
 
 		if maxonTypeTag(slotType) == ValueTypeTag.interfaceRef 'aFatPointer'
-			payloads.push(PayloadField.create(serviceWitnessHalfSlotName(paramName), declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
+			payloads.push(PayloadField.create(serviceWitnessHalfSlotName(paramName), declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
 		end 'aFatPointer'
 	end 'eachParam'
 
 	if serviceMessageHasAReply(signatures, key: key, decl: decl) 'awaitable'
-		payloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText))
+		payloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
 	end 'awaitable'
 
 	return payloads
@@ -1655,8 +1658,8 @@ end 'serviceDeclaresMessage'
 // `shutdown` and `clone`. `serviceHandleAdmits` below is the same roster asked about ONE name, and
 // `Parser.dispatchOnServiceHandle` has an arm per entry. The editor's offer set and the compiler's admit
 // set are one fact, so a fourth thing a handle accepts is owed to all three.
-module function serviceHandleSurface(request EnumLayout) returns ByteArrayArray
-	var surface = ByteArrayArray.create()
+module function serviceHandleSurface(request EnumLayout) returns NameRoster
+	var surface = NameRoster.create()
 
 	for index in 0 upto request.caseCount() 'eachVariant'
 		if index == ServiceShutdownCaseIndex 'theCompilersOwnPill'
@@ -1691,7 +1694,7 @@ module union ServiceArm
 	shutdownPill
 
 	// Every other variant calls the message it is named after.
-	message(callee ByteArray)
+	message(let callee ByteArray)
 end 'ServiceArm'
 
 module function serviceArmAt(request EnumLayout, typeName ByteArray, caseIndex CaseIndex) returns ServiceArm
@@ -1706,9 +1709,9 @@ end 'serviceArmAt'
 // switch has an arm per variant, so a message nobody sends is still called — and `DeadFunctionElimination`
 // reaches it through the `funcAddr` the `spawn` lowers to. `StdlibSource`'s walk runs before the loop exists
 // and credits the `spawn` with this list instead.
-module function serviceLoopHandlerCallees(signatures ProgramSignatures, typeName ByteArray) returns ByteArrayArray
+module function serviceLoopHandlerCallees(signatures ProgramSignatures, typeName ByteArray) returns NameRoster
 	let request = requireServiceRequestLayout(signatures, typeName: typeName)
-	var callees = ByteArrayArray.create()
+	var callees = NameRoster.create()
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
 		match serviceArmAt(request, typeName: typeName, caseIndex: caseIndex) 'arm'
@@ -1728,11 +1731,11 @@ end 'serviceLoopHandlerCallees'
 // come from one derivation, so a live type cannot be on one list and not the other — a handle whose
 // loop nothing built (a link failure) or a loop for a type with no request union (a panic inside
 // the synthesis).
-module function serviceTypeRoster(signatures ProgramSignatures) returns ByteArrayArray
+module function serviceTypeRoster(signatures ProgramSignatures) returns NameRoster
 	return serviceRosterOf(signatures, liveOnly: true)
 end 'serviceTypeRoster'
 
-module function serviceCompanionRoster(signatures ProgramSignatures) returns ByteArrayArray
+module function serviceCompanionRoster(signatures ProgramSignatures) returns NameRoster
 	return serviceRosterOf(signatures, liveOnly: false)
 end 'serviceCompanionRoster'
 
@@ -1740,30 +1743,16 @@ end 'serviceCompanionRoster'
 // and one service. The mint still asks the registry as well, for the reason its own comment gives;
 // this makes the LOOP builder — which has no registry to collide with — correct by construction.
 //
-// ⛔⛔ **IT RETURNS NAMES, AND THAT IS FORCED BY THE BORROW RULE RATHER THAN CHOSEN.** Minting inside
-// the walk mutates `signatures` while `candidate` is an element BORROWED out of it: **`E3070:
-// cannot mutate 'signatures' via 'recordServiceCompanions' while it is borrowed by 'candidate'`**.
-// The same shape `ProgramSignatures.rewriteRecordedReturnTypes` states once for all three of its
-// rules: a pass that rewrites the very map it walks collects first. Copying the names first ends
-// the aliasing before any write happens.
-function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns ByteArrayArray
-	var services = ByteArrayArray.create()
+// ⛔ **IT RETURNS NAMES**: the mint writes `signatures`, whose candidate list this walk iterates, and
+// rewriting a container mid-walk is the one shape a `for … in` promises nothing about
+// (`ProgramSignatures.rewriteRecordedReturnTypes` collects first for the same reason).
+function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns NameRoster
+	var services = NameRoster.create()
 
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
-		if liveOnly and not signatures.spawnGateIsOpen(candidate.gate) 'aDefaultNothingBuilds'
+		if not candidateStartsAService(signatures, candidate: candidate, liveOnly: liveOnly) 'notAService'
 			continue
-		end 'aDefaultNothingBuilds'
-
-		match classifyServiceTarget(signatures, typeName: candidate.typeName, member: candidate.member) 'verdict'
-			// Refused at the `spawn` by `Parser.parseSpawn`, which asks this same classification. Nothing is
-			// minted for any of them — see this file's header for why the sweep never reports.
-			typeIsNotAStruct or
-			memberIsNotDeclared or
-			memberTakesAReceiver or
-			memberDoesNotReturnTheType or
-			typeIsAConstrainedGeneric then continue
-			startsAService then break
-		end 'verdict'
+		end 'notAService'
 
 		if serviceNameAlreadyListed(services, typeName: candidate.typeName) 'aSecondSpawnOfOneType'
 			continue
@@ -1775,10 +1764,27 @@ function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns By
 	return services
 end 'serviceRosterOf'
 
+function candidateStartsAService(signatures ProgramSignatures, candidate ServiceSpawnCandidate, liveOnly bool) returns bool
+	if liveOnly and not signatures.spawnGateIsOpen(candidate.gate) 'aDefaultNothingBuilds'
+		return false
+	end 'aDefaultNothingBuilds'
+
+	return match classifyServiceTarget(signatures, typeName: candidate.typeName, member: candidate.member) 'verdict'
+		// Refused at the `spawn` by `Parser.parseSpawn`, which asks this same classification. Nothing is
+		// minted for any of them — see this file's header for why the sweep never reports.
+		typeIsNotAStruct or
+		memberIsNotDeclared or
+		memberTakesAReceiver or
+		memberDoesNotReturnTheType or
+		typeIsAConstrainedGeneric gives false
+		startsAService gives true
+	end 'verdict'
+end 'candidateStartsAService'
+
 // A linear scan, because the list is the number of DISTINCT SERVICE TYPES a program declares — one or two in
 // every program that has any — and a `Set with ByteArray` would cost a hash per candidate to beat a compare
 // against a list that short.
-function serviceNameAlreadyListed(services ByteArrayArray, typeName ByteArray) returns bool
+function serviceNameAlreadyListed(services NameRoster, typeName ByteArray) returns bool
 	for listed in services 'each'
 		if listed.equals(typeName) 'found'
 			return true
@@ -1930,9 +1936,9 @@ end 'buildInterfaceRequestUnion'
 // The recorded representative first, then every other implementer on `serviceCompanionRoster` — the roster
 // `MailboxRuntime.installInterfaceHandleConversions` builds conversions over, so the services a send is
 // vetted against are exactly the services its handle can convert to.
-module function interfaceServiceImplementers(signatures ProgramSignatures, interfaceName ByteArray) returns ByteArrayArray
+module function interfaceServiceImplementers(signatures ProgramSignatures, interfaceName ByteArray) returns NameRoster
 	let recorded = signatures.interfaceHandleRepresentative(interfaceName)
-	var implementers = ByteArrayArray.create()
+	var implementers = NameRoster.create()
 	implementers.push(recorded)
 
 	for service in serviceCompanionRoster(signatures) 'eachService'

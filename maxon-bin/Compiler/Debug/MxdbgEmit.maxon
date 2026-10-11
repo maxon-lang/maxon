@@ -64,7 +64,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 		end 'itsIr'
 	end 'eachFunctionsTypes'
 
-	types.writeInto(writer, spellings: project.stdlibShadowSpellings)
+	types.writeInto(writer, spellings: project.shadowRoster.spellings)
 
 	let provenance = SidecarProvenance.of(signatures)
 
@@ -675,16 +675,18 @@ typealias SidecarTestNameMap = Map with (ByteArray, String)
 
 type SidecarProvenance
 	let tests as SidecarTestNameMap
-	let spellings as StdlibShadowSpellingArray
+	let roster as ShadowSpellingRoster
 
 	static function of(signatures ProgramSignatures) returns SidecarProvenance
 		var tests = SidecarTestNameMap.create()
 
-		for declared in signatures.settled.declaredTests 'eachTest'
+		for declared in signatures.settledDeclarations().declaredTests 'eachTest'
 			tests.upsert(declared.symbol, value: testDisplayName(declared.displayName))
 		end 'eachTest'
 
-		return Self{tests: tests, spellings: signatures.shadowSpellings()}
+		let roster = signatures.shadowRoster()
+
+		return Self{tests: tests, roster: roster}
 	end 'of'
 
 	function originOf(project Project, name ByteArray, sourceFile FilePath) returns MxdbgOrigin
@@ -712,7 +714,7 @@ type SidecarProvenance
 	end 'originOf'
 
 	function displayNameOf(name ByteArray) returns String
-		return try self.tests.get(name) otherwise String.from(authorSpelledName(name, spellings: self.spellings))
+		return try self.tests.get(name) otherwise String.from(authorSpelledName(name, spellings: self.roster.spellings))
 	end 'displayNameOf'
 
 	function originOfChunk(project Project, lookup MxdbgIrLookup, name ByteArray) returns MxdbgOrigin

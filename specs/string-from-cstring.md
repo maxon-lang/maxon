@@ -14,7 +14,9 @@ crossing of the boundary between text and a raw byte pointer. It is how an answe
 intrinsic **declared to return `cstring`** becomes something a program can read.
 
 It forwards to `__ManagedMemory.fromCString(cstr)` — the surface's second static, beside `create` — which
-the compiler lowers to `__mm_from_cstring` (`StringRuntime.buildMmFromCString`).
+the compiler lowers to `__mm_from_cstring` (`StringRuntime.buildMmFromCString`). A `cstring`, `cstr()` and
+`__ManagedMemory` are library-tier: only a source file under `stdlib/` or `runtime/` may name them, so every
+case below compiles as a library-tier source (`<!-- tier: stdlib -->`).
 
 ### ⭐ IT COPIES, AND IT HAS TO
 
@@ -37,6 +39,7 @@ why bytes that may hold a zero travel as a `ByteArray` through `String.from(byte
 ## Tests
 
 <!-- test: round-trips-a-literal -->
+<!-- tier: stdlib -->
 The simplest crossing there is: bytes out to a pointer, bytes back into a `String`. A String LITERAL's
 blob is NUL-terminated in `.rdata` by construction, so `cstr()` hands back the blob untouched and this
 case exercises the read side alone.
@@ -56,6 +59,7 @@ hello, world len=12
 ```
 
 <!-- test: round-trips-a-packed-receiver -->
+<!-- tier: stdlib -->
 ⭐ The other `cstr()` path, so this feature is measured against BOTH of them. A first `append` onto `""`
 leaves `capacity == length`, the shape whose terminator slot the record cannot vouch for — so the source
 is grown and terminated in place before its pointer is taken (`specs/string-cstr.md` owns that half).
@@ -78,6 +82,7 @@ packed tight len=12
 ```
 
 <!-- test: the-result-is-independent-of-its-source -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE CASE THAT SAYS IT COPIED.** A view over the source's buffer would pass both cases above and fail
 this one: the source is mutated hard enough to REALLOCATE after the conversion, and a `String` still
 reading the old block would print rubbish or fault. It prints what it was built from.
@@ -101,6 +106,7 @@ owner=original-and-then-a-great-deal-more-so-the-buffer-moves
 ```
 
 <!-- test: an-empty-source-round-trips-to-an-empty-string -->
+<!-- tier: stdlib -->
 The degenerate length. `strlen` finds its terminator at offset 0, so the walk never runs and the record is
 built with a zero-byte buffer — the shape most likely to be an off-by-one somewhere, and the reason it has
 a case rather than being assumed to follow from the others.
@@ -119,6 +125,7 @@ end 'main'
 ```
 
 <!-- test: it-stops-at-an-embedded-nul -->
+<!-- tier: stdlib -->
 ⛔ **THE TRUNCATION, PINNED AS THE RULE IT IS.** `"a\0b"` is three bytes of `String`; through a pointer it
 is one. Pinning it here is what stops a later reader from treating the loss as a bug and "fixing" it by
 carrying a length a `cstring` does not have.
@@ -138,6 +145,7 @@ source=3 round=1
 ```
 
 <!-- test: the-managed-memory-static-is-reachable-directly -->
+<!-- tier: stdlib -->
 The layer underneath, asked without the `String` wrapper — because that is where the mechanism actually
 lives, and a case that only ever reaches it through `stdlib/String.maxon` could not tell a broken static
 from a broken forwarder.
@@ -156,6 +164,7 @@ through the static
 ```
 
 <!-- test: error-unknown-managed-memory-static -->
+<!-- tier: stdlib -->
 The refusal that names the surface. It renders both statics from the very constants their arms are parsed
 with, so the sentence cannot come to disagree with the dispatch — and it tells a reader that
 `createCursor` is not unbuilt but MISFILED, which is the cure they can actually apply. Both references

@@ -92,7 +92,7 @@ export type TestFileGroup
 	// carries the file's run-wide ordinal, so no two of them are ever equal. The declared spelling is
 	// therefore the callable spelling, from the entry file as from anywhere.
 	export let runnerName as String
-	export let tests as IndexedTestArray
+	export var tests as IndexedTestArray
 
 	export static function create(file FilePath, runnerName String, tests IndexedTestArray) returns TestFileGroup
 		return Self{file: file, runnerName: runnerName, tests: tests}
@@ -108,13 +108,13 @@ export type StagedTestBuild
 	// (`Compiler.loadSourceFiles`) — and the root rides along at the end to FIX the project root, exactly as
 	// `SpecTestRunner.stageSourceFiles` does and for its reason: with one file named, `commonAncestorOf`
 	// would answer that FILE, and every namespace and every `__file__` would be measured from it.
-	export let buildTargets as MaxonSourcePathArray
+	export var buildTargets as MaxonSourcePathArray
 
 	// The subset of those this compiler WROTE, each with the reserved names it minted there — handed to
 	// `Compiler.compileToProduct` as `compilerWrittenSources`, which is what lets those names be DECLARED
 	// and lets the generated code CALL `__` names at all. A `.maxtest` copy that got no dispatcher is
 	// NOT in here: its bytes are the author's, unchanged.
-	export let compilerWrittenSources as CompilerWrittenSourceArray
+	export var compilerWrittenSources as CompilerWrittenSourceArray
 
 	// ⭐⭐ **WHICH OF THOSE ARE COPIES, AND OF WHOSE FILES** — handed to
 	// `Compiler.compileToProduct` as `stagedSourceOrigins`, which is what makes a compile error name the
@@ -125,7 +125,7 @@ export type StagedTestBuild
 	// ⛔ The generated entry file is deliberately ABSENT. It is not a copy of anything, so there is no
 	// author's file to name — a diagnostic there is a bug in what this compiler wrote, and the staged
 	// path is the only spelling that lets a reader open the text that failed.
-	export let stagedSourceOrigins as StagedSourceOriginArray
+	export var stagedSourceOrigins as StagedSourceOriginArray
 
 	// Where the staged tree is rooted — the test build's project root.
 	export let root as FilePath
@@ -314,7 +314,7 @@ function stageOneSource(build GeneratedBuild, source FilePath, stagedPath FilePa
 	// runner, so a group always mints exactly the one name.
 	match groupOfFile(groups, file: source) 'holdsTests'
 		found(group) then try build.addSource(stagedPath, content: "{content}{fileDispatcherSource(group)}", mintedNames: mintedNamesForDispatcher(group))
-		absent then try build.addSource(stagedPath, content: content, mintedNames: ByteArrayArray.create())
+		absent then try build.addSource(stagedPath, content: content, mintedNames: NameRoster.create())
 	end 'holdsTests'
 
 	build.recordOrigin(StagedSourceOrigin.create(stagedPath, reportedPath: source))
@@ -324,8 +324,8 @@ end 'stageOneSource'
 // a second time.** One name: the per-file runner. It is spelled from `TestFileGroup.runnerName`, which is
 // also what `fileDispatcherSource` declares and what `entrySource` calls, so the declaration door cannot
 // come to admit a spelling the generator has stopped producing.
-function mintedNamesForDispatcher(group TestFileGroup) returns ByteArrayArray
-	var names = ByteArrayArray.create()
+function mintedNamesForDispatcher(group TestFileGroup) returns NameRoster
+	var names = NameRoster.create()
 	names.push(group.runnerName.toByteArray())
 	return names
 end 'mintedNamesForDispatcher'
@@ -336,8 +336,8 @@ end 'mintedNamesForDispatcher'
 // ⚠ Its non-reserved members (`selection`, `selected`, `began`, `ended`) are deliberately absent: this
 // list answers ONE question — which `__` names the declaration door must admit — and a name no rule refuses
 // has nothing to be admitted from.
-function mintedNamesForEntry() returns ByteArrayArray
-	var names = ByteArrayArray.create()
+function mintedNamesForEntry() returns NameRoster
+	var names = NameRoster.create()
 	names.push(MaxonTestIndexAlias.toByteArray())
 	names.push(MaxonTestHelperType.toByteArray())
 	names.push(MaxonTestEntrySymbol.toByteArray())
@@ -381,8 +381,6 @@ function fileDispatcherSource(group TestFileGroup) returns String
 	return source
 end 'fileDispatcherSource'
 
-// `useWireFormat` is called once, first, before anything can report: the contract
-// `stdlib/Testing.maxon` states, and why the format is an argument rather than a stdlib constant.
 function entrySource(groups TestFileGroupArray) returns String
 	requireTestBinaryExitsAreItsOwn()
 
@@ -409,7 +407,6 @@ function entrySource(groups TestFileGroupArray) returns String
 	source.append("end '{MaxonTestHelperType}'\n\n")
 
 	source.append("export function {MaxonTestEntrySymbol}() returns ExitCode\n")
-	source.append("\t__TestReport.useWireFormat(\"{TestProtocolWrapper}\", separator: \"{TestProtocolSeparatorInMaxonSource}\")\n")
 	source.append("\tlet selection = {MaxonTestHelperType}.selection()\n")
 	source.append("\tvar {EveryTestPassedLocal} = true\n\n")
 

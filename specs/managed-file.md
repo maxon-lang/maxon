@@ -13,6 +13,11 @@ category: type-system
 
 `__ManagedFile` is a compiler builtin type that wraps a Windows file HANDLE with automatic cleanup via a destructor when the last reference goes out of scope: a managed, RAII-based file API.
 
+`__ManagedFile` is library-tier, like the `__ManagedMemory` values its path and buffer arguments are: only a
+source file under `stdlib/` or `runtime/` may name the type or call its statics (E3185 anywhere else).
+`stdlib/File.maxon` is built on it, and a program uses `File`; the cases below that drive it directly
+compile in the library tier (`<!-- tier: stdlib -->`).
+
 ### Type Structure
 
 `__ManagedFile` has a single field:
@@ -70,6 +75,7 @@ end
 ## Tests
 
 <!-- test: managed-file.open-read-nonexistent -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedFile.openRead("nonexistent_file_xyz_98765.txt".toByteArray().managed) otherwise 'notFound'
@@ -87,6 +93,7 @@ not found
 ```
 
 <!-- test: managed-file.write-and-read -->
+<!-- tier: stdlib -->
 ```maxon
 enum TestFileError implements Error
 	openFailed
@@ -172,6 +179,7 @@ Hello Managed
 ```
 
 <!-- test: managed-file.exists -->
+<!-- tier: stdlib -->
 ```maxon
 enum TestFileError implements Error
 	openFailed
@@ -220,6 +228,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.delete-nonexistent -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedFile.delete("nonexistent_delete_xyz.txt".toByteArray().managed) otherwise 'checkFail'
@@ -237,6 +246,7 @@ delete failed as expected
 ```
 
 <!-- test: managed-file.auto-close -->
+<!-- tier: stdlib -->
 ```maxon
 enum TestFileError implements Error
 	openFailed
@@ -293,6 +303,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.open-read-not-found-variant -->
+<!-- tier: stdlib -->
 
 The errno→variant mapping ensures that opening a path that does not exist
 routes to the `notFound` arm (rather than the catch-all `openFailed`).
@@ -316,6 +327,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.delete-not-found-variant -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -333,6 +345,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.stat-not-found-variant -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	var result = 0
@@ -350,6 +363,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.error-direct-construction -->
+A program outside the library tiers cannot name the type at all, so the construction is refused at the name.
 ```maxon
 function main() returns ExitCode
 	let f = __ManagedFile{_handle: 0}
@@ -357,10 +371,25 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3072: specs/managed-file/managed-file.error-direct-construction.maxon:3:24: '__ManagedFile' is a compiler builtin type and cannot be constructed directly
+error E3185: <fragment>:3:10: '__ManagedFile' named outside the library tiers: the raw OS file handle type is nameable only from a source file under stdlib/ or runtime/ — use 'File'
+```
+
+<!-- test: managed-file.error-direct-construction-in-the-library-tier -->
+<!-- tier: stdlib -->
+Library code may name the type, and still cannot build one from a literal: a handle comes only from an
+`open*` static.
+```maxon
+function main() returns ExitCode
+	let f = __ManagedFile{_handle: 0}
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3072: <fragment>:3:24: '__ManagedFile' is a compiler builtin type and cannot be constructed directly
 ```
 
 <!-- test: managed-file.unknown-instance-method-is-refused-by-name -->
+<!-- tier: stdlib -->
 This case pins the instance-method DISPATCHER.
 
 The instance surface is exactly five methods (`size`/`read`/`readAppending`/`write`/`close`), so anything else is refused
@@ -390,6 +419,7 @@ error E2015: <fragment>:6:12: Unsupported: `__ManagedFile` method 'seek' — the
 ```
 
 <!-- test: managed-file.rename-round-trip -->
+<!-- tier: stdlib -->
 `rename` is the ONLY one of the thirteen methods that no other case reaches SUCCESSFULLY at the builtin
 level: `specs/file-io.md` goes through `File.rename`, whose signature takes a `FilePath`, and
 `specs/void-call-result.md` calls it only on a missing file. This case pins the builtin-level round trip
@@ -435,6 +465,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.open-create-new-refuses-an-existing-path -->
+<!-- tier: stdlib -->
 `openCreateNew` creates a file that does not exist, and a second `openCreateNew` of the same path throws and
 leaves the first file's bytes in place.
 ```maxon
@@ -481,6 +512,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.open-create-new-of-an-existing-path-throws-already-exists -->
+<!-- tier: stdlib -->
 The refusal of an existing path is the `alreadyExists` case, not the catch-all `openFailed`.
 ```maxon
 function main() returns ExitCode
@@ -508,6 +540,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.read-appending-continues-after-the-live-length -->
+<!-- tier: stdlib -->
 Two `readAppending` calls fill one buffer end to end: the second lands after the bytes the first left, and
 each grows the buffer's length by what it read.
 ```maxon
@@ -540,6 +573,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.read-appending-past-the-capacity-is-refused -->
+<!-- tier: stdlib -->
 A `readAppending` whose bytes would run past the buffer's capacity is `readFailed`, and reads nothing.
 ```maxon
 function main() returns ExitCode
@@ -569,6 +603,7 @@ end 'main'
 ```
 
 <!-- test: error.managed-file.read-appending-into-a-buffer-of-wider-elements-is-refused -->
+<!-- tier: stdlib -->
 `readAppending` grows the buffer's length by the bytes it read, and a length counts elements, so only a byte
 buffer is accepted: a buffer of wider elements is refused where it is passed.
 ```maxon
@@ -585,6 +620,7 @@ error E3005: <fragment>:5:18: argument type mismatch for 'managed': expected '__
 ```
 
 <!-- test: managed-file.a-file-held-open-for-reading-can-be-rewritten-and-deleted -->
+<!-- tier: stdlib -->
 A read handle shares the file with every other open: while one is held, the same path can be opened for
 writing, written, and deleted.
 ```maxon
@@ -621,6 +657,7 @@ end 'main'
 ```
 
 <!-- test: managed-file.stat-round-trip -->
+<!-- tier: stdlib -->
 This is the case that reaches a SUCCESSFUL `stat` at the builtin level. Every other successful
 `stat` goes through `File.info`, and `stat-not-found-variant` throws before a buffer exists.
 
@@ -689,6 +726,7 @@ dirIsDirectory=1
 ```
 
 <!-- test: managed-file.open-read-without-try -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 
 ⭐ **E3057 MUST NAME THE CONSTRUCT THE AUTHOR WROTE (D12).** `openRead` throws, so a bare call branches on
@@ -709,6 +747,7 @@ error E3057: specs/managed-file/managed-file.open-read-without-try.maxon:3:6: th
 ```
 
 <!-- test: managed-file.open-write-executable-without-try -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 
 ⭐⭐ **THE CALLEE NAMES THE METHOD THAT WAS WRITTEN.** A POSIX lane makes the 0755 bit OBSERVABLE — an
@@ -727,6 +766,7 @@ error E3057: specs/managed-file/managed-file.open-write-executable-without-try.m
 ```
 
 <!-- test: managed-file.read-into-a-non-owned-buffer-is-refused -->
+<!-- tier: stdlib -->
 
 ⛔⛔ **A `read` IS A WRITE INTO THE CALLER'S BUFFER, AND A BUFFER THE RECORD DOES NOT OWN IS REFUSED —
 NOT FILLED.** A zero-copy view, an `.rdata` byte-string blob, an inline String and an immortal record all
@@ -804,6 +844,7 @@ within=999 over=999 parent=65,68
 ```
 
 <!-- test: managed-file.read-bound-is-the-owned-capacity -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE CONTROL THAT MAKES THE REFUSAL ABOVE MEAN SOMETHING.** "A read into a non-owned buffer throws" is
 satisfied just as well by a guard that throws on EVERY buffer, so the owned path has to be pinned beside it:
@@ -861,6 +902,7 @@ at=4 first=48 over=999
 ```
 
 <!-- test: error.a-managed-memory-parameter-mismatch-names-managed-memory -->
+<!-- tier: stdlib -->
 A bare `__ManagedMemory` parameter holds the library's `Byte`. A buffer over a `Byte` the program declares
 is another type, and the refusal names the parameter's side as `__ManagedMemory` over `stdlib.Byte`, not
 through any alias the program wrote for its own buffer.

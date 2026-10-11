@@ -75,9 +75,14 @@ pin one half each.
 position and unknown member are decided in the front end, are target-neutral, and carry NO marker. See
 `async-scheduler.md`'s *Targets* section for the one statement of the substrate gate.
 
+Every `__Builtins` member is library-tier: only a source file under `stdlib/` or `runtime/` may call one,
+and a call from anywhere else is E3185. The cases below call the intrinsics themselves, so they compile in
+the library tier (`<!-- tier: stdlib -->`). A program calls `sleep(ms)`.
+
 ## Tests
 
 <!-- test: builtins-sleep.statement-position -->
+<!-- tier: stdlib -->
 A void wrapper shaped exactly like `stdlib/Sleep.maxon` — one `__Builtins.sleep(…)` statement and
 nothing else — compiles, and the sleep is OBSERVABLE: the elapsed time measured across it with
 stdlib's `Clock` is at least most of the requested duration. Two stdlib-loading mechanisms in one
@@ -104,6 +109,7 @@ end 'main'
 ```
 
 <!-- test: builtins-sleep.value-position-rejected -->
+<!-- tier: stdlib -->
 `sleep` returns nothing, so reading its result is reading a value that is not there — the same
 rejection a void user-call gets, quoting the QUALIFIED name the user wrote.
 ```maxon
@@ -117,6 +123,7 @@ error E2004: <fragment>:3:27: Function '__Builtins.sleep' does not return a valu
 ```
 
 <!-- test: builtins-sleep.arity-rejected -->
+<!-- tier: stdlib -->
 An intrinsic has no signature registry entry for the ordinary arity check to consult, so the arity is
 enforced at the emit — and the diagnostic quotes what the user wrote, not the bare spelling.
 ```maxon
@@ -130,6 +137,7 @@ error E3036: <fragment>:3:13: '__Builtins.sleep' takes exactly 1 argument, but 0
 ```
 
 <!-- test: builtins-sleep.float-arg-rejected -->
+<!-- tier: stdlib -->
 The duration is an integer count of milliseconds; a float is refused, by the SAME operand rule the
 bare `sleep(1.5)` is refused by (`async-sleep.float-arg-rejected`) — one emit, so the two spellings
 cannot drift apart on what they accept. ⚠ The two differ in WHICH refusal arrives FIRST off
@@ -147,6 +155,7 @@ error E3005: <fragment>:3:13: '__Builtins.sleep' requires a integer, but its arg
 ```
 
 <!-- test: builtins-sleep.unknown-member-in-statement-position -->
+<!-- tier: stdlib -->
 The statement door admits a SHAPE, not a name list: an unrecognized `__Builtins` member written on a
 line of its own reaches the same reserved-callee rejection it gets in expression position, rather than
 the shape-level `E2015`.
@@ -161,6 +170,7 @@ error E3004: <fragment>:3:13: call to undefined function '__Builtins.nope': the 
 ```
 
 <!-- test: builtins-sleep.rejected-on-wasm -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 wasm32-wasi has no green-thread sleep substrate, so the call is refused at its source span with
 `E3104`, naming the runtime entry that has no lowering there — never a panic from inside the wasm
@@ -176,8 +186,9 @@ error E3104: <fragment>:3:13: this construct lowers to the runtime entry '__gt_s
 ```
 
 <!-- test: builtins-sleep.rejected-on-wasm-when-unreached -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The gate is REACHABILITY-BLIND for user code: `napper` is never called, yet its intrinsic is still refused.
+The gate is REACHABILITY-BLIND for the program's own source — a library-tier case's files included, because a project rooted under `stdlib/` keeps its own files as the program's rather than recording them as library source (`StdlibLoader.setAsideTheUsersOwnLibraryFiles`): `napper` is never called, yet its intrinsic is still refused.
 `SemanticCheck` visits every function and dead-function elimination runs two tiers later, so this is the
 same rule that reports a type error in an unreached function. Pinned because the stdlib loader's own
 exemption (`checkCalls` skips an unreached stdlib body) points the other way, and it is the INTRINSIC that

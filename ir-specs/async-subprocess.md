@@ -7,12 +7,13 @@ category: concurrency
 
 # Subprocess — spawn a child and yield while it runs: the cases that pin emitted code
 
-The cases of `specs/async-subprocess.md` whose subject is the emitted code. Each pins the Target IR its program compiles to, on every native lane that runs it.
+The cases of `specs/async-subprocess.md` whose subject is the emitted code. Each pins the Target IR its program compiles to, on every native lane that runs it. `__Builtins.runProcess` is callable only from a source file under `stdlib/` or `runtime/` (E3185), so the case compiles in the library tier (`<!-- tier: stdlib -->`).
 
 ## Tests
 
 <!-- test: async-subprocess.posix-an-already-exited-child-gets-no-record -->
 <!-- unsupported-targets: x64-windows -->
+<!-- tier: stdlib -->
 ⛔⛔ **`-ESRCH` IS AN ANSWER, NOT A DESCRIPTOR, AND IT MUST NEVER REACH THE RECORD TABLE.** Its neighbour
 above pins that an already-exited child is reaped rather than refused; this one pins the road the refusal
 travels. `__np_child_open` answers the negative errno, and the open RETURNS on that edge; callers see

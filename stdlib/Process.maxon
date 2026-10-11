@@ -39,6 +39,8 @@ end 'ProcessIntrospectionError'
 // cstring entry contains. `SubprocessRuntime.SubpEnvUnreadableByte` is the producer's half.
 let EnvironmentUnreadableByte = 0
 
+public typealias BackgroundPriority = int(i64.min to i64.max)
+
 /// Information about the currently-running process.
 public type Process
 	/// Returns the absolute path to the current executable.
@@ -49,6 +51,28 @@ public type Process
 		let path = String.init(managed)
 		return try FilePath.from(path) otherwise throw ProcessIntrospectionError.pathUnavailable
 	end 'executablePath'
+
+	/// This process's id.
+	public static function id() returns Pid
+		return __Builtins.currentProcessId()
+	end 'id'
+
+	/// The name of the pid space this process belongs to, empty when the host cannot say.
+	public static function namespace() returns String
+		return String.init(__Builtins.processNamespace())
+	end 'namespace'
+
+	/// True while a process with id `pid` exists, false once it has ended and been reaped.
+	public static function isAlive(pid Pid) returns bool
+		return __Builtins.processIsAlive(pid)
+	end 'isAlive'
+
+	/// Put this process at background scheduling priority and answer the priority the OS then
+	/// reports: a priority class on Windows, a nice value under POSIX. Processes spawned afterwards
+	/// inherit it.
+	public static function enterBackgroundPriority() returns BackgroundPriority
+		return __Builtins.enterBackgroundPriority()
+	end 'enterBackgroundPriority'
 
 	/// The value of `name` in this process's own environment, or `variableUnset` when nothing carries
 	/// it. Throws `environmentUnreadable` when the environment cannot be read at all.

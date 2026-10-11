@@ -317,6 +317,7 @@ end 'main'
 ```
 
 <!-- test: sizeof.a-plain-managed-field-is-still-a-pointer -->
+<!-- tier: stdlib -->
 ### Without the marker, `managed` is an ordinary pointer field
 
 The negative control, and it is the reason the rule is keyed on the CONFORMANCE and not on the field

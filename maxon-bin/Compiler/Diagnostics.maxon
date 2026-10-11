@@ -131,7 +131,7 @@ end 'StdlibShadowSpelling'
 export typealias StdlibShadowSpellingArray = Array with StdlibShadowSpelling
 
 // @generated library-cache begin
-module function cacheWriteStdlibShadowSpellingArray(writer LibraryCacheWriter, value StdlibShadowSpellingArray)
+function cacheWriteStdlibShadowSpellingArray(writer LibraryCacheWriter, value StdlibShadowSpellingArray)
 	writer.unsigned(value.count() as CacheUnsigned)
 
 	for item in value 'eachItem'
@@ -139,7 +139,7 @@ module function cacheWriteStdlibShadowSpellingArray(writer LibraryCacheWriter, v
 	end 'eachItem'
 end 'cacheWriteStdlibShadowSpellingArray'
 
-module function cacheReadStdlibShadowSpellingArray(reader LibraryCacheReader) returns StdlibShadowSpellingArray throws LibraryCacheDamage
+function cacheReadStdlibShadowSpellingArray(reader LibraryCacheReader) returns StdlibShadowSpellingArray throws LibraryCacheDamage
 	let count = try reader.count()
 	var result = StdlibShadowSpellingArray.create()
 	result.reserve(count)
@@ -168,6 +168,67 @@ export typealias ShadowRespellingArray = Array with ShadowRespelling
 export typealias ShadowRespellingsOf = function(FilePath) returns ShadowRespellingArray
 
 export typealias WrittenMintSet = Set with ByteArray
+
+// @generated library-cache begin
+function cacheWriteWrittenMintSet(writer LibraryCacheWriter, value WrittenMintSet)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.bytes(item)
+	end 'eachItem'
+end 'cacheWriteWrittenMintSet'
+
+function cacheReadWrittenMintSet(reader LibraryCacheReader) returns WrittenMintSet throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = WrittenMintSet.create()
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.bytes()
+		result.insert(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadWrittenMintSet'
+
+// @generated library-cache end
+
+export type ShadowSpellingRoster
+	export let spellings as StdlibShadowSpellingArray
+	export let mints as WrittenMintSet
+
+	export static function of(spellings StdlibShadowSpellingArray) returns ShadowSpellingRoster
+		var mints = WrittenMintSet.create()
+
+		for spelling in spellings 'eachSpelling'
+			mints.insert(spelling.minted)
+		end 'eachSpelling'
+
+		return Self{spellings: spellings, mints: mints}
+	end 'of'
+
+	export static function none() returns ShadowSpellingRoster
+		return Self{spellings: StdlibShadowSpellingArray.create(), mints: WrittenMintSet.create()}
+	end 'none'
+
+	// @generated library-cache begin
+	module function cacheWrite(writer LibraryCacheWriter)
+		cacheWriteStdlibShadowSpellingArray(writer, value: self.spellings)
+		cacheWriteWrittenMintSet(writer, value: self.mints)
+	end 'cacheWrite'
+
+	module static function cacheRead(reader LibraryCacheReader) returns ShadowSpellingRoster throws LibraryCacheDamage
+		let f_spellings = try cacheReadStdlibShadowSpellingArray(reader)
+		let f_mints = try cacheReadWrittenMintSet(reader)
+
+		return Self{spellings: f_spellings, mints: f_mints}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ShadowSpellingRoster) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ShadowSpellingRoster'
 
 module function shadowRespellings(spellings StdlibShadowSpellingArray, reader ShadowSpellingReader, written WrittenMintSet) returns ShadowRespellingArray
 	var respellings = ShadowRespellingArray.create()
@@ -788,7 +849,7 @@ export type DiagnosticSink
 		return Self.to(DiagnosticDestination.discarded)
 	end 'discarding'
 
-	static function to (destination DiagnosticDestination) returns DiagnosticSink
+	static function to(destination DiagnosticDestination) returns DiagnosticSink
 		return Self{destination: destination, capturedLines: CapturedDiagnosticTextArray.create()}
 	end 'to'
 

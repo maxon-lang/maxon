@@ -37,10 +37,10 @@ end 'main'
 | [Core](#overview) | [Core Functions](#core-functions) |
 | [Text](/docs/stdlib/text/#string) | String, Character, Ascii, Unicode, CharacterSet |
 | [Collections](/docs/stdlib/collections/#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
-| [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory |
+| [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](/docs/stdlib/data/#json) | Json, Sha256, Hasher |
-| [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, SharedValue, Random, Math, Primitive Extensions |
+| [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, Math, Primitive Extensions |
 | [Testing](/docs/stdlib/testing/) | Testing |
 | [Build](/docs/stdlib/build/) | Build |
 
@@ -154,7 +154,7 @@ at the call site, rather than failing at run time:
 | Refused on `wasm32-wasi` | Error |
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
-| `Clock`, `WallClock`, `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
+| `Clock`, `WallClock`, `sleep`, every `Scheduler` member but `parallelBoundary` | E3104 |
 | `Log`, `Logger`, `LogSink` and the log handlers: logging runs on services, which need green threads | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
 | `Process.executablePath`, `SharedSegment` | E3104 |
@@ -177,8 +177,35 @@ back, each become U+FFFD.
 
 Files, directory searches and sockets are held by compiler-managed handle types (`__ManagedFile`,
 `__ManagedDirectory`, `__ManagedSocket`) that release the operating-system resource when their last
-reference goes out of scope. Programs use them only through the library types (`File`, `Directory`,
+reference goes out of scope. Programs use them through the library types (`File`, `Directory`,
 `TcpClient`, `TcpListener`); names beginning with `__` are reserved for the compiler and the library.
+
+### The library tier
+
+The raw surface the library is written against belongs to the library tier: a source file under `stdlib/` or
+`runtime/`. Anywhere else each of these is
+[E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier) (see
+[Raw Memory and the Library Tier](/docs/language/memory-model/#raw-memory-and-the-library-tier)):
+
+- every `__Builtins.*` intrinsic;
+- `.managed`, `__ManagedMemory` and `__ManagedMemoryCursor`;
+- `String.cstr()` and `cstring`;
+- `Promise.inner`;
+- the raw handle types `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages` and
+  `__ManagedHandle`.
+
+A program reaches the same facilities through the library:
+
+| Reading or action | API |
+|-------------------|-----|
+| The allocator's counters, levels, census and scavenger | [HeapStats](/docs/stdlib/runtime/#heapstats) |
+| The machine's uptime, a thread's CPU time | `Clock.osTickMs()`, `Clock.threadCpuTicks()` |
+| This process's id, namespace and priority; another process's liveness | `Process.id()`, `Process.namespace()`, `Process.enterBackgroundPriority()`, `Process.isAlive(pid)` |
+| Logical CPUs, scheduler counters, stack size, pinning | `Scheduler.machineCpuCount()`, `Scheduler.counters()`, `Scheduler.currentStackBytes()`, `Scheduler.pinToMachine()` |
+| A float's IEEE 754 bits | `Math.bitsOf(x)`, `Math.fromBits(bits)` |
+| Terminal colour, raw standard input | `Console.stdoutWantsColor()`, `Console.stdin().readBytes(n)` |
+| Whether a promise has finished; the first of several | `p.isComplete()`, `promises.awaitAny()` |
+| Driving or sampling another process | [Debuggee](/docs/stdlib/io/#debuggee), [Sampler](/docs/stdlib/io/#sampler) |
 
 ### The runtime tier
 

@@ -63,7 +63,7 @@
 // would be a second spelling of *"which await blocks this message"*.
 type ServiceBlockingGraph
 	// Node ⇒ the service type's declared name.
-	var serviceNames as ByteArrayArray
+	var serviceNames as NameRoster
 
 	// The edges, as the parallel columns `buildCsr` consumes: `edgeOwners[i]` is the service whose message
 	// blocks, `edgeAwaited[i]` the service it blocks on.
@@ -71,11 +71,11 @@ type ServiceBlockingGraph
 	var edgeAwaited as CsrColumn
 
 	// Per edge: the MESSAGE that blocks, and where the blocking `await` is written.
-	var edgeMessages as ByteArrayArray
+	var edgeMessages as NameRoster
 	var edgeSites as ServiceAwaitSiteArray
 
-	static function create(serviceNames ByteArrayArray) returns ServiceBlockingGraph
-		return Self{serviceNames: serviceNames, edgeOwners: CsrColumn.create(), edgeAwaited: CsrColumn.create(), edgeMessages: ByteArrayArray.create(), edgeSites: ServiceAwaitSiteArray.create()}
+	static function create(serviceNames NameRoster) returns ServiceBlockingGraph
+		return Self{serviceNames: serviceNames, edgeOwners: CsrColumn.create(), edgeAwaited: CsrColumn.create(), edgeMessages: NameRoster.create(), edgeSites: ServiceAwaitSiteArray.create()}
 	end 'create'
 
 	function nodeCount() returns CsrIndex
@@ -310,7 +310,9 @@ function opIsAServiceSend(op MaxonOp) returns bool
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness gives false
+		existentialWitness or
+		holdValue or
+		holdEnd gives false
 	end 'op'
 end 'opIsAServiceSend'
 
@@ -335,22 +337,6 @@ function reportServiceCallCycle(project Project, graph ServiceBlockingGraph, nod
 end 'reportServiceCallCycle'
 
 // The whole sentence: the rule, the ring one hop per line, and the workaround.
-//
-// ⛔⛔ **THE SENTENCE THE PATH HANGS UNDER, AND BOTH OF ITS SPELLINGS WERE WRONG ONCE.**
-//
-// It was a module-level `String` for one build, seeded straight into the accumulator (`var message =
-// ServiceCycleHeadline` over a `String` constant), and **MEASURED: the message ACCUMULATED ACROSS
-// COMPILES.** The second cyclic program in the suite printed the FIRST one's path — file names and all —
-// and the third printed both. A module-level `String` is a lazily-initialized static, a `var` bound to one
-// CO-OWNS its record, and `append` then wrote through into the static.
-//
-// It was then a module-level BYTE literal wrapped in `String.from`, which mints a fresh record per call and
-// fixed that — and **MEASURED: the em-dash came out as an ASCII `-`.** The compiler refuses a non-ASCII codepoint
-// in a byte literal outright (`E1004: Codepoint U+2014 exceeds the byte range 0-255`); the BOOTSTRAP, which
-// compiles this file at stage-1, silently transliterates it. Reported; it is not this file's to fix.
-//
-// ⇒ a `String` literal INSIDE the function, which is the one spelling that is fresh per call (a borrowed
-// `.rdata` literal is promoted to an owned copy at the bind) and carries its own bytes.
 function serviceCallCycleMessage(graph ServiceBlockingGraph, cycle CsrColumn, start CsrIndex) returns String
 	var message = "service call cycle — these messages can deadlock waiting on each other:"
 

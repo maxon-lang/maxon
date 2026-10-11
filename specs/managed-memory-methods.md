@@ -11,6 +11,8 @@ category: dev
 
 `__ManagedMemory` is a compiler builtin type providing heap-backed buffer storage. It has instance methods for element access, mutation, and buffer management, as well as static methods for creation. All element-access and mutation methods perform runtime bounds checking and throw on invalid access.
 
+`__ManagedMemory`, `__ManagedMemoryCursor`, a value's `.managed` buffer, `cstring` and `String.cstr()` are library-tier: only a source file under `stdlib/` or `runtime/` may name them (E3185 anywhere else). Every case below that reaches the buffer compiles in the library tier (`<!-- tier: stdlib -->`); the cases without the marker pin the `Array` surface over it.
+
 ### Instance Methods
 
 - `length()` returns int
@@ -24,8 +26,8 @@ category: dev
 - `clear()` — releases every element and sets the length to 0, keeping the capacity
 - `remove(index)` returns Element — removes the element at `index`, shifting the rest left (throws unless 0 <= index < length)
 - `swap(i, j:)` — exchanges the elements at `i` and `j` (throws unless both are below the length)
-- `shiftRight(index, count)` (throws if index < 0, count < 0 or index + count > capacity)
-- `shiftLeft(index, count)` (throws if index < 1, count < 0 or index + count > capacity)
+- `shiftRight(index, count)` — releases the element at `index + count`, slides `[index, index + count)` up one slot and zeroes slot `index` (throws `shiftOutOfBounds` unless index + count < length, so the top slot it writes is a live one and nothing is ever left past the length)
+- `shiftLeft(index, count)` — releases the element at `index - 1`, slides `[index, index + count)` down one slot and zeroes the slot it vacated (throws if index < 1, count < 0 or index + count > capacity). Both shifts check the range without forming a sum that can overflow
 - `byteAt(index)` returns int (throws `invalidByteRange` unless 0 <= index < length * elementSize)
 - `setByte(index, value)` (throws `invalidByteRange` unless 0 <= index < capacity * elementSize)
 - `append(other)` — append another buffer's data in-place
@@ -145,6 +147,7 @@ end 'main'
 ```
 
 <!-- test: cstring-round-trip -->
+<!-- tier: stdlib -->
 Out and back through a raw pointer. `specs/string-from-cstring.md` owns the conversion's own cases —
 the copy, the empty source, the embedded NUL; this one is here because it is the `__ManagedMemory` surface's
 own round trip, asked without the `String.fromCString` forwarder.
@@ -222,6 +225,7 @@ end 'main'
 ### Bounds checking
 
 <!-- test: bounds-get-oob -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -241,6 +245,7 @@ end 'main'
 ```
 
 <!-- test: bounds-set-oob -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -262,6 +267,7 @@ end 'main'
 ```
 
 <!-- test: bounds-setlength-exceeds-capacity -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -280,6 +286,7 @@ end 'main'
 ```
 
 <!-- test: bounds-byte-oob -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -297,6 +304,7 @@ end 'main'
 ```
 
 <!-- test: bounds-slice-oob -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -318,12 +326,13 @@ end 'main'
 ```
 
 <!-- test: bounds-valid-operations -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	let arr = IntArray.create()
+	var arr = IntArray.create()
 	try arr.managed.grow(8) otherwise panic("grow OOB")
 	try arr.managed.setLength(4) otherwise panic("setLength OOB")
 	try arr.managed.set(0, 10) otherwise panic("set OOB")
@@ -343,6 +352,7 @@ end 'main'
 ```
 
 <!-- test: bounds-negative-index -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -387,6 +397,7 @@ end 'main'
 ```
 
 <!-- test: shrink-setlength-direct-no-leak -->
+<!-- tier: stdlib -->
 Shrink directly through the `__ManagedMemory.setLength` builtin (the path
 `Array.resize` lowers to). Dropping the tail must free those elements.
 ```maxon
@@ -535,6 +546,7 @@ end 'main'
 ```
 
 <!-- test: clear-then-regrow-managed-no-double-free -->
+<!-- tier: stdlib -->
 `clear()` RELEASES the elements; restoring the length back over those slots must not restore
 it over the dead pointers, or the array's destructor decrefs each of them a second time.
 Every regrown slot must read as EMPTY.
@@ -569,6 +581,7 @@ end 'main'
 ```
 
 <!-- test: shrink-then-regrow-managed-no-double-free -->
+<!-- tier: stdlib -->
 The same shape through the SHRINK path rather than `clear`: `truncate(1)` releases the
 two dropped strings, and the length then grows back over their slots. The dropped pointers
 must not reappear.
@@ -603,6 +616,7 @@ kept=56 empties=2
 ```
 
 <!-- test: pop-then-regrow-managed-no-double-free -->
+<!-- tier: stdlib -->
 `pop()` hands its element to the caller — the caller owns it, not the array — but the slot
 still holds the pointer. Growing back over that slot must not re-adopt an element the
 caller owns, or it is freed twice.
@@ -713,6 +727,7 @@ landing on the case the operation is documented to report. A shifted ordinal rer
 the `default panic` says which.
 
 <!-- test: managed-memory-error-variants -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	var seen = 0
@@ -791,6 +806,7 @@ error E2015: <fragment>:4:8: Unsupported: `Array` member 'setLength' — the com
 ```
 
 <!-- test: buffer-of-a-slice-is-a-buffer-and-detaches-before-it-writes -->
+<!-- tier: stdlib -->
 
 A `slice` taken THROUGH the buffer surface is itself a buffer — the surface rides the VALUE, so `sub.managed`
 resolves on a binding the slice produced. And that slice is a zero-copy VIEW, whose `capacity@16` is the
@@ -806,7 +822,7 @@ function main() returns ExitCode
 	arr.push(11)
 	arr.push(22)
 	arr.push(33)
-	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
+	var sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
 	try sub.managed.setLength(1) otherwise panic("setLength: a detached view publishes its live length")
 	try sub.managed.setByte(0, 99) otherwise panic("setByte: offset 0 of a detached 8-byte slot")
 	let parent = try arr.get(0) otherwise panic("get: index 0 of a length-3 array")
@@ -818,6 +834,7 @@ end 'main'
 ```
 
 <!-- test: byte-at-reads-the-word-buffer-a-byte-at-a-time -->
+<!-- tier: stdlib -->
 
 `byteAt` addresses BYTES where `get` addresses ELEMENTS, and at element size 8 the two differ — which is the
 whole reason `byteAt` is not `get`'s alias. 258 is `0x0102`, so its low byte is 2 and its second byte is 1 on
@@ -825,7 +842,7 @@ a little-endian target. It also pins the element TYPING `create`'s literal eleme
 fit a `Byte`, so a byte-only binding would refuse this program outright.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(0, value: 258) otherwise return 3
 	let lo = try mm.byteAt(0) otherwise return 4
@@ -838,6 +855,7 @@ end 'main'
 ```
 
 <!-- test: byte-at-stops-at-the-live-length -->
+<!-- tier: stdlib -->
 
 `byteAt`'s bound is `length · element_size` — the LIVE length, not the capacity that `setByte` is bounded by.
 The asymmetry is deliberate (`maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`, `ManagedMemSetName`): a write stages bytes into
@@ -845,7 +863,7 @@ allocated slots BEFORE a length publishes them, a read has nothing to see there.
 exactly the limit.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	let v = try mm.byteAt(2) otherwise 7
 	return v as ExitCode
@@ -856,13 +874,14 @@ end 'main'
 ```
 
 <!-- test: grow-to-the-same-capacity-then-below-it -->
+<!-- tier: stdlib -->
 
 `grow` raises the capacity to EXACTLY what it is asked for. Asked for what it already has it is a no-op;
 asked to LOWER it, it throws `invalidCapacity` rather than silently keeping the larger buffer — which is the
 one thing that separates it from `reserve` (`maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`, `buildManagedMemGrow`).
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
 	try mm.grow(8) otherwise return 2
 	if mm.capacity() != 8 'cap'
 		return 3
@@ -886,9 +905,9 @@ end 'main'
 
 `__ManagedMemory` IS an `Array with Byte`, so a `__ManagedMemory` member necessarily arrives on
 an array receiver and can only be gated on that INSTANCE. `setLength`/`setByte` are therefore dispatched only
-for the byte instance — and the immutable-receiver rule (E3019) has to be gated on the same answer, or it
+for the byte instance — and the immutable-receiver rule (E3159) has to be gated on the same answer, or it
 complains about MUTABILITY for a method the receiver has no dispatch arm for. Ungated, this program would
-report `E3019 cannot pass 'a' to function that mutates parameter 'self'`, while the identical program with
+report `E3159` for a write through the read-only `a`, while the identical program with
 `var` reports the unknown-method refusal below. Refused either way — but a program must be
 refused for the REASON that is true of it, and the true reason is that `Array with Int` has no `setLength`.
 ```maxon
@@ -908,6 +927,7 @@ error E2015: <fragment>:7:8: Unsupported: `Array` member 'setLength' — the com
 ### An element size the compiler has no element TYPE for is refused, not silently truncated
 
 <!-- test: error.create-element-size-with-no-element-type -->
+<!-- tier: stdlib -->
 
 `create`'s `elementSize` is read TWICE: the runtime stores it into `element_size@24` — the stride every
 accessor moves by — and the front end picks the result's `Array` instance from it, because `get`/`set` are
@@ -931,6 +951,7 @@ error E2015: <fragment>:3:37: Unsupported: `__ManagedMemory.create`'s `elementSi
 ### A buffer mark minted in one function does not reach another function's value
 
 <!-- test: error.buffer-mark-does-not-leak-across-functions -->
+<!-- tier: stdlib -->
 
 The buffer surface rides the VALUE (`Parser.bufferSurfaceValues`), and `ValueId`s restart at 0 in every
 function (`resetPerFunction` re-creates the minter), so the mark set is per-function and its shared empty
@@ -971,13 +992,14 @@ length** — `set` against `capacity`, `setByte` against `capacity · elementSiz
 what a capacity bound permits and a length bound forbids. The first case below is that round trip.
 
 <!-- test: set-stages-into-capacity-then-set-length-publishes -->
+<!-- tier: stdlib -->
 
 The round trip `setLength`'s contract names: four elements written while `length()` is still 0, then ONE
 `setLength` publishing all four at once. Under a length bound the first `set` is refused (`0 >= 0`) and the
 idiom has no spelling at all.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	if mm.length() != 0 'createPublishesNothing'
 		return 2
 	end 'createPublishesNothing'
@@ -998,12 +1020,13 @@ end 'main'
 ```
 
 <!-- test: set-past-the-live-length-lands-and-reads-back-published -->
+<!-- tier: stdlib -->
 
 The same rule with a NON-zero length, so the staged slot is genuinely past a live range rather than past an
 empty one: index 2 is written while the length is 2, and reads back once the length reaches 3.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.set(0, value: 1) otherwise return 3
 	try mm.set(1, value: 2) otherwise return 3
@@ -1018,6 +1041,7 @@ end 'main'
 ```
 
 <!-- test: set-at-the-capacity-and-below-zero-is-refused -->
+<!-- tier: stdlib -->
 
 The bound is the capacity, so the LAST slot inside it takes a write and the first slot outside it does not.
 The pairing is what makes this case discriminate: an `at capacity → throws` assertion on its own is satisfied
@@ -1027,7 +1051,7 @@ is FALSE and an at-or-over test alone reads it as in range.
 ```maxon
 function main() returns ExitCode
 	var seen = 0
-	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	let cap = mm.capacity()
 	try mm.set(cap - 1, value: 7) otherwise return 2
 	try mm.set(cap, value: 7) otherwise (e) 'atCapacity'
@@ -1059,13 +1083,14 @@ end 'main'
 ```
 
 <!-- test: get-stops-at-the-live-length-where-set-does-not -->
+<!-- tier: stdlib -->
 
 The ASYMMETRY, pinned in one program so the two bounds cannot silently converge: index 1 accepts a write while
 the length is 1 and refuses a read at the same instant, and the read starts working the moment `setLength`
 publishes it. Reading an unpublished slot has nothing to see; writing one is the whole point.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(1, value: 77) otherwise return 3
 	let unpublished = try mm.get(1) otherwise 42
@@ -1082,6 +1107,7 @@ end 'main'
 ```
 
 <!-- test: error.staging-a-managed-element-into-unpublished-capacity -->
+<!-- tier: stdlib -->
 
 ⚖ **USER RULING (the SECOND one on this member): staging a MANAGED element is REFUSED — E3109.**
 
@@ -1113,6 +1139,7 @@ error E3109: <fragment>:8:17: 'managed.set' cannot store an element of 'String':
 ```
 
 <!-- test: error.staging-a-managed-struct-element-is-refused-the-same-way -->
+<!-- tier: stdlib -->
 
 ⭐ **THE RULE IS "MANAGED", NOT "`String`" — and this is the case that says so.** A struct element is boxed on
 the heap exactly as a `String` is, so it leaks exactly as one: without the gate, staging a `Slot` past the
@@ -1145,6 +1172,7 @@ error E3109: <fragment>:18:17: 'managed.set' cannot store an element of 'Slot': 
 ```
 
 <!-- test: error.reserve-then-stage-without-publishing-is-refused -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **FIVE LINES.** Nothing here looks like a contract violation — `reserve` then `set(0, …)` then return —
 and under a length bound that `set` is simply refused. The capacity bound is what makes it reachable, and
@@ -1164,6 +1192,7 @@ error E3109: <fragment>:7:16: 'managed.set' cannot store an element of 'String':
 ```
 
 <!-- test: staging-a-trivial-element-twice-releases-nothing-and-still-publishes -->
+<!-- tier: stdlib -->
 
 ⭐ **THE RULING'S MAIN LINE, KEPT ALIVE FOR THE ELEMENT KIND THAT STILL HAS IT.** The refusal above takes the
 managed half of the staging story away; the TRIVIAL half is the whole reason the capacity bound was ruled, and
@@ -1174,7 +1203,7 @@ restage, publish again — which is what pins the destroy walk's per-slot NULL G
 ```maxon
 function main() returns ExitCode
 	var total = 0
-	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(1, value: 5) otherwise return 3
 	try mm.set(1, value: 6) otherwise return 4
@@ -1193,13 +1222,14 @@ end 'main'
 ```
 
 <!-- test: set-byte-past-the-live-length-is-allowed-within-capacity -->
+<!-- tier: stdlib -->
 
 ⚖ The capacity USER RULING itself, pinned as behaviour rather than as prose: `setByte` at an offset past
 the live length but inside the capacity is ALLOWED. It exists because the Documentation section above carries
 the stale LENGTH wording and a reader will find it.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(3, value: 65) otherwise return 3
 	try mm.setLength(4) otherwise return 4
@@ -1238,6 +1268,7 @@ end 'main'
 ```
 
 <!-- test: set-on-a-view-detaches-before-it-reads-a-capacity -->
+<!-- tier: stdlib -->
 
 ⚠ **A VIEW CARRIES A NEGATIVE CAPACITY** (`BufferOwnership.ViewBufferCapacity` is exactly `-1`), so a capacity
 bound read off one before the detach refuses EVERY index — `0 >= -1`. The detach republishes `capacity@16` as
@@ -1252,7 +1283,7 @@ function main() returns ExitCode
 	arr.push(11)
 	arr.push(22)
 	arr.push(33)
-	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
+	var sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
 	try sub.managed.set(1, value: 99) otherwise return 1
 	try sub.managed.set(2, value: 99) otherwise 'pastTheDetachedCapacity'
 		let parent = try arr.get(1) otherwise panic("get: index 1 of a length-3 array")
@@ -1358,6 +1389,7 @@ Stack trace:
 ```
 
 <!-- test: set-byte-through-a-viewed-owner-detaches-first -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE WRITE GUARD CALLS THE DETACH UNCONDITIONALLY.** `__managed_cow_detach` has TWO arms — a buffer that is
 not this record's (`capacity < 0`), and one that IS but is being read by a view — and a guard that called the
@@ -1386,6 +1418,7 @@ end 'main'
 ```
 
 <!-- test: set-through-a-viewed-owner-detaches-first -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE SAME ARM-2 HOLE ON `managed.set`, WHICH THE `setByte` CASE ABOVE DOES NOT COVER.**
 `__managed_mem_set` and `__managed_set_byte` reach `__managed_cow_detach` through the one
@@ -1423,6 +1456,7 @@ this one is about the element's REPRESENTATION, holds at EVERY offset, and has n
 access to a pointer is not something a correct program wants. One predicate, two reasons, two messages.
 
 <!-- test: error.set-byte-on-a-managed-element-buffer-is-refused -->
+<!-- tier: stdlib -->
 
 Without the refusal this program exits **101**. The write goes into a live `String`'s pointer, after
 which the element it names is unreachable and unreleasable.
@@ -1441,6 +1475,7 @@ error E3110: <fragment>:7:17: 'managed.setByte' cannot address the bytes of an e
 ```
 
 <!-- test: error.byte-at-on-a-managed-element-buffer-is-refused -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE HALF A REFUSAL OF THE WRITER ALONE WOULD MISS, WHICH IS WHY IT HAS ITS OWN CASE.** `byteAt`
 returns a value: it corrupts nothing, leaks nothing, and raises no error, so no gate in this project could see
@@ -1462,6 +1497,7 @@ error E3110: <fragment>:7:25: 'managed.byteAt' cannot address the bytes of an el
 ```
 
 <!-- test: raw-byte-access-still-works-for-every-trivial-element-kind -->
+<!-- tier: stdlib -->
 
 ⭐ **THE FALSE-REJECT GUARD, and the case that makes the two refusals above safe to keep.** Byte access is the
 buffer surface's whole reason for existing, and refusing it for the wrong receiver would be a far larger
@@ -1476,12 +1512,12 @@ typealias IntArray = Array with Int
 
 function main() returns ExitCode
 	var total = 0
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(3, value: 65) otherwise return 3
 	try mm.setLength(4) otherwise return 4
 	total = total + (try mm.byteAt(3) otherwise return 5)
-	let words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 6
+	var words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 6
 	try words.setByte(0, value: 9) otherwise return 7
 	try words.setLength(1) otherwise return 8
 	total = total + (try words.byteAt(0) otherwise return 9)
@@ -1501,6 +1537,7 @@ end 'main'
 ### A throwing buffer read written without `try` names the buffer method
 
 <!-- test: error.byte-at-without-try -->
+<!-- tier: stdlib -->
 
 ⭐ **THE SAME E3057 RULE, THE `__ManagedMemory` FAMILY'S NOUN.** `byteAt` throws
 `__ManagedMemoryError.indexOutOfBounds`, so a bare call drops the flag and hands back a dummy 0 — a wrong
@@ -1564,6 +1601,7 @@ BUFFER" below close that: each of the three spellings has a case in both directi
 `__ManagedDirectory.filename`/`currentPath`, and the `.managed` field.
 
 <!-- test: buffer-surface-serves-every-member-its-roster-names -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE FALSE-REJECT GUARD — eleven of the roster's twenty members, in one program, returning a
 computed value.** The other nine (`elementSize`, `fill`, `toCString`, `makeCharFromBytes`, `remove`, `swap`,
@@ -1576,7 +1614,7 @@ throw), and the byte buffer is where a `setByte`/`byteAt` pair addresses a whole
 ```maxon
 function main() returns ExitCode
 	var total = 0
-	let words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	var words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try words.setLength(2) otherwise return 2
 	try words.set(0, value: 11) otherwise return 3
 	try words.set(1, value: 22) otherwise return 4
@@ -1588,14 +1626,14 @@ function main() returns ExitCode
 	let part = try words.slice(1, 2) otherwise return 8
 	total = total + (try part.get(0) otherwise return 9)
 	total = total + part.length()
-	let more = try __ManagedMemory.create(1, elementSize: 8) otherwise return 10
+	var more = try __ManagedMemory.create(1, elementSize: 8) otherwise return 10
 	try more.setLength(1) otherwise return 11
 	try more.set(0, value: 33) otherwise return 12
 	words.append(more)
 	total = total + words.length()
 	words.clear()
 	total = total + words.length()
-	let bytes = try __ManagedMemory.create(4, elementSize: 1) otherwise return 14
+	var bytes = try __ManagedMemory.create(4, elementSize: 1) otherwise return 14
 	try bytes.setLength(2) otherwise return 15
 	try bytes.setByte(1, value: 5) otherwise return 16
 	total = total + (try bytes.byteAt(1) otherwise return 17)
@@ -1607,6 +1645,7 @@ end 'main'
 ```
 
 <!-- test: error.try-on-the-buffers-append -->
+<!-- tier: stdlib -->
 
 ⚖ **`append` IS THE ONE BUFFER MUTATOR THAT CANNOT FAIL, SO A `try` ON IT IS E3055 — USER RULING.**
 It reads as an exception beside `set`/`setLength`/`setByte`/`grow`/`slice`, which all throw, and
@@ -1621,7 +1660,7 @@ redundant `try` on a non-throwing builtin is refused here, so that line records 
 compiler does not have rather than the callee's contract.
 ```maxon
 function main() returns ExitCode
-	let a = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	var a = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	let b = try __ManagedMemory.create(2, elementSize: 8) otherwise return 2
 	try a.append(b) otherwise return 3
 	return 0
@@ -1632,6 +1671,7 @@ error E3055: <fragment>:5:2: try requires a throwing function: this builtin call
 ```
 
 <!-- test: buffer-append-deep-clones-a-managed-element -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE BUFFER'S `append` AND THE `Array`'s ARE ONE OPERATION.** A byte-blit of the receiver's elements
 whatever they are would make appending through the `.managed` surface of an `Array with String` duplicate
@@ -1666,6 +1706,7 @@ beta is also long enough to be heap allocated
 ```
 
 <!-- test: error.buffer-has-no-push -->
+<!-- tier: stdlib -->
 
 ⭐ **`push` IS NOT A BUFFER MEMBER.** `push` is an `Array` method and
 the buffer has no member of that name — the two grow differently (`__managed_push` raises the capacity by the
@@ -1684,6 +1725,7 @@ error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'push' — th
 ```
 
 <!-- test: error.buffer-has-no-push-in-value-position -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE VALUE POSITION IS THE SAME SHAPE ONE SURFACE OVER, AND IT IS WHY THIS GATE MUST PRECEDE THE
 ARMS.** Reaching `push`'s own `requireVoidMethodIsStatement`, `let x = mm.push(7)` would answer
@@ -1702,6 +1744,7 @@ error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'push' — t
 ```
 
 <!-- test: the-buffer-does-have-remove -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE BUFFER HAS `remove`, AND BOTH HALVES SAY SO.** The roster names `remove`, and the arm emits the
 `Array`'s `__managed_remove` (same `length` bound, same tail slide, same erase of the vacated slot).
@@ -1711,7 +1754,7 @@ four slots and leaves the length at 0 (see `create-and-length`), so the buffer h
 write an element before there is anything for index 0 to name.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	try mm.setByte(0, 7) otherwise return 3
 	let gone = try mm.remove(0) otherwise return 4
@@ -1723,6 +1766,7 @@ end 'main'
 ```
 
 <!-- test: error.buffer-has-no-count -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE FOLDED NAME IS THE SHARPEST CASE IN THIS BLOCK: `length` IS the buffer's spelling and `count` is
 the `Array`'s, and one arm serves both.** `__ManagedMemory.length()` is folded onto `Array.count()` because
@@ -1740,6 +1784,7 @@ error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'count' — 
 ```
 
 <!-- test: error.buffer-has-no-appendMemory -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **`count`'s ARGUMENT, ONE MEMBER OVER — AND THE DIRECTION THAT NEEDED ITS OWN CASE.** `appendMemory` is
 declared on `Array` (`stdlib/Array.maxon:272`) and NOWHERE else: not in the corpus, and no corpus
@@ -1761,6 +1806,7 @@ error E2015: <fragment>:5:9: Unsupported: `__ManagedMemory` member 'appendMemory
 ```
 
 <!-- test: error.buffer-has-no-managed-field -->
+<!-- tier: stdlib -->
 
 ⭐ **`.managed` IS THE `Array`'s FIELD, SO A BUFFER DOES NOT HAVE IT — AND THE CHAIN IS WHAT MAKES THAT
 REACHABLE.** The field is an identity that re-enters this dispatch with the buffer surface already set, so
@@ -1778,6 +1824,7 @@ error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'managed' —
 ```
 
 <!-- test: buffer-reports-its-element-size -->
+<!-- tier: stdlib -->
 
 ⚠ **THE BUFFER REPORTS ITS ELEMENT SIZE.** The packed stride is read through exactly this door. The roster
 names what IS served and carries no list of what is missing, because a hand-written list of what is MISSING
@@ -1796,6 +1843,7 @@ end 'main'
 ```
 
 <!-- test: error.buffer-has-no-pop -->
+<!-- tier: stdlib -->
 
 `pop`, `first` and `last` are the `Array`'s alone; of the move-out accessors the buffer serves only `remove`
 (`the-buffer-does-have-remove`). One case per name, because each is one arm and a gate that lost a single
@@ -1812,6 +1860,7 @@ error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'pop' — th
 ```
 
 <!-- test: error.buffer-has-no-first -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -1824,6 +1873,7 @@ error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'first' — 
 ```
 
 <!-- test: error.buffer-has-no-last -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -1836,6 +1886,7 @@ error E2015: <fragment>:4:17: Unsupported: `__ManagedMemory` member 'last' — t
 ```
 
 <!-- test: error.buffer-has-no-insert -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **A SECOND DIAGNOSTIC THAT WOULD ASSERT A BUFFER MEMBER INTO EXISTENCE, and it is why the `try` here is
 deliberate.** `insert` is a NON-throwing `Array` method, so with the `try` rule asked first `try mm.insert(…)`
@@ -1855,6 +1906,7 @@ error E2015: <fragment>:4:9: Unsupported: `__ManagedMemory` member 'insert' — 
 ```
 
 <!-- test: error.buffer-has-no-reserve -->
+<!-- tier: stdlib -->
 
 ⚠ `reserve` and `grow` are the pair most easily mistaken for one another, and refusing `reserve` is what
 keeps them distinguishable: `grow` sets the capacity to EXACTLY what it is asked for and throws when asked
@@ -1872,6 +1924,7 @@ error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'reserve' —
 ```
 
 <!-- test: error.buffer-has-no-resize -->
+<!-- tier: stdlib -->
 
 ⚠ And `resize`/`setLength` are the other such pair, already stated one block up: `resize` GROWS the
 capacity to fit, `setLength` must REFUSE a length above it. `stdlib/Array.maxon` builds `resize` out of
@@ -1889,6 +1942,7 @@ error E2015: <fragment>:4:5: Unsupported: `__ManagedMemory` member 'resize' — 
 ```
 
 <!-- test: error.buffer-has-no-is-empty -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -1901,6 +1955,7 @@ error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'isEmpty' �
 ```
 
 <!-- test: error.buffer-has-no-clone -->
+<!-- tier: stdlib -->
 
 ⚠ `slice` is the buffer's copy, and it is on the roster — so refusing `clone` takes nothing away. What it
 prevents is a SECOND owned-copy door whose bound is the whole receiver, on a surface where the interesting
@@ -1917,6 +1972,7 @@ error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'clone' — 
 ```
 
 <!-- test: error.buffer-of-a-slice-has-no-array-members-either -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **ONE NESTING LEVEL DOWN — a buffer the SOURCE never named, reached as the result of a `slice` through
 the surface.** The mark rides the VALUE, so the slice of a buffer is a buffer, and its surface has to be
@@ -1924,7 +1980,7 @@ the same one its parent has: a gate that read the receiver's SPELLING rather tha
 every `Array` member back in through one hop.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(4) otherwise return 2
 	let part = try mm.slice(0, 2) otherwise return 3
 	let x = part.count()
@@ -1936,6 +1992,7 @@ error E2015: <fragment>:6:15: Unsupported: `__ManagedMemory` member 'count' — 
 ```
 
 <!-- test: array-members-still-work-through-a-managed-field-hop -->
+<!-- tier: stdlib -->
 
 ⭐ **THE OTHER HALF OF THE NESTING GUARD: the surface must not leak the OTHER way.** `.managed` sets the
 buffer surface for the ONE hop the source wrote it on, so the `Array` around it keeps every `Array` member
@@ -1976,6 +2033,7 @@ COMPUTES a value through a roster member and asserts the number. The receiver in
 buffer, and the declaration is doing all the work.
 
 <!-- test: error.declared-parameter-has-the-buffer-surface -->
+<!-- tier: stdlib -->
 
 `count` is an `Array` member and not a buffer one, so a parameter declared `__ManagedMemory` is refused it —
 and refused it with the BUFFER's roster, which is the half that says the message answers for the type it is
@@ -1998,6 +2056,7 @@ error E2015: <fragment>:3:12: Unsupported: `__ManagedMemory` member 'count' — 
 ```
 
 <!-- test: declared-parameter-serves-the-roster -->
+<!-- tier: stdlib -->
 
 ⭐ **THE FALSE-REJECT HALF, and without the declared mark it is WRONG rather than merely permissive**:
 `length()` is the buffer roster's FIRST member, and an unmarked parameter is refused it as an unknown `Array`
@@ -2018,6 +2077,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.declared-return-type-has-the-buffer-surface -->
+<!-- tier: stdlib -->
 
 The RETURN spelling, refused the same member for the same reason. It is the one of the three that cannot be
 answered from the file the call is in — the callee may be declared anywhere — so the fact travels on the
@@ -2038,6 +2098,7 @@ error E2015: <fragment>:8:11: Unsupported: `__ManagedMemory` member 'count' — 
 ```
 
 <!-- test: declared-return-type-serves-the-roster -->
+<!-- tier: stdlib -->
 
 The return spelling's false-reject half. `slice` is on BOTH rosters, so it is deliberately taken through the
 buffer's own bounds and then counted with `length()`, which is not on the `Array`'s: without the declared
@@ -2058,6 +2119,7 @@ end 'main'
 ```
 
 <!-- test: error.declared-field-has-the-buffer-surface -->
+<!-- tier: stdlib -->
 
 The FIELD spelling. The bit rides `StructLayout` beside the field's declared type, in the column the SWEEP
 records — the whole-program layout every read door consults — and is read at the one site a field read mints
@@ -2081,6 +2143,7 @@ error E2015: <fragment>:12:15: Unsupported: `__ManagedMemory` member 'count' —
 ```
 
 <!-- test: declared-field-serves-the-roster -->
+<!-- tier: stdlib -->
 
 The field spelling's false-reject half, and it reaches the buffer surface through TWO different doors on one
 layout: `h.buf` from outside the type, and a bare `self.buf` from inside a method. Both mint their value at
@@ -2109,6 +2172,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.a-buffer-returning-function-cannot-be-overloaded -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE THIRD FACT THE DECLARATION SWEEP PUBLISHES PER BARE NAME.** The sweep is
 keyed by the name the source WROTE, so an overload set leaves one entry — and the return spelling decides
@@ -2252,6 +2316,7 @@ well — a wrong ACCEPTANCE no diagnostic reports, decided by whichever spelling
 quietly written onto the shared layout column.
 
 <!-- test: tuple-element-serves-the-roster -->
+<!-- tier: stdlib -->
 
 The tuple RETURN spelling's false-reject half. `p.0` is rewritten to a positional field token and reaches the
 same `emitFieldLoad` a struct field does, so the slot mask minted on the call result is what the read
@@ -2273,6 +2338,7 @@ end 'main'
 ```
 
 <!-- test: tuple-destructuring-serves-the-roster -->
+<!-- tier: stdlib -->
 
 `let (m, n) = pair()` binds each name to a field load off the hidden temp, so a destructured name inherits
 the bit for ITS position and nothing else. This entrance was not on the defect row; it was found by walking
@@ -2294,6 +2360,7 @@ end 'main'
 ```
 
 <!-- test: tuple-parameter-serves-the-roster -->
+<!-- tier: stdlib -->
 
 The tuple PARAMETER spelling. The mask is read off the annotation's TOKENS at the same moment the
 whole-value bit is, and travels the same parse-local column into `bindParameters`.
@@ -2313,6 +2380,7 @@ end 'main'
 ```
 
 <!-- test: tuple-through-a-struct-field-serves-the-roster -->
+<!-- tier: stdlib -->
 
 A struct FIELD whose declared type is a tuple — the composed shape, which falls out of the two mechanisms
 rather than needing a third: the field's declared surface carries the mask, `h.p` mints it onto the loaded
@@ -2338,6 +2406,7 @@ end 'main'
 ```
 
 <!-- test: array-element-serves-the-roster -->
+<!-- tier: stdlib -->
 
 The generic ARRAY ELEMENT spelling. `Array with T` is writable only as a `typealias` RHS, so the element's
 spelling is recorded per ALIAS NAME at the one place a generic instantiation's arguments are read, and a
@@ -2358,6 +2427,7 @@ end 'main'
 ```
 
 <!-- test: array-element-through-a-struct-field-serves-the-roster -->
+<!-- tier: stdlib -->
 
 The same element mark reached through a struct FIELD declared with the alias. The field column is written by
 the declaration SWEEP, which runs before any alias is interned, so the element half cannot ride it — it is
@@ -2386,6 +2456,7 @@ end 'main'
 ```
 
 <!-- test: error.tuple-element-has-the-buffer-surface -->
+<!-- tier: stdlib -->
 
 The refusal half of the tuple slot. `count` is an `Array` member and not a buffer one, and without the slot
 carrier this program compiles, links and RUNS (exit 5).
@@ -2406,6 +2477,7 @@ error E2015: <fragment>:10:13: Unsupported: `__ManagedMemory` member 'count' —
 ```
 
 <!-- test: error.array-element-has-the-buffer-surface -->
+<!-- tier: stdlib -->
 
 The refusal half of the array element, which without its carrier likewise runs (exit 5).
 ```maxon
@@ -2502,6 +2574,7 @@ end 'main'
 ```
 
 <!-- test: error.tuple-slot-mark-does-not-leak-across-functions -->
+<!-- tier: stdlib -->
 
 The slot mask's copy-on-write twin of `error.buffer-mark-does-not-leak-across-functions`, and it is needed
 for the identical reason: `ValueId`s restart at 0 in every function, the mask table's empty anchor is
@@ -2543,6 +2616,7 @@ They are the regressions a change that moves the buffer mark is most likely to c
 its own.
 
 <!-- test: managed-field-chained-serves-the-buffer-roster -->
+<!-- tier: stdlib -->
 
 The CHAINED `arr.managed.<member>()` is an IDENTITY read that passes the buffer surface along the dispatch
 rather than minting a value, so it reaches the buffer's roster with no allocation and no runtime call. (The
@@ -2563,6 +2637,7 @@ end 'main'
 ```
 
 <!-- test: error.managed-field-chain-does-not-mark-the-array -->
+<!-- tier: stdlib -->
 
 And the surface does NOT flow back onto the receiver: after `arr.managed.length()`, `arr` is still an
 `Array` and still refused `length`. The identity read passes the surface to ONE dispatch, not to the value.
@@ -2583,6 +2658,7 @@ error E2015: <fragment>:10:18: Unsupported: `Array` member 'length' — the comp
 ```
 
 <!-- test: managed-field-as-a-value-binds-serves-the-roster-and-drops-once -->
+<!-- tier: stdlib -->
 
 **`arr.managed` IN VALUE POSITION.** Four doors in one program, all on the SAME record: a
 `let` binding, a call ARGUMENT, a `return` out of a function whose receiver is a borrowed PARAMETER, and a
@@ -2626,6 +2702,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.managed-field-as-a-value-does-not-mark-the-array -->
+<!-- tier: stdlib -->
 
 The VALUE form's surface mark rides the value `.managed` MINTS, never the receiver — the same property the
 chained form has, for the same reason, and the one a pass-through `ValueId` would break in both directions at
@@ -2647,6 +2724,7 @@ error E2015: <fragment>:9:27: Unsupported: `Array` member 'length' — the compi
 ```
 
 <!-- test: managed-field-on-a-value-receiver-binds-and-serves-the-roster -->
+<!-- tier: stdlib -->
 
 The OTHER door onto the same arm: a VALUE receiver, whose record the STATEMENT already owns. It takes no
 retain — a second owner of a temporary nobody else will drop is a retain and a release that cancel — and the
@@ -2664,6 +2742,7 @@ end 'main'
 ```
 
 <!-- test: error.managed-field-alone-is-not-a-statement -->
+<!-- tier: stdlib -->
 
 The value form is claimed in EXPRESSION position only. A statement of it would build a buffer reference and
 discard it on the same line, so the statement dispatcher keeps asking for the chained `.<member>(` spelling
@@ -2684,6 +2763,7 @@ error E2015: <fragment>:8:2: Unsupported: identifier statement
 ```
 
 <!-- test: managed-field-as-a-value-releases-in-every-forking-region -->
+<!-- tier: stdlib -->
 
 ⭐ **THE VALUE FORM TAKES A STATEMENT-SCOPED DROP, SO IT IS SUBJECT TO THE REGION DISCIPLINE**
 (`coOwnAggregateAsTemp` → `trackOwnedTemp` → `drainPendingTemps`), and that discipline has no automatic
@@ -2733,6 +2813,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: buffer-surface-survives-a-var-reassignment -->
+<!-- tier: stdlib -->
 
 A `var` reassigned from another buffer keeps the buffer surface. The mark rides the VALUE, and a reassignment
 rebinds the NAME to a new value — so this holds only because the new value is itself marked, which is exactly
@@ -2752,6 +2833,7 @@ end 'main'
 ```
 
 <!-- test: buffer-surface-survives-a-var-reassigned-from-a-slice -->
+<!-- tier: stdlib -->
 
 The same rebinding, from a `slice` of the buffer's OWN value — the one producer whose result is marked by
 `parseArraySlice` rather than by a declaration.
@@ -2768,6 +2850,7 @@ end 'main'
 ```
 
 <!-- test: error.a-tuple-returning-overload-is-refused-the-same-way -->
+<!-- tier: stdlib -->
 
 ⭐ **THE WIDENED HALF.** Neither declaration RETURNS `__ManagedMemory`; one of them names it at a tuple
 SLOT, which is the identical ambiguity through the identical channel. Without the refusal this program
@@ -2798,9 +2881,10 @@ An element read has
 SIX spellings and a whole-array copy has TWO, and a mark that reached some of them would be the same
 inverted roster at the spellings it missed.
 
-<!-- test: every-borrowing-element-member-serves-the-buffer-roster -->
+<!-- test: every-element-reading-member-serves-the-buffer-roster -->
+<!-- tier: stdlib -->
 
-`get`, `first` and `last` all BORROW an element, and all three funnel through the ONE accessor mint — so the
+`get`, `first` and `last` all read an element, and all three funnel through the ONE accessor mint — so the
 mark is made there rather than per arm.
 ```maxon
 typealias BufArray = Array with __ManagedMemory
@@ -2820,10 +2904,10 @@ end 'main'
 ```
 
 <!-- test: a-popped-element-serves-the-buffer-roster -->
+<!-- tier: stdlib -->
 
-`pop` MOVES the element out instead of borrowing it, so it gets its own case for two reasons: it may not
-share a function with a live borrow of the same array (E3070), and the OWNED buffer must reach the roster
-AND still be dropped exactly once — the exit code proves the first, the leak gate the second.
+`pop` MOVES the element out instead of reading it, so it gets its own case: the OWNED buffer must reach the
+roster AND still be dropped exactly once — the exit code proves the first, the leak gate the second.
 ```maxon
 typealias BufArray = Array with __ManagedMemory
 
@@ -2839,9 +2923,11 @@ end 'main'
 ```
 
 <!-- test: a-for-loop-element-serves-the-buffer-roster -->
+<!-- tier: stdlib -->
 
 The fifth spelling: `for m in bufs` reads its element through the same accessor, with the loop's own
-unchecked callee. It is a BORROW, so nothing here is dropped twice.
+unchecked callee. The element is a counted read — the loop takes its own reference each step and releases
+it — so nothing here is dropped twice or leaked.
 ```maxon
 typealias BufArray = Array with __ManagedMemory
 
@@ -2861,6 +2947,7 @@ end 'main'
 ```
 
 <!-- test: a-clone-of-an-array-of-buffers-still-holds-buffers -->
+<!-- tier: stdlib -->
 
 ⭐ **`clone` CARRIES THE ELEMENT MARK ACROSS THE COPY.** `clone` hands back a whole array of the receiver's
 OWN instance, and that instance cannot carry the element spelling — `Array with __ManagedMemory` and `Array
@@ -2882,6 +2969,7 @@ end 'main'
 ```
 
 <!-- test: a-slice-of-an-array-of-buffers-still-holds-buffers -->
+<!-- tier: stdlib -->
 
 The `Array`-surface `slice` is the other whole-array producer, and it carries the element surface for the
 reason `clone` does — one container out from the rule that already made a slice of a BUFFER a buffer.
@@ -2919,6 +3007,7 @@ left to derive it from later: a tuple's element types are CANONICAL by the time 
 alias name is gone. It is blocked on the alias-visibility work, not on this mechanism.
 
 <!-- test: a-nested-tuple-slot-serves-the-roster -->
+<!-- tier: stdlib -->
 
 A tuple inside a tuple. `p.0` binds a value carrying ITS slots, and `p.0.0` reads one off it — the same line
 of `emitFieldLoad` running twice, one container in each time. Nothing in the mechanism knows how deep it is.
@@ -2980,6 +3069,7 @@ end 'main'
 ```
 
 <!-- test: a-tuple-slot-of-buffers-serves-the-roster -->
+<!-- tier: stdlib -->
 
 A slot whose declared type is an array-of-buffers ALIAS — the surface a slot could not express at all while
 its payload was one bit. The element bit is asked of the alias registry, so this is the PARAMETER door: it is
@@ -3052,6 +3142,7 @@ end 'main'
 ```
 
 <!-- test: a-nested-tuple-parameter-serves-the-roster -->
+<!-- tier: stdlib -->
 
 The nested shape through the PARAMETER door, where the mask is read off the annotation's own tokens rather
 than off the whole-program index — the two capture sites must agree, and a case each is how they are held to
@@ -3104,6 +3195,7 @@ half — a tuple's element types are canonical by the time anything could ask �
 registry at a sweep-fed door at all, and is refused in both orders instead of accepted in one.
 
 <!-- test: a-sibling-files-array-of-buffers-alias-serves-the-roster -->
+<!-- tier: stdlib -->
 
 ⭐ **THE ROOT, ALIAS FILE FIRST.** `Holder.bufs` is declared with an alias the OTHER file writes, so by the
 time this file is swept the alias is registered and the field type has already resolved to
@@ -3140,6 +3232,7 @@ end 'main'
 ```
 
 <!-- test: a-sibling-files-array-of-buffers-alias-serves-the-roster-either-order -->
+<!-- tier: stdlib -->
 
 ⭐ **THE ROOT, ALIAS FILE LAST — the identical program, its two files declared the other way round.** Here the alias is NOT yet
 registered when the holder is swept, so the field type stays `named("BufArray")` and it is the read-door
@@ -3176,6 +3269,7 @@ end 'seed'
 ```
 
 <!-- test: error.a-sibling-files-alias-in-a-tuple-slot-is-refused-alias-file-first -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE HEADLINE CASE. Without the refusal this program COMPILES AND RUNS** — `make().0` is served the
 buffer's roster because the alias file is compiled first — which this half DECLARES rather than hoping
@@ -3211,6 +3305,7 @@ error E2015: <fragment>:20:12: Unsupported: `Array` member 'length' — the comp
 ```
 
 <!-- test: error.a-sibling-files-alias-in-a-tuple-slot-is-refused-alias-file-last -->
+<!-- tier: stdlib -->
 
 ⚠ **THE OTHER ORDER — the identical program, its two files declared the other way round.** This order is refused even without the refusal
 above; it is kept because a pair is what makes "order-independent" a claim a test can fail, and half a pair is just
@@ -3249,6 +3344,7 @@ siblings are absent. These four were written to break that walk, and are kept be
 over a LATER sibling of a NESTED slot is a walk nobody has read.
 
 <!-- test: a-buffer-three-tuples-deep-serves-the-roster -->
+<!-- tier: stdlib -->
 
 Slot 1 of slot 1 of slot 0 — three levels, and every step past a sibling the walk has to skip.
 ```maxon
@@ -3268,6 +3364,7 @@ end 'main'
 ```
 
 <!-- test: two-nested-slots-of-one-tuple-take-their-own-surfaces -->
+<!-- tier: stdlib -->
 
 ⭐ **THE STRONGEST FORM OF THE OVER-ACCEPTANCE CONTROL: both spellings in ONE tuple, one statement.** Slot 1's
 slot 1 is a buffer and answers `length()` (4); slot 0's slot 0 is a `ByteArray` and answers `count()` (5).
@@ -3290,6 +3387,7 @@ end 'main'
 ```
 
 <!-- test: error.a-byte-array-slot-beside-a-buffer-slot-keeps-the-array-surface -->
+<!-- tier: stdlib -->
 
 And the refusal half of that same tuple: the `ByteArray`-spelled nested slot is still refused `length`, in a
 type that carries a buffer at another slot. A mask that set the wrong bit, or a walk that skipped the wrong
@@ -3311,6 +3409,7 @@ error E2015: <fragment>:10:15: Unsupported: `Array` member 'length' — the comp
 ```
 
 <!-- test: a-seventy-element-tuple-carries-its-last-slots-surface -->
+<!-- tier: stdlib -->
 
 ⭐ **THERE IS NO ARITY CEILING, AND THIS IS WHAT SAYS SO.** A flat 62-slot mask would have to REFUSE a
 wider tuple type, because a 63rd slot would silently lose its bit. A tree has one node per named
@@ -3350,6 +3449,7 @@ the declaration SWEEP that captures *"this position spelled `__ManagedMemory`"* 
 a payload's answer, or the mark alone reads nothing. The column holds the fact; the mark is what reads it.
 
 <!-- test: union-payload-declared-managed-memory-serves-the-roster -->
+<!-- tier: stdlib -->
 
 The false-reject half, and without the mark it is WRONG rather than merely permissive: `length()` is the buffer
 roster's FIRST member. The payload value is an ordinary `"hello".toByteArray()` — nothing about the VALUE
@@ -3379,6 +3479,7 @@ end 'main'
 ```
 
 <!-- test: error.union-payload-declared-managed-memory-refuses-an-array-member -->
+<!-- tier: stdlib -->
 
 The refusal half. `count` is an `Array` member and not a buffer one, so the binding is refused it — and
 refused it with the BUFFER's roster, which is what says the message answers for the type it is shown about.
@@ -3409,6 +3510,7 @@ error E2015: <fragment>:11:18: Unsupported: `__ManagedMemory` member 'count' —
 ```
 
 <!-- test: union-payload-declared-managed-memory-serves-a-shared-member -->
+<!-- tier: stdlib -->
 
 The POSITIVE CONTROL — a member BOTH rosters name, so it answers on either side of the flip and pins that
 the payload binding stayed usable rather than merely changing which refusal it gets. `capacity` is on the
@@ -3429,7 +3531,7 @@ function room(h Held) returns Int
 end 'room'
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	let h = Held.mem(mm)
 	return room(h) as ExitCode
@@ -3498,6 +3600,7 @@ end 'main'
 ```
 
 <!-- test: union-payload-declared-an-array-of-buffers-serves-the-roster -->
+<!-- tier: stdlib -->
 
 ⭐ **THE SLOT MECHANISM'S DEPTH AT THE NEW DOOR, and it comes free rather than needing a second mechanism**: a payload
 declared `BufArray` hands its ELEMENTS the buffer surface, so `x.get(0).length()` answers. The element bit
@@ -3531,6 +3634,7 @@ end 'main'
 ```
 
 <!-- test: error.a-tuple-slot-mark-does-not-leak-into-a-parameter-default-helper -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **THE SIXTH VALUE SPACE — a PARAMETER DEFAULT's synthesized helper — must reset all three surface
 columns, not one.** `error.tuple-slot-mark-does-not-leak-across-functions`
@@ -3572,6 +3676,7 @@ error E2015: <fragment>:8:44: Unsupported: `Array` member 'length' — the compi
 ```
 
 <!-- test: a-sibling-files-buffer-array-payload-serves-the-roster-alias-file-first -->
+<!-- tier: stdlib -->
 
 ⭐ **THE FILE-ORDER PAIR AT THE NEW DOOR.** `union-payload-declared-an-array-of-buffers-serves-the-roster`
 above is single-file, and a member roster can depend on FILE ORDER — the identical two-file program compiling
@@ -3610,6 +3715,7 @@ end 'main'
 ```
 
 <!-- test: a-sibling-files-buffer-array-payload-serves-the-roster-alias-file-last -->
+<!-- tier: stdlib -->
 
 ⭐ **The other half — the identical program, its two files declared the other way round.** Here the alias is
 NOT yet registered when the union is swept, so the payload type stays `named("BufArray")`, the sweep's stored
@@ -3671,6 +3777,7 @@ file orders between them: a swept type is still `named` EXACTLY when the alias w
 is EXACTLY when the token test found nothing, because both conditions are `recordGenericAlias`'s ONE write.
 
 <!-- test: a-buffer-alias-serves-the-roster-at-a-struct-field -->
+<!-- tier: stdlib -->
 
 The ten-line repro, through TWO doors on one layout — `h.buf` from outside the type and a bare `self.buf`
 from inside a method — for the reason `declared-field-serves-the-roster` states about the bare spelling:
@@ -3702,6 +3809,7 @@ end 'main'
 ```
 
 <!-- test: error.a-buffer-alias-at-a-struct-field-refuses-an-array-member -->
+<!-- tier: stdlib -->
 
 The refusal half. `count` is an `Array` member and not a buffer one, so the field is refused it — and refused
 it with the BUFFER's roster, which is what says the message answers for the type it is shown about. **This
@@ -3775,6 +3883,7 @@ end 'main'
 ```
 
 <!-- test: a-buffer-alias-serves-the-roster-at-a-declared-return -->
+<!-- tier: stdlib -->
 
 The RETURN clause is the second swept position, and it is read through the same one fold
 (`ProgramSignatures.declaredReturnSurface`). Nothing about the VALUE says buffer — it is an ordinary
@@ -3813,6 +3922,7 @@ error E2015: <fragment>:7:19: Unsupported: `Array` member 'length' — the compi
 ```
 
 <!-- test: a-buffer-alias-serves-the-roster-at-a-union-payload -->
+<!-- tier: stdlib -->
 
 The union PAYLOAD is the third swept position, and it reaches the same derivation through
 `payloadSurfaceOf`. Three positions, one fold — which is what says this is ONE defect and not three.
@@ -3843,6 +3953,7 @@ end 'main'
 ```
 
 <!-- test: an-inner-buffer-alias-serves-the-roster-at-a-struct-field -->
+<!-- tier: stdlib -->
 
 ⭐ **AN ALIAS DECLARED INSIDE THE TYPE, which is the spelling `stdlib/Character.maxon` and
 `stdlib/String.maxon` actually write** (`typealias ByteMemory = __ManagedMemory with Byte` inside
@@ -3877,6 +3988,7 @@ end 'main'
 ```
 
 <!-- test: a-cast-to-a-qualified-inner-alias-converts -->
+<!-- tier: stdlib -->
 
 The inner alias reached from OUTSIDE its type, by its qualified name, as the target of an `as`: the
 library `ByteArray` converts to `Holder.Mem`, as it converts to a top-level `ByteBuffer`.
@@ -3907,6 +4019,7 @@ end 'main'
 ```
 
 <!-- test: a-sibling-files-buffer-alias-serves-the-roster-alias-file-first -->
+<!-- tier: stdlib -->
 
 ⭐ **THE FILE-ORDER PAIR, which is what proves the cure is a COMPLEMENTARY half and not a replacement.**
 **Alias file FIRST**: the alias is already registered when `main.maxon` is swept, so the field type has
@@ -3942,6 +4055,7 @@ end 'main'
 ```
 
 <!-- test: a-sibling-files-buffer-alias-serves-the-roster-alias-file-last -->
+<!-- tier: stdlib -->
 
 ⭐ **The other half — the identical program, its two files declared the other way round.** Here the alias is
 NOT yet registered when `main.maxon` is swept, so the field type stays `named("ByteBuffer")`, the stored
@@ -3998,6 +4112,7 @@ SPELLING is resolved to the reader's own declaration before either set is asked
 empty map and allocates nothing.
 
 <!-- test: a-contested-alias-takes-each-files-own-buffer-spelling -->
+<!-- tier: stdlib -->
 
 Both halves in one program, so neither can be satisfied by handing everything one surface: `bufferWidth`'s
 parameter must reach `length` (its file spelled the buffer) and `arrayWidth`'s must reach `count` (its file
@@ -4034,6 +4149,7 @@ end 'main'
 ```
 
 <!-- test: a-contested-alias-takes-each-files-own-buffer-spelling-at-a-struct-field -->
+<!-- tier: stdlib -->
 
 ⭐ **THE FIELD DOOR'S HALF, WHICH TAKES A DIFFERENT ROUTE TO THE SAME ANSWER AND SO NEEDS ITS OWN CASE.** A
 contested name has its recorded field type REWRITTEN to a per-instance mint
@@ -4085,6 +4201,7 @@ end 'main'
 ```
 
 <!-- test: a-family-buffer-alias-keeps-its-buffer-surface -->
+<!-- tier: stdlib -->
 
 An alias whose name a nominal type in another directory also holds is a declaration of its own, and it keeps
 the surface its spelling gives it. `buf.maxon` spells `B` as the buffer; `shapes/` declares a `module type B`,
@@ -4142,6 +4259,7 @@ in the two spellings, because a rule about a roster is only pinned by BOTH direc
 must reach `length`, and the `ByteArray` spelling must still be refused it and still answer `count`.
 
 <!-- test: a-generic-arguments-buffer-spelling-reaches-a-substituted-return -->
+<!-- tier: stdlib -->
 
 The base case, and it needs two things at once: the FACTORY has to stamp the spelling the call site wrote
 (`gid` cannot answer, and `BufCell.make(…)` mints a value with no declared type to read), and the
@@ -4228,6 +4346,7 @@ end 'main'
 ```
 
 <!-- test: a-declared-parameter-carries-the-argument-spelling-into-a-substituted-return -->
+<!-- tier: stdlib -->
 
 The receiver's mark reaching the call from a DECLARED position rather than from the factory — a parameter
 typed with the alias, in a function that never sees where the value was built.
@@ -4260,6 +4379,7 @@ end 'main'
 ```
 
 <!-- test: a-generic-field-read-carries-the-argument-spelling -->
+<!-- tier: stdlib -->
 
 The FIELD door, which is the same crossing one op earlier: `var slot as U` names the buffer nowhere, so a
 declaration-side surface can never answer for it, and the read has to take the receiver's argument spelling.
@@ -4288,6 +4408,7 @@ end 'main'
 ```
 
 <!-- test: an-inner-alias-return-carries-the-argument-spelling-one-hop-further -->
+<!-- tier: stdlib -->
 
 ⭐⭐ **TWO HOPS, WHICH IS THE SHAPE A `for m in bufs` OVER A CORPUS `Array` IS.** `inner()` returns the
 body's own `typealias TCell = Cell with T`, so the argument lands at the RESULT's own argument 0 rather than
@@ -4416,21 +4537,21 @@ end 'main'
 
 ## The two buffer members the corpus keeps to itself
 
-<!-- test: error.buffer-toCString-is-stdlib-only -->
-### `toCString()` is STDLIB-ONLY
+<!-- test: error.buffer-toCString-is-library-tier -->
+### `toCString()` is LIBRARY-TIER
+
+A user file never reaches this member: the `.managed` read that would hand it a buffer is refused first, with
+**E3185**, because a raw buffer is reachable only from a source file under `stdlib/` or `runtime/`.
 
 ⭐⭐ **A `cstring` IS A RAW ADDRESS WITH NO OWNER, AND THAT IS THE TYPE'S CONTRACT RATHER THAN A GAP** —
 no length, no capacity, no refcount, and no drop that could reclaim it. `__mm_to_cstring` hands the
 receiver's own buffer back when `buffer[length]` is already 0 and COPIES otherwise, and the copy is the
-half nothing owns. A zero-copy view is exactly the receiver whose next byte belongs to its parent, so a
-program reaching this door through `arr.managed` takes the copy path on ordinary input: admitted, the
-program below exits **101** — the leak gate — where the `.length()` control on the same slice exits 0.
+half nothing owns. A zero-copy view is exactly the receiver whose next byte belongs to its parent, so the
+slice below takes the copy path on ordinary input, and the copy is never reclaimed.
 
-⇒ The member stays on the buffer roster, because the corpus DOES call it (`stdlib/String.maxon:198`'s
-`cstr()`), and the visibility that declaration carries is enforced the only way the compiler can enforce it: on
-the file's physical location, exactly as the four stdlib-only `String` byte doors are
-(`Parser.requireStdlibOnlyStringMethod`). The ownership question belongs to whatever gives `cstring`
-a producer and a consumer; while nothing does, no user program can be the one that asks it.
+⇒ The member stays on the buffer roster, because the corpus DOES call it (`stdlib/String.maxon`'s
+`cstr()`), and only library code can name a buffer to call it on. The ownership question belongs to whatever
+gives `cstring` a producer and a consumer; while nothing does, no user program can be the one that asks it.
 ```maxon
 function main() returns ExitCode
 	let bytes = "abcd".toByteArray()
@@ -4440,18 +4561,21 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:22: Unsupported: `__ManagedMemory` member 'toCString' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which is not exported to user code) and this file is not under `stdlib/`. `toCString` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `makeCharFromBytes` trusts its caller for `pos + len <= length()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `byteAt`, which is bounds-checked and throwing
+error E3185: <fragment>:5:14: '.managed' read from outside the library tiers: a value's raw '__ManagedMemory' buffer is reachable only from a source file under stdlib/ or runtime/ — use the 'Array' methods
 ```
 
-<!-- test: error.buffer-makeCharFromBytes-is-stdlib-only -->
-### `makeCharFromBytes(pos, len)` is STDLIB-ONLY
+<!-- test: error.buffer-makeCharFromBytes-is-library-tier -->
+### `makeCharFromBytes(pos, len)` is LIBRARY-TIER
+
+A user file is refused at the first raw door it names — here the `__ManagedMemory` type — with **E3185**.
 
 The same gate, and the second member behind it. Its corpus declaration is a `module function`
 (`stdlib/String.maxon:321`) whose stated contract is *"callers must guarantee `pos + len <=
 byteLength()`"* — a PRECONDITION, so the graph it forwards to (`__char_at`, the one door a `Character` is
 born through) copies the window without checking it. `__char_at` is shared with `for c in s`, whose window
-comes from the segmenter and is in range by construction, so the check does not belong inside it. Handed
-a window from USER code the copy walks off the buffer: admitted, the program below dies with **0xC0000005**.
+comes from the segmenter and is in range by construction, so the check does not belong inside it. The window
+below runs a billion bytes past a two-byte buffer, and the copy would walk off it; library code is trusted
+with the precondition, and a user file cannot name a buffer to break it.
 ```maxon
 function main() returns ExitCode
 	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
@@ -4461,7 +4585,26 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:13: Unsupported: `__ManagedMemory` member 'makeCharFromBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which is not exported to user code) and this file is not under `stdlib/`. `toCString` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `makeCharFromBytes` trusts its caller for `pos + len <= length()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `byteAt`, which is bounds-checked and throwing
+error E3185: <fragment>:3:15: '__ManagedMemory' named outside the library tiers: the raw buffer type is nameable only from a source file under stdlib/ or runtime/ — use 'Array'
+```
+
+<!-- test: error.buffer-makeCharFromBytes-needs-a-byte-record-receiver -->
+<!-- tier: stdlib -->
+### Library code calling `makeCharFromBytes` on a bare buffer is refused, not a compiler panic
+
+`__char_at` reads the byte record's single-byte-grapheme flag one slot past a bare 48-byte buffer record, so
+the member is reachable only through a `String`'s or a `Character`'s own buffer. Library code that hands it any
+other receiver gets a diagnostic.
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	let c = mm.makeCharFromBytes(0, len: 1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:13: Unsupported: `__ManagedMemory` member 'makeCharFromBytes' reached a receiver that is not a String's or a Character's own buffer — `__char_at` reads the single-byte-grapheme flag one slot past a bare buffer record; call it through a String or Character receiver
 ```
 
 ## The FUSED Record Path's Safety Argument Is About The RECORD
@@ -4551,6 +4694,7 @@ ELEMENT the door on the other side is asked about, never what it asks** — so n
 covering that.
 
 <!-- test: the-fused-append-path-agrees-with-the-value-path -->
+<!-- tier: stdlib -->
 **THE SUBJECT.** The bare, fused spelling must answer what the value spelling answers. Two elements
 appended to themselves is four.
 ```maxon
@@ -4576,6 +4720,7 @@ end 'main'
 ```
 
 <!-- test: the-bare-fused-append-answers-the-same -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE CASE THIS SECTION EXISTS FOR — the receiver written BARE, which is the spelling that takes the fused
 record path.** Handed the byte instance, this program does not produce a wrong answer, it **kills the
 compiler**; the control above compiles and runs to 4 either way, which is what says the operation is
@@ -4603,6 +4748,7 @@ end 'main'
 ```
 
 <!-- test: the-other-fused-readers-already-agreed-and-must-go-on-agreeing -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE NEUTRALITY CONTROL, AND IT IS WHAT BOUNDS THE BLAST RADIUS.** `length` and `byteAt` answer
 identically through both routes even under the byte instance
 (`bareLen=2 selfLen=2 bareByteAt=7 selfByteAt=7`) — so `append` is the only one of the three the byte

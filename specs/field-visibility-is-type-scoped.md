@@ -133,3 +133,106 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: error.an-extension-in-another-file-cannot-read-a-private-field-of-the-extended-type -->
+`Map` is declared in the standard library, so an `extension Map` in a program file is outside the type: `self.keys` is
+`Map`'s private field.
+
+```maxon
+typealias Index = Map with (String, Count)
+
+extension Map
+	function slots() returns Count
+		return self.keys.count()
+	end 'slots'
+end 'Map'
+
+function main() returns ExitCode
+	var index = Index.create()
+	index.upsert("key", value: 1)
+	return index.slots() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3014: <fragment>:6:15: cannot access unexported field: 'keys' outside of type 'Map'
+```
+
+<!-- test: error.an-extension-in-another-file-cannot-write-a-private-field-of-the-extended-type -->
+A write of a private field breaks the type's invariants, so it is refused the same way.
+
+```maxon
+typealias Index = Map with (String, Count)
+
+extension Map
+	function corrupt()
+		self.capacity = 0
+	end 'corrupt'
+end 'Map'
+
+function main() returns ExitCode
+	var index = Index.create()
+	index.corrupt()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3014: <fragment>:6:8: cannot access unexported field: 'capacity' outside of type 'Map'
+```
+
+<!-- test: error.an-extension-in-another-file-cannot-read-a-private-field-by-its-bare-name -->
+The bare spelling of the same read.
+
+```maxon
+typealias Index = Map with (String, Count)
+
+extension Map
+	function slots() returns Count
+		return keys.count()
+	end 'slots'
+end 'Map'
+
+function main() returns ExitCode
+	var index = Index.create()
+	index.upsert("key", value: 1)
+	return index.slots() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3014: <fragment>:6:10: cannot access unexported field: 'keys' outside of type 'Map'
+```
+
+<!-- test: an-extension-in-the-types-own-file-reaches-its-private-field -->
+An extension that sits in the file that declares the type is part of it: `self.hidden` and the bare `hidden` are the
+type's own private field.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var hidden as Integer
+
+	static function create(hidden Integer) returns Self
+		return Self{hidden: hidden}
+	end 'create'
+end 'Counter'
+
+extension Counter
+	function peek() returns Integer
+		return self.hidden
+	end 'peek'
+
+	function bump()
+		self.hidden = self.hidden + 1
+		hidden = hidden + 1
+	end 'bump'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(40)
+	c.bump()
+	return c.peek() as ExitCode
+end 'main'
+```
+```exitcode
+42
+```

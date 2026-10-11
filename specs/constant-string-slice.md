@@ -67,7 +67,8 @@ would there silently succeed and corrupt every other use of those bytes.
 
 ### How these cases measure it
 
-The counters are `builtins-mm-counters.md`'s, read as the SUM of the tracked and raw layers — in a
+The counters are `HeapStats.allocationsMade()` and `HeapStats.rawAllocationsMade()`
+(`builtins-mm-counters.md`), read as the SUM of the tracked and raw layers — in a
 one-thread program, exactly the process-wide allocation total `PhaseProbe` brackets a phase with. Each
 case brackets ONLY the slice, because `print` and interpolation allocate on their own account.
 
@@ -80,9 +81,9 @@ delta.
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
-	let before = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	let before = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	let sub = s.slice(s.startIndex(), endIndex: s.endIndex())
-	let after = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	let after = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	print("{after - before} {sub}\n")
 	return 0
 end 'main'
@@ -100,9 +101,9 @@ can cut for itself. `"hello world"` is single-byte-grapheme, so `length: 5` is f
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
-	let before = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	let before = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	let sub = s.slice(s.startIndex(), length: 5)
-	let after = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	let after = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	print("{after - before} {sub}\n")
 	return 0
 end 'main'
@@ -121,9 +122,9 @@ holds its parent alive.
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
-	let before = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	let before = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	let sub = s.slice(s.startIndex(), length: 0)
-	let after = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	let after = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	print("{after - before} [{sub}] {sub.count()}\n")
 	return 0
 end 'main'
@@ -143,7 +144,7 @@ above and fail this one.
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
-	let before = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	let before = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	var total = 0
 	var trips = 0
 	while trips < 500 'loop'
@@ -151,7 +152,7 @@ function main() returns ExitCode
 		total = total + sub.byteLength()
 		trips = trips + 1
 	end 'loop'
-	let after = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	let after = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	print("{after - before} {total}\n")
 	return 0
 end 'main'
@@ -214,10 +215,10 @@ this, a fold that quietly guessed at a `findFirst` result would look exactly lik
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
-	let before = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	let before = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	let idx = try s.findFirst(" ") otherwise s.endIndex()
 	let sub = s.slice(s.startIndex(), endIndex: idx)
-	let after = __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	let after = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 	print("{after > before} {sub}\n")
 	return 0
 end 'main'

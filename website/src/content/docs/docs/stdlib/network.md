@@ -267,6 +267,9 @@ transfer, TLS and `Expect: 100-continue` are outside it.
 | `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline. |
 | `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
 
+`close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
+[E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord).
+
 `serve` hands each exchange to `handler.handle`. A handler that throws, or returns without answering, has
 its exchange answered `500` with an empty body, and `handler.faulted` is told. A request `accept()` refuses
 has already been answered with its status (see [Protocol errors](#protocol-errors)), and `serve` goes on
@@ -304,6 +307,10 @@ lines ahead of the request line are skipped. Header lines follow [Header parsing
 | `request()` | `HttpRequest` | — | The request that arrived, with its body. For an origin-form target `url()` is built as `http://<Host><target>`, so `path()` and `query()` read the target; an HTTP/1.0 request that sent no `Host` has a hostless `url()`, whose `host()` throws `fieldNotPresent`. For an absolute-form target `url()` is read from the target. |
 | `respond(response HttpResponse)` | — | `HttpServerError` | Write the response and close the connection. Throws `alreadyResponded` on a second answer, `invalidResponse` for a response the rules below refuse, and `sendFailed` when the write fails or outlasts `writeDeadlineMs`. |
 | `respondWith(code StatusCode, body String, contentType String)` | — | `HttpServerError` | Answer a status, a body and its content type, as `respond` does. |
+
+`respond` and `respondWith` record that the exchange is answered, so an exchange from `accept()` is held in
+a `var` to answer it; through a `let` it is [E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord).
+A handler answers the `exchange` parameter `serve` hands it directly.
 
 Every response carries `Connection: close`, and a `Content-Length` computed from its body whenever its
 status allows a body: every status but 204 and 304, which end at their headers. The server writes both

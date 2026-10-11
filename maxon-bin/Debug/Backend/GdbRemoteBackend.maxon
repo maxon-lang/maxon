@@ -83,6 +83,13 @@ end 'GdbSlotChoice'
 union GdbRemoteLink
 	unconnected
 	connected(connection GdbRemoteConnection)
+
+	function connection() returns GdbRemoteConnection throws AbsentError
+		match self 'link'
+			unconnected then throw AbsentError.absent
+			connected(held) then return held
+		end 'link'
+	end 'connection'
 end 'GdbRemoteLink'
 
 union GdbListenerHold
@@ -239,9 +246,8 @@ export type GdbRemoteBackend
 	end 'holdsItsScratch'
 
 	export function close()
-		match self.link 'linked'
-			unconnected then break
-			connected(connection) then connection.close()
+		if var connection = try self.link.connection() 'linked'
+			connection.close()
 		end 'linked'
 
 		self.link = GdbRemoteLink.unconnected
@@ -252,7 +258,9 @@ export type GdbRemoteBackend
 	function stubReaped()
 		self.stubOutputDrained()
 
-		match self.stubProcess 'stub'
+		var heldStub = self.stubProcess
+
+		match heldStub 'stub'
 			none then return
 			running(child) then gdbStubEnded(child)
 		end 'stub'
@@ -416,7 +424,9 @@ export type GdbRemoteBackend
 			return BackendAdoption.refused("the debug stub answered '{payload}' where the program's first stop was asked for")
 		end 'notAStopAtAll'
 
-		match gdbStopReportOf(payload) 'read'
+		var stopRead = gdbStopReportOf(payload)
+
+		match stopRead 'read'
 			malformed then return BackendAdoption.refused("the debug stub's first stop reply, '{payload}', names no thread")
 			report(stop) then self.recordStop(stop)
 		end 'read'
@@ -519,7 +529,9 @@ export type GdbRemoteBackend
 			return BackendEventClass.bookkeeping
 		end 'notAStopReply'
 
-		match gdbStopReportOf(payload) 'read'
+		var stopRead = gdbStopReportOf(payload)
+
+		match stopRead 'read'
 			malformed then return BackendEventClass.bookkeeping
 			report(stop) then self.recordStop(stop)
 		end 'read'
@@ -1114,7 +1126,9 @@ export type GdbRemoteBackend
 			return self.borrowedStopKeptWaiting()
 		end 'notAStopReply'
 
-		match gdbStopReportOf(payload) 'read'
+		var stopRead = gdbStopReportOf(payload)
+
+		match stopRead 'read'
 			malformed then return false
 			report(stop) then self.recordStop(stop)
 		end 'read'
@@ -1140,10 +1154,9 @@ export type GdbRemoteBackend
 	end 'borrowedStopKeptWaiting'
 
 	function interruptTheProgram() returns bool
-		match self.link 'linked'
-			unconnected then return false
-			connected(connection) then return connection.interrupt()
-		end 'linked'
+		var connection = try self.link.connection() otherwise return false
+
+		return connection.interrupt()
 	end 'interruptTheProgram'
 
 	function returnedTheBorrowedStop(borrowed bool)
@@ -1222,13 +1235,11 @@ export type GdbRemoteBackend
 	// --- memory ---
 
 	export function readMemory(address DebugAddress, bytes BackendByteCount) returns BackendMemoryRead
-		if bytes == 0 'nothingAsked'
-			return BackendMemoryRead.read(ByteArray.create())
-		end 'nothingAsked'
-
-		if bytes > TransferWindowBytes 'pastTheWindow'
-			return BackendMemoryRead.unreadable
-		end 'pastTheWindow'
+		match transferSizeOf(bytes as TransferByteCount) 'size'
+			nothing then return BackendMemoryRead.read(ByteArray.create())
+			pastTheWindow then return BackendMemoryRead.unreadable
+			withinTheWindow then break
+		end 'size'
 
 		let borrowed = self.borrowedStop()
 		let seen = self.askStub("m{address:x},{bytes:x}")
@@ -1246,13 +1257,11 @@ export type GdbRemoteBackend
 	// ⛔ **A WRITE OF NOTHING IS NOT SENT.** The stub hangs on a zero-length write rather than refusing one,
 	// and an engine that restores an empty original asks for exactly that.
 	export function writeMemory(address DebugAddress, bytes ByteArray) returns bool
-		if bytes.count() == 0 'nothingToWrite'
-			return true
-		end 'nothingToWrite'
-
-		if (bytes.count() as BackendByteCount) > TransferWindowBytes 'pastTheWindow'
-			return false
-		end 'pastTheWindow'
+		match transferSizeOf(bytes.count() as TransferByteCount) 'size'
+			nothing then return true
+			pastTheWindow then return false
+			withinTheWindow then break
+		end 'size'
 
 		let borrowed = self.borrowedStop()
 		let written = self.askStub("M{address:x},{bytes.count():x}:{gdbHexTextOf(bytes)}")
@@ -1384,38 +1393,33 @@ export type GdbRemoteBackend
 	// --- the one door onto the connection ---
 
 	function askStub(payload String) returns GdbAnswer
-		match self.link 'linked'
-			unconnected then return GdbAnswer.broken(GdbNotConnectedReason)
-			connected(connection) then return connection.ask(payload)
-		end 'linked'
+		var connection = try self.link.connection() otherwise return GdbAnswer.broken(GdbNotConnectedReason)
+
+		return connection.ask(payload)
 	end 'askStub'
 
 	function answerWithin(budgetMs GdbWaitMs) returns GdbAnswer
-		match self.link 'linked'
-			unconnected then return GdbAnswer.broken(GdbNotConnectedReason)
-			connected(connection) then return connection.answerWithin(budgetMs)
-		end 'linked'
+		var connection = try self.link.connection() otherwise return GdbAnswer.broken(GdbNotConnectedReason)
+
+		return connection.answerWithin(budgetMs)
 	end 'answerWithin'
 
 	function tellStub(payload String) returns bool
-		match self.link 'linked'
-			unconnected then return false
-			connected(connection) then return connection.writePacket(payload)
-		end 'linked'
+		var connection = try self.link.connection() otherwise return false
+
+		return connection.writePacket(payload)
 	end 'tellStub'
 
 	function shakeHands() returns GdbHandshake
-		match self.link 'linked'
-			unconnected then return GdbHandshake.refused(GdbNotConnectedReason)
-			connected(connection) then return connection.shakeHands()
-		end 'linked'
+		var connection = try self.link.connection() otherwise return GdbHandshake.refused(GdbNotConnectedReason)
+
+		return connection.shakeHands()
 	end 'shakeHands'
 
 	function threadSuffixSupported() returns bool
-		match self.link 'linked'
-			unconnected then return false
-			connected(connection) then return connection.threadSuffixSupported()
-		end 'linked'
+		let connection = try self.link.connection() otherwise return false
+
+		return connection.threadSuffixSupported()
 	end 'threadSuffixSupported'
 end 'GdbRemoteBackend'
 

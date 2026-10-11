@@ -46,20 +46,19 @@ var r2 = await p2
   **`E3073` is not a side condition — it is the model stated as a rule.** `async` buys overlapped
   waiting, so spawning something that can never give up the green thread buys nothing at all: it would
   simply run to completion at the spawn point. A CPU-bound function that legitimately never waits says
-  so with `__Builtins.parallelBoundary()` (see `builtins-parallel-boundary.md`).
+  so with `Scheduler.parallelBoundary()` (see `builtins-parallel-boundary.md`).
 - Throwing async functions require `try await` to extract the result
 - `promise.cancel()` cancels the associated green thread
 - **`await` is LINEAR**: a promise is awaited exactly once, and a second await is a compile error (E3100)
 
-**Arguments move.**
-An `async` call's arguments MOVE into the coroutine, for `let` and `var` bindings alike: the reference
-transfers, the caller's binding is consumed (a later read is E3102), and a scalar is copied. Handing one
-binding twice in one call is E3102. A parameter the callee reassigns gets storage the coroutine owns;
-nothing is written back to the caller, and a coroutine may write a moved `let`. A function PARAMETER or a
-`self` FIELD passed to `async` is co-owned instead — it cannot be consumed — which is how a handle (an
-`HttpServer`, a socket) is shared with a coroutine. A module-level `let` stays shared. E3138 at an `async`
-call refuses only a reference held without a count. A closure handed to `async` moves into the coroutine
-like any other managed value.
+**Arguments are shared.**
+An `async` call's arguments are shared with the coroutine exactly as an ordinary call shares them: the caller
+and its coroutines are one strand of one green thread, so the coroutine takes a plain count of its own on each
+managed argument and the caller's binding stays usable. A `var` handed to `async` is read and written after
+the call as before, a `let` is shared read-only, and one binding may be handed twice in one call. A coroutine
+that writes its parameter is refused a read-only argument (E3159), as an ordinary call is. A parameter the
+callee reassigns gets storage the coroutine owns; nothing is written back to the caller. A closure that
+captured a binding owns it, so handing that binding to `async` afterwards is a use after move (E3102).
 
 **Await is linear.**
 The thunk owns its result and hands it over at the `await`. A second await of the same promise
@@ -1730,7 +1729,20 @@ Every other reading of `<base>.<member>(…)` reaches the same door and is refus
 target that is not a linked function is a link failure or a wrong answer at run time rather than a
 diagnostic.
 
+<!-- test: async-await.error.qualified-spawn-compiler-owned-static-outside-the-library-tiers -->
+Outside the library tiers the raw type's name is refused first, at the type the spawn names.
+```maxon
+function main() returns ExitCode
+	let p = async __ManagedFile.readAll("x")
+	return await p
+end 'main'
+```
+```maxoncstderr
+error E3185: <fragment>:3:16: '__ManagedFile' named outside the library tiers: the raw OS file handle type is nameable only from a source file under stdlib/ or runtime/ — use 'File'
+```
+
 <!-- test: async-await.error.qualified-spawn-compiler-owned-static -->
+<!-- tier: stdlib -->
 A static on a compiler-owned surface is served by a runtime entry the compiler emits, so there is no
 declared function whose address the scheduler could be handed. The roster (`__ManagedFile`,
 `__ManagedDirectory`, `__ManagedSocket`, `__ManagedMemory`, a container alias) shares this one refusal
@@ -1742,7 +1754,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/async-await/async-await.error.qualified-spawn-compiler-owned-static.maxon:3:16: Unsupported: `async __ManagedFile.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it
+error E2015: <fragment>:3:16: Unsupported: `async __ManagedFile.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it
 ```
 
 <!-- test: async-await.error.qualified-spawn-container-alias-static -->
@@ -2079,8 +2091,8 @@ end 'main'
 9
 ```
 
-<!-- test: async-await.a-string-read-after-an-async-spawn-is-use-after-move -->
-A managed `var` handed to `async` is moved into the coroutine.
+<!-- test: async-await.a-string-read-after-an-async-spawn-is-shared -->
+A managed `var` handed to `async` is shared with the coroutine, so the caller reads it again after the spawn.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2098,12 +2110,17 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:13:10: use of moved value 'word': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+hello padded out long enough to heap allocate 1
+hello padded out long enough to heap allocate 1!
+1
 ```
 
-<!-- test: async-await.a-let-read-after-an-async-spawn-is-use-after-move -->
-A managed `let` handed to `async` is moved into the coroutine exactly as a `var` is.
+<!-- test: async-await.a-let-read-after-an-async-spawn-is-shared -->
+A managed `let` handed to `async` is shared with the coroutine exactly as a `var` is.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2121,12 +2138,18 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:13:10: use of moved value 'word': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+hello padded out long enough to heap allocate 1
+hello padded out long enough to heap allocate 1!
+1
 ```
 
-<!-- test: async-await.a-let-moved-into-async-is-freed-once-by-the-coroutine -->
-The coroutine owns the moved `let` and releases it once, after the caller's frame has moved on.
+<!-- test: async-await.a-let-shared-with-async-is-freed-once-by-the-coroutine -->
+The coroutine holds a count of its own on the shared `let` and releases it once, after the caller's frame has
+moved on.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -2156,9 +2179,10 @@ hello padded out long enough to heap allocate 1!
 47
 ```
 
-<!-- test: async-await.a-let-moved-into-async-may-be-written-by-the-coroutine -->
-The coroutine owns a `let` moved into it, so a target that writes its parameter is handed it as it would be a
-`var`: the caller's binding is gone and nothing else sees the record.
+<!-- test: async-await.error.a-let-handed-to-async-cannot-be-written-by-the-coroutine -->
+<!-- unsupported-targets: wasm32-wasi -->
+A `let` handed to `async` is shared read-only, so a target that writes its parameter may not be handed it.
+wasm32-wasi has no coroutines, so it answers `E3104` for the `async` before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2182,12 +2206,44 @@ function main() returns ExitCode
 	return await pending as ExitCode
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3159: <fragment>:20:22: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
-<!-- test: async-await.a-cell-resident-var-handed-to-async-is-moved -->
-`word` lives in a cell because `fill` reassigns its parameter; the coroutine takes the cell's contents.
+<!-- test: async-await.a-var-handed-to-async-may-be-written-by-the-coroutine -->
+A `var` handed to `async` is shared with the coroutine, so a target that writes its parameter writes the record the
+caller's binding still holds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Box'
+
+function poke(p Box) returns Integer
+	Scheduler.yield()
+	p.n = p.n + 41
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	var b = Box.create()
+	let pending = async poke(b)
+	let written = await pending
+
+	return (written + b.n) as ExitCode
+end 'main'
+```
+```exitcode
+84
+```
+
+<!-- test: async-await.a-cell-resident-var-handed-to-async-is-shared -->
+`word` lives in a cell because `fill` reassigns its parameter; the coroutine shares the cell's contents.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2217,7 +2273,7 @@ filled 2 padded out long enough to heap allocate!
 48
 ```
 
-<!-- test: async-await.a-cell-resident-var-read-after-an-async-spawn-is-use-after-move -->
+<!-- test: async-await.a-cell-resident-var-read-after-an-async-spawn-is-shared -->
 The same cell-resident `var`, read after the spawn.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2241,13 +2297,18 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:18:10: use of moved value 'word': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+filled 2 padded out long enough to heap allocate
+filled 2 padded out long enough to heap allocate!
+48
 ```
 
-<!-- test: async-await.a-var-reassigned-after-a-closure-captured-it-is-moved-into-async -->
-The closure owns the value it captured, so the `var` reassigned afterwards holds a new value of its own, and that
-value moves into the coroutine while the closure goes on reading the first.
+<!-- test: async-await.a-var-reassigned-after-a-closure-captured-it-is-handed-to-async -->
+The closure owns the value it captured, so the `var` reassigned afterwards holds a new value of its own, and the
+coroutine shares that value while the closure goes on reading the first.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2271,7 +2332,7 @@ second padded out long enough to heap allocate 1!
 1 47
 ```
 
-<!-- test: async-await.error.a-cell-resident-var-a-closure-only-reads-cannot-be-moved-into-async -->
+<!-- test: async-await.error.a-cell-resident-var-a-closure-only-reads-cannot-be-handed-to-async -->
 A closure that only READS a cell-resident `var` takes the cell's occupant, so handing the `var` to the
 coroutine afterwards is a use after move.
 ```maxon
@@ -2304,7 +2365,7 @@ end 'main'
 error E3102: <fragment>:22:22: use of moved value 'word': its ownership moved to the closure that captures it
 ```
 
-<!-- test: async-await.error.a-cell-resident-var-read-after-a-nested-closure-cannot-be-moved-into-async -->
+<!-- test: async-await.error.a-cell-resident-var-read-after-a-nested-closure-cannot-be-handed-to-async -->
 The outer closure reads `word` after a nested closure has ended, so it still captures `word`, and handing the
 `var` to the coroutine afterwards is a use after move.
 ```maxon
@@ -2342,7 +2403,7 @@ end 'main'
 error E3102: <fragment>:27:22: use of moved value 'word': its ownership moved to the closure that captures it
 ```
 
-<!-- test: async-await.error.a-cell-resident-var-read-after-a-nested-closure-across-lines-cannot-be-moved-into-async -->
+<!-- test: async-await.error.a-cell-resident-var-read-after-a-nested-closure-across-lines-cannot-be-handed-to-async -->
 The nested closure's body ends at its own line break, and the outer closure's body goes on past it to read
 `word`.
 ```maxon
@@ -2383,8 +2444,8 @@ end 'main'
 error E3102: <fragment>:30:22: use of moved value 'word': its ownership moved to the closure that captures it
 ```
 
-<!-- test: async-await.a-let-whose-clone-a-closure-captured-is-moved-into-async -->
-The closure owns the clone it captured, so `b` moves into the coroutine and `peek` still reads its own record.
+<!-- test: async-await.a-let-whose-clone-a-closure-captured-is-handed-to-async -->
+The closure owns the clone it captured, so `b` is shared with the coroutine and `peek` still reads its own record.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2414,7 +2475,7 @@ end 'main'
 14
 ```
 
-<!-- test: async-await.a-var-whose-clone-a-closure-captured-is-moved-into-async -->
+<!-- test: async-await.a-var-whose-clone-a-closure-captured-is-handed-to-async -->
 The same capture of a clone of a `var` that stays out of a cell.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2449,8 +2510,8 @@ end 'main'
 14
 ```
 
-<!-- test: async-await.error.one-let-handed-twice-to-one-async-call-is-use-after-move -->
-The first argument moves `b` into the coroutine, so the second reads a moved value.
+<!-- test: async-await.one-let-handed-twice-to-one-async-call-is-shared -->
+Both arguments name the one `let` `b`: the coroutine shares the record under both parameters.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2473,12 +2534,12 @@ function main() returns ExitCode
 	return (await p) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:19:31: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+14
 ```
 
-<!-- test: async-await.error.a-let-and-its-alias-handed-to-one-async-call-are-refused -->
-`c` names the record `b` holds, so moving `b` into the coroutine leaves `c` a second owner of it.
+<!-- test: async-await.a-let-and-its-alias-handed-to-one-async-call-are-shared -->
+`c` names the record `b` holds, and both are read-only, so the coroutine shares the record under both parameters.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2502,14 +2563,14 @@ function main() returns ExitCode
 	return (await p) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3138: <fragment>:20:31: the value handed to `async pair(…)` is also read through a name that holds no reference of its own (`b`): a second name for the same record. An `async` call moves this value: the coroutine takes over the reference this frame held and releases it when it ends, so a reader holding no reference of its own would go on reading a record the coroutine may already have released. Pass a `.clone()`, or build the value at the call: an INTERPOLATION over it is a record nothing else can name
+```exitcode
+14
 ```
 
 <!-- test: async-await.error.a-match-payload-of-a-let-union-cannot-be-written-by-a-coroutine -->
 <!-- unsupported-targets: wasm32-wasi -->
-`b` is bound out of `w`, which is a `let`, and nothing proves `b` is the record's only owner, so a coroutine
-that writes its parameter may not be handed it.
+`b` is bound out of `w`, which is a `let`, so `b` is read-only and a coroutine that writes its parameter may not
+be handed it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2544,12 +2605,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:27:36: cannot pass 'b' to function that mutates parameter 'p' (in main)
+error E3159: <fragment>:27:36: cannot pass 'b', which is read-only (a `match` binding), to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
 <!-- test: async-await.error.an-element-the-array-still-holds-cannot-be-written-by-a-coroutine -->
 <!-- unsupported-targets: wasm32-wasi -->
-`a` reads an element `items` still holds, so a coroutine that writes its parameter may not be handed it.
+`a` is a `let` holding an element `items` still holds, so `a` is read-only and a coroutine that writes its
+parameter may not be handed it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Boxes = Array with Box
@@ -2578,12 +2640,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:23:22: cannot pass 'a' to function that mutates parameter 'p' (in main)
+error E3159: <fragment>:23:22: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
-<!-- test: async-await.a-counted-co-owner-bound-to-a-let-moves-into-async -->
-`first` hands back an element `items` still holds, so `a` holds its own reference to it: the coroutine takes
-that reference over and the array keeps its own.
+<!-- test: async-await.a-counted-co-owner-bound-to-a-let-is-shared-with-async -->
+`first` hands back an element `items` still holds, so `a` holds its own reference to it: the coroutine counts a
+reference of its own and the array keeps its own.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Boxes = Array with Box
@@ -2623,8 +2685,8 @@ end 'main'
 1 7
 ```
 
-<!-- test: async-await.error.a-counted-co-owner-moved-into-async-is-used-after-move -->
-The same `a`, read after the spawn took its reference.
+<!-- test: async-await.a-counted-co-owner-shared-with-async-is-read-after-the-spawn -->
+The same `a`, read after the spawn counted its own reference.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Boxes = Array with Box
@@ -2655,13 +2717,17 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:27:10: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+7
+7
 ```
 
-<!-- test: async-await.a-match-payload-the-union-still-holds-moves-into-a-reading-coroutine -->
+<!-- test: async-await.a-match-payload-the-union-still-holds-is-shared-with-a-reading-coroutine -->
 `w` is a `var`, so matching it leaves its payload in place and `b` holds its own reference to the record the
-union still holds: a coroutine that only reads it may take that reference over.
+union still holds: a coroutine that only reads it counts a reference of its own.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2742,13 +2808,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:25:22: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'p' (in main)
+error E3159: <fragment>:25:22: cannot pass a value read out of a module-level `let`, which is read-only, to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
-<!-- test: async-await.error.an-immutable-global-in-a-cell-cannot-be-written-by-a-coroutine -->
+<!-- test: async-await.error.a-let-naming-an-immutable-global-is-handed-to-neither-a-reassigning-function-nor-a-coroutine -->
 <!-- unsupported-targets: wasm32-wasi -->
-`b` is a cell-resident `var` holding the record the module-level `let G` holds, and after `bump` nothing proves
-which record it holds, so neither `bump` nor a coroutine that writes its parameter may be handed it.
+`b` is a `let` naming the record the module-level `let G` holds, so it is read-only: neither `bump`,
+which reassigns its parameter, nor a coroutine that writes its parameter may be handed it.
+wasm32-wasi has no coroutines, so it answers `E3104` for the `async` before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2777,7 +2844,7 @@ function poke(p Box) returns Integer
 end 'poke'
 
 function main() returns ExitCode
-	var b = G
+	let b = G
 	_ = bump(b)
 	print("{await async poke(b)}\n")
 	print("{G.n}\n")
@@ -2785,12 +2852,80 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:30:6: cannot pass 'b' to function that mutates parameter 'p' (in main)
-error E3019: <fragment>:31:22: cannot pass 'b' to function that mutates parameter 'p' (in main)
+error E3159: <fragment>:30:6: cannot pass 'b', which is read-only (a module-level `let`), to a function that writes parameter 'p' (in main); pass a clone()
+error E3159: <fragment>:31:22: cannot pass 'b', which is read-only (a module-level `let`), to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
-<!-- test: async-await.a-cell-resident-co-owner-moves-into-a-reading-coroutine -->
-A cell-resident `b` holding its own reference to an element `items` still holds is moved into a coroutine that
+<!-- test: async-await.error.an-immutable-global-in-a-let-cannot-be-written-by-a-coroutine -->
+<!-- unsupported-targets: wasm32-wasi -->
+`b` is a `let` naming the record the module-level `let G` holds, so a coroutine that writes its parameter may
+not be handed it.
+wasm32-wasi has no coroutines, so it answers `E3104` for the `async` before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+let G = Box.create()
+
+function poke(p Box) returns Integer
+	Scheduler.yield()
+	p.n = 99
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	let b = G
+	print("{await async poke(b)}\n")
+	print("{G.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:22:22: cannot pass 'b', which is read-only (a module-level `let`), to a function that writes parameter 'p' (in main); pass a clone()
+```
+
+<!-- test: async-await.error.an-immutable-global-is-not-bound-to-a-var-before-a-coroutine -->
+A `var` is a writable name, so it may not hold the record the module-level `let G` holds: the binding is refused
+before any coroutine is handed it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+let G = Box.create()
+
+function poke(p Box) returns Integer
+	Scheduler.yield()
+	p.n = 99
+	return p.n
+end 'poke'
+
+function main() returns ExitCode
+	var b = G
+	print("{await async poke(b)}\n")
+	print("{G.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:21:6: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: async-await.a-cell-resident-co-owner-is-shared-with-a-reading-coroutine -->
+A cell-resident `b` holding its own reference to an element `items` still holds is shared with a coroutine that
 only reads it, and the array keeps its own.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2931,10 +3066,9 @@ end 'main'
 error E3102: <fragment>:39:23: use of moved value 'b': its ownership moved to the closure that captures it
 ```
 
-<!-- test: async-await.error.a-var-the-loop-iterates-cannot-be-moved-into-async-inside-the-loop -->
-<!-- unsupported-targets: wasm32-wasi -->
-The spawn would move `items` into the coroutine while the loop still walks it and `x` still borrows one of
-its elements.
+<!-- test: async-await.a-var-the-loop-iterates-is-shared-with-async-inside-the-loop -->
+The loop holds its own reference to `items` and `x` its own reference to an element, so the spawn shares
+`items` with the coroutine and `x` is still readable after the coroutine has released its reference.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Words = Array with String
@@ -2964,13 +3098,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:22:25: cannot move 'items' into `async measure(…)` while it is borrowed by 'x' (borrowed at line 21)
+```exitcode
+0
+```
+```stdout
+95 first padded out long enough to heap allocate 1
 ```
 
-<!-- test: async-await.a-value-a-closure-holds-a-field-of-is-moved-into-async -->
-<!-- unsupported-targets: wasm32-wasi -->
-`inner` is a field of `b`; the closure holds a reference of its own to it, so `b` moves into the coroutine.
+<!-- test: async-await.a-value-a-closure-holds-a-field-of-is-shared-with-async -->
+`inner` is a field of `b`; the closure holds a reference of its own to it, so `b` is shared with the coroutine.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3008,17 +3144,18 @@ end 'main'
 14
 ```
 
-<!-- test: async-await.error.a-value-whose-field-is-read-after-the-call-cannot-be-moved-into-async -->
-<!-- unsupported-targets: wasm32-wasi -->
-`inner` borrows a field of `b` and is read after the coroutine has taken `b`, so the move is refused.
+<!-- test: async-await.a-value-whose-field-is-read-after-the-call-is-shared-with-async -->
+`inner` holds its own reference to a field of `b`, so `b` is shared with the coroutine and `inner` is still
+readable after the coroutine has released `b`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
 	export var n as Integer
+	export let text as String
 
 	static function create() returns Self
-		return Self{n: 7}
+		return Self{n: 7, text: "inner padded out long enough to heap allocate {7}"}
 	end 'create'
 end 'Inner'
 
@@ -3040,11 +3177,15 @@ function main() returns ExitCode
 	let inner = b.inner
 	let p = async consume(b)
 	let r = await p
-	return (r + inner.n) as ExitCode
+	print("{r} {inner.n} {inner.text}\n")
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:28:24: cannot move 'b' into `async consume(…)` while it is borrowed by 'inner' (borrowed at line 27)
+```exitcode
+0
+```
+```stdout
+7 7 inner padded out long enough to heap allocate 7
 ```
 
 <!-- test: async-await.a-coroutine-that-reassigns-an-interface-parameter -->
@@ -3168,20 +3309,20 @@ function main() returns ExitCode
 	let a = async Holder.create("hello {3}")
 	let b = async ten()
 	let n = await b
-	print("{n} {__Builtins.gtIsComplete(a.inner)}\n")
+	print("{n} {a.isComplete()}\n")
 	return 0
 end 'main'
 ```
 ```stdout
-10 1
+10 true
 ```
 ```exitcode
 0
 ```
 
-<!-- test: async-await.error.a-cell-read-then-handed-by-reference-in-one-spawn -->
-`word` is read for the first argument and then handed by reference to `fill` for the second, which may
-replace and release what was read.
+<!-- test: async-await.error.a-cell-handed-by-reference-in-one-spawn-overlaps-the-argument-read-from-it -->
+`word` is the first argument and is also handed by reference to `fill`, which reassigns it, inside the second:
+one call may not hand a function storage it reassigns together with another view of that storage.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3204,5 +3345,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: <fragment>:17:22: the value of 'word' handed to `async shout(…)` was read before a later argument handed 'word' by reference to a function that may replace it, so it may no longer be what 'word' holds. Read 'word' into a `let` first and pass that
+error E3186: <fragment>:17:22: argument 'word' overlaps argument 'word' of 'fill', which 'fill' reassigns (parameter 'dest') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass 'word.clone()'
 ```

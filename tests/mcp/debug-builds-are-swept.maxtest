@@ -6,7 +6,7 @@ let PlantedBytes = "not really an image"
 
 typealias BuildSerial = int(1 to 9)
 
-function plantedName(owner OwnerId, mintedAt UnixSeconds, serial BuildSerial) returns String
+function plantedName(owner Pid, mintedAt UnixSeconds, serial BuildSerial) returns String
 	return "{PlantedStem}-{owner}-{mintedAt}-{serial}{executableSuffix()}"
 end 'plantedName'
 
@@ -25,7 +25,7 @@ test 'a server sweeps exactly the debug builds whose owner has ended, whatever t
 	let builds = stagingDir("{SweepStagingDir}/{CacheDirName}/{CacheVendorDirName}/{DebugBuildDirName}")
 
 	let now = WallClock.nowUnixSeconds()
-	let live = __Builtins.currentProcessId()
+	let live = Process.id()
 	let ended = endedProcessId()
 
 	let oldLive = plantedName(live, mintedAt: now - TwoHoursSeconds, serial: 1)
@@ -44,8 +44,8 @@ test 'a server sweeps exactly the debug builds whose owner has ended, whatever t
 	let docs = responseDocs(runMcp([initRequest(1)], environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()])))
 
 	try Expect.equal(docs.count(), expected: 1, message: "the control: the server must start and answer `initialize`, or nothing below says anything about its startup")
-	try Expect.isTrue(__Builtins.processIsAlive(live), message: "the control: this test's own process is alive, so the builds planted under its id belong to a live owner")
-	try Expect.isFalse(__Builtins.processIsAlive(ended), message: "the control: the child run to learn an ended id has been reaped, so builds planted under it have no owner")
+	try Expect.isTrue(Process.isAlive(live), message: "the control: this test's own process is alive, so the builds planted under its id belong to a live owner")
+	try Expect.isFalse(Process.isAlive(ended), message: "the control: the child run to learn an ended id has been reaped, so builds planted under it have no owner")
 	try Expect.isTrue(planted(builds, name: oldLive), message: "a build two hours old whose owner is still running belongs to a live session and must not be swept; `{oldLive}` is gone")
 	try Expect.isTrue(planted(builds, name: "{oldLive}{SidecarSuffix}"), message: "a kept build keeps its sidecar")
 	try Expect.isFalse(planted(builds, name: youngEnded), message: "a build minted just now by a process that has ended has no session left to use it and must be swept; `{youngEnded}` is still there")

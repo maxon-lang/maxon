@@ -43,11 +43,15 @@ excludes `wasm32-wasi` alone, where the whole API is refused at compile time
 with E3074 because WASI has no process-spawn primitive
 (`subprocess-unsupported.md` pins that refusal).
 
-### Two the compiler spellings
+### Byte-exact output from a child
 
-`__Builtins.writeStdout` / `writeStderr` take a `__ManagedMemory`, so a
-`ByteArray` is handed over as `bytes.managed`, and the byte count they answer
-is an impure result that a statement-position call must discard with `_ =`.
+A case whose child must write bytes no shell can produce (a NUL) builds them in a `ByteArray` and writes
+`String.from(bytes)` with `print` / `printError`: a `String` carries an explicit length, so every byte is
+written.
+
+Two cases reach intrinsics with no public replacement — the Windows executable search's answer
+(`subprocessResolveOnPath`) and a file descriptor held open (`__ManagedFile.openRead`) — so they compile as
+library-tier sources (`<!-- tier: stdlib -->`).
 
 ## Tests
 
@@ -706,6 +710,7 @@ name with another extension: executable not found: maxon-spec-pathext-shim.bat
 ```
 
 <!-- test: subprocess-a-bare-name-is-searched-in-createprocess-order-on-windows -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
 ⭐⭐ **ON WINDOWS A BARE NAME IS SEARCHED IN `CreateProcessW`'s ORDER, AND THE ANSWER IS AN ABSOLUTE PATH TO
 THE FILE THAT RUNS.** `CreateProcessW` looks for a name with no path in the directory the application
@@ -1594,13 +1599,13 @@ function runChild()
 	out.push(0)
 	out.push(99)
 	out.push(100)
-	_ = __Builtins.writeStdout(out.managed)
+	print(String.from(out))
 
 	var err = ByteArray.create()
 	err.push(119)
 	err.push(0)
 	err.push(120)
-	_ = __Builtins.writeStderr(err.managed)
+	printError(String.from(err))
 end 'runChild'
 
 function main() returns ExitCode
@@ -1667,7 +1672,7 @@ function runChild()
 	payload.push(0)
 	payload.push(99)
 	payload.push(100)
-	_ = __Builtins.writeStdout(payload.managed)
+	print(String.from(payload))
 
 	// Then a line for the line reader: "ef\0g\n".
 	var line = ByteArray.create()
@@ -1676,7 +1681,7 @@ function runChild()
 	line.push(0)
 	line.push(103)
 	line.push(10)
-	_ = __Builtins.writeStdout(line.managed)
+	print(String.from(line))
 
 	// And one on the other stream: "w\0xy\n".
 	var errLine = ByteArray.create()
@@ -1685,7 +1690,7 @@ function runChild()
 	errLine.push(120)
 	errLine.push(121)
 	errLine.push(10)
-	_ = __Builtins.writeStderr(errLine.managed)
+	printError(String.from(errLine))
 end 'runChild'
 
 function main() returns ExitCode
@@ -1960,20 +1965,18 @@ payload holding a NUL whole, never cut at the NUL. The child is this case's own 
 stdin to the end and prints the count and the value of every byte it received. The `delayed` child prints a
 line first, because that door feeds nothing until the child's first stdout byte.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-
 function readAllStdin() returns String
 	var received = ByteArray.create()
+	var stdin = Console.stdin()
 
 	while true 'drain'
-		let chunk = __Builtins.readStdin(4096)
+		let chunk = stdin.readBytes(4096)
 
-		if chunk.length() == 0 'ended'
+		if chunk.count() == 0 'ended'
 			break
 		end 'ended'
 
-		received.append(ByteArray.init(chunk))
+		received.append(chunk)
 	end 'drain'
 
 	var line = "{received.count()} bytes ["
@@ -2037,6 +2040,7 @@ streamed: 4 bytes [97 0 98 10]
 ```
 
 <!-- test: subprocess-a-spawn-whose-pipes-cannot-be-made-fails-instead-of-panicking -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, wasm32-wasi -->
 A spawn whose stdin or stdout pipe cannot be made fails as `spawnFailed`, and nothing panics. The case runs
 itself under `/bin/sh` with `ulimit -n` lowered, and that child opens its own executable until the open
@@ -2171,9 +2175,6 @@ becomes its standard input. The case runs itself under `/bin/sh` with `<&-`, and
 feeding its stdin, then runs `/bin/cat` with stdin inherited: on the null device `cat` reads end of file at once
 and exits 0 having written nothing to either stream.
 ```maxon
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
-
 function spawnWithStdinClosed(exe Executable)
 	var fedArgv = StringArray.create()
 	fedArgv.push("fed")
@@ -2206,15 +2207,16 @@ function main() returns ExitCode
 
 		if mode == "fed" 'readFed'
 			var received = ByteArray.create()
+			var stdin = Console.stdin()
 
 			while true 'drain'
-				let chunk = __Builtins.readStdin(4096)
+				let chunk = stdin.readBytes(4096)
 
-				if chunk.length() == 0 'ended'
+				if chunk.count() == 0 'ended'
 					break
 				end 'ended'
 
-				received.append(ByteArray.init(chunk))
+				received.append(chunk)
 			end 'drain'
 
 			print("{received.count()} bytes\n")
@@ -2276,15 +2278,16 @@ function main() returns ExitCode
 		end 'write'
 
 		var received = 0 as Tally
+		var stdin = Console.stdin()
 
 		while true 'drain'
-			let read = __Builtins.readStdin(4096)
+			let read = stdin.readBytes(4096)
 
-			if read.length() == 0 'ended'
+			if read.count() == 0 'ended'
 				break
 			end 'ended'
 
-			received = received + read.length()
+			received = received + (read.count() as Tally)
 		end 'drain'
 
 		printError("child read {received} bytes\n")

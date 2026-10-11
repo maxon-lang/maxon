@@ -318,6 +318,7 @@ line:
 | `<!-- preempt: off -->` | Run the program with `MAXON_PREEMPT=off` in its environment, so the monitor takes no processor from the thread holding it; `off` is the only value |
 | `<!-- stdin: hold -->` / `<!-- stdin: delayed -->` | Give the program a stdin that blocks. `hold` is a pipe nobody ever writes to, so a read blocks for the program's whole life; `delayed` writes one line about a second after the program's first stdout byte and closes, so the read blocks and then completes. Without the marker stdin is the null device and every read answers at once with EOF |
 | `<!-- runs: alone -->` | Run the case's program with no other case's program running beside it: the harness runs a spec's `alone` cases as a job of their own, after every other job has finished, and starts nothing else while it runs. It is for a program whose peak memory is set by a runtime limit, such as a green thread's stack grown to its 1 GiB maximum; `alone` is the only value |
+| `<!-- tier: stdlib -->` | Compile the case as library-tier source: its files are staged inside a private copy of `stdlib/`, so the case may name what only `stdlib/` and `runtime/` sources may (`__Builtins`, `.managed`, `__ManagedMemory`, `cstring`; E3185 elsewhere). It is for a case whose subject is that surface; a case that only uses one reaches it through the safe standard-library API. The case runs in a program of its own. `stdlib` is the only value |
 | `<!-- process: own -->` | Keep the case out of every batch program: it compiles and runs in a program of its own. It is for a case that observes state the whole process shares, which no check of its source can see (a named resource an earlier case still holds, a per-process counter). `runs: alone` also changes when the case is scheduled; `own` changes only which process it runs in, and is the only value |
 
 A case holds one block of each kind: one ` ```maxon ` program, one ` ```exitcode `, one each of the portable
@@ -488,7 +489,7 @@ alone. The declared and mentioned names come from the compiler's own front end, 
 sits in its own directory, so its file-private names stay its own, with its `main` renamed to an exported
 `__spec_case_<n>`, and a generated entry runs the cases selected by `--select=`
 between begin and end markers carrying each case's exit code. After each case's `main` returns and before
-its end marker, the entry calls `__Builtins.gtQuiesce()`, which waits for every service and coroutine the
+its end marker, the entry calls `Scheduler.quiesce()`, which waits for every service and coroutine the
 case left running, so their output lands between the markers, and the end marker carries the count that is
 still outstanding. On wasm32-wasi the entry skips that call and the end marker carries 0. A case's stdout and
 stderr are the bytes between its markers. A case whose end marker is missing or reports work still
@@ -513,16 +514,17 @@ cannot read `--select=`, so its entry runs every case, and a case whose output c
 diagnosed the same way.
 
 These cases always compile and run on their own: a compile-error case; a case pinning `stderr`; an `Args`
-marker; a `stdin`, `procs`, `preempt`, `network`, `process: own` or `runs: alone` marker; an `MmTrace`, `LogTrace`,
+marker; a `stdin`, `procs`, `preempt`, `network`, `tier: stdlib`, `process: own` or `runs: alone` marker; an `MmTrace`, `LogTrace`,
 `AsyncTrace` or `DebugInfo` marker; a stdlib-overlay or runtime-file section; a multi-file case;
 `__file__` or `__line__` in the source; a `TargetIr`, `RequiredRuntime`, `RequiredData` or
 `RequiredRdata` block; a top-level `export` or `module` declaration, which a multi-file program refuses
 when no other file uses it (E3092, E3094); and a `main` that is not exactly
 `function main() returns ExitCode` or `function main()` with one `end 'main'`. So does a case whose source
 names one of these words anywhere, a `typealias` included: `CommandLine` or `executablePath`, which read
-the batch program's own argv and path; `__Builtins`, whose runtime counters earlier cases move;
-`__DebugStream`, whose name-id table is numbered across the whole program; and `Log`, `Logger`, `LogSink`
-or `TraceCapture`, which set state the whole process shares. A case declaring any name the standard library
+the batch program's own argv and path; a `HeapStats` call or one of the `Scheduler` and `Clock` calls that read process-wide runtime state (`Scheduler.counters()`, `Scheduler.currentStackBytes()`, `Scheduler.quiesce()`, `Scheduler.currentMachine()`, `Clock.threadCpuTicks()`), which earlier cases move;
+`__DebugStream`, whose name-id table is numbered across the whole program; and `Log`, `Logger`, `LogSink`,
+`TraceCapture`, `enterBackgroundPriority`, `pinToMachine` or `unpinFromMachine`, which set state the whole
+process shares. A case declaring any name the standard library
 also declares (an enum such as `StringError`, an alias such as `ByteArray`, an interface such as
 `InitableFromStringLiteral`) runs alone too, because every other case's use of that name would change meaning.
 

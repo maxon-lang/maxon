@@ -446,7 +446,7 @@ bound to it. `drainViaLocal` pops one of two Strings through the local and drops
 survivor — each freed once.
 
 ⚠ The alias must be a `var`. `let arr = self.items` is **not legal Maxon**:
-`pop` mutates its receiver, and a mutating method on a `let` binding is E3019. The property under test is
+`pop` mutates its receiver, and a mutating method on a `let` binding is E3159. The property under test is
 that the move-out goes through a LOCAL bound to the field rather than through the field directly.
 
 <!-- test: pop-via-local-binding -->
@@ -1388,6 +1388,7 @@ line kept as a `note:`; `specs/array-conditional-conformance-withheld.md` explai
 the blame edge once, for all four such cases.
 
 <!-- test: opaque-copy-uncopyable-instantiation-rejected -->
+<!-- tier: stdlib -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -1421,7 +1422,6 @@ typealias NestedContainer = Container with Handle
 
 function main() returns ExitCode
 	var nc = NestedContainer.create()
-	nc.push(Handle.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
 	var dup = nc.duplicate()
 	return 0
 end 'main'

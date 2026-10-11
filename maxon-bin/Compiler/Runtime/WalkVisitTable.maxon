@@ -109,7 +109,7 @@ function buildWalkSlot(module StdModule)
 	let discard = emitConst(module, block: entry, value: VisitHashDiscardBits, ids: ids)
 	let hashed = emitBin(module, block: entry, a: mixed, b: discard, opcode: StdBinOpcode.shrLogical, ids: ids)
 	let start = emitBin(module, block: entry, a: hashed, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let probe = emitCascadeJoin(module, func: func, label: b"probe", template: argsOf(start), ids: ids)
+	var probe = emitCascadeJoin(module, func: func, label: b"probe", template: argsOf(start), ids: ids)
 	emitCascadeBranch(module, from: CascadeCursor.create(entry, carried: argsOf(start)), to: probe)
 
 	let index = onlyCarried(probe)
@@ -180,7 +180,7 @@ function buildWalkNote(module StdModule)
 	let table = 0 as ValueId
 	let record = 1 as ValueId
 	let unmet = 2 as ValueId
-	let place = emitCascadeJoin(module, func: func, label: b"place", template: argsOf(table), ids: ids)
+	var place = emitCascadeJoin(module, func: func, label: b"place", template: argsOf(table), ids: ids)
 
 	emitBranchOnTable(module, block: entry, table: table, whenPresent: check, whenAbsent: create, ids: ids)
 

@@ -32,10 +32,10 @@ end 'main'
 | [Core](#overview) | [Core Functions](#core-functions) |
 | [Text](#string) | String, Character, Ascii, Unicode, CharacterSet |
 | [Collections](#array) | Array, List, Map, Set, Vector, Range, Iterators, Interfaces |
-| [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory |
+| [I/O and processes](#file) | File, FilePath, Directory, Console, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](#json) | Json, Sha256, Hasher |
-| [System](#clock) | Clock, Scheduler, SharedValue, Random, Math, Primitive Extensions |
+| [System](#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, Math, Primitive Extensions |
 | [Testing](#testing) | Testing |
 | [Build](#build) | Build |
 
@@ -149,7 +149,7 @@ at the call site, rather than failing at run time:
 | Refused on `wasm32-wasi` | Error |
 |--------------------------|-------|
 | `File`, `Directory`, `Console`, `CommandLine` | E3104 |
-| `Clock`, `WallClock`, `sleep`, `Scheduler.yield`, `Scheduler.processorCount` | E3104 |
+| `Clock`, `WallClock`, `sleep`, every `Scheduler` member but `parallelBoundary` | E3104 |
 | `Log`, `Logger`, `LogSink` and the log handlers: logging runs on services, which need green threads | E3104 |
 | `TcpClient`, `TcpListener`, `HttpClient`, `HttpServer` | E3104 |
 | `Process.executablePath`, `SharedSegment` | E3104 |
@@ -172,8 +172,35 @@ back, each become U+FFFD.
 
 Files, directory searches and sockets are held by compiler-managed handle types (`__ManagedFile`,
 `__ManagedDirectory`, `__ManagedSocket`) that release the operating-system resource when their last
-reference goes out of scope. Programs use them only through the library types (`File`, `Directory`,
+reference goes out of scope. Programs use them through the library types (`File`, `Directory`,
 `TcpClient`, `TcpListener`); names beginning with `__` are reserved for the compiler and the library.
+
+### The library tier
+
+The raw surface the library is written against belongs to the library tier: a source file under `stdlib/` or
+`runtime/`. Anywhere else each of these is
+[E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) (see
+[Raw Memory and the Library Tier](LANGUAGE_REFERENCE.md#raw-memory-and-the-library-tier)):
+
+- every `__Builtins.*` intrinsic;
+- `.managed`, `__ManagedMemory` and `__ManagedMemoryCursor`;
+- `String.cstr()` and `cstring`;
+- `Promise.inner`;
+- the raw handle types `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages` and
+  `__ManagedHandle`.
+
+A program reaches the same facilities through the library:
+
+| Reading or action | API |
+|-------------------|-----|
+| The allocator's counters, levels, census and scavenger | [HeapStats](#heapstats) |
+| The machine's uptime, a thread's CPU time | `Clock.osTickMs()`, `Clock.threadCpuTicks()` |
+| This process's id, namespace and priority; another process's liveness | `Process.id()`, `Process.namespace()`, `Process.enterBackgroundPriority()`, `Process.isAlive(pid)` |
+| Logical CPUs, scheduler counters, stack size, pinning | `Scheduler.machineCpuCount()`, `Scheduler.counters()`, `Scheduler.currentStackBytes()`, `Scheduler.pinToMachine()` |
+| A float's IEEE 754 bits | `Math.bitsOf(x)`, `Math.fromBits(bits)` |
+| Terminal colour, raw standard input | `Console.stdoutWantsColor()`, `Console.stdin().readBytes(n)` |
+| Whether a promise has finished; the first of several | `p.isComplete()`, `promises.awaitAny()` |
+| Driving or sampling another process | [Debuggee](#debuggee), [Sampler](#sampler) |
 
 ### The runtime tier
 
@@ -312,10 +339,9 @@ Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `String.from(bytes ByteArray)` | `String` | A string over the bytes. The bytes are not validated as UTF-8. |
-| `String.fromCString(cs cstring)` | `String` | Copy the NUL-terminated bytes at `cs`; the string owns its copy. Stops at the first zero byte. |
-| `String.init(managed)` | `String` | The compiler's literal initializer; programs write a literal instead. |
+| `String.init(managed)` | `String` | The compiler's literal initializer, over library-tier storage; programs write a literal. |
 | `toByteArray()` | `ByteArray` | The UTF-8 bytes as a new, independent array. |
-| `cstr()` | `cstring` | A NUL-terminated view of the bytes, for an intrinsic that takes `cstring`. Valid while the string is alive and unmodified. |
+| `cstr()` | `cstring` | Library tier ([E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) elsewhere): a NUL-terminated view of the bytes, for an intrinsic that takes `cstring`. Valid while the string is alive and unmodified. |
 | `clone()` | `String` | An independent copy; writes to either never show through the other. |
 
 ### Properties
@@ -620,7 +646,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 | `clone()` | `Array` | A second array over the same elements. Storage is shared copy-on-write and separates on the first write to either. An element that is a record holding a field at an interface type is copied through that field's conformer; an element held at an interface type itself is refused (an element slot is one machine word). A copy of an element that is or holds a promise is E3141, here and at `slice` and `append`. |
 | `Array.from(source Iterable)` | `Array` | Collect every element of an iterable, called through an alias (`ScoreArray.from(range)`). The iterable must bind `Element` to the alias's own element (E3127). |
 | `Array.init(managed)` | `Array` | Wrap raw compiler-managed storage; used by the compiler and the library. |
-| `managed` | field | The array's raw storage, for `appendMemory` and library code. |
+| `managed` | field | The array's raw storage, for `appendMemory` and library code. Library tier: reading it elsewhere is [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185). |
 
 ### Reading
 
@@ -643,7 +669,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 | `set(index, value Element)` | Replace an element. Throws `indexOutOfBounds` at or past `count()`, even when capacity exists there. |
 | `push(value Element)` | Append one element. |
 | `append(other Array)` | Append every element of another array. |
-| `appendMemory(source)` | Append every element of raw storage (another array's `managed`) without wrapping it in an `Array`. |
+| `appendMemory(source)` | Append every element of raw storage (another array's `managed`) without wrapping it in an `Array`. Its argument is library-tier storage, so library code calls it; a program appends another array with `append`. |
 | `pop()` | Remove and return the last element. Throws `indexOutOfBounds` when empty. |
 | `insert(at, value Element)` | Insert, shifting later elements right. An `at` past the end appends. |
 | `remove(at)` | Remove and return the element at `at`. Throws `indexOutOfBounds`. |
@@ -765,6 +791,10 @@ order, which is unspecified. The table resizes when it is three-quarters full.
 
 `MapIterator` implements `Iterator with (Key, Value)`: `current()` and `advance()`.
 
+A stored key is read-only: a key read back from the map, by iteration or otherwise, takes no writes
+([E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159)), so a key's hash stays the one it was filed under.
+`clone()` gives a key to change.
+
 ```maxon
 enum MapError implements Error
 	keyNotFound
@@ -816,6 +846,9 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 | `createIterator()` | `SetIterator` | Throws `IterationError.exhausted` when empty. |
 
 `SetIterator` implements `Iterator with Element`: `current()` and `advance()`.
+
+A stored element is read-only, as a `Map` key is: an element read back from the set takes no writes
+([E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159)); `clone()` gives one to change.
 
 ```maxon
 typealias Tags = Set with String
@@ -1323,7 +1356,9 @@ program: a new reader does not see input an earlier one already buffered.
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `Console.stdin()` | `Stdin` | — | The standard-input reader. |
+| `Console.stdoutWantsColor()` | `bool` | — | True when standard output is a terminal, `NO_COLOR` is unset and `TERM` is other than `dumb` (compared case-insensitively): output may then carry ANSI escapes. `NO_COLOR` set to any value turns colour off; Windows reads an empty value as unset. `false` on `wasm32-wasi`. |
 | `readLine()` | `String` | `ConsoleError.endOfFile` | The next line without its `\n`; a `\r` before it is removed too. A last line with no terminator is returned, and the call after it throws. |
+| `readBytes(n BytePos)` | `ByteArray` | — | Up to `n` bytes, unchanged. Fewer than `n` only when input ends first; an empty array at the end of input. It reads from the same buffer as `readLine`. |
 
 ```maxon
 function main() returns ExitCode
@@ -1551,15 +1586,15 @@ Output:
 `TraceCapture` records trace keys so a test can check which internal path ran. `trace` records only between
 `startCapture` and `stopCapture`; for levelled output see [Log](#log).
 
-A capture holds only the keys the program emitted itself. `TraceCapture` keeps its capture state in
-module-level `var`s, so a call to any of these methods from a service message handler is
-[E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143).
+A capture holds only the keys the program emitted itself. The capture lives in a recorder service, the
+library's `default` for its capture control: a program that calls `TraceCapture` spawns that service before
+`main` runs, and every thread and service traces into the one capture.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `TraceCapture.trace(key String)` | — | Record `key` when capturing. Use a stable dotted name. |
-| `TraceCapture.startCapture()` | — | Start recording, discarding earlier keys. |
-| `TraceCapture.stopCapture()` | `TraceKeyArray` | Stop, and return the keys in the order they were emitted. |
+| `TraceCapture.trace(key String)` | — | Send `key` to the recorder when capturing. Use a stable dotted name. |
+| `TraceCapture.startCapture()` | — | Clear the recorder, then switch capturing on. |
+| `TraceCapture.stopCapture()` | `TraceKeyArray` | Switch capturing off, then await the recorder's keys, in the order it received them; the recorder starts empty again. |
 | `TraceCapture.fired(capturedKeys TraceKeyArray, key String)` | `bool` | True when `key` was recorded at least once. |
 
 ```maxon
@@ -1588,6 +1623,10 @@ and WASI, matching what each platform can report.
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `Process.executablePath()` | `FilePath` | `ProcessIntrospectionError.pathUnavailable` | Absolute path of the running executable. |
+| `Process.id()` | `Pid` | — | This process's id. |
+| `Process.namespace()` | `String` | — | The pid space this process belongs to: the `/proc/self/ns/pid` link target on Linux, the boot-session UUID on macOS, the machine's `MachineGuid` on Windows; `""` when the host withholds it. Two processes may probe each other's ids when their namespaces are equal. |
+| `Process.isAlive(pid Pid)` | `bool` | — | True while a process with id `pid` exists; `false` once it has ended and been reaped, and for an id no host hands out (0, or one past 32 bits). |
+| `Process.enterBackgroundPriority()` | `BackgroundPriority` | — | Put this process at background scheduling priority and answer the priority the OS reports afterwards: a priority class on Windows (`BELOW_NORMAL_PRIORITY_CLASS`, 16384), a nice value under POSIX (10). Children spawned afterwards inherit it. `BackgroundPriority` is `int(i64.min to i64.max)`. |
 | `Process.environmentVariable(name String)` | `String` | `ProcessIntrospectionError.variableUnset`, `.environmentUnreadable` | The variable's value. Names are case-insensitive on Windows (`Path` answers to `PATH`) and exact elsewhere. An unset variable throws; a variable set to `""` returns `""`. |
 | `Process.currentEnvironmentEntries()` | `StringArray` | `ProcessIntrospectionError.environmentUnreadable` | Every `NAME=VALUE` entry, in the order the OS reports them. Throws when the OS fails to hand the environment over. |
 | `Process.envEntryName(entry String)` | `String` | — | The text before the first `=` (searching from the second byte, so Windows' `=C:=C:\dir` entries keep their name). |
@@ -1833,9 +1872,8 @@ enum RunProcessError implements Error
 end 'RunProcessError'
 ```
 
-The error the runtime's `__Builtins.runProcess` intrinsic throws when its command names nothing the host
-can start. An `otherwise (e)` handler on that call can `match` on `spawnFailed`. `Subprocess` reports its own
-failures as `SubprocessError`.
+The error the library-tier intrinsic `__Builtins.runProcess` throws when its command names nothing the host
+can start. A program starts processes through `Subprocess`, which reports its failures as `SubprocessError`.
 
 ### StreamingSubprocess
 
@@ -1930,7 +1968,7 @@ refused at compile time elsewhere.
 | `readWord(offset SegmentOffset)` | `SegmentWord` | `SharedMemoryError` | The 64-bit word `offset` bytes in. |
 | `writeWord(offset SegmentOffset, value SegmentWord)` | — | `SharedMemoryError` | Write a 64-bit word `offset` bytes in. |
 | `copyOut(offset SegmentOffset, byteCount SegmentByteCount)` | `ByteArray` | `SharedMemoryError` | An independent copy of a byte range. |
-| `close()` | — | — | Unmap and release the section, and withdraw its name if this segment published it. Idempotent. |
+| `close()` | — | — | Unmap and release the section, and withdraw its name if this segment published it. Idempotent. A `readWord`, `writeWord` or `copyOut` afterwards throws `SharedMemoryError.closed`. |
 
 `readWord` is an acquire load and `writeWord` a release store, so a word is how one process announces
 bytes to another: once `readWord` returns a value another process wrote with `writeWord`, every write that
@@ -1959,6 +1997,7 @@ union SharedMemoryError implements Error
 	mapFailed
 	invalidName
 	outOfBounds
+	closed
 end 'SharedMemoryError'
 ```
 
@@ -1967,7 +2006,8 @@ end 'SharedMemoryError'
 `invalidName`: the name is empty, longer than 31 bytes, or holds a `/`, a `\` or a NUL byte. The rule is the
 same on every target (31 bytes is macOS's limit), so a name that works on one host works on all of them.
 `mapFailed`: no address space for the view. `outOfBounds`: a `readWord`, `writeWord` or `copyOut` would
-reach past the end of the section.
+reach past the end of the section. `closed`: a `readWord`, `writeWord` or `copyOut` on a segment after its
+`close()`.
 
 Always `close()` a segment. A section stays alive while any view of it is mapped, and on Linux and macOS the
 name outlives the process until it is withdrawn or the machine restarts.
@@ -1989,6 +2029,178 @@ end 'main'
 ```
 
 Output: `docs-demo-segment 42 8`.
+
+## Debuggee
+
+The debugger surface: `DebugPort` drives a debuggee through the Win32 debug API on Windows, and
+`ProcessTrace` drives one through `ptrace` on Linux. Both types compile on every target; an operation that
+reaches the debug channel of the other host panics. Each owns a scratch region it reserves at `create()`
+(`isReady()` reports whether it did) and releases at `close()`; an operation after `close()` panics.
+
+A transfer through `readMemory` or `writeCode` moves at most `DebugTransferBytes` (512) bytes. A longer one
+throws `unreadable` or `unwritable` before the debuggee is touched, and a transfer of 0 bytes returns at once.
+`transferSizeOf(count TransferByteCount)` answers which of the three a count is: a `TransferSize` of
+`nothing`, `withinTheWindow` or `pastTheWindow`.
+
+```maxon
+enum DebuggeeError implements Error
+	unreadable
+	unwritable
+	outOfBounds
+end 'DebuggeeError'
+```
+
+`unreadable`: memory or registers the OS refused to read, or a read past the window.
+`unwritable`: a write the debuggee refused, a write past the window, or a register block of the wrong size.
+`outOfBounds`: a `RegisterBlock` offset off a word boundary or past the end.
+
+### RegisterBlock
+
+Every register set a debuggee hands back is a `RegisterBlock`: a record of 64-bit words read at word-aligned
+byte offsets.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `word(offset RegisterOffset)` | `RegisterWord` | `DebuggeeError.outOfBounds` | The word at byte `offset`, a multiple of 8 below the block's size. |
+| `with(offset RegisterOffset, word RegisterWord)` | `RegisterBlock` | `DebuggeeError.outOfBounds` | A new block with that word replaced; the receiver keeps its words. |
+| `programCounter()`, `stackPointer()`, `framePointer()` | `RegisterWord` | `DebuggeeError.outOfBounds` | `rip`, `rsp` and `rbp` of a Windows x64 `CONTEXT`. |
+| `flags()` | `RegisterWord` | `DebuggeeError.outOfBounds` | `EFlags` of a Windows x64 `CONTEXT`. |
+| `gpr(index Win64GprIndex)` | `RegisterWord` | `DebuggeeError.outOfBounds` | General-purpose register `index` of a `CONTEXT`, in its order `rax`, `rcx`, `rdx`, `rbx`, `rsp`, `rbp`, `rsi`, `rdi`, `r8` to `r15`. |
+| `xmmLane(index Win64XmmIndex)` | `RegisterWord` | `DebuggeeError.outOfBounds` | The low 64 bits of `xmm<index>` of a `CONTEXT`. |
+| `withProgramCounter(address RegisterWord)` | `RegisterBlock` | `DebuggeeError.outOfBounds` | A new `CONTEXT` with `rip` replaced. |
+| `withFlags(flags RegisterWord)` | `RegisterBlock` | `DebuggeeError.outOfBounds` | A new `CONTEXT` with `EFlags` replaced. |
+
+The `CONTEXT` accessors throw `outOfBounds` for a block of any other size.
+
+### DebugPort
+
+`DebugPort` holds the event the debuggee last reported; `continueEvent` and `eventThread` refer to it.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `DebugPort.create()` | `DebugPort` | — | A port with its scratch region reserved. |
+| `isReady()` | `bool` | — | True while the scratch region is held. |
+| `close()` | — | — | Release the scratch region. |
+| `waitEvent(budgetMs DebuggeeWaitMs)` | `DebugPortEvent` | — | Wait up to `budgetMs` for the next debug event. |
+| `eventThread()` | `DebuggeeThreadId` | — | The thread that reported the last event. |
+| `continueEvent(disposition DebugDisposition)` | `bool` | — | Let the debuggee run on from the last event, `handled` or `unhandled`; true when the OS accepted it. |
+| `readMemory(process DebugHandle, address DebuggeeAddress, count DebuggeeByteCount)` | `ByteArray` | `DebuggeeError.unreadable` | `count` bytes of the debuggee's memory; a short read throws. |
+| `writeCode(process DebugHandle, address DebuggeeAddress, content ByteArray)` | — | `DebuggeeError.unwritable` | Write `content` into code: lift the page protection, write, restore it and flush the instruction cache. |
+| `readContext(thread DebugHandle)` | `RegisterBlock` | `DebuggeeError.unreadable` | The thread's `CONTEXT`: control, integer and floating-point registers. |
+| `writeContext(thread DebugHandle, context RegisterBlock)` | — | `DebuggeeError.unwritable` | Set the thread's `CONTEXT` from a block of `CONTEXT` size. |
+| `suspend(thread DebugHandle)`, `resume(thread DebugHandle)` | `bool` | — | Suspend or resume the thread; true on success. |
+| `breakIn(process DebugHandle)` | `bool` | — | Make the debuggee raise a breakpoint. |
+| `detach(processId DebuggeeProcessId)` | `bool` | — | Stop debugging the process and let it run. |
+
+`DebugHandle` is an OS handle a `DebugPortEvent` carries. `DebugDisposition` is `handled` or `unhandled`.
+
+| `DebugPortEvent` case | Meaning |
+|-----------------------|---------|
+| `timedOut` | The budget passed with the debuggee silent. |
+| `processCreated(processId, thread, process, threadHandle, imageBase)` | The debuggee started; `process` and `threadHandle` are its `DebugHandle`s. |
+| `threadCreated(thread, threadHandle, startAddress)` | A thread started. |
+| `threadExited(thread)` | A thread ended. |
+| `processExited(thread, exitCode)` | The debuggee ended with `exitCode` (`DebuggeeExitCode`). |
+| `libraryLoaded(thread)` | A DLL loaded. |
+| `exception(thread, code, address)` | An exception, with its `DebuggeeFaultCode` and address. |
+| `other(thread)` | Any other debug event. |
+
+### ProcessTrace
+
+`ProcessTrace` addresses the debuggee by process and thread id.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `ProcessTrace.create()` | `ProcessTrace` | — | A tracer with its scratch region reserved. |
+| `isReady()` | `bool` | — | True while the scratch region is held. |
+| `close()` | — | — | Release the scratch region. |
+| `configure(process DebuggeeProcessId)` | `bool` | — | Trace new threads of `process` too, and kill it when the tracer exits. |
+| `wait(budgetMs DebuggeeWaitMs, process DebuggeeProcessId)` | `TraceReport` | — | Wait up to `budgetMs` for a thread of `process` to report. |
+| `resume(thread DebuggeeThreadId, signal DebuggeeSignal, stepping bool)` | `bool` | — | Continue the thread, or single-step it when `stepping`, delivering `signal`; `NoTraceSignal` (0) resumes it silently. |
+| `detach(thread DebuggeeThreadId, signal DebuggeeSignal)` | `bool` | — | Stop tracing the thread, delivering `signal`. |
+| `signalThread(process DebuggeeProcessId, thread DebuggeeThreadId, signal DebuggeeSignal)` | `bool` | — | Send `signal` to one thread. |
+| `signalProcess(process DebuggeeProcessId, signal DebuggeeSignal)` | `bool` | — | Send `signal` to the process. |
+| `signalWasSentByKill(thread DebuggeeThreadId)` | `bool` | — | True when the signal that stopped the thread came from `kill`. |
+| `readMemory(process DebuggeeProcessId, address DebuggeeAddress, count DebuggeeByteCount)` | `ByteArray` | `DebuggeeError.unreadable` | `count` bytes of the debuggee's memory. |
+| `writeCode(thread DebuggeeThreadId, address DebuggeeAddress, content ByteArray)` | — | `DebuggeeError.unwritable` | Write `content` a word at a time, keeping the bytes around it. |
+| `registers(thread DebuggeeThreadId)` | `RegisterBlock` | `DebuggeeError.unreadable` | The thread's general registers, as the kernel lays them out for the architecture. |
+| `setRegisters(thread DebuggeeThreadId, block RegisterBlock)` | — | `DebuggeeError.unwritable` | Set them from a block of that size. |
+| `vectorRegisters(thread DebuggeeThreadId)` | `RegisterBlock` | `DebuggeeError.unreadable` | The thread's floating-point and vector registers. |
+
+| `TraceReport` case | Meaning |
+|--------------------|---------|
+| `nothing` | The budget passed with the debuggee silent. |
+| `exited(thread, code)` | The thread exited with `code`. |
+| `killed(thread, status)` | A signal ended the thread; `status` is the raw wait status. |
+| `stopped(thread, signal, event)` | The thread stopped with `signal`; `event` is a `TraceEvent`: `signalStop`, `cloneEvent` (it started a thread) or `otherEvent`. |
+
+`arrived()` is true for every case but `nothing`.
+
+| Type | Definition |
+|------|------------|
+| `DebuggeeAddress`, `DebuggeeThreadId`, `DebuggeeProcessId`, `TransferByteCount` | `int(0 to u64.max)` |
+| `DebuggeeByteCount` | `int(0 to 0x40000000)` |
+| `DebuggeeWaitMs` | `int(0 to 0xFFFFFFFF)` |
+| `DebuggeeExitCode`, `RegisterWord` | `int(i64.min to i64.max)` |
+| `DebuggeeFaultCode` | `int(0 to u32.max)` |
+| `DebuggeeSignal` | `int(0 to 255)` |
+| `RegisterOffset` | `int(0 to 0xFFFF)` |
+| `Win64GprIndex`, `Win64XmmIndex` | `int(0 to 15)` |
+
+## Sampler
+
+A sampling profiler's view of another process, on `x64-windows`. `SampledProcess` suspends a thread
+briefly, copies its registers and the top of its stack, and lets it run on; `SampleTimer` paces the samples.
+
+| `SampledProcess` member | Returns | Throws | Description |
+|-------------------------|---------|--------|-------------|
+| `SampledProcess.open(pid Pid)` | `SampledProcess` | `SamplerError.noSuchProcess`, `.noScratch` | Open process `pid` for sampling and reserve its scratch regions. |
+| `threads()` | `SampledThreadArray` | — | Open every thread the process has now. Each stays open until `release` or `close`. |
+| `release(thread SampledThread)` | — | — | Close one thread this sampler opened. |
+| `cycles(thread SampledThread)` | `SampleCycles` | `SamplerError.unknownThread` | CPU cycles the thread has consumed. |
+| `capture(thread SampledThread)` | `SampleCapture` | `SamplerError.unknownThread`, `.callingThread` | Sample one thread. `callingThread` refuses the thread making the call, which would suspend itself. |
+| `modules()` | `SampledModuleArray` | `SamplerError.moduleListUnavailable` | Every module loaded in the process, retried while the OS's module snapshot is unavailable. |
+| `close()` | — | — | Close every open thread, the process and the scratch regions. |
+| `clone()` | — | — | Panics: a sampler owns one process's handles, so it is held in one place. |
+
+| `SampleCapture` case | Meaning |
+|----------------------|---------|
+| `threadGone` | The thread exited. |
+| `unreadable(allocationBase, suspendedCycles)` | The thread was suspended, and its registers were unreadable. |
+| `captured(stack)` | A `SampledStack`. |
+
+A `SampledStack` has `programCounter`, `framePointer` and `stackPointer`; `allocationBase`, the base of the
+stack's reservation; `suspendedCycles`, the thread's cycle count read while it was suspended; and `window`,
+a `StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` stays readable until the
+sampler's next `capture`: `byteCount()` is the bytes copied, 0 once a later capture has replaced them, and
+`word(offset StackWindowOffset)` is the word `offset` bytes in, throwing `SamplerError.outOfWindow` outside the
+copy or after a later capture.
+
+`SampledThread` has a public `id` (`SampledThreadId`). `SampledModule` has `base`, `limit` and `name`, with
+each UTF-16 unit above ASCII in the name read as `?`.
+
+| `SampleTimer` member | Returns | Throws | Description |
+|----------------------|---------|--------|-------------|
+| `SampleTimer.create(interval SampleIntervalNanos)` | `SampleTimer` | `SamplerError.noTimer` | A periodic timer, rounded to 100 ns steps. |
+| `wait()` | — | — | Sleep until the next tick: each deadline is the previous one plus the interval, so the samples keep their rate. Panics after `close()`. |
+| `close()` | — | — | Release the timer. |
+
+```maxon
+enum SamplerError implements Error
+	noSuchProcess
+	noScratch
+	noTimer
+	unknownThread
+	outOfWindow
+	moduleListUnavailable
+	callingThread
+end 'SamplerError'
+```
+
+`SampleCycles`, `SampledThreadId` are `int(0 to u64.max)`; `SampleIntervalNanos` is `int(1 to u64.max)`;
+`StackWindowOffset` is `int(0 to i64.max)`; `SampledThreadArray` and `SampledModuleArray` are arrays of
+`SampledThread` and `SampledModule`. The module is declared under `#if os(Windows) and arch(x64)`, so its
+names exist on `x64-windows` alone.
 
 ## TcpClient
 
@@ -2252,6 +2464,9 @@ transfer, TLS and `Expect: 100-continue` are outside it.
 | `serve(handler HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline. |
 | `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
 
+`close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
+[E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159).
+
 `serve` hands each exchange to `handler.handle`. A handler that throws, or returns without answering, has
 its exchange answered `500` with an empty body, and `handler.faulted` is told. A request `accept()` refuses
 has already been answered with its status (see [Protocol errors](#protocol-errors)), and `serve` goes on
@@ -2289,6 +2504,10 @@ lines ahead of the request line are skipped. Header lines follow [Header parsing
 | `request()` | `HttpRequest` | — | The request that arrived, with its body. For an origin-form target `url()` is built as `http://<Host><target>`, so `path()` and `query()` read the target; an HTTP/1.0 request that sent no `Host` has a hostless `url()`, whose `host()` throws `fieldNotPresent`. For an absolute-form target `url()` is read from the target. |
 | `respond(response HttpResponse)` | — | `HttpServerError` | Write the response and close the connection. Throws `alreadyResponded` on a second answer, `invalidResponse` for a response the rules below refuse, and `sendFailed` when the write fails or outlasts `writeDeadlineMs`. |
 | `respondWith(code StatusCode, body String, contentType String)` | — | `HttpServerError` | Answer a status, a body and its content type, as `respond` does. |
+
+`respond` and `respondWith` record that the exchange is answered, so an exchange from `accept()` is held in
+a `var` to answer it; through a `let` it is [E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159).
+A handler answers the `exchange` parameter `serve` hands it directly.
 
 Every response carries `Connection: close`, and a `Content-Length` computed from its body whenever its
 status allows a body: every status but 204 and 304, which end at their headers. The server writes both
@@ -2589,8 +2808,15 @@ and time of day use `WallClock`.
 | `Clock.elapsedNanos(since InstantNanos)` | `DurationNanos` | Nanoseconds since a `nowNanos()` reading; `0` if the clock appears to go backwards. |
 | `Clock.nowMs()` | `InstantMs` | The same clock in milliseconds. |
 | `Clock.elapsedMs(since InstantMs)` | `DurationMs` | Milliseconds since a `nowMs()` reading. |
+| `Clock.osTickMs()` | `InstantMs` | How long the machine has been up, in milliseconds, from the operating system's tick count. It moves in host ticks, up to 16 ms apart on `x64-windows`. |
+| `Clock.threadCpuTicks()` | `ThreadCpuTicks` | CPU time the calling thread has consumed. It advances only while the thread runs on a core, so a difference of two readings is that thread's cost alone, whatever else the machine runs. |
 
 `since` is the first argument, so it is written without a label: `Clock.elapsedNanos(start)`.
+
+The unit of `threadCpuTicks()` belongs to the platform: TSC cycles on Windows (`QueryThreadCycleTime`) and
+nanoseconds elsewhere (`CLOCK_THREAD_CPUTIME_ID`). Compare two readings from one platform, or ratios of
+differences. `ThreadCpuTicks` is `int(0 to u64.max)`. `osTickMs()` and `threadCpuTicks()` are refused on
+`wasm32-wasi` (E3104).
 
 | Target | Source | Period |
 |--------|--------|--------|
@@ -2661,9 +2887,17 @@ Output: `2024-10-04 11017`, then `2023-11-14T22:13:20.123Z`.
 |--------|-------------|
 | `Scheduler.yield()` | Let the next runnable green thread run. The caller resumes behind everything that was already runnable. When nothing else is runnable it returns promptly, so a loop that yields is a busy wait that lets others progress. It uses no timer, unlike `sleep(0)`, and is safe in a program that never starts a green thread. |
 | `Scheduler.processorCount()` | The number of processors the scheduler runs services on, as a `SchedulerProcessorCount` (`int(1 to u64.max)`, a `Count`, so it compares with a collection's `count()` with no cast): the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets (1 to 2147483647, above the machine's count as well as below it). The count is resolved before `main` runs, so it is the same before the first `spawn` as after it. |
+| `Scheduler.machineCpuCount()` | The machine's logical processor count, at least 1, whatever `MAXON_MAX_PROCS` sets: every active processor in every processor group on Windows, the processors this process may run on under Linux. A `SchedulerProcessorCount`. |
+| `Scheduler.counters()` | The scheduler's event counters since the program started, as a `SchedulerCounters`, each read once. |
+| `Scheduler.currentStackBytes()` | The calling green thread's current stack size in bytes, a `StackByteCount` (`int(0 to u64.max)`). A stack grows on demand and halves once the thread has been idle with most of it unused. |
+| `Scheduler.quiesce()` | Park the caller until every other green thread has finished, and answer how many have not, as a `GreenThreadCount` (`int(0 to u64.max)`): `0`, or the count left when every machine is idle and nothing pending can run again. The program carries on afterwards as before; services stay running. |
+| `Scheduler.parallelBoundary()` | A compile-time marker with no run-time effect. A CPU-bound function calls it to mark a spawn of itself as deliberate, which satisfies [E3073](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3073) for a function that only computes. |
+| `Scheduler.pinToMachine()` | Bind the calling green thread to the machine (OS thread) running it, and answer whether it did. A pinned thread that parks resumes on the same machine. |
+| `Scheduler.unpinFromMachine()` | Release the calling green thread from its machine. |
+| `Scheduler.currentMachine()` | The machine running the calling green thread, as a `MachineIndex` (`int(0 to u64.max)`); `0` is no machine. |
 
-Both are refused on `wasm32-wasi` (E3104). Green threads, `async` and `await` are described under Concurrency in
-[LANGUAGE_REFERENCE.md](LANGUAGE_REFERENCE.md).
+On `wasm32-wasi` `parallelBoundary()` compiles and every other member is refused (E3104). Green threads,
+`async` and `await` are described under Concurrency in [LANGUAGE_REFERENCE.md](LANGUAGE_REFERENCE.md).
 
 ```maxon
 function worker() returns ExitCode
@@ -2683,13 +2917,117 @@ end 'main'
 
 Output: `worker` then `main`.
 
+### SchedulerCounters
+
+Every field is a `SchedulerEventCount` (`int(0 to u64.max)`) summed over every processor. All but
+`maxActiveWorkers` and `idleProcessors` are totals that only rise.
+
+| Field | Counts |
+|-------|--------|
+| `steals` | Green threads a worker took from another processor's run queue. |
+| `retakes` | Processors the system monitor took back from a machine stuck in a long kernel call. |
+| `maxActiveWorkers` | The most worker machines ever active at once; at least 1. |
+| `recycledThreads` | Green-thread records a spawn took from the free list, in place of a fresh one. |
+| `timerStarts` | Machines the monitor started for a timer no running machine would fire in time. |
+| `syscalls` | Kernel calls entered by a machine holding a processor, where the monitor could retake it. |
+| `slices` | Time slices the scheduler started. |
+| `preempts` | Preemption requests green threads honoured, after 10 ms on one processor. |
+| `parkWakes` | Times a parked machine's wait returned, for any reason. An idle program keeps it near zero. |
+| `netpollBlocks` | Times a green thread suspended on the network poller waiting for a socket. |
+| `idleProcessors` | Processors idle with no machine right now. |
+| `threadRecordsCarved` | Green-thread records ever carved from the record arena. |
+| `timerScanSteps` | Timer-heap entries inspected while cancelling deadlines. |
+| `globalPushes` | Green threads ever pushed onto the global run queue. |
+
+## HeapStats
+
+`HeapStats` reads the allocator's own counters and levels. It is a namespace with no fields. `thread()`,
+`process()`, `slab()` and `census()` answer heap records, and a record still live at a later `slab()` or
+`census()` is a slot that reading counts. The scalar readings (`threadAllocations()` and its five siblings)
+allocate nothing, so two of them bracket a stretch of code without counting the reads themselves.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `HeapStats.allocationsMade()` | `HeapCount` | Tracked (managed-box) allocations since the process started. |
+| `HeapStats.allocationsLive()` | `HeapCount` | Tracked allocations live now. |
+| `HeapStats.bytesAllocated()` | `HeapBytes` | Bytes those tracked allocations handed out, cumulative. |
+| `HeapStats.rawAllocationsMade()` | `HeapCount` | Raw (header-free) allocations since the process started: element buffers, string bytes, closure environments. |
+| `HeapStats.rawAllocationsLive()` | `HeapCount` | Raw allocations live now. |
+| `HeapStats.rawBytesAllocated()` | `HeapBytes` | Bytes those raw allocations handed out, cumulative. |
+| `HeapStats.allocationsTagged(tag HeapBucketIndex)` | `HeapCount` | Tracked allocations whose allocation tag is `tag`, cumulative. Bucket 0 holds the untagged ones and 2047 every tag from 2047 up; the buckets sum to `allocationsMade()`. Tags exist in a `--debugstream` build; every other build answers 0. |
+| `HeapStats.bytesTagged(tag HeapBucketIndex)` | `HeapBytes` | Bytes those tagged allocations asked for, cumulative. |
+| `HeapStats.threadAllocations()`, `HeapStats.threadFrees()` | `HeapCount` | The calling green thread's allocations and frees, both layers together. |
+| `HeapStats.threadBytes()` | `HeapBytes` | The bytes the calling green thread's allocations asked for, both layers together. |
+| `HeapStats.processAllocations()`, `HeapStats.processFrees()` | `HeapCount` | Every thread's allocations and frees, both layers together. |
+| `HeapStats.processBytes()` | `HeapBytes` | The bytes every thread's allocations asked for, both layers together, a box's header included. |
+| `HeapStats.thread()` | `HeapActivity` | The calling green thread's allocations, frees and bytes, both layers together. |
+| `HeapStats.process()` | `HeapActivity` | Every thread's allocations, frees and bytes, both layers together, a box's header included. Each figure only rises, so two readings bracket a phase while other threads allocate. |
+| `HeapStats.slab()` | `SlabUsage` | The slab's levels now. |
+| `HeapStats.census(mode HeapCensusMode)` | `SlabCensus` | Walk every live slot once and tally it into 2048 buckets. |
+| `HeapStats.scavenge()` | `HeapBytes` | Return idle memory to the operating system, and answer the bytes handed back by this call. |
+
+`HeapActivity` has three fields: `allocations` and `frees` (`HeapCount`) and `bytes` (`HeapBytes`). A
+program with no green threads answers `thread()` from the process-wide totals.
+
+`SlabUsage` holds bytes of slot, a size class's rounding included:
+
+| Field | Type | Holds |
+|-------|------|-------|
+| `live` | `HeapBytes` | Slots handed out. |
+| `free` | `HeapBytes` | Slots on some span's free list, a slot queued by a free on another processor included. `live + free` is every slot of every live span. |
+| `cachedFree` | `HeapBytes` | The part of `free` a processor's cache can still reach; `free - cachedFree` is free memory stranded in spans a live slot keeps alive. |
+| `parked` | `HeapBytes` | Whole spans holding no live slot: the backlog `scavenge()` reclaims. |
+| `committed` | `HeapBytes` | Arena memory backed by physical pages, plus live direct OS mappings. |
+| `remoteFrees` | `HeapCount` | Frees performed on a processor other than the one caching the slot's span, cumulative. |
+
+`HeapCensusMode` chooses what a bucket of `census` holds: `byTag` (0), the slots whose allocation tag is the
+bucket index (in a `--debugstream` build), or `bySizeClass` (1), the slots of that size class. In `byTag`
+mode bucket 2046 holds slots with no plausible tag and 2047 tags past the table.
+
+| `SlabCensus` member | Returns | Description |
+|---------------------|---------|-------------|
+| `mode` | `HeapCensusMode` | The mode it was taken in. |
+| `tallyBytes` | `HeapBytes` | The live bytes the walk visited. |
+| `liveBytes` | `HeapBytes` | The slab's `live` level read right after the walk, before the snapshot's own arrays exist; it equals `tallyBytes` when nothing else allocated in between. |
+| `bucketCount(index HeapBucketIndex)` | `HeapCount` | Live slots in bucket `index`. |
+| `bucketBytes(index HeapBucketIndex)` | `HeapBytes` | Their bytes. |
+
+`scavenge()` destroys every span with no live slot, so its chunks serve any size class again, and hands the
+operating system the physical pages of every 64 KiB granule that stayed wholly free across two calls. The
+first call after a population is dropped answers 0 and the second answers the bytes; a granule reused in
+between stays committed. On `wasm32-wasi` the chunks return to the arena and linear memory keeps its size.
+
+`HeapCount` and `HeapBytes` are `int(0 to u64.max)`; `HeapBucketIndex` is `int(0 to 2047)`.
+
+```maxon
+typealias Payload = Array with Byte
+
+function main() returns ExitCode
+	let before = HeapStats.processAllocations()
+	var kept = Payload.create()
+	kept.push(1)
+	let after = HeapStats.processAllocations()
+	print("{after > before} {HeapStats.slab().live > 0} {kept.count()}\n")
+	return 0
+end 'main'
+```
+
+Output: `true true 1`.
+
 ## SharedValue
 
 `SharedValue with T` is a live cell every thread can read: a reader takes an immutable snapshot lock-free,
 and a writer publishes a whole new value. Use it through an alias:
-`typealias ConfigCell = SharedValue with Config`. `T` is a `String`, a scalar, a service handle, or a type
-whose every field is a `let` over such types ([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171)). It is the run-time form of a registry key's
-`default` ([`SharedValue`](LANGUAGE_REFERENCE.md#sharedvalue--a-live-value-made-at-run-time)).
+`typealias ConfigCell = SharedValue with Config`. `T` is any type whose value graph reaches no OS handle,
+function value or promise ([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171)): records with `var`
+fields, `Array` and `Map` publish as well as scalars, strings and service handles. It is the run-time form of
+a registry key's `default` ([`SharedValue`](LANGUAGE_REFERENCE.md#sharedvalue--a-live-value-made-at-run-time)).
+
+A value `current()` returns, like a registry `default`'s, is read-only all the way down: a write through it is
+[E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159) and binding it to a `var` is
+[E3078](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3078); `clone()` gives a mutable copy. `publish` takes a
+value with no other owner ([E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174)); publish a fresh value
+or a `clone()`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -2772,6 +3110,14 @@ It prints a number from 1 to 6.
 | `Math.log10(x Real)` | `Real` | Base-10 logarithm. Exact at every power of ten a double represents exactly: `log10(10^k)` is `k` for `k` in 0 to 22. |
 | `Math.pow(base Real, exponent Real)` | `Real` | `base` raised to `exponent`, following IEEE 754's special cases (`pow(0.0, -1.0)` is infinity; `pow(x, 0)` and `pow(1, y)` are 1 even for NaN). |
 | `Math.hasNegativeSignBit(z Real)` | `bool` | True when the sign bit is set, including `-0.0`, which no comparison can distinguish from `0.0`. |
+| `Math.isNaN(z Real)` | `bool` | True for every NaN, whatever its bit pattern. |
+| `Math.positiveInfinity()` | `Real` | +∞. |
+| `Math.negativeInfinity()` | `Real` | −∞. |
+| `Math.quietNaN()` | `Real` | A quiet NaN. |
+| `Math.bitsOf(x Real)` | `FloatBits` | The 64-bit IEEE 754 pattern of `x`, as a signed word: `Math.bitsOf(1.0)` is `0x3FF0000000000000`, and every negative value, `-0.0` included, has a negative pattern. |
+| `Math.fromBits(bits FloatBits)` | `Real` | The double whose IEEE 754 pattern is `bits`; the inverse of `bitsOf`. |
+
+`FloatBits` is `int(i64.min to i64.max)`.
 
 These are implemented in Maxon from series expansions, so results can differ from a C library in the last
 bit.

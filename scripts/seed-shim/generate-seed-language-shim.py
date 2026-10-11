@@ -2,22 +2,34 @@
 """generate-seed-language-shim.py - write the seed shim that withdraws every language form the seed
 cannot parse.
 
-Three forms: a `typealias ... implements` clause, a generic function (`function f(...) uses T`), and
-a type body's inferred field (`var x = e as T`, `var x = Type.member(...)`, `var x = "text"`, which
-the seed reads only as `var x as T = e`). The seed enforces every ranged typealias nominally, so
-once the clauses are gone each widening crossing the tree relies on is an E3005/E2028 there; a
-generic function is withdrawn whole, which the tree affords because the compiler calls none; an
-inferred field is written back with the type its initializer names. This script copies the tree's
-`maxon-bin/`, `stdlib/` and `runtime/` into a scratch directory, stages every other patch in
-`scripts/seed-shim/` in sorted order, strips all three forms, and then builds with the seed until
-it is clean, writing at every site the seed refuses the cast to the parent it names: on each arm of
-a match whose arms disagree, after an `otherwise` fallback, and, where one operand of a binary
-operator is a number literal, on the other operand, cast to the literal's alias. A cast the seed
-calls unneeded (E3010) is dropped. A `Compiler.`-qualified name is written bare, which the seed
-resolves to the same declaration; an E3078 its borrow checker raises gets the `.clone()` it asks
-for, and a loop it reads as still borrowing what its body mutates iterates a clone held in a local;
-a decimal integer literal above i64.max is written in hex, and a typealias range bound above it as
-i64.max. The difference is the patch.
+Five forms: a `typealias ... implements` clause, a generic function (`function f(...) uses T`), a type
+body's inferred field (`var x = e as T`, `var x = Type.member(...)`, `var x = "text"`, which the seed
+reads only as `var x as T = e`), a `readonly` qualifier on a container's element type
+(`Array with readonly T`, `Map with (K, readonly V)`) and a `let` on a union case's payload
+(`case(let name T)`). The seed enforces every ranged typealias nominally, so once the clauses are gone
+each widening crossing the tree relies on is an E3005/E2028 there; a generic function is withdrawn
+whole, which the tree affords because the compiler calls none; an inferred field is written back with
+the type its initializer names; the two qualifiers are withdrawn, which leaves the container and union
+types the seed always held. This script copies the tree's `maxon-bin/`, `stdlib/` and `runtime/` into a
+scratch directory, stages every other patch in `scripts/seed-shim/` in sorted order, strips all five
+forms, and then builds with the seed for each native target until every build is clean, so the code a
+lane's `#if` selects is judged by the seed as well, writing at every site the seed refuses the cast to
+the parent it names: on each arm of a match whose arms disagree, after an `otherwise` fallback, and,
+where one operand of a binary operator is a number literal, on the other operand, cast to the
+literal's alias. A cast the seed calls unneeded (E3010) is dropped. A `Compiler.`-qualified name is
+written bare, which the seed resolves to the same declaration; a decimal integer literal above i64.max
+is written in hex, and a typealias range bound above it as i64.max. The rules the tree no longer has
+are answered at each site the seed refuses by the rewrite its older rule asks for:
+  E3070  a `let` that holds an element of a collection across a call that mutates the collection is
+         bound to a `.clone()` of it; a loop it reads as still borrowing what its body mutates
+         iterates a clone held in a local, when the script can prove the body leaves the collection
+         unmutated.
+  E3078  an immutable variable assigned to a mutable binding gets the `.clone()` the seed asks for.
+  E2013  a loop whose element is assigned through becomes an index loop that binds a `var` alias of
+         the element it reads.
+  E3077  a `var` the seed reads as never reassigned, because it only sees assignments where the tree
+         counts a hand-off to a mutating parameter, is written `let`.
+The difference is the patch.
 
 Usage:
   python scripts/seed-shim/generate-seed-language-shim.py [--tree DIR] [--seed PATH] [--work DIR]
@@ -46,12 +58,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from maxon_source import FieldDefaultShapeError, field_default_type
 
-PATCH_NAME = "0016-withdraw-the-language-forms-the-seed-cannot-parse-from-the-first-build.patch"
+PATCH_NAME = "0008-withdraw-the-language-forms-the-seed-cannot-parse-from-the-first-build.patch"
 SOURCE_DIRS = ["maxon-bin", "stdlib", "runtime"]
+NATIVE_TARGETS = ["x64-windows", "x64-linux", "arm64-macos", "arm64-linux"]
 MAX_ROUNDS = 800
 MAX_ATTEMPTS_PER_SITE = 10
 
-HEADER = """# The seed cannot parse a generic function, so each is withdrawn whole; the compiler calls none of them.
+HEADER = """# The seed cannot parse a `readonly` qualifier on a container's element type (`Array with readonly T`,
+# `Map with (K, readonly V)`) or a `let` on a union case's payload (`case(let name T)`), so each is withdrawn. Without
+# the qualifier two instances of a container are one type to the seed, which is what it always held.
+# The seed cannot parse a generic function, so each is withdrawn whole; the compiler calls none of them.
 # The seed cannot parse a `typealias X = int(range) implements Parent` clause either, and it enforces every ranged
 # typealias nominally at every crossing. Each clause is withdrawn, and every place the tree widens a subtype
 # to its parent without a cast gets the cast the seed names. A divisor cast to a parent that admits 0 makes the
@@ -66,6 +82,11 @@ HEADER = """# The seed cannot parse a generic function, so each is withdrawn who
 # The seed cannot parse a `Compiler.`-qualified name, so each is written bare; the seed resolves that to the same
 # declaration. Where its older borrow checker refuses a legal program, the patch writes the copy it demands: the
 # `.clone()` an E3078 names, and a clone held in a local for a loop it reads as borrowing what its body mutates.
+# The tree also no longer has rules the seed enforces, so each site the seed refuses is written the way its older
+# rule accepts: a `let` that holds a collection's element across a call that mutates the collection is bound to a
+# `.clone()` of it, and so is a loop's iterated collection where the body provably leaves it unmutated; a loop whose
+# element is assigned through is an index loop over a `var` alias of the element it reads; and a `var` the seed sees no
+# assignment to is a `let`.
 # GENERATED by `scripts/seed-shim/generate-seed-language-shim.py`; regenerate it when the sources it touches move.
 """
 
@@ -85,7 +106,17 @@ UNUSED_EXPORT = re.compile(r"^exported [a-z]+ '(?P<name>[A-Za-z0-9_]+)' is never
 ARGUMENT = re.compile(r"^argument type mismatch for '(?P<label>[A-Za-z0-9_]+)': expected '(?P<expected>[A-Za-z0-9_]+)', got '(?P<got>[A-Za-z0-9_]+)'")
 IMMUTABLE_TO_MUTABLE = re.compile(r"^cannot assign immutable variable '(?P<source>[A-Za-z0-9_]+)' to mutable binding '(?P<target>[A-Za-z0-9_]+)'; .*use clone\(\)")
 BORROWED_BY_LOOP = re.compile(r"^cannot mutate '(?P<owner>[A-Za-z0-9_]+)' via '(?P<via>[A-Za-z0-9_]+)' while it is borrowed by '(?P<element>[A-Za-z0-9_]+)' \(borrowed at line (?P<line>\d+)\)")
+NEVER_REASSIGNED = re.compile(r"^variable '(?P<name>[A-Za-z0-9_]+)' is never reassigned; use 'let' instead of 'var'")
+IMMUTABLE_LOOP_ELEMENT = re.compile(r"^cannot assign to immutable variable: '(?P<name>[A-Za-z0-9_]+)'$")
+SEED_PREFIX = "seed"
+POSITION_IN_RANGE = "the loop's own position is below the count it was bounded by"
+LET_BINDING = re.compile(r"^(?P<head>[ \t]*let (?P<name>[A-Za-z0-9_]+) = )(?P<value>.+?)(?P<eol>\r?)$")
 FOR_LOOP = re.compile(r"^(?P<indent>[ \t]*)for (?P<element>[A-Za-z0-9_]+) in (?P<iterated>.+?) (?P<label>'[A-Za-z0-9_]+')(?P<eol>\r?)$")
+READONLY_WORD = "readonly"
+READONLY_ARGUMENT = re.compile(r"(?:\bwith |, |\()(?P<modifier>readonly (?=[A-Za-z(]))")
+UNION_OPEN = re.compile(r"^(?P<indent>[ \t]*)(?:[a-z]+ )*union (?P<name>[A-Z][A-Za-z0-9_]*)")
+UNION_CASE = re.compile(r"^[ \t]*[a-z][A-Za-z0-9_]*\(")
+PAYLOAD_LET = re.compile(r"(?:(?<=\()|(?<=, ))let (?=[a-z_][A-Za-z0-9_]* [A-Z(])")
 CLONE_CALL = ".clone()"
 HELD_PREFIX = "seedHeld"
 PROVEN_LOOP_HOISTS = {
@@ -312,6 +343,114 @@ def strip_generic_functions(work):
 
 		if changed:
 			write(path, "\n".join(kept))
+
+	return withdrawn
+
+
+def strip_readonly_arguments(work):
+	withdrawn = 0
+
+	for path in maxon_sources(work, SOURCE_DIRS):
+		text = read(path)
+
+		if READONLY_WORD not in text:
+			continue
+
+		lines = text.split("\n")
+
+		try:
+			regions = CodeRegions(lines).per_line
+		except Unhandled as e:
+			raise SystemExit(f"generate-seed-language-shim.py: {os.path.relpath(path, work)}: {e}")
+
+		rewritten = []
+
+		for index, line in enumerate(lines):
+			out = []
+			last = 0
+
+			for start, end in regions[index]:
+				for m in READONLY_ARGUMENT.finditer(line, start, end):
+					out.append(line[last:m.start("modifier")])
+					last = m.end("modifier")
+					withdrawn += 1
+
+			out.append(line[last:])
+			rewritten.append("".join(out))
+
+		if rewritten != lines:
+			write(path, "\n".join(rewritten))
+
+	return withdrawn
+
+
+def payload_end(line, open_index):
+	depth = 0
+
+	for i in range(open_index, len(line)):
+		if line[i] == "(":
+			depth += 1
+		elif line[i] == ")":
+			depth -= 1
+
+			if depth == 0:
+				return i
+
+	raise Unhandled("a union case's payload list does not close on its line")
+
+
+def strip_payload_lets(work):
+	withdrawn = 0
+
+	for path in maxon_sources(work, SOURCE_DIRS):
+		text = read(path)
+
+		if "let " not in text or "union " not in text:
+			continue
+
+		lines = text.split("\n")
+		end = None
+		changed = False
+
+		for index, line in enumerate(lines):
+			if end is None:
+				opened = UNION_OPEN.match(line)
+
+				if opened:
+					end = re.compile(r"^" + re.escape(opened.group("indent")) + r"end '" + re.escape(opened.group("name")) + r"'\r?$")
+					case_indent = opened.group("indent") + "\t"
+
+				continue
+
+			if end.match(line):
+				end = None
+				continue
+
+			declared = UNION_CASE.match(line)
+
+			if declared is None or not line.startswith(case_indent) or line[len(case_indent):len(case_indent) + 1] in (" ", "\t"):
+				continue
+
+			open_index = declared.end() - 1
+
+			try:
+				close = payload_end(line, open_index)
+			except Unhandled as e:
+				raise SystemExit(f"generate-seed-language-shim.py: {os.path.relpath(path, work)}:{index + 1}: {e}")
+
+			payload = line[open_index:close]
+			stripped, count = PAYLOAD_LET.subn("", payload)
+
+			if count:
+				lines[index] = line[:open_index] + stripped + line[close:]
+				withdrawn += count
+				changed = True
+
+		if end is not None:
+			raise SystemExit(f"generate-seed-language-shim.py: {os.path.relpath(path, work)}: a union is never closed")
+
+		if changed:
+			write(path, "\n".join(lines))
 
 	return withdrawn
 
@@ -694,17 +833,26 @@ def match_back(line, close_index):
 	closer = line[close_index]
 	opener = CLOSERS[closer]
 
-	for i in range(close_index, -1, -1):
-		if line[i] in "\"'":
-			raise Unhandled("a string literal inside the operand")
+	i = close_index
 
-		if line[i] == closer:
+	while i >= 0:
+		if line[i] == "'":
+			raise Unhandled("a character literal inside the operand")
+
+		if line[i] == '"':
+			i = line.rfind('"', 0, i)
+
+			if i < 0:
+				raise Unhandled("an unterminated string literal inside the operand")
+		elif line[i] == closer:
 			depth += 1
 		elif line[i] == opener:
 			depth -= 1
 
 			if depth == 0:
 				return i
+
+		i -= 1
 
 	raise Unhandled("unbalanced brackets before the operator")
 
@@ -1097,6 +1245,17 @@ def fix_line(line, column, code, message, parents, ranges):
 
 		return line[:cast_at.start()] + line[cast_at.end():]
 
+	m = NEVER_REASSIGNED.match(message)
+
+	if code == "E3077" and m:
+		name = m.group("name")
+		keyword = "var "
+
+		if not line.startswith(name, at) or not line[:at].endswith(keyword):
+			raise Unhandled(f"no `var {name}` ending at the reported column")
+
+		return line[:at - len(keyword)] + "let " + line[at:]
+
 	m = IMMUTABLE_TO_MUTABLE.match(message)
 
 	if code == "E3078" and m:
@@ -1161,6 +1320,52 @@ def require_read_only_via(borrow, iterated, members):
 		where = f"`{owner}`, which this script cannot place on the iterated `{iterated}`"
 
 	raise Unhandled(f"the refused mutation reaches {where}, via `{via}`, which is not a read-only {'/'.join(sorted(COLLECTION_TYPES))} method of {STDLIB_DIR}/, so this script cannot prove it leaves the iterated collection unmutated and iterating a clone of it could change what the loop sees")
+
+
+def enclosing_loop_of(lines, index, element):
+	for j in range(index - 1, -1, -1):
+		loop = FOR_LOOP.match(lines[j])
+
+		if loop is None or loop.group("element") != element:
+			continue
+
+		if loop_end(lines, j, loop.group("indent"), loop.group("label")) > index:
+			return j
+
+	raise Unhandled(f"`{element}` is not the element of a loop enclosing line {index + 1}")
+
+
+def index_loop_element(lines, loop_index):
+	loop = FOR_LOOP.match(lines[loop_index])
+	iterated = loop.group("iterated")
+
+	if MEMBER_CHAIN.fullmatch(iterated) is None:
+		raise Unhandled(f"the loop iterates `{iterated}`, which is not a field path an index loop can read twice")
+
+	element = loop.group("element")
+	indent = loop.group("indent")
+	eol = loop.group("eol")
+	position = f"{SEED_PREFIX}{element[0].upper()}{element[1:]}Position"
+
+	lines[loop_index] = f"{indent}for {position} in 0 upto {iterated}.count() {loop.group('label')}{eol}"
+	lines.insert(loop_index + 1, f'{indent}\tvar {element} = try {iterated}.get({position}) otherwise panic("{POSITION_IN_RANGE}"){eol}')
+
+
+def clone_borrowing_let(lines, borrow_index, element):
+	bound = LET_BINDING.match(lines[borrow_index])
+
+	if bound is None or bound.group("name") != element:
+		raise Unhandled(f"no `let {element} = ...` at line {borrow_index + 1}")
+
+	value = bound.group("value")
+
+	if value.endswith(CLONE_CALL):
+		raise Unhandled(f"`{element}` is already bound to a clone, which the seed still reads as borrowing")
+
+	if not is_member_chain(value):
+		value = f"({value})"
+
+	lines[borrow_index] = bound.group("head") + value + CLONE_CALL + bound.group("eol")
 
 
 def hoist_loop_borrow(lines, line_number, borrow, members, rel):
@@ -1376,8 +1581,15 @@ def argument_span(line, at, label):
 
 
 def build(work, seed_name):
-	result = run([os.path.join(work, ".bootstrap", seed_name), "build", "maxon-bin", "--output=out/c1" + os.path.splitext(seed_name)[1]], cwd=work, check=False)
-	return result.returncode, result.stdout + result.stderr
+	code = 0
+	logs = []
+
+	for target in NATIVE_TARGETS:
+		result = run([os.path.join(work, ".bootstrap", seed_name), "build", "maxon-bin", f"--target={target}", f"--output=out/c1-{target}"], cwd=work, check=False)
+		code = code or result.returncode
+		logs.append(result.stdout + result.stderr)
+
+	return code, "\n".join(logs)
 
 
 def resolve(work, path):
@@ -1449,6 +1661,10 @@ def main():
 			return report_refusals("a field default whose type this script cannot write back as an annotation", refused, work)
 
 		print(f"annotated {annotated} inferred fields", flush=True)
+		readonly = strip_readonly_arguments(work)
+		print(f"withdrew {readonly} `readonly` element-type qualifiers", flush=True)
+		payload_lets = strip_payload_lets(work)
+		print(f"withdrew {payload_lets} `let` union payload qualifiers", flush=True)
 
 	members = MemberDeclarations(work)
 	casts = 0
@@ -1465,7 +1681,7 @@ def main():
 			print(f"round {round_number}: the seed builds the shimmed tree ({casts} casts)", flush=True)
 			break
 
-		diagnostics = [m for m in map(DIAGNOSTIC.match, log.splitlines()) if m]
+		diagnostics = list({m.group(0): m for m in map(DIAGNOSTIC.match, log.splitlines()) if m}.values())
 
 		if not diagnostics:
 			raise SystemExit(f"generate-seed-language-shim.py: the seed exited {code} with no diagnostic\n{log}")
@@ -1485,6 +1701,7 @@ def main():
 		for path, sites in by_file.items():
 			lines = read(path).split("\n")
 			hoists = []
+			clones = {}
 
 			for line_number, column, d, rel in sorted(sites, key=lambda s: (s[0], s[1]), reverse=True):
 				key = (rel, line_number, lines[line_number - 1], d.group("message"))
@@ -1501,7 +1718,24 @@ def main():
 				borrow = BORROWED_BY_LOOP.match(d.group("message"))
 
 				if d.group("code") == "E3070" and borrow:
-					hoists.append((int(borrow.group("line")), line_number, borrow, d, rel))
+					borrow_index = int(borrow.group("line")) - 1
+
+					if LET_BINDING.match(lines[borrow_index]):
+						clones.setdefault(borrow_index, (borrow, d))
+					else:
+						hoists.append((borrow_index + 1, d, lambda borrow=borrow, line_number=line_number, rel=rel: hoist_loop_borrow(lines, line_number, borrow, members, rel)))
+
+					continue
+
+				immutable = IMMUTABLE_LOOP_ELEMENT.match(d.group("message"))
+
+				if d.group("code") == "E2013" and immutable:
+					try:
+						loop_index = enclosing_loop_of(lines, line_number - 1, immutable.group("name"))
+						hoists.append((loop_index + 1, d, lambda loop_index=loop_index: index_loop_element(lines, loop_index)))
+					except Unhandled as e:
+						refused.append(f"{d.group(0)}\n    {e}")
+
 					continue
 
 				try:
@@ -1514,15 +1748,22 @@ def main():
 				except Unhandled as e:
 					refused.append(f"{d.group(0)}\n    {e}")
 
+			for borrow_index, (borrow, d) in clones.items():
+				try:
+					clone_borrowing_let(lines, borrow_index, borrow.group("element"))
+					casts += 1
+				except Unhandled as e:
+					refused.append(f"{d.group(0)}\n    {e}")
+
 			hoisted = set()
 
-			for borrow_line, line_number, borrow, d, rel in sorted(hoists, key=lambda s: s[0], reverse=True):
-				if borrow_line in hoisted:
+			for anchor_line, d, rewrite in sorted(hoists, key=lambda s: s[0], reverse=True):
+				if anchor_line in hoisted:
 					continue
 
 				try:
-					hoist_loop_borrow(lines, line_number, borrow, members, rel)
-					hoisted.add(borrow_line)
+					rewrite()
+					hoisted.add(anchor_line)
 					casts += 1
 				except Unhandled as e:
 					refused.append(f"{d.group(0)}\n    {e}")

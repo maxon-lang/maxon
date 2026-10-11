@@ -119,10 +119,10 @@ export union MaxonType
 	boolean
 	integer
 	float
-	named(id TypeNameId)
+	named(let id TypeNameId)
 	exitCode
 	unresolved
-	structRef(id TypeNameId)
+	structRef(let id TypeNameId)
 	string
 
 	// A FUNCTION VALUE — the address of its function record: the code word, then a closure's captures.
@@ -146,7 +146,7 @@ export union MaxonType
 	// named function's record is immortal `.rdata`; a capturing closure's is a heap record, owned and
 	// dropped like any other.
 	//
-	function(id TypeNameId)
+	function(let id TypeNameId)
 
 	// A TYPE-PARAMETER reference — `T` inside `type Box uses T`. It is OPAQUE: a trivial
 	// type parameter lowers to an 8-byte machine word (`valueTagToStdType` → i64) exactly as
@@ -158,14 +158,14 @@ export union MaxonType
 	// (`TypeClass.typeParameter`), the deferral that lets a concrete argument meet a `T` parameter
 	// and a `T` result meet a concrete comparison.
 	//
-	typeParameter(id TypeParamId)
+	typeParameter(let id TypeParamId)
 
 	// A generic INSTANCE `Base with Args` — `Box with Integer`, the resolved form of a
 	// generic-instance typealias. It is a POINTER to the base struct's box (a machine word, i64), so
 	// a value of an instance type is a struct reference like any other. `id` keys the
 	// `GenericInstanceRegistry` for its `(baseId, argTypes)` payload (OUT OF LINE — see
 	// `GenericInstanceId`).
-	genericInstance(id GenericInstanceId)
+	genericInstance(let id GenericInstanceId)
 
 	// ⭐ **A `Character` — ONE EXTENDED GRAPHEME CLUSTER.** Represented by the SAME fused
 	// 56-byte record a `String` is (`StringRuntime`'s layout), holding the cluster's UTF-8 bytes: a
@@ -208,7 +208,7 @@ export union MaxonType
 	// method call on such a parameter was `E3011: Unknown type 'Backend'` for an interface declared three
 	// lines above.
 	//
-	interfaceRef(id TypeNameId)
+	interfaceRef(let id TypeNameId)
 
 	// ⭐⭐ **`cstring` — A NUL-TERMINATED BYTE POINTER, AND ITS OWN TYPE BECAUSE A `__Builtins.*` PARAMETER
 	// DECLARES IT AND MUST REJECT AN ORDINARY INT.** It is a raw address — no length, no capacity, no
@@ -765,7 +765,7 @@ end 'maxonTypeOfTag'
 // it to the corresponding StdReturnType.
 export union MaxonReturnType
 	void
-	value(inner MaxonType)
+	value(let inner MaxonType)
 end 'MaxonReturnType'
 
 // @generated library-cache begin
@@ -1169,10 +1169,14 @@ export enum MaxonUnaryOp
 	signExtendI16
 	signExtendI32
 	promoteUnsignedToFloat
+
+	// The SAME VALUE under a fresh identity: what a `holdValue` marker becomes when its hold is proved
+	// unnecessary and the held read stands for a bare reference (`HoldResolver.aliasEntry`). It computes nothing.
+	copy
 end 'MaxonUnaryOp'
 
 // @generated library-cache begin
-let CacheCasesMaxonUnaryOp = [MaxonUnaryOp.neg, MaxonUnaryOp.bitNot, MaxonUnaryOp.logicalNot, MaxonUnaryOp.trunc, MaxonUnaryOp.promoteToFloat, MaxonUnaryOp.floor, MaxonUnaryOp.ceil, MaxonUnaryOp.round, MaxonUnaryOp.sqrt, MaxonUnaryOp.abs, MaxonUnaryOp.fneg, MaxonUnaryOp.floatToBits, MaxonUnaryOp.bitsToFloat, MaxonUnaryOp.signExtendI8, MaxonUnaryOp.signExtendI16, MaxonUnaryOp.signExtendI32, MaxonUnaryOp.promoteUnsignedToFloat]
+let CacheCasesMaxonUnaryOp = [MaxonUnaryOp.neg, MaxonUnaryOp.bitNot, MaxonUnaryOp.logicalNot, MaxonUnaryOp.trunc, MaxonUnaryOp.promoteToFloat, MaxonUnaryOp.floor, MaxonUnaryOp.ceil, MaxonUnaryOp.round, MaxonUnaryOp.sqrt, MaxonUnaryOp.abs, MaxonUnaryOp.fneg, MaxonUnaryOp.floatToBits, MaxonUnaryOp.bitsToFloat, MaxonUnaryOp.signExtendI8, MaxonUnaryOp.signExtendI16, MaxonUnaryOp.signExtendI32, MaxonUnaryOp.promoteUnsignedToFloat, MaxonUnaryOp.copy]
 
 function cacheReadMaxonUnaryOp(reader LibraryCacheReader) returns MaxonUnaryOp throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -1228,7 +1232,8 @@ export function signExtendSlotOf(op MaxonUnaryOp) returns SignExtendSlot
 		fneg or
 		floatToBits or
 		bitsToFloat or
-		promoteUnsignedToFloat gives SignExtendSlot.notASignExtension
+		promoteUnsignedToFloat or
+		copy gives SignExtendSlot.notASignExtension
 		signExtendI8 gives SignExtendSlot.fromBytes(1)
 		signExtendI16 gives SignExtendSlot.fromBytes(2)
 		signExtendI32 gives SignExtendSlot.fromBytes(4)
@@ -1354,38 +1359,6 @@ function cacheTableAgreesFunctionRefForm() returns bool
 	return true
 end 'cacheTableAgreesFunctionRefForm'
 
-export function cacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect() returns bool
-	if not cacheTableAgreesValueTypeTag() 'disagreesCacheTableAgreesValueTypeTag'
-		return false
-	end 'disagreesCacheTableAgreesValueTypeTag'
-
-	if not cacheTableAgreesWriteBlameHolder() 'disagreesCacheTableAgreesWriteBlameHolder'
-		return false
-	end 'disagreesCacheTableAgreesWriteBlameHolder'
-
-	if not cacheTableAgreesCalleeMint() 'disagreesCacheTableAgreesCalleeMint'
-		return false
-	end 'disagreesCacheTableAgreesCalleeMint'
-
-	if not cacheTableAgreesMaxonBinOp() 'disagreesCacheTableAgreesMaxonBinOp'
-		return false
-	end 'disagreesCacheTableAgreesMaxonBinOp'
-
-	if not cacheTableAgreesMaxonUnaryOp() 'disagreesCacheTableAgreesMaxonUnaryOp'
-		return false
-	end 'disagreesCacheTableAgreesMaxonUnaryOp'
-
-	if not cacheTableAgreesMaxonCmpOp() 'disagreesCacheTableAgreesMaxonCmpOp'
-		return false
-	end 'disagreesCacheTableAgreesMaxonCmpOp'
-
-	if not cacheTableAgreesFunctionRefForm() 'disagreesCacheTableAgreesFunctionRefForm'
-		return false
-	end 'disagreesCacheTableAgreesFunctionRefForm'
-
-	return true
-end 'cacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect'
-
 // @generated library-cache end
 
 // ⭐⭐ **WAS THIS CALL SITE'S CALLEE MINTED BY THE `<primitive>.<method>` REWRITE?** — the ONE
@@ -1499,6 +1472,82 @@ function cacheTableAgreesCalleeMint() returns bool
 
 	return true
 end 'cacheTableAgreesCalleeMint'
+
+// @generated library-cache end
+
+export enum HoldKind
+	binding
+	callOperand
+	calleeValue
+	loopSource
+	loopElement
+	interpolationPart
+	binaryOperand
+end 'HoldKind'
+
+// @generated library-cache begin
+let CacheCasesHoldKind = [HoldKind.binding, HoldKind.callOperand, HoldKind.calleeValue, HoldKind.loopSource, HoldKind.loopElement, HoldKind.interpolationPart, HoldKind.binaryOperand]
+
+function cacheReadHoldKind(reader LibraryCacheReader) returns HoldKind throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesHoldKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadHoldKind'
+
+function cacheTableAgreesHoldKind() returns bool
+	let declared = HoldKind.allCases
+
+	if CacheCasesHoldKind.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesHoldKind.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesHoldKind'
+
+export function cacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect() returns bool
+	if not cacheTableAgreesValueTypeTag() 'disagreesCacheTableAgreesValueTypeTag'
+		return false
+	end 'disagreesCacheTableAgreesValueTypeTag'
+
+	if not cacheTableAgreesWriteBlameHolder() 'disagreesCacheTableAgreesWriteBlameHolder'
+		return false
+	end 'disagreesCacheTableAgreesWriteBlameHolder'
+
+	if not cacheTableAgreesCalleeMint() 'disagreesCacheTableAgreesCalleeMint'
+		return false
+	end 'disagreesCacheTableAgreesCalleeMint'
+
+	if not cacheTableAgreesMaxonBinOp() 'disagreesCacheTableAgreesMaxonBinOp'
+		return false
+	end 'disagreesCacheTableAgreesMaxonBinOp'
+
+	if not cacheTableAgreesMaxonUnaryOp() 'disagreesCacheTableAgreesMaxonUnaryOp'
+		return false
+	end 'disagreesCacheTableAgreesMaxonUnaryOp'
+
+	if not cacheTableAgreesMaxonCmpOp() 'disagreesCacheTableAgreesMaxonCmpOp'
+		return false
+	end 'disagreesCacheTableAgreesMaxonCmpOp'
+
+	if not cacheTableAgreesFunctionRefForm() 'disagreesCacheTableAgreesFunctionRefForm'
+		return false
+	end 'disagreesCacheTableAgreesFunctionRefForm'
+
+	if not cacheTableAgreesHoldKind() 'disagreesCacheTableAgreesHoldKind'
+		return false
+	end 'disagreesCacheTableAgreesHoldKind'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect'
 
 // @generated library-cache end
 
@@ -1702,7 +1751,7 @@ export union MaxonOp
 	// SourceRangeTable) for per-argument diagnostics. lowerCall reorders the labelled args
 	// to the callee's declaration order using the `funcSignatures` registry.
 	//
-	// ⭐ **`argImmutableNames` — THE NAME AN E3019 WOULD BLAME FOR EACH ARGUMENT, or empty.** The
+	// ⭐ **`argImmutableNames` — THE NAME AN E3159 WOULD BLAME FOR EACH ARGUMENT, or empty.** The
 	// call-site half of the immutable-mutation rule needs to know which arguments name an IMMUTABLE
 	// BINDING, and that is a property of the SYNTAX, not of the value: `let a = p` carries the
 	// parameter `p`'s own ValueId while being a `let`, so a per-VALUE mark would refuse `f(p)` in any
@@ -1742,14 +1791,14 @@ export union MaxonOp
 	// `mint` says whether `callee` is bytes the author wrote or a name the compiler minted from a spelling
 	// that shares none of them — see `CalleeMint`. It is the LAST field for the reason a new op is appended at
 	// its band's end: every existing destructuring reads its operands positionally.
-	call(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
+	call(result ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// --- band: plain ---
 	// Integer literal materialization. `value` is the already-parsed i64 (the
 	// parser converts the raw token text via NumberParsing.parseInt at emit
 	// time). `valueType` is the literal's source-level type (integer, or a
 	// named ranged alias). `result` is the freshly-minted ValueId it defines.
-	literal(result ValueId, value ParsedInt, valueType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
+	literal(result ValueId, value ParsedInt, let valueType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
 
 	// Value-returning return terminator. Always placed as a block terminator via
 	// setTerminator, never as a regular body op. `retVal` is the value to return.
@@ -1827,7 +1876,7 @@ export union MaxonOp
 	// The ADDRESS of a data-section global. `label` is identifier TEXT (a NAME, looked up —
 	// not a value), per the MaxonOp header's value/name split, and it is the storage label
 	// `ProgramSignatures` derived — see `SignatureIndex.dataLabelFor`.
-	globalAddr(result ValueId, label ByteArray) = MaxonOpMeta{category: OpCategory.varAccess}
+	globalAddr(result ValueId, let label ByteArray) = MaxonOpMeta{category: OpCategory.varAccess}
 
 	// Read a `valueType` value from `addr + offset`. `valueType` is the SOURCE-level type
 	// (integer/boolean); the width collapse to `StdType` happens only in lowering, per the
@@ -1851,7 +1900,7 @@ export union MaxonOp
 	//
 	// It carries NO ownership: a literal is never allocated, refcounted or dropped, so category
 	// `plain` (it stands alone, matched by variant).
-	stringLiteral(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	stringLiteral(result ValueId, let bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 
 	// --- scalar error handling (dual-register `(value, errorFlag)` ABI) ---
 	//
@@ -1864,7 +1913,7 @@ export union MaxonOp
 	// PARSER emits (`compare(errorFlag != 0)` + `condBranch`) is what reads the flag; the value is used
 	// on the success edge. Category `callFree`, the same band as `call` — it IS `call` plus the flag def.
 	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
-	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
+	tryCall(result ValueId, errorFlag ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// THROW an error — a `throw E.case` / `throw U.case(x)` or `otherwise (e) throw e`. TERMINATOR (control
 	// leaves the function via the error edge). `errorValue` is either the enum ORDINAL (a SCALAR error) or a
@@ -1902,7 +1951,7 @@ export union MaxonOp
 	// a claim that every message is bakeable. The parser picks between them; both end on `mrt_panic` with a
 	// NUL-terminated line, and neither leaves lowering guessing at the location, because the interpolation
 	// carries the very same prefix as its first fragment.
-	panicAbort(message ByteArray) = MaxonOpMeta{category: OpCategory.panicking}
+	panicAbort(let message ByteArray) = MaxonOpMeta{category: OpCategory.panicking}
 
 	// --- function values ---
 	//
@@ -1916,7 +1965,7 @@ export union MaxonOp
 	// `literal`/`stringLiteral` do — NOT in the reserved `closureProducer` band, which a coarse "does
 	// this produce a heap closure?" membership test will want. functionRef allocates nothing, so it is
 	// not that.
-	functionRef(result ValueId, funcName ByteArray, form FunctionRefForm) = MaxonOpMeta{category: OpCategory.plain}
+	functionRef(result ValueId, let funcName ByteArray, form FunctionRefForm) = MaxonOpMeta{category: OpCategory.plain}
 
 	// A call THROUGH a function VALUE — `f(21)`, `h.op(21)`, `pick()(21)`. `callee` is a `ValueId` holding
 	// the function record (unlike `call`'s `callee ByteArray` NAME) — the whole reason it is a
@@ -1947,19 +1996,20 @@ export union MaxonOp
 	//
 	// Their `OpCategory.awaiting` is metadata independent of this tail position.
 	//
-	// SPAWN a green thread running `callee(args…)` and yield a Promise handle. The Maxon-tier twin of `call`
-	// — same (callee NAME, args, `name:` labels, ranges) shape, so lowering slots the labelled args into
-	// parameter order exactly as `lowerCall` does — but instead of RUNNING the call it lowers to
-	// `__gt_spawn(funcAddr(callee), argBuf)`, spilling the scalar args into `argBuf`. `result` is the i64
-	// promise handle (the spawned GT's pointer). The parser rejects a managed/float async arg or result
-	// (E2015) before this op is emitted, so every `args` value and the callee's return are GPR scalars.
-	// `argImmutableNames` carries the same per-argument blame names a plain `call` does — see there.
+	// SPAWN a green thread running `callee(args…)` and yield a Promise handle. The Maxon-tier twin of
+	// `call` — same (callee NAME, args, `name:` labels, ranges) shape, so lowering slots the labelled
+	// args into parameter order exactly as `lowerCall` does — but instead of RUNNING the call it
+	// lowers to `__gt_spawn(funcAddr(callee), argBuf)`, spilling the scalar args into `argBuf`.
+	// `result` is the i64 promise handle (the spawned GT's pointer). The parser rejects an async arg
+	// or result that does not ride the GPR channel (`tagRidesAsyncGprChannel`) before this op is
+	// emitted, so every `args` value and the callee's return are GPR words. `argImmutableNames`
+	// carries the same per-argument blame names a plain `call` does — see there.
 	//
 	// ⚠ **NO `mint` FIELD, UNLIKE `call` — and `Parser.asyncSpawnCallee` is what keeps that honest.** A
 	// spawn's `callee` is always bytes the author wrote (a free identifier, or a `<Type>.<static>` mangle of
 	// two written tokens); a MINTED callee (`int.fromString` → `__int_fromString`) is REFUSED at the parse
 	// door rather than carried here, so every reader downstream may read this name as the author's own.
-	asyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray) = MaxonOpMeta{category: OpCategory.awaiting}
+	asyncCall(result ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;
 	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.
@@ -2017,7 +2067,7 @@ export union MaxonOp
 	// ⚠ For a `b"…"` the payload is the DECODED Latin-1 text (`Parser.decodeByteStringLiteral`: escapes
 	// resolved, each source codepoint mapped to one byte, a codepoint above 0xFF already rejected E1004).
 	// For a packed literal it is the LSB-first bit image `Parser.packConstantElements` lays down.
-	constArrayLiteral(result ValueId, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	constArrayLiteral(result ValueId, elementSize ElementStride, elementCount ParsedInt, let bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 
 	// --- the DENSE-match jump table ---
 	//
@@ -2147,7 +2197,7 @@ export union MaxonOp
 	// ⚠ It binds NO callee (`maxonOpCalleeKind` answers `noCallee`): `<T>` reaches `UnusedExportCheck`
 	// through the ordinary `call <T>.<factory>` this op's `state` operand comes from, and `<T>.__loop` is
 	// the compiler's own name, which that pass tracks nothing under.
-	serviceSpawn(result ValueId, typeName ByteArray, state ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+	serviceSpawn(result ValueId, let typeName ByteArray, state ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// ⭐⭐ **`serviceSend(result, callee, handle, request)` — ENQUEUE ONE MESSAGE, INLINE, AND RETURN.**
 	// `callee` is the message's own qualified name (`"Calc.bump"`), `handle` the mailbox pointer loaded out of
@@ -2171,7 +2221,7 @@ export union MaxonOp
 	// call's callee is, and `noteQualifiedOwner` credits `Calc` from the same name — so the pass needs no arm
 	// of its own. It can never reach the overload RESOLVER's rewrite: an overloaded message is refused at the
 	// `spawn` (`ServiceCompanions.classifyServiceRoster`), so `Calc.bump` is never an overload set's key.
-	serviceSend(result ValueId, callee ByteArray, handle ValueId, request ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+	serviceSend(result ValueId, let callee ByteArray, handle ValueId, request ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// ⭐⭐⭐ **`serviceReplyCell(result, messageName)` — MINT THE REPLY CELL ONE AWAITABLE SEND WILL RESOLVE
 	// THROUGH.** `result` is the cell POINTER, an integer, and it is a `Promise` to everything above:
@@ -2192,7 +2242,7 @@ export union MaxonOp
 	// ⚠ **`maxonOpCalleeKind` answers `noCallee`**, and the field is `messageName` rather than `callee` to
 	// say so: the message is credited to `UnusedExportCheck` by the `serviceSend` beside this op, and the
 	// name here may be `<T>.shutdown` — the compiler's pill, which no file declares.
-	serviceReplyCell(result ValueId, messageName ByteArray, awaitedService ByteArray) = MaxonOpMeta{category: OpCategory.awaiting}
+	serviceReplyCell(result ValueId, let messageName ByteArray, let awaitedService ByteArray) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// --- a module-level `let` holding a constructed struct of scalars ---
 	//
@@ -2235,7 +2285,7 @@ export union MaxonOp
 	// carries ONE payload and serves an owned heap literal as well, so its imaged sites need a side table to
 	// say which of the two they are; this shape has no heap spelling and its payload is N SEPARATE literals,
 	// which one `bytes` field cannot hold without inventing an encoding for it.
-	immortalStringTable(result ValueId, texts ByteArrayArray, elementSize ElementStride, elementDestroy OwnershipCallee) = MaxonOpMeta{category: OpCategory.plain}
+	immortalStringTable(result ValueId, texts ByteBlobArray, elementSize ElementStride, elementDestroy OwnershipCallee) = MaxonOpMeta{category: OpCategory.plain}
 
 	// --- `--coverage` counter points ---
 	//
@@ -2282,7 +2332,14 @@ export union MaxonOp
 	// `IrFunction.existentialFieldStores`, which records every store into such a field — this op included.
 	//
 	// `OpCategory.plain` — it takes the address of a constant and calls nothing.
-	existentialWitness(result ValueId, interfaceName ByteArray, conformer ValueId) = MaxonOpMeta{category: OpCategory.plain}
+	existentialWitness(result ValueId, let interfaceName ByteArray, conformer ValueId) = MaxonOpMeta{category: OpCategory.plain}
+
+	// A read that may outlive its owner (`holdValue`) and the end of its window (`holdEnd`), as
+	// markers. `resolveHoldMarkers` turns each into the call to `callee` with `args`, or drops a hold
+	// it proves unneeded, before lowering — `lowerMaxonToStd` panics on a marker that survives.
+	holdValue(result ValueId, held ValueId, let callee ByteArray, args ValueIdArray, kind HoldKind) = MaxonOpMeta{category: OpCategory.plain}
+
+	holdEnd(result ValueId, held ValueId, let callee ByteArray, args ValueIdArray, kind HoldKind) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
 // @generated library-cache begin
@@ -2327,14 +2384,16 @@ export function cacheWriteMaxonOp(writer LibraryCacheWriter, value MaxonOp)
 		covPoint(a0) then cacheWriteMaxonOpCovPoint(writer, a0: a0)
 		rawIntrinsic(a0, a1, a2, a3) then cacheWriteMaxonOpRawIntrinsic(writer, a0: a0, a1: a1, a2: a2, a3: a3)
 		existentialWitness(a0, a1, a2) then cacheWriteMaxonOpExistentialWitness(writer, a0: a0, a1: a1, a2: a2)
+		holdValue(a0, a1, a2, a3, a4) then cacheWriteMaxonOpHoldValue(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4)
+		holdEnd(a0, a1, a2, a3, a4) then cacheWriteMaxonOpHoldEnd(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4)
 	end 'payload'
 end 'cacheWriteMaxonOp'
 
-function cacheWriteMaxonOpCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 ByteArrayArray, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray, a7 CalleeMint)
+function cacheWriteMaxonOpCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 NameRoster, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray, a7 CalleeMint)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.bytes(a1)
 	cacheWriteValueIdArray(writer, value: a2)
-	cacheWriteByteArrayArray(writer, value: a3)
+	cacheWriteNameRoster(writer, value: a3)
 	cacheWriteSourceRangeArray(writer, value: a4)
 	cacheWriteWriteBlameArray(writer, value: a5)
 	cacheWriteParamCountArray(writer, value: a6)
@@ -2406,12 +2465,12 @@ function cacheWriteMaxonOpStringLiteral(writer LibraryCacheWriter, a0 ValueId, a
 	writer.bytes(a1)
 end 'cacheWriteMaxonOpStringLiteral'
 
-function cacheWriteMaxonOpTryCall(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteArray, a3 ValueIdArray, a4 ByteArrayArray, a5 SourceRangeArray, a6 WriteBlameArray, a7 ParamCountArray, a8 CalleeMint)
+function cacheWriteMaxonOpTryCall(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteArray, a3 ValueIdArray, a4 NameRoster, a5 SourceRangeArray, a6 WriteBlameArray, a7 ParamCountArray, a8 CalleeMint)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.unsigned(a1 as CacheUnsigned)
 	writer.bytes(a2)
 	cacheWriteValueIdArray(writer, value: a3)
-	cacheWriteByteArrayArray(writer, value: a4)
+	cacheWriteNameRoster(writer, value: a4)
 	cacheWriteSourceRangeArray(writer, value: a5)
 	cacheWriteWriteBlameArray(writer, value: a6)
 	cacheWriteParamCountArray(writer, value: a7)
@@ -2443,11 +2502,11 @@ function cacheWriteMaxonOpIndirectCall(writer LibraryCacheWriter, a0 ValueId, a1
 	cacheWriteValueIdArray(writer, value: a2)
 end 'cacheWriteMaxonOpIndirectCall'
 
-function cacheWriteMaxonOpAsyncCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 ByteArrayArray, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray)
+function cacheWriteMaxonOpAsyncCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 NameRoster, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.bytes(a1)
 	cacheWriteValueIdArray(writer, value: a2)
-	cacheWriteByteArrayArray(writer, value: a3)
+	cacheWriteNameRoster(writer, value: a3)
 	cacheWriteSourceRangeArray(writer, value: a4)
 	cacheWriteWriteBlameArray(writer, value: a5)
 	cacheWriteParamCountArray(writer, value: a6)
@@ -2537,9 +2596,9 @@ function cacheWriteMaxonOpImmortalStructRecord(writer LibraryCacheWriter, a0 Val
 	writer.unsigned(a2 as CacheUnsigned)
 end 'cacheWriteMaxonOpImmortalStructRecord'
 
-function cacheWriteMaxonOpImmortalStringTable(writer LibraryCacheWriter, a0 ValueId, a1 ByteArrayArray, a2 ElementStride, a3 OwnershipCallee)
+function cacheWriteMaxonOpImmortalStringTable(writer LibraryCacheWriter, a0 ValueId, a1 ByteBlobArray, a2 ElementStride, a3 OwnershipCallee)
 	writer.unsigned(a0 as CacheUnsigned)
-	cacheWriteByteArrayArray(writer, value: a1)
+	cacheWriteByteBlobArray(writer, value: a1)
 	writer.signed(a2 as CacheSigned)
 	cacheWriteOwnershipCallee(writer, value: a3)
 end 'cacheWriteMaxonOpImmortalStringTable'
@@ -2560,6 +2619,22 @@ function cacheWriteMaxonOpExistentialWitness(writer LibraryCacheWriter, a0 Value
 	writer.bytes(a1)
 	writer.unsigned(a2 as CacheUnsigned)
 end 'cacheWriteMaxonOpExistentialWitness'
+
+function cacheWriteMaxonOpHoldValue(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteArray, a3 ValueIdArray, a4 HoldKind)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.bytes(a2)
+	cacheWriteValueIdArray(writer, value: a3)
+	writer.unsigned(a4.ordinal as CacheUnsigned)
+end 'cacheWriteMaxonOpHoldValue'
+
+function cacheWriteMaxonOpHoldEnd(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteArray, a3 ValueIdArray, a4 HoldKind)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	writer.bytes(a2)
+	cacheWriteValueIdArray(writer, value: a3)
+	writer.unsigned(a4.ordinal as CacheUnsigned)
+end 'cacheWriteMaxonOpHoldEnd'
 
 export function cacheReadMaxonOp(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
 	let tag = try reader.unsigned()
@@ -2602,6 +2677,8 @@ export function cacheReadMaxonOp(reader LibraryCacheReader) returns MaxonOp thro
 		34 gives try cacheReadMaxonOpCovPoint(reader)
 		35 gives try cacheReadMaxonOpRawIntrinsic(reader)
 		36 gives try cacheReadMaxonOpExistentialWitness(reader)
+		37 gives try cacheReadMaxonOpHoldValue(reader)
+		38 gives try cacheReadMaxonOpHoldEnd(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadMaxonOp'
@@ -2610,7 +2687,7 @@ function cacheReadMaxonOpCall(reader LibraryCacheReader) returns MaxonOp throws 
 	let a0 = (try reader.unsigned()) as ValueId
 	let a1 = try reader.bytes()
 	let a2 = try cacheReadValueIdArray(reader)
-	let a3 = try cacheReadByteArrayArray(reader)
+	let a3 = try cacheReadNameRoster(reader)
 	let a4 = try cacheReadSourceRangeArray(reader)
 	let a5 = try cacheReadWriteBlameArray(reader)
 	let a6 = try cacheReadParamCountArray(reader)
@@ -2711,7 +2788,7 @@ function cacheReadMaxonOpTryCall(reader LibraryCacheReader) returns MaxonOp thro
 	let a1 = (try reader.unsigned()) as ValueId
 	let a2 = try reader.bytes()
 	let a3 = try cacheReadValueIdArray(reader)
-	let a4 = try cacheReadByteArrayArray(reader)
+	let a4 = try cacheReadNameRoster(reader)
 	let a5 = try cacheReadSourceRangeArray(reader)
 	let a6 = try cacheReadWriteBlameArray(reader)
 	let a7 = try cacheReadParamCountArray(reader)
@@ -2759,7 +2836,7 @@ function cacheReadMaxonOpAsyncCall(reader LibraryCacheReader) returns MaxonOp th
 	let a0 = (try reader.unsigned()) as ValueId
 	let a1 = try reader.bytes()
 	let a2 = try cacheReadValueIdArray(reader)
-	let a3 = try cacheReadByteArrayArray(reader)
+	let a3 = try cacheReadNameRoster(reader)
 	let a4 = try cacheReadSourceRangeArray(reader)
 	let a5 = try cacheReadWriteBlameArray(reader)
 	let a6 = try cacheReadParamCountArray(reader)
@@ -2879,7 +2956,7 @@ end 'cacheReadMaxonOpImmortalStructRecord'
 
 function cacheReadMaxonOpImmortalStringTable(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
 	let a0 = (try reader.unsigned()) as ValueId
-	let a1 = try cacheReadByteArrayArray(reader)
+	let a1 = try cacheReadByteBlobArray(reader)
 	let a2 = (try reader.boundedSigned(-4, high: 8)) as ElementStride
 	let a3 = try cacheReadOwnershipCallee(reader)
 
@@ -2908,6 +2985,26 @@ function cacheReadMaxonOpExistentialWitness(reader LibraryCacheReader) returns M
 
 	return MaxonOp.existentialWitness(a0, interfaceName: a1, conformer: a2)
 end 'cacheReadMaxonOpExistentialWitness'
+
+function cacheReadMaxonOpHoldValue(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = try reader.bytes()
+	let a3 = try cacheReadValueIdArray(reader)
+	let a4 = try cacheReadHoldKind(reader)
+
+	return MaxonOp.holdValue(a0, held: a1, callee: a2, args: a3, kind: a4)
+end 'cacheReadMaxonOpHoldValue'
+
+function cacheReadMaxonOpHoldEnd(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as ValueId
+	let a1 = (try reader.unsigned()) as ValueId
+	let a2 = try reader.bytes()
+	let a3 = try cacheReadValueIdArray(reader)
+	let a4 = try cacheReadHoldKind(reader)
+
+	return MaxonOp.holdEnd(a0, held: a1, callee: a2, args: a3, kind: a4)
+end 'cacheReadMaxonOpHoldEnd'
 
 // @generated library-cache end
 
@@ -3060,6 +3157,8 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 
 		// A witness table's slots name impls through relocations, not through a call this op makes.
 		existentialWitness gives MaxonCalleeKind.noCallee
+		holdValue gives MaxonCalleeKind.noCallee
+		holdEnd gives MaxonCalleeKind.noCallee
 	end 'op'
 end 'maxonOpCalleeKind'
 
@@ -3118,7 +3217,9 @@ export function maxonOpIsServiceSpawn(op MaxonOp) returns bool
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness gives false
+		existentialWitness or
+		holdValue or
+		holdEnd gives false
 	end 'op'
 end 'maxonOpIsServiceSpawn'
 
@@ -3160,7 +3261,9 @@ export function maxonOpLeavesByError(op MaxonOp) returns bool
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness gives false
+		existentialWitness or
+		holdValue or
+		holdEnd gives false
 	end 'op'
 end 'maxonOpLeavesByError'
 
@@ -3202,10 +3305,20 @@ end 'WriteBlameError'
 export enum WriteBlameHolder
 	binding
 	closure
+	forElement
+	ifLetBinding
+	matchBinding
+	letField
+	letPayload
+	readOnlyElement
+	storedMapKey
+	storedSetElement
+	moduleLet
+	sharedView
 end 'WriteBlameHolder'
 
 // @generated library-cache begin
-let CacheCasesWriteBlameHolder = [WriteBlameHolder.binding, WriteBlameHolder.closure]
+let CacheCasesWriteBlameHolder = [WriteBlameHolder.binding, WriteBlameHolder.closure, WriteBlameHolder.forElement, WriteBlameHolder.ifLetBinding, WriteBlameHolder.matchBinding, WriteBlameHolder.letField, WriteBlameHolder.letPayload, WriteBlameHolder.readOnlyElement, WriteBlameHolder.storedMapKey, WriteBlameHolder.storedSetElement, WriteBlameHolder.moduleLet, WriteBlameHolder.sharedView]
 
 function cacheReadWriteBlameHolder(reader LibraryCacheReader) returns WriteBlameHolder throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -3258,6 +3371,13 @@ export union WriteBlame
 			blamed(name, _) then return name
 		end 'blame'
 	end 'blamedName'
+
+	export function blamedHolder() returns WriteBlameHolder throws WriteBlameError
+		match self 'blame'
+			unblamed then throw WriteBlameError.unblamed
+			blamed(_, holder) then return holder
+		end 'blame'
+	end 'blamedHolder'
 end 'WriteBlame'
 
 // @generated library-cache begin

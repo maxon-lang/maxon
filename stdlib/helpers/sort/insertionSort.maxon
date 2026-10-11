@@ -15,12 +15,8 @@ public extension Array
 	// stops as soon as the predecessor is not strictly greater than the
 	// pending element (cmp returning `equalTo` does not trigger a swap).
 	//
-	// The pending element bubbles down via raw SWAPS rather than the textbook
-	// hold-and-shift form: holding `pending` while `set` shifts its slot would
-	// decref the held occupant out from under the borrow
-	// (`__managed_mem_set`'s overwrite semantics free the displaced element —
-	// the sort-of-managed-elements UAF). A swap moves ownership between slots
-	// with refcounts unchanged, so managed elements survive the relocation.
+	// The pending element bubbles down via raw SWAPS rather than the textbook hold-and-shift form: a swap moves
+	// ownership between slots with refcounts unchanged, so managed elements relocate without a retain or a release.
 	public function internalInsertionSortRange(lo ElementIndex, hi ElementIndex, cmp SortComparator)
 		if hi <= lo + 1 'trivial'
 			return

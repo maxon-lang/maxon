@@ -1402,7 +1402,7 @@ type Counter
 end 'Counter'
 
 function once() returns Integer
-	let counter = Counter.create()
+	var counter = Counter.create()
 	return counter.bump()
 end 'once'
 
@@ -1497,7 +1497,7 @@ function stash(sink Sink, count Integer) returns Integer
 end 'stash'
 
 function main() returns ExitCode
-	let sink = Sink.create()
+	var sink = Sink.create()
 	_ = stash(sink, count: 4)
 
 	if sink.size() != 1 'wrong'
@@ -1808,7 +1808,7 @@ function enroll() returns Box
 end 'enroll'
 
 function tamper() returns Integer
-	let box = enroll()
+	var box = enroll()
 	return box.bump()
 end 'tamper'
 
@@ -2609,7 +2609,7 @@ type Walker
 end 'Walker'
 
 function walked(data IntArray) returns Integer
-	let walker = Walker.over(data)
+	var walker = Walker.over(data)
 	walker.step()
 	return 1
 end 'walked'
@@ -2656,7 +2656,7 @@ type Walker
 end 'Walker'
 
 function wiped(data IntArray) returns Integer
-	let walker = Walker.over(data)
+	var walker = Walker.over(data)
 	walker.wipe()
 	return 1
 end 'wiped'
@@ -2715,15 +2715,15 @@ type Parent
 end 'Parent'
 
 function bumped(target Box) returns Integer
-	let child = Child.create()
-	let parent = Parent.over(child)
+	var child = Child.create()
+	var parent = Parent.over(child)
 	parent.adopt(target)
 	child.bump()
 	return 1
 end 'bumped'
 
 function main() returns ExitCode
-	let target = Box.create(5)
+	var target = Box.create(5)
 	_ = bumped(target)
 
 	if target.number != 6 'wrong'
@@ -2763,7 +2763,7 @@ type Child
 end 'Child'
 
 function bumped(target Box) returns Integer
-	let child = Child.create(target.number)
+	var child = Child.create(target.number)
 	child.bump()
 	return 1
 end 'bumped'
@@ -2810,7 +2810,7 @@ type Parent
 end 'Parent'
 
 function grown(target IntArray) returns Integer
-	let parent = Parent.over(target)
+	var parent = Parent.over(target)
 	parent.grow()
 	return 1
 end 'grown'
@@ -2852,7 +2852,7 @@ type Parent
 end 'Parent'
 
 function shortened(target IntArray) returns Integer
-	let parent = Parent.over(target)
+	var parent = Parent.over(target)
 	parent.shorten()
 	return 1
 end 'shortened'
@@ -2902,7 +2902,7 @@ function run(action Action) returns Integer
 end 'run'
 
 function grown(target IntArray) returns Integer
-	let parent = Parent.over(target)
+	var parent = Parent.over(target)
 	return run(function() gives parent.growCount())
 end 'grown'
 
@@ -2950,13 +2950,13 @@ type Parent
 end 'Parent'
 
 function bumped(target Box) returns Integer
-	let parent = Parent.over(Child.over(target))
+	var parent = Parent.over(Child.over(target))
 	parent.bump()
 	return 1
 end 'bumped'
 
 function main() returns ExitCode
-	let target = Box.create(5)
+	var target = Box.create(5)
 	_ = bumped(target)
 	return 0 if target.number == 6 else 1
 end 'main'
@@ -3004,13 +3004,13 @@ function relay(target Holder, items IntArray)
 end 'relay'
 
 function hand(target Holder, items IntArray)
-	let scratch = Wrapper.make()
+	var scratch = Wrapper.make()
 	scratch.touchChild()
 	relay(target, items: items)
 end 'hand'
 
 function grown(items IntArray) returns Integer
-	let holder = Holder.make()
+	var holder = Holder.make()
 	hand(holder, items: items)
 	holder.grow()
 	return 1
@@ -3072,13 +3072,13 @@ function relay(target Holder, box Box)
 end 'relay'
 
 function hand(target Holder, box Box)
-	let scratch = Wrapper.make()
+	var scratch = Wrapper.make()
 	scratch.touchChild()
 	relay(target, box: box)
 end 'hand'
 
 function bumped(box Box) returns Integer
-	let holder = Holder.make()
+	var holder = Holder.make()
 	hand(holder, box: box)
 	holder.bumpBox()
 	return 1
@@ -3132,7 +3132,7 @@ function made(items IntArray, action Adopt) returns Holder
 end 'made'
 
 function grown(target IntArray) returns Integer
-	let holder = made(target, action: adoptInto)
+	var holder = made(target, action: adoptInto)
 	holder.grow()
 	return 1
 end 'grown'
@@ -3188,13 +3188,13 @@ function made(box Box, action Adopt) returns Holder
 end 'made'
 
 function bumped(target Box) returns Integer
-	let holder = made(target, action: adoptInto)
+	var holder = made(target, action: adoptInto)
 	holder.bump()
 	return 1
 end 'bumped'
 
 function main() returns ExitCode
-	let target = Box.create(5)
+	var target = Box.create(5)
 	_ = bumped(target)
 	return 0 if target.number == 6 else 1
 end 'main'
@@ -3244,7 +3244,7 @@ end 'Shelf'
 typealias IntShelf = Shelf with Integer
 
 function grown(target IntArray) returns Integer
-	let shelf = IntShelf.filled(target)
+	var shelf = IntShelf.filled(target)
 	shelf.grow()
 	return 1
 end 'grown'
@@ -3337,9 +3337,9 @@ function scribble() returns Small
 	var i = 0 as Small
 
 	while i < 3 'loop'
-		let fresh = Box.create(0)
-		let b = held
-		let pick = fresh if i < 2 else b
+		var fresh = Box.create(0)
+		var b = held
+		var pick = fresh if i < 2 else b
 		other = pick
 		other.n = 7
 		held = shared
@@ -3427,7 +3427,7 @@ type Shelf
 end 'Shelf'
 
 function main() returns ExitCode
-	let shelf = Shelf.create()
+	var shelf = Shelf.create()
 	shelf.stock()
 	_ = shelf.steal()
 	return 0 if shelf.left() == 0 else 1
@@ -3594,7 +3594,7 @@ A counter read is a read of a figure that moves, like a clock read, so its funct
 typealias Tally = int(0 to u64.max)
 
 function allocated() returns Tally
-	return __Builtins.processAllocTotal() as Tally
+	return HeapStats.process().allocations as Tally
 end 'allocated'
 
 function main() returns ExitCode
@@ -3628,7 +3628,7 @@ type Cursor
 end 'Cursor'
 
 function scratch() returns Integer
-	let cursor = Cursor.over(IntArray.create())
+	var cursor = Cursor.over(IntArray.create())
 	cursor.drop()
 	return 1
 end 'scratch'
@@ -3660,7 +3660,7 @@ type Cursor
 end 'Cursor'
 
 function wipe(values IntArray) returns Integer
-	let cursor = Cursor.over(values)
+	var cursor = Cursor.over(values)
 	cursor.drop()
 	return 1
 end 'wipe'
@@ -3703,7 +3703,7 @@ type Cursor
 end 'Cursor'
 
 function reset(extra IntArray) returns Integer
-	let cursor = Cursor.over(IntArray.create())
+	var cursor = Cursor.over(IntArray.create())
 	cursor.adopt(extra)
 	cursor.drop()
 	return 1
@@ -3792,4 +3792,109 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-function-that-always-panics-is-not-pure-so-its-result-is-droppable -->
+A function every path of which panics has an effect, so its result is not must-use: `_ =` discards it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var armed = false
+
+function refuse() returns Integer
+	panic("refused")
+end 'refuse'
+
+function main() returns ExitCode
+	if armed 'fire'
+		_ = refuse()
+	end 'fire'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-function-that-always-panics-dropped-from-a-statement -->
+The same call as a bare statement is E3065, with the `_ =` cure.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var armed = false
+
+function refuse() returns Integer
+	panic("refused")
+end 'refuse'
+
+function main() returns ExitCode
+	if armed 'fire'
+		refuse()
+	end 'fire'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3065: <fragment>:12:3: result of 'refuse' is not used (use '_ = expr' to discard)
+```
+
+<!-- test: a-wrapper-around-a-function-that-always-panics-is-not-pure-so-its-result-is-droppable -->
+The effect carries through callers: `relay` calls `guarded`, which calls `refuse`, and every one of them
+reaches a call that never comes back, so none is pure and `_ =` discards the result.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var armed = false
+
+function refuse() returns Integer
+	panic("refused")
+end 'refuse'
+
+function guarded() returns Integer
+	return refuse()
+end 'guarded'
+
+function relay() returns Integer
+	return guarded()
+end 'relay'
+
+function main() returns ExitCode
+	if armed 'fire'
+		_ = relay()
+	end 'fire'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-wrapper-around-a-function-that-always-panics-dropped-from-a-statement -->
+The wrapper's bare call is E3065 like the panicking function's own, with the `_ =` cure.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var armed = false
+
+function refuse() returns Integer
+	panic("refused")
+end 'refuse'
+
+function guarded() returns Integer
+	return refuse()
+end 'guarded'
+
+function relay() returns Integer
+	return guarded()
+end 'relay'
+
+function main() returns ExitCode
+	if armed 'fire'
+		relay()
+	end 'fire'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3065: <fragment>:20:3: result of 'relay' is not used (use '_ = expr' to discard)
 ```

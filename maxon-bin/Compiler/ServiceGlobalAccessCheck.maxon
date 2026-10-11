@@ -1,10 +1,11 @@
 // ServiceGlobalAccessCheck.maxon — A SHARED WORD BELONGS TO ONE GREEN THREAD (E3143), the message-reachability closure,
-// the two rules that keep module `let`s safe to read from any green thread (E3163, E3164), and the two that keep a
-// `let` and a `var` from owning one record (E3165, E3166).
+// the two rules that keep module `let`s safe to read from any green thread (E3163, E3164), and the one that keeps a
+// `let` from owning a `var`'s record (E3165).
 //
 // ⭐⭐ **A MODULE-LEVEL `var` IS ONE WORD, AND A MESSAGE IS A GREEN THREAD THE SCHEDULER MAY PUT ON ANY OS
 // THREAD.** Those two facts cannot both hold in a program that compiles, so one of them is refused, and it
-// is the ACCESS: ⚖ a message — and anything reachable from one — may neither WRITE nor READ module storage.
+// is the ACCESS: ⚖ a message — and anything reachable from one — may neither WRITE nor READ a module-level or
+// `static` `var`.
 // A module-level `let` stays legal, and that is the whole of the escape hatch: a written-once word has no second
 // writer for anybody to race, and `__module_init` marks its record shared before `main`, so the counts messages
 // step on it are atomic. A `let` no share walk can mark is refused where a message reads it (E3163), and a
@@ -13,34 +14,15 @@
 // ⭐⭐⭐ **NEITHER HALF CAN BE A RUN-TIME CHECK, BECAUSE THERE IS NO MOMENT AT WHICH THE RUNTIME COULD
 // NOTICE.** `done = done + 1` is a load, an add and a store; two Ms that interleave those six steps each
 // write the other's stale value back. Nothing traps, nothing leaks, no allocation is lost — the program
-// simply answers a number that is too small, sometimes. MEASURED at `MAXON_MAX_PROCS=16` on the committed
-// `sched-runqueue.nothing-is-stolen-on-one-processor`, driven to a fixed total of 1200 sends, ten runs:
-// 1200, 1200, **1199**, **1199**, **1198**, **1199**, **1199**, 1200, **1199**, 1200 — **five of ten runs
-// lost an update, and every one exited 0.** `specs/sched-processor.md` records the same class one
-// order of magnitude larger. ⇒ the compiler is the only place that can stand, and the ACCESS is the only
-// site it can stand at.
+// simply answers a number that is too small, sometimes. ⇒ the compiler is the only place that can stand, and
+// the ACCESS is the only site it can stand at.
 //
-// ⚠ **AND THE SAME PROGRAM IS PERFECTLY CORRECT AT ONE PROCESSOR**, which is why this rule arrives beside
-// the `DefaultMaxProcs` flip and not before it. Every green thread ran on the one M, so the six steps could
-// not interleave — which is exactly what several committed cases relied on, in as many words. The refusal is
-// what makes that reliance expire at the source instead of in a tally that is occasionally short.
+// ⚠ **AND THE SAME PROGRAM IS PERFECTLY CORRECT AT ONE PROCESSOR**: every green thread runs on the one M, so
+// the six steps cannot interleave. A run at `MAXON_MAX_PROCS=1` is no evidence either way.
 //
 // ⛔⛔ **THE READ IS REFUSED TOO, AND IT IS THE HALF WITH TEETH — A USE-AFTER-FREE RATHER THAN A LOST
-// UPDATE.** ⚖ Ruled after the write rule landed, on this measurement: a global's assignment DECREFS the
-// record the slot was holding (`Parser.emitCheckedGlobalStore`), so a reader that has already loaded the
-// pointer reads on into freed memory. Twelve services spinning on `label.count()` while `main` ran
-// `label = "bravo-{r}"` four thousand times, with an INTERPOLATED value so each store frees a real heap
-// record rather than an immortal `.rdata` one:
-//
-//   | `MAXON_MAX_PROCS=1`  | **8 of 8 clean** |
-//   | `MAXON_MAX_PROCS=16` | **20 of 20 exit 139**, several panicking inside `String.count` → `utf8DecodeAt`
-//                            with *"Range check failed: value outside typealias 'Codepoint'"* — decoding a
-//                            record that had been freed under them |
-//
-// ⚠ A cheaper probe answers CLEANLY and is worth knowing about, because it is what a first attempt writes: a
-// handler that reads the global ONCE, with `main`'s single store either side of it, exits normally every
-// time. It never holds the pointer across a store. The hazard needs the reader to be IN the load and the
-// writer to be freeing, which is what the spin and the 4,000 stores buy.
+// UPDATE.** A global's assignment DECREFS the record the slot was holding (`Parser.emitCheckedGlobalStore`),
+// so a reader that has already loaded the pointer reads on into freed memory.
 //
 // ⭐⭐ **THE RULE IS ABOUT WHO TOUCHES IT, NOT ABOUT GLOBALS AS SUCH.** A write to `self.<field>` is legal — a
 // service's fields are reached by ONE green thread, which is the whole point of putting state there. A READ
@@ -72,10 +54,8 @@
 // author a restructuring the language already prescribes. So it refuses, and it says so in the diagnostic
 // rather than pretending it found a call path (`SharedGlobalAccessRoute.throughAnUnnameableDispatch`).
 //
-// ⭐ **BOTH VERDICTS ARE RUN, ONE INDIRECT CALL APART.**
-// `green-thread-globals.error.a-dispatch-the-compiler-cannot-follow-widens-the-rule` and
-// `green-thread-globals.a-plain-function-may-write-a-module-global` are the SAME program except that the
-// first routes its handler through a closure value; they answer refused and accepted respectively.
+// ⭐ `green-thread-globals.error.a-module-var-only-a-closure-call-in-a-handler-could-reach` pins the refusing
+// verdict.
 //
 // ⚠ **AN UNRESOLVABLE *NAMED* CALLEE IS NOT ONE OF THOSE, AND TREATING IT AS ONE WOULD MAKE THE RULE
 // VACUOUS-BY-REFUSAL.** A name no `IrFunction` declares is a Std-tier runtime entry point or an extern —
@@ -175,101 +155,6 @@ function oneHotSeeds(survey ServiceProgramSurvey, funcIndex ElementIndex) return
 	return seedsAt(survey, funcIndices: one)
 end 'oneHotSeeds'
 
-// ⭐⭐ **THE EARLIEST ACCESS OF ONE DIRECTION THAT A MESSAGE CAN RUN, REPORTED — OR `false` IF THERE IS
-// NONE.** Answering rather than reporting-and-hoping is what lets the caller run it twice, which is the
-// whole of the ranking rule below.
-function reportEarliest(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, reached BoolArray, wanted ModuleVarAccess) returns bool
-	for row in 0 upto survey.accessRowCount() 'eachAccess'
-		let site = survey.accessSiteAt(row)
-
-		if not sameModuleVarAccess(site.access, other: wanted) 'theOtherDirection'
-			continue
-		end 'theOtherDirection'
-
-		let funcIndex = survey.accessFuncAt(row)
-
-		if not reachedAt(reached, funcIndex: funcIndex) 'noMessageRunsIt'
-			continue
-		end 'noMessageRunsIt'
-
-		reportSharedGlobalAccess(project, signatures: signatures, funcNames: funcNames, survey: survey, funcIndex: funcIndex, site: site)
-		return true
-	end 'eachAccess'
-
-	return false
-end 'reportEarliest'
-
-// A `union` carries no `==`, and these two arms are compared in exactly one place. `TypeCycleCheck`'s rule:
-// a two-arm test written as a `match` covers the union exhaustively, so a third direction fails to compile
-// here rather than silently reading as "not the one I wanted".
-function sameModuleVarAccess(access ModuleVarAccess, other ModuleVarAccess) returns bool
-	return match access 'access'
-		read gives match other 'other'
-			read gives true
-			write gives false
-		end 'other'
-
-		write gives match other 'other'
-			read gives false
-			write gives true
-		end 'other'
-	end 'access'
-end 'sameModuleVarAccess'
-
-// ⭐ **THE E3143 CHECK.** Close the message seeds forward over the shared call graph and refuse the first
-// write a message can run.
-//
-// ⚠ **THE TWO GATES ARE ASKED BY `checkServiceRules`**, which owns the survey this rule shares with E3139 —
-// `moduleVarAccessSites` is empty for every program that never names a module `var` (the parser records a
-// site only at `storeToGlobal` and at an author's `emitGlobalLoad`), and the service roster is empty for
-// every program that spawns nothing.
-//
-// A survey with no access ROW is a different answer from an empty site MAP: every recorded access belonged
-// to a body dead-code elimination dropped, so there is nothing to close over.
-module function checkServiceGlobalAccesses(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, reached BoolArray)
-	if survey.accessRowCount() == 0 'everyRecordedAccessBelongsToADroppedBody'
-		return
-	end 'everyRecordedAccessBelongsToADroppedBody'
-
-	reportFirstAccessAMessageCanRun(project, signatures: signatures, funcNames: funcNames, survey: survey, reached: reached)
-end 'checkServiceGlobalAccesses'
-
-// ⭐ **THE FIRST OFFENDING ACCESS, AND ONLY THE FIRST.** One statement is one defect and the cure is the same
-// for every other access to the same global; reporting each would bury the one the author has to change
-// under its own consequences, exactly as `blameForTypeCycles` refuses to double-diagnose one ring.
-//
-// ⛔⛔ **A WRITE OUT-RANKS A READ, AND THAT IS NOT A TIE-BREAK — IT IS WHAT KEEPS ONE DEFECT FROM HAVING TWO
-// SENTENCES.** `total = total + by` emits the RHS's LOAD before the store, so in op order the READ of `total`
-// comes first; `total = 5` has no load at all. Reported in program order, one read-modify-write would be
-// diagnosed as *"the message reads the module-level `total`"* anchored at the right-hand occurrence, while
-// the identical defect one character shorter would be diagnosed as a write — the same fault, two subjects,
-// decided by whether the statement happens to mention its own target. **MEASURED as exactly that**, on this
-// file's own three committed write cases, the moment the read half landed.
-//
-// ⇒ the ranking is by DIRECTION first and position second, and the direction it prefers is the write: a
-// read-modify-write IS a write, and a function that writes a shared word is the reason every reader of that
-// word is unsafe. Naming the root rather than the consequence is the same call `blameForTypeCycles` makes.
-function reportFirstAccessAMessageCanRun(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, reached BoolArray)
-	if reportEarliest(project, signatures: signatures, funcNames: funcNames, survey: survey, reached: reached, wanted: ModuleVarAccess.write) 'aWriteWasReported'
-		return
-	end 'aWriteWasReported'
-
-	_ = reportEarliest(project, signatures: signatures, funcNames: funcNames, survey: survey, reached: reached, wanted: ModuleVarAccess.read)
-end 'reportFirstAccessAMessageCanRun'
-
-// The diagnostic: anchored at the WRITE, which is where the program can be repaired, naming the message that
-// reaches it and carrying the `spawn` that made the type a service as a NOTE — what every whole-program
-// service rule owes (`specs/services.md` §"What the compiler synthesizes"), because the `spawn` may be in
-// another file.
-function reportSharedGlobalAccess(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, funcIndex ElementIndex, site ModuleVarAccessSite)
-	let blame = blameForSharedGlobalAccess(survey, funcIndex: funcIndex)
-	let writer = functionAt(funcNames, index: funcIndex)
-	let message = functionAt(funcNames, index: blame.messageIndex)
-	let serviceName = try survey.serviceOf(blame.messageIndex) otherwise panic("reportSharedGlobalAccess: the blamed function {blame.messageIndex} is no service message — `blameForSharedGlobalAccess` walks back to a message seed")
-	let spawn = serviceSpawnSiteOf(signatures, typeName: serviceName)
-	reportPositionedWithNote(project, code: ErrorCode.semanticSharedGlobalAccessFromGreenThread, message: sharedGlobalAccessRefusal(blame.route, access: site.access, writer: writer.name, message: message.name, storageName: site.storageName), line: site.line, column: site.column, filePath: site.declFilePath, note: DiagnosticNote.at(serviceSpawnNoteText(serviceName), line: spawn.line, column: spawn.column, filePath: spawn.declFilePath))
-end 'reportSharedGlobalAccess'
-
 // ⭐ **WHICH MESSAGE RUNS THE WRITER, AND BY WHICH ROAD.** The road is part of the answer and not a detail:
 // the sentence may not claim a call path when the only thing that reached the writer was the widening, or
 // the author goes looking for a call that is not in their program.
@@ -336,62 +221,81 @@ function messageReachingAnUnnameableDispatch(survey ServiceProgramSurvey) return
 	panic("messageReachingAnUnnameableDispatch: no message's own cone holds a run-time dispatch, yet the widening marked a writer no named chain reaches — the widening marks nothing until a function some message names dispatches at run time, and this walk re-closes the messages one at a time")
 end 'messageReachingAnUnnameableDispatch'
 
-// ⭐⭐ **THE WHOLE SENTENCE: who writes, why one word cannot have two writers, and the cure.** The rule and
-// the cure are written ONCE and the ROUTE supplies only the subject clause — three copies of the race
-// paragraph would be three chances to describe the same defect differently.
-//
-// ⚠ **IT IS A `String` LITERAL BUILT INSIDE THE FUNCTION**, on `ServiceCallCycleCheck.serviceCallCycleMessage`'s
-// finding: a module-level `String` constant seeded into an accumulator is a lazily-initialized static that a
-// `var` binding CO-OWNS, and `append` then writes through into the static — MEASURED there as a message that
-// accumulated across compiles.
-function sharedGlobalAccessRefusal(route SharedGlobalAccessRoute, access ModuleVarAccess, writer ByteArray, message ByteArray, storageName ByteArray) returns String
-	let global = String.from(storageName)
-	var refusal = sharedGlobalAccessSubject(route, access: access, writer: writer, message: message, global: global)
-	refusal.append(" — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares. ")
-	refusal.append(sharedGlobalAccessHazard(access, global: global))
-	refusal.append(" Keep it in a field of `self` and hand it back through a reply, or make `{global}` a `let`")
-	return refusal
-end 'sharedGlobalAccessRefusal'
-
-// ⭐⭐ **THE TWO DIRECTIONS FAIL DIFFERENTLY, AND ONLY THE HAZARD SENTENCE KNOWS IT.** A racing WRITE loses an
-// update and answers a number that is too small; a racing READ can be worse, because the write that changes
-// the slot RELEASES the record it was holding (`Parser.emitCheckedGlobalStore`) — so the reader is not
-// looking at a stale word, it is following a pointer into freed memory. Saying "the program answers a number
-// that is too small" about a read would understate a use-after-free, and one sentence covering both would be
-// true of neither.
-//
-// ⚠ **THE READ SENTENCE SAYS "WHEN IT HOLDS A String, AN ARRAY OR A STRUCT", AND THE HEDGE IS LOAD-BEARING
-// RATHER THAN CAUTIOUS.** A SCALAR global's slot holds no record and frees nothing; racing it yields a stale
-// word and no more. The site this diagnostic is built from carries the slot's NAME and not its TYPE, so the
-// sentence states the ladder instead of picking a rung — which is honest for both, where naming a released
-// record would be simply FALSE about `var n = 0`.
-function sharedGlobalAccessHazard(access ModuleVarAccess, global String) returns String
-	return match access 'access'
-		read gives "A reader gets whichever side of a concurrent write the scheduler happened to interleave — and when `{global}` holds a String, an array or a struct that is not a stale word but a FREED ONE, because the write RELEASES the record the slot was holding while the reader is still following the pointer it already loaded. Nothing traps at the store."
-		write gives "So `{global} = …` is a load, an add and a store that two of them can interleave, each writing the other's stale value back. Nothing traps when they do; the program answers a number that is too small."
-	end 'access'
-end 'sharedGlobalAccessHazard'
-
 // The subject clause, one arm per road. The direct shape leads with the MESSAGE because that is the whole
-// sentence; the two indirect ones lead with the WRITER, because that is the line the caret sits on and the
-// reader needs to know why an ordinary function — which may write a global all it likes — is being refused.
-function sharedGlobalAccessSubject(route SharedGlobalAccessRoute, access ModuleVarAccess, writer ByteArray, message ByteArray, global String) returns String
-	let verb = sharedGlobalAccessVerb(access)
+// sentence; the two indirect ones lead with the READER, because that is the line the caret sits on and the
+// reader needs to know why an ordinary function — which may touch a global all it likes — is being refused.
+function sharedGlobalAccessSubject(route SharedGlobalAccessRoute, verb String, reader ByteArray, message ByteArray, noun String) returns String
 	return match route 'road'
-		itself gives "the message `{String.from(message)}` {verb} the module-level `{global}`"
-		throughCalls gives "`{String.from(writer)}` {verb} the module-level `{global}`, and the message `{String.from(message)}` reaches it"
-		throughAnUnnameableDispatch gives "`{String.from(writer)}` {verb} the module-level `{global}`, and the message `{String.from(message)}` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here"
+		itself gives "the message `{String.from(message)}` {verb} the {noun}"
+		throughCalls gives "`{String.from(reader)}` {verb} the {noun}, and the message `{String.from(message)}` reaches it"
+		throughAnUnnameableDispatch gives "`{String.from(reader)}` {verb} the {noun}, and the message `{String.from(message)}` dispatches through a closure or a witness whose target this compiler cannot name, so it may land here"
 	end 'road'
 end 'sharedGlobalAccessSubject'
 
-// The one word the two directions differ by. Present tense and third person, because every subject clause
-// above puts a single actor in front of it.
-function sharedGlobalAccessVerb(access ModuleVarAccess) returns String
-	return match access 'access'
-		read gives "reads"
-		write gives "writes"
-	end 'access'
-end 'sharedGlobalAccessVerb'
+module typealias ModuleVarRoster = Array with readonly TopLevelDecl
+
+module function moduleVarDeclarationsOf(signatures ProgramSignatures, spawnsAService bool) returns ModuleVarRoster
+	var moduleVars = ModuleVarRoster.create()
+
+	if not spawnsAService 'nothingIsShared'
+		return moduleVars
+	end 'nothingIsShared'
+
+	for index in 0 upto signatures.topLevelDeclCount() 'eachDecl'
+		let decl = signatures.declAt(index)
+
+		if decl.mutable 'aVar'
+			moduleVars.push(decl)
+		end 'aVar'
+	end 'eachDecl'
+
+	return moduleVars
+end 'moduleVarDeclarationsOf'
+
+module function checkServiceGlobalAccesses(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, moduleVars ModuleVarRoster, reached BoolArray)
+	var reported = BoolArray.create()
+	reported.resize(moduleVars.count())
+
+	for row in 0 upto survey.moduleVarUses.sites.rowCount() 'eachAccess'
+		if not reachedAt(reached, funcIndex: survey.moduleVarUses.sites.funcAt(row)) 'noMessageRunsIt'
+			continue
+		end 'noMessageRunsIt'
+
+		let varIndex = survey.moduleVarUses.subjectAt(row)
+
+		let alreadyReported = try reported.get(varIndex) otherwise panic("checkServiceGlobalAccesses: reported.get OOB at {varIndex} below count {reported.count()}")
+
+		if alreadyReported 'oneDefectPerVar'
+			continue
+		end 'oneDefectPerVar'
+
+		try reported.set(varIndex, value: true) otherwise panic("checkServiceGlobalAccesses: reported.set OOB at {varIndex} below count {reported.count()}")
+		reportSharedGlobalAccess(project, signatures: signatures, funcNames: funcNames, survey: survey, decl: try moduleVars.get(varIndex) otherwise panic("checkServiceGlobalAccesses: moduleVars.get OOB at {varIndex} — every subject was filed against this roster"), row: row)
+	end 'eachAccess'
+end 'checkServiceGlobalAccesses'
+
+function reportSharedGlobalAccess(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey, decl TopLevelDecl, row CsrIndex)
+	let readerIndex = survey.moduleVarUses.sites.funcAt(row)
+	let reader = functionAt(funcNames, index: readerIndex)
+	let blame = blameForSharedGlobalAccess(survey, funcIndex: readerIndex)
+	let message = functionAt(funcNames, index: blame.messageIndex)
+	let serviceName = try survey.serviceOf(blame.messageIndex) otherwise panic("reportSharedGlobalAccess: the blamed function {blame.messageIndex} is no service message — `blameForSharedGlobalAccess` walks back to a message seed")
+	let spawn = serviceSpawnSiteOf(signatures, typeName: serviceName)
+	let range = project.opRanges.get(survey.moduleVarUses.sites.opAt(row))
+	reportPositionedWithNote(project, code: ErrorCode.semanticModuleVarInServiceProgram, message: sharedGlobalAccessRefusal(blame.route, decl: decl, reader: reader.name, message: message.name), line: range.line, column: range.column, filePath: reader.sourceFilePath, note: DiagnosticNote.at(serviceSpawnNoteText(serviceName), line: spawn.line, column: spawn.column, filePath: spawn.declFilePath))
+end 'reportSharedGlobalAccess'
+
+function sharedGlobalAccessRefusal(route SharedGlobalAccessRoute, decl TopLevelDecl, reader ByteArray, message ByteArray) returns String
+	let name = String.from(decl.name)
+	let noun = match decl.scope 'scope'
+		fileScope gives "module-level `var {name}`"
+		typeBody gives "static `var {name}`"
+	end 'scope'
+
+	var refusal = sharedGlobalAccessSubject(route, verb: "uses", reader: reader, message: message, noun: noun)
+	refusal.append(" — a message runs on a green thread the scheduler may put on any OS thread, and a module `var` is one word every one of them shares: a write can lose an update, and a read can follow a record a concurrent write has just freed. Keep it in a field of `self` and hand it back through a reply, or make `{name}` a `let`")
+	return refusal
+end 'sharedGlobalAccessRefusal'
 
 function reachedAt(reached BoolArray, funcIndex ElementIndex) returns bool
 	return try reached.get(funcIndex) otherwise panic("reachedAt: reached.get OOB at {funcIndex} below count {reached.count()} — every function index comes from the list the closure was sized to")
@@ -428,7 +332,7 @@ function reportUnmarkableLetRead(project Project, funcNames FunctionNameIndex, s
 	let message = functionAt(funcNames, index: blame.messageIndex)
 	let global = String.from(letGlobal.declName)
 	let range = project.opRanges.get(survey.globalUses.sites.opAt(row))
-	let subject = sharedGlobalAccessSubject(blame.route, access: ModuleVarAccess.read, writer: reader.name, message: message.name, global: global)
+	let subject = sharedGlobalAccessSubject(blame.route, verb: "reads", reader: reader.name, message: message.name, noun: "module-level `{global}`")
 	let declaration = DiagnosticNote.at("`{global}` is declared here", line: letGlobal.nameLine, column: letGlobal.nameColumn, filePath: letGlobal.declFilePath)
 	reportPositionedWithNote(project, code: ErrorCode.semanticUnmarkableLetReadByAMessage, message: "{subject}, and it holds {noun}. A message runs on a green thread the scheduler may put on any OS thread, so the counts every message steps on `{global}` must be atomic, and no share walk can mark it so. Keep it in a field of the service that reads it", line: range.line, column: range.column, filePath: reader.sourceFilePath, note: declaration)
 end 'reportUnmarkableLetRead'
@@ -742,6 +646,8 @@ module function runTimeTargetOf(op MaxonOp) returns RunTimeTarget
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness gives RunTimeTarget.named
+		existentialWitness or
+		holdValue or
+		holdEnd gives RunTimeTarget.named
 	end 'op'
 end 'runTimeTargetOf'

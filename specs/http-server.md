@@ -39,7 +39,7 @@ type HelloHandler implements HttpHandler
 end 'HelloHandler'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
 	_ = server.serve(HelloHandler.create("hello\n"))
 
 	return 0
@@ -50,7 +50,7 @@ end 'main'
 
 ```text
 function serveOne(server HttpServer) returns ExitCode throws HttpServerError
-	let exchange = try server.accept()
+	var exchange = try server.accept()
 	let request = exchange.request()
 	try exchange.respondWith(StatusCode.ok, body: request.url().path(), contentType: "text/plain")
 
@@ -99,7 +99,7 @@ body.
 typealias Served = int(0 to 9)
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise return 1
+	var exchange = try server.accept() otherwise return 1
 	let request = exchange.request()
 	let query = try request.url().query() otherwise "none"
 	let described = "{request.method().name} {request.url().path()} {query}"
@@ -123,7 +123,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -162,7 +162,7 @@ function bigBody() returns String
 end 'bigBody'
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise return 1
+	var exchange = try server.accept() otherwise return 1
 	let received = exchange.request().body().byteLength() as BodyBytes
 
 	try exchange.respondWith(StatusCode.ok, body: "{received}", contentType: "text/plain") otherwise return 2
@@ -185,7 +185,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -204,7 +204,7 @@ served=3 status=200 agreed=true sent=21120
 typealias Served = int(0 to 9)
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise return 1
+	var exchange = try server.accept() otherwise return 1
 	let headers = exchange.request().headers()
 	let lower = try headers.get("x-maxon-tag") otherwise "absent"
 	let upper = try headers.get("X-MAXON-TAG") otherwise "absent"
@@ -230,7 +230,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -296,7 +296,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -354,7 +354,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -370,7 +370,7 @@ first=200 body=answered second=200 ended=closed
 <!-- procs: 1 -->
 ```maxon
 function answerTwice(server HttpServer) returns String
-	let exchange = try server.accept() otherwise return "accept-failed"
+	var exchange = try server.accept() otherwise return "accept-failed"
 	try exchange.respondWith(StatusCode.ok, body: "first", contentType: "text/plain") otherwise return "first-failed"
 
 	try exchange.respondWith(StatusCode.ok, body: "second", contentType: "text/plain") otherwise (e) 'refused'
@@ -393,7 +393,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -449,7 +449,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -466,7 +466,7 @@ idle=acceptDeadlinePassed prompt=true body=echo/again ended=closed
 let ReadBufferBytes = 4096
 
 function acceptedHeader(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -493,7 +493,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -551,7 +551,7 @@ function oversizeHeaderBlock() returns String
 end 'oversizeHeaderBlock'
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		print("accept threw {e.name}\n")
 		return 1
 	end 'refused'
@@ -614,7 +614,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		print("accept threw {e.name}\n")
 		return 1
 	end 'refused'
@@ -625,7 +625,7 @@ function serveOne(server HttpServer) returns Served
 end 'serveOne'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	let port = server.port()
 	let peer = async serveOne(server)
 	let status = shout(port, block: "POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {DeclaredBodyBytes}\r\n\r\nabcd")
@@ -669,7 +669,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		print("accept threw {e.name}\n")
 		return 1
 	end 'refused'
@@ -680,7 +680,7 @@ function serveOne(server HttpServer) returns Served
 end 'serveOne'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	let port = server.port()
 	let peer = async serveOne(server)
 	let status = shout(port, block: "POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nabcd\r\n0\r\n\r\n")
@@ -728,10 +728,10 @@ function saySilence(port NetworkPort) returns String
 end 'saySilence'
 
 function serveTwo(server HttpServer) returns Served
-	let refused = try server.accept() otherwise (e) 'timedOut'
+	var refused = try server.accept() otherwise (e) 'timedOut'
 		print("accept threw {e.name}\n")
 
-		let exchange = try server.accept() otherwise return 1
+		var exchange = try server.accept() otherwise return 1
 		try exchange.respondWith(StatusCode.ok, body: "second", contentType: "text/plain") otherwise return 2
 
 		return 3
@@ -793,7 +793,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		print("accept threw {e.name}\n")
 		return 1
 	end 'refused'
@@ -804,7 +804,7 @@ function serveOne(server HttpServer) returns Served
 end 'serveOne'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	let port = server.port()
 	let peer = async serveOne(server)
 	let status = shout(port, block: "GARBAGE\r\n\r\n")
@@ -852,7 +852,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		print("accept threw {e.name}\n")
 		return 1
 	end 'refused'
@@ -898,7 +898,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -944,7 +944,7 @@ function trickle(port NetworkPort) returns String
 end 'trickle'
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		print("accept threw {e.name}\n")
 		return 1
 	end 'refused'
@@ -970,7 +970,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1011,7 +1011,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function acceptedAs(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -1108,7 +1108,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1130,14 +1130,14 @@ pass the second half of this case and say nothing about `close()`.
 typealias Served = int(0 to 9)
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise return 1
+	var exchange = try server.accept() otherwise return 1
 	try exchange.respondWith(StatusCode.ok, body: "live", contentType: "text/plain") otherwise return 2
 
 	return 3
 end 'serveOne'
 
 function acceptAfterClose(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -1161,7 +1161,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1195,7 +1195,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function acceptedAs(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -1251,7 +1251,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1304,7 +1304,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function acceptedAs(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -1341,7 +1341,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1382,7 +1382,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function acceptedAs(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -1427,7 +1427,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1462,7 +1462,7 @@ typealias Served = int(0 to 9)
 let ReadBufferBytes = 4096
 
 function serveOne(server HttpServer) returns Served
-	let exchange = try server.accept() otherwise return 1
+	var exchange = try server.accept() otherwise return 1
 	try exchange.respondWith(StatusCode.ok, body: "hello", contentType: "text/plain") otherwise return 2
 
 	return 3
@@ -1511,7 +1511,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1570,7 +1570,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1687,7 +1687,7 @@ function main() returns ExitCode
 	lowerFlag(PeerResetFlag)
 	lowerFlag(FaultReportedFlag)
 
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1750,7 +1750,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1773,7 +1773,7 @@ let ReadBufferBytes = 4096
 let TrickledHead = "GET /slow HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Pad: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\r\n\r\n"
 
 function acceptedAs(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -1857,7 +1857,7 @@ let SentBodyChunks = 3200
 let BodyChunk = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123"
 
 function acceptedAs(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -1911,7 +1911,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -1947,7 +1947,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function acceptedAs(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -2115,7 +2115,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function acceptedAs(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -2162,7 +2162,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -2204,7 +2204,7 @@ function shout(port NetworkPort, block String) returns String
 end 'shout'
 
 function acceptedAs(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -2240,7 +2240,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -2295,7 +2295,7 @@ function answeredWith(port NetworkPort) returns String
 end 'answeredWith'
 
 function respondedWith(server HttpServer, response HttpResponse) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -2340,7 +2340,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```
@@ -2385,7 +2385,7 @@ function everythingFrom(client TcpClient) returns String
 end 'everythingFrom'
 
 function acceptedAs(server HttpServer) returns String
-	let exchange = try server.accept() otherwise (e) 'refused'
+	var exchange = try server.accept() otherwise (e) 'refused'
 		return e.name
 	end 'refused'
 
@@ -2416,7 +2416,7 @@ function exchangeOver(server HttpServer) returns ExitCode
 end 'exchangeOver'
 
 function main() returns ExitCode
-	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
 	return exchangeOver(server)
 end 'main'
 ```

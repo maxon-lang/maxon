@@ -78,7 +78,7 @@ function foldInFunc(module StdModule, func IrFunction, scratch EstablishedScratc
 		return false
 	end 'nothingToFold'
 
-	let analysis = EstablishedFunction.build(module, func: func, scratch: scratch)
+	var analysis = EstablishedFunction.build(module, func: func, scratch: scratch)
 
 	if analysis.records.count == 0 'noRecordNamed'
 		return false
@@ -141,8 +141,6 @@ type EstablishedFunction
 	end 'build'
 
 	// Every record a guard tests or a callee with a stated effect names, and every variable-index bound.
-	// An INDEX loop: a `for … in` element over the tree is a borrow of `self` while the body writes
-	// the record index and the bound columns.
 	function gather(module StdModule, func IrFunction, scratch EstablishedScratch)
 		for orderIndex in 0 upto self.tree.reverseOrder.count() 'eachBlock'
 			let position = try self.tree.reverseOrder.get(orderIndex) otherwise panic("foldEstablishedGuards: reverseOrder.get OOB at {orderIndex}")
@@ -359,7 +357,7 @@ end 'storeKeepsEveryFact'
 // on the bounded accessor `runBlockOps` remembered what that accessor's success proves. Any other test
 // establishes nothing on either arm. `scratch.branch` holds the terminator and `reader.arith` its compare.
 function classifyEstablishingEdge(analysis EstablishedFunction, scratch EstablishedScratch)
-	let reader = analysis.reader
+	var reader = analysis.reader
 	let condId = scratch.branch.condId
 
 	if classifyManagedGuard(reader, condId: condId, out: scratch.guard) 'aGuard'

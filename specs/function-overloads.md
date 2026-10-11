@@ -1740,7 +1740,7 @@ function relay(n Integer, p IntPromise) returns IntPromise
 end 'relay'
 
 function relay(p IntPromise, q IntPromise, flag bool) returns IntPromise
-	if flag and p.inner > 0 'peeked'
+	if flag and not p.isComplete() 'peeked'
 		print("peeked\n")
 	end 'peeked'
 

@@ -54,7 +54,7 @@ let MaxStdlibSearchDepth = 64
 
 // The second library root, `runtime/` — the language runtime, loaded by every compile exactly as
 // `stdlib/` is.
-module let RuntimeDirName = "runtime"
+export let RuntimeDirName = "runtime"
 
 // Anchored on the executable, not `Directory.currentPath()`: the compiler may run from any
 // directory (the spec runner compiles in a throwaway temp dir), while its binary always lives inside
@@ -146,7 +146,7 @@ export typealias FunctionNameSet = Set with ByteArray
 // A stdlib function name -> the x64-windows-only runtime entry its body reaches, directly or through
 // other stdlib functions. Membership IS "this function needs the Win32 substrate", so the map is its own
 // mark column and there is no second set to keep in step with it.
-export typealias StdlibSubstrateEntryMap = Map with (ByteArray, ByteArray)
+export typealias StdlibSubstrateEntryMap = Map with (ByteArray, readonly ByteArray)
 
 // Stdlib function name -> its DENSE node index in the substrate fixpoint's call graph. A distinct alias
 // from `FuncIndexByName`, whose values are merged-MODULE function indices: these index the far
@@ -169,7 +169,7 @@ end 'InstanceBucket'
 
 type ConstrainedOwnerLedger
 	export var seen as ConstrainedOwnerSet
-	export var pending as ByteArrayArray
+	export var pending as NameRoster
 	export let instancesByBase as InstancesByBaseMap
 
 	static function over(signatures ProgramSignatures) returns Self
@@ -187,12 +187,12 @@ type ConstrainedOwnerLedger
 				continue
 			end 'baseAlreadyIndexed'
 
-			let first = InstanceBucket.create()
+			var first = InstanceBucket.create()
 			first.ids.push(instance)
-			instancesByBase.upsert(baseName.clone(), value: first)
+			instancesByBase.upsert(baseName, value: first)
 		end 'eachInstance'
 
-		return Self{seen: ConstrainedOwnerSet.create(), pending: ByteArrayArray.create(), instancesByBase: instancesByBase}
+		return Self{seen: ConstrainedOwnerSet.create(), pending: NameRoster.create(), instancesByBase: instancesByBase}
 	end 'over'
 
 	function noteOwnerOf(funcName ByteArray)
@@ -207,7 +207,7 @@ type ConstrainedOwnerLedger
 			return
 		end 'nothingToCredit'
 
-		self.seen.insert(typeName.clone())
+		self.seen.insert(typeName)
 		self.pending.push(typeName.clone())
 	end 'noteOwner'
 end 'ConstrainedOwnerLedger'
@@ -272,9 +272,9 @@ export type LibraryFacts
 	// after this derivation, and `withCompilerCalledTierUnreached` is where the two are joined.
 	export let compilerCalledTier as FunctionNameSet
 
-	let substrateNodes as ByteArrayArray
+	let substrateNodes as NameRoster
 
-	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet, compilerCalledTier FunctionNameSet, substrateNodes ByteArrayArray) returns LibraryFacts
+	export static function create(libraryFunctions FunctionNameSet, unreachable FunctionNameSet, substrateEntries StdlibSubstrateEntryMap, runtimeTier FunctionNameSet, unreachedRuntimeTier FunctionNameSet, compilerCalledTier FunctionNameSet, substrateNodes NameRoster) returns LibraryFacts
 		return Self{libraryFunctions: libraryFunctions, unreachable: unreachable, substrateEntries: substrateEntries, runtimeTier: runtimeTier, unreachedRuntimeTier: unreachedRuntimeTier, compilerCalledTier: compilerCalledTier, substrateNodes: substrateNodes}
 	end 'create'
 
@@ -282,7 +282,7 @@ export type LibraryFacts
 	// at all: no function is stdlib, nothing is unreachable-stdlib, nothing is in the runtime tier and
 	// nothing needs the substrate.
 	export static function empty() returns LibraryFacts
-		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledTier: FunctionNameSet.create(), substrateNodes: ByteArrayArray.create())
+		return Self.create(FunctionNameSet.create(), unreachable: FunctionNameSet.create(), substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: FunctionNameSet.create(), unreachedRuntimeTier: FunctionNameSet.create(), compilerCalledTier: FunctionNameSet.create(), substrateNodes: NameRoster.create())
 	end 'empty'
 
 	// ⭐⭐ **THE ONE QUESTION EVERY PRE-ELIMINATION PASS ASKS OF A LIBRARY BODY: WILL DEAD-FUNCTION
@@ -352,12 +352,12 @@ export function deriveLibraryFacts(project Project, module MaxonModule, signatur
 
 	return match reach 'reach'
 		noLibrarySource gives LibraryFacts.empty()
-		unreferenced(roster, stdlib) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: FunctionNameSet.create()), substrateNodes: ByteArrayArray.create())
+		unreferenced(roster, stdlib) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: FunctionNameSet.create()), substrateNodes: NameRoster.create())
 		walked(roster, stdlib, reachable) gives libraryFactsOf(roster, stdlib: stdlib, split: classifyLibraryReach(roster, reachable: reachable), substrateNodes: roster.names)
 	end 'reach'
 end 'deriveLibraryFacts'
 
-function libraryFactsOf(roster LibraryFunctionRoster, stdlib FunctionNameSet, split LibraryReachSplit, substrateNodes ByteArrayArray) returns LibraryFacts
+function libraryFactsOf(roster LibraryFunctionRoster, stdlib FunctionNameSet, split LibraryReachSplit, substrateNodes NameRoster) returns LibraryFacts
 	return LibraryFacts.create(stdlib, unreachable: split.unreachable, substrateEntries: StdlibSubstrateEntryMap.create(), runtimeTier: roster.runtimeTier, unreachedRuntimeTier: split.unreachedRuntimeTier, compilerCalledTier: roster.compilerReached, substrateNodes: substrateNodes)
 end 'libraryFactsOf'
 
@@ -439,8 +439,6 @@ end 'growStdlibBodyDemand'
 function demandEveryReachedLibraryFile(project Project, reachable FunctionNameSet) returns bool throws CompileError
 	var grew = false
 
-	// An index loop, not `for … in`: the element is a borrow of `project`, and the call below is
-	// recorded as writing that same storage (see `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`).
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
 		let demandedThisFile = try demandOneStdlibFileIfReached(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("demandEveryReachedLibraryFile: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), reachable: reachable)
 		grew = grew or demandedThisFile
@@ -450,11 +448,7 @@ function demandEveryReachedLibraryFile(project Project, reachable FunctionNameSe
 end 'demandEveryReachedLibraryFile'
 
 // Demand ONE stdlib file's bodies if any function it declares is reachable, answering whether the demand
-// set grew. ⭐ **THE PATH ARRIVES AS A PARAMETER**, which is what lets it be named three times: read
-// inline out of `project.librarySourcePaths` it is a borrow of `project`, and `queryParseOps` and the
-// `insert` both WRITE `project`, so the caller would need the same `try … get(fileIndex) otherwise
-// panic(…)` spelled once per use — one fact, three copies. Same cure as
-// `Parser.conformanceRequiresMethod`.
+// set grew.
 function demandOneStdlibFileIfReached(project Project, path FilePath, reachable FunctionNameSet) returns bool throws CompileError
 	if project.db.demandedLibraryBodyFiles.contains(path) 'alreadyBuilding'
 		return false
@@ -485,10 +479,10 @@ end 'demandOneStdlibFileIfReached'
 // two columns are built by ONE walk because the tier is a property of the FILE the first column is read
 // out of; asking it afterwards would need a name->path map nothing else here has a use for.
 type LibraryFunctionRoster
-	// Every library function, in load order. A `ByteArrayArray` rather than a set because the names are
+	// Every library function, in load order. A `NameRoster` rather than a set because the names are
 	// unique by construction (E3006 rejects a duplicate) and the substrate fixpoint needs a dense ORDER
 	// for its node space as well as membership.
-	export let names as ByteArrayArray
+	export let names as NameRoster
 
 	// The `runtime/` subset of `names` — the tier `classifyLibraryReach` may never file `unreachable`.
 	export let runtimeTier as FunctionNameSet
@@ -497,7 +491,7 @@ type LibraryFunctionRoster
 	// same walk as the two columns above so the three cannot come to disagree about which names they hold.
 	export let compilerReached as FunctionNameSet
 
-	static function create(names ByteArrayArray, runtimeTier FunctionNameSet, compilerReached FunctionNameSet) returns LibraryFunctionRoster
+	static function create(names NameRoster, runtimeTier FunctionNameSet, compilerReached FunctionNameSet) returns LibraryFunctionRoster
 		return Self{names: names, runtimeTier: runtimeTier, compilerReached: compilerReached}
 	end 'create'
 end 'LibraryFunctionRoster'
@@ -505,13 +499,10 @@ end 'LibraryFunctionRoster'
 // Read back from each library file's PARSE ARTIFACT — a memo HIT, since `queryAllModule` has already
 // parsed it — so the cost is O(library functions) and touches nothing the user wrote.
 function libraryFunctionRoster(project Project) returns LibraryFunctionRoster throws CompileError
-	var names = ByteArrayArray.create()
+	var names = NameRoster.create()
 	var runtimeTier = FunctionNameSet.create()
 	var compilerReached = FunctionNameSet.create()
 
-	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
 		try collectOneLibraryFile(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("libraryFunctionRoster: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), names: names, runtimeTier: runtimeTier, compilerReached: compilerReached)
 	end 'eachFile'
@@ -519,11 +510,8 @@ function libraryFunctionRoster(project Project) returns LibraryFunctionRoster th
 	return LibraryFunctionRoster.create(names, runtimeTier: runtimeTier, compilerReached: compilerReached)
 end 'libraryFunctionRoster'
 
-// One library file's functions, filed into both columns. ⭐ **THE PATH ARRIVES AS A PARAMETER**, for
-// `demandOneStdlibFileIfReached`'s reason: it is named twice here, and both `isRuntimeSourceFile` (a
-// provenance memo) and `queryParseOps` WRITE `project`, so a borrow read inline out of
-// `project.librarySourcePaths` survives neither call.
-function collectOneLibraryFile(project Project, path FilePath, names ByteArrayArray, runtimeTier FunctionNameSet, compilerReached FunctionNameSet) throws CompileError
+// One library file's functions, filed into both columns.
+function collectOneLibraryFile(project Project, path FilePath, names NameRoster, runtimeTier FunctionNameSet, compilerReached FunctionNameSet) throws CompileError
 	let isRuntime = isRuntimeSourceFile(project, path: path)
 	let isCompilerCalled = isRuntime and runtimeTierFileIsCompilerCalled(path)
 	let artifact = try queryParseOps(project, path: path)
@@ -785,7 +773,7 @@ end 'classifyLibraryReach'
 // resolution, keys on the real callee, and prunes it there. What this costs is only that
 // `scanRuntimeUsage` may read an unreached sibling overload's body — and only in a program that already
 // calls that stdlib name.
-function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees ByteArrayArray, initWitnessInterfaces ByteArrayArray) returns FunctionNameSet throws CompileError
+function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster, initWitnessInterfaces NameRoster) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
 	var reached = BoolArray.create()
@@ -802,9 +790,9 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// shape — nothing reaches it from `main` — so a root missing here is a compiler abort on the first test
 	// that calls the library, not a lost prune.
 	for func in module.functions 'eachFunction'
-		if isTestFunctionName(func.name) 'aTest'
+		if isTestFunctionName(func.name) or not stdlib.contains(func.name) 'aRoot'
 			markReachable(func.name, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		end 'aTest'
+		end 'aRoot'
 	end 'eachFunction'
 
 	for callee in initCallees 'eachInitializerRoot'
@@ -845,7 +833,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	let seedConformers = conformersMintedWithoutTheirOwnMethods(signatures)
 	let enumConformers = enumConformersByInterface(project)
 	var witnessInterfaces = InterfaceNameSet.create()
-	var witnessInterfaceOrder = ByteArrayArray.create()
+	var witnessInterfaceOrder = NameRoster.create()
 	var interfacesSeeded = 0 as FieldIndex
 	var creditedServices = CreditedServiceSet.create()
 	var ownerLedger = ConstrainedOwnerLedger.over(signatures)
@@ -927,8 +915,8 @@ end 'reachableMaxonFunctionNames'
 // PANICS BY NAME. `arrayRecordBaseName` is the corpus declaration as the stdlib spells it, which is what
 // this walk reads. The other two names are uncontestable (`TypeResolution.isCompilerOwnedTypeName`), so
 // only this one moves.
-function conformersMintedWithoutTheirOwnMethods(signatures ProgramSignatures) returns ByteArrayArray
-	var names = ByteArrayArray.create()
+function conformersMintedWithoutTheirOwnMethods(signatures ProgramSignatures) returns NameRoster
+	var names = NameRoster.create()
 	names.push(StringConformerName)
 	names.push(CharacterConformerName)
 	names.push(signatures.arrayRecordBaseName())
@@ -943,7 +931,7 @@ end 'conformersMintedWithoutTheirOwnMethods'
 // is a constant — while which enums declare which interface is a property of the PROGRAM. Crossing the two
 // growing sets would be quadratic in a fixpoint, so the enums are INDEXED by the interface the seed loop
 // already iterates and the inner work stays one row lookup.
-typealias EnumConformersByInterface = Map with (ByteArray, ByteArrayArray)
+typealias EnumConformersByInterface = Map with (ByteArray, NameRoster)
 
 // ⭐ **THE ENUMS AND UNIONS WHOSE WITNESS SLOTS A NAMED INTERFACE OWES A CREDIT TO** — see P1 at
 // `classifyLibraryReach` for why a conformer that no call builds values of needs one at all.
@@ -982,7 +970,7 @@ function recordEnumWitnessCredit(byInterface EnumConformersByInterface, project 
 		return
 	end 'noSlotToCredit'
 
-	var conformers = try byInterface.get(interfaceName) otherwise ByteArrayArray.create()
+	var conformers = try byInterface.get(interfaceName) otherwise NameRoster.create()
 	conformers.push(enumName)
 	byInterface.upsert(interfaceName, value: conformers)
 end 'recordEnumWitnessCredit'
@@ -992,7 +980,7 @@ end 'recordEnumWitnessCredit'
 // second copy of the drain is a second place for a marking to be added to one side only.
 // ⚠ **EVERY REACHED FUNCTION IS ASKED, WITH NO SKIP ONCE AN ANSWER IS KNOWN**: the interface a later
 // function names is one the seed still owes. The ask is a qualified-name split and a handful of map lookups.
-function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder ByteArrayArray, creditedServices CreditedServiceSet, ownerLedger ConstrainedOwnerLedger)
+function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder NameRoster, creditedServices CreditedServiceSet, ownerLedger ConstrainedOwnerLedger)
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
@@ -1096,7 +1084,7 @@ end 'drainReachableWorklist'
 // ⚠ **UNDER-APPROXIMATING HERE IS A PANIC, NOT A SILENT WRONG ANSWER**, and the seed loop in
 // `reachableMaxonFunctionNames` is what keeps it exact: a name discovered by a LATER round re-seeds, so a
 // witness position reached only through a seeded body is still covered.
-function collectWitnessPositionInterfaces(func IrFunction, project Project, signatures ProgramSignatures, funcSignatures FuncSignatureMap, into InterfaceNameSet, order ByteArrayArray)
+function collectWitnessPositionInterfaces(func IrFunction, project Project, signatures ProgramSignatures, funcSignatures FuncSignatureMap, into InterfaceNameSet, order NameRoster)
 	for paramType in func.maxonParamTypes 'eachParam'
 		if maxonTypeTag(paramType) == ValueTypeTag.interfaceRef 'existentialParam'
 			noteWitnessPositionInterface(paramType, project: project, into: into, order: order)
@@ -1119,13 +1107,13 @@ end 'collectWitnessPositionInterfaces'
 
 // The interface an `interfaceRef` position names, filed once. The ids of a MERGED module's signature types
 // are project-global (`mergeArtifact` remaps them), so the project's interner is the one they live in.
-function noteWitnessPositionInterface(t MaxonType, project Project, into InterfaceNameSet, order ByteArrayArray)
+function noteWitnessPositionInterface(t MaxonType, project Project, into InterfaceNameSet, order NameRoster)
 	noteInterfaceName(interfaceNameOfType(t, typeNames: project.typeNames), into: into, order: order)
 end 'noteWitnessPositionInterface'
 
 // The RETURN arm's form: a return type is a `MaxonReturnType`, so the tag test lives past the `value` arm
 // rather than in front of it — `maxonReturnTypeTag` panics on `void` by design.
-function noteWitnessPositionInterfaceIfExistential(t MaxonType, project Project, into InterfaceNameSet, order ByteArrayArray)
+function noteWitnessPositionInterfaceIfExistential(t MaxonType, project Project, into InterfaceNameSet, order NameRoster)
 	if maxonTypeTag(t) != ValueTypeTag.interfaceRef 'notAnExistential'
 		return
 	end 'notAnExistential'
@@ -1158,7 +1146,7 @@ end 'functionDeclaresAWitnessPosition'
 // ⚠ **A SET FOR MEMBERSHIP AND AN ARRAY FOR ORDER, because the seed loop must be able to WALK the names
 // it has not yet acted on** — and it must walk them in a fixed order, so what a compile builds cannot depend
 // on a hash bucket.
-function noteInterfaceName(name ByteArray, into InterfaceNameSet, order ByteArrayArray)
+function noteInterfaceName(name ByteArray, into InterfaceNameSet, order NameRoster)
 	if into.contains(name) 'alreadyNamed'
 		return
 	end 'alreadyNamed'
@@ -1473,7 +1461,7 @@ end 'markServiceLoopHandlers'
 //     of a program whose only constraint is `Hashable`.
 //     Crediting them HERE as well would undo exactly that: the seed marks `int.hash`, the drain reaches it,
 //     and a total credit on `int` pulls in every other impl the type declares.
-module function markConformerWitnessImpls(func IrFunction, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+module function markConformerWitnessImpls(func IrFunction, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match splitQualifiedName(func.name) 'owner'
 		// A FREE function belongs to no type, so reaching it produces no conformer and implies no table.
 		notQualified then break
@@ -1482,8 +1470,8 @@ module function markConformerWitnessImpls(func IrFunction, project Project, sign
 end 'markConformerWitnessImpls'
 
 // The total credit above, for a type the seed does not own.
-function markEveryDeclaredWitnessImplOf(typeName ByteArray, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	if namesInclude(seedConformers, name: typeName) 'theSeedOwnsThisConformer'
+function markEveryDeclaredWitnessImplOf(typeName ByteArray, project Project, signatures ProgramSignatures, seedConformers NameRoster, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	if seedConformers.contains(typeName) 'theSeedOwnsThisConformer'
 		return
 	end 'theSeedOwnsThisConformer'
 
@@ -1512,7 +1500,7 @@ function markConstraintArgumentImpls(ledger ConstrainedOwnerLedger, project Proj
 		end 'eachInstance'
 	end 'eachNewlyReachedOwner'
 
-	ledger.pending = ByteArrayArray.create()
+	ledger.pending = NameRoster.create()
 end 'markConstraintArgumentImpls'
 
 // Credit every requirement implementation `typeName`'s witness tables can name. A type that declares no
@@ -1620,7 +1608,7 @@ end 'markCorpusSlotInitCallees'
 // the short-circuit would file `String.hash` unreachable while its witness table still named it. It is a
 // MARKING on both sides, driven by the pair of predicates this scan asks below and the drain asks of reached
 // code — see `functionDeclaresAWitnessPosition`, which carries the argument in full.
-function userCodeReachesStdlib(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees ByteArrayArray, initWitnessInterfaces ByteArrayArray) returns bool
+function userCodeReachesStdlib(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster, initWitnessInterfaces NameRoster) returns bool
 	// ⭐ **A ROOT THE PRECISE WALK SEEDS IS A CROSSING NO BODY CARRIES, WHICH IS WHY IT CANNOT BE FOUND BY THE
 	// OP SCAN BELOW.** `var sep = FilePath.separator()` reaches stdlib without any function of this module
 	// naming it — the call belongs to `__module_init`, which does not exist yet. Missing it would answer "all
@@ -1740,7 +1728,7 @@ end 'corpusDeclaresASeededConformance'
 
 // Does any name on a list the precise walk marks reach stdlib? One function for every such list — the
 // initializer roots and a service's handlers — so none of them can arrive with a subtly different test.
-function anyNameReachesStdlib(names ByteArrayArray, project Project, stdlib FunctionNameSet) returns bool
+function anyNameReachesStdlib(names NameRoster, project Project, stdlib FunctionNameSet) returns bool
 	for name in names 'eachName'
 		if nameReachesStdlib(name, project: project, stdlib: stdlib) 'found'
 			return true
@@ -1800,7 +1788,7 @@ end 'opReadsACorpusSlotRootedInStdlib'
 // The loop the caller above keeps out of its one-line answer. It reads the set being BUILT rather than
 // `isLibraryFunction`, for `userCodeReachesStdlib`'s stated reason: this runs inside the derivation that
 // publishes it.
-function anyCalleeIsIn(callees ByteArrayArray, stdlib FunctionNameSet) returns bool
+function anyCalleeIsIn(callees NameRoster, stdlib FunctionNameSet) returns bool
 	for callee in callees 'eachCallee'
 		if stdlib.contains(callee) 'crossesIntoStdlib'
 			return true
@@ -1832,7 +1820,7 @@ end 'anyCalleeIsIn'
 //
 // The UNREACHABLE stdlib functions are left out entirely: they are invisible to this compile, so their
 // substrate is too. That is what keeps a `Clock.nowMs()` in code `main` never calls compiling for wasm.
-function stdlibSubstrateEntries(module MaxonModule, stdlibNames ByteArrayArray, unreachable FunctionNameSet) returns StdlibSubstrateEntryMap
+function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unreachable FunctionNameSet) returns StdlibSubstrateEntryMap
 	let nodeCount = stdlibNames.count()
 	var nodeOf = StdlibNodeByName.create()
 
@@ -1877,9 +1865,7 @@ end 'stdlibSubstrateEntries'
 // helper that took them apart could be handed five of the six.
 //
 // ⭐ THE COLUMNS PROPAGATE SCALARS. A marked node stores an INDEX into `seedEntries`, never the entry name
-// itself: reading a name out of the answer while inserting into it is a read-borrow held across a mutation,
-// which the ownership checker refuses (E3070) — correctly, since the insert may reallocate what the read
-// borrowed. The names are read once, after the fixpoint has settled.
+// itself. The names are read once, after the fixpoint has settled.
 type SubstrateFixpoint
 	// Per node: does it (transitively) need the Win32 substrate? Also the "already queued" test — a node is
 	// marked exactly when it enters the worklist, so it enters at most once.
@@ -1889,7 +1875,7 @@ type SubstrateFixpoint
 	var seedOf as CsrColumn
 
 	// The runtime entry each seed names, in the order the seeds were found.
-	var seedEntries as ByteArrayArray
+	var seedEntries as NameRoster
 
 	// Nodes whose callers still have to inherit from them. Drained by index, never popped, so a node's
 	// position is stable while the array grows.
@@ -1905,7 +1891,7 @@ type SubstrateFixpoint
 		marked.resize(nodeCount)
 		var seedOf = CsrColumn.create()
 		seedOf.resize(nodeCount)
-		return Self{marked: marked, seedOf: seedOf, seedEntries: ByteArrayArray.create(), worklist: CsrColumn.create(), edgeCallee: CsrColumn.create(), edgeCaller: CsrColumn.create()}
+		return Self{marked: marked, seedOf: seedOf, seedEntries: NameRoster.create(), worklist: CsrColumn.create(), edgeCallee: CsrColumn.create(), edgeCaller: CsrColumn.create()}
 	end 'overNodes'
 
 	// `node` names `entry` directly — a SEED.
@@ -2063,7 +2049,9 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		rawIntrinsic(_, intrinsic, _, _) then noteSubstrateRawIntrinsic(intrinsic, callerNode: callerNode, state: state)
 
 		// A witness table's impls are reached through the conformer, never through an edge this op names.
-		existentialWitness then break
+		existentialWitness or
+		holdValue or
+		holdEnd then break
 	end 'op'
 end 'noteSubstrateEdge'
 

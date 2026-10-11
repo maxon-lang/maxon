@@ -89,6 +89,11 @@ end 'dapBroke'
 
 let FixturesDirName = "tests/debug/fixtures"
 let StagingRootDirName = "temp/dap"
+let StdlibDirName = "stdlib"
+let LibraryTierDirName = "tier"
+let LibraryTierBinDirName = "bin"
+let LibraryTierProgramDirName = "__fixture__"
+let StageLibraryTierCommandName = "stage-library-tier"
 let StoredFixtureSuffix = ".fixture"
 let StagedProgramFileName = "main.maxon"
 let BuildCommandName = "build"
@@ -166,13 +171,48 @@ function dapBuiltExecutable(staged FilePath) returns FilePath
 end 'dapBuiltExecutable'
 
 export function dapBuildFixture(staged FilePath, scope DapBuildScope = DapBuildScope.mainFile) returns FilePath
-	let executable = dapBuiltExecutable(staged)
 	let source = match scope 'what'
 		mainFile gives dapStagedSource(staged)
 		wholeDirectory gives staged
 	end 'what'
 
-	var config = Configuration.create(Executable.path(dapTestedCompilerPath()))
+	return dapBuiltFrom(source, staged: staged, compiler: dapTestedCompilerPath())
+end 'dapBuildFixture'
+
+export function dapBuildLibraryTierFixture(caseLabel String, fixture String) returns FilePath
+	let staged = dapStagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
+	dapClearStagedFiles(staged)
+
+	let compiler = dapStagedLibraryTier(staged)
+	let program = dapStagingDir(staged.join(LibraryTierDirName).join(StdlibDirName).join(LibraryTierProgramDirName).toString())
+	dapStageStoredTree(dapFixtureDir("{FixturesDirName}{PathSeparator}{fixture}"), into: program)
+
+	return dapBuiltFrom(program, staged: staged, compiler: compiler)
+end 'dapBuildLibraryTierFixture'
+
+function dapStagedLibraryTier(staged FilePath) returns FilePath
+	let tier = staged.join(LibraryTierDirName)
+	let compiler = dapTestedCompilerPath()
+
+	var config = Configuration.create(Executable.path(compiler))
+	config.arguments = [StageLibraryTierCommandName, tier.toString()]
+	config.workingDirectory = staged
+
+	let out = try config.run() otherwise (e) 'spawnFailed'
+		panic("dap tests: the gate could not run — could not stage the library tier: {e.displayReason()}")
+	end 'spawnFailed'
+
+	if out.exitCode() != 0 'didNotStage'
+		panic("dap tests: the gate could not run — staging the library tier exited {out.exitCode()}: {out.stdout} {out.stderr}")
+	end 'didNotStage'
+
+	return tier.join(LibraryTierBinDirName).join(compiler.filename())
+end 'dapStagedLibraryTier'
+
+function dapBuiltFrom(source FilePath, staged FilePath, compiler FilePath) returns FilePath
+	let executable = dapBuiltExecutable(staged)
+
+	var config = Configuration.create(Executable.path(compiler))
 	config.arguments = [BuildCommandName, source.toString(), "{OutputOptionPrefix}{executable.toString()}"]
 	config.workingDirectory = staged
 
@@ -185,7 +225,7 @@ export function dapBuildFixture(staged FilePath, scope DapBuildScope = DapBuildS
 	end 'buildFailed'
 
 	return executable
-end 'dapBuildFixture'
+end 'dapBuiltFrom'
 
 export function dapBuildTestBinary(staged FilePath) returns FilePath
 	var config = Configuration.create(Executable.path(dapTestedCompilerPath()))
@@ -458,7 +498,7 @@ export type DapClient
 		var wanted = JsonDoc.create()
 
 		for body in self.stashed 'eachStashed'
-			let doc = try Json.parse(body) otherwise continue
+			var doc = try Json.parse(body) otherwise continue
 
 			if not found and matches(doc) 'itsHere'
 				wanted = doc

@@ -220,21 +220,12 @@ end 'programStartedGlobals'
 // is the first to see; concat resolves those labels against the same table.
 module function encodeOnTheBackendPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex, chunks FunctionCodeChunkArray) returns TargetModule throws CompileError
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
-	var callStackBytes = StackSizeColumn.create()
-	let targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt, chunks: chunks, callStackBytes: callStackBytes)
+	let targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt, chunks: chunks)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
 	let releaseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)
 	stdModule.releaseBody()
 	recordPhase(project, phase: CompilePhase.releaseIr, probe: releaseProbe)
-
-	if usage.usesGt 'preemptionDepth'
-		requirePreemptionFitsTheGuardMargin(targetModule, funcNames: funcNames, frames: callStackBytes, target: target)
-
-		if targetStopsThreadsForPreemption(target) 'asyncPreemptionDepth'
-			requireAsyncPreemptionFitsItsMargin(targetModule, funcNames: funcNames, frames: callStackBytes, target: target)
-		end 'asyncPreemptionDepth'
-	end 'preemptionDepth'
 
 	return targetModule
 end 'encodeOnTheBackendPool'
@@ -277,7 +268,7 @@ end 'appendDataSectionEntries'
 // `StdToWasm.appendLeakGate`.
 function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: project.entryStubCalls.checksLeaks, initGlobals: usage.usesManagedGlobals, releasesRegistry: project.entryStubCalls.releasesRegistry, funcNames: funcNames, entryFunction: project.entryFunctionName, spellings: project.stdlibShadowSpellings)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData, checkLeaks: project.entryStubCalls.checksLeaks, initGlobals: usage.usesManagedGlobals, releasesRegistry: project.entryStubCalls.releasesRegistry, funcNames: funcNames, entryFunction: project.entryFunctionName, spellings: project.shadowRoster.spellings)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)
@@ -321,7 +312,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// at `.text` offset 0 where the backtrace needs it.
 	match target.os 'panicRuntime'
 		windows or
-		linux then appendX64RuntimeChunks(chunks, target: target, dumpCoverage: usage.usesCoverage, usesGt: usage.usesGt)
+		linux then appendX64RuntimeChunks(chunks, target: target, dumpCoverage: usage.usesCoverage, usesGt: usage.usesGt, context: project.hostContext)
 		macos or
 		wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
 	end 'panicRuntime'
@@ -343,10 +334,15 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// `installGtRuntime` was gated on rather than a probe of the module (`buildBackend`'s header says
 	// why a probe is wrong).
 	if usage.usesGt 'gtChunks'
-		appendX64GtRuntimeChunks(chunks, target: target)
+		appendX64GtRuntimeChunks(chunks, target: target, context: project.hostContext)
 	end 'gtChunks'
 
 	recordPhase(project, phase: CompilePhase.encodeRuntime, probe: encodeProbe)
+
+	if usage.usesGt 'unguardedChains'
+		try requireUnguardedChainsFitTheGuardMargin(project, module: targetModule, globalData: globalData, funcNames: funcNames, chunks: chunks, target: target)
+	end 'unguardedChains'
+
 	releaseEncodedTargetModule(project, targetModule: targetModule)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)

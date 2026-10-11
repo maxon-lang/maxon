@@ -10,8 +10,8 @@
 # ⚠⚠ IT IS NOT A SUBSTITUTE FOR THE IN-PROCESS COUNTERS, AND THEY ARE NOT A SUBSTITUTE FOR IT.
 # They answer different questions and BOTH are needed:
 #
-#   • `__Builtins.mmAllocTotal()` / `mmAllocLive()` / `mmAllocBytes()`, and the byte count
-#     `__Builtins.scavengeMemory()` returns, are EXACT, deterministic and bit-reproducible. They
+#   • `HeapStats.allocationsMade()` / `allocationsLive()` / `bytesAllocated()`, and the byte count
+#     `HeapStats.scavenge()` returns, are EXACT, deterministic and bit-reproducible. They
 #     count what the program ASKED FOR and what the allocator HANDED BACK.
 #   • PEAK RSS (this script) is noisy and cannot be trended — but it is the only instrument that
 #     can see whether DECOMMITTED PAGES ACTUALLY LEFT THE RESIDENT SET. A scavenger that

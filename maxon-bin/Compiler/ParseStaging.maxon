@@ -11,48 +11,6 @@
 // A registry contribution is an ordered entry ARRAY rather than a map, which keeps
 // it insertion-ordered so the merge is byte-deterministic.
 
-// ⭐ **THE SHARED EMPTY contribution arrays.** An artifact that records NONE of a family — a file with
-// no `interface`/`implements` declaration, and (see below) any artifact that never records a type name
-// at all — points its field at one of these shared, never-mutated singletons rather than allocating an
-// empty array it will never push into. The matching `record*` copies on write at the first push
-// (`count() == 0` uniquely identifies "still the shared empty", since each of those functions is its
-// array's only writer). This is the same pay-for-use discipline `sharedEmptyWhereConstraints`/`emptyTypeParams`
-// follow, and it keeps the artifact allocation-neutral for a program that declares none.
-//
-// ⚠ **`typeNameDecls` IS HERE FOR A STRONGER REASON THAN "OFTEN EMPTY" — TWO OF THE THREE `Parser`
-// CONSTRUCTION SITES CAN NEVER FILL IT.** Only `recordTypeName`, reached from `dispatchTopLevel`, ever
-// pushes one, and `dispatchTopLevel` runs on the REAL parse alone: the tolerant declaration sweep
-// (`foldDeclaredSignaturesInto`, one `Parser` per file) walks tokens on its own and `walkConstInitializer`
-// (one `Parser` per top-level constant) evaluates an expression. Eagerly creating the array in
-// `FileParseArtifact.create` would bill one allocation to EVERY sweep and EVERY constant for a structure
-// with no writer.
-let sharedEmptyInterfaces = IrInterfaceArray.create()
-let sharedEmptyConformances = ConformanceDeclArray.create()
-
-// A `<Type> from "…"` construction is rare — and, like `typeNameDecls`, it has the stronger reason:
-// only the REAL parse can build one, so the tolerant declaration sweep and every top-level constant's
-// transient `Parser` would otherwise each pay for an array with no writer.
-let sharedEmptyLiteralInitSites = LiteralInitSiteArray.create()
-
-// An instantiation the compiler INFERRED from a bracketed literal is rarer still, and shares both
-// reasons above: only the REAL parse reaches a literal body, and the overwhelming file writes none.
-let sharedEmptyInferredInstantiationSites = GenericInstantiationSiteArray.create()
-let sharedEmptyTypeNameDecls = TypeNameDeclArray.create()
-let sharedEmptyFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
-
-// A statement that uses NONE of a call's result is rarer than either — one spelling opens the door
-// (`(_, _) = f()`) and almost no file writes it — so the empty column is shared for the reason above it.
-let sharedEmptyDiscardedResults = PendingDiscardedResultArray.create()
-
-// A coverage point is minted only under `--coverage`, so EVERY artifact of an ordinary build shares this
-// one — the strongest form of the reason above, since the writer is gated on a build flag rather than on
-// a rare spelling.
-let sharedEmptyCovPoints = CovPointArray.create()
-
-// Only a real parse mints instance rows, so every other artifact shares this, and a merge replaces it rather
-// than writing into it.
-let sharedNoInstanceIds = GenericInstanceIdArray.create()
-
 export typealias FileParseArtifactArray = Array with FileParseArtifact
 
 export typealias SourceByteCount = int(0 to u32.max)
@@ -82,14 +40,14 @@ export type ParseJob
 	export let isStdlibSource as bool
 	export let isRuntimeSource as bool
 	export let declaresCompilerInternalNames as bool
-	export let compilerMintedNames as ByteArrayArray
+	export let compilerMintedNames as NameRoster
 	export let livesUnderStdlibDirectory as bool
 	export let buildsBodies as bool
 	export let capturesDebugLocals as bool
 	export let instrumentsCoverage as bool
 	export let foldsAConstantInitializer as bool
 
-	export static function create(path FilePath, namespace String, isStdlibSource bool, isRuntimeSource bool, declaresCompilerInternalNames bool, compilerMintedNames ByteArrayArray, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool) returns ParseJob
+	export static function create(path FilePath, namespace String, isStdlibSource bool, isRuntimeSource bool, declaresCompilerInternalNames bool, compilerMintedNames NameRoster, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool) returns ParseJob
 		return Self{path: path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, foldsAConstantInitializer: false}
 	end 'create'
 
@@ -104,7 +62,7 @@ export type ParseJob
 	// So the walk never asks the project for a path, which would put a `Directory.currentPath()` probe on the
 	// per-declaration path.
 	export static function forConstantInitializer(path FilePath, namespace String) returns ParseJob
-		return Self{path: path, namespace: namespace, isStdlibSource: false, isRuntimeSource: false, declaresCompilerInternalNames: false, compilerMintedNames: ByteArrayArray.create(), livesUnderStdlibDirectory: false, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, foldsAConstantInitializer: true}
+		return Self{path: path, namespace: namespace, isStdlibSource: false, isRuntimeSource: false, declaresCompilerInternalNames: false, compilerMintedNames: NameRoster.create(), livesUnderStdlibDirectory: false, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, foldsAConstantInitializer: true}
 	end 'forConstantInitializer'
 end 'ParseJob'
 
@@ -125,7 +83,7 @@ export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverr
 
 	// A refusal and its blame may hold records the index owns (a `throws` clause's name, a recorded constant's
 	// error, an instantiation's file), and the outcome crosses back from a pool worker, so it carries copies.
-	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
+	var artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		_ = signatures.closeParseBand(job.path)
 		return FileParseOutcome.failed(parseErr.clone(), blame: parser.libraryBlame.clone(), salvaged: parser.abortedParseArtifact())
 	end 'parseFail'
@@ -212,14 +170,14 @@ end 'cacheReadParseMintsMinted'
 // `ProgramSignatures.overloadedDeclsOf`. Both default EMPTY for the synthesized helpers named above — a
 // synthesized helper is never overloaded, so there is nothing to tell apart.
 export type FuncReturnTypeEntry
-	export var name as ByteArray
-	export var returnType as MaxonReturnType
-	export var declaredSurface as DeclaredSurface
+	export let name as ByteArray
+	export let returnType as MaxonReturnType
+	export let declaredSurface as DeclaredSurface
 	export var visibility as Visibility
 	export var takesReceiver as bool
 	export var opaqueParams as OpaqueParamInfo
-	export var paramNames as ByteArrayArray
-	export var paramTypes as MaxonTypeArray
+	export let paramNames as NameRoster
+	export let paramTypes as MaxonTypeArray
 
 	// The bare NAME the `returns` clause wrote, when it wrote one — `DenseColumn` for
 	// `returns DenseColumn`, and `none` for `returns Array with Integer`, for a primitive, or for no
@@ -236,7 +194,7 @@ export type FuncReturnTypeEntry
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS.** A default naming a module-level `let`
 	// makes that anchor an export nothing calls, which `checkUnusedExports` reports as E3092. An empty
 	// container costs a record; the anchor costs a build.
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = ByteArrayArray.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0) returns FuncReturnTypeEntry
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames NameRoster = NameRoster.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0) returns FuncReturnTypeEntry
 		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
 end 'FuncReturnTypeEntry'
@@ -250,7 +208,7 @@ export typealias FuncReturnTypeEntryArray = Array with FuncReturnTypeEntry
 // `commitFuncSignatures` can anchor a duplicate-definition diagnostic (E3006) on the blamed
 // declaration.
 export type FuncSignatureEntry
-	export var name as ByteArray
+	export let name as ByteArray
 	export var signature as FuncSignature
 	export var nameLine as LineNumber
 	export var nameColumn as ColumnNumber
@@ -387,7 +345,7 @@ module typealias FuncSignatureFloorMap = Map with (ByteArray, FuncSignatureEntry
 // ⚠ NOT exported: the entry is built here and drained by `commitRangeChecks` here, so only
 // `FunctionRangeCheckEntryArray` crosses a file boundary. `checkUnusedExports` (E3092) is what says so.
 type FunctionRangeCheckEntry
-	export var name as ByteArray
+	export let name as ByteArray
 	export var checks as FunctionRangeChecks
 
 	static function create(name ByteArray, checks FunctionRangeChecks) returns FunctionRangeCheckEntry
@@ -495,11 +453,6 @@ export type FileParseArtifact
 	// The twin of `asyncSpawnSites` for services: every `await` of a service reply this file holds, keyed by the op
 	// index in THIS artifact's module and folded with the merge's offset. See `Project.serviceAwaitSites`.
 	export var serviceAwaitSites as ServiceAwaitSiteMap
-
-	// The E3143 twin of `serviceAwaitSites`: every read or write of mutable module storage this file holds,
-	// keyed by the op index in THIS artifact's module and folded with the merge's offset. See
-	// `Project.moduleVarAccessSites`.
-	export var moduleVarAccessSites as ModuleVarAccessSiteMap
 
 	export var registryUseSites as RegistryUseSiteTable
 
@@ -695,10 +648,9 @@ export type FileParseArtifact
 			typeIdsAreProjectGlobal: false,
 			module: MaxonModule.create(),
 			opRanges: SourceRangeTable.create(),
-			covPoints: sharedEmptyCovPoints,
+			covPoints: CovPointArray.create(),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			serviceAwaitSites: ServiceAwaitSiteMap.create(),
-			moduleVarAccessSites: ModuleVarAccessSiteMap.create(),
 			registryUseSites: noRegistryUseSites,
 			allocTagSites: AllocTagSiteMap.create(),
 			debugStreamNameSites: DebugStreamNameSiteMap.create(),
@@ -708,20 +660,20 @@ export type FileParseArtifact
 			funcSignatures: FuncSignatureEntryArray.create(),
 			overloadSets: noOverloadSets,
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
-			pendingFunctionTypeDoors: sharedEmptyFunctionTypeDoors,
-			pendingDiscardedResults: sharedEmptyDiscardedResults,
+			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
+			pendingDiscardedResults: PendingDiscardedResultArray.create(),
 			rangeChecks: FunctionRangeCheckEntryArray.create(),
 			typeAliases: RangedTypeAliasArray.create(),
 			functionTypeAliases: FunctionTypeAliasArray.create(),
 			structTypes: StructLayoutArray.create(),
 			enumTypes: EnumLayoutArray.create(),
-			interfaces: sharedEmptyInterfaces,
-			typeNameDecls: sharedEmptyTypeNameDecls,
+			interfaces: IrInterfaceArray.create(),
+			typeNameDecls: TypeNameDeclArray.create(),
 			usedTypeNames: noUsedTypeNames,
 			memberAccessedTypeNames: noUsedTypeNames,
-			conformances: sharedEmptyConformances,
-			literalInitSites: sharedEmptyLiteralInitSites,
-			inferredInstantiationSites: sharedEmptyInferredInstantiationSites,
+			conformances: ConformanceDeclArray.create(),
+			literalInitSites: LiteralInitSiteArray.create(),
+			inferredInstantiationSites: GenericInstantiationSiteArray.create(),
 			typeNames: TypeNameInterner.createForSource(sourceBytes),
 			currentFuncIndex: 0,
 			diagnostics: DiagnosticArray.create(),
@@ -730,7 +682,7 @@ export type FileParseArtifact
 			deferredParseErrors: DeferredParseErrorArray.create(),
 			bindingHygieneDiagnostics: DiagnosticArray.create(),
 			parseMints: ParseMints.none,
-			instanceIdsInUse: sharedNoInstanceIds
+			instanceIdsInUse: GenericInstanceIdArray.create()
 		}
 	end 'create'
 
@@ -803,14 +755,6 @@ export type FileParseArtifact
 	export function recordServiceAwaitSite(site ServiceAwaitSite)
 		self.serviceAwaitSites.upsert(self.module.opCount(), value: site.clone())
 	end 'recordServiceAwaitSite'
-
-	// The E3143 twin, on the same read-it-through-here contract. ⚠ Here the key is the op the assignment
-	// STATEMENT is about to begin emitting — the first op of its right-hand side, not the store itself — which
-	// is all its one reader needs: it asks which FUNCTION the write sits in, and every op the statement emits
-	// belongs to that one.
-	export function recordModuleVarAccessSite(site ModuleVarAccessSite)
-		self.moduleVarAccessSites.upsert(self.module.opCount(), value: site.clone())
-	end 'recordModuleVarAccessSite'
 
 	export function recordRegistryUseSite(site RegistryUseSite)
 		var byOp = self.registryUseSitesForWrite()
@@ -886,10 +830,8 @@ export type FileParseArtifact
 	// the wrong function. A `none`-result op (`ret`/`retVoid`/`condBranch`/`branch`) defines no
 	// value and records nothing.
 	function recordValueOrigin(op MaxonOp, opIndex ElementIndex)
-		match maxonOpResultValue(op) 'result'
-			none then break
-			value(id) then self.valueOrigins.record(self.currentFuncIndex, valueId: id, opIndex: opIndex)
-		end 'result'
+		let id = try maxonOpDefinedValue(op) otherwise return
+		self.valueOrigins.record(self.currentFuncIndex, valueId: id, opIndex: opIndex)
 	end 'recordValueOrigin'
 
 	// Record a PARAMETER's declaration span as this file's contribution to the whole-program
@@ -924,12 +866,12 @@ export type FileParseArtifact
 	// Record the whole current member list of one overloaded bare name. REPLACES rather than appends:
 	// the parser hands back the complete list every time a member joins, which is what keeps this table a
 	// projection of the parser's own records rather than a second accumulation to keep in step.
-	export function recordOverloadSet(base ByteArray, members ByteArrayArray)
+	export function recordOverloadSet(base ByteArray, members NameRoster)
 		var byBase = self.overloadSetsForWrite()
 		byBase.upsert(base.clone(), value: members.clone())
 	end 'recordOverloadSet'
 
-	// ⭐ **THE INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is ONE statement (E3019), so a
+	// ⭐ **THE INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is ONE statement (E3159), so a
 	// list cannot be written in the arm that reads it: each door below installs the
 	// list on the first entry and ANSWERS it, and the caller writes through a `var` alias of that answer.
 
@@ -1004,13 +946,8 @@ export type FileParseArtifact
 	end 'recordEnumType'
 
 	// Record a declared `interface` as this file's contribution to `project.interfaces`
-	// — the same NEVER-touch-Project discipline every `record*` above follows. Copy-on-write off the
-	// shared empty on the first push (this is the array's only writer, so `count() == 0` means shared).
+	// — the same NEVER-touch-Project discipline every `record*` above follows.
 	export function recordInterface(iface IrInterface)
-		if self.interfaces.count() == 0 'firstInterface'
-			self.interfaces = IrInterfaceArray.create()
-		end 'firstInterface'
-
 		self.interfaces.push(iface.clone())
 	end 'recordInterface'
 
@@ -1037,78 +974,39 @@ export type FileParseArtifact
 	// Record that a top-level declaration minted a TYPE NAME — the same NEVER-touch-Project discipline
 	// every `record*` above follows. Called from `Parser.dispatchTopLevel`, the ONE place that sees all
 	// five declaring keywords, so this array's order IS the file's source order across kinds.
-	// Copy-on-write off the shared empty on the first push, exactly as `recordInterface` — and here it
-	// buys more, because the two `Parser` sites that are not the real parse never reach this function at
-	// all (see `sharedEmptyTypeNameDecls`).
 	export function recordTypeNameDecl(decl TypeNameDecl)
-		if self.typeNameDecls.count() == 0 'firstTypeNameDecl'
-			self.typeNameDecls = TypeNameDeclArray.create()
-		end 'firstTypeNameDecl'
-
 		self.typeNameDecls.push(decl)
 	end 'recordTypeNameDecl'
 
 	// Record a `type X implements …` conformance as this file's contribution to `project.conformances`.
 	// The type-name position travels with it so `checkConformance` anchors on the name.
-	// Copy-on-write off the shared empty on the first push, exactly as `recordInterface`.
 	export function recordConformance(conformance ConformanceDecl)
-		if self.conformances.count() == 0 'firstConformance'
-			self.conformances = ConformanceDeclArray.create()
-		end 'firstConformance'
-
 		self.conformances.push(conformance.clone())
 	end 'recordConformance'
 
 	// Record a `<Type> from "…"` construction as this file's contribution to `project.literalInitSites`.
-	// Copy-on-write off the shared empty on the first push, exactly as `recordConformance`.
 	export function recordLiteralInitSite(site LiteralInitSite)
-		if self.literalInitSites.count() == 0 'firstSite'
-			self.literalInitSites = LiteralInitSiteArray.create()
-		end 'firstSite'
-
 		self.literalInitSites.push(site)
 	end 'recordLiteralInitSite'
 
 	// Record an instantiation a bracketed literal inferred — see `inferredInstantiationSites`.
-	// Copy-on-write off the shared empty on the first push, exactly as `recordLiteralInitSite`.
 	export function recordInferredInstantiationSite(site GenericInstantiationSite)
-		if self.inferredInstantiationSites.count() == 0 'firstSite'
-			self.inferredInstantiationSites = GenericInstantiationSiteArray.create()
-		end 'firstSite'
-
 		self.inferredInstantiationSites.push(site)
 	end 'recordInferredInstantiationSite'
 
-	// Record a function VALUE meeting a function-typed PLACE (see PendingFunctionTypeDoor). Copy-on-write
-	// off the shared empty on the first push, for the reason `recordTypeNameDecl` is: only the REAL parse
-	// can reach a door, so eagerly creating the array would bill one allocation to every declaration SWEEP
-	// and every top-level CONSTANT (`walkConstInitializer` builds a `Parser`, and so an artifact, per one)
-	// for a structure they can never fill.
+	// Record a function VALUE meeting a function-typed PLACE (see PendingFunctionTypeDoor).
 	export function recordFunctionTypeDoor(door PendingFunctionTypeDoor)
-		if self.pendingFunctionTypeDoors.count() == 0 'firstDoor'
-			self.pendingFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
-		end 'firstDoor'
-
 		self.pendingFunctionTypeDoors.push(door.clone())
 	end 'recordFunctionTypeDoor'
 
-	// Record a statement that used none of a call's result (see PendingDiscardedResult). Copy-on-write off
-	// the shared empty on the first push, for the reason `recordFunctionTypeDoor` is.
+	// Record a statement that used none of a call's result (see PendingDiscardedResult).
 	export function recordDiscardedResult(site PendingDiscardedResult)
-		if self.pendingDiscardedResults.count() == 0 'firstSite'
-			self.pendingDiscardedResults = PendingDiscardedResultArray.create()
-		end 'firstSite'
-
 		self.pendingDiscardedResults.push(site.clone())
 	end 'recordDiscardedResult'
 
 	// Allocate this file's next counter slot and return its FILE-LOCAL id, which is what the op carries.
 	// Read before the push, so the id is the position this point takes.
 	export function recordCovPoint(point CovPoint) returns CovPointId
-		if self.covPoints.count() == 0 'firstPoint'
-			self.covPoints = CovPointArray.create()
-		end 'firstPoint'
-
 		let id = self.covPoints.count() as CovPointId
 		self.covPoints.push(point)
 
@@ -1125,7 +1023,6 @@ export type FileParseArtifact
 		cacheWriteCovPointArray(writer, value: self.covPoints)
 		cacheWriteAsyncSpawnSiteMap(writer, value: self.asyncSpawnSites)
 		cacheWriteServiceAwaitSiteMap(writer, value: self.serviceAwaitSites)
-		cacheWriteModuleVarAccessSiteMap(writer, value: self.moduleVarAccessSites)
 		cacheWriteRegistryUseSiteTable(writer, value: self.registryUseSites)
 		cacheWriteAllocTagSiteMap(writer, value: self.allocTagSites)
 		cacheWriteDebugStreamNameSiteMap(writer, value: self.debugStreamNameSites)
@@ -1170,7 +1067,6 @@ export type FileParseArtifact
 		let f_covPoints = try cacheReadCovPointArray(reader)
 		let f_asyncSpawnSites = try cacheReadAsyncSpawnSiteMap(reader)
 		let f_serviceAwaitSites = try cacheReadServiceAwaitSiteMap(reader)
-		let f_moduleVarAccessSites = try cacheReadModuleVarAccessSiteMap(reader)
 		let f_registryUseSites = try cacheReadRegistryUseSiteTable(reader)
 		let f_allocTagSites = try cacheReadAllocTagSiteMap(reader)
 		let f_debugStreamNameSites = try cacheReadDebugStreamNameSiteMap(reader)
@@ -1205,11 +1101,11 @@ export type FileParseArtifact
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, moduleVarAccessSites: f_moduleVarAccessSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferralSources: f_deferralSources, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, deferredParseErrors: f_deferredParseErrors, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferralSources: f_deferralSources, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, deferredParseErrors: f_deferredParseErrors, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize336
-		return sizeof(FileParseArtifact) as CacheSize336
+	static function cacheLayoutBytes() returns CacheSize328
+		return sizeof(FileParseArtifact) as CacheSize328
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1262,8 +1158,18 @@ function artifactOwnedOp(op MaxonOp) returns MaxonOp
 
 		// The interface name is read off the artifact's own interner, which holds its own copy.
 		existentialWitness then return op
+		holdValue or
+		holdEnd then return artifactOwnedHold(op)
 	end 'op'
 end 'artifactOwnedOp'
+
+function artifactOwnedHold(op MaxonOp) returns MaxonOp
+	match op 'hold'
+		holdValue(result, held, callee, args, kind) then return MaxonOp.holdValue(result, held: held, callee: callee.clone(), args: args, kind: kind)
+		holdEnd(result, held, callee, args, kind) then return MaxonOp.holdEnd(result, held: held, callee: callee.clone(), args: args, kind: kind)
+		default panic("artifactOwnedHold: reached with an op that is not a hold marker — `artifactOwnedOp` routes only `holdValue` and `holdEnd` here")
+	end 'hold'
+end 'artifactOwnedHold'
 
 // A call's names are copied and its value-id columns kept: the parser builds `args`, `argRanges` and
 // `argDefaultSlots` for this op, while a label or a blamed name may be a parameter name the index holds. Bound in a
@@ -1278,7 +1184,7 @@ function artifactOwnedCall(op MaxonOp) returns MaxonOp
 end 'artifactOwnedCall'
 
 // An empty column is kept: most calls share the parser's one empty `NoImmutableArgNames`, which is image data.
-function ownedNames(names ByteArrayArray) returns ByteArrayArray
+function ownedNames(names NameRoster) returns NameRoster
 	return names if names.isEmpty() else names.clone()
 end 'ownedNames'
 
@@ -1355,7 +1261,6 @@ end 'commitArtifactRegistries'
 // to the ops. One missing here escapes `FoldLedger.requireTablesHeld`, and a stale key in it names a
 // different op with nothing to notice.
 module enum OpKeyedTable
-	moduleVarAccessSites
 	synthesizedOpFiles
 	registryUseSites
 	serviceAwaitSites
@@ -1374,7 +1279,6 @@ module typealias OpKeyedTableArray = Array with OpKeyedTable
 
 module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
 	return match table 'whichTable'
-		moduleVarAccessSites gives project.moduleVarAccessSites.count()
 		synthesizedOpFiles gives project.synthesizedOpFiles.count()
 		registryUseSites gives project.registryUseSites.count()
 		serviceAwaitSites gives project.serviceAwaitSites.count()
@@ -1521,7 +1425,7 @@ end 'commitDiagnostics'
 // incumbent's PATH is deliberately not in the text: a second absolute path inside a message is
 // machine-dependent and unmatchable in a `maxoncstderr` block.
 function commitTypeNameDecls(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
-	reportTypeNameCollisions(project, collisions: project.typeNameDecls.recordAll(artifact.typeNameDecls, directories: signatures.settled.fileModuleDirectories))
+	reportTypeNameCollisions(project, collisions: project.typeNameDecls.recordAll(artifact.typeNameDecls, directories: signatures.settledDeclarations().fileModuleDirectories))
 end 'commitTypeNameDecls'
 
 // Type-name collision is not transitive — d1's `enum Box` collides with d2's, d2's collides with an alias
@@ -1741,7 +1645,7 @@ end 'checkGenericAliasCycles'
 // A SYNTHESIZED alias carries no anchor (`unanchored`), so it falls back to the whole-program form
 // `reportInstantiationPairCollision` uses for the same reason — pointing into a file the user never wrote
 // would be worse than not pointing at all.
-function reportGenericAliasCycle(project Project, entry GenericAliasEntry, path ByteArrayArray)
+function reportGenericAliasCycle(project Project, entry GenericAliasEntry, path NameRoster)
 	if path.isEmpty() 'noCycleTheGraphCanProve'
 		reportUnsettledAliasResolution(project, entry: entry)
 		return
@@ -1759,7 +1663,7 @@ end 'reportGenericAliasCycle'
 // `A` for a one-node cycle, `A -> B -> A` for a longer one. The single name is not a TRUNCATED path: an alias
 // that names itself has no intermediate to show, and `A -> A` would repeat the one fact the name already
 // carries. `specs/type-checking.md` pins both spellings, one case each.
-function renderAliasCyclePath(path ByteArrayArray) returns String
+function renderAliasCyclePath(path NameRoster) returns String
 	let first = String.from(try path.get(0) otherwise panic("renderAliasCyclePath: an empty path is the other door and is filtered by the caller"))
 
 	if path.count() == 1 'namesOnlyItself'
@@ -1846,6 +1750,10 @@ function renderInstantiation(signatures ProgramSignatures, gid GenericInstanceId
 		if position > 0 'afterFirst'
 			rendered.append(", ")
 		end 'afterFirst'
+
+		if signatures.genericInstanceArgIsReadOnly(gid, position: position) 'readOnlyArgument'
+			rendered.append("{String.from(ReadonlyModifierWord)} ")
+		end 'readOnlyArgument'
 
 		rendered.append(String.from(signatures.instanceArgCompiledName(gid, position: position)))
 	end 'eachArgument'
@@ -2054,7 +1962,7 @@ end 'rebaseArtifact'
 // has none.
 function adoptedInstanceIds(artifact FileParseArtifact, signatures ProgramSignatures) returns GenericInstanceIdArray
 	return match artifact.parseMints 'mints'
-		none gives sharedNoInstanceIds
+		none gives GenericInstanceIdArray.create()
 		minted(mints) gives signatures.adoptParseMints(mints)
 	end 'mints'
 end 'adoptedInstanceIds'
@@ -2116,7 +2024,7 @@ export function footprintOf(project Project, artifact FileParseArtifact, signatu
 		panic("footprintOf: a stashed artifact already carries program-wide name ids — a parse is stashed before its merge, while every name id it holds is its own file's")
 	end 'alreadyMerged'
 
-	let moduleWatcher = TypeIdRemap.watching(FileLocalNamesBase)
+	var moduleWatcher = TypeIdRemap.watching(FileLocalNamesBase)
 	rewriteTypeIds(project, artifact: artifact, remap: moduleWatcher)
 
 	var instances = GenericInstanceIdSet.create()
@@ -2133,7 +2041,7 @@ export function footprintOf(project Project, artifact FileParseArtifact, signatu
 end 'footprintOf'
 
 function watchMints(mints LocalInstanceMints, instances GenericInstanceIdSet, names ObservedNameSet, interfaces ObservedInterfaceSet)
-	let watcher = TypeIdRemap.watching(mints.typeNameBaseline)
+	var watcher = TypeIdRemap.watching(mints.typeNameBaseline)
 	mints.watchedBy(watcher)
 	absorbWatched(watcher, instances: instances, names: names, interfaces: interfaces)
 end 'watchMints'
@@ -2192,7 +2100,9 @@ function renumberedOp(op MaxonOp, remap TypeIdRemap) returns MaxonOp
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness gives op
+		existentialWitness or
+		holdValue or
+		holdEnd gives op
 	end 'op'
 end 'renumberedOp'
 
@@ -2310,7 +2220,7 @@ end 'newcomerDisplacesTheFloor'
 // ⇒ A new mint nobody classifies lands on a mangled sentence and says what the author WROTE, which is
 // imprecise rather than wrong.
 function duplicateFunctionMessage(project Project, name ByteArray, declFilePath FilePath) returns String
-	let signatures = try queryProgramSignatures(project) otherwise panic("duplicateFunctionMessage: queryProgramSignatures failed during merge — the whole-program index is computed and memoized before the pipeline runs, so a merge-time ask cannot fail fresh")
+	var signatures = try queryProgramSignatures(project) otherwise panic("duplicateFunctionMessage:queryProgramSignatures failed during merge — the whole-program index is computed and memoized before the pipeline runs, so a merge-time ask cannot fail fresh")
 
 	if signatures.isContestedRegistrationName(name) 'aFreeFunctionContestedAcrossDirectories'
 		return mangledDuplicateFunctionMessage(name, signatures: signatures, why: "a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function")
@@ -2402,10 +2312,10 @@ end 'commitOverloadSets'
 // that overloads nothing never reaches it.
 function commitEachOverloadSet(project Project, byBase OverloadSetMap)
 	for (base, members) in byBase 'each'
-		var accumulated = try project.overloadSets.get(base) otherwise ByteArrayArray.create()
+		var accumulated = try project.overloadSets.get(base) otherwise NameRoster.create()
 
 		for member in members 'eachMember'
-			if not namesInclude(accumulated, name: member) 'notYetCommitted'
+			if not accumulated.contains(member) 'notYetCommitted'
 				accumulated.push(member)
 			end 'notYetCommitted'
 		end 'eachMember'
@@ -2438,7 +2348,6 @@ end 'commitPendingFunctionTypeDoors'
 // today's pipeline, not a rule.
 function commitOpKeyedSites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
 	project.serviceAwaitSites.upsertRelocated(artifact.serviceAwaitSites, offset: opOffset)
-	project.moduleVarAccessSites.upsertRelocated(artifact.moduleVarAccessSites, offset: opOffset)
 
 	match artifact.registryUseSites 'registryUses'
 		unwritten then break

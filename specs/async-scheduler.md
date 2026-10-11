@@ -629,7 +629,7 @@ a signal handler reads the interrupted thread's record. Here the reader that out
 that read land in whatever the slab gave the memory to next.
 
 Two hundred spawn-and-await rounds, one after another: the first spawn has nothing to reuse, and each of the
-other 199 takes the record the round before it gave back. `__Builtins.schedGtRecycleCount()` counts the
+other 199 takes the record the round before it gave back. `Scheduler.counters().recycledThreads` counts the
 spawns a free list served.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -647,7 +647,7 @@ function main() returns ExitCode
 		sum = sum + await p
 		i = i + 1
 	end 'rounds'
-	print("sum={sum} recycled={__Builtins.schedGtRecycleCount()}\n")
+	print("sum={sum} recycled={Scheduler.counters().recycledThreads}\n")
 	return 0
 end 'main'
 ```
@@ -697,9 +697,9 @@ end 'wave'
 
 function main() returns ExitCode
 	let first = wave(0)
-	let afterFirst = __Builtins.schedGtRecycleCount()
+	let afterFirst = Scheduler.counters().recycledThreads
 	let second = wave(1000)
-	let afterSecond = __Builtins.schedGtRecycleCount()
+	let afterSecond = Scheduler.counters().recycledThreads
 	print("first={first} second={second} wave1={afterFirst} wave2={afterSecond - afterFirst}\n")
 	return 0
 end 'main'

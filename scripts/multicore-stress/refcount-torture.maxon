@@ -125,7 +125,7 @@ end 'churnRound'
 function hammer(idx Integer, roundCount Integer, perRound Integer) returns Integer
 	// Marks this CPU-bound function a legitimate `async` target (the E3073
 	// yielding contract) without claiming fake I/O. No-op at runtime.
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 
 	var acc = 0
 	var r = 0
@@ -163,11 +163,12 @@ function main() returns ExitCode
 	// It reads the same in a passing run and a segfaulting one, and it grows with
 	// `MAXON_MAX_PROCS` even under the pin, because what it counts is the P structs
 	// bring-up allocated rather than anything this program leaked.
-	let live = __Builtins.mmRawAllocLive()
-	let workers = __Builtins.schedMaxActiveWorkers()
-	let steals = __Builtins.schedStealCount()
+	let live = HeapStats.rawAllocationsLive()
+	let counters = Scheduler.counters()
+	let workers = counters.maxActiveWorkers
+	let steals = counters.steals
 	let monitor = monitorActions()
-	let cpus = __Builtins.cpuCount()
+	let cpus = Scheduler.machineCpuCount()
 
 	print("aggregate={total}\n")
 	print("live={live}\n")

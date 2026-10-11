@@ -20,8 +20,9 @@ let name = "Maxon"
 // pi = 3.14            // E2013: cannot assign to immutable variable: 'pi'
 ```
 
-A `let` cannot be mutated through a method either: calling a method that writes its receiver (`push`,
-`append`, `set`, `remove`, `clear`, …) on a `let` is **E3019**.
+A `let` is read-only all the way down (see [Read-Only Values](/docs/language/memory-model/#read-only-values)): calling a method that writes
+its receiver (`push`, `append`, `set`, `remove`, `clear`, …) on a `let`, or writing a field of anything it
+reaches, is **E3159**.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -31,7 +32,7 @@ function main() returns ExitCode
 	var items = TallyArray.create()
 	items.push(1)                    // fine: items is a var
 	// let fixed = TallyArray.create()
-	// fixed.push(1)                 // E3019: cannot pass 'fixed' to function that mutates parameter 'self'
+	// fixed.push(1)                 // E3159: cannot write through 'fixed': 'fixed' is read-only (a `let` binding)
 	print("{items.count()}\n")
 	return 0
 end 'main'
@@ -53,8 +54,8 @@ end 'main'
   `a.clone()` for an independent copy (see
   [Reference-by-Default Assignment](/docs/language/memory-model/#reference-by-default-assignment)).
   Numbers, `bool` and other scalar values are always independent copies.
-- **A mutable name takes an immutable name's record only by moving it** (see
-  [Immutable XOR Mutable](/docs/language/memory-model/#immutable-xor-mutable)):
+- **A read-only value stays read-only.** `var b = a` moves `a` when `a` is a `var`; from a read-only `a` (a
+  `let` included) it is **E3078**, and `a.clone()` is the mutable copy (see [Read-Only Values](/docs/language/memory-model/#read-only-values)):
 
   ```maxon
   typealias Coord = int(i64.min to i64.max)
@@ -68,13 +69,14 @@ end 'main'
   end 'Point'
 
   function main() returns ExitCode
-  	let a = Point.create(1)
+  	var a = Point.create(1)
+  	a.x = 2
   	var b = a                 // a MOVES into b; reading a afterwards is E3102
   	b.x = 10
 
   	let c = Point.create(3)
-  	let d = c                 // d aliases c: two immutable names
-  	// var e = c              // E3078: cannot assign immutable variable 'c' to mutable binding 'e'
+  	let d = c                 // d shares c's record: both are read-only
+  	// var e = c              // E3078: a read-only value bound to a `var`
   	var f = c.clone()         // an independent record
   	f.x = 30
   	print("{b.x} {c.x} {d.x} {f.x}\n")   // 10 3 3 30
@@ -128,18 +130,17 @@ end 'main'
   included. A scalar `var` is readable, a `var`'s initializer may reach any global, and a `let`'s may reach
   other `let`s.
 - The other direction is refused too: a `var`'s initializer may not call anything whose result may be, lie
-  within or hold a module-level `let`'s record (**E3166**, at the `var`'s declaration, naming the call). What
+  within or hold a module-level `let`'s record (**E3078**, at the `var`'s declaration, naming the call). What
   a call hands back is followed through further calls, witness dispatches and calls through function values;
-  a record built fresh from numbers read out of a `let` is legal. The same fact refuses a write, inside a
-  function, through a record a call handed back out of a `let` — through its `otherwise` fallback, a ternary
-  or `match` arm — at a field write (**E3159**) and at a method that writes its receiver (**E3019**).
-- A field of a module-level `let` is that `let`'s own storage: a `var` made from it (`var m = H.index`) and
-  written through is **E3078**, as one made from a field of a local `let` is. Read it through a `let`, or bind
-  a `clone()`.
+  a record built fresh from numbers read out of a `let` is legal.
+- A module-level `let` is [read-only](/docs/language/memory-model/#read-only-values) through everything it reaches, for the program's whole
+  life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
+  of it (`var m = H.index`) or such a call result to a `var` is **E3078**. Read it through a `let`, or bind a
+  `clone()`.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](/docs/language/async/#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](/docs/cli/error-codes/#e3173--registryreachedfromglobalinitializer): the
   defaults are built after every global initializer has run.
 - A top-level declaration is private to its file unless marked `export`, `module` or `public`.
-- A [service](/docs/language/async/#services--spawn) handler may not read or write a module-level `var`
-  (**E3143**); keep service state in its fields.
+- A [service](/docs/language/async/#services--spawn) handler, and every function it reaches, may not read or write a module-level
+  `var` (**E3143**); keep service state in its fields.

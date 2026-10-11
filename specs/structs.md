@@ -137,7 +137,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/structs/error.let-struct-field-assign.maxon:16:2: cannot assign to immutable variable: 'p'
+error E3159: specs/structs/error.let-struct-field-assign.maxon:16:2: cannot write through 'p': 'p' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: error.let-field-assign -->
@@ -515,7 +515,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create(41)
+	var c = Counter.create(41)
 	let d = c.bump()
 	return d.value as ExitCode
 end 'main'
@@ -708,11 +708,11 @@ end 'main'
 ```
 
 <!-- test: error.return-a-let-declared-global -->
-The negative control, and the one thing the widened door must still refuse — **at the WRITE**.
+The negative control, and the one thing the widened door must still refuse — **at the BINDING**.
 RETURNING a `let`-declared global's record is legal: `expose()` compiles, and a caller
-that only reads what it hands back is a working program. What is refused is `b.push("zz")`, because that
-mutates a global the program declared immutable. The caller can know this only because the return is
-summarised whole-program — `expose`'s body may be in another file.
+that only reads what it hands back is a working program (the next case). What is refused is `var b = expose()`,
+because the `var` would be a writable name for a global the program declared immutable. The caller can know
+this only because the return is summarised whole-program — `expose`'s body may be in another file.
 ```maxon
 typealias Names = Array with String
 
@@ -729,7 +729,27 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:12:4: cannot pass 'b' to function that mutates parameter 'self' (in main)
+error E3078: <fragment>:11:6: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: a-let-declared-global-returned-by-a-call-is-read -->
+The accepted twin: the returned record is bound to a `let`, read, and never written.
+```maxon
+typealias Names = Array with String
+
+let A = ["ab", "cde"]
+
+function expose() returns Names
+	return A
+end 'expose'
+
+function main() returns ExitCode
+	let b = expose()
+	return b.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
 ```
 
 <!-- test: error.mismatched-type-end-label -->

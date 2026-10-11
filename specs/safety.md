@@ -20,13 +20,17 @@ engine owns the stack, so running out of it is wasmtime's own trap, like every o
 handler needs stack of its own once the thread's is spent: Windows reserves it with
 `SetThreadStackGuarantee`, and a POSIX lane runs the handler on the thread's alternate signal stack. A
 POSIX handler tells an overflow from a bad address by where the fault lands — within 64 KiB of the
-stack pointer is the stack's own guard. A green thread's stack does not overflow this way: its prologue
-guard grows it first, up to 1 GiB, and a recursion that needs more stops there with the same panic, trace
-and exit code.
+stack pointer is the stack's own guard. A green thread's stack does not overflow this way and has no guard
+page: its prologue guard grows it first, up to 1 GiB, and a recursion that needs more stops there with the
+same panic, trace and exit code. A frame no prologue guard checks — a runtime body — runs inside the guard
+margin the prologue guards keep clear, and the build proves every chain of such frames fits that margin and
+refuses a recursion among them (E5004, `specs/stack-guard-pages.md`). The OS-backed stacks — the main
+thread's, every OS thread's, the signal stack and the per-M system stack — keep real guard regions, and a
+fault there reports the same panic.
 
 A fault on a green thread is covered the same way: every OS thread registers its own alternate signal
-stack on the POSIX lanes, and on Windows every green thread's stack reserves room below its guard for
-the handler's frame.
+stack on the POSIX lanes, and on Windows every green thread's stack keeps the OS's reservation clear below
+its guard word, where the kernel builds a faulting thread's exception record.
 
 A backtrace holds at most 100 frames, the faulting function's own frame included; a deeper chain ends
 with `...additional frames elided...`.
@@ -1331,6 +1335,7 @@ Stack trace:
 ```
 
 <!-- test: force-segfault -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: arm64-macos, wasm32-wasi -->
 ⭐⭐ **THE ONLY CASE THAT CAN REACH THE FAULT HANDLER ON PURPOSE.** Every other route into
 `mrt_fault_thunk` is a compiler BUG, so without `__Builtins.forceSegfault()` the whole thunk would be code
@@ -1338,6 +1343,9 @@ no suite could exercise: green everywhere, and unmeasured. The intrinsic lowers 
 `maxon_force_segfault`, whose body is Maxon source the compiler reads out of `runtime/FaultProbe.maxon`
 (`specs/runtime-source-tier.md`): a `__Raw.storeWord` through address 0, which the handler's
 EXCEPTION_ACCESS_VIOLATION arm turns into this line, this backtrace and exit 1.
+
+`__Builtins` is callable only from a source file under `stdlib/` or `runtime/` (E3185), and the intrinsic has
+no public replacement, so this case and the three below that call it compile as library-tier source.
 
 ⚠ **THE ENTRY POINT IS A FUNCTION AND NOT A STORE INLINED AT THE CALL SITE, BECAUSE THE FRAME LIST IS WHAT
 THIS ASSERTS.** Inlined, frame 0 would be `main` and the case would stop saying that the walk crosses a frame
@@ -1361,6 +1369,7 @@ Stack trace:
 ```
 
 <!-- test: force-segfault-macos -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-linux, wasm32-wasi -->
 ### Deliberate access violation produces a clean panic (arm64-macOS)
 ⚠⚠ **A Mach-O RUNS ONLY ON macOS**, so on any other host the runner reports this NOT RUN and refuses to
@@ -1393,6 +1402,7 @@ Stack trace:
 ```
 
 <!-- test: force-segfault-on-a-green-thread -->
+<!-- tier: stdlib -->
 ### A fault on a green thread walks that thread's own stack
 The fault happens on a coroutine's stack while the handler runs elsewhere — Windows's vectored handler below
 the fault on that same stack, with the TIB describing it; a POSIX lane's on the machine's signal stack — and the
@@ -1472,6 +1482,7 @@ end 'main'
 ```
 
 <!-- test: error.force-segfault-name-is-reserved -->
+<!-- tier: stdlib -->
 ⛔⛔ **`maxon_force_segfault` IS THE ONE COMPILER-OWNED FUNCTION SYMBOL WEARING NO RESERVED PREFIX, SO A
 RESERVATION IS WHAT PROTECTS IT.** The three cases above assert the name as a FRAME a backtrace prints, which
 is why it can never be moved into the `__` band a shape test could recognise — and its body is ordinary
@@ -1499,5 +1510,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2051: sub/<fragment>:3:10: identifier 'maxon_force_segfault' is reserved: it is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()`
+error E2051: sub/<fragment>:3:10: identifier 'maxon_force_segfault' is reserved: it is the compiler's own fault-probe entry point, which the library tiers reach through `__Builtins.forceSegfault()`
 ```

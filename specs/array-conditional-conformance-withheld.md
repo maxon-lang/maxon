@@ -168,6 +168,7 @@ cloned
 ```
 
 <!-- test: error.the-suppression-may-not-read-a-weaker-index-than-the-report -->
+<!-- tier: stdlib -->
 ### A `where` clause satisfied by an EXTENSION still refuses the copy gate
 
 ⛔⛔ **THE SUPPRESSION MAY NOT READ A WEAKER CONFORMANCE INDEX THAN E3017's REPORT — THAT IS THE DIRECTION
@@ -250,7 +251,6 @@ typealias NestedContainer = Container with Handle
 
 function main() returns ExitCode
 	var nc = NestedContainer.create()
-	nc.push(Handle.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
 	let dup = nc.duplicate()
 	let n = dup.items.count()
 	return n as ExitCode

@@ -5,6 +5,7 @@ from maxon_source import FieldDefaultShapeError, field_default_type, parse_union
 
 CONTAINER_KINDS = ("array", "list", "set", "map")
 RESOLUTION_DEPTH_LIMIT = 20
+READONLY_QUALIFIER = "readonly"
 
 
 class Unresolved(Exception):
@@ -44,9 +45,13 @@ def split_with(text):
     argument = re.sub(r"\s+implements\s+.*$", "", match.group(2).strip())
 
     if argument.startswith("(") and argument.endswith(")"):
-        return head, split_top_level(argument[1:-1])
+        return head, [without_readonly(part) for part in split_top_level(argument[1:-1])]
 
-    return head, [argument]
+    return head, [without_readonly(argument)]
+
+
+def without_readonly(text):
+    return re.sub(r"^" + READONLY_QUALIFIER + r"\s+", "", text.strip())
 
 
 class Emitter:

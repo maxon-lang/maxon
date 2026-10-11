@@ -77,6 +77,8 @@ export let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X6
 // register the chunk answers in. ⛔ MEASURED, and it is a SILENT WRONG ANSWER: `File.writeText("abc")`
 // wrote 94,976 bytes to disk on x64-linux, because `mrt_host_write_file` read its count out of a register
 // nothing had loaded and its BOOL verdict was still true.
+export let X64IntegerResultReg = X64Register.r8
+
 let hostChunkArgRegisters = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9]
 
 // The physical register a host-surface chunk takes argument slot `index` in. Past the file is a
@@ -128,11 +130,11 @@ let VirtualAllocLetOsChooseBase = 0x0
 // EXPORTED because the hand-assembled `__gt_morestack` chunk (X64GtRuntime) makes the SAME
 // `VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` call to grow a GT stack — one
 // spelling of the two flags, shared by the Std lowering here and the byte code there, not two copies.
-export let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_RESERVE (0x2000)
+let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_RESERVE (0x2000)
 
 // `PAGE_READWRITE` — the memory protection `VirtualAlloc` commits with and `CreateFileMappingW`
 // publishes a section with. ONE Win32 constant, so one name: it is not `VirtualAlloc`'s.
-export let PageReadWriteProtection = 0x4
+let PageReadWriteProtection = 0x4
 
 let CurrentProcessPseudoHandle = -1
 
@@ -140,8 +142,8 @@ let CurrentProcessPseudoHandle = -1
 // chunk both emit. `MEM_RELEASE` releases the WHOLE reservation from its base — which is why
 // `dwSize` MUST be 0 and `osFreePages` needs no size operand. EXPORTED for the same one-spelling reason as
 // the two flags above.
-export let VirtualFreeMemRelease = 0x8000  // MEM_RELEASE
-export let VirtualFreeSizeMustBeZero = 0x0  // dwSize is 0 for a MEM_RELEASE (release the whole reservation)
+let VirtualFreeMemRelease = 0x8000  // MEM_RELEASE
+let VirtualFreeSizeMustBeZero = 0x0  // dwSize is 0 for a MEM_RELEASE (release the whole reservation)
 
 // The DECOMMIT half of `VirtualFree`, and the COMMIT-only half of `VirtualAlloc`.
 //
@@ -171,6 +173,7 @@ let VirtualAllocCommitOnly = 0x1000  // MEM_COMMIT
 // lanes say: a reservation permits nothing (`PosixMmap.MmapProtNone`), and the commit is what grants access.
 // One reservation state described one way, rather than a lane that reads as writable and a lane that does not.
 let VirtualAllocReserveOnly = 0x2000  // MEM_RESERVE — take the address space, commit nothing.
+let VirtualAllocPageGuard = 0x100
 let VirtualAllocPageNoAccess = 0x1  // PAGE_NOACCESS — a reservation permits nothing until it is committed.
 
 // `GetStdHandle(STD_OUTPUT_HANDLE)` — the handle `osWriteStdout` writes to. The
@@ -342,6 +345,8 @@ let PeekPipeLeftSlot = 1  // arg6 lpBytesLeftThisMessage
 // about which argument is being filled. Which Win32 parameter each carries depends on the SERVICE, which is
 // why they are named by POSITION rather than by a parameter name.
 let HostSampleArg5Slot = 0
+let GuardOldProtectSlot = 0
+let GuardOutgoingSlots = 1
 let HostSampleArg6Slot = 1
 
 // EXPORTED for `X64GtRuntime`'s system-stack shim, which must reserve the same words this lowering writes
@@ -653,18 +658,13 @@ end 'argFpRegisterAt'
 // with the value-class column, which classes the result via the SAME `stdTypeIsFloat(resultType)`, so the
 // capture `movRegReg` sees two same-file ends (a `movsd` for a float) instead of a cross-file move.
 function indirectResultRegister(resultType StdType) returns X64Register
-	return X64Register.xmm0 if stdTypeIsFloat(resultType) else X64Register.r8
+	return X64Register.xmm0 if stdTypeIsFloat(resultType) else X64IntegerResultReg
 end 'indirectResultRegister'
 
 // A block whose float-equality branch was split → the id of the `ordered` block minted for it.
 // See `reserveFloatEqualityBlocks`, which is the only writer, and `lowerCondBranch`, the only
 // reader. A MISS means "this block's branch is not a float equality", which `try/otherwise`
 // says without a sentinel.
-//
-// It holds the block's ID and not its ref on purpose: the walk reads this while holding a live
-// borrow of `targetModule.blocks` (its `dstBlock`), and recovering an id from a ref would need
-// a second borrow of that same array — the thing `moveBranchEdgeToSplit` scopes its helpers
-// apart to avoid. An id is a scalar and needs no borrow at all.
 //
 // ⛔ **TWO PARALLEL ARRAYS SEARCHED LINEARLY, NOT A `Map`.** A `Map` hashes its key through a witness
 // slot, and this isel runs on a pool worker, where a dispatch the compiler cannot name is refused
@@ -1000,7 +1000,7 @@ export type StdToX64Lowering
 	// Every callee's declared ABI (`CalleeAbiTable`): which arguments a call routes to an XMM register, and
 	// whether its result comes back in XMM0 or R8 (`callResultRegister`). The one table the value-class
 	// column reads too, so a float result's CAPTURE register and its allocation CLASS are the one fact.
-	let abi as CalleeAbiTable
+	var abi as CalleeAbiTable
 
 	// Fresh virtuals for the function being lowered (`mintVirtual`).
 	var fresh as ValueMinter
@@ -1263,6 +1263,7 @@ export type StdToX64Lowering
 			// last two words are real stack arguments, and a narrower one leaves them unread. The frame is
 			// folded to a per-function max anyway, so sizing per service would buy nothing.
 			osHostProcess gives win64OutgoingArgBytes(HostProcessStackArgWords)
+			osGuardPages gives win64OutgoingArgBytes(GuardOutgoingSlots)
 			osNetpoll gives win64OutgoingArgBytes(NetpollOutgoingSlots)
 			osSocketOverlapped gives win64OutgoingArgBytes(SocketOverlappedOutgoingSlots)
 		end 'o'
@@ -1271,11 +1272,7 @@ export type StdToX64Lowering
 	// Per-function lowering: walk the function's blocks and lower each op into the
 	// matching target block (indexed by the same blockRef the function carries).
 	// The function's StdReturnType drives whether the return materializes an R8 move.
-	// THREE STRICTLY SEQUENTIAL PHASES, and the split between them is a BORROW boundary rather
-	// than a stylistic one: phase 2 MUTATES the function (it appends blocks), so neither the reads
-	// before it nor the walk after it may hold a borrow of it across it. The function is
-	// therefore threaded by INDEX and re-fetched inside each phase — the discipline
-	// `splitCriticalEdgesInFunc` follows for the same reason, and which E3019 enforces.
+	// THREE STRICTLY SEQUENTIAL PHASES: phase 2 MUTATES the function (it appends blocks).
 	function lowerFunction(funcIdx ElementIndex)
 		self.prepareFunctionTables(funcIdx)
 
@@ -1287,9 +1284,9 @@ export type StdToX64Lowering
 		let originalBlockCount = self.stdBlockCountOf(funcIdx)
 		self.orderedBlockIds = self.reserveFloatEqualityBlocks(funcIdx)
 
-		// The op walk returns the OUTGOING stack-argument bytes the function's x64 lowering needs (nonzero
-		// only for a `__print_string`, whose `WriteFile` lowering has two stack arguments). Applied to the
-		// TARGET function AFTER the walk, in a scope holding no `srcFunc` borrow of the same object.
+		// The op walk returns the OUTGOING stack-argument bytes the function's x64 lowering needs
+		// (nonzero only for a `__print_string`, whose `WriteFile` lowering has two stack arguments).
+		// Applied to the TARGET function AFTER the walk.
 		let outgoingArgBytes = self.lowerFunctionBlocks(funcIdx, originalBlockCount: originalBlockCount)
 		self.applyOutgoingArgSize(funcIdx, bytes: outgoingArgBytes)
 	end 'lowerFunction'
@@ -1320,8 +1317,7 @@ export type StdToX64Lowering
 		self.fresh = ValueMinter.create(self.valueDefs.valueBound() as ParamCount)
 	end 'prepareFunctionTables'
 
-	// The function's block count as the STD module knows it — a scoped read, so the caller holds
-	// no borrow of the function across the mint that follows.
+	// The function's block count as the STD module knows it.
 	function stdBlockCountOf(funcIdx ElementIndex) returns ElementIndex
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		return srcFunc.blockRefs.count()
@@ -1332,10 +1328,10 @@ export type StdToX64Lowering
 	function lowerFunctionBlocks(funcIdx ElementIndex, originalBlockCount ElementIndex) returns StackSize
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 
-		// The max outgoing stack-arg bytes any op in this function needs — a running MAX (a call REUSES the
-		// region, so it is the largest single call's need, not their sum). An import call past four arguments
-		// and a compiler call past six of one file both contribute. Accumulated from the op already in hand, so no
-		// extra pass, and returned for `lowerFunction` to record once the walk's borrow is released.
+		// The max outgoing stack-arg bytes any op in this function needs — a running MAX (a call REUSES
+		// the region, so it is the largest single call's need, not their sum). An import call past four
+		// arguments and a compiler call past six of one file both contribute. Accumulated from the op
+		// already in hand, so no extra pass, and returned for `lowerFunction` to record.
 		var outgoingArgBytes = 0 as StackSize
 
 		// This function's OWN parameter files, folded ONCE — every `param` op then reads a scalar instead of
@@ -1578,6 +1574,7 @@ export type StdToX64Lowering
 			// The two halves of the reserve/commit split. Both routes are real on both OSes this backend
 			// serves, so neither is gated — see the two lowerings for what each OS is actually asked.
 			osCommitPages(resultId, addrId, sizeId) then self.lowerOsCommitPages(resultId, addrId: addrId, sizeId: sizeId, dstBlock: dstBlock)
+			osGuardPages(resultId, addrId, sizeId) then self.lowerOsGuardPages(resultId, addrId: addrId, sizeId: sizeId, dstBlock: dstBlock)
 			osReservePages(resultId, sizeId) then self.lowerOsReservePages(resultId, sizeId: sizeId, dstBlock: dstBlock)
 
 			// The atomics and the per-thread identity word. Neither atomic is OS-routed — a `lock` prefix is
@@ -1713,6 +1710,7 @@ export type StdToX64Lowering
 			memFill then panic("StdToX64Lowering: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
 
 			// A reserve and a commit are value-producing body ops, for the decommit's reason.
+			osGuardPages or
 			osCommitPages or
 			osReservePages then panic("StdToX64Lowering: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
 
@@ -2423,7 +2421,7 @@ export type StdToX64Lowering
 	// two XMM ends (a `movsd`), never a cross-file `mov r, xmm`. The error-flag register (R10) is separate
 	// and unconditional — it is always a GPR.
 	function callResultRegister(callee ByteArray) returns X64Register
-		return X64Register.xmm0 if calleeResultClass(self.abi, callee: callee) == RegClass.xmm else X64Register.r8
+		return X64Register.xmm0 if calleeResultClass(self.abi, callee: callee) == RegClass.xmm else X64IntegerResultReg
 	end 'callResultRegister'
 
 	// The DIRECT-call argument moves: each argument's register FILE is the CALLEE's declared PARAM class,
@@ -3209,6 +3207,21 @@ export type StdToX64Lowering
 			syscall then self.emitMmap(TargetVReg.virtual(resultId), base: PageBase.at(addrId), sizeId: sizeId, protection: MmapProtReadWrite, flags: MmapAnonPrivateLinux or MmapFixed, dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsCommitPages'
+
+	function lowerOsGuardPages(resultId ValueId, addrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsGuardPagesWin64(resultId, addrId: addrId, sizeId: sizeId, dstBlock: dstBlock)
+			syscall then panic("StdToX64Lowering: osGuardPages is the x64-Windows green-thread stack guard — the Linux lane guards its stacks with a no-access mapping and never emits it")
+		end 'route'
+	end 'lowerOsGuardPages'
+
+	function lowerOsGuardPagesWin64(resultId ValueId, addrId ValueId, sizeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(addrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: PageReadWriteProtection or VirtualAllocPageGuard))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(x64PhysReg(X64Register.r9), base: x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(GuardOldProtectSlot)))
+		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.VirtualProtect, into: TargetVReg.virtual(resultId))
+	end 'lowerOsGuardPagesWin64'
 
 	// Lower `memFill(dest, byteCount, value)` — the destination and the length into the two registers the
 	// size ladder reads, then the macro-op that IS the ladder. NOT OS-routed and not target-gated: a byte
@@ -5176,17 +5189,12 @@ export type StdToX64Lowering
 	// its `je`/`jne`, its `jmp`, and a copy of both of the original block's phi edges. The walk
 	// is left only the original block's half, and needs nothing from here but a block id.
 	//
-	// ⚠ IT IS A SEPARATE PASS FOR A BORROW REASON, not for taste. Minting PUSHES to
-	// `targetModule.blocks`, and the walk holds a live borrow out of that same array for the
-	// whole of every block (its `dstBlock`) — the rule `moveBranchEdgeToSplit` scopes its helpers
-	// apart to obey. It also pushes to `srcFunc.blockRefs`, which the walk reads by index.
-	// Running it before either borrow exists is what makes both safe.
+	// ⚠ IT RUNS BEFORE THE WALK, because minting pushes to `srcFunc.blockRefs`, which the walk reads
+	// by index — `lowerFunction` bounds the walk to the blocks that were there before.
 	function reserveFloatEqualityBlocks(funcIdx ElementIndex) returns OrderedBlockRoster
-		// COLLECT FIRST, THEN MINT — `splitCriticalEdgesInFunc`'s exact discipline, and for its
-		// exact reason: the mint below fetches and MUTATES the function, so no borrow of it may
-		// still be live, and it also appends to the very `blockRefs` this would otherwise iterate.
-		// The classification is unaffected by the splits (each only adds a block), so the snapshot
-		// stays valid across all of them.
+		// COLLECT FIRST, THEN MINT: the mint appends to the very `blockRefs` this would otherwise
+		// iterate. The classification is unaffected by the splits (each only adds a block), so the
+		// snapshot stays valid across all of them.
 		let toSplit = self.blocksNeedingFloatEqualitySplit(funcIdx)
 
 		var reserved = OrderedBlockRoster.create()
@@ -5329,6 +5337,7 @@ export type StdToX64Lowering
 			osThreadCpuTicks or
 			osDecommitPages or
 			memFill or
+			osGuardPages or
 			osCommitPages or
 			osReservePages or
 			atomicCas or
@@ -5414,8 +5423,7 @@ export type StdToX64Lowering
 	// taken the unordered answer away — so its `je`/`jne` is the plain equality test with no NaN
 	// case left in it. That is the whole trick: each block asks exactly ONE question.
 	//
-	// Every step is its own scoped helper, so no two live borrows of `targetModule.blocks` ever
-	// coexist. Reads come first, then the mint, then the writes.
+	// Reads come first, then the mint, then the writes.
 	function buildOrderedBlock(funcIdx ElementIndex, blockRef ElementIndex) returns BlockId
 		// The condition value is not needed here: the predicate is looked up by BLOCK
 		// (see `FusedPredColumn`), which is the same key this split was selected under.
@@ -5434,12 +5442,11 @@ export type StdToX64Lowering
 		return newId
 	end 'buildOrderedBlock'
 
-	// Mint an empty `ordered` block: a fresh function-local id, an entry in `targetModule.blocks`,
-	// and its ref registered on the function. Mirrors `addSplitBlock` (SsaDestruction), which is
-	// the established way a Target-tier pass grows the CFG.
-	// The function is fetched HERE, by index, and mutated directly — its borrow never escapes to a
-	// caller that could still be holding one. Same shape as `addSplitBlock`, down to the inline site
-	// being COPIED: the original block keeps its own box, and the module travels home in a reply.
+	// Mint an empty `ordered` block: a fresh function-local id, an entry in `targetModule.blocks`, and
+	// its ref registered on the function. Mirrors `addSplitBlock` (SsaDestruction), which is the
+	// established way a Target-tier pass grows the CFG. Same shape as `addSplitBlock`, down to the
+	// inline site being COPIED: the original block keeps its own box, and the module travels home in a
+	// reply.
 	function addOrderedBlock(funcIdx ElementIndex, heat BlockHeat, inlineSite InlineSiteRef) returns ElementIndex
 		var srcFunc = self.stdModule.getFunc(funcIdx)
 		let newId = srcFunc.nextBlockId
@@ -5450,7 +5457,6 @@ export type StdToX64Lowering
 		return newRef
 	end 'addOrderedBlock'
 
-	// `blockRef`'s block — a scoped read whose borrow ends with the one field the caller takes off it.
 	function blockAt(blockRef ElementIndex) returns IrBlock
 		return try self.targetModule.blocks.get(blockRef) otherwise panic("blockAt: blockRef {blockRef} not in targetModule.blocks")
 	end 'blockAt'
@@ -5586,6 +5592,7 @@ export type StdToX64Lowering
 			osCpuCount panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osCpuCount`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osThreadCpuTicks panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osThreadCpuTicks`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osDecommitPages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osDecommitPages`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osGuardPages or
 			osCommitPages or
 			osReservePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a page reserve or commit, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			memFill panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `memFill`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
@@ -5689,7 +5696,7 @@ export type StdToX64Lowering
 	// `stdReturnTypeIsFloat(void)` is `false`, so it lands in R8, where a GPR zero belongs and the caller
 	// ignores it once the flag is set).
 	function emitReturnValueMove(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
-		let retReg = X64Register.xmm0 if stdReturnTypeIsFloat(returnType) else X64Register.r8
+		let retReg = X64Register.xmm0 if stdReturnTypeIsFloat(returnType) else X64IntegerResultReg
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(retReg), srcReg: TargetVReg.virtual(retValId)))
 	end 'emitReturnValueMove'
 
@@ -5715,7 +5722,7 @@ end 'StdToX64Lowering'
 
 union HostCallee
 	import(slot IatSlot)
-	chunk(name ByteArray)
+	chunk(let name ByteArray)
 end 'HostCallee'
 
 function hostCallOp(callee HostCallee) returns TargetOp

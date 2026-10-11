@@ -1,0 +1,15 @@
+let TierOverlaySpecName = "tier-overlay"
+
+test 'a library-tier case carrying a stdlib overlay compiles as library source against the overlaid library'
+	let run = runGateFixtureOnce(StringArray.create())
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: TierOverlaySpecName, testNames: ["tier-overlay.sees-the-overlay", "tier-overlay.control"], broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a case may be library-tier and carry a stdlib overlay at once")
+end 'a library-tier case carrying a stdlib overlay compiles as library source against the overlaid library'

@@ -5,8 +5,8 @@
 // bakes these constants into the Maxon source it synthesizes, and the runner reads back what that source
 // printed. A marker spelled a second time — in `stdlib/Testing.maxon`, or in the reader — would be the
 // protocol written down twice, and the two would drift the first time either side moved. That is exactly
-// why `__TestReport.useWireFormat` takes the wrapper and separator as ARGUMENTS rather than declaring
-// them: the stdlib holds the mechanism, this holds the format.
+// why `__TestReport.threw` takes the wrapper and separator as ARGUMENTS rather than declaring them: the
+// stdlib holds the mechanism, this holds the format.
 //
 // ⭐ **EVERYTHING TRAVELS ON STDERR, alongside `__TestReport.threw`**, so protocol and error reports stay
 // in one stream and their ORDER is meaningful — a `threw` between a begin and an end belongs to that test.
@@ -32,10 +32,8 @@ export let TestProtocolWrapper = "@@maxon-test@@"
 // character is the one class of byte such a value does not contain.
 //
 // ⚠ **THIS IS THE SPELLING, NOT THE CHARACTER**, and the two are different things at different moments:
-// generated SOURCE carries these six bytes and the running binary prints one. The reader half of the
-// protocol needs the character and will declare it beside this constant, with a comment tying the pair.
-// It is not declared yet because nothing reads it yet, and an unread export is a claim rather than a
-// fact.
+// generated SOURCE carries these six bytes and the running binary prints one. The character is
+// `TestProtocolSeparator` below.
 export let TestProtocolSeparatorInMaxonSource = "\\u001f"
 
 // First field of a line the DISPATCHER wrote, marking a test about to run.
@@ -72,8 +70,7 @@ export function requireTestBinaryExitsAreItsOwn()
 end 'requireTestBinaryExitsAreItsOwn'
 
 // ⭐⭐ **THE FIELD SEPARATOR AS THE ONE BYTE A RUNNING BINARY PRINTS** — the pair to
-// `TestProtocolSeparatorInMaxonSource` above, and the obligation that constant's own note recorded
-// ("the reader half of the protocol needs the character and will declare it beside this constant").
+// `TestProtocolSeparatorInMaxonSource` above.
 //
 // ⚠ **THE TWO ARE ONE FACT AT TWO MOMENTS AND MUST NEVER BE DERIVED FROM EACH OTHER.** Generated
 // SOURCE carries the six-byte escape above, because it is text a compiler will lex; this is the

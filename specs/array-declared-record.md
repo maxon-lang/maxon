@@ -114,9 +114,15 @@ reaches the value through its own declaration's members, and there is nothing IN
 other side's members to be missing from. A member is a compile-time question about a declaration; a
 value is a run-time record, and here the record is one thing under two names.
 
+`__ManagedMemory`, `__ManagedMemoryCursor` and `.managed` are library-tier: only a source file under
+`stdlib/` or `runtime/` may name them (E3185 anywhere else). A declared `Array` record is built over a
+`__ManagedMemory`, so the cases below that declare one, or read a buffer through `.managed`, compile in
+the library tier (`<!-- tier: stdlib -->`).
+
 ## Tests
 
 <!-- test: the-empty-literal-is-the-empty-container -->
+<!-- tier: stdlib -->
 `Self{}` inside `type Array` builds the EMPTY container, which is the answer `<InnerAlias>{}` already
 gets: the sole field IS the record, so an empty literal leaves no slot unwritten.
 
@@ -157,6 +163,7 @@ end 'main'
 ```
 
 <!-- test: the-literal-is-an-identity-on-the-buffer -->
+<!-- tier: stdlib -->
 `Self{managed: m}` allocates nothing — it is the buffer, renamed. The adopted array and the buffer
 therefore agree on `length@8` because it is the same word, and the refcount balances: a run that
 took one owner too few or too many would exit **101**, not print.
@@ -195,6 +202,7 @@ end 'main'
 ```
 
 <!-- test: a-static-returning-self-is-the-instance -->
+<!-- tier: stdlib -->
 ⭐ **A `static function … returns Self` that builds the container needs the enclosing instance's
 layout descriptor, and it may only source one by returning `Self`.** With `Self` resolving to the
 base `structRef` the static was told it returned something else —
@@ -234,6 +242,7 @@ end 'main'
 ```
 
 <!-- test: clone-through-the-inline-buffer-gives-independent-storage -->
+<!-- tier: stdlib -->
 ⭐ **THE STRIDE.** `clone()`'s body reads `managed` and slices it, and the inline-`managed` read used
 to mint a BYTE view of an 8-byte-wide buffer. The copy is exercised at a width where that lie is
 observable — the elements read back, and the two arrays grow independently.
@@ -282,6 +291,7 @@ end 'main'
 ```
 
 <!-- test: a-managed-element-clones-and-balances -->
+<!-- tier: stdlib -->
 The same clone over a MANAGED element. Every element is a refcounted pointer, so a copy that took
 the wrong number of references exits **101** rather than answering — which is what makes the printed
 answer the leak check as well as the value check.
@@ -324,6 +334,7 @@ end 'main'
 ```
 
 <!-- test: self-in-an-interface-requirement-matches-the-declaration -->
+<!-- tier: stdlib -->
 `Cloneable.clone() returns Self` and `BuiltinArrayLiteral.init(…) returns Self` are matched against a
 declaration whose `Self` is an INSTANCE. The comparison and the diagnostic both spell it as the
 declaration writes it.
@@ -362,6 +373,7 @@ end 'main'
 ```
 
 <!-- test: error.a-second-field-under-the-name-array -->
+<!-- tier: stdlib -->
 ⛔ **THE HAZARD THE ADMISSION IS STRUCTURAL FOR.** The identity hands back the buffer, so a second
 declared field would be dropped at construction and then read past the record's end by the clone and
 drop cascades. The refusal names the SHAPE, because the name is not what is wrong here.
@@ -412,6 +424,7 @@ error E2015: <fragment>:8:10: Unsupported: `Array` implements `BuiltinArrayLiter
 ```
 
 <!-- test: a-generic-conformer-of-another-name-is-the-record-too -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE STRUCTURAL ADMISSION'S BOUNDARY, AND THE NAME IS NOT WHERE IT LIES.** This
 declaration is generic over one parameter and its sole field IS a `__ManagedMemory` over that parameter
 — the whole shape — so it IS the record, and it is admitted although nothing about it is spelled
@@ -451,6 +464,7 @@ end 'main'
 ```
 
 <!-- test: a-conformer-of-another-name-owns-its-managed-elements -->
+<!-- tier: stdlib -->
 ⭐ **AND ITS OWNERSHIP CASCADE IS ITS OWN.** The record identity decides the drop callee and the element
 descriptor, so a conformer admitted by SHAPE has to carry managed elements as correctly as the corpus's
 does — `__destruct_Bag_String` is a distinct symbol from the corpus array's and is built from `Bag`'s own
@@ -490,6 +504,7 @@ beta
 ```
 
 <!-- test: a-conformer-of-another-name-and-the-library-array-are-two-records-in-one-program -->
+<!-- tier: stdlib -->
 ⭐⭐ **TWO RECORDS, TWO GIDS, ONE PROGRAM — which is what the fold being per-DECLARATION rather than
 per-compile buys.** `Bag with String` is `Bag`'s own instance and `"a,bb,ccc".split(",")` is the corpus
 array's, and both carry the compiler's synthesized surface because both declarations carry the marker. A
@@ -528,6 +543,7 @@ end 'main'
 ```
 
 <!-- test: error.a-conformer-of-another-name-is-still-refused -->
+<!-- tier: stdlib -->
 The refusal. The identity rests on `Array with T` and `__ManagedMemory with T` being one
 instance, which is a fact about that base name and no other — so a conformer of any other name
 gets the sentence about the two names the compiler owns a record for.
@@ -549,6 +565,7 @@ error E2015: <fragment>:6:10: Unsupported: `Holder` implements `BuiltinArrayLite
 ```
 
 <!-- test: a-declared-member-off-the-roster-is-served-from-the-corpus -->
+<!-- tier: stdlib -->
 ⭐ **A MEMBER THE DECLARATION CARRIES AND THE ROSTER DOES NOT IS AN ORDINARY CALL TO AN ORDINARY DECLARED
 FUNCTION.** `at` is not one of the members the compiler synthesizes, and the call is served from the declaration
 rather than refused with the roster sentence — the program plainly has the method, sitting in the very
@@ -588,6 +605,7 @@ end 'main'
 ```
 
 <!-- test: the-self-spelling-of-a-corpus-served-member-reaches-the-same-body -->
+<!-- tier: stdlib -->
 The `self.` spelling of the call above, made from inside the declaration's own body. It is the spelling
 that reaches `dispatchMethodOnReceiver`, and it is served exactly as the call above is — the two
 spellings of one member agree about whether the member exists at all.
@@ -630,6 +648,7 @@ end 'main'
 ```
 
 <!-- test: a-bare-call-to-a-roster-member-takes-the-roster -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE ROSTER-WINS ORDER APPLIES TO THE BARE SPELLING TOO.** `self.get(i)` reaches the synthesized
 arm, and so does a BARE `get(i)` in the same body, so one member has one meaning however it is written.
 The two bodies are made to DISAGREE on
@@ -677,6 +696,7 @@ end 'main'
 ```
 
 <!-- test: a-bare-roster-member-inside-an-extension-body-resolves -->
+<!-- tier: stdlib -->
 An `extension` body's bare `count()` / `get(i)` is the same rule one declaration over, and it is what
 `stdlib/Array.maxon`'s `contains(sequence)` is written in. The sibling walk cannot see them — they belong
 to the type's OWN body — so the call was `E3004 call to undefined function 'get'`, a diagnostic no reader
@@ -725,6 +745,7 @@ end 'main'
 ```
 
 <!-- test: a-managed-element-through-a-corpus-served-member-balances -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE OWNERSHIP HALF, AND IT PINS THE EXIT CODE BECAUSE THE PRINT ALONE COULD NOT SEE THE BUG.** The
 corpus-served member hands back a MANAGED element, which is a `+1` the CALLEE owes
 (`Parser.emitOwnedValueReturn`'s opaque arm) and takes through the enclosing instance's descriptor
@@ -779,6 +800,7 @@ alpha beta 2
 ```
 
 <!-- test: a-buffer-member-off-the-old-six-takes-the-record -->
+<!-- tier: stdlib -->
 ⭐⭐ **A BARE `managed.<member>(…)` HANDS OVER THE RECEIVER'S OWN RECORD FOR *EVERY* MEMBER.**
 `Parser.fusedManagedMemberTakesTheRecord` admits `clear`, `get`, `set`, `setLength`, `capacity`, `grow`,
 `slice`, `remove`, `fill`, `shiftRight` and `elementSize` exactly as it admits `length`, `byteAt`,
@@ -848,6 +870,7 @@ gamma 1
 ```
 
 <!-- test: the-value-spelling-of-the-same-field-keeps-its-reference -->
+<!-- tier: stdlib -->
 ⭐ **THE CONTROL FOR THE CASE ABOVE — `managed` USED AS A VALUE STILL MINTS ITS REFERENCE.** The door
 the case above takes is gated on a member call FOLLOWING the field (`Parser.memberCallFollows`), which is
 exactly *"the only consumer is a call in the same statement"*. A `return managed` has no such consumer: the
@@ -892,6 +915,7 @@ end 'main'
 ```
 
 <!-- test: error.a-member-no-declaration-carries-is-still-refused -->
+<!-- tier: stdlib -->
 ⛔ **THE FALL-THROUGH MAY NOT BECOME A SILENT NO-OP.** The corpus door admits only a name the declaration
 actually carries; anything else meets the roster sentence unchanged, which is the answer for a member that
 exists nowhere.
@@ -924,6 +948,7 @@ error E2015: <fragment>:22:11: Unsupported: `Array` member 'nosuch' — the comp
 ```
 
 <!-- test: a-corpus-served-managed-element-balances-across-a-loop -->
+<!-- tier: stdlib -->
 ⭐ **THE SAME ARITHMETIC, FIFTY TIMES OVER, WITH A CLONE IN THE MIDDLE.** One call can be one reference
 wrong and still look right; a loop cannot. Every round takes an element out through the corpus door in
 BOTH spellings — `b.at(0)` and, inside `lastOne`, `self.at(…)` over a BARE `count()` — and drops a clone,
@@ -995,6 +1020,7 @@ end 'main'
 ```
 
 <!-- test: a-buffer-member-keeps-its-meaning-when-the-record-declares-the-name -->
+<!-- tier: stdlib -->
 ⭐⭐ **`managed.<m>()` MEANS THE BUFFER'S `<m>`, EVEN WHEN THE RECORD AROUND IT DECLARES ONE TOO.**
 `Array with T` and `__ManagedMemory with T` are ONE record with TWO surfaces, so nothing about the
 receiver's TYPE tells them apart — only the buffer mark does. A corpus door that read the type alone
@@ -1071,6 +1097,7 @@ end 'main'
 ```
 
 <!-- test: a-managed-swap-through-the-buffer-is-not-the-records-own -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE SAME COLLISION ON A THROWING MEMBER.**
 `stdlib/helpers/sort/smallSort.maxon:32` is `try managed.swap(i, j: j)` inside an `export extension
 Array` that declares a `swap` of its own — a bare call resolved to the extension's own method would stop
@@ -1160,6 +1187,7 @@ alpha gamma beta delta 4
 ```
 
 <!-- test: a-library-array-value-reaches-a-declared-own-array-parameter -->
+<!-- tier: stdlib -->
 ⭐⭐ **A VALUE CROSSES THE SPLIT, AND THE ELEMENT IS MANAGED SO THE CROSSING IS AN OWNERSHIP CLAIM AND
 NOT ONLY A TYPE ONE.** `String.split` hands back the LIBRARY's `Array with String`; `takesMine` declares
 the PROGRAM's. They are two declarations, and the argument is admitted because both are the
@@ -1198,6 +1226,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: a-declared-own-array-value-reaches-a-library-parameter -->
+<!-- tier: stdlib -->
 ⭐ **THE SAME CROSSING THE OTHER WAY, INTO `stdlib/` ITSELF.** `String.from(bytes ByteArray)` is
 declared over the library's `Array with Byte`; the argument is the program's own. It is the direction
 that matters most, because the library body then goes on to call `reserve`, `count` and `appendMemory`
@@ -1237,6 +1266,7 @@ Hi!
 ```
 
 <!-- test: for-in-walks-both-arrays-in-one-program -->
+<!-- tier: stdlib -->
 ⭐ **`for … in` ADMITS BOTH, AND BY DIFFERENT ROUTES.** The library's array declares `createIterator()`,
 so it is rewritten to its `ArrayIterator` and walked as a cursor; the program's own declares none, so it
 takes the COUNTED form off `count`/`get` (`Parser.requireIterableSource`'s array arm exists for exactly
@@ -1282,6 +1312,7 @@ end 'main'
 ```
 
 <!-- test: error.a-library-only-member-is-not-served-on-the-programs-own-array -->
+<!-- tier: stdlib -->
 ⛔ **THE SCOPING, SEEN FROM THE PROGRAM'S SIDE.** `truncate` is declared on `stdlib/Array.maxon`'s
 `Array` and on nothing else in this program, so it is not served on a value of the program's own
 container. The refusal names the split rather than reciting the synthesized roster at a reader who can
@@ -1316,6 +1347,7 @@ error E2015: <fragment>:21:7: Unsupported: `Array` member 'truncate' — this va
 ```
 
 <!-- test: error.a-program-only-member-is-not-served-on-a-library-array -->
+<!-- tier: stdlib -->
 ⛔ **AND FROM THE LIBRARY'S SIDE, WHICH IS THE HALF A READER MEETS BY SURPRISE.** `at` is declared two
 lines up, in this program's own `type Array`, and `s.split(",")` is not a value of it. The receiver-scoped
 lookup says so; the roster sentence alone would be about a method the reader is looking straight at.
@@ -1350,6 +1382,7 @@ error E2015: <fragment>:22:14: Unsupported: `Array` member 'at' — this value's
 ```
 
 <!-- test: a-compiler-minted-literal-is-the-library-array -->
+<!-- tier: stdlib -->
 ⭐⭐ **A LITERAL THE COMPILER MINTS IS THE LIBRARY'S RECORD, NOT THE PROGRAM'S — and the program never
 wrote a type for it to be read from.** `b"Hi!"` and `[4, 5]` name no declaration: the sweep interns their
 `Array with Byte` / `Array with int` instances itself. Under a contest the corpus's own declaration has
@@ -1387,6 +1420,7 @@ false false
 ```
 
 <!-- test: a-minted-managed-element-literal-is-the-library-array-and-balances -->
+<!-- tier: stdlib -->
 ⭐ **THE SAME MINT WITH A MANAGED ELEMENT, WHERE A WRONG RECORD IDENTITY IS A LEAK OR A DOUBLE FREE
 RATHER THAN AN EXPECTATION MISMATCH.** `["a", "bb"]` interns `Array with String`; `contains` is served
 only from the library's declaration. The two `String` records are freed by one `__managed_decref` walk,
@@ -1420,6 +1454,7 @@ true
 ```
 
 <!-- test: error.a-conformer-of-another-name-under-a-contest-is-still-refused-under-its-own-name -->
+<!-- tier: stdlib -->
 ⛔⛔ **THE TWO-DECLARATIONS SENTENCE IS ABOUT TWO `Array`s, SO A RECEIVER THAT IS NEITHER MAY NOT BE
 HANDED IT.** `refuseArrayMemberTheOtherDeclarationCarries` gates on whether the receiver is one of the
 two `Array`s, not only on whether a CONTEST exists. The array surface serves every
@@ -1482,6 +1517,7 @@ error E2015: <fragment>:39:11: Unsupported: `Bag` member 'at' — the compiler p
 ```
 
 <!-- test: error.a-conformer-of-another-name-is-refused-under-its-own-name -->
+<!-- tier: stdlib -->
 ⛔ **THE ROSTER REFUSAL NAMES THE TYPE THE VALUE ACTUALLY HAS.** Since a conformer of any name IS the
 record, the array surface serves more than one declaration — so the refusal cannot name a constant. This
 program declares no `Array` at all and `Bag` is the only container in it; a sentence about `Array` would
@@ -1515,6 +1551,7 @@ error E2015: <fragment>:21:11: Unsupported: `Bag` member 'nosuchmember' — the 
 ```
 
 <!-- test: error.the-librarys-array-is-refused-under-the-name-its-file-writes -->
+<!-- tier: stdlib -->
 ⛔⛔ **AND THE OTHER SIDE OF THAT NOUN — THE ONE THAT CAN LEAK A NAME NO AUTHOR MAY WRITE.** Under a
 contest the corpus's declaration is keyed under this compile's MINT, so a refusal reading the receiver's
 instance straight off says **`__Array`** — a spelling `Parser.requireUnreservedName` forbids the reader
@@ -1545,6 +1582,7 @@ error E2015: <fragment>:18:15: Unsupported: `Array` member 'nosuchmember' — th
 ```
 
 <!-- test: error.a-conformer-named-for-a-container-the-compiler-serves-is-refused -->
+<!-- tier: stdlib -->
 ⛔⛔ **THE MARKER IS OPEN TO ANY NAME EXCEPT ONE THE COMPILER ALREADY SERVES A CONTAINER UNDER, AND
 WITHOUT THAT EXCEPTION A FIXED-SIZE `Vector with 3 Num` GROWS.** `Bag` above is admitted because the
 compiler owns no `Bag`; `Vector` is different in kind, because the compiler synthesizes that container itself and
@@ -1588,6 +1626,7 @@ error E2015: <fragment>:10:10: Unsupported: `Vector` is a generic container the 
 ```
 
 <!-- test: a-conformer-named-for-the-list-is-admitted-because-the-list-left-the-class -->
+<!-- tier: stdlib -->
 ⭐⭐ **`List` IS NOT IN THE CLASS, AND THIS CASE IS THE GUARD ON THAT.** The compiler synthesizes no
 `List`: the name is absent from `isBuiltinGenericBaseNameBesidesTheRecord`, so
 `requireNameIsNotABuiltinContainerBase` does not answer about it — a user `type List` is an ordinary
@@ -1629,6 +1668,7 @@ end 'main'
 ```
 
 <!-- test: error.a-conformer-named-for-a-container-that-constructs-nothing-still-does-not-take-its-surface -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE HALF THE TWO CASES ABOVE CANNOT SEE: A CONFORMER THAT CONSTRUCTS NOTHING.** Its `init` satisfies
 the conformance by DELEGATING, so it never reaches a fused-wrapper literal and the declaration stands. What
 must still hold is that the marker did not make `Vector` an ARRAY declaration, and the only thing holding
@@ -1679,10 +1719,11 @@ error E2015: <fragment>:18:2: Unsupported: a member access on 'v': `Vector` is a
 ```
 
 <!-- test: error.a-string-marker-conformer-named-for-a-container-is-not-this-doors-subject -->
+<!-- tier: stdlib -->
 ⛔ **THE CONTAINER-NAME REFUSAL'S NOUN IS RIGHT ONLY FOR THE ARRAY MARKER.**
 `Parser.requireNameIsNotABuiltinContainerBase` RENDERS the marker into its sentence rather than spelling
 it, but rendering carries the marker's NAME and not the REASON under it, which is the growable surface.
-Ungated, it would answer the declaration below — `interface-conformance.error.literal-marker-conformer-would-be-discarded-at-construction`
+Ungated, it would answer the declaration below — `interface-conformance.error.literal-marker-conformer-would-be-dropped-through-the-wrong-cascade`
 with only the type's name changed — with:
 
 > ``…not the `__ManagedMemory` record a `BuiltinStringLiteral` conformer's literal is an identity on.
@@ -1721,6 +1762,7 @@ error E2015: <fragment>:7:10: Unsupported: `Vector` implements `BuiltinStringLit
 ```
 
 <!-- test: a-declared-roster-member-keyed-by-another-type-is-served-from-the-declaration -->
+<!-- tier: stdlib -->
 The record declares `get` keyed by a `String`, which no element index can be, so the call reaches the
 declaration's own body: the empty key has count 0 and reads the one element pushed.
 ```maxon
@@ -1757,6 +1799,7 @@ end 'main'
 ```
 
 <!-- test: error.a-declared-roster-member-keyed-by-another-type-refuses-an-index -->
+<!-- tier: stdlib -->
 The same declaration handed an integer is an argument of the wrong type for `key`.
 ```maxon
 typealias Num = int(0 to 1000)
@@ -1792,6 +1835,7 @@ error E3005: <fragment>:27:16: argument type mismatch for 'key': expected 'Strin
 ```
 
 <!-- test: a-declared-roster-member-keyed-by-an-enum-is-served-from-the-declaration -->
+<!-- tier: stdlib -->
 An enum is not an element index either, so a `get` keyed by one is the declaration's own.
 ```maxon
 typealias Num = int(0 to 1000)
@@ -1837,6 +1881,7 @@ end 'main'
 ```
 
 <!-- test: error.a-declared-ranged-index-refuses-another-alias -->
+<!-- tier: stdlib -->
 A `get` declared over a ranged index alias is served by the compiler, and its index argument must be that alias.
 ```maxon
 typealias Num = int(0 to 1000)
@@ -1875,6 +1920,7 @@ error E3005: <fragment>:30:16: argument type mismatch for 'index': expected 'Slo
 ```
 
 <!-- test: error.a-declared-ranged-index-refuses-a-string -->
+<!-- tier: stdlib -->
 A `String` is no index at all, whatever alias the declaration names.
 ```maxon
 typealias Num = int(0 to 1000)
@@ -1927,6 +1973,7 @@ error E3005: <fragment>:8:16: argument type mismatch for 'index': expected 'Elem
 ```
 
 <!-- test: a-user-array-keeps-its-own-hash-and-equals -->
+<!-- tier: stdlib -->
 A program's own `type Array` that declares `hash` and `equals` is served by them, method and operator alike.
 ```maxon
 typealias Num = int(0 to 1000)
@@ -1963,6 +2010,7 @@ end 'main'
 ```
 
 <!-- test: a-library-string-array-key-beside-a-user-array -->
+<!-- tier: stdlib -->
 A library `StringArray` is a working `Map` key in a program that declares its own `type Array`.
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral
@@ -1993,6 +2041,7 @@ end 'main'
 ```
 
 <!-- test: a-library-string-array-key-is-not-hashed-by-a-user-array -->
+<!-- tier: stdlib -->
 The library `StringArray` key hashes and compares through the library's own conformance, never through
 the `hash` and `equals` a program's own `type Array` declares.
 ```maxon

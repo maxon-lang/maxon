@@ -1284,63 +1284,6 @@ let IfaceDispatchBase = 8 as KnobSize
 let IfaceDispatchTypeCount = 4 as KnobSize
 
 // ===========================================================================================
-// The `__ManagedMemory` BUFFER SURFACE knob
-// ===========================================================================================
-//
-// ⚠ **A RECURRENCE OF THIS FILE'S FOUNDING DEFECT THAT THE MANIFEST DID NOT EVEN NAME.**
-// MEASURED on the ladder this knob was written against: `.managed`, `ByteArray`, `toByteArray`,
-// `addressableBytes` and `__ManagedMemory` appear **zero** times in a corpus without it, at rung 0 and
-// at rung 5 alike. So `Parser.bufferSurfaceOf` and `Parser.markBufferSurface` — the whole surface
-// mechanism, eight call sites in seven functions — run EXACTLY ZERO TIMES on every rung, and a Δ0 read
-// over them measures the instrument's blind spot rather than the cost.
-//
-// ⭐⭐ **THE READ SIDE IS SHORT-CIRCUITED TO NOTHING IN A FILE THAT HAS NO MARKS, WHICH IS WHY "the corpus
-// already dispatches array methods" IS NOT COVERAGE.** `Parser.valueIsBufferSurface` is asked once per
-// array-method dispatch, and on the shared zero-capacity set it "returns before it hashes anything" (its
-// own note) — so all 134 array-method call sites a marks-free ladder holds at rung 0, and all 4,288 at
-// rung 5, take the free path every time. `bufferSurfaceValues` is PER-PARSER, i.e. per FILE, so the product a
-// linear-column regression would cost is (marks in this file) x (array dispatches in this file). Both
-// live in this knob's own file, and both double.
-//
-// EIGHT, WHICH IS THIS BAND'S PER-SITE BASE — `StringOpsBase`, `ArrayOpsBase`, `IfaceDispatchBase` and
-// `GenericInstancesBase` all sit there, and this is a per-SITE knob by the same test: it grows the number
-// of places a buffer is PRODUCED over a FIXED set of three aliases and one holder type, so a change to how
-// `__ManagedMemory` is LAID OUT moves nothing here and a change to how a buffer value is MINTED moves
-// everything. Not 4 (the per-TYPE families' base, `ManagedStructTypesBase` / `ManagedArrayOpsBase`),
-// because nothing in this knob is per-type.
-//
-// ⚠ **AND IT IS NOT `FloatSpillLoopsBase`'S TRAP IN A NEW COAT, BECAUSE THE MECHANISM HAS NO THRESHOLD** —
-// one `.managed` in value position reaches `bufferSurfaceOf`, so there is no count below which the door
-// stops opening. What a too-low base WOULD cost is the growth term: the mark set is installed on the first
-// mark (`ValueMarkColumn`), so a knob of ONE site would price the INSTALL and never the SET, and the
-// quadratic a value-keyed column would introduce could not out-run the constant term at any
-// rung. Eight groups puts ~81 marks against 162 array-method dispatches in this file at rung 0, and ~2,592
-// against 5,122 at rung 5 — a product that rises 1,024-fold across the ladder while the linear term rises
-// 32-fold.
-let BufferSurfaceSitesBase = 8 as KnobSize
-
-// The buffer each group builds: `create(BufferSurfaceCapacity, elementSize: 1)`, a length published inside
-// that capacity, and a slice inside that length. Named because each is a bare literal in TWO programs at
-// once — this one and the one it generates — and because the three are ORDERED: a `setLength` past the
-// capacity or a `slice` past the length is a shape real code does not write. That ordering is now CHECKED
-// rather than merely asserted — `bufferStaticAndSliceBlock` reads both lengths back and witnesses them —
-// where before, with nothing running the program, nothing would ever have caught it.
-let BufferSurfaceCapacity = 8
-let BufferSurfacePublishedLength = 4
-let BufferSurfaceSliceEnd = 2
-
-// The element stride `__ManagedMemory.create` is given. ONE, because `Parser.requireManagedMemoryElementSize`
-// picks the result's `Array` instance from this constant and a byte stride is the instance `__ManagedMemory`
-// canonically denotes — the same one `String.toByteArray()` hands back, which is what lets the two producers
-// in this knob's file share a type.
-let BufferSurfaceElementSize = 1
-
-// Masks the opaque accumulator into the byte alias's range. `DivisorMask`'s argument, one alias over: the
-// pushed value must derive from the seed or it folds, and it must fit `int(0 to u8.max)` or the cast's
-// runtime guard would be a real failure in a program nobody runs to observe it.
-let BufferSurfaceByteMask = 255
-
-// ===========================================================================================
 // The NAMESPACE knob — SUBDIRECTORIES, and references written `dir.fn()` / `dir.Name`
 // ===========================================================================================
 //
@@ -1608,11 +1551,6 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	// `InterfacesPerFile` constant is what keeps the per-file interface scan bounded (see its knob).
 	sourceBytes = sourceBytes + try writeInterfaceTypes(dir, count: knobAt(InterfaceTypesBase, rung: rung), written: written, drivers: drivers)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "y_ifdisp", source: ifaceDispatchSource(knobAt(IfaceDispatchBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(IfaceDispatchDriver))
-
-	// The `__ManagedMemory` BUFFER SURFACE. Its marks and the array-method dispatches that ASK
-	// about them share this ONE file deliberately: `bufferSurfaceValues` is per-PARSER, i.e. per file, so the
-	// product a value-keyed regression would cost only exists where both halves are.
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "y_bufsurf", source: bufferSurfacesSource(knobAt(BufferSurfaceSitesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(BufferSurfacesDriver))
 
 	// The NAMESPACE knob — the only one that creates DIRECTORIES, because a namespace IS a
 	// directory. It writes and registers itself, and registers ONE driver for M modules; see there.
@@ -2111,7 +2049,7 @@ function writeCallChain(dir FilePath, length KnobSize, written StringArray, driv
 	var calleeValue = corpusSeedValue() + ChainBaseIncrement
 
 	for i in 1 upto length 'eachLink'
-		let linkName = chainLinkName(i)
+		var linkName = chainLinkName(i)
 		let x = corpusSeedValue() + (i mod 9 + 1)
 		let y = corpusSeedValue() * 2
 		out.append("\n")
@@ -3694,23 +3632,6 @@ let InterfaceHolderFieldName = "back"
 let DispatchInterfacePrefix = "ScaleDispProto"
 let DispatchConformerPrefix = "ScaleDisp"
 let IfaceDispatchDriver = "scaleIfaceDispatch"
-
-// ⚠⚠ **`ByteAliasName` NAMES THE LIBRARY'S `Byte`, AND THE GENERATED CORPUS DECLARES NONE OF ITS OWN.**
-// A typealias's identity is its declaration, so a corpus `typealias Byte = int(0 to u8.max)` — or any other
-// alias over that range — is a different element type from the one `__ManagedMemory`, `toByteArray()` and
-// `ByteArray` use, and pushing a `toByteArray()` result into the corpus's array is E3005: a hard compile
-// failure that takes the whole ladder down as a BROKEN RUN rather than skewing a number.
-// `tests/cli/scale-test-rung-zero-compiles-and-every-witness-holds.maxtest` is the gate.
-let ByteAliasName = "Byte"
-let ManagedMemoryTypeSpelling = "__ManagedMemory"
-
-let BufferSurfaceArrayAlias = "ScaleBufArray"
-let BufferSurfaceOfBuffersAlias = "ScaleBufOfBufs"
-let BufferSurfaceHoldName = "ScaleBufHold"
-let BufferSurfaceHoldFieldName = "buf"
-let BufferSurfaceReadName = "scaleBufLength"
-let BufferSurfaceReturnPrefix = "scaleBufferOf"
-let BufferSurfacesDriver = "scaleBufferSurfaces"
 
 let CoverageNarrowAlias = "ScaleCoverNarrow"
 let CoverageBoolName = "scaleCoverBool"
@@ -5512,186 +5433,6 @@ function ifaceDispatchSource(siteCount KnobSize) returns String
 	return out.build()
 end 'ifaceDispatchSource'
 
-// ⭐⭐ **THE FOUR `.managed`-IN-VALUE-POSITION DOORS, ON ONE BINDING-OWNED ARRAY.** Every one
-// of them is the CO-OWNED arm of `Parser.bufferSurfaceOf` (`Parser.maxon:28901-29151`): `ba{index}` is a
-// BINDING, so somebody else already owes the record a drop and the surface value must become a SECOND
-// owner through `coOwnAggregateAsTemp` — a `__mm_retain`, a tracked temp and the mark. That is the
-// EXPENSIVE arm of the two, and the pending-temp block below is the cheap one; a knob that reached only
-// one of them would price half the mechanism.
-//
-// ⭐ **EVERY `.length()` HERE IS THE PROOF, NOT DECORATION.** `length` is on the BUFFER roster and NOT on
-// the `Array` one, so each of these lines compiles ONLY IF the corresponding `markBufferSurface` ran —
-// measured, four ways, by declaring each carrier as the plain `Array` alias instead and taking **E2015
-// `Array` member 'length'** every time. So "does the ladder reach the mechanism?" is answered by the rung
-// compiling at all, and cannot rot into a claim nobody re-checks.
-//
-// The FOURTH door is the struct FIELD, which is not a fourth spelling of the same thing: a field's declared
-// surface is written by the tolerant declaration SWEEP and DERIVED at the read
-// (`Parser.markDeclaredSurface`'s field carrier), which is the carrier with the documented file-ORDER
-// hazard. The other two carriers — a PARAMETER (`scaleBufLength`) and a RETURN clause
-// (`scaleBufferOf{index}`) — are reached by the two lines above it.
-// ⭐ **EVERY `.length()` HERE ANSWERS THE NUMBER OF `push`ES THIS FUNCTION WROTE, AND THAT IS A SECOND
-// PROOF ON TOP OF THE COMPILE-TIME ONE.** The block's existing evidence is that it compiles at all —
-// `length` is on the BUFFER roster and not on `Array`'s, so a missing `markBufferSurface` is E2015. What
-// it could not say before is whether the surface a door produced VIEWS THE SAME ELEMENTS: a co-owned arm
-// that retained the wrong record, or a `return` door handing back an empty view, compiles perfectly and
-// answers the wrong length. All four value doors are witnessed against the same two pushes here.
-function bufferValueDoorsBlock(index KnobIndex) returns String
-	let published = BufferValueDoorsPushCount
-	var body = StringBuilder.create()
-	body.append("\t\tvar ba{index} = {BufferSurfaceArrayAlias}.create()\n")
-	body.append("\t\tba{index}.push((a and {BufferSurfaceByteMask}) as {ByteAliasName})\n")
-	body.append("\t\tba{index}.push(((a + {index mod 5 + 1}) and {BufferSurfaceByteMask}) as {ByteAliasName})\n")
-	body.append("\t\tlet bm{index} = ba{index}.managed\n")
-	body.append("\t\tacc = acc + bm{index}.length() + {BufferSurfaceReadName}(ba{index}.managed){neutralizeText(2 * published)}\n")
-	body.append(accProbe("\t\t"))
-	body.append("\t\tacc = acc + {BufferSurfaceReturnPrefix}{index}(ba{index}).length() + {asScaleInt("ba{index}.count()")}{neutralizeText(2 * published)}\n")
-	body.append(accProbe("\t\t"))
-	body.append("\t\tlet bh{index} = {BufferSurfaceHoldName}.create(ba{index}.managed, value: a)\n")
-	body.append("\t\tacc = acc + bh{index}.{BufferSurfaceHoldFieldName}.length(){neutralizeText(published)}\n")
-	body.append(accProbe("\t\t"))
-	return ownedSiteBlock("bv{index}", body: body.build())
-end 'bufferValueDoorsBlock'
-
-// How many elements the value-doors block pushes before every door reads its length back — the number
-// each of those four `.length()` calls must answer.
-let BufferValueDoorsPushCount = 2
-
-// ⭐ **THE OTHER ARM OF `bufferSurfaceOf` (`Parser.maxon:28896-29147`) — a receiver the STATEMENT already
-// owns.** `"…".toByteArray()` is an unbound owned temporary, so `pendingTempsContain` answers yes and the
-// mark goes on the receiver's OWN `ValueId` with no retain at all. It is a genuinely different cost from
-// the block above — one `Set` insert against a retain, a tracked temp and a scope-exit drop — and it is the
-// spelling every `path.toByteArray().managed` in `stdlib/` writes, so it is the one the real corpus is
-// thickest in.
-//
-// The literal is LONG for `stringOpsSource`'s reason: a short one lives inline in the 56-byte record and
-// the bytes never reach the heap the buffer surface is a view onto.
-function bufferPendingTempBlock(index KnobIndex) returns String
-	// The view is over the literal's own bytes, so its length is the literal's byte count — which makes
-	// this the one door whose witness also checks `toByteArray()` itself.
-	let payload = "scale buffer payload segment {index} long enough to reach the heap"
-	var body = StringBuilder.create()
-	body.append("\t\tlet bt{index} = \"{payload}\".toByteArray().managed\n")
-	body.append("\t\tacc = acc + bt{index}.length(){neutralizeText(payload.byteLength() as TrackedValue)}\n")
-	body.append(accProbe("\t\t"))
-	return ownedSiteBlock("bt{index}", body: body.build())
-end 'bufferPendingTempBlock'
-
-// The two producers that are not `.managed` at all: `__ManagedMemory.create`
-// (`Parser.parseManagedMemoryStaticCall`) and a `slice` taken THROUGH the buffer surface
-// (`Parser.parseArraySlice`, whose `bufferSurface` arm marks the result).
-//
-// ⭐ **THE SLICE'S SECOND ARGUMENT IS POSITIONAL, AND THAT IS WHAT PROVES THE SURFACE REACHED THE PARSE.**
-// `endIndex:` is REQUIRED on the `Array` surface and OPTIONAL on the buffer one
-// (`Parser.consumeArrayArgLabel`), so `slice(0, 2)` on an array is **E2010 Expected identifier but got
-// 'integer literal'** — measured. The rung compiling is therefore evidence about the arm taken, not merely
-// about the call being made.
-//
-// ⚠ **THE `otherwise` MUST DIVERGE, OR THE KNOB SILENTLY STOPS MEASURING.** A value `try` whose fallback
-// produces an ordinary `ByteArray` merges a marked value with an unmarked one and the result is correctly
-// NOT a buffer — measured, as E2015 on the very next `setLength`. `panic` is also what these three deserve:
-// the capacity is requested one line above, the length is published inside it and the slice is inside that,
-// so none of them can fail (`AGENTS.md`: a `try` that should never fail uses `otherwise panic`).
-function bufferStaticAndSliceBlock(index KnobIndex) returns String
-	var body = StringBuilder.create()
-	body.append("\t\tvar bc{index} = try {ManagedMemoryTypeSpelling}.create({BufferSurfaceCapacity}, elementSize: {BufferSurfaceElementSize}) otherwise panic(\"scale corpus: the {BufferSurfaceCapacity}-byte buffer this line just asked for\")\n")
-	body.append("\t\ttry bc{index}.setLength({BufferSurfacePublishedLength}) otherwise panic(\"scale corpus: length {BufferSurfacePublishedLength} is inside the capacity allocated one line above\")\n")
-	body.append("\t\tlet bq{index} = try bc{index}.slice(0, {BufferSurfaceSliceEnd}) otherwise panic(\"scale corpus: end {BufferSurfaceSliceEnd} is inside the length published one line above\")\n")
-
-	// The three constants are ORDERED — capacity, then the length published inside it, then the slice
-	// inside that — and the two `.length()` calls read the last two back. So the ordering this comment
-	// asserts is now CHECKED rather than merely asserted: a `setLength` that clamped, or a `slice` that
-	// returned the whole buffer, lands here.
-	body.append("\t\tacc = acc + bq{index}.length() + bc{index}.length(){neutralizeText(BufferSurfaceSliceEnd + BufferSurfacePublishedLength)}\n")
-	body.append(accProbe("\t\t"))
-	return ownedSiteBlock("bc{index}", body: body.build())
-end 'bufferStaticAndSliceBlock'
-
-// The producer that reads a DIFFERENT column to decide — `Parser.markElementReadSurface`, which marks an
-// element read only when the RECEIVER's elements are buffers (`bufferSurfaceElements`, the mark
-// `Array with __ManagedMemory` earns from its alias). Every array accessor funnels through one mint, so
-// this one `get` prices the arm all six of them share.
-//
-// The pushed element is a `String`'s byte view rather than a `__ManagedMemory.create`, because the two are
-// the SAME instance (`Array with Byte`) and this element only has to BE a buffer — the create path is
-// already priced one block up, and paying for it twice would put two producers on one column.
-function bufferElementReadBlock(index KnobIndex) returns String
-	// The element read back is the one element pushed, so its length is that literal's byte count and the
-	// array's count is one — which is what makes `markElementReadSurface` answering about the WRONG slot
-	// visible rather than merely compiling.
-	let element = "scale buffer element {index} long enough to reach the heap"
-	var body = StringBuilder.create()
-	body.append("\t\tvar bf{index} = {BufferSurfaceOfBuffersAlias}.create()\n")
-	body.append("\t\tbf{index}.push(\"{element}\".toByteArray())\n")
-	body.append("\t\tlet bg{index} = try bf{index}.get(0) otherwise panic(\"scale corpus: index 0 of an array pushed to one line above\")\n")
-	body.append("\t\tacc = acc + bg{index}.length() + {asScaleInt("bf{index}.count()")}{neutralizeText(((element.byteLength() + BufferElementPushCount) as TrackedValue))}\n")
-	body.append(accProbe("\t\t"))
-	return ownedSiteBlock("bf{index}", body: body.build())
-end 'bufferElementReadBlock'
-
-// How many buffers the element-read block pushes before reading one back.
-let BufferElementPushCount = 1
-
-// The `bufferSurfaces` knob: M groups, each producing the `__ManagedMemory` BUFFER SURFACE through every
-// door a HOST-PORTABLE corpus can spell — see `BufferSurfaceSitesBase` for the measurement that says the
-// ladder had none of them.
-//
-// SIX of `markBufferSurface`'s EIGHT call sites are reached, and the two that are not are named here rather
-// than left to read as coverage:
-//   • A FUSED WRAPPER's inline `managed` read (`Parser.emitFieldLoad`), which is what serves the corpus's
-//     `String.addressableBytes()` — a `module function` no file outside `stdlib/` may call, and reachable
-//     only from a type implementing one of `stdlib/Builtins.maxon`'s literal markers, which a generated rung
-//     cannot declare either. No knob can close this; it is a property of the door, not of the corpus.
-//     ⚠ The mint sits on the FUSED WRAPPER rather than on a `dispatchStringMethod` arm, so a roster
-//     counted by NAME and one counted by SITE disagree about which door it is, never about how many.
-//   • `__ManagedDirectory.filename` / `currentPath` (`Parser.emitOwnedManagedMemoryResult`) lowers to the
-//     `__md_*` runtime entries. ⚠ This one is a CORPUS GAP rather than a door the generator cannot reach:
-//     every lane that can HOST a compile provides `managedDirectory`, and `compileRung` spawns `build` with
-//     no `--target`, so a rung generating one would compile. Nothing measures these two producers today.
-//
-// The TWO `Array with <T>` instances this knob adds are FIXED, exactly as the array knobs' three are, and
-// only the site count doubles: `{BufferSurfaceArrayAlias}` — which IS `Array with Byte`, so the `.managed`
-// receivers, `toByteArray()` and `create(…, elementSize: 1)` are all one instance and not three — and
-// `{BufferSurfaceOfBuffersAlias}`, the array OF buffers the element-read producer needs.
-function bufferSurfacesSource(groupCount KnobSize) returns String
-	var out = StringBuilder.create()
-	out.append("// Generated by ScaleCorpus: the buffer-surface knob — {groupCount} groups reaching `.managed` in VALUE position (let / argument / return / struct field) plus `{ManagedMemoryTypeSpelling}.create`, a slice through the surface, and an element read off an array of buffers.\n")
-	out.append("typealias {BufferSurfaceArrayAlias} = Array with {ByteAliasName}\n")
-	out.append("typealias {BufferSurfaceOfBuffersAlias} = Array with {ManagedMemoryTypeSpelling}\n")
-	out.append(managedFieldTypeDecl(BufferSurfaceHoldName, managedFieldName: BufferSurfaceHoldFieldName, managedTypeName: ManagedMemoryTypeSpelling))
-
-	// The PARAMETER carrier of the declared surface, and the ARGUMENT door's callee. ONE function, because a
-	// parameter's spelling is read once per DECLARATION while the axis that has to double is the CALL — which
-	// the driver makes once per group.
-	out.append("\nfunction {BufferSurfaceReadName}(m {ManagedMemoryTypeSpelling}) returns {ScaleIntAlias}\n")
-	out.append("\treturn m.length()\n")
-	out.append("end '{BufferSurfaceReadName}'\n")
-
-	// The RETURN carrier, and the `return` door onto `bufferSurfaceOf`. ONE PER GROUP, because a `return` is
-	// one per function by construction: a single shared returner would leave this door fixed-size while every
-	// other door doubled, which is `GenericInstancesBase`'s "M names, one descriptor" failure one door over.
-	// The receiver is a BORROWED parameter, which is `stdlib/File.maxon:147`'s shape and the co-owned arm's
-	// second reason for existing.
-	for i in 0 upto groupCount 'eachReturner'
-		out.append("\nfunction {BufferSurfaceReturnPrefix}{i}(a {BufferSurfaceArrayAlias}) returns {ManagedMemoryTypeSpelling}\n")
-		out.append("\treturn a.managed\n")
-		out.append("end '{BufferSurfaceReturnPrefix}{i}'\n")
-	end 'eachReturner'
-
-	out.append("\n")
-	out.append(witnessedDriverHeader(BufferSurfacesDriver))
-
-	for i in 0 upto groupCount 'eachGroup'
-		out.append(bufferValueDoorsBlock(i))
-		out.append(bufferPendingTempBlock(i))
-		out.append(bufferStaticAndSliceBlock(i))
-		out.append(bufferElementReadBlock(i))
-	end 'eachGroup'
-
-	out.append(accWitnessTail(BufferSurfacesDriver))
-	return out.build()
-end 'bufferSurfacesSource'
-
 // `main`, which threads the seed through every generated function.
 //
 // It calls all of them ON PURPOSE. An uncalled function is a function a future dead-code pass could
@@ -5964,28 +5705,13 @@ export function printCorpusManifest()
 	print("      String>` — the element-drop function threaded through the array record, and the RETAIN a\n")
 	print("      `get` of a managed element owes.\n")
 	print("      ⚠ EVERY ARRAY KNOB IS PER-SITE: the `Array with <T>` INSTANCES are FIXED, and they are\n")
-	print("      these FIVE and no others — `{IntArrayAlias}` (a ranged int), `{StringArrayAlias}`,\n")
-	print("      `{ManagedRowArrayAlias}` (a struct owning a String), plus the buffer knob's\n")
-	print("      `{BufferSurfaceArrayAlias}` (`Array with {ByteAliasName}`, which is what\n")
-	print("      `{ManagedMemoryTypeSpelling}` denotes) and `{BufferSurfaceOfBuffersAlias}` (an array OF\n")
-	print("      buffers). Only the OP-SITE count doubles.\n")
+	print("      these THREE and no others — `{IntArrayAlias}` (a ranged int), `{StringArrayAlias}` and\n")
+	print("      `{ManagedRowArrayAlias}` (a struct owning a String). Only the OP-SITE count doubles.\n")
 	print("      (Named from the generator's own constants, so `grep 'Array with' rung0/*.maxon` on a dumped\n")
 	print("      corpus is the audit, and a rename cannot make this line stale.)\n")
 	print("      A per-INSTANCE Array dimension — many distinct element types, so many distinct\n")
 	print("      layout descriptors — is NOT generated; the generic-instances knob is the only place that\n")
 	print("      cost is measured, and it measures it for a user base, not for `Array`\n")
-	print("    THE `{ManagedMemoryTypeSpelling}` BUFFER SURFACE — the SECOND member roster over the same\n")
-	print("      `Array` record, reached at SIX of its eight producer call sites: `.managed` in VALUE\n")
-	print("      position through BOTH ownership arms (a BINDING's array, which must become a second owner\n")
-	print("      via __mm_retain, and an unbound `\"…\".toByteArray()` TEMPORARY, which must not), at all four\n")
-	print("      value doors (a `let`, a call ARGUMENT, a `return` out of a borrowed parameter, and a struct\n")
-	print("      FIELD); `{ManagedMemoryTypeSpelling}.create(count, elementSize:)`; a `slice` taken THROUGH\n")
-	print("      the surface (its second argument POSITIONAL, which is the spelling only the buffer admits);\n")
-	print("      an element read off an array of buffers; and all THREE declared-surface carriers — a\n")
-	print("      PARAMETER, a RETURN clause and a struct FIELD. Every buffer member here is `length()`, which\n")
-	print("      the `Array` roster does NOT have, so each of these lines compiles ONLY IF its mark was made\n")
-	print("      — the rung compiling at all is the evidence, and it cannot go stale\n")
-	print("      (it also brings `otherwise panic(...)` on a `try` that cannot fail — the corpus's only one)\n")
 	print("    GENERICS, UNCONSTRAINED: `type ... uses T` and `uses A, B` bases (dictionary-passing, so ONE\n")
 	print("      shared body per base), `typealias X = Base with Arg` instantiations each with their OWN\n")
 	print("      type argument, and both ownership paths for that argument — a TRIVIAL ranged int (borrowed\n")
@@ -6071,8 +5797,8 @@ export function printCorpusManifest()
 	print("    The per-type deep CLONER cascade (__clone_<T>, and `noteCascadeUsage`'s needs-fixpoint) is\n")
 	print("    absent too: nothing here deep-clones a MANAGED-element array, so `neededCloners` stays\n")
 	print("    empty and that fixpoint early-outs at every rung.\n")
-	print("    ⚠ AND `String.byteAt` IS UNREACHABLE FROM A GENERATED RUNG, for the SAME reason as\n")
-	print("    `addressableBytes` below and not for any reason a knob could fix: it is one of the five\n")
+	print("    ⚠ AND `String.byteAt` IS UNREACHABLE FROM A GENERATED RUNG, and not for any reason a knob\n")
+	print("    could fix: it is one of the five\n")
 	print("    STDLIB-ONLY String members (each a `module function` in `stdlib/`), so a call from a rung\n")
 	print("    directory, which is outside `stdlib/`, is refused with E3088 by `SemanticCheck.calleeVisibleFrom`.\n")
 	print("    It is named here rather than left out of\n")
@@ -6080,14 +5806,6 @@ export function printCorpusManifest()
 	print("    defect the four String knobs above exist to end. Its stdlib-only siblings `byteAtOrPanic`,\n")
 	print("    `hasSingleByteGraphemes` and `setByte` are absent for the identical reason. User code reaches\n")
 	print("    those bytes through `toByteArray()`, which IS generated.\n")
-	print("    ⚠ AND TWO OF THE BUFFER SURFACE'S EIGHT PRODUCERS ARE UNREACHABLE FROM A GENERATED RUNG, each\n")
-	print("    for a reason that is a property of the DOOR and not of this generator, so no knob can close\n")
-	print("    either: a fused wrapper's inline `managed` read (which serves the corpus's own\n")
-	print("    `String.addressableBytes()`, and which no rung can declare a fused wrapper to reach), and\n")
-	print("    `__ManagedDirectory.filename`/\n")
-	print("    `currentPath` lower to the `__md_*` runtime entries, which every compile-hosting lane provides\n")
-	print("    — so unlike the fused wrapper above, that one is a CORPUS GAP a knob could close rather than a\n")
-	print("    door this generator cannot reach.\n")
 	print("\n")
 	print("  !! THE MEMORY COLUMNS CANNOT SEE A COST THAT ALLOCATES NOTHING. THE CPU COLUMN CAN.\n")
 	print("     Allocations and bytes are exact and blind in the same breath: a pass that re-walks tokens or\n")

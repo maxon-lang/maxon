@@ -43,21 +43,18 @@ test 'hover shows user function signature'
 end 'hover shows user function signature'
 
 test 'hover shows variable type from intrinsic function call'
-	// Line 3: "    var name = String.fromCString(filename)"
+	// Line 3: "    var name = String.from(filename)"
 	//          0         1         2         3
 	//          0123456789012345678901234567890123456789
 	//
-	// ⭐ RE-POINTED BY RULING, 2026-09-02: the recovered fixture bound `filename` from `__find_filename`,
-	// an intrinsic no live compiler has and which the compiler refuses to let an author name at all. `String.cstr`
-	// is a live declaration returning `cstring`, so the claim — a binding's type is its CALLEE'S declared
-	// return — is asked unchanged. Only lines 1 and 2 changed; line 3 is byte-identical to the recovered
-	// one, so the position below is too.
+	// `String.toByteArray` is a live declaration returning `ByteArray`, so the claim — a binding's type is
+	// its CALLEE'S declared return — is asked of a call on a `String` local.
 	let document = calleeReturnDocument()
-	let rendering = hoverRendering(document, line: 3, character: 34)
+	let rendering = hoverRendering(document, line: 3, character: 27)
 
 	Expect.contains(rendering, needle: "filename", message: "the rendering names the variable it resolved.")
 
-	Expect.contains(rendering, needle: "cstring", message: "a variable's inferred type is the one flowing OUT of the callee that produced it. Inference that stopped at the call boundary would leave this position untyped.")
+	Expect.contains(rendering, needle: "ByteArray", message: "a variable's inferred type is the one flowing OUT of the callee that produced it. Inference that stopped at the call boundary would leave this position untyped.")
 end 'hover shows variable type from intrinsic function call'
 
 function pointsArrayDocument() returns String
@@ -96,12 +93,12 @@ end 'multiplyDocument'
 
 // ⚠ `path` is a bare string literal and `filename` is a call on it, in that order, because BOTH steps are
 // the subject: the first is a type a literal gives, the second is a type only the callee's declaration
-// can give. Collapsing them into `var filename = \"test\".cstr()` would leave the test passing on the
+// can give. Collapsing them into `var filename = \"test\".toByteArray()` would leave the test passing on the
 // literal alone.
 function calleeReturnDocument() returns String
 	return String.from(b"function test()
     var path = \"test\"
-    var filename = path.cstr()
-    var name = String.fromCString(filename)
+    var filename = path.toByteArray()
+    var name = String.from(filename)
 end 'test'")
 end 'calleeReturnDocument'

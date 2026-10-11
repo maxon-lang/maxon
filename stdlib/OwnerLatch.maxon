@@ -1,0 +1,25 @@
+module typealias OwnerOpenCell = SharedValue with bool
+
+// Exactly one `claimClose` answers true, however many callers race for it: `publish(replacing:)`
+// replaces only while `open` is still current.
+module type OwnerLatch
+	let cell as OwnerOpenCell
+
+	module static function create(startsOpen bool) returns OwnerLatch
+		return Self{cell: OwnerOpenCell.create(startsOpen)}
+	end 'create'
+
+	module function isOpen() returns bool
+		return self.cell.current()
+	end 'isOpen'
+
+	module function claimClose() returns bool
+		let open = self.cell.current()
+
+		if not open 'alreadyClosed'
+			return false
+		end 'alreadyClosed'
+
+		return self.cell.publish(false, replacing: open)
+	end 'claimClose'
+end 'OwnerLatch'

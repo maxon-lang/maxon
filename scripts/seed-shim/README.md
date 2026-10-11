@@ -18,7 +18,10 @@ program, so it can call an intrinsic this tree adds and no published release kno
 refuses the tree with E3004 at that call, not at the declaration. Withdrawing the call leaves every table
 standing, so `C1` knows the intrinsic and compiles the unshimmed tree into `C2`; the first build is merely
 one whose instrument reports nothing. Keep such a patch to the single function that calls, so what the
-shimmed build loses is stated by the patch itself.
+shimmed build loses is stated by the patch itself. A method call on an enum a closure captured is the same case
+in a different spelling: the seed refuses the call with E2015 at the call site, the patch routes it through a module
+function the seed can compile (`0007-withdraw-the-method-call-on-a-captured-enum-from-the-first-build.patch`), and
+`C1` knows the construct.
 
 ⭐ **A VISIBILITY TIER IS THE THIRD CASE, AND IT SPANS MANY DECLARATIONS.** A rule about what a
 signature may name decides a declaration's tier, so a release that predates the rule audits those tiers
@@ -34,23 +37,53 @@ so the patch also writes each cast that rule demands, and wraps a division whose
 admit 0 in the `try … otherwise panic` the seed then requires. A generic function (`function f(...) uses T`) is
 withdrawn whole, which is sound because the compiler calls none. A type-body field whose type comes from its
 initializer (`var x = e as T`, `var x = Type.member(...)`, `var x = "text"`) is written `var x as T = e`, and a
-decimal integer literal above `i64.max` is written in hex (a typealias range bound as `i64.max`). Only those
-forms and the casts go; the declarations and every table stay, so `C1` knows the forms and compiles the unshimmed tree. The casts are
-found by building with the seed until it is clean, so the one patch for every such form is written by
-`generate-seed-language-shim.py` and not by hand — regenerate it whenever the sources it touches move.
-The seed also compiles a comparison against a literal from 2^63 up as a signed one, so a `C1` it builds derives
-wrong division constants and panics in `deriveSignedMagic`; the hand-written `0015-c1-declines-every-division-strength-reduction.patch`
-makes `classifyDivision` decline every divisor, so `C1` emits plain divides and builds the unshimmed tree into a correct `C2`.
+decimal integer literal above `i64.max` is written in hex (a typealias range bound as `i64.max`). A
+`Compiler.`-qualified name is written bare, which the seed resolves to the same declaration, and an `export` whose
+only reach beyond its file was a crossing the patch turned into a cast is withdrawn (E3092). A `readonly`
+qualifier on a container's element type (`Array with readonly T`, `Map with (K, readonly V)`) and a `let` on a
+union case's payload (`case(let name T)`) are parse errors to a release that predates them, and the patch
+withdraws the qualifier at every declaration, which leaves the container and union types the seed always held.
+Only those forms and the casts go; the declarations and every table stay, so `C1` knows the forms and compiles the
+unshimmed tree. The casts are found by building with the seed for each of the four native targets until every build
+is clean, so the code a lane's `#if` selects is judged too. The one patch for every such form is written by
+`generate-seed-language-shim.py` and not by hand — regenerate it whenever the sources it touches move, and
+after the documenter has written its comments, since a comment edit moves the context a hunk is matched on.
 
 ⭐ **THE LIBRARY LINKED INTO `C1` IS THE FIFTH CASE.** The first build compiles the tree's `stdlib/` into
-`C1` as it would into any program, so a library body that calls a `__ManagedFile` method or a `__Builtins`
-intrinsic the seed does not know is refused there, and so is a `__ManagedFileError` case the seed's runtime
-has no flag for. Such a patch rewrites the library BODY to calls the seed knows, and withdraws the error cases
-that body cannot produce together with the arms that name them. Only `C1`'s own behaviour is weaker:
-its `File.createText` truncates an existing file, its `File.readText` reads through a copy, and its
-`Random.draw` answers 0, so the tree lock it takes rests on a claim file any command may overwrite and waits
-that are always the shortest. The restore runs before the second build, so `C1` compiles `C2` against the
-unshimmed library.
+`C1` as it would into any program, so a library body that names a type, a method or a `__Builtins` intrinsic
+the seed does not know is refused there, and so is a library error case the seed's runtime has no flag for.
+Such a patch rewrites the library BODY to calls the seed knows, and withdraws the error cases that body cannot
+produce together with the arms that name them. The restore runs before the second build, so `C1` compiles
+`C2` against the unshimmed library, and only `C1`'s own behaviour is weaker.
+
+A handle type is the standing example. `stdlib/Debuggee.maxon` and `stdlib/Sampler.maxon` own a page
+reservation and an OS handle through `__ManagedPages` and `__ManagedHandle`, which the seed refuses by name
+(E3004, E3011). The patch gives each file a stand-in type with the same member names over the
+`__Builtins.profile*` intrinsics the seed knows, and renames the mentions. `C1` then releases its pages and
+handles by their owner's `release()` and not by a drop; it runs no debugger or profiler session while it
+builds `C2`.
+
+⭐ **A RULE THE TREE HAS DELETED AND THE SEED STILL ENFORCES IS THE SIXTH CASE, AND ITS REWRITES ARE
+GENERATED WITH THE FOURTH'S.** With the forms withdrawn the seed judges the tree by its older rules, and refuses
+sites the tree is right to write: a `let` that holds a collection's element across a call that mutates the
+collection (E3070), a loop it reads as still borrowing what its body mutates (E3070), a loop element assigned
+through (E2013), a `var` it sees no assignment to because the tree counts a hand-off to a mutating parameter as
+one (E3077), and an immutable variable assigned to a mutable binding (E3078). The patch writes each site the
+way the older rule accepts: the `let` is bound to a `.clone()` of what it held; the loop iterates a clone held
+in a local, only where the script proves the body leaves the collection unmutated; the loop becomes an index
+loop over a `var` alias of the element it reads; the `var` is a `let`; the assignment gets the `.clone()` the
+seed asks for. These rewrites exist only in `C1`, which the restore removes before `C2` is built, and what
+stands behind them is the fixed point rather than an argument: `scripts/fixpoint.sh` from a compiler this
+script built must reproduce the bytes a slot-built compiler reproduces. The script finds the sites by building
+with the seed for each of the four native targets until every build is clean, so the code a lane's `#if`
+selects is judged too. A refusal it cannot rewrite stops it, naming the site.
+
+⭐ **A CONSTRUCT THE SEED MISCOMPILES IS THE SEVENTH CASE.** The seed also compiles a comparison against a literal
+from 2^63 up as a signed one, so a `C1` it builds derives wrong division constants and panics in
+`deriveSignedMagic`. `0006-withdraw-the-division-strength-reduction-from-the-first-build.patch` makes
+`classifyDivision` decline every divisor, so `C1` emits plain divides and builds the unshimmed tree into a correct
+`C2`. It is hand-written, and like the second case it withdraws behaviour in one function and leaves every table
+standing.
 
 ⛔ **Delete a patch once a release has shipped the compiler that accepts what it withdraws.** It is dead
 from that moment — the plain build succeeds and nothing here is read — and a patch that no longer

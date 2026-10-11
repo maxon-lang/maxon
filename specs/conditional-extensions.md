@@ -97,7 +97,7 @@ type IntList implements HasItems with Integer
 end 'IntList'
 
 function main() returns ExitCode
-	let list = try IntList.create([10, 20, 30]) otherwise return 2
+	var list = try IntList.create([10, 20, 30]) otherwise return 2
 	if list.has(20) 'yes'
 		return 1
 	end 'yes'
@@ -276,7 +276,7 @@ type HashBucket implements Bucket with HashItem
 end 'HashBucket'
 
 function main() returns ExitCode
-	let b = try HashBucket.create([HashItem.create(1), HashItem.create(2), HashItem.create(3)]) otherwise return 2
+	var b = try HashBucket.create([HashItem.create(1), HashItem.create(2), HashItem.create(3)]) otherwise return 2
 	if b.lookup(HashItem.create(2)) 'found'
 		return 1
 	end 'found'
@@ -354,7 +354,7 @@ type NotEqSeq implements Seq with NotEq
 end 'NotEqSeq'
 
 function main() returns ExitCode
-	let s = try NotEqSeq.create([NotEq.create(1), NotEq.create(2)]) otherwise return 9
+	var s = try NotEqSeq.create([NotEq.create(1), NotEq.create(2)]) otherwise return 9
 	return s.countItems()
 end 'main'
 ```

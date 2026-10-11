@@ -121,8 +121,9 @@ function main() returns ExitCode
 	rows.push(9)
 	let head = 1 as LoopHead
 	let r = try rows.get(head) otherwise 0    // a LoopHead is an ElementIndex
-	print("{r} {takesBlock(head)}\n")          // 9 1
-	// takesBlock(3 as VarId)                 // E3005: expected 'BlockId', got 'VarId'
+	let other = 3 as VarId
+	print("{r} {takesBlock(head)} {other}\n")  // 9 1 3
+	// takesBlock(other)                      // E3005: expected 'BlockId', got 'VarId'
 	return 0
 end 'main'
 ```

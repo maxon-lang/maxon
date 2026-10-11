@@ -1,0 +1,149 @@
+---
+feature: raw-resource-release-is-a-write
+status: experimental
+keywords: [SharedSegment, DebugPort, SampleTimer, close, release, raw memory, read-only, shared, E3159]
+category: memory
+---
+
+# Releasing a resource, or writing its raw memory, is a write of the value that owns it
+
+## Documentation
+
+A `SharedSegment`, a `DebugPort` or a `SampleTimer` owns an operating-system resource: a mapping, a window of
+scratch pages, a timer handle. `close()` hands the resource back, and a method that lets the kernel fill the
+scratch pages writes them. Neither stores into a field, but both change what the value stands for, so the
+compiler counts them as writes of the receiver, exactly as it counts `push` on an array.
+
+A write needs a value nothing else can read at the same moment. A `let` binding, a `let` field, a registry
+`default` or `SharedValue` read, and any other read-only view refuse the call (E3159). The owner holds the
+value in a `var` and closes it there; a resource that no one closed is released when its last reference drops.
+
+## Tests
+
+<!-- test: error.a-let-segment-cannot-be-closed -->
+<!-- unsupported-targets: wasm32-wasi -->
+A `let` segment is read-only, so the call that unmaps it is refused.
+wasm32-wasi has no shared memory segments, so it answers `E3104` for `SharedSegment` before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+function main() returns ExitCode
+	let segment = try SharedSegment.create("maxon-spec-raw-let", bytes: 4096) otherwise return 1
+	segment.close()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:4:10: cannot pass 'segment', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.a-registry-segment-cannot-be-closed-by-a-reader -->
+<!-- unsupported-targets: wasm32-wasi -->
+Every thread reads a registry `default`, so no thread may unmap it under the others.
+wasm32-wasi has no shared memory segments, so it answers `E3104` for `SharedSegment` before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+default SharedSegment = try SharedSegment.create("maxon-spec-raw-registry", bytes: 4096) otherwise panic("no segment")
+
+function main() returns ExitCode
+	SharedSegment.current().close()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:5:26: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: a-var-segment-is-closed-by-its-owner -->
+The accepted twin: the owner holds the segment in a `var`, closes it, and every accessor then throws `closed`.
+
+```maxon
+function main() returns ExitCode
+	var segment = try SharedSegment.create("maxon-spec-raw-var", bytes: 4096) otherwise return 1
+	segment.close()
+	let refused = try segment.copyOut(0, byteCount: 8) otherwise 'closed'
+		return 0
+	end 'closed'
+	return refused.count() as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-let-debug-port-cannot-be-closed -->
+A `DebugPort` frees its scratch pages in `close()`, so a `let` port refuses it.
+
+```maxon
+function main() returns ExitCode
+	let port = DebugPort.create()
+	port.close()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:4:7: cannot pass 'port', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: a-var-debug-port-is-closed-by-its-owner -->
+The accepted twin: a `var` port is closed by its owner and answers `isReady()` false afterwards.
+
+```maxon
+function main() returns ExitCode
+	var port = DebugPort.create()
+	port.close()
+	print("{port.isReady()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+false
+```
+
+<!-- test: error.a-let-sample-timer-cannot-be-closed -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+A `SampleTimer` closes its handle, so a `let` timer refuses `close()`.
+`SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
+
+```maxon
+function main() returns ExitCode
+	let timer = try SampleTimer.create(1000000) otherwise return 1
+	timer.close()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:4:8: cannot pass 'timer', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.a-let-process-trace-cannot-be-closed -->
+A `ProcessTrace` frees its scratch pages in `close()`, so a `let` trace refuses it.
+
+```maxon
+function main() returns ExitCode
+	let trace = ProcessTrace.create()
+	trace.close()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:4:8: cannot pass 'trace', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: a-var-process-trace-is-closed-by-its-owner -->
+The accepted twin: a `var` trace is closed by its owner and answers `isReady()` false afterwards.
+
+```maxon
+function main() returns ExitCode
+	var trace = ProcessTrace.create()
+	trace.close()
+	print("{trace.isReady()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+false
+```

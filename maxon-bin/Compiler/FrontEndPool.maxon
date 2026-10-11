@@ -70,8 +70,8 @@ end 'compilePhaseOfStage'
 
 // What one file's lex answers: the raw stream and the `#if`-resolved one, or the refusal that stopped either.
 module union LexOutcome
-	lexed(tokens TokenArray, active TokenArray)
-	directiveFailed(tokens TokenArray, error DirectiveError)
+	lexed(let tokens TokenArray, let active TokenArray)
+	directiveFailed(let tokens TokenArray, error DirectiveError)
 	lexFailed(error LexerError)
 
 	module function rawStream() returns TokenArray throws LexerError
@@ -172,7 +172,7 @@ type FrontEndWorker
 		return FrontEndReply.create(self.state.ran(job))
 	end 'run'
 
-	export function adopt(declarations SettledDeclarationsCell, template IndexTemplateCell)
+	export function adopt(declarations SettledDeclarationsCell, template ProgramSignatures)
 		self.state.hold(ProgramSignatures.adopting(declarations, template: template))
 	end 'adopt'
 
@@ -273,7 +273,7 @@ end 'FrontEndDrainInput'
 
 type WorkerHandoff
 	export let declarations as SettledDeclarationsCell
-	export let template as IndexTemplateCell
+	export let template as ProgramSignatures
 
 	// The revision the template's live keys are at. A fold after `holdBaseline` moves the baseline
 	// past it, so a worker adopting later starts here and `refreshLiveKeys` brings it up to date;
@@ -335,7 +335,6 @@ module type FrontEndPool
 		var files = PoolJobArray.create()
 		var sizes = PoolJobSizeArray.create()
 
-		// Index loops, not `for … in`: the element is a BORROW of `project`, and the queries below write it.
 		for fileIndex in 0 upto project.db.sourcePaths.count() 'eachFile'
 			let held = try activeTokensAreHeld(project, path: sourcePathAt(project, fileIndex: fileIndex), buildKey: buildKey)
 
@@ -588,7 +587,7 @@ module type FrontEndPool
 		end 'fillThePipeline'
 
 		while replies.count() > 0 'serveWhoeverFinishedFirst'
-			let ready = __Builtins.awaitAny(replies)
+			let ready = replies.awaitAny()
 			let freedWorker = dispatch.workerAt(ready)
 			let fileIndex = fileOfJob(files, job: dispatch.land(ready, outstanding: replies.count()))
 			let reply = try replies.remove(ready) otherwise panic("FrontEndPool.drain: replies.remove({ready}) — `awaitAny` answered a slot of this very array")

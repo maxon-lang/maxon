@@ -433,6 +433,8 @@ let SlabDoorOwnerMoved = 0
 // the whole reach evidence the from-`main` walk has about the tier file, so
 // `StdlibSource.runtimeTierFileIsCompilerCalled` names it — see `SlabRuntimeTierFileName`.
 let SlabOsDirectAllocName = b"__slab_os_direct_alloc"
+let SlabAllocOversizeName = b"__slab_alloc_oversize"
+let SlabFreeOversizeName = b"__slab_free_oversize"
 let SlabOsDirectFreeName = b"__slab_os_direct_free"
 
 // The tier file holding those two bodies, for the declared reach edge. Stated beside the names it covers so
@@ -586,6 +588,9 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabRefill(module, model: model)
 	buildSlabAllocEntry(module, name: SlabAllocName, zeroed: true, model: model)
 	buildSlabAllocEntry(module, name: SlabAllocRawName, zeroed: false, model: model)
+	guardSlabStateBase(module)
+	buildSlabAllocOversize(module, model: model)
+	buildSlabFreeOversize(module, model: model)
 	buildSlabSpanDestroy(module)
 	buildSlabFreeToFull(module)
 	buildSlabFreeToRaw(module)
@@ -704,6 +709,7 @@ function slabTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the chunk granularity", here: SlabPageBytes, named: "SlabPageBytes"))
 	out.push(TierGeometryPin.create("an OS-direct mapping's prefix", here: OsDirectPrefixBytes, named: "OsDirectPrefixBytes"))
 	out.push(TierGeometryPin.create("the exit code for a pointer the OS-direct road never handed out", here: RuntimeAbort.slabOsDirectPointerNotOurs.rawValue as ParsedInt, named: "SlabOsDirectPointerNotOursExit"))
+	out.push(TierGeometryPin.create("the exit code for a slab-state read before the first allocation committed it", here: RuntimeAbort.slabStateReadBeforeCommit.rawValue as ParsedInt, named: "SlabStateReadBeforeCommitExit"))
 
 	out.push(TierGeometryPin.create("the state region's word stride", here: WordBytes, named: "SlabWordBytes"))
 	out.push(TierGeometryPin.create("the metadata slab's bump cursor", here: SlabStateMetaBumpOffset as ParsedInt, named: "SlabStateMetaBumpOffset"))
@@ -724,6 +730,7 @@ function slabTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the state region's size", here: slabStateBytes(), named: "SlabStateBytes"))
 	out.push(TierGeometryPin.create("the state region's chunk run", here: slabStateChunks(), named: "SlabStateChunks"))
 	out.push(TierGeometryPin.create("the uncommitted-state sentinel", here: SlabStateUncommitted, named: "SlabStateUncommitted"))
+	out.push(TierGeometryPin.create("the census tag-bucket count", here: SlabCensusTagBuckets, named: "SlabCensusTagBuckets"))
 
 	out.push(TierGeometryPin.create("an mspan's metadata slot", here: MspanSlotBytes, named: "MspanSlotBytes"))
 	out.push(TierGeometryPin.create("an mspan's base address", here: MspanBaseAddrOffset as ParsedInt, named: "MspanBaseAddrOffset"))
@@ -763,6 +770,14 @@ function slabTierPins() returns TierGeometryPinArray
 
 	return out
 end 'slabTierPins'
+
+export let HeapStatsStdlibFileName = "HeapStats.maxon"
+
+export function checkHeapStatsBuckets(signatures ProgramSignatures, stdlibPath FilePath)
+	var pins = TierGeometryPinArray.create()
+	pins.push(TierGeometryPin.create("the census tag-bucket count", here: SlabCensusTagBuckets, named: "HeapBucketCount"))
+	requireTierGeometryAgrees(pins, signatures: signatures, tierPath: stdlibPath, emitterFile: "Compiler/Runtime/SlabRuntime.maxon", layer: "checkHeapStatsBuckets")
+end 'checkHeapStatsBuckets'
 
 // A chunk run this file will ask `__slab_arena_alloc_chunks` for, checked against what an arena can serve on
 // each lane. One helper rather than two pairs of `if`s, so a third request cannot arrive checked against one
@@ -953,7 +968,7 @@ end 'emitSlabPublishScheduler'
 
 // A block a walk bails to, with the arguments its edge carries.
 export type SlabBailEdge
-	export let block as IrBlock
+	export var block as IrBlock
 	export let args as ValueIdArray
 
 	export static function create(block IrBlock, args ValueIdArray) returns Self
@@ -1052,7 +1067,7 @@ end 'SlabShardRouting'
 // every door does in the arm itself: addressed in the predecessor, the edge whose row is a constant folds
 // the multiply and both adds away, while a row index joined across edges keeps all three on the hot path.
 type SlabShardSite
-	export let block as IrBlock
+	export var block as IrBlock
 	export let trafficRow as ValueId
 	export let routing as SlabShardRouting
 
@@ -1089,8 +1104,8 @@ end 'slabShardProc'
 // edge carries either.
 export type SlabShardArms
 	export let schedulerWord as ValueId
-	export let sole as SlabShardSite
-	export let serial as SlabShardSite
+	export var sole as SlabShardSite
+	export var serial as SlabShardSite
 
 	static function create(module StdModule, func IrFunction, state ValueId, schedulerWord ValueId, need SlabShardNeed, ids ValueMinter, label ByteArray, heat BlockHeat) returns Self
 		var soleWriter = module.addBlock(func, label: label, heat: heat)
@@ -1242,7 +1257,7 @@ module function emitSlabResolveShard(module StdModule, func IrFunction, cur IrBl
 	var ownRow = module.addBlock(func, label: label, heat: heat)
 
 	let rawRowUnlocked = SlabBailEdge.create(arms.sole.block, args: rawSoleArgs)
-	let rawRowSerialised = SlabBailEdge.create(noMachine, args: ValueIdArray.create())
+	var rawRowSerialised = SlabBailEdge.create(noMachine, args: ValueIdArray.create())
 	let m = emitSlabMachineOrBail(module, func: func, cur: cur, schedulerWord: schedulerWord, haveMachine: haveMachine, noScheduler: rawRowUnlocked, noMachine: rawRowSerialised, ids: ids, label: label, heat: heat)
 
 	// A thread that is not a machine has no depth word of its own, so its step lands on the state region's
@@ -1345,7 +1360,7 @@ function emitSlabLockDepthAddr(module StdModule, func IrFunction, cur IrBlock, s
 
 	var haveMachine = module.addBlock(func, label: label, heat: heat)
 
-	let toSink = SlabBailEdge.create(merge, args: argsOf(sink))
+	var toSink = SlabBailEdge.create(merge, args: argsOf(sink))
 	let m = emitSlabMachineOrBail(module, func: func, cur: cur, schedulerWord: schedulerWord, haveMachine: haveMachine, noScheduler: toSink, noMachine: toSink, ids: ids, label: label, heat: heat)
 
 	let mine = emitFieldAddr(module, block: haveMachine, record: m, offset: MOffLocks, ids: ids)
@@ -1818,7 +1833,7 @@ end 'emitMcentralLink'
 // disagreed the span would be stamped for one P and installed in another's row, which is precisely the
 // corruption the ownership gate exists to catch. One derivation, in `__slab_alloc`, passed down.
 function buildSlabRefill(module StdModule, model MachineModel)
-	var func = IrFunction.createFromStd(SlabRefillName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	var func = IrFunction.createFromStd(SlabRefillName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2188,12 +2203,26 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, zeroed bool, mode
 	// ⭐ **THE OS-DIRECT ROAD IS BUILT LAST AND THE SIZE TEST IS SPELLED AFTER IT, SO ITS BLOCKS LAND PAST
 	// THE HIT PATH** rather than between the entry and the class lookup every small request runs through.
 	var osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.cold)
-	buildSlabOsDirectArm(module, func: func, cur: osDirect, size: size, model: model, ids: ids)
+	let oversized = ids.mint()
+	module.appendOp(osDirect, op: StdOp.call(oversized, callee: SlabAllocOversizeName, args: argsOf(size)))
+	module.setTerminator(osDirect, op: StdOp.ret(oversized))
 
 	emitSlabSizeRouting(module, block: entry, size: size, osDirect: osDirect, small: small, ids: ids)
 
 	module.functions.push(func)
 end 'buildSlabAllocEntry'
+
+function guardSlabStateBase(module StdModule)
+	for func in module.functions 'eachFunction'
+		if func.name.equals(SlabStateName) 'theTierBody'
+			func.needsGreenThreadStackGuard = true
+			func.pinsItsThread = true
+			return
+		end 'theTierBody'
+	end 'eachFunction'
+
+	panic("guardSlabStateBase: `{String.from(SlabStateName)}` is a runtime-tier body every allocating program carries, and the module holds no function of that name")
+end 'guardSlabStateBase'
 
 // The above-32 KiB road: the region committed, the calling thread's row credited, and the request handed to
 // a mapping of its own.
@@ -2203,11 +2232,23 @@ end 'buildSlabAllocEntry'
 // side table every allocation mutates, so an OS-direct alloc and free share no state with any other thread
 // at all: one `osAllocPages`, two stores into pages nobody else can name yet. So the walk here resolves the
 // shard only as far as the row it must credit.
+function buildSlabAllocOversize(module StdModule, model MachineModel)
+	var func = IrFunction.createFromStd(SlabAllocOversizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	buildSlabOsDirectArm(module, func: func, cur: entry, size: 0, model: model, ids: ids)
+
+	module.functions.push(func)
+end 'buildSlabAllocOversize'
+
 function buildSlabOsDirectArm(module StdModule, func IrFunction, cur IrBlock, size ValueId, model MachineModel, ids ValueMinter)
 	let state = ids.mint()
 	var stateReady = emitSlabStateBase(module, func: func, cur: cur, stateId: state, ids: ids, label: b"state", heat: BlockHeat.cold)
 
-	let arms = emitSlabResolveShard(module, func: func, cur: stateReady, state: state, model: model, need: SlabShardNeed.creditsOnly, traffic: ThreadTraffic.alloc(size), ids: ids, label: b"shard", heat: BlockHeat.cold)
+	var arms = emitSlabResolveShard(module, func: func, cur: stateReady, state: state, model: model, need: SlabShardNeed.creditsOnly, traffic: ThreadTraffic.alloc(size), ids: ids, label: b"shard", heat: BlockHeat.cold)
 
 	var osCall = module.addBlock(func, label: b"oscall", heat: BlockHeat.cold)
 	emitSlabCreditBothArms(module, arms: arms, layer: SlabTrafficLayer.raw, event: SlabTrafficEvent.alloc(size), next: osCall, ids: ids)
@@ -2262,7 +2303,7 @@ end 'emitSlabLockedDoorEntry'
 // a free of a span at the moment it is taken apart. Keeping the destroy off this path is what lets every
 // other free stay lock-free.
 function buildSlabFreeToFull(module StdModule)
-	var func = IrFunction.createFromStd(SlabFreeToFullName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	var func = IrFunction.createFromStd(SlabFreeToFullName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2273,8 +2314,7 @@ function buildSlabFreeToFull(module StdModule)
 	let slot = 0 as ValueId
 	let span = 1 as ValueId
 
-	let state = ids.mint()
-	module.appendOp(exhausted, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
+	let state = emitSlabStateCommitted(module, block: exhausted, ids: ids)
 	let classIdx = emitLoadField(module, block: exhausted, record: span, offset: MspanClassIdxOffset, ids: ids)
 	let mcentralSlot = emitStateSlotAddr(module, block: exhausted, state: state, arrayOffset: SlabStateMcentralOffset as ParsedInt, index: classIdx, ids: ids)
 
@@ -2524,7 +2564,7 @@ function buildSlabCensusEntry(module StdModule, name ByteArray, callee ByteArray
 		forwarded gives oneI64Param()
 	end 'paramTypes'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2851,8 +2891,25 @@ function buildSlabFree(module StdModule, model MachineModel)
 	// road every slot free takes.
 	var osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.cold)
 
-	let osState = emitSlabStateCommitted(module, block: osDirect, ids: ids)
-	let osArms = emitSlabResolveShard(module, func: func, cur: osDirect, state: osState, model: model, need: SlabShardNeed.creditsOnly, traffic: ThreadTraffic.free, ids: ids, label: b"shard", heat: BlockHeat.cold)
+	module.appendOp(osDirect, op: StdOp.call(ids.mint(), callee: SlabFreeOversizeName, args: argsOf(ptr)))
+	module.setTerminator(osDirect, op: StdOp.retVoid)
+
+	module.setTerminator(mapped, op: StdOp.condBranch(unmapped, thenBlockId: osDirect.id, elseBlockId: toSpan.id))
+
+	module.functions.push(func)
+end 'buildSlabFree'
+
+function buildSlabFreeOversize(module StdModule, model MachineModel)
+	var func = IrFunction.createFromStd(SlabFreeOversizeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	let osState = emitSlabStateCommitted(module, block: entry, ids: ids)
+	var osArms = emitSlabResolveShard(module, func: func, cur: entry, state: osState, model: model, need: SlabShardNeed.creditsOnly, traffic: ThreadTraffic.free, ids: ids, label: b"shard", heat: BlockHeat.cold)
 
 	var osCall = module.addBlock(func, label: b"oscall", heat: BlockHeat.cold)
 	emitSlabCreditBothArms(module, arms: osArms, layer: SlabTrafficLayer.raw, event: SlabTrafficEvent.free, next: osCall, ids: ids)
@@ -2860,10 +2917,8 @@ function buildSlabFree(module StdModule, model MachineModel)
 	module.appendOp(osCall, op: StdOp.call(ids.mint(), callee: SlabOsDirectFreeName, args: argsOf(ptr)))
 	module.setTerminator(osCall, op: StdOp.retVoid)
 
-	module.setTerminator(mapped, op: StdOp.condBranch(unmapped, thenBlockId: osDirect.id, elseBlockId: toSpan.id))
-
 	module.functions.push(func)
-end 'buildSlabFree'
+end 'buildSlabFreeOversize'
 
 // Give one region back to `__slab_free`. `ptr` must be exactly what `__slab_alloc` answered, and never 0.
 export function emitSlabFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)

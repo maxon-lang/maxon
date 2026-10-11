@@ -21,9 +21,15 @@ helper that expects a NUL-terminated cstring — without the check, the
 runtime would walk past the buffer end when the byte count fills the
 allocated capacity.
 
+Every one of these types, their statics, `cstring` and the whole `__Builtins` namespace is library-tier: only a
+source file under `stdlib/` or `runtime/` may name them (E3185 anywhere else). A program reaches them
+through `File`, `Directory`, `TcpClient` and the other public surfaces, so the cases below compile in the
+library tier (`<!-- tier: stdlib -->`).
+
 ## Tests
 
 <!-- test: builtin-type-checking.error-managed-file-open-read-int -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let result = __ManagedFile.openRead(0)
@@ -35,6 +41,7 @@ error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-fil
 ```
 
 <!-- test: builtin-type-checking.error-managed-file-write-int -->
+<!-- tier: stdlib -->
 ```maxon
 enum TestFileError implements Error
 	openFailed
@@ -62,6 +69,7 @@ error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-fil
 ```
 
 <!-- test: builtin-type-checking.error-managed-directory-open-search-int -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let result = __ManagedDirectory.openSearch(0)
@@ -73,9 +81,10 @@ error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-dir
 ```
 
 <!-- test: builtin-type-checking.error-managed-memory-set-length-string -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
-	let managed = try __ManagedMemory.create(10, 8) otherwise panic("create failed")
+	var managed = try __ManagedMemory.create(10, 8) otherwise panic("create failed")
 	managed.setLength("hello")
 	return 0
 end 'main'
@@ -85,9 +94,10 @@ error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-mem
 ```
 
 <!-- test: builtin-type-checking.error-managed-memory-append-int -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
-	let managed = try __ManagedMemory.create(10, 8) otherwise panic("create failed")
+	var managed = try __ManagedMemory.create(10, 8) otherwise panic("create failed")
 	managed.append(42)
 	return 0
 end 'main'
@@ -97,6 +107,7 @@ error E3005: specs/builtin-type-checking/builtin-type-checking.error-managed-mem
 ```
 
 <!-- test: builtin-type-checking.error-managed-socket-tcp-connect-int -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let result = __ManagedSocket.tcpConnect(0, 80)
@@ -139,6 +150,7 @@ Code that genuinely needs the bytes as a `__ManagedMemory` asks for
 through it cannot alter the string.
 
 <!-- test: builtin-type-checking.error-subprocess-resolve-on-path-managed -->
+<!-- tier: stdlib -->
 ⚠ **ONE SENTENCE FOR EVERY OPERAND REFUSAL**: one
 wording for every `__Builtins.*` operand refusal, naming the callee and the two SOURCE types and anchoring on
 the callee.
@@ -149,8 +161,8 @@ each door would accept the other's argument — an address made of an arbitrary 
 ```maxon
 function main() returns ExitCode
 	let s = "ls"
-	// A `__ManagedMemory` reached the only way user code can reach a string's bytes: an independent
-	// `toByteArray()` view. It is still the wrong TYPE here, which is the point of the test.
+	// A `__ManagedMemory` reached through an independent `toByteArray()` view. It is still the wrong
+	// TYPE here, which is the point of the test.
 	_ = __Builtins.subprocessResolveOnPath(s.toByteArray().managed)
 	return 0
 end 'main'
@@ -160,6 +172,7 @@ error E3005: <fragment>:6:17: '__Builtins.subprocessResolveOnPath' requires a cs
 ```
 
 <!-- test: builtin-type-checking.error-subprocess-resolve-on-path-int -->
+<!-- tier: stdlib -->
 The wording divergence is `error-subprocess-resolve-on-path-managed`'s, above.
 ```maxon
 function main() returns ExitCode
@@ -172,6 +185,7 @@ error E3005: <fragment>:3:17: '__Builtins.subprocessResolveOnPath' requires a cs
 ```
 
 <!-- test: builtin-type-checking.error-subprocess-get-pid-cstring -->
+<!-- tier: stdlib -->
 The wording divergence is `error-subprocess-resolve-on-path-managed`'s, above.
 ```maxon
 function main() returns ExitCode
@@ -186,6 +200,7 @@ error E3005: <fragment>:5:17: '__Builtins.subprocessGetPid' requires a int, but 
 ```
 
 <!-- test: builtin-type-checking.subprocess-resolve-on-path-cstring -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	// Routing the path through `String.cstr()` satisfies the cstring type

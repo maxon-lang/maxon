@@ -351,7 +351,7 @@ Built at run time rather than imaged, this global would cost **four** allocation
 ⚠ **Two of those four are the surprise, and they are the reason a reader should not assume "the literals
 were already immortal, so only the array cost anything".** `"## Deferred"` has an immortal `.rdata` record
 of its own — and storing it into a run-time array `__str_clone`s it into a fresh heap String anyway, because a
-durable store of a constant takes a private copy (`reference-identity.a-durable-store-of-a-constant-copies-it`).
+durable store of a constant string takes a private copy.
 Imaging the table removes the copies with it: the slots address the literals' own records, and a constant
 addressed from a constant needs no copy because neither can be written.
 <!-- MmTrace -->

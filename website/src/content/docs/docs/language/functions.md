@@ -201,12 +201,13 @@ end 'main'
   of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
   assignment rule — an argument the callee writes is accepted here if and only if writing the same thing at
   the call site would be accepted.
-- Passing a `let` to a parameter the callee writes is **E3019** (`cannot pass 'y' to function that mutates
-  parameter 'n'`). A method writing a field of its **own** receiver is not a parameter write, so
-  `let acc = Accumulator.create()` followed by `acc.add(10)` is legal. An immutable field, or a field of an
-  immutable instance, is refused for the same reason the equivalent assignment is.
-- Passing a collection to a parameter the callee **reassigns** while a reference into that collection is
-  still live is **E3070**: the reassignment frees what the reference points into.
+- Passing a [read-only](/docs/language/memory-model/#read-only-values) value to a parameter the callee writes is **E3159** (`cannot pass
+  'y', which is read-only (a `let` binding), to a function that writes parameter 'n'`). The receiver of a
+  method counts as a parameter, so `let acc = Accumulator.create()` followed by `acc.add(10)`, where `add`
+  writes a field of `acc`, is refused too. A `let` field, or anything reached through a read-only value, is
+  refused for the same reason the equivalent assignment is.
+- Passing storage to a parameter the callee **reassigns**, while another argument of the same call reaches
+  that storage, is **E3186** (see [Aliasing Between Arguments](/docs/language/memory-model/#aliasing-between-arguments)).
 - Passing a literal or another expression gives the callee a temporary; its writes have no visible effect.
 - A parameter declared at a type parameter — in a method of a generic type or in a generic function — is
   passed by reference on the same terms.
@@ -278,11 +279,11 @@ Clone a local before the closure when the function still needs it (`let mine = w
 captured inside a loop is moved on the first trip, so the second is **E3102**. A capture moves its local
 before the call it is an argument of runs, so that call may not also consume the local, take it by
 reference or write it as its receiver (**E3102**); a call that only reads it may. Inside a closure, a captured name is the closure's own
-copy, so passing it to a parameter the callee writes is **E3019**.
+copy, so passing it to a parameter the callee writes is **E3159**.
 
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
 and the captures, so a closure may be returned, stored in a field, a module-level variable, a container or
-a union payload, and passed to `async`, which moves it into the coroutine. A plain function is a record that
+a union payload, and passed to `async`. A plain function is a record that
 lives for the whole program. Copies share: `var g = f` and `f.clone()` hold the same closure, and a function
 value is exempt from **E3078**. A module-level `let` or `var` may hold a function value, including a closure
 a factory call returns.

@@ -75,7 +75,7 @@ module function completionAnswer(request LspRequest) returns LspAnswer throws Ls
 	var doc = JsonDoc.create()
 	var items = JsonNodeIdArray.create()
 
-	for offer in offersAt(request.text, tokens: tokens, keywords: request.keywords, blocks: lspDocumentBlocks(tokens), offset: offset, uri: request.uri) 'eachOffer'
+	for offer in offersAt(request.text, tokens: tokens, keywords: request.keywords, blocks: lspDocumentBlocks(tokens), offset: offset, uri: request.uri, workspace: request.workspace) 'eachOffer'
 		var item = LspJsonObject.create(doc)
 		item.put(LabelKey, value: JsonNode.stringNode(offer.label))
 		item.put(LspKindKey, value: JsonNode.numberNode(offer.kind as JsonFloat))
@@ -105,7 +105,7 @@ typealias OfferedLabelSet = Set with String
 // ⚠ The no-receiver rung comes first, and the order is a cost bound. A cursor following no `.` has
 // nothing to offer whatever the project declares, and an editor fires completion on ordinary typing, so
 // reaching a corpus build to answer an empty list puts a project sweep on every keystroke.
-function offersAt(text String, tokens TokenArray, keywords KeywordTable, blocks LspDocumentBlockArray, offset ByteOffset, uri String) returns CompletionOfferArray
+function offersAt(text String, tokens TokenArray, keywords KeywordTable, blocks LspDocumentBlockArray, offset ByteOffset, uri String, workspace LspWorkspaceState) returns CompletionOfferArray
 	if not lspCursorFollowsAMemberAccess(tokens, offset: offset) 'nothingToComplete'
 		return CompletionOfferArray.create()
 	end 'nothingToComplete'
@@ -120,7 +120,7 @@ function offersAt(text String, tokens TokenArray, keywords KeywordTable, blocks 
 		end 'aTypeThisBufferDeclares'
 	end 'aNamedSubject'
 
-	let corpus = lspDocumentCorpus(uri)
+	var corpus = lspDocumentCorpus(workspace, uri: uri)
 
 	return offersFor(lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: corpus), tokens: tokens, blocks: blocks, corpus: corpus)
 end 'offersAt'

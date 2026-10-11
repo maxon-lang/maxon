@@ -68,7 +68,7 @@ type TrackedDecl
 
 	// The key a reference is matched against — a function's compiled name, a type's name, or a binding's
 	// name. NOT the display spelling: `displayName` is what the message prints.
-	export var key as ByteArray
+	export let key as ByteArray
 	export var displayName as String
 
 	// The word the message calls this declaration: "function", "type", "typealias", "constant", "variable".
@@ -272,9 +272,6 @@ type TrackedDecls
 
 	// `upsert`, not `insert`: a contested bare name is a legal program, not a collision — see
 	// `TrackedDeclIndexMap`.
-	// ⚠ The existing list is COPIED out before the write rather than pushed to in place: `get` hands back a
-	// borrow of the map's own slot, and mutating the map through `upsert` while that borrow is live is
-	// E3070. Built fresh, the borrow ends at the `if`.
 	function indexUnder(index TrackedDeclIndexMap, key ByteArray, at ElementIndex)
 		var claimants = TrackedDeclIndexArray.create()
 
@@ -924,7 +921,7 @@ function noteEveryPayloadType(signatures ProgramSignatures, tracked TrackedDecls
 
 	// The index's own layout again — `noteStructFieldTypes`' interner, for its reason. Taken once rather
 	// than per field: it is a handle to the index's table, and this is the innermost loop of the walk.
-	let payloadTypeNames = signatures.indexTypeNames()
+	var payloadTypeNames = signatures.indexTypeNames()
 
 	for payloadFields in layout.casePayloads 'eachCase'
 		for field in payloadFields 'eachField'
@@ -981,7 +978,7 @@ end 'noteComponentType'
 // itself arrived from — `ProgramSignatures.indexSpaceTypeName` is the door that says so. So this hop
 // RE-STATES the interner rather than forwarding its caller's.
 function noteInstanceArgs(signatures ProgramSignatures, tracked TrackedDecls, id GenericInstanceId, denotedBy AuditedFile, reader AuditedFile)
-	let argTypeNames = signatures.indexTypeNames()
+	var argTypeNames = signatures.indexTypeNames()
 
 	for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArg'
 		noteComponentType(signatures, tracked: tracked, type: signatures.substitutedInstanceArg(id, position: position), typeNames: argTypeNames, denotedBy: denotedBy, reader: reader)
@@ -1217,7 +1214,7 @@ function noteOneInitializersCallees(signatures ProgramSignatures, tracked Tracke
 	end 'initializer'
 end 'noteOneInitializersCallees'
 
-function noteEveryInitializerCallee(signatures ProgramSignatures, tracked TrackedDecls, callees ByteArrayArray, reader AuditedFile)
+function noteEveryInitializerCallee(signatures ProgramSignatures, tracked TrackedDecls, callees NameRoster, reader AuditedFile)
 	for callee in callees 'eachCallee'
 		noteFunctionName(signatures, tracked: tracked, name: callee, reader: reader)
 		noteCalleeSignature(signatures, tracked: tracked, callee: callee, reader: reader)

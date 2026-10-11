@@ -197,17 +197,17 @@ end 'LockHost'
 function thisLockHost() returns LockHost
 	#if os(Windows)
 		let hostName = try Process.environmentVariable(HostNameVariable) otherwise return LockHost.unknown
-		return lockHostNamed([hostName, String.init(__Builtins.processNamespace())])
+		return lockHostNamed([hostName, Process.namespace()])
 	#endif
 
 	#if os(Linux)
 		let kernelName = try firstNamedIn([KernelHostNamePath]) otherwise return LockHost.unknown
 		let machineId = try firstNamedIn([MachineIdPath, DbusMachineIdPath]) otherwise return LockHost.unknown
-		return lockHostNamed([kernelName, machineId, String.init(__Builtins.processNamespace())])
+		return lockHostNamed([kernelName, machineId, Process.namespace()])
 	#endif
 
 	#if os(Macos)
-		return lockHostNamed([String.init(__Builtins.processNamespace())])
+		return lockHostNamed([Process.namespace()])
 	#endif
 
 	#if os(Wasi)
@@ -264,10 +264,16 @@ type HeldLock
 	var touchDelayMs as DurationMs
 	var lastRefreshMs as InstantMs
 	var refreshWarned = false
+	var upkeepSpan as PhaseDelta
+	var upkeep as PhaseDelta
 
 	static function none() returns HeldLock
-		return Self{holding: HeldCheckoutLock.none, lastTouchMs: 0, touchDelayMs: TouchIntervalMs, lastRefreshMs: 0}
+		return Self{holding: HeldCheckoutLock.none, lastTouchMs: 0, touchDelayMs: TouchIntervalMs, lastRefreshMs: 0, upkeepSpan: PhaseDelta.zero(), upkeep: PhaseDelta.zero()}
 	end 'none'
+
+	function addUpkeepTo(total PhaseDelta)
+		total.add(self.upkeep)
+	end 'addUpkeepTo'
 
 	// ⭐ Say the holder is still working. Cheap enough to call from anywhere that runs regularly — the
 	// write is throttled to one every `TouchIntervalMs`.
@@ -293,6 +299,7 @@ type HeldLock
 		end 'tooSoon'
 
 		self.lastTouchMs = Clock.nowMs()
+		let upkeepProbe = PhaseProbe.beginProcessWideCounters()
 
 		let refresh = match takeClaim(lock.claimPath) 'claim'
 			held(claimToken) gives refreshUnderClaim(lock, claimToken: claimToken)
@@ -308,6 +315,9 @@ type HeldLock
 			failed(reason) then self.failedRefresh(lock, reason: reason)
 			foreign(found) then self.dropForeignHold(lock, found: found)
 		end 'refresh'
+
+		upkeepProbe.elapsedInto(self.upkeepSpan)
+		self.upkeep.add(self.upkeepSpan)
 	end 'touchHeld'
 
 	function refreshed(lock OwnedLock)
@@ -394,6 +404,13 @@ export type LockHold
 		self.checkout.touch()
 		self.output.touch()
 	end 'touch'
+
+	export function upkeep() returns PhaseDelta
+		var total = PhaseDelta.zero()
+		self.checkout.addUpkeepTo(total)
+		self.output.addUpkeepTo(total)
+		return total
+	end 'upkeep'
 
 	export function release()
 		self.output.release()
@@ -830,7 +847,7 @@ end 'decideOverExisting'
 
 function holderIsThisProcess(holder LeftoverOwner) returns bool
 	return match holder 'holder'
-		process(pid) gives pid == __Builtins.currentProcessId()
+		process(pid) gives pid as Pid == Process.id()
 		notOwned gives false
 	end 'holder'
 end 'holderIsThisProcess'
@@ -1532,12 +1549,12 @@ function lockPartWhat(path FilePath, part LockPart) returns String
 end 'lockPartWhat'
 
 function freshToken() returns String
-	return "{__Builtins.currentProcessId()}-{WallClock.nowUnixSeconds()}-{Clock.nowNanos()}"
+	return "{Process.id()}-{WallClock.nowUnixSeconds()}-{Clock.nowNanos()}"
 end 'freshToken'
 
 function recordText(token String, sinceUnix UnixSeconds, heldSeconds LockSeconds, host LockHost) returns String
 	var text = StringBuilder.create()
-	appendField(text, key: PidField, value: "{__Builtins.currentProcessId()}")
+	appendField(text, key: PidField, value: "{Process.id()}")
 	appendField(text, key: TokenField, value: token)
 	appendField(text, key: SinceField, value: "{sinceUnix}")
 	appendField(text, key: HeldField, value: "{heldSeconds}")

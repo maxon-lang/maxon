@@ -152,6 +152,10 @@ end 'linuxUsesHostSurface'
 // on the reader union alone answered `GlobalDataTable.dataSectionOffsetOf: no .data slot is labelled
 // '__mrt_errno'` at BACKEND time — a panic and not a diagnostic.
 //
+// ⛔ **THE TRACE BAND IS A THIRD STASH-ONLY PRODUCER.** `usesProcessDebug` lays out the `ptrace`, tracee-read,
+// await and signal chunks, and each ends in the syscall tail that stashes a failed call's reason, so a program
+// that only drives a `ProcessTrace` carries the word.
+//
 // ⚠ **BOTH LINUX LANES ASK THESE TWO, AND NEITHER OWNS THEM.** The question is about `RuntimeUsage` and
 // names no instruction set; a second copy beside one assembler is a facility added to one lane's gate and
 // not the other's, which is that lane's `.data` word missing under a chunk that stashes into it.
@@ -159,7 +163,7 @@ end 'linuxUsesHostSurface'
 // states: its resolver opens `/etc/hosts` through `mrt_host_file_open`, whose failure arm stashes an errno
 // nothing in a socket program will ever read back.
 export function linuxTouchesErrnoWord(usage RuntimeUsage) returns bool
-	return linuxUsesHostSurface(usage) or usage.usesGt or usage.usesManagedSocket
+	return linuxUsesHostSurface(usage) or usage.usesGt or usage.usesManagedSocket or usage.usesProcessDebug
 end 'linuxTouchesErrnoWord'
 
 // The read chunk's gate — every opener `PosixRuntime.posixOpensFiles` names, plus standard input, which is

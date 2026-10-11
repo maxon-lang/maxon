@@ -11,10 +11,13 @@ category: stdlib
 
 `stdlib/Console.maxon` gives a program its standard input as a `Stdin` reader that buffers OS
 reads. `Console.stdin()` constructs one, and `readLine()` returns one line at a time with the
-terminator stripped (`\r\n` and `\n` both). Those two are the public surface; the reader's other
+terminator stripped (`\r\n` and `\n` both); `readBytes(n)` returns up to `n` bytes as a `ByteArray`,
+fewer only at EOF, and an empty array at EOF. Those three are the public surface; the reader's other
 methods are the module's own.
 
-The whole module bottoms out in ONE compiler intrinsic:
+The whole module bottoms out in ONE compiler intrinsic, which only a source file under `stdlib/` or
+`runtime/` may call (E3185 elsewhere) — the cases below that drive it directly compile in the library tier
+(`<!-- tier: stdlib -->`):
 
 | Intrinsic | Meaning |
 |---|---|
@@ -42,13 +45,14 @@ worker forever.
 
 ### ⚠ Most of `Stdin`'s methods are NOT public
 
-Of `Stdin`'s methods only `create()` and `readLine()` carry `public`; `eof()`, `readBytes()`,
+Of `Stdin`'s methods only `create()`, `readLine()` and `readBytes()` carry `public`; `eof()`,
 `fillOnce()` and the four buffer helpers do not, and a user program naming one is refused with E3008
 (`function 'Stdin.eof' is not exported`).
 
 ⇒ **So `eof()`'s BEHAVIOUR is not directly pinnable from a spec case, and no case below pretends to
-be pinning it.** What the public surface CAN reach, it reaches through `readLine()`'s throw: the
-state machine under it is exercised, and its observable consequence is asserted.
+be pinning it.** What the public surface CAN reach, it reaches through `readLine()`'s throw and
+`readBytes()`'s empty answer: the state machine under them is exercised, and its observable consequence
+is asserted.
 
 **The REFUSAL is pinnable, though, and it is pinned** (`error.a-non-exported-method-is-refused`),
 because it is the only case in the suite that asks the visibility question of an INSTANCE METHOD.
@@ -72,14 +76,14 @@ Once `eofSeen` is set, `fillOnce` returns without a syscall, so repeated `readLi
 each throw `ConsoleError.endOfFile` rather than the second one blocking, faulting, or answering a
 stale buffer. `repeat-reads-at-eof-are-idempotent` drives it three times.
 
-### The substrate is x64-windows and arm64-macOS
+### The substrate is every native lane
 
 `__Builtins.readStdin` lowers to `__con_read_stdin`, which fetches the standard handle and reads it —
-`GetStdHandle` + `ReadFile` on Windows, and on arm64-macOS the same two ops with no handle call at all:
+`GetStdHandle` + `ReadFile` on Windows, and on the POSIX lanes the same two ops with no handle call at all:
 `osStdHandle` becomes ONE subtraction (Win32's three selectors and POSIX's three descriptors are
 consecutive runs) and the read is `read(2)`. It shares the `TargetFacilities` gate with the file,
-directory and command-line families, so a program that reaches it on a lane that has neither is refused
-with `E3104` at the call's own span rather than panicking inside a backend — see
+directory and command-line families, so a program that reaches it on wasm32-wasi is refused with `E3104`
+at the span of the call the program wrote rather than panicking inside a backend — see
 `Compiler/Runtime/ConsoleRuntime.maxon`'s header for why wasm32-wasi has no `fd_read` lowering: a
 component holds an input-stream RESOURCE, which is neither a handle nor a descriptor, so there is no
 arithmetic that produces one.
@@ -172,13 +176,14 @@ end 'main'
 3
 ```
 
-<!-- test: console-stdin.builtin-answers-zero-bytes-at-eof -->
-The intrinsic under the module, driven directly: EOF is a length of 0, not a failure and not a
-1-byte NUL buffer. A capacity leaking into the length would answer 64.
+<!-- test: console-stdin.read-bytes-answers-an-empty-array-at-eof -->
+`readBytes(n)` at EOF answers an EMPTY array, not a failure and not a 1-byte NUL buffer. A capacity
+leaking into the count would answer 64.
 ```maxon
 function main() returns ExitCode
-	let mm = __Builtins.readStdin(64)
-	if mm.length() == 0 'eof'
+	var stdin = Console.stdin()
+	let bytes = stdin.readBytes(64)
+	if bytes.count() == 0 'eof'
 		return 5
 	end 'eof'
 	return 1
@@ -188,17 +193,18 @@ end 'main'
 5
 ```
 
-<!-- test: console-stdin.builtin-result-is-owned -->
-Each call answers a FRESH owned `__ManagedMemory`, dropped at the end of the statement that bound
-it. A hundred of them in a loop is the leak gate's shape: a missing drop is a non-zero mm balance
-at exit, which the runtime reports as exit 101 rather than as a wrong number.
+<!-- test: console-stdin.read-bytes-result-is-owned -->
+Each call answers a FRESH owned `ByteArray`, dropped at the end of the iteration that bound it. A
+hundred of them in a loop is the leak gate's shape: a missing drop is a non-zero mm balance at exit,
+which the runtime reports as exit 101 rather than as a wrong number.
 ```maxon
 function main() returns ExitCode
+	var stdin = Console.stdin()
 	var total = 0
 	var i = 0
 	while i < 100 'reads'
-		let mm = __Builtins.readStdin(4096)
-		total = total + mm.length()
+		let bytes = stdin.readBytes(4096)
+		total = total + bytes.count()
 		i = i + 1
 	end 'reads'
 	return (total + 6) as ExitCode
@@ -209,6 +215,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.builtin-takes-a-ranged-count -->
+<!-- tier: stdlib -->
 The byte budget may be spelled with a RANGED typealias, which carries the `named` tag until
 TypeResolution collapses it. The narrow `tag == integer` test would refuse this argument by naming
 one type twice; the operand check is `tagIsIntegral`, which is the correct predicate for
@@ -230,6 +237,7 @@ end 'main'
 ```
 
 <!-- test: console-stdin.builtin-arity-checked -->
+<!-- tier: stdlib -->
 `readStdin` takes exactly one argument. An intrinsic has no signature for the ordinary arity check
 to read, so it is refused by the same `builtinArity` check `trunc`/`sleep`/`commandLineArg` use.
 ```maxon
@@ -242,6 +250,7 @@ error E3036: <fragment>:3:20: '__Builtins.readStdin' takes exactly 1 argument, b
 ```
 
 <!-- test: console-stdin.builtin-operand-type -->
+<!-- tier: stdlib -->
 The byte budget is a COUNT. A String argument is refused at the call site rather than reaching a
 runtime that would read a record pointer as a length.
 ```maxon
@@ -255,15 +264,17 @@ error E3005: <fragment>:3:20: '__Builtins.readStdin' requires a int, but its arg
 
 <!-- test: console-stdin.rejected-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-The stdin substrate is x64-windows and arm64-macOS. On a target with neither the call is
-refused at its source span with `E3104`, naming the runtime entry that has no lowering there — never a
-panic from inside the wasm backend.
+The stdin substrate is every native lane. On wasm32-wasi a program reaching it is refused with `E3104` at
+the stdlib call it wrote, naming the runtime entry that has no lowering there — never a panic from inside the
+wasm backend. `readBytes` reaches the entry through `Stdin`'s private refill, and the program is blamed at
+the method it named.
 ```maxon
 function main() returns ExitCode
-	let mm = __Builtins.readStdin(64)
-	return mm.length() as ExitCode
+	var input = Console.stdin()
+	let bytes = input.readBytes(64)
+	return bytes.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:22: this construct lowers to the runtime entry '__con_read_stdin', which has no wasm32-wasi implementation
+error E3104: <fragment>:4:20: 'Stdin.readBytes' lowers to the runtime entry '__con_read_stdin', which has no wasm32-wasi implementation
 ```

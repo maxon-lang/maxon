@@ -12,7 +12,9 @@ category: system
 `stdlib/Subprocess.maxon` is the child-process surface — `Subprocess.run(...)`,
 `Configuration.run()`, `runDetached()` and `StreamingSubprocess` — and every one of its leaves
 bottoms out in a compiler intrinsic. `Parser.BuiltinsSubprocessSpawnName` lists them all; they fall into
-three families.
+three families. They are library-tier: only a source file under `stdlib/` or `runtime/` may call one, so
+the cases below that call one directly compile in the library tier (`<!-- tier: stdlib -->`), and the cases
+that drive the public surface compile as an ordinary program.
 
 | Family | Intrinsics |
 |---|---|
@@ -153,6 +155,7 @@ unglobbed. Neither program could carry the other's claim.
 ## Tests
 
 <!-- test: subprocess-builtins.collect-echo -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 The whole attached path end to end: build an argv blob, spawn `cmd /c echo hello` with both output
 streams collected, wait, and read the result struct back. The child's stdout is `hello\r\n` — SEVEN
@@ -205,6 +208,7 @@ kind=0 code=0 outLen=7 errLen=0 matches=true
 ```
 
 <!-- test: subprocess-builtins.posix-collect-echo -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `collect-echo`'s subject on the POSIX lane, and the case that proves the whole attached path runs here at
 all: build an argv blob, spawn `/bin/echo hello` with both streams collected, wait, and read the result
@@ -254,6 +258,7 @@ kind=0 code=0 outLen=6 errLen=0 matches=true
 ```
 
 <!-- test: subprocess-builtins.posix-a-reported-exit-is-reaped-rather-than-polled -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 ⭐⭐ **A CHILD'S EXIT REACHES THE POLLER ONCE, SO THE COLLECT MUST REAP ON IT RATHER THAN ASK AGAIN.** The
 collect's idle pass parks on the child's poll source, and that source reports the exit exactly once. XNU can
@@ -328,6 +333,7 @@ laps=200 collected=200
 ```
 
 <!-- test: subprocess-builtins.posix-argv-reaches-the-child-verbatim -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 ⭐ **THE CASE THAT PROVES THERE IS NO SHELL ON THE ARGV PATH — `argv-quoting`'s subject, inverted.** The
 Windows sibling asserts that a token holding a space is QUOTED into one command line; this lane must
@@ -383,6 +389,7 @@ verbatim=true len=17 kind=0
 ```
 
 <!-- test: subprocess-builtins.handle-guards -->
+<!-- tier: stdlib -->
 **EVERY** `__Builtins.subprocess*` entry that takes a handle, answering a failure for one that was
 never spawned — a negative handle, one whose packed generation (`3` is generation 0) no live slot ever
 holds, and live-looking ones (`64`, `9999`) in a table no spawn allocated. ⚠ A guessed handle that
@@ -418,6 +425,7 @@ readOut=0 readErr=0 voidsReturned=true
 ```
 
 <!-- test: subprocess-builtins.result-pointer-guards -->
+<!-- tier: stdlib -->
 The six `subprocessResult*` readers take the struct POINTER `subprocessWaitCollect` answers, and that
 answer is `-1` on failure. `stdlib/Subprocess.maxon` tests for it before reading — but a caller need
 not, and unguarded, one line is an ACCESS VIOLATION. Each reader guards with its own `nullValue`; these are
@@ -469,6 +477,7 @@ read=0 readErr=0 write=-1 wait=-1 voidsReturned=true
 ```
 
 <!-- test: subprocess-builtins.file-stdio-that-cannot-open-fails-the-spawn -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `InputSource.file(path)` and `OutputDestination.file(path)` are public corpus surface, and
 `CreateFileW` can fail. ⚠ **An unchecked open makes the spawn SUCCEED:** `INVALID_HANDLE_VALUE`
@@ -512,6 +521,7 @@ spawn=-1 reason=true
 ```
 
 <!-- test: subprocess-builtins.stdin-bytes-and-stderr -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `StdinKind.bytes` queues a payload the collect loop pushes into the child's stdin between drains,
 and closes the pipe once it is spent — so `more` echoes it back and exits rather than blocking for
@@ -559,6 +569,7 @@ outHasPayload=true errHasOops=true kind=0
 ```
 
 <!-- test: subprocess-builtins.posix-stdin-bytes -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `stdin-bytes-and-stderr`'s stdin half on this lane. `StdinKind.bytes` queues a payload the collect loop
 pushes into the child between drains and closes the pipe once it is spent — so `/bin/cat` echoes it back
@@ -603,6 +614,7 @@ kind=0 code=0 echoed=true outLen=7
 ```
 
 <!-- test: subprocess-builtins.posix-stdout-and-stderr-are-separate -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `stdin-bytes-and-stderr`'s other half: the two pipes are drained INDEPENDENTLY, not one after the other.
 The child writes four bytes to stdout and three to stderr with no trailing newline on either, so each
@@ -650,6 +662,7 @@ out=true err=true outLen=4 errLen=3
 ```
 
 <!-- test: subprocess-builtins.posix-exit-code-is-propagated -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 The child's own exit status reaches `subprocessResultStatusCode` unchanged. ⚠ **On this lane that is a
 `waitpid` status word rather than `GetExitCodeProcess`'s plain integer**, so the runtime has to decode it —
@@ -695,6 +708,7 @@ kind=0 code=7
 ```
 
 <!-- test: subprocess-builtins.timeout-kills-the-child -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 A non-zero `timeoutMs` is a KILL-AFTER deadline, which is what `stdlib/Subprocess.maxon`'s
 `Configuration.timeoutMs` documents. The child would run for many seconds; the deadline fires,
@@ -739,6 +753,7 @@ kind=2
 ```
 
 <!-- test: subprocess-builtins.posix-timeout-kills-the-child -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `timeout-kills-the-child` on this lane. `/bin/sleep 5` would run for five seconds; the 300 ms deadline
 fires, the child is killed, and the result's status kind is `timedOut` (`2`). The DURATION is asserted
@@ -786,6 +801,7 @@ kind=2 killedEarly=true
 ```
 
 <!-- test: subprocess-builtins.timeout-kills-the-whole-tree -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 **A DEADLINE KILLS THE CHILD'S DESCENDANTS, NOT ONLY THE CHILD.** `timeout-kills-the-child` proves the
 direct child is ended and can say nothing about what the child had already started.
@@ -847,6 +863,7 @@ kind=2 descendantSurvived=false
 ```
 
 <!-- test: subprocess-builtins.posix-timeout-kills-the-whole-tree -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `timeout-kills-the-whole-tree` on this lane, and the shell is nested here for that case's reason: the inner
 `/bin/sh` is a GRANDCHILD of this program and both the sleep and the write are its work, so a kill that
@@ -901,6 +918,7 @@ kind=2 descendantSurvived=false
 ```
 
 <!-- test: subprocess-builtins.a-child-that-exited-before-the-deadline-keeps-its-own-code -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 **A DEADLINE KILL REPORTS THE KILL'S CODE ONLY FOR A CHILD THE KILL ENDED.** The direct child exits at once
 with `3`, but the grandchild it started in the background holds the stdout pipe, so the collect cannot finish
@@ -946,6 +964,7 @@ kind=2 code=3
 ```
 
 <!-- test: subprocess-builtins.posix-a-child-that-exited-before-the-deadline-keeps-its-own-code -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `a-child-that-exited-before-the-deadline-keeps-its-own-code` on this lane. The shell exits with `3` and the
 `sleep` it left in the background holds the stdout pipe, so the child is an unreaped zombie when the deadline
@@ -991,6 +1010,7 @@ kind=2 code=3
 ```
 
 <!-- test: subprocess-builtins.a-release-under-a-parked-collect-is-a-named-stop -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
@@ -1070,6 +1090,7 @@ fatal error: runtime abort 117 (subpCollectSlotReleased)
 ```
 
 <!-- test: subprocess-builtins.a-second-collect-on-a-held-slot-is-a-named-stop -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
@@ -1143,6 +1164,7 @@ fatal error: runtime abort 117 (subpCollectSlotReleased)
 ```
 
 <!-- test: subprocess-builtins.detach-answers-a-pid -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 The detach bit (bit 2 of `flags`) makes the runtime answer the child's OS process id rather than a
 table handle, and release the slot — so the parent holds no handle to a child it will never wait
@@ -1181,6 +1203,7 @@ positive=true
 ```
 
 <!-- test: subprocess-builtins.posix-detach-answers-a-pid -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `detach-answers-a-pid` on this lane: the detach bit (bit 2 of `flags`) makes the runtime answer the child's
 OS process id rather than a table handle, and release the slot — so the parent holds no handle to a child it
@@ -1220,6 +1243,7 @@ positive=true
 ```
 
 <!-- test: subprocess-builtins.a-detach-gives-its-slot-back -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `detach-answers-a-pid` asserts the pid; this asserts the OTHER half of its sentence, that the detach
 RELEASES the slot. The table holds 64 slots and a spawn with none free answers `-1`, so 65 detaches in
@@ -1272,6 +1296,7 @@ spawned=65 firstFailure=-1
 ```
 
 <!-- test: subprocess-builtins.posix-a-detach-gives-its-slot-back -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `a-detach-gives-its-slot-back` on this lane: 65 detaches of `/usr/bin/true` into a 64-slot table each
 answer a real pid, which is only possible if every detach released its slot.
@@ -1318,6 +1343,7 @@ spawned=65 firstFailure=-1
 ```
 
 <!-- test: subprocess-builtins.posix-a-detached-child-gets-a-new-session -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 ⛔⛔ **THE TWO POSIX DETACH CASES ABOVE ASSERT THE PID AND THE SLOT, AND NEITHER ASSERTS WHAT DETACHING IS
 FOR.** A detached child must be in a SESSION OF ITS OWN, so the terminal hangup that ends the parent never
@@ -1392,6 +1418,7 @@ detached=true newSession=true
 ```
 
 <!-- test: subprocess-builtins.inherited-and-discarded-output -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `OutputKind.inherit` hands the child the PARENT's own standard handle, so its text lands in this
 program's stdout with nothing collected; `OutputKind.discard` opens the NUL device, so the second
@@ -1448,6 +1475,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: subprocess-builtins.posix-inherited-and-discarded-output -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `inherited-and-discarded-output` on this lane. `OutputKind.inherit` hands the child the PARENT's own
 descriptor, so its text lands in this program's stdout with nothing collected; `OutputKind.discard` opens
@@ -1506,6 +1534,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: subprocess-builtins.argv-quoting -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 A token holding a SPACE is quoted, so it reaches the child as ONE argument rather than two. `echo`
 prints its arguments back with the quotes removed, which is what makes the round trip observable:
@@ -1552,6 +1581,7 @@ echoed=true len=7
 ```
 
 <!-- test: subprocess-builtins.large-collect-grows-the-buffer -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 An UNCAPPED collect of far more than one buffer's worth: 200 lines of 40 characters, which `cmd`
 terminates with CRLF, is exactly 8400 bytes. The collect buffer starts at 4096 and doubles past what
@@ -1596,6 +1626,7 @@ kind=0 code=0 outLen=8400
 ```
 
 <!-- test: subprocess-builtins.posix-large-collect-grows-both-buffers -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 An UNCAPPED collect of far more than one buffer's worth, on BOTH pipes at once: 1200 lines of 49
 characters plus a LF on each stream is exactly 60000 bytes each, 117 KiB together. Each collect buffer
@@ -1648,6 +1679,7 @@ kind=0 code=0 outLen=60000 errLen=60000
 ```
 
 <!-- test: subprocess-builtins.capture-limit -->
+<!-- tier: stdlib -->
 A non-zero `stdoutLimit` caps what is KEPT, never what is read: a runtime that stopped reading at
 the ceiling would leave the child blocked on a full pipe for ever. The child writes far more than
 the ceiling and still exits cleanly, and the capture stops at the ceiling.
@@ -1689,6 +1721,7 @@ kind=0 code=0 capped=true
 ```
 
 <!-- test: subprocess-builtins.streaming-over-argv -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `subprocessSpawnStreaming` takes the same argv blob and wires all three streams to pipes, which is
 what "streaming" MEANS — there are no stdio triples to pass because the caller drives all three. It
@@ -1739,6 +1772,7 @@ wrote=0 echoed=true lineLen=6 code=0
 ```
 
 <!-- test: subprocess-builtins.streaming-read-exact-bytes -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `subprocessReadStdoutBytes(handle, n)` answers EXACTLY `n` bytes, and that is a different question
 from the one `subprocessReadStdoutLine` answers — which is why it exists. A line reader cannot
@@ -1799,6 +1833,7 @@ wrote=0 first=abcd second=efgh restLen=6 eofLen=0 code=0
 ```
 
 <!-- test: subprocess-builtins.streaming-read-bytes-after-line -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⭐⭐ **THE TWO READERS SHARE ONE PER-HANDLE BUFFER, AND THIS IS THE CASE THAT SAYS SO.** A framed
 client reads its headers a LINE at a time and its body by exact COUNT, so the two readers alternate
@@ -1850,6 +1885,7 @@ wrote=0 lineLen=7 after=abcd code=0
 ```
 
 <!-- test: subprocess-builtins.streaming-read-bytes-refuses-a-negative-count -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⛔⛔ **A NEGATIVE COUNT IS REFUSED, AND THE STREAM IS LEFT EXACTLY AS IT WAS.** The refusal has to happen
 BEFORE the "is enough buffered?" test, because `bufferedBytes >= count` is VACUOUSLY TRUE for a negative
@@ -1909,6 +1945,7 @@ wrote=0 negLen=0 state=open still=abcd code=0
 ```
 
 <!-- test: subprocess-builtins.streaming-stream-state-follows-the-reader -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `subprocessStdoutState(handle)` / `subprocessStderrState(handle)` answer `__SubprocessStreamState` — the
 per-stream fact a reader's bytes cannot carry. A reader answers `""` for a clean end of stream AND for
@@ -2056,6 +2093,7 @@ closeStdin: returned
 ```
 
 <!-- test: subprocess-builtins.resolve-on-path -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 The `PATH` + `PATHEXT` walk. `cmd` is on the PATH of every Windows host and has no extension as
 written, so a resolver that only tried the name verbatim would miss it and one that only tried the
@@ -2085,6 +2123,7 @@ grew=true absolute=true missIsNull=0 missEchoed=true
 ```
 
 <!-- test: subprocess-builtins.last-error-is-empty-when-clean -->
+<!-- tier: stdlib -->
 `subprocessLastErrorMessage()` answers the EMPTY buffer while nothing has failed, and the OS
 error NUMBER once something has — here a spawn of an executable that does not exist, which
 `CreateProcessW` refuses with `ERROR_FILE_NOT_FOUND` (2) and a POSIX spawn with `ENOENT`, which
@@ -2124,6 +2163,7 @@ cleanLen=0 spawn=-1 message=true
 ```
 
 <!-- test: subprocess-builtins.a-caller-built-environment-is-the-childs-whole-environment -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⭐⭐ **`envInherit = 0` HANDS THE CHILD THE CALLER'S OWN BLOCK.** The stdlib assembles a block from
 this process's own entries (`__Builtins.osEnvironmentEntry`) with the caller's overrides applied for
@@ -2182,6 +2222,7 @@ spawned=true echoed=true len=6
 
 ```
 <!-- test: subprocess-builtins.posix-a-caller-built-environment-is-the-childs-whole-environment -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 The Windows twin's subject on the POSIX lane. ⚠ **It is a sibling rather than a widened marker for
 `posix-collect-echo`'s reason: the CHILD is platform-specific.** `cmd /c echo %VAR%` has no meaning
@@ -2241,6 +2282,7 @@ spawned=true echoed=true len=17
 ```
 
 <!-- test: subprocess-builtins.rejected-on-wasm -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The subprocess substrate is gated on `HostFacility.subprocess`, which every native lane provides
 and wasm does not. On a target that does not, the call is refused at its source span
@@ -2362,6 +2404,7 @@ exit=0 out=ok
 ```
 
 <!-- test: subprocess-builtins.posix-a-released-handle-cannot-release-the-spawn-that-reuses-its-slot -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, wasm32-wasi -->
 A released handle stays dead while a new spawn is still being set up in the slot it named. The first spawn
 makes a FIFO, is collected and released, so the second spawn takes the same slot. The second spawn reads its
@@ -2445,6 +2488,7 @@ second: kind=0 code=0 out=through the fifo
 ```
 
 <!-- test: subprocess-builtins.posix-a-file-open-in-the-parent-is-not-inherited-by-the-child -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, arm64-macos, wasm32-wasi -->
 A descriptor the parent holds open when it spawns is not the child's. Here the parent writes 1 MiB into the FIFO
 the child reads as its stdin; that is more than a pipe buffers, so the parent's write end is still open when the

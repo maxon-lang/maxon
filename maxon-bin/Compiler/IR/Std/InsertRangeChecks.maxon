@@ -255,27 +255,6 @@ export function insertRangeChecks(project Project, module StdModule)
 	end 'eachFunc'
 end 'insertRangeChecks'
 
-// The `guardChainTail` an emitter starts with, SHARED and never mutated — `guardSiteAt` REPLACES
-// the field with a freshly built index rather than filling this one.
-//
-// ⚠ It is shared for the reason `Parser`'s `sharedEmptyInstanceAliasNames` is: an emitter is built for
-// every function carrying ANY range-check side data, which includes every function that merely passes a
-// constant argument or constructs a generic instance, so an unconditional `ValueIdArray.create()` in
-// `create` is one allocation per such function across the whole program. MEASURED on the scale ladder:
-// as a per-emitter `create()` it cost +45 / +66 / +108 / +192 / +360 / +696 allocations across the six
-// rungs — a linear cost, but a real one, paid entirely by functions that never emit a guard. Only ONE
-// function in the whole generated corpus ever builds a real index (`scaleCoverCast`).
-let sharedEmptyGuardChainTail = ValueIdArray.create()
-
-// The `guardChainBase` companion to it, shared for the identical reason and replaced in the identical
-// place — the three chain columns are built together and are empty together, so
-// `guardChainTail.isEmpty()` is the one test that decides for all of them.
-let sharedEmptyGuardChainBase = BlockOpPosArray.create()
-
-// One pre-split op list per block id — see `RangeCheckEmitter.guardChainSource`. Shared and replaced
-// exactly as the two columns above are.
-let sharedEmptyGuardChainSource = PreSplitOpsByBlock.create()
-
 // Per-function emitter: owns the module + function it rewrites and the fresh-ValueId counter its guard
 // ops draw from (seeded past every id the function already uses).
 type RangeCheckEmitter
@@ -303,22 +282,22 @@ type RangeCheckEmitter
 
 	var borrowOperands as BorrowOperandsColumn
 
-	// Where each of this function's blocks currently ENDS — a blockRef index (+1, `buildBlockIdIndex`'s
-	// sentinel encoding) per block id. It starts as the plain block-id => blockRef index (every block is
-	// its own chain end), and each guard MOVES its site block's entry to the continuation the split
-	// minted, so the next guard in that source block lands after it rather than before it. Starts as the
-	// SHARED empty one and is REPLACED by a real index on first use — see `sharedEmptyGuardChainTail`
-	// and `guardSiteAt`.
+	// Where each of this function's blocks currently ENDS — a blockRef index (+1,
+	// `buildBlockIdIndex`'s sentinel encoding) per block id. It starts as the plain block-id =>
+	// blockRef index (every block is its own chain end), and each guard MOVES its site block's entry
+	// to the continuation the split minted, so the next guard in that source block lands after it
+	// rather than before it. Starts empty and is REPLACED by a real index on first use — see
+	// `guardSiteAt`.
 	var guardChainTail as ValueIdArray
 
 	// ⭐ **WHERE EACH CHAIN-END BLOCK BEGINS, IN ITS ORIGINAL BLOCK'S COORDINATES** — one position per
 	// block id, and the other half of what makes site positions and the guard CHAIN compose. A site's
-	// recorded position (`RangeCheckSite.stdOpPos`) is an offset into the block as the
-	// LOWERING left it; but the k-th guard SPLITS that block, so the (k+1)-th site's op now sits in the
-	// continuation at `position - base`, where `base` is where the last split cut. Zero until a block's
-	// first guard splits it, and moved to the split point by every split after that. Built and shared
-	// exactly as `guardChainTail` is — the three chain columns are one index in three columns, so one
-	// `isEmpty` decides all of them.
+	// recorded position (`RangeCheckSite.stdOpPos`) is an offset into the block as the LOWERING left
+	// it; but the k-th guard SPLITS that block, so the (k+1)-th site's op now sits in the continuation
+	// at `position - base`, where `base` is where the last split cut. Zero until a block's first guard
+	// splits it, and moved to the split point by every split after that. Built exactly as
+	// `guardChainTail` is — the three chain columns are one index in three columns, so one `isEmpty`
+	// decides all of them.
 	var guardChainBase as BlockOpPosArray
 
 	// ⭐⭐ **THE OP LIST EACH GUARDED BLOCK HELD BEFORE ITS FIRST GUARD SPLIT IT — THE ONE LIST EVERY
@@ -329,15 +308,15 @@ type RangeCheckEmitter
 	// block of B ops that copies B op refs in total rather than Θ(k × B) — see `splitChainEnd`.
 	//
 	// It is also the coordinate space a site's recorded `stdOpPos` is written in, which is why
-	// `guardSiteAt` bounds-checks against it and not against a block whose front the splits have carved
-	// away. Built and shared exactly as the two columns above are.
+	// `guardSiteAt` bounds-checks against it and not against a block whose front the splits have
+	// carved away. Built exactly as the two columns above are.
 	var guardChainSource as PreSplitOpsByBlock
 
 	var waivers as EntryGuardWaivers
 	var spellings as DeclarationQualifierMemo
 
 	static function create(project Project, module StdModule, func IrFunction, funcIndex ElementIndex, waivers EntryGuardWaivers, spellings DeclarationQualifierMemo) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, unsignedMaxLiterals: noValueMarks, borrowOperands: noBorrowOperands, guardChainTail: sharedEmptyGuardChainTail, guardChainBase: sharedEmptyGuardChainBase, guardChainSource: sharedEmptyGuardChainSource, spellings: spellings}
+		return Self{project: project, module: module, func: func, funcIndex: funcIndex, waivers: waivers, ids: ValueMinter.resuming(nextFreeValueId(module, func: func)), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create(), writtenNegativeLiterals: noValueMarks, unsignedMaxLiterals: noValueMarks, borrowOperands: noBorrowOperands, guardChainTail: ValueIdArray.create(), guardChainBase: BlockOpPosArray.create(), guardChainSource: PreSplitOpsByBlock.create(), spellings: spellings}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -586,7 +565,7 @@ type RangeCheckEmitter
 	// A guard whose bounds both elide splits nothing and is not a cascade to record: `emitGuardAt`
 	// hands back the head it was given.
 	function emitParamGuard(site RangeCheckParamSite, alias RangedTypeAlias, entryId BlockId, filePath FilePath)
-		let guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount)
+		var guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount)
 		let headId = guardSite.block.id
 		self.requireGuardHeadHoldsOnlyParams(guardSite)
 
@@ -720,6 +699,7 @@ type RangeCheckEmitter
 				osThreadCpuTicks or
 				osDecommitPages or
 				memFill or
+				osGuardPages or
 				osCommitPages or
 				osReservePages or
 				atomicCas or
@@ -1515,6 +1495,7 @@ type RangeCheckEmitter
 				osThreadCpuTicks or
 				osDecommitPages or
 				memFill or
+				osGuardPages or
 				osCommitPages or
 				osReservePages or
 				atomicCas or
@@ -1638,18 +1619,14 @@ let RangeCheckOkLabel = b"__rc_ok"
 // route. **A rationale that does not hold is worse than none: it is what a sixth primitive's author
 // would read as a licence.**
 //
-// ✅ **THE LINEARITY IS MEASURED** — `tests/ladders/genmanagedsites.sh onefunc` puts the sites in ONE
-// straight-line block and reads ×1.99 ×1.99 ×2.00 allocations and ×2.07 ×2.10 ×2.06 bytes at
-// n = 32/64/128/256, where Σ(B − pₖ) would read ×4; its `spread` control holds the same site count one
-// per function and sits on the same curve. **What follows is the READING of the emission sites that
-// explains that, and it is a reading.** The three THROWING entries arrive as a `tryCall` whose error
-// flag is tested immediately, so the call is the LAST op in its block and this function copies ZERO ops;
-// the one
-// non-throwing carve (`__managed_get_unchecked`) is emitted once per `for`-in header, so its block holds
-// exactly one and its tail is copied exactly once; and `__managed_count` is rewritten in place and
-// carves nothing. ⇒ The product term is MEASURED-LINEAR-IN-PRACTICE, not absent. A primitive that
-// carves MID-block, or a pass that merges a throwing call's blocks, reinstates it with nothing in the
-// way — re-run that ladder then, and take `splitChainEnd` if it bends.
+// ✅ **WHY IT STAYS LINEAR IN PRACTICE, AND IT IS A READING OF THE EMISSION SITES.** The three
+// THROWING entries arrive as a `tryCall` whose error flag is tested immediately, so the call is the
+// LAST op in its block and this function copies ZERO ops; the one non-throwing carve
+// (`__managed_get_unchecked`) is emitted once per `for`-in header, so its block holds exactly one
+// and its tail is copied exactly once; and `__managed_count` is rewritten in place and carves
+// nothing. ⇒ The product term is LINEAR IN PRACTICE, not absent. A primitive that carves MID-block,
+// or a pass that merges a throwing call's blocks, reinstates it with nothing in the way — take
+// `splitChainEnd` then.
 export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position ElementIndex, label ByteArray) returns IrBlock
 	var headBlock = head
 	var tailOps = OpIndexArray.create()
@@ -1875,6 +1852,7 @@ function retMatchesValue(term StdOp, block IrBlock, target ValueId) returns bool
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -1945,7 +1923,7 @@ end 'WaivableParam'
 
 typealias WaivableParamArray = Array with WaivableParam
 typealias WaivableParamsByCallee = Map with (ByteArray, WaivableParamArray)
-typealias CallTargetMap = Map with (ValueId, ByteArray)
+typealias CallTargetMap = Map with (ValueId, readonly ByteArray)
 typealias CallTargetsByFunction = Map with (ElementIndex, CallTargetMap)
 typealias RecordedCallArguments = Map with (ValueId, RangeCheckSiteArray)
 
@@ -2016,7 +1994,7 @@ type EntryGuardWaivers
 	end 'denyIfAnUncheckedPathReaches'
 
 	function denyAll(callee ByteArray)
-		let params = try self.candidates.get(callee) otherwise return
+		var params = try self.candidates.get(callee) otherwise return
 
 		for i in 0 upto params.count() 'eachParam'
 			denyParamAt(params, at: i)
@@ -2092,7 +2070,7 @@ type EntryGuardWaivers
 	end 'recordCallTarget'
 
 	function denyParamsTheCallDidNotRecord(project Project, callee ByteArray, sites RangeCheckSiteArray)
-		let params = try self.candidates.get(callee) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: '{String.from(callee)}' was just found among the candidates")
+		var params = try self.candidates.get(callee) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: '{String.from(callee)}' was just found among the candidates")
 
 		for i in 0 upto params.count() 'eachParam'
 			let param = try params.get(i) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: params.get OOB at {i}")

@@ -155,7 +155,7 @@ AND reads in one call, so a bracket around it counts the SPAWN — `osProcessSpa
 `SyscallClass.blocking`, and at ONE processor the machine inside `clone`+`execve` holds the only P, so
 `__sched_retake`'s `(nmspinning + npidle) > 0` term is zero and the retake always fires. That retake is
 correct; it is what lets anything else run while a child is being spawned. Here the two are SEPARATE calls,
-so `beforeRetake` … `schedRetakeCount() - beforeRetake` brackets `subpReadLine` ALONE and the spawn's
+so `beforeRetake` … `Scheduler.counters().retakes - beforeRetake` brackets `subpReadLine` ALONE and the spawn's
 retake falls outside it. The idiom is `netpoll-socket`'s verbatim.
 
 The child delays a second before its line, so the read is certainly outstanding when the scheduler runs out
@@ -170,9 +170,9 @@ precisely the arrangement the case exists to refuse.
 ```maxon
 function main() returns ExitCode
 	let h = subpSpawn("sleep 1; echo hello")
-	let beforeRetake = __Builtins.schedRetakeCount()
+	let beforeRetake = Scheduler.counters().retakes
 	let line = subpReadLine(h)
-	let delta = __Builtins.schedRetakeCount() - beforeRetake
+	let delta = Scheduler.counters().retakes - beforeRetake
 	let rescued = delta > 0
 	let n = line.byteLength()
 	print("rescued={rescued}\n")
@@ -191,7 +191,7 @@ rescued=false
 <!-- test: streaming-subprocess.posix-a-drained-child-costs-no-timer-scan -->
 <!-- unsupported-targets: x64-windows -->
 <!-- procs: 1 -->
-⭐ **DRAINING A CHILD MUST NOT COST ANYTHING PER LIVE SLEEPER, AND `schedTimerScanStepCount()` IS THE ONLY
+⭐ **DRAINING A CHILD MUST NOT COST ANYTHING PER LIVE SLEEPER, AND `Scheduler.counters().timerScanSteps` IS THE ONLY
 READING THAT CAN SAY SO.** Disarming a deadline is a LINEAR walk of the live timer heap under `__sched_lock`
 (`GtRuntime.emitGtTimerStoreRemove`), and a `(gt, tag)` that is not on the heap walks to its END. A child
 exit and a pipe-read readiness arm NO deadline, and between them they are the highest-frequency wakes the
@@ -213,7 +213,7 @@ which is not a scan.
 counter that never moved at all would satisfy the first witness perfectly. So the same program then performs
 the ONE cancel in it that really does have an entry to find: `dropAParkedSleeper` drops a promise parked on
 a 2000 ms deadline, in `parked-timer-drop-cancel`'s exact shape — bound to a name, and `await`ing a `fast`
-sibling first so the victim has run and armed its timer (the `gtIsComplete` peek adds `0`, which is that
+sibling first so the victim has run and armed its timer (the `isComplete()` peek adds `0`, which is that
 thread saying it is still parked). That cancel walks a heap of nine, so the counter is live, and the `0`
 above is a measurement rather than a silence.
 
@@ -235,7 +235,7 @@ function dropAParkedSleeper() returns Integer
 	let victim = async sleeper()
 	let q = async fast()
 	let r = await q
-	return r + __Builtins.gtIsComplete(victim.inner)
+	return r + (1 if victim.isComplete() else 0)
 end 'dropAParkedSleeper'
 
 function main() returns ExitCode
@@ -250,20 +250,20 @@ function main() returns ExitCode
 	Scheduler.yield()
 
 	let h = subpSpawn("for i in a b c d e f g h i j k l m n o p q r s t; do echo line-$i; done")
-	let before = __Builtins.schedTimerScanStepCount()
+	let before = Scheduler.counters().timerScanSteps
 	var total = 0
 	var line = subpReadLine(h)
 	while line.byteLength() > 0 'drain'
 		total = total + line.byteLength()
 		line = subpReadLine(h)
 	end 'drain'
-	let scanned = __Builtins.schedTimerScanStepCount() - before
+	let scanned = Scheduler.counters().timerScanSteps - before
 	_ = subpWait(h)
 	subpRelease(h)
 
-	let beforeCancel = __Builtins.schedTimerScanStepCount()
+	let beforeCancel = Scheduler.counters().timerScanSteps
 	_ = dropAParkedSleeper()
-	let walked = __Builtins.schedTimerScanStepCount() - beforeCancel
+	let walked = Scheduler.counters().timerScanSteps - beforeCancel
 
 	_ = await s1
 	_ = await s2
@@ -706,7 +706,7 @@ first=3 firstLine=6 stale=-1 staleLine=0 fresh=7 freshLine=7
 <!-- test: streaming-subprocess.windows-a-parked-line-read-is-on-the-poller -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 <!-- procs: 1 -->
-⭐ **A PIPE READ THAT WAITS MUST WAIT ON THE SCHEDULER'S POLLER, AND `schedNetpollBlockCount()` IS WHAT
+⭐ **A PIPE READ THAT WAITS MUST WAIT ON THE SCHEDULER'S POLLER, AND `Scheduler.counters().netpollBlocks` IS WHAT
 SAYS SO.** A read parked anywhere else is a wait the scheduler cannot see: it does not count toward
 `__np_waiters`, the deadlock census cannot reason about it, and a second completion port needs a thread of
 its own to drain it. The counter is stepped by `__np_pd_commit` alone, so a non-zero delta across the read
@@ -720,9 +720,9 @@ witness nothing.
 ```maxon
 function main() returns ExitCode
 	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
-	let before = __Builtins.schedNetpollBlockCount()
+	let before = Scheduler.counters().netpollBlocks
 	let line = subpReadLine(h)
-	let parks = __Builtins.schedNetpollBlockCount() - before
+	let parks = Scheduler.counters().netpollBlocks - before
 	let n = line.byteLength()
 	_ = subpWait(h)
 	subpRelease(h)

@@ -1,29 +1,6 @@
-let PtracePeekData = 2
-let PtracePokeData = 5
-let PtraceCont = 7
-let PtraceSingleStep = 9
-let PtraceDetach = 17
-let PtraceSetOptions = 0x4200
-let PtraceGetSigInfo = 0x4202
-
-let SignalCodeSentByKill = 0
-
-let PtraceOptionTraceClone = 0x00000008
-let PtraceOptionExitKill = 0x00100000
-
-let PtraceEventClone = 3
-
 let SignalTrap = 5
 
-let NoSignal = 0
-
-let WaitSignalMask = 0x7F
-let WaitStoppedMask = 0xFF
-let WaitStoppedMarker = 0x7F
-let WaitCodeShift = 8
-let WaitEventShift = 16
-
-let ByteMask = 0xFF
+let NoSignal = NoTraceSignal as BackendWord
 
 let GroupStopSliceMs = 50
 
@@ -114,12 +91,6 @@ union PtraceHeldStopLookup
 	end 'nothingYet'
 end 'PtraceHeldStopLookup'
 
-union PtraceWaitStatus
-	exited(code BackendExitCode)
-	killed(waitStatus BackendWord)
-	stopped(signal BackendWord, event BackendWord)
-end 'PtraceWaitStatus'
-
 union PtraceProgramCounter
 	unreadable
 	at(address DebugAddress)
@@ -152,7 +123,7 @@ union PtraceThreadEntryLookup
 end 'PtraceThreadEntryLookup'
 
 export type PtraceBackend
-	var scratch as BackendScratchPage
+	var trace as ProcessTrace
 	var process as BackendWord
 	var threads as PtraceThreadEntryArray
 	var pendingThreadId as BackendWord
@@ -165,15 +136,15 @@ export type PtraceBackend
 	var status as BackendExitStatus
 
 	export static function create() returns PtraceBackend
-		return Self{scratch: BackendScratchPage.create(), process: 0, threads: PtraceThreadEntryArray.create(), pendingThreadId: 0, stopOutstanding: false, sawFirstStop: false, stopRequested: false, driverTrapInFlight: false, stepping: BackendStepRoster.create(), held: PtraceHeldStopArray.create(), status: BackendExitStatus.running}
+		return Self{trace: ProcessTrace.create(), process: 0, threads: PtraceThreadEntryArray.create(), pendingThreadId: 0, stopOutstanding: false, sawFirstStop: false, stopRequested: false, driverTrapInFlight: false, stepping: BackendStepRoster.create(), held: PtraceHeldStopArray.create(), status: BackendExitStatus.running}
 	end 'create'
 
 	export function holdsItsScratch() returns bool
-		return self.scratch.held()
+		return self.trace.isReady()
 	end 'holdsItsScratch'
 
 	export function close()
-		self.scratch.close()
+		self.trace.close()
 	end 'close'
 
 	export function exitStatus() returns BackendExitStatus
@@ -214,42 +185,34 @@ export type PtraceBackend
 			at(stop) then return self.heldStopDelivered(stop)
 		end 'held'
 
-		self.scratch.setWord(PtraceStatusOffset as BackendPageOffset, value: 0)
+		let waited = self.trace.wait(budgetMs as DebuggeeWaitMs, process: self.process as DebuggeeProcessId)
+		let report = self.noted(waited)
 
-		let reporter = hostDebugCall(HostDebugVerb.awaitTracee, a0: self.scratch.addressOf(PtraceStatusOffset as BackendPageOffset), a1: budgetMs, a2: self.process, a3: 0, a4: 0)
-
-		if reporter == 0 'nothingArrived'
-			return BackendEventClass.ended(DebugStopEvent.timedOut)
-		end 'nothingArrived'
-
-		return self.classified(reporter, waited: self.scratch.word(PtraceStatusOffset as BackendPageOffset) and BackendDwordMask)
+		return self.classified(report)
 	end 'oneWaitStatus'
 
-	function takenWaitStatus(reporter BackendWord, waited BackendWord) returns PtraceWaitStatus
-		if (waited and WaitSignalMask) == 0 'itLeftOnItsOwn'
-			return PtraceWaitStatus.exited(((waited shr WaitCodeShift) and ByteMask) as BackendExitCode)
-		end 'itLeftOnItsOwn'
+	function noted(report TraceReport) returns TraceReport
+		match report 'which'
+			stopped(thread, signal, event) then self.rememberThread(thread as BackendThreadId, signal: signal as BackendWord, event: event)
 
-		if (waited and WaitStoppedMask) != WaitStoppedMarker 'aSignalKilledIt'
-			return PtraceWaitStatus.killed(waited)
-		end 'aSignalKilledIt'
+			nothing or
+			exited or
+			killed then break
+		end 'which'
 
-		let signal = (waited shr WaitCodeShift) and ByteMask
-		let event = (waited shr WaitEventShift) and ByteMask
-		self.rememberThread(reporter as BackendThreadId, signal: signal, event: event)
+		return report
+	end 'noted'
 
-		return PtraceWaitStatus.stopped(signal, event: event)
-	end 'takenWaitStatus'
-
-	function classified(reporter BackendWord, waited BackendWord) returns BackendEventClass
-		return match self.takenWaitStatus(reporter, waited: waited) 'status'
-			exited(code) gives self.reporterDeparted(reporter, event: DebugStopEvent.exited(code))
-			killed(waitStatus) gives self.reporterDeparted(reporter, event: DebugStopEvent.signalled(waitStatus))
-			stopped(signal, event) gives self.reporterStopped(reporter, signal: signal, event: event)
-		end 'status'
+	function classified(report TraceReport) returns BackendEventClass
+		return match report 'which'
+			nothing gives BackendEventClass.ended(DebugStopEvent.timedOut)
+			exited(thread, code) gives self.reporterDeparted(thread as BackendWord, event: DebugStopEvent.exited(code as BackendExitCode))
+			killed(thread, waitStatus) gives self.reporterDeparted(thread as BackendWord, event: DebugStopEvent.signalled(waitStatus as BackendWord))
+			stopped(thread, signal, event) gives self.reporterStopped(thread as BackendWord, signal: signal as BackendWord, event: event)
+		end 'which'
 	end 'classified'
 
-	function reporterStopped(reporter BackendWord, signal BackendWord, event BackendWord) returns BackendEventClass
+	function reporterStopped(reporter BackendWord, signal BackendWord, event TraceEvent) returns BackendEventClass
 		if self.process == 0 'theTraceeArrived'
 			self.process = reporter
 		end 'theTraceeArrived'
@@ -295,14 +258,14 @@ export type PtraceBackend
 	// ⛔ The options ride the FIRST stop rather than the spawn: `PTRACE_TRACEME` makes the child a tracee but
 	// only a stopped tracee can be configured, and `PTRACE_O_EXITKILL` is what makes the debuggee die with its
 	// debugger — so a session that set it later would leave an orphan for the window in between.
-	function stoppedWith(reporter BackendWord, signal BackendWord, event BackendWord) returns BackendEventClass
-		if event == PtraceEventClone 'aThreadWasBorn'
+	function stoppedWith(reporter BackendWord, signal BackendWord, event TraceEvent) returns BackendEventClass
+		if event == TraceEvent.cloneEvent 'aThreadWasBorn'
 			return self.resumedUnlessHeld(reporter, signal: NoSignal)
 		end 'aThreadWasBorn'
 
 		if not self.sawFirstStop 'theExecStop'
 			self.sawFirstStop = true
-			_ = hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceSetOptions, a1: self.process, a2: 0, a3: PtraceOptionExitKill or PtraceOptionTraceClone, a4: 0)
+			_ = self.trace.configure(self.process as DebuggeeProcessId)
 
 			return self.standing(reporter, reason: BackendStopReason.entry, faultCode: 0, at: self.programCounterOf(reporter))
 		end 'theExecStop'
@@ -333,7 +296,7 @@ export type PtraceBackend
 		end 'aSignalToHandOn'
 
 		if self.mayRun(thread) 'itIsNotHeldThroughAStep'
-			_ = self.resumeThread(reporter, request: self.resumeRequestFor(thread))
+			_ = self.resumeThread(reporter, asAStep: self.resumesAsAStep(thread))
 		end 'itIsNotHeldThroughAStep'
 
 		return BackendEventClass.bookkeeping
@@ -390,13 +353,7 @@ export type PtraceBackend
 	end 'tookTheTrapsKind'
 
 	function trapCameFromTheDriversSignal(reporter BackendWord) returns bool
-		self.scratch.setWord((PtraceSigInfoOffset + SigInfoCodeOffset) as BackendPageOffset, value: 0)
-
-		if hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceGetSigInfo, a1: reporter, a2: 0, a3: self.scratch.addressOf(PtraceSigInfoOffset as BackendPageOffset), a4: 0) == 0 'theKernelRefused'
-			return false
-		end 'theKernelRefused'
-
-		return (self.scratch.word((PtraceSigInfoOffset + SigInfoCodeOffset) as BackendPageOffset) and BackendDwordMask) == SignalCodeSentByKill
+		return self.trace.signalWasSentByKill(reporter as DebuggeeThreadId)
 	end 'trapCameFromTheDriversSignal'
 
 	function hold(stop PtraceHeldStop)
@@ -588,7 +545,7 @@ export type PtraceBackend
 
 		return match faults 'fault'
 			keptForTheDebugger gives false
-			handedToTheProgram gives self.resumeThread(id as BackendWord, request: PtraceCont)
+			handedToTheProgram gives self.resumeThread(id as BackendWord, asAStep: false)
 		end 'fault'
 	end 'continuedTowardItsStop'
 
@@ -607,7 +564,7 @@ export type PtraceBackend
 	end 'standsOwingAStop'
 
 	function continuedKeepingItsSignal(id BackendThreadId) returns bool
-		if hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceCont, a1: id as BackendWord, a2: 0, a3: NoSignal, a4: 0) == 0 'theKernelRefused'
+		if not self.trace.resume(id as DebuggeeThreadId, signal: NoTraceSignal, stepping: false) 'theKernelRefused'
 			return false
 		end 'theKernelRefused'
 
@@ -625,14 +582,14 @@ export type PtraceBackend
 	end 'awaitStops'
 
 	function settledOneReport(budgetMs BackendWord) returns bool
-		self.scratch.setWord(PtraceStatusOffset as BackendPageOffset, value: 0)
-		let reporter = hostDebugCall(HostDebugVerb.awaitTracee, a0: self.scratch.addressOf(PtraceStatusOffset as BackendPageOffset), a1: budgetMs, a2: self.process, a3: 0, a4: 0)
+		let waited = self.trace.wait(budgetMs as DebuggeeWaitMs, process: self.process as DebuggeeProcessId)
+		let report = self.noted(waited)
 
-		if reporter == 0 'nothingCameBack'
+		if not report.arrived() 'nothingCameBack'
 			return false
 		end 'nothingCameBack'
 
-		self.settleGroupStop(reporter, waited: self.scratch.word(PtraceStatusOffset as BackendPageOffset) and BackendDwordMask)
+		self.settleGroupStop(report)
 
 		return true
 	end 'settledOneReport'
@@ -659,16 +616,17 @@ export type PtraceBackend
 	// wait and reported to the driver, and a thread that owes a held report is never resumed, so the
 	// hit cannot be run past. Any other signal is kept for that thread's resume, so a fault stays
 	// owed to the program; a fault is also held and shown to the debugger.
-	function settleGroupStop(reporter BackendWord, waited BackendWord)
-		match self.takenWaitStatus(reporter, waited: waited) 'status'
-			exited(code) then self.departureHeld(reporter, event: DebugStopEvent.exited(code))
-			killed(waitStatus) then self.departureHeld(reporter, event: DebugStopEvent.signalled(waitStatus))
-			stopped(signal, event) then self.settleStoppedThread(reporter, signal: signal, event: event)
+	function settleGroupStop(report TraceReport)
+		match report 'status'
+			nothing then panic("PtraceBackend.settleGroupStop: an empty wait is answered by settledOneReport before it settles anything")
+			exited(thread, code) then self.departureHeld(thread as BackendWord, event: DebugStopEvent.exited(code as BackendExitCode))
+			killed(thread, waitStatus) then self.departureHeld(thread as BackendWord, event: DebugStopEvent.signalled(waitStatus as BackendWord))
+			stopped(thread, signal, event) then self.settleStoppedThread(thread as BackendWord, signal: signal as BackendWord, event: event)
 		end 'status'
 	end 'settleGroupStop'
 
-	function settleStoppedThread(reporter BackendWord, signal BackendWord, event BackendWord)
-		if event != 0 'aPtraceEventRatherThanASignal'
+	function settleStoppedThread(reporter BackendWord, signal BackendWord, event TraceEvent)
+		if event != TraceEvent.signalStop 'aPtraceEventRatherThanASignal'
 			return
 		end 'aPtraceEventRatherThanASignal'
 
@@ -776,13 +734,11 @@ export type PtraceBackend
 		return true
 	end 'stepThread'
 
-	// ⛔ THE ROSTER IS SNAPSHOT BEFORE THE FIRST RESUME, because a resume rewrites the table it would otherwise
-	// be read through — `withEntryReplaced` replaces the whole array, which a live borrow refuses (E3070).
 	function stoppedThreadsResumed() returns bool
 		var resumed = true
 
 		for entry in self.resumableRoster() 'eachStoppedThread'
-			if not self.resumeThread(entry.id as BackendWord, request: self.resumeRequestFor(entry.id)) 'theKernelRefused'
+			if not self.resumeThread(entry.id as BackendWord, asAStep: self.resumesAsAStep(entry.id)) 'theKernelRefused'
 				resumed = false
 			end 'theKernelRefused'
 		end 'eachStoppedThread'
@@ -825,17 +781,17 @@ export type PtraceBackend
 		end 'company'
 	end 'mayRun'
 
-	function resumeRequestFor(id BackendThreadId) returns BackendWord
-		return PtraceSingleStep if self.stepping.holds(id) else PtraceCont
-	end 'resumeRequestFor'
+	function resumesAsAStep(id BackendThreadId) returns bool
+		return self.stepping.holds(id)
+	end 'resumesAsAStep'
 
 	// A ptrace resume injects one signal, so every other owed signal is raised again once the request
 	// succeeds: the kernel does not re-raise an asynchronous signal its tracer withheld.
-	function resumeThread(thread BackendWord, request BackendWord) returns bool
+	function resumeThread(thread BackendWord, asAStep bool) returns bool
 		let id = thread as BackendThreadId
 		let owed = self.owedSignalsOf(id)
 
-		if hostDebugCall(HostDebugVerb.traceRequest, a0: request, a1: thread, a2: 0, a3: ptraceFirstSignalOf(owed), a4: 0) == 0 'theKernelRefused'
+		if not self.trace.resume(thread as DebuggeeThreadId, signal: ptraceFirstSignalOf(owed) as DebuggeeSignal, stepping: asAStep) 'theKernelRefused'
 			return false
 		end 'theKernelRefused'
 
@@ -847,7 +803,7 @@ export type PtraceBackend
 
 	export function requestStop() returns bool
 		if not self.driverTrapInFlight 'noSignalIsOnItsWay'
-			if hostDebugCall(HostDebugVerb.processSignal, a0: self.process, a1: SignalTrap, a2: 0, a3: 0, a4: 0) == 0 'theKernelRefused'
+			if not self.trace.signalProcess(self.process as DebuggeeProcessId, signal: SignalTrap as DebuggeeSignal) 'theKernelRefused'
 				return false
 			end 'theKernelRefused'
 
@@ -904,7 +860,7 @@ export type PtraceBackend
 		var detached = true
 
 		for entry in self.threads 'eachThread'
-			if hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceDetach, a1: entry.id as BackendWord, a2: 0, a3: ptraceFirstSignalOf(entry.owedSignals), a4: 0) == 0 'theKernelRefused'
+			if not self.trace.detach(entry.id as DebuggeeThreadId, signal: ptraceFirstSignalOf(entry.owedSignals) as DebuggeeSignal) 'theKernelRefused'
 				detached = false
 
 				continue
@@ -957,61 +913,30 @@ export type PtraceBackend
 	end 'returnedTheBorrowedStop'
 
 	export function readMemory(address DebugAddress, bytes BackendByteCount) returns BackendMemoryRead
-		if bytes == 0 'nothingAsked'
-			return BackendMemoryRead.read(ByteArray.create())
-		end 'nothingAsked'
-
-		if bytes > TransferWindowBytes 'pastTheWindow'
-			return BackendMemoryRead.unreadable
-		end 'pastTheWindow'
-
-		self.scratch.setWord(PtraceReadCountOffset as BackendPageOffset, value: 0)
-
 		let borrowed = self.borrowedStop()
-		let copied = hostDebugCall(HostDebugVerb.traceeRead, a0: self.process, a1: address as BackendWord, a2: self.scratch.addressOf(PtraceTransferOffset as BackendPageOffset), a3: bytes as BackendWord, a4: self.scratch.addressOf(PtraceReadCountOffset as BackendPageOffset)) != 0
+		let copied = try self.trace.readMemory(self.process as DebuggeeProcessId, address: address as DebuggeeAddress, count: bytes as DebuggeeByteCount) otherwise 'unreadable'
+			self.returnedTheBorrowedStop(borrowed)
+
+			return BackendMemoryRead.unreadable
+		end 'unreadable'
+
 		self.returnedTheBorrowedStop(borrowed)
 
-		if not copied 'notMapped'
-			return BackendMemoryRead.unreadable
-		end 'notMapped'
-
-		return BackendMemoryRead.read(self.scratch.bytesAt(PtraceTransferOffset as BackendPageOffset, count: bytes))
+		return BackendMemoryRead.read(copied)
 	end 'readMemory'
 
 	// ⛔ `process_vm_writev` CANNOT WRITE A READ-ONLY TEXT PAGE and every breakpoint write is exactly that, so
 	// the write road is `PTRACE_POKEDATA` — which is word-granular, so a partial word is read back first and
 	// overlaid.
 	export function writeMemory(address DebugAddress, bytes ByteArray) returns bool
-		let count = bytes.count() as BackendWord
+		match transferSizeOf(bytes.count() as TransferByteCount) 'size'
+			nothing then return true
+			pastTheWindow then return false
+			withinTheWindow then break
+		end 'size'
 
-		if count == 0 'nothingToWrite'
-			return true
-		end 'nothingToWrite'
-
-		if count > TransferWindowBytes 'pastTheWindow'
-			return false
-		end 'pastTheWindow'
-
-		var written = 0 as BackendWord
-		var wrote = true
 		let borrowed = self.borrowedStop()
-
-		while written < count 'eachWord'
-			let target = (address as BackendWord) + written
-			let aligned = target - (target mod (DebuggeeWordBytes as BackendWord))
-			let inWord = target - aligned
-			let room = (DebuggeeWordBytes as BackendWord) - inWord
-			let left = count - written
-			let take = room if left > room else left
-
-			if not self.wordOverlaid(aligned, at: inWord, taking: take, from: bytes, startingAt: written) 'unwritable'
-				wrote = false
-				break
-			end 'unwritable'
-
-			written = written + take
-		end 'eachWord'
-
+		let wrote = self.codeWrittenByAStoppedThread(address, bytes: bytes)
 		self.returnedTheBorrowedStop(borrowed)
 
 		return wrote
@@ -1021,32 +946,14 @@ export type PtraceBackend
 	// to one this backend knows is stopped rather than to the thread group's leader: a walk single-steps one
 	// thread while the others run on, and aiming a poke at a RUNNING leader answers `ESRCH` — which planted no
 	// trap and reported no failure the driver could act on, so the walk ran to the program's exit.
-	function wordOverlaid(aligned BackendWord, at BackendWord, taking BackendWord, from ByteArray, startingAt BackendWord) returns bool
-		var through = 0 as BackendWord
-
+	function codeWrittenByAStoppedThread(address DebugAddress, bytes ByteArray) returns bool
 		match self.stoppedThreadForRequests() 'stopped'
 			none then return false
-			at(thread) then through = thread
+			at(thread) then try self.trace.writeCode(thread as DebuggeeThreadId, address: address as DebuggeeAddress, content: bytes) otherwise return false
 		end 'stopped'
 
-		self.scratch.setWord(PtracePeekOffset as BackendPageOffset, value: 0)
-
-		if hostDebugCall(HostDebugVerb.traceRequest, a0: PtracePeekData, a1: through, a2: aligned, a3: self.scratch.addressOf(PtracePeekOffset as BackendPageOffset), a4: 0) == 0 'unreadable'
-			return false
-		end 'unreadable'
-
-		var bytes = debuggeeWordBytes(self.scratch.word(PtracePeekOffset as BackendPageOffset) as DebuggeeWord, width: DebuggeeWordBytes)
-
-		for step in 0 upto taking 'eachByte'
-			let value = try from.get((startingAt + step) as ElementIndex) otherwise panic("PtraceBackend.wordOverlaid: the caller's window is bounded by the byte count, so byte {startingAt + step} of {from.count()} is in hand — a zero taken here would be poked into the debuggee's own code")
-			try bytes.set((at + step) as ElementIndex, value: value) otherwise panic("PtraceBackend.wordOverlaid: the caller keeps byte {at} + {step} inside the {DebuggeeWordBytes}-byte word it peeked")
-		end 'eachByte'
-
-		match debugLittleEndianAt(bytes, at: 0, width: DebuggeeWordBytes) 'overlaid'
-			pastTheBytes then panic("PtraceBackend.wordOverlaid: the peeked word was split into {DebuggeeWordBytes} bytes, so all of them are in hand")
-			read(word) then return hostDebugCall(HostDebugVerb.traceRequest, a0: PtracePokeData, a1: through, a2: aligned, a3: word as BackendWord, a4: 0) != 0
-		end 'overlaid'
-	end 'wordOverlaid'
+		return true
+	end 'codeWrittenByAStoppedThread'
 
 	function stoppedThreadForRequests() returns PtraceRequestThread
 		for entry in self.threads 'eachThread'
@@ -1061,20 +968,17 @@ export type PtraceBackend
 	// --- registers ---
 
 	export function readRegisters(thread BackendThreadId) returns BackendRegisterRead
-		if not self.registersRead(thread as BackendWord) 'unreadable'
-			return BackendRegisterRead.unreadable
-		end 'unreadable'
-
+		let block = try self.trace.registers(thread as DebuggeeThreadId) otherwise return BackendRegisterRead.unreadable
 		var file = DebugRegisterFile.create()
 		let offsets = ptraceGprBlockOffsets()
 
 		for (iter, offset) in offsets.withIterator() 'eachGeneralRegister'
-			file.setValue(iter.index() as BackendRegisterNumber, value: self.scratch.word(ptraceGprBlockSlot(offset)))
+			file.setValue(iter.index() as BackendRegisterNumber, value: ptraceBlockWord(block, at: offset))
 		end 'eachGeneralRegister'
 
-		file.setValue(BackendRegSlotPc as BackendRegisterNumber, value: self.scratch.word(ptraceProgramCounterSlot()))
-		file.setValue(BackendRegSlotFlags as BackendRegisterNumber, value: self.scratch.word(ptraceStatusWordSlot()))
-		file.setValue(BackendRegSlotSp as BackendRegisterNumber, value: self.scratch.word(ptraceStackPointerSlot()))
+		file.setValue(BackendRegSlotPc as BackendRegisterNumber, value: ptraceProgramCounterOf(block))
+		file.setValue(BackendRegSlotFlags as BackendRegisterNumber, value: ptraceStatusWordOf(block))
+		file.setValue(BackendRegSlotSp as BackendRegisterNumber, value: ptraceStackPointerOf(block))
 
 		return BackendRegisterRead.read(file)
 	end 'readRegisters'
@@ -1085,45 +989,31 @@ export type PtraceBackend
 	// reach; only the low half of each XMM is taken, because that is the half the other lane's `CONTEXT`
 	// decode stores and the slot is one word wide.
 	export function fillVectorRegisters(thread BackendThreadId, into DebugRegisterFile)
-		if not ptraceVectorRegistersRead(self.scratch, thread: thread as BackendWord) 'noVectorFile'
-			return
-		end 'noVectorFile'
+		let block = try self.trace.vectorRegisters(thread as DebuggeeThreadId) otherwise return
 
 		for lane in 0 upto BackendVectorSlots 'eachVectorRegister'
-			into.setValue((BackendGprSlots + lane) as BackendRegisterNumber, value: self.scratch.word(ptraceVectorLaneSlot(lane as BackendWord)))
+			into.setValue((BackendGprSlots + lane) as BackendRegisterNumber, value: ptraceVectorLaneOf(block, lane: lane as BackendWord))
 		end 'eachVectorRegister'
 	end 'fillVectorRegisters'
 
 	export function setProgramCounter(thread BackendThreadId, address DebugAddress) returns bool
-		if not self.registersRead(thread as BackendWord) 'unreadable'
-			return false
-		end 'unreadable'
+		let block = try self.trace.registers(thread as DebuggeeThreadId) otherwise return false
+		let patched = try ptraceWithProgramCounter(block, address: address as BackendWord) otherwise panic("PtraceBackend.setProgramCounter: ptraceWithProgramCounter refused a register block registers just produced — the program counter sits at a constant offset inside the fixed-length block")
+		try self.trace.setRegisters(thread as DebuggeeThreadId, block: patched) otherwise return false
 
-		self.scratch.setWord(ptraceProgramCounterSlot(), value: address as BackendWord)
-
-		return self.registersWritten(thread as BackendWord)
+		return true
 	end 'setProgramCounter'
 
-	function registersRead(thread BackendWord) returns bool
-		return ptraceRegistersRead(self.scratch, thread: thread)
-	end 'registersRead'
-
-	function registersWritten(thread BackendWord) returns bool
-		return ptraceRegistersWritten(self.scratch, thread: thread)
-	end 'registersWritten'
-
 	function programCounterOf(thread BackendWord) returns PtraceProgramCounter
-		if not self.registersRead(thread) 'unreadable'
-			return PtraceProgramCounter.unreadable
-		end 'unreadable'
+		let block = try self.trace.registers(thread as DebuggeeThreadId) otherwise return PtraceProgramCounter.unreadable
 
-		return PtraceProgramCounter.at(debugAddressOrZero(self.scratch.word(ptraceProgramCounterSlot()) as DebuggeeWord))
+		return PtraceProgramCounter.at(debugAddressOrZero(ptraceProgramCounterOf(block) as DebuggeeWord))
 	end 'programCounterOf'
 
 	// --- the thread table ---
 
-	function rememberThread(id BackendThreadId, signal BackendWord, event BackendWord)
-		let standingSignal = signal if event == 0 else NoSignal
+	function rememberThread(id BackendThreadId, signal BackendWord, event TraceEvent)
+		let standingSignal = signal if event == TraceEvent.signalStop else NoSignal
 		let stopObserved = standingSignal == ptraceStopSignal()
 
 		match self.entryOf(id) 'known'
@@ -1193,7 +1083,7 @@ export type PtraceBackend
 	end 'laterSignalsRaised'
 
 	function signalRaised(id BackendThreadId, signal BackendWord) returns bool
-		return hostDebugCall(HostDebugVerb.threadSignal, a0: self.process, a1: id as BackendWord, a2: signal, a3: 0, a4: 0) != 0
+		return self.trace.signalThread(self.process as DebuggeeProcessId, thread: id as DebuggeeThreadId, signal: signal as DebuggeeSignal)
 	end 'signalRaised'
 
 	function owesAStop(id BackendThreadId) returns bool

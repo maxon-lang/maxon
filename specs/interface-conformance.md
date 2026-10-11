@@ -520,12 +520,14 @@ end 'main'
 7
 ```
 
-### A user type implementing a compiler builtin interface
+### A type implementing a compiler builtin interface
 
-<!-- test: builtin-interface-user-code -->
+<!-- test: builtin-interface-conformer-in-the-library-tier -->
+<!-- tier: stdlib -->
 `stdlib/Builtins.maxon`'s `BuiltinArrayLiteral` is a MARKER: the compiler finds the type implementing it and
-uses that declaration as the record a `[…]` literal builds. A user program may declare its own conformer, and
-`stdlib/Array.maxon` is one — the compiler reads the corpus's declaration rather than transcribing a layout.
+uses that declaration as the record a `[…]` literal builds. A conformer's record holds a `__ManagedMemory`,
+which only a source file under `stdlib/` or `runtime/` may name (E3185), so the conformer cases here compile
+in the library tier; `stdlib/Array.maxon` is one — the compiler reads the corpus's declaration rather than transcribing a layout.
 
 ⚠ **THE FIELD MUST BE A BUFFER OVER THE TYPE PARAMETER, AND THE INNER `typealias` IS HOW ONE IS SPELT.** A
 field declaration may not carry a `with` clause directly (`var managed as __ManagedMemory with
@@ -551,6 +553,7 @@ end 'main'
 ```
 
 <!-- test: error.builtin-array-conformer-over-the-wrong-element -->
+<!-- tier: stdlib -->
 ⭐⭐ **The compiler REFUSES A CONFORMER WHOSE BUFFER IS NOT OVER ITS OWN TYPE PARAMETER.**
 `Array with T` and `__ManagedMemory with T` are ONE `GenericInstanceId`, so a
 `MyCollection{managed: m}` literal is not a CONSTRUCTION at all — it is an IDENTITY on the record, handed back
@@ -2111,6 +2114,7 @@ error E3016: <fragment>:8:6: Method 'Point.digest' throws 'Bogus' but interface 
 ## A builtin literal marker is not a marker a user type may wear
 
 <!-- test: error.literal-marker-conformer-would-be-dropped-through-the-wrong-cascade -->
+<!-- tier: stdlib -->
 ### The record a marker conformer gets is a BYTE RECORD, and its cascade is a STRUCT's
 
 ⭐⭐ **THE ENVELOPE COLLAPSE IS A LAYOUT RULE; THE VALUE IT PRODUCES CARRIES AN IDENTITY NOTHING ELSE
@@ -2149,6 +2153,7 @@ error E2015: <fragment>:8:10: Unsupported: `Wrapped` implements `BuiltinStringLi
 ```
 
 <!-- test: error.literal-marker-conformer-would-be-cloned-through-the-wrong-cascade -->
+<!-- tier: stdlib -->
 ### The clone half of the same refusal
 
 `__clone_<T>` is built from the identical declared field list, so co-owning such a value out of a struct
@@ -2190,6 +2195,7 @@ error E2015: <fragment>:8:10: Unsupported: `Wrapped` implements `BuiltinStringLi
 ```
 
 <!-- test: error.literal-marker-conformer-cannot-hold-what-its-literal-was-given -->
+<!-- tier: stdlib -->
 ### ⚠ THE SILENT ONE — a field written `false` that reads back TRUE
 
 ⭐⭐ **THE MOST SERIOUS OF THE THREE, BECAUSE IT NEITHER FAULTS NOR LEAKS.** The fused encoder takes the
@@ -2225,6 +2231,7 @@ error E2015: <fragment>:7:10: Unsupported: `Wrapped` implements `BuiltinStringLi
 ```
 
 <!-- test: error.char-literal-marker-conformer-is-refused-too -->
+<!-- tier: stdlib -->
 ### `BuiltinCharLiteral` is refused by the same door
 
 The marker the refusal quotes is the one the type DECLARES, so the two byte-record markers reach one

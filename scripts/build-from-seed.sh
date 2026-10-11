@@ -3,7 +3,7 @@
 # Build this tree's compiler from a released seed at `.bootstrap/maxon`: the seed builds `C1`, and
 # `C1` builds `C2` into the slot. Prints the result's `maxon version`.
 #
-# ⛔⛔ **ONE BUILD FROM THE SEED IS NOT THIS TREE'S COMPILER, IN TWO WAYS.**
+# ⛔⛔ **ONE BUILD FROM THE SEED IS NOT THIS TREE'S COMPILER, IN THREE WAYS.**
 #
 #   * **ITS OWN RUNTIME IS THE SEED'S.** `C1` emits the new runtime into what it builds, but the
 #     runtime inside `C1` was emitted by the previous release. `spec-test`'s worker IS the compiler,
@@ -27,9 +27,10 @@
 #
 # ⛔ **THE SHIM IS WITHDRAWN BEFORE `C1` BUILDS `C2`, AND THAT IS WHAT MAKES IT SOUND.** A patch
 # withdraws a DECLARATION the seed refuses, a CALL SITE in compiler source the seed refuses the tree at,
-# a VISIBILITY MODIFIER an older audit reads as an unused export, or a LANGUAGE FORM the seed cannot
-# parse (with the casts its older rule then demands) — never the tables that teach `C1` the entry. `C1` therefore knows the entry and compiles the unshimmed tree. Left in place for the
-# second build it would ship a compiler built from the stubbed source.
+# a VISIBILITY MODIFIER an older audit reads as an unused export, a LANGUAGE FORM the seed cannot parse
+# (with the rewrites its older rules then demand), a LIBRARY BODY naming what the seed has never heard of,
+# or a CONSTRUCT the seed miscompiles — never the tables that teach `C1` the entry. `C1` therefore knows the entry and compiles the unshimmed
+# tree. Left in place for the second build it would ship a compiler built from the stubbed source.
 # `scripts/seed-shim/README.md` owns the rule.
 #
 # Usage:

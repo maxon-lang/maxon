@@ -1,10 +1,10 @@
 // "A spawned green thread reached a worker M" is a property to BLOCK ON, not one to sample. `main`
-// can publish every message and read `schedMaxActiveWorkers()` before the OS has run the thread
+// can publish every message and read `Scheduler.counters().maxActiveWorkers` before the OS has run the thread
 // `__sched_wake_or_spawn` created for it, and a correct runtime then reads `workers=1` — failing both
 // halves of the assertion by winning a race instead of by being wrong.
 //
-// ⭐ THE COUNTERS THIS WAITS ON ARE PROCESS-WIDE AND MONOTONIC. `schedMaxActiveWorkers` is a
-// high-water mark and `slabRemoteFreeCount` sums one per-P word over `__sched_procs`, so WHICH
+// ⭐ THE COUNTERS THIS WAITS ON ARE PROCESS-WIDE AND MONOTONIC. `Scheduler.counters().maxActiveWorkers` is a
+// high-water mark and `HeapStats.slab().remoteFrees` sums one per-P word over `__sched_procs`, so WHICH
 // machine asks is irrelevant and WHEN it asks is everything. That is why callers read them at the
 // point their work is published rather than wherever is convenient.
 
@@ -25,14 +25,14 @@ let secondWorker = 2
 export function awaitWorkerArrival() returns bool
 	// With one processor there is no second machine and `workers=1` is the correct reading, so waiting
 	// here would spend the whole budget to learn nothing.
-	if __Builtins.schedProcessorCount() < secondWorker 'oneProcessor'
+	if Scheduler.processorCount() < secondWorker 'oneProcessor'
 		return true
 	end 'oneProcessor'
 
 	var turn = 0
 
 	while turn < arrivalTurns 'wait'
-		if __Builtins.schedMaxActiveWorkers() >= secondWorker 'arrived'
+		if Scheduler.counters().maxActiveWorkers >= secondWorker 'arrived'
 			return true
 		end 'arrived'
 

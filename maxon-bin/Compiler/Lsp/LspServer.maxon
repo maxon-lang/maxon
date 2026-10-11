@@ -55,8 +55,7 @@ let FoldersRemovedKey = "removed"
 
 // Run the server until the client ends the session, and report how it ended.
 export function runLspServer() returns ExitCode
-	startLspOutput()
-	var session = LspSession.create()
+	var session = LspSession.create(spawn LspStdoutWriter.create())
 	return session.run()
 end 'runLspServer'
 
@@ -66,27 +65,29 @@ type LspSession
 	var shutdownRequested = false
 	var stopped = false
 	var streamBroken = false
+	var stdin as Stdin
+	var workspace as LspWorkspaceState
 
 	// Minted here rather than read from the client, which may state no `version`: every arrival needs
 	// one of its own for a project check to learn it was superseded.
 	var nextDocumentVersion as LspDocumentVersion
 
-	static function create() returns LspSession
-		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create(), nextDocumentVersion: 0}
+	static function create(writer LspStdoutWriter.handle) returns LspSession
+		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create(), stdin: Console.stdin(), workspace: LspWorkspaceState.create(writer), nextDocumentVersion: 0}
 	end 'create'
 
 	// The message pump. One turn reads one framed message; the session ends when the client says so
 	// (`exit`), when it closes the stream, or when a message arrives this server cannot frame.
 	export function run() returns ExitCode
 		while not self.stopped 'pump'
-			match readLspMessage() 'incoming'
+			match readLspMessage(self.stdin) 'incoming'
 				message(body) then handleMessage(body)
 				endOfStream then self.stopped = true
 				framingError(detail) then failOnBrokenStream(detail)
 			end 'incoming'
 		end 'pump'
 
-		lspOutputWriter().endSession()
+		self.workspace.writer.endSession()
 
 		return exitCode()
 	end 'run'
@@ -95,9 +96,9 @@ type LspSession
 		self.documents.upsert(uri, value: text)
 		self.nextDocumentVersion = self.nextDocumentVersion + 1
 		let version = self.nextDocumentVersion
-		lspOutputWriter().track(uri.clone(), version: version)
+		self.workspace.writer.track(uri.clone(), version: version)
 
-		match publishBufferDiagnostics(uri, text: text, arrival: arrival) 'publish'
+		match publishBufferDiagnostics(self.workspace, uri: uri, text: text, arrival: arrival) 'publish'
 			unchecked then return
 			published(reader, root, path, fast) then self.requestProjectCheck(LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion, alone: fast.clone()), reader: reader, root: root)
 		end 'publish'
@@ -106,7 +107,7 @@ type LspSession
 	function requestProjectCheck(request LspProjectCheckRequest, reader LspReaderSearch, root WorkspaceRoot)
 		match lspProjectCheckRoot(reader, root: root) 'root'
 			none then return
-			at(dir) then lspProjectCheckerFor(dir, tiers: reader.tiers).check(request.clone())
+			at(dir) then lspProjectCheckerFor(self.workspace, dir: dir, tiers: reader.tiers).check(request.clone())
 		end 'root'
 	end 'requestProjectCheck'
 
@@ -129,7 +130,7 @@ type LspSession
 
 	function handleMessage(body String)
 		let doc = try Json.parse(body) otherwise 'notJson'
-			writeLspError(LspRequestId.absent, code: LspJsonRpcErrorCode.parseError, message: "Parse error - request body is not valid JSON")
+			writeLspError(self.workspace.writer, id: LspRequestId.absent, code: LspJsonRpcErrorCode.parseError, message: "Parse error - request body is not valid JSON")
 			return
 		end 'notJson'
 
@@ -151,13 +152,13 @@ type LspSession
 
 	function handleRequest(method String, id LspRequestId, doc JsonDoc)
 		if method == MethodInitialize 'initialize'
-			respondInitialize(id, doc: doc)
+			respondInitialize(self.workspace, id: id, doc: doc)
 			return
 		end 'initialize'
 
 		if method == MethodShutdown 'shutdown'
 			self.shutdownRequested = true
-			respondShutdown(id)
+			respondShutdown(self.workspace.writer, id: id)
 			return
 		end 'shutdown'
 
@@ -190,24 +191,24 @@ type LspSession
 			return
 		end 'noAnswerYet'
 
-		let answer = try self.answerResolving(method, doc: doc) otherwise 'badParams'
+		var answer = try self.answerResolving(method, doc: doc) otherwise 'badParams'
 			self.refuseParams(spelling.wireName, id: id)
 			return
 		end 'badParams'
 
-		writeLspResult(answer.doc, id: id, result: answer.result)
+		writeLspResult(self.workspace.writer, doc: answer.doc, id: id, result: answer.result)
 	end 'answerLanguageRequest'
 
 	function answerExtensionRequest(method LspExtensionMethod, id LspRequestId, doc JsonDoc)
 		let wireName = lspExtensionMethodWireName(method)
 
-		let outcome = try answerExtension(method, doc: doc, documents: self.documents) otherwise 'badParams'
+		var outcome = try answerExtension(method, doc: doc, documents: self.documents, workspace: self.workspace) otherwise 'badParams'
 			self.refuseParams(wireName, id: id)
 			return
 		end 'badParams'
 
 		match outcome 'outcome'
-			answered(answer) then writeLspResult(answer.doc, id: id, result: answer.result)
+			answered(answer) then writeLspResult(self.workspace.writer, doc: answer.doc, id: id, result: answer.result)
 			compilerUnavailable then self.refuse(id, code: LspJsonRpcErrorCode.internalError, message: "Internal error - {wireName}: this compiler cannot locate its stdlib/ and runtime/ sources")
 		end 'outcome'
 	end 'answerExtensionRequest'
@@ -223,7 +224,7 @@ type LspSession
 		let uri = try lspMemberText(doc, of: textDocument, key: LspUriKey)
 		let text = try self.documents.get(uri) otherwise return LspAnswer.nothing()
 
-		return try answerFor(LspRequest.of(method, incoming: doc, params: params, uri: uri, text: text, keywords: self.keywords))
+		return try answerFor(LspRequest.of(method, incoming: doc, params: params, uri: uri, text: text, keywords: self.keywords, workspace: self.workspace))
 	end 'answerResolving'
 
 	// ⛔ NO `else` ARM, AND THAT IS THE PROTOCOL: a notification is never answered, so one this server
@@ -239,7 +240,7 @@ type LspSession
 		end 'didChange' else if method == MethodDidClose 'didClose'
 			try self.closeDocument(doc) otherwise ignore
 		end 'didClose' else if method == MethodDidChangeWorkspaceFolders 'workspaceFolders'
-			try changeWorkspaceFolders(doc) otherwise ignore
+			try changeWorkspaceFolders(self.workspace, doc: doc) otherwise ignore
 		end 'workspaceFolders' else if method == MethodExit 'exit'
 			self.stopped = true
 		end 'exit'
@@ -272,8 +273,8 @@ type LspSession
 	function closeDocument(doc JsonDoc) throws LspParamsError
 		let (_, _, uri) = try notifiedDocument(doc)
 		_ = self.documents.remove(uri)
-		lspOutputWriter().forget(uri.clone())
-		clearPublishedDiagnostics(uri)
+		self.workspace.writer.forget(uri.clone())
+		clearPublishedDiagnostics(self.workspace.writer, uri: uri)
 	end 'closeDocument'
 
 	// A malformed message that carries an id is refused; one without an id is a notification and gets no
@@ -282,7 +283,7 @@ type LspSession
 		match id 'addressee'
 			absent then return
 			number or
-			text then writeLspError(id, code: code, message: message)
+			text then writeLspError(self.workspace.writer, id: id, code: code, message: message)
 		end 'addressee'
 	end 'refuse'
 end 'LspSession'
@@ -296,8 +297,8 @@ end 'LspSession'
 // capabilities say what a client can RENDER, not what a server may offer: the server advertises what it
 // serves and the client decides what to ask for. Gating advertisement on them made a client that declared
 // nothing get a hover it was never told about.
-function respondInitialize(id LspRequestId, doc JsonDoc)
-	lspRememberClientRoots(clientRootsOf(doc))
+function respondInitialize(workspace LspWorkspaceState, id LspRequestId, doc JsonDoc)
+	lspRememberClientRoots(workspace, roots: clientRootsOf(doc))
 
 	var reply = JsonDoc.create()
 	var capabilities = LspJsonObject.create(reply)
@@ -312,7 +313,7 @@ function respondInitialize(id LspRequestId, doc JsonDoc)
 	var result = LspJsonObject.create(reply)
 	result.putNode(CapabilitiesKey, value: capabilities.finish())
 	result.putNode(ServerInfoKey, value: serverInfoNode(reply))
-	writeLspResult(reply, id: id, result: result.finish())
+	writeLspResult(workspace.writer, doc: reply, id: id, result: result.finish())
 end 'respondInitialize'
 
 function serverInfoNode(doc JsonDoc) returns JsonNodeId
@@ -343,7 +344,7 @@ function clientRootsOf(doc JsonDoc) returns LspClientRootArray
 	return roots
 end 'clientRootsOf'
 
-function changeWorkspaceFolders(doc JsonDoc) throws LspParamsError
+function changeWorkspaceFolders(workspace LspWorkspaceState, doc JsonDoc) throws LspParamsError
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
 	let event = try lspMember(doc, of: params, key: FolderEventKey)
 
@@ -353,7 +354,7 @@ function changeWorkspaceFolders(doc JsonDoc) throws LspParamsError
 	pushWorkspaceFolderRoots(doc, container: event, key: FoldersAddedKey, into: added)
 	pushWorkspaceFolderRoots(doc, container: event, key: FoldersRemovedKey, into: removed)
 
-	lspChangeClientRoots(added, removed: removed)
+	lspChangeClientRoots(workspace, added: added, removed: removed)
 end 'changeWorkspaceFolders'
 
 function pushWorkspaceFolderRoots(doc JsonDoc, container JsonNodeId, key String, into LspClientRootArray)
@@ -420,10 +421,10 @@ function answerFor(request LspRequest) returns LspAnswer throws LspParamsError
 end 'answerFor'
 
 // The one place an extension request is handed to its handler, complete over `LspExtensionMethod`.
-function answerExtension(method LspExtensionMethod, doc JsonDoc, documents LspDocumentTextMap) returns LspExtensionOutcome throws LspParamsError
+function answerExtension(method LspExtensionMethod, doc JsonDoc, documents LspDocumentTextMap, workspace LspWorkspaceState) returns LspExtensionOutcome throws LspParamsError
 	return match method 'extension'
-		generateIr gives try generateIrAnswer(doc, params: try lspMember(doc, of: doc.root, key: JsonRpcParamsKey))
-		listProjects gives listProjectsAnswer(documents)
+		generateIr gives try generateIrAnswer(workspace, incoming: doc, params: try lspMember(doc, of: doc.root, key: JsonRpcParamsKey))
+		listProjects gives listProjectsAnswer(workspace, documents: documents)
 	end 'extension'
 end 'answerExtension'
 
@@ -458,9 +459,9 @@ function areaServedMethods(area LspArea) returns LspMethodArray
 end 'areaServedMethods'
 
 // LSP defines shutdown's result as null.
-function respondShutdown(id LspRequestId)
+function respondShutdown(writer LspStdoutWriter.handle, id LspRequestId)
 	var doc = JsonDoc.create()
-	writeLspResult(doc, id: id, result: doc.add(JsonNode.nullNode()))
+	writeLspResult(writer, doc: doc, id: id, result: doc.add(JsonNode.nullNode()))
 end 'respondShutdown'
 
 // `params`, `params.textDocument` and its `uri` — the walk every `textDocument/*` notification begins

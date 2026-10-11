@@ -430,7 +430,7 @@ end 'writeStagedFile'
 function freshOutsideCheckoutDir(caseDirName String) returns FilePath
 	requireOneCaseDirName(caseDirName)
 
-	let dir = createdStagedDirectory(hostTempDir().join("{OutsideCheckoutStagingDirNamePrefix}{CaseDirectoryWordSeparator}{__Builtins.currentProcessId()}{CaseDirectoryWordSeparator}{caseDirectoryName(caseDirName)}"))
+	let dir = createdStagedDirectory(hostTempDir().join("{OutsideCheckoutStagingDirNamePrefix}{CaseDirectoryWordSeparator}{Process.id()}{CaseDirectoryWordSeparator}{caseDirectoryName(caseDirName)}"))
 
 	clearStagedFiles(dir)
 	requireNoVendorAbove(dir)
@@ -1379,7 +1379,7 @@ export function outputLockOf(record FilePath) returns FilePath
 end 'outputLockOf'
 
 export function plantLockOfALiveHolder(lock FilePath)
-	plantOutputLock(lock, content: lockRecordOf(__Builtins.currentProcessId(), host: thisLockHostIdentity()))
+	plantOutputLock(lock, content: lockRecordOf(Process.id(), host: thisLockHostIdentity()))
 end 'plantLockOfALiveHolder'
 
 export function plantLockOfAnEndedHolder(lock FilePath)
@@ -1413,15 +1413,15 @@ end 'endedVersionRunProcessId'
 function thisLockHostIdentity() returns String
 	#if os(Windows)
 		let hostName = try Process.environmentVariable(HostNameVariable) otherwise panic("CliHarness: the gate could not run - {HostNameVariable} is not set, so this host names itself nowhere the driver reads.")
-		return hostIdentityOf([hostName, String.init(__Builtins.processNamespace())])
+		return hostIdentityOf([hostName, Process.namespace()])
 	#endif
 
 	#if os(Linux)
-		return hostIdentityOf([firstNamedIn([KernelHostNamePath]), firstNamedIn([MachineIdPath, DbusMachineIdPath]), String.init(__Builtins.processNamespace())])
+		return hostIdentityOf([firstNamedIn([KernelHostNamePath]), firstNamedIn([MachineIdPath, DbusMachineIdPath]), Process.namespace()])
 	#endif
 
 	#if os(Macos)
-		return hostIdentityOf([String.init(__Builtins.processNamespace())])
+		return hostIdentityOf([Process.namespace()])
 	#endif
 end 'thisLockHostIdentity'
 

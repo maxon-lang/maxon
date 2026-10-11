@@ -185,9 +185,8 @@ along. **Only an exact count catches this.**
 function main() returns ExitCode
 	let oneFile = FilePath from "test_dots_one"
 	_ = Directory.create(oneFile)
-	var f = try __ManagedFile.openWrite("test_dots_one/only.txt".toByteArray().managed) otherwise return 1
-	try f.write("x".toByteArray().managed) otherwise return 2
-	f.close()
+	let onlyFile = FilePath from "test_dots_one/only.txt"
+	try File.writeText(onlyFile, content: "x") otherwise return 1
 
 	let entries = try Directory.list(oneFile) otherwise return 3
 	for e in entries 'each'
@@ -199,7 +198,7 @@ function main() returns ExitCode
 	if entries.count() != 1 'countOne'
 		return 5
 	end 'countOne'
-	try __ManagedFile.delete("test_dots_one/only.txt".toByteArray().managed) otherwise return 6
+	try File.delete(onlyFile) otherwise return 6
 
 	// An empty directory holds ONLY "." and "..". Filtering them must leave an
 	// empty list — not a spurious entry read from an unwritten name buffer.

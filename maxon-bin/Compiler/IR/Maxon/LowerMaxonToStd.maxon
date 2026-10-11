@@ -230,6 +230,7 @@ function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
 		signExtendI8 or
 		signExtendI16 or
 		signExtendI32 then panic("maxonUnaryOpToStdOpcode: {op.name} has no 1:1 Std opcode — it EXPANDS to a shift pair, and `lowerUnaryOp` routes it to `lowerSignExtend` before reaching this map")
+		copy then panic("maxonUnaryOpToStdOpcode: {op.name} is no Std opcode — a deleted hold names the value it held, and `lowerUnaryOp` records that as a substitution before reaching this map")
 	end 'map'
 end 'maxonUnaryOpToStdOpcode'
 
@@ -463,7 +464,7 @@ typealias ImmortalStructBoxLabelSet = Set with String
 
 typealias FunctionRecordLabelSet = Set with String
 
-typealias FunctionValueTargetMap = Map with (ValueId, ByteArray)
+typealias FunctionValueTargetMap = Map with (ValueId, readonly ByteArray)
 
 union FunctionValueTargets
 	none
@@ -547,29 +548,20 @@ type WitnessAdapterRequest
 	// WHICH table stamped this slot, and therefore WHERE the dictionary the adapter passes comes from:
 	// `perInstance` names the instance whose descriptor and witnesses the adapter materializes, `shared` is
 	// the null dictionary `requireWitnessSlotImplIgnoresDictionary` proves nothing reads.
-	export let instance as WitnessTableInstance
+	export var instance as WitnessTableInstance
 
 	export let reinterpretedParams as ArgFloatMask
 
 	static function create(conformerType ByteArray, implName ByteArray, adapterName ByteArray, slotArity ParamCount, instance WitnessTableInstance, reinterpretedParams ArgFloatMask) returns WitnessAdapterRequest
 		return Self{conformerType: conformerType, implName: implName, adapterName: adapterName, slotArity: slotArity, instance: instance, reinterpretedParams: reinterpretedParams}
 	end 'create'
-
-	// ⚠ **AN INDEPENDENT COPY, FOR THE DRAIN THAT CANNOT HOLD A BORROW.** `installWitnessSlotAdapters`
-	// reads a queued request out of `pendingWitnessAdapters` and hands it to a call that APPENDS to that
-	// very array — see the loop, which grows by design. A borrowed element may not be held across the
-	// write (E3070), and the three name columns are what the copy has to be deep in: they are the request's
-	// only managed fields, and the array owns the ones it holds.
-	function clone() returns WitnessAdapterRequest
-		return Self{conformerType: self.conformerType.clone(), implName: self.implName.clone(), adapterName: self.adapterName.clone(), slotArity: self.slotArity, instance: self.instance, reinterpretedParams: self.reinterpretedParams}
-	end 'clone'
 end 'WitnessAdapterRequest'
 
 typealias WitnessAdapterRequestArray = Array with WitnessAdapterRequest
 
 union FormalSite
 	dispatchedFrom(receiver ValueId)
-	tableSlot(conformer ByteArray)
+	tableSlot(let conformer ByteArray)
 end 'FormalSite'
 
 // ⭐⭐ **ONE CALL THAT PASSED A ZERO WHERE A `where` CONSTRAINT'S WITNESS TABLE BELONGS, RECORDED WHILE THE
@@ -942,7 +934,9 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 		rawIntrinsic or
 
 		// A witness table is registered by `ensureWitnessTable` when the op is lowered.
-		existentialWitness then break
+		existentialWitness or
+		holdValue or
+		holdEnd then break
 		stringLiteral(_, bytes) then _ = registerStringBlob(globalData, bytes: bytes)
 		constArrayLiteral(_, _, _, bytes) then _ = registerByteArrayLiteralBlob(globalData, bytes: bytes)
 	end 'op'
@@ -954,7 +948,7 @@ end 'registerIfProgramLiteral'
 // answer with no diagnostic anywhere. `Parser.emitRuntimeCall` builds an all-empty label column, so a
 // label here means someone taught the parser to write one. It panics at the one place that could still
 // see it. ONE home so the non-throwing and throwing runtime-call paths cannot drift on this rule.
-function requireRuntimeCallPositional(callee ByteArray, argLabels ByteArrayArray)
+function requireRuntimeCallPositional(callee ByteArray, argLabels NameRoster)
 	for label in argLabels 'eachLabel'
 		if not label.isEmpty() 'labelled'
 			panic("requireRuntimeCallPositional: the runtime call to '{String.from(callee)}' carries the argument label '{String.from(label)}' — a runtime entry point is declared by nothing, so there is no signature to slot a label against and the argument would silently fill the position it was WRITTEN in. Runtime calls are positional: see Parser.emitRuntimeCall")
@@ -963,13 +957,13 @@ function requireRuntimeCallPositional(callee ByteArray, argLabels ByteArrayArray
 end 'requireRuntimeCallPositional'
 
 union LayoutSource
-	ofInstance(instanceValue ValueId)
+	ofInstance(instance GenericInstanceId)
 	forwardedFromTheCaller
 end 'LayoutSource'
 
 union ByReferenceParamSource
 	indirectCallee
-	directCallee(name ByteArray)
+	directCallee(let name ByteArray)
 end 'ByReferenceParamSource'
 
 typealias IndexTest = function(ElementIndex) returns bool
@@ -996,18 +990,14 @@ type WitnessTableEntry
 	function names(otherInstance GenericInstanceId, otherInterface ByteArray) returns bool
 		return self.instance == otherInstance and self.interfaceName.equals(otherInterface)
 	end 'names'
-
-	function clone() returns WitnessTableEntry
-		return Self{instance: self.instance, interfaceName: self.interfaceName.clone(), conformer: self.conformer.clone()}
-	end 'clone'
 end 'WitnessTableEntry'
 
 typealias WitnessTableEntryArray = Array with WitnessTableEntry
 
 type WitnessPartition
 	export let owner as ByteArray
-	export let kept as WitnessTableEntryArray
-	export let shed as WitnessTableEntryArray
+	export var kept as WitnessTableEntryArray
+	export var shed as WitnessTableEntryArray
 
 	static function create(owner ByteArray, kept WitnessTableEntryArray, shed WitnessTableEntryArray) returns WitnessPartition
 		return Self{owner: owner, kept: kept, shed: shed}
@@ -1060,8 +1050,8 @@ let noDescriptorTable = DescriptorTable.create()
 
 union WitnessArgSource
 	forwardedBareParameter(token TypeParamId)
-	staticTable(conformer ByteArray, instance WitnessTableInstance)
-	parametricInstance(conformer ByteArray, instance GenericInstanceId)
+	staticTable(let conformer ByteArray, instance WitnessTableInstance)
+	parametricInstance(let conformer ByteArray, instance GenericInstanceId)
 end 'WitnessArgSource'
 
 type HiddenSlotTarget
@@ -1071,10 +1061,6 @@ type HiddenSlotTarget
 	static function create(callee ByteArray, slot HiddenParameterSlot) returns HiddenSlotTarget
 		return Self{callee: callee, slot: slot}
 	end 'create'
-
-	function clone() returns HiddenSlotTarget
-		return Self{callee: self.callee.clone(), slot: self.slot}
-	end 'clone'
 end 'HiddenSlotTarget'
 
 typealias HiddenSlotTargetArray = Array with HiddenSlotTarget
@@ -1086,16 +1072,6 @@ type HiddenSlotUse
 	static function create(reads bool, forwards HiddenSlotTargetArray) returns HiddenSlotUse
 		return Self{reads: reads, forwards: forwards}
 	end 'create'
-
-	function clone() returns HiddenSlotUse
-		var copied = HiddenSlotTargetArray.create()
-
-		for target in self.forwards 'eachTarget'
-			copied.push(target.clone())
-		end 'eachTarget'
-
-		return Self{reads: self.reads, forwards: copied}
-	end 'clone'
 end 'HiddenSlotUse'
 
 typealias HiddenSlotUseMap = Map with (String, HiddenSlotUse)
@@ -1214,7 +1190,7 @@ end 'divisionExpansionKind'
 
 union LoweredFunction
 	none
-	named(name ByteArray)
+	named(let name ByteArray)
 end 'LoweredFunction'
 
 type MaxonToStdLowering
@@ -1247,7 +1223,7 @@ type MaxonToStdLowering
 	// and threaded in. `buildLayoutNeedingFuncs` derives its FILTERED set by walking `funcNames.functions`,
 	// so that set's key space is provably the duplicate-free one rather than whatever the module happened to
 	// hold — the same argument `SemanticCheck`'s throws map and escape summary stand on.
-	let funcNames as FunctionNameIndex
+	var funcNames as FunctionNameIndex
 
 	// The qualified names of functions that carry a hidden layout-descriptor parameter — built
 	// once by `buildLayoutNeedingFuncs` (a PARAMETER-COUNT scan, never an op-scan: see its header for the
@@ -1358,32 +1334,28 @@ type MaxonToStdLowering
 	// ⭐ The mm-trace tag of each compiler-minted box that is not any declared type's, keyed by the
 	// `__mm_alloc` call's own op index (`project.allocTagSites`). Read by `allocTagIndexOf` and by nothing
 	// else — see `Project.allocTagSites` for why a trace label may not ride in the type slot.
-	let allocTagSites as AllocTagSiteMap
+	var allocTagSites as AllocTagSiteMap
 
 	// ⭐ The compile-time NAME each `__ds_name_id` marker call interns, keyed by that call's own op index
 	// (`project.debugStreamNameSites`). Read by `lowerDebugStreamNameId` and by nothing else. This is the
 	// first tier that can NUMBER them: the interner is whole-program and this walk is the one pass that sees
 	// the whole merged module — see `Project.debugStreamNameSites`.
-	let debugStreamNameSites as DebugStreamNameSiteMap
+	var debugStreamNameSites as DebugStreamNameSiteMap
 
 	// Which `constArrayLiteral` ops materialize an IMMORTAL `.rdata` record rather than an owned heap one
 	// (`project.immortalConstArraySites`). Read by `lowerConstArrayLiteral` and by nothing else.
-	let immortalConstArraySites as ImmortalConstArraySiteMap
+	var immortalConstArraySites as ImmortalConstArraySiteMap
 
 	// ⭐⭐ **WHERE THIS TIER WRITES DOWN WHAT IT KNOWS ABOUT AN ELEMENT STRIDE** — the container stamp
 	// of every runtime call whose first argument is a CONCRETE `Array with T`, keyed by the Std op index the
 	// call is about to occupy (`project.stdOpElementStrides`). Written by `recordStaticElementFacts` and read
 	// only by `inlineManagedPrimitives`, the very next pass but one — `insertRangeChecks` is the only thing
 	// in between, and it appends ops rather than renumbering them.
-	//
-	// ⚠ It is a `let` like its two neighbours and is nonetheless WRITTEN through: a `Map` is a heap object, so
-	// the word governs the binding and not the table. The neighbours are read-only because the parser filled
-	// them; this one is filled here.
-	let stdOpElementStrides as StdOpElementStrideMap
+	var stdOpElementStrides as StdOpElementStrideMap
 
 	// The same door's second fact, in the same key space: the sites whose element owes no drop
-	// (`project.stdOpTrivialElementSites`). A `let` written through for the reason above.
-	let stdOpTrivialElementSites as StdOpTrivialElementSiteSet
+	// (`project.stdOpTrivialElementSites`).
+	var stdOpTrivialElementSites as StdOpTrivialElementSiteSet
 
 	// The whole-program Maxon op index of the op being lowered. Published by the block walk, exactly as
 	// `rangeSites` is and for the same reason: an op's SIDE TABLES are keyed by its index, and the walk is
@@ -1394,6 +1366,7 @@ type MaxonToStdLowering
 	// function like `valueTags`, from `IrFunction.valueExistentialInstances`. `witnessFormalType` reads the
 	// RECEIVER's entry to resolve an associated formal at the SITE that declared it.
 	var currentExistentialInstances as ValueExistentialInstanceMap
+	var currentCallInstances as ValueCallInstanceMap
 
 	// ⭐ The whole-program type-name interner (`project.typeNames`), which `valueNameIds` indexes into and
 	// into which `mergeArtifact` remapped every id on a merged signature or op type — copied out at `create`
@@ -1402,8 +1375,6 @@ type MaxonToStdLowering
 	// NAME a witness label is built from (`interfaceNameOfType`), and an argument's recorded name id back
 	// into the declaration `signatures` is keyed by (by here a float-backed enum and an `int` are both `i64`
 	// — `argIsFloatBackedEnum`).
-	// ⚠ It was DECLARED TWICE, once per question, with the second declaration silently taking the field: one
-	// fact written down twice, in the field list of the pass whose header says not to.
 	var typeNames as TypeNameInterner
 
 	// The name of the function CURRENTLY being lowered — re-pointed per function, for the diagnostics the
@@ -1497,6 +1468,8 @@ type MaxonToStdLowering
 	// columns to fit the highest id, so a monotonic counter is all that is required.
 	var nextValueId as ValueId
 
+	var holdAliases as ValueIdArray
+
 	static function create(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns MaxonToStdLowering
 		// ⭐⭐ **THE TWO LOWERING-WRITTEN PROJECT TABLES THAT NOTHING ELSE RESETS, AND THEY ARE THE ODD ONES
 		// OUT AMONG THEIR OWN SIBLINGS.** `stdOpElementStrides` and `stdOpTrivialElementSites` are keyed by
@@ -1520,7 +1493,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), pendingNullLayoutArgs: NullLayoutArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(), pendingNullLayoutArgs: NullLayoutArgRequestArray.create(), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFunction: LoweredFunction.none, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create()}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1657,9 +1630,6 @@ type MaxonToStdLowering
 		// Walk each function's blocks and lower their body ops + terminator. Value
 		// ids need no per-function reset — the parser already numbered them densely
 		// per function, and this pass passes them through untouched.
-		// An INDEX loop through `getFunc`, which ends the element's borrow at its return: the lowering
-		// below writes `stdModule` while the body reads `srcFunc` on every trip of its own loops. ⚖ Canonical
-		// note at `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 		for fnIndex in 0 upto self.stdModule.functions.count() 'eachFunc'
 			try requireStillWanted(project)
 			let srcFunc = self.stdModule.getFunc(fnIndex)
@@ -1701,6 +1671,7 @@ type MaxonToStdLowering
 			// The existential-instance column travels with it as well: a dispatch's associated FORMAL is
 			// resolved from the RECEIVER's own `with` arguments, which live only here.
 			self.currentExistentialInstances = srcFunc.valueExistentialInstances
+			self.currentCallInstances = srcFunc.valueCallInstances
 
 			// The name column travels with it too: `instanceIdOfValue` reads a `genericInstance`
 			// receiver's `GenericInstanceId` out of it.
@@ -1746,9 +1717,7 @@ type MaxonToStdLowering
 			let closureParamCount = srcFunc.paramCount
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
-				// ⚠ **THE SOURCE BLOCK IS READ FOR ITS THREE FACTS AND NOT HELD ACROSS THE OP LOOP.** A block
-				// read out of `maxonModule.blocks` is a BORROW of that module, and `lowerOp`/`lowerTerminator`
-				// write the lowering's own storage — so the held alias is refused (E3070). It is also the
+				// ⚠ **THE SOURCE BLOCK IS READ FOR ITS THREE FACTS AND NOT HELD ACROSS THE OP LOOP** — the
 				// staleness `IrModule.getBlockByIdIn` warns about, one container over: *"use this instead of
 				// holding an IrBlock struct alias across other block-creating / block-mutating calls"*. The
 				// per-op ref is re-read through `maxonBlockOpRefAt`, which is two indexed loads.
@@ -1805,6 +1774,8 @@ type MaxonToStdLowering
 					carryOplessTerminator(srcTerminator, srcBlockId: srcBlockId, dstBlock: dstBlock)
 				end 'noTermOp'
 			end 'eachBlock'
+
+			self.substituteHoldAliases(srcFunc)
 
 			// The cursor belongs to THIS function's walk. `installParametricWitnessChecks` and
 			// `installWitnessSlotAdapters` append below, and neither is any statement's code.
@@ -1966,6 +1937,8 @@ type MaxonToStdLowering
 			// The witness half of a concrete conformer a field store widens. Routed through a SMALL re-match so the
 			// interface NAME is bound in a single-call arm, never in this big one.
 			existentialWitness then self.lowerExistentialWitness(hlOp, dstBlock: dstBlock)
+			holdValue or
+			holdEnd then panic("lowerMaxonToStd: a hold marker reached the lowering — `resolveHoldMarkers` turns every `holdValue`/`holdEnd` into a call or deletes it before the Maxon module leaves the semantic check")
 		end 'lower'
 	end 'lowerOp'
 
@@ -2018,7 +1991,7 @@ type MaxonToStdLowering
 	// ⭐ **THE `element_destroy@40` RELOCATION IS ALSO WHAT ROOTS THE DESTRUCTOR.** Imaging the global deletes
 	// its `__module_init` construction, and with it the `functionRef` that was the callee's only compile-time
 	// mention; `MmRuntime.noteRelocatedFunctionUsage` installs every callee an `.rdata` relocation names.
-	function emitImmortalStringTable(result ValueId, texts ByteArrayArray, elementSize ElementStride, elementDestroy OwnershipCallee, dstBlock IrBlock)
+	function emitImmortalStringTable(result ValueId, texts ByteBlobArray, elementSize ElementStride, elementDestroy OwnershipCallee, dstBlock IrBlock)
 		let table = registerImmortalStringTableRecord(self.globalData, texts: texts, elementSize: elementSize, debugStream: self.debugStream)
 
 		if not self.emittedImmortalStringTables.contains(table.recordLabel) 'firstUse'
@@ -2181,6 +2154,8 @@ type MaxonToStdLowering
 			serviceSend or
 			serviceReplyCell then panic("lowerMaxonToStd: a service op appeared as a block terminator (parser bug — a `spawn` produces a mailbox pointer the next op stores, a send is a statement and a reply cell is a value the send that follows it reads; all three are body ops, never terminators)")
 			existentialWitness then panic("lowerMaxonToStd: an `existentialWitness` op appeared as a block terminator (parser bug — it defines the witness half the field store after it writes, so it is a body op)")
+			holdValue or
+			holdEnd then panic("lowerMaxonToStd: a hold marker appeared as a block terminator (parser bug — a hold is a body op, resolved before lowering)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -3191,16 +3166,20 @@ type MaxonToStdLowering
 		// two instances of one generic conformer share the impl and must NOT share the adapter, because the
 		// adapter is exactly where the two dictionaries differ. A shared table's component IS the conformer,
 		// so no existing adapter's symbol moves.
-		let adapterName = witnessSlotAdapterSymbol(self.witnessTableLabelComponent(typeName, instance: instance), interfaceName: slot.sourceInterfaceName, methodName: slot.method.name)
+		let adapterName = self.witnessSlotAdapterName(typeName, instance: instance, slot: slot)
 
 		if self.emittedWitnessAdapters.contains(adapterName) 'anotherTableAlreadyRequestedIt'
 			return adapterName
 		end 'anotherTableAlreadyRequestedIt'
 
-		self.emittedWitnessAdapters.insert(adapterName)
-		self.pendingWitnessAdapters.push(WitnessAdapterRequest.create(typeName, implName: implName, adapterName: adapterName, slotArity: self.witnessSlotAbiArity(slot.method), instance: instance, reinterpretedParams: reinterpretedParams))
+		self.emittedWitnessAdapters.insert(self.witnessSlotAdapterName(typeName, instance: instance, slot: slot))
+		self.pendingWitnessAdapters.push(WitnessAdapterRequest.create(typeName, implName: self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method), adapterName: self.witnessSlotAdapterName(typeName, instance: instance, slot: slot), slotArity: self.witnessSlotAbiArity(slot.method), instance: instance, reinterpretedParams: reinterpretedParams))
 		return adapterName
 	end 'witnessSlotCallee'
+
+	function witnessSlotAdapterName(typeName ByteArray, instance WitnessTableInstance, slot CollectedInterfaceMethod) returns ByteArray
+		return witnessSlotAdapterSymbol(self.witnessTableLabelComponent(typeName, instance: instance), interfaceName: slot.sourceInterfaceName, methodName: slot.method.name)
+	end 'witnessSlotAdapterName'
 
 	// A `static` requirement is answered 0: `witnessSlotFormalTypes` seeds a receiver its impl does not take,
 	// so the two masks would be compared one position apart.
@@ -3267,13 +3246,6 @@ type MaxonToStdLowering
 		return method.paramTypeNames.count() if method.isStatic else 1 + method.paramTypeNames.count()
 	end 'witnessSlotAbiArity'
 
-	// ⭐⭐ **ONE MAXON OP, AS A REFERENCE THIS FRAME OWNS RATHER THAN A BORROW OF THE MODULE.** An op read
-	// out of `self.maxonModule.ops` and BOUND is a borrow of the module for as long as the binding lives
-	// (E3070), and `lowerOp`/`lowerTerminator` are methods that write this lowering's storage — so the
-	// binding cannot span the call, however plainly this pass never writes its SOURCE module. Returning the
-	// op takes a reference instead: the compiler's return convention promotes a borrowed managed value to an owned
-	// one (`Parser.emitOwnedValueReturn` — *"a borrowed struct/union/instance INCREFS"*), which is the
-	// language's answer to "I need to hold this element", and costs one incref/decref per lowered op.
 	function maxonOpAt(opIdx ElementIndex) returns MaxonOp
 		return try self.maxonModule.ops.get(opIdx) otherwise panic("maxonOpAt: op {opIdx} is not in maxonModule.ops")
 	end 'maxonOpAt'
@@ -3294,13 +3266,7 @@ type MaxonToStdLowering
 		var next = 0 as ElementIndex
 
 		while next < self.pendingWitnessAdapters.count() 'drain'
-			// ⚠⚠ **THE REQUEST IS COPIED OUT, AND THIS IS THE ONE SITE WHERE THAT IS NOT MERELY THE BORROW
-			// RULE BEING SATISFIED — IT IS THE HAZARD THE RULE EXISTS FOR.** `synthesizeWitnessSlotAdapter`
-			// APPENDS to `pendingWitnessAdapters` (an adapter's own dictionary may request a further table,
-			// which is why this loop drains by index over a growing array in the first place), so the element
-			// borrow `get` hands back is taken out of an array that then grows underneath it. E3070 refused
-			// it; a `clone()` is what makes the request this frame's own for the length of the call.
-			let request = (try self.pendingWitnessAdapters.get(next) otherwise panic("installWitnessSlotAdapters: pendingWitnessAdapters.get OOB at {next} below count {self.pendingWitnessAdapters.count()}")).clone()
+			let request = try self.pendingWitnessAdapters.get(next) otherwise panic("installWitnessSlotAdapters: pendingWitnessAdapters.get OOB at {next} below count {self.pendingWitnessAdapters.count()}")
 			next = next + 1
 			self.synthesizeWitnessSlotAdapter(request, project: project)
 		end 'drain'
@@ -3329,7 +3295,7 @@ type MaxonToStdLowering
 			paramTypes.push(try impl.paramTypes.get(k) otherwise panic("synthesizeWitnessSlotAdapter: '{String.from(request.implName)}' declares {impl.paramTypes.count()} Std parameter types but its slot passes {request.slotArity} — a witness slot's arity can only be SHORTER than its impl's"))
 		end 'eachSlotParam'
 
-		var adapter = IrFunction.createFromStd(request.adapterName, returnType: impl.returnType, paramCount: request.slotArity, paramTypes: paramTypes, throwsTypeName: impl.throwsTypeName)
+		var adapter = IrFunction.createFromStd(request.adapterName, returnType: impl.returnType, paramCount: request.slotArity, paramTypes: paramTypes, throwsTypeName: impl.throwsTypeName, needsGreenThreadStackGuard: true)
 		adapter.maxonReturnType = impl.maxonReturnType
 		var entry = self.stdModule.addBlock(adapter, label: b"entry", heat: BlockHeat.normal)
 		emitTypedParams(self.stdModule, block: entry, paramTypes: paramTypes)
@@ -3575,11 +3541,11 @@ type MaxonToStdLowering
 
 	function hiddenParameterIsRead(calleeName ByteArray, callerName ByteArray, slot HiddenParameterSlot, visited HiddenSlotVisitedSet) returns bool
 		var pending = HiddenSlotTargetArray.create()
-		pending.push(HiddenSlotTarget.create(calleeName.clone(), slot: slot))
+		pending.push(HiddenSlotTarget.create(calleeName, slot: slot))
 		var next = 0 as ElementIndex
 
 		while next < pending.count() 'eachReachedSlot'
-			let current = (try pending.get(next) otherwise panic("hiddenParameterIsRead: pending.get({next}) below count")).clone()
+			let current = try pending.get(next) otherwise panic("hiddenParameterIsRead: pending.get({next}) below count")
 			next = next + 1
 			let key = hiddenSlotKey(current.callee, slot: current.slot)
 
@@ -3595,7 +3561,7 @@ type MaxonToStdLowering
 			end 'readsItDirectly'
 
 			for target in use.forwards 'eachForward'
-				pending.push(target.clone())
+				pending.push(target)
 			end 'eachForward'
 		end 'eachReachedSlot'
 
@@ -3862,7 +3828,7 @@ type MaxonToStdLowering
 
 	function materializeLayoutArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
 		match self.layoutSourceOf(argIds, sig: sig, result: result, callee: callee) 'source'
-			ofInstance(instanceValue) then return self.emitInstanceDescriptorAddr(instanceValue, dstBlock: dstBlock)
+			ofInstance(instance) then return self.emitInstanceDescriptorAddr(instance, dstBlock: dstBlock)
 			forwardedFromTheCaller then return self.forwardCallerLayout(callee, dstBlock: dstBlock)
 		end 'source'
 	end 'materializeLayoutArgFor'
@@ -3881,6 +3847,10 @@ type MaxonToStdLowering
 			let receiver = try argIds.get(0) otherwise panic("layoutSourceOf: layout-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
 			return self.receiverLayoutSource(receiver, callee: callee)
 		end 'instanceMethod'
+
+		if let qualifier = try self.currentCallInstances.get(result) 'calledThroughAnInstance'
+			return LayoutSource.ofInstance(qualifier)
+		end 'calledThroughAnInstance'
 
 		// ⭐ **A FIELD-DEFAULT HELPER IS THE ONE RECEIVERLESS LAYOUT-NEEDING CALLEE WHOSE DESCRIPTOR COMES
 		// FROM THE CALLER.** Its result is the FIELD's type (`Array with Key`), not the enclosing
@@ -3907,7 +3877,7 @@ type MaxonToStdLowering
 			return LayoutSource.forwardedFromTheCaller
 		end 'forwarded'
 
-		return LayoutSource.ofInstance(result)
+		return LayoutSource.ofInstance(self.instanceIdOfValue(result))
 	end 'layoutSourceOf'
 
 	// The descriptor address for a generic-instance VALUE — the shared core of the two ways a layout-needing
@@ -3955,9 +3925,7 @@ type MaxonToStdLowering
 	// pair for an unbalanced one. The forwarding edge is drawn only from a call whose receiver RESOLVES to such an
 	// instance (`Parser.nestedInstanceReceiverAt`), and the emitted cursor calls `Map.map` makes resolve to
 	// nothing — so that chain keeps both of its inert ends.
-	function emitInstanceDescriptorAddr(instanceValue ValueId, dstBlock IrBlock) returns ValueId
-		let gid = self.instanceIdOfValue(instanceValue)
-
+	function emitInstanceDescriptorAddr(gid GenericInstanceId, dstBlock IrBlock) returns ValueId
 		if self.hasImplicitLayout and self.descriptorTableHolds(gid) 'resolvedAtTheConcreteRoot'
 			return self.emitDescriptorTableRead(gid, dstBlock: dstBlock)
 		end 'resolvedAtTheConcreteRoot'
@@ -4070,6 +4038,7 @@ type MaxonToStdLowering
 
 			self.valueTags = func.valueTags
 			self.valueNameIds = func.valueNameIds
+			self.currentCallInstances = func.valueCallInstances
 			self.currentFunction = LoweredFunction.named(func.name)
 			subjects.enterFunction(fnIndex, carriesADescriptor: self.functionCarriesADescriptor(func))
 			self.noteTableCandidatesOf(func.blockRefs, into: subjects)
@@ -4091,10 +4060,10 @@ type MaxonToStdLowering
 	// calls pass the zero `NullWitnessArgRequest` proves unread. It runs before that check, which
 	// walks witness entries too and would otherwise refuse the program.
 	function dropGrowingWitnessEntries()
-		var owners = ByteArrayArray.create()
+		var owners = NameRoster.create()
 
 		for (owner, _) in self.descriptorTables 'eachOwner'
-			owners.push(owner.clone())
+			owners.push(owner)
 		end 'eachOwner'
 
 		var partitions = WitnessPartitionArray.create()
@@ -4108,13 +4077,13 @@ type MaxonToStdLowering
 				var visited = DescriptorTableOwnerSet.create()
 
 				if self.descriptorTableReaches(owner, from: self.signatures.genericInstanceBaseName(entry.instance), visited: visited) 'aChainThatGrows'
-					shed.push(entry.clone())
+					shed.push(entry)
 				end 'aChainThatGrows' else 'staysFiled'
-					kept.push(entry.clone())
+					kept.push(entry)
 				end 'staysFiled'
 			end 'eachEntry'
 
-			partitions.push(WitnessPartition.create(owner.clone(), kept: kept, shed: shed))
+			partitions.push(WitnessPartition.create(owner, kept: kept, shed: shed))
 		end 'eachOwnerWithWitnesses'
 
 		for partition in partitions 'eachPartition'
@@ -4128,7 +4097,7 @@ type MaxonToStdLowering
 	function requireEveryComposedDescriptorHasASource(sites DescriptorSubjectSiteArray, project Project) throws CompileError
 		for site in sites 'eachSite'
 			if self.instanceIsResolvedAtTheConcreteRoot(site.instance) 'noDescriptorToComposeFrom'
-				try self.refuseDescriptorSubject(site, project: project, reason: "is called on '{String.from(self.signatures.instanceDisplayName(site.instance))}', whose layout descriptor is read out of the calling method's own descriptor, and this body carries none — a method reserves one only when its body reaches the instance through a field, an inner typealias, a parameter or a local bound from one of those, a closure carries the descriptor of the method it is written in, and a `static function` that does not return its own type, or a closure written inside one, has none to carry. Make the call from an instance method of the enclosing type, through one of those spellings (e.g. 'self.<field>.<method>(…)')")
+				try self.refuseDescriptorSubject(site, project: project, reason: "is called on '{String.from(self.signatures.instanceDisplayName(site.instance))}', whose layout descriptor is read out of the calling method's own descriptor, and this body carries none — a method reserves one only when its body reaches the instance through a field, an inner typealias, a parameter or a local bound from one of those, a closure carries the descriptor of the method it is written in, and a `static function` carries one only when a parameter's type is written over its type's own parameters. Make the call from an instance method of the enclosing type, through one of those spellings (e.g. 'self.<field>.<method>(…)')")
 			end 'noDescriptorToComposeFrom'
 		end 'eachSite'
 	end 'requireEveryComposedDescriptorHasASource'
@@ -4197,7 +4166,7 @@ type MaxonToStdLowering
 			return seeded
 		end 'alreadyFiled'
 
-		let fresh = DescriptorTable.create()
+		var fresh = DescriptorTable.create()
 		self.descriptorTables.upsert(owner, value: fresh)
 		return fresh
 	end 'tableOfOwnerForWrite'
@@ -4234,7 +4203,7 @@ type MaxonToStdLowering
 		end 'callShape'
 	end 'noteTableCandidateOfOp'
 
-	function noteTableCandidateOfCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, into DescriptorSubjects)
+	function noteTableCandidateOfCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, into DescriptorSubjects)
 		let composedStamp = self.createTakesItsElementStampFromADescriptor(callee, result: result)
 
 		if composedStamp 'aComposedElementStamp'
@@ -4296,7 +4265,7 @@ type MaxonToStdLowering
 			return
 		end 'aFrameOfAnotherType'
 
-		let table = self.tableOfOwnerForWrite(owner)
+		var table = self.tableOfOwnerForWrite(owner)
 
 		if self.holdsWitnessEntry(table, instance: argGid, interfaceName: interfaceName) 'alreadyFiled'
 			return
@@ -4316,7 +4285,7 @@ type MaxonToStdLowering
 	function noteTableCandidateOfSource(source LayoutSource, callee ByteArray, into DescriptorSubjects)
 		match source 'source'
 			forwardedFromTheCaller then return
-			ofInstance(instanceValue) then self.noteTableCandidate(self.instanceIdOfValue(instanceValue), callee: callee, into: into)
+			ofInstance(instance) then self.noteTableCandidate(instance, callee: callee, into: into)
 		end 'source'
 	end 'noteTableCandidateOfSource'
 
@@ -4336,7 +4305,7 @@ type MaxonToStdLowering
 		let tag = self.valueTagOf(receiver)
 
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return LayoutSource.ofInstance(receiver)
+			return LayoutSource.ofInstance(self.instanceIdOfValue(receiver))
 		end 'instance'
 
 		// ⭐ A `structRef`(base) receiver is the enclosing generic body's OWN instance — `self` — so the
@@ -4638,7 +4607,7 @@ type MaxonToStdLowering
 	// here is a compiler-invariant violation and panics rather than emitting wrong code.
 	// The `argRanges` on the Maxon op are diagnostics-only (consumed by SemanticCheck),
 	// so lowering ignores them.
-	function lowerCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
+	function lowerCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, dstBlock IrBlock)
 		// ⭐ A COMPILER-EMITTED CALL HAS NO SIGNATURE TO SLOT AGAINST, and needs none:
 		// `Parser.emitRuntimeCall` wrote its arguments itself, positionally, in declaration order — so
 		// the reordering below would be the identity, and the registry lookup it needs first would panic
@@ -4939,7 +4908,7 @@ type MaxonToStdLowering
 	// match it against, the argument would be dropped into the position it happened to occupy rather
 	// than the one it named. That is a wrong answer with no diagnostic anywhere, so it panics at the
 	// one place that could still see it.
-	function lowerRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
+	function lowerRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, dstBlock IrBlock)
 		requireRuntimeCallPositional(callee, argLabels: argLabels)
 
 		// ⭐ **THE TOTAL REMAINDER IS EXPANDED HERE — the non-throwing twin of `lowerTryCall`'s checked-division
@@ -5350,7 +5319,8 @@ type MaxonToStdLowering
 		let crossed = self.crossFloatDomainArgs(args, paramTypes: declaredParams, byReference: ByReferenceParamSource.indirectCallee, dstBlock: dstBlock)
 
 		if let target = try self.functionValueTargetOf(callee) 'aNamedFunctionsRecord'
-			self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: target, args: self.argsTheTargetTakes(target, args: crossed)))
+			let targetArgs = self.argsTheTargetTakes(target, args: crossed)
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: target, args: targetArgs))
 			return
 		end 'aNamedFunctionsRecord'
 
@@ -5473,7 +5443,7 @@ type MaxonToStdLowering
 	// ACTUAL's tag is the unresolved `valueTags` column, it would panic `maxonTypeToStdType` outright
 	// on a `named` actual, and it cannot see a binding the actual does not happen to match.
 	function witnessFormalType(formalName ByteArray, formalFilePath FilePath, dispatched IrInterface, site FormalSite) returns MaxonType
-		if let position = try namePositionIn(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
+		if let position = try dispatched.associatedTypeNames.positionOfName(formalName) 'aConformerBindsIt'
 			return self.associatedFormalType(dispatched.name, position: position, formalName: formalName, site: site)
 		end 'aConformerBindsIt'
 
@@ -5681,7 +5651,7 @@ type MaxonToStdLowering
 	// trampoline's integer channel and `SemanticCheck.requireAsyncScalarParams` refuses it — so the slotted
 	// args pass through as i64 without the float widening. A MANAGED argument is accepted and is one
 	// such i64: its box pointer.
-	function lowerAsyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
+	function lowerAsyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, dstBlock IrBlock)
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerAsyncCall: async callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 
 		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
@@ -5911,7 +5881,9 @@ type MaxonToStdLowering
 	function lowerFunctionValueRef(result ValueId, funcName ByteArray, dstBlock IrBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: self.globalData.labelBytesOf(self.ensureFunctionRecord(funcName))))
 
-		match self.functionValueTargets 'targets'
+		var targets = self.functionValueTargets
+
+		match targets 'targets'
 			none then self.functionValueTargets = FunctionValueTargets.entries(singleFunctionValueTarget(result, funcName: funcName))
 			entries(byValue) then byValue.upsert(result, value: funcName)
 		end 'targets'
@@ -6234,6 +6206,16 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType))
 	end 'appendStdBinOp'
 
+	function substituteHoldAliases(func IrFunction)
+		if self.holdAliases.count() == 0 'noAlias'
+			return
+		end 'noAlias'
+
+		compressValueSubstitutions(self.holdAliases)
+		substituteValuesInFunc(self.stdModule, func: func, subst: self.holdAliases)
+		self.holdAliases = ValueIdArray.create()
+	end 'substituteHoldAliases'
+
 	// Lower a Maxon unary op to its Std counterpart. Like lowerBinOp, the operand
 	// and result ValueIds pass through verbatim; only the source-level operator maps
 	// to a width/ABI-resolved Std opcode — except the sign extensions, which have no
@@ -6243,6 +6225,11 @@ type MaxonToStdLowering
 	// it — for the reason `lowerRuntimeCall`'s division match carries its own residue: a `match` arm is one
 	// statement, and a void callee has no value for a `return` to hand back.
 	function lowerUnaryOp(result ValueId, operand ValueId, op MaxonUnaryOp, dstBlock IrBlock)
+		if op == MaxonUnaryOp.copy 'aCopy'
+			recordValueSubstitution(self.holdAliases, resultId: result, replacement: operand)
+			return
+		end 'aCopy'
+
 		match signExtendSlotOf(op) 'aSignExtension'
 			fromBytes(slotBytes) then self.lowerSignExtend(result, operand: operand, slotBytes: slotBytes, dstBlock: dstBlock)
 			notASignExtension then self.appendStdUnaryOp(result, operand: operand, op: op, dstBlock: dstBlock)
@@ -6356,11 +6343,9 @@ type MaxonToStdLowering
 	// there); an `opIndex` terminator never reaches here (the caller guards with
 	// hasTerminatorOp). This keeps `assertAllBlocksTerminated` satisfied for the
 	// unreachable continuation block the `if`/`else` parser marks `dead`.
-	// ⚠ **IT TAKES THE TERMINATOR SLOT AND THE BLOCK'S ID, NOT THE BLOCK.** Its caller walks the Maxon
-	// blocks while WRITING the lowering's own storage, so it may not hold a block record read out of
-	// `maxonModule.blocks` (E3070) — and the slot is a scalar-payload union it copied out before the walk
-	// began. The id rather than a label for the same reason, and it names the block more exactly (a label is
-	// not an identity).
+	// ⚠ **IT TAKES THE TERMINATOR SLOT AND THE BLOCK'S ID, NOT THE BLOCK.** Its caller does not
+	// hold the source block across its op loop (see `lowerMaxonToStd`'s block walk). The id rather
+	// than a label because it names the block more exactly (a label is not an identity).
 	function carryOplessTerminator(srcTerminator Terminator, srcBlockId BlockId, dstBlock IrBlock)
 		match srcTerminator 'carry'
 			unset then break
@@ -6515,7 +6500,7 @@ type MaxonToStdLowering
 	// DECLARED throwing function, so it takes `appendThrowingCall`'s slotting path like every other `try f(…)`. The
 	// discriminator is `isSignaturelessCompilerCallee`, `lowerCall`'s exactly — this is the throwing twin of
 	// that site and the two must part company on the same fact.
-	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
+	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, dstBlock IrBlock)
 		// ⭐ **A CHECKED DIVIDE IS EXPANDED, NOT CALLED.** Asked FIRST, and exhaustively, so a checked
 		// division callee can never fall through to the `StdOp.tryCall` `appendThrowingCall` emits — there is no `__checked_div`
 		// function for such a call to reach, and the linker's "call to unknown function" would be the failure.
@@ -6541,7 +6526,7 @@ type MaxonToStdLowering
 
 	// Emit the `StdOp.tryCall` for every throwing callee that is not an expanded division — verbatim
 	// arguments for a compiler-owned one, label-slotted for a declared one.
-	function appendThrowingCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray, dstBlock IrBlock)
+	function appendThrowingCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray, dstBlock IrBlock)
 		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'compilerOwnTryCall'
 			requireRuntimeCallPositional(callee, argLabels: argLabels)
 

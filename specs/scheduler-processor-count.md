@@ -34,7 +34,7 @@ With no `MAXON_MAX_PROCS` in the environment the scheduler builds one processor 
 program that spawns nothing is told exactly that.
 ```maxon
 function main() returns ExitCode
-	if Scheduler.processorCount() == __Builtins.cpuCount() 'everyProcessor'
+	if Scheduler.processorCount() == Scheduler.machineCpuCount() 'everyProcessor'
 		return 3
 	end 'everyProcessor'
 	return 1
@@ -79,11 +79,11 @@ procs=64
 a count when it fits a positive 32-bit signed integer, so the value is ignored and the machine's count
 applies. The `procs:` marker takes only a count the harness can read as one, so the program re-executes
 itself with that text as `MAXON_MAX_PROCS` in the child's environment and prints what the child reports.
-The child compares against `__Builtins.cpuCount()`, which keeps the answer the same on every host. Not on
+The child compares against `Scheduler.machineCpuCount()`, which keeps the answer the same on every host. Not on
 `wasm32-wasi`, where the subprocess band is refused at compile time (`subprocess-unsupported.md`).
 ```maxon
 function child() returns ExitCode
-	let machine = Scheduler.processorCount() == __Builtins.cpuCount()
+	let machine = Scheduler.processorCount() == Scheduler.machineCpuCount()
 	print("machine={machine}\n")
 	return 0
 end 'child'
@@ -122,7 +122,7 @@ ignored rather than read as 12, and the machine's count applies. The same re-exe
 above, with this text as `MAXON_MAX_PROCS`.
 ```maxon
 function child() returns ExitCode
-	let machine = Scheduler.processorCount() == __Builtins.cpuCount()
+	let machine = Scheduler.processorCount() == Scheduler.machineCpuCount()
 	print("machine={machine}\n")
 	return 0
 end 'child'

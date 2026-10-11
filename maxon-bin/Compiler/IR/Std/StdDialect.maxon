@@ -1365,7 +1365,7 @@ export union StdOp
 	// metadata (`isCall`/`isMemory`/`isStore`/`clobbersFlags` all true, `isPure` false
 	// — a call may read/write memory and must not move or drop). APPENDED at the END of
 	// the call band, after `param`.
-	call(resultId ValueId, callee ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	call(resultId ValueId, let callee ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// Void return terminator — the return of a function with no `returns` clause. A
 	// DISTINCT variant rather than a `ret` carrying some absent-value ValueId: `ValueId`
@@ -1390,7 +1390,7 @@ export union StdOp
 	// address that cannot change, so it is freely REMATERIALIZABLE — an x64 `lea
 	// [rip+disp32]` needs no input register at all) and `isMemory: false` (it computes an
 	// address; it does not TOUCH memory — nothing is loaded).
-	globalAddr(resultId ValueId, label ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	globalAddr(resultId ValueId, let label ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 
 	// Read `valueType` bytes from `addrId + offset` into `resultId`.
 	//
@@ -1473,7 +1473,7 @@ export union StdOp
 	// than one with a section field because the section is the whole difference the relocation kind
 	// carries: `globalAddr` lowers to a `.data` relocation (`dataSectionRipRelDisp32`), this to an
 	// `.rdata` one (`ripRelDisp32`).
-	rdataAddr(resultId ValueId, label ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	rdataAddr(resultId ValueId, let label ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 
 	// --- scalar error handling ---
 	//
@@ -1485,7 +1485,7 @@ export union StdOp
 	// identical to `call`: full call-barrier semantics. The x64/arm64 lowering captures BOTH return
 	// registers through the parallel-copy resolver (never a naive `mov;mov`, which collapses a
 	// value/flag swap — see StdToX64Conversion.lowerTryCall).
-	tryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	tryCall(resultId ValueId, errorFlagId ValueId, let callee ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// The DUAL-REGISTER epilogue terminator: write `retValId` to the primary return register (R8 / x0)
 	// and `errorFlagId` to the error-flag register (R10 / x9), then the return terminator. This is the
@@ -1517,7 +1517,7 @@ export union StdOp
 	// one with a section field because the section is the whole difference the relocation kind carries:
 	// `globalAddr`→a `.data` reloc, `rdataAddr`→an `.rdata` one, this→a `.text` function-symbol fixup (x64
 	// `CallFixup`, resolved intra-`.text` by `resolveCallFixups`).
-	funcAddr(resultId ValueId, funcName ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	funcAddr(resultId ValueId, let funcName ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 
 	// A call THROUGH a function VALUE — `resultId = calleeReg(args…)`. `calleeReg` is the SSA value holding
 	// the code pointer (from a `funcAddr`, a param, or a field load), NOT a name — the whole reason it is
@@ -1584,7 +1584,7 @@ export union StdOp
 	//
 	// Its `category: system` places it logically,
 	// independent of this tail position.
-	osPanic(label ByteArray) = StdOpMeta{category: StdOpCategory.system, role: OpRole.diverging, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osPanic(let label ByteArray) = StdOpMeta{category: StdOpCategory.system, role: OpRole.diverging, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- The OS-import primitive the green-thread SLEEP substrate's clock needs ---
 	//
@@ -2616,6 +2616,11 @@ export union StdOp
 	// Full call-barrier metadata on both: each IS a call or a syscall once lowered, exactly like `osAllocPages`,
 	// and `isStore: true` because a commit replaces the contents of the range it names.
 	osCommitPages(resultId ValueId, addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `VirtualProtect` with `PAGE_GUARD` over `[addr, addr + size)`. Only the x64-windows lowering
+	// accepts it: the POSIX lanes guard a stack with a no-access mapping, and every other lowering
+	// panics on it.
+	osGuardPages(resultId ValueId, addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	osReservePages(resultId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- The ATOMICS and the PER-THREAD IDENTITY the multi-M scheduler is built on ---
@@ -3226,6 +3231,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// The page band: bounded, and every one of them is reachable under `__slab_lock`.
 		osAllocPages or
 		osFreePages or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		osDecommitPages or
@@ -3474,6 +3480,7 @@ export function stdOpLabelKindOf(op StdOp) returns StdOpLabelKind
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -3910,6 +3917,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -4160,6 +4168,7 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		currentThreadToken or
@@ -4479,6 +4488,7 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -4679,11 +4689,6 @@ end 'StdShapeReader'
 // It needs no size up front — the column grows to fit the highest id it is given — so it is a drop-in
 // for the `Set` it replaces, with the same three operations and no hashing at all.
 
-// The id column every set that does not record its ids shares. NEVER MUTATED — every write to that field
-// is guarded by `recordsIds`, and the two readers of it panic without it — which is what lets one instance
-// stand in for all of them, exactly as `IrFunction`'s shared-empty anchors do.
-let sharedEmptyUseIds = ValueIdArray.create()
-
 export type StdValueUseSet
 	var member as BoolArray
 
@@ -4720,12 +4725,12 @@ export type StdValueUseSet
 	var insertedIds as ValueIdArray
 
 	export static function create() returns StdValueUseSet
-		return Self{member: BoolArray.create(), tracksRepeats: false, repeated: BoolArray.create(), recordsIds: false, insertedIds: sharedEmptyUseIds}
+		return Self{member: BoolArray.create(), tracksRepeats: false, repeated: BoolArray.create(), recordsIds: false, insertedIds: ValueIdArray.create()}
 	end 'create'
 
 	// The counting form — same set, plus `containsRepeat`. See `tracksRepeats`.
 	export static function createTrackingRepeats() returns StdValueUseSet
-		return Self{member: BoolArray.create(), tracksRepeats: true, repeated: BoolArray.create(), recordsIds: false, insertedIds: sharedEmptyUseIds}
+		return Self{member: BoolArray.create(), tracksRepeats: true, repeated: BoolArray.create(), recordsIds: false, insertedIds: ValueIdArray.create()}
 	end 'createTrackingRepeats'
 
 	// The ITERABLE form — same set, plus `insertedIdCount`/`insertedIdAt`. See `recordsIds`.
@@ -4934,6 +4939,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osProcessTerminate(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osSocketConnect(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		osCommitPages(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
+		osGuardPages(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
 		atomicRmw(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
 		unaryOp(_, operand, _, _) then referenced.insert(operand)
 		binOpImm(_, operand, _, _, _) then referenced.insert(operand)
@@ -5205,6 +5211,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osSocketRecv(resultId, _, _, _) then def.recordOne(resultId)
 		osCpuCount(resultId) then def.recordOne(resultId)
 		osCommitPages(resultId, _, _) then def.recordOne(resultId)
+		osGuardPages(resultId, _, _) then def.recordOne(resultId)
 		osReservePages(resultId, _) then def.recordOne(resultId)
 		atomicCas(resultId, _, _, _) then def.recordOne(resultId)
 		atomicRmw(resultId, _, _, _) then def.recordOne(resultId)
@@ -5500,6 +5507,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// The exact mirror of `collectStdOpUses`'s two arms — the reads are the rewrites, and each result
 		// id is a DEF carried through unchanged, exactly as `osAllocPages`'s is.
 		osCommitPages(resultId, addr, size) gives StdOp.osCommitPages(resultId, addrId: remappedValue(addr, subst: subst), sizeId: remappedValue(size, subst: subst))
+		osGuardPages(resultId, addr, size) gives StdOp.osGuardPages(resultId, addrId: remappedValue(addr, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osReservePages(resultId, sizeId) gives StdOp.osReservePages(resultId, sizeId: remappedValue(sizeId, subst: subst))
 
 		// The exact mirror of `collectStdOpUses`'s three arms — every read is a rewrite, each result id
@@ -5552,7 +5560,7 @@ end 'remappedValue'
 // already pointed at the first. Both callers record in walk order, so a chain's earlier link is always
 // already in the column; see `substituteIdentityImmediates` for why that is an optimization rather than
 // a correctness requirement.
-module function recordValueSubstitution(subst ValueIdArray, resultId ValueId, replacement ValueId)
+export function recordValueSubstitution(subst ValueIdArray, resultId ValueId, replacement ValueId)
 	var next = subst.count()
 
 	while next as ValueId <= resultId 'grow'
@@ -5570,7 +5578,7 @@ end 'recordValueSubstitution'
 // so each entry is followed to a fixpoint once; a chain longer than the column can only be a cycle, and
 // that is a builder defect reported by name rather than a walk that never ends. Linear in the column: an
 // entry already at its end costs one read.
-module function compressValueSubstitutions(subst ValueIdArray)
+export function compressValueSubstitutions(subst ValueIdArray)
 	let longestAcyclicChain = subst.count()
 
 	for i in 0 upto subst.count() 'eachEntry'
@@ -5765,6 +5773,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		osCpuCount or
 		osThreadCpuTicks or
 		osDecommitPages or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		currentThreadToken or
@@ -5952,7 +5961,7 @@ end 'clonedBlocks'
 // ONE walk, applying ALL of the substitutions — never one walk per substitution. That is a performance
 // contract and `remapStdOpUses`' own header carries the measurement behind it (the pair form made
 // `elimTrivialBlockArgs` 54% of a large compile).
-module function substituteValuesInFunc(module StdModule, func IrFunction, subst ValueIdArray)
+export function substituteValuesInFunc(module StdModule, func IrFunction, subst ValueIdArray)
 	for blockRef in func.blockRefs 'eachBlock'
 		substituteValuesInBlock(module, block: module.getBlock(blockRef), subst: subst)
 	end 'eachBlock'
@@ -6320,6 +6329,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -6523,6 +6533,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or

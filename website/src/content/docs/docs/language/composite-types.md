@@ -187,7 +187,7 @@ end 'main'
 - A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer
   may reach follows the [Top-Level Variables](/docs/language/variables/#top-level-variables) rules: a `let`'s initializer may not reach
   a module-level `var` that holds a record (**E3165**), a `var`'s may not take a module-level `let`'s record
-  (**E3166**), and a `spawn` reachable from any global initializer is **E3164** — a
+  (**E3078**), and a `spawn` reachable from any global initializer is **E3164** — a
   [`default` declaration](/docs/language/async/#program-wide-defaults--default) starts a program-wide service before `main`.
 - A `let` without `static` in a type body is an ordinary field with a default.
 
@@ -473,7 +473,7 @@ type Digits implements InitableFromArrayLiteral with Digit
 		var total = 0 as Number
 
 		for d in digits 'each'
-			total = total * 10 + d
+			total = total * 10 + d as Number
 		end 'each'
 
 		return Self{value: total}
@@ -497,11 +497,11 @@ typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function get() returns T
+	function get() returns T
 		return item
 	end 'get'
 end 'Box'
@@ -827,7 +827,7 @@ function makePair(a Amount, b Amount) returns (Amount, Amount)
 end 'makePair'
 
 function main() returns ExitCode
-	var t = (0, 0)
+	var t = makePair(0, b: 0)
 	t.0 = 20
 	t.1 = 22
 	print("{sum(t)}\n")                      // 42

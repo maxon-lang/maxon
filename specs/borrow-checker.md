@@ -1,44 +1,43 @@
 ---
 feature: borrow-checker
 status: experimental
-keywords: [borrow, checker, mutation, safety, reference, NLL]
+keywords: [borrow, counted, mutation, safety, reference]
 category: memory
 ---
-# Borrow Checker
+# Counted Borrows
 
 ## Documentation
 
-The borrow checker prevents mutation of a value while references to its internal state are alive. When you obtain a reference from a mutable source (e.g., `var s = arr.get(0)`), that source cannot be mutated until the reference is no longer used.
-
-Borrows use non-lexical lifetimes (NLL): a borrow ends at the last use of the borrowing variable, not at the end of its scope. This means you can safely use a reference and then mutate the source after you're done with the reference.
-
-### Error E3070: Borrow Conflict
-
-```text
-error E3070: cannot mutate 'arr' via 'push' while it is borrowed by 's'
-```
+A value read out of a collection (`arr.get(0)`, `list.first()`, the element of a `for … in`, a cursor's
+`current()`) is counted: the binding holds its own reference to the element. Mutating, clearing or
+rebinding the source afterwards leaves that value readable and unchanged, so a program may mutate a
+collection while values read from it are still in use.
 
 ## Tests
 
-<!-- test: borrow-basic-conflict -->
-### Basic borrow conflict
-Getting an element then pushing must be rejected.
+<!-- test: get-then-push-keeps-the-element -->
+### Getting an element, then pushing
+The element read by `get` stays readable after the source grows and is cleared.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello"]
+	var arr = ["hello {40 + 2} world, long enough for the heap"]
 	let s = try arr.get(0) otherwise ""
 	arr.push("world")
+	arr.clear()
 	print("{s}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-checker/borrow-basic-conflict.maxon:5:6: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
+```exitcode
+0
+```
+```stdout
+hello 42 world, long enough for the heap
 ```
 
 <!-- test: borrow-nll-allowed -->
-### NLL: borrow ends at last use
-Using the reference before mutating is allowed because the borrow expires.
+### Reading, then mutating
+Using the value before mutating the source.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -48,7 +47,6 @@ function main() returns ExitCode
 	arr.push(42)
 	let v = try arr.get(0) otherwise 0
 	print("{v}\n")
-	// v is no longer used after this point — borrow has expired
 	arr.push(99)
 	return 0
 end 'main'
@@ -61,8 +59,8 @@ end 'main'
 ```
 
 <!-- test: borrow-different-source -->
-### Different source is not a conflict
-Mutating a different array is fine.
+### Mutating a different source
+A value read from one array is untouched by a push to another.
 ```maxon
 typealias StringArray = Array with String
 
@@ -83,8 +81,8 @@ hello
 ```
 
 <!-- test: borrow-not-live-in-otherwise -->
-### Try-otherwise: source is mutable inside the otherwise handler
-The borrow created by `try map.get(name)` only lives on the success path. Inside the `otherwise` block the get failed — `existing` was never bound, so there is no live borrow and mutating the same map must be allowed.
+### Try-otherwise: the source is mutable inside the otherwise handler
+Inside the `otherwise` block the get failed and `existing` was never bound; the handler mutates the same map.
 ```maxon
 typealias ByteArrayMap = Map with (String, ByteArray)
 

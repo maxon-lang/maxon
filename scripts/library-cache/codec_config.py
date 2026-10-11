@@ -31,8 +31,12 @@ SKIPPED_FIELDS = {
     ("ProgramSignatures", "rowSetLog"): "RowSetLog.closed()",
     ("ProgramSignatures", "mintedTupleLayouts"): "StructLayoutArray.create()",
     ("ProgramSignatures", "published"): "SettledCellArray.create()",
+    ("ProgramSignatures", "sharedSettled"): "SettledDeclarations.unused()",
+    ("ProgramSignatures", "readsPublishedView"): "false",
     ("SettledDeclarations", "genericInstanceNameMarker"): "genericInstanceNameMarker()",
     ("SettledDeclarations", "declTokenStreams"): "DeclTokenStreamMap.create()",
+    ("VarInfo", "isEnrolled"): "false",
+    ("VarInfo", "enrolledAt"): "0",
 }
 
 ROOTS = [
@@ -46,7 +50,7 @@ ROOTS = [
     ("alias", "IrBlockArray"),
     ("alias", "TokenArray"),
     ("alias", "FilePathArray"),
-    ("alias", "ByteArrayArray"),
+    ("alias", "NameRoster"),
     "ProgramSignatures",
 ]
 

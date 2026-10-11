@@ -1066,16 +1066,13 @@ end 'main'
 v=abXY
 ```
 
-<!-- test: a-returned-borrow-still-writes-through-to-the-caller -->
-### The Return Door Hands Back the Caller's Own Record
-⭐⭐ **THE `returned` DOOR'S HALF OF THE SAME RULING: A BORROWED `String` IS NOT COPIED.** `return s` over a
-borrowed `String` promotes through `retainBorrowedByteRecord` (`__str_retain`) rather than through
-`promoteToOwnedString` (`__mm_alloc` + `__str_copy`), so what the caller adopts is a SECOND REFERENCE to
-`main`'s record rather than a copy of its bytes. Maxon is single-ownership with reference semantics —
-*"everything is a reference; if you want a copy you do it explicitly with `clone()`"* — so a `return s` handing
-back a different record than the `s` it was given would be a copy the author never wrote, and the caller's value
-would silently stop being the callee's. There is ONE record here, so both names print the appended text; the
-shared record is co-owned (`markValueCoOwnsHeap`) and never destructively moved.
+<!-- test: a-returned-borrow-bound-to-a-var-is-copied-not-written-through -->
+### The Return Door Hands Back the Caller's Record, and the `var` Binding Copies It
+⭐⭐ **A `String` A NAME DOES NOT OWN IS COPIED WHEN IT IS BOUND TO A `var`.** `return s` over a borrowed `String`
+promotes through `retainBorrowedByteRecord` (`__str_retain`), so what the caller receives is a second reference to
+`main`'s record. Binding that result to a `var` is the point where a writable name would share storage with `v`, so
+the binding copies it at run time (`__str_unshare`): `out.append("XY")` appends to the copy and `v` is unchanged.
+The record is shared only while the result is not written.
 ```maxon
 function relay(s String) returns String
 	return s
@@ -1093,7 +1090,253 @@ end 'main'
 0
 ```
 ```stdout
-v=abXY out=abXY
+v=ab out=abXY
+```
+
+<!-- test: a-returned-borrow-assigned-to-a-var-is-copied-not-written-through -->
+### The Reassignment Door Copies What The Binding Door Copies
+⭐⭐ **THE SIBLING ROUTE OF THE CASE ABOVE.** `s = relay(v)` hands an existing `var` the same shared record `var out =
+relay(v)` is handed, so the reassignment copies it too (`__str_unshare`): `s.append("XY")` grows the copy, and `v` and
+the string `s` held before are both untouched.
+```maxon
+function make() returns String
+	var m = "a"
+	m.append("b")
+	return m
+end 'make'
+
+function relay(s String) returns String
+	return s
+end 'relay'
+
+function main() returns ExitCode
+	let v = make()
+	var s = "zz"
+	s = relay(v)
+	s.append("XY")
+	print("v={v} s={s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=ab s=abXY
+```
+
+<!-- test: a-returned-borrow-assigned-to-a-var-in-a-loop-is-copied-each-trip -->
+### A Reassignment In A Loop Copies On Every Trip
+Each trip hands `s` a fresh share of `v`'s record, and each trip writes the copy it was given, so `v` is never
+written and the leak gate stays quiet.
+```maxon
+function make() returns String
+	var m = "a"
+	m.append("b")
+	return m
+end 'make'
+
+function relay(s String) returns String
+	return s
+end 'relay'
+
+function main() returns ExitCode
+	let v = make()
+	var s = "zz"
+
+	for i in 0 upto 3 'trips'
+		s = relay(v)
+		s.append("{i}")
+	end 'trips'
+
+	print("v={v} s={s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=ab s=ab2
+```
+
+<!-- test: a-returned-borrow-stored-in-a-var-field-is-copied-not-written-through -->
+### A Field Store Copies What A Binding Copies
+The `var` field is a writable name too: `self.text = relay(src)` must not leave the field sharing the caller's record,
+so growing the field leaves `v` as it was.
+```maxon
+function make() returns String
+	var m = "a"
+	m.append("b")
+	return m
+end 'make'
+
+function relay(s String) returns String
+	return s
+end 'relay'
+
+type Holder
+	var text as String
+
+	static function create(text String) returns Holder
+		return Holder{text: text}
+	end 'create'
+
+	function adopt(src String)
+		self.text = relay(src)
+	end 'adopt'
+
+	function grow()
+		self.text.append("XY")
+	end 'grow'
+
+	function show(v String)
+		print("v={v} text={self.text}\n")
+	end 'show'
+end 'Holder'
+
+function main() returns ExitCode
+	let v = make()
+	var h = Holder.create("zz")
+	h.adopt(v)
+	h.grow()
+	h.show(v)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=ab text=abXY
+```
+
+<!-- test: a-returned-borrow-stored-through-a-field-assignment-is-copied-not-written-through -->
+### A Struct Literal Field Copies Too
+`Holder{text: relay(src)}` stores the call's result into a `var` field through the literal door, so the same copy is
+owed there and growing the field leaves `v` as it was.
+```maxon
+function make() returns String
+	var m = "a"
+	m.append("b")
+	return m
+end 'make'
+
+function relay(s String) returns String
+	return s
+end 'relay'
+
+type Holder
+	var text as String
+
+	static function adopting(src String) returns Holder
+		return Holder{text: relay(src)}
+	end 'adopting'
+
+	function grow()
+		self.text.append("XY")
+	end 'grow'
+
+	function show(v String)
+		print("v={v} text={self.text}\n")
+	end 'show'
+end 'Holder'
+
+function main() returns ExitCode
+	let v = make()
+	var h = Holder.adopting(v)
+	h.grow()
+	h.show(v)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=ab text=abXY
+```
+
+<!-- test: a-borrowed-string-stored-in-a-var-field-is-copied-not-written-through -->
+### A Borrowed `String` Stored In A `var` Field Is Copied, Through Assignment And Through A Literal
+The field is a writable name for what it was handed, so the store copies the record the caller still owns: growing
+the field through `adopt` or through a record built by `create` leaves `v` as it was.
+```maxon
+function make() returns String
+	var m = "a"
+	m.append("b")
+	return m
+end 'make'
+
+type Holder
+	var text as String
+
+	static function create(text String) returns Holder
+		return Holder{text: text}
+	end 'create'
+
+	function adopt(src String)
+		self.text = src
+	end 'adopt'
+
+	function grow()
+		self.text.append("XY")
+	end 'grow'
+
+	function show(v String)
+		print("v={v} text={self.text}\n")
+	end 'show'
+end 'Holder'
+
+function main() returns ExitCode
+	let v = make()
+	var h = Holder.create("zz")
+	h.adopt(v)
+	h.grow()
+	h.show(v)
+	var g = Holder.create(v)
+	g.grow()
+	g.show(v)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=ab text=abXY
+v=ab text=abXY
+```
+
+<!-- test: a-returned-borrow-stored-in-a-module-var-is-copied-not-written-through -->
+### A Module `var` Takes A Copy Too
+`slot = relay(v)` stores through the global door, which copies what the binding door copies.
+```maxon
+function make() returns String
+	var m = "a"
+	m.append("b")
+	return m
+end 'make'
+
+function relay(s String) returns String
+	return s
+end 'relay'
+
+var slot = "zz"
+
+function main() returns ExitCode
+	let v = make()
+	slot = relay(v)
+	slot.append("XY")
+	print("v={v} slot={slot}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v=ab slot=abXY
 ```
 
 <!-- test: a-returned-literal-is-cloned-not-shared -->
@@ -1196,9 +1439,10 @@ a=Hello b=Hello arr[0]=74
 ```
 
 <!-- test: tobytearray-is-independent-through-the-raw-managed-door -->
-The independence holds through the RAW door too, and that is what makes `s.toByteArray().managed` the
-sanctioned way for code outside the stdlib to hand a string's bytes to an intrinsic that wants a
-`__ManagedMemory`. `Array` exports `managed`; `String` does not. So this is the one route from a string
+<!-- tier: stdlib -->
+The independence holds through the RAW door too: `s.toByteArray().managed` is how library-tier code hands
+a string's bytes to an intrinsic that wants a `__ManagedMemory`. `Array` exports `managed`; `String` does
+not. So this is the one route from a string
 to a writable buffer — and it detaches.
 
 This is pinned separately from the tests above because they go through `Array.set`, which is
@@ -1208,7 +1452,7 @@ the case that would actually alias if the view had not already detached.
 function main() returns ExitCode
 	let who = "ello"
 	let s = "H{who}"
-	let arr = s.toByteArray()
+	var arr = s.toByteArray()
 	try arr.managed.set(0, 74) otherwise panic("set")
 	let b0 = try arr.get(0) otherwise panic("get")
 	print("s={s} arr[0]={b0}")

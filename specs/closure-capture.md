@@ -24,12 +24,12 @@ var f = function(x int) gives x + offset
 ```
 
 Nested closures capture through their enclosing closure, and a value held at an interface type is captured
-with its witness. Passing a captured name by reference inside a closure is E3019.
+with its witness. Passing a captured name by reference inside a closure is E3159.
 
 A function value is one word: the address of a reference-counted closure record holding its code and its
 captures. A plain function is an immortal static record. The closure owns its environment, so it may be
-returned, stored in a global, a field, a container or a union payload, and passed to `async`, which moves
-it into the coroutine. Copies share: `var g = f` and `f.clone()` take another reference to the same record.
+returned, stored in a global, a field, a container or a union payload, and passed to `async`, where the
+coroutine holds it until it ends. Copies share: `var g = f` and `f.clone()` take another reference to the same record.
 
 A closure stored into something it captures would form a reference cycle no drop can release, so a
 whole-program check refuses it (E3183). The check follows what the compiler can see; aliasing that only
@@ -750,18 +750,16 @@ end 'main'
 The closure body gets its own `IrFunction` with its own dense SSA numbering, so the parser saves the
 enclosing function's context, resets it, parses the body and restores it. The reset list and the
 save/restore list are written out separately and NOTHING makes them agree. A column reset and not put back
-is a compiler PANIC — not a diagnostic, a crash — on programs anyone writes. The three this case reaches:
+is a compiler PANIC — not a diagnostic, a crash — on programs anyone writes. The two this case reaches,
+from inside a `for … in` body:
 
-  • **`iterationLockedBindings`** — the `for..in` lock STACK. A closure anywhere in a loop body that emptied
-    it would leave the loop's own `releaseIterationSource` nothing to pop: *"the iteration lock stack is
-    empty"*. That is `for x in a` with a closure in it, and nothing more.
   • **`declaringWitnessParamBase`/`declaringWitnessParamCount`** — where a `where`-constrained generic method's
     witness parameters sit. Zeroed by a closure, the first witness dispatch AFTER it would panic in
     `witnessParamValueId`. The same two statements in the OTHER order compile regardless, which hides it.
   • **`charLiteralOps`** — pinned by `char-literal-to-int/char-literal-coerces-across-a-closure-body`, whose
     second half is a SILENT WRONG ANSWER rather than a panic.
 
-This case is the shared one: one program that reaches all three, so a future column added to the reset list
+This case is the shared one: one program that reaches both, so a future column added to the reset list
 and forgotten in the restore list has somewhere to fail.
 
 ```maxon
@@ -836,6 +834,149 @@ instance.
 ⚠ **A REFUSAL OF AN INSTANCE HERE WOULD CONTRADICT ITSELF.** `typeTagName(genericInstance)` prints
 `"struct"`, so the message would read *"the captured 'b', which is declared 'struct' and not a struct
 type"*.
+
+<!-- test: closure-capture.a-bare-var-field-in-a-closure-is-written-like-self-dot-field -->
+A bare field name inside a closure is `self.field`: the closure writes the `var` field `held` through the call exactly as the spelled-out `self.held` does, and both are accepted.
+
+```maxon
+typealias NameArray = Array with String
+typealias Action = function() returns bool
+
+type Held
+	export var names as NameArray
+
+	static function create() returns Self
+		return Self{names: NameArray.create()}
+	end 'create'
+
+	function hold(key String) returns bool
+		self.names.push(key)
+		return true
+	end 'hold'
+end 'Held'
+
+function perform(action Action) returns bool
+	return action()
+end 'perform'
+
+type Registry
+	export var held as Held
+
+	static function create() returns Self
+		return Self{held: Held.create()}
+	end 'create'
+
+	function viaBare(key String) returns bool
+		return perform(function() gives held.hold(key))
+	end 'viaBare'
+
+	function viaSelf(key String) returns bool
+		return perform(function() gives self.held.hold(key))
+	end 'viaSelf'
+end 'Registry'
+
+function main() returns ExitCode
+	var registry = Registry.create()
+	_ = registry.viaBare("a")
+	_ = registry.viaSelf("b")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: closure-capture.error.a-bare-let-field-in-a-closure-is-read-only -->
+The same bare spelling over a `let` field: the field is read-only, so the closure may not call a writing method on it.
+
+```maxon
+typealias NameArray = Array with String
+typealias Action = function() returns bool
+
+type Held
+	export var names as NameArray
+
+	static function create() returns Self
+		return Self{names: NameArray.create()}
+	end 'create'
+
+	function hold(key String) returns bool
+		self.names.push(key)
+		return true
+	end 'hold'
+end 'Held'
+
+function perform(action Action) returns bool
+	return action()
+end 'perform'
+
+type Registry
+	export let held as Held
+
+	static function create() returns Self
+		return Self{held: Held.create()}
+	end 'create'
+
+	function hold(key String) returns bool
+		return perform(function() gives held.hold(key))
+	end 'hold'
+end 'Registry'
+
+function main() returns ExitCode
+	var registry = Registry.create()
+	_ = registry.hold("a")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:30:40: cannot pass a `let` field of 'held', which is read-only, to a function that writes parameter 'self' (in Registry.hold$closure_0); pass a clone()
+```
+
+<!-- test: closure-capture.error.a-self-let-field-in-a-closure-is-read-only -->
+The spelled-out twin of the case above, refused identically.
+
+```maxon
+typealias NameArray = Array with String
+typealias Action = function() returns bool
+
+type Held
+	export var names as NameArray
+
+	static function create() returns Self
+		return Self{names: NameArray.create()}
+	end 'create'
+
+	function hold(key String) returns bool
+		self.names.push(key)
+		return true
+	end 'hold'
+end 'Held'
+
+function perform(action Action) returns bool
+	return action()
+end 'perform'
+
+type Registry
+	export let held as Held
+
+	static function create() returns Self
+		return Self{held: Held.create()}
+	end 'create'
+
+	function hold(key String) returns bool
+		return perform(function() gives self.held.hold(key))
+	end 'hold'
+end 'Registry'
+
+function main() returns ExitCode
+	var registry = Registry.create()
+	_ = registry.hold("a")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:30:45: cannot pass a value read out of a `let` field, which is read-only, to a function that writes parameter 'self' (in Registry.hold$closure_0); pass a clone()
+```
 
 <!-- test: closure-capture.captured-generic-instance-method-and-field -->
 Both members a base can carry, off one captured instance: a METHOD call and a FIELD read.
@@ -2232,14 +2373,16 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:18:27: cannot pass 'n' to function that mutates parameter 'dest' (in Counter.setter$closure_0): the closure holds its own copy of 'n', so a write through 'dest' cannot reach it
+error E3159: <fragment>:18:27: cannot pass 'n' to a function that writes parameter 'dest' (in Counter.setter$closure_0): the closure holds its own copy of 'n', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 ### A captured Promise
 
 <!-- test: closure-capture.a-captured-promise-moves-into-the-closure -->
 A capture moves the promise into the closure, so the green thread stays alive for as long as the closure does
-and runs at the next yield, after the frame that spawned it has ended.
+and runs at the next yield, after the frame that spawned it has ended. `main`'s two yields let `setFlag` run
+to completion on the strand, so the closure's `isComplete()` read answers through a promise that is still
+alive.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -2253,17 +2396,18 @@ function setFlag() returns Integer
 	return 1
 end 'setFlag'
 
-function alive(p IntPromise) returns Integer
-	return 1 if p.inner > 0 else 0
-end 'alive'
+function finished(p IntPromise) returns Integer
+	return 1 if p.isComplete() else 0
+end 'finished'
 
 function later() returns Thunk
 	let p = async setFlag()
-	return function() gives alive(p)
+	return function() gives finished(p)
 end 'later'
 
 function main() returns ExitCode
 	let f = later()
+	Scheduler.yield()
 	Scheduler.yield()
 	print("{flag} {f()}\n")
 	return 0
@@ -2289,7 +2433,7 @@ function plain() returns Integer
 end 'plain'
 
 function alive(p IntPromise) returns Integer
-	return 1 if p.inner > 0 else 0
+	return 1 if p.isComplete() else 0
 end 'alive'
 
 function never() returns Thunk
@@ -2347,7 +2491,7 @@ function plain() returns Integer
 end 'plain'
 
 function alive(p IntPromise) returns Integer
-	return 1 if p.inner > 0 else 0
+	return 1 if p.isComplete() else 0
 end 'alive'
 
 function main() returns ExitCode
@@ -3202,7 +3346,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:27:3: cannot write through 'self.inner', which may be the record of immutable variable 'held'; use clone()
+error E3159: <fragment>:27:3: cannot write through 'self.inner': 'held' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 error E3183: <fragment>:27:21: this closure captures 'held' and is stored into a record 'held' holds, so 'held' would hold the closure and the closure would hold 'held', and neither would ever be released. Store it somewhere 'held' does not reach, or capture what the closure needs instead of 'held' itself
 ```
 

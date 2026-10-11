@@ -7,11 +7,12 @@ category: memory
 
 # Ranged-Int Sub-Byte Bit-Packing: the cases that pin emitted code
 
-The cases of `specs/ranged-int-bit-packing.md` whose subject is the emitted code. Each pins the Target IR its program compiles to, on every native lane that runs it.
+The cases of `specs/ranged-int-bit-packing.md` whose subject is the emitted code. Each pins the Target IR its program compiles to, on every native lane that runs it. Each reads the record's packed width through `.managed`, which only a source file under `stdlib/` or `runtime/` may read (E3185), so each compiles in the library tier (`<!-- tier: stdlib -->`).
 
 ## Tests
 
 <!-- test: static-2bit-cast-packed -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Q = int(0 to 3)
 
@@ -401,6 +402,7 @@ func @main {
 ```
 
 <!-- test: static-4bit-cast-packed-cross-byte -->
+<!-- tier: stdlib -->
 ```maxon
 typealias N = int(0 to 15)
 
@@ -818,6 +820,7 @@ func @main {
 ```
 
 <!-- test: static-bool-packed -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let a = [true, false, true, false]

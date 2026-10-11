@@ -42,18 +42,18 @@ export interface DebugMemory
 end 'DebugMemory'
 
 export type EngineStop
-	export var reason as DebugAddress
-	export var fault as DebugAddress
-	export var machine as DebugAddress
-	export var greenThread as DebugAddress
-	export var traceMark as DebugAddress
-	export var pc as DebugAddress
-	export var stackPointer as DebugAddress
-	export var framePointer as DebugAddress
-	export var returnAddresses as DebugAddressArray
-	export var callerFramePointers as DebugAddressArray
-	export var truncated as bool
-	export var conditionMissed as bool
+	export let reason as DebugAddress
+	export let fault as DebugAddress
+	export let machine as DebugAddress
+	export let greenThread as DebugAddress
+	export let traceMark as DebugAddress
+	export let pc as DebugAddress
+	export let stackPointer as DebugAddress
+	export let framePointer as DebugAddress
+	export let returnAddresses as DebugAddressArray
+	export let callerFramePointers as DebugAddressArray
+	export let truncated as bool
+	export let conditionMissed as bool
 
 	export static function create(reason DebugAddress, fault DebugAddress, machine DebugAddress, greenThread DebugAddress, traceMark DebugAddress, pc DebugAddress, stackPointer DebugAddress, framePointer DebugAddress, returnAddresses DebugAddressArray, callerFramePointers DebugAddressArray, truncated bool, conditionMissed bool) returns EngineStop
 		return Self{reason: reason, fault: fault, machine: machine, greenThread: greenThread, traceMark: traceMark, pc: pc, stackPointer: stackPointer, framePointer: framePointer, returnAddresses: returnAddresses, callerFramePointers: callerFramePointers, truncated: truncated, conditionMissed: conditionMissed}
@@ -139,7 +139,7 @@ let FirstStopSeq = 1
 type EngineBreakpoint
 	export let offset as DebugAddress
 	export let address as DebugAddress
-	export let originalBytes as ByteArray
+	export var originalBytes as ByteArray
 	export let usersOwn as bool
 	export let conditioned as bool
 	export let condition as DebugConditionRecord
@@ -310,7 +310,7 @@ union EngineExecutedTrap
 end 'EngineExecutedTrap'
 
 union EngineWalk
-	walked(returnAddresses DebugAddressArray, callerFramePointers DebugAddressArray, truncated bool)
+	walked(let returnAddresses DebugAddressArray, let callerFramePointers DebugAddressArray, truncated bool)
 end 'EngineWalk'
 
 export type DebugEngine implements DebugMemory
@@ -327,7 +327,7 @@ export type DebugEngine implements DebugMemory
 	var cacheBytes as ByteArray
 	var cacheFilled as bool
 	var trace as DebugTraceState
-	let routing as ChildOutputRouting
+	var routing as ChildOutputRouting
 	var registers as DebugRegisterFile
 	var stopThread as BackendThreadId
 	var stopped as bool
@@ -346,7 +346,7 @@ export type DebugEngine implements DebugMemory
 	export static function start(program FilePath, reader MxdbgReader, textBytes DebugAddress, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, routing ChildOutputRouting, stopTimeoutMs StopTimeoutMs, traced bool) returns EngineStart
 		requireEngineBoundsMatchTheBackend()
 
-		if not debugSessionPinnedToItsMachine() 'noPin'
+		if not Scheduler.pinToMachine() 'noPin'
 			return EngineStart.refused("this driver could not pin its own green thread to the machine the debug interface answers on")
 		end 'noPin'
 
@@ -362,7 +362,7 @@ export type DebugEngine implements DebugMemory
 			environment.upsert(name, value: value)
 		end 'eachVariable'
 
-		let trace = openedTraceRing(program, traced: traced)
+		var trace = openedTraceRing(program, traced: traced)
 
 		match trace 'ring'
 			untraced or
@@ -370,10 +370,10 @@ export type DebugEngine implements DebugMemory
 			ring(collector) then environment.upsert(DsActivationEnvVar, value: collector.segmentName())
 		end 'ring'
 
-		let target = try DebugTarget.launchTraced(program, arguments: arguments, workingDirectory: workingDirectory, environment: environment, routing: routing) otherwise (e) 'noChild'
+		var target = try DebugTarget.launchTraced(program, arguments: arguments, workingDirectory: workingDirectory, environment: environment, routing: routing) otherwise (e) 'noChild'
 			backend.close()
 			closeTraceRing(trace)
-			releaseDebugSessionPin()
+			Scheduler.unpinFromMachine()
 
 			return EngineStart.refused("could not launch the program ({e.displayReason()})")
 		end 'noChild'
@@ -483,7 +483,7 @@ export type DebugEngine implements DebugMemory
 		let outcome = self.target.settle(how)
 		self.target.pump()
 		closeTraceRing(self.trace)
-		releaseDebugSessionPin()
+		Scheduler.unpinFromMachine()
 
 		return outcome
 	end 'closedWith'
@@ -523,7 +523,9 @@ export type DebugEngine implements DebugMemory
 	end 'takeOutput'
 
 	export function collectedOutput() returns CollectedLines
-		return match self.routing 'where'
+		var heldRouting = self.routing
+
+		return match heldRouting 'where'
 			verbatim or
 			allToStandardError gives CollectedLines.create()
 			collect(sink) gives sink.takeAll()
@@ -531,7 +533,9 @@ export type DebugEngine implements DebugMemory
 	end 'collectedOutput'
 
 	export function traceSlice(mark DebugAddress, since DebugTraceSince, limit DebugTraceTally) returns DebugTraceSlice
-		match self.trace 'ring'
+		var heldTrace = self.trace
+
+		match heldTrace 'ring'
 			untraced then return DebugTraceSlice.missing(DebugTraceNotRequestedReason)
 			noProducer then return DebugTraceSlice.missing(DebugTraceNoProducerReason)
 			ring(collector) then return slicedFrom(collector, mark: mark, since: since, limit: limit)
@@ -539,7 +543,9 @@ export type DebugEngine implements DebugMemory
 	end 'traceSlice'
 
 	function pumpTrace()
-		match self.trace 'ring'
+		var heldTrace = self.trace
+
+		match heldTrace 'ring'
 			untraced or
 			noProducer then break
 			ring(collector) then collector.pump()
@@ -651,21 +657,21 @@ export type DebugEngine implements DebugMemory
 		end 'pastTheImage'
 
 		if self.armedAt(self.textBase + offset) 'armedAlready'
-			self.recordBreakpoint(offset, originalBytes: self.originalBytesAt(offset), usersOwn: forTheUser or self.userBreakpointAt(self.textBase + offset), conditioned: false, condition: DebugConditionRecord.unconditioned())
+			let original = self.originalBytesAt(offset)
+			self.recordBreakpoint(offset, originalBytes: original, usersOwn: forTheUser or self.userBreakpointAt(self.textBase + offset), conditioned: false, condition: DebugConditionRecord.unconditioned())
 			self.forgetTheHoldAt(offset)
 
 			return CommandOutcome.done
 		end 'armedAlready'
 
-		var original = ByteArray.create()
+		let trap = self.backend.plantTrap(self.textBase + offset)
 
-		match self.backend.plantTrap(self.textBase + offset) 'planted'
+		match trap 'planted'
 			unreadable then return CommandOutcome.refused(DebugOutOfTextReason)
 			unwritable then return CommandOutcome.refused(DebugUnwritableReason)
-			planted(bytes) then original = bytes
+			planted(original) then self.recordBreakpoint(offset, originalBytes: original, usersOwn: forTheUser, conditioned: false, condition: DebugConditionRecord.unconditioned())
 		end 'planted'
 
-		self.recordBreakpoint(offset, originalBytes: original, usersOwn: forTheUser, conditioned: false, condition: DebugConditionRecord.unconditioned())
 		self.forgetTheHoldAt(offset)
 		self.cacheFilled = false
 
@@ -740,7 +746,8 @@ export type DebugEngine implements DebugMemory
 			return held
 		end 'theWalkCouldNotHoldItsReturn'
 
-		self.recordBreakpoint(offset, originalBytes: self.originalBytesAt(offset), usersOwn: true, conditioned: true, condition: record)
+		let original = self.originalBytesAt(offset)
+		self.recordBreakpoint(offset, originalBytes: original, usersOwn: true, conditioned: true, condition: record)
 
 		return CommandOutcome.done
 	end 'attachCondition'
@@ -751,7 +758,8 @@ export type DebugEngine implements DebugMemory
 			at then break
 		end 'known'
 
-		self.recordBreakpoint(offset, originalBytes: self.originalBytesAt(offset), usersOwn: true, conditioned: false, condition: DebugConditionRecord.unconditioned())
+		let original = self.originalBytesAt(offset)
+		self.recordBreakpoint(offset, originalBytes: original, usersOwn: true, conditioned: false, condition: DebugConditionRecord.unconditioned())
 
 		return CommandOutcome.done
 	end 'clearCondition'
@@ -912,7 +920,7 @@ export type DebugEngine implements DebugMemory
 		var outcome = CommandOutcome.done
 
 		for point in standing 'eachPoint'
-			let lifted = self.liftedOne(point.offsetOf())
+			var lifted = self.liftedOne(point.offsetOf())
 
 			if outcome.accepted() 'noFailureYet'
 				outcome = lifted
@@ -1855,7 +1863,7 @@ export type DebugEngine implements DebugMemory
 end 'DebugEngine'
 
 function refusedBeforeLaunch(reason String) returns EngineStart
-	releaseDebugSessionPin()
+	Scheduler.unpinFromMachine()
 
 	return EngineStart.refused(reason)
 end 'refusedBeforeLaunch'
@@ -1963,16 +1971,13 @@ end 'refusalDependsOnTheInstruction'
 // ⚠ The two bounds below are written twice: a typed range cannot name a `let`, so the only way to keep
 // them true is to compare them with the register file they describe.
 function requireEngineBoundsMatchTheBackend()
-	if MaxEngineReadLength != TransferWindowBytes 'aWindowThatIsNotTheBackends'
-		panic("DebugEngine: EngineReadLength is bounded at {MaxEngineReadLength} and the backend answers a read of at most {TransferWindowBytes} bytes")
+	if MaxEngineReadLength != DebugTransferBytes 'aWindowThatIsNotTheBackends'
+		panic("DebugEngine: EngineReadLength is bounded at {MaxEngineReadLength} and the backend answers a read of at most {DebugTransferBytes} bytes")
 	end 'aWindowThatIsNotTheBackends'
 
 	if MaxEngineRegisterNumber != BackendRegisterSlots - 1 'aFileThatIsNotTheBackends'
 		panic("DebugEngine: EngineRegisterNumber is bounded at {MaxEngineRegisterNumber} and the backend's register file holds {BackendRegisterSlots} slots")
 	end 'aFileThatIsNotTheBackends'
 
-	requireBackendPageOffsetSpansItsScratch()
-	requireWindowsScratchLayoutIsDisjoint()
-	requirePtraceScratchLayoutIsDisjoint()
 	requireRegisterSlotsAreTheCompilersOwn()
 end 'requireEngineBoundsMatchTheBackend'

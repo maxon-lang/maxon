@@ -337,6 +337,9 @@ let RunsAloneValue = "alone"
 let ProcessMarker = "<!-- process:"
 let ProcessOwnValue = "own"
 
+let TierMarker = "<!-- tier:"
+let TierStdlibValue = "stdlib"
+
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
 let ArgSeparator = " "
@@ -790,7 +793,7 @@ export union SpecProcs
 	unset
 
 	// `<!-- procs: N -->`: `MAXON_MAX_PROCS=N` is placed in the environment of this case's program alone.
-	pinned(count RequestedProcessorCount)
+	pinned(let count RequestedProcessorCount)
 end 'SpecProcs'
 
 // ⭐ **WHETHER A CASE WITHDRAWS THE MONITOR'S PREEMPTION — see `PreemptMarker` for why this is a per-case
@@ -845,6 +848,12 @@ export enum SpecProcess
 
 	own
 end 'SpecProcess'
+
+export enum SpecTier
+	user
+
+	stdlib
+end 'SpecTier'
 
 export union SpecTargetIr
 	unpinned(insertAt TraceSlice)
@@ -951,6 +960,8 @@ export type SpecTest
 
 	export let process as SpecProcess
 
+	export let tier as SpecTier
+
 	export let targetIr as SpecTargetIr
 
 	// A pin for any lane, this run's or another's.
@@ -958,9 +969,9 @@ export type SpecTest
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, targetIr SpecTargetIr, pinsTargetIr bool) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, debugInfo bool, traceCapture SpecTraceCapture, network SpecNetwork, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, runs SpecRuns, process SpecProcess, tier SpecTier, targetIr SpecTargetIr, pinsTargetIr bool) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, targetIr: targetIr, pinsTargetIr: pinsTargetIr}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, runtimeFiles: sections.runtimeFiles, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: targetIr, pinsTargetIr: pinsTargetIr}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -968,6 +979,13 @@ export type SpecTest
 	export function isMultiFile() returns bool
 		return self.sourceFiles.count() > 0
 	end 'isMultiFile'
+
+	export function compilesAsLibrary() returns bool
+		return match self.tier 'tier'
+			user gives false
+			stdlib gives true
+		end 'tier'
+	end 'compilesAsLibrary'
 
 	// ⭐ True when this case pins the bytes of a LINKED SECTION (a ```RequiredData / ```RequiredRdata
 	// block), which is what a target restriction for such a case is DERIVED from — see
@@ -1172,6 +1190,9 @@ end 'exitCodeExpectationIn'
 function scanTestFromMarker(lines StringArray, markerIndex ElementIndex, markerLine String, markerOpenings StringArray, testOpening String, tests SpecTestArray, specPath FilePath, effectiveTargetKey String) returns ElementIndex
 	let closed = closedOpening(testOpening, markerIndex: markerIndex, specPath: specPath)
 	var builder = CaseBuilder.create(markerValueOf(closed), markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
+	var unsupportedTargets = TargetKeyArray.create()
+	var runtimeNames = RuntimeFunctionNameArray.create()
+	var programArgs = ProgramArgArray.create()
 	builder.refuseCrowdedLine(markerOpenings, line: markerLine, lineIndex: markerIndex)
 
 	let lineCount = lines.count()
@@ -1190,15 +1211,15 @@ function scanTestFromMarker(lines StringArray, markerIndex ElementIndex, markerL
 		end 'caseEnd'
 
 		if not openings.isEmpty() 'directiveLine'
-			builder.readDirectiveLine(openings, line: line, lineIndex: i)
+			builder.readDirectiveLine(openings, line: line, lineIndex: i, unsupportedTargets: unsupportedTargets, programArgs: programArgs)
 			i = i + 1
 			continue
 		end 'directiveLine'
 
-		i = builder.readLine(lines, index: i, fenceLine: line.trim())
+		i = builder.readLine(lines, index: i, fenceLine: line.trim(), runtimeNames: runtimeNames)
 	end 'blocks'
 
-	tests.push(builder.build(lines, caseEnd: i))
+	tests.push(builder.build(lines, caseEnd: i, unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs))
 	return i
 end 'scanTestFromMarker'
 
@@ -1287,9 +1308,6 @@ type CaseBuilder
 	var stderr as TargetPreferredText
 	var stdout as TargetPreferredText
 	var sectionPins as SpecSectionPinArray
-	var unsupportedTargets as TargetKeyArray
-	var runtimeNames as RuntimeFunctionNameArray
-	var programArgs as ProgramArgArray
 	var asyncTrace as bool
 	var debugInfo as bool
 	var markedFamily as MarkedTraceFamily
@@ -1316,11 +1334,12 @@ type CaseBuilder
 	var runs as SpecRuns
 
 	var process as SpecProcess
+	var tier as SpecTier
 	var targetIrBlock as TargetIrBlock
 	var pinsAnyLane as bool
 
 	static function create(name String, markerIndex ElementIndex, specPath FilePath, effectiveTargetKey String) returns CaseBuilder
-		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(), claimedDirectives: CaseDirectiveArray.create(), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(), unsupportedTargets: TargetKeyArray.create(), runtimeNames: RuntimeFunctionNameArray.create(), programArgs: ProgramArgArray.create(), asyncTrace: false, debugInfo: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, targetIrBlock: TargetIrBlock.absent, pinsAnyLane: false}
+		return Self{site: UnreadCommentSite.insideCase(name), name: name, markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey, claimedBlocks: StringArray.create(), claimedDirectives: CaseDirectiveArray.create(), fenceSeen: false, program: CaseProgram.absent, exitCode: SpecExitCode.unpinned, compilerError: TargetPreferredText.create(), stderr: TargetPreferredText.create(), stdout: TargetPreferredText.create(), sectionPins: SpecSectionPinArray.create(), asyncTrace: false, debugInfo: false, markedFamily: MarkedTraceFamily.none, captureBlock: CaptureBlock.absent, network: SpecNetwork.none, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, runs: SpecRuns.shared, process: SpecProcess.shared, tier: SpecTier.user, targetIrBlock: TargetIrBlock.absent, pinsAnyLane: false}
 	end 'create'
 
 	function refuseCrowdedLine(openings StringArray, line String, lineIndex ElementIndex)
@@ -1338,17 +1357,17 @@ type CaseBuilder
 		panic("SpecParser: {specPath.toString()}:{lineIndex + 1}: this line carries {openings.count()} directives: '{line.trim()}'. Each line is read for one marker, so every directive after the first would be discarded without a word. Give each directive a line of its own")
 	end 'refuseCrowdedLine'
 
-	function readDirectiveLine(openings StringArray, line String, lineIndex ElementIndex)
+	function readDirectiveLine(openings StringArray, line String, lineIndex ElementIndex, unsupportedTargets TargetKeyArray, programArgs ProgramArgArray)
 		self.refuseCrowdedLine(openings, line: line, lineIndex: lineIndex)
 		let opening = try openings.first() otherwise panic("SpecParser.CaseBuilder.readDirectiveLine: the caller hands it a line whose openings are non-empty, so its first cannot be absent")
 
 		match directiveOf(opening) 'directive'
-			known(directive) then self.readDirective(directive, opening: opening, lineIndex: lineIndex)
+			known(directive) then self.readDirective(directive, opening: opening, lineIndex: lineIndex, unsupportedTargets: unsupportedTargets, programArgs: programArgs)
 			unread then self.refuseUnreadDirective(opening, lineIndex: lineIndex)
 		end 'directive'
 	end 'readDirectiveLine'
 
-	function readDirective(directive CaseDirective, opening String, lineIndex ElementIndex)
+	function readDirective(directive CaseDirective, opening String, lineIndex ElementIndex, unsupportedTargets TargetKeyArray, programArgs ProgramArgArray)
 		let spelling = directive.spelling()
 
 		if claimedDirectives.contains(directive) 'repeated'
@@ -1363,8 +1382,8 @@ type CaseBuilder
 
 		match directive 'directive'
 			testCase then panic("SpecParser.CaseBuilder.readDirective: a test marker ends the case before its line reaches here (`endsTestCase`), so this arm is unreachable")
-			unsupportedTargets then unsupportedTargets = parseUnsupportedTargetKeys(opening, specPath: specPath, testName: name)
-			args then programArgs = parseProgramArgs(opening)
+			unsupportedTargets then unsupportedTargets.append(parseUnsupportedTargetKeys(opening, specPath: specPath, testName: name))
+			args then programArgs.append(parseProgramArgs(opening))
 			asyncTrace then asyncTrace = true
 			debugInfo then debugInfo = true
 			mmTrace then self.markTraceFamily(TraceFamily.mm, lineIndex: lineIndex)
@@ -1375,6 +1394,7 @@ type CaseBuilder
 			stdin then stdin = parseStdinValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 			runs then runs = parseRunsValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 			process then process = parseProcessValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
+			tier then tier = parseTierValue(opening, lineIndex: lineIndex, specPath: specPath, testName: name)
 		end 'directive'
 	end 'readDirective'
 
@@ -1396,7 +1416,7 @@ type CaseBuilder
 		refuseUnreadOpening(opening, lineIndex: lineIndex, specPath: specPath, site: site)
 	end 'refuseUnreadDirective'
 
-	function readLine(lines StringArray, index ElementIndex, fenceLine String) returns ElementIndex
+	function readLine(lines StringArray, index ElementIndex, fenceLine String, runtimeNames RuntimeFunctionNameArray) returns ElementIndex
 		// Asked before the fence arms: they match by prefix, so a prose line such as
 		// `` ```RequiredRuntime block, one name per line: `` would be consumed as a block and its words
 		// read as function names.
@@ -1536,14 +1556,14 @@ type CaseBuilder
 		claimedBlocks.push(kind)
 	end 'claimBlock'
 
-	function build(lines StringArray, caseEnd ElementIndex) returns SpecTest
+	function build(lines StringArray, caseEnd ElementIndex, unsupportedTargets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray) returns SpecTest
 		let source = match program 'program'
 			absent panic("SpecParser: {specPath.toString()}:{markerIndex + 1}: test '{name}' has no ```maxon block, so there is no program to run and the case would run nowhere with nothing reported. Add its source under the marker, or delete the marker")
 			read(text) gives text
 		end 'program'
 
 		let traceCapture = self.settledCapture(lines, caseEnd: caseEnd)
-		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinsTargetIr: pinsAnyLane)
+		return SpecTest.create(name, source: source, expectation: self.expectationFor(traceCapture, runtimeNames: runtimeNames), unsupportedTargets: unsupportedTargets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, debugInfo: debugInfo, traceCapture: traceCapture, network: network, procs: procs, preempt: preempt, stdin: stdin, runs: runs, process: process, tier: tier, targetIr: self.settledTargetIr(lines, caseEnd: caseEnd), pinsTargetIr: pinsAnyLane)
 	end 'build'
 
 	function settledCapture(lines StringArray, caseEnd ElementIndex) returns SpecTraceCapture
@@ -1575,7 +1595,7 @@ type CaseBuilder
 		return SpecTraceCapture.pinned(blockFamily, trace: trace, span: span)
 	end 'agreeingCapture'
 
-	function expectationFor(traceCapture SpecTraceCapture) returns SpecExpectation
+	function expectationFor(traceCapture SpecTraceCapture, runtimeNames RuntimeFunctionNameArray) returns SpecExpectation
 		// A ```maxoncstderr block WINS over an ```exitcode one: the two are mutually exclusive,
 		// and a spec carrying both is asserting the compile FAILS — which no exit code of the
 		// program it never produced could also be true of.
@@ -2094,6 +2114,7 @@ enum CaseDirective
 	stdin
 	runs
 	process
+	tier
 
 	function spelling() returns String
 		return match self 'directive'
@@ -2110,6 +2131,7 @@ enum CaseDirective
 			stdin gives StdinMarker
 			runs gives RunsMarker
 			process gives ProcessMarker
+			tier gives TierMarker
 		end 'directive'
 	end 'spelling'
 
@@ -2127,7 +2149,8 @@ enum CaseDirective
 			preempt or
 			stdin or
 			runs or
-			process gives false
+			process or
+			tier gives false
 		end 'directive'
 	end 'isFlag'
 end 'CaseDirective'
@@ -2393,6 +2416,11 @@ function parseProcessValue(opening String, lineIndex ElementIndex, specPath File
 	return SpecProcess.own
 end 'parseProcessValue'
 
+function parseTierValue(opening String, lineIndex ElementIndex, specPath FilePath, testName String) returns SpecTier
+	requireSoleMarkerValue(opening, marker: TierMarker, accepted: TierStdlibValue, lineIndex: lineIndex, specPath: specPath, testName: testName, consequence: "It compiles the case as library-tier source, for a case whose subject is a library-tier surface; absence already says the case is the author's code, and an unrecognized value would quietly compile a library-tier case as the author's and report the refusal that tier exists to lift")
+	return SpecTier.stdlib
+end 'parseTierValue'
+
 // What a `<!-- stdin: … -->` marker asks the child's fd 0 to be.
 //
 // ⛔ **AN UNRECOGNIZED VALUE IS A PANIC, NOT A `closed`**, for `parseNetworkValue`'s reason and with the
@@ -2457,7 +2485,7 @@ function parseProgramArgs(opening String) returns ProgramArgArray
 		// Advanced ONCE, before the branches: both the next segment's start and the next character's
 		// position are this same index, and computing it twice would be one fact — and one panic
 		// message — written down twice.
-		let next = try payload.indexAfter(pos) otherwise panic("SpecParser.parseProgramArgs: indexAfter failed at character {at} of {length} on the payload '{payload}', which the while guard says is still in range")
+		var next = try payload.indexAfter(pos) otherwise panic("SpecParser.parseProgramArgs: indexAfter failed at character {at} of {length} on the payload '{payload}', which the while guard says is still in range")
 
 		if isQuote or isSeparator 'segmentEnds'
 			current.append(payload.slice(segmentStart, endIndex: pos))

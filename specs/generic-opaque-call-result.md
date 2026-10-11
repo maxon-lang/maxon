@@ -151,9 +151,8 @@ The program's own answer comes through the compiler's `Array` surface, which is 
 record it describes is destroyed exactly once.
 
 <!-- test: a-self-is-its-own-instance-record-keeps-its-parameter-opaque -->
+<!-- tier: stdlib -->
 ```maxon
-typealias Idx = int(0 to u64.max)
-
 enum BagError implements Error
 	oob
 end 'BagError'
@@ -170,11 +169,11 @@ type Array uses Element implements BuiltinArrayLiteral
 		return Self{}
 	end 'create'
 
-	function count() returns Idx
+	function count() returns ElementIndex
 		return managed.length()
 	end 'count'
 
-	function at(i Idx) returns Element throws BagError
+	function at(i ElementIndex) returns Element throws BagError
 		return try managed.get(i) otherwise throw BagError.oob
 	end 'at'
 end 'Array'

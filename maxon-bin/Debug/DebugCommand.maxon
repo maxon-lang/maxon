@@ -109,7 +109,7 @@ let SymbolizeLeastWords = 3 as CommandWordCount
 
 // The outcome of finding, reading and VOUCHING FOR the sidecar that describes a given path.
 union SidecarLoad
-	loaded(reader MxdbgReader, code ByteArray)
+	loaded(reader MxdbgReader, let code ByteArray)
 	refused(reason String)
 end 'SidecarLoad'
 
@@ -178,7 +178,7 @@ union DebuggerRequestParse
 end 'DebuggerRequestParse'
 
 module union DebugImageCheck
-	usable(code ByteArray, reader MxdbgReader)
+	usable(let code ByteArray, reader MxdbgReader)
 	refused(reason String)
 end 'DebugImageCheck'
 
@@ -215,7 +215,7 @@ function runClassifySequences(spelling String, classified ClassificationPrinter)
 end 'runClassifySequences'
 
 union HexByteRead
-	bytes(code ByteArray)
+	bytes(let code ByteArray)
 	notHex(text String)
 end 'HexByteRead'
 
@@ -459,7 +459,9 @@ end 'printDebugCompletions'
 function runDebugSessionFor(request DebuggerRequest, program FilePath, code ByteArray, reader MxdbgReader) returns ExitCode
 	let face = DebugFace.batch if request.batch else DebugFace.conversational
 
-	match DebugSession.launch(program, reader: reader, code: code, arguments: request.programArguments, workingDirectory: inheritedWorkingDirectory(), targetEnv: request.targetEnv, stopTimeoutMs: request.stopTimeoutMs, face: face, traced: request.traced) 'started'
+	var launch = DebugSession.launch(program, reader: reader, code: code, arguments: request.programArguments, workingDirectory: inheritedWorkingDirectory(), targetEnv: request.targetEnv, stopTimeoutMs: request.stopTimeoutMs, face: face, traced: request.traced)
+
+	match launch 'started'
 		refused(reason) then return refuseDebugCommand(reason)
 		ready(session) then return drivenDebugSession(session, request: request)
 	end 'started'
@@ -943,7 +945,7 @@ end 'sidecarMatchingCode'
 // The bytes of a binary's code section, whatever container it is in. A union so a file in none of the
 // three formats is refused by name rather than folded into an empty section.
 module union CodeSectionRead
-	found(bytes ByteArray)
+	found(let bytes ByteArray)
 	refused(reason String)
 end 'CodeSectionRead'
 

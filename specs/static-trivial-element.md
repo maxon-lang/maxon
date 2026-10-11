@@ -175,6 +175,7 @@ end 'main'
 ```
 
 <!-- test: a-managed-element-read-still-reports-an-empty-slot -->
+<!-- tier: stdlib -->
 The control for the read arm. A slot opened through the raw buffer holds nothing; read back through
 `Array.get` over a managed element it is `emptySlot`, which only the `__im_empty` arm can say. The
 stamp says the element owes a drop, so that arm stays. Sabotage — stamping this site trivial — hands

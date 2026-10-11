@@ -37,11 +37,19 @@ export typealias RelocationArray = Array with Relocation
 // vs chunk-local) depends on the array it lives in; consumers must know which.
 export type CallFixup
 	export var codeOffset as CodeOffset
-	export var targetName as ByteArray
+	export let targetName as ByteArray
+
+	// The site takes the function's ADDRESS rather than calling it: `UnguardedChains` counts the
+	// function as a target of every call through a pointer, and the site as no call edge.
+	export var takesAddressOnly as bool
 
 	export static function create(codeOffset CodeOffset, targetName ByteArray) returns CallFixup
-		return Self{codeOffset: codeOffset, targetName: targetName}
+		return Self{codeOffset: codeOffset, targetName: targetName, takesAddressOnly: false}
 	end 'create'
+
+	export static function addressOf(codeOffset CodeOffset, targetName ByteArray) returns CallFixup
+		return Self{codeOffset: codeOffset, targetName: targetName, takesAddressOnly: true}
+	end 'addressOf'
 end 'CallFixup'
 
 export typealias CallFixupArray = Array with CallFixup
@@ -54,7 +62,7 @@ export typealias CallFixupArray = Array with CallFixup
 // per-function facts the backtrace table holds beyond a name, and the object writers ignore all
 // three.
 export type DebugSymbol
-	export var name as ByteArray
+	export let name as ByteArray
 	export var codeOffset as CodeOffset
 	export var asyncPreemptible as bool
 	export var asyncUnsafePrefixBytes as CodeOffset
@@ -203,7 +211,7 @@ end 'rdataAbsTargetOffset'
 // instruction and its target together — no dyld rebase entry is needed.
 export type Arm64FuncAdrpReloc
 	export var codeOffset as CodeOffset
-	export var funcName as ByteArray
+	export let funcName as ByteArray
 	export var textOffset as CodeOffset
 
 	export static function create(codeOffset CodeOffset, funcName ByteArray) returns Arm64FuncAdrpReloc
@@ -404,7 +412,7 @@ export type DebugLineRowBuilder
 	var entering as bool
 	var atBlockStart as bool
 	let branchTargets as BoolArray
-	let lines as SpanLineTable
+	var lines as SpanLineTable
 
 	export static function forFunction(module TargetModule, func IrFunction, armed bool, encoding FunctionEncodingFacts) returns DebugLineRowBuilder
 		return Self{rows: DebugLineRowArray.create(), last: NoSpanId, lastSite: InlineSiteRef.none, openSite: InlineSiteRef.none, armed: armed, entering: false, atBlockStart: false, branchTargets: lineEntryColumn(module, func: func, encoding: encoding) if armed else BoolArray.create(), lines: encoding.lines}
@@ -580,6 +588,21 @@ end 'DebugFunctionRange'
 
 export typealias DebugFunctionRangeArray = Array with DebugFunctionRange
 
+// What one call of a chunk costs its caller's stack, as the unguarded-chain proof prices it
+// (`UnguardedChains`, E5004). A wrong declaration is not caught: it under-prices a chain and lets
+// an overflow through silently.
+export enum ChunkStackUse
+	// Nothing declared. A chunk on an unguarded chain must declare its cost, or the proof panics.
+	unmeasured
+
+	// `stackBytesPerCall` plus the deepest of its callees, all on the caller's stack.
+	onCallerStack
+
+	// It switches stacks, so `stackBytesPerCall` is all it leaves on the caller's, and its callees are
+	// not counted.
+	leavesTheStack
+end 'ChunkStackUse'
+
 // Per-function code chunk. The backend emits one chunk per function, then a module-level fixup pass
 // concatenates them into the final `.text` section. All offsets inside a chunk are chunk-local
 // (`entryOffset` is always 0); the concat pass shifts every fixup by the chunk's start offset
@@ -593,7 +616,7 @@ export typealias DebugFunctionRangeArray = Array with DebugFunctionRange
 // address pairs (chunk-local `codeOffset`, rebased at concat like `callFixups`);
 // empty for every x64 chunk and for any arm64 chunk that takes no function value.
 export type FunctionCodeChunk
-	export var funcName as ByteArray
+	export let funcName as ByteArray
 	export var code as ByteArray
 	export var entryOffset as CodeOffset
 	export var callFixups as CallFixupArray
@@ -657,6 +680,25 @@ export type FunctionCodeChunk
 	// as `BacktraceFormat.SymtabScaffoldingBit`.
 	export var compilerScaffolding as bool
 
+	export var stackUse as ChunkStackUse
+	export var stackBytesPerCall as StackSize
+
+	// The chunk runs a prologue stack guard, so a caller's margin pays only the return address its
+	// call pushes.
+	export var checksStack as bool
+
+	export function spendsCallerStack(bytes StackSize, checks bool)
+		self.stackUse = ChunkStackUse.onCallerStack
+		self.stackBytesPerCall = bytes
+		self.checksStack = checks
+	end 'spendsCallerStack'
+
+	export function leavesCallerStack(bytes StackSize)
+		self.stackUse = ChunkStackUse.leavesTheStack
+		self.stackBytesPerCall = bytes
+		self.checksStack = false
+	end 'leavesCallerStack'
+
 	export static function create(funcName ByteArray) returns FunctionCodeChunk
 		return Self{
 			funcName: funcName,
@@ -678,7 +720,10 @@ export type FunctionCodeChunk
 			inlineRanges: InlineRangeArray.create(),
 			asyncPreemptible: false,
 			asyncUnsafePrefixBytes: 0,
-			compilerScaffolding: true
+			compilerScaffolding: true,
+			stackUse: ChunkStackUse.unmeasured,
+			stackBytesPerCall: 0,
+			checksStack: false
 		}
 	end 'create'
 
@@ -707,7 +752,10 @@ export type FunctionCodeChunk
 			inlineRanges: InlineRangeArray.create(),
 			asyncPreemptible: false,
 			asyncUnsafePrefixBytes: 0,
-			compilerScaffolding: true
+			compilerScaffolding: true,
+			stackUse: ChunkStackUse.unmeasured,
+			stackBytesPerCall: 0,
+			checksStack: false
 		}
 	end 'createWith'
 end 'FunctionCodeChunk'

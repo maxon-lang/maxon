@@ -20,9 +20,9 @@ the `_ = expr` cure where one exists, instead of saying the shape is unsupported
 `discarded-results.md` carries all three verdicts.
 
 ⭐ `specs/static-methods.md` covers statics thoroughly, but **every one of its cases returns a value**,
-so these are the cases in statement position. A user-written void static is a statement exactly as
-`__Builtins.sleep(ms)` and `__ManagedFile.statFree(buf)` are: which callees are compiler-owned is not a
-rule about the shape.
+so these are the cases in statement position. A user-written void static is a statement exactly as the
+library tier's `__Builtins.sleep(ms)` and `__ManagedFile.statFree(buf)` are: which callees are
+compiler-owned is not a rule about the shape.
 
 ## Tests
 
@@ -103,8 +103,8 @@ strength of its BASE alone, so a member that resolves to nothing is refused by `
 names the callee — not by `E2015: Unsupported: identifier statement`, a message about the SHAPE, which is
 false for a void static: the construct is supported, the name is wrong, and E2015 says nothing about a name.
 ⭐ This is the same answer TWO other positions give for the identical typo — expression position
-(`let x = Helper.nope()`) and the compiler-owned half in THIS position (`__Builtins.nope()`) — so the
-typo has one spelling, not three.
+(`let x = Helper.nope()`) and the compiler-owned half in THIS position (`__Builtins.nope()` in a
+library-tier source) — so the typo has one spelling, not three.
 ```maxon
 type Helper
 	static function shout()

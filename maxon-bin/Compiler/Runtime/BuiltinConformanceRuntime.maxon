@@ -134,7 +134,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	// and `String` has no `Comparable`, so no `String.compare`. Those three holes are one fact, stated in
 	// `isIntrinsicBuiltinConformance` and read from there rather than restated here. ⚠ `Character` looks
 	// like a fourth and is not: it conforms to all three.
-	var impls = ByteArrayArray.create()
+	var impls = NameRoster.create()
 	let intHash = candidateImplName(impls, conformerName: IntConformerName, methodName: HashMethodName)
 	let intEquals = candidateImplName(impls, conformerName: IntConformerName, methodName: EqualsMethodName)
 	let intCompare = candidateImplName(impls, conformerName: IntConformerName, methodName: CompareMethodName)
@@ -235,7 +235,7 @@ end 'installBuiltinConformanceRuntime'
 // closes. It is `qualifiedMethodName` plus the enrolment, not a wrapper around either: the returned
 // `ByteArray` is the SAME one the array now holds, which is what lets `referenced.contains(<name>)` compare
 // the identical bytes the walk searched for.
-function candidateImplName(impls ByteArrayArray, conformerName ByteArray, methodName ByteArray) returns ByteArray
+function candidateImplName(impls NameRoster, conformerName ByteArray, methodName ByteArray) returns ByteArray
 	let name = qualifiedMethodName(conformerName, methodName: methodName)
 	impls.push(name)
 	return name
@@ -263,7 +263,7 @@ end 'candidateImplName'
 // false positive is an impl `eliminateDeadFunctions` then prunes — while `liveOpIndices` would allocate an
 // ops-sized index array PER FUNCTION to answer it. Over-approximating is free here and under-approximating
 // is a link failure, so the walk is deliberately the cheap, wide one.
-function referencedBuiltinImpls(module StdModule, globalData GlobalDataTable, impls ByteArrayArray) returns FunctionNameSet
+function referencedBuiltinImpls(module StdModule, globalData GlobalDataTable, impls NameRoster) returns FunctionNameSet
 	var referenced = FunctionNameSet.create()
 
 	let synthesizable = undefinedImplNames(module, impls: impls)
@@ -306,7 +306,7 @@ end 'referencedBuiltinImpls'
 // guarantee: this is a MEMBERSHIP test, not a resolution, so it has no tie to break. Two functions of one
 // name would make it answer `defined` either way, which is the same answer, and the pair itself is refused
 // downstream where an index does exist (`DeadFunctionElimination`).
-function undefinedImplNames(module StdModule, impls ByteArrayArray) returns ByteArrayArray
+function undefinedImplNames(module StdModule, impls NameRoster) returns NameRoster
 	// At most eleven entries, and it is a SET rather than a per-candidate flag column so both loops can walk
 	// their arrays by BORROW — neither the function records nor the candidate names are retained to answer a
 	// byte compare.
@@ -321,7 +321,7 @@ function undefinedImplNames(module StdModule, impls ByteArrayArray) returns Byte
 		end 'eachImpl'
 	end 'eachFunc'
 
-	var undefined = ByteArrayArray.create()
+	var undefined = NameRoster.create()
 
 	for impl in impls 'eachCandidate'
 		if not definedCandidates.contains(impl) 'notDefined'
@@ -339,7 +339,7 @@ end 'undefinedImplNames'
 //
 // That match is written twice over the same union, and the fold is refused for cost. Sharing it
 // needs a per-op extractor answering "a name, or nothing", and every spelling of that costs per op:
-// a payload union boxes (16 bytes per op), an out-`ByteArrayArray` pushes a managed ByteArray per
+// a payload union boxes (16 bytes per op), an out-`NameRoster` pushes a managed ByteArray per
 // hit, a closure parameter captures, and an empty-name sentinel is a wrong answer waiting for a
 // callee the module does not name. `markCalleeOf` walks every live op of every function, so a box
 // per op there is a regression.
@@ -348,7 +348,7 @@ end 'undefinedImplNames'
 // union makes both matches non-exhaustive (E2026, naming the variant). A new variant carrying a
 // callee name must get its own arm in both; the one mistake nothing catches is adding it to the
 // no-name arm instead.
-function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced FunctionNameSet)
+function noteOpBuiltinImplReference(op StdOp, impls NameRoster, referenced FunctionNameSet)
 	match op 'op'
 		// None of these names a Maxon function: computation, branches, returns, `.data`/`.rdata`
 		// addresses, loads and stores, code pointers a `funcAddr` or `.rdata` slot already produced
@@ -443,6 +443,7 @@ function noteOpBuiltinImplReference(op StdOp, impls ByteArrayArray, referenced F
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -480,7 +481,7 @@ end 'noteOpBuiltinImplReference'
 
 // Credit `name` if it is one of the candidate impls. A linear scan, which is why the candidates are an array
 // rather than a set: at a handful of entries the compare is cheaper than a hash, and this runs per op.
-function noteBuiltinImplReference(name ByteArray, impls ByteArrayArray, referenced FunctionNameSet)
+function noteBuiltinImplReference(name ByteArray, impls NameRoster, referenced FunctionNameSet)
 	for impl in impls 'eachImpl'
 		if name.equals(impl) 'match'
 			referenced.insert(impl)

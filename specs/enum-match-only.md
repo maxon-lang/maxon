@@ -328,6 +328,30 @@ end 'main'
 error E3005: specs/enum-match-only/error.callarg-int-to-union.maxon:15:9: argument type mismatch for 'e': expected 'BoxA', got 'int'
 ```
 
+<!-- test: error.callarg-int-cast-to-union -->
+The same argument spelled with a cast, which would make its type agree with the parameter: the cast itself
+is refused (`cast-target-type-resolution.md`), so no integer reaches `takesBoxA` as a union.
+```maxon
+typealias Integer = int(0 to i64.max)
+
+union BoxA
+	msg(text String)
+end 'BoxA'
+
+function takesBoxA(e BoxA) returns Integer
+	match e 'k'
+		msg then return 1
+	end 'k'
+end 'takesBoxA'
+
+function main() returns ExitCode
+	return takesBoxA(7 as BoxA) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/enum-match-only/error.callarg-int-cast-to-union.maxon:15:21: Cannot cast from int to union 'BoxA' — a union value is built by its case constructor
+```
+
 <!-- test: callarg-union-same-type -->
 The mirror of the rejections above: passing the SAME union the parameter declares COMPILES and runs, so
 the identity check does not over-reject a correct call. `readA(BoxA.num(42))` returns 42.

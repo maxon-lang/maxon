@@ -922,6 +922,7 @@ error E2015: <fragment>:9:8: Unsupported: reassigning the type-parameter field '
 ```
 
 <!-- test: error.contested-generic-alias-at-the-opaque-copy-gate -->
+<!-- tier: stdlib -->
 The twin of the case above at the OTHER reader-free classifier: `typeSupportsDeepClone` carries the identical
 `isGenericAlias → genericAliasInstance` arm, and `requireOpaqueArrayCopyable` drives it over the same
 `instancesOfBase` walk. A superseded spelling refuses nothing, so the refusal that stands is the one the live instantiations earn — the

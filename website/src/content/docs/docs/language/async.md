@@ -59,17 +59,15 @@ not 80.
   argument rides a cell the coroutine owns.
 - A callee may keep an argument it is handed (move it into a record it returns, for one); a coroutine
   dropped before it runs releases what it was handed instead.
-- **The arguments move into the coroutine**, because it can outlive the caller's frame. A local `let` or
-  `var` passed to `async` is consumed: reading it afterwards is **E3102**, and so is handing one binding twice
-  to one call. A scalar is copied. A parameter the callee reassigns writes storage the coroutine owns, and
-  nothing is written back to the caller, so a coroutine may write an argument it was given as a `let`.
-  Clone a value the caller still needs (`async work(data.clone())`).
-- **A parameter or a field of `self` is shared, not moved**: the coroutine takes its own reference and the
-  function goes on using it. Passing a handle through a parameter is how a socket or a server is shared with
-  a coroutine. A module-level `let` is shared too.
-- A value the caller can also read through a second name that holds no reference of its own is **E3138**;
-  pass a `.clone()`. A value something still borrows — a field read out of it is read after the call — is
-  **E3070**, and a match payload of a `let` union handed to a parameter the coroutine writes is **E3019**.
+- **The arguments are shared, exactly as an ordinary call shares them.** The caller and its coroutines are
+  one strand of one green thread, so the coroutine takes a plain count of its own on each managed argument
+  and the caller's binding stays usable: a `var` handed to `async` is read and written after the call, a
+  `let` is shared read-only, and one binding may be handed twice in one call. A scalar is copied. Passing a
+  handle is how a socket or a server is shared with a coroutine.
+- A parameter the callee reassigns gets storage the coroutine owns, and nothing is written back to the
+  caller. A coroutine that writes a parameter is refused a [read-only](/docs/language/memory-model/#read-only-values) argument
+  (**E3159**), as an ordinary call is.
+- A closure that captured a binding owns it, so handing that binding to `async` afterwards is **E3102**.
 - The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, or perform file, socket or
   process I/O, directly or through its callees. A function that never yields is **E3073** (`function never
   yields; 'async' is for I/O-concurrent work only`): there is nothing to overlap.
@@ -144,7 +142,7 @@ function main() returns ExitCode
 	naps.push(async nap(20, tag: 2))
 	naps.push(async nap(100, tag: 3))
 
-	let first = __Builtins.awaitAny(naps)
+	let first = naps.awaitAny()
 	print("first finished: index {first}\n")     // index 1
 
 	var sum = 0
@@ -157,9 +155,10 @@ function main() returns ExitCode
 end 'main'
 ```
 
-**Waiting for the first of several.** `__Builtins.awaitAny(array)` parks until any promise in the array has
-finished and returns its index. It consumes nothing: every promise, the winner included, is still awaited
-(or dropped) afterwards. An already-finished promise is returned without parking.
+**Waiting for the first of several.** `promises.awaitAny()`, on an `Array with Promise with …`, parks until
+any promise in the array has finished and returns its index. It consumes nothing: every promise, the winner
+included, is still awaited (or dropped) afterwards. An already-finished promise is returned without parking.
+`p.isComplete()` asks one promise whether it has finished, without parking or consuming it.
 
 **Reading a promise out of storage.** A promise has one owner, so reading one out of the array or the struct
 field that holds it starts a MOVE out of that slot: consuming the read empties the slot, and a read never
@@ -228,11 +227,11 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	function bump(by Count)
+	export function bump(by Count)
 		self.count = self.count + by
 	end 'bump'
 
-	function total() returns Count
+	export function total() returns Count
 		return self.count
 	end 'total'
 end 'Calc'
@@ -282,14 +281,19 @@ end 'main'
 **What crosses a message.** A value sent to a service must not stay reachable from the sender in a way
 either side could write, because the two green threads may run at the same time on different processors:
 
-- A `let` or `var`, a temporary or a literal argument is **moved** into the service; reading the sender's
-  variable afterwards is **E3102**. Replies are moved too, and so is every argument a `spawn`'s factory keeps
-  in the service's state. The handler owns what it was sent, so it may keep it or write it.
-- A value with an owner besides the sender — held in a container, borrowed from a parameter — is **E3138**;
-  send a `.clone()`. A factory argument the factory keeps follows the same rule: one borrowed from a
-  parameter, a field, an element or a module-level `let`'s record, or a borrowed `String`, is **E3138**, and
-  a field read off a temporary built inside the factory call's own argument list crosses, because the `spawn`
-  releases that temporary.
+- A local `let` or `var`, a temporary or a literal argument the sender owns is **moved** into the service;
+  reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
+  `spawn`'s factory keeps in the service's state. The handler owns what it was moved, so it may keep it or
+  write it.
+- A [read-only](/docs/language/memory-model/#read-only-values) value the sender does not own — a module-level `let`, a `let` field, a
+  `SharedValue` or registry read, or a parameter nothing in the sending function writes — is **shared**: its graph is marked shared, so every
+  count on it steps atomically, and neither side may write it. Sending a parameter the sending function
+  writes, or any shared value the handler writes or keeps, is **E3138**. A borrowed `String` is copied at the
+  send.
+- A value with an owner besides the sender that is not read-only — held in a container, read out of a field
+  or an element of a `var`, or the source of an enclosing `for` loop — is **E3138**; send a `.clone()`. A factory
+  argument the factory keeps follows the same rule, and a field read off a temporary built inside the
+  factory call's own argument list crosses, because the `spawn` releases that temporary.
 - A `spawn` of a factory declared more than once, whose declarations keep an argument differently, is
   **E2015**; give the factories distinct names.
 - A parameter type that cannot cross at all — a promise, a function value, an opaque type parameter — is
@@ -321,7 +325,7 @@ holding an OS handle, a value held at an interface type, or a generic instance w
 **E3163** where a message can read it, and legal where only `main` does. A `spawn` a global initializer can
 reach is **E3164** (a [`default`](#program-wide-defaults--default) starts a program-wide service before
 `main`), a `let` whose initializer reaches a module-level `var` holding a record is **E3165**, and
-a `var` whose initializer may take a `let`'s record is **E3166** (see
+a `var` whose initializer may take a `let`'s record is **E3078** (see
 [Top-Level Variables](/docs/language/variables/#top-level-variables)).
 
 **Output order.** Text printed by `main` and by a service handler may interleave in any order; sequence it
@@ -392,10 +396,11 @@ A top-level `default Key = expression` declares the program-wide default for `Ke
 - **A service key** is an interface. The expression spawns a type that implements it
   ([E3170](/docs/cli/error-codes/#e3170--registrydefaultservicedoesnotimplementkey) otherwise), and `Key.current()` returns an
   owned `Key.handle`.
-- **A value key** is a type whose fields are all `let`, over types a share walk can mark — scalars,
-  `String`, other such records, service handles and `SharedValue`s
-  ([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) otherwise). The expression builds one, and may
-  spawn services for its fields. `Key.current()` returns the published record.
+- **A value key** is a type whose graph a share walk can mark: one that reaches no OS handle, function value
+  or promise ([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) otherwise). Its fields may be `var`,
+  and may hold containers. The expression builds one, and may spawn services for its fields.
+  `Key.current()` returns the published record, [read-only](/docs/language/memory-model/#read-only-values) all the way down: a write
+  through it is **E3159**, binding it to a `var` is **E3078**, and `clone()` makes a mutable copy.
 
 ```maxon
 typealias Count = int(i64.min to i64.max)
@@ -506,8 +511,9 @@ end 'main'
 - `ConfigCell.create(v)` makes a cell; `current()` reads its value lock-free; `publish(v)` replaces it
   for every holder; `publish(v, replacing: old)` is the conditional form, answering as
   `Key.register(new, replacing: old)` does.
-- Readers take an immutable snapshot and a writer publishes a whole new value, so a value a reader holds
-  stays valid across later publishes. A published value must be solely owned
+- Readers take a read-only snapshot and a writer publishes a whole new value, so a value a reader holds
+  stays valid across later publishes. A value `current()` returns is read-only all the way down, as a value
+  key's is. A published value must be solely owned
   ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned)).
 - The cell is shared by reference: `clone()` hands out another reference to the same value, and a cell
   crosses a message like a service handle.

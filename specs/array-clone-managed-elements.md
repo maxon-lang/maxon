@@ -119,6 +119,7 @@ end 'main'
 ```
 
 <!-- test: error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused -->
+<!-- tier: stdlib -->
 ⛔⛔ **THE DEEP-CLONE GATE AND THE CLONE STRATEGY MUST AGREE ABOUT THE COMPILER'S OWN AGGREGATES.**
 `CharacterSet`, `__ManagedFile` and `__ManagedDirectory` have a REGISTERED layout — they need
 a nominal identity — but they are declared in no FILE, so `installStructCloners` (which walks the project's
@@ -152,7 +153,6 @@ end 'Holder'
 typealias Holders = Array with Holder
 function main() returns ExitCode
 	var a = Holders.create()
-	a.push(Holder.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
 	let b = a.clone()
 	return b.count() as ExitCode
 end 'main'
@@ -163,6 +163,7 @@ note: stdlib/Array.maxon:83:32: raised inside the library, on behalf of the cons
 ```
 
 <!-- test: an-array-of-a-handle-holding-struct-compiles-when-nothing-copies-it -->
+<!-- tier: stdlib -->
 The refusal above answers for a COPY. The same element in an array that is only pushed to, walked and counted
 is legal.
 ```maxon
@@ -576,6 +577,7 @@ appended inner string, long enough to allocate
 ```
 
 <!-- test: an-array-no-code-copies-may-hold-an-element-clone-cannot-copy -->
+<!-- tier: stdlib -->
 `b/`'s `Holders` holds a handle element no clone can copy, and nothing copies a `Holders`, so it compiles; `a/`'s clone of its own array still works.
 ```maxon
 // --- file: a/a.maxon

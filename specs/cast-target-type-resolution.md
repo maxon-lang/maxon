@@ -24,6 +24,8 @@ evaporate. **A named cast target is resolved, and each kind answers:**
 | a name NO declaration binds | **E3011**, at the `as` |
 | a misspelling of a real alias | **E3011**, at the `as` |
 | a declared `type` (struct) | **E3009**, at the `as` |
+| a declared `enum` | **E3009**, at the `as` |
+| a declared `union` | **E3009**, at the `as` |
 | a declared ranged typealias | resolved |
 
 There is no second cascade in the parser. `TypeResolution` owns the one list of sources a named type can
@@ -46,12 +48,20 @@ never reaches the parser's expression path at all. Covering only the first would
 `let SENTINEL = 5 as Bogus` silently evaporating — half a fact, which is worse than none because
 the half that works makes the other half look tested.
 
-## What an enum target does
+## No value is forged through a cast
 
-`5 as Color` for a declared `enum`/`union` is accepted, because the compiler ERASES an enum to
-`integer` (`resolveNamedType`'s enum arm) — so the cast is `5 as int`, a legal, pointless numeric
-no-op, exactly like `5 as SomeIntAlias`. Whether Maxon permits `int` ↔ `enum` casts is a LANGUAGE
-question, and this file leaves it open.
+An integer is not an enum case and not a union value, so `5 as Color` and `4096 as Outcome` are **E3009**,
+whether the integer is a literal or computed at run time. The compiler represents an enum as its integer and a
+payload-carrying union as a pointer to its box, so an accepted cast would hand the program a value no case
+carries — or an address it then dereferences.
+
+- **An enum** comes from an integer through `Color.fromRawValue(raw)`, which throws `noSuchRawValue` when no
+  case carries `raw` (`constants.md`).
+- **A union** value is built by its case constructor, `Outcome.ok(7)`.
+
+**An interface value converts to no other interface.** `a as B`, where `a` is held as interface `A`, is
+E3009, even when the concrete type behind `a` happens to implement `B`: the cast is checked against the
+interface the value is held as, which promises nothing about `B`.
 
 ## Tests
 
@@ -185,4 +195,185 @@ end 'main'
 ```
 ```maxoncstderr
 error E3011: specs/cast-target-type-resolution/error.cast-to-misspelled-stdlib-typealias.maxon:3:12: Unknown type 'Millisecond'
+```
+
+<!-- test: error.cast-int-literal-to-enum -->
+An enum named from outside its body, the same spelling as the struct case above. The message names the
+lookup that does the job.
+```maxon
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = 1 as Color
+	return 1 if c == Color.green else 0
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/cast-target-type-resolution/error.cast-int-literal-to-enum.maxon:9:12: Cannot cast from int to enum 'Color' — an integer is not a case; use 'Color.fromRawValue(raw)', which throws 'noSuchRawValue' for a value no case carries
+```
+
+<!-- test: error.cast-computed-int-to-enum -->
+The same refusal for an integer only the run knows, which is the one that can hold a value no case carries.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function pick(n Integer) returns Integer
+	return n + 7
+end 'pick'
+
+function main() returns ExitCode
+	let raw = pick(0)
+	let c = raw as Color
+	return 1 if c == Color.green else 0
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/cast-target-type-resolution/error.cast-computed-int-to-enum.maxon:16:14: Cannot cast from int to enum 'Color' — an integer is not a case; use 'Color.fromRawValue(raw)', which throws 'noSuchRawValue' for a value no case carries
+```
+
+<!-- test: an-enum-comes-from-an-integer-through-from-raw-value -->
+The cure the refusal names: a raw value a case carries gives that case, and one no case carries throws.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function pick(n Integer) returns Integer
+	return n + 1
+end 'pick'
+
+function main() returns ExitCode
+	let found = try Color.fromRawValue(pick(0)) otherwise Color.red
+	let missing = try Color.fromRawValue(pick(6)) otherwise Color.blue
+	print("{found.name} {missing.name}\n")
+	return 0
+end 'main'
+```
+```stdout
+green blue
+```
+```exitcode
+0
+```
+
+<!-- test: error.cast-int-to-union -->
+A payload-carrying union is a pointer to its box, so an accepted cast would hand `match` the address 4096
+to read a case and a payload from.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Outcome
+	ok(v Integer)
+	err(msg String)
+end 'Outcome'
+
+function main() returns ExitCode
+	let o = 4096 as Outcome
+	match o 'm'
+		ok(v) then print("{v}\n")
+		err(msg) then print(msg)
+	end 'm'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/cast-target-type-resolution/error.cast-int-to-union.maxon:10:15: Cannot cast from int to union 'Outcome' — a union value is built by its case constructor
+```
+
+<!-- test: error.cast-interface-to-another-interface -->
+`a` is held as `A`, and `B` is an interface `T` does not even implement. The cast is refused where it is
+written rather than reaching code generation.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface A
+	function f() returns Integer
+end 'A'
+
+interface B
+	function g() returns String
+end 'B'
+
+type T implements A
+	var n as Integer
+
+	static function create() returns T
+		return T{n: 7}
+	end 'create'
+
+	function f() returns Integer
+		return self.n
+	end 'f'
+end 'T'
+
+function viaA(a A) returns String
+	let b = a as B
+	return b.g()
+end 'viaA'
+
+function main() returns ExitCode
+	print(viaA(T.create()))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/cast-target-type-resolution/error.cast-interface-to-another-interface.maxon:25:12: Cannot cast from interface 'A' to interface 'B' — an interface value converts to no other interface
+```
+
+<!-- test: error.cast-interface-to-an-interface-the-conformer-also-implements -->
+`T implements A, B`, so the value behind `a` could answer `g()`. The cast is refused all the same: it is
+checked against `A`, the interface `a` is held as, and `A` promises nothing about `B`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface A
+	function f() returns Integer
+end 'A'
+
+interface B
+	function g() returns String
+end 'B'
+
+type T implements A, B
+	var n as Integer
+
+	static function create() returns T
+		return T{n: 7}
+	end 'create'
+
+	function f() returns Integer
+		return self.n
+	end 'f'
+
+	function g() returns String
+		return "t {self.n}"
+	end 'g'
+end 'T'
+
+function viaA(a A) returns String
+	let b = a as B
+	return b.g()
+end 'viaA'
+
+function main() returns ExitCode
+	print(viaA(T.create()))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: <fragment>:29:12: Cannot cast from interface 'A' to interface 'B' — an interface value converts to no other interface
 ```

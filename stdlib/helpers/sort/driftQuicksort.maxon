@@ -27,32 +27,12 @@ public extension Array
 	// Buffers whichever class is smaller, so `scratch` need only hold
 	// `min(lessCount, geCount) <= (hi - lo) / 2` elements.
 	//
-	// ⚠ THE PIVOT IS HELD IN `pivotHold`, NOT READ OUT OF THE RANGE IT PARTITIONS.
-	// A pivot read straight from `managed[pivotIndex]` is a BORROW of that slot,
-	// and the compaction cursor `w` walks up to and past `pivotIndex` — so the
-	// `managed.set(w, …)` that arrives there RELEASES the record the comparator
-	// is still reading (`__managed_mem_set` frees the occupant it displaces).
-	// Nothing else holds that record: the store takes its own reference through
-	// `retainFunc@64`, which for a byte record is `__str_clone`, a DEEP CLONE —
-	// so the copy the buffer or the lower slot receives is a DIFFERENT record and
-	// the borrowed one is freed under the borrow. MEASURED under the self-hosted
-	// move model: a partition that must answer 3 answered 5, silently, with no
-	// crash and no leak. Parking the pivot in a one-slot storage that this pass
-	// never writes puts it out of every store's reach for the whole pass.
-	// `smallSort.maxon:24-32` names the same hazard as the reason `swap` routes
-	// through the raw `managed.swap` builtin rather than get + set.
+	// The pivot is parked in `pivotHold`, a one-slot storage this pass never writes, so every comparison reads
+	// one record that no store into [lo, hi) displaces. `clear` keeps the capacity `pivotHold` already has, so
+	// only the very first `push` of a whole sort allocates.
 	//
-	// `pivotHold` costs no allocation per call: `clear` keeps the capacity it
-	// already has, so only the very first `push` of a whole sort grows it.
-	//
-	// The SCANNED element is the same hazard one slot smaller, and both split
-	// loops below answer it the same way: each tests membership of the BUFFERED
-	// class first, so `v`'s last mention is the in-place `managed.set` that
-	// consumes it. `v` borrows `managed`, and a borrow of `managed` still named
-	// after a write to `managed` is the shape this whole function exists to keep
-	// out. Written the other way round the two arms remain mutually exclusive
-	// and the program is still sound, but the borrow rule cannot see that and
-	// refuses it (E3070, blaming the arm that in that iteration never runs).
+	// Each split loop tests membership of the BUFFERED class first, so the scanned element's last mention is the
+	// in-place `managed.set` that consumes it.
 	function stablePartition(lo ElementIndex, hi ElementIndex, pivotIndex ElementIndex, scratch MergeScratchArray, pivotHold MergeScratchArray, cmp SortComparator) returns ElementIndex
 		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("stablePartition: get OOB at pivot")
 		pivotHold.clear()

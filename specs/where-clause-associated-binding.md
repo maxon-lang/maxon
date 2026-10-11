@@ -733,7 +733,9 @@ end 'main'
 true
 ```
 
-<!-- test: associated-binding.error.a-static-whose-callee-reads-a-parametric-witness -->
+<!-- test: associated-binding.a-static-whose-callee-reads-a-parametric-witness-composes-it-from-the-call-sites-descriptor -->
+`Outer.tally` is a `static function` that does not return `Self`; the descriptor it carries arrives from its call, and
+the witness table for `Box with E` conforming to `Sized` is composed from it where `Holder.twice` reads it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -803,8 +805,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3132: <fragment>:57:18: 'Outer.tally' calls 'Holder.twice', whose `where` constraint requires a witness table for `Box` conforming to `Sized` at a generic instance written over this body's OWN type parameters — and 'Holder.twice' READS that witness. A conformance whose impls carry a hidden dictionary is given a table PER INSTANCE, whose slots supply that instantiation's layout descriptor; an instance that is still parametric names a descriptor the enclosing frame only holds at run time, so no static table exists to pass. Reach the constrained method through a concrete instance, or make the conformance's impls independent of their type argument
+```exitcode
+0
+```
+```stdout
+16
 ```
 
 <!-- test: associated-binding.a-conformance-reading-its-layout-through-a-blind-edge-is-served-per-instance -->

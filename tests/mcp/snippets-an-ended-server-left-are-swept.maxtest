@@ -8,7 +8,7 @@ let OrphanedSnippetSerial = 2
 
 typealias PlantedSerial = int(1 to 2)
 
-function plantedSnippetFile(directory FilePath, owner OwnerId, serial PlantedSerial, suffix String) returns String
+function plantedSnippetFile(directory FilePath, owner Pid, serial PlantedSerial, suffix String) returns String
 	let name = "{SnippetStem}-{owner}-{serial}{suffix}"
 	try File.writeText(directory.join(name), content: PlantedText) otherwise panic("mcp snippet sweep test: could not plant {name} in {directory.path}")
 
@@ -22,7 +22,7 @@ test 'a server sweeps the snippets and snippet builds whose server has ended, an
 	let snippets = stagingDir("{SnippetSweepStagingDir}/{CacheVendorDirName}/{SnippetDirName}")
 
 	let ended = endedProcessId()
-	let live = __Builtins.currentProcessId()
+	let live = Process.id()
 	var endedFiles = StringArray.create()
 	endedFiles.push(plantedSnippetFile(snippets, owner: ended, serial: StagedSnippetSerial, suffix: SnippetSourceSuffix))
 	endedFiles.push(plantedSnippetFile(snippets, owner: ended, serial: StagedSnippetSerial, suffix: executableSuffix()))

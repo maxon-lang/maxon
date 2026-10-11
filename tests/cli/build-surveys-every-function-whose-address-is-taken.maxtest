@@ -1,0 +1,35 @@
+let AddressTakenCaseDirName = "address-taken-survey"
+
+let AddressTakenLogFlag = "--log=codegen:debug"
+
+let AddressTakenMainFileName = "main.maxon"
+let AddressTakenMainSource = "function work(name String) returns ExitCode\n\treturn 1 if name.isEmpty() else 0\nend 'work'\n\nfunction main() returns ExitCode\n\tlet pending = async work(\"alpha\")\n\treturn await pending\nend 'main'\n"
+
+let AddressTakenLinePrefix = "function whose address is taken: '"
+let CodeTakenAddressName = "__gt_release_work"
+let SpawnedFunctionName = "work"
+
+function surveyNamesAFunction(stderr String, name String) returns bool
+	return stderr.contains("{AddressTakenLinePrefix}{name}'")
+end 'surveyNamesAFunction'
+
+test 'a build surveys every function whose address is taken'
+	requireHeldOutsideCheckout(AddressTakenCaseDirName, check: SurveysAddressTakenFunctions.create())
+end 'a build surveys every function whose address is taken'
+
+type SurveysAddressTakenFunctions implements OutsideCheckoutCase
+	static function create() returns SurveysAddressTakenFunctions
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		writeStagedFile(dir.join(AddressTakenMainFileName), content: AddressTakenMainSource)
+
+		let built = runDriver([BuildCommandWord, AddressTakenMainFileName, AddressTakenLogFlag], workingDirectory: dir)
+		let said = "It wrote to stderr: {built.stderr}"
+
+		try Expect.equal(built.exitCode(), expected: 0, message: "an `async` program did not build under {AddressTakenLogFlag}. {said}")
+		try Expect.isTrue(surveyNamesAFunction(built.stderr, name: SpawnedFunctionName), message: "{AddressTakenLogFlag} did not survey `{SpawnedFunctionName}`, the function `async` hands the scheduler by address. {said}")
+		try Expect.isTrue(surveyNamesAFunction(built.stderr, name: CodeTakenAddressName), message: "{AddressTakenLogFlag} did not survey `{CodeTakenAddressName}`, the releaser a code-materialized `funcAddr` hands the scheduler: the unguarded-chain proof counts only the function slots in `.rdata` unless it also reads the addresses code takes. {said}")
+	end 'requireHeldIn'
+end 'SurveysAddressTakenFunctions'

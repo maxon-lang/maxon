@@ -1,17 +1,17 @@
 ---
 feature: process-namespace
 status: stable
-keywords: [process, processNamespace, pid namespace, boot session, introspection, __Builtins, intrinsics]
+keywords: [process, Process.namespace, processNamespace, pid namespace, boot session, introspection]
 category: system
 ---
 
-# `__Builtins.processNamespace()` — the pid space the running process's ids are drawn from
+# `Process.namespace()` — the pid space the running process's ids are drawn from
 
 ## Documentation
 
-| Intrinsic | Meaning |
+| Function | Meaning |
 |---|---|
-| `__Builtins.processNamespace()` | a `__ManagedMemory` naming the pid space this process belongs to; empty when the host cannot say |
+| `Process.namespace() returns String` | the name of the pid space this process belongs to; empty when the host cannot say |
 
 Two processes may probe each other's ids only when they share a pid space. What names one differs per
 host:
@@ -24,7 +24,9 @@ host:
   `9b7f1c2e-3a4d-4e5f-8a6b-7c8d9e0f1a2b`. A Windows machine has one pid space, and the GUID names the machine.
 - **wasm32-wasi** does not provide it, and a call is refused with `E3104` at its span.
 
-The answer is host-specific, so the cases below assert properties of it rather than a value.
+The answer is host-specific, so the cases below assert properties of it rather than a value. Its body is the
+library-tier intrinsic `__Builtins.processNamespace()`; the case pinning that intrinsic's arity compiles as
+a library-tier source (`<!-- tier: stdlib -->`).
 
 ## Tests
 
@@ -32,7 +34,7 @@ The answer is host-specific, so the cases below assert properties of it rather t
 The call answers a non-empty name.
 ```maxon
 function main() returns ExitCode
-	let name = String.init(__Builtins.processNamespace())
+	let name = Process.namespace()
 
 	if name.isEmpty() 'unnamed'
 		return 1
@@ -50,7 +52,7 @@ On Linux the answer is the pid-namespace link target, `pid:[<inode>]`; on macOS 
 bytes in five groups joined by `-`.
 ```maxon
 function main() returns ExitCode
-	let name = String.init(__Builtins.processNamespace())
+	let name = Process.namespace()
 
 	#if os(Linux)
 		if name.startsWith("pid:[") and name.endsWith("]") 'aPidNamespaceLink'
@@ -75,8 +77,8 @@ end 'main'
 Two calls in one process answer the same name.
 ```maxon
 function main() returns ExitCode
-	let first = String.init(__Builtins.processNamespace())
-	let second = String.init(__Builtins.processNamespace())
+	let first = Process.namespace()
+	let second = Process.namespace()
 
 	if first == second 'same'
 		return 3
@@ -90,7 +92,8 @@ end 'main'
 ```
 
 <!-- test: process-namespace.arity-checked -->
-`processNamespace` takes no arguments.
+<!-- tier: stdlib -->
+The intrinsic takes no arguments.
 ```maxon
 function main() returns ExitCode
 	let name = String.init(__Builtins.processNamespace(1))
@@ -103,13 +106,13 @@ error E3036: <fragment>:3:36: '__Builtins.processNamespace' takes exactly 0 argu
 
 <!-- test: process-namespace.rejected-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-A wasm32-wasi component has no pid space to name, so the call is refused at its source span.
+A wasm32-wasi component has no pid space to name, so the call is refused at the span the program wrote.
 ```maxon
 function main() returns ExitCode
-	let name = String.init(__Builtins.processNamespace())
+	let name = Process.namespace()
 	return name.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:36: this construct lowers to the runtime entry '__proc_namespace', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:21: 'Process.namespace' lowers to the runtime entry '__proc_namespace', which has no wasm32-wasi implementation
 ```

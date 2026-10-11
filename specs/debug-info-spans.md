@@ -63,23 +63,27 @@ the invariant above of a specialized body rather than only of a written one.
 ### An array bounds check compiles with debug info on
 `arr.get(5)` past the end lowers to a checked access whose failure edge is its own block and whose
 success edge is a continuation every op past the site moves onto. Everything the preceding statements
-span was positioned in the block that split abandoned. Verbatim the source of the committed
-`array-slots/past-the-end-reports-index-out-of-bounds` case, which passes on every run because the
-suite compiles it with debug info off.
+span was positioned in the block that split abandoned. The shape is
+`array-slots/past-the-end-reports-index-out-of-bounds`'s, which passes on every run because the suite
+compiles it with debug info off.
 <!-- DebugInfo -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
 	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
 	var arr = SlotArray.create()
-	arr.reserve(2)
-	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
+	arr.push(Slot.create(1))
+	arr.push(Slot.create(2))
 	try arr.get(5) otherwise (e) 'handler'
 		match e 'check'
 			emptySlot then return 42

@@ -48,7 +48,7 @@ let sinkCount = 12
 // NUMBER FOR ITS OWN SAKE.** `pin-matrix.sh`'s assertion 4 asks
 // whether a SPAWNED green thread reached a worker M, and at 400 the answer is a
 // coin flip on a busy box: `main` sends all 4,800 messages and reads
-// `schedMaxActiveWorkers()` in about 40 ms, which is a race against the OS thread
+// `Scheduler.counters().maxActiveWorkers` in about 40 ms, which is a race against the OS thread
 // `__sched_wake_or_spawn` created ever executing its first instruction. It reads
 // `workers=1 steals=0` when it wins that race — not a wrong answer, and the
 // `aggregate` is byte-identical either way, but assertion 4 goes red.
@@ -137,14 +137,15 @@ function main() returns ExitCode
 	// ⚠ READ BEFORE THE HANDLES DROP. These are cumulative counters, and every worker M
 	// this program creates was created by the FIRST `spawn` — long before this line — so
 	// reading here measures what the sends did rather than what the teardown did.
-	let workers = __Builtins.schedMaxActiveWorkers()
-	let steals = __Builtins.schedStealCount()
-	let cpus = __Builtins.cpuCount()
-	let procs = __Builtins.schedProcessorCount()
+	let counters = Scheduler.counters()
+	let workers = counters.maxActiveWorkers
+	let steals = counters.steals
+	let cpus = Scheduler.machineCpuCount()
+	let procs = Scheduler.processorCount()
 
 	// ⚠ A LOWER BOUND ON THIS RUN'S CROSS-P FREES, NOT A TOTAL: sinks are still queued
 	// here, so the payloads they have yet to release are not in this number.
-	let remoteFrees = __Builtins.slabRemoteFreeCount()
+	let remoteFrees = HeapStats.slab().remoteFrees
 
 	// The one-worker pin at ONE processor is conditional on the monitor, for `monitor-witness.maxon`'s
 	// reason: a preemption, a retake or a machine started for an overdue timer can each put a second M

@@ -34,8 +34,8 @@ a sign to reveal, and a range containing zero is exactly what makes the divide f
 
 ⚠ **The FILE's subject is untouched.** `-0.0`'s sign bit is pinned by the negated-literal,
 field-default, range-bound and interpolation cases below, and observing the sign of a zero DIRECTLY
-is `__Builtins.floatToBits` — see `specs/atan2.md`'s `atan2.signed-zero`, which pins seven
-signed-zero argument combinations, the three with a zero RESULT through that builtin.
+is `Math.bitsOf` — see `specs/atan2.md`'s `atan2.signed-zero`, which pins seven
+signed-zero argument combinations, the three with a zero RESULT through it.
 
 ### Negating a float VARIABLE flips its sign bit
 
@@ -57,7 +57,7 @@ end 'main'
 
 A positive zero negated is a NEGATIVE zero, and negating that gives the positive one back. The
 sign is read two ways: through `print`, whose float formatter is sign-bit based, and through
-`Math.hasNegativeSignBit`, which is `__Builtins.floatToBits` — the print-independent instrument.
+`Math.hasNegativeSignBit`, which reads `Math.bitsOf` — the print-independent instrument.
 Under `0.0 - x` both prints said `0.0` and the bit was never set.
 
 <!-- test: negating-a-zero-variable -->
@@ -91,7 +91,7 @@ is the only way to observe it.
 <!-- test: negating-nan-flips-its-sign-bit -->
 ```maxon
 function main() returns ExitCode
-	let quietNan = __Builtins.bitsToFloat(0x7FF8000000000000)
+	let quietNan = Math.fromBits(0x7FF8000000000000)
 	if Math.hasNegativeSignBit(quietNan) 'arrivedNegative'
 		return 1
 	end 'arrivedNegative'

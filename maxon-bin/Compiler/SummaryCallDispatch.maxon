@@ -4,7 +4,7 @@
 
 module typealias WitnessSlotKey = int(0 to u64.max)
 typealias WitnessImplsMemo = Map with (WitnessSlotKey, CallLandingBodies)
-typealias FunctionValueBodiesMemo = Map with (ParamCount, CallLandingBodies)
+typealias FunctionValueBodiesMemo = Map with (ByteArray, CallLandingBodies)
 typealias InstanceRecordMemo = Map with (GenericInstanceId, bool)
 
 let WitnessSlotKeyShift = 16 as WitnessSlotKey
@@ -12,6 +12,14 @@ let WitnessSlotKeyShift = 16 as WitnessSlotKey
 module function witnessSlotKeyOf(interfaceDeclIndex ElementIndex, methodIndex WitnessMethodIndex) returns WitnessSlotKey
 	return ((interfaceDeclIndex as WitnessSlotKey) shl WitnessSlotKeyShift) or (methodIndex as WitnessSlotKey)
 end 'witnessSlotKeyOf'
+
+let FunctionValueReaderSeparator = "@@"
+
+// The reader's file is part of the key: `functionShapesAgree` resolves the shapes' names from that
+// file.
+function functionValueBodiesKey(calleeType ByteArray, readerFilePath FilePath) returns ByteArray
+	return "{String.from(calleeType)}{FunctionValueReaderSeparator}{readerFilePath}".toByteArray()
+end 'functionValueBodiesKey'
 
 module interface SummaryCallWalker
 	function callSiteCursor() returns CallSiteCursor
@@ -27,7 +35,7 @@ module interface SummarizedBodies
 	function traceAndWiden(index ElementIndex) returns bool
 end 'SummarizedBodies'
 
-module function dispatchNamedCall(walker SummaryCallWalker, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray)
+module function dispatchNamedCall(walker SummaryCallWalker, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray)
 	var cursor = walker.callSiteCursor()
 	let site = cursor.nextCallSite(func, callee: callee, args: args, argLabels: argLabels)
 
@@ -77,7 +85,7 @@ function storeThroughRuntimeShape(walker SummaryCallWalker, func IrFunction, arg
 		return
 	end 'storesNothing'
 
-	let resolution = walker.callSiteCursor().resolution
+	var resolution = walker.callSiteCursor().resolution
 
 	for receiverIndex in 0 upto args.count() 'eachReceiver'
 		let receiver = try args.get(receiverIndex) otherwise panic("storeThroughRuntimeShape: args.get OOB at receiver {receiverIndex}")
@@ -316,29 +324,40 @@ module type CallSummaryIndex
 		return found
 	end 'implsOf'
 
-	// A call through a function value lands only on a body that takes exactly its arguments: the value's type
-	// fixes its parameter count, so a body of any other arity cannot be the one called.
-	module function functionValueBodiesFor(argCount ParamCount) returns CallLandingBodies
-		if let memoized = try self.functionValueBodies.get(argCount) 'asked'
+	// A call through a function value lands only on a function used as a value whose shape agrees with the
+	// callee value's function type — the same agreement every door a function value passes through asks.
+	module function functionValueBodiesCalledThrough(func IrFunction, callee ValueId) returns CallLandingBodies
+		var registry = functionTypeRegistryOf(self.project)
+		let calleeType = functionTypeNameOf(registry, nameId: try func.valueNameIds.get(callee) otherwise panic("CallSummaryIndex.functionValueBodiesCalledThrough: v{callee} of '{String.from(func.name)}' has no type name — the type columns are minted in lockstep"))
+
+		let memoKey = functionValueBodiesKey(calleeType, readerFilePath: func.sourceFilePath)
+
+		if let memoized = try self.functionValueBodies.get(memoKey) 'asked'
 			return memoized
 		end 'asked'
 
 		self.gatherFunctionRefBodies()
+		let calleeShape = requireFunctionShapeOf(registry, name: calleeType, side: "called")
 		var found = CallLandingBodies.create()
 		found.unresolved = self.functionRefBodies.unresolved
 		found.unresolvedMayStore = self.functionRefBodies.unresolvedMayStore
 
 		for index in self.functionRefBodies.impls 'eachBody'
-			let body = self.functionAt(index)
-
-			if body.paramCount == paramCountALandingBodyTakes(body.name, argCount: argCount) 'takesExactlyTheArguments'
-				found.impls.push(index)
-			end 'takesExactlyTheArguments'
+			match declaredFunctionShapeOf(registry, name: self.functionAt(index).name) 'bodyShape'
+				declared(bodyShape) then self.admitBodyOfShape(index, bodyShape: bodyShape, calleeShape: calleeShape, registry: registry, readerFilePath: func.sourceFilePath, into: found)
+				undeclared then found.impls.push(index)
+			end 'bodyShape'
 		end 'eachBody'
 
-		self.functionValueBodies.upsert(argCount, value: found)
+		self.functionValueBodies.upsert(memoKey, value: found)
 		return found
-	end 'functionValueBodiesFor'
+	end 'functionValueBodiesCalledThrough'
+
+	function admitBodyOfShape(index ElementIndex, bodyShape FunctionShape, calleeShape FunctionShape, registry FunctionTypeRegistry, readerFilePath FilePath, into CallLandingBodies)
+		if functionShapesAgree(registry, signatures: self.signatures, declared: calleeShape, got: bodyShape, readerFilePath: readerFilePath) 'agrees'
+			into.impls.push(index)
+		end 'agrees'
+	end 'admitBodyOfShape'
 
 	function gatherFunctionRefBodies()
 		if self.functionRefBodiesGathered 'gathered'
@@ -468,7 +487,7 @@ module type CallSiteCursor
 		return site
 	end 'takeCallSite'
 
-	module function nextCallSite(func IrFunction, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray) returns ElementIndex
+	module function nextCallSite(func IrFunction, callee ByteArray, args ValueIdArray, argLabels NameRoster) returns ElementIndex
 		let site = self.takeCallSite()
 
 		if not self.resolving 'filed'
@@ -504,7 +523,7 @@ module type CallSiteCursor
 		end 'eachArg'
 	end 'slotCallSiteArgs'
 
-	module function slotNamedArgs(sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray)
+	module function slotNamedArgs(sig FuncSignature, args ValueIdArray, argLabels NameRoster)
 		self.argPositions.clear()
 		self.argFills.clear()
 
@@ -546,15 +565,6 @@ module type CallSiteCursor
 		return try self.argPositions.get(i) otherwise panic("CallSiteCursor.argPositionAt: argument {i} is past the {self.argPositions.count()} slotted")
 	end 'argPositionAt'
 end 'CallSiteCursor'
-
-// A function value's record is passed last; only a lifted closure declares it as a parameter.
-function paramCountALandingBodyTakes(name ByteArray, argCount ParamCount) returns ParamCount
-	if isLiftedClosureName(name) 'takesItsOwnRecord'
-		return argCount
-	end 'takesItsOwnRecord'
-
-	return argCount - FunctionRecordArgCount
-end 'paramCountALandingBodyTakes'
 
 function instanceIdOfValue(func IrFunction, value ValueId) returns GenericInstanceId
 	return (try func.valueNameIds.get(value) otherwise panic("instanceIdOfValue: v{value} of '{String.from(func.name)}' has no type name — the type columns are minted in lockstep")) as GenericInstanceId

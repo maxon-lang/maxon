@@ -67,12 +67,14 @@ let NulByte = 0
 /// calls fail for different reasons and a caller can act on the difference: a create fails on a name
 /// collision with an incompatible section or on a size the system will not back, a map on address space.
 /// `invalidName` is a name some lane cannot publish, refused before any host call (see `create`).
-/// `outOfBounds` is an accessor whose bytes would reach past the end of the mapping.
+/// `outOfBounds` is an accessor whose bytes would reach past the end of the mapping. `closed` is an
+/// accessor called after `close()`.
 public union SharedMemoryError implements Error
 	createFailed
 	mapFailed
 	invalidName
 	outOfBounds
+	closed
 end 'SharedMemoryError'
 
 /// A named section, mapped into this process.
@@ -90,8 +92,8 @@ public type SharedSegment
 	// to read a section's name back off its handle, and the name is what a second process needs.
 	var name as String
 
-	// Latched by `close()` so a second call is a no-op, the contract `StreamingSubprocess.release` states.
-	var closed as bool
+	// Claimed by `close()` so a second call is a no-op, the contract `StreamingSubprocess.release` states.
+	let latch as OwnerLatch
 
 	let publisher as bool
 
@@ -157,7 +159,7 @@ public type SharedSegment
 
 	static function mapped(rawHandle SegmentHandle, name String, bytes SegmentByteCount, publisher bool) returns SharedSegment throws SharedMemoryError
 		let rawBase = __Builtins.sharedMemoryMap(rawHandle, bytes)
-		var segment = SharedSegment{handle: rawHandle, base: rawBase, bytes: bytes, name: name, closed: false, publisher: publisher}
+		var segment = SharedSegment{handle: rawHandle, base: rawBase, bytes: bytes, name: name, latch: OwnerLatch.create(true), publisher: publisher}
 
 		if rawBase == NoSection 'mapFailed'
 			segment.close()
@@ -217,6 +219,10 @@ public type SharedSegment
 	// The host accessors read and write raw memory at `base + offset` and check nothing, so the mapping's
 	// extent is enforced here, where `bytes` is known.
 	function requireInside(offset SegmentOffset, byteCount SegmentByteCount) throws SharedMemoryError
+		if not latch.isOpen() 'unmapped'
+			throw SharedMemoryError.closed
+		end 'unmapped'
+
 		if (offset as SegmentEnd) + (byteCount as SegmentEnd) > (bytes as SegmentEnd) 'pastTheEnd'
 			throw SharedMemoryError.outOfBounds
 		end 'pastTheEnd'
@@ -231,7 +237,7 @@ public type SharedSegment
 	/// addressable to any later process until the machine is restarted. An adopter leaves the name to its
 	/// publisher, whose other adopters still map it by that name.
 	public function close()
-		if closed 'alreadyClosed'
+		if not latch.claimClose() 'alreadyClosed'
 			return
 		end 'alreadyClosed'
 
@@ -240,8 +246,6 @@ public type SharedSegment
 		end 'withdrawTheName' else 'keepTheName'
 			__Builtins.sharedMemoryRelease(handle, base, bytes)
 		end 'keepTheName'
-
-		closed = true
 	end 'close'
 end 'SharedSegment'
 

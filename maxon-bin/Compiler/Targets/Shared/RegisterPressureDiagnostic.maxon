@@ -382,12 +382,11 @@ end 'firstOriginLineOfOp'
 // Collecting + ranking the blocking values
 // ==========================================================================
 
-// The blocking values (everything live at the peak op), each resolved to its source def site
-// and its READ count within the overflowing region. `peak.liveBefore` IS the working set the deficit was
-// measured against, so listing it is exactly the set the user chooses from. UNSORTED here (swept in id
-// order); `sortedOrder` produces the ranked view — sorting a scalar index permutation rather
-// than moving the reference-typed candidates around (moving them would mutate the array while
-// an element borrow is live, which the borrow checker rejects).
+// The blocking values (everything live at the peak op), each resolved to its source def site and
+// its READ count within the overflowing region. `peak.liveBefore` IS the working set the deficit
+// was measured against, so listing it is exactly the set the user chooses from. UNSORTED here
+// (swept in id order); `sortedOrder` produces the ranked view — sorting a scalar index permutation
+// rather than moving the reference-typed candidates around.
 //
 // It tests each id of the value space rather than walking the row's set bits, which is the opposite
 // of what `BitRow.collect`'s contract asks of every consumer on a hot path: `peak` arrives as a
@@ -411,7 +410,7 @@ end 'collectCandidates'
 
 // A permutation of `candidates`' indices, sorted by the TOTAL order (reads-in-loop ASC, then
 // value id ASC) — cheapest to move out first, ties broken by id so the output is byte-
-// deterministic. Sorts a SCALAR index array (int copies, never a borrow) via insertion sort,
+// deterministic. Sorts a SCALAR index array via insertion sort,
 // leaving the reference-typed `candidates` untouched: the blocking set is tiny (bounded by the
 // register file), so O(n^2) is fine, and there is no Map/hash iteration to introduce drift.
 function sortedOrder(candidates PressureCandidateArray) returns CandidateOrder
@@ -439,7 +438,7 @@ function sortedOrder(candidates PressureCandidateArray) returns CandidateOrder
 end 'sortedOrder'
 
 // True iff `candidates[aIndex]` sorts AFTER `candidates[bIndex]` under (reads-in-loop asc, then
-// value id asc). Reads two candidates (shared borrows, no mutation), so no borrow conflict.
+// value id asc).
 function candidateAtGreater(candidates PressureCandidateArray, aIndex ElementIndex, bIndex ElementIndex) returns bool
 	let a = try candidates.get(aIndex) otherwise panic("candidateAtGreater: get OOB at {aIndex}")
 	let b = try candidates.get(bIndex) otherwise panic("candidateAtGreater: get OOB at {bIndex}")

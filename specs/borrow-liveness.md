@@ -1,89 +1,89 @@
 ---
 feature: borrow-liveness
 status: selfhosted
-keywords: [borrow, checker, E3070, NLL, liveness, for-in, mutation, safety]
+keywords: [borrow, counted, reference, liveness, for-in, mutation, safety]
 category: memory
 ---
-# Borrow Liveness (E3070) — the shapes `specs/borrow-checker.md` does not reach
+# Borrow liveness — a value read out of storage outlives every write to that storage
 
 ## Documentation
 
-`specs/borrow-checker.md` and `specs/array-realloc-dangling-ref.md` pin what the LANGUAGE promises.
-This file pins the shapes the compiler's own borrow-liveness mechanism reaches — each one either a
-use-after-free it refuses or a guard against it over-rejecting.
+A value read out of storage holds its own reference to what it read: `arr.get(i)`, `arr.first()`, a
+read of a managed field, the element of a `for … in`, and a cursor's `current()` all count. A write to
+the storage — `clear`, `push`, `truncate`, a rebind, a field store, or a call to a function or method
+that does any of these — releases only the storage's own reference, so a value read before the write
+stays alive and unchanged, and the program reads exactly what it read.
 
-**Why these refuse.** `arr.get(i)` hands back the element pointer and takes no reference for it
-(`Parser.emitContainerElementAccessor` with `ContainerElementReference.borrowed`), so a program that frees
-the array under an outstanding borrow is a **use-after-free**. The only two sound answers are
-retain-on-get or refuse; the element is a borrow, so the compiler refuses. Without the refusal the
-program reads freed memory — a fault, or `__mm_free`'s always-on poison `0x3F3F3F3F3F3F3F3F`
-(`4557430888798830399`) read back as a length.
+A `for … in` over an array holds a reference to the array it started on and reads its live count on
+every step: a `push` in the body extends the iteration, a `clear` ends it, and rebinding the variable
+leaves the loop walking the array it started on.
 
-⭐⭐ **THE `for … in` ELEMENT IS A BORROW TOO — ⚖ USER RULING.** Four cases below refuse a `clear()`
-reached from inside a `for … in` over the array being cleared. `for x in a` over an `Array` takes the
-counter form, whose element is a borrowed element exactly as `get`'s is. The cursor form, whose
-`ArrayIterator.current()` returns a `+1` through `coOwnBorrowedOpaque`, would leave no borrow to dangle,
-but at two heap records per loop entry and three calls per trip; the ruling makes the element a BORROW.
+An argument read out of storage is counted like any other read, so a call may hand a function storage
+it writes together with another view of that storage, and the view still names what it was read as. Only
+a parameter the callee REASSIGNS, which is passed by reference, may not overlap another argument; that
+is E3186, pinned in `specs/argument-overlap.md`.
 
-⚠ **A RUNTIME-BUILT STRING IS WHAT MAKES THESE CASES EVIDENCE.** A literal would be a false negative — an
-immortal `.rdata` record survives a free it never had — so the element each case borrows is heap.
-
-**A shadowing name is a different binding.** The compiler keys a borrow on the BINDING
-(`Scope`-resolved, object identity), not on the variable's NAME, so a block that shadows a
-borrowed array's name is writable.
+⚠ **A RUNTIME-BUILT STRING IS WHAT MAKES THESE CASES EVIDENCE.** A literal is an immortal record that no
+write can free, so a program reading one prints the right answer whether or not the read is counted.
+The strings these cases read are built at run time, and each case prints what it read AFTER the write.
 
 ## Tests
 
-<!-- test: rebind-drops-the-borrowed-record -->
-### Rebinding the source frees what the borrow points at
-`arr = <fresh>` drops the record `arr` held, so every element borrowed out of it is freed.
-Without the refusal the read of `s` faults (**0xC0000005**).
+<!-- test: rebind-keeps-the-value-read-out-of-the-old-record -->
+### Rebinding the source leaves an element read out of it alive
+`arr = <fresh>` releases the array's reference to the old record; `s` holds its own.
 ```maxon
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = try arr.get(0) otherwise ""
 	arr = StringArray.create()
-	print("[{s}]\n")
+	print("[{s}] {arr.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/rebind-drops-the-borrowed-record.maxon:7:2: cannot mutate 'arr' via '=' while it is borrowed by 's' (borrowed at line 6)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
-<!-- test: a-borrow-read-early-in-a-loop-body-is-live-at-a-later-write-in-it -->
-`first` is bound before the loop and read at the top of its body, so the `clear()` below the read is followed by
-that read on the next trip: the borrow is live at the write even though no read follows it in the text.
+<!-- test: a-value-read-before-a-loop-survives-a-clear-on-every-trip -->
+`first` is bound before the loop and read at the top of its body, so the read on the second trip follows
+the first trip's `clear()` and `push`. It reads the element it was bound to.
 ```maxon
 function main() returns ExitCode
 	var arr = StringArray.create()
-	arr.push("a{3}")
-	arr.push("b{4}")
+	arr.push("first {3} long enough for the heap")
+	arr.push("second {4} long enough for the heap")
 	let first = try arr.get(0) otherwise "none"
 	var i = 0
 
 	while i < 2 'loop'
 		print("{first}\n")
 		arr.clear()
-		arr.push("c{5}")
+		arr.push("third {5} long enough for the heap")
 		i = i + 1
 	end 'loop'
 
+	print("{arr.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:11:7: cannot mutate 'arr' via 'clear' while it is borrowed by 'first' (borrowed at line 6)
-error E3070: <fragment>:12:7: cannot mutate 'arr' via 'push' while it is borrowed by 'first' (borrowed at line 6)
+```exitcode
+0
+```
+```stdout
+first 3 long enough for the heap
+first 3 long enough for the heap
+1
 ```
 
 <!-- test: field-chain-source -->
-### A borrow taken through a field chain is a borrow
-`b.items.get(0)` borrows, and `b.items.clear()` frees it. The subject is the chain's BASE — the
-same key `for it in b.items` locks — so the two spellings cannot disagree. Without the refusal the
-read of `s` faults (**0xC0000005**).
+### An element read through a field chain survives a clear of that field
+`b.items.get(0)` counts the element, so `b.items.clear()` releases only the array's reference.
 ```maxon
 typealias StringArray = Array with String
 
@@ -91,7 +91,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: ["hello world this is a long string for heap allocation"]}
+		return Self{items: ["hello world this is a long string for heap allocation {40 + 2}"]}
 	end 'create'
 end 'Bag'
 
@@ -99,18 +99,20 @@ function main() returns ExitCode
 	var b = Bag.create()
 	let s = try b.items.get(0) otherwise ""
 	b.items.clear()
-	print("[{s}]\n")
+	print("[{s}] {b.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/field-chain-source.maxon:15:10: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 14)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
 <!-- test: self-field-alias-source -->
-### A bare self-field alias is a borrow source
-`items` inside a method of `Bag` names the field, and the borrow and the write reach the ONE alias
-installed at method entry.
+### The bare self-field spelling counts the same
+`items` inside a method of `Bag` names the field.
 ```maxon
 typealias StringArray = Array with String
 
@@ -118,30 +120,33 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: ["hello world this is a long string for heap allocation"]}
+		return Self{items: ["hello world this is a long string for heap allocation {40 + 2}"]}
 	end 'create'
 
 	function peek() returns ExitCode
 		let s = try items.get(0) otherwise ""
 		items.clear()
-		print("[{s}]\n")
+		print("[{s}] {items.count()}\n")
 		return 0
 	end 'peek'
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.peek()
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/self-field-alias-source.maxon:13:9: cannot mutate 'items' via 'clear' while it is borrowed by 's' (borrowed at line 12)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
 <!-- test: self-field-rebind -->
-### Rebinding a self-field frees what the borrow points at
-The rebind door one indirection out — `items = <fresh>` and `self.items = <fresh>` converge on the
-one self-field store and both refuse.
+### Rebinding a self-field leaves an element read out of it alive
+`items = <fresh>` and `self.items = <fresh>` are one self-field store; it releases the field's reference
+to the old array and nothing else.
 ```maxon
 typealias StringArray = Array with String
 
@@ -149,53 +154,57 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: ["hello world this is a long string for heap allocation"]}
+		return Self{items: ["hello world this is a long string for heap allocation {40 + 2}"]}
 	end 'create'
 
 	function peek() returns ExitCode
 		let s = try items.get(0) otherwise ""
 		items = StringArray.create()
-		print("[{s}]\n")
+		print("[{s}] {items.count()}\n")
 		return 0
 	end 'peek'
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.peek()
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/self-field-rebind.maxon:13:3: cannot mutate 'items' via '=' while it is borrowed by 's' (borrowed at line 12)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
 <!-- test: parameter-source -->
-### A PARAMETER may be a borrow source
-A parameter's container is writable (it is a borrowed reference to the caller's record), which is
-exactly why a borrow out of it can dangle.
+### An element read out of a PARAMETER survives a clear through that parameter
+The clear reaches the caller's record; the element keeps its own reference.
 ```maxon
 typealias StringArray = Array with String
 
 function look(arr StringArray) returns ExitCode
 	let s = try arr.get(0) otherwise ""
 	arr.clear()
-	print("[{s}]\n")
+	print("[{s}] {arr.count()}\n")
 	return 0
 end 'look'
 
 function main() returns ExitCode
-	var a = ["hello world this is a long string for heap allocation"]
+	var a = ["hello world this is a long string for heap allocation {40 + 2}"]
 	return look(a)
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/parameter-source.maxon:6:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 5)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
 <!-- test: mutating-callee-argument -->
-### Handing the source to a callee that writes it
-The one write the parser cannot settle — whether `grow` mutates what it was handed depends on its
-body — so it is decided against the whole-program parameter-mutation summary.
+### Handing the source to a callee that clears it
+The callee empties the caller's array; the element `s` read before the call is still its own.
 ```maxon
 typealias StringArray = Array with String
 
@@ -204,21 +213,23 @@ function grow(dest StringArray)
 end 'grow'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = try arr.get(0) otherwise ""
 	grow(arr)
-	print("[{s}]\n")
+	print("[{s}] {arr.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/mutating-callee-argument.maxon:11:2: cannot mutate 'arr' via 'grow' while it is borrowed by 's' (borrowed at line 10)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
 <!-- test: mutating-callee-labelled-argument -->
-### The argument's SOURCE order is bridged to the parameter's DECLARATION order
-`grow(1, dest: arr, other: spare)` writes parameter 2 while `arr` is source argument 1, so the
-labelled slotting has to be inverted before the mutation mask can be read.
+### … and the same through a labelled argument out of declaration order
+`grow(1, dest: arr, other: spare)` clears parameter 2 while `arr` is source argument 1.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -229,22 +240,24 @@ function grow(n Integer, other StringArray, dest StringArray) returns Integer
 end 'grow'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
-	var spare = StringArray.create()
+	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let spare = StringArray.create()
 	let s = try arr.get(0) otherwise ""
 	let k = grow(1, dest: arr, other: spare)
-	print("[{s}] {k}\n")
+	print("[{s}] {k} {arr.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/mutating-callee-labelled-argument.maxon:14:10: cannot mutate 'arr' via 'grow' while it is borrowed by 's' (borrowed at line 13)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 1 0
 ```
 
 <!-- test: non-mutating-callee-argument -->
-### A callee that only READS the source is not a conflict
-The over-rejection guard for the case above: the summary says `peek` writes no parameter, so the
-borrow survives the call.
+### A callee that only READS the source
+The element and the array are both intact after the call.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -270,9 +283,7 @@ end 'main'
 
 <!-- test: shadowed-source-is-writable -->
 ### A block that SHADOWS the source's name writes a different array
-the compiler keys a borrow on the BINDING, not on the name, so the inner `arr` is a different storage and
-writing it cannot free the outer array's element. The compiler accepts the program and returns the
-right answer.
+The inner `arr` is a different binding, so writing it leaves the outer array and its element untouched.
 ```maxon
 typealias StringArray = Array with String
 
@@ -296,26 +307,33 @@ end 'main'
 [hello world this is a long string for heap allocation]
 ```
 
-<!-- test: first-is-a-borrow-source -->
-### `first()` borrows exactly as `get()` does
-All three read-in-place accessors are one door, so none of them can be taught the rule separately.
+<!-- test: first-counts-like-get -->
+### `first()` counts exactly as `get()` does
+The pushes reallocate the array's buffer; `s` holds the element itself, not a slot of the buffer.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = try arr.first() otherwise ""
-	arr.push("another long string for the heap allocation path here")
-	print("[{s}]\n")
+
+	for i in 0 upto 40 'grow'
+		arr.push("another long string for the heap allocation path {i}")
+	end 'grow'
+
+	arr.clear()
+	print("[{s}] {arr.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/first-is-a-borrow-source.maxon:5:6: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 4)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
-<!-- test: pop-is-not-a-borrow -->
-### `pop()` MOVES the element out, so there is nothing to borrow
-The exclusion is structural — it is the same `owned` flag that decides the runtime's move-out, not
-a second list of method names.
+<!-- test: pop-moves-the-element-out -->
+### `pop()` MOVES the element out of the array
+The caller owns the element `pop()` returns outright.
 ```maxon
 function main() returns ExitCode
 	var arr = ["hello world this is a long string for heap allocation", "second long string for the heap allocation path"]
@@ -332,7 +350,7 @@ end 'main'
 [second long string for the heap allocation path]
 ```
 
-<!-- test: remove-is-not-a-borrow -->
+<!-- test: remove-moves-the-element-out -->
 ### `remove()` moves out too
 ```maxon
 function main() returns ExitCode
@@ -350,9 +368,9 @@ end 'main'
 [hello world this is a long string for heap allocation]
 ```
 
-<!-- test: block-scoped-borrow-expires -->
-### A borrow bound inside a block is dead once the block is left
-The borrowing name's last use is inside the block, so the write after it is fine.
+<!-- test: a-value-read-and-consumed-inside-a-block -->
+### A value read and consumed inside a block
+The element is read and measured inside `inner`; the `clear()` after the block writes the array alone.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -377,9 +395,7 @@ end 'main'
 
 <!-- test: mutation-in-otherwise-handler -->
 ### The source is mutable inside the `otherwise` handler
-The array shape of `specs/borrow-checker.md:borrow-not-live-in-otherwise`, which pins the `Map` form.
-On the handler's path the get FAILED and `s` was never bound, so there is no
-live borrow and the push must be allowed — which activation-at-the-BINDING gives structurally.
+On the handler's path the get FAILED and `s` was never bound; the handler writes the array and returns.
 ```maxon
 typealias StringArray = Array with String
 
@@ -397,14 +413,10 @@ end 'main'
 7
 ```
 
-<!-- test: forin-element-borrow-via-callee -->
-### A `for … in` element is a borrow, and a callee can free it
-The iteration lock refuses every write that NAMES the iterated array; it structurally cannot
-refuse one that hands the array to a callee. Without this rule the body reads the free-poison
-`4557430888798830399` (`0x3F3F3F3F3F3F3F3F`). ⚖ **USER RULING**: the `for … in` element is a borrow.
-
-⚠ **THIS SPELLING IS THE ONLY ONE THE BORROW DECIDES.** Written with `var b` it is `E3077 … variable 'b'
-is never reassigned; use 'let' instead`, so the `let` binding is what reaches the borrow check.
+<!-- test: forin-element-survives-a-callee-clearing-the-source -->
+### A `for … in` element survives a callee clearing the array, and the clear ends the loop
+The element is counted, so the body reads it intact after `wipe`; the next step reads the live count,
+which is 0, so the second element is never reached.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -413,7 +425,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: ["hello world this is a long string for heap allocation"]}
+		return Self{items: ["hello world this is a long string for heap allocation {40 + 2}", "second string long enough for heap allocation {40 + 2}"]}
 	end 'create'
 end 'Bag'
 
@@ -422,34 +434,28 @@ function wipe(dest StringArray)
 end 'wipe'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	var total = 0 as Integer
 	for it in b.items 'scan'
 		wipe(b.items)
+		print("[{it}]\n")
 		total = total + (it.byteLength() as Integer)
 	end 'scan'
 	print("{total}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/forin-element-borrow-via-callee.maxon:21:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 20)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42]
+56
 ```
 
-<!-- test: forin-element-borrow-is-lexical -->
-### The loop element's borrow runs to the loop's `end`, NOT to the variable's last use
-`it` is never read again after the write, so ordinary last-use liveness would call the borrow dead
-and let this through — but the ITERATION keeps reading the record on every later trip. The loop
-element's liveness is the body's extent, which is the same lexical liveness the iteration lock models.
-
-⚠ Kept as a SEPARATE case from the one above rather than folded into it: the two differ only in
-where `wipe` sits, and that difference is the whole content of the liveness question the pair asks.
-
-⭐⭐ **THIS LEXICAL EXTENT IS WHY THE COMPILER'S OWN SOURCE WRITES SOME WALKS AS INDEX LOOPS.** A walk
-whose element is live across a mutating call is written as an index loop over `count()` + `get(i)`, whose
-borrow **is** ordinary last-use liveness and therefore dies at the call it feeds. So this case pins the
-difference between the two loop forms, not a curiosity: see `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`
-for the note those sites point at.
+<!-- test: a-clear-at-the-end-of-a-for-body-ends-the-iteration -->
+### A clear as the body's last statement ends the iteration at the next step
+The loop reads the array's live count on every step, not the count it started with.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -458,7 +464,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: ["hello world this is a long string for heap allocation"]}
+		return Self{items: ["hello world this is a long string for heap allocation {40 + 2}", "second string long enough for heap allocation {40 + 2}"]}
 	end 'create'
 end 'Bag'
 
@@ -467,7 +473,7 @@ function wipe(dest StringArray)
 end 'wipe'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	var total = 0 as Integer
 	for it in b.items 'scan'
 		total = total + (it.byteLength() as Integer)
@@ -477,14 +483,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/forin-element-borrow-is-lexical.maxon:22:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 20)
+```exitcode
+0
+```
+```stdout
+56
 ```
 
 <!-- test: forin-mutation-after-loop -->
-### … and it ends THERE — a write after the loop is fine
-The over-rejection guard for the lexical extent above. Without the `end` bound this program would
-be refused, and it is perfectly safe.
+### A write after the loop
+The loop walks the whole array; the clear after its `end` writes an array no loop is reading.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -502,7 +510,7 @@ function wipe(dest StringArray)
 end 'wipe'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	var total = 0 as Integer
 	for it in b.items 'scan'
 		total = total + (it.byteLength() as Integer)
@@ -519,11 +527,10 @@ end 'main'
 53
 ```
 
-<!-- test: forin-discard-borrows-no-element -->
-### `for _ in` reads no element into a name, so it borrows nothing
-The discard binds nothing, so no borrow can outlive the read. The RECORD itself survives any
-callee — a callee can clear a container but cannot rebind the caller's binding — and a write that
-WOULD drop it is refused by the iteration lock instead.
+<!-- test: forin-discard-binds-no-element -->
+### `for _ in` reads the live count too
+The discard binds no element, and the loop still reads the array's live count each step, so the clear
+in the first trip ends it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -532,7 +539,7 @@ type Bag
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: ["hello world this is a long string for heap allocation"]}
+		return Self{items: ["hello world this is a long string for heap allocation", "second string long enough for heap allocation"]}
 	end 'create'
 end 'Bag'
 
@@ -541,7 +548,7 @@ function wipe(dest StringArray)
 end 'wipe'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	var total = 0 as Integer
 	for _ in b.items 'scan'
 		wipe(b.items)
@@ -558,10 +565,10 @@ end 'main'
 1
 ```
 
-<!-- test: forin-over-a-fresh-clone-borrows-nothing-of-the-field -->
-### A loop over a fresh clone of a field borrows the clone, not the field
-The iterated container is a new array the loop owns, so pushing onto the field inside the body is a
-write to a different record.
+<!-- test: forin-over-a-fresh-clone-walks-the-clone -->
+### A loop over a fresh clone of a field walks the clone, not the field
+The iterated container is a new array the loop owns, so pushing onto the field inside the body does not
+extend the iteration.
 ```maxon
 typealias Strings = Array with String
 typealias Tally = int(0 to u64.max)
@@ -585,7 +592,7 @@ type Paths
 end 'Paths'
 
 function main() returns ExitCode
-	let paths = Paths.create()
+	var paths = Paths.create()
 	paths.doubled()
 	print("{paths.size()}\n")
 	return 0
@@ -598,48 +605,48 @@ end 'main'
 4
 ```
 
-<!-- test: otherwise-return-preserves-the-borrow -->
-### A diverging `otherwise` does not destroy the borrow
-`try arr.get(0) otherwise return 1` still binds `s` on the success path, so the borrow is real and
-the later `clear()` must be refused. The handler is parsed by re-entering the STATEMENT parser
-mid-initializer, so a borrow that were tracked by statement position rather than by the VALUE it
-produced would be wiped here, and the read of `s` would fault (**0xC0000005**).
+<!-- test: otherwise-return-keeps-the-element-counted -->
+### A diverging `otherwise` binds a counted element on the success path
+`try arr.get(0) otherwise return 1` binds `s` to the element it read, which outlives the `clear()`.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = try arr.get(0) otherwise return 1
 	arr.clear()
-	print("[{s}]\n")
+	print("[{s}] {arr.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/otherwise-return-preserves-the-borrow.maxon:5:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 4)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
-<!-- test: otherwise-block-preserves-the-borrow -->
-### … and neither does a diverging `otherwise` BLOCK
-The block form re-enters the statement parser through `parseBlockBody`, one level further down.
-Same borrow, same refusal.
+<!-- test: otherwise-block-keeps-the-element-counted -->
+### … and so does a diverging `otherwise` BLOCK
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = try arr.get(0) otherwise 'empty'
 		return 7
 	end 'empty'
 	arr.clear()
-	print("[{s}]\n")
+	print("[{s}] {arr.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/otherwise-block-preserves-the-borrow.maxon:7:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 4)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
-<!-- test: borrow-must-reach-the-binding -->
-### A binding that does NOT hold the element borrows nothing
-`n` is an integer computed FROM the element; the element itself reaches no name, so nothing can
-dangle and the mutation is legal. A borrow attached to whatever binding came next would refuse this.
+<!-- test: a-value-computed-from-an-element-survives-a-clear -->
+### A value computed from the element
+`n` is an integer computed FROM the element, and the clear after it leaves `n` as it was.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -662,10 +669,10 @@ end 'main'
 53
 ```
 
-<!-- test: range-loop-counter-is-not-a-borrower -->
+<!-- test: range-loop-counter-is-an-index-not-an-element -->
 ### A counted range's loop variable is the index, not an element
-The bound expression may borrow, but the loop variable is the header phi — so the loop's LEXICAL
-extent must not be handed to it, or every write inside the body would be refused.
+The range's bound is evaluated once, before the loop, so the clear in the body changes nothing the loop
+reads.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -691,12 +698,10 @@ end 'main'
 1378
 ```
 
-<!-- test: sibling-field-shares-the-subject -->
-### A SIBLING field of the same base is the same subject — conservative, and it must be
-The subject of a field chain is its BASE (`b`), the key the iteration lock uses,
-and it has to be: a rebind `b = other` drops the record `b.items` points at, so a finer
-`(base, field)` key would miss that use-after-free. The price is that writing `b.other` while
-`b.items` is borrowed is refused too.
+<!-- test: a-sibling-field-clear-leaves-the-element-intact -->
+### Clearing a SIBLING field of the same base
+`b.other.clear()` empties a different array; the element read out of `b.items` and `b.items` itself are
+untouched.
 ```maxon
 typealias StringArray = Array with String
 
@@ -705,7 +710,7 @@ type Bag
 	export var other as StringArray
 
 	static function create() returns Self
-		return Self{items: ["hello world this is a long string for heap allocation"], other: ["a second array entirely, sharing only its base binding"]}
+		return Self{items: ["hello world this is a long string for heap allocation {40 + 2}"], other: ["a second array entirely, sharing only its base binding"]}
 	end 'create'
 end 'Bag'
 
@@ -713,39 +718,41 @@ function main() returns ExitCode
 	var b = Bag.create()
 	let s = try b.items.get(0) otherwise ""
 	b.other.clear()
-	print("[{s}]\n")
+	print("[{s}] {b.items.count()} {b.other.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/sibling-field-shares-the-subject.maxon:16:10: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 15)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 1 0
 ```
 
-<!-- test: ternary-merge-carries-the-borrow -->
-### A borrow survives a TERNARY merge
-A merge MINTS A NEW VALUE, and the borrow is keyed on the value the accessor produced — so the phi
-has to inherit it or the binding holds an element nothing is tracking, and the read faults
-(**0xC0000005**).
+<!-- test: ternary-merge-keeps-the-element-counted -->
+### An element chosen by a TERNARY survives a clear of its array
+The merge carries the counted element, not a slot of the array.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
-	var n = 0 as Integer
+	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let n = 0 as Integer
 	let s = (try arr.get(0) otherwise "") if n == 0 else "a fallback string long enough for the heap"
 	arr.clear()
 	print("[{s}]\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/ternary-merge-carries-the-borrow.maxon:8:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 7)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42]
 ```
 
-<!-- test: match-gives-carries-the-borrow -->
-### … and a `match … gives` merge, which is the same merge one construct over
-Both go through the one merge finalizer, so they inherit the borrow at the same line of code — the
-alternative is two rules for one join.
+<!-- test: match-gives-keeps-the-element-counted -->
+### … and one chosen by a `match … gives`
 ```maxon
 enum Mode
 	first
@@ -753,7 +760,7 @@ enum Mode
 end 'Mode'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let m = Mode.first
 	let s = match m 'pick'
 		first gives try arr.get(0) otherwise ""
@@ -764,15 +771,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/match-gives-carries-the-borrow.maxon:14:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 11)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42]
 ```
 
-<!-- test: match-gives-merges-every-arms-borrow -->
-### … and it carries EVERY arm's borrow, not just one
-One binding, two subjects: each arm retargets its own pending borrow onto the same phi, so `s` really
-does hold an element of both arrays and both writes must be refused. The claim loop is what makes
-this work — stopping it at its first match would wave one of the two through as a use-after-free.
+<!-- test: match-gives-over-two-arrays-survives-clearing-both -->
+### … whichever array the chosen arm read from
+`s` may come out of either array, and clearing both leaves it intact.
 ```maxon
 enum Mode
 	first
@@ -780,8 +788,8 @@ enum Mode
 end 'Mode'
 
 function main() returns ExitCode
-	var a = ["alpha string long enough for the heap allocation path"]
-	var b = ["beta string long enough for the heap allocation path"]
+	var a = ["alpha string long enough for the heap allocation path {40 + 2}"]
+	var b = ["beta string long enough for the heap allocation path {40 + 2}"]
 	let m = Mode.first
 	let s = match m 'pick'
 		first gives try a.get(0) otherwise ""
@@ -793,49 +801,40 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/match-gives-merges-every-arms-borrow.maxon:15:4: cannot mutate 'a' via 'clear' while it is borrowed by 's' (borrowed at line 12)
-error E3070: specs/borrow-liveness/match-gives-merges-every-arms-borrow.maxon:16:4: cannot mutate 'b' via 'clear' while it is borrowed by 's' (borrowed at line 13)
+```exitcode
+0
+```
+```stdout
+[alpha string long enough for the heap allocation path 42]
 ```
 
-<!-- test: propagating-try-carries-the-borrow -->
-### A PROPAGATING `try` binds the accessor's own value
-No merge, no phi, nothing to retarget — the borrow is the value the binding takes. The third of the
-parser's three value merges is therefore the only `try` form that needs one.
-
-⚠ `look` declares `throws ArrayError` — the error `arr.get` actually throws. An unrelated enum in its
-`throws` clause is refused, because the compiler knows the array family's error TYPE
-(`runtimeThrowsClause`) and checks the propagation against it:
-`E3059: try propagates 'ArrayError' but enclosing function throws 'Oops'`. The `Oops` enum stays declared but
-unused so the line numbers this case's expected diagnostic names do not move.
+<!-- test: propagating-try-keeps-the-element-counted -->
+### A PROPAGATING `try` binds the counted element
 ```maxon
 typealias StringArray = Array with String
-
-enum Oops implements Error
-	failed
-end 'Oops'
 
 function look(arr StringArray) returns ExitCode throws ArrayError
 	let s = try arr.get(0)
 	arr.clear()
-	print("[{s}]\n")
+	print("[{s}] {arr.count()}\n")
 	return 0
 end 'look'
 
 function main() returns ExitCode
-	var a = ["hello world this is a long string for heap allocation"]
+	var a = ["hello world this is a long string for heap allocation {40 + 2}"]
 	return try look(a) otherwise 9
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/propagating-try-carries-the-borrow.maxon:10:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 9)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
 <!-- test: var-reassigned-from-an-element-copies-it -->
-### Assigning an element into a `var` COPIES it, so there is no borrow to conflict with
-A managed value stored into a `var` is promoted to an owned copy at the store, so `s` owns its own
-record and clearing the array cannot reach it. The compiler accepts the program and returns the right
-answer, because here it genuinely does not borrow.
+### Assigning an element into a `var`
+`s` owns the value it was assigned, so clearing the array leaves it intact.
 ```maxon
 function main() returns ExitCode
 	var arr = ["hello world this is a long string for heap allocation"]
@@ -854,10 +853,7 @@ end 'main'
 ```
 
 <!-- test: loop-carried-var-holds-a-copy -->
-### A loop-header phi over a `var` carries a COPY, not a borrow
-The fourth and last merge class the parser mints. It needs no borrow retarget and correctly has
-none: every store into a managed `var` promotes to an owned copy first, so the value the phi joins
-already owns its own record. The compiler accepts the program and prints the right string.
+### A `var` assigned on every trip of a loop keeps the last element it was assigned
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -882,12 +878,8 @@ end 'main'
 ```
 
 <!-- test: receiver-method-writing-its-own-field -->
-### A method that clears its OWN field frees what the caller borrowed
-`b.wipe()` destroys the element `s` holds exactly as `wipe(b.items)` does — the array just arrives in
-the RECEIVER column instead of an argument one. Answering it needs a second question of the callee:
-*"does this body write the storage this parameter points at?"*, which is **yes** here while E3019's
-*"does passing an immutable binding here make it an error?"* stays **no**. Without the refusal the
-program prints `4557430888798830399` out of freed memory.
+### A method that clears its OWN field leaves an element the caller read intact
+`b.wipe()` empties the array exactly as `wipe(b.items)` does, with the array arriving as the receiver.
 ```maxon
 typealias StringArray = Array with String
 
@@ -905,20 +897,22 @@ end 'Bag'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.push("alpha string long enough for heap allocation")
+	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	b.wipe()
-	print("{s.byteLength()}\n")
+	print("{s.byteLength()} [{s}] {b.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/receiver-method-writing-its-own-field.maxon:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```exitcode
+0
+```
+```stdout
+47 [alpha string long enough for heap allocation 42] 0
 ```
 
 <!-- test: receiver-method-explicit-self-spelling -->
 ### … and the `self.items.clear()` spelling is the same write
-Both spellings converge on one door, so neither can be taught the rule separately.
 ```maxon
 typealias StringArray = Array with String
 
@@ -936,22 +930,23 @@ end 'Bag'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.push("alpha string long enough for heap allocation")
+	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	b.wipe()
-	print("{s.byteLength()}\n")
+	print("{s.byteLength()} [{s}] {b.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/receiver-method-explicit-self-spelling.maxon:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```exitcode
+0
+```
+```stdout
+47 [alpha string long enough for heap allocation 42] 0
 ```
 
 <!-- test: receiver-method-rebinding-its-own-field -->
-### … and REBINDING the field is a write of the receiver's storage too
-`items = <fresh>` inside the method drops the record the caller borrowed out of. It is recorded at the
-one self-field store, and only into the E3070 column — feeding E3019's from there turns
-`self-keyword.md:self-with-params` red, which is that door's pinned guard.
+### … and so does a method that REBINDS the field
+`items = <fresh>` inside the method releases the field's reference to the old array and nothing else.
 ```maxon
 typealias StringArray = Array with String
 
@@ -969,28 +964,23 @@ end 'Bag'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.push("alpha string long enough for heap allocation")
+	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	b.wipe()
-	print("{s.byteLength()}\n")
+	print("{s.byteLength()} [{s}] {b.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/receiver-method-rebinding-its-own-field.maxon:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```exitcode
+0
+```
+```stdout
+47 [alpha string long enough for heap allocation 42] 0
 ```
 
 <!-- test: receiver-method-inside-a-for-loop -->
 ### … and inside a `for … in` over the field it clears
-The loop element's borrow is lexical, so the call is refused wherever in the body it sits.
-
-⭐⭐ **THE SHARPEST INSTANCE OF THE RULE THIS FILE OPENS WITH.** The element is not retained, so the
-program is a use-after-free unless refused; where the two sound answers are retain-on-get *or* refuse,
-the compiler refuses (⚖ **USER RULING**).
-
-⚠ The sibling directly above (`receiver-method-rebinding-its-own-field`) borrows through
-`arr.get(0)`, a different door, and reaches the same E3070 — so the pair pins that the `for … in`
-door and the `get` door answer alike.
+The loop element survives the clear, and the clear ends the loop: the second element is never reached.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1009,24 +999,28 @@ end 'Bag'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.push("alpha string long enough for heap allocation")
+	b.items.push("alpha string long enough for heap allocation {40 + 2}")
+	b.items.push("beta string long enough for heap allocation {40 + 2}")
 	var total = 0 as Integer
 	for it in b.items 'scan'
 		b.wipe()
+		print("[{it}]\n")
 		total = total + (it.byteLength() as Integer)
 	end 'scan'
 	print("{total}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/receiver-method-inside-a-for-loop.maxon:22:5: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 21)
+```exitcode
+0
+```
+```stdout
+[alpha string long enough for heap allocation 42]
+47
 ```
 
 <!-- test: receiver-method-writes-transitively -->
-### A method that CALLS one that clears the field inherits the write
-The second column rides the SAME least fixpoint over the SAME call-graph edges as the first, so
-transitivity needs no second rule: `wipe()` gains the receiver's bit from `reset()`.
+### … and through a method that CALLS one that clears the field
 ```maxon
 typealias StringArray = Array with String
 
@@ -1048,37 +1042,22 @@ end 'Bag'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.push("alpha string long enough for heap allocation")
+	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	b.wipe()
-	print("{s.byteLength()}\n")
+	print("{s.byteLength()} [{s}] {b.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/receiver-method-writes-transitively.maxon:24:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 23)
+```exitcode
+0
+```
+```stdout
+47 [alpha string long enough for heap allocation 42] 0
 ```
 
 <!-- test: receiver-method-writing-its-own-field-through-a-corpus-member -->
-### … and the write reaches the caller through a member the COMPILER does not serve
-⛔⛔ **THE SAME WRITE, SPELLED THROUGH A CORPUS-DECLARED MEMBER.** `truncate` is not on
-`Parser.arraySurfaceMemberNames`: it is an ordinary declared function in `stdlib/Array.maxon`, so the
-parser cannot settle the write itself, and the enclosing method's `storageWrittenParamMask` bit has to
-arrive through the call graph. `SemanticCheck.collectCallParamEdges` records an ordinary edge only for
-an argument that IS one of the caller's own parameters, and `items` is a FIELD of one — so without a
-second edge kind `wipe` would be summarised as writing nothing, `b.wipe()` would be waved through, and
-the program would print `4557430888798830399` (`__mm_free`'s `0x3F` poison read back as a length)
-where 44 is correct.
-
-⇒ The edge set the STORAGE column is closed over therefore carries a second edge kind: *"the caller's
-parameter `p` owns the ARRAY this call's receiver denotes"*, recorded at the one ordinary-call
-receiver door (`Parser.prependReceiverArg`). It is storage-only — feeding it into E3019's column
-would refuse a `let` receiver for a method writing its own field, which is the ruling
-`self-keyword.md:self-with-params` pins.
-
-⚠ **EVERY ARRAY MEMBER OFF THE ROSTER REACHES THE CALLER THIS WAY** — `clear`, `insert`, `reserve` and
-`truncate` alike are declared in `stdlib/Array.maxon`, so the write is inferred through the call graph
-rather than settled by the parser, and this edge kind is what carries it.
+### … and through `truncate`, an `Array` member declared in `stdlib/Array.maxon`
 ```maxon
 typealias StringArray = Array with String
 
@@ -1096,23 +1075,22 @@ end 'Bag'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.push("alpha string long enough for heap allocation")
+	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	b.wipe()
-	print("{s.byteLength()}\n")
+	print("{s.byteLength()} [{s}] {b.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/receiver-method-writing-its-own-field-through-a-corpus-member.maxon:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```exitcode
+0
+```
+```stdout
+47 [alpha string long enough for heap allocation 42] 0
 ```
 
 <!-- test: a-free-callee-writing-a-field-of-its-parameter -->
-### … and the same hole through a FREE callee, where the field's base is an ordinary parameter
-The receiver of the corpus call is `bag.items` — a field of parameter 0 rather than a field of `self`
-— so the edge is recorded off the same `subjectStorageMask` derivation and not off a second one. It
-matters because the two spellings reach `prependReceiverArg` by different receiver paths and a rule
-taught to one of them is exactly the half nobody re-runs.
+### … and through a FREE callee that truncates a field of its parameter
 ```maxon
 typealias StringArray = Array with String
 
@@ -1130,25 +1108,22 @@ end 'wipe'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.push("alpha string long enough for heap allocation")
+	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	wipe(b)
-	print("{s.byteLength()}\n")
+	print("{s.byteLength()} [{s}] {b.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/a-free-callee-writing-a-field-of-its-parameter.maxon:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```exitcode
+0
+```
+```stdout
+47 [alpha string long enough for heap allocation 42] 0
 ```
 
-<!-- test: a-corpus-served-read-only-member-is-not-a-conflict -->
-### The over-rejection guard for the two above: a corpus member that only READS is still callable
-The new edge is recorded at every ordinary member call whose receiver's storage reaches a parameter,
-WITHOUT asking whether the callee writes — that answer belongs to the fixpoint, which has not run yet.
-So the guard is the fixpoint's own filter: `Array.capacity` writes nothing, no bit travels the edge,
-and `b.room()` stays legal while `s` is live. Recorded on a member that is corpus-served for the same
-reason the two above are — `capacity` left the roster at X-array-retire — because a guard written over
-a rostered member would not exercise the edge at all.
+<!-- test: a-corpus-served-read-only-member-leaves-an-element-read-intact -->
+### A method calling a read-only `stdlib/Array.maxon` member
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1182,10 +1157,7 @@ end 'main'
 ```
 
 <!-- test: receiver-method-that-writes-nothing -->
-### A method that does NOT write the field stays callable while the borrow is live
-The over-rejection guard for the five above: a receiver is an argument the conflict check sees, so a rule that blamed the receiver for merely
-BEING one would refuse every method call on `b`. Only a callee the summary says writes the storage
-counts.
+### A method that does NOT write the field
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1218,13 +1190,11 @@ end 'main'
 44 1
 ```
 
-<!-- test: let-receiver-still-takes-mutating-methods -->
-### E3019's answer is UNCHANGED — a `let` receiver still takes a method that writes its own fields
-The other half of the split, and the one a merged mask would have destroyed: The compiler rules that a `let`
-on a struct binding does not reach inside the type's own methods (`self-keyword.md:self-with-params`
-pins the field-store door, `parameter-mutation:let-struct-with-array-field-to-mutating-method-ok` the
-container-method one). Both writes here are refused for E3070 only when a borrow is live — with none
-outstanding, the program compiles and runs.
+<!-- test: let-receiver-refuses-mutating-methods -->
+### A `let` receiver refuses a method that writes its own fields
+A `let` is deeply read-only, so a type's own methods that write `self` are refused on it, as is a write
+through one of its fields (`self-keyword.md:self-with-params` pins the field-store door,
+`parameter-mutation:let-struct-with-array-field-to-mutating-method-error` the container-method one).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1248,6 +1218,43 @@ end 'Bag'
 
 function main() returns ExitCode
 	let b = Bag.create()
+	b.add(42)
+	b.wipe()
+	print("{b.total} {b.items.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: specs/borrow-liveness/let-receiver-refuses-mutating-methods.maxon:24:4: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3159: specs/borrow-liveness/let-receiver-refuses-mutating-methods.maxon:25:4: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: var-receiver-takes-mutating-methods -->
+### A `var` receiver takes a method that writes its own fields
+The same program on a `var` runs, and each write is visible to the read after it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+	export var total as Integer
+
+	static function create() returns Self
+		return Self{items: StringArray.create(), total: 0}
+	end 'create'
+
+	function wipe()
+		items.clear()
+	end 'wipe'
+
+	function add(v Integer)
+		total = total + v
+	end 'add'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation")
 	b.add(42)
 	b.wipe()
@@ -1263,11 +1270,8 @@ end 'main'
 ```
 
 <!-- test: sibling-call-on-the-enclosing-self -->
-### A sibling call INSIDE the type reaches the same field, and must be refused there too
-`reset()` clears `items` while `s` borrows an element of it — the same use-after-free as `b.wipe()`,
-one level in. It needs its own answer because the receiver here is `self`, which stands for the WHOLE
-receiver, while the borrow was recorded against the FIELD's alias: a single site keyed on `self` would
-match nothing. Without this door the program prints `4557430888798830399` where 44 is correct.
+### A sibling call INSIDE the type that clears the field the method read from
+`reset()` clears `items` after `s` was read out of it, one level in from `b.wipe()`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1283,27 +1287,31 @@ type Bag
 		items.clear()
 	end 'reset'
 
-	function bad() returns Integer
+	function measure() returns Integer
 		let s = try items.get(0) otherwise ""
 		reset()
+		print("[{s}]\n")
 		return s.byteLength()
-	end 'bad'
+	end 'measure'
 end 'Bag'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.push("alpha string long enough for heap allocation")
-	print("{b.bad()}\n")
+	b.items.push("alpha string long enough for heap allocation {40 + 2}")
+	print("{b.measure()} {b.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/sibling-call-on-the-enclosing-self.maxon:18:3: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)
+```exitcode
+0
+```
+```stdout
+[alpha string long enough for heap allocation 42]
+47 0
 ```
 
 <!-- test: sibling-call-explicit-self-spelling -->
 ### … and `self.reset()` is the same call
-Both spellings resolve the receiver to the same value, so one predicate answers for both.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1319,29 +1327,31 @@ type Bag
 		items.clear()
 	end 'reset'
 
-	function bad() returns Integer
+	function measure() returns Integer
 		let s = try items.get(0) otherwise ""
 		self.reset()
+		print("[{s}]\n")
 		return s.byteLength()
-	end 'bad'
+	end 'measure'
 end 'Bag'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.push("alpha string long enough for heap allocation")
-	print("{b.bad()}\n")
+	b.items.push("alpha string long enough for heap allocation {40 + 2}")
+	print("{b.measure()} {b.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/sibling-call-explicit-self-spelling.maxon:18:8: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)
+```exitcode
+0
+```
+```stdout
+[alpha string long enough for heap allocation 42]
+47 0
 ```
 
 <!-- test: sibling-call-that-writes-nothing -->
-### A read-only sibling call stays legal while the borrow is live
-The over-rejection guard for the two above. A `self` receiver stands for every field of the enclosing
-receiver, so it records a site per borrowed field — and every one of them is still filtered by the
-whole-program summary, which says `size()` writes nothing.
+### A read-only sibling call
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1378,15 +1388,8 @@ end 'main'
 45
 ```
 
-<!-- test: method-writing-a-non-array-field-is-not-a-conflict -->
-### A method that writes a NON-ARRAY field of the receiver is not a conflict
-E3070 tracks an array element and nothing else, so only an ARRAY write can free one — the same line
-the `String` and `Set` receiver doors draw. Ungated, `total = total + v` would mark the whole
-receiver written and this legal program would be refused.
-
-⚠ The gate needs the TYPE TAG and not just the name: a `TypeNameId` and a `GenericInstanceId` share a
-numeric space, so asking "is this an Array instance?" of a plain alias by its number alone can answer
-TRUE by coincidence, which is a false rejection.
+<!-- test: a-method-writing-a-non-array-field-leaves-an-element-read-intact -->
+### A method that writes a NON-ARRAY field of the receiver
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1421,104 +1424,109 @@ end 'main'
 ```
 
 <!-- test: module-storage-source -->
-### A top-level `var` is a borrow source
-Module storage differs from a local in WHERE the record is anchored and in nothing a borrow can see,
-so the borrow subject reaches beyond `Scope`: without it `g.clear()` would compile clean and the read
-would fault (**0xC0000005**).
+### An element read out of a top-level `var` survives a clear of it
+Module storage counts exactly as a local does.
 ```maxon
-var g = ["hello world this is a long string for heap allocation"]
+typealias StringArray = Array with String
+
+var g = StringArray.create()
 
 function main() returns ExitCode
+	g.push("hello world this is a long string for heap allocation {40 + 2}")
 	let s = try g.get(0) otherwise ""
 	g.clear()
-	print("[{s}]\n")
+	print("[{s}] {g.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/module-storage-source.maxon:6:4: cannot mutate 'g' via 'clear' while it is borrowed by 's' (borrowed at line 5)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
 <!-- test: module-storage-rebind -->
-### … and rebinding one frees what the borrow points at
-The global store DECREFS the record the slot held (`emitCheckedGlobalStore`), so it is the local
-rebind door one anchoring out. Without the refusal the read of `s` faults (**0xC0000005**).
+### … and a rebind of it
+The global store releases the slot's reference to the old array; `s` holds its own.
 ```maxon
 typealias StringArray = Array with String
 
-var g = ["hello world this is a long string for heap allocation"]
+var g = StringArray.create()
 
 function main() returns ExitCode
+	g.push("hello world this is a long string for heap allocation {40 + 2}")
 	let s = try g.get(0) otherwise ""
 	g = StringArray.create()
-	print("[{s}]\n")
+	print("[{s}] {g.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/module-storage-rebind.maxon:8:2: cannot mutate 'g' via '=' while it is borrowed by 's' (borrowed at line 7)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
 <!-- test: module-storage-to-a-mutating-callee -->
-### … and handing one to a callee that writes it
-The call-argument door reaches module storage through the same subject derivation as a local.
+### … and a callee that clears it
 ```maxon
 typealias StringArray = Array with String
 
-var g = ["hello world this is a long string for heap allocation"]
+var g = StringArray.create()
 
 function grow(dest StringArray)
 	dest.clear()
 end 'grow'
 
 function main() returns ExitCode
+	g.push("hello world this is a long string for heap allocation {40 + 2}")
 	let s = try g.get(0) otherwise ""
 	grow(g)
-	print("[{s}]\n")
+	print("[{s}] {g.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/module-storage-to-a-mutating-callee.maxon:12:2: cannot mutate 'g' via 'grow' while it is borrowed by 's' (borrowed at line 11)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
 <!-- test: forin-over-module-storage -->
-### … and a `for … in` over one borrows its element lexically
-The loop element's borrow reaches module storage too. Without this rule the body prints
-`4557430888798830399` — `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s always-on poison: the element's record is
-freed by the `clear()`, and the poison is readable at that address. ⚖ **USER RULING**: the element is a
-borrow, so the program is refused.
-
-⚠ **WITHOUT THIS RULE THE STORAGE CLASS WOULD DECIDE THE PROGRAM, WHICH IS WHY MODULE STORAGE IS IN
-THE SUBJECT SPACE AT ALL.** The iteration lock refuses a write NAMING the iterated array and does
-not reach module storage, so `g.clear()` inside `for it in g` passes the LOCK — while the same two
-lines over a LOCAL array are `E3019 … cannot pass 'arr' to function that mutates parameter 'self'`
-from the lock alone. The E3070 borrow is what makes the two spellings agree; the lock's reach is a
-different mechanism and the two must not be read as one.
+### … and a `for … in` over one, cleared in the body
+The element survives the clear, and the clear ends the loop.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
 
-var g = ["hello world this is a long string for heap allocation"]
+var g = StringArray.create()
 
 function main() returns ExitCode
+	g.push("hello world this is a long string for heap allocation {40 + 2}")
+	g.push("second string long enough for heap allocation {40 + 2}")
 	var total = 0 as Integer
 	for it in g 'scan'
 		g.clear()
+		print("[{it}]\n")
 		total = total + (it.byteLength() as Integer)
 	end 'scan'
 	print("{total}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/forin-over-module-storage.maxon:9:5: cannot mutate 'g' via 'clear' while it is borrowed by 'it' (borrowed at line 8)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42]
+56
 ```
 
-<!-- test: module-storage-borrow-expires -->
-### The over-rejection guard for the four above
-A read-only callee does not end the borrow, and once the borrowing name's last use is past, the
-global is writable again — the same NLL rule a local subject obeys, which is the point of admitting
-module storage to the SUBJECT space rather than to a rule of its own.
+<!-- test: module-storage-read-only-callee-then-clear -->
+### A read-only callee, then a clear, over a top-level `var`
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1546,16 +1554,8 @@ end 'main'
 0
 ```
 
-<!-- test: method-writing-a-string-or-set-field-is-not-a-conflict -->
-### A method that writes a `String` or a `Set` field of the receiver is not a conflict
-The over-rejection guard for the two rows of `IrFunction`'s mask table that run the OTHER way: a
-`String` or `Set` receiver write sets E3019's mask and deliberately NOT the storage column, because
-neither can free an ARRAY element and an array element is the only borrow E3070 tracks. Recording
-them would refuse both calls here, on a program that is perfectly safe.
-
-⚠ E3019's own answer about those two receivers is unchanged and must stay so — `tagIt(msg)` on a
-`let` String argument is still refused. The two masks are asked of the same write and answer
-differently; this case pins the E3070 half.
+<!-- test: a-method-writing-a-string-or-set-field-leaves-an-element-read-intact -->
+### A method that writes a `String` or a `Set` field of the receiver
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1601,15 +1601,9 @@ end 'main'
 ```
 
 <!-- test: a-field-store-in-a-callee-freeing-its-parameters-array -->
-### A callee that STORES an array field of its parameter frees the borrowed element
-The direct-store twin of `a-free-callee-writing-a-field-of-its-parameter` above, and it exists
-because the two reach the storage by different doors: that one calls a mutating member ON the field
-(`bag.items.truncate(0)`, `Parser.noteReceiverWrite`), this one REPLACES the field
-(`b.items = <fresh>`, `Parser.parseFieldAssignment`), whose `emitFieldWrite` decrefs the record the
-field held and frees every element some other name still borrows.
-
-⚠ **A field store through a PARAMETER reaches the caller's record**, so without this door the program
-faults (**0xC0000005**).
+### A callee that STORES an array field of its parameter
+The store through the parameter replaces the caller's field and releases the old array; the element the
+caller read is still its own.
 ```maxon
 typealias StringArray = Array with String
 
@@ -1627,31 +1621,22 @@ end 'wipe'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.push("alpha string long enough for heap allocation")
+	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	wipe(b)
-	print("{s.byteLength()}\n")
+	print("{s.byteLength()} [{s}] {b.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/a-field-store-in-a-callee-freeing-its-parameters-array.maxon:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```exitcode
+0
+```
+```stdout
+47 [alpha string long enough for heap allocation 42] 0
 ```
 
-<!-- test: a-scalar-field-store-is-not-a-conflict -->
-### The over-rejection guard for the case above: storing a SCALAR field frees nothing
-The store door's twin of `method-writing-a-non-array-field-is-not-a-conflict`, and it needs its own
-case because the two doors key their subject DIFFERENTLY. A self-field store's subject is the FIELD
-(`iterationSubjectNameAt` names it), so a write to one field cannot collide with a borrow out of
-another; a `b.n = 5` store's subject is the chain BASE, `b`, which every field of `b` collapses onto.
-Ungated, the write would conflict with every live borrow rooted at `b` — including, as here, one it
-cannot possibly free — and this legal program, which prints `hello`, would be refused
-*"cannot mutate 'b' via '='"*.
-
-⚠ The gate is MANAGED-ness and deliberately not array-ness, which is the narrower gate the mask
-beside it uses: `b.inner = other` frees a nested struct and cascades to ITS arrays, and a borrow taken
-through `b.inner.items.get(0)` carries the same subject `b` — so array-gating the note would open a
-real use-after-free while closing this false rejection.
+<!-- test: a-scalar-field-store-leaves-an-element-read-intact -->
+### Storing a SCALAR field of the same base
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -1681,36 +1666,32 @@ end 'main'
 hello 5
 ```
 
-<!-- test: error.a-borrow-taken-out-of-a-borrow-holds-the-root -->
-### A borrow of a borrow holds the ROOT storage, not just the value it was read from
-`c.current()` reads an element out of the CURSOR, and the cursor is itself a standing borrow of
-`xs`. Keyed only on `c`, the element's borrow would expire with `c`'s own last use while the element
-it names still points into `xs`, and this program would fault (**0xC0000005**). A borrow therefore
-composes: minting one on storage that is ITSELF borrowed mints one on its base
-too, up to the root.
+<!-- test: a-value-read-through-a-cursor-survives-a-clear-of-its-source -->
+### A value read through a cursor survives a clear of the cursor's source
+`c.current()` counts the element it returns, and the cursor counts its source.
 ```maxon
 function main() returns ExitCode
-	var xs = ["hello world this is a long string for heap allocation"]
-	let c = try xs.managed.createCursor() otherwise return 1
+	var xs = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let c = try xs.cursor() otherwise return 1
 	let s = c.current()
 	xs.clear()
-	print("[{s}]\n")
+	print("[{s}] {xs.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/error.a-borrow-taken-out-of-a-borrow-holds-the-root.maxon:6:5: cannot mutate 'xs' via 'clear' while it is borrowed by 's' (borrowed at line 5)
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation 42] 0
 ```
 
-<!-- test: a-composed-borrow-expires-at-its-own-last-use -->
-### A composed borrow is still NLL — it expires with the borrower, not with the chain
-The same chain with the element read BEFORE the write is safe and must stay compilable: composing
-the borrow up to the root may not turn the root into a lexical lock. This is the over-rejection
-guard for the case above.
+<!-- test: a-value-read-through-a-cursor-printed-before-the-clear -->
+### A value read through a cursor, printed before the clear
 ```maxon
 function main() returns ExitCode
-	var xs = ["hello world this is a long string for heap allocation"]
-	let c = try xs.managed.createCursor() otherwise return 1
+	var xs = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let c = try xs.cursor() otherwise return 1
 	let s = c.current()
 	print("[{s}]\n")
 	xs.clear()
@@ -1721,16 +1702,13 @@ end 'main'
 0
 ```
 ```stdout
-[hello world this is a long string for heap allocation]
+[hello world this is a long string for heap allocation 42]
 ```
 
-<!-- test: error.a-try-merge-keeps-every-link-of-a-composed-chain -->
-### A `try … otherwise` merge retargets EVERY link of a composed borrow, not just one
-`try p.items.get(0) otherwise ""` binds the merge PHI, not the accessor's result, so each link the
-composition minted has to move onto that phi. Retargeting only the first left the OTHER link keyed
-on a value no binding claims — and which link survived depended on push order alone. Here the
-surviving question is the INTERMEDIATE one: `p` is itself an element borrowed out of `arr`, and
-`p.items.clear()` frees what `s` names.
+<!-- test: a-value-read-out-of-an-element-survives-a-clear-of-that-element-s-field -->
+### A value read out of an element's field survives a clear of that field
+`p` is an element read out of `arr`, and `s` an element read out of `p.items`; `p.items.clear()`
+releases only the array's reference to `s`.
 ```maxon
 typealias StringArray = Array with String
 
@@ -1738,7 +1716,7 @@ type Holder
 	export var items as StringArray
 
 	static function create() returns Self
-		return Self{items: ["alpha string long enough for heap allocation"]}
+		return Self{items: ["alpha string long enough for heap allocation {40 + 2}"]}
 	end 'create'
 end 'Holder'
 
@@ -1747,36 +1725,29 @@ typealias HolderArray = Array with Holder
 function main() returns ExitCode
 	var arr = HolderArray.create()
 	arr.push(Holder.create())
-	let p = try arr.get(0) otherwise Holder.create()
+	var p = try arr.get(0) otherwise Holder.create()
 	let s = try p.items.get(0) otherwise ""
 	p.items.clear()
-	print("[{s}]\n")
+	print("[{s}] {p.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/error.a-try-merge-keeps-every-link-of-a-composed-chain.maxon:19:10: cannot mutate 'p' via 'clear' while it is borrowed by 's' (borrowed at line 18)
+```exitcode
+0
+```
+```stdout
+[alpha string long enough for heap allocation 42] 0
 ```
 
-<!-- test: a-callee-clearing-a-managed-list-frees-a-node-handle -->
+<!-- test: a-callee-clearing-a-managed-list-leaves-a-node-handle-alive -->
 ### A callee that clears a `__ManagedList` does NOT free the node a handle still names
-
-⚠ **THE CASE'S NAME STATES THE OPPOSITE OF ITS VERDICT; THE HEADING AND THE PINNED OUTPUT ARE THE
-VERDICT.** The program is memory-safe and runs.
 
 ⚖ **USER RULING — NODES ARE REFCOUNTED AND A HANDLE IS A SECOND OWNER.** `clear` drops the CHAIN's
 reference and nothing else; a node a handle still holds walks out of the walk alive, still carrying its
-element, and dies with its last owner. So a `clear` in a callee frees nothing a caller's handle names,
-and `dispatchManagedListMethod` calls `noteBorrowSubjectWrite` not at all.
+element, and dies with its last owner, so a `clear` in a callee frees nothing a caller's handle names.
 
-⭐ **THIS IS THE SHAPE THE RULING IS ABOUT.** `managed-list-node-handle-lifetime.md:a-returned-handle-survives-
-a-clear` is its twin with the mint in another function.
-
-⚠ **BOTH HALVES OF E3070 COME OFF ONE FLAG AT ONE DOOR** — the same-body site and the cross-function
-`storageWrittenParamMask`. This surface's E3070 flag is empty where its E3019 flag
-(`managedListMethodMutatesReceiver`) is not, which is the "two answers differ" point in its strongest
-form. An ELEMENT borrow is not a node handle, so the `List`/`Array`/nested-struct store-door refusals
-below are unaffected.
+⭐ `managed-list-node-handle-lifetime.md:a-returned-handle-survives-a-clear` is its twin with the mint
+in another function.
 ```maxon
 typealias StringChain = __ManagedList with String
 
@@ -1786,7 +1757,7 @@ end 'wipe'
 
 function main() returns ExitCode
 	var chain = StringChain.create()
-	let node = chain.insertLast("alpha string long enough for heap allocation")
+	let node = chain.insertLast("alpha string long enough for heap allocation {40 + 2}")
 	wipe(chain)
 	print("[{node.value()}]\n")
 	return 0
@@ -1796,7 +1767,7 @@ end 'main'
 0
 ```
 ```stdout
-[alpha string long enough for heap allocation]
+[alpha string long enough for heap allocation 42]
 ```
 
 <!-- test: a-callee-inserting-into-a-managed-list-keeps-every-handle -->
@@ -1818,7 +1789,7 @@ end 'grow'
 
 function main() returns ExitCode
 	var chain = StringChain.create()
-	let node = chain.insertLast("alpha string long enough for heap allocation")
+	let node = chain.insertLast("alpha string long enough for heap allocation {40 + 2}")
 	grow(chain)
 	print("[{node.value()}] {chain.count()}\n")
 	return 0
@@ -1828,21 +1799,12 @@ end 'main'
 0
 ```
 ```stdout
-[alpha string long enough for heap allocation] 2
+[alpha string long enough for heap allocation 42] 2
 ```
 
-<!-- test: a-method-rebinding-a-list-field-frees-the-borrowed-element -->
+<!-- test: a-method-rebinding-a-list-field-leaves-an-element-read-out-of-it-alive -->
 ### A method that REBINDS a `List` field does not free the element a caller holds
-⚖ **USER RULING. THE CASE'S NAME DESCRIBES A BORROW THIS PROGRAM NEVER MINTS; THE PINNED OUTPUT IS THE
-VERDICT.** `emitCheckedSelfFieldStore`'s E3070 seed is gated on `typeOwnsBorrowableStorage`, which asks
-what the store can FREE rather than what the field is named after, so a `List`-typed struct field is a
-store that can free storage — `a-field-store-in-a-callee-freeing-its-parameters-array` and
-`a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it` are the cases that hold that gate.
-
-⭐ **WHAT IS ABSENT HERE IS THE BORROW.** `List`'s `first()` is corpus-served, so it discharges a real
-`+1` (`coOwnBorrowedOpaque`) and `s` is an OWNED `String`. There is no borrow for the store to conflict
-with, the use-after-free is structurally absent rather than merely undetected, and the program exits 0
-with no leak and prints the string.
+`first()` counts the element it returns, so the store releases the list and `s` keeps its own reference.
 ```maxon
 typealias StringList = List with String
 
@@ -1860,7 +1822,7 @@ end 'Bag'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.append("alpha string long enough for heap allocation")
+	b.items.append("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.first() otherwise "none"
 	b.reset()
 	print("[{s}]\n")
@@ -1871,19 +1833,12 @@ end 'main'
 0
 ```
 ```stdout
-[alpha string long enough for heap allocation]
+[alpha string long enough for heap allocation 42]
 ```
 
 <!-- test: a-field-store-in-a-callee-freeing-its-parameters-list -->
-### … and the same store one indirection out, through the field-chain door
-The `List` twin of `a-field-store-in-a-callee-freeing-its-parameters-array` above, and it needs its own
-case because it is a DIFFERENT door: that store is `items = <fresh>` inside a method
-(`emitCheckedSelfFieldStore`), this one is `b.items = <fresh>` through a parameter
-(`parseFieldAssignment`). Both ask the same `typeOwnsBorrowableStorage` gate, and neither reaches the
-other.
-
-⚠ It takes the accepting answer above for the same reason and under the same ruling — the `Array` twin
-directly above is the case that holds this door's gate red.
+### … and the same store one indirection out, through a parameter
+`b.items = <fresh>` through a parameter, where the case above stores `items = <fresh>` inside a method.
 ```maxon
 typealias StringList = List with String
 
@@ -1901,7 +1856,7 @@ end 'wipe'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.items.append("alpha string long enough for heap allocation")
+	b.items.append("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.first() otherwise "none"
 	wipe(b)
 	print("[{s}]\n")
@@ -1912,18 +1867,12 @@ end 'main'
 0
 ```
 ```stdout
-[alpha string long enough for heap allocation]
+[alpha string long enough for heap allocation 42]
 ```
 
-<!-- test: a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it -->
-### A store does not free an ELEMENT — it drops the RECORD, and the drop cascades
-An `Array`-keyed gate would be wrong a second way, and this shape has nothing to do with `List`: the
-field here is a plain STRUCT. Dropping `inner` releases the `Array` that struct owns, freeing the element a
-caller borrowed through `b.inner.items.get(0)` — and that borrow's subject is the chain base `b`,
-which is exactly what the call to `b.reset()` is checked against. `a-scalar-field-store-is-not-a-conflict`
-records this same cascade as the reason the SAME-BODY seed is gated on managed-ness rather than
-array-ness; this case pins the cross-function seed beside it to the same answer, so the two halves of
-one rule cannot disagree. Without it the program faults (**0xC0000005**).
+<!-- test: a-method-rebinding-a-nested-struct-field-keeps-an-element-read-out-of-it -->
+### Rebinding a nested STRUCT field drops the record and its array, and the element read out of it survives
+Dropping `inner` releases the `Array` that struct owns; `s` holds its own reference to the element.
 ```maxon
 typealias StringArray = Array with String
 
@@ -1949,30 +1898,23 @@ end 'Bag'
 
 function main() returns ExitCode
 	var b = Bag.create()
-	b.inner.items.push("alpha string long enough for heap allocation")
+	b.inner.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.inner.items.get(0) otherwise "none"
 	b.reset()
-	print("[{s}]\n")
+	print("[{s}] {b.inner.items.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/borrow-liveness/a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it.maxon:28:4: cannot mutate 'b' via 'reset' while it is borrowed by 's' (borrowed at line 27)
+```exitcode
+0
+```
+```stdout
+[alpha string long enough for heap allocation 42] 0
 ```
 
-<!-- test: a-string-field-store-is-not-a-conflict -->
-### The over-rejection guard for the three above: storing a `String` field frees no container
-The store doors' gate is *"can dropping this record free storage a tracked borrow points into"*, and
-the plausible spelling of that — bare managed-ness — is a **false rejection**, which is why
-`typeOwnsBorrowableStorage` carves out the two managed types that are not aggregates. Every borrow
-E3070 tracks is a reference INTO A CONTAINER (an element, a chain node, a cursor); a `String` owns a
-byte buffer and hands out no such reference, so replacing one can invalidate nothing.
-
-⚠ It is the same fact `method-writing-a-string-or-set-field-is-not-a-conflict` already pins for the
-METHOD door — one fact may not have two answers depending on which door asks. With a `String` store
-gated at bare managed-ness, `b.retag()` would be refused *"cannot mutate 'b' via 'retag'"* on a legal
-program. Both store doors are
-exercised: `retag` is the self-field spelling, `rename` the field-chain one through a parameter.
+<!-- test: a-string-field-store-leaves-an-element-read-intact -->
+### Storing a `String` field of the same receiver
+`retag` is the self-field spelling, `rename` the field-chain one through a parameter.
 ```maxon
 typealias StringArray = Array with String
 
@@ -2010,23 +1952,10 @@ end 'main'
 44 a third tag entirely
 ```
 
-<!-- test: a-managed-field-handed-to-the-method-that-reassigns-it -->
-### A borrowed argument is HELD across the call — the receiver and one of its fields, to one method
-E3070 refuses a write the parser can PROVE conflicts with a NAMED live borrow. A borrow that no name
-holds has no borrower to blame and no diagnostic to raise, and it reaches the callee with no reference
-of its own. `Parser.anchorBorrowedArguments` closes that: when a call is given both a value read
-out of storage and the storage itself, the caller holds a reference for the length of the statement.
-
-⛔⛔ **ONE CORRUPTION, THREE SYMPTOMS, ALL FROM PROGRAMS THAT COMPILE CLEAN.** Without the anchor the
-`byteLength()` spelling panics `Range check failed`, the interpolating one exits **82
-`slabOsAllocFailed`**, and `f(g.s)` reaching the field through a module `var` faults **0xC0000005**. A
-spelling that happens to run is no evidence either way: a `byteLength()` read can survive only because
-the length word at `@8` outlives the free, while `"[{other}]"` reads the freed buffer back after the
-interpolation reused it.
-
-⚠ **THE FIELD IS FILLED AT RUN TIME ON PURPOSE.** A literal would be an immortal `.rdata` record that
-survives a free it never had — a false negative. `fill` builds the bytes in a loop, so the record the
-cell holds is heap and solely the cell's.
+<!-- test: a-managed-field-handed-to-the-method-that-writes-its-owner -->
+### The receiver and one of its fields, handed to a method that replaces the field
+`replace` stores over `self.s`, the field its argument was read out of. The argument holds its own
+reference, so the store releases only the field's, and `other` still names the bytes `fill` built.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -2045,7 +1974,6 @@ type Cell
 		self.s = t
 	end 'fill'
 
-	// The callee reassigns the very field its own argument was read out of.
 	function replace(other String) returns String
 		self.s = "replaced"
 		return "[{other}]"
@@ -2055,7 +1983,8 @@ end 'Cell'
 function main() returns ExitCode
 	var a = Cell.create()
 	a.fill(10)
-	print("{a.replace(a.s)}\n")
+	let out = a.replace(a.s)
+	print("{out} {a.s}\n")
 	return 0
 end 'main'
 ```
@@ -2063,15 +1992,13 @@ end 'main'
 0
 ```
 ```stdout
-[xxxxxxxxxx]
+[xxxxxxxxxx] replaced
 ```
 
 <!-- test: a-managed-field-handed-to-a-free-callee-beside-its-owner -->
 ### The free-function spelling: the owner and its field, in two argument columns
-The same conflict with no receiver in it. `clobber` is handed `b` and `b.s`; the store through `b`
-drops the record `borrowed` names. This is the shape `Parser.callReachesBorrowedArgumentStorage`
-answers by finding the borrower's storage named by ANOTHER argument of the same call — the bare name
-`b` — rather than by the receiver.
+`clobber` is handed `b` for `c` together with `b.s`, and stores over `c.s`; `borrowed` holds its own
+reference to the record the store replaces.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -2099,7 +2026,8 @@ end 'clobber'
 function main() returns ExitCode
 	var b = Cell.create()
 	b.fill(10)
-	print("{clobber(b, borrowed: b.s)}\n")
+	let out = clobber(b, borrowed: b.s)
+	print("{out} {b.s}\n")
 	return 0
 end 'main'
 ```
@@ -2107,21 +2035,14 @@ end 'main'
 0
 ```
 ```stdout
-[xxxxxxxxxx]
+[xxxxxxxxxx] clobbered
 ```
 
 <!-- test: an-array-element-handed-to-a-callee-that-clears-the-array -->
-### The ARRAY-ELEMENT analogue — E3070's own subject, in the one shape it cannot see
-`try a.get(0) otherwise ""` mints a pending borrow, and a pending borrow becomes a `BorrowRecord` only
-when a BINDING claims it (`Parser.attachPendingBorrows`). Written inline as an argument, no binding
-ever does — so the entry is dropped unclaimed at the statement's end and the write door's
-`functionHoldsABorrow` gate answers false. The element is handed to a callee that frees it with no
-borrow recorded anywhere, so the anchor is what holds it for the length of the statement.
-
-⚠ **THE BOUND SPELLING IS REFUSED AND THAT IS NOT AN INCONSISTENCY** — see
-`mutating-callee-argument` above, where `let s = try arr.get(0) …` then `grow(arr)` is E3070. There
-the borrow outlives the statement under a name, which is the fact E3070 is about; here it cannot
-outlive the call it is an argument to.
+### The ARRAY-ELEMENT analogue: an array and one of its elements, to a callee that clears the array
+An element read inline as an argument is counted like the bound spelling — `let s = try arr.get(0) …`
+then `grow(arr)` in `mutating-callee-argument` — so `clear` releases only the array's reference and
+`borrowed` still names the element.
 ```maxon
 typealias Count = int(0 to 1000)
 typealias StringArray = Array with String
@@ -2142,7 +2063,8 @@ end 'build'
 function main() returns ExitCode
 	var a = StringArray.create()
 	a.push(build(10))
-	print("{clobber(a, borrowed: try a.get(0) otherwise "")}\n")
+	let out = clobber(a, borrowed: try a.get(0) otherwise "")
+	print("{out} {a.count()}\n")
 	return 0
 end 'main'
 ```
@@ -2150,15 +2072,13 @@ end 'main'
 0
 ```
 ```stdout
-[xxxxxxxxxx]
+[xxxxxxxxxx] 0
 ```
 
 <!-- test: a-field-of-a-module-var-handed-to-a-callee-that-reaches-it-by-name -->
-### MODULE STORAGE is reachable from every callee, so it needs no second argument
-`clobber` is handed nothing but the string. It reaches the cell by NAME, which no argument list can
-show — so the reachability test that settles the two cases above cannot settle this one, and the rule
-answers it the other way: a top-level `var` is reachable from everywhere, so a borrow out of one is
-anchored unconditionally. Without the anchor the program exits 82 `slabOsAllocFailed`.
+### A field of a module `var`, handed to a callee that replaces it by name
+`clobber` is handed one argument and reaches the cell by NAME. The read of `g.s` counts, so the store
+releases only the field's reference and `borrowed` still names the bytes it was handed.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -2199,11 +2119,9 @@ end 'main'
 ```
 
 <!-- test: a-bare-module-var-handed-to-a-callee-that-rebinds-it -->
-### The same rule at the simplest spelling: the global itself, rebound under its own argument
-No field and no container — the argument IS the global's value, and `emitCheckedGlobalStore` drops
-the record it displaces. `recordGlobalReadValue`'s writable arm is the second of
-`markRebindableSlotRead`'s three producers, so the read carries the mark exactly as a field read does.
-Without the anchor the program exits 82.
+### … and the global itself, rebound under its own argument
+The argument IS the global's value; the rebind releases the global's reference and the parameter keeps
+its own.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -2236,16 +2154,9 @@ end 'main'
 ```
 
 <!-- test: a-receiver-read-out-of-a-module-var-outlives-a-callee-that-replaces-it -->
-### The RECEIVER is an argument too, and a call with an EMPTY argument list still has one
-A method call taking no arguments still reaches the anchor pass, because the receiver is prepended
-into the same column an argument occupies (`prependReceiverArg`). `g.measure()` reads its receiver out of a module `var` and the body
-replaces that very global, so without the anchor `self` dangles for the rest of the method and the
-program faults (**0xC0000005**).
-
-⚠ The receiver does NOT satisfy its own reachability — only its being MODULE storage does. Were it to,
-every method call through a self field (`self.items.push(v)`) would anchor its own receiver, which is a
-refcount pair on the hottest shape in the corpus. `a-field-handed-to-a-callee-that-cannot-reach-it`
-below is the guard on that.
+### … and a RECEIVER read out of a module `var`, whose method replaces that global
+`g.measure()` reads its receiver out of a module `var`; the body replaces the global, and `self` still
+names the record the call was made on.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -2286,15 +2197,10 @@ end 'main'
 ```
 
 <!-- test: a-field-handed-to-a-callee-that-cannot-reach-it -->
-### The over-anchoring guard: a callee handed only the VALUE takes no reference
-The narrowing is the whole reason this rule is affordable, so it needs a case that fails if the rule
-stops narrowing. `measure` is handed `b.s` and nothing else: it cannot name the cell, the cell is not
-module storage, and no other argument denotes it — so nothing it can do frees the record and the
-caller owes no reference. The emitted code's `main` (`--emit-ir`) carries **no `__str_retain` at all**, against
-exactly one in the free-callee case above whose only difference is that the owner travels beside the
-field. Anchoring unconditionally instead would put one at every `f(self.field)` in the tree — most of
-the calls a compiler writes — and push the compiler's widest calls over the x64 register file (E5001),
-so the compiler would not self-compile.
+### A callee handed only the VALUE of a field, with the owner nowhere in reach
+`measure` is handed `b.s` and nothing else: it cannot name the cell, the cell is not module storage, and no other
+argument denotes it, so nothing it can do frees the record the field holds. The program runs and prints the string
+the field held.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -2333,21 +2239,10 @@ end 'main'
 ```
 
 <!-- test: a-merged-borrow-carries-every-arms-storage-to-the-call -->
-### ONE value, TWO pending borrows — and the one the callee can reach is the SECOND
-`match-gives-merges-every-arms-borrow` above pins this for a BINDING: each arm retargets its own pending
-borrow onto the one phi, so the phi carries an entry per SUBJECT. Written inline as an ARGUMENT the same
-phi reaches `Parser.borrowedArgumentIsAtRisk`, which must ask its reachability question of **every** entry
-— `a` here, then `b`, and only `b` is what the call is handed. Which entry comes first is push order,
-which is not a rule.
-
-⛔ **A WALK THAT STOPS AT ITS FIRST MATCH IS WRONG HERE** — the same trap `Parser.retargetPendingBorrow`'s
-⚠⚠ block records one door over: *"a value id is DEFINED ONCE, so at most one entry can carry it"* is
-true of the id and never the claim that matters. Stop the walk at its first link and this program exits
-**82 `slabOsAllocFailed`**; run it whole and it prints the bytes.
-
-⚠ A composed borrow reaches the same walk the same way — `composePendingBorrowOntoBases` files one entry
-per link of the chain, all keyed on the accessor's result — so this case guards both producers of the
-several-entries-one-value shape.
+### A value MERGED from two arms, handed beside the array one arm read from
+The `match` produces a new value — the element its chosen arm read, counted — rather than a view of
+either array's storage, so the call hands `clobber` one view of `b` and the clear leaves `borrowed`
+intact.
 ```maxon
 typealias Count = int(0 to 1000)
 typealias StringArray = Array with String
@@ -2391,8 +2286,9 @@ end 'main'
 [xxxxxxxxxx]
 ```
 
-<!-- test: iterating-a-conditional-of-two-fields-refuses-a-call-that-rebinds-one -->
-A `for` over a conditional of two field chains is borrowed from storage the body can rebind through `weigh`, so the call is E3070.
+<!-- test: iterating-a-conditional-of-two-fields-survives-a-call-that-rebinds-one -->
+A `for` over a conditional of two field chains holds its own reference to the array it walks, so the body
+rebinding `self.holder.items` through `weigh` leaves the loop walking that array to its end.
 ```maxon
 typealias Tally = int(0 to i64.max)
 
@@ -2471,8 +2367,15 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:62:17: cannot mutate 'holder' via 'weigh' while it is borrowed by 'candidate' (borrowed at line 61)
+```exitcode
+0
+```
+```stdout
+50
+first 0 2
+50
+second 1 3
+total 5
 ```
 
 <!-- test: iterating-a-field-of-a-call-result-survives-a-rebind-of-that-field -->
@@ -2567,14 +2470,8 @@ second 1 3
 total 5
 ```
 
-
-
-
-
-
-
 <!-- test: a-borrowed-field-survives-its-root-handed-to-a-consuming-constructor -->
-### A consuming argument co-owns the root, so a field borrowed out of it stays alive
+### A consuming argument co-owns the root, so a field read out of it stays alive
 `Holder.create(b)` stores `b` and takes a reference of its own; `b` keeps its own, so `inner` names a live record.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2620,7 +2517,7 @@ end 'main'
 
 <!-- test: a-borrowed-field-survives-the-co-owner-of-its-root-letting-go -->
 ### The record a consuming constructor co-owns outlives that co-owner
-Replacing `h.box` releases the holder's reference; `b`'s own still keeps the record and the field `inner` borrows.
+Replacing `h.box` releases the holder's reference; `b`'s own still keeps the record and the field `inner` names.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2665,7 +2562,7 @@ end 'main'
 ```
 
 <!-- test: a-borrowed-field-survives-the-field-its-root-was-stored-into-being-replaced -->
-### A field store co-owns the root, so replacing that field frees nothing a borrow names
+### A field store co-owns the root, so replacing that field frees nothing a field read names
 `h.box = b` takes a reference of its own, so replacing `h.box` again releases only that one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2712,7 +2609,7 @@ end 'main'
 ```
 
 <!-- test: a-borrowed-field-survives-its-root-pushed-into-a-cleared-container -->
-### A container store co-owns the root, so clearing the container frees nothing a borrow names
+### A container store co-owns the root, so clearing the container frees nothing a field read names
 `xs.push(b)` takes a reference of its own, so clearing `xs` releases only that one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2753,7 +2650,7 @@ end 'main'
 ```
 
 <!-- test: a-captured-borrowed-field-survives-the-co-owner-of-its-root-letting-go -->
-### A closure holding a borrowed field still reads a live record after the root's co-owner lets go
+### A closure holding a field read out of the root still reads a live record after the root's co-owner lets go
 The closure reads `inner` after the holder lets go of its reference to `b`'s record, which `b` still keeps.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2799,9 +2696,9 @@ end 'main'
 52 52
 ```
 
-<!-- test: error.a-borrowed-field-outlives-a-move-of-its-root-into-a-nested-block -->
-### The binding a root moves into is dropped at its block's end, under a borrow still read after it
-`let r = b` moves the record into `r`, which is dropped at the end of `nested` while `inner` is still read after it.
+<!-- test: a-field-read-survives-a-move-of-its-root-into-a-nested-block -->
+### The binding a root moves into is dropped at its block's end, and a field read out of the root survives
+`let r = b` moves the record into `r`, which is dropped at the end of `nested`; `inner` holds its own reference.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2827,20 +2724,24 @@ function main() returns ExitCode
 
 	if inner.label.byteLength() > 0 'nested'
 		let r = b
-		print("{r.inner.label.byteLength()}\n")
+		print("[{r.inner.label}]\n")
 	end 'nested'
 
-	print("{inner.label.byteLength()}\n")
+	print("[{inner.label}]\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:27:2: cannot drop 'r' at the end of its block while it is borrowed by 'inner' (borrowed at line 22)
+```exitcode
+0
+```
+```stdout
+[an inner label padded long enough to heap allocate 1]
+[an inner label padded long enough to heap allocate 1]
 ```
 
-<!-- test: error.a-borrowed-field-outlives-a-match-give-of-its-root -->
-### A match arm that gives the root away hands it to a binding the borrow must follow
-The `first` arm moves `b` into the match's result, which `r = Outer.create(3)` then releases while `inner` is still read.
+<!-- test: a-field-read-survives-a-match-give-of-its-root -->
+### A match arm that gives the root away, to a binding then rebound
+The `first` arm moves `b` into the match's result, which `r = Outer.create(3)` then releases; `inner` holds its own reference.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2877,17 +2778,20 @@ function main() returns ExitCode
 		second gives Outer.create(2)
 	end 'pick'
 	r = Outer.create(3)
-	print("{inner.label.byteLength()} {r.inner.label.byteLength()}\n")
+	print("[{inner.label}] [{r.inner.label}]\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:33:3: cannot move 'b' into the value its branch gives while it is borrowed by 'inner' (borrowed at line 31)
+```exitcode
+0
+```
+```stdout
+[an inner label padded long enough to heap allocate 1] [an inner label padded long enough to heap allocate 3]
 ```
 
-<!-- test: error.a-borrowed-field-blocks-a-rebind-of-its-root -->
-### Rebinding the root frees the record a field borrow points into
-Rebinding `b` releases the record `inner` points into.
+<!-- test: a-field-read-survives-a-rebind-of-its-root -->
+### Rebinding the root leaves a field read out of it alive
+Rebinding `b` releases `b`'s reference to the record; `inner` holds its own.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2911,17 +2815,20 @@ function main() returns ExitCode
 	var b = Outer.create(1)
 	let inner = b.inner
 	b = Outer.create(2)
-	print("{inner.label.byteLength()} {b.inner.label.byteLength()}\n")
+	print("[{inner.label}] [{b.inner.label}]\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:23:2: cannot mutate 'b' via '=' while it is borrowed by 'inner' (borrowed at line 22)
+```exitcode
+0
+```
+```stdout
+[an inner label padded long enough to heap allocate 1] [an inner label padded long enough to heap allocate 2]
 ```
 
-<!-- test: error.a-borrowed-field-blocks-a-rebind-of-the-binding-its-root-moved-into -->
-### A reassignment that moves the root carries the borrow to the binding it moved into
-`c = b` moves the record into `c`, so rebinding `c` releases the record `inner` points into.
+<!-- test: a-field-read-survives-a-rebind-of-the-binding-its-root-moved-into -->
+### A reassignment that moves the root, then a rebind of the binding it moved into
+`c = b` moves the record into `c`, and rebinding `c` releases that reference; `inner` holds its own.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2947,17 +2854,20 @@ function main() returns ExitCode
 	var c = Outer.create(2)
 	c = b
 	c = Outer.create(3)
-	print("{inner.label.byteLength()} {c.inner.label.byteLength()}\n")
+	print("[{inner.label}] [{c.inner.label}]\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:25:2: cannot mutate 'c' via '=' while it is borrowed by 'inner' (borrowed at line 22)
+```exitcode
+0
+```
+```stdout
+[an inner label padded long enough to heap allocate 1] [an inner label padded long enough to heap allocate 3]
 ```
 
-<!-- test: error.a-borrowed-element-outlives-a-move-of-its-array-into-a-nested-block -->
-### The binding an array moves into is dropped at its block's end, under an element borrow read after it
-`let r = xs` moves the array into `r`, which is dropped at the end of `nested` while `s` is still read after it.
+<!-- test: an-element-survives-a-move-of-its-array-into-a-nested-block -->
+### The binding an array moves into is dropped at its block's end, and an element read out of it survives
+`let r = xs` moves the array into `r`, which is dropped at the end of `nested`; `s` holds its own reference.
 ```maxon
 typealias Words = Array with String
 
@@ -2971,17 +2881,21 @@ function main() returns ExitCode
 		print("{r.count()}\n")
 	end 'nested'
 
-	print("{s.byteLength()}\n")
+	print("{s.byteLength()} [{s}]\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:12:2: cannot drop 'r' at the end of its block while it is borrowed by 's' (borrowed at line 7)
+```exitcode
+0
+```
+```stdout
+1
+48 [a word padded out long enough to heap allocate 1]
 ```
 
-<!-- test: error.a-borrowed-element-outlives-a-match-give-of-its-array -->
-### A match arm that gives an array away hands it to a binding its element borrow must follow
-The `first` arm moves `xs` into the match's result, which `r.clear()` then empties while `s` is still read.
+<!-- test: an-element-survives-a-match-give-of-its-array -->
+### A match arm that gives an array away, to a binding then cleared
+The `first` arm moves `xs` into the match's result, which `r.clear()` then empties; `s` holds its own reference.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Words = Array with String
@@ -3004,17 +2918,21 @@ function main() returns ExitCode
 		second gives Words.create()
 	end 'pick'
 	r.clear()
-	print("{s.byteLength()} {r.count()}\n")
+	print("{s.byteLength()} {r.count()} [{s}]\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:19:3: cannot move 'xs' into the value its branch gives while it is borrowed by 's' (borrowed at line 17)
+```exitcode
+0
+```
+```stdout
+48 0 [a word padded out long enough to heap allocate 1]
 ```
 
-<!-- test: error.a-borrowed-element-blocks-a-clear-of-the-binding-its-array-moved-into -->
-### A reassignment that moves an array carries its element borrow to the binding it moved into
-`c = xs` moves the array into `c`, so clearing `c` frees the element `s` points at.
+<!-- test: an-element-survives-a-clear-of-the-binding-its-array-moved-into -->
+### A reassignment that moves an array, then a clear of the binding it moved into
+`c = xs` moves the array into `c`, and clearing `c` releases the array's reference to the element; `s`
+holds its own.
 ```maxon
 typealias Words = Array with String
 
@@ -3025,16 +2943,19 @@ function main() returns ExitCode
 	var c = Words.create()
 	c = xs
 	c.clear()
-	print("{s.byteLength()} {c.count()}\n")
+	print("{s.byteLength()} {c.count()} [{s}]\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:10:4: cannot mutate 'c' via 'clear' while it is borrowed by 's' (borrowed at line 7)
+```exitcode
+0
+```
+```stdout
+48 0 [a word padded out long enough to heap allocate 1]
 ```
 
 <!-- test: a-closure-capturing-a-borrowed-field-is-copied-into-an-outer-binding -->
-### A closure capturing a borrowed field holds a reference of its own
+### A closure capturing a field read holds a reference of its own
 `g` outlives `nested` and the rebind of `b`; the closure's environment keeps `inner` alive.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3075,7 +2996,7 @@ end 'main'
 ```
 
 <!-- test: a-closure-capturing-a-borrowed-field-is-returned -->
-### A closure capturing a borrowed field of a local can be returned
+### A closure capturing a field read of a local can be returned
 `b` is released when `reader` returns; the closure's environment still holds `inner`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3115,7 +3036,7 @@ end 'main'
 ```
 
 <!-- test: a-closure-capturing-a-borrowed-field-is-stored-in-a-field -->
-### A closure capturing a borrowed field of a local can be stored in a record
+### A closure capturing a field read of a local can be stored in a record
 `b` is released when `fill` returns; the stored closure still holds `inner`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3168,7 +3089,7 @@ end 'main'
 ```
 
 <!-- test: a-closure-capturing-a-borrowed-field-is-handed-to-a-function-that-keeps-it -->
-### A closure capturing a borrowed field of a local can be handed to a callee that stores it
+### A closure capturing a field read of a local can be handed to a callee that stores it
 `Slot.create` keeps the closure past `build`, which releases `b`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3217,7 +3138,7 @@ end 'main'
 
 <!-- test: a-closure-capturing-a-borrowed-field-is-run-by-a-coroutine-after-its-block -->
 <!-- unsupported-targets: wasm32-wasi -->
-### A coroutine runs a closure capturing a borrowed field after the closure's block
+### A coroutine runs a closure capturing a field read after the closure's block
 The coroutine owns the closure, whose environment holds `inner` past the rebind of `b`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3270,7 +3191,7 @@ end 'main'
 ```
 
 <!-- test: a-borrowed-field-follows-its-root-into-a-binding-of-the-same-block -->
-### A move of the root into a binding of the same block carries the borrow with it
+### A move of the root into a binding of the same block
 `r` owns the record from `let r = b` until the end of `main`, which outlives every read of `inner`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -3307,8 +3228,8 @@ end 'main'
 ```
 
 <!-- test: a-closure-argument-holds-a-borrowed-field-only-to-the-end-of-its-block -->
-### A closure handed to a call holds the borrow it captures only until the end of its block
-`apply` only calls the closure, so the root may be rebound once `nested` has ended.
+### A closure handed to a call inside a block, then a rebind of the root after it
+`apply` calls the closure inside `nested`, and the root is rebound after the block has ended.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3353,4 +3274,346 @@ end 'main'
 ```stdout
 52
 53
+```
+
+<!-- test: an-element-survives-a-clear-through-a-second-binding-of-its-array -->
+### An element survives a clear reached through a SECOND binding of the same array
+`Holder.create(x)` stores the record `x` names, so `h.items` and `x` are one array. The clear through
+`h.items` empties `x` too, and `s` keeps the element it read.
+```maxon
+typealias StringArray = Array with String
+
+type Holder
+	export var items as StringArray
+
+	static function create(items StringArray) returns Holder
+		return Holder{items: items}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var x = StringArray.create()
+	x.push("hello {40 + 2} world, long enough for the heap")
+	var h = Holder.create(x)
+	let s = try x.get(0) otherwise ""
+	h.items.clear()
+	print("[{s}] {x.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[hello 42 world, long enough for the heap] 0
+```
+
+<!-- test: an-element-survives-a-holder-growing-and-clearing-the-shared-array -->
+### … and a method of the second holder that grows the array past many reallocations, then clears it
+The element was read before the holder existed; it is neither a slot of the buffer the pushes
+reallocate nor released by the clear.
+```maxon
+typealias Words = Array with String
+
+type Holder
+	var items as Words
+
+	static function create(items Words) returns Self
+		return Self{items: items}
+	end 'create'
+
+	function grow()
+		for i in 0 upto 300 'g'
+			items.push("holder-filler-{i}-pppppppppppppppp")
+		end 'g'
+
+		items.clear()
+	end 'grow'
+end 'Holder'
+
+function main() returns ExitCode
+	var arr = ["first {1} padded out long enough for the heap", "second {2} padded out long enough for the heap"]
+	let s = try arr.get(0) otherwise "none"
+	var h = Holder.create(arr)
+	h.grow()
+	print("[{s}] {s.byteLength()} {arr.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[first 1 padded out long enough for the heap] 43 0
+```
+
+<!-- test: an-interpolated-field-read-survives-a-later-part-reassigning-the-field -->
+### A field read as an interpolation part survives a later part that reassigns the field
+`{self.name}` is read before `self.rename()` runs; the part holds its own reference, so the
+reassignment's release of the old name leaves the text being built intact.
+```maxon
+type Person
+	var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	function current() returns String
+		return name
+	end 'current'
+
+	function rename() returns String
+		self.name = "renamed {40 + 2} value long enough for a heap record"
+		return "done"
+	end 'rename'
+
+	function describe() returns String
+		return "{self.name} {self.rename()}"
+	end 'describe'
+end 'Person'
+
+function main() returns ExitCode
+	var p = Person.create("original {40 + 2} value long enough for a heap record")
+	let text = p.describe()
+	print("[{text}]\n")
+	print("[{p.current()}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 value long enough for a heap record done]
+[renamed 42 value long enough for a heap record]
+```
+
+<!-- test: a-field-read-as-a-left-operand-survives-the-right-operand-reassigning-the-field -->
+### A field read as a comparison's LEFT operand survives a right operand that reassigns the field
+`self.name` is read before `self.swapName()` runs; the comparison sees the original name, which
+equals the text `swapName` returns.
+```maxon
+type Person
+	var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	function current() returns String
+		return name
+	end 'current'
+
+	function swapName() returns String
+		self.name = "swapped {40 + 2} value long enough for a heap record"
+		return "original {40 + 2} value long enough for a heap record"
+	end 'swapName'
+
+	function keptOriginal() returns bool
+		return self.name == self.swapName()
+	end 'keptOriginal'
+end 'Person'
+
+function main() returns ExitCode
+	var p = Person.create("original {40 + 2} value long enough for a heap record")
+	print("{p.keptOriginal()}\n")
+	print("[{p.current()}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+[swapped 42 value long enough for a heap record]
+```
+
+<!-- test: an-element-read-after-an-indirect-call-survives-a-set-of-its-slot -->
+### An element read after a call through a function value survives a `set` of the slot it came from
+`cb()` may do anything, so it ends what a caller can know about `items`; the reads after it are counted
+just the same. `set` releases the slot's reference to the record `e` read, and `e` keeps its own; the
+`filler` allocated after the write would take over a freed record.
+```maxon
+type Box
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+typealias Hook = function()
+
+function announce()
+	print("hook\n")
+end 'announce'
+
+function replaceFirst(items Boxes, cb Hook)
+	cb()
+	let e = try items.get(0) otherwise panic("the caller pushed one")
+	try items.set(0, value: Box.create("replacement {7} padded out long enough for the heap")) otherwise panic("the caller pushed one")
+	let filler = Box.create("filler {9} padded out long enough for the heap")
+	let now = try items.get(0) otherwise panic("the caller pushed one")
+	print("[{e.label}] [{now.label}] [{filler.label}]\n")
+end 'replaceFirst'
+
+function main() returns ExitCode
+	var xs = Boxes.create()
+	xs.push(Box.create("original {40 + 2} padded out long enough for the heap"))
+	replaceFirst(xs, cb: announce)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hook
+[original 42 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [filler 9 padded out long enough for the heap]
+```
+
+<!-- test: a-raw-cursor-current-survives-a-clear-of-its-buffer -->
+<!-- tier: stdlib -->
+### A value read through a raw buffer cursor survives a `clear` of the buffer
+The raw cursor's `current()` is an element read like `get`: it counts what it returns, so the buffer's
+`clear` releases only the buffer's reference.
+```maxon
+function main() returns ExitCode
+	var xs = ["alpha {40 + 2} value long enough for a heap record"]
+	let c = try xs.managed.createCursor() otherwise return 1
+	let s = c.current()
+	xs.managed.clear()
+	let filler = "filler {9} padded out long enough for the heap"
+	print("[{s}] {xs.count()} [{filler}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[alpha 42 value long enough for a heap record] 0 [filler 9 padded out long enough for the heap]
+```
+
+<!-- test: a-field-read-through-a-var-field-of-self-survives-a-rebind-of-that-field -->
+### A value read through a `var` field of `self` survives the method rebinding that field
+`self.inner.name` passes through `inner`, a `var` field the method then replaces; `n` holds its own
+reference to the name, so the store releases only the old `Inner`'s.
+```maxon
+type Inner
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+
+	function nameAfterRebind() returns String
+		let n = self.inner.name
+		self.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		let filler = "filler {1} padded out long enough for the heap"
+		return "[{n}] [{self.inner.name}] [{filler}]"
+	end 'nameAfterRebind'
+end 'Outer'
+
+function main() returns ExitCode
+	var a = Outer.create("first {40 + 2} padded out long enough for the heap")
+	print("{a.nameAfterRebind()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[first 42 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
+```
+
+<!-- test: a-field-read-through-a-var-field-of-a-parameter-survives-a-rebind-of-that-field -->
+### … and through a `var` field of a parameter
+```maxon
+type Inner
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+function nameAfterRebind(o Outer) returns String
+	let n = o.inner.name
+	o.inner = Inner.create("replacement {8} padded out long enough for the heap")
+	let filler = "filler {2} padded out long enough for the heap"
+	return "[{n}] [{o.inner.name}] [{filler}]"
+end 'nameAfterRebind'
+
+function main() returns ExitCode
+	var b = Outer.create("second {40 + 3} padded out long enough for the heap")
+	print("{nameAfterRebind(b)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[second 43 padded out long enough for the heap] [replacement 8 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: an-argument-read-through-a-var-field-survives-the-callee-rebinding-that-field -->
+### … and as an argument, beside the record the callee rebinds the field of
+`c.inner.name` is read through the `var` field `inner` and handed to `clobber` beside `c`; `clobber`
+replaces `o.inner`, and `name` still holds its own reference.
+```maxon
+type Inner
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+function clobber(o Outer, name String) returns String
+	o.inner = Inner.create("replacement {9} padded out long enough for the heap")
+	let filler = "filler {3} padded out long enough for the heap"
+	return "[{name}] [{o.inner.name}] [{filler}]"
+end 'clobber'
+
+function main() returns ExitCode
+	var c = Outer.create("third {40 + 4} padded out long enough for the heap")
+	print("{clobber(c, name: c.inner.name)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[third 44 padded out long enough for the heap] [replacement 9 padded out long enough for the heap] [filler 3 padded out long enough for the heap]
 ```

@@ -1,0 +1,243 @@
+// E3186. The parser files every call whose managed arguments name overlapping storage
+// (`StoragePath.overlaps`); this pass reports the pairs whose callee reassigns one of the two parameters
+// by reference, which the callee's own body decides (`reassignedParamMask`).
+export type OverlappingArgument
+	export let column as ParamCount
+	export let label as ByteArray
+	export let text as ByteArray
+	export let line as LineNumber
+	export let sourceColumn as ColumnNumber
+
+	export static function create(column ParamCount, label ByteArray, text ByteArray, line LineNumber, sourceColumn ColumnNumber) returns OverlappingArgument
+		return Self{column: column, label: label, text: text, line: line, sourceColumn: sourceColumn}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.bytes(self.label)
+		writer.bytes(self.text)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.sourceColumn as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns OverlappingArgument throws LibraryCacheDamage
+		let f_column = (try reader.unsigned()) as ParamCount
+		let f_label = try reader.bytes()
+		let f_text = try reader.bytes()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_sourceColumn = (try reader.unsigned()) as ColumnNumber
+
+		return Self{column: f_column, label: f_label, text: f_text, line: f_line, sourceColumn: f_sourceColumn}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(OverlappingArgument) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'OverlappingArgument'
+
+export type ArgumentOverlapSite
+	export let callResult as ValueId
+	export let first as OverlappingArgument
+	export let second as OverlappingArgument
+
+	export static function create(callResult ValueId, first OverlappingArgument, second OverlappingArgument) returns ArgumentOverlapSite
+		return Self{callResult: callResult, first: first, second: second}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.callResult as CacheUnsigned)
+		self.first.cacheWrite(writer)
+		self.second.cacheWrite(writer)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ArgumentOverlapSite throws LibraryCacheDamage
+		let f_callResult = (try reader.unsigned()) as ValueId
+		let f_first = try OverlappingArgument.cacheRead(reader)
+		let f_second = try OverlappingArgument.cacheRead(reader)
+
+		return Self{callResult: f_callResult, first: f_first, second: f_second}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(ArgumentOverlapSite) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ArgumentOverlapSite'
+
+export type OverlappingPair
+	export let callLine as LineNumber
+	export let callColumn as ColumnNumber
+	export let first as OverlappingArgument
+	export let second as OverlappingArgument
+
+	export static function create(callLine LineNumber, callColumn ColumnNumber, first OverlappingArgument, second OverlappingArgument) returns OverlappingPair
+		return Self{callLine: callLine, callColumn: callColumn, first: first, second: second}
+	end 'create'
+
+	export function boundTo(callResult ValueId) returns ArgumentOverlapSite
+		return ArgumentOverlapSite.create(callResult, first: self.first, second: self.second)
+	end 'boundTo'
+end 'OverlappingPair'
+
+export typealias OverlappingPairArray = Array with OverlappingPair
+
+export typealias ArgumentOverlapSiteArray = Array with ArgumentOverlapSite
+
+// @generated library-cache begin
+module function cacheWriteArgumentOverlapSiteArray(writer LibraryCacheWriter, value ArgumentOverlapSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteArgumentOverlapSiteArray'
+
+module function cacheReadArgumentOverlapSiteArray(reader LibraryCacheReader) returns ArgumentOverlapSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ArgumentOverlapSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try ArgumentOverlapSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadArgumentOverlapSiteArray'
+
+// @generated library-cache end
+
+export union StorageStep
+	field(name ByteArray)
+	element
+
+	function meets(other StorageStep) returns bool
+		match self 'step'
+			field(name) then return other.namesField(name)
+			element then return other.isElement()
+		end 'step'
+	end 'meets'
+
+	function namesField(name ByteArray) returns bool
+		return match self 'step'
+			field(own) gives own.equals(name)
+			element gives false
+		end 'step'
+	end 'namesField'
+
+	function isElement() returns bool
+		return match self 'step'
+			field gives false
+			element gives true
+		end 'step'
+	end 'isElement'
+end 'StorageStep'
+
+export typealias StorageStepArray = Array with StorageStep
+
+export type StoragePath
+	export let root as ByteArray
+	export let steps as StorageStepArray
+	export let text as ByteArray
+
+	export static function create(root ByteArray, steps StorageStepArray, text ByteArray) returns StoragePath
+		return Self{root: root, steps: steps, text: text}
+	end 'create'
+
+	export function overlaps(other StoragePath) returns bool
+		if not self.root.equals(other.root) 'differentRoots'
+			return false
+		end 'differentRoots'
+
+		var shared = other.steps.count()
+
+		if self.steps.count() < shared 'mineIsShorter'
+			shared = self.steps.count()
+		end 'mineIsShorter'
+
+		for k in 0 upto shared 'eachSharedStep'
+			let mine = try self.steps.get(k) otherwise panic("StoragePath.overlaps: steps.get OOB at {k} below the shared count")
+			let theirs = try other.steps.get(k) otherwise panic("StoragePath.overlaps: other.steps.get OOB at {k} below the shared count")
+
+			if not mine.meets(theirs) 'divergent'
+				return false
+			end 'divergent'
+		end 'eachSharedStep'
+
+		return true
+	end 'overlaps'
+end 'StoragePath'
+
+export function checkArgumentOverlaps(project Project, module MaxonModule, funcNames FunctionNameIndex)
+	for func in module.functions 'eachFunc'
+		if func.argumentOverlaps.count() == 0 'filedNothing'
+			continue
+		end 'filedNothing'
+
+		let callees = directCalleesByResult(module, func: func)
+
+		for site in func.argumentOverlaps 'eachSite'
+			reportArgumentOverlap(project, funcNames: funcNames, func: func, site: site, callees: callees)
+		end 'eachSite'
+	end 'eachFunc'
+end 'checkArgumentOverlaps'
+
+typealias CalleeByResultMap = Map with (ValueId, readonly ByteArray)
+
+function directCalleesByResult(module MaxonModule, func IrFunction) returns CalleeByResultMap
+	var found = CalleeByResultMap.create()
+
+	for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
+		let block = module.blockAtPosition(func, position: blockPosition)
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = module.getOp(opIdx)
+
+			if maxonOpCalleeKind(op) != MaxonCalleeKind.direct 'namesNoDirectCallee'
+				continue
+			end 'namesNoDirectCallee'
+
+			match op 'call'
+				call(result, callee, _, _, _, _, _, _) then found.upsert(result, value: callee)
+				tryCall(result, _, callee, _, _, _, _, _, _) then found.upsert(result, value: callee)
+				asyncCall or
+				serviceSend then break
+				default panic("directCalleesByResult: '{String.from(func.name)}' holds a direct call op this pass does not read — a site is filed only at a plain call, and a try rewrites it in place")
+			end 'call'
+		end 'eachOp'
+	end 'eachBlock'
+
+	return found
+end 'directCalleesByResult'
+
+function reportArgumentOverlap(project Project, funcNames FunctionNameIndex, func IrFunction, site ArgumentOverlapSite, callees CalleeByResultMap)
+	let callee = try callees.get(site.callResult) otherwise panic("reportArgumentOverlap: '{String.from(func.name)}' filed an argument overlap at the call whose result is v{site.callResult}, where it holds no direct call — the parser files a site only at a call it is emitting, and the call op keeps that result")
+	let sig = try project.funcSignatures.get(callee) otherwise panic("reportArgumentOverlap: the call to '{String.from(callee)}' in '{String.from(func.name)}' has no signature in funcSignatures — a call op is checked against one before this pass runs")
+
+	let firstPosition = try argSlotPosition(sig.paramNames, argIndex: site.first.column, label: site.first.label) otherwise panic("reportArgumentOverlap: argument {site.first.column} (label '{String.from(site.first.label)}') fills no parameter of '{String.from(callee)}' — a call that slots no argument is refused before this pass runs")
+	let secondPosition = try argSlotPosition(sig.paramNames, argIndex: site.second.column, label: site.second.label) otherwise panic("reportArgumentOverlap: argument {site.second.column} (label '{String.from(site.second.label)}') fills no parameter of '{String.from(callee)}' — a call that slots no argument is refused before this pass runs")
+
+	let boundFunc = try funcNames.funcNamed(callee) otherwise panic("reportArgumentOverlap: the call to '{String.from(callee)}' in '{String.from(func.name)}' names no function of the module — a signature and a body are registered together")
+	let firstReassigned = maskHasParam(boundFunc.reassignedParamMask, param: firstPosition)
+	let secondReassigned = maskHasParam(boundFunc.reassignedParamMask, param: secondPosition)
+
+	if not firstReassigned and not secondReassigned 'noReassignedParameter'
+		return
+	end 'noReassignedParameter'
+
+	let anchored = site.second if firstReassigned else site.first
+	let blamed = site.first if firstReassigned else site.second
+	let blamedPosition = firstPosition if firstReassigned else secondPosition
+	let parameter = displayParamName(try sig.paramNames.get(blamedPosition) otherwise panic("reportArgumentOverlap: paramNames.get OOB at {blamedPosition} — the position came from `argSlotPosition` over this very column"))
+
+	reportPositioned(project, code: ErrorCode.argumentOverlapsWrittenParameter, message: argumentOverlapMessage(String.from(anchored.text), blamed: "argument '{String.from(blamed.text)}'", callee: String.from(unqualifiedMemberOf(overloadRegistrationBaseName(callee))), parameter: parameter), line: anchored.line, column: anchored.sourceColumn, filePath: func.sourceFilePath)
+end 'reportArgumentOverlap'
+
+export function argumentOverlapMessage(anchored String, blamed String, callee String, parameter String) returns String
+	return "argument '{anchored}' overlaps {blamed}, which '{callee}' reassigns (parameter '{parameter}') — one call may not hand a function storage it reassigns by reference together with another view of that storage. Pass '{anchored}.clone()'"
+end 'argumentOverlapMessage'

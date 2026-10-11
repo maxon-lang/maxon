@@ -139,7 +139,7 @@ type Accumulator
 end 'Accumulator'
 
 function main() returns ExitCode
-	let acc = Accumulator.create(0)
+	var acc = Accumulator.create(0)
 	acc.add(10)
 	acc.add(20)
 	acc.add(12)
@@ -203,7 +203,7 @@ type Value
 end 'Value'
 
 function main() returns ExitCode
-	let v = Value.create(21)
+	var v = Value.create(21)
 	v.double()
 	return v.get()
 end 'main'

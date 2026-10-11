@@ -1766,14 +1766,16 @@ end 'collectBlockSuccessorIds'
 module function lineEntryColumn(module TargetModule, func IrFunction, encoding FunctionEncodingFacts) returns BoolArray
 	var firstSpans = SpanIdArray.create()
 	firstSpans.refill(func.nextBlockId, value: NoSpanId)
-	var blockSites = InlineSiteRefArray.create()
-	blockSites.refill(func.nextBlockId, value: InlineSiteRef.none)
+	var openingSites = InlineSiteRefArray.create()
+	openingSites.refill(func.nextBlockId, value: InlineSiteRef.none)
 
 	for blockRef in func.blockRefs 'eachBlockOpening'
 		let block = try module.blocks.get(blockRef) otherwise panic("lineEntryColumn: blockRef from func.blockRefs not in module.blocks")
 		try firstSpans.set(block.id, value: firstSpanOf(module, block: block)) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' has id {block.id}, past the {func.nextBlockId} this function numbers")
-		try blockSites.set(block.id, value: block.inlineSite) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' has id {block.id}, past the {func.nextBlockId} this function numbers")
+		try openingSites.set(block.id, value: block.inlineSite) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' has id {block.id}, past the {func.nextBlockId} this function numbers")
 	end 'eachBlockOpening'
+
+	let blockSites = openingSites
 
 	var entered = BoolArray.create()
 	entered.refill(func.nextBlockId, value: false)
@@ -1833,7 +1835,7 @@ type LineWays
 	let predecessors as CsrGraph
 	let sites as InlineSiteRefArray
 	let lineClasses as BlockLineClassArray
-	let encoding as FunctionEncodingFacts
+	var encoding as FunctionEncodingFacts
 	export let entry as BlockId
 	var frontiers as LineFrontierArray
 	var reachesEntry as BoolArray

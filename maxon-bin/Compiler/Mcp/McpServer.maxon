@@ -207,7 +207,7 @@ function handleToolsCall(reqDoc JsonDoc, idNode JsonNodeId, paramsId JsonNodeId,
 end 'handleToolsCall'
 
 function handleRpcMessage(line String, exePath FilePath, devMode bool, debug DebugSessionSlot, fileMemos SharedFileMemoMap) returns RpcReply
-	let doc = try Json.parse(line) otherwise return unattributedRpcError(RpcStandardErrorCode.parseError, message: "Parse error - invalid JSON")
+	var doc = try Json.parse(line) otherwise return unattributedRpcError(RpcStandardErrorCode.parseError, message: "Parse error - invalid JSON")
 
 	return handleRpcDocument(doc, exePath: exePath, devMode: devMode, debug: debug, fileMemos: fileMemos)
 end 'handleRpcMessage'
@@ -317,7 +317,7 @@ end 'runMcpServer'
 // framing LSP and DAP do.
 function runMcpStdioServer(devMode bool, exePath FilePath) returns ExitCode
 	var stdin = Console.stdin()
-	let debug = DebugSessionSlot.create()
+	var debug = DebugSessionSlot.create(SerialMint.create())
 	var fileMemos = SharedFileMemoMap.create()
 
 	while true 'serverLoop'

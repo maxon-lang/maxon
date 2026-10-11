@@ -71,12 +71,14 @@ union DapWake
 end 'DapWake'
 
 type DapFrameReader
+	var stdin as Stdin
+
 	static function create() returns DapFrameReader
-		return Self{}
+		return Self{stdin: Console.stdin()}
 	end 'create'
 
 	export function next() returns LspIncoming
-		return readLspMessage().clone()
+		return readLspMessage(self.stdin).clone()
 	end 'next'
 end 'DapFrameReader'
 
@@ -104,7 +106,7 @@ export function runDapServer() returns ExitCode
 			adapter.noteSliceArmed()
 		end 'aProgramToWatch'
 
-		let ready = __Builtins.awaitAny(wakes)
+		let ready = wakes.awaitAny()
 		let woke = try wakes.remove(ready) otherwise panic("runDapServer: wakes.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		match await woke 'which'
@@ -149,7 +151,7 @@ end 'DapVariableRef'
 
 type DapSourceBreakpoints
 	export let path as FilePath
-	export let armed as DapBreakpointAskArray
+	export var armed as DapBreakpointAskArray
 
 	static function create(path FilePath, armed DapBreakpointAskArray) returns DapSourceBreakpoints
 		return Self{path: path, armed: armed}
@@ -173,7 +175,7 @@ type DapAdapter
 	var sliceArmed as bool
 
 	static function create() returns DapAdapter
-		return Self{writer: DapWriter.create(), debuggee: DebugSessionSlot.create(), lifecycle: DapLifecycle.idle, stopOnEntry: false, stoppedThread: DapMainThreadId, sourceBreakpoints: DapSourceBreakpointsArray.create(), functionBreakpoints: DapBreakpointAskArray.create(), frameRefs: DapFrameRefArray.create(), variableRefs: DapVariableRefArray.create(), renderedTrees: DebugValueTreeArray.create(), numbering: DapNumbering.countingFromOne(), serving: true, broken: false, sliceArmed: false}
+		return Self{writer: DapWriter.create(), debuggee: DebugSessionSlot.create(SerialMint.create()), lifecycle: DapLifecycle.idle, stopOnEntry: false, stoppedThread: DapMainThreadId, sourceBreakpoints: DapSourceBreakpointsArray.create(), functionBreakpoints: DapBreakpointAskArray.create(), frameRefs: DapFrameRefArray.create(), variableRefs: DapVariableRefArray.create(), renderedTrees: DebugValueTreeArray.create(), numbering: DapNumbering.countingFromOne(), serving: true, broken: false, sliceArmed: false}
 	end 'create'
 
 	function programState() returns DebugProgramState
@@ -246,7 +248,9 @@ type DapAdapter
 	end 'finish'
 
 	function watch()
-		match self.debuggee.hold 'which'
+		var holding = self.debuggee.hold
+
+		match holding 'which'
 			empty then panic("DapAdapter.watch: the adapter watches only while a launched program runs")
 			held(session) then self.watchSession(session)
 		end 'which'
@@ -310,7 +314,9 @@ type DapAdapter
 			return
 		end 'theProgramHasEnded'
 
-		match self.debuggee.hold 'which'
+		var holding = self.debuggee.hold
+
+		match holding 'which'
 			empty then self.refuseWithoutAProgram(request)
 			held(session) then try self.answerLive(request, session: session)
 		end 'which'
@@ -333,7 +339,9 @@ type DapAdapter
 			return
 		end 'alreadyLaunched'
 
-		match try dapLaunch(request.arguments) 'launched'
+		let serial = self.debuggee.serials.mint()
+
+		match try dapLaunch(request.arguments, serial: serial) 'launched'
 			refused(message) then self.writer.refuse(request, message: message)
 			launched(session, parkAtEntry) then self.adopt(request, session: session, parkAtEntry: parkAtEntry)
 		end 'launched'
@@ -434,7 +442,7 @@ type DapAdapter
 			asked.push(DapBreakpointRequest.ask(DapBreakpointAsk.create(DebugBreakTarget.fileLine(spelled, line: line as DebugLineNumber), condition: try dapBreakCondition(breakpoint), requested: DapRequestedLine.at(clientLine))))
 		end 'eachBreakpoint'
 
-		let armed = self.armReplacing(request, session: session, previous: self.sourceBreakpointsAt(path), asked: asked)
+		var armed = self.armReplacing(request, session: session, previous: self.sourceBreakpointsAt(path), asked: asked)
 		self.holdSourceBreakpoints(path, armed: armed)
 	end 'setSourceBreakpoints'
 
@@ -622,9 +630,9 @@ type DapAdapter
 
 	function respondFrameLocals(request DapRequest, session DebugToolSession, frame ElementIndex)
 		let held = (try self.frameRefs.get(frame) otherwise panic("DapAdapter.respondFrameLocals: a scope reference names a frame this stop handed out")).clone()
-		let answers = self.delivered(session, replies: session.conversation.localsOfFrame(held.frame, onTheStoppedThread: held.onTheStoppedThread), announceResume: false)
+		var answers = self.delivered(session, replies: session.conversation.localsOfFrame(held.frame, onTheStoppedThread: held.onTheStoppedThread), announceResume: false)
 
-		if let tree = try answers.trees.get(0) 'rendered'
+		if var tree = try answers.trees.get(0) 'rendered'
 			self.respondValues(request, tree: self.held(tree), indices: tree.roots)
 
 			return
@@ -685,9 +693,9 @@ type DapAdapter
 			return
 		end 'anUnknownContext'
 
-		let answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.print(expression)), announceResume: false)
+		var answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.print(expression)), announceResume: false)
 
-		if let tree = try answers.trees.get(0) 'rendered'
+		if var tree = try answers.trees.get(0) 'rendered'
 			let treeIndex = self.held(tree)
 			let root = try tree.roots.get(0) otherwise panic("DapAdapter.evaluate: a `value` reply carries exactly one root")
 			let value = tree.nodeAt(root)

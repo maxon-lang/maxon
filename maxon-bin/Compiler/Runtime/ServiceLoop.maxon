@@ -116,7 +116,7 @@ typealias SpawnedInstanceSet = Set with GenericInstanceId
 // ⚠ **THE ROSTER LOOKUP INSIDE THE WALK IS OVER DISTINCT SERVICE TYPES**, which is a count an author writes
 // by hand (`serviceTypeRoster`'s own bound) — unlike the INSTANTIATIONS, which grow with the program and are
 // therefore deduped through a set rather than a scan.
-function spawnedInstancesByService(module MaxonModule, services ByteArrayArray) returns SpawnedInstanceBuckets
+function spawnedInstancesByService(module MaxonModule, services NameRoster) returns SpawnedInstanceBuckets
 	var buckets = SpawnedInstanceBuckets.create()
 
 	for _ in services 'eachService'
@@ -138,7 +138,7 @@ function spawnedInstancesByService(module MaxonModule, services ByteArrayArray) 
 	return buckets
 end 'spawnedInstancesByService'
 
-function noteSpawnedInstance(op MaxonOp, func IrFunction, services ByteArrayArray, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
+function noteSpawnedInstance(op MaxonOp, func IrFunction, services NameRoster, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
 	if not maxonOpIsServiceSpawn(op) 'startsNoService'
 		return
 	end 'startsNoService'
@@ -151,7 +151,7 @@ end 'noteSpawnedInstance'
 
 // One `serviceSpawn`'s instantiation, into its service's bucket. A state standing at NO instantiation is a
 // monomorphic service's plain box and is bucketed by nobody — `buildServiceLoops` is where that is judged.
-function bucketSpawnedInstance(func IrFunction, spawnedType ByteArray, state ValueId, services ByteArrayArray, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
+function bucketSpawnedInstance(func IrFunction, spawnedType ByteArray, state ValueId, services NameRoster, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
 	let tag = try func.valueTags.get(state) otherwise panic("bucketSpawnedInstance: v{state} is not in '{String.from(func.name)}'s dense value-tag column")
 	let nameId = try func.valueNameIds.get(state) otherwise panic("bucketSpawnedInstance: v{state} is not in '{String.from(func.name)}'s dense value-name column")
 
@@ -161,7 +161,7 @@ function bucketSpawnedInstance(func IrFunction, spawnedType ByteArray, state Val
 	end 'stands'
 end 'bucketSpawnedInstance'
 
-function noteDistinctInstance(gid GenericInstanceId, spawnedType ByteArray, services ByteArrayArray, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
+function noteDistinctInstance(gid GenericInstanceId, spawnedType ByteArray, services NameRoster, buckets SpawnedInstanceBuckets, seen SpawnedInstanceSet)
 	if seen.contains(gid) 'alreadyBucketed'
 		return
 	end 'alreadyBucketed'
@@ -428,7 +428,7 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// does not have.
 	var args = ValueIdArray.create()
 	args.push(ServiceStateParam)
-	var payloadClasses = PayloadClassArray.create()
+	var payloadClasses = LoadedPayloadClassArray.create()
 	var payloadTypes = MaxonTypeArray.create()
 
 	for param in 0 upto decl.paramTypes.count() 'eachParam'
@@ -489,7 +489,7 @@ end 'buildMessageArm'
 type ReassignedPayloadCell
 	export let position as ParamCount
 	export let cell as ValueId
-	export let class as PayloadClass
+	export var class as PayloadClass
 	export let valueType as MaxonType
 
 	static function create(position ParamCount, cell ValueId, class PayloadClass, valueType MaxonType) returns Self
@@ -499,11 +499,13 @@ end 'ReassignedPayloadCell'
 
 typealias ReassignedPayloadCellArray = Array with ReassignedPayloadCell
 
+typealias LoadedPayloadClassArray = Array with readonly PayloadClass
+
 // A payload whose handler parameter is passed by reference is handed in a parameter cell, and
 // `reclaimReassignedPayloads` reads the cell's final value back into `args` before
 // `dropUnconsumedPayloads` runs: the handler may have replaced the value, and the drop must release
 // what the cell holds, not what the message carried.
-function spillReassignedPayloads(fn SynthesizedFunction, byReference ParamPositionMask, classes PayloadClassArray, types MaxonTypeArray, args ValueIdArray, site SynthesizedSite) returns ReassignedPayloadCellArray
+function spillReassignedPayloads(fn SynthesizedFunction, byReference ParamPositionMask, classes LoadedPayloadClassArray, types MaxonTypeArray, args ValueIdArray, site SynthesizedSite) returns ReassignedPayloadCellArray
 	var cells = ReassignedPayloadCellArray.create()
 
 	if byReference == NoParamPositions 'everyParameterByValue'
@@ -805,7 +807,7 @@ end 'emitFusedHandlerFlag'
 //
 // ⚠ The index is CALL-ALIGNED — the receiver is position 0 — which is the space `ParamConsumeInfo`'s columns
 // are recorded in (`Parser.recordScannedSignature` states it), and `args` is built in that same order.
-function dropUnconsumedPayloads(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, request EnumLayout, caseIndex CaseIndex, classes PayloadClassArray, args ValueIdArray, site SynthesizedSite)
+function dropUnconsumedPayloads(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, request EnumLayout, caseIndex CaseIndex, classes LoadedPayloadClassArray, args ValueIdArray, site SynthesizedSite)
 	let payloads = request.payloadsAt(caseIndex)
 
 	for param in 0 upto classes.count() 'eachPayload'

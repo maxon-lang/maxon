@@ -1664,7 +1664,7 @@ end 'encodeLeaRegLabel'
 // resolution patches this with no new relocation kind.
 export function encodeLeaRegFuncAddr(code ByteArray, callFixups CallFixupArray, dest X64Register, targetName ByteArray)
 	emitLeaRipRelPrefix(code, dest: dest)
-	callFixups.push(CallFixup.create(codeHere(code), targetName: targetName))
+	callFixups.push(CallFixup.addressOf(codeHere(code), targetName: targetName))
 	writeDword(code, value: 0)
 end 'encodeLeaRegFuncAddr'
 
@@ -1837,19 +1837,6 @@ export function encodePopReg(code ByteArray, reg X64Register)
 	code.push(OpcodePopBase + regLow3(gpr))
 end 'encodePopReg'
 
-// The bytes a stack grows by when its GUARD PAGE is touched, and therefore the largest frame a
-// single `sub rsp` may open. Windows commits a thread stack ONE PAGE AT A TIME, and only when the
-// guard page itself is accessed: a subtraction that carries rsp PAST the guard page never touches
-// it, so the first write below lands on reserved-but-uncommitted memory and the process dies with
-// 0xC0000005. A frame of exactly one page cannot skip it — the deepest address it reaches is
-// `rsp - 4096`, and the guard page starts no lower than that whatever rsp's offset within its own
-// page — so the walk is needed strictly PAST this size, which is why the test below is `>`.
-//
-// It is the x86-64 page size, an ARCHITECTURE fact about the address translation the OS grows
-// stacks in units of. The PE writer's section alignment happens to be the same number for an
-// entirely unrelated reason; tying the two together would be one constant standing for two facts.
-let StackGuardPageBytes = 4096 as StackSize
-
 // The register the page walk borrows. It must hold no live value AT THE PROLOGUE, which rules out
 // every argument register: the prologue runs before a single incoming argument has been captured.
 // r11 carries no argument in EITHER ABI the compiler emits for (Win64 rcx/rdx/r8/r9, SysV
@@ -1870,13 +1857,13 @@ let StackProbeScratchReg = X64Register.r11
 // currentGt, `__gt_morestack`'s gt). The threshold is what keeps those safe, and the certificate
 // is what turns "they are all small" from a comment that ages into a panic that fires.
 export function encodePrologue(code ByteArray, stackSize StackSize, probeScratchIsFree bool)
-	if stackSize > StackGuardPageBytes 'walk'
+	if stackSize > StackProbeStrideBytes 'walk'
 		if not probeScratchIsFree 'noScratch'
 			// Bound to a local because a member access on a module-level `let` inside an
 			// interpolation is an E2010 (`{StackProbeScratchReg.name}` is refused where
 			// `{scratch.name}` parses).
 			let scratch = StackProbeScratchReg
-			panic("encodePrologue: a {stackSize}-byte frame is past the {StackGuardPageBytes}-byte guard page, so it must walk the pages down — but this call site did not certify {scratch.name} free, and the walk has no other register to use. Reserve it in page-sized steps, or free a scratch register at that site and certify it.")
+			panic("encodePrologue: a {stackSize}-byte frame is past the {StackProbeStrideBytes}-byte guard page, so it must walk the pages down — but this call site did not certify {scratch.name} free, and the walk has no other register to use. Reserve it in page-sized steps, or free a scratch register at that site and certify it.")
 		end 'noScratch'
 
 		encodeStackProbe(code, stackSize: stackSize)
@@ -1911,12 +1898,12 @@ end 'encodePrologue'
 // with the walk.
 //
 // ⛔⛔ **NOT ONE BYTE IS TOUCHED BELOW THE FRAME BASE, AND THAT IS WHAT THE TEST-BEFORE-TOUCH SHAPE
-// BUYS.** A walk that touched first and compared after overshot the base by up to a page whenever the
-// frame is not a whole number of pages. On an OS-grown stack that costs a spare committed page; on a
-// GREEN THREAD's stack it is a SIGSEGV, because that stack is an exact mmap'd region whose size the
-// prologue's guard reserved from `frameBytes` alone — an overshoot walks off the bottom of it.
-// The walk still covers every page: consecutive touches are one page apart, and the base is less than
-// a page below the last of them, so no page is stepped over.
+// BUYS.** A walk that touched first and compared after overshot the base by up to a page whenever
+// the frame is not a whole number of pages. On an OS-grown stack that costs a spare committed page;
+// on a GREEN THREAD's stack it is a write below the stack — for a pooled stack, into its neighbour
+// — because that stack is an exact region whose size the prologue's guard reserved from
+// `frameBytes` alone. The walk still covers every page: consecutive touches are one page apart, and
+// the base is less than a page below the last of them, so no page is stepped over.
 //
 // ⚠ EMITTED ON EVERY x64 OS, NOT ONLY WINDOWS. Linux's default guard gap is 256 pages, so an OS
 // thread's stack is already safe there and this walk is redundant on that lane — but touching pages
@@ -1932,7 +1919,7 @@ function encodeStackProbe(code ByteArray, stackSize StackSize)
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: StackProbeScratchReg, imm: stackSize as Imm32)
 
 	let walkStart = code.count()
-	encodeRspAdjust(code, ext: Grp1ExtSub, amount: StackGuardPageBytes)
+	encodeRspAdjust(code, ext: Grp1ExtSub, amount: StackProbeStrideBytes)
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rsp, src: StackProbeScratchReg, wide: true)
 
 	// UNSIGNED `jbe`: these are addresses, and a stack near the top of the address space would read
@@ -2885,7 +2872,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 		lineRows.openBlock(block.id, site: block.inlineSite)
 
 		if isFirstBlock and emitGuard 'guard'
-			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: frame.frameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
+			emitGtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: frame.frameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.runtimeEntry if encoding.pinsItsThread else GtGuardSite.functionEntry, target: target)
 
 			// Everything the guard emitted is where an asynchronous stop may NOT land — see
 			// `FunctionCodeChunk.asyncUnsafePrefixBytes`. Read off the buffer rather than re-derived from the
@@ -2934,14 +2921,16 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
 
 	// A function may be stopped where it stands exactly when the stack guard applies to it
-	// (`mightGuard`). Not `emitGuard`: a call-free loop that spills nothing reserves no frame and
-	// carries no guard, and it is exactly the function asynchronous preemption exists to stop. The
-	// safe-point predicate tests the stack pointer against `GtRuntime.gtAsyncPreemptMargin` itself.
-	chunk.asyncPreemptible = mightGuard
+	// (`mightGuard`) and it does not pin its thread (`GtGuardSite.runtimeEntry`). Not `emitGuard`: a
+	// call-free loop that spills nothing reserves no frame and carries no guard, and it is exactly the
+	// function asynchronous preemption exists to stop. The safe-point predicate tests the stack
+	// pointer against `GtRuntime.gtAsyncPreemptMargin` itself.
+	chunk.asyncPreemptible = mightGuard and not encoding.pinsItsThread
 	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
 
 	// Provenance, not `mightGuard`: a guarded cascade is still scaffolding to the debugger.
 	chunk.compilerScaffolding = encoding.compilerScaffolding
+	chunk.spendsCallerStack(frame.callStackBytes(), checks: emitGuard)
 
 	// Gated on `--coverage` rather than on debug info: the two are independent channels, and this one is
 	// empty for an ordinary build because no `covInc` was emitted to fill it.
@@ -3044,13 +3033,13 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
-	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, spellings: project.stdlibShadowSpellings))
+	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, spellings: project.shadowRoster.spellings))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in.
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
-	code.append(buildInlineFrameTableBytes(inlineFrames, spellings: project.stdlibShadowSpellings))
+	code.append(buildInlineFrameTableBytes(inlineFrames, spellings: project.shadowRoster.spellings))
 
 	resolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 

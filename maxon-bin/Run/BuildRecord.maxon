@@ -91,7 +91,7 @@ end 'NamedValue'
 
 type RecordLine
 	export let label as RecordLabel
-	export let fields as StringArray
+	export var fields as StringArray
 
 	static function create(label RecordLabel, fields StringArray) returns RecordLine
 		return Self{label: label, fields: fields}
@@ -116,8 +116,8 @@ export type BuildRecordRequest
 	export let coverage as bool
 	export let debugStream as bool
 	export let asyncTrace as bool
-	export let productVersion as VersionComponentArray
-	export let defines as DefineArray
+	export var productVersion as VersionComponentArray
+	export var defines as DefineArray
 
 	export static function create(output FilePath, target Target, inputPaths MaxonSourcePathArray, debugInfo bool, coverage bool, debugStream bool, asyncTrace bool, productVersion VersionComponentArray, defines DefineArray) returns BuildRecordRequest
 		return Self{output: output, target: target, inputPaths: inputPaths, debugInfo: debugInfo, coverage: coverage, debugStream: debugStream, asyncTrace: asyncTrace, productVersion: productVersion, defines: defines}
@@ -690,7 +690,7 @@ function recordLinesIn(text String) returns RecordLineArray throws RunCacheError
 
 		let spelled = try fields.get(LabelField) otherwise panic("recordLinesIn: a split answers at least one piece")
 		let label = try RecordLabel.fromName(spelled) otherwise throw RunCacheError.unavailable("a line is labelled `{spelled}`, which names nothing a record holds")
-		let rest = try fields.slice(FirstFieldAfterTheLabel, endIndex: fields.count()) otherwise panic("recordLinesIn: a split answers at least one piece, so the fields after the label start within the array")
+		var rest = try fields.slice(FirstFieldAfterTheLabel, endIndex: fields.count()) otherwise panic("recordLinesIn: a split answers at least one piece, so the fields after the label start within the array")
 
 		lines.push(RecordLine.create(label, fields: rest))
 	end 'eachLine'

@@ -12,15 +12,15 @@ category: system
 `slab-census.md` says what the heap is HOLDING right now, by walking every live slot. That walk cannot see
 a box that was allocated and freed a microsecond later, and a phase whose whole cost is churn — a million
 short-lived boxes that leave the residency table exactly where they found it — is invisible to every level
-it reports. `builtins-mm-counters.md`'s `__Builtins.mmAllocTotal()` DOES see that churn, as one
+it reports. `builtins-mm-counters.md`'s `HeapStats.allocationsMade()` DOES see that churn, as one
 process-wide number, and attributes none of it.
 
-Two builtins split that one number by the allocation TAG.
+Two `HeapStats` readers split that one number by the allocation TAG.
 
-| Builtin | What it answers |
+| Reader | What it answers |
 |---|---|
-| `__Builtins.mmAllocTotalByTag(i)` | how many `__mm_alloc` calls bucket `i` has taken since the process started |
-| `__Builtins.mmAllocBytesByTag(i)` | how many bytes those calls ASKED FOR |
+| `HeapStats.allocationsTagged(i)` | how many `__mm_alloc` calls bucket `i` has taken since the process started |
+| `HeapStats.bytesTagged(i)` | how many bytes those calls ASKED FOR |
 
 ⭐⭐ **THE TALLY IS CUMULATIVE AND NEVER FALLS.** `__mm_alloc` steps a bucket and nothing else touches it —
 a free steps nothing, a scavenge steps nothing, a drop steps nothing. That is what makes it a CHURN figure
@@ -33,16 +33,21 @@ whose tag index is `i`; bucket 0 holds the UNTAGGED ones; bucket 2047 is the OVE
 allocation whose tag is 2047 or higher. `slab-census.md` owns the tags themselves — what a tag index means,
 and which type minted it.
 
-⭐⭐ **Σ OVER THE 2048 COUNT BUCKETS IS EXACTLY `__Builtins.mmAllocTotal()`.** Both count the same
+⭐⭐ **Σ OVER THE 2048 COUNT BUCKETS IS EXACTLY `HeapStats.allocationsMade()`.** Both count the same
 `__mm_alloc` calls, so the equality is not an approximation and it holds at every instant a program can
 read the two. It is the one relation the buckets can be checked against without naming a tag index, and
 `the-buckets-total-the-tracked-allocations` is the gate: a tally that misses an arrival breaks it low, and
 one that steps two buckets per allocation breaks it high.
 
-⚠ **AN UNTRACED BUILD ANSWERS 0 FOR EVERY BUCKET OF BOTH BUILTINS.** A tag exists only in a
+⚠ **AN UNTRACED BUILD ANSWERS 0 FOR EVERY BUCKET OF BOTH READERS.** A tag exists only in a
 `--debugstream` build — it is carried by the packed word that build prepends to each box — so there is
-nothing to index by, and the stepping is not compiled at all. The builtins remain callable, and answer the
+nothing to index by, and the stepping is not compiled at all. The readers remain callable, and answer the
 honest 0 rather than a figure the program would have to know not to believe.
+
+The readers are `stdlib/HeapStats.maxon`'s public face of the runtime intrinsics
+`__Builtins.mmAllocTotalByTag(i)` and `__Builtins.mmAllocBytesByTag(i)`, which only a source file under
+`stdlib/` or `runtime/` may call (E3185). The two arity cases at the end are about those intrinsics
+themselves, so they compile in the library tier.
 
 ⚠ **THE PROGRAM CANNOT NAME ITS OWN TAG INDEX.** A tag is minted by the compiler, so a case pinned to a
 number would be re-minted by every type the tree adds ahead of the one under test. Every case below states
@@ -59,16 +64,14 @@ census and the tag names.
 ## Tests
 
 <!-- test: allocations-by-tag.a-tagged-population-raises-one-bucket-by-N -->
-RED: the pre-change tree knows no `__Builtins.mmAllocTotalByTag`, so the case dies at the unknown
-`__Builtins` member with E3004 (`callUnknownFunction`) and never runs. Once the builtins exist, a
-population of N widgets built between two readings must raise exactly one bucket by exactly N, must lower
+A population of N widgets built between two readings must raise exactly one bucket by exactly N, must lower
 none, and must raise that bucket's byte column too — a count column wired to a byte column, or either one
 stepped by the wrong amount, fails here.
 <!-- MmTrace -->
 ```maxon
 typealias WidgetField = int(0 to 65536)
-typealias Tally = int(0 to u64.max)
-typealias TallyArray = Array with Tally
+typealias CountSnapshot = Array with HeapCount
+typealias ByteSnapshot = Array with HeapBytes
 
 let Population = 64
 let TallyBuckets = 2048
@@ -88,21 +91,21 @@ function main() returns ExitCode
 	var holder = Widgets.create()
 	holder.reserve(Population)
 
-	var beforeCounts = TallyArray.create()
+	var beforeCounts = CountSnapshot.create()
 	beforeCounts.reserve(TallyBuckets)
 	for _ in 0 upto TallyBuckets 'sizeTheCountSnapshot'
 		beforeCounts.push(0)
 	end 'sizeTheCountSnapshot'
 
-	var beforeBytes = TallyArray.create()
+	var beforeBytes = ByteSnapshot.create()
 	beforeBytes.reserve(TallyBuckets)
 	for _ in 0 upto TallyBuckets 'sizeTheByteSnapshot'
 		beforeBytes.push(0)
 	end 'sizeTheByteSnapshot'
 
 	for i in 0 upto TallyBuckets 'snapshot'
-		try beforeCounts.set(i, value: __Builtins.mmAllocTotalByTag(i)) otherwise panic("the snapshot is sized to every bucket")
-		try beforeBytes.set(i, value: __Builtins.mmAllocBytesByTag(i)) otherwise panic("the snapshot is sized to every bucket")
+		try beforeCounts.set(i, value: HeapStats.allocationsTagged(i)) otherwise panic("the snapshot is sized to every bucket")
+		try beforeBytes.set(i, value: HeapStats.bytesTagged(i)) otherwise panic("the snapshot is sized to every bucket")
 	end 'snapshot'
 
 	for k in 0 upto Population 'buildWidgets'
@@ -113,7 +116,7 @@ function main() returns ExitCode
 	var biggestIndex = 0
 	for i in 0 upto TallyBuckets 'compare'
 		let was = try beforeCounts.get(i) otherwise panic("the snapshot is sized to every bucket")
-		let now = __Builtins.mmAllocTotalByTag(i)
+		let now = HeapStats.allocationsTagged(i)
 
 		if now < was 'aBucketFell'
 			return 2
@@ -131,7 +134,7 @@ function main() returns ExitCode
 
 	let bytesWere = try beforeBytes.get(biggestIndex) otherwise panic("the snapshot is sized to every bucket")
 
-	if __Builtins.mmAllocBytesByTag(biggestIndex) <= bytesWere 'theBucketsBytesDidNotRise'
+	if HeapStats.bytesTagged(biggestIndex) <= bytesWere 'theBucketsBytesDidNotRise'
 		return 3
 	end 'theBucketsBytesDidNotRise'
 
@@ -359,10 +362,8 @@ mm_free ArrayRecord #1
 ```
 
 <!-- test: allocations-by-tag.the-buckets-total-the-tracked-allocations -->
-RED: the pre-change tree refuses the unknown `__Builtins.mmAllocTotalByTag` member with E3004
-(`callUnknownFunction`) before anything runs. The relation the case gates afterwards is Σ over the 2048
-count buckets equals `__Builtins.mmAllocTotal()`, asked at two points with a population built between
-them — so a tally that misses a whole family of arrivals is caught even when every bucket it does step
+The relation the case gates is Σ over the 2048 count buckets equals `HeapStats.allocationsMade()`, asked at
+two points with a population built between them — so a tally that misses a whole family of arrivals is caught even when every bucket it does step
 moves by the right amount. The sum accumulates into a scalar rather than an array, because an array that
 grew mid-walk would allocate between the two figures being compared.
 <!-- MmTrace -->
@@ -387,10 +388,10 @@ function main() returns ExitCode
 	var holder = Widgets.create()
 	holder.reserve(Population)
 
-	let totalBefore = __Builtins.mmAllocTotal()
+	let totalBefore = HeapStats.allocationsMade()
 	var sumBefore = 0
 	for i in 0 upto TallyBuckets 'totalTheBucketsBefore'
-		sumBefore = sumBefore + __Builtins.mmAllocTotalByTag(i)
+		sumBefore = sumBefore + HeapStats.allocationsTagged(i)
 	end 'totalTheBucketsBefore'
 
 	if sumBefore != totalBefore 'theBucketsMissedTheTotalBeforeTheBuild'
@@ -401,10 +402,10 @@ function main() returns ExitCode
 		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
 	end 'buildWidgets'
 
-	let totalAfter = __Builtins.mmAllocTotal()
+	let totalAfter = HeapStats.allocationsMade()
 	var sumAfter = 0
 	for i in 0 upto TallyBuckets 'totalTheBucketsAfter'
-		sumAfter = sumAfter + __Builtins.mmAllocTotalByTag(i)
+		sumAfter = sumAfter + HeapStats.allocationsTagged(i)
 	end 'totalTheBucketsAfter'
 
 	if sumAfter != totalAfter 'theBucketsMissedTheTotalAfterTheBuild'
@@ -619,16 +620,14 @@ mm_free ArrayRecord #1
 ```
 
 <!-- test: allocations-by-tag.dropping-the-population-leaves-the-bucket -->
-RED: E3004 at the unknown `__Builtins.mmAllocTotalByTag` member (`callUnknownFunction`) is what the
-pre-change tree answers. The property afterwards is the one that separates a CHURN column from a LEVEL:
-the population is dropped, `__Builtins.mmAllocLive()` falls to prove the drop really happened, and the
+The property is the one that separates a CHURN column from a LEVEL:
+the population is dropped, `HeapStats.allocationsLive()` falls to prove the drop really happened, and the
 bucket the population raised does not move at all. A bucket the free path decrements would be a residency
 table wearing a churn column's name, and it is caught here and nowhere else in this file.
 <!-- MmTrace -->
 ```maxon
 typealias WidgetField = int(0 to 65536)
-typealias Tally = int(0 to u64.max)
-typealias TallyArray = Array with Tally
+typealias CountSnapshot = Array with HeapCount
 
 let Population = 64
 let TallyBuckets = 2048
@@ -648,14 +647,14 @@ function main() returns ExitCode
 	var holder = Widgets.create()
 	holder.reserve(Population)
 
-	var beforeCounts = TallyArray.create()
+	var beforeCounts = CountSnapshot.create()
 	beforeCounts.reserve(TallyBuckets)
 	for _ in 0 upto TallyBuckets 'sizeTheSnapshot'
 		beforeCounts.push(0)
 	end 'sizeTheSnapshot'
 
 	for i in 0 upto TallyBuckets 'snapshot'
-		try beforeCounts.set(i, value: __Builtins.mmAllocTotalByTag(i)) otherwise panic("the snapshot is sized to every bucket")
+		try beforeCounts.set(i, value: HeapStats.allocationsTagged(i)) otherwise panic("the snapshot is sized to every bucket")
 	end 'snapshot'
 
 	for k in 0 upto Population 'buildWidgets'
@@ -666,7 +665,7 @@ function main() returns ExitCode
 	var biggestIndex = 0
 	for i in 0 upto TallyBuckets 'compare'
 		let was = try beforeCounts.get(i) otherwise panic("the snapshot is sized to every bucket")
-		let now = __Builtins.mmAllocTotalByTag(i)
+		let now = HeapStats.allocationsTagged(i)
 
 		if (now - was) > biggestRise 'rose'
 			biggestRise = now - was
@@ -674,16 +673,16 @@ function main() returns ExitCode
 		end 'rose'
 	end 'compare'
 
-	let heldCount = __Builtins.mmAllocTotalByTag(biggestIndex)
-	let liveHolding = __Builtins.mmAllocLive()
+	let heldCount = HeapStats.allocationsTagged(biggestIndex)
+	let liveHolding = HeapStats.allocationsLive()
 
 	holder = Widgets.create()
 
-	if __Builtins.mmAllocTotalByTag(biggestIndex) != heldCount 'theCumulativeBucketMoved'
+	if HeapStats.allocationsTagged(biggestIndex) != heldCount 'theCumulativeBucketMoved'
 		return 1
 	end 'theCumulativeBucketMoved'
 
-	if __Builtins.mmAllocLive() >= liveHolding 'theDropFreedNothing'
+	if HeapStats.allocationsLive() >= liveHolding 'theDropFreedNothing'
 		return 2
 	end 'theDropFreedNothing'
 
@@ -904,10 +903,9 @@ mm_free ArrayRecord #69
 ```
 
 <!-- test: allocations-by-tag.an-untraced-build-tallies-nothing -->
-RED: the pre-change tree stops at E3004 on the unknown `__Builtins.mmAllocTotalByTag` member
-(`callUnknownFunction`). Afterwards this is the case that says an UNTRACED build answers 0 rather than a
+This is the case that says an UNTRACED build answers 0 rather than a
 figure nobody should believe. It carries no trace-capture marker, so it is compiled without
-`--debugstream` and there is no tag to index by; `__Builtins.mmAllocTotal()` still moves, which is what
+`--debugstream` and there is no tag to index by; `HeapStats.allocationsMade()` still moves, which is what
 separates "the program allocated nothing" from "the tally is switched off".
 ```maxon
 typealias WidgetField = int(0 to 65536)
@@ -930,24 +928,24 @@ function main() returns ExitCode
 	var holder = Widgets.create()
 	holder.reserve(Population)
 
-	let totalBefore = __Builtins.mmAllocTotal()
+	let totalBefore = HeapStats.allocationsMade()
 
 	for k in 0 upto Population 'buildWidgets'
 		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
 	end 'buildWidgets'
 
-	if __Builtins.mmAllocTotal() <= totalBefore 'theProgramAllocatedNothing'
+	if HeapStats.allocationsMade() <= totalBefore 'theProgramAllocatedNothing'
 		return 1
 	end 'theProgramAllocatedNothing'
 
 	for i in 0 upto TallyBuckets 'readCountBuckets'
-		if __Builtins.mmAllocTotalByTag(i) != 0 'aCountBucketWasTallied'
+		if HeapStats.allocationsTagged(i) != 0 'aCountBucketWasTallied'
 			return 2
 		end 'aCountBucketWasTallied'
 	end 'readCountBuckets'
 
 	for i in 0 upto TallyBuckets 'readByteBuckets'
-		if __Builtins.mmAllocBytesByTag(i) != 0 'aByteBucketWasTallied'
+		if HeapStats.bytesTagged(i) != 0 'aByteBucketWasTallied'
 			return 3
 		end 'aByteBucketWasTallied'
 	end 'readByteBuckets'
@@ -960,11 +958,11 @@ end 'main'
 ```
 
 <!-- test: allocations-by-tag.alloc-total-by-tag-arity-checked -->
-RED: the pre-change tree answers E3004 at the unknown `__Builtins` member (`callUnknownFunction`) rather
-than the arity diagnostic below. Both readers take exactly one argument — the bucket index. An intrinsic
-has no signature for the ordinary arity check to read, so each is refused by the same `builtinArity` check
+<!-- tier: stdlib -->
+Both intrinsics `HeapStats` reads through take exactly one argument — the bucket index. An intrinsic has
+no signature for the ordinary arity check to read, so each is refused by the same `builtinArity` check
 `awaitAny`/`readStdin` use, and each names ITSELF — which is what a copy-pasted dispatch arm carrying its
-neighbour's name would fail. Front-end only and target-neutral, so no marker.
+neighbour's name would fail. The subject is the intrinsic, so the case compiles in the library tier.
 ```maxon
 function main() returns ExitCode
 	return __Builtins.mmAllocTotalByTag() as ExitCode
@@ -975,8 +973,8 @@ error E3036: <fragment>:3:20: '__Builtins.mmAllocTotalByTag' takes exactly 1 arg
 ```
 
 <!-- test: allocations-by-tag.alloc-bytes-by-tag-arity-checked -->
-RED: the same E3004 at the unknown `__Builtins` member (`callUnknownFunction`) is what the pre-change tree
-reports. The byte reader is refused the same way and naming itself.
+<!-- tier: stdlib -->
+The byte intrinsic is refused the same way and names itself.
 ```maxon
 function main() returns ExitCode
 	return __Builtins.mmAllocBytesByTag() as ExitCode
@@ -984,4 +982,99 @@ end 'main'
 ```
 ```maxoncstderr
 error E3036: <fragment>:3:20: '__Builtins.mmAllocBytesByTag' takes exactly 1 argument, but 0 were given
+```
+
+<!-- test: allocations-by-tag.the-public-counters-see-a-population-arrive-and-leave -->
+The totals beside the buckets, read through the surface a program outside the library tiers reads: a
+population of N widgets built between two readings raises `HeapStats.bytesAllocated()` by at least N widgets'
+bytes, raises the calling thread's `HeapStats.thread()` allocations by at least N and its bytes by at least N
+widgets' bytes, and dropping the population raises its frees by at least N. Every figure is cumulative, so each
+is a lower bound: the holder's own buffers move them too.
+```maxon
+typealias WidgetField = int(0 to 65536)
+
+let Population = 1000
+
+type Widget
+	export var low as WidgetField
+	export var high as WidgetField
+
+	static function create(low WidgetField, high WidgetField) returns Widget
+		return Widget{low: low, high: high}
+	end 'create'
+end 'Widget'
+
+typealias Widgets = Array with Widget
+
+function main() returns ExitCode
+	var holder = Widgets.create()
+	holder.reserve(Population)
+
+	let bytesBefore = HeapStats.bytesAllocated()
+	let threadBefore = HeapStats.thread()
+
+	for k in 0 upto Population 'buildWidgets'
+		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
+	end 'buildWidgets'
+
+	let bytesAfter = HeapStats.bytesAllocated()
+	let threadHolding = HeapStats.thread()
+
+	holder = Widgets.create()
+
+	let threadAfter = HeapStats.thread()
+	let widgetBytes = Population * sizeof(Widget)
+	var score = 0
+
+	if bytesAfter - bytesBefore >= widgetBytes 'theProcessCountedTheBytes'
+		score = score + 1
+	end 'theProcessCountedTheBytes'
+
+	if threadHolding.allocations - threadBefore.allocations >= Population 'theThreadCountedTheAllocations'
+		score = score + 2
+	end 'theThreadCountedTheAllocations'
+
+	if threadHolding.bytes - threadBefore.bytes >= widgetBytes 'theThreadCountedTheBytes'
+		score = score + 4
+	end 'theThreadCountedTheBytes'
+
+	if threadAfter.frees - threadHolding.frees >= Population 'theThreadCountedTheFrees'
+		score = score + 8
+	end 'theThreadCountedTheFrees'
+
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: allocations-by-tag.a-scalar-reading-allocates-nothing-and-a-record-reading-allocates-its-record -->
+A counter a bracket reads must not be moved by the read. The scalar readings (`threadAllocations()`,
+`threadBytes()`, `processAllocations()`, `processBytes()`) answer a number, so two of them back to back see the same
+figure; `HeapStats.thread()` answers a `HeapActivity` record, so the second of two back-to-back readings has
+already counted the first one's record.
+```maxon
+function main() returns ExitCode
+	let threadFirst = HeapStats.threadAllocations()
+	let threadSecond = HeapStats.threadAllocations()
+	let bytesFirst = HeapStats.threadBytes()
+	let bytesSecond = HeapStats.threadBytes()
+	let before = HeapStats.thread()
+	let after = HeapStats.thread()
+	var score = 0
+
+	if threadSecond == threadFirst and bytesSecond == bytesFirst 'aScalarReadingMovedNothing'
+		score = score + 1
+	end 'aScalarReadingMovedNothing'
+
+	if after.allocations > before.allocations and after.bytes > before.bytes 'aRecordReadingCountedItself'
+		score = score + 2
+	end 'aRecordReadingCountedItself'
+
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+3
 ```

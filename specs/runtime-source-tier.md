@@ -37,7 +37,8 @@ The privileges are what a runtime needs and nothing else:
 stops at the parser: each asserts what the tier ADMITS or REFUSES, and every one would still pass if the
 compiler threw the body away immediately afterwards. What proves otherwise is a REAL family — the wall
 clock, `runtime/Clock.maxon`'s `__clock_now_unix_s` — reached from a user program through
-`__Builtins.currentUnixTimeSeconds()` and pinned there under a ```RequiredRuntime block. No source file
+`WallClock.nowUnixSeconds()`, whose body is the `__Builtins.currentUnixTimeSeconds()` intrinsic, and pinned
+there under a ```RequiredRuntime block. No source file
 outside the tier may CALL a runtime entry, so a call the compiler emits is the only root a program can
 deliberately reach one through, and a family that has one is the only honest way to watch the far end.
 

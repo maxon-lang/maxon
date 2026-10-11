@@ -59,6 +59,7 @@ let GtSwitchTibScratchReg = X64Register.rax
 // once here.
 module let TibStackBaseDisp = 0x08 as Imm32  // NT_TIB.StackBase  — gs:[0x08]
 module let TibStackLimitDisp = 0x10 as Imm32  // NT_TIB.StackLimit — gs:[0x10]
+let TebDeallocationStackDisp = 0x1478 as Imm32
 
 // The NT_TIB stack bounds are a PAIR (base, limit); these two helpers spell that two-word structure ONCE for
 // the three sites that move it — the context switch's save + load, and the shim's after-call restore (which is
@@ -69,6 +70,8 @@ function emitSaveTibIntoGt(code ByteArray, gtReg X64Register, scratch X64Registe
 	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackBase as Imm32, srcReg: scratch, wide: true)
 	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackLimitDisp, wide: true)
 	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackLimit as Imm32, srcReg: scratch, wide: true)
+	encodeMovRegGsAbs(code, dest: scratch, disp: TebDeallocationStackDisp, wide: true)
+	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibDeallocation as Imm32, srcReg: scratch, wide: true)
 end 'emitSaveTibIntoGt'
 
 function emitLoadTibFromGt(code ByteArray, gtReg X64Register, scratch X64Register)
@@ -76,6 +79,8 @@ function emitLoadTibFromGt(code ByteArray, gtReg X64Register, scratch X64Registe
 	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: scratch, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: scratch, base: gtReg, disp: GtOffTibStackLimit as Imm32, wide: true)
 	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: scratch, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: scratch, base: gtReg, disp: GtOffTibDeallocation as Imm32, wide: true)
+	encodeMovGsAbsReg(code, disp: TebDeallocationStackDisp, srcReg: scratch, wide: true)
 end 'emitLoadTibFromGt'
 
 function emitX64CarryLastError(code ByteArray, gtReg X64Register, os Os, direction GtLastErrorDirection)
@@ -139,55 +144,6 @@ module function x64OsProbesStackBounds(os Os) returns bool
 	end 'os'
 end 'x64OsProbesStackBounds'
 
-// ⭐ **`__gt_morestack`'s PAGE SOURCE (step 5) — `rax = <new_size bytes>`, with `new_size` in r14.** The two
-// OSes agree on nothing here but the answer: Windows commits and reserves in one call, Linux maps anonymous
-// private pages the first touch faults in. Both leave the base in rax, which is what lets step 5 read one
-// register whichever lane it is on.
-function emitGtMorestackAllocate(code ByteArray, iatRelocs RelocationArray, os Os)
-	match x64OsCallKind(os) 'route'
-		importCall then emitGtMorestackVirtualAlloc(code, iatRelocs: iatRelocs)
-		syscall then emitGtMorestackMmap(code)
-	end 'route'
-end 'emitGtMorestackAllocate'
-
-// `VirtualAlloc(NULL, new_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)`.
-function emitGtMorestackVirtualAlloc(code ByteArray, iatRelocs RelocationArray)
-	encodeRmRegDirect(code, opcode: OpcodeXorRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)  // lpAddress = NULL
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: GtMoreNewSizeReg, wide: true)  // dwSize = new_size
-	encodeMovRegImm32(code, dest: X64Register.r8, value: VirtualAllocCommitAndReserve)
-	encodeMovRegImm32(code, dest: X64Register.r9, value: PageReadWriteProtection)
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualAlloc))
-	encodeImportAnswerWidth(code, slot: IatSlot.VirtualAlloc)
-end 'emitGtMorestackVirtualAlloc'
-
-function emitGtMorestackMmap(code ByteArray)
-	encodeX64MmapAnon(code, length: X64MapLength.inRegister(GtMoreNewSizeReg))
-end 'emitGtMorestackMmap'
-
-// ⭐ **`__gt_stack_relocate`'s RELEASE — give back the old stack, whose base is in r12 and whose length is in
-// r13.** ⚠ **WINDOWS FORBIDS THE LENGTH AND POSIX REQUIRES IT**, which is `lowerOsFreePages`' split exactly:
-// `MEM_RELEASE` names a whole reservation by its base alone, while `munmap` names a range. Neither answer is
-// captured — a failed release leaves the routine nothing to do, and every pointer into the old stack has
-// already been rewritten.
-function emitGtStackRelease(code ByteArray, iatRelocs RelocationArray, os Os)
-	match x64OsCallKind(os) 'route'
-		importCall then emitGtStackVirtualFree(code, iatRelocs: iatRelocs)
-		syscall then emitGtStackMunmap(code)
-	end 'route'
-end 'emitGtStackRelease'
-
-function emitGtStackVirtualFree(code ByteArray, iatRelocs RelocationArray)
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: RelocOldBaseReg, wide: true)  // lpAddress = old_base
-	encodeMovRegImm32(code, dest: X64Register.rdx, value: VirtualFreeSizeMustBeZero)  // dwSize = 0
-	encodeMovRegImm32(code, dest: X64Register.r8, value: VirtualFreeMemRelease)  // dwFreeType = MEM_RELEASE
-	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualFree))
-end 'emitGtStackVirtualFree'
-
-function emitGtStackMunmap(code ByteArray)
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: RelocOldBaseReg, wide: true)
-	encodeX64MunmapBaseInRdi(code, length: X64MapLength.inRegister(RelocOldSizeReg))
-end 'emitGtStackMunmap'
-
 // Repoint the NT_TIB at the single SYSTEM stack `[topReg - GtSystemStackSize, topReg)` — `gs:[0x08] = top`,
 // `gs:[0x10] = top - size`. The two sites that switch a kernel call onto the system stack — the syscall shim
 // (before an `iatCall`) and `__gt_morestack` (step 3, for its VirtualAlloc and the relocation's VirtualFree) —
@@ -198,6 +154,7 @@ function emitRepointTibToSystemStack(code ByteArray, topReg X64Register)
 	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: topReg, wide: true)
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: topReg, imm: GtSystemStackSize as Imm32)
 	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: topReg, wide: true)
+	encodeMovGsAbsReg(code, disp: TebDeallocationStackDisp, srcReg: topReg, wide: true)
 end 'emitRepointTibToSystemStack'
 
 // The scratch registers the trampoline holds across the straight-line body: r12 = the GT (callee-saved, so it
@@ -321,7 +278,9 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 
 	code.push(OpcodeRet)
 
-	return FunctionCodeChunk.createWith(GtContextSwitchName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(GtContextSwitchName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	chunk.leavesCallerStack(gtInitialFrameBytes(target) as StackSize)
+	return chunk
 end 'buildGtContextSwitchChunk'
 
 // `__gt_trampoline` — the entry a FRESH green thread `ret`s into on its first switch-in. NOT a normal call:
@@ -384,7 +343,9 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtSwitchFromReg, src: GtTrampGtReg, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: GtContextSwitchName)
 
-	return FunctionCodeChunk.createWith(GtTrampolineName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(GtTrampolineName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	chunk.leavesCallerStack(0)
+	return chunk
 end 'buildGtTrampolineChunk'
 
 // --- The Win32 syscall shim ---
@@ -1105,7 +1066,9 @@ function buildGtShimEnterChunk(target Target) returns FunctionCodeChunk
 	emitShimLockDepthStep(code, m: X64Register.rax, delta: OneMore)
 	code.push(OpcodeRet)
 
-	return FunctionCodeChunk.createWith(GtShimEnterName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(GtShimEnterName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create())
+	chunk.spendsCallerStack(StackWordBytes as StackSize, checks: false)
+	return chunk
 end 'buildGtShimEnterChunk'
 
 function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, slotIndex RelocSlotIndex)
@@ -1476,12 +1439,13 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: GtMoreNewSizeReg, src: GtMoreNewBaseReg, wide: true)  // new_size - need
 	encodeJcc(code, rel32Fixups: growFixups, cond: X64CondCode.below, targetBlockId: GrowDoubleLabel)
 
-	// Step 5: new_base = <this OS's page source>(new_size) ; r15 = new_base. A refusal is NULL from `VirtualAlloc`
+	// Step 5: new_base = __gt_stack_alloc(new_size) ; r15 = new_base. A refusal is NULL from `VirtualAlloc`
 	// and a negative errno from a raw `mmap`, so the sign test catches both — `__slab_assert_os_alloc`'s test.
-	emitGtMorestackAllocate(code, iatRelocs: iatRelocs, os: target.os)
-	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: argRegisterAt(0), src: GtMoreNewSizeReg, wide: true)
+	encodeCallDirect(code, callFixups: callFixups, targetName: GtStackAllocName)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64IntegerResultReg, src: X64IntegerResultReg, wide: true)
 	encodeJcc(code, rel32Fixups: growFixups, cond: X64CondCode.lessEqual, targetBlockId: GrowRefusedLabel)
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewBaseReg, src: X64Register.rax, wide: true)  // r15 = new_base
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewBaseReg, src: X64IntegerResultReg, wide: true)  // r15 = new_base
 
 	// Step 6: present the thread where it stands — `gt.sp` = the entry rsp, `gt.fp` = the live rbp — and move it.
 	// Writing the two words of a RUNNING thread is harmless: nothing reads them until its next switch-out
@@ -1540,7 +1504,9 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeX64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, route: x64OsCallKind(target.os), exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord, usesGt: true, target: target)
 	resolveChunkRel32Fixups(code, labelOffsets: growLabels, rel32Fixups: growFixups)
 
-	return FunctionCodeChunk.createWith(GtMorestackName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	var chunk = FunctionCodeChunk.createWith(GtMorestackName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	chunk.leavesCallerStack(StackWordBytes as StackSize)
+	return chunk
 end 'buildGtMorestackChunk'
 
 // The registers `__gt_stack_relocate` works in. The five persistent ones are callee-saved in the internal ABI, which
@@ -1566,7 +1532,7 @@ let RelocLinkReg = X64Register.r11
 // the caller has established that the live region plus the guard height fits.
 function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
-	var iatRelocs = RelocationArray.create()
+	var callFixups = CallFixupArray.create()
 
 	// rsp ≡ 8 on entry, so the pushes plus the shadow space must be a whole number of 16-byte units for the
 	// release call to find rsp aligned.
@@ -1628,10 +1594,13 @@ function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	if x64OsProbesStackBounds(target.os) 'republishTheBounds'
 		encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffTibStackBase as Imm32, srcReg: RelocNewHighReg, wide: true)
 		encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffTibStackLimit as Imm32, srcReg: RelocNewBaseReg, wide: true)
+		encodeStoreBaseDispReg(code, base: RelocGtReg, disp: GtOffTibDeallocation as Imm32, srcReg: RelocNewBaseReg, wide: true)
 	end 'republishTheBounds'
 
 	// Give the old stack back. Every pointer into it has been rewritten, so nothing that survives this can read it.
-	emitGtStackRelease(code, iatRelocs: iatRelocs, os: target.os)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: argRegisterAt(0), src: RelocOldBaseReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: argRegisterAt(1), src: RelocOldSizeReg, wide: true)
+	encodeCallDirect(code, callFixups: callFixups, targetName: GtStackFreeName)
 
 	encodeEpilogue(code, stackSize: ShadowSpaceBytes)
 
@@ -1641,7 +1610,10 @@ function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	end 'pop'
 
 	code.push(OpcodeRet)
-	return FunctionCodeChunk.createWith(GtStackRelocateName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs)
+
+	var chunk = FunctionCodeChunk.createWith(GtStackRelocateName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	chunk.spendsCallerStack((stackedBytes as StackSize) + ShadowSpaceBytes, checks: false)
+	return chunk
 end 'buildGtStackRelocateChunk'
 
 // The guard word of the GT in `gt` set to its stack's base plus the guard height — where every stack the thread
@@ -1731,7 +1703,7 @@ export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdat
 	// thread" → skip. The M is dead the moment it has answered, so it shares r11 with the GT.
 	emitLoadCurrentGtOrBail(code, rdataRelocs: rdataRelocs, fixups: guardFixups, mDest: ShimGtReg, gtDest: ShimGtReg, bail: GuardSkipLabel, os: target.os)
 
-	if site == GtGuardSite.mrtPanic 'withdrawARequest'
+	if not guardSiteMayPark(site) 'withdrawARequest'
 		emitGtBranchUnlessPreemptRequest(code, fixups: guardFixups, unlessRequested: GuardCompareLabel)
 		emitGtGuardWordRestore(code, gt: ShimGtReg, scratch: ShimGtRspReg, target: target)
 		guardLabels.place(GuardCompareLabel, value: codeHere(code))
@@ -1751,7 +1723,7 @@ export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdat
 	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: ShimGtRspReg, os: target.os)
 	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: ShimGtRspReg, disp: MOffSystemStackSP as Imm32, wide: true)
 
-	if site == GtGuardSite.functionEntry 'mayPark'
+	if guardSiteMayPark(site) 'mayPark'
 		encodeCallDirect(code, callFixups: callFixups, targetName: GtGuardTrippedName)
 		encodeJmpBackwardShort(code, targetOffset: guardTop as CodeOffset)
 	end 'mayPark' else 'mustNotPark'
@@ -1784,7 +1756,9 @@ function buildGtGuardTrippedChunk() returns FunctionCodeChunk
 	encodeJmpDirect(code, callFixups: callFixups, targetName: GtMorestackName)
 	resolveChunkRel32Fixups(code, labelOffsets: labels, rel32Fixups: fixups)
 
-	return FunctionCodeChunk.createWith(GtGuardTrippedName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(GtGuardTrippedName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	chunk.spendsCallerStack(x64GtPreemptArmStackBytes(), checks: false)
+	return chunk
 end 'buildGtGuardTrippedChunk'
 
 // ⭐⭐ **THE PREEMPT ARM: A REQUEST IS HONOURED ON THE GREEN THREAD's OWN STACK — Go's `newstack` preempt arm**,
@@ -1818,10 +1792,11 @@ function emitGtPreemptArm(code ByteArray, callFixups CallFixupArray) returns Sta
 	return (StackWordBytes + (StackFrameAlignment - StackWordBytes)) as StackSize + blockBytes
 end 'emitGtPreemptArm'
 
-// ⭐ **WHAT A HONOURED PREEMPTION REQUEST COSTS THE GREEN THREAD's STACK BELOW THE GUARD, BEFORE `__gt_preempt`
-// RUNS**: the guard's `call` return address and the arm, read off the arm's own emitter.
-// `requirePreemptionFitsTheGuardMargin` adds `__gt_preempt`'s tree to it.
-export function x64GtPreemptArmStackBytes() returns StackSize
+// ⭐ **WHAT A HONOURED PREEMPTION REQUEST COSTS THE GREEN THREAD's STACK BELOW THE GUARD, BEFORE
+// `__gt_preempt` RUNS**: the guard's `call` return address and the arm, read off the arm's own
+// emitter. `UnguardedChains.requireUnguardedChainsFitTheGuardMargin` adds `__gt_preempt`'s tree to
+// it.
+function x64GtPreemptArmStackBytes() returns StackSize
 	return StackWordBytes as StackSize + emitGtPreemptArm(ByteArray.create(), callFixups: CallFixupArray.create())
 end 'x64GtPreemptArmStackBytes'
 
@@ -2000,7 +1975,7 @@ end 'buildPreemptSelfRegisterChunk'
 // The import calls are direct, not shimmed: `__sysmon` is this chunk's only caller and it is not a
 // machine (`SchedRuntime.buildSysmon`), so it runs on a real OS-thread stack with no processor to
 // hand away.
-function buildPreemptMachineChunk() returns FunctionCodeChunk
+function buildPreemptMachineChunk(context HostContextLayout) returns FunctionCodeChunk
 	let SlotMachine = 0
 	let SlotHandle = 1
 	let SlotContext = 2
@@ -2024,7 +1999,7 @@ function buildPreemptMachineChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
 	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.SuspendThread))
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.SuspendThread)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: SuspendThreadFailed)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: context.suspendThreadFailed as MachineWord)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptUnlockLabel)
 
@@ -2032,8 +2007,8 @@ function buildPreemptMachineChunk() returns FunctionCodeChunk
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.r10, label: SchedPreemptContextLabel)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.r10, disp: 0, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotContext), srcReg: X64Register.r10, wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win64ContextControl)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: Win64ContextFlagsOffset as Imm32, srcReg: X64Register.rax, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: context.contextControl as MachineWord)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r10, disp: context.contextFlagsOffset as Imm32, srcReg: X64Register.rax, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r10, wide: true)
@@ -2045,14 +2020,14 @@ function buildPreemptMachineChunk() returns FunctionCodeChunk
 	// `__gt_preempt_safe(m, pc, sp)` — the third argument rides RAX, which is this compiler's own third
 	// argument register (`StdToX64Conversion.argRegisters`) and not Win64's.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r10, base: X64Register.rbp, disp: asm.slotDisp(SlotContext), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r10, disp: Win64ContextRipOffset as Imm32, wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: argRegisterAt(2), base: X64Register.r10, disp: Win64ContextRspOffset as Imm32, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r10, disp: context.contextRipOffset as Imm32, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: argRegisterAt(2), base: X64Register.r10, disp: context.contextRspOffset as Imm32, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotMachine), wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PreemptSafeName)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.r8, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: PreemptResumeLabel)
 
-	emitX64PreemptInject(asm, fileSlot: SlotContext, spOffset: Win64ContextRspOffset as Imm32, pcOffset: Win64ContextRipOffset as Imm32)
+	emitX64PreemptInject(asm, fileSlot: SlotContext, spOffset: context.contextRspOffset as Imm32, pcOffset: context.contextRipOffset as Imm32)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotHandle), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r10, wide: true)
@@ -2123,7 +2098,9 @@ function buildGtAsyncPreemptChunk() returns FunctionCodeChunk
 
 	_ = emitAsyncPreemptBody(code, callFixups: callFixups)
 
-	return FunctionCodeChunk.createWith(AsyncPreemptName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	var chunk = FunctionCodeChunk.createWith(AsyncPreemptName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	chunk.spendsCallerStack(x64GtAsyncPreemptStackBytes(), checks: false)
+	return chunk
 end 'buildGtAsyncPreemptChunk'
 
 // The trampoline's bytes, and the answer `x64GtAsyncPreemptStackBytes` measures itself with — one emitter, so
@@ -2373,7 +2350,7 @@ end 'buildLinuxPreemptHandlerChunk'
 // Append the hand-assembled GT chunks — called by BackendDispatch when the module spawns a green thread, alongside
 // `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other runtime chunk, so
 // `mrt_start` stays at `.text` offset 0.
-export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, target Target)
+export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, target Target, context HostContextLayout)
 	chunks.push(buildGtContextSwitchChunk(target))
 	chunks.push(buildGtTrampolineChunk())
 	chunks.push(buildGtGuardTrippedChunk())
@@ -2393,7 +2370,7 @@ export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, target T
 		chunks.push(buildGtAsyncPreemptChunk())
 
 		match targetPreemptDelivery(target) 'delivery'
-			threadSuspend then appendX64SuspendPreemptChunks(chunks)
+			threadSuspend then appendX64SuspendPreemptChunks(chunks, context: context)
 			signal then appendX64SignalPreemptChunks(chunks)
 			none then panic("appendX64GtRuntimeChunks: `targetStopsThreadsForPreemption` admitted {targetToString(target)}, which `targetPreemptDelivery` says has no delivery mechanism at all — the two have drifted")
 		end 'delivery'
@@ -2402,9 +2379,9 @@ end 'appendX64GtRuntimeChunks'
 
 // x64-windows: the monitor reads and writes the stopped thread's register file, and every exit closes its
 // window first (`SchedRuntime.ExitProcessGateName`).
-function appendX64SuspendPreemptChunks(chunks FunctionCodeChunkArray)
+function appendX64SuspendPreemptChunks(chunks FunctionCodeChunkArray, context HostContextLayout)
 	chunks.push(buildPreemptSelfRegisterChunk())
-	chunks.push(buildPreemptMachineChunk())
+	chunks.push(buildPreemptMachineChunk(context))
 	chunks.push(buildExitProcessGateChunk())
 end 'appendX64SuspendPreemptChunks'
 

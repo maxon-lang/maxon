@@ -29,6 +29,11 @@ built from non-constant narrow elements) is covered separately in
 `array-literal-element-size.md`, where it is corrected in a post-TypeResolution
 pass.
 
+`__ManagedMemory`, `.managed`, `__ManagedDirectory` and `__ManagedFile` are library-tier: only a source file
+under `stdlib/` or `runtime/` may name them (E3185 anywhere else). The cases below that inspect or write a
+buffer directly, or receive one the compiler synthesized, compile in the library tier
+(`<!-- tier: stdlib -->`).
+
 ### Every write is exactly `element_size` bytes wide — including the ERASES
 
 The stride is only half of it. An operation that VACATES a slot must erase
@@ -618,12 +623,12 @@ element declared `int(0 to 200)`, under the most natural name a byte alias has. 
 element's declared BOUNDS (`RangedAliasRegistry.holdsEveryByteInEveryFile`) — is what closes it, and
 `a-narrow-byte-does-not-admit-a-compiler-synthesized-buffer` at the end of this file is the case.
 
-⚠ **THE VIEW-SIDE BEHAVIOUR IS REACHABLE FROM A SPEC.** `String.addressableBytes()` is refused to any file
-not physically under `stdlib/` (`Parser.requireStdlibOnlyStringMethod`), and the spec runner stages every
-fragment outside `stdlib/`. But the element is EVERY compiler-synthesized byte buffer, and three of its
-producers are written in ORDINARY USER SOURCE (`__ManagedDirectory.filename`/`currentPath`,
-`__Builtins.commandLineArg`), so an arriving `Array with __ManagedByte` is four keystrokes away from any
-spec fragment. The last two sections of this file are those cases.
+⚠ **THE VIEW-SIDE BEHAVIOUR IS REACHABLE FROM A SPEC.** `String.addressableBytes()` is a `module` member of
+`stdlib/String.maxon`, so no file outside `stdlib/` can call it (E3008). But the element is EVERY
+compiler-synthesized byte buffer, and three of its producers are library-tier statics
+(`__ManagedDirectory.filename`/`currentPath`, `__Builtins.commandLineArg`), so an arriving
+`Array with __ManagedByte` is one call away from any library-tier case (`<!-- tier: stdlib -->`). The last
+two sections of this file are those cases.
 
 <!-- test: byte-packed-alias-is-not-interchangeable-with-byte -->
 ### Two byte-packed aliases are still two types
@@ -735,6 +740,7 @@ Hello 1
 ```
 
 <!-- test: a-wide-byte-still-reads-a-compiler-synthesized-buffer -->
+<!-- tier: stdlib -->
 ### A buffer the COMPILER minted answers to no file's `Byte` — not even the file that asked for it
 The case above proves a STDLIB MODULE's buffer survives a wide `Byte`. This one proves the
 harder half: a buffer that no source line describes at all. `__ManagedDirectory.currentPath()` is a
@@ -745,7 +751,7 @@ there is nothing here for a declaration to decide, and it wears the compiler's o
 
 ⚠ **PER-FILE SCOPING IS NOT THE WEAKER FORM OF THAT CURE, IT IS A DIFFERENT ANSWER, AND IT IS WRONG.**
 Contest-scoping the element to the PARSING file relocates the defect rather than removing it: this
-program is the user's own file, so the buffer would take the user's `Byte` and
+program's own file declares a `Byte` of its own, so the buffer would take that `Byte` and
 `String.init(managed)` would refuse it:
 `E3005 argument type mismatch for 'managed': expected '__ManagedMemory', got 'Array_Byte$0_1000'`.
 Only an element the program cannot name at all ends it.
@@ -1021,6 +1027,7 @@ error E2015: <fragment>:6:10: Unsupported: a `b"…"` byte-string literal in a p
 ```
 
 <!-- test: a-buffer-field-strides-its-declaring-files-byte -->
+<!-- tier: stdlib -->
 ### A `__ManagedMemory` FIELD strides its DECLARING file's `Byte`, not its reader's
 `ProgramSignatures.declaredSlotType` resolves a slot's compiler-minted alias against the file that
 DECLARED the slot. `holder.maxon` declares no `Byte`, so `Holder.buf` is a byte-PACKED buffer for
@@ -1059,6 +1066,7 @@ end 'main'
 ```
 
 <!-- test: a-buffer-field-refuses-another-files-byte-at-the-construction -->
+<!-- tier: stdlib -->
 ### …and the disagreement lands LOUDLY, at the construction
 The same two files with the buffer handed IN rather than built inside `holder.maxon`. `main.maxon`'s
 `c.bytes()` is its OWN `Byte`, two bytes wide, and the field is one byte wide — so the two
@@ -1198,6 +1206,7 @@ downstream"*), and it too has a distinguishing case —
 `overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate`, at the end of this file.
 
 <!-- test: a-synthesized-buffer-crosses-every-declared-byte-buffer-door -->
+<!-- tier: stdlib -->
 ### One synthesized buffer, through six declared byte-buffer doors
 The cwd differs per machine, so every assertion is on a LENGTH — the failure this case guards is a
 refusal to compile. It carries no lane restriction, for
@@ -1288,6 +1297,7 @@ more natural name of the two. ⇒ the declared element's DECLARED BOUNDS are the
 what receives one must admit every value a byte has.
 
 <!-- test: a-narrow-byte-does-not-admit-a-compiler-synthesized-buffer -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 ### A one-byte slot that cannot hold 255 is refused at the boundary
 ```maxon
@@ -1320,6 +1330,7 @@ was never written against. With the shared door it compiles and picks the `__Man
 the eighth site is load-bearing exactly like the other seven.
 
 <!-- test: overload-scoring-admits-a-synthesized-buffer-at-a-byte-buffer-candidate -->
+<!-- tier: stdlib -->
 ### Overload scoring picks the byte-buffer candidate for a compiler-synthesized buffer
 The `Ints` candidate is declared FIRST, so a resolver that scores the `__ManagedMemory` one
 `incompatible` reports against `x` rather than selecting it. It carries no lane restriction, for
@@ -1630,6 +1641,7 @@ hi
 ```
 
 <!-- test: a-narrow-byte-refuses-a-raw-byte-write-through-the-buffer-surface -->
+<!-- tier: stdlib -->
 ### `setByte` is a raw-byte write, so a narrow `Byte` refuses it too
 No String anywhere: `__ManagedMemory` IS `Array with Byte`, so a buffer built in this file carries this
 file's element and `setByte` writes past its declared range.
@@ -1653,6 +1665,7 @@ error E3118: <fragment>:12:10: 'setByte' writes a RAW BYTE at a byte OFFSET, so 
 ```
 
 <!-- test: a-narrow-byte-refuses-a-raw-byte-write-into-a-literals-buffer -->
+<!-- tier: stdlib -->
 ### The buffer surface of a `b"…"` literal is the same write, and the literal's range rule cannot reach it
 The literal's range rule checks the blob's own bytes, and they all fit. `.managed` then hands the very same record a raw-byte
 writer, which puts 223 into an element declared `int(0 to 100)` after the literal has been approved.
@@ -1675,6 +1688,7 @@ error E3118: <fragment>:11:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so 
 ```
 
 <!-- test: a-wide-byte-still-writes-raw-bytes-through-the-buffer-surface -->
+<!-- tier: stdlib -->
 ### A `Byte` WIDER than a byte keeps its raw writer, as long as it fills its slot
 ⚠ **THE SAME WRITE UNDER `int(0 to 1000)` IS REFUSED, TWICE OVER, AND DELIBERATELY** —
 `__ManagedMemory.create(8, 1)` is the byte-PACKED producer this file's `create`/literal section refuses for
@@ -1723,6 +1737,7 @@ end 'main'
 ```
 
 <!-- test: raw-byte-reads-survive-a-narrow-byte -->
+<!-- tier: stdlib -->
 ### `byteAt` yields a plain `int`, never the element, so a narrow `Byte` does not touch it
 ```maxon
 typealias Byte = int(0 to 100)
@@ -1744,6 +1759,7 @@ end 'main'
 ```
 
 <!-- test: a-narrow-byte-refuses-a-file-read-into-its-buffer -->
+<!-- tier: stdlib -->
 ### `__ManagedFile.read` blits a file's contents, so it answers to the element too
 The third raw-byte fill, and the one with no String and no literal in it: `__mf_read` writes whatever is
 in the file into the caller's buffer, and that buffer is `Array with Byte` over THIS file's element.
@@ -1776,6 +1792,7 @@ error E3117: <fragment>:12:12: 'read' stores RAW bytes into an element declared 
 ```
 
 <!-- test: a-raw-byte-write-answers-to-the-element-not-to-the-name-byte -->
+<!-- tier: stdlib -->
 ### The rule reads the element's RANGE, never the name `Byte`
 `isByteElementName`'s roster is a question about the NAME, and this rule is not: `Small` is byte-PACKED
 (`rangedAliasStorageBytes` gives every non-negative range fitting `u8.max` a one-byte slot), so one raw
@@ -1818,6 +1835,7 @@ adopts nothing and merely copies values. Asking it would make the receiver-side 
 element has a value set of its own (`ProgramSignatures.elementIntegerValueRange`): a byte's.
 
 <!-- test: a-narrow-byte-refuses-a-synthesized-buffer-appended-to-it -->
+<!-- tier: stdlib -->
 ### A narrow `Byte` refuses a synthesized buffer appended into its array
 ⚠ **NO `unsupported-targets:` MARKER**, for `a-narrow-byte-refuses-a-file-read-into-its-buffer`'s
 reason: `__ManagedDirectory.currentPath` has no wasm32-wasi implementation, but the refusal is a parse-time
@@ -1844,6 +1862,7 @@ error E3005: <fragment>:13:4: argument type mismatch for 'other': expected 'Byte
 ```
 
 <!-- test: a-byte-that-holds-every-byte-still-appends-a-synthesized-buffer -->
+<!-- tier: stdlib -->
 ### A `Byte` that holds every byte still takes one
 The other half of the boundary, and the case that keeps the door LIVE: refusing this would convert a
 correct program into a compile error. The cwd differs per machine, so the assertion is on a LENGTH; the
@@ -1875,6 +1894,7 @@ compiler-owned element its value set (`ProgramSignatures.elementIntegerValueRang
 answers in both directions on its own.
 
 <!-- test: a-synthesized-buffer-takes-a-byte-array-appended-to-it -->
+<!-- tier: stdlib -->
 ### A synthesized buffer takes a declared byte array appended to it
 ```maxon
 typealias Byte = int(0 to u8.max)
@@ -1894,6 +1914,7 @@ end 'main'
 ```
 
 <!-- test: a-synthesized-buffer-takes-a-NARROWER-byte-array-appended-to-it -->
+<!-- tier: stdlib -->
 ### …and a NARROWER one too, because every one of its values is a byte
 The asymmetry that makes `error.append-narrower-element-array` a refusal runs the other way here: an
 `int(0 to 100)` value stored into a raw byte buffer can never be read back out of range, because the
@@ -1934,6 +1955,7 @@ module writes `__ManagedMemory.create(size + extraBytes, 1)` and is parsed by ev
 `wide-byte-program-still-round-trips-a-file` below is what holds that shut.
 
 <!-- test: error.a-byte-packed-buffer-is-refused-when-byte-is-wider-than-one-byte -->
+<!-- tier: stdlib -->
 ### `__ManagedMemory.create(n, 1)` is refused where the `b"…"` literal is
 ```maxon
 typealias Byte = int(0 to 1000)
@@ -1955,6 +1977,7 @@ error E2015: <fragment>:10:38: Unsupported: `__ManagedMemory.create(count, eleme
 ```
 
 <!-- test: a-byte-packed-buffer-is-accepted-at-the-canonical-byte -->
+<!-- tier: stdlib -->
 ### The canonical `Byte` keeps the two producers agreeing, so the buffer is built and read normally
 The acceptance half: the refusal is about the DISAGREEMENT and not about `elementSize: 1`.
 ```maxon
@@ -1977,6 +2000,7 @@ end 'main'
 ```
 
 <!-- test: a-word-buffer-is-untouched-by-a-wide-byte -->
+<!-- tier: stdlib -->
 ### A MACHINE-WORD buffer in the same wide-`Byte` program is untouched
 Only the byte arm can disagree: `create(n, 8)` takes the bare-`int` instance, whose stride is the machine
 word by construction whatever `Byte` was declared to be. A rule that read the `elementSize` alone rather
@@ -2029,6 +2053,7 @@ elsewhere — each admitting every pattern of its slot. `an-exit-code-element-fi
 below pins it.
 
 <!-- test: error.a-raw-byte-write-is-refused-at-a-slot-the-element-does-not-fill -->
+<!-- tier: stdlib -->
 ### A ranged element WIDER than a byte that does not fill its slot
 `rangedAliasStorageBytes` gives `int(0 to 1000)` a TWO-byte slot, so a raw byte at offset 1 is the slot's
 HIGH byte and the element would read back 57089 — outside its own declared range.
@@ -2052,6 +2077,7 @@ error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so 
 ```
 
 <!-- test: error.a-raw-byte-write-is-refused-on-a-negative-lower-bound-element -->
+<!-- tier: stdlib -->
 ### An element with a NEGATIVE lower bound keeps the machine word and does not fill it
 `rangedAliasStorageBytes` is the UNSIGNED ladder, so `int(-5 to 5)` takes the whole word — and one raw byte
 would put **223** into an element declared `int(-5 to 5)`.
@@ -2075,6 +2101,7 @@ error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so 
 ```
 
 <!-- test: error.a-raw-byte-write-is-refused-on-a-bool-element -->
+<!-- tier: stdlib -->
 ### A `bool` element is a ONE-byte slot holding exactly two values
 The slot is one byte and the element admits `0` and `1`, so this is the case that separates *"admits every
 value of its slot"* from *"strides one byte"*. Without the rule `v` and `not v` would BOTH be true while
@@ -2094,6 +2121,7 @@ error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, and 
 ```
 
 <!-- test: error.a-raw-byte-write-is-refused-on-an-enum-element -->
+<!-- tier: stdlib -->
 ### An ENUM element stores an ORDINAL, and a raw byte is not one
 An enum's value set is the ordinals its declaration lists, which is never every pattern of the slot holding
 them. Without the rule the program would compile and then **hang**, matching an ordinal no arm names.
@@ -2125,6 +2153,7 @@ error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so 
 ```
 
 <!-- test: an-exit-code-element-fills-its-own-slot-and-takes-a-raw-byte-write -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
 ### An `ExitCode` element FILLS its slot, so a raw byte write is legal
 ⛔⛔ **THE SLOT AND THE RANGE MUST COME FROM ONE PLACE.** A raw byte write is legal exactly when the
@@ -2160,6 +2189,7 @@ end 'main'
 ```
 
 <!-- test: a-raw-byte-write-is-accepted-when-the-element-fills-its-two-byte-slot -->
+<!-- tier: stdlib -->
 ### An element that DOES fill its two-byte slot keeps its raw writer
 `int(0 to u16.max)` admits every value of the two-byte slot it was given, so a raw byte at either offset is
 honest, and this program reads **57089** back.
@@ -2185,6 +2215,7 @@ end 'main'
 ```
 
 <!-- test: a-raw-byte-write-still-stages-a-machine-word-element -->
+<!-- tier: stdlib -->
 ### A machine-word `int` element admits every bit pattern of its slot, so staging still works
 The reason the rule may not be *"does the element hold every BYTE"*: `int(i64.min to i64.max)` does not, and it holds every value of its slot.
 ```maxon
@@ -2203,6 +2234,7 @@ end 'main'
 ```
 
 <!-- test: a-raw-byte-write-into-a-byte-no-file-declares-is-still-accepted -->
+<!-- tier: stdlib -->
 ### A program that declares no `Byte` at all keeps its raw writer
 The literal mints its own `Array with Byte` (`undeclaredNamedElementSlot`'s byte arm), which strides
 one byte and has no declared range for a raw byte to fall outside of — exactly the case E3117 returns on.
@@ -2218,6 +2250,7 @@ end 'main'
 ```
 
 <!-- test: a-byte-packed-buffer-under-the-canonical-byte-still-takes-a-raw-byte-write -->
+<!-- tier: stdlib -->
 ### The two rules COMPOSED: a byte-packed `create` buffer under the canonical `Byte`, written raw
 ⭐ **THE ONE CASE THAT CROSSES BOTH RULES.** `a-wide-byte-still-writes-raw-bytes-through-the-buffer-surface`
 builds its receiver with `Bytes.create()` + `push`, so this is the case exercising the composition. Here the stride rule

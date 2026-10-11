@@ -9,7 +9,9 @@ category: collections
 
 ## Documentation
 
-`Array.cursor()` creates an `ArrayCursor` that provides efficient, bounds-check-free access to array elements. The cursor is always at a valid position — navigation methods (`advance`, `retreat`, `advanceBy`, `retreatBy`, `seek`) throw `IterationError` on invalid moves, and `current()` reads the element at the current position without any bounds check. `advanceBy` and `retreatBy` come from the `Iterator` and `BidirectionalIterator` extensions and default to calling `advance`/`retreat` n times.
+`Array.cursor()` creates an `ArrayCursor` over the array's elements. Navigation never moves it to an invalid position — navigation methods (`advance`, `retreat`, `advanceBy`, `retreatBy`, `seek`) throw `IterationError` on invalid moves — and `current()` reads the element at the current position. `advanceBy` and `retreatBy` come from the `Iterator` and `BidirectionalIterator` extensions and default to calling `advance`/`retreat` n times.
+
+A cursor holds its own reference to the array, and the array stays writable while the cursor is live. The cursor reads the array's live length on every access: an element pushed after the cursor was made is reachable through it, and a `current()` whose position a `clear` (or any other shortening) has left past the end panics with an index out of range. `current()` and `peek` hand back their own reference to the element they read.
 
 ## Tests
 
@@ -453,6 +455,56 @@ end 'main'
 ```
 ```stdout
 48 120 70 70 255
+```
+
+<!-- test: a-cursor-sees-a-push-to-its-source -->
+A push under a live cursor may reallocate the buffer; the cursor still reads the element it
+names, and can seek onto the element the push added.
+```maxon
+function main() returns ExitCode
+	var a = ["x {40 + 2} long enough heap string", "y {40 + 2} long enough heap string", "z {40 + 2} long enough heap string", "w {40 + 2} long enough heap string"]
+	let c = try a.cursor() otherwise panic("cursor")
+	try c.seek(1) otherwise panic("seek")
+	a.push("v {40 + 2} long enough heap string")
+	print("{c.current()}\n")
+	try c.seek(4) otherwise panic("seek")
+	print("{c.current()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+y 42 long enough heap string
+v 42 long enough heap string
+```
+
+<!-- test: current-past-the-end-after-the-source-is-cleared-panics -->
+`clear` shortens the array to nothing under a cursor parked at index 3. `current()` finds its position
+past the live length and panics with an index out of range rather than reading the released slot.
+```maxon
+function main() returns ExitCode
+	var a = ["x {40 + 2} long enough heap string", "y {40 + 2} long enough heap string", "z {40 + 2} long enough heap string", "w {40 + 2} long enough heap string"]
+	let c = try a.cursor() otherwise panic("cursor")
+	try c.seek(3) otherwise panic("seek")
+	a.clear()
+	print("{c.current()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+```
+```stderr
+panic: index out of range: the cursor's position is past the end of its array
+Stack trace:
+  in __managed_cursor_current
+  in ArrayIterator.current
+  in main
+  in mrt_start
 ```
 
 ### A step COUNT is unsigned, so a negative step is a MISTAKE and not a direction

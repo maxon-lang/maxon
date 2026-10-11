@@ -879,6 +879,7 @@ error E3004: <fragment>:7:3: call to undefined function 'push'
 ```
 
 <!-- test: error.the-buffer-under-a-vector-is-still-the-buffer -->
+<!-- tier: stdlib -->
 ⛔ **THE THIRD ENTRANCE.** `bufferSurfaceOfDeclaredRecord` deliberately RETYPES a sized container's
 `managed` read to `Array with Element`, so that `stdlib/Vector.maxon`'s own `VectorIter.create(managed)`
 type-checks — one record, two ids. The retype is a TYPE and not a surface: the value is still marked the
@@ -955,10 +956,9 @@ end 'main'
 
 ## A `let` Vector Still Refuses The Write, By The Declaration's Own Rule
 
-⚖ **E3019's IMMUTABLE-RECEIVER RULE IS A BUILTIN-SURFACE RULE AND A DECLARED TYPE IS EXEMPT FROM IT —
-AND THIS MEMBER IS STILL REFUSED.** `stdlib/Vector.maxon`'s `set` writes through its receiver
-(`managed.set`), so the ORDINARY parameter-mutation rule reaches the refusal from the declaration instead
-of from a roster, as it does for `Set`'s and `Map`'s own mutators (`surfaceRosterProvider`'s note).
+⚖ **A `let` VECTOR IS REFUSED THE WRITE BY THE ORDINARY PARAMETER-MUTATION RULE, NOT BY A ROSTER.**
+`stdlib/Vector.maxon`'s `set` writes through its receiver (`managed.set`), so the refusal (E3159) comes from the
+declaration, as it does for `Set`'s and `Map`'s own mutators.
 
 ⚠ **THE SENTENCE NAMES THE PARAMETER**, and that is the whole of what this case pins: it names the
 PARAMETER the callee declares, not a surface. A case that asserted only "refused" would not see the
@@ -976,7 +976,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:7:8: cannot pass 'v' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:7:8: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
 ## A Vector Global Takes The Declared Generic's Road
@@ -1370,6 +1370,7 @@ cannot produce; this refusal costs nothing at runtime and closes the seam one le
 `push` is already refused on this surface.
 
 <!-- test: error.a-sized-containers-buffer-may-not-be-cleared -->
+<!-- tier: stdlib -->
 **ENTRANCE A — the bare `managed` read inside an `extension Vector`**, the primary shape. `managed` is
 not exported, so this is the shortest spelling that reaches the record.
 ```maxon
@@ -1393,6 +1394,7 @@ error E2015: <fragment>:7:11: Unsupported: `__ManagedMemory` member 'clear' — 
 ```
 
 <!-- test: error.a-sized-containers-buffer-may-not-be-relengthened -->
+<!-- tier: stdlib -->
 `setLength` is the member the measurement caught moving the length furthest — `grow(64)` then
 `setLength(64)` read `count=3 walked=64 g40=0`.
 ```maxon
@@ -1416,6 +1418,7 @@ error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'setLength' 
 ```
 
 <!-- test: error.a-sized-containers-buffer-may-not-lose-an-element -->
+<!-- tier: stdlib -->
 `remove` shrinks by one and slides the tail — 5 to 4.
 ```maxon
 typealias Int = int(i64.min to i64.max)
@@ -1438,6 +1441,7 @@ error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'remove' —
 ```
 
 <!-- test: error.a-sized-containers-buffer-may-not-be-appended-to -->
+<!-- tier: stdlib -->
 ⭐ **THIS CASE ALSO PRE-EMPTS A COMPILER PANIC, AND THAT IS A CONSEQUENCE OF THE REFUSAL RATHER THAN ITS
 POINT.** The refusal here runs AHEAD of `parseArrayAppend`, so the path
 `parseArrayAppend -> requireAppendArg -> arrayAppendArgAdmits` — which would size a `typeParameter` element
@@ -1476,6 +1480,7 @@ error E2015: <fragment>:7:15: Unsupported: `__ManagedMemory` member 'append' —
 ```
 
 <!-- test: error.the-chained-self-managed-reaches-the-same-refusal -->
+<!-- tier: stdlib -->
 **ENTRANCE B — `self.managed`, which mints NO value to mark** and passes the surface along the dispatch
 instead (`viaManagedField`). It is a different carrier from entrance A and is closed separately; open,
 it drifts to `count=3 len=0`, identically to A.
@@ -1500,6 +1505,7 @@ error E2015: <fragment>:7:16: Unsupported: `__ManagedMemory` member 'clear' — 
 ```
 
 <!-- test: error.a-local-bound-to-the-buffer-reaches-the-same-refusal -->
+<!-- tier: stdlib -->
 **ENTRANCE C — the buffer bound to a local first.** The compiler has no stack slots, so `m` binds to the
 surface's own `ValueId` and the value mark answers for it; the case exists because that is a PROPERTY
 of the binding rule rather than a thing this refusal arranges, and a change to it would silently
@@ -1525,15 +1531,11 @@ end 'main'
 error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — this buffer is a `Vector`'s own record, and a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record. 'clear' WRITES the record's length, which would leave the type saying one number while `get` and the walk answer another. A sized container's buffer refuses setLength/append/clear/remove and serves every other member of the surface; the growable `Array`'s buffer serves all of them, because an `Array`'s count IS its record's length
 ```
 
-<!-- test: error.a-buffer-the-declaration-hands-out-reaches-the-same-refusal -->
-⛔⛔ **ENTRANCE D — THE RECORD LEAVING BY `return`, AND THE CASE THAT SETTLES *WHERE* THE RULE BELONGS.**
-A `ValueId` mark dies at a function boundary, and re-deriving the fact in the CALLER from the callee's
-declaration over-refuses a `slice`, which has the very same type as the record (see
-`the-slice-a-member-returns-is-served`). ⇒ The refusal sits at the one place the mark still EXISTS: the
-`return` itself, inside the declaration. Note where it points — line 6, the `return managed`,
-not the caller's `got.clear()` — and that it is a DIFFERENT refusal from a length change, with its own
-sentence, because *"you moved the number the type states"* and *"past here nothing can tell your record from
-a slice of it"* are two injuries with two cures.
+<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-return-it -->
+⛔⛔ **ENTRANCE D — THE RECORD LEAVING BY `return`, FROM A USER FILE.** A user extension cannot reach a
+vector's record at all, so it cannot hand it out either. The first raw door in this program is the
+signature: `returns ElementMemory` names the raw buffer type (`ElementMemory` is `__ManagedMemory with
+Element`), and it is refused there, ahead of the `return managed` and the caller's `got.clear()`.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1552,10 +1554,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:3: Unsupported: a `Vector`'s own record may not be RETURNED from it — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+error E3185: <fragment>:6:25: 'ElementMemory' named outside the library tiers: the raw buffer type is nameable only from a source file under stdlib/ or runtime/ — use 'Array'
 ```
 
 <!-- test: the-length-preserving-buffer-members-are-still-served -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE OVER-REFUSAL CONTROL, AND IT IS THE HALF A REFUSAL USUALLY FORGETS.** Everything on the
 buffer surface that does NOT write the length word is still served on a sized container's buffer. Each
 call here leaves `length()` at its start value: `grow` moves capacity 4 to 64, `swap` and
@@ -1587,6 +1590,7 @@ end 'main'
 ```
 
 <!-- test: the-growable-arrays-buffer-still-changes-its-length -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE UNDER-REACH CONTROL — THE GROWABLE `Array`'s BUFFER KEEPS ALL FOUR, and this one cannot be
 faked green, because `stdlib/Array.maxon` itself calls `managed.setLength` five times,
 `managed.remove` twice and `managed.clear` once. A refusal that reached the growable record would fail
@@ -1612,16 +1616,11 @@ end 'main'
 10
 ```
 
-<!-- test: error.a-buffer-handed-to-the-declarations-own-helper-reaches-the-same-refusal -->
-⛔⛔ **ENTRANCE E — THE ARGUMENT DIRECTION OF D, A LIVE WRONG ANSWER EVEN WITH EVERY OTHER ROUTE
-CLOSED.** With A–D shut, an `extension Vector` whose `bust()` is `wipe(managed)` and whose
-`wipe(m ElementMemory)` is `m.clear()` would compile, run, and print **`count=3 walked=0`** — one helper
-method away.
-
-⛔ **THE REFUSAL IS NOT SCOPED TO "another member of the SIZED CONTAINER"**, because that scope is itself a
-hole — see `error.a-buffer-handed-to-a-foreign-generic-reaches-the-same-refusal` below, which is the same
-injury through a callee the sized container never heard of. The ONE call the corpus needs (`stdlib/Vector.maxon`'s `createIterator` handing the record to `VectorIter.create`) is exempted
-by LOCATION — the declaring library may hand its own record around — and no user file is.
+<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-pass-it-to-a-helper -->
+⛔⛔ **ENTRANCE E — THE ARGUMENT DIRECTION OF D.** An `extension Vector` whose `bust()` is `wipe(managed)`
+and whose `wipe(m ElementMemory)` is `m.clear()` would leave the type saying 3 while the walk finds nothing
+(`count=3 walked=0`). From a user file it never gets that far: the bare `managed` in `bust()` is the first
+raw door, and it is refused at the read, before the helper's `ElementMemory` parameter is reached.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1643,19 +1642,16 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:8: Unsupported: a `Vector`'s own record may not be passed to a call — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+error E3185: <fragment>:7:8: '.managed' read from outside the library tiers: a value's raw '__ManagedMemory' buffer is reachable only from a source file under stdlib/ or runtime/ — use the 'Array' methods
 ```
 
 <!-- test: the-slice-a-member-hands-to-a-helper-is-served -->
-⭐⭐ **THE OVER-REFUSAL CONTROL FOR THE ARGUMENT ESCAPE.** The escape rule is about the RECORD, and
-`managed.slice(0, 2)` is not the record — `__managed_slice` mints a fresh VIEW whose `length@8` is its own,
-so clearing it cannot move the vector's length and no answer can disagree with the type. ⛔ **A rule keyed on
-the DECLARATION instead of on the value** — "a `Vector` member's `ElementMemory` parameter is the vector's
-storage" — would refuse THIS PROGRAM, since a slice has exactly that type, with the sentence *"this buffer is
-a `Vector`'s own record"* about a thing that is not: a legal program refused by a false claim, while the
-identical `s.clear()` written in place compiles and runs. ⇒ The fact is carried on the value and never inferred from the declaration; delete that carry and this
-case is what goes red. The exit code proves BOTH halves: the slice really was cleared (0) and the vector's
-own record was untouched (3).
+<!-- tier: stdlib -->
+⭐ **A SLICE IS A VIEW WITH A LENGTH OF ITS OWN.** `managed.slice(0, 2)` is not the vector's record —
+`__managed_slice` mints a fresh view whose `length@8` is its own — so a helper that takes it as an
+`ElementMemory` and clears it cannot move the vector's length, and no answer can disagree with the type.
+The exit code proves both halves: the slice really was cleared (0) and the vector's own record was
+untouched (3).
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1682,11 +1678,9 @@ end 'main'
 ```
 
 <!-- test: the-slice-a-member-returns-is-served -->
-⭐⭐ **THE OVER-REFUSAL CONTROL FOR THE RETURN ESCAPE — the twin of the case above, in the direction entrance
-D refuses.** A member may hand a `slice` of its record to any caller and the caller may change it freely:
-that is precisely what the escape refusal's own sentence tells the reader to do instead of returning the
-record. So the two are one decision seen from both sides — the record may not leave, a view of it always may
-— and a rule that could not tell them apart would make the advice impossible to follow.
+<!-- tier: stdlib -->
+⭐ **… AND A MEMBER MAY RETURN A SLICE, WHICH ITS CALLER MAY CHANGE FREELY.** The caller clears the view
+it was handed (0); the vector's own record keeps its three elements (3).
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1710,19 +1704,18 @@ end 'main'
 
 ## And The Record May Not LEAVE By Any Of The Other Three Doors Either
 
-⛔⛔ **THREE MORE ROUTES, EACH OF WHICH WOULD PRINT `len=0 count=3` ON A `Vector with 3 Int`.** They share
-one cause, and it is worth stating once: `bufferSurfaceOfDeclaredRecord` RETYPES the record to
-`Array with Element` so `VectorIter.create(managed)` type-checks. That retype makes the value indistinguishable from a growable array to everything except
+⛔⛔ **EACH OF THESE ROUTES WOULD PRINT `len=0 count=3` ON A `Vector with 3 Int`.** They share one cause:
+`bufferSurfaceOfDeclaredRecord` RETYPES the record to `Array with Element` so `VectorIter.create(managed)`
+type-checks, and that retype makes the value indistinguishable from a growable array to everything except
 the per-value MARK — so any route that carries the record somewhere a `ValueId` mark cannot follow hands
-back a fully working `Array` over the vector's storage, and it is `stdlib/Array.maxon`'s own `clear()` that
-answers on it, not merely the buffer roster's. ⇒ There is no third thing to test for at the far end. The
-only defence is that the marked value never reaches a place the mark cannot go: a `return`, ANY call
-argument, and any durable STORE.
+back a fully working `Array` over the vector's storage. ⇒ The record is reachable only from the library
+tiers. A user extension cannot read `managed` or name the raw buffer type, so each route below is refused
+at its first raw door by **E3185**, before any value of the record exists to carry.
 
-<!-- test: error.a-buffer-pushed-into-a-container-reaches-the-same-refusal -->
-**ROUTE F — THE RECORD AS A CONTAINER'S ELEMENT.** `Array with ElementMemory` is spellable inside the
-declaration, `push` takes the record by reference, and `get` hands it back with no mark. Unrefused:
-`len=0 count=3 walked=0`.
+<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-push-it-into-a-container -->
+**ROUTE F — THE RECORD AS A CONTAINER'S ELEMENT.** `Array with ElementMemory` would hold the record, and
+`get` would hand it back with no mark. The first raw door is the element type in the extension's
+`typealias`.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1745,14 +1738,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: a `Vector`'s own record may not be stored into a container, a tuple or a field — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+error E3185: <fragment>:6:30: 'ElementMemory' named outside the library tiers: the raw buffer type is nameable only from a source file under stdlib/ or runtime/ — use 'Array'
 ```
 
-<!-- test: error.a-buffer-put-in-a-tuple-reaches-the-same-refusal -->
+<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-put-it-in-a-tuple -->
 **ROUTE G — THE RECORD AS A TUPLE SLOT**, which needs no container type spelled anywhere: two tokens of
-punctuation launder the mark. ⭐ The slot read comes back on the ARRAY surface rather than the buffer one —
-`t.0.count()` and `t.0.push(1)` both compile, `t.0.length()` is refused as an unknown `Array` member —
-which is the clearest single demonstration of what the retype costs once the mark is gone.
+punctuation would launder the mark. The only raw door is the bare `managed` inside the tuple, and it is
+refused there.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1771,20 +1763,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:11: Unsupported: a `Vector`'s own record may not be stored into a container, a tuple or a field — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+error E3185: <fragment>:7:12: '.managed' read from outside the library tiers: a value's raw '__ManagedMemory' buffer is reachable only from a source file under stdlib/ or runtime/ — use the 'Array' methods
 ```
 
-<!-- test: error.a-buffer-assigned-into-another-records-field-reaches-the-same-refusal -->
-**ROUTE H — THE RECORD ASSIGNED INTO A GROWABLE `Array`'s OWN `managed` FIELD.** The growable record's buffer
-carries no sized mark, so every length writer is served on it.
-
-⚠⚠ **A CRASH ON THIS SHAPE IS NOT THIS RULE'S, AND SAYING SO IS THE POINT.** **The same
-`x.managed = <a buffer>` store segfaults with NO `Vector` in the program at all**: `var b = Ints.create()`
-then `b.managed = a.managed` prints `b=4557430888798830399`, which is `0x3f3f3f3f3f3f3f3f`, **eight
-`__mm_free` poison bytes read back as a count**, and then exits **139**. The `managed` READ alone is clean
-(`let m = a.managed` gives `m=1 a=1`, exit 0), so the fault is the field STORE — a separate release fault.
-**This case refuses the ESCAPE, and the escape is a wrong answer, not the crash.** A refusal that claimed
-the crash would be taking credit for curing a different fault.
+<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-store-it-in-a-field -->
+**ROUTE H — THE RECORD ASSIGNED INTO A GROWABLE `Array`'s OWN `managed` FIELD.** The growable record's
+buffer carries no sized mark, so every length writer would be served on it. The first raw door is the
+`.managed` on the assignment's target, `a.managed`, ahead of the bare `managed` it would be assigned.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1806,17 +1791,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:3: Unsupported: a `Vector`'s own record may not be stored into a container, a tuple or a field — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+error E3185: <fragment>:10:5: '.managed' read from outside the library tiers: a value's raw '__ManagedMemory' buffer is reachable only from a source file under stdlib/ or runtime/ — use the 'Array' methods
 ```
 
-<!-- test: error.a-buffer-handed-to-a-foreign-generic-reaches-the-same-refusal -->
-⛔⛔ **ROUTE I — THE ARGUMENT ESCAPE'S CALLEE SCOPE WAS THE HOLE.** The first cure refused an argument only
-when the callee was declared on the sized container, on the argument that nothing else can name the type.
-INSIDE an `extension Vector` the type IS nameable, so a user's own generic — no library, no `stdlib`, nine
-lines — takes the record in and hands it straight back out with no mark on it. This case is why the scope is
-gone and why the corpus's one legitimate escape is exempted by LOCATION instead: a callee ALLOWLIST would
-have to be right about which of a foreign declaration's members merely read the record, which is not a fact
-any declaration holds.
+<!-- test: error.a-user-extension-cannot-read-a-vectors-buffer-to-hand-it-to-a-generic -->
+⛔⛔ **ROUTE I — THE RECORD THROUGH A USER'S OWN GENERIC.** A nine-line `Box uses T` would take the record
+in and hand it straight back out with no mark on it. From a user file the extension cannot spell the
+instantiation: `Box with ElementMemory` names the raw buffer type, and that is the first raw door.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1850,15 +1831,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:21:25: Unsupported: a `Vector`'s own record may not be passed to a call — a vector's size is a coordinate of its TYPE, so `count()` answers `countof(Self)` and never reads the record, and the two agree only while nothing moves the record's length. `__ManagedMemory` is equally the type of a `slice` of that record, whose length IS its own and may be moved freely, so once the value crosses a call NOTHING distinguishes the two and setLength/append/clear/remove would be served on the record itself. Hand out `slice(…)` instead, or do the work here, where the record is still known to be the vector's. The growable `Array` has no such rule, because an `Array`'s count IS its record's length
+error E3185: <fragment>:18:30: 'ElementMemory' named outside the library tiers: the raw buffer type is nameable only from a source file under stdlib/ or runtime/ — use 'Array'
 ```
 
 <!-- test: a-slice-may-be-stored-passed-and-returned-freely -->
-⭐⭐ **THE OVER-REFUSAL CONTROL FOR ALL THREE NEW DOORS, IN ONE PROGRAM.** Every route above is legal on a
-`slice`, because a view's `length@8` is its own and no answer about it can contradict the vector's type. The
-slice here is stored into a container, put in a tuple, passed to a foreign generic and cleared through each
-— and the vector's own record is untouched at the end. Delete the mark test in
-`refuseASizedContainersRecordEscaping` and make the three doors unconditional, and THIS case is what goes red.
+<!-- tier: stdlib -->
+⭐ **EVERY ROUTE ABOVE IS LEGAL ON A `slice`, IN THE LIBRARY TIER.** A view's `length@8` is its own, so no
+answer about it can contradict the vector's type. The slice here is stored into a container, put in a
+tuple, passed to a foreign generic and cleared through each — and the vector's own record is untouched at
+the end.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -1885,11 +1866,11 @@ extension Vector
 		var fromContainer = try b.get(0) otherwise panic("no element")
 		fromContainer.clear()
 
-		let t = (try managed.slice(0, 2) otherwise panic("slice"), 1)
+		var t = (try managed.slice(0, 2) otherwise panic("slice"), 1)
 		t.0.clear()
 
-		let boxed = BufBox.create(try managed.slice(0, 2) otherwise panic("slice"))
-		let fromBox = boxed.get()
+		var boxed = BufBox.create(try managed.slice(0, 2) otherwise panic("slice"))
+		var fromBox = boxed.get()
 		fromBox.clear()
 
 		return (fromContainer.length() as Int) + (fromBox.length() as Int) + (10 * (managed.length() as Int))
@@ -1921,6 +1902,7 @@ facts:
   third case here pins it.
 
 <!-- test: error.a-buffer-through-a-ternary-reaches-the-same-refusal -->
+<!-- tier: stdlib -->
 **ROUTE J — THE TERNARY MERGE.** The degenerate `x if c else x` is deliberate: both edges are the same
 expression, so nothing about the program needs two answers — only the phi's fresh `ValueId` could give one.
 ```maxon
@@ -1945,6 +1927,7 @@ error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — t
 ```
 
 <!-- test: error.a-buffer-through-a-try-fallback-reaches-the-same-refusal -->
+<!-- tier: stdlib -->
 **ROUTE K — THE `try … otherwise` MERGE**, which needs no second spelling of the record at all: the ok
 edge is a legal `slice` and only the FALLBACK is the record, so a rule that looked at either edge alone
 would have to be right about both.
@@ -1970,6 +1953,7 @@ error E2015: <fragment>:8:5: Unsupported: `__ManagedMemory` member 'clear' — t
 ```
 
 <!-- test: a-growable-buffer-keeps-its-own-roster-through-a-merge -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE OTHER HALF OF THE CARRY, AND IT IS A REPAIR RATHER THAN A REFUSAL.** The merged value here is
 an ordinary growable buffer: it must come out on the BUFFER roster, which is the roster a value
 spelled `__ManagedMemory` is on — not the `Array` roster, where `setLength` and `length` would both be
@@ -1994,14 +1978,10 @@ end 'main'
 ```
 
 <!-- test: an-extension-still-walks-its-own-vector -->
-⭐⭐ **THE OVER-REFUSAL CONTROL FOR THE CALL ESCAPE, AND IT IS THE ONE AN UNSCOPED ESCAPE COULD PLAUSIBLY
-BREAK.** With no callee scope, `for e in managed` — which hands the record to an iterator factory — is
-refused inside an `extension Vector`, and that is deliberate: the compiler cannot know a
-foreign callee only READS, and `ArrayIterator` is compiled for the growable `Array` and the sized `Vector`
-alike, so "this record's count comes from a type" is not a fact its declaration can hold. What must survive
-is the way an extension actually walks its own vector, and both spellings do: `for e in self`, which goes
-through the declaration's own `createIterator`, and the one the refusal's sentence names, a `slice`. The
-exit code is the two walks side by side.
+<!-- tier: stdlib -->
+⭐ **AN EXTENSION WALKS ITS OWN VECTOR BOTH WAYS:** `for e in self`, which goes through the declaration's
+own `createIterator`, and a `for` over a `slice` of its record. The exit code is the two walks side by
+side.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int

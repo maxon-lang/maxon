@@ -75,7 +75,7 @@ function main() returns ExitCode
 	var h = CellHolder.create()
 	h.add(Cell.create(40))
 
-	let e = h.entryAt(0)
+	var e = h.entryAt(0)
 	e.0.bump(2)
 
 	let again = h.entryAt(0)
@@ -1330,8 +1330,8 @@ end 'main'
 error E2015: <fragment>:32:10: Unsupported: a container whose element is 'Bag.EBox' — a generic instance or tuple written over this type's OWN parameter, resting (itself, or through an instance it holds) a slot declared AT that parameter — cannot be created in a body that carries no layout descriptor: a container stamps ONE machine word as its element destructor, and the only word that releases such a slot at every instantiation is read out of the enclosing instance's layout descriptor, which this body does not carry. Construct the container through an inner typealias (`<Alias>.create()` or `<Alias>{}`), which reserves the descriptor for the method or the `Self`-returning `static function` that writes it; or hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`); or build the container in a method of a concrete instantiation
 ```
 
-<!-- test: error.a-closure-in-a-static-storing-a-borrowed-parameter-is-refused -->
-A closure written in a static stores a borrowed type-parameter value, and the static carries no descriptor for the closure to take its reference through.
+<!-- test: a-closure-in-a-static-storing-a-borrowed-parameter-takes-the-call-sites-descriptor -->
+A closure written in a static stores a borrowed type-parameter value. The closure carries the descriptor of the body it is written in, which `StrCell.keep` receives from its call, so the record the closure builds holds a reference of its own.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
@@ -1342,6 +1342,10 @@ type Cell uses T
 		return Self{v: v}
 	end 'create'
 
+	function marker() returns Int
+		return 1
+	end 'marker'
+
 	static function firstOf(cells CellArray) returns Int
 		let f = function() gives cells.count()
 		return f()
@@ -1350,7 +1354,7 @@ type Cell uses T
 	static function keep(v T) returns Int
 		let f = function(x T) gives Self{v: x}
 		let c = f(v)
-		return 1
+		return c.marker()
 	end 'keep'
 end 'Cell'
 
@@ -1358,16 +1362,20 @@ typealias StrCell = Cell with String
 typealias CellArray = Array with StrCell
 
 function main() returns ExitCode
-	let c = StrCell.create("a")
-	return StrCell.keep("b") as ExitCode
+	let c = StrCell.create("a {40 + 2} value long enough for a heap record")
+	print("{StrCell.keep("b {40 + 2} value long enough for a heap record")} {c.marker()}\n")
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:17:11: Unsupported: the closure written in 'Cell.keep' takes a reference to a borrowed type-parameter value, but the body reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and a `static function` that does not return `Self` has no instance to read it from (build the record in an instance method, or in a `static function` that returns `Self`). A closure carries the descriptor of the body it is written in, so a closure written inside such a static has none either (take the reference in an instance method and hand the closure the result)
+```exitcode
+0
+```
+```stdout
+1 1
 ```
 
-<!-- test: error.a-static-reassigning-its-parameter-from-a-borrow-is-refused -->
-A static that does not return `Self` reassigns its type-parameter parameter from a field of another instance, and it carries no descriptor to take that reference through.
+<!-- test: a-static-reassigning-its-parameter-from-a-borrow-takes-the-call-sites-descriptor -->
+A static that does not return `Self` reassigns its type-parameter parameter from a field of another instance. The reference it takes is read through the descriptor `StrCell.adopt` hands the shared body, and the record the field names is still live afterwards.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -1385,17 +1393,21 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function main() returns ExitCode
-	let src = StrCell.make("source")
-	let adopted = StrCell.adopt("dropped", other: src)
-	return 0 if adopted else 1
+	let src = StrCell.make("source {40 + 2} value long enough for a heap record")
+	let adopted = StrCell.adopt("dropped {40 + 2} value long enough for a heap record", other: src)
+	print("{src.v} {adopted}\n")
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:9:18: Unsupported: 'adopt' takes a reference to a borrowed type-parameter value, but the body reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and a `static function` that does not return `Self` has no instance to read it from (build the record in an instance method, or in a `static function` that returns `Self`). A closure carries the descriptor of the body it is written in, so a closure written inside such a static has none either (take the reference in an instance method and hand the closure the result)
+```exitcode
+0
+```
+```stdout
+source 42 value long enough for a heap record true
 ```
 
 <!-- test: error.a-static-handing-a-local-to-a-by-reference-parameter-is-refused -->
-A static that does not return `Self` hands a local holding a type-parameter value to a by-reference parameter, and it has no instance to source the descriptor the parameter's cell takes its reference through.
+A static that does not return `Self` hands a local holding a type-parameter value to an instance method that takes it by reference, and a call on another instance has no descriptor for the static to hand on.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -1424,11 +1436,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:18: Unsupported: a `static function` that hands a type-parameter value to a by-reference parameter needs the enclosing instance's dictionary — the parameter's cell takes and releases its own reference to the value, and how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the instance's descriptor at run time — so it must return `Self` for the caller to source that dictionary from the instance the static builds; a static returning any other type has no source (make the hand-off in an instance method, or return `Self`)
+error E2015: <fragment>:13:18: Unsupported: calling 'setOnce' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method
 ```
 
 <!-- test: error.a-static-handing-a-field-to-a-by-reference-parameter-is-refused -->
-A static that does not return `Self` hands a field of another instance to a by-reference parameter, and it has no instance to source the descriptor the parameter's cell takes its reference through.
+A static that does not return `Self` hands a field of another instance to an instance method that takes it by reference, and a call on another instance has no descriptor for the static to hand on.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -1455,7 +1467,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:18: Unsupported: a `static function` that hands a type-parameter value to a by-reference parameter needs the enclosing instance's dictionary — the parameter's cell takes and releases its own reference to the value, and how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the instance's descriptor at run time — so it must return `Self` for the caller to source that dictionary from the instance the static builds; a static returning any other type has no source (make the hand-off in an instance method, or return `Self`)
+error E2015: <fragment>:13:18: Unsupported: calling 'setOnce' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method
 ```
 
 <!-- test: error.a-static-needing-sizeof-that-also-passes-an-int-by-reference-names-sizeof -->
@@ -1489,7 +1501,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:18: Unsupported: a `static function` that needs the enclosing instance's dictionary — it constructs an opaque type-parameter `Array` (`ElementArray.create()`), reads `sizeof` of the type parameter, or reads `countof` of the sized container's own `Self` — must return `Self` so the caller can source it from the instance the static builds; a static returning any other type has no source (build the array, read the size or read the count through an instance method on `self`, or return `Self`)
+error E2015: <fragment>:15:18: Unsupported: a `static function` that needs the enclosing instance's dictionary — it constructs an opaque type-parameter `Array` (`ElementArray.create()`), reads `sizeof` of the type parameter, or reads `countof` of the sized container's own `Self` — must return `Self` so the caller can source it from the instance the static builds, or (for the descriptor) take a parameter whose type is written over the type's parameters so the call site can pass one; a static that does neither has no source (build the array, read the size or read the count through an instance method on `self`, or return `Self`)
 ```
 
 <!-- test: a-call-reaching-a-generic-and-a-concrete-declaration-binds-each-by-its-own-convention -->
@@ -1552,8 +1564,8 @@ end 'main'
 word 6
 ```
 
-<!-- test: error.a-static-dropping-an-opaque-value-it-reads-is-refused -->
-A closure in a static reads an opaque value and drops it, and the static carries no descriptor to release it through.
+<!-- test: a-static-dropping-an-opaque-value-it-reads-releases-it-through-the-call-sites-descriptor -->
+A closure in a static reads an opaque value and drops it. The static receives the descriptor from its call, and the closure releases the value through it.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
@@ -1588,16 +1600,20 @@ end 'Holder'
 typealias StrHolder = Holder with String
 
 function main() returns ExitCode
-	let h = StrHolder.create("a")
-	return StrHolder.peek(h) as ExitCode
+	let h = StrHolder.create("a {40 + 2} value long enough for a heap record")
+	print("{StrHolder.peek(h)}\n")
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:25:18: Unsupported: 'peek' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove`/`removeFirst` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); a `for … in` over a value held at a PARAMETERIZED interface, whose element is the enclosing type's own parameter and is owned per trip (store it into an `Array with <type parameter>`, which reserves the descriptor, or iterate in a method of a concrete instantiation). A closure carries the descriptor of the body it is written in, so a closure written inside such a body has none either (do the owning work in an instance method and hand the closure a value it need not release)
+```exitcode
+0
+```
+```stdout
+1
 ```
 
-<!-- test: error.a-composed-container-cloned-in-a-closure-in-a-static-is-refused -->
-A container of tuples over the parameter cloned in a closure written in a static has no descriptor to copy its records through.
+<!-- test: a-composed-container-cloned-in-a-closure-in-a-static-copies-through-the-call-sites-descriptor -->
+A container of tuples over the parameter cloned in a closure written in a static copies its records through the descriptor the static receives from its call.
 ```maxon
 typealias Count = int(0 to 100000)
 typealias NameArray = Array with String
@@ -1654,12 +1670,15 @@ function main() returns ExitCode
 		total = total + pair.1.n
 	end 'eachPair'
 
-	print("{total} {snap.count()}\n")
+	print("{total} {snap.count()} {k}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:37:31: Unsupported: 'Array.clone' is called on 'Holder.Pairs', whose type arguments mix this type's own parameters with other types, so the layout descriptor it is handed is composed at run time from the calling method's own descriptor — and this method reserves none. A method reserves one when its body reaches that instance through a field, an inner typealias, a parameter or a local bound from one of those; call it through one of them (e.g. 'self.<field>.<method>(…)')
+```exitcode
+0
+```
+```stdout
+11 2 2
 ```
 
 <!-- test: a-generic-types-own-name-literal-in-a-static-builds-like-self -->
@@ -2316,7 +2335,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:10:2: cannot pass 'x' to function that mutates parameter 'dest' (in swapIn)
+error E3159: <fragment>:10:2: cannot pass 'x', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in swapIn); pass a clone()
 ```
 
 <!-- test: two-files-private-generic-functions-of-one-name-each-keep-their-own-by-reference-parameter -->

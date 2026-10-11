@@ -1,28 +1,23 @@
 ---
 feature: process-background-priority
 status: stable
-keywords: [process, priority, background, scheduling, enterBackgroundPriority, __Builtins, intrinsics]
+keywords: [process, priority, background, scheduling, Process.enterBackgroundPriority, enterBackgroundPriority]
 category: system
 ---
 
-# `__Builtins.enterBackgroundPriority()` — run this process out of the way
+# `Process.enterBackgroundPriority()` — run this process out of the way
 
 ## Documentation
 
-`__Builtins` is the compiler's builtin TYPE: a name reserved for the compiler, whose static methods
-are INTRINSICS rather than functions any file declares. This spec pins one of them:
-
-| Intrinsic | Meaning |
+| Function | Meaning |
 |---|---|
-| `__Builtins.enterBackgroundPriority()` | put THIS process at background scheduling priority, and answer the priority the OS then reports |
+| `Process.enterBackgroundPriority()` | put THIS process at background scheduling priority, and answer the priority the OS then reports |
 
-It takes no arguments and has no `stdlib/` wrapper: the intrinsic IS the surface, for
-`__Builtins.currentProcessId`'s reason — a declaration whose whole body is one intrinsic call is the
-thin wrapper the house rules forbid.
+It takes no arguments. Its body is the library-tier intrinsic `__Builtins.enterBackgroundPriority()`.
 
-### It is the one intrinsic in this band that CHANGES the process rather than reporting on it
+### It CHANGES the process rather than reporting on it
 
-`cpuCount`, `currentProcessId` and `schedMaxActiveWorkers` all ask questions. This one acts, and then
+`Scheduler.machineCpuCount()`, `Process.id()` and `Scheduler.counters()` all ask questions. This one acts, and then
 asks. Its caller is a harness that is about to saturate the machine — the compiler's `spec-test` pool
 calls it once before spawning any worker — so that a full suite stops making the box unusable while
 it runs.
@@ -38,7 +33,7 @@ spelled once per spawn site, and it would still miss the threads the parent runs
 
 Windows answers a priority CLASS (`BELOW_NORMAL_PRIORITY_CLASS` = 16384, against
 `NORMAL_PRIORITY_CLASS` = 32); POSIX answers a NICE value (10, against 0). The two scales even run in
-opposite directions — larger is LOWER priority under POSIX. That is `threadCpuTicks`'s situation
+opposite directions — larger is LOWER priority under POSIX. That is `Clock.threadCpuTicks()`'s situation
 exactly, and it is handled the same way: compare against the constant for the platform you are on,
 never across platforms.
 
@@ -51,13 +46,13 @@ background level, and stability across repeated calls — and each pair spells t
 ### The answer is a SECOND READING, and that is the whole reason it returns anything
 
 A `void` "set" would be untestable — nothing a case could name would change, which is the argument
-`scavengeMemory`'s header makes for answering a byte count. So the op sets the priority and then
+`HeapStats.scavenge()` makes for answering a byte count. So the op sets the priority and then
 READS IT BACK from the OS, and the value it answers is the read, never the value it just wrote.
 
 ### ⛔⛔ NO CASE BELOW CAN SEE WHETHER THE *SET* HAPPENED
 
 **The suite runs these cases inside a process tree that is ALREADY at below-normal priority**, because
-`Main.runSpecTest` calls this very intrinsic before it spawns the worker pool, and a child inherits the
+`Main.runSpecTest` calls this very function before it spawns the worker pool, and a child inherits the
 priority class. So a test binary is at 16384 *before its first instruction*, and `GetPriorityClass`
 answers 16384 whether the lowering sets anything or not.
 
@@ -67,7 +62,7 @@ a missing one, and nothing written inside this suite can.** The discriminator ne
 priority, which the harness structurally cannot provide to its own children.
 
 ⭐ **THE DISCRIMINATING CHECK IS THEREFORE A HAND PROCEDURE, AND IT IS OWED BY ANY CHANGE TO THIS
-LOWERING.** Build a program that prints `__Builtins.enterBackgroundPriority()` and run it from a
+LOWERING.** Build a program that prints `Process.enterBackgroundPriority()` and run it from a
 NORMAL-priority shell (not through the suite, and not through an MCP tool whose server may itself be
 de-prioritised). It must print **16384**; with the SET removed it prints **32**. That is the whole of
 the evidence that the write happens, and it is why this section exists instead of a case that would
@@ -80,7 +75,7 @@ answers 10 there whether or not the set ran. The hand check is the same program 
 
 ### `setpriority`, NEVER `nice` — and the POSIX lane's thread question
 
-The intrinsic lowers to `__proc_bg_priority`, one of the three entries behind the `processInfo` host
+The intrinsic under it lowers to `__proc_bg_priority`, one of the three entries behind the `processInfo` host
 facility — gated by the `__proc_` PREFIX, so it is covered by construction rather than by memory, and
 a program reaching it on a target that does not provide the facility is refused at the call's own
 span with `E3104`. Which targets provide it is `TargetFacilities.targetProvidesFacility`'s to say.
@@ -123,7 +118,7 @@ section above for what does, and why no case here can.
 function main() returns ExitCode
 	let belowNormalPriorityClass = 16384
 	let normalPriorityClass = 32
-	let priority = __Builtins.enterBackgroundPriority()
+	let priority = Process.enterBackgroundPriority()
 	var score = 0
 	if priority == belowNormalPriorityClass 'isBelowNormal'
 		score = score + 1
@@ -146,8 +141,8 @@ back the same answer. A lowering that toggled, or that lowered by one step per c
 ```maxon
 function main() returns ExitCode
 	let belowNormalPriorityClass = 16384
-	let first = __Builtins.enterBackgroundPriority()
-	let second = __Builtins.enterBackgroundPriority()
+	let first = Process.enterBackgroundPriority()
+	let second = Process.enterBackgroundPriority()
 	var score = 0
 	if first == second 'agree'
 		score = score + 1
@@ -174,7 +169,7 @@ measurement that discharged it on this lane.
 function main() returns ExitCode
 	let backgroundNiceValue = 10
 	let normalNiceValue = 0
-	let priority = __Builtins.enterBackgroundPriority()
+	let priority = Process.enterBackgroundPriority()
 	var score = 0
 	if priority == backgroundNiceValue 'isBackground'
 		score = score + 1
@@ -198,8 +193,8 @@ the split its Windows sibling was written to make.
 ```maxon
 function main() returns ExitCode
 	let backgroundNiceValue = 10
-	let first = __Builtins.enterBackgroundPriority()
-	let second = __Builtins.enterBackgroundPriority()
+	let first = Process.enterBackgroundPriority()
+	let second = Process.enterBackgroundPriority()
 	var score = 0
 	if first == second 'agree'
 		score = score + 1
@@ -216,15 +211,15 @@ end 'main'
 
 <!-- test: process-background-priority.rejected-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-wasm32-wasi has no scheduler-priority substrate, so the call is refused at its source span with
-`E3104`, naming the runtime entry that has no lowering there — never a panic from inside the wasm
-backend.
+wasm32-wasi has no scheduler-priority substrate, so the call is refused at the span the program wrote
+with `E3104`, naming the library function and the runtime entry that has no lowering there — never a
+panic from inside the wasm backend.
 ```maxon
 function main() returns ExitCode
-	let priority = __Builtins.enterBackgroundPriority()
+	let priority = Process.enterBackgroundPriority()
 	return priority as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:28: this construct lowers to the runtime entry '__proc_bg_priority', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:25: 'Process.enterBackgroundPriority' lowers to the runtime entry '__proc_bg_priority', which has no wasm32-wasi implementation
 ```

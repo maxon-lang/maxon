@@ -55,7 +55,9 @@ export function executeDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String,
 		return startDebugSession(reqDoc, idNode: idNode, args: args, exePath: exePath, debug: debug)
 	end 'start'
 
-	return match debug.hold 'live'
+	var holding = debug.hold
+
+	return match holding 'live'
 		empty gives toolErrorText(reqDoc, idNode: idNode, message: NoSessionMessage, repoRoot: ActingTree.host)
 		held(session) gives runDebugTool(reqDoc, idNode: idNode, name: name, args: args, session: session, debug: debug)
 	end 'live'
@@ -103,7 +105,7 @@ end 'debugStartReadOf'
 function builtAndLaunched(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, program String, argument DebugProgramArgument, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, exePath FilePath, debug DebugSessionSlot) returns String
 	let traced = getOptionalBoolArg(reqDoc, args: args, key: "trace", defaultVal: false)
 
-	return match debugProgramFor(program, compiler: exePath, traced: traced, argument: argument, timeoutMs: childTimeoutMsOf(reqDoc, args: args, unasked: CompilerChildTimeoutMs)) 'resolved'
+	return match debugProgramFor(program, compiler: exePath, traced: traced, argument: argument, timeoutMs: childTimeoutMsOf(reqDoc, args: args, unasked: CompilerChildTimeoutMs), serial: debug.serials.mint()) 'resolved'
 		failed(diagnostics) gives toolErrorText(reqDoc, idNode: idNode, message: "{DebugStartToolName}: {diagnostics}", repoRoot: ActingTree.host)
 		ready(image) gives launchedInPlaceOfTheLive(reqDoc, idNode: idNode, args: args, image: image, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced, debug: debug)
 	end 'resolved'
@@ -112,7 +114,9 @@ end 'builtAndLaunched'
 function launchedInPlaceOfTheLive(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, image DebugImage, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, debug DebugSessionSlot) returns String
 	let replaced = debug.reap(DebugSessionEnding.terminateTheProgram)
 
-	return match DebugToolSession.launch(image, arguments: getOptionalStringListArg(reqDoc, args: args, key: "args"), targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced) 'started'
+	var launch = DebugToolSession.launch(image, arguments: getOptionalStringListArg(reqDoc, args: args, key: "args"), targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced)
+
+	return match launch 'started'
 		refused(reason) gives refusedStartReply(reqDoc, idNode: idNode, message: "{DebugStartToolName}: {reason}", replaced: replaced)
 		ready(session) gives placedSessionReply(reqDoc, idNode: idNode, session: session, debug: debug, replaced: replaced)
 	end 'started'
@@ -213,7 +217,7 @@ function argumentFreeCommandFor(name String) returns DebugCommand
 end 'argumentFreeCommandFor'
 
 union BreakpointToolAction
-	arm(condition DebugBreakCondition)
+	arm(let condition DebugBreakCondition)
 	disarm
 
 	function commandOn(target DebugBreakTarget) returns DebugCommand

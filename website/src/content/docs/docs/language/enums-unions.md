@@ -171,6 +171,8 @@ type — an interface-typed parameter, an interface-typed return, or an interfac
 dispatch through the witness table, as they do for any other conformer:
 
 ```maxon
+typealias Integer = int(0 to 255)
+
 interface Greeter
 	function greet() returns Integer
 end 'Greeter'
@@ -424,6 +426,33 @@ enum case: `Outcome.pending`.
 Payloads may be integers, floats, booleans, strings, records, other unions and collections. An integer
 literal passed for a `float` payload widens to the float: `Reading.celsius(21)` carries `21.0`.
 
+### Read-Only Payloads
+
+A payload declared `let` is read-only for the whole life of the value, like a `let` field (see
+[Read-Only Values](/docs/language/memory-model/#read-only-values)). A value stored into it must be read-only, a value type, or moved in
+(**E3078** otherwise); a match binding of it is read-only, and a write through it is **E3159**. A union whose
+payloads are all `let` and all value types is itself a value type.
+
+```maxon
+typealias Weight = int(0 to 100)
+
+union Op
+	call(let callee ByteArray, weight Weight)
+	nop
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.call(b"emit", weight: 3)
+
+	match op 'show'
+		call(callee, weight) then print("{callee.count()} {weight}\n")    // 4 3
+		nop then print("nop\n")
+	end 'show'
+
+	return 0
+end 'main'
+```
+
 ### Pattern Matching
 
 In a `match`, `caseName(a, b)` binds the payload for that arm; the bindings are local to the arm.
@@ -468,7 +497,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-When the matched value is a `let`, the bindings are immutable and assigning to one is **E2013**.
+When the matched value is a `let`, the bindings are immutable and assigning to one is **E2013**. They are
+also [read-only](/docs/language/memory-model/#read-only-values) all the way down, so a write through one is **E3159**.
 
 ### Comparing Union Values
 

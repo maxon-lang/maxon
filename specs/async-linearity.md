@@ -30,7 +30,7 @@ reaches it.
   two consumes that hand the thread back to the RUNTIME (`await` / `try await`, and `.cancel()`) record the
   consume against the green thread's own identity, so **any later use of any name that spells that thread**
   is refused at the name — a second `await`, a `cancel` after an `await`, and equally a NON-consuming read
-  like `q.inner`, which no linearity check could ever see. Because it is keyed on the thread and not on a
+  like `q.isComplete()`, which no linearity check could ever see. Because it is keyed on the thread and not on a
   binding, an **alias** (`let q = p`) is covered by the same record as the binding that spawned it.
 - **E3102 — "use of moved value"** stays for a promise that was handed to another OWNER rather than
   reclaimed: passed as a call argument, stored into a container or a union payload. The thread is alive and
@@ -390,11 +390,11 @@ typealias Integer = int(i64.min to i64.max)
 ⭐ **A CONSUME POISONS EVERY NAME THAT SPELLS THE THREAD, NOT ONLY THE ONE THAT OWNS IT.** `let q = p`
 enrols no second owner — `q` simply reads `p`'s value — so a consume that poisoned only the owned-set
 entry would leave `q` fully live over a green thread the runtime has already reclaimed, and
-`gtIsComplete` would answer off a GT struct already back on the scheduler's free list — no diagnostic, no
+`isComplete()` would answer off a GT struct already back on the scheduler's free list — no diagnostic, no
 crash. That is the shape a peek gives an ownership defect: a plausible number.
 
 ⚠ The peek is what makes this observable at all. `q` could not be awaited a second time — E3100 catches
-that — but `q.inner` is a NON-consuming read, and no linearity check exists that can see one.
+that — but `q.isComplete()` is a NON-consuming read, and no linearity check exists that can see one.
 ```maxon
 function makeValue() returns Integer
 	Scheduler.yield()
@@ -405,13 +405,13 @@ function main() returns ExitCode
 	let p = async makeValue()
 	let q = p
 	let a = await p
-	let done = __Builtins.gtIsComplete(q.inner)
+	let done = 1 if q.isComplete() else 0
 	return (a + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3142: <fragment>:11:37: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+error E3142: <fragment>:11:18: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-linearity.error.use-after-cancel-through-alias -->
@@ -430,13 +430,13 @@ function main() returns ExitCode
 	let p = async makeValue()
 	let q = p
 	p.cancel()
-	let done = __Builtins.gtIsComplete(q.inner)
+	let done = 1 if q.isComplete() else 0
 	return (7 + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3142: <fragment>:11:37: this promise was already consumed by an earlier 'cancel': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+error E3142: <fragment>:11:18: this promise was already consumed by an earlier 'cancel': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: async-linearity.error.cancel-twice -->

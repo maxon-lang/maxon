@@ -1,16 +1,37 @@
 module type ViewEntry
 	module let facts as RawStreamFacts
-	module let view as SharedBuildView
+	module var view as SharedBuildView
 
 	module static function create(facts RawStreamFacts, view SharedBuildView) returns ViewEntry
 		return Self{facts: facts, view: view}
 	end 'create'
 end 'ViewEntry'
 
+function encodedSourceSpellings(writer LibraryCacheWriter, spellings NameRoster)
+	writer.unsigned(spellings.count() as CacheUnsigned)
+
+	for spelling in spellings 'eachSpelling'
+		writer.bytes(spelling)
+	end 'eachSpelling'
+end 'encodedSourceSpellings'
+
+function decodedSourceSpellings(reader LibraryCacheReader) returns NameRoster throws LibraryCacheDamage
+	let count = try reader.count()
+	var spellings = NameRoster.create()
+	spellings.reserve(count)
+
+	for _ in 0 upto count 'eachSpelling'
+		let spelling = try reader.bytes()
+		spellings.push(spelling)
+	end 'eachSpelling'
+
+	return spellings
+end 'decodedSourceSpellings'
+
 module function encodedViewSection(facts RawStreamFacts, view SharedBuildView) returns ByteArray
 	var writer = LibraryCacheWriter.create()
-	cacheWriteByteArrayArray(writer, value: facts.declaredTypeNames)
-	cacheWriteByteArrayArray(writer, value: facts.reservedSpellings)
+	encodedSourceSpellings(writer, spellings: facts.declaredTypeNames)
+	encodedSourceSpellings(writer, spellings: facts.reservedSpellings)
 	writer.flag(view.producerMaskComputed)
 	writer.unsigned(view.producerMask as CacheUnsigned)
 	cacheWriteTokenArray(writer, value: view.activeTokens)
@@ -19,8 +40,8 @@ module function encodedViewSection(facts RawStreamFacts, view SharedBuildView) r
 end 'encodedViewSection'
 
 module function decodedViewSection(reader LibraryCacheReader, buildKey BuildKey) returns ViewEntry throws LibraryCacheDamage
-	let names = try cacheReadByteArrayArray(reader)
-	let reserved = try cacheReadByteArrayArray(reader)
+	let names = try decodedSourceSpellings(reader)
+	let reserved = try decodedSourceSpellings(reader)
 	let maskComputed = try reader.flag()
 	let mask = try cacheReadProducerMask(reader)
 	let tokens = try cacheReadTokenArray(reader)
@@ -43,7 +64,7 @@ module function encodedBaseline(declarations LibraryDeclarations, key HashDigest
 	writer.unsigned(key as CacheUnsigned)
 	cacheWriteFilePathArray(writer, value: declarations.manifest.deferred)
 	cacheWriteFilePathArray(writer, value: declarations.manifest.streamed)
-	cacheWriteByteArrayArray(writer, value: declarations.manifest.templates)
+	cacheWriteNameRoster(writer, value: declarations.manifest.templates)
 	declarations.signatures.cacheWrite(writer)
 
 	if writer.refused() 'aCaseTheFormatDoesNotCarry'
@@ -57,7 +78,7 @@ module function decodedManifest(reader LibraryCacheReader, key HashDigest) retur
 	try requireKey(reader, expected: key)
 	let deferred = try cacheReadFilePathArray(reader)
 	let streamed = try cacheReadFilePathArray(reader)
-	let templates = try cacheReadByteArrayArray(reader)
+	let templates = try cacheReadNameRoster(reader)
 
 	return LibraryManifest.create(deferred, streamed: streamed, templates: templates)
 end 'decodedManifest'

@@ -42,6 +42,14 @@ statement of it.** Dropping a promise reaps a green-thread struct and releases i
 which is why the cases here carry no `unsupported-targets` marker for it. A case marked for one lane
 family is marked because its CHILD COMMAND is a shell's or `cmd`'s, never because the drop is.
 
+A case observes a thread without consuming its promise through `p.isComplete()`. The cases that park on a
+child spawned by `__Builtins.runProcess` compile in the library tier (`<!-- tier: stdlib -->`): that
+intrinsic is callable only from a source file under `stdlib/` or `runtime/` (E3185). They use it because it is
+the child wait that parks on a poll source a drop takes the thread off. A coroutine parked in `Subprocess.run`
+waits in `__gt_subp_wait_collect`, which drains the child's pipes while it waits: dropping its promise waits the
+child out (the program lives as long as the child does), so it exercises another road than the one these cases
+pin.
+
 ## Tests
 
 <!-- test: async-promise-drop.never-ran-drop-no-leak -->
@@ -91,7 +99,8 @@ function main() returns ExitCode
 	let a = async ten()
 	let b = async twenty()
 	let r = await b
-	return (r + __Builtins.gtIsComplete(a.inner)) as ExitCode
+	let done = 1 if a.isComplete() else 0
+	return (r + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -178,7 +187,8 @@ function main() returns ExitCode
 	let s = async sleeper()
 	let q = async fast()
 	let r = await q
-	return (r + __Builtins.gtIsComplete(s.inner)) as ExitCode
+	let done = 1 if s.isComplete() else 0
+	return (r + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -255,10 +265,11 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.parked-subprocess-drop-cancel -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 The CHILD twin of the parked-timer case, and the same program one op at a time. `slowProc` spawns a child
 that runs for ~2 s and parks on the poll source that child became; `fast` completes immediately, so `await q`
-returns 42 while `slowProc` is still parked on its child — the `gtIsComplete` peek adds `0`, which is that
+returns 42 while `slowProc` is still parked on its child — the `isComplete()` peek adds `0`, which is that
 thread saying so. Scope exit drops `s` — the `waiting` arm takes it off that source and RENOUNCES it, so the
 thread resumes, gives the source back, closes the child's handle (abandon the WAIT, do not kill the child) and
 unwinds its own frame. The abandoned child runs to completion independently; the program exits promptly with 42
@@ -287,7 +298,8 @@ function main() returns ExitCode
 	let s = async slowProc()
 	let q = async fast()
 	let r = await q
-	return (r + __Builtins.gtIsComplete(s.inner)) as ExitCode
+	let done = 1 if s.isComplete() else 0
+	return (r + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -296,6 +308,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.posix-parked-subprocess-drop-cancel -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `parked-subprocess-drop-cancel` on the POSIX lanes, where `/bin/sh -c "sleep 2"` is a child that really does
 outlive the `await`. The road is the same one: a child park is a poll source here too, so the `waiting` arm
@@ -315,7 +328,8 @@ function main() returns ExitCode
 	let s = async slowProc()
 	let q = async fast()
 	let r = await q
-	return (r + __Builtins.gtIsComplete(s.inner)) as ExitCode
+	let done = 1 if s.isComplete() else 0
+	return (r + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -324,6 +338,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.parked-subprocess-drop-reclaims-the-frames-heap -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⭐ **THE DROPPED COROUTINE UNWINDS ITS OWN FRAME, SO THE HEAP ITS LOCALS OWN GOES BACK.** `slowProc` holds
 one interpolated `String` across a park on its child, and `main` drops the promise while it is still parked.
@@ -352,7 +367,8 @@ function main() returns ExitCode
 	let p = async slowProc(1)
 	let q = async fast()
 	let r = await q
-	return (r + __Builtins.gtIsComplete(p.inner)) as ExitCode
+	let done = 1 if p.isComplete() else 0
+	return (r + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -361,6 +377,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-promise-drop.posix-parked-subprocess-drop-reclaims-the-frames-heap -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 The same shape on the POSIX lane, where `/bin/sh -c "sleep 2"` is a child that really does outlive the
 `await`. ⚠ Its sibling above spawns through `cmd /c`, which on this lane fails to exec and returns before
@@ -386,7 +403,8 @@ function main() returns ExitCode
 	let p = async slowProc(1)
 	let q = async fast()
 	let r = await q
-	return (r + __Builtins.gtIsComplete(p.inner)) as ExitCode
+	let done = 1 if p.isComplete() else 0
+	return (r + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -406,7 +424,7 @@ program can produce.
 
 ⚠ **THE PROMISE MUST BE BOUND AND THE SLEEP IS WHAT PUTS THE DROP AFTER THE PARK.** `_ = async reader(h)`
 discards at its own statement, before the coroutine has run, and takes the never-ran arm instead. The
-`gtIsComplete` peek adds `0`, which is that thread saying it was still parked when `dropWhileParked`
+`isComplete()` peek adds `0`, which is that thread saying it was still parked when `dropWhileParked`
 returned and dropped it.
 ```maxon
 function reader(h Integer, tag Integer) returns Integer
@@ -418,7 +436,7 @@ end 'reader'
 function dropWhileParked(h Integer) returns Integer
 	let p = async reader(h, tag: 1)
 	sleep(200)
-	return __Builtins.gtIsComplete(p.inner)
+	return 1 if p.isComplete() else 0
 end 'dropWhileParked'
 
 function main() returns ExitCode
@@ -462,7 +480,8 @@ end 'victim'
 function dropper() returns Integer
 	let p = async victim(1)
 	sleep(200)
-	return 7 + __Builtins.gtIsComplete(p.inner)
+	let done = 1 if p.isComplete() else 0
+	return 7 + done
 end 'dropper'
 
 function main() returns ExitCode
@@ -673,7 +692,7 @@ function completesUnderTheDrive(slots IntPromiseArray) returns bool
 	while spins < MaxSpins 'drive'
 		Scheduler.yield()
 		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
-		if __Builtins.gtIsComplete(p.inner) != 0 'complete'
+		if p.isComplete() 'complete'
 			return true
 		end 'complete'
 		spins = spins + 1
@@ -737,7 +756,7 @@ function completesUnderTheDrive(slots IntPromiseArray) returns bool
 	while spins < MaxSpins 'drive'
 		Scheduler.yield()
 		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
-		if __Builtins.gtIsComplete(p.inner) != 0 'complete'
+		if p.isComplete() 'complete'
 			return true
 		end 'complete'
 		spins = spins + 1
@@ -796,9 +815,11 @@ end 'main'
 ```
 
 <!-- test: async-promise-drop.an-element-moved-out-by-pop-belongs-to-the-caller -->
+<!-- procs: 1 -->
 `pop` MOVES the element out: the array no longer holds it and the caller's binding does, so the binding
-drops it at scope exit like any other owned promise. `.inner` peeks at the handle without consuming it, which is
-what lets this case observe the promise at all without awaiting it.
+drops it at scope exit like any other owned promise. `isComplete()` peeks at the thread without consuming it, which
+is what lets this case observe the promise at all without awaiting it. One processor keeps the answer fixed: `main`
+has not parked, so the popped thread has not run yet.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -813,12 +834,12 @@ function main() returns ExitCode
 		var s = IntPromiseArray.create()
 		s.push(async plain())
 		let p = try s.pop() otherwise panic("just pushed one")
-		print("popped a thread {p.inner > 0}, array now {s.count()}")
+		print("popped a thread complete={p.isComplete()}, array now {s.count()}")
 		return 0
 end 'main'
 ```
 ```stdout
-popped a thread true, array now 0
+popped a thread complete=false, array now 0
 ```
 ```exitcode
 0
@@ -830,9 +851,9 @@ A struct FIELD is an owner too, and the struct's synthesized destructor drops it
 what makes that position safe.
 
 ⚠ **IT AWAITS THE FIELD RATHER THAN PEEKING IT, AND THE DIFFERENCE IS THE WHOLE CASE.** A peek
-`h.p.inner > 0` passes for the wrong reason. The spawn is a statement-scoped pending temporary, so storing it
+`h.p.isComplete()` answers for the wrong reason. The spawn is a statement-scoped pending temporary, so storing it
 into a field without MOVING it would leave the drain to cancel the thread at the end of that statement; the
-field would then hold a dead handle, and a peek reads a dangling pointer that is still non-zero. `await h.p`
+field would then hold a dead handle, and a peek reads a thread that is already gone. `await h.p`
 is what tells the two apart: against a cancelled thread it aborts (**exit 92**), and only a field that
 really owns a live promise answers 7.
 ```maxon
@@ -845,7 +866,7 @@ function plain() returns Integer
 end 'plain'
 
 type Holder
-		public let p as IntPromise
+		public var p as IntPromise
 
 		static function of(p IntPromise) returns Holder
 				return Holder{p: p}
@@ -859,6 +880,92 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: async-promise-drop.a-let-field-takes-a-fresh-spawn-and-a-last-use-promise -->
+A `let` field takes a promise it is the only holder of: a spawn written at the call, and a `var` promise at its last use. Both are moved in, and the holders' destructors drop them without a leak.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+type Holder
+	public let p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+function main() returns ExitCode
+	var pr = async plain()
+	let h = Holder.of(pr)
+	let again = Holder.of(async plain())
+	_ = h.p.isComplete()
+	_ = again.p.isComplete()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.error.awaiting-a-promise-held-in-a-let-field-is-refused -->
+`await` consumes the promise: it empties the slot it was read from. A `let` field is read-only, so nothing reachable through it may be written, and the await is refused. A `var` field (`a-struct-field-drops-the-promise-it-holds`) is accepted.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+type Holder
+	public let p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+function main() returns ExitCode
+	let h = Holder.of(async plain())
+	return (await h.p) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:19:10: cannot consume with 'await' a promise held in a `let` field: consuming a promise empties the slot it was read from, and nothing reachable through a read-only value may be written; hold it in a `var` field
+```
+
+<!-- test: async-promise-drop.error.cancelling-a-promise-held-in-a-let-field-is-refused -->
+`cancel` consumes the promise the same way, so it is refused through a `let` field for the same reason.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function plain() returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return 7
+end 'plain'
+
+type Holder
+	public let p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+function main() returns ExitCode
+	let h = Holder.of(async plain())
+	h.p.cancel()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:19:6: cannot consume with 'cancel' a promise held in a `let` field: consuming a promise empties the slot it was read from, and nothing reachable through a read-only value may be written; hold it in a `var` field
 ```
 
 <!-- test: async-promise-drop.error.a-promise-element-read-through-a-borrow-door -->
@@ -997,7 +1104,7 @@ parameter, and the sweep counts an `await` of the parameter as a take. A sweep t
 durable storage would enroll nobody, and the `await` would meet `requireConsumedPromiseIsOwned`'s E3141 at a
 program that is perfectly legal. `promise-peek.md`'s
 `a-peek-through-a-function-leaves-the-promise-alone` pins the other side — a callee that only READS
-`p.inner` consumes nothing and leaves the promise with the caller.
+`p.isComplete()` consumes nothing and leaves the promise with the caller.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -1366,7 +1473,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 type Holder
-	public let p as IntPromise
+	public var p as IntPromise
 
 	static function of(p IntPromise) returns Holder
 		return Holder{p: p}
@@ -1400,7 +1507,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 type Holder
-	public let p as IntPromise
+	public var p as IntPromise
 
 	static function of(p IntPromise) returns Holder
 		return Holder{p: p}
@@ -1978,11 +2085,13 @@ end 'main'
 ```
 
 <!-- test: async-promise-drop.a-peeked-promise-argument-stays-with-the-caller -->
+<!-- procs: 1 -->
 ⭐⭐ **A CALLER MOVES A PROMISE ARGUMENT IN EXACTLY WHERE THE CALLEE OWNS IT.** `finish` awaits `q`, so it owns
 `q`; it only peeks `p`, so `p` stays the caller's, and the caller's later `await p` is legal. The caller and the
 callee answer "does the callee take this one?" off one predicate over the swept facts. A caller that moved
 every promise argument of a callee that consumes ANY parameter would refuse this program at `await p` with
-E3102 and leak its sibling below.
+E3102 and leak its sibling below. On one processor the peek reads `p` before `main` has parked, so it answers
+`false` and `r` is 11.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
@@ -1993,8 +2102,8 @@ function work(n Integer) returns Integer
 end 'work'
 
 function finish(p IntPromise, q IntPromise) returns Integer
-	let alive = 1 if p.inner > 0 else 0
-	return (await q) + alive
+	let ran = 1 if p.isComplete() else 0
+	return (await q) + ran
 end 'finish'
 
 function main() returns ExitCode
@@ -2006,13 +2115,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-12 2
+11 2
 ```
 ```exitcode
 0
 ```
 
 <!-- test: async-promise-drop.a-peeked-promise-argument-is-dropped-by-the-caller -->
+<!-- procs: 1 -->
 The same peeked argument left to the caller's scope exit: the caller still owns it, so the caller drops it.
 Were it moved into a callee that did not own it, nobody would drop it and the run would abort **75**.
 ```maxon
@@ -2025,8 +2135,8 @@ function work(n Integer) returns Integer
 end 'work'
 
 function finish(p IntPromise, q IntPromise) returns Integer
-	let alive = 1 if p.inner > 0 else 0
-	return (await q) + alive
+	let ran = 1 if p.isComplete() else 0
+	return (await q) + ran
 end 'finish'
 
 function main() returns ExitCode
@@ -2037,7 +2147,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-12
+11
 ```
 ```exitcode
 0

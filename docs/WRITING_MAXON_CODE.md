@@ -840,7 +840,7 @@ let popped = try list.removeFirst() otherwise 0  // throws
 ### Prefer iterators over indexed access
 
 Walk a collection with `for`-`in`, not an index loop over `.get()`. Indexed access needs a `try` on every
-step, conflicts with the borrow checker (E3070) when the collection is mutated, and is slower.
+step and is slower.
 
 ```maxon
 // AVOID — indexed loop with a per-step try
@@ -1155,15 +1155,17 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
 ### Memory Model
 
 - Primitives: copied by value
-- Structs: assigned by reference (alias). Use `.clone()` for independent copy
-- Reference counting: automatic scope cleanup
-- Borrow checking: CANNOT mutate a collection while a `.get()` borrow is live (E3070)
+- Structs: shared by reference when stored or passed. Use `.clone()` for independent copy
+- Reference counting: automatic scope cleanup. A read that could outlive its owner is counted, and a `for`
+  loop holds its source, so mutating a collection while an element read from it is in use is safe
 - `@heap let p = Point.create(0.0, y: 0.0)` forces heap allocation
-- A record is written through mutable holders or read through immutable names, never both at once.
-  `var b = a`, where the `let` `a` is its record's only reference, **moves** it: reading `a` afterwards is
-  **E3102**. Where another live `let` still names the record, `var b = a` is **E3078** — use `let` or
-  `.clone()`. Writing a field of a record a live `let` may still read is **E3159**.
-- A parameter the function assigns to is passed by reference; passing a `let` to it is **E3019**.
+- `let` is read-only all the way down: a `let` binding, `let` field, `let` payload, module-level `let`,
+  `SharedValue` or registry read, stored `Map` key or `Set` element, and `readonly` element. A write through
+  one is **E3159**; binding one to a `var` or storing it where something may write it is **E3078**.
+- `var b = a` and `let b = a` from a `var` `a` **move** it: reading `a` afterwards is **E3102**. `var b = a`
+  from a `let` `a` is **E3078**; use `.clone()` for a mutable copy.
+- A parameter the function assigns to is passed by reference; passing a read-only value to it is **E3159**.
+  Passing storage to a parameter the callee reassigns while another argument reaches it is **E3186**.
 
 ### Purity and discarded results
 

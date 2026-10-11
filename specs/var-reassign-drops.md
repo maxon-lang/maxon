@@ -308,7 +308,7 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(1)
-	let t = s
+	var t = s
 	s = t
 	print(s)
 	return 0
@@ -319,4 +319,24 @@ end 'main'
 ```
 ```stdout
 v1
+```
+
+<!-- test: error.self-assign-through-a-let-is-refused -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	var s = build(1)
+	let t = s
+	s = t
+	print(s)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:11:2: cannot assign the read-only 't' to mutable binding 's'; use 'let' instead of 'var', or use clone()
 ```

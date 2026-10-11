@@ -16,13 +16,6 @@
 // One `await` on a service reply. Rows, not a per-function column: see `ServiceAwaitRoster`.
 module typealias ServiceAwaitSiteArray = Array with ServiceAwaitSite
 
-// One row per ACCESS to module storage: which function holds it, which direction, and what the author wrote
-// there. A ROSTER rather than a per-function column, on `ServiceAwaitRoster`'s discipline and for its reason
-// — a function may touch two globals, and a read-modify-write touches one of them twice, so a single site
-// per function can carry neither. Rows are appended in function-major then op-major order, which is what
-// makes "the earliest offending access" a scan rather than a sort.
-typealias ModuleVarAccessSiteArray = Array with ModuleVarAccessSite
-
 module enum AwaitRowLookup implements Error
 	awaitsOnlyThroughAHelper
 end 'AwaitRowLookup'
@@ -209,7 +202,7 @@ module type ServiceProgramSurvey
 	// which is what narrows where it can land (`widenFrom`). A function's rows are contiguous, from its entry in
 	// `witnessDispatchStarts` to the next function's.
 	var witnessDispatchFuncs as FuncIndexArray
-	var witnessDispatchRequirements as ByteArrayArray
+	var witnessDispatchRequirements as NameRoster
 	var witnessDispatchStarts as EntryIndexArray
 
 	// ⭐ E3143's column: the functions whose ADDRESS this program takes — one entry per `functionRef` that
@@ -217,18 +210,18 @@ module type ServiceProgramSurvey
 	// rather than as a marked column because a `functionRef` may name a function this sweep has not reached yet.
 	var addressTaken as CsrColumn
 
-	// E3143's roster, in two parallel columns.
-	var accessFuncs as FuncIndexArray
-	var accessSites as ModuleVarAccessSiteArray
-
 	// E3163's and E3165's roster: every op addressing the slot of a managed global.
 	export var globalUses as SlotRoster
+
+	// E3143's roster: every op addressing the slot of a module-level or `static` `var`, filed against the
+	// position of that `var` in the `ModuleVarRoster` the rule was handed.
+	export var moduleVarUses as SlotRoster
 
 	// E3164's roster: every `spawn`, and the function holding it.
 	export var spawns as OpRoster
 
 	static function create() returns ServiceProgramSurvey
-		return Self{edges: CallGraphEdges.create(), ownerPerFunc: MessageOwnerArray.create(), awaits: ServiceAwaitRoster.create(), callsAClosure: BoolArray.create(), dispatchesThroughAWitness: BoolArray.create(), witnessDispatchFuncs: FuncIndexArray.create(), witnessDispatchRequirements: ByteArrayArray.create(), witnessDispatchStarts: EntryIndexArray.create(), calleeGraph: buildCsr(CsrColumn.create(), to: CsrColumn.create(), nodeCount: 0), addressTaken: CsrColumn.create(), accessFuncs: FuncIndexArray.create(), accessSites: ModuleVarAccessSiteArray.create(), globalUses: SlotRoster.create(), spawns: OpRoster.create()}
+		return Self{edges: CallGraphEdges.create(), ownerPerFunc: MessageOwnerArray.create(), awaits: ServiceAwaitRoster.create(), callsAClosure: BoolArray.create(), dispatchesThroughAWitness: BoolArray.create(), witnessDispatchFuncs: FuncIndexArray.create(), witnessDispatchRequirements: NameRoster.create(), witnessDispatchStarts: EntryIndexArray.create(), calleeGraph: buildCsr(CsrColumn.create(), to: CsrColumn.create(), nodeCount: 0), addressTaken: CsrColumn.create(), globalUses: SlotRoster.create(), moduleVarUses: SlotRoster.create(), spawns: OpRoster.create()}
 	end 'create'
 
 	module function funcCount() returns CsrIndex
@@ -258,18 +251,6 @@ module type ServiceProgramSurvey
 			service(name) then return name
 		end 'owner'
 	end 'serviceOf'
-
-	module function accessRowCount() returns CsrIndex
-		return self.accessSites.count()
-	end 'accessRowCount'
-
-	module function accessFuncAt(row CsrIndex) returns ElementIndex
-		return try self.accessFuncs.get(row) otherwise panic("ServiceProgramSurvey.accessFuncAt: accessFuncs.get OOB at {row} below count {self.accessRowCount()}")
-	end 'accessFuncAt'
-
-	module function accessSiteAt(row CsrIndex) returns ModuleVarAccessSite
-		return try self.accessSites.get(row) otherwise panic("ServiceProgramSurvey.accessSiteAt: accessSites.get OOB at {row} below count {self.accessRowCount()}")
-	end 'accessSiteAt'
 
 	// Does this function choose a callee at run time — a closure call or a witness dispatch?
 	module function dispatchesAtRunTime(funcIndex ElementIndex) returns bool
@@ -335,7 +316,7 @@ module type ServiceProgramSurvey
 	// ⭐⭐ **ONE FUNCTION'S EDGES, ITS AWAITS, ITS RUN-TIME DISPATCHES, ITS ADDRESS-TAKING AND ITS MODULE
 	// ACCESSES — ALL OUT OF THE SAME OP SWEEP.** Five facts about one body; five walks of it would be five
 	// chances to disagree about which ops that body has, which is this file's whole reason for existing.
-	function noteFunction(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndexByName FuncIndexByName, funcIndex ElementIndex, dispatch WitnessDispatchTargets, globalsByLabel SlotSubjectByLabel)
+	function noteFunction(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, funcIndexByName FuncIndexByName, funcIndex ElementIndex, dispatch WitnessDispatchTargets, globalsByLabel SlotSubjectByLabel, moduleVarsByLabel SlotSubjectByLabel)
 		if let owner = try messageOwnerNameOf(signatures, callee: func.name) 'aMessage'
 			self.ownerPerFunc.push(MessageOwner.service(owner))
 		end 'aMessage' else 'notAMessage'
@@ -375,13 +356,9 @@ module type ServiceProgramSurvey
 					self.awaits.noteReplyAwait(funcIndex, site: awaitSite, signatures: signatures)
 				end 'awaitsAReply'
 
-				if let accessSite = try project.moduleVarAccessSites.get(opIndex) 'touchesModuleStorage'
-					self.accessFuncs.push(funcIndex)
-					self.accessSites.push(accessSite)
-				end 'touchesModuleStorage'
-
 				if maxonOpNamesAGlobalLabel(op) 'addressesAGlobal'
 					self.globalUses.noteIfListed(maxonOpGlobalLabelName(op), listed: globalsByLabel, funcIndex: funcIndex, opIndex: opIndex)
+					self.moduleVarUses.noteIfListed(maxonOpGlobalLabelName(op), listed: moduleVarsByLabel, funcIndex: funcIndex, opIndex: opIndex)
 				end 'addressesAGlobal'
 
 				if maxonOpIsServiceSpawn(op) 'aSpawn'
@@ -417,8 +394,8 @@ typealias RequirementNameSet = Set with ByteArray
 // ⚠ **THE GATES ARE ASKED BEFORE THE SWEEP, AND EACH IS EMPTY FOR A DIFFERENT ENORMOUS POPULATION.**
 // `serviceAwaitSites` is empty for every program that awaits no reply — every program with no service in it,
 // and every fire-and-forget one. `serviceTypeRoster` is empty for every program that spawns nothing, and the
-// other three service rules need a service too: `moduleVarAccessSites` is empty for every program that never
-// names a module `var`, the unmarkable `let`s for every program whose `let`s can all be walked, and
+// other three service rules need a service too: `moduleVarDeclarationsOf` is empty for every program that
+// declares no module-level or `static` `var`, the unmarkable `let`s for every program whose `let`s can all be walked, and
 // `__module_init` exists only in a program with a managed global. E3165 needs no service, only a managed `var`
 // beside a `let` whose initializer calls.
 //
@@ -429,7 +406,8 @@ export function checkServiceRules(project Project, module MaxonModule, signature
 	let spawnsAService = serviceTypeRoster(signatures).count() != 0
 	let unmarkableLets = letShareWalksOf(project.managedGlobals, spawnsAService: spawnsAService).unmarkable
 	let blockingRuleApplies = project.serviceAwaitSites.count() != 0
-	let globalRuleApplies = spawnsAService and project.moduleVarAccessSites.count() != 0
+	let moduleVars = moduleVarDeclarationsOf(signatures, spawnsAService: spawnsAService)
+	let globalRuleApplies = moduleVars.count() != 0
 	let letRuleApplies = unmarkableLets.count() != 0
 	let initializerRuleApplies = spawnsAService and funcNames.byName.contains(ModuleInitName)
 	let letInitializerRuleApplies = aLetInitializerMayReachAVar(project.managedGlobals)
@@ -442,10 +420,11 @@ export function checkServiceRules(project Project, module MaxonModule, signature
 	var survey = ServiceProgramSurvey.create()
 	var dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
 	let globalsByLabel = managedGlobalsByLabel(project.managedGlobals)
+	let moduleVarsByLabel = slotLabelsOfModuleVars(moduleVars)
 
 	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
 		let func = try funcNames.functions.get(funcIndex) otherwise panic("checkServiceRules: functions.get OOB at {funcIndex}")
-		survey.noteFunction(project, module: module, signatures: signatures, func: func, funcIndexByName: funcNames.byName, funcIndex: funcIndex, dispatch: dispatch, globalsByLabel: globalsByLabel)
+		survey.noteFunction(project, module: module, signatures: signatures, func: func, funcIndexByName: funcNames.byName, funcIndex: funcIndex, dispatch: dispatch, globalsByLabel: globalsByLabel, moduleVarsByLabel: moduleVarsByLabel)
 	end 'eachFunc'
 
 	survey.settleCallGraph()
@@ -454,17 +433,17 @@ export function checkServiceRules(project Project, module MaxonModule, signature
 		checkServiceCallCycles(project, signatures: signatures, funcNames: funcNames, survey: survey)
 	end 'e3139'
 
-	if globalRuleApplies or letRuleApplies 'aMessageMayReachModuleStorage'
+	if globalRuleApplies or letRuleApplies 'aMessageCanRunIt'
 		let reached = functionsSeedsCanRun(funcNames, survey: survey, seeds: survey.messageSeeds(), dispatch: dispatch)
 
 		if globalRuleApplies 'e3143'
-			checkServiceGlobalAccesses(project, signatures: signatures, funcNames: funcNames, survey: survey, reached: reached)
+			checkServiceGlobalAccesses(project, signatures: signatures, funcNames: funcNames, survey: survey, moduleVars: moduleVars, reached: reached)
 		end 'e3143'
 
 		if letRuleApplies 'e3162'
 			checkUnmarkableLetReads(project, funcNames: funcNames, survey: survey, reached: reached)
 		end 'e3162'
-	end 'aMessageMayReachModuleStorage'
+	end 'aMessageCanRunIt'
 
 	let initializers = initializerCallees(project, module: module, funcNames: funcNames)
 
@@ -491,6 +470,16 @@ function managedGlobalsByLabel(globals ManagedGlobalArray) returns SlotSubjectBy
 
 	return byLabel
 end 'managedGlobalsByLabel'
+
+function slotLabelsOfModuleVars(moduleVars ModuleVarRoster) returns SlotSubjectByLabel
+	var byLabel = SlotSubjectByLabel.create()
+
+	for (position, decl) in moduleVars.withIterator() 'eachVar'
+		byLabel.upsert(try decl.dataLabel.label() otherwise panic("slotLabelsOfModuleVars: the `var` {String.from(decl.name)} has no `.data` slot, yet every `var` is stored"), value: position.index())
+	end 'eachVar'
+
+	return byLabel
+end 'slotLabelsOfModuleVars'
 
 // Only an initializer that calls can reach another global, and only a `var` among the managed globals is refused.
 function aLetInitializerMayReachAVar(globals ManagedGlobalArray) returns bool
@@ -550,6 +539,8 @@ function opTakesAFunctionsAddress(op MaxonOp) returns bool
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness gives false
+		existentialWitness or
+		holdValue or
+		holdEnd gives false
 	end 'op'
 end 'opTakesAFunctionsAddress'

@@ -48,13 +48,6 @@
 // TELL AN ORDINARY LOAD FROM A READ OF A WORD ANOTHER THREAD WRITES.**
 // This is the one premise here that is about the whole program rather than about the loop.
 //
-// ⚠ The frontend proves something adjacent and it is NOT what this rule rests on. A `for … in`
-// element is a LEXICAL BORROW of the subject, and the borrow checker refuses a call taking that subject
-// mutably while the loop is live (`Parser.maxon`, a ⚖ USER RULING; round-trip cases in
-// `specs/borrow-liveness.md`). That is a real fact and it is cited here so a later reader does not
-// take it for the rule — but it says nothing about a `while` loop, about a global, or about a container
-// the loop does not iterate, and Rule 1 needs none of it.
-//
 // ══ RULE 2 — WHEN A LOAD MAY BE SPECULATED: IT WAS GOING TO RUN ANYWAY ══
 //
 // **A hoisted op executes even when the loop body never runs**, and for a load that can FAULT. The
@@ -459,8 +452,6 @@ function analyzeLoopBlocks(module StdModule, func IrFunction, tree StdDominatorT
 	scratch.walkOrder.clear()
 	recordLoopPreorder(tree, members: scratch.members, header: header, into: scratch.walkOrder)
 
-	// An INDEX loop, not `for … in`: the element is a BORROW of `scratch`, and the call below is
-	// recorded as writing that same storage. ⚖ Canonical note at `ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for i in 0 upto scratch.walkOrder.count() 'eachBlock'
 		let position = try scratch.walkOrder.get(i) otherwise panic("analyzeLoopBlocks: walkOrder.get OOB at {i} inside its own count")
 		analyzeLoopBlock(module, block: blockAtPosition(module, func: func, position: position), position: position, memoryIsStable: memoryIsStable, scratch: scratch)

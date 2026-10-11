@@ -1,0 +1,157 @@
+/// Readings of the allocator's own counters and levels.
+/// @category System
+public typealias HeapCount = int(0 to u64.max)
+public typealias HeapBytes = int(0 to u64.max)
+public typealias HeapBucketIndex = int(0 to 2047)
+typealias HeapCountArray = Array with HeapCount
+typealias HeapBytesArray = Array with HeapBytes
+
+let HeapBucketCount = 2048
+
+/// How `HeapStats.census` buckets the live heap: by allocation tag, which only a `--debugstream`
+/// build puts on a box, or by size class.
+public enum HeapCensusMode
+	byTag = 0
+	bySizeClass = 1
+end 'HeapCensusMode'
+
+public type HeapActivity
+	public let allocations as HeapCount
+	public let frees as HeapCount
+	public let bytes as HeapBytes
+
+	static function create(allocations HeapCount, frees HeapCount, bytes HeapBytes) returns Self
+		return Self{allocations: allocations, frees: frees, bytes: bytes}
+	end 'create'
+end 'HeapActivity'
+
+public type SlabUsage
+	public let live as HeapBytes
+	public let free as HeapBytes
+	public let cachedFree as HeapBytes
+	public let parked as HeapBytes
+	public let committed as HeapBytes
+	public let remoteFrees as HeapCount
+
+	static function create(live HeapBytes, free HeapBytes, cachedFree HeapBytes, parked HeapBytes, committed HeapBytes, remoteFrees HeapCount) returns Self
+		return Self{live: live, free: free, cachedFree: cachedFree, parked: parked, committed: committed, remoteFrees: remoteFrees}
+	end 'create'
+end 'SlabUsage'
+
+/// The live heap in 2048 buckets. `tallyBytes` is the live bytes the walk itself counted, a
+/// cross-check on the buckets' sum. Bucket 2046 holds the slots whose first word is not a tag, and
+/// bucket 2047 a tag past the end of the table.
+public type SlabCensus
+	public let mode as HeapCensusMode
+	public let tallyBytes as HeapBytes
+	public let liveBytes as HeapBytes
+	let counts as HeapCountArray
+	let bytes as HeapBytesArray
+
+	static function create(mode HeapCensusMode, tallyBytes HeapBytes, liveBytes HeapBytes, counts HeapCountArray, bytes HeapBytesArray) returns Self
+		return Self{mode: mode, tallyBytes: tallyBytes, liveBytes: liveBytes, counts: counts, bytes: bytes}
+	end 'create'
+
+	public function bucketCount(index HeapBucketIndex) returns HeapCount
+		return try self.counts.get(index as ElementIndex) otherwise panic("SlabCensus.bucketCount: bucket {index} is outside the {HeapBucketCount} buckets a census snapshot holds")
+	end 'bucketCount'
+
+	public function bucketBytes(index HeapBucketIndex) returns HeapBytes
+		return try self.bytes.get(index as ElementIndex) otherwise panic("SlabCensus.bucketBytes: bucket {index} is outside the {HeapBucketCount} buckets a census snapshot holds")
+	end 'bucketBytes'
+end 'SlabCensus'
+
+public type HeapStats
+	public static function allocationsMade() returns HeapCount
+		return __Builtins.mmAllocTotal()
+	end 'allocationsMade'
+
+	public static function allocationsLive() returns HeapCount
+		return __Builtins.mmAllocLive()
+	end 'allocationsLive'
+
+	public static function bytesAllocated() returns HeapBytes
+		return __Builtins.mmAllocBytes()
+	end 'bytesAllocated'
+
+	public static function rawAllocationsMade() returns HeapCount
+		return __Builtins.mmRawAllocTotal()
+	end 'rawAllocationsMade'
+
+	public static function rawAllocationsLive() returns HeapCount
+		return __Builtins.mmRawAllocLive()
+	end 'rawAllocationsLive'
+
+	public static function rawBytesAllocated() returns HeapBytes
+		return __Builtins.mmRawAllocBytes()
+	end 'rawBytesAllocated'
+
+	/// Allocations tag `tag` has made since the process started; `bytesTagged` is the bytes they asked
+	/// for. Both only rise, and both answer 0 outside a `--debugstream` build.
+	public static function allocationsTagged(tag HeapBucketIndex) returns HeapCount
+		return __Builtins.mmAllocTotalByTag(tag)
+	end 'allocationsTagged'
+
+	public static function bytesTagged(tag HeapBucketIndex) returns HeapBytes
+		return __Builtins.mmAllocBytesByTag(tag)
+	end 'bytesTagged'
+
+	public static function threadAllocations() returns HeapCount
+		return __Builtins.threadAllocTotal()
+	end 'threadAllocations'
+
+	public static function threadFrees() returns HeapCount
+		return __Builtins.threadFreeTotal()
+	end 'threadFrees'
+
+	public static function threadBytes() returns HeapBytes
+		return __Builtins.threadAllocBytes()
+	end 'threadBytes'
+
+	public static function processAllocations() returns HeapCount
+		return __Builtins.processAllocTotal()
+	end 'processAllocations'
+
+	public static function processFrees() returns HeapCount
+		return __Builtins.processFreeTotal()
+	end 'processFrees'
+
+	public static function processBytes() returns HeapBytes
+		return __Builtins.processAllocBytes()
+	end 'processBytes'
+
+	public static function thread() returns HeapActivity
+		return HeapActivity.create(HeapStats.threadAllocations(), frees: HeapStats.threadFrees(), bytes: HeapStats.threadBytes())
+	end 'thread'
+
+	public static function process() returns HeapActivity
+		return HeapActivity.create(HeapStats.processAllocations(), frees: HeapStats.processFrees(), bytes: HeapStats.processBytes())
+	end 'process'
+
+	public static function slab() returns SlabUsage
+		return SlabUsage.create(__Builtins.slabLiveBytes(), free: __Builtins.slabFreeBytes(), cachedFree: __Builtins.slabCachedFreeBytes(), parked: __Builtins.slabParkedBytes(), committed: __Builtins.slabCommittedBytes(), remoteFrees: __Builtins.slabRemoteFreeCount())
+	end 'slab'
+
+	/// Walks every live slot once. A heap the walk finds inconsistent ends the program with exit code
+	/// 119.
+	public static function census(mode HeapCensusMode) returns SlabCensus
+		let tally = __Builtins.slabCensusTally(mode.rawValue)
+		let live = __Builtins.slabLiveBytes()
+		var counts = HeapCountArray.create()
+		var bytes = HeapBytesArray.create()
+
+		for bucket in 0 upto HeapBucketCount 'eachBucket'
+			counts.push(__Builtins.slabCensusBucketCount(bucket as HeapBucketIndex))
+			bytes.push(__Builtins.slabCensusBucketBytes(bucket as HeapBucketIndex))
+		end 'eachBucket'
+
+		return SlabCensus.create(mode, tallyBytes: tally, liveBytes: live, counts: counts, bytes: bytes)
+	end 'census'
+
+	/// Hand free chunks back to the page layer and decommit the 64 KiB granules that were already
+	/// wholly free at the previous call, answering the bytes decommitted. A caller that wants memory
+	/// back after a burst calls it twice.
+	public static function scavenge() returns HeapBytes
+		return __Builtins.scavengeMemory()
+	end 'scavenge'
+end 'HeapStats'

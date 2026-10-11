@@ -1679,7 +1679,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		arm64Cbz(reg, targetBlockId) then arm64EmitCbz(code, fixups: branchFixups, reg: arm64GprField(reg), targetBlock: targetBlockId)
 		arm64Cbnz(reg, targetBlockId) then arm64EmitCbnz(code, fixups: branchFixups, reg: arm64GprField(reg), targetBlock: targetBlockId)
 		arm64MovImm(dest, value) then arm64EmitMovImm(code, rd: arm64GprField(dest), value: value)
-		arm64Prologue(stackSize, recordOffset) then arm64EmitPrologue(code, frameSize: stackSize, recordOffset: recordOffset)
+		arm64Prologue(stackSize, recordOffset) then arm64EmitPrologue(code, frameSize: stackSize, recordOffset: recordOffset, probeScratchIsFree: true)
 		arm64Epilogue(stackSize, recordOffset) then arm64EmitEpilogue(code, frameSize: stackSize, recordOffset: recordOffset)
 		arm64Add(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpAdd, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		arm64Sub(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpSub, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
@@ -2453,16 +2453,48 @@ export let Arm64FrameRecordBytes = 16
 // allocates and stores in one instruction and so can only put the record AT the new SP. `add x29, sp,
 // #recordOffset` then keeps x29 pointing at the record, which is what leaves `[x29 + 16 + slot*8]` spill
 // addressing identical in both shapes.
-export function arm64EmitPrologue(code ByteArray, frameSize StackSize, recordOffset StackSize)
+export function arm64EmitPrologue(code ByteArray, frameSize StackSize, recordOffset StackSize, probeScratchIsFree bool)
 	if frameSize <= Arm64FramePairIndexMax and recordOffset == 0 'compact'
 		arm64EmitStpPreIndex(code, frameSize: frameSize)
 		arm64EmitAddFpFromSp(code, offset: recordOffset)
 	end 'compact' else 'explicitAlloc'
-		arm64EmitStackAlloc(code, amount: frameSize)
+		arm64EmitFrameAlloc(code, frameSize: frameSize, probeScratchIsFree: probeScratchIsFree)
 		arm64EmitFrameRecordPair(code, opcode: Arm64OpStpOffX, offset: recordOffset as MachineWord)
 		arm64EmitAddFpFromSp(code, offset: recordOffset)
 	end 'explicitAlloc'
 end 'arm64EmitPrologue'
+
+let Arm64OpCmpSpReg = 0xEB2063FF
+
+function arm64EmitFrameAlloc(code ByteArray, frameSize StackSize, probeScratchIsFree bool)
+	if frameSize <= StackProbeStrideBytes 'withinOnePage'
+		arm64EmitStackAlloc(code, amount: frameSize)
+		return
+	end 'withinOnePage'
+
+	if not probeScratchIsFree 'noScratch'
+		panic("arm64EmitFrameAlloc: a {frameSize}-byte frame is past the {StackProbeStrideBytes}-byte page, so it must walk the pages down — but this call site did not certify x{Arm64Ip1} free, and the walk has no other register to use. Reserve it in page-sized steps, or free a scratch register at that site and certify it.")
+	end 'noScratch'
+
+	arm64EmitStackProbe(code, frameSize: frameSize)
+end 'arm64EmitFrameAlloc'
+
+// The arm64 twin of `X64Backend.encodeStackProbe`: it touches every page between SP and the new
+// frame's base.
+function arm64EmitStackProbe(code ByteArray, frameSize StackSize)
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpSubImm, rd: Arm64Ip1, rn: Arm64SpBaseField, imm: frameSize as MachineWord)
+
+	let walkStart = code.count()
+	arm64EmitStackAlloc(code, amount: StackProbeStrideBytes)
+	emitArm64Insn(code, insn: Arm64OpCmpSpReg or (Arm64Ip1 shl Arm64RmShift))
+	let toLanding = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.ls)
+	arm64EmitStoreWord64Sp(code, src: Arm64Ip1, byteOffset: 0)
+	arm64PatchBranch26(code, codeOffset: arm64EmitLocalBranch(code), targetOffset: walkStart as CodeOffset)
+
+	arm64PatchBranch19(code, codeOffset: toLanding, targetOffset: codeHere(code))
+	arm64EmitMovToSp(code, src: Arm64Ip1)
+	arm64EmitStoreWord64Sp(code, src: Arm64Ip1, byteOffset: 0)
+end 'arm64EmitStackProbe'
 
 // Close the frame: LDP x29, x30, [sp], #N for a compact frame, else reload the record and free the
 // frame with an ADD-sp split. The `ret` is the separate `arm64Ret` terminator, exactly as x64's
@@ -2628,7 +2660,7 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction, fra
 		// and relocates it first. The exemption is `skipsGreenThreadStackGuard`, asked of the function's
 		// provenance and never its name.
 		if isFirstBlock and guarded 'guard'
-			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: frameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.functionEntry, target: target)
+			emitArm64GtStackGuard(code, callFixups: callFixups, rdataRelocs: rdataRelocs, frameBytes: frameBytes, margin: gtStackGuardMargin(target), site: GtGuardSite.runtimeEntry if encoding.pinsItsThread else GtGuardSite.functionEntry, target: target)
 
 			// x64's twin: the guard's bytes are where an asynchronous stop may not land, read off the buffer.
 			unsafePrefixBytes = codeHere(code)
@@ -2670,11 +2702,12 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction, fra
 	chunk.funcAdrpRelocs = funcAdrpRelocs
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
 
-	// Stoppable where it stands exactly when the stack guard applies; `X64Backend.emitFunctionChunk`
-	// says why `compilerScaffolding` is asked separately.
-	chunk.asyncPreemptible = guarded
+	// Stoppable where it stands exactly when the stack guard applies and it does not pin its thread;
+	// `X64Backend.emitFunctionChunk` says why `compilerScaffolding` is asked separately.
+	chunk.asyncPreemptible = guarded and not encoding.pinsItsThread
 	chunk.asyncUnsafePrefixBytes = unsafePrefixBytes
 	chunk.compilerScaffolding = encoding.compilerScaffolding
+	chunk.spendsCallerStack(frameBytes, checks: guarded)
 
 	// Gated on `--coverage` rather than on debug info: the two are independent channels, and this one is
 	// empty for an ordinary build because no `covInc` was emitted to fill it. Dropping it would leave every
@@ -2789,14 +2822,14 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: SymbolTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
 	labelsLaid = labelsLaid + 1
-	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, spellings: project.stdlibShadowSpellings))
+	code.append(buildSymbolTableBytes(debugSymbols, target: project.target, spellings: project.shadowRoster.spellings))
 
 	// The inline frame tables follow the whole of `__symtable` — names and flag run both — under their own
 	// label (`BacktraceFormat`), past the `[mrt_start, __symtable)` window the walkers symbolize in; x64's
 	// concat lays them out the same way.
 	padTo(code, size: alignUp(code.count() as BytePos, alignment: SymbolTableAlignment))
 	try recordChunkLabel(labelOffsets, name: InlineFrameTableName, offset: codeHere(code), laidOut: labelsLaid, project: project, funcNames: funcNames)
-	code.append(buildInlineFrameTableBytes(inlineFrames, spellings: project.stdlibShadowSpellings))
+	code.append(buildInlineFrameTableBytes(inlineFrames, spellings: project.shadowRoster.spellings))
 
 	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 	arm64ResolveFuncAdrpRelocs(funcAdrpRelocs, labelOffsets: labelOffsets)
@@ -3011,6 +3044,11 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	end 'gtChunks'
 
 	recordPhase(project, phase: CompilePhase.encodeRuntime, probe: encodeProbe)
+
+	if usage.usesGt 'unguardedChains'
+		try requireUnguardedChainsFitTheGuardMargin(project, module: targetModule, globalData: globalData, funcNames: funcNames, chunks: chunks, target: target)
+	end 'unguardedChains'
+
 	releaseEncodedTargetModule(project, targetModule: targetModule)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)

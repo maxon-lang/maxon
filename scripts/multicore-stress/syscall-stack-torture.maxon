@@ -172,9 +172,10 @@ function main() returns ExitCode
 
 	// ⚠ READ BEFORE THE HANDLES DROP, for `service-torture`'s reason: these are
 	// cumulative counters, and every worker M was created long before this line.
-	let workers = __Builtins.schedMaxActiveWorkers()
-	let steals = __Builtins.schedStealCount()
-	let procs = __Builtins.schedProcessorCount()
+	let counters = Scheduler.counters()
+	let workers = counters.maxActiveWorkers
+	let steals = counters.steals
+	let procs = Scheduler.processorCount()
 
 	// ⭐⭐ THE ONE SPAWN-DRIVEN PROGRAM WHOSE `workers` PIN IS CONDITIONAL, AND THE BLOCKING CALLS ARE WHY.
 	// At one processor a spawned green thread has no second M to wake, so every other program here reads

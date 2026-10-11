@@ -7,7 +7,7 @@
 // rewrite `main` and to find unused exports. Each case is staged in a directory of its own so
 // its file-private names stay apart, its `main` becomes an exported `__spec_case_<n>`, and a
 // generated entry runs the cases its `--select=` list names between BEGIN and END markers that
-// carry each case's exit code and the live green-thread count `__Builtins.gtQuiesce()` reports.
+// carry each case's exit code and the live green-thread count `Scheduler.quiesce()` reports.
 //
 // The entry quiesces after each case because a case's services and coroutines otherwise run on
 // after its `main` returns and land their output past its END marker. A case left with live
@@ -60,10 +60,9 @@ let MainSignatureQualifiers = ["export ", "module ", "public ", "async "]
 
 let CommandLineReader = "CommandLine"
 let ExecutablePathReader = "executablePath"
-let RuntimeStateReader = "__Builtins"
 let DebugStreamReader = "__DebugStream"
-let ProcessStateWriters = ["Log", "Logger", "LogSink", "TraceCapture"]
-let GreenThreadQuiesceCall = "__Builtins.gtQuiesce()"
+let ProcessStateWriters = ["Log", "Logger", "LogSink", "TraceCapture", "enterBackgroundPriority", "pinToMachine", "unpinFromMachine"]
+let GreenThreadQuiesceCall = "Scheduler.quiesce()"
 let BatchNothingOutstanding = 0
 let FileMacro = "__file__"
 let LineMacro = "__line__"
@@ -79,10 +78,12 @@ module enum SoloReason
 	readsCommandLine
 	readsItsExecutable
 
-	// `__Builtins.` is the only door a program has to runtime counters, and earlier cases move them.
+	// The runtime counters a program reads (`RawSurface.runtimeStateReadingCalls`) are process-wide, and
+	// earlier cases move them.
 	readsRuntimeState
 
-	// `Log`, `Logger`, `LogSink` and `TraceCapture` set process-wide state a later case would inherit.
+	// `Log`, `Logger`, `LogSink`, `TraceCapture`, the process priority and a machine pin set process-wide
+	// state a later case would inherit.
 	sharesProcessState
 
 	// A multi-file program refuses an export nothing uses (E3092, E3094).
@@ -111,6 +112,7 @@ module enum SoloReason
 	tracesAsync
 	buildsDebugInfo
 	stagesOwnTiers
+	compilesAsLibrary
 	spansFiles
 	readsItsPosition
 	pinsEmittedCode
@@ -323,6 +325,10 @@ module function placementOf(test SpecTest, irAction IrAction) returns Placement
 		return Placement.apart(SoloReason.stagesOwnTiers)
 	end 'stagesOwnTiers'
 
+	if test.compilesAsLibrary() 'compilesAsLibrary'
+		return Placement.apart(SoloReason.compilesAsLibrary)
+	end 'compilesAsLibrary'
+
 	if test.isMultiFile() 'spansFiles'
 		return Placement.apart(SoloReason.spansFiles)
 	end 'spansFiles'
@@ -421,8 +427,8 @@ end 'ClaimedMember'
 module typealias ClaimedMemberArray = Array with ClaimedMember
 
 module type BatchGroup
-	export let members as BatchMemberArray
-	let claims as BatchClaimArray
+	export var members as BatchMemberArray
+	var claims as BatchClaimArray
 
 	module static function create() returns BatchGroup
 		return Self{members: BatchMemberArray.create(), claims: BatchClaimArray.create()}
@@ -506,7 +512,7 @@ function claimedPlacementFor(member BatchMember, claims SourceClaims) returns Cl
 		return ClaimedPlacement.apart(SoloReason.readsItsExecutable)
 	end 'readsItsExecutable'
 
-	if namesAny(claims, words: [RuntimeStateReader]) 'readsRuntimeState'
+	if namesAny(claims, words: runtimeStateReadingCalls()) 'readsRuntimeState'
 		return ClaimedPlacement.apart(SoloReason.readsRuntimeState)
 	end 'readsRuntimeState'
 
@@ -588,7 +594,7 @@ type EntryFacilities
 end 'EntryFacilities'
 
 function endedCaseSource(index ElementIndex, codeText String, facilities EntryFacilities) returns String
-	let outstanding = GreenThreadQuiesceCall if facilities.quiesces else "{BatchNothingOutstanding}"
+	let outstanding = "{GreenThreadQuiesceCall} as {BatchLeftAlias}" if facilities.quiesces else "{BatchNothingOutstanding}"
 	return "{facilities.indent()}{BatchRunType}.ended({index}, code: {codeText}, outstanding: {outstanding})\n"
 end 'endedCaseSource'
 
@@ -650,8 +656,8 @@ function batchEntrySource(members BatchMemberArray, facilities EntryFacilities) 
 	return source
 end 'batchEntrySource'
 
-function mintedNamesForBatchEntry() returns ByteArrayArray
-	var names = ByteArrayArray.create()
+function mintedNamesForBatchEntry() returns NameRoster
+	var names = NameRoster.create()
 	names.push(BatchIndexAlias.toByteArray())
 	names.push(BatchLeftAlias.toByteArray())
 	names.push(BatchRunType.toByteArray())
@@ -661,7 +667,7 @@ end 'mintedNamesForBatchEntry'
 
 module type BatchProgram
 	export let exePath as FilePath
-	export let members as BatchMemberArray
+	export var members as BatchMemberArray
 	export let stdlibDir as String
 	export let runtimeDir as String
 	export let writtenFiles as FilePathArray
@@ -706,7 +712,7 @@ function stageBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 		let test = try tests.get(member.testIndex) otherwise panic("SpecBatch: batch member {iter.index()} names test {member.testIndex}, past the {tests.count()} the spec selected")
 		let caseIndex = iter.index()
 		let path = build.root.join("{BatchCaseDirPrefix}{caseIndex}").join(BatchCaseFileName)
-		var names = ByteArrayArray.create()
+		var names = NameRoster.create()
 		names.push(batchCaseName(caseIndex).toByteArray())
 		try build.addSource(path, content: batchCaseSource(test, caseIndex: caseIndex), mintedNames: names)
 	end 'eachMember'
@@ -814,7 +820,7 @@ module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex
 		last = buildBatch(tempDir, ordinal: ordinal, tests: tests, members: remaining, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 
 		match last 'attempt'
-			built then return BatchOutcome.create(last, refusals: refusals)
+			built then break 'eachAttempt'
 			notBuilt(answer, refused) then remaining = noteRefused(refusals, answer: answer, ordinal: ordinal, refused: refused, remaining: remaining)
 		end 'attempt'
 

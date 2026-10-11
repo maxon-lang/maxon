@@ -1574,9 +1574,13 @@ func @main {
 ```
 
 <!-- test: data-section-runtime-word-after-a-bool-is-aligned -->
+<!-- tier: stdlib -->
 The runtime's words are laid out after the program's own globals, and each is still naturally aligned:
 a 1-byte user global is followed by seven bytes of padding before the scheduler's 8-byte worker mark.
 An arm64 exclusive load or store faults on an address that is not a multiple of its width.
+`main` reads the worker mark through `__Builtins`, which only a source file under `stdlib/` or `runtime/` may
+call (E3185), so the case compiles in the library tier; its public spelling, `Scheduler.counters()`, lays out
+a word for every scheduler counter rather than the one this layout pins.
 
 ```maxon
 var flag = true

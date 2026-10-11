@@ -223,6 +223,7 @@ export type IrModule uses Op
 	export var hostText = HostTextEncoding.utf8
 
 	export var runtimeAbortSites = RuntimeAbortSiteArray.create()
+	export var runtimeAbortDoorBuilt = false
 
 	export static function create() returns Self
 		return Self{}
@@ -628,16 +629,11 @@ export type IrModule uses Op
 		return try self.blocks.get(index) otherwise panic("getBlock: index out of bounds")
 	end 'getBlock'
 
-	// The block at a `func.blockRefs` POSITION — the key space `StdDominatorTree` answers in. Read through
-	// a function so the borrow of the module ends at the return, as `getOp` explains.
+	// The block at a `func.blockRefs` POSITION — the key space `StdDominatorTree` answers in.
 	export function blockAtPosition(func IrFunction, position ElementIndex) returns IrBlock
 		return self.getBlock(try func.blockRefs.get(position) otherwise panic("blockAtPosition: position {position} is outside func.blockRefs, which holds {func.blockRefs.count()} block(s)"))
 	end 'blockAtPosition'
 
-	// ⚠ **ONE OP, READ THROUGH A FUNCTION — AND THAT IS E3070 RATHER THAN TIDINESS.** A `module.ops.get(…)`
-	// written inline borrows the module for as long as the value lives, and a pass that mutates the module
-	// in the next breath (an `appendOp`, an `ops.set`) is refused by the self-compile. Reading through this
-	// ends the borrow at the return, which is why every op read on a mutating path comes here.
 	export function getOp(index ElementIndex) returns Op
 		return try self.ops.get(index) otherwise panic("getOp: op index {index} out of bounds")
 	end 'getOp'

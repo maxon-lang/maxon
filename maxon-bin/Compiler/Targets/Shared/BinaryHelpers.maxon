@@ -56,6 +56,21 @@ export typealias CodeOffset = int(0 to u64.max)
 export typealias CodeOffsetArray = Array with CodeOffset
 export typealias StackSize = int(0 to u64.max)
 
+// The stride a stack probe walks a large frame down in, and therefore the largest frame a prologue
+// opens in one step. A guard page faults only when it is itself touched: a subtraction that carries
+// the stack pointer PAST it never touches it, so the first write below lands beyond the guard (on
+// Windows, on reserved-but-uncommitted memory, and the process dies with 0xC0000005). A frame of
+// exactly one stride cannot skip a guard region at least that large — the deepest address it
+// reaches is `sp - 4096` — so the walk is needed strictly PAST this size, which is why both
+// prologues (`X64Backend.encodePrologue`, `Arm64Backend.arm64EmitFrameAlloc`) test `>`. Every
+// system stack's guard region is held to at least this size
+// (`GtRuntime.requireProbeStrideFitsTheSystemStackGuard`).
+//
+// It is the x86-64 page size, an ARCHITECTURE fact about the address translation the OS grows
+// stacks in units of. The PE writer's section alignment happens to be the same number for an
+// entirely unrelated reason; tying the two together would be one constant standing for two facts.
+export let StackProbeStrideBytes = 4096 as StackSize
+
 export function codeHere(code ByteArray) returns CodeOffset
 	return code.count() as CodeOffset
 end 'codeHere'

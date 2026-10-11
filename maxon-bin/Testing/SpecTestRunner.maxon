@@ -75,6 +75,14 @@ let MultiFileSourceDirSuffix = ".src"
 // staged runtime anywhere else is a directory nothing loads.
 let StagedTierRootSuffix = ".tiers"
 
+let SpecTierDirName = "__spec_tier__"
+
+let SharedTierRootStem = "__shared__"
+
+let SharedTierReadyName = "staged.ok"
+
+let SharedTierReadyContent = "staged\n"
+
 let CarriageReturn = "\r"
 
 let FragmentTestPrefix = "// Test: "
@@ -916,6 +924,8 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 		throw CompileError.directoryNotFound(tempDir)
 	end 'noTempDir'
 
+	clearSharedTiers(tempDir, tests: tests)
+
 	let runWorkingDir = specRunWorkingDir()
 	let exeExtension = executableExtension(effectiveTarget.os)
 	let specDirName = specDir.filename()
@@ -925,7 +935,9 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	var prepared = PreparedTestArray.create()
 
 	for (iter, test) in tests.withIterator() 'eachCompile'
-		match batch.stepFor(iter.index()) 'batched'
+		var batchedStep = batch.stepFor(iter.index())
+
+		match batchedStep 'batched'
 			found(step) then prepared.push(step)
 			absent then prepared.push(preparedAfterBatching(test, at: iter.index(), refusals: batch.refusals, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: irActionAt(actions, index: iter.index()), effectiveTarget: effectiveTarget, fileMemos: fileMemos))
 		end 'batched'
@@ -960,6 +972,8 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	for sharedProgram in batch.batches 'eachBatch'
 		discardBuild(sharedProgram.program.writtenFiles, exePath: sharedProgram.program.exePath)
 	end 'eachBatch'
+
+	clearSharedTiers(tempDir, tests: tests)
 
 	return SpecRun.create(results, cpu: cpu, batch: performed.tally)
 end 'runOneSpec'
@@ -1027,12 +1041,13 @@ function withBatchedFailuresDiagnosed(performed RunsPerformed, prepared Prepared
 
 	for at in failed 'eachAffected'
 		let test = try tests.get(at) otherwise panic("withBatchedFailuresDiagnosed: test {at} is past the {tests.count()} the spec selected")
-		let step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: irActionAt(actions, index: at), effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		let action = irActionAt(actions, index: at)
+		let step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: action, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 		again.push(step)
 		try prepared.set(at, value: step) otherwise panic("withBatchedFailuresDiagnosed: prepared test {at} is past the {prepared.count()} the spec prepared")
 	end 'eachAffected'
 
-	let second = executeRuns(again, batches: PreparedBatchArray.create(), specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
+	var second = executeRuns(again, batches: PreparedBatchArray.create(), specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
 
 	for (iter, at) in failed.withIterator() 'eachRerun'
 		try performed.observations.set(at, value: observationAt(second.observations, index: iter.index())) otherwise panic("withBatchedFailuresDiagnosed: observation {at} is past the {performed.observations.count()} the spec prepared")
@@ -1457,7 +1472,7 @@ end 'TargetRefusal'
 // Four guards keep it narrow, each against a different way it could swallow a real failure:
 //   * only a verdict that did not hold is considered, so a case that pins E3104 as its own expected
 //     diagnostic (`builtins-sleep.rejected-on-wasm`) matches, passes, and never reaches here;
-//   * a `compilerError` case is not converted even when its verdict failed (`outcomeOrTargetSkip`),
+//   * a `compilerError` case is not converted even when its verdict failed (`refusalThatSkips`),
 //     so the coverage that pins a refusal survives the refusal becoming a skip in both directions;
 //   * every non-empty line the compiler printed must be an E3104, not merely contain one: another
 //     diagnostic is a real complaint, and a line that is not a diagnostic at all (a panic, a
@@ -1525,9 +1540,9 @@ end 'targetRefusalIn'
 // ⇒ **THE QUESTION IS WHO THE SUBJECT IS.** A `compilerError` case asserts WHAT THE COMPILER SAYS, so
 // the diagnostics are the artifact under test and a disagreement is an assertion that did not hold. Only
 // a case that expected to BUILD AND RUN can be "not runnable here", and that is the one this converts.
-function outcomeOrTargetSkip(outcome TestOutcome, expectation SpecExpectation, compile CompileAnswer) returns TestOutcome
+function refusalThatSkips(outcome TestOutcome, expectation SpecExpectation, compile CompileAnswer) returns TargetRefusal
 	if outcome.isPass() 'itRanHere'
-		return outcome
+		return TargetRefusal.notRefused
 	end 'itRanHere'
 
 	let compilerIsTheSubject = match expectation 'e'
@@ -1536,14 +1551,11 @@ function outcomeOrTargetSkip(outcome TestOutcome, expectation SpecExpectation, c
 	end 'e'
 
 	if compilerIsTheSubject 'diagnosticsAreTheAssertion'
-		return outcome
+		return TargetRefusal.notRefused
 	end 'diagnosticsAreTheAssertion'
 
-	return match targetRefusalIn(compile) 'refusal'
-		notRefused gives outcome
-		refused(diagnostics) gives TestOutcome.skipped(diagnostics)
-	end 'refusal'
-end 'outcomeOrTargetSkip'
+	return targetRefusalIn(compile)
+end 'refusalThatSkips'
 
 // ⭐⭐ **EVERY RESULT IN EXACTLY ONE VERDICT COLUMN**, read off one walk.
 //
@@ -1971,7 +1983,7 @@ type StagedTest
 	// both into the root module and change what the case MEANS. Naming the directory last pins the
 	// root at `<testDir>` for every shape, and costs nothing: staging wrote exactly the declared
 	// files, and `Compiler.loadSourceFiles` registers a path it has already seen zero more times.
-	export let buildTargets as MaxonSourcePathArray
+	export var buildTargets as MaxonSourcePathArray
 
 	// Every path the compiler may name, with the offset that maps it onto the fragment.
 	export let paths as FragmentPathMappingArray
@@ -2019,7 +2031,7 @@ end 'StagedTest'
 // that names a path escaping the scratch directory. A union, so a failure carries its reason and
 // there is no half-staged state to inspect.
 union StagingResult
-	staged(test StagedTest)
+	staged(let test StagedTest)
 	failed(reason String)
 end 'StagingResult'
 
@@ -2287,7 +2299,9 @@ function prepareOneTest(test SpecTest, specName String, specDirName String, temp
 		return PreparedTest.finished(TestRun.notCompiled("could not form output path for {test.name}"))
 	end 'badExePath'
 
-	match stageTest(tempDir, test: test, specDirName: specDirName) 'staging'
+	var staging = stageTest(tempDir, test: test, specDirName: specDirName)
+
+	match staging 'staging'
 		failed(reason) then return PreparedTest.finished(TestRun.notCompiled(reason))
 		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, action: action, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 	end 'staging'
@@ -2307,6 +2321,10 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 
 	let compiled = compileOneTest(test, staged: staged, exeBase: exeBase, exePath: exePath, emitIr: rendersTargetIr(test, action: action, effectiveTarget: effectiveTarget), effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 
+	if test.compilesAsLibrary() 'theSpecsLibraryWalkMustNotSeeIt'
+		deleteWrittenFiles(staged.writtenFiles)
+	end 'theSpecsLibraryWalkMustNotSeeIt'
+
 	return preparedFrom(compiled, specName: specName, action: action, effectiveTarget: effectiveTarget, via: RunVia.alone)
 end 'compileStagedTest'
 
@@ -2320,13 +2338,13 @@ function preparedFrom(compiled CompiledTest, specName String, action IrAction, e
 		// compiler's answer first exists: `compiled.compile` has just come back, and nothing downstream
 		// re-reads its diagnostics. It wraps the verdict rather than preceding it, because a case whose
 		// EXPECTATION is the refusal must keep its pass — and it is handed that EXPECTATION as well,
-		// because a `compilerError` case must keep its FAIL too. See `outcomeOrTargetSkip`.
+		// because a `compilerError` case must keep its FAIL too. See `refusalThatSkips`.
 		//
 		// ⚠ **THE `awaiting` ARM NEEDS NO SUCH WRAP, AND THAT IS STRUCTURAL RATHER THAN AN OMISSION.**
 		// `runPreconditions` yields it only for a compile that BUILT, and `targetRefusalIn` answers
 		// `notRefused` for anything but a compile that REPORTED DIAGNOSTICS. A refusal therefore cannot
 		// be reachable from a test that got as far as being run.
-		settled(outcome) gives settledStep(compiled, outcome: outcomeOrTargetSkip(outcome, expectation: compiled.test.expectation, compile: compiled.compile), action: action, via: via, effectiveTarget: effectiveTarget)
+		settled(outcome) gives settledPreRun(compiled, outcome: outcome, action: action, via: via, effectiveTarget: effectiveTarget)
 		needsExecution(expected, stderr, stdout) gives PreparedTest.awaiting(PendingRun.create(compiled, expected: expected, stderr: stderr, stdout: stdout, action: action, via: via))
 	end 'verdict'
 end 'preparedFrom'
@@ -2393,6 +2411,13 @@ module function compileVerdictOf(e CompileError) returns CompileVerdict
 	end 'failure'
 end 'compileVerdictOf'
 
+function settledPreRun(compiled CompiledTest, outcome TestOutcome, action IrAction, via RunVia, effectiveTarget Target) returns PreparedTest
+	match refusalThatSkips(outcome, expectation: compiled.test.expectation, compile: compiled.compile) 'refusal'
+		notRefused then return settledStep(compiled, outcome: outcome, action: action, via: via, effectiveTarget: effectiveTarget)
+		refused(diagnostics) then return settledStep(compiled, outcome: TestOutcome.skipped(diagnostics), action: action, via: via, effectiveTarget: effectiveTarget)
+	end 'refusal'
+end 'settledPreRun'
+
 function settledStep(compiled CompiledTest, outcome TestOutcome, action IrAction, via RunVia, effectiveTarget Target) returns PreparedTest
 	let run = settleTargetIr(compiled, outcome: outcome, action: action, effectiveTarget: effectiveTarget)
 	releaseCompiled(compiled, via: via)
@@ -2438,18 +2463,18 @@ end 'withoutRenderedIr'
 function againstPin(rendered String, compiled CompiledTest, outcome TestOutcome, action IrAction, effectiveTarget Target) returns TestRun
 	return match action 'action'
 		none gives TestRun.create(outcome, cpu: compiled.cpu, minted: MintedIr.none)
-		compare(expected) gives TestRun.create(targetIrOutcome(outcome, expected: normalizedIr(expected), rendered: rendered, effectiveTarget: effectiveTarget), cpu: compiled.cpu, minted: MintedIr.none)
+		compare(expected) gives pinComparedRun(outcome, expected: normalizedIr(expected), rendered: rendered, compiled: compiled, effectiveTarget: effectiveTarget)
 		mint(slice) gives TestRun.create(outcome, cpu: compiled.cpu, minted: MintedIr.minted(slice, text: rendered))
 	end 'action'
 end 'againstPin'
 
-function targetIrOutcome(outcome TestOutcome, expected String, rendered String, effectiveTarget Target) returns TestOutcome
+function pinComparedRun(outcome TestOutcome, expected String, rendered String, compiled CompiledTest, effectiveTarget Target) returns TestRun
 	if expected == rendered 'pinHolds'
-		return outcome
+		return TestRun.create(outcome, cpu: compiled.cpu, minted: MintedIr.none)
 	end 'pinHolds'
 
-	return TestOutcome.fail("the {targetIrFenceFor(effectiveTarget)} pin differs from the Target IR the compiler rendered. First difference:\n{firstDifference(expected, actual: rendered)}\nRead the difference; if the change is intended, re-mint the pin with `{UpdateRequiredFlag} {FilterFlagPrefix}<spec>/`")
-end 'targetIrOutcome'
+	return TestRun.create(TestOutcome.fail("the {targetIrFenceFor(effectiveTarget)} pin differs from the Target IR the compiler rendered. First difference:\n{firstDifference(expected, actual: rendered)}\nRead the difference; if the change is intended, re-mint the pin with `{UpdateRequiredFlag} {FilterFlagPrefix}<spec>/`"), cpu: compiled.cpu, minted: MintedIr.none)
+end 'pinComparedRun'
 
 function normalizedIr(text String) returns String
 	return text.replace(CarriageReturn, with: "").trimEnd(CharacterSet.newlines())
@@ -2850,7 +2875,7 @@ end 'withMonitorStderrText'
 
 // The verdict of a test whose program HAS now run.
 //
-// ⚠ It does not consult `outcomeOrTargetSkip`: a test only reaches here through a compile that BUILT,
+// ⚠ It does not consult `refusalThatSkips`: a test only reaches here through a compile that BUILT,
 // and a target refusal is read off a compile that REPORTED DIAGNOSTICS and printed nothing but E3104s.
 // See `compileStagedTest`'s `settled` arm, which is the only door onto that conversion.
 function finishPendingRun(pending PendingRun, observation RunObservation, effectiveTarget Target) returns TestRun
@@ -2861,27 +2886,20 @@ end 'finishPendingRun'
 // Write `test`'s source to disk and describe how the compiler's diagnostics map back onto the
 // merged fragment. THE one place a test's source reaches the filesystem.
 function stageTest(tempDir FilePath, test SpecTest, specDirName String) returns StagingResult
-	if test.isMultiFile() 'multiFile'
+	if test.isMultiFile() or test.compilesAsLibrary() 'staysInADirectory'
 		return stageSourceFiles(tempDir, test: test, specDirName: specDirName)
-	end 'multiFile'
+	end 'staysInADirectory'
 
 	// A `// --- stdlib-overlay:` section cannot reach this branch: `SpecParser.splitSourceSections`
 	// refuses a case that declares one without a `// --- file:` section, because an overlay says what
 	// the compile's STDLIB is and never what it compiles.
 	let fragmentPath = tempDir.join("{test.name}{MaxonFragmentExtension}")
+	var paths = FragmentPathMappingArray.create()
+	var written = FilePathArray.create()
 
-	if not writeFragment(fragmentPath, test: test) 'writeFailed'
+	if not stageFragment(fragmentPath, test: test, paths: paths, written: written) 'writeFailed'
 		return StagingResult.failed("could not write fragment {fragmentPath.toString()}")
 	end 'writeFailed'
-
-	var paths = FragmentPathMappingArray.create()
-
-	// The compiled file IS the fragment (`fragmentSource` wrote the case's own bytes), so its
-	// line numbers need no translation.
-	paths.push(FragmentPathMapping.create(fragmentPath.toString(), lineOffset: NoLineOffset, sourceDirPrefix: ""))
-
-	var written = FilePathArray.create()
-	written.push(fragmentPath)
 
 	var buildTargets = MaxonSourcePathArray.create()
 	buildTargets.push(fragmentPath)
@@ -2917,17 +2935,25 @@ end 'missingRuntimeReason'
 // on its own leftovers" is a failure this project has already had twice. Whatever this
 // run did not write, this run removes.
 function stageSourceFiles(tempDir FilePath, test SpecTest, specDirName String) returns StagingResult
-	// `.src`-suffixed so it never equals `exeBase` (`<tempDir>/<name>`) — see MultiFileSourceDirSuffix.
-	let testDir = tempDir.join("{test.name}{MultiFileSourceDirSuffix}")
+	var paths = FragmentPathMappingArray.create()
+	var written = FilePathArray.create()
+
+	// The checkout's own tiers, located exactly as a compile with no override would locate them — and
+	// the SOURCE a case's private copies are made from.
+	let checkoutStdlib = try locateStdlibDir() otherwise return StagingResult.failed(missingStdlibReason())
+	let checkoutRuntime = try runtimeDirBeside(checkoutStdlib) otherwise return StagingResult.failed(missingRuntimeReason())
+
+	let tiers = try sourceTiersFor(tempDir, test: test, checkoutStdlib: checkoutStdlib, checkoutRuntime: checkoutRuntime, paths: paths, written: written) otherwise (e) 'tierStagingFailed'
+		return StagingResult.failed(tierStagingErrorText(e))
+	end 'tierStagingFailed'
+
+	let testDir = sourceDirectoryFor(tempDir, test: test, tiers: tiers)
 
 	if not Directory.create(testDir) 'noTestDir'
 		return StagingResult.failed("could not create source directory {testDir.toString()}")
 	end 'noTestDir'
 
 	purgeFilesIn(testDir)
-
-	var paths = FragmentPathMappingArray.create()
-	var written = FilePathArray.create()
 
 	// Separate from `written` on purpose: tier staging appends its own files to that list below, and a
 	// case's private stdlib is not one of the units the program is built FROM. `staged` is separate
@@ -2958,22 +2984,23 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, specDirName String) r
 		staged.push(path)
 	end 'eachFile'
 
+	if not test.isMultiFile() 'theFragmentIsTheProgram'
+		let fragmentPath = testDir.join("{test.name}{MaxonFragmentExtension}")
+
+		if not stageFragment(fragmentPath, test: test, paths: paths, written: written) 'fragmentWriteFailed'
+			return StagingResult.failed("could not write fragment {fragmentPath.toString()}")
+		end 'fragmentWriteFailed'
+
+		staged.push(fragmentPath)
+	end 'theFragmentIsTheProgram'
+
 	var buildTargets = compilationUnitsAmong(staged, root: testDir)
-
-	// The checkout's own tiers, located exactly as a compile with no override would locate them — and
-	// the SOURCE a case's private copies are made from.
-	let checkoutStdlib = try locateStdlibDir() otherwise return StagingResult.failed(missingStdlibReason())
-	let checkoutRuntime = try runtimeDirBeside(checkoutStdlib) otherwise return StagingResult.failed(missingRuntimeReason())
-
-	let tiers = try sourceTiersFor(tempDir, test: test, checkoutStdlib: checkoutStdlib, checkoutRuntime: checkoutRuntime, paths: paths, written: written) otherwise (e) 'tierStagingFailed'
-		return StagingResult.failed(tierStagingErrorText(e))
-	end 'tierStagingFailed'
 
 	// LAST, so every file above is registered before the walk reaches it and the walk finds nothing
 	// new — the directory is here to fix the project ROOT, not to contribute a unit.
 	buildTargets.push(testDir)
 
-	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, specDirName: specDirName, paths: paths, writtenFiles: written))
+	return StagingResult.staged(StagedTest.create(buildTargets, stdlibDir: tiers.stdlib.toString(), runtimeDir: tiers.runtime.toString(), specDirName: specDirName, paths: paths, writtenFiles: written))
 end 'stageSourceFiles'
 
 // The tiers a case compiles against: its private copies when it declares either marker, the checkout's
@@ -2983,13 +3010,35 @@ end 'stageSourceFiles'
 // a private copy of one tier without the other leaves the compile pointed at a root holding half of
 // what it loads — a `stdlib-overlay:` case with no staged `runtime/` beside it has no runtime tier at
 // all, and a `runtime-file:` case with no staged `stdlib/` has nothing to be a sibling OF.
-function sourceTiersFor(tempDir FilePath, test SpecTest, checkoutStdlib FilePath, checkoutRuntime FilePath, paths FragmentPathMappingArray, written FilePathArray) returns StagedSourceTiers throws TierStagingError
+function sourceTiersFor(tempDir FilePath, test SpecTest, checkoutStdlib FilePath, checkoutRuntime FilePath, paths FragmentPathMappingArray, written FilePathArray) returns StagedTierDirs throws TierStagingError
 	if test.stdlibOverlays.count() > 0 or test.runtimeFiles.count() > 0 'stagesItsOwnTiers'
 		return try stageSourceTiers(tempDir, test: test, sourceStdlib: checkoutStdlib, sourceRuntime: checkoutRuntime, paths: paths, written: written)
 	end 'stagesItsOwnTiers'
 
-	return StagedSourceTiers.create(checkoutStdlib.toString(), runtimeDir: checkoutRuntime.toString())
+	if test.compilesAsLibrary() 'sharesTheSpecsTiers'
+		return try stageSharedTiers(tempDir, sourceStdlib: checkoutStdlib, sourceRuntime: checkoutRuntime)
+	end 'sharesTheSpecsTiers'
+
+	return StagedTierDirs.create(checkoutStdlib, runtime: checkoutRuntime)
 end 'sourceTiersFor'
+
+function sourceDirectoryFor(tempDir FilePath, test SpecTest, tiers StagedTierDirs) returns FilePath
+	if not test.compilesAsLibrary() 'aPrivateSourceDirectory'
+		return tempDir.join("{test.name}{MultiFileSourceDirSuffix}")
+	end 'aPrivateSourceDirectory'
+
+	return tiers.stdlib.join("{SpecTierDirName}")
+end 'sourceDirectoryFor'
+
+function stageFragment(fragmentPath FilePath, test SpecTest, paths FragmentPathMappingArray, written FilePathArray) returns bool
+	if not writeFragment(fragmentPath, test: test) 'writeFailed'
+		return false
+	end 'writeFailed'
+
+	paths.push(FragmentPathMapping.create(fragmentPath.toString(), lineOffset: NoLineOffset, sourceDirPrefix: ""))
+	written.push(fragmentPath)
+	return true
+end 'stageFragment'
 
 // ⭐⭐ **WHICH OF THE STAGED FILES BELONG TO THE PROGRAM — ASKED WITH THE COMPILER'S OWN PREDICATE,
 // NOT DECIDED HERE.** `staged` is every `// --- file:` section the case declared, on disk and in
@@ -3052,36 +3101,6 @@ module function missingStdlibReason() returns String
 	return "no {StdlibDirName}/ above this executable, so a diagnostic raised inside the library could not be rewritten to a portable path"
 end 'missingStdlibReason'
 
-// Why a case that stages its own source tiers could not be staged. A one-arm union implementing `Error`
-// — the shape `ScaleError` already uses next door — so the staging steps below read as a `try` chain and
-// every failure carries its own sentence rather than a boolean the caller has to explain.
-union TierStagingError implements Error
-	refused(reason String)
-end 'TierStagingError'
-
-// The sentence a refusal carries, for the one caller that turns it back into a `StagingResult`.
-// `scaleErrorText`'s shape, for the same reason: a union arm is how the reason travels, and unwrapping
-// it belongs at the boundary rather than at every `throw`.
-function tierStagingErrorText(error TierStagingError) returns String
-	return match error 'e'
-		refused(reason) gives reason
-	end 'e'
-end 'tierStagingErrorText'
-
-// The `stdlib/` and `runtime/` roots a case compiles against, as the STRINGS the compile takes: they are
-// handed to `compileToProduct` as `stdlibDirOverride` and `runtimeDirOverride` and read by
-// `normalizeCompilerOutput` as the roots to rewrite out of a diagnostic, and all of those take the
-// spelling rather than the path. A pair, because they are chosen together and the compile is told both:
-// returning one and re-deriving the other is how the two would come to name different roots.
-type StagedSourceTiers
-	export let stdlibDir as String
-	export let runtimeDir as String
-
-	static function create(stdlibDir String, runtimeDir String) returns StagedSourceTiers
-		return Self{stdlibDir: stdlibDir, runtimeDir: runtimeDir}
-	end 'create'
-end 'StagedSourceTiers'
-
 // ⭐⭐ **A CASE'S PRIVATE SOURCE TIERS — the fixture that makes `<stdlibDir>/Builtins.maxon`'s OWN rules
 // and the `runtime/` tier's privileges testable, and the reason it has to exist rather than being a spec
 // someone forgot to write.**
@@ -3122,62 +3141,48 @@ end 'StagedSourceTiers'
 //
 // ⭐ **THE RUNTIME SECTIONS ARE WRITTEN AFTER THE TIER IS COPIED**, because the refusal that stops one
 // from clobbering a real runtime module asks whether the file is already there.
-function stageSourceTiers(tempDir FilePath, test SpecTest, sourceStdlib FilePath, sourceRuntime FilePath, paths FragmentPathMappingArray, written FilePathArray) returns StagedSourceTiers throws TierStagingError
+function stageSourceTiers(tempDir FilePath, test SpecTest, sourceStdlib FilePath, sourceRuntime FilePath, paths FragmentPathMappingArray, written FilePathArray) returns StagedTierDirs throws TierStagingError
 	let tierRoot = tempDir.join("{test.name}{StagedTierRootSuffix}")
 
-	if not Directory.create(tierRoot) 'noRoot'
-		throw TierStagingError.refused("could not create source-tier directory {tierRoot.toString()}")
-	end 'noRoot'
+	if tierRoot.equals(sharedTierRoot(tempDir)) 'namedLikeTheSharedTiers'
+		throw TierStagingError.refused("a case named '{test.name}' would stage its private source tiers at {tierRoot.toString()}, where the library-tier cases of the spec share their tiers")
+	end 'namedLikeTheSharedTiers'
 
-	purgeFilesIn(tierRoot)
+	let staged = try copiedTiers(tierRoot, sourceStdlib: sourceStdlib, sourceRuntime: sourceRuntime, written: written)
 
-	// Interpolated so the argument is a committed `String` — see `specTempRootDir` for why a bare
-	// module-`let` constant is ambiguous between `join`'s two overloads.
-	let stagedStdlib = tierRoot.join("{StdlibDirName}")
-	let stagedRuntime = try runtimeDirBeside(stagedStdlib) otherwise throw TierStagingError.refused("could not derive the staged runtime tier beside {stagedStdlib.toString()}")
+	try applyOverlaySections(test, stagedStdlib: staged.stdlib, sourceStdlib: sourceStdlib, paths: paths)
+	try writeRuntimeFileSections(test, stagedRuntime: staged.runtime, sourceRuntime: sourceRuntime, paths: paths, written: written)
 
-	try copySourceTier(sourceStdlib, into: stagedStdlib, written: written)
-	try copySourceTier(sourceRuntime, into: stagedRuntime, written: written)
-	try applyOverlaySections(test, stagedStdlib: stagedStdlib, sourceStdlib: sourceStdlib, paths: paths)
-	try writeRuntimeFileSections(test, stagedRuntime: stagedRuntime, sourceRuntime: sourceRuntime, paths: paths, written: written)
-
-	return StagedSourceTiers.create(stagedStdlib.toString(), runtimeDir: stagedRuntime.toString())
+	return staged
 end 'stageSourceTiers'
 
-// Copy every file the compiler would LOAD from `from` into `into`, preserving the tree. ONE routine for
-// both tiers: "stage a private copy of a directory the compiler loads" is one operation, and two copies
-// of it would be free to drift on what a source is or on where the tree lands.
-//
-// ⚠ **THE SET OF FILES IS ASKED OF `Compiler.collectMaxonSources`, WHICH IS THE COMPILER'S OWN ANSWER
-// TO "WHAT IS A SOURCE UNDER A DIRECTORY?"** A copy built from a second rule here — every `.maxon`,
-// say — would drift the day that walk grows a clause (it has since grown one, `.maxonignore`, and this
-// copy inherited it for free), and the drift would show up as a case compiling against a tier subtly
-// unlike the one the same compiler loads everywhere else.
-//
-// ⚠ **WHAT THE WALK FINDS IS EXACTLY WHAT THE COMPILER LOADS, AND THE TWO GUARDS BELOW REST ON THAT
-// COINCIDENCE.** `applyOverlaySections` refuses an overlay naming "not a file the compiler loads from
-// <stdlib>" and `writeRuntimeFileSections` refuses a name that IS one, and both enforce that by asking
-// whether the name is in THIS copy. A file copied here but not loaded by the compiler would pass the
-// first and trip the second, either way delivering an answer about a file nothing reads.
-function copySourceTier(from FilePath, into FilePath, written FilePathArray) throws TierStagingError
-	var sources = MaxonSourcePathArray.create()
-	_ = try collectMaxonSources(from, into: sources) otherwise throw TierStagingError.refused("could not walk {from.toString()} to stage a private copy of it")
+function sharedTierRoot(tempDir FilePath) returns FilePath
+	return tempDir.join("{SharedTierRootStem}{StagedTierRootSuffix}")
+end 'sharedTierRoot'
 
-	for source in sources 'eachSource'
-		let relative = try source.relativeTo(from) otherwise throw TierStagingError.refused("{source.toString()} is not under {from.toString()}, though that walk is what found it")
+function stageSharedTiers(tempDir FilePath, sourceStdlib FilePath, sourceRuntime FilePath) returns StagedTierDirs throws TierStagingError
+	let tierRoot = sharedTierRoot(tempDir)
+	let ready = tierRoot.join("{SharedTierReadyName}")
 
-		let destination = into.join(relative)
-		let parent = try destination.parent() otherwise throw TierStagingError.refused("could not derive a directory for {destination.toString()}")
+	if File.exists(ready) 'alreadyStaged'
+		return try StagedTierDirs.beneath(tierRoot)
+	end 'alreadyStaged'
 
-		if not Directory.create(parent) 'noSubdir'
-			throw TierStagingError.refused("could not create directory {parent.toString()}")
-		end 'noSubdir'
+	let staged = try copiedTiers(tierRoot, sourceStdlib: sourceStdlib, sourceRuntime: sourceRuntime, written: FilePathArray.create())
+	try File.writeText(ready, content: SharedTierReadyContent) otherwise throw TierStagingError.refused("could not write {ready.toString()}")
 
-		let content = try File.readText(source) otherwise throw TierStagingError.refused("could not read {source.toString()}")
-		try File.writeText(destination, content: content) otherwise throw TierStagingError.refused("could not write {destination.toString()}")
-		written.push(destination)
-	end 'eachSource'
-end 'copySourceTier'
+	return staged
+end 'stageSharedTiers'
+
+function clearSharedTiers(tempDir FilePath, tests SpecTestArray)
+	for test in tests 'eachTest'
+		if test.compilesAsLibrary() 'aCaseSharesTheTiers'
+			purgeFilesIn(sharedTierRoot(tempDir))
+
+			return
+		end 'aCaseSharesTheTiers'
+	end 'eachTest'
+end 'clearSharedTiers'
 
 // The phrases a staged-section refusal carries beyond the name the spec wrote: which marker it is, what
 // the tier root is called in a sentence, and what a second section naming one file would do to the first.
@@ -3384,8 +3389,8 @@ end 'fragmentSource'
 // section the case pinned disagrees with the linked image — and otherwise says so, carrying the three
 // pins its execution will be judged against.
 union PreRunVerdict
-	settled(outcome TestOutcome)
-	needsExecution(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout)
+	settled(let outcome TestOutcome)
+	needsExecution(let expected SpecExitCode, let stderr SpecStderr, let stdout SpecStdout)
 end 'PreRunVerdict'
 
 function preRunVerdict(test SpecTest, specName String, compile CompileAnswer, staged StagedTest, exePath FilePath, effectiveTarget Target) returns PreRunVerdict
@@ -3564,7 +3569,9 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 	end 'underTheMonitor'
 
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
-		return RunCommand.create(Executable.path(modulePath), argv: programArgs as StringArray)
+		let hostArguments = programArgs as StringArray
+
+		return RunCommand.create(Executable.path(modulePath), argv: hostArguments)
 	end 'hostSpawn'
 
 	let launch = match externalRunnerFor(effectiveTarget) 'runner'
@@ -4045,7 +4052,7 @@ end 'pushSolo'
 typealias BatchedFailureMap = Map with (ElementIndex, String)
 
 type RunsPerformed
-	export let observations as RunObservationArray
+	export var observations as RunObservationArray
 	export let tally as BatchTally
 	export let batchedFailures as BatchedFailureMap
 
@@ -4811,7 +4818,7 @@ function runPreconditions(expected SpecExitCode, stderr SpecStderr, stdout SpecS
 	// below it. The four sites all ask ONE question — "did this half of the expectation hold, and if not
 	// hand its verdict straight up" — and spelling it as a two-arm match made each of them a place a
 	// third outcome had to be remembered. `isPass()` answers over the whole union in one place, so a
-	// verdict this function never mints (`skipped`, which only `outcomeOrTargetSkip` can produce and only
+	// verdict this function never mints (`skipped`, which only `refusalThatSkips` can produce and only
 	// from a FAILED compile) needs no arm at any of them.
 	let sectionOutcome = checkRequiredSections(sectionPins, exePath: exePath, effectiveTarget: effectiveTarget)
 
@@ -5038,7 +5045,7 @@ end 'compareSectionPrefix'
 // The search for payload `n` starts at the END of payload `n-1`'s match, so the pin's order is a real
 // constraint: two blobs written in one order do not pass if the image places them in the other. It is
 // deliberately not an "anywhere" containment — that would let a re-ordered image pass unnoticed.
-function locateSectionPayloads(payloads ByteArrayArray, actual ByteArray, sectionName String) returns TestOutcome
+function locateSectionPayloads(payloads ByteBlobArray, actual ByteArray, sectionName String) returns TestOutcome
 	var searchFrom = 0 as ByteOffset
 
 	for (iter, payload) in payloads.withIterator() 'eachPayload'

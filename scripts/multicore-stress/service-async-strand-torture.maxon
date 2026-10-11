@@ -9,7 +9,7 @@
 // at its own statement is renounced before the coroutine ever runs, and would build none of this. `parked=`
 // counts the subject rounds that reached the shape, and must equal `rounds=`.
 //
-// ⭐⭐ WHY IT READS `schedGtRecordsCarved()`. A coroutine the shutdown fails to reclaim holds its own record, and
+// ⭐⭐ WHY IT READS `Scheduler.counters().threadRecordsCarved`. A coroutine the shutdown fails to reclaim holds its own record, and
 // its owner's through the strand reference, for ever — and the exit gate cannot see it, because the drop's
 // consumer half has already debited `__gt_live_count`. The heap gate sees it only because the coroutine's
 // `Probe` argument is released by that same reclaim (a 101); the carve count sees it whatever the coroutine
@@ -77,7 +77,7 @@ type Worker
 	export function fire(v Integer) returns Integer
 		let p = async slowWork(v, probe: self.probe, ms: ParkedSleepMs)
 		Scheduler.yield()
-		let parked = self.probe.started and __Builtins.gtIsComplete(p.inner) == 0
+		let parked = self.probe.started and not p.isComplete()
 		self.pending.push(p)
 		return 1 if parked else 0
 	end 'fire'
@@ -141,7 +141,7 @@ function phase(joined bool, batches Integer) returns Integer
 end 'phase'
 
 function main() returns ExitCode
-	let bound = 1 + 2 * RecordsPerService * BatchSize + ListSlack * (__Builtins.schedProcessorCount() - 1)
+	let bound = 1 + 2 * RecordsPerService * BatchSize + ListSlack * ((Scheduler.processorCount() as SchedulerEventCount) - 1)
 	var batches = MinBatches
 
 	while batches * BatchSize < 2 * bound 'enoughToDiscriminate'
@@ -152,16 +152,16 @@ function main() returns ExitCode
 	_ = phase(false, batches: 1)
 	_ = phase(true, batches: 1)
 
-	let carvedBeforeStrand = __Builtins.schedGtRecordsCarved()
-	let rawBeforeStrand = __Builtins.mmRawAllocLive()
+	let carvedBeforeStrand = Scheduler.counters().threadRecordsCarved
+	let rawBeforeStrand = HeapStats.rawAllocationsLive()
 	let parked = phase(false, batches: batches)
-	let carvedAfterStrand = __Builtins.schedGtRecordsCarved()
-	let rawAfterStrand = __Builtins.mmRawAllocLive()
+	let carvedAfterStrand = Scheduler.counters().threadRecordsCarved
+	let rawAfterStrand = HeapStats.rawAllocationsLive()
 
-	let rawBeforeAwait = __Builtins.mmRawAllocLive()
+	let rawBeforeAwait = HeapStats.rawAllocationsLive()
 	_ = phase(true, batches: batches)
-	let carved = __Builtins.schedGtRecordsCarved()
-	let rawAfterAwait = __Builtins.mmRawAllocLive()
+	let carved = Scheduler.counters().threadRecordsCarved
+	let rawAfterAwait = HeapStats.rawAllocationsLive()
 
 	let leaked = carved - bound if carved > bound else 0
 	print("leaked={leaked} carved={carved} bound={bound} parked={parked} strand={carvedAfterStrand - carvedBeforeStrand} await={carved - carvedAfterStrand} rawStrand={rawAfterStrand - rawBeforeStrand} rawAwait={rawAfterAwait - rawBeforeAwait} rounds={batches * BatchSize}\n")

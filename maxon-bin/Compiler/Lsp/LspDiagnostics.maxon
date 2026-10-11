@@ -39,10 +39,12 @@ let QuotedNameSegment = 1
 // not locate `stdlib/`, or was handed a uri spelling no path, has checked nothing and knows
 // nothing. Saying nothing leaves the editor showing what it already had, which is what "not
 // checked" looks like.
-module function publishBufferDiagnostics(uri String, text String, arrival BufferArrival) returns BufferPublish
+module function publishBufferDiagnostics(workspace LspWorkspaceState, uri String, text String, arrival BufferArrival) returns BufferPublish
 	let path = try FilePath.from(uri) otherwise return BufferPublish.unchecked
 
-	match lspDocumentProject(path, content: text) 'buffer'
+	var checked = lspDocumentProject(workspace, path: path, content: text)
+
+	match checked 'buffer'
 		loaded(project, reader) then return project.publishDocumentDiagnostics(uri, reader: reader, arrival: arrival, path: path, text: text)
 		unavailable then return BufferPublish.unchecked
 	end 'buffer'
@@ -70,7 +72,7 @@ union SweptParse
 end 'SweptParse'
 
 union DiagnosticSubject
-	named(name ByteArray, index ElementIndex)
+	named(let name ByteArray, index ElementIndex)
 	unattributable
 end 'DiagnosticSubject'
 
@@ -87,14 +89,10 @@ end 'RefusalRoad'
 typealias SiblingVerdictMap = Map with (ByteArray, bool)
 
 // Tell the editor this document has nothing on it — the notification a closed document is owed.
-module function clearPublishedDiagnostics(uri String)
-	lspOutputWriter().write(diagnosticsNotificationText(uri, items: JsonNodeIdArray.create(), doc: JsonDoc.create()))
+module function clearPublishedDiagnostics(writer LspStdoutWriter.handle, uri String)
+	writer.write(diagnosticsNotificationText(uri, items: JsonNodeIdArray.create(), doc: JsonDoc.create()))
 end 'clearPublishedDiagnostics'
 
-// ⚖ **THESE STEPS ARE THE PROJECT'S OWN, WHICH IS WHAT LETS A `match` PAYLOAD REACH THEM.** The compile
-// writes the project, and a method writing its own receiver is legal on a binding nothing may write from
-// outside; the same work spelled `publishCheckedDiagnostics(project: project)` hands that payload to a
-// parameter the callee writes, which is E3019.
 extension Project
 	function publishDocumentDiagnostics(uri String, reader LspReaderSearch, arrival BufferArrival, path FilePath, text String) returns BufferPublish
 		// Built before the check: a correction then reuses the held project, and the
@@ -108,7 +106,7 @@ extension Project
 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
 
 		let fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
-		lspOutputWriter().write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create()))
+		reader.workspace.writer.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create()))
 
 		return BufferPublish.published(reader, root: root, path: path, fast: fast)
 	end 'publishDocumentDiagnostics'
@@ -148,7 +146,9 @@ extension Project
 	end 'correctedCheck'
 
 	function explainedByTheCorpus(reported DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
-		match lspProjectCorpus(reader, root: root) 'corpus'
+		var swept = lspProjectCorpus(reader, root: root)
+
+		match swept 'corpus'
 			loaded(_, signatures, readerPath) then return self.unsuppressedRefusals(reported, signatures: signatures, reader: readerPath, buffer: buffer, text: text, tokens: tokens, road: RefusalRoad.aCleanParsesCheck)
 			unavailable then return reported
 		end 'corpus'
@@ -173,7 +173,9 @@ extension Project
 	end 'bufferParse'
 
 	function correctedRefusal(reported DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
-		match lspProjectCorpus(reader, root: root) 'corpus'
+		var swept = lspProjectCorpus(reader, root: root)
+
+		match swept 'corpus'
 			loaded(corpus, signatures, readerPath) then return self.refusalCorrectedBy(corpus, signatures: signatures, reader: readerPath, buffer: buffer, reported: reported, text: text, tokens: tokens)
 			unavailable then return reported
 		end 'corpus'
@@ -219,7 +221,7 @@ extension Project
 			return reported
 		end 'nothingToAttribute'
 
-		let own = try queryProgramSignatures(self) otherwise return reported
+		var own = try queryProgramSignatures(self) otherwise return reported
 		let document = HoverDocument.ofTokens(text, tokens: tokens, keywords: self.keywords, corpus: LspCorpus.unavailable)
 		var verdicts = SiblingVerdictMap.create()
 		var kept = DiagnosticArray.create()

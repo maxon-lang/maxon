@@ -148,9 +148,16 @@ There is no literal to compare against — every number depends on what the prog
 have done — so the cases below assert what cannot vary: monotonicity, an invariant between two
 columns, a DELTA across a known allocation, and a return to a floor across a scope exit.
 
+Every `__Builtins` member is library-tier: only a source file under `stdlib/` or `runtime/` may call one,
+and a call from anywhere else is E3185. The cases below call the intrinsics themselves, so they compile in
+the library tier (`<!-- tier: stdlib -->`). A program reads the same counters through
+`stdlib/HeapStats.maxon` (`HeapStats.allocationsMade()`, `allocationsLive()`, `bytesAllocated()`, the `raw…`
+trio, and `HeapStats.thread()` / `HeapStats.process()`).
+
 ## Tests
 
 <!-- test: builtins-mm-counters.total-is-monotonic-and-moves -->
+<!-- tier: stdlib -->
 The cumulative counter never decreases, and a real allocation moves it. The second half is what a
 lowering that summed the wrong column — or answered a constant — fails first.
 ```maxon
@@ -177,6 +184,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.live-returns-to-its-floor -->
+<!-- tier: stdlib -->
 **THE CASE THAT SEPARATES THE TWO TRACKED COLUMNS.** An array built and dropped inside a called
 function leaves the LIVE count exactly where it was, while the CUMULATIVE count is strictly higher.
 It is the leak gate's own invariant read at a finer granularity, and it fails three different ways:
@@ -214,6 +222,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.bytes-scale-with-the-request -->
+<!-- tier: stdlib -->
 **THE CASE THAT SAYS A BYTE COLUMN IS BYTES AND NOT A COUNT**, and it is written on the SUM of the
 two layers because that is the contract — see *The two LAYERS* above. Filling 1024 elements moves
 the volume by
@@ -258,6 +267,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.total-is-never-below-live -->
+<!-- tier: stdlib -->
 The invariant that must hold at every observation point in both layers: an allocation must be
 counted before it can be live. It is what a cumulative counter that had been wired to the free path
 — or a live counter that double-counted — breaks.
@@ -287,6 +297,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.the-two-layers-are-disjoint -->
+<!-- tier: stdlib -->
 **THE CASE THAT PROVES THE TWO LAYERS' SUM DOES NOT DOUBLE-COUNT.** the compiler's `__mm_alloc` obtains its
 box from `__slab_alloc`, so the obvious implementation credits every allocation to BOTH columns and the
 sum reads exactly double. Here a program allocates 512 array elements and nothing else:
@@ -325,6 +336,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.raw-total-is-never-below-tracked-total-after-boxes -->
+<!-- tier: stdlib -->
 **THE NESTING INVARIANT, READ ACROSS A WINDOW, WHERE A RAW COLUMN NOTHING CREDITS WOULD SHOW.** Every box
 is one slab request, so `raw + boxes` is the slab's OWN request count whatever the reader's subtraction
 does, and a window that boxes N times must move it by at least N. The two halves that carry the case fail
@@ -368,6 +380,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding -->
+<!-- tier: stdlib -->
 **THE CASE THAT SAYS THE RAW COLUMNS ARE MAINTAINED AT ALL**, which is the hazard a column reading
 a plausible `0` hides. `__gt_init` takes the scheduler's tables from `__slab_alloc` before `main` runs, and
 `main` itself runs on a green thread, so by its first line the columns already count that scaffolding and
@@ -428,6 +441,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.raw-live-falls-below-raw-total -->
+<!-- tier: stdlib -->
 **THE CASE THAT PINS THE RAW COLUMNS AS TWO NUMBERS: A COUNTED CALLER FREES, SO `live` FALLS BELOW
 `total`.** The caller is a service's MAILBOX. `__mbox_send` cuts one envelope per message from
 `__slab_alloc`, and `__mbox_recv` hands it back through `__slab_free` the moment it pops the message,
@@ -483,6 +497,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.all-six-run-on-wasm -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 **THE ACCEPTANCE HALF OF THE TARGET PAIR.** The six counters reach no OS — each sums a column of the
 allocator's own state region — so they lower on every target the compiler emits and are refused nowhere. Pinned on the lane that REFUSES
@@ -528,6 +543,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.a-thread-is-billed-only-its-own-allocations -->
+<!-- tier: stdlib -->
 ⭐⭐⭐ **THE CASE THE POOL NEEDS, AND THE ONE THE SIX ABOVE STRUCTURALLY CANNOT BE.** Every column above is
 summed over every row, so each answers for the whole PROCESS — exact while ONE thread allocates and
 worthless the moment several do: a bracket opened inside a worker counts every other worker's traffic for
@@ -609,6 +625,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.process-totals-are-the-six-summed-while-one-thread-runs -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE CASE THAT SAYS WHAT EACH PROCESS-WIDE TOTAL IS.** With one thread running, the six per-layer
 figures are exact, so each total must equal the figure they sum to — to the digit. The allocation total is
 both layers' count; the free total is that count less both layers' live counts; and the byte total exceeds
@@ -657,6 +674,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.process-totals-agree-with-the-calling-thread-while-it-is-the-only-one -->
+<!-- tier: stdlib -->
 **THE PROCESS-WIDE TOTALS AND THE PER-THREAD COLUMNS ARE ONE QUANTITY**, so a reading of one sits beside
 a reading of the other in one table. While `main` is the only thread allocating, all three
 deltas must agree to the digit — the byte pair included, because both count a box's header with its payload.
@@ -726,6 +744,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.process-totals-only-rise-while-another-thread-allocates -->
+<!-- tier: stdlib -->
 ⭐⭐⭐ **THE PROPERTY A BRACKET RESTS ON: NO READING STANDS BELOW AN EARLIER ONE, WHATEVER ELSE IS RUNNING.**
 `main` reads all three totals over and over while a service allocates and frees a hundred thousand arrays
 on another thread, and counts every reading that came in below the one before it. The count must be 0, and
@@ -798,6 +817,7 @@ end 'main'
 ```
 
 <!-- test: builtins-mm-counters.alloc-total-arity-checked -->
+<!-- tier: stdlib -->
 Every one of the twelve takes no arguments. An intrinsic has no signature for the ordinary arity check
 to read, so each is refused by the same `builtinArity` check `currentProcessId`/`cpuCount` use —
 and each names ITSELF, which is what a copy-pasted dispatch arm carrying its neighbour's name would
@@ -812,6 +832,7 @@ error E3036: <fragment>:3:20: '__Builtins.mmAllocTotal' takes exactly 0 argument
 ```
 
 <!-- test: builtins-mm-counters.alloc-live-arity-checked -->
+<!-- tier: stdlib -->
 The live tracked counter, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode
@@ -823,6 +844,7 @@ error E3036: <fragment>:3:20: '__Builtins.mmAllocLive' takes exactly 0 argument,
 ```
 
 <!-- test: builtins-mm-counters.alloc-bytes-arity-checked -->
+<!-- tier: stdlib -->
 The tracked byte volume, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode
@@ -834,6 +856,7 @@ error E3036: <fragment>:3:20: '__Builtins.mmAllocBytes' takes exactly 0 argument
 ```
 
 <!-- test: builtins-mm-counters.raw-alloc-total-arity-checked -->
+<!-- tier: stdlib -->
 The cumulative raw counter, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode
@@ -845,6 +868,7 @@ error E3036: <fragment>:3:20: '__Builtins.mmRawAllocTotal' takes exactly 0 argum
 ```
 
 <!-- test: builtins-mm-counters.raw-alloc-live-arity-checked -->
+<!-- tier: stdlib -->
 The live raw counter, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode
@@ -856,6 +880,7 @@ error E3036: <fragment>:3:20: '__Builtins.mmRawAllocLive' takes exactly 0 argume
 ```
 
 <!-- test: builtins-mm-counters.raw-alloc-bytes-arity-checked -->
+<!-- tier: stdlib -->
 The raw byte volume, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode
@@ -867,6 +892,7 @@ error E3036: <fragment>:3:20: '__Builtins.mmRawAllocBytes' takes exactly 0 argum
 ```
 
 <!-- test: builtins-mm-counters.thread-alloc-total-arity-checked -->
+<!-- tier: stdlib -->
 The calling thread's allocation column, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode
@@ -878,6 +904,7 @@ error E3036: <fragment>:3:20: '__Builtins.threadAllocTotal' takes exactly 0 argu
 ```
 
 <!-- test: builtins-mm-counters.thread-free-total-arity-checked -->
+<!-- tier: stdlib -->
 The calling thread's free column, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode
@@ -889,6 +916,7 @@ error E3036: <fragment>:3:20: '__Builtins.threadFreeTotal' takes exactly 0 argum
 ```
 
 <!-- test: builtins-mm-counters.thread-alloc-bytes-arity-checked -->
+<!-- tier: stdlib -->
 The calling thread's byte column, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode
@@ -900,6 +928,7 @@ error E3036: <fragment>:3:20: '__Builtins.threadAllocBytes' takes exactly 0 argu
 ```
 
 <!-- test: builtins-mm-counters.process-alloc-total-arity-checked -->
+<!-- tier: stdlib -->
 The process-wide allocation total, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode
@@ -911,6 +940,7 @@ error E3036: <fragment>:3:20: '__Builtins.processAllocTotal' takes exactly 0 arg
 ```
 
 <!-- test: builtins-mm-counters.process-free-total-arity-checked -->
+<!-- tier: stdlib -->
 The process-wide free total, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode
@@ -922,6 +952,7 @@ error E3036: <fragment>:3:20: '__Builtins.processFreeTotal' takes exactly 0 argu
 ```
 
 <!-- test: builtins-mm-counters.process-alloc-bytes-arity-checked -->
+<!-- tier: stdlib -->
 The process-wide byte total, refused the same way and naming itself.
 ```maxon
 function main() returns ExitCode

@@ -166,10 +166,11 @@ type ObservedTest
 	export let passed as bool
 	export let nanos as DurationNanos
 	export let thrown as ThrownReport
-	export let output as StreamLines
+	export let output as String
+	export let wroteOutput as bool
 
-	static function create(index ElementIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output StreamLines) returns ObservedTest
-		return Self{index: index, ended: ended, passed: passed, nanos: nanos, thrown: thrown, output: output}
+	static function create(index ElementIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output String, wroteOutput bool) returns ObservedTest
+		return Self{index: index, ended: ended, passed: passed, nanos: nanos, thrown: thrown, output: output, wroteOutput: wroteOutput}
 	end 'create'
 end 'ObservedTest'
 
@@ -179,9 +180,6 @@ typealias ObservedTestArray = Array with ObservedTest
 // arm is ONE statement: the four event shapes each become one call here, and the state they share is
 // this record's rather than seven locals the loop would have to carry.
 type TestStreamWalk
-	// Every test the stream reported, in the order it reported them.
-	var observed as ObservedTestArray
-
 	// Output and `threw` reports that belonged to NO test. Kept rather than dropped: a discarded
 	// report is the one thing a reader would most want back when trying to explain a run that made no
 	// sense.
@@ -199,13 +197,13 @@ type TestStreamWalk
 	var inFlightOutput as StreamLines
 
 	static function create() returns TestStreamWalk
-		return Self{observed: ObservedTestArray.create(), stray: StreamLines.create(), inFlight: false, inFlightIndex: 0, inFlightEnded: false, inFlightPassed: false, inFlightNanos: 0, inFlightThrown: ThrownReport.absent, inFlightOutput: StreamLines.create()}
+		return Self{stray: StreamLines.create(), inFlight: false, inFlightIndex: 0, inFlightEnded: false, inFlightPassed: false, inFlightNanos: 0, inFlightThrown: ThrownReport.absent, inFlightOutput: StreamLines.create()}
 	end 'create'
 
 	// A begin marker. Whatever was already running is closed first — a begin with no matching end is
 	// exactly how a crash names its victim, and dropping the earlier test here would lose that.
-	function began(index ElementIndex)
-		closeInFlight()
+	function began(index ElementIndex, observed ObservedTestArray)
+		closeInFlight(observed)
 
 		inFlight = true
 		inFlightIndex = index
@@ -219,7 +217,7 @@ type TestStreamWalk
 	// An end marker. One for a test that did not begin — or for the wrong one — is IGNORED: the
 	// dispatcher cannot emit that, so the stream is damaged, and leaving the running test open reports
 	// it as crashed, which is the loud outcome that deserves.
-	function ended(index ElementIndex, passed bool, nanos DurationNanos)
+	function ended(index ElementIndex, passed bool, nanos DurationNanos, observed ObservedTestArray)
 		if not inFlight or inFlightIndex != index 'notTheTestThatIsRunning'
 			return
 		end 'notTheTestThatIsRunning'
@@ -227,7 +225,7 @@ type TestStreamWalk
 		inFlightEnded = true
 		inFlightPassed = passed
 		inFlightNanos = nanos
-		closeInFlight()
+		closeInFlight(observed)
 	end 'ended'
 
 	function threw(errorType String, errorCase String, file String, line ReportedSourceLine)
@@ -250,17 +248,18 @@ type TestStreamWalk
 
 	// The stream ended, and this is the walk's PRODUCT. Whatever was still running is closed
 	// unfinished, which is what makes it a crash.
-	function finish() returns TestStreamResult
-		closeInFlight()
+	function finish(observed ObservedTestArray) returns TestStreamResult
+		closeInFlight(observed)
+
 		return TestStreamResult.create(observed, stray: stray.text())
 	end 'finish'
 
-	function closeInFlight()
+	function closeInFlight(observed ObservedTestArray)
 		if not inFlight 'nothingRunning'
 			return
 		end 'nothingRunning'
 
-		observed.push(ObservedTest.create(inFlightIndex, ended: inFlightEnded, passed: inFlightPassed, nanos: inFlightNanos, thrown: inFlightThrown, output: inFlightOutput))
+		observed.push(ObservedTest.create(inFlightIndex, ended: inFlightEnded, passed: inFlightPassed, nanos: inFlightNanos, thrown: inFlightThrown, output: inFlightOutput.text(), wroteOutput: inFlightOutput.wroteAny()))
 		inFlight = false
 	end 'closeInFlight'
 end 'TestStreamWalk'
@@ -338,17 +337,18 @@ function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected Test
 	let attributable = attributableLaunch(launch)
 
 	var walk = TestStreamWalk.create()
+	var reportedTests = ObservedTestArray.create()
 
 	for event in parseTestEvents(attributable.stderr) 'eachEvent'
 		match event 'shape'
-			began(index) then walk.began(index)
-			ended(index, passed, nanos) then walk.ended(index, passed: passed, nanos: nanos)
+			began(index) then walk.began(index, observed: reportedTests)
+			ended(index, passed, nanos) then walk.ended(index, passed: passed, nanos: nanos, observed: reportedTests)
 			threw(errorType, errorCase, file, line) then walk.threw(errorType, errorCase: errorCase, file: file, line: line)
 			outputLine(text) then walk.wrote(text)
 		end 'shape'
 	end 'eachEvent'
 
-	let observed = walk.finish()
+	let observed = walk.finish(reportedTests)
 
 	// A launch that never started REPLACES the stream's own text rather than adding to it: there is no
 	// stream, and the reason nothing ran is the only thing worth reporting.
@@ -367,7 +367,9 @@ function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected Test
 		end 'wasItSeen'
 	end 'eachExpectedTest'
 
-	return ShardStep.create(withLeakAttribution(plan, results: settled, leaked: attributable.leaked), unobserved: unobserved, stray: stray)
+	let attributed = withLeakAttribution(plan, results: settled, leaked: attributable.leaked)
+
+	return ShardStep.create(attributed, unobserved: unobserved, stray: stray)
 end 'attributeLaunch'
 
 // ⭐ **ONE TEST'S VERDICT, FROM ITS MARKERS.** A test that ended reports what it said; one that began
@@ -377,13 +379,13 @@ function resultFor(group TestFileGroup, observation ObservedTest, stray String) 
 
 	if observation.ended 'finishedUnderItsOwnPower'
 		let outcome = UnitTestOutcome.passed if observation.passed else UnitTestOutcome.failed
-		return UnitTestResult.create(observation.index, test: test, outcome: outcome, nanos: observation.nanos, thrown: observation.thrown, output: observation.output.text())
+		return UnitTestResult.create(observation.index, test: test, outcome: outcome, nanos: observation.nanos, thrown: observation.thrown, output: observation.output)
 	end 'finishedUnderItsOwnPower'
 
 	// ⚠ THE FALLBACK IS THE SHARD'S STRAY TEXT AND NEVER THE RAW STREAM. Falling back to the stream
 	// would put the wire protocol itself into a user's report, so a silently-crashing test would be
 	// reported as its own begin marker.
-	let output = observation.output.text() if observation.output.wroteAny() else stray
+	let output = observation.output if observation.wroteOutput else stray
 	return UnitTestResult.create(observation.index, test: test, outcome: UnitTestOutcome.crashed, nanos: 0, thrown: observation.thrown, output: output)
 end 'resultFor'
 
@@ -393,19 +395,15 @@ end 'resultFor'
 // failure: the assertion is the actionable report, and a leak on the way out of a failing test is a
 // consequence of it.
 function withLeakAttribution(plan TestLaunchPlan, results UnitTestResultArray, leaked bool) returns UnitTestResultArray
-	if not leaked 'noLeakSignal'
-		return results
-	end 'noLeakSignal'
-
 	let onlyCandidate = results.count() == 1
 
 	var updated = UnitTestResultArray.create()
 
 	for result in results 'eachResult'
-		if result.outcome != UnitTestOutcome.passed 'alreadyHasItsOwnVerdict'
+		if not leaked or result.outcome != UnitTestOutcome.passed 'keepsItsVerdict'
 			updated.push(result)
 			continue
-		end 'alreadyHasItsOwnVerdict'
+		end 'keepsItsVerdict'
 
 		if onlyCandidate 'theOnlyTestInThatProcess'
 			updated.push(asLeaked(result))

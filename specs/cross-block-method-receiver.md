@@ -100,6 +100,7 @@ v=7
 ```
 
 <!-- test: builtin-method-statement-after-if-merge -->
+<!-- tier: stdlib -->
 The builtin-method statement path — a `__ManagedMemory` receiver whose method is
 emitted INLINE rather than as a call, so the receiver value is consumed at the
 call site instead of being passed.

@@ -91,11 +91,11 @@ function main() returns ExitCode
 	var holder = PairArray.create()
 	holder.reserve(100)
 
-	let before = __Builtins.mmAllocLive()
+	let before = HeapStats.allocationsLive()
 	for i in 0 upto 100 'build'
 		holder.push(Pair.create(i, hi: i * 2))
 	end 'build'
-	let after = __Builtins.mmAllocLive()
+	let after = HeapStats.allocationsLive()
 
 	var sum = 0
 	for p in holder 'read'
@@ -188,6 +188,7 @@ end 'main'
 ```
 
 <!-- test: inline-records.array-of-inline-records-is-eight-byte-strided -->
+<!-- tier: stdlib -->
 An inline record is a trivial 8-byte element, so 500 pushes into a reserved array allocate nothing; a
 boxed element has the same 8-byte stride (a pointer), but boxing every element would exit 3.
 ```maxon
@@ -208,11 +209,11 @@ function main() returns ExitCode
 	var arr = PairArray.create()
 	arr.reserve(500)
 
-	let before = __Builtins.mmAllocLive()
+	let before = HeapStats.allocationsLive()
 	for i in 0 upto 500 'push'
 		arr.push(Pair.create(i, hi: i))
 	end 'push'
-	let after = __Builtins.mmAllocLive()
+	let after = HeapStats.allocationsLive()
 
 	if arr.managed.elementSize() != 8 'stride'
 		return 2
@@ -270,11 +271,11 @@ function main() returns ExitCode
 	var keys = PointArray.create()
 	keys.reserve(500)
 
-	let before = __Builtins.mmAllocLive()
+	let before = HeapStats.allocationsLive()
 	for i in 0 upto 500 'build'
 		keys.push(Point.create(i, y: i + 1))
 	end 'build'
-	let after = __Builtins.mmAllocLive()
+	let after = HeapStats.allocationsLive()
 
 	var m = PointMap.create()
 	for k in keys 'insert'
@@ -323,7 +324,7 @@ end 'Pair'
 let origin = Pair.create(1, hi: 2)
 
 function main() returns ExitCode
-	let live = __Builtins.mmAllocLive()
+	let live = HeapStats.allocationsLive()
 
 	if origin.lo != 1 'lo'
 		return 90
@@ -362,10 +363,10 @@ end 'bumped'
 function main() returns ExitCode
 	let a = Pair.create(1, hi: 10)
 
-	let before = __Builtins.mmAllocLive()
+	let before = HeapStats.allocationsLive()
 	let b = bumped(a)
 	let c = bumped(b)
-	let after = __Builtins.mmAllocLive()
+	let after = HeapStats.allocationsLive()
 
 	if c.lo != 3 'lo'
 		return 1
@@ -408,10 +409,10 @@ function main() returns ExitCode
 	let p = Pair.create(3, hi: 4)
 	let sum = function() gives p.lo + p.hi
 
-	let before = __Builtins.mmAllocLive()
+	let before = HeapStats.allocationsLive()
 	let first = sum()
 	let second = sum()
-	let after = __Builtins.mmAllocLive()
+	let after = HeapStats.allocationsLive()
 
 	if first != 7 'firstValue'
 		return 1
@@ -449,9 +450,9 @@ end 'Pair'
 function main() returns ExitCode
 	let p = Pair.create(5, hi: 6)
 
-	let before = __Builtins.mmAllocLive()
+	let before = HeapStats.allocationsLive()
 	let q = p.clone()
-	let after = __Builtins.mmAllocLive()
+	let after = HeapStats.allocationsLive()
 
 	if q.lo != 5 'lo'
 		return 1
@@ -527,10 +528,10 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	let before = __Builtins.mmAllocLive()
+	let before = HeapStats.allocationsLive()
 	let good = try Pair.make(1) otherwise Pair.create(0, hi: 0)
 	let bad = try Pair.make(3) otherwise Pair.create(0, hi: 0)
-	let after = __Builtins.mmAllocLive()
+	let after = HeapStats.allocationsLive()
 
 	if good.lo != 1 'goodLo'
 		return 1
@@ -650,9 +651,9 @@ function main() returns ExitCode
 	var holder = HalfBoxArray.create()
 	holder.reserve(4)
 
-	let before = __Builtins.mmAllocLive()
+	let before = HeapStats.allocationsLive()
 	holder.push(HalfBox.create(1, b: 2))
-	let after = __Builtins.mmAllocLive()
+	let after = HeapStats.allocationsLive()
 
 	if holder.count() != 1 'held'
 		return 1
@@ -989,7 +990,7 @@ end 'Pair'
 var slot = Pair.create(1, hi: 2)
 
 function main() returns ExitCode
-	let before = __Builtins.mmAllocLive()
+	let before = HeapStats.allocationsLive()
 
 	if slot.lo != 1 'firstLo'
 		return 1
@@ -1005,7 +1006,7 @@ function main() returns ExitCode
 		return 3
 	end 'secondHi'
 
-	let after = __Builtins.mmAllocLive()
+	let after = HeapStats.allocationsLive()
 
 	if after != before 'alloc'
 		return 4
@@ -1096,7 +1097,7 @@ end 'Pair'
 var built = Pair.scaled(5)
 
 function main() returns ExitCode
-	let before = __Builtins.mmAllocLive()
+	let before = HeapStats.allocationsLive()
 
 	if built.lo != 15 'initialLo'
 		return 1
@@ -1116,7 +1117,7 @@ function main() returns ExitCode
 		return 4
 	end 'secondHi'
 
-	let after = __Builtins.mmAllocLive()
+	let after = HeapStats.allocationsLive()
 
 	if after != before 'alloc'
 		return 5

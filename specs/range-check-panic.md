@@ -818,7 +818,8 @@ end 'main'
 ```
 
 <!-- test: range-check-panic.error.a-nested-alias-index-on-an-array-conformer-is-checked -->
-A program's own `Array` declares its `get` index as an alias nested in its body, and an out-of-range literal index is refused against that alias.
+<!-- tier: stdlib -->
+An `Array` conformer declares its `get` index as an alias nested in its body, and an out-of-range literal index is refused against that alias. The conformer stores its elements in a `__ManagedMemory`, which only a source file under `stdlib/` or `runtime/` may name (E3185), so the case compiles in the library tier.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -1887,6 +1888,7 @@ total=6
 ```
 
 <!-- test: range-check-panic.a-capacity-is-not-a-count -->
+<!-- tier: stdlib -->
 ⛔ **THE RED GATE FOR THE `count` WITHHOLD.** The interval is recorded where `__managed_count` is emitted
 and NOWHERE ELSE on that arm's siblings: a `capacity()` answers a NEGATIVE SENTINEL for a buffer its record
 does not own — `-1` for a slice, which `stdlib/Array.maxon`'s `ReportedCapacity` header states and pins —

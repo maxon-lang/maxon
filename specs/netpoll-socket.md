@@ -14,10 +14,10 @@ PARK the green thread that issued them and hand the processor back. The property
 waiting on a socket holds NO machine: it is suspended on the poller until the descriptor is readable or
 writable, and never sits inside a kernel call holding the processor it was running on.
 
-`__Builtins.schedNetpollBlockCount()` counts those parks — how many times a green thread has been
+`Scheduler.counters().netpollBlocks` counts those parks — how many times a green thread has been
 suspended on the network poller waiting for a socket to become ready. It joins the scheduler-state roster
-beside `__Builtins.schedRetakeCount()` and `__Builtins.schedPreemptCount()`, which count the sysmon
-rescues a blocking socket call provokes instead, and `__Builtins.schedSyscallCount()`, which counts the
+beside `Scheduler.counters().retakes` and `Scheduler.counters().preempts`, which count the sysmon
+rescues a blocking socket call provokes instead, and `Scheduler.counters().syscalls`, which counts the
 bracketed kernel calls a rescue could be made out of — so it sees a blocking call whether or not the monitor
 looked during it.
 
@@ -116,8 +116,8 @@ function attemptOver(listener TcpListener) returns (Tally, bool) throws Attempt
 	let peer = async echoRounds(listener)
 	_ = try echoOnce(listener, n: 0) otherwise 0
 
-	let beforeRetake = __Builtins.schedRetakeCount()
-	let beforePreempt = __Builtins.schedPreemptCount()
+	let beforeRetake = Scheduler.counters().retakes
+	let beforePreempt = Scheduler.counters().preempts
 
 	let p1 = async echoOnce(listener, n: 1)
 	let p2 = async echoOnce(listener, n: 2)
@@ -130,8 +130,8 @@ function attemptOver(listener TcpListener) returns (Tally, bool) throws Attempt
 	let r4 = try await p4 otherwise 0
 	let ok = r1 + r2 + r3 + r4
 
-	let retaken = __Builtins.schedRetakeCount() - beforeRetake
-	let preempted = __Builtins.schedPreemptCount() - beforePreempt
+	let retaken = Scheduler.counters().retakes - beforeRetake
+	let preempted = Scheduler.counters().preempts - beforePreempt
 	let stuck = (retaken + preempted) > 0
 
 	let served = await peer
@@ -220,7 +220,7 @@ function exchangeOver(listener TcpListener) returns ExitCode
 	let peer = async echoRounds(listener)
 	_ = try echoOnce(listener, n: 0) otherwise 0
 
-	let before = __Builtins.schedSyscallCount()
+	let before = Scheduler.counters().syscalls
 
 	let p1 = async echoOnce(listener, n: 1)
 	let p2 = async echoOnce(listener, n: 2)
@@ -234,7 +234,7 @@ function exchangeOver(listener TcpListener) returns ExitCode
 	let ok = r1 + r2 + r3 + r4
 	let served = await peer
 
-	let brackets = __Builtins.schedSyscallCount() - before
+	let brackets = Scheduler.counters().syscalls - before
 
 	if served != rounds 'peer'
 		panic("unreachable: every round-trip that returned was answered by this peer")
@@ -300,7 +300,7 @@ function echoOnce(listener TcpListener, n Tally) returns Tally throws NetworkErr
 end 'echoOnce'
 
 function exchangeOver(listener TcpListener) returns ExitCode
-	let beforeParks = __Builtins.schedNetpollBlockCount()
+	let beforeParks = Scheduler.counters().netpollBlocks
 
 	let peer = async echoRounds(listener)
 	let p1 = async echoOnce(listener, n: 1)
@@ -310,7 +310,7 @@ function exchangeOver(listener TcpListener) returns ExitCode
 	let r2 = try await p2 otherwise 0
 	let ok = r1 + r2
 
-	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
+	let parks = Scheduler.counters().netpollBlocks - beforeParks
 	let blocked = parks >= readers
 
 	let served = await peer
@@ -542,7 +542,7 @@ answers `timedOut`, unwinds its own frame, and its runner reclaims it. The exit 
 box reports 101.
 
 ⚠ **`parked` IS WHAT MAKES THIS A POLLER CASE.** A reader that merely yielded at the I/O point ahead of its
-kernel call is also "not complete" and is also reachable by the drop, so the `gtIsComplete` peek alone reads
+kernel call is also "not complete" and is also reachable by the drop, so the `isComplete()` peek alone reads
 GREEN against a runtime with no poller at all. Only the counter
 separates a promise dropped off the POLLER from one dropped at a plain I/O yield.
 
@@ -560,13 +560,13 @@ function parkedInRecv() returns bool
 		return false
 	end 'notYet'
 
-	return __Builtins.schedNetpollBlockCount() >= parkedFrom
+	return Scheduler.counters().netpollBlocks >= parkedFrom
 end 'parkedInRecv'
 
 function stall(listener TcpListener) returns ExitCode throws NetworkError
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
 
-	parkedFrom = __Builtins.schedNetpollBlockCount() + 1
+	parkedFrom = Scheduler.counters().netpollBlocks + 1
 	_ = try client.recv(1024)
 
 	return 0
@@ -586,7 +586,7 @@ function main() returns ExitCode
 		parked = parkedInRecv()
 	end 'untilParkedInRecv'
 
-	let stillWaiting = __Builtins.gtIsComplete(reader.inner) == 0
+	let stillWaiting = not reader.isComplete()
 
 	print("dropped={parked and stillWaiting}\n")
 	return 0
@@ -633,11 +633,11 @@ end 'stall'
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 
-	let before = __Builtins.schedNetpollBlockCount()
+	let before = Scheduler.counters().netpollBlocks
 	let reader = async stall(listener)
 	sleep(200)
-	let parked = __Builtins.schedNetpollBlockCount() - before
-	let stillWaiting = __Builtins.gtIsComplete(reader.inner) == 0
+	let parked = Scheduler.counters().netpollBlocks - before
+	let stillWaiting = not reader.isComplete()
 
 	print("dropped={parked > 0 and stillWaiting}\n")
 	return 0
@@ -696,10 +696,10 @@ function readUntilClosed(client TcpClient) returns ReadOutcome
 end 'readUntilClosed'
 
 function readOver(client TcpClient) returns ExitCode
-	let before = __Builtins.schedNetpollBlockCount()
+	let before = Scheduler.counters().netpollBlocks
 	let reader = async readUntilClosed(client)
 	sleep(200)
-	let parked = __Builtins.schedNetpollBlockCount() - before
+	let parked = Scheduler.counters().netpollBlocks - before
 
 	client.close()
 	let code = await reader
@@ -1076,7 +1076,7 @@ function dialAfterSettling(listener TcpListener) returns bool
 end 'dialAfterSettling'
 
 function exchangeOver(listener TcpListener) returns ExitCode
-	let beforeParks = __Builtins.schedNetpollBlockCount()
+	let beforeParks = Scheduler.counters().netpollBlocks
 
 	let acceptor = async acceptOne(listener)
 	let dialer = async dialAfterSettling(listener)
@@ -1084,7 +1084,7 @@ function exchangeOver(listener TcpListener) returns ExitCode
 	let served = await acceptor
 	let dialled = await dialer
 
-	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
+	let parks = Scheduler.counters().netpollBlocks - beforeParks
 	let parked = parks >= acceptors
 
 	print("served={served} dialled={dialled} parked={parked}\n")
@@ -1180,7 +1180,7 @@ for its port after the drop and gets the same answer it gave before.
 leaked box (101), a named abort, or a hang cannot be mistaken for the clean exit this case is about.
 
 ⚠ **`parked > 0` IS WHAT MAKES THIS A POLLER CASE.** An accept that merely yielded ahead of its kernel call is
-also "not complete" and is also reachable by the drop, so the `gtIsComplete` peek alone reads green against a
+also "not complete" and is also reachable by the drop, so the `isComplete()` peek alone reads green against a
 runtime whose listener never reached the poller at all.
 ```maxon
 let cleanExit = 42
@@ -1194,11 +1194,11 @@ end 'stall'
 function exchangeOver(listener TcpListener) returns ExitCode
 	let port = listener.port()
 
-	let before = __Builtins.schedNetpollBlockCount()
+	let before = Scheduler.counters().netpollBlocks
 	let acceptor = async stall(listener)
 	sleep(200)
-	let parked = __Builtins.schedNetpollBlockCount() - before
-	let stillWaiting = __Builtins.gtIsComplete(acceptor.inner) == 0
+	let parked = Scheduler.counters().netpollBlocks - before
+	let stillWaiting = not acceptor.isComplete()
 	let stillBound = listener.port() == port
 
 	print("dropped={parked > 0 and stillWaiting} bound={stillBound}\n")
@@ -1245,10 +1245,10 @@ function acceptUntilClosed(listener TcpListener) returns AcceptOutcome
 end 'acceptUntilClosed'
 
 function exchangeOver(listener TcpListener) returns ExitCode
-	let before = __Builtins.schedNetpollBlockCount()
+	let before = Scheduler.counters().netpollBlocks
 	let acceptor = async acceptUntilClosed(listener)
 	sleep(200)
-	let parked = __Builtins.schedNetpollBlockCount() - before
+	let parked = Scheduler.counters().netpollBlocks - before
 
 	listener.close()
 	let code = await acceptor
@@ -1296,7 +1296,7 @@ function exchangeOver(listener TcpListener) returns ExitCode
 
 	let acceptor = async stall(listener)
 	sleep(200)
-	let stillWaiting = __Builtins.gtIsComplete(acceptor.inner) == 0
+	let stillWaiting = not acceptor.isComplete()
 	let stillBound = listener.port() == port
 
 	print("dropped={stillWaiting} bound={stillBound}\n")

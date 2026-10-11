@@ -1071,7 +1071,7 @@ error E3005: <fragment>:25:17: Operator '<' requires type parameter 'T' to be co
 ```
 
 <!-- test: witness-mutation-of-let-argument-refused -->
-⭐⭐ **E3019 REACHES THE GENERIC ROUTE, AND THAT IS A WHOLE-PROGRAM CLAIM RATHER THAN A LOCAL ONE.**
+⭐⭐ **E3159 REACHES THE GENERIC ROUTE, AND THAT IS A WHOLE-PROGRAM CLAIM RATHER THAN A LOCAL ONE.**
 `Box.run(dest)` forwards `dest` into `self.item.grow(dest)`, which names no callee — the body is compiled ONCE
 against the opaque `T` and the jump goes through a witness table. What it DOES name is a REQUIREMENT, and
 which bodies fill that slot is fixed whole-program by the conformance check, so the mutation summary closes
@@ -1119,12 +1119,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:34:4: cannot pass 'a' to function that mutates parameter 'dest' (in main)
+error E3159: <fragment>:34:4: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
 ```
 
 <!-- test: witness-mutation-of-var-argument-allowed -->
 ⭐ **THE FIRST CONTROL FOR THE REFUSAL ABOVE, AND THE ONE THAT MATTERS: THE SAME PROGRAM WITH `var a`.**
-E3019 is about the BINDING, never about the route — a refusal that fired on the dispatch rather than on the
+E3159 is about the BINDING, never about the route — a refusal that fired on the dispatch rather than on the
 subject would take this program with it, and nothing else in this file would notice. Answers 9: the push
 happened, through the witness table, into an array the program declared mutable.
 ```maxon

@@ -28,7 +28,13 @@ publishes a length over slots nothing has written; that is how a slot table whos
 tracked separately (`Map`, `Set`) is built. Reading such a slot back through `Array.get` reports
 **`ArrayError.emptySlot`** — a DIFFERENT error from `ArrayError.indexOutOfBounds`, because the
 index is in range and it is the slot that is empty. Conflating the two turns "you never filled
-this" into "you asked past the end", which sends the reader looking at the wrong thing.
+this" into "you asked past the end", which sends the reader looking at the wrong thing. A `for` loop has no
+error to report, so its element read of an empty slot PANICS with the empty-slot message rather than
+handing the body a null.
+
+`.managed` and `__ManagedMemory` are library-tier surface (E3185 outside `stdlib/` and `runtime/`), so
+the cases that open an empty slot through `setLength` compile in the library tier
+(`<!-- tier: stdlib -->`).
 
 ## Tests
 
@@ -155,6 +161,7 @@ end 'main'
 ```
 
 <!-- test: raw-open-slot-reports-empty-slot -->
+<!-- tier: stdlib -->
 ### An empty slot opened through the raw buffer reports emptySlot
 `__ManagedMemory.setLength` is the layer where an unwritten slot is a defined state. Read back
 through `Array.get` it is `emptySlot` — NOT `indexOutOfBounds`, which would blame an index that
@@ -190,17 +197,12 @@ end 'main'
 The other half of the same distinction: this one really IS out of bounds.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-
-type Slot
-	export var value as Integer
-end 'Slot'
-
-typealias SlotArray = Array with Slot
+typealias IntegerArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = SlotArray.create()
-	arr.reserve(2)
-	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
+	var arr = IntegerArray.create()
+	arr.push(1)
+	arr.push(2)
 	try arr.get(5) otherwise (e) 'handler'
 		match e 'check'
 			emptySlot then return 42
@@ -222,17 +224,12 @@ never reaches it: `ElementIndex` stops at `i64.max`, so a negative is refused at
 `ArrayError` of either name is ever minted. A literal is refused at compile time.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-
-type Slot
-	export var value as Integer
-end 'Slot'
-
-typealias SlotArray = Array with Slot
+typealias IntegerArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = SlotArray.create()
-	arr.reserve(2)
-	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
+	var arr = IntegerArray.create()
+	arr.push(1)
+	arr.push(2)
 	try arr.get(-1) otherwise (e) 'handler'
 		match e 'check'
 			emptySlot then return 42
@@ -243,7 +240,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:14:10: Value -1 is outside the range of 'ElementIndex' (int(0 to 18446744073709551615))
+error E3005: <fragment>:9:10: Value -1 is outside the range of 'ElementIndex' (int(0 to 18446744073709551615))
 ```
 
 <!-- test: laundered-negative-index-panics-at-the-door -->
@@ -252,21 +249,16 @@ A negative the compiler cannot see is refused by the runtime guard instead. The 
 the refusal is not either `ArrayError`: both are still written, both would return, and neither runs.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-
-type Slot
-	export var value as Integer
-end 'Slot'
-
-typealias SlotArray = Array with Slot
+typealias IntegerArray = Array with Integer
 
 function launder(n Integer) returns Integer
 	return n
 end 'launder'
 
 function main() returns ExitCode
-	var arr = SlotArray.create()
-	arr.reserve(2)
-	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
+	var arr = IntegerArray.create()
+	arr.push(1)
+	arr.push(2)
 	try arr.get(launder(-1) as ElementIndex) otherwise (e) 'handler'
 		match e 'check'
 			emptySlot then return 42
@@ -280,13 +272,14 @@ end 'main'
 1
 ```
 ```stderr
-panic at laundered-negative-index-panics-at-the-door.test:18: Range check failed: value outside typealias 'ElementIndex'
+panic at laundered-negative-index-panics-at-the-door.test:13: Range check failed: value outside typealias 'ElementIndex'
 Stack trace:
   in main
   in mrt_start
 ```
 
 <!-- test: first-empty-slot -->
+<!-- tier: stdlib -->
 ### first() on an array whose slot 0 is empty
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -314,6 +307,7 @@ end 'main'
 ```
 
 <!-- test: last-empty-slot -->
+<!-- tier: stdlib -->
 ### last() on an array whose last slot is empty
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -339,6 +333,196 @@ end 'main'
 ```
 ```exitcode
 55
+```
+
+<!-- test: for-over-an-empty-slot-panics -->
+<!-- tier: stdlib -->
+### A `for` element read of an empty slot panics
+The loop reads element 0, then meets the slot `setLength` published and nothing filled. It panics with
+the empty-slot message instead of dereferencing the null the slot holds. A struct element cannot be `resize`d into
+existence (`error.resize-struct-element`), so the raw buffer is the only way to open an empty slot under a body that
+is not generic; `for-over-an-empty-slot-in-a-generic-body-panics` opens one through `resize`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.push(Slot.create(5))
+	arr.reserve(3)
+	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
+	for s in arr 'walk'
+		print("{s.value}\n")
+	end 'walk'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+5
+```
+```stderr
+panic at for-over-an-empty-slot-panics.test:19: empty slot: element 1 of the array was never filled
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: for-over-an-empty-slot-in-a-generic-body-panics -->
+### A `for` element read of an empty slot panics in a body compiled once for every element type
+`Bag` is generic, so `visit` is one compiled body for every `Element`, and its loop cannot ask at compile time
+whether the element owns a record. The array's own record says so at run time: `pad` grows `Bag with String` over
+slots nothing wrote, and the loop panics at element 0 with the empty-slot message instead of taking a reference
+to the null the slot holds.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Bag uses Element
+	typealias ElementArray = Array with Element
+
+	var items as ElementArray
+
+	static function create() returns Self
+		return Self{items: ElementArray.create()}
+	end 'create'
+
+	function pad(n Integer)
+		self.items.resize(n as Count)
+	end 'pad'
+
+	function visit() returns Integer
+		var kept = ElementArray.create()
+
+		for e in self.items 'each'
+			kept.push(e)
+		end 'each'
+
+		return kept.count() as Integer
+	end 'visit'
+end 'Bag'
+
+typealias NameBag = Bag with String
+
+function main() returns ExitCode
+	var bag = NameBag.create()
+	bag.pad(2)
+	print("visited {bag.visit()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at for-over-an-empty-slot-in-a-generic-body-panics.test:20: empty slot: element 0 of the array was never filled
+Stack trace:
+  in Bag.visit
+  in main
+  in mrt_start
+```
+
+<!-- test: a-zero-is-an-element-in-a-generic-body-over-scalars -->
+The twin: the same body instantiated at `Integer`, where a zeroed slot is the element 0 and nothing is empty, so the
+loop visits both.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Bag uses Element
+	typealias ElementArray = Array with Element
+
+	var items as ElementArray
+
+	static function create() returns Self
+		return Self{items: ElementArray.create()}
+	end 'create'
+
+	function pad(n Integer)
+		self.items.resize(n as Count)
+	end 'pad'
+
+	function visit() returns Integer
+		var kept = ElementArray.create()
+
+		for e in self.items 'each'
+			kept.push(e)
+		end 'each'
+
+		return kept.count() as Integer
+	end 'visit'
+end 'Bag'
+
+typealias NumberBag = Bag with Integer
+
+function main() returns ExitCode
+	var bag = NumberBag.create()
+	bag.pad(2)
+	print("visited {bag.visit()}\n")
+	return 0
+end 'main'
+```
+```stdout
+visited 2
+```
+```exitcode
+0
+```
+
+<!-- test: a-static-generic-body-takes-a-borrowed-element-loop-through-the-call-sites-descriptor -->
+A `static function` that does not return `Self` has no instance, so the layout descriptor it takes a reference
+through arrives from its call. The loop reads a borrowed element and the `clear` drops the source; the element holds
+its own reference, so the `push` stores a live record and the push extends the loop by nothing.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Bag uses Element
+	typealias ElementArray = Array with Element
+
+	var items as ElementArray
+
+	static function create() returns Self
+		return Self{items: ElementArray.create()}
+	end 'create'
+
+	static function keepFirstAfterClear(items ElementArray) returns Integer
+		var seen = 0
+
+		for e in items 'each'
+			items.clear()
+			items.push(e)
+			seen = seen + 1
+		end 'each'
+
+		return seen
+	end 'keepFirstAfterClear'
+end 'Bag'
+
+typealias NameBag = Bag with String
+typealias NameArray = Array with String
+
+function main() returns ExitCode
+	var names = NameArray.create()
+	names.push("a {names.count()}")
+	let seen = NameBag.keepFirstAfterClear(names)
+	print("{seen} {names.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 1
 ```
 
 <!-- test: error.declare-array-error-enum -->

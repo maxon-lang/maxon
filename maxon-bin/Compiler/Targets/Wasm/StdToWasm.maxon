@@ -282,7 +282,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// Defined functions in the order `wasmFuncIdxOf` assumes — walked off the INDEX'S OWN ARRAY rather than
 	// the module's, so the order the func indices are DERIVED from and the order they are EMITTED in are the
 	// same array rather than two that must be kept in step.
-	var inlinePositions = ByteArrayArray.create()
+	var inlinePositions = NameRoster.create()
 
 	for (iter, func) in funcNames.functions.withIterator() 'eachFunc'
 		let funcIdx = (WasmImportCount + iter.index()) as Wasm32Index
@@ -662,7 +662,7 @@ type WasmFrameStack
 	export let elidedLength as Imm32
 	export let lineTableBase as Wasm32Index
 	let prefix as ByteArray
-	let spellings as StdlibShadowSpellingArray
+	var spellings as StdlibShadowSpellingArray
 
 	static function above(rdataEnd BytePos, spellings StdlibShadowSpellingArray) returns Self
 		let base = alignUp(rdataEnd, alignment: WasmRdataAlignment) as Wasm32Index
@@ -696,7 +696,7 @@ type WasmFrameStack
 		}
 	end 'above'
 
-	function image(functionNames ByteArrayArray, inlinePositions ByteArrayArray) returns ByteArray
+	function image(functionNames NameRoster, inlinePositions NameRoster) returns ByteArray
 		var image = self.prefix.clone()
 		var lines = ByteArray.create()
 		let linesOffset = image.count() + ((functionNames.count() + inlinePositions.count()) shl WasmFrameLineEntryShift)
@@ -1063,6 +1063,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -1615,6 +1616,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osSocketRecv(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osCpuCount(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osCommitPages(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osGuardPages(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osReservePages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		atomicCas(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		atomicRmw(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
@@ -2046,6 +2048,7 @@ type WasmFuncEmitter
 			osCpuCount then panic("emitStraightLineTerminator: an `osCpuCount` is a body op, never a terminator")
 			osThreadCpuTicks then panic("emitStraightLineTerminator: an `osThreadCpuTicks` is a body op, never a terminator")
 			osDecommitPages then panic("emitStraightLineTerminator: an `osDecommitPages` is a body op, never a terminator")
+			osGuardPages or
 			osCommitPages or
 			osReservePages then panic("emitStraightLineTerminator: a page reserve or commit is a body op, never a terminator")
 			memFill then panic("emitStraightLineTerminator: a `memFill` is a body op, never a terminator")
@@ -2224,6 +2227,7 @@ type WasmFuncEmitter
 			osCpuCount then panic("emitDispatcherTerminator: an `osCpuCount` is a body op, never a terminator")
 			osThreadCpuTicks then panic("emitDispatcherTerminator: an `osThreadCpuTicks` is a body op, never a terminator")
 			osDecommitPages then panic("emitDispatcherTerminator: an `osDecommitPages` is a body op, never a terminator")
+			osGuardPages or
 			osCommitPages or
 			osReservePages then panic("emitDispatcherTerminator: a page reserve or commit is a body op, never a terminator")
 			memFill then panic("emitDispatcherTerminator: a `memFill` is a body op, never a terminator")
@@ -2345,6 +2349,7 @@ type WasmFuncEmitter
 			// A commit answers the address it was handed: the pages are already backed by the grow that
 			// reserved them.
 			osCommitPages(resultId, addrId, _) then self.emitOsCommitPages(resultId, addrId: addrId)
+			osGuardPages then panic("StdToWasm: osGuardPages is the Windows green-thread stack guard — wasm32-wasi has no green-thread stacks, so no program reaches it")
 
 			// The dense-match jump table is ALWAYS a block terminator, never a body op.
 			switch then panic("emitBodyOp: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
@@ -3105,8 +3110,8 @@ type WasmFuncEmitter
 		emitFramePosition(self.body, frames: self.frames, slotOffsetLocal: self.slotOffsetLocal, position: position)
 	end 'recordFramePosition'
 
-	function inlinePositionLines() returns ByteArrayArray
-		var lines = ByteArrayArray.create()
+	function inlinePositionLines() returns NameRoster
+		var lines = NameRoster.create()
 
 		for siteIndex in self.positions.sites 'eachSite'
 			lines.push(self.renderInlinePosition(siteIndex))
@@ -3861,9 +3866,9 @@ type WasmFuncEmitter
 end 'WasmFuncEmitter'
 
 type WasmPhiCopies implements ParallelCopyEmitter
-	let body as WasmBody
-	let valtypes as WasmValTypeArray
-	let scratchLocalByValType as ScratchLocalMap
+	var body as WasmBody
+	var valtypes as WasmValTypeArray
+	var scratchLocalByValType as ScratchLocalMap
 
 	static function create(body WasmBody, valtypes WasmValTypeArray, scratchLocalByValType ScratchLocalMap) returns WasmPhiCopies
 		return Self{body: body, valtypes: valtypes, scratchLocalByValType: scratchLocalByValType}
@@ -4096,6 +4101,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osCpuCount then panic("decideDispatcher: an `osCpuCount` is a body op, never a terminator")
 		osThreadCpuTicks then panic("decideDispatcher: an `osThreadCpuTicks` is a body op, never a terminator")
 		osDecommitPages then panic("decideDispatcher: an `osDecommitPages` is a body op, never a terminator")
+		osGuardPages or
 		osCommitPages or
 		osReservePages then panic("decideDispatcher: a page reserve or commit is a body op, never a terminator")
 		memFill then panic("decideDispatcher: a `memFill` is a body op, never a terminator")

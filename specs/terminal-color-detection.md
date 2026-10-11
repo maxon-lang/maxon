@@ -1,24 +1,19 @@
 ---
 feature: terminal-color-detection
 status: stable
-keywords: [terminal, tty, color, colour, ansi, NO_COLOR, TERM, stdoutWantsAnsiColor, __Builtins, intrinsics]
+keywords: [terminal, tty, color, colour, ansi, NO_COLOR, TERM, Console.stdoutWantsColor, stdoutWantsAnsiColor]
 category: system
 ---
 
-# `__Builtins.stdoutWantsAnsiColor()` — may this program's output carry ANSI escapes?
+# `Console.stdoutWantsColor()` — may this program's output carry ANSI escapes?
 
 ## Documentation
 
-`__Builtins` is the compiler's builtin TYPE: a name reserved for the compiler, whose static methods
-are INTRINSICS rather than functions any file declares. This spec pins one of them:
-
-| Intrinsic | Meaning |
+| Function | Meaning |
 |---|---|
-| `__Builtins.stdoutWantsAnsiColor()` | `true` when this process's standard output is a terminal that wants colour |
+| `Console.stdoutWantsColor() returns bool` | `true` when this process's standard output is a terminal that wants colour |
 
-It takes no arguments and has no `stdlib/` wrapper: the intrinsic IS the surface, for
-`__Builtins.enterBackgroundPriority`'s reason — a declaration whose whole body is one intrinsic call
-is the thin wrapper the house rules forbid.
+It takes no arguments. Its body is the library-tier intrinsic `__Builtins.stdoutWantsAnsiColor()`.
 
 ### THREE conditions, ALL required, and each rules out a different way of being wrong
 
@@ -33,19 +28,19 @@ The rule:
 
 Dropping any one of them is a wrong answer of a different kind, which is why none is optional.
 
-### ⛔⛔ `--color=auto` RESOLVES THROUGH THIS INTRINSIC
+### ⛔⛔ `--color=auto` RESOLVES THROUGH THIS FUNCTION
 
 `docs/CLI_REFERENCE.md` and the compiler's own usage text say *"auto means only when stdout is a
-terminal"*, and `TestRender.reportColorEnabled` answers `auto` through this intrinsic, so the flag does
+terminal"*, and `TestRender.reportColorEnabled` answers `auto` through this function, so the flag does
 what it says.
 
 ### ⚠ THE ANSWER IS A PREDICATE, WHICH IS WHY IT IS A `bool` AND NOT AN `int`
 
-Its neighbours in the argumentless band — `currentProcessId`, `cpuCount`,
-`enterBackgroundPriority` — answer NUMBERS a caller reads. This one answers a QUESTION, and tagged
+Its neighbours in the argumentless band — `Process.id()`, `Scheduler.machineCpuCount()`,
+`Process.enterBackgroundPriority()` — answer NUMBERS a caller reads. This one answers a QUESTION, and tagged
 `integer` it would need `!= 0` at every call site: the sentinel-shaped spelling the house rules
-refuse. The runtime still answers 0/1, because the Std tier has no `setcc`; the PARSER is what tags
-the result `boolean`, which is `__ManagedDirectory.exists`'s arrangement exactly.
+refuse. The runtime still answers 0/1, because the Std tier has no `setcc`; the PARSER tags the intrinsic's
+result `boolean`, which is `__ManagedDirectory.exists`'s arrangement exactly.
 
 ### ⚠ ON WINDOWS, `NO_COLOR` SET TO THE EMPTY STRING READS AS UNSET
 
@@ -117,7 +112,7 @@ disagreement: `ioctl(TCGETS)` asks whether a TERMINAL is there, where `GetFileTy
 "character device".
 ```maxon
 function main() returns ExitCode
-	if __Builtins.stdoutWantsAnsiColor() 'wantsColor'
+	if Console.stdoutWantsColor() 'wantsColor'
 		return 1
 	end 'wantsColor'
 
@@ -135,8 +130,8 @@ environment probe half-read would be free to differ on the second call, and this
 not.
 ```maxon
 function main() returns ExitCode
-	let first = __Builtins.stdoutWantsAnsiColor()
-	let second = __Builtins.stdoutWantsAnsiColor()
+	let first = Console.stdoutWantsColor()
+	let second = Console.stdoutWantsColor()
 	if first == second 'agree'
 		return 0
 	end 'agree'
@@ -152,13 +147,12 @@ end 'main'
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ⭐⭐ **THE DEGRADATION, PINNED ON THE ONE LANE THAT CAN NEVER HAVE THE FACILITY.** A WASI component
 cannot ask what is on the other end of its `output-stream`, so this program must still BUILD and must
-answer `false` — the conservative half — rather than being refused at its own span. ⛔ This case
-replaced one asserting `E3104` here, and the replacement is the point: that refusal took the compiler's
-own `Testing/` code with it and made the compiler unbuildable for arm64-macOS. An `exitcode` of 1 would mean the
+answer `false` — the conservative half — rather than being refused at its own span. A refusal here
+would take the compiler's own `Testing/` code with it. An `exitcode` of 1 would mean the
 fallback had started GUESSING `true`, which is the one answer this must never give.
 ```maxon
 function main() returns ExitCode
-	if __Builtins.stdoutWantsAnsiColor() 'wantsColor'
+	if Console.stdoutWantsColor() 'wantsColor'
 		return 1
 	end 'wantsColor'
 

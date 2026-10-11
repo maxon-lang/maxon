@@ -44,7 +44,7 @@ export union TypeCycleTarget
 	// A declared `type` / `enum` / `union`, BY NAME. The name is resolved against the declaration registries
 	// by the caller rather than here, so a name no declaration holds simply contributes no edge — which is
 	// what keeps a `named` that turned out to be a ranged alias from inventing one.
-	aggregate(name ByteArray)
+	aggregate(let name ByteArray)
 
 	// A generic INSTANCE — `Array with Folder`, whether the author wrote it inline or reached it through a
 	// `typealias`.
@@ -53,7 +53,7 @@ export union TypeCycleTarget
 	// An INTERFACE, BY NAME — the type of `var back as Backref`. WHAT such a field holds is decided
 	// whole-program by the conformance registry and never by the reference itself, which is why this arm
 	// carries only the name and the conformers are read where the graph is built.
-	existential(interfaceName ByteArray)
+	existential(let interfaceName ByteArray)
 end 'TypeCycleTarget'
 
 // The node a `MaxonType` interned in `typeNames` points at. `named` and `structRef` are ONE arm because the
@@ -118,7 +118,7 @@ type TypeCycleGraph
 	// Node ⇒ its name, for the aggregate half. The container half's display name is derived at render time
 	// (`ProgramSignatures.instanceDisplayName`), because it is the author's `typealias` spelling and there is
 	// no reason to materialize one per instance for a program that compiles.
-	var aggregateNames as ByteArrayArray
+	var aggregateNames as NameRoster
 
 	// How many generic instances the program interned — the container half's width, held here so the
 	// adjacency and the node numbering cannot come to disagree about how wide the space is.
@@ -131,7 +131,7 @@ type TypeCycleGraph
 	// node and no conformer walk, and could lie on no cycle anyway — a node nothing points AT has in-degree
 	// zero.
 	var nodeOfInterface as TypeCycleNodeMap
-	var interfaceNames as ByteArrayArray
+	var interfaceNames as NameRoster
 
 	// The edges, as the parallel (owner, held) columns `buildCsr` consumes.
 	var edgeOwners as CsrColumn
@@ -140,7 +140,7 @@ type TypeCycleGraph
 	var edgeLabels as TypeCycleEdgeLabelArray
 
 	static function create(instanceCount GenericInstanceId) returns TypeCycleGraph
-		return Self{nodeOfAggregate: TypeCycleNodeMap.create(), aggregateNames: ByteArrayArray.create(), instanceCount: instanceCount, nodeOfInterface: TypeCycleNodeMap.create(), interfaceNames: ByteArrayArray.create(), edgeOwners: CsrColumn.create(), edgeHeld: CsrColumn.create(), edgeLabels: TypeCycleEdgeLabelArray.create()}
+		return Self{nodeOfAggregate: TypeCycleNodeMap.create(), aggregateNames: NameRoster.create(), instanceCount: instanceCount, nodeOfInterface: TypeCycleNodeMap.create(), interfaceNames: NameRoster.create(), edgeOwners: CsrColumn.create(), edgeHeld: CsrColumn.create(), edgeLabels: TypeCycleEdgeLabelArray.create()}
 	end 'create'
 
 	function aggregateCount() returns CsrIndex
@@ -539,8 +539,7 @@ function addConformerEdges(project Project, signatures ProgramSignatures, graph 
 		return
 	end 'noReferenceNamedAnInterface'
 
-	// Keys out first, then the walk — `ConformanceCheck.checkGrantedEnumConformance` states why.
-	var names = ByteArrayArray.create()
+	var names = NameRoster.create()
 
 	for (name, _) in project.structTypes 'eachDeclaredStruct'
 		names.push(name)

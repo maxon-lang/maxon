@@ -121,14 +121,12 @@ module union OpenBuffer
 	none
 end 'OpenBuffer'
 
-var lspFileMemos = SharedFileMemoMap.create()
-
 // ⚠ The diagnostics are DISCARDED, never printed: a client cannot drain this server's stderr
 // (`tests/lsp/LspClient.maxon`'s header), so a compile that printed them would fill the pipe and leave
 // both processes waiting on each other. What a caller reports is `project.diagnostics`. The project
 // check's session discards for the same reason.
-module function libraryTierProject(root FilePath, tiers LibraryTiers, buffer OpenBuffer) returns Project throws CompileError
-	var project = createProject(root, target: detectHostTarget(), stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, debugStream: false, session: CompileSession.create(DiagnosticSink.discarding(), fileMemos: lspFileMemos, treeLock: LockHold.none()))
+module function libraryTierProject(root FilePath, tiers LibraryTiers, buffer OpenBuffer, fileMemos SharedFileMemoMap) returns Project throws CompileError
+	var project = createProject(root, target: detectHostTarget(), stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, debugStream: false, session: CompileSession.create(DiagnosticSink.discarding(), fileMemos: fileMemos, treeLock: LockHold.none()))
 
 	registerTheOpenBuffer(project, buffer: buffer)
 
@@ -151,10 +149,10 @@ end 'registerTheOpenBuffer'
 //
 // The buffer is registered before the library load, so a tier document's buffer is what
 // `setAsideTheUsersOwnLibraryFiles` files as library source, and its copy on disk is never loaded.
-module function lspDocumentProject(path FilePath, content String) returns LspDocumentProject
+module function lspDocumentProject(workspace LspWorkspaceState, path FilePath, content String) returns LspDocumentProject
 	let tiers = try LibraryTiers.locate() otherwise return LspDocumentProject.unavailable
-	let reader = LspReaderSearch.of(path, tiers: tiers)
-	let project = try libraryTierProject(lspBufferRootOf(reader), tiers: tiers, buffer: OpenBuffer.held(path, content: content)) otherwise return LspDocumentProject.unavailable
+	let reader = LspReaderSearch.of(path, tiers: tiers, workspace: workspace)
+	let project = try libraryTierProject(lspBufferRootOf(reader), tiers: tiers, buffer: OpenBuffer.held(path, content: content), fileMemos: workspace.fileMemos) otherwise return LspDocumentProject.unavailable
 
 	return LspDocumentProject.loaded(project, reader: reader)
 end 'lspDocumentProject'

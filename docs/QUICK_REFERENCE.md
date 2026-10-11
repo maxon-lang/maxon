@@ -10,7 +10,7 @@
 | `character literal` | Grapheme cluster | `'A'`, `'é'` |
 | `string literal` | UTF-8 string | `"hello"` |
 | `byte string literal` | ByteArray from string | `b"hello"` |
-| `cstring` | NUL-terminated UTF-8 pointer, used to pass strings to `__Builtins.*` runtime intrinsics | `s.cstr()` |
+| `cstring` | NUL-terminated UTF-8 pointer, nameable only in `stdlib/` and `runtime/` sources (E3185 elsewhere) | `s.cstr()` |
 
 ## Ranged Type Aliases
 
@@ -163,24 +163,31 @@ end 'Origin'
 
 // Reference-by-default for structs
 var a = Point.create(1, y: 2)
-var b = a               // reference -- b is an alias for a (same object)
-b.x = 99               // a.x is now 99
+var points = PointArray.create()
+points.push(a)          // the array shares a's record
+var b = try points.get(0) otherwise panic("pushed")
+b.x = 99                // a.x is now 99: a and b are one record
 b = Point.create(5, y: 6)  // rebinds b -- a is unaffected
+var m = a               // a MOVES into m; reading a afterwards is E3102
 
 // Explicit clone for independent copy (requires Cloneable)
-var c = a.clone()       // deep copy -- c is independent
-c.x = 42               // a.x is still 99
+var c = m.clone()       // deep copy -- c is independent
+c.x = 42                // m.x is still 99
+let frozen = c          // c moves into frozen, read-only all the way down
+// frozen.x = 1         // E3159: 'frozen' is read-only
 ```
 
 All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `_ =` requires a function call on the right-hand side (`_ = 42` is an error).
 
-**Assignment semantics:** For struct types, `var b = a` creates a reference (alias to the same heap object). Field mutation through the alias affects the original. Reassignment (`b = Point.create(...)`) rebinds without affecting the original. Use `var b = a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
+**Assignment semantics:** A record is stored by reference: a record pushed into a container, stored in a field or passed to a call is shared, and a field write through one holder is visible through every other. `var b = a` and `let b = a` from a `var a` MOVE the record (reading `a` afterwards is E3102). Reassignment (`b = Point.create(...)`) rebinds without affecting the record `b` held. Use `a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
+
+**Read-only values:** `let` is read-only all the way down: a `let` binding, a `let` field, a `let` union payload, a module-level `let`, a `SharedValue` or registry read, a stored `Map` key or `Set` element, and an element of `Array with readonly T` / `Map with K, readonly V`. A write through one (a field store, a method that writes its receiver, an argument the callee writes) is E3159; binding one to a `var`, or storing it where something may write it, is E3078. `clone()` makes a mutable copy. A `for`, `if let` or `match` binding follows its source.
 
 **Auto-conformance:** The compiler auto-generates `Cloneable` and `Equatable` conformance for structs whose fields are all Cloneable/Equatable. Primitives, `String`, and `Array` are built-in Cloneable and Equatable types. Use `.clone()` to create independent copies.
 
 **Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs are not freed at scope exit — the caller takes responsibility for their lifetime. Structs with all-primitive fields that don't escape scope are automatically stack-promoted (no heap allocation or refcounting). Use `@heap var p = Point.create(...)` to force heap allocation.
 
-**Borrow checking:** You cannot mutate a collection while a variable borrows from it (e.g., a reference obtained via `.get()`). Borrows expire at the last use of the borrowing variable (non-lexical lifetimes). Error E3070.
+**Counted reads:** A value read out of a collection or a field takes its own reference whenever something before its last use could release it, and a `for` loop or cursor holds its source, so mutating a collection while an element read from it is in use is safe. A `for` over an `Array` or a `String` re-reads the live count each step. Passing storage to a parameter the callee reassigns while another argument of the same call reaches it is E3186.
 
 **Self-field shadowing:** Inside an instance method, a local (`let`/`var`, parameter, match binding, tuple destructure, for-in variable, try/otherwise error binding) cannot have the same name as one of the type's fields. Such a shadow is rejected with E3006.
 
@@ -260,7 +267,7 @@ end 'check'
 greet("Smith", title: "Dr.")
 ```
 
-**Parameter passing:** Parameters are passed by value when only read. Parameters that are assigned to inside the function body are passed by reference -- mutations propagate back to the caller's storage: a local `var`, a module-level `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a `let` variable to a mutating parameter is a compile error (E3019). Literals and expressions create a temporary stack slot; their mutations are not visible to the caller.
+**Parameter passing:** Parameters are passed by value when only read. Parameters that are assigned to inside the function body are passed by reference -- mutations propagate back to the caller's storage: a local `var`, a module-level `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a read-only value to a parameter the callee writes is a compile error (E3159). Literals and expressions create a temporary stack slot; their mutations are not visible to the caller.
 
 **Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `_ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
 
@@ -967,7 +974,7 @@ end 'each'
 - Growable stacks, `main` included (2KB initial, 8KB on x64-Windows; doubles until the frame fits, up to 1GB)
 - Throwing async functions require `try await` (not plain `await`), except inside a `try` block or a `test` body
 - `async` target must yield (contain I/O or `await` points)
-- `async` arguments MOVE into the coroutine: a local `let` or `var` passed to `async` is consumed (a later read is E3102); a parameter or a `self` field is shared instead, which is how a socket or server handle reaches a coroutine
+- `async` arguments are SHARED with the coroutine, as with an ordinary call: the coroutine runs on the caller's green thread, so a local `let` or `var` passed to `async` stays readable by the caller, and a parameter the coroutine reassigns gets storage the coroutine owns. A service send is the call that moves a mutable value
 - An unawaited promise is DROPPED at scope exit — an unstarted coroutine never runs and a parked one's wait is cancelled
 
 ## Arrays

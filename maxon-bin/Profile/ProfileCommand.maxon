@@ -346,35 +346,31 @@
 		return Environment.inheritUpdating(request.targetEnv)
 	end 'profileChildEnvironment'
 
+	let ProfileNoSamplerReason = "the sampler could not take the timer and scratch pages it ticks on, so this run could not be measured at all"
+
 	// ⭐ Everything that can fail is asked HERE, before a single tick, so a refusal names the missing mechanism
 	// rather than a profile coming back mysteriously empty.
 	//
 	// ⚠ The session is built into a LOCAL `var` rather than handed back inside a union: it is written on
 	// every tick, and a value bound by a `match` arm is immutable (E3063).
 	function sampleUntilItEnds(request ProfileRequest, placement ProfilePlacement, sidecar MxdbgReader, child StreamingSubprocess, cyclesPerTick ProfileCyclesPerTick) returns ExitCode
-		let pid = (try child.processId() otherwise panic("ProfileCommand.sampleUntilItEnds: the child was spawned for this session and is released only after sampling, so the spawn recorded a process id for it")) as ProfileWord
+		let pid = try child.processId() otherwise panic("ProfileCommand.sampleUntilItEnds: the child was spawned for this session and is released only after sampling, so the spawn recorded a process id for it")
 
-		let process = __Builtins.profileOpenTarget(pid)
+		let process = try SampledProcess.open(pid) otherwise (e) 'cannotOpen'
+			match e 'why'
+				noSuchProcess then return refuseProfileAfterKilling(child, reason: "{reportPathDisplay(request.exePath())} could not be sampled: it ended before the sampler attached. Profile a program that runs long enough to be measured.")
+				noScratch then return refuseProfileAfterKilling(child, reason: ProfileNoSamplerReason)
+				noTimer or
+				unknownThread or
+				outOfWindow or
+				moduleListUnavailable or
+				callingThread then panic("ProfileCommand.sampleUntilItEnds: SampledProcess.open refuses only a missing process or missing pages")
+			end 'why'
+		end 'cannotOpen'
 
-		if process == 0 'noSuchProcess'
-			return refuseProfileAfterKilling(child, reason: "{reportPathDisplay(request.exePath())} could not be sampled: it ended before the sampler attached. Profile a program that runs long enough to be measured.")
-		end 'noSuchProcess'
+		var session = ProfileSession.create(process, cyclesPerTick: cyclesPerTick)
 
-		let timer = __Builtins.profileTimerCreate()
-		let scratch = __Builtins.profileScratchAlloc(ProfileScratchBlockBytes)
-		let window = __Builtins.profileScratchAlloc(ProfileStackWindowBytes)
-
-		// ⚠ The session is built BEFORE the three are tested, so whatever was taken is released down the one
-		// path that releases anything — `release` skips the slots that came back empty. Testing first would
-		// need a second close sequence here, and two of them disagree the moment a fourth resource appears.
-		var session = ProfileSession.create(process, timer: timer, scratch: scratch, window: window, cyclesPerTick: cyclesPerTick)
-
-		if timer == 0 or scratch == 0 or window == 0 'noSampler'
-			session.release()
-			return refuseProfileAfterKilling(child, reason: "the sampler could not take the timer and scratch pages it ticks on, so this run could not be measured at all")
-		end 'noSampler'
-
-		let outcome = match profileImageFor(session, pid: pid, placement: placement, sidecar: sidecar) 'symbols'
+		let outcome = match profileImageFor(session, placement: placement, sidecar: sidecar) 'symbols'
 			refused(reason) gives refuseProfileAfterKilling(child, reason: reason)
 			loaded(image) gives runProfileTicks(request, child: child, session: session, image: image)
 		end 'symbols'
@@ -388,11 +384,10 @@
 		var accumulator = ProfileAccumulator.create()
 		var frames = ProfileStringArray.create()
 
-		let intervalTicks = profileIntervalTicks(request.rateHz)
+		var timer = try SampleTimer.create(profileIntervalNanos(request.rateHz)) otherwise return refuseProfileAfterKilling(child, reason: ProfileNoSamplerReason)
 		let deadlineNanos = trunc(request.timeoutSeconds * MillisecondsPerSecond * NanosPerMilli) as DurationNanos
 		let started = Clock.nowNanos()
 		var lastRefresh = started
-		var deadline = __Builtins.profileNowFileTime() + intervalTicks
 		var status = ProfileTargetStatus.notObserved
 		var completed = false
 
@@ -409,7 +404,7 @@
 
 			// Liveness is checked after the sample, so a short program's last moments are measured rather
 			// than lost to a check that happened to win the race.
-			let observed = profileChildExit(child)
+			var observed = profileChildExit(child)
 
 			if profileStatusObserved(observed) 'itEnded'
 				status = observed
@@ -421,9 +416,10 @@
 				break
 			end 'pastTheDeadline'
 
-			deadline = deadline + intervalTicks
-			session.waitUntil(deadline)
+			timer.wait()
 		end 'eachTick'
+
+		timer.close()
 
 		let seconds = profileSecondsOf(Clock.elapsedNanos(started))
 

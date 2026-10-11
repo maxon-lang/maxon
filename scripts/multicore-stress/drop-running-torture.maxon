@@ -14,7 +14,7 @@
 // thread and START it, short enough that the thread — which spins for `dropWork`, three
 // times longer — is still mid-body when the drop lands. That is the state under test.
 //
-// The reading: `__Builtins.schedGtRecordsCarved()`, the records the scheduler's arena
+// The reading: `Scheduler.counters().threadRecordsCarved`, the records the scheduler's arena
 // has ever carved, against the most a sound runtime can carve here — `peakLive`
 // records live at once, plus fewer than 64 waiting on each other processor's free
 // list. `leaked` is how far the count runs past that bound, and MUST be 0 at every
@@ -111,14 +111,14 @@ function dropped(idx Integer) returns Integer
 	// CPU-parallel checkpoint: marks this hand-written CPU-bound function as a
 	// legitimate `async` target (satisfies the E3073 yielding contract) without
 	// claiming fake I/O. No-op at runtime.
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	started = started + 1
 
 	return spin(dropWork, seed: idx)
 end 'dropped'
 
 function settle(work Integer) returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 
 	return spin(work, seed: 0)
 end 'settle'
@@ -165,7 +165,7 @@ function main() returns ExitCode
 
 	sink = sink + drain()
 
-	let bound = peakLive + listSlack * (__Builtins.schedProcessorCount() - 1)
+	let bound = peakLive + listSlack * ((Scheduler.processorCount() as SchedulerEventCount) - 1)
 	var i = 0
 
 	while i < measuredRounds or i < 2 * bound 'measured'
@@ -175,13 +175,14 @@ function main() returns ExitCode
 
 	sink = sink + drain()
 
-	let carved = __Builtins.schedGtRecordsCarved()
+	let counters = Scheduler.counters()
+	let carved = counters.threadRecordsCarved
 	let leaked = carved - bound if carved > bound else 0
 	let ranCount = started
-	let steals = __Builtins.schedStealCount()
-	let workers = __Builtins.schedMaxActiveWorkers()
+	let steals = counters.steals
+	let workers = counters.maxActiveWorkers
 	let monitor = monitorActions()
-	let cpus = __Builtins.cpuCount()
+	let cpus = Scheduler.machineCpuCount()
 
 	// The driver parses these. `leaked` is the ASSERTION. `steals` is the exact
 	// coverage reading — a steal is a worker M taking a thread out of MAIN's ring

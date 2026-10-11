@@ -85,26 +85,6 @@ typealias CutOffCallerSet = Set with ElementIndex
 // How many parameter cascades one callee carries — its arity at most, and one in nearly every case.
 typealias GuardCount = int(0 to u64.max)
 
-// The shared empties a `SiteSplicer` starts with and NEVER writes to — `seedSiteBuffers` replaces them
-// with real arrays at the first site, and `valueIds` replaces the minter at the first splice. The leaf
-// rule constructs one inliner per FUNCTION in the module and the overwhelming majority of functions hold
-// no inlinable site at all, so four `create()`s in the constructor would be four heap objects per
-// function for nothing. Same shape, and the same measured reason, as
-// `InlineManagedPrimitives.sharedUnseededMinter` and `InsertRangeChecks`' chain columns; safe for the
-// same reason — the one operation that would write to each is the one that replaces it.
-let sharedEmptySitePositions = BlockOpPosArray.create()
-let sharedEmptySiteCallees = FuncIndexArray.create()
-let sharedEmptyContPositions = BlockPositionColumn.create()
-let sharedUnseededLeafMinter = ValueMinter.create(0)
-
-// ⭐ The two columns a splice that declines NOTHING never writes to — which is nearly every splice in the
-// module, since a callee with a narrowed parameter is a handful of them. Shared for the three empties
-// above's reason and with their invariant: `DeclinedGuards.decline` REPLACES both fields before its first
-// write, so neither is ever mutated. Fresh columns would be two allocations per splice for a plan almost
-// every splice answers `false` from.
-let sharedEmptyDeclineColumn = BoolArray.create()
-let sharedEmptyForwardColumn = BlockIdArray.create()
-
 // ⭐⭐ **WHICH (caller, callee) PAIRS THIS RUN MAY SPLICE — the pass runs TWICE over one module and each
 // pair is offered to it exactly once.**
 //
@@ -343,6 +323,7 @@ function inlineOpRole(op StdOp, meta StdOpMetaMemo) returns InlineOpRole
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -906,10 +887,8 @@ type DeclinedGuards
 	// the columns are written in exactly one place and it is the first decline.
 	export var anyDeclined as bool
 
-	// ⚠ `export` for ONE reader that is not a method: `sharedDeclinesNothing`, a module-level `let`, which
-	// a file-private constructor may not initialize.
 	static function create(blockIdSpace BlockId, guardCount GuardCount) returns DeclinedGuards
-		return Self{declined: sharedEmptyDeclineColumn, forward: sharedEmptyForwardColumn, blockIdSpace: blockIdSpace, guardCount: guardCount, anyDeclined: false}
+		return Self{declined: BoolArray.create(), forward: BlockIdArray.create(), blockIdSpace: blockIdSpace, guardCount: guardCount, anyDeclined: false}
 	end 'create'
 
 	function decline(guard RangeCheckParamGuard)
@@ -925,7 +904,7 @@ type DeclinedGuards
 		end 'eachOwnedBlock'
 	end 'decline'
 
-	// COPY-ON-WRITE off the two shared empties, at the first decline and nowhere else. `forward` is seeded
+	// Seeded at the first decline and nowhere else. `forward` is seeded
 	// to the IDENTITY so that "this block is not forwarded" needs no second column to say so.
 	function seedColumns()
 		var declineColumn = BoolArray.create()
@@ -973,13 +952,6 @@ type DeclinedGuards
 		panic("DeclinedGuards.entryFrom: the forwarding chain from block {id} is longer than the {self.guardCount} cascade(s) that can be on it — a cascade's `__rc_ok` has been recorded as its own head")
 	end 'entryFrom'
 end 'DeclinedGuards'
-
-// ⭐ THE ONE PLAN EVERY SPLICE INTO A CALLEE WITH NO NARROWED PARAMETER ANSWERS FROM — which is the
-// overwhelming majority of them. `sharedUnseededLeafMinter`'s pattern and its invariant: `decline` is the
-// only thing that writes to a plan, and `declinedGuards` hands this one back exactly when the loop that
-// would call it has nothing to iterate. Its `blockIdSpace`/`guardCount` are 0 and unread, because both
-// columns and the chase are gated on `anyDeclined`, which is false here for ever.
-let sharedDeclinesNothing = DeclinedGuards.create(0, guardCount: 0)
 
 // ⭐ The columns ONE splice derives from its callee's block set, held together because every step of the
 // splice reads at least two of them.
@@ -1301,7 +1273,7 @@ function spliceAlwaysSplicedCallees(project Project, module StdModule, byName Fu
 			continue
 		end 'leftAsWritten'
 
-		var splicer = SiteSplicer.create(project, module: module, func: module.getFunc(funcIndex), funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: sharedUnseededLeafMinter, seeded: false)
+		var splicer = SiteSplicer.create(project, module: module, func: module.getFunc(funcIndex), funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: ValueMinter.create(0), seeded: false)
 		splicer.run()
 		plan.measure(funcIndex, module: module, func: module.getFunc(funcIndex))
 		try closedToTheCallerWalk.set(funcIndex, value: true) otherwise panic("spliceAlwaysSplicedCallees: closedToTheCallerWalk.set OOB at {funcIndex}")
@@ -1315,7 +1287,7 @@ function isClosedToTheCallerWalk(closed BoolArray, funcIndex ElementIndex) retur
 end 'isClosedToTheCallerWalk'
 
 function spliceLeaves(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound)
-	let plan = buildLeafPlan(module, namedByIrRequest: namedByIrRequest, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
+	var plan = buildLeafPlan(module, namedByIrRequest: namedByIrRequest, meta: meta, round: round, runtimeTier: project.libraryFacts.runtimeTier, byName: byName)
 
 	if plan.eligibleCount == 0 'nothingToInline'
 		if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
@@ -1356,7 +1328,7 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 			continue
 		end 'theCascadeOwnsIt'
 
-		var splicer = SiteSplicer.create(project, module: module, func: func, funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: sharedUnseededLeafMinter, seeded: false)
+		var splicer = SiteSplicer.create(project, module: module, func: func, funcIndex: funcIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: ValueMinter.create(0), seeded: false)
 		splicer.run()
 	end 'eachFunc'
 
@@ -1423,8 +1395,7 @@ export function requireAlwaysSplicedBodiesAreGone(project Project, module StdMod
 	end 'dataDoors'
 end 'requireAlwaysSplicedBodiesAreGone'
 
-// A body declaring the row that a reference no op of the module spells still names. ANSWERED rather than
-// reported at the walk: the report writes to `project` and both rosters below are borrowed out of it.
+// A body declaring the row that a reference no op of the module spells still names.
 union AlwaysSplicedDataReference
 	none
 	found(funcIndex ElementIndex, door String)
@@ -2813,8 +2784,7 @@ type SiteSplicer
 	var highestDefined as ValueId
 
 	// The current block's sites, in ascending position, and the continuation each split minted, in the
-	// same order. Reused across the function's blocks (truncated, not reallocated) and shared-empty until
-	// the first site — see `sharedEmptySitePositions`.
+	// same order. Reused across the function's blocks (truncated, not reallocated).
 	var sitePositions as BlockOpPosArray
 	var siteCallees as FuncIndexArray
 	var contPositions as BlockPositionColumn
@@ -2841,9 +2811,9 @@ type SiteSplicer
 			ids: ids,
 			seeded: seeded,
 			highestDefined: 0,
-			sitePositions: sharedEmptySitePositions,
-			siteCallees: sharedEmptySiteCallees,
-			contPositions: sharedEmptyContPositions,
+			sitePositions: BlockOpPosArray.create(),
+			siteCallees: FuncIndexArray.create(),
+			contPositions: BlockPositionColumn.create(),
 			siteBuffersSeeded: false,
 			aReturnReachesTheContinuation: false,
 			copiedBlockIsReachable: false,
@@ -3032,8 +3002,8 @@ type SiteSplicer
 	end 'spliceRecordedSites'
 
 	// One forward walk of the block, recording every inlinable site and CENSUSING every other direct
-	// call. It allocates nothing for a block with no site — which is nearly every block in the module —
-	// because the buffers are shared-empty until `considerSite` seeds them.
+	// call. It allocates nothing for a block with no site — which is nearly every block in the
+	// module — because only `considerSite` seeds the buffers.
 	//
 	// ⚠ The `StdOp` match is EXHAUSTIVE: `call` is named and so is every other variant, so a variant
 	// added later fails to compile here until it is consciously placed. A terminator is never a `call`,
@@ -3138,6 +3108,7 @@ type SiteSplicer
 				osThreadCpuTicks or
 				osDecommitPages or
 				memFill or
+				osGuardPages or
 				osCommitPages or
 				osReservePages or
 				atomicCas or
@@ -3352,6 +3323,7 @@ type SiteSplicer
 			osThreadCpuTicks or
 			osDecommitPages or
 			memFill or
+			osGuardPages or
 			osCommitPages or
 			osReservePages or
 			atomicCas or
@@ -3479,10 +3451,6 @@ type SiteSplicer
 	// almost all of them — and that empty `paramGuards` list is what keeps the cost off the common splice:
 	// the loop below runs zero times and no proof is asked.
 	function declinedGuards(calleeFunc IrFunction, args ValueIdArray) returns DeclinedGuards
-		if calleeFunc.paramGuards.isEmpty() 'noNarrowedParameter'
-			return sharedDeclinesNothing
-		end 'noNarrowedParameter'
-
 		var declined = DeclinedGuards.create(calleeFunc.nextBlockId, guardCount: calleeFunc.paramGuards.count() as GuardCount)
 
 		for guard in calleeFunc.paramGuards 'eachGuard'
@@ -3671,10 +3639,9 @@ type SiteSplicer
 
 			// An ABORTING block never reaches its `ret`, which is there for the callee's arity alone
 			// (`appendDeadReturn`). Copied as an edge, it would hand the continuation a dead constant beside
-			// the real result, and that merge is a phi — which pins a fresh record: once its call is gone the
-			// record is `promoteStackRecords`' to lift, and that pass refuses one reaching a phi. The copy
-			// leaves the CALLER the same way instead — here, after `copyBody`'s borrow of the callee block
-			// has ended, since the append mutates the module.
+			// the real result, and that merge is a phi — which pins a fresh record: once its call is gone
+			// the record is `promoteStackRecords`' to lift, and that pass refuses one reaching a phi. The
+			// copy leaves the CALLER the same way instead.
 			if self.copyBody(calleeBlockRef, freshRef: freshRef, contRef: contRef, subst: subst, blocks: blocks, calleeFunc: calleeFunc) 'aborts'
 				appendDeadReturn(self.module, func: self.func, block: self.blockAt(freshRef), ids: self.valueIds())
 
@@ -3730,10 +3697,6 @@ type SiteSplicer
 		var fresh = self.blockAt(freshRef)
 
 		for opIdx in calleeBlock.opRefs 'eachOp'
-			// ⚠ **THE OP IS READ THROUGH `getOp` AND THE CLONE IS BOUND BEFORE THE APPEND, AND BOTH ARE
-			// E3070's DOING.** `self.module.ops.get(...)` inline here BORROWS `module`, and `appendOp`
-			// mutates it — which the self-compile refuses (`cannot mutate 'module' via 'appendOp' while it
-			// is borrowed`).
 			let op = self.module.getOp(opIdx)
 
 			// The dialect's own role names the `param` variant and nothing else, so it answers what
@@ -3745,7 +3708,7 @@ type SiteSplicer
 
 			// ⭐ **THE CLONE KEEPS THE CALLEE'S SPAN, WHICH IS THE WHOLE REASON THE FILE RIDES IN THE ROW.**
 			// A span carried per-FUNCTION would report the caller's file for every inlined body, so a
-			// debugger could never step into one. Read before the append, for the borrow reason above.
+			// debugger could never step into one.
 			let calleeSpan = self.module.spans.at(opIdx)
 			let aborts = self.meta.hasRole(op, role: OpRole.diverging)
 			let cloned = self.cloner.clone(op, valueSubst: subst, blockSubst: blocks.blockSubst, payloads: ClonePayloads.shared)
@@ -3869,6 +3832,7 @@ type SiteSplicer
 			osThreadCpuTicks or
 			osDecommitPages or
 			memFill or
+			osGuardPages or
 			osCommitPages or
 			osReservePages or
 			atomicCas or
@@ -3973,9 +3937,7 @@ type SiteSplicer
 		return try self.module.blocks.get(blockRef) otherwise panic("SiteSplicer: blockRef {blockRef} of '{String.from(self.func.name)}' is not in module.blocks")
 	end 'blockAt'
 
-	// The flat `module.ops` index a block names at `pos`. Read through a function for `IrModule.getOp`'s
-	// stated reason: an inline `self.blockAt(...).opRefs.get(...)` borrows `module` across the append
-	// that follows, which the self-compile refuses.
+	// The flat `module.ops` index a block names at `pos`.
 	function blockOpRefAt(blockRef ElementIndex, pos ElementIndex) returns ElementIndex
 		return try self.blockAt(blockRef).opRefs.get(pos) otherwise panic("SiteSplicer: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
 	end 'blockOpRefAt'
@@ -4103,6 +4065,7 @@ function assertParamOpMatchesConvention(op StdOp, calleeFunc IrFunction)
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or

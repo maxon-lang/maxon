@@ -514,7 +514,7 @@ end 'CommentSpan'
 
 export typealias CommentSpanArray = Array with CommentSpan
 
-union CommentLog
+export union CommentLog
 	discarded
 	recorded(spans CommentSpanArray)
 
@@ -526,16 +526,11 @@ union CommentLog
 	end 'record'
 end 'CommentLog'
 
-// One shared value for every `tokenize`. A log built per `Lexer`, as a union value or as an array
-// field alike, costs a heap allocation per file and per merge on the compiler's path, which reads
-// no comment.
-let DiscardedComments = CommentLog.discarded
-
 export type LexedSource
 	export let tokens as TokenArray
-	export let comments as CommentSpanArray
+	export let comments as CommentLog
 
-	export static function create(tokens TokenArray, comments CommentSpanArray) returns LexedSource
+	export static function create(tokens TokenArray, comments CommentLog) returns LexedSource
 		return Self{tokens: tokens, comments: comments}
 	end 'create'
 end 'LexedSource'
@@ -884,12 +879,19 @@ type Lexer
 	var emittedAtEof as bool
 	let keywords as KeywordTable
 
-	export var comments as CommentLog
+	var comments as CommentLog
 	var interpolationDepth as InterpolationDepth
 
-	static function create(source String, bytes ByteArray, cursor ByteCursor, keywords KeywordTable, comments CommentLog) returns Lexer
-		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count() as ByteOffset, line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false, keywords: keywords, comments: comments, interpolationDepth: 0}
+	static function create(source String, bytes ByteArray, cursor ByteCursor, keywords KeywordTable, recording bool) returns Lexer
+		return Self{source: source, bytes: bytes, cursor: cursor, tokens: TokenArray.create(), len: bytes.count() as ByteOffset, line: 1, column: 1, pendingError: LexerError.unexpectedEof(0, column: 0), hasPendingError: false, emittedAtEof: false, keywords: keywords, comments: CommentLog.recorded(CommentSpanArray.create()) if recording else CommentLog.discarded, interpolationDepth: 0}
 	end 'create'
+
+	function takeComments() returns CommentLog
+		let taken = self.comments
+		self.comments = CommentLog.discarded
+
+		return taken
+	end 'takeComments'
 
 	// --- Navigation helpers ---
 
@@ -2062,8 +2064,12 @@ type Lexer
 		// returning a valid Token even after the last user-visible token was
 		// consumed. Position points one column past the last lexed character on
 		// the same line.
-		tokens.push(Token.create(TokenKind.eof, line: line, column: column))
-		return tokens
+		self.tokens.push(Token.create(TokenKind.eof, line: line, column: column))
+
+		let finished = self.tokens
+		self.tokens = TokenArray.create()
+
+		return finished
 	end 'run'
 
 	// One iteration of the DFA loop. Returns true when the lexer is done — either
@@ -2100,23 +2106,21 @@ export function tokenize(source String, keywords KeywordTable) returns TokenArra
 		return TokenArray.create()
 	end 'emptySource'
 
-	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, comments: DiscardedComments)
+	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: false)
 	return try lexer.run()
 end 'tokenize'
 
 export function tokenizeWithComments(source String, keywords KeywordTable) returns LexedSource throws LexerError
 	let bytes = source.toByteArray()
 	let cursor = try bytes.cursor() otherwise 'emptySource'
-		return LexedSource.create(TokenArray.create(), comments: CommentSpanArray.create())
+		return LexedSource.create(TokenArray.create(), comments: CommentLog.recorded(CommentSpanArray.create()))
 	end 'emptySource'
 
-	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, comments: CommentLog.recorded(CommentSpanArray.create()))
+	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: true)
 	let tokens = try lexer.run()
+	let log = lexer.takeComments()
 
-	return match lexer.comments 'sink'
-		recorded(spans) gives LexedSource.create(tokens, comments: spans)
-		discarded panic("tokenizeWithComments: the lexer was handed a recording log and discarded it")
-	end 'sink'
+	return LexedSource.create(tokens, comments: log)
 end 'tokenizeWithComments'
 
 // --- Pure helpers ---

@@ -16,8 +16,15 @@ and time of day use `WallClock`.
 | `Clock.elapsedNanos(since InstantNanos)` | `DurationNanos` | Nanoseconds since a `nowNanos()` reading; `0` if the clock appears to go backwards. |
 | `Clock.nowMs()` | `InstantMs` | The same clock in milliseconds. |
 | `Clock.elapsedMs(since InstantMs)` | `DurationMs` | Milliseconds since a `nowMs()` reading. |
+| `Clock.osTickMs()` | `InstantMs` | How long the machine has been up, in milliseconds, from the operating system's tick count. It moves in host ticks, up to 16 ms apart on `x64-windows`. |
+| `Clock.threadCpuTicks()` | `ThreadCpuTicks` | CPU time the calling thread has consumed. It advances only while the thread runs on a core, so a difference of two readings is that thread's cost alone, whatever else the machine runs. |
 
 `since` is the first argument, so it is written without a label: `Clock.elapsedNanos(start)`.
+
+The unit of `threadCpuTicks()` belongs to the platform: TSC cycles on Windows (`QueryThreadCycleTime`) and
+nanoseconds elsewhere (`CLOCK_THREAD_CPUTIME_ID`). Compare two readings from one platform, or ratios of
+differences. `ThreadCpuTicks` is `int(0 to u64.max)`. `osTickMs()` and `threadCpuTicks()` are refused on
+`wasm32-wasi` (E3104).
 
 | Target | Source | Period |
 |--------|--------|--------|
@@ -88,9 +95,17 @@ Output: `2024-10-04 11017`, then `2023-11-14T22:13:20.123Z`.
 |--------|-------------|
 | `Scheduler.yield()` | Let the next runnable green thread run. The caller resumes behind everything that was already runnable. When nothing else is runnable it returns promptly, so a loop that yields is a busy wait that lets others progress. It uses no timer, unlike `sleep(0)`, and is safe in a program that never starts a green thread. |
 | `Scheduler.processorCount()` | The number of processors the scheduler runs services on, as a `SchedulerProcessorCount` (`int(1 to u64.max)`, a `Count`, so it compares with a collection's `count()` with no cast): the machine's logical processor count, or the count `MAXON_MAX_PROCS` sets (1 to 2147483647, above the machine's count as well as below it). The count is resolved before `main` runs, so it is the same before the first `spawn` as after it. |
+| `Scheduler.machineCpuCount()` | The machine's logical processor count, at least 1, whatever `MAXON_MAX_PROCS` sets: every active processor in every processor group on Windows, the processors this process may run on under Linux. A `SchedulerProcessorCount`. |
+| `Scheduler.counters()` | The scheduler's event counters since the program started, as a `SchedulerCounters`, each read once. |
+| `Scheduler.currentStackBytes()` | The calling green thread's current stack size in bytes, a `StackByteCount` (`int(0 to u64.max)`). A stack grows on demand and halves once the thread has been idle with most of it unused. |
+| `Scheduler.quiesce()` | Park the caller until every other green thread has finished, and answer how many have not, as a `GreenThreadCount` (`int(0 to u64.max)`): `0`, or the count left when every machine is idle and nothing pending can run again. The program carries on afterwards as before; services stay running. |
+| `Scheduler.parallelBoundary()` | A compile-time marker with no run-time effect. A CPU-bound function calls it to mark a spawn of itself as deliberate, which satisfies [E3073](/docs/cli/error-codes/#e3073--asyncnonyielding) for a function that only computes. |
+| `Scheduler.pinToMachine()` | Bind the calling green thread to the machine (OS thread) running it, and answer whether it did. A pinned thread that parks resumes on the same machine. |
+| `Scheduler.unpinFromMachine()` | Release the calling green thread from its machine. |
+| `Scheduler.currentMachine()` | The machine running the calling green thread, as a `MachineIndex` (`int(0 to u64.max)`); `0` is no machine. |
 
-Both are refused on `wasm32-wasi` (E3104). Green threads, `async` and `await` are described under Concurrency in
-[LANGUAGE_REFERENCE.md](/docs/language/overview/).
+On `wasm32-wasi` `parallelBoundary()` compiles and every other member is refused (E3104). Green threads,
+`async` and `await` are described under Concurrency in [LANGUAGE_REFERENCE.md](/docs/language/overview/).
 
 ```maxon
 function worker() returns ExitCode
@@ -110,13 +125,117 @@ end 'main'
 
 Output: `worker` then `main`.
 
+### SchedulerCounters
+
+Every field is a `SchedulerEventCount` (`int(0 to u64.max)`) summed over every processor. All but
+`maxActiveWorkers` and `idleProcessors` are totals that only rise.
+
+| Field | Counts |
+|-------|--------|
+| `steals` | Green threads a worker took from another processor's run queue. |
+| `retakes` | Processors the system monitor took back from a machine stuck in a long kernel call. |
+| `maxActiveWorkers` | The most worker machines ever active at once; at least 1. |
+| `recycledThreads` | Green-thread records a spawn took from the free list, in place of a fresh one. |
+| `timerStarts` | Machines the monitor started for a timer no running machine would fire in time. |
+| `syscalls` | Kernel calls entered by a machine holding a processor, where the monitor could retake it. |
+| `slices` | Time slices the scheduler started. |
+| `preempts` | Preemption requests green threads honoured, after 10 ms on one processor. |
+| `parkWakes` | Times a parked machine's wait returned, for any reason. An idle program keeps it near zero. |
+| `netpollBlocks` | Times a green thread suspended on the network poller waiting for a socket. |
+| `idleProcessors` | Processors idle with no machine right now. |
+| `threadRecordsCarved` | Green-thread records ever carved from the record arena. |
+| `timerScanSteps` | Timer-heap entries inspected while cancelling deadlines. |
+| `globalPushes` | Green threads ever pushed onto the global run queue. |
+
+## HeapStats
+
+`HeapStats` reads the allocator's own counters and levels. It is a namespace with no fields. `thread()`,
+`process()`, `slab()` and `census()` answer heap records, and a record still live at a later `slab()` or
+`census()` is a slot that reading counts. The scalar readings (`threadAllocations()` and its five siblings)
+allocate nothing, so two of them bracket a stretch of code without counting the reads themselves.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `HeapStats.allocationsMade()` | `HeapCount` | Tracked (managed-box) allocations since the process started. |
+| `HeapStats.allocationsLive()` | `HeapCount` | Tracked allocations live now. |
+| `HeapStats.bytesAllocated()` | `HeapBytes` | Bytes those tracked allocations handed out, cumulative. |
+| `HeapStats.rawAllocationsMade()` | `HeapCount` | Raw (header-free) allocations since the process started: element buffers, string bytes, closure environments. |
+| `HeapStats.rawAllocationsLive()` | `HeapCount` | Raw allocations live now. |
+| `HeapStats.rawBytesAllocated()` | `HeapBytes` | Bytes those raw allocations handed out, cumulative. |
+| `HeapStats.allocationsTagged(tag HeapBucketIndex)` | `HeapCount` | Tracked allocations whose allocation tag is `tag`, cumulative. Bucket 0 holds the untagged ones and 2047 every tag from 2047 up; the buckets sum to `allocationsMade()`. Tags exist in a `--debugstream` build; every other build answers 0. |
+| `HeapStats.bytesTagged(tag HeapBucketIndex)` | `HeapBytes` | Bytes those tagged allocations asked for, cumulative. |
+| `HeapStats.threadAllocations()`, `HeapStats.threadFrees()` | `HeapCount` | The calling green thread's allocations and frees, both layers together. |
+| `HeapStats.threadBytes()` | `HeapBytes` | The bytes the calling green thread's allocations asked for, both layers together. |
+| `HeapStats.processAllocations()`, `HeapStats.processFrees()` | `HeapCount` | Every thread's allocations and frees, both layers together. |
+| `HeapStats.processBytes()` | `HeapBytes` | The bytes every thread's allocations asked for, both layers together, a box's header included. |
+| `HeapStats.thread()` | `HeapActivity` | The calling green thread's allocations, frees and bytes, both layers together. |
+| `HeapStats.process()` | `HeapActivity` | Every thread's allocations, frees and bytes, both layers together, a box's header included. Each figure only rises, so two readings bracket a phase while other threads allocate. |
+| `HeapStats.slab()` | `SlabUsage` | The slab's levels now. |
+| `HeapStats.census(mode HeapCensusMode)` | `SlabCensus` | Walk every live slot once and tally it into 2048 buckets. |
+| `HeapStats.scavenge()` | `HeapBytes` | Return idle memory to the operating system, and answer the bytes handed back by this call. |
+
+`HeapActivity` has three fields: `allocations` and `frees` (`HeapCount`) and `bytes` (`HeapBytes`). A
+program with no green threads answers `thread()` from the process-wide totals.
+
+`SlabUsage` holds bytes of slot, a size class's rounding included:
+
+| Field | Type | Holds |
+|-------|------|-------|
+| `live` | `HeapBytes` | Slots handed out. |
+| `free` | `HeapBytes` | Slots on some span's free list, a slot queued by a free on another processor included. `live + free` is every slot of every live span. |
+| `cachedFree` | `HeapBytes` | The part of `free` a processor's cache can still reach; `free - cachedFree` is free memory stranded in spans a live slot keeps alive. |
+| `parked` | `HeapBytes` | Whole spans holding no live slot: the backlog `scavenge()` reclaims. |
+| `committed` | `HeapBytes` | Arena memory backed by physical pages, plus live direct OS mappings. |
+| `remoteFrees` | `HeapCount` | Frees performed on a processor other than the one caching the slot's span, cumulative. |
+
+`HeapCensusMode` chooses what a bucket of `census` holds: `byTag` (0), the slots whose allocation tag is the
+bucket index (in a `--debugstream` build), or `bySizeClass` (1), the slots of that size class. In `byTag`
+mode bucket 2046 holds slots with no plausible tag and 2047 tags past the table.
+
+| `SlabCensus` member | Returns | Description |
+|---------------------|---------|-------------|
+| `mode` | `HeapCensusMode` | The mode it was taken in. |
+| `tallyBytes` | `HeapBytes` | The live bytes the walk visited. |
+| `liveBytes` | `HeapBytes` | The slab's `live` level read right after the walk, before the snapshot's own arrays exist; it equals `tallyBytes` when nothing else allocated in between. |
+| `bucketCount(index HeapBucketIndex)` | `HeapCount` | Live slots in bucket `index`. |
+| `bucketBytes(index HeapBucketIndex)` | `HeapBytes` | Their bytes. |
+
+`scavenge()` destroys every span with no live slot, so its chunks serve any size class again, and hands the
+operating system the physical pages of every 64 KiB granule that stayed wholly free across two calls. The
+first call after a population is dropped answers 0 and the second answers the bytes; a granule reused in
+between stays committed. On `wasm32-wasi` the chunks return to the arena and linear memory keeps its size.
+
+`HeapCount` and `HeapBytes` are `int(0 to u64.max)`; `HeapBucketIndex` is `int(0 to 2047)`.
+
+```maxon
+typealias Payload = Array with Byte
+
+function main() returns ExitCode
+	let before = HeapStats.processAllocations()
+	var kept = Payload.create()
+	kept.push(1)
+	let after = HeapStats.processAllocations()
+	print("{after > before} {HeapStats.slab().live > 0} {kept.count()}\n")
+	return 0
+end 'main'
+```
+
+Output: `true true 1`.
+
 ## SharedValue
 
 `SharedValue with T` is a live cell every thread can read: a reader takes an immutable snapshot lock-free,
 and a writer publishes a whole new value. Use it through an alias:
-`typealias ConfigCell = SharedValue with Config`. `T` is a `String`, a scalar, a service handle, or a type
-whose every field is a `let` over such types ([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable)). It is the run-time form of a registry key's
-`default` ([`SharedValue`](/docs/language/async/#sharedvalue--a-live-value-made-at-run-time)).
+`typealias ConfigCell = SharedValue with Config`. `T` is any type whose value graph reaches no OS handle,
+function value or promise ([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable)): records with `var`
+fields, `Array` and `Map` publish as well as scalars, strings and service handles. It is the run-time form of
+a registry key's `default` ([`SharedValue`](/docs/language/async/#sharedvalue--a-live-value-made-at-run-time)).
+
+A value `current()` returns, like a registry `default`'s, is read-only all the way down: a write through it is
+[E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord) and binding it to a `var` is
+[E3078](/docs/cli/error-codes/#e3078--semanticvarfromimmutable); `clone()` gives a mutable copy. `publish` takes a
+value with no other owner ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned)); publish a fresh value
+or a `clone()`.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
@@ -199,6 +318,14 @@ It prints a number from 1 to 6.
 | `Math.log10(x Real)` | `Real` | Base-10 logarithm. Exact at every power of ten a double represents exactly: `log10(10^k)` is `k` for `k` in 0 to 22. |
 | `Math.pow(base Real, exponent Real)` | `Real` | `base` raised to `exponent`, following IEEE 754's special cases (`pow(0.0, -1.0)` is infinity; `pow(x, 0)` and `pow(1, y)` are 1 even for NaN). |
 | `Math.hasNegativeSignBit(z Real)` | `bool` | True when the sign bit is set, including `-0.0`, which no comparison can distinguish from `0.0`. |
+| `Math.isNaN(z Real)` | `bool` | True for every NaN, whatever its bit pattern. |
+| `Math.positiveInfinity()` | `Real` | +∞. |
+| `Math.negativeInfinity()` | `Real` | −∞. |
+| `Math.quietNaN()` | `Real` | A quiet NaN. |
+| `Math.bitsOf(x Real)` | `FloatBits` | The 64-bit IEEE 754 pattern of `x`, as a signed word: `Math.bitsOf(1.0)` is `0x3FF0000000000000`, and every negative value, `-0.0` included, has a negative pattern. |
+| `Math.fromBits(bits FloatBits)` | `Real` | The double whose IEEE 754 pattern is `bits`; the inverse of `bitsOf`. |
+
+`FloatBits` is `int(i64.min to i64.max)`.
 
 These are implemented in Maxon from series expansions, so results can differ from a C library in the last
 bit.

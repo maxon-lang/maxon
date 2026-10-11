@@ -67,9 +67,14 @@ verdict.
 That is why the two cases below are stated as a PAIR: the marker case alone would pass against a compiler
 that had stopped checking, and the control is what says the check is still live.
 
+Every `__Builtins` member is library-tier: only a source file under `stdlib/` or `runtime/` may call one,
+and a call from anywhere else is E3185. The cases below call the intrinsics themselves, so they compile in
+the library tier (`<!-- tier: stdlib -->`). A program writes `Scheduler.parallelBoundary()`.
+
 ## Tests
 
 <!-- test: builtins-parallel-boundary.marks-a-cpu-bound-spawn -->
+<!-- tier: stdlib -->
 A CPU-bound function whose only concession to the scheduler is `__Builtins.parallelBoundary()` is a
 legal `async` target: the spawn compiles, runs, and hands back the value it computed.
 
@@ -126,6 +131,7 @@ error E3073: <fragment>:7:10: 'async work(6)' — function never yields; 'async'
 ```
 
 <!-- test: builtins-parallel-boundary.statement-position -->
+<!-- tier: stdlib -->
 It returns nothing, so it is written on a line of its own — the statement door `builtins-sleep.md`
 opened for `__Builtins.<member>(…)`, which is a SHAPE and not a name list. A program whose whole body
 is the marker compiles and exits normally.
@@ -145,6 +151,7 @@ end 'main'
 ```
 
 <!-- test: builtins-parallel-boundary.error.value-position-rejected -->
+<!-- tier: stdlib -->
 It returns nothing, so reading its result is reading a value that is not there — the same rejection
 `__Builtins.sleep`'s result gets, quoting the QUALIFIED name the user wrote.
 ```maxon
@@ -158,6 +165,7 @@ error E2004: <fragment>:3:27: Function '__Builtins.parallelBoundary' does not re
 ```
 
 <!-- test: builtins-parallel-boundary.error.arity-rejected -->
+<!-- tier: stdlib -->
 An intrinsic has no signature registry entry for the ordinary arity check to consult, so the arity is
 enforced at the emit — and the diagnostic quotes what the user wrote, not the bare spelling. It takes
 NOTHING: there is no knob on a checkpoint.

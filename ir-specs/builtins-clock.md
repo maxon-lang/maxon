@@ -12,6 +12,7 @@ The cases of `specs/builtins-clock.md` whose subject is the emitted code. Each p
 ## Tests
 
 <!-- test: builtins-clock.wall-clock-body-is-runtime-source -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE CALENDAR'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE THAT
 SEES IT.** `runtime/Clock.maxon` writes `__clock_now_unix_s` as a call to `clockTicksSince1970` — the
 helper both wall clocks share, which reads the host's FILETIME through a `__Raw` frame word and applies

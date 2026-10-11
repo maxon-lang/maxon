@@ -499,8 +499,8 @@ a first payload string long enough to heap
 
 <!-- test: returned-alias-of-a-let-union-payload -->
 The retain is an INCREF, not a copy, so a payload that escapes the borrow is a SECOND
-owner of the SAME record. A mutable name made from it would write the payload of `m`, which
-is `let`, so the binding is refused.
+owner of the SAME record. Binding it to a `var` copies a `String` a name does not own, so the
+`append` reaches the copy and the payload of `m` is unchanged.
 
 ```maxon
 union M
@@ -519,12 +519,127 @@ function main() returns ExitCode
 	let m = M.text("original payload, long enough to be a real heap allocation")
 	var escaped = grab(m)
 	escaped.append(" MUTATED")
-	print(grab(m))
+	print("{grab(m)}|{escaped}\n")
 	return 0
 end 'main'
 ```
+```exitcode
+0
+```
+```stdout
+original payload, long enough to be a real heap allocation|original payload, long enough to be a real heap allocation MUTATED
+```
+
+<!-- test: returned-alias-of-a-let-struct-union-payload -->
+The same escape with a STRUCT payload: the returned `Body` is the very box `m` holds, so binding it to a `var`
+is refused at the binding.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Body
+	export var mass as Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Slot
+	empty
+	filled(body Body)
+end 'Slot'
+
+function grab(slot Slot) returns Body
+	return match slot 'k'
+		empty gives Body.create(0)
+		filled(b) gives b
+	end 'k'
+end 'grab'
+
+function main() returns ExitCode
+	let slot = Slot.filled(Body.create(5))
+	var escaped = grab(slot)
+	escaped.mass = 99
+	return grab(slot).mass as ExitCode
+end 'main'
+```
 ```maxoncstderr
-error E3078: <fragment>:16:6: cannot assign the result of 'grab', which may share storage with immutable variable 'm', to mutable binding 'escaped'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:26:6: cannot assign the result of 'grab', which may share storage with immutable variable 'slot', to mutable binding 'escaped'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: a-clone-of-a-let-union-payload-may-be-written -->
+The accepted twin of the two cases above: a `clone()` of the returned payload is the caller's own record, so the
+`var` made from it may be written and the payload of `m` is untouched.
+
+```maxon
+union M
+	silent
+	text(body String)
+end 'M'
+
+function grab(m M) returns String
+	return match m 'k'
+		silent gives "a fallback literal long enough to be a real heap string"
+		text(s) gives s
+	end 'k'
+end 'grab'
+
+function main() returns ExitCode
+	let m = M.text("original payload, long enough to be a real heap allocation")
+	var own = grab(m).clone()
+	own.append(" MUTATED")
+	print("{grab(m)}\n{own}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original payload, long enough to be a real heap allocation
+original payload, long enough to be a real heap allocation MUTATED
+```
+
+<!-- test: a-clone-of-a-let-struct-union-payload-may-be-written -->
+The struct twin: the clone is a private `Body`, written without reaching the payload of `slot`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Body
+	export var mass as Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+union Slot
+	empty
+	filled(body Body)
+end 'Slot'
+
+function grab(slot Slot) returns Body
+	return match slot 'k'
+		empty gives Body.create(0)
+		filled(b) gives b
+	end 'k'
+end 'grab'
+
+function main() returns ExitCode
+	let slot = Slot.filled(Body.create(5))
+	var own = grab(slot).clone()
+	own.mass = 99
+	print("{grab(slot).mass} {own.mass}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 99
 ```
 
 <!-- test: borrowed-struct-payload-bind-leak-free -->
@@ -3211,7 +3326,7 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	let cell = Cell.create(Slot.filled("the borrowed payload, long enough to be a real heap allocation"))
+	var cell = Cell.create(Slot.filled("the borrowed payload, long enough to be a real heap allocation"))
 	let measured = match cell.slot 'm'
 		filled(s) gives cell.replaceThenMeasure(s)
 		empty(n) gives n

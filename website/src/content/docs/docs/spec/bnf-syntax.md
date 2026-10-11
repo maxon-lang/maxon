@@ -58,7 +58,8 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'continue'
 
 Contextual keywords are IDENTIFIER tokens that act as syntax in one position only: `module` (directly
 before a declaration), `test` (a top-level declaration followed by a `TEST_NAME`), `spawn` (followed by a
-type's factory call) and `bits` (followed by `(` on a typealias right-hand side). `__line__` and `__file__`
+type's factory call), `bits` (followed by `(` on a typealias right-hand side) and `readonly` (before a type
+argument after `with`, `(` or `,`). `__line__` and `__file__`
 are identifiers in the reserved `__` space, legal only as a parameter default (§3.1).
 
 ### 1.4 Literals
@@ -351,10 +352,10 @@ union_decl    = visibility_prefix 'union' IDENTIFIER
 union_case    = IDENTIFIER [ '(' assoc_fields ')' ] [ '=' raw_value ]
 
 assoc_fields  = assoc_field { ',' assoc_field }
-assoc_field   = IDENTIFIER type_ref
+assoc_field   = [ 'let' ] IDENTIFIER type_ref
 ```
 
-A case's optional `= raw_value` (§3.3) is its explicit tag (`add(dest Id, src Id) = 5`) or its backing record (`= OpMeta{...}`). When struct-backed, every variant must carry an `= struct_raw_literal` of the same backing struct type. The backing struct is accessible via `.rawValue` on a union value; associated-value payloads are still accessed via `match`. An associated value may be of any type, `float` included, and a `static function` in a union is refused (E2015).
+A case's optional `= raw_value` (§3.3) is its explicit tag (`add(dest Id, src Id) = 5`) or its backing record (`= OpMeta{...}`). When struct-backed, every variant must carry an `= struct_raw_literal` of the same backing struct type. The backing struct is accessible via `.rawValue` on a union value; associated-value payloads are still accessed via `match`. An associated value may be of any type, `float` included, and a `static function` in a union is refused (E2015). A payload declared `let` is read-only for the value's whole life, like a `let` field: what is stored into it must be read-only, a value type, or moved in (E3078), and a write through it is E3159.
 
 ### 3.5 Interface Declaration
 
@@ -436,8 +437,10 @@ alias_type_args
               = type_arg { ',' type_arg }                    (* a bare list: typealias right-hand side only *)
               | '(' type_arg { ',' type_arg } ')'
 
-type_arg      = generic_base 'with' [ INTEGER ] type_args    (* nested instance: parenthesize several arguments *)
-              | type_ref
+type_arg      = [ 'readonly' ] generic_base 'with' [ INTEGER ] type_args    (* nested instance: parenthesize several arguments *)
+              | [ 'readonly' ] type_ref
+
+                (* 'readonly' only on an Array or List element and a Map value: `Map with Key, readonly Value` (E2075) *)
 
                 (* the optional INTEGER is a fixed element count: `Vector with 3 Coord` *)
 
@@ -458,7 +461,7 @@ default_decl  = 'default' IDENTIFIER '=' expression NEWLINE
 ```
 
 The IDENTIFIER is the key. An interface key's expression is a `spawn_expr` (§6.7) of a type that
-implements it (E3170); any other key is an all-`let` type the expression builds (E3171). The key gains the
+implements it (E3170); any other key is a type the expression builds whose graph a share walk can mark (E3171). The key gains the
 statics `current()` and `register(value)` / `register(value, replacing: old)`. `default` is also a `match`
 keyword (§5.7); at the start of a top-level declaration it begins this production. Two
 declarations for one key in the program's files, or two in the standard library, are E3169.
@@ -485,7 +488,7 @@ constraint_iface
               = IDENTIFIER [ 'with' type_args ]              (* may bind the interface's associated types *)
 
 type_ref      = 'bool'
-              | 'cstring'
+              | 'cstring'                    (* only in a source file under stdlib/ or runtime/; E3185 elsewhere *)
               | 'Self'
               | IDENTIFIER { '.' IDENTIFIER }
               | tuple_type

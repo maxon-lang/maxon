@@ -22,7 +22,7 @@ ownership defects these members can have.
 
 `count`, `isEmpty`, `head` and `tail` read the record. Everything else — both end insertions, both
 interior insertions, both reinsertions, `remove`, `detach` and `clear` — writes at least one of
-`head@0`, `tail@8` and `count@16`, so all nine are refused through an immutable receiver (E3019).
+`head@0`, `tail@8` and `count@16`, so all nine are refused through an immutable receiver (E3159).
 `setValue` is the one WRITE on the node surface, so a `let`-bound handle is refused there for the same
 reason; `value`, `next` and `prev` are reads.
 
@@ -349,7 +349,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:7:4: cannot pass 'n' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:7:4: cannot write through 'n': 'n' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: detaching-through-a-let-chain-is-refused -->
@@ -378,7 +378,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:16:8: cannot pass 'chain' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:16:8: cannot write through 'chain': 'chain' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: a-discarded-insertion-mints-no-handle -->

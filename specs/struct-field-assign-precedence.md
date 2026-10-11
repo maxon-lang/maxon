@@ -32,9 +32,10 @@ Writing `c.version = 2` needs two things to be mutable, and they are two differe
 1. the **instance** — `let c` cannot be written through at all;
 2. the **field** — `export let version` cannot be written, whatever `c` is.
 
-Both report **E2013**, because they are one defect seen from two sides: a write to something
-declared not to accept one. But when **both** are immutable, only one message can be
-printed, and *which one* is a real decision rather than a tie.
+They are one defect seen from two sides — a write to something declared not to accept one — and
+they are refused differently. A write through a read-only instance is **E3159**, the code for every
+write through a `let`; a write to a `let` field of a mutable instance is **E2013**. But when **both**
+are immutable, only one message can be printed, and *which one* is a real decision rather than a tie.
 
 **The instance wins.** The reason is that the other message would be actively wrong: told
 `cannot assign to field 'Config.version' … (declare with 'var' to make it mutable)`, a reader
@@ -48,7 +49,7 @@ exactly the kind of rule the next edit reorders without noticing, which is why i
 here rather than left to a comment: the ordering is not derivable, so it gets a CHECK.
 
 `structs.md` covers each half of rank 2 alone — `error.let-struct-field-assign` (a `let` instance,
-a `var` field) and `error.let-field-assign` (a `var` instance, a `let` field) — and never makes them
+a `var` field, E3159) and `error.let-field-assign` (a `var` instance, a `let` field, E2013) — and never makes them
 fail together, so neither can tell the two orderings apart. Rank 1 needs a write to a field on a
 non-struct through an immutable binding, which only this file writes.
 
@@ -78,7 +79,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:15:2: cannot assign to immutable variable: 'c'
+error E3159: <fragment>:15:2: cannot write through 'c': 'c' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: error.not-a-struct-outranks-immutable-instance -->

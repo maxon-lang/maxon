@@ -49,7 +49,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 | `clone()` | `Array` | A second array over the same elements. Storage is shared copy-on-write and separates on the first write to either. An element that is a record holding a field at an interface type is copied through that field's conformer; an element held at an interface type itself is refused (an element slot is one machine word). A copy of an element that is or holds a promise is E3141, here and at `slice` and `append`. |
 | `Array.from(source Iterable)` | `Array` | Collect every element of an iterable, called through an alias (`ScoreArray.from(range)`). The iterable must bind `Element` to the alias's own element (E3127). |
 | `Array.init(managed)` | `Array` | Wrap raw compiler-managed storage; used by the compiler and the library. |
-| `managed` | field | The array's raw storage, for `appendMemory` and library code. |
+| `managed` | field | The array's raw storage, for `appendMemory` and library code. Library tier: reading it elsewhere is [E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier). |
 
 ### Reading
 
@@ -72,7 +72,7 @@ Output: `1 5 9` and `4 9 -1 true`.
 | `set(index, value Element)` | Replace an element. Throws `indexOutOfBounds` at or past `count()`, even when capacity exists there. |
 | `push(value Element)` | Append one element. |
 | `append(other Array)` | Append every element of another array. |
-| `appendMemory(source)` | Append every element of raw storage (another array's `managed`) without wrapping it in an `Array`. |
+| `appendMemory(source)` | Append every element of raw storage (another array's `managed`) without wrapping it in an `Array`. Its argument is library-tier storage, so library code calls it; a program appends another array with `append`. |
 | `pop()` | Remove and return the last element. Throws `indexOutOfBounds` when empty. |
 | `insert(at, value Element)` | Insert, shifting later elements right. An `at` past the end appends. |
 | `remove(at)` | Remove and return the element at `at`. Throws `indexOutOfBounds`. |
@@ -100,7 +100,7 @@ An array grows by doubling while small and eases toward 1.25x once it is large.
 | `sortUnstable(cmp function(Element, Element) returns Ordering)` | Unstable sort by a comparator. |
 
 A sort reads and writes no module-level state, so it may run inside a service message handler without
-tripping [E3143](/docs/cli/error-codes/#e3143--semanticsharedglobalaccessfromgreenthread).
+tripping [E3143](/docs/cli/error-codes/#e3143--semanticmodulevarinserviceprogram).
 
 ### Iterating
 
@@ -194,6 +194,10 @@ order, which is unspecified. The table resizes when it is three-quarters full.
 
 `MapIterator` implements `Iterator with (Key, Value)`: `current()` and `advance()`.
 
+A stored key is read-only: a key read back from the map, by iteration or otherwise, takes no writes
+([E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord)), so a key's hash stays the one it was filed under.
+`clone()` gives a key to change.
+
 ```maxon
 enum MapError implements Error
 	keyNotFound
@@ -245,6 +249,9 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 | `createIterator()` | `SetIterator` | Throws `IterationError.exhausted` when empty. |
 
 `SetIterator` implements `Iterator with Element`: `current()` and `advance()`.
+
+A stored element is read-only, as a `Map` key is: an element read back from the set takes no writes
+([E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord)); `clone()` gives one to change.
 
 ```maxon
 typealias Tags = Set with String

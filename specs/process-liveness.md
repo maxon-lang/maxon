@@ -1,24 +1,29 @@
 ---
 feature: process-liveness
 status: stable
-keywords: [process, processIsAlive, pid, liveness, __Builtins, intrinsics]
+keywords: [process, Process.isAlive, processIsAlive, pid, liveness]
 category: system
 ---
 
-# `__Builtins.processIsAlive(pid)` — whether a process with that id exists
+# `Process.isAlive(pid)` — whether a process with that id exists
 
 ## Documentation
 
-| Intrinsic | Meaning |
+| Function | Meaning |
 |---|---|
-| `__Builtins.processIsAlive(pid)` | `true` while a process with id `pid` exists, `false` once it has ended and been reaped |
+| `Process.isAlive(pid Pid) returns bool` | `true` while a process with id `pid` exists, `false` once it has ended and been reaped |
+
+An id no host can hand out — zero, one past the 32-bit range, any `Pid` up to `u64.max` — answers `false`,
+never a range panic. Its body is the library-tier intrinsic `__Builtins.processIsAlive(pid)`, which takes a
+signed word; the cases pinning that intrinsic's negative words and arity compile as library-tier
+sources (`<!-- tier: stdlib -->`).
 
 ## Tests
 
 <!-- test: process-liveness.this-process-is-alive -->
 ```maxon
 function main() returns ExitCode
-	if __Builtins.processIsAlive(__Builtins.currentProcessId()) 'alive'
+	if Process.isAlive(Process.id()) 'alive'
 		return 3
 	end 'alive'
 	return 1
@@ -31,7 +36,7 @@ end 'main'
 <!-- test: process-liveness.no-process-has-id-zero -->
 ```maxon
 function main() returns ExitCode
-	if __Builtins.processIsAlive(0) 'claimed'
+	if Process.isAlive(0) 'claimed'
 		return 1
 	end 'claimed'
 	return 3
@@ -44,7 +49,7 @@ end 'main'
 <!-- test: process-liveness.an-id-past-every-host-range-is-not-alive -->
 ```maxon
 function main() returns ExitCode
-	if __Builtins.processIsAlive(4294967296 + __Builtins.currentProcessId()) 'claimed'
+	if Process.isAlive(4294967296 + Process.id()) 'claimed'
 		return 1
 	end 'claimed'
 	return 3
@@ -55,6 +60,7 @@ end 'main'
 ```
 
 <!-- test: process-liveness.a-negative-id-is-not-alive -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	if __Builtins.processIsAlive(0 - 1) 'claimed'
@@ -74,9 +80,9 @@ end 'main'
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
-	let pid = __Builtins.currentProcessId()
+	let pid = Process.id()
 	for offset in 1 to 3 'offGranule'
-		if __Builtins.processIsAlive(pid + offset) 'claimed'
+		if Process.isAlive(pid + offset) 'claimed'
 			return offset
 		end 'claimed'
 	end 'offGranule'
@@ -102,7 +108,7 @@ function main() returns ExitCode
 	var answer = 3 as ExitCode
 	if code != 0 'failed'
 		answer = 8
-	end 'failed' else if __Builtins.processIsAlive(pid) 'stillThere'
+	end 'failed' else if Process.isAlive(pid as Pid) 'stillThere'
 		answer = 9
 	end 'stillThere'
 	child.release()
@@ -133,7 +139,7 @@ function main() returns ExitCode
 	if result.pid == 0 'noId'
 		return 4
 	end 'noId'
-	if __Builtins.processIsAlive(result.pid) 'stillThere'
+	if Process.isAlive(result.pid) 'stillThere'
 		return 5
 	end 'stillThere'
 	return 3
@@ -157,7 +163,7 @@ function main() returns ExitCode
 	config.arguments.push("2")
 	#endif
 	let pid = try config.runDetached() otherwise return 2
-	if __Builtins.processIsAlive(pid) 'alive'
+	if Process.isAlive(pid) 'alive'
 		return 3
 	end 'alive'
 	return 4
@@ -175,7 +181,7 @@ typealias ProbeWord = int(0 to 10)
 
 function main() returns ExitCode
 	let small = 7 as ProbeWord
-	if __Builtins.processIsAlive(__Builtins.currentProcessId()) 'alive'
+	if Process.isAlive(Process.id()) 'alive'
 		return (small - 4) as ExitCode
 	end 'alive'
 	return 1
@@ -200,7 +206,7 @@ end 'ProbeWord'
 
 function main() returns ExitCode
 	let probe = ProbeWord.create()
-	if __Builtins.processIsAlive(__Builtins.currentProcessId()) 'alive'
+	if Process.isAlive(Process.id()) 'alive'
 		return probe.count as ExitCode
 	end 'alive'
 	return 1
@@ -214,17 +220,15 @@ end 'main'
 An unsigned id no signed word can hold names no process, and asking about one answers `false`, never a range
 panic.
 ```maxon
-typealias WidePid = int(0 to u64.max)
-
 function main() returns ExitCode
-	if __Builtins.processIsAlive(u64.max as WidePid) 'claimed'
+	if Process.isAlive(u64.max as Pid) 'claimed'
 		return 1
 	end 'claimed'
 
-	let pids = [u64.max as WidePid, 9223372036854775807 as WidePid]
+	let pids = [u64.max as Pid, 9223372036854775807 as Pid]
 
 	for pid in pids 'each'
-		if __Builtins.processIsAlive(pid) 'alive'
+		if Process.isAlive(pid) 'alive'
 			return 2
 		end 'alive'
 	end 'each'
@@ -237,6 +241,7 @@ end 'main'
 ```
 
 <!-- test: process-liveness.arity-checked -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	if __Builtins.processIsAlive() 'alive'
@@ -253,12 +258,12 @@ error E3036: <fragment>:3:16: '__Builtins.processIsAlive' takes exactly 1 argume
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
-	if __Builtins.processIsAlive(1) 'alive'
+	if Process.isAlive(1) 'alive'
 		return 1
 	end 'alive'
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:16: this construct lowers to the runtime entry '__proc_alive', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:13: 'Process.isAlive' lowers to the runtime entry '__proc_alive', which has no wasm32-wasi implementation
 ```

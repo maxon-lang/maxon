@@ -84,7 +84,7 @@ export type Arm64RuntimeAsm
 		let frameBytes = alignUpStack(outgoingArgBytes + Arm64FrameRecordBytes + slots * SpillSlotBytes, alignment: StackFrameAlignment)
 
 		var code = entry
-		arm64EmitPrologue(code, frameSize: frameBytes, recordOffset: outgoingArgBytes)
+		arm64EmitPrologue(code, frameSize: frameBytes, recordOffset: outgoingArgBytes, probeScratchIsFree: false)
 
 		return Self{
 			code: code,
@@ -161,11 +161,13 @@ export type Arm64RuntimeAsm
 	// and RETURNING there is strictly worse than trapping. A diverging chunk therefore calls this
 	// directly rather than passing `finishFunction` a flag — whether the frame comes down at all is the
 	// whole of what a closer decides.
-	export function finishChunk(name ByteArray) returns FunctionCodeChunk
+	export function finishChunk(name ByteArray, guarded bool = false) returns FunctionCodeChunk
 		arm64ResolveBlockBranches(self.code, blockOffsets: self.labelOffsets, fixups: self.branchFixups)
 
 		var chunk = FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs)
 		chunk.funcAdrpRelocs = self.funcAdrpRelocs
+		chunk.spendsCallerStack(self.stackBytesPerCall(), checks: guarded)
+
 		return chunk
 	end 'finishChunk'
 

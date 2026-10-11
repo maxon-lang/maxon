@@ -116,10 +116,6 @@ let TestKeywordSpelling = "test"
 // exists for some targets and not others. Discovering for the host and building for `--target` would
 // drop a test from the report without saying so, and emit a dispatcher call to one the real compile
 // cannot resolve.
-//
-// The tests are COPIED out of the index rather than handed back as a borrow of it: the index is a memo
-// owned by a `Project` this function is the last holder of, and a roster that outlived its project would
-// be a view into freed storage.
 export function discoverTests(subject FilePath, target Target) returns DiscoveredTestArray throws CompileError
 	var project = try loadProject([subject], target: target, sourceSelection: SourceSelection.productionAndTests)
 	let signatures = try queryProgramSignatures(project)
@@ -134,7 +130,7 @@ export function discoverTests(subject FilePath, target Target) returns Discovere
 
 	var found = DiscoveredTestArray.create()
 
-	for declared in signatures.settled.declaredTests 'eachDeclaredTest'
+	for declared in signatures.settledDeclarations().declaredTests 'eachDeclaredTest'
 		found.push(DiscoveredTest.create(declared.symbol.clone(), displayName: declared.displayName, file: declared.file, line: declared.line))
 	end 'eachDeclaredTest'
 

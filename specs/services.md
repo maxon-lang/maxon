@@ -80,7 +80,7 @@ so a later read of it is **E3102**, as is handing one binding twice in one send.
 handler owns what it was sent: it may keep it or write it, and nothing is written back to the sender. This is not ergonomics: a refcount step on a box one
 green thread holds is a plain load/add/store, so a send that put one box into two green threads' hands without
 saying so would not be slow, it would corrupt the heap. Two refusals are static. A ROOT this frame does not
-solely own — a value a closure or a container also holds, or a borrowed parameter — is **E3138**, and a value
+solely own — a value a closure or a container also holds, or a borrowed parameter other than a `String` — is **E3138**, and a value
 that cannot have exactly one owner on the far side at all is **E3135**: a `Promise` (a handle its awaiter owns),
 a function value (a closure record its copies share), an opaque type parameter (no layout at the send).
 Every other aggregate — a container, a record with a managed field, a union with a managed payload, a value
@@ -717,7 +717,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: a-factory-may-be-spelled-with-a-keyword -->
 ⭐ A keyword may be a DECLARED NAME, and `stdlib/FilePath.maxon:34` proves the shape is live corpus:
-`public static function from (path String) returns FilePath`. So `spawn Reader.from(3)` must be recognized
+`public static function from(path String) returns FilePath`. So `spawn Reader.from(3)` must be recognized
 as a spawn — both halves of `<Type>.<factory>` go through the same name reader every other declaration
 position uses.
 
@@ -1304,7 +1304,7 @@ SECOND `get` sends into freed memory.
 
 ⚠ **ONE SEND IS CLEAN EVEN UNDER THAT DEFECT.** The first message is already queued when the mailbox dies,
 so it is still handled and still answered; the loop only stops afterwards. **At `MAXON_MAX_PROCS` 1 and 16
-alike, two sends are exit 92 (`RuntimeAbort.schedulerDeadlock`) and a `.clone()` of the borrowed element is
+alike, two sends are exit 92 (`RuntimeAbort.schedulerDeadlock`) and a `.clone()` of the element read is
 exit 89 (`slabFreeOfParkedSpan`)** — a heap corruption, not a diagnostic. This case
 therefore sends THREE times through three separate reads, and its answer is the accumulated total.
 ```maxon
@@ -1819,54 +1819,399 @@ typealias Integer = int(i64.min to i64.max)
 typealias Strings = Array with String
 ```
 ```maxoncstderr
-error E3138: <fragment>:20:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:20:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
-<!-- test: error.a-borrowed-parameter-may-not-be-sent -->
-Send-uniqueness does not survive a function boundary: `p` arrived as a BORROWED struct parameter and the
-caller still holds it. ⭐ **THE RULE IS UNIFORM OVER BORROWS.** A borrowed `String` is
-refused here like any other borrow rather than PROMOTED to a copy: a promotion would answer one question two
-ways at one send site — deciding by whether the value's type happened to have a cheap owning copy — with an
-allocation the author never wrote. `error.a-value-sent-through-a-parameter-is-refused` below is that shape.
-
-⚠ What is promoted is a value with NO owner at all: a STRING LITERAL this parse minted, whose record
-is immortal `.rdata`. Nobody owns it, so nothing can be a second owner, and there is nothing to move — see
-`a-string-argument-moves-into-the-service`, whose third send is a bare literal.
+<!-- test: a-borrowed-parameter-nothing-writes-is-shared-with-the-service -->
+A message argument the sender does not own is SHARED when nothing can write it: `p` arrived as a borrowed
+struct parameter, `forward` never writes it, and the handler only reads it. The graph is marked shared, so every
+count in it steps atomically, and both threads read the one record. `forward`'s caller still holds `p` and reads
+it afterwards. The parameter is kept by the call the way a `let` field keeps one, so a caller hands it a fresh
+or read-only value.
 ```maxon
 type Payload
-	var n as Integer
+	export var n as Integer
 
-	static function create() returns Self
-		return Self{n: 0}
+	static function create(n Integer) returns Self
+		return Self{n: n}
 	end 'create'
 end 'Payload'
 
 type Store
-	var n as Integer
+	var seen as Integer
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{seen: 0}
 	end 'create'
 
-	export function keep(p Payload)
-		self.n = self.n + 1
+	export function keep(p Payload) returns Integer
+		self.seen = self.seen + 1
+		return p.n
 	end 'keep'
 end 'Store'
 
-function forward(h Store.handle, p Payload)
-	h.keep(p)
+function forward(h Store.handle, p Payload) returns Integer
+	return (try await h.keep(p) otherwise 0) + p.n
 end 'forward'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	let p = Payload.create()
-	forward(h, p: p)
+	let p = Payload.create(7)
+	let total = forward(h, p: p)
+	print("{total} {p.n}\n")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
+```exitcode
+0
+```
+```stdout
+14 7
+```
+
+<!-- test: error.a-borrowed-parameter-the-sender-writes-may-not-be-sent -->
+<!-- unsupported-targets: wasm32-wasi -->
+`forward` writes `p`, so the record is not read-only for the thread that sends it: the service would read it
+while `forward` changes it.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+type Payload
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Payload'
+
+type Store
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Payload) returns Integer
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function forward(h Store.handle, p Payload) returns Integer
+	p.n = 8
+	return try await h.keep(p) otherwise 0
+end 'forward'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var p = Payload.create(7)
+	return forward(h, p: p) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
 ```maxoncstderr
-error E3138: <fragment>:23:9: argument `p` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:25:26: argument `p` of the message `Store.keep` is a PARAMETER this function writes. A parameter nothing here writes is shared with the service — both threads read one record and every count in it steps atomically — but a record this function writes would change under the service while it reads. Send a `.clone()`, or stop writing the parameter
+```
+
+<!-- test: error.a-borrowed-parameter-the-handler-writes-may-not-be-sent -->
+<!-- unsupported-targets: wasm32-wasi -->
+The handler writes its parameter, so a record both threads reach would be written by the service while the sender
+reads it.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+type Payload
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Payload'
+
+type Store
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function bump(p Payload) returns Integer
+		p.n = p.n + 1
+		self.seen = self.seen + 1
+		return p.n
+	end 'bump'
+end 'Store'
+
+function forward(h Store.handle, p Payload) returns Integer
+	return try await h.bump(p) otherwise 0
+end 'forward'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let p = Payload.create(7)
+	return forward(h, p: p) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3138: <fragment>:25:26: argument `p` of the message `Store.bump` is a PARAMETER shared with the service, and the handler `Store.bump` writes or keeps its parameter `p`. A record both threads reach may be written by neither. Send a `.clone()`, or make `Store.bump` only read `p`
+```
+
+<!-- test: error.a-var-read-again-is-not-handed-to-a-function-that-sends-it-shared -->
+<!-- unsupported-targets: wasm32-wasi -->
+`forward` shares its parameter with the service, so the value a caller hands it must have no other writer. A `var`
+the caller reads again has one.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+type Payload
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Payload'
+
+type Store
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Payload) returns Integer
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function forward(h Store.handle, p Payload) returns Integer
+	return try await h.keep(p) otherwise 0
+end 'forward'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var p = Payload.create(7)
+	let total = forward(h, p: p)
+	p.n = 9
+	return (total + p.n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:30:14: cannot pass the `var` 'p', which is read again, to parameter 'p' of 'forward', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: a-module-let-record-is-shared-with-the-service -->
+A module-level `let` is read-only for the whole program, so a message may carry it directly. The sender does not own
+the record, nothing can write it, and the handler only reads it: the graph is marked shared, every count in it steps
+atomically, and both threads read the one record.
+```maxon
+type Payload
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Payload'
+
+type Store
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Payload) returns Integer
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+let Shared = Payload.create(7)
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let total = (try await h.keep(Shared) otherwise 0) + Shared.n
+	print("{total}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+14
+```
+
+<!-- test: a-let-field-record-is-shared-with-the-service -->
+A `let` field has no other writer for the record's whole life, so the record read out of one is a read-only root the
+sender does not own, and a message shares it exactly as it shares a module-level `let`.
+```maxon
+type Payload
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Payload'
+
+type Holder
+	export let payload as Payload
+
+	static function create(n Integer) returns Self
+		return Self{payload: Payload.create(n)}
+	end 'create'
+end 'Holder'
+
+type Store
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Payload) returns Integer
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let holder = Holder.create(5)
+	let total = (try await h.keep(holder.payload) otherwise 0) + holder.payload.n
+	print("{total}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+10
+```
+
+<!-- test: error.a-module-let-record-the-handler-writes-may-not-be-sent -->
+<!-- unsupported-targets: wasm32-wasi -->
+The handler writes its parameter, so a record both threads reach would be written by the service while the sender
+and every other reader of the module-level `let` see it. A read-only value is shared only with a handler that reads.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+type Payload
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Payload'
+
+type Store
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function bump(p Payload) returns Integer
+		p.n = p.n + 1
+		self.seen = self.seen + 1
+		return p.n
+	end 'bump'
+end 'Store'
+
+let Shared = Payload.create(7)
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	return (try await h.bump(Shared) otherwise 0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3138: <fragment>:28:27: argument `p` of the message `Store.bump` is a read-only value shared with the service, and the handler `Store.bump` writes or keeps its parameter `p`. A record both threads reach may be written by neither. Send a `.clone()`, or make `Store.bump` only read `p`
+```
+
+<!-- test: a-shared-value-read-is-shared-with-the-service -->
+A value `SharedValue.current()` answers is read-only for the whole program and owned by the cell, so a message may carry
+it directly: the graph is shared, every count in it steps atomically, and the handler only reads it.
+```maxon
+type Config
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+type Store
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(c Config) returns Integer
+		self.seen = self.seen + 1
+		return c.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(7))
+	let h = spawn Store.create()
+	let total = (try await h.keep(cell.current()) otherwise 0) + cell.current().n
+	print("{total}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias ConfigCell = SharedValue with Config
+```
+```exitcode
+0
+```
+```stdout
+14
+```
+
+<!-- test: error.a-shared-value-read-the-handler-writes-may-not-be-sent -->
+<!-- unsupported-targets: wasm32-wasi -->
+The handler writes its parameter, so the record the cell hands every reader would be written by the service while the
+cell's other readers see it.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+type Config
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+type Store
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function bump(c Config) returns Integer
+		c.n = c.n + 1
+		self.seen = self.seen + 1
+		return c.n
+	end 'bump'
+end 'Store'
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(7))
+	let h = spawn Store.create()
+	return (try await h.bump(cell.current()) otherwise 0) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+typealias ConfigCell = SharedValue with Config
+```
+```maxoncstderr
+error E3138: <fragment>:27:27: argument `c` of the message `Store.bump` is a read-only value shared with the service, and the handler `Store.bump` writes or keeps its parameter `c`. A record both threads reach may be written by neither. Send a `.clone()`, or make `Store.bump` only read `c`
 ```
 
 <!-- test: error.a-service-is-rejected-on-wasm -->
@@ -2084,7 +2429,7 @@ note 4
 <!-- test: deepmove.abort.a-reply-holding-a-shared-record-aborts -->
 The refusal on the reply road. The reply's root is a `CellArray` the handler mints in its own frame, so the
 static E3137 rule admits it; what the walk finds inside is the `Cell` the service's state still owns —
-`push` increfs the borrowed element, so that one record has two owners, the state and the reply. Handing it
+`push` takes its own reference to the element, so that one record has two owners, the state and the reply. Handing it
 across would put one box in two green threads' hands with a plain reference count between them, so the move
 aborts with `RuntimeAbort` exit **96** and nothing reaches the awaiter.
 ```maxon
@@ -2700,7 +3045,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	var s = Cells.create()
-	var cell = Cell.create(1)
+	let cell = Cell.create(1)
 	s.insert(cell)
 	let removed = s.remove(cell)
 	let h = spawn Svc.create()
@@ -5654,7 +5999,7 @@ type Pair
 	end 'create'
 end 'Pair'
 
-typealias Boxes = Array with Box
+typealias Boxes = Array with readonly Box
 
 type Svc
 	var kept as Boxes
@@ -6161,6 +6506,133 @@ typealias Integer = int(i64.min to i64.max)
 ```maxoncstderr
 error E3137: <fragment>:10:3: `Store.itself` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
 note: <fragment>:15:10: the `spawn` that makes `Store` a service
+```
+
+<!-- test: a-reply-swapped-out-of-a-field-is-sole -->
+The swap idiom: `let old = self.items` followed by `self.items = Items.create()` moves the record out of the
+field. The replacement is fresh and every store to the field is fresh, so `old` is the record's only holder and
+the reply crosses without a `.clone()`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Items = Array with Integer
+
+type Store
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function put(n Integer)
+		self.items.push(n)
+	end 'put'
+
+	export function take() returns Items
+		let old = self.items
+		self.items = Items.create()
+		return old
+	end 'take'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	h.put(4)
+	let got = try await h.take() otherwise return 2
+	print("{got.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: error.a-read-of-the-field-between-the-swap-load-and-store-keeps-the-reply-aliased -->
+<!-- unsupported-targets: wasm32-wasi -->
+A read of `self.items` between the load and the store may hand the record to a second holder, so the swap no
+longer proves `old` is the only one and the reply is refused.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Items = Array with Integer
+
+type Store
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function put(n Integer)
+		self.items.push(n)
+	end 'put'
+
+	export function take() returns Items
+		let old = self.items
+		let seen = self.items.count()
+		self.items = Items.create()
+		return old
+	end 'take'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	h.put(4)
+	let got = try await h.take() otherwise return 2
+	print("{got.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:20:3: `Store.take` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:25:10: the `spawn` that makes `Store` a service
+```
+
+<!-- test: error.a-field-another-store-fills-with-a-borrowed-record-is-not-swapped-out -->
+<!-- unsupported-targets: wasm32-wasi -->
+`replace` stores a record it was handed into `items`, so the record `old` holds may be one its sender still names.
+The swap in `take` does not prove `old` is the only holder, and the reply is refused.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Items = Array with Integer
+
+type Store
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function put(n Integer)
+		self.items.push(n)
+	end 'put'
+
+	export function replace(given Items)
+		self.items = given
+	end 'replace'
+
+	export function take() returns Items
+		let old = self.items
+		self.items = Items.create()
+		return old
+	end 'take'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	h.put(4)
+	let got = try await h.take() otherwise return 2
+	print("{got.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3137: <fragment>:23:3: `Store.take` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
+note: <fragment>:28:10: the `spawn` that makes `Store` a service
 ```
 
 <!-- test: error.a-reply-may-not-return-a-message-parameter -->
@@ -6945,9 +7417,8 @@ machine to join the idle list runs `checkdead` in the same hold of the lock: no 
 child or read pending, and `main` not finished is exit 92 at once. `procs: 4` is what makes this case take
 that decision on the fourth idle machine rather than the only one.
 
-⚠ The closure clones the handle it forwards (`m.clone()`): a message parameter arrives BORROWED and a
-send MOVES, so the handle crossing into `B.work` has to be one this frame owns — E3138 otherwise, which
-is `error.a-borrowed-parameter-may-not-be-sent`'s subject and has nothing to do with this one.
+⚠ The closure clones the handle it forwards (`m.clone()`), so the handle crossing into `B.work` is one this
+frame owns and the send moves it; the subject of this case is the deadlock, not how the handle crosses.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias WorkFn = function(B.handle, A.handle) returns Integer
@@ -7062,7 +7533,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: awaitany-returns-the-completed-index -->
 ⭐ **ONE WAITING PRIMITIVE COVERS SERVICE REPLIES, FILE IO AND SUBPROCESS DRAINS, AND THIS IS THE HALF THAT
 MAKES IT TRUE.** A reply is an ordinary `Promise`, so it goes into an `Array with Promise with …` and
-`__Builtins.awaitAny` selects over it exactly as it does over `async` spawns — no separate "channel select"
+its `awaitAny()` selects over it exactly as it does over `async` spawns — no separate "channel select"
 and no second waiting mechanism.
 
 ⚠ **THE STORAGE MUST NAME THE REPLY'S OWN ERROR TYPE.** A reply ALWAYS carries `ServiceError` (the service can
@@ -7094,7 +7565,7 @@ function main() returns ExitCode
 	let h = spawn Slow.create()
 	var ps = ReplyPromiseArray.create()
 	ps.push(h.value())
-	let ready = __Builtins.awaitAny(ps)
+	let ready = ps.awaitAny()
 	let p = try ps.get(ready) otherwise panic("awaitAny named a slot that is in range")
 	let v = try await p otherwise 0
 	return (ready + v) as ExitCode
@@ -7272,7 +7743,7 @@ function main() returns ExitCode
 	h.shutdown()
 	var ps = ReplyPromiseArray.create()
 	ps.push(h.value())
-	let ready = __Builtins.awaitAny(ps)
+	let ready = ps.awaitAny()
 	let p = try ps.get(ready) otherwise panic("awaitAny named a slot that is in range")
 	try await p otherwise (e) 'gone'
 		match e 'w'
@@ -7955,20 +8426,15 @@ typealias Integer = int(i64.min to i64.max)
 error E2015: <fragment>:36:23: Unsupported: `spawn Keeper.create(…)` — `Keeper.create` is declared 2 times and they do not all keep argument 1 alike. A `spawn` MOVES every argument its factory keeps into the service, and which declaration this call binds is settled after this point, so there is no one move to make. Give the factories distinct names
 ```
 
-<!-- test: error.a-value-sent-through-a-parameter-is-refused -->
-⭐⭐ **THE `String` HALF OF `error.a-borrowed-parameter-may-not-be-sent`, AND THE CASE THAT KEEPS THE RULE
-UNIFORM.** `buf` arrived as a borrowed parameter and the caller still holds it — the identical fact the
-struct case is refused for, at the identical position, in the identical sentence. Promoting `buf` to a fresh
-copy instead would be sound, and an allocation the author never wrote, chosen by whether the value's TYPE
-had a cheap clone rather than by whether a second owner exists.
+<!-- test: a-borrowed-string-parameter-is-copied-into-the-send -->
+⭐⭐ **A BORROWED `String` PARAMETER IS COPIED INTO THE SEND.** `buf` arrived as a borrowed parameter and the
+caller still holds it. A `String` is a value type, so the send hands the service a COPY and `buf` stays
+readable afterwards: the service owns its own record and the caller's is untouched, with no `.clone()`
+written. A borrowed struct parameter that nothing writes is shared instead
+(`a-borrowed-parameter-nothing-writes-is-shared-with-the-service`).
 
-⚠ **THE CURE THE DIAGNOSTIC TEACHES IS THAT COPY, SPELLED OUT.** `h.keep(buf.clone())` compiles and does
-exactly what a promotion would — at a site the reader can see, which is what an explicit transfer rule owes
-them.
-
-⚠ A bare LITERAL is not in this class and is promoted: it has no owner to be a second of. That is
-`a-string-argument-moves-into-the-service`'s third send, and it is why the test here is PROVENANCE and not
-type.
+⚠ A bare LITERAL is promoted the same way (`a-string-argument-moves-into-the-service`'s third send), and a
+`String` the frame built itself is MOVED, as before; the copy is only for a `String` this frame does not own.
 ```maxon
 type Store
 	var n as Integer
@@ -7977,25 +8443,30 @@ type Store
 		return Self{n: 0}
 	end 'create'
 
-	export function keep(s String)
+	export function keep(s String) returns Integer
 		self.n = self.n + 1
-		print("kept {s}\n")
+		return s.byteLength() as Integer
 	end 'keep'
 end 'Store'
 
-function forward(h Store.handle, buf String)
-	h.keep(buf)
+function forward(h Store.handle, buf String) returns Integer
+	let kept = try await h.keep(buf) otherwise 0
+	return kept + (buf.byteLength() as Integer)
 end 'forward'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	forward(h, buf: "hello")
+	let total = forward(h, buf: "hello")
+	print("{total}\n")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```maxoncstderr
-error E3138: <fragment>:16:9: argument `s` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```exitcode
+0
+```
+```stdout
+10
 ```
 
 <!-- test: a-borrowed-parameter-may-be-sent-as-a-clone -->
@@ -8168,9 +8639,8 @@ kept hello (1)
 <!-- test: error.use-after-await-of-a-reply -->
 ⭐⭐ **A REPLY IS A PROMISE, SO IT IS MOVE-ONLY TOO.** A reply cell is minted at the interned
 `Promise with (T[, E])`, as a spawn's promise is. Minted as a bare `ValueTypeTag.integer` word instead,
-`requireBindingLive`'s scalar early-return would swallow the consume poison entirely, and the raw handle
-would flow straight into an INTEGER parameter position with no `.inner` to unwrap it: this program would
-compile and exit **8** — `gtIsComplete` answering 1 off a reclaimed cell.
+`requireBindingLive`'s scalar early-return would swallow the consume poison entirely: this program would
+compile and exit **8** — `isComplete()` answering `true` off a reclaimed cell.
 
 ⚠ **ITS SPAWN TWIN IS E3102 TOO**: the same five lines over `async makeValue()` are refused, and over
 `h.total()` they must be refused alike. Linearity (E3100)
@@ -8194,7 +8664,7 @@ function main() returns ExitCode
 	let p = h.total()
 	let a = try await p otherwise 0
 	let b = p
-	let done = __Builtins.gtIsComplete(b)
+	let done = 1 if b.isComplete() else 0
 	return (a + done) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -8329,7 +8799,7 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	let p = h.total()
 	let copy = p.clone()
-	print("copied {copy.inner > 0}")
+	print("copied {copy.isComplete()}")
 	return (try await p otherwise 0) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -8338,10 +8808,11 @@ typealias Integer = int(i64.min to i64.max)
 error E3141: <fragment>:17:15: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Promise with (int(-9223372036854775808 to 9223372036854775807), ServiceError)` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
 ```
 
-<!-- test: a-reply-inner-is-the-one-unwrap -->
-The sanctioned reply → `int` conversion, and the twin of `promise-typing.inner-is-the-one-unwrap`. `.inner`
-peeks at the cell word without consuming the reply, so the `await` that follows still reclaims it and the
-program still balances to zero.
+<!-- test: a-reply-inner-compiles-in-the-library-tier -->
+<!-- tier: stdlib -->
+A reply's `.inner` is library-tier surface: `promise-typing.md:promise-typing.error.inner-is-library-tier`
+is this program refused in the user tier. A library-tier source reads it as the reply → `int` conversion. It peeks at the cell word without consuming
+the reply, so the `await` that follows still reclaims it and the program still balances to zero.
 ```maxon
 type Calc
 	var count as Integer
@@ -8381,8 +8852,8 @@ the exit gate alone cannot see the loss.
 `fire` builds the shape in three steps, and each one is load-bearing:
 
 - **`Scheduler.yield()` after the `async`** hands the strand to the coroutine, which runs until its `sleep` parks
-  it on a timer. The handler then reads `probe.started` and a peek of `0`, so `parked=8` says every one of the
-  eight coroutines had started and not finished when its handler returned.
+  it on a timer. The handler then reads `probe.started` and `isComplete()` answering `false`, so `parked=8`
+  says every one of the eight coroutines had started and not finished when its handler returned.
 - **The promise is kept in the service's state**, so the one thing that drops it is the shutdown's state drop
   in `<T>.__loop`'s teardown, with the coroutine still parked: its ten-second timer is far longer than the
   program runs, so the coroutine cannot finish before the shutdown reaches it.
@@ -8405,7 +8876,7 @@ sabotage, carving more records than a sound runtime does.
 `scripts/multicore-stress/service-async-strand-torture.maxon` runs this shape in batches of twenty services.
 A runtime that reclaims every record carves no more than two batches' records plus fewer than 64 on each
 other processor's free list, however many rounds run, and the torture runs until one record lost per round
-would carry `__Builtins.schedGtRecordsCarved()` to twice that bound. Every round reaches the shape (`parked=`
+would carry `Scheduler.counters().threadRecordsCarved` to twice that bound. Every round reaches the shape (`parked=`
 equals the rounds) and the count stays under the bound at `MAXON_MAX_PROCS` 1, 4 and 16 — where the
 sabotaged runtime above exceeds it and exits 101. The
 CONTROL, the same batches with the handler `await`ing its coroutine so nothing is in flight at the shutdown,
@@ -8454,7 +8925,7 @@ type Worker
 	export function fire(v Integer) returns Integer
 		let p = async slowWork(v, probe: self.probe)
 		Scheduler.yield()
-		let parked = self.probe.started and __Builtins.gtIsComplete(p.inner) == 0
+		let parked = self.probe.started and not p.isComplete()
 		self.pending.push(p)
 		return 1 if parked else 0
 	end 'fire'
@@ -9077,7 +9548,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: error.spawn-factory-argument-borrowed-from-a-parameter-refused -->
@@ -9121,7 +9592,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:25:30: argument `shelf` of `spawn Keeper.create(…)` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:25:30: argument `shelf` of `spawn Keeper.create(…)` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: error.spawn-factory-argument-read-off-an-earlier-statements-temporary-refused -->
@@ -9169,12 +9640,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:34:39: argument `settings` of `spawn Surveyor.create(…)` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:34:39: argument `settings` of `spawn Surveyor.create(…)` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
-<!-- test: error.spawn-factory-string-argument-borrowed-from-a-parameter-refused -->
-The `String` half of `error.spawn-factory-argument-borrowed-from-a-parameter-refused`: a borrowed `String` is
-refused like any other borrow rather than copied, exactly as at a send.
+<!-- test: a-spawn-factory-string-argument-borrowed-from-a-parameter-is-copied -->
+A borrowed `String` a factory keeps in the service's state is copied, exactly as a message argument is
+(`a-borrowed-string-parameter-is-copied-into-the-send`): the service owns its own record and `name` stays
+readable in `start`. Every other borrowed argument is still refused
+(`error.spawn-factory-argument-borrowed-from-a-parameter-refused`).
 ```maxon
 type Greeter
 	var name as String
@@ -9200,8 +9673,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3138: <fragment>:15:31: argument `name` of `spawn Greeter.create(…)` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```exitcode
+0
+```
+```stdout
+hello ada
 ```
 
 <!-- test: services.a-spawn-factory-argument-read-two-fields-off-a-temporary-starts-once -->
@@ -9806,7 +10282,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:26:28: the state `spawn Worker.create(…)` would start the service with cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: error.reply-a-sibling-returns-a-local-another-local-aliases-refused -->
@@ -11058,7 +11534,7 @@ end 'main'
 
 <!-- test: services.a-spawn-factory-argument-read-off-a-temporary-starts-once -->
 A factory argument read out of a temporary's field keeps that temporary alive only for the read: the
-`Holder` the argument was borrowed from is released before the state is walked, so the `Settings` it held
+`Holder` the argument was read from is released before the state is walked, so the `Settings` it held
 has the service as its one owner.
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -11108,7 +11584,7 @@ end 'main'
 
 <!-- test: services.a-message-argument-built-from-a-temporarys-field-crosses-once -->
 A message argument built from a field read out of a temporary has one owner at the send: the temporary the
-field was borrowed from is released before the argument's graph is walked.
+field was read from is released before the argument's graph is walked.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -11157,7 +11633,7 @@ end 'main'
 ```
 
 <!-- test: services.a-send-inside-a-larger-expression-releases-only-what-its-arguments-built -->
-The release at a send reaches only what its own argument list built. A borrow read before the send keeps
+The release at a send reaches only what its own argument list built. A field read before the send keeps
 its temporary, a `try` fork inside the arguments hands its temporaries back before the release, and an
 interpolated argument crosses as the one owner of its record.
 ```maxon
@@ -11729,7 +12205,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:26:20: argument `other` of the message `Svc.take2` cannot be proven to have exactly one owner (`b`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:26:20: argument `other` of the message `Svc.take2` cannot be proven to have exactly one owner (`b`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: services.error.a-sent-let-used-as-a-method-receiver-is-use-after-move -->
@@ -11813,10 +12289,11 @@ error E3102: <fragment>:31:23: use of moved value 'b': its ownership moved to an
 ```
 
 <!-- test: services.error.a-cell-holding-a-co-owned-record-cannot-be-sent -->
-`s` lives in a cell because `bump` reassigns its parameter, and the cell's record is co-owned with `t`; the
-send on the other branch is refused exactly as it is when `s` is not a cell.
+`s` lives in a cell because `bump` reassigns its parameter, and the cell's record is co-owned with the array
+`held`; the send on the other branch is refused exactly as it is when `s` is not a cell.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Boxes = Array with Box
 
 type Box
 	export var v as Integer
@@ -11845,10 +12322,11 @@ end 'bump'
 
 function main() returns ExitCode
 	let h = spawn Keeper.create()
-	let t = Box.create(1)
-	var s = t
+	var held = Boxes.create()
+	held.push(Box.create(1))
+	var s = try held.get(0) otherwise panic("pushed")
 
-	if t.v > 100 'big'
+	if held.count() > 100 'big'
 		bump(s)
 	end 'big' else 'small'
 		let r = try await h.put(s) otherwise 0
@@ -11859,14 +12337,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:37:27: argument `b` of the message `Keeper.put` cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:39:27: argument `b` of the message `Keeper.put` cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: services.error.a-cell-a-loop-refills-with-a-co-owned-record-cannot-be-sent-in-the-loop -->
-The first iteration sends the cell's own record; the loop then stores a record `t` still names, which the
+The first iteration sends the cell's own record; the loop then stores a record the array `held` still holds, which the
 next iteration would send.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Boxes = Array with Box
 
 type Box
 	export var v as Integer
@@ -11895,22 +12374,23 @@ end 'bump'
 
 function main() returns ExitCode
 	let h = spawn Keeper.create()
-	let t = Box.create(5)
+	var held = Boxes.create()
+	held.push(Box.create(5))
 	var s = Box.create(1)
 	bump(s)
 
 	for _ in 0 upto 2 'each'
 		let r = try await h.put(s) otherwise 0
 		print("{r}\n")
-		s = t
+		s = try held.get(0) otherwise panic("pushed")
 	end 'each'
 
-	print("{t.v}\n")
+	print("{held.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:36:27: argument `b` of the message `Keeper.put` cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves this value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:38:27: argument `b` of the message `Keeper.put` cannot be proven to have exactly one owner: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: services.a-cell-record-a-callee-replaced-is-sent -->
@@ -12065,9 +12545,10 @@ end 'main'
 16 25
 ```
 
-<!-- test: services.error.a-var-the-loop-iterates-cannot-be-sent-inside-the-loop -->
-<!-- unsupported-targets: wasm32-wasi -->
-The send would move `items` while the loop still walks it and `x` still borrows one of its elements.
+<!-- test: error.a-var-the-loop-iterates-is-not-sent-inside-the-loop -->
+The loop holds a counted reference to the array it iterates, so the `var` `items` is no longer the record's only
+owner inside the loop body, and the send, which would move it to the service while the loop still reads it, is
+refused where it is written.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Words = Array with String
@@ -12104,7 +12585,52 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: <fragment>:28:27: cannot move 'items' into argument `words` of the message `Summer.add` while it is borrowed by 'x' (borrowed at line 27)
+error E3138: <fragment>:28:27: argument `words` of the message `Summer.add` cannot be proven to have exactly one owner (`items`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```
+
+<!-- test: services.a-var-the-loop-iterated-is-sent-after-the-loop -->
+Once the loop has ended it holds nothing, so the `var` is the record's only owner again and the send moves it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Words = Array with String
+
+type Summer
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function add(words Words) returns Integer
+		for word in words 'each'
+			self.total = self.total + (word.byteLength() as Integer)
+		end 'each'
+
+		return self.total
+	end 'add'
+end 'Summer'
+
+function main() returns ExitCode
+	let h = spawn Summer.create()
+	var items = Words.create()
+	items.push("first padded out long enough to heap allocate {1}")
+	items.push("second padded out long enough to heap allocate {2}")
+	var seen = 0 as Integer
+
+	for x in items 'each'
+		seen = seen + (x.byteLength() as Integer)
+	end 'each'
+
+	let r = try await h.add(items) otherwise 0
+	print("{seen} {r}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+95 95
 ```
 
 <!-- test: services.a-value-whose-field-a-closure-holds-is-refused-at-the-send -->

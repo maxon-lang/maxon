@@ -1,0 +1,389 @@
+#if os(Windows) and arch(x64)
+	public typealias SampleCycles = int(0 to u64.max)
+	public typealias SampledThreadId = int(0 to u64.max)
+	public typealias SampleIntervalNanos = int(1 to u64.max)
+	public typealias StackWindowOffset = int(0 to i64.max)
+	typealias CaptureSerial = int(0 to u64.max)
+	typealias CaptureSerialCell = SharedValue with CaptureSerial
+	typealias UnitShift = int(0 to 48)
+
+	public enum SamplerError implements Error
+		noSuchProcess
+		noScratch
+		noTimer
+		unknownThread
+		outOfWindow
+		moduleListUnavailable
+		callingThread
+	end 'SamplerError'
+
+	let SampleProcessScratchBytes = 8192 as ScratchBytes
+	let SampleWindowBytes = 65536
+	let SampleContextSlot = 0 as ScratchOffset
+	let SampleRegionSlot = 2048 as ScratchOffset
+	let SampleModuleEntrySlot = 4096 as ScratchOffset
+
+	let SampleContextRspOffset = 0x98
+	let SampleContextRbpOffset = 0xA0
+	let SampleContextRipOffset = 0xF8
+	let SampleContextRspSlot = (SampleContextSlot + SampleContextRspOffset) as ScratchOffset
+	let SampleContextRbpSlot = (SampleContextSlot + SampleContextRbpOffset) as ScratchOffset
+	let SampleContextRipSlot = (SampleContextSlot + SampleContextRipOffset) as ScratchOffset
+
+	let ProfileRegionRecordBytes = 48
+	let Win64MbiBaseAddressOffset = 0
+	let ProfileRegionAllocationBaseOffset = 8
+	let Win64MbiRegionSizeOffset = 24
+	let ProfileRegionSuspendedCyclesOffset = ProfileRegionRecordBytes
+	let ProfileSampleThreadGone = 0 - 1
+	let ProfileSampleNoRegisters = 0 - 2
+
+	let SampleRegionAllocationBaseSlot = (SampleRegionSlot + ProfileRegionAllocationBaseOffset) as ScratchOffset
+	let SampleRegionSuspendedCyclesSlot = (SampleRegionSlot + ProfileRegionSuspendedCyclesOffset) as ScratchOffset
+
+	let ModuleEntryBytes = 1080
+	let ModuleEntrySizeSlot = 4096 as ScratchOffset
+	let ModuleEntryBaseSlot = (4096 + 24) as ScratchOffset
+	let ModuleEntryExtentSlot = (4096 + 32) as ScratchOffset
+	let ModuleEntryNameOffset = 48
+	let ModuleSnapshotAttempts = 20
+	let ModuleSnapshotRetryMs = 5
+	let InvalidHandle = 0 - 1
+	let CurrentThreadPseudoHandle = 0 - 2
+
+	let Utf16UnitMask = 0xFFFF
+	let Utf16UnitBits = 16
+	let Utf16UnitsPerWord = 4
+	let AsciiCeiling = 128
+	let NonAsciiPlaceholder = 0x3F
+
+	let NanosPerFileTimeTick = 100
+
+	public type SampledThread
+		public let id as SampledThreadId
+		let handle as RegisterWord
+
+		static function identified(handle RegisterWord, id SampledThreadId) returns SampledThread
+			return Self{id: id, handle: handle}
+		end 'identified'
+
+		function rawHandle() returns RegisterWord
+			return self.handle
+		end 'rawHandle'
+	end 'SampledThread'
+
+	type OpenThread
+		let id as SampledThreadId
+		var handle as __ManagedHandle
+
+		static function holding(handle __ManagedHandle, id SampledThreadId) returns OpenThread
+			return Self{id: id, handle: handle}
+		end 'holding'
+
+		function names(thread SampledThread) returns bool
+			return (self.handle.handle() as RegisterWord) == thread.rawHandle() and self.id == thread.id
+		end 'names'
+
+		function release()
+			self.handle.release()
+		end 'release'
+	end 'OpenThread'
+
+	typealias OpenThreadArray = Array with OpenThread
+
+	public typealias SampledThreadArray = Array with SampledThread
+
+	public type SampledModule
+		public let base as RegisterWord
+		public let limit as RegisterWord
+		public let name as String
+
+		static function spanning(base RegisterWord, limit RegisterWord, name String) returns SampledModule
+			return Self{base: base, limit: limit, name: name}
+		end 'spanning'
+	end 'SampledModule'
+
+	/// The stack bytes one `capture` copied. It reads as empty once its process is closed or a later
+	/// `capture` reuses the window.
+	public type StackWindow
+		let pages as ScratchPages
+		let copied as RegisterWord
+		let serial as CaptureSerial
+		let captures as CaptureSerialCell
+
+		static function over(pages ScratchPages, copied RegisterWord, serial CaptureSerial, captures CaptureSerialCell) returns StackWindow
+			return Self{pages: pages, copied: copied, serial: serial, captures: captures}
+		end 'over'
+
+		function readable() returns bool
+			return self.pages.held() and self.captures.current() == self.serial
+		end 'readable'
+
+		public function byteCount() returns RegisterWord
+			return self.copied if self.readable() else 0
+		end 'byteCount'
+
+		public function word(offset StackWindowOffset) returns RegisterWord throws SamplerError
+			if not self.readable() or (offset as RegisterWord) > self.copied - sizeof(RegisterWord) 'outsideTheCopy'
+				throw SamplerError.outOfWindow
+			end 'outsideTheCopy'
+
+			return self.pages.word(offset as ScratchOffset)
+		end 'word'
+	end 'StackWindow'
+
+	public type SampledStack
+		public let programCounter as RegisterWord
+		public let framePointer as RegisterWord
+		public let stackPointer as RegisterWord
+		public let allocationBase as RegisterWord
+		public let suspendedCycles as RegisterWord
+		public let window as StackWindow
+
+		static function of(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, allocationBase RegisterWord, suspendedCycles RegisterWord, window StackWindow) returns SampledStack
+			return Self{programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, allocationBase: allocationBase, suspendedCycles: suspendedCycles, window: window}
+		end 'of'
+	end 'SampledStack'
+
+	public union SampleCapture
+		threadGone
+		unreadable(allocationBase RegisterWord, suspendedCycles RegisterWord)
+		captured(stack SampledStack)
+	end 'SampleCapture'
+
+	union SampledThreadSlot
+		none
+		at(index ElementIndex)
+	end 'SampledThreadSlot'
+
+	/// Samples the threads of another process, on x64 Windows only. `close()` releases the handles and
+	/// scratch regions it holds.
+	public type SampledProcess
+		var process as __ManagedHandle
+		let pid as RegisterWord
+		var scratch as ScratchPages
+		var window as ScratchPages
+		var openThreads as OpenThreadArray
+		let captures as CaptureSerialCell
+
+		public static function open(pid Pid) returns SampledProcess throws SamplerError
+			let process = __ManagedHandle.adopting(__Builtins.profileOpenTarget(pid))
+
+			if process.handle() == 0 'noSuchProcess'
+				throw SamplerError.noSuchProcess
+			end 'noSuchProcess'
+
+			var sampled = Self{process: process, pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(), captures: CaptureSerialCell.create(0 as CaptureSerial)}
+
+			if not sampled.scratch.held() or not sampled.window.held() 'noPages'
+				sampled.close()
+
+				throw SamplerError.noScratch
+			end 'noPages'
+
+			return sampled
+		end 'open'
+
+		public function threads() returns SampledThreadArray
+			var found = SampledThreadArray.create()
+			var cursor = 0 as RegisterWord
+
+			while true 'eachThread'
+				let handle = __Builtins.profileNextThread(self.process.handle() as RegisterWord, cursor) as RegisterWord
+
+				if handle == 0 'endOfTheList'
+					break
+				end 'endOfTheList'
+
+				let id = __Builtins.profileThreadId(handle) as SampledThreadId
+				self.openThreads.push(OpenThread.holding(__ManagedHandle.adopting(handle), id: id))
+				found.push(SampledThread.identified(handle, id: id))
+				cursor = handle
+			end 'eachThread'
+
+			return found
+		end 'threads'
+
+		function slotOf(thread SampledThread) returns SampledThreadSlot
+			for (iter, held) in self.openThreads.withIterator() 'eachHandle'
+				if held.names(thread) 'thisOne'
+					return SampledThreadSlot.at(iter.index())
+				end 'thisOne'
+			end 'eachHandle'
+
+			return SampledThreadSlot.none
+		end 'slotOf'
+
+		function requireHeld(thread SampledThread) throws SamplerError
+			match self.slotOf(thread) 'held'
+				none then throw SamplerError.unknownThread
+				at then return
+			end 'held'
+		end 'requireHeld'
+
+		public function release(thread SampledThread)
+			match self.slotOf(thread) 'held'
+				none then return
+				at(index) then self.dropThread(index)
+			end 'held'
+		end 'release'
+
+		function dropThread(index ElementIndex)
+			var dropped = try self.openThreads.remove(index) otherwise panic("SampledProcess.dropThread: index {index} came from a search of the table")
+			dropped.release()
+		end 'dropThread'
+
+		public function cycles(thread SampledThread) returns SampleCycles throws SamplerError
+			try self.requireHeld(thread)
+
+			return __Builtins.profileThreadCycles(thread.rawHandle()) as SampleCycles
+		end 'cycles'
+
+		/// Read `thread`'s registers and copy its stack into the window. Throws `unknownThread` for a
+		/// thread `threads()` did not hand out or `release` let go, and `callingThread` for the thread
+		/// making the call.
+		public function capture(thread SampledThread) returns SampleCapture throws SamplerError
+			try self.requireHeld(thread)
+
+			if thread.id == (__Builtins.profileThreadId(CurrentThreadPseudoHandle) as SampledThreadId) 'suspendsItself'
+				throw SamplerError.callingThread
+			end 'suspendsItself'
+
+			let serial = self.nextCapture()
+			let windowBytes = __Builtins.profileSample(self.process.handle() as RegisterWord, thread.rawHandle(), self.scratch.addressOf(SampleContextSlot), self.scratch.addressOf(SampleRegionSlot), self.window.addressOf(0), SampleWindowBytes)
+
+			if windowBytes == ProfileSampleThreadGone 'exited'
+				return SampleCapture.threadGone
+			end 'exited'
+
+			let allocationBase = self.scratch.word(SampleRegionAllocationBaseSlot)
+			let suspendedCycles = self.scratch.word(SampleRegionSuspendedCyclesSlot)
+
+			if windowBytes == ProfileSampleNoRegisters 'nothingToRead'
+				return SampleCapture.unreadable(allocationBase, suspendedCycles: suspendedCycles)
+			end 'nothingToRead'
+
+			let copiedStack = StackWindow.over(self.window.readHandle(), copied: windowBytes as RegisterWord, serial: serial, captures: self.captures)
+
+			return SampleCapture.captured(SampledStack.of(self.scratch.word(SampleContextRipSlot), framePointer: self.scratch.word(SampleContextRbpSlot), stackPointer: self.scratch.word(SampleContextRspSlot), allocationBase: allocationBase, suspendedCycles: suspendedCycles, window: copiedStack))
+		end 'capture'
+
+		function nextCapture() returns CaptureSerial
+			let next = self.captures.current() + 1
+			self.captures.publish(next)
+
+			return next
+		end 'nextCapture'
+
+		public function modules() returns SampledModuleArray throws SamplerError
+			var attempt = 0
+
+			while attempt < ModuleSnapshotAttempts 'retry'
+				attempt = attempt + 1
+				let snapshot = __Builtins.profileModuleSnapshot(self.pid) as RegisterWord
+
+				if snapshot == InvalidHandle or snapshot == 0 'notYet'
+					sleep(ModuleSnapshotRetryMs)
+					continue
+				end 'notYet'
+
+				let walked = self.walkedModules(snapshot)
+				__Builtins.profileClose(snapshot)
+
+				return walked
+			end 'retry'
+
+			throw SamplerError.moduleListUnavailable
+		end 'modules'
+
+		function walkedModules(snapshot RegisterWord) returns SampledModuleArray
+			var modules = SampledModuleArray.create()
+			self.scratch.setWord(ModuleEntrySizeSlot, value: ModuleEntryBytes)
+			var more = __Builtins.profileModuleFirst(snapshot, self.scratch.addressOf(SampleModuleEntrySlot))
+
+			while more != 0 'eachModule'
+				let base = self.scratch.word(ModuleEntryBaseSlot)
+				modules.push(SampledModule.spanning(base, limit: base + (self.scratch.word(ModuleEntryExtentSlot) and u32.max), name: self.moduleName()))
+				more = __Builtins.profileModuleNext(snapshot, self.scratch.addressOf(SampleModuleEntrySlot))
+			end 'eachModule'
+
+			return modules
+		end 'walkedModules'
+
+		function moduleName() returns String
+			var name = ByteArray.create()
+			var offset = ModuleEntryNameOffset
+
+			while offset < ModuleEntryBytes 'eachWord'
+				let packed = self.scratch.word((SampleModuleEntrySlot + offset) as ScratchOffset)
+
+				for unit in 0 upto Utf16UnitsPerWord 'eachUnit'
+					let code = (packed shr ((unit * Utf16UnitBits) as UnitShift)) and Utf16UnitMask
+
+					if code == 0 'endOfName'
+						return String.from(name)
+					end 'endOfName'
+
+					name.push((code if code < AsciiCeiling else NonAsciiPlaceholder) as Byte)
+				end 'eachUnit'
+
+				offset = offset + sizeof(RegisterWord)
+			end 'eachWord'
+
+			return String.from(name)
+		end 'moduleName'
+
+		public function clone() returns Self
+			panic("SampledProcess.clone: a sampled process owns the handles of one process and one table of the threads opened on it, which a second copy could neither share nor close — hold it in one place")
+		end 'clone'
+
+		public function close()
+			for thread in self.openThreads 'eachThread'
+				thread.release()
+			end 'eachThread'
+
+			self.openThreads.clear()
+			self.process.release()
+			self.scratch.release()
+			self.window.release()
+		end 'close'
+	end 'SampledProcess'
+
+	public typealias SampledModuleArray = Array with SampledModule
+
+	/// A periodic timer: each `wait()` blocks until `interval` past the previous deadline, at 100 ns
+	/// resolution. `wait()` after `close()` panics.
+	public type SampleTimer
+		var timer as __ManagedHandle
+		let stepTicks as RegisterWord
+		var deadline as RegisterWord
+
+		public static function create(interval SampleIntervalNanos) returns SampleTimer throws SamplerError
+			let timer = __ManagedHandle.timer()
+
+			if timer.handle() == 0 'noTimer'
+				throw SamplerError.noTimer
+			end 'noTimer'
+
+			let ticks = (interval / NanosPerFileTimeTick) as RegisterWord
+			let step = ticks if ticks > 0 else 1
+
+			return Self{timer: timer, stepTicks: step, deadline: (__Builtins.profileNowFileTime() as RegisterWord) + step}
+		end 'create'
+
+		public function wait()
+			let handle = self.timer.handle() as RegisterWord
+
+			if handle == 0 'closed'
+				panic("SampleTimer.wait: the timer was closed")
+			end 'closed'
+
+			self.deadline = self.deadline + self.stepTicks
+			__Builtins.profileTimerWait(handle, self.deadline)
+		end 'wait'
+
+		public function close()
+			self.timer.release()
+		end 'close'
+	end 'SampleTimer'
+#endif

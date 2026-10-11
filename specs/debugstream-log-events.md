@@ -48,10 +48,10 @@ compilation the event belongs to, so N interleaved emitters can be demuxed back 
 `cat` and `lvl` are raw bytes whose meaning belongs to the emitting program's own enums; the monitor
 prints them as numbers and deliberately does not know what they mean.
 
-### `text` takes the message's BYTES, not a String
+### `text` takes the message as a `String`
 
-The message argument is a `__ManagedMemory` — the buffer a `String`'s `toByteArray()` hands back —
-and it is BORROWED: the entry copies the bytes into the ring and never takes ownership. A message
+The message argument is a `String`, and it is BORROWED: the entry copies the String's UTF-8 bytes
+into the ring and never takes ownership. A message
 longer than one ring entry can carry is TRUNCATED rather than torn across two entries.
 
 ### Every argument is POSITIONAL
@@ -75,8 +75,7 @@ function main() returns ExitCode
 	__DebugStream.phaseBegin(phase, 7)
 	__DebugStream.event(ev, 1, 2, 7, 100, 200)
 	let msg = "hello ring"
-	let bytes = msg.toByteArray()
-	__DebugStream.text(1, 2, 7, bytes.managed)
+	__DebugStream.text(1, 2, 7, msg)
 	__DebugStream.phaseEnd(phase, 7)
 	print("enabled={__DebugStream.enabled()}\n")
 	return 0
@@ -107,8 +106,7 @@ function main() returns ExitCode
 	__DebugStream.phaseBegin(phase, 7)
 	__DebugStream.event(ev, 1, 2, 7, 100, 200)
 	let msg = "hello ring"
-	let bytes = msg.toByteArray()
-	__DebugStream.text(3, 4, 7, bytes.managed)
+	__DebugStream.text(3, 4, 7, msg)
 	__DebugStream.phaseEnd(phase, 7)
 	return 0
 end 'main'
@@ -142,7 +140,7 @@ the process dying while writing the entry. A run that survives to emit all three
 its `async` is the whole property.
 ```maxon
 function work(n Integer) returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	return n * 2
 end 'work'
 
@@ -241,17 +239,17 @@ end 'main'
 error E3005: <fragment>:3:16: '__DebugStream.phaseBegin' requires a int, but its argument is String
 ```
 
-<!-- test: debugstream-log-events.error.text-wants-the-bytes -->
-`text`'s message slot takes the `__ManagedMemory` a `toByteArray()` hands back. A `String` is not it:
-the entry copies raw bytes and has no String record to read them out of.
+<!-- test: debugstream-log-events.error.text-wants-a-string -->
+`text`'s message slot takes a `String`. A `ByteArray` is not it: the entry reads the bytes out of a
+String record, and an array record has a different layout.
 ```maxon
 function main() returns ExitCode
-	__DebugStream.text(1, 2, 7, "hello")
+	__DebugStream.text(1, 2, 7, "hello".toByteArray())
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:16: '__DebugStream.text' requires a __ManagedMemory, but its argument is String
+error E3005: <fragment>:3:16: '__DebugStream.text' requires a String, but its argument is ByteArray
 ```
 
 <!-- test: debugstream-log-events.error.an-emitting-member-answers-nothing -->

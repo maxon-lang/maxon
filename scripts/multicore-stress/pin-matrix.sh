@@ -104,7 +104,7 @@
 # fabrication. Both new constants carry the argument at their own `let`.
 #
 # THE FAILURE. `service-torture` sent 4,800 messages and read
-# `schedMaxActiveWorkers()` inside about 40 ms, which is a race against the OS thread
+# `Scheduler.counters().maxActiveWorkers` inside about 40 ms, which is a race against the OS thread
 # `__sched_wake_or_spawn` created ever reaching its first instruction. Win that race
 # and the row reads `workers=1 steals=0` — failing BOTH halves of assertion 4, not
 # passing by one. It is not a wrong answer: the `aggregate` was byte-identical across
@@ -126,14 +126,14 @@
 #
 # ⚠⚠ EVERY CELL ABOVE IS A READING OF THE *SAMPLED* SHAPE, WHICH THESE PROGRAMS DO NOT
 # HAVE. It was taken with `main` publishing its messages and reading
-# `schedMaxActiveWorkers()` straight away, so a K=16 cell is the OS declining to give
+# `Scheduler.counters().maxActiveWorkers` straight away, so a K=16 cell is the OS declining to give
 # the worker M a timeslice inside a ~40 ms window. The table is kept because it is what
 # motivated the wait and it has not been re-run against it; re-measuring the four cells
 # under `yes > /dev/null` x K for K in {0,4,8,16} is the outstanding reading.
 #
-# ⭐⭐ THE SHAPE IS BLOCKING. `main` waits on `schedMaxActiveWorkers() >= 2` with a
+# ⭐⭐ THE SHAPE IS BLOCKING. `main` waits on `Scheduler.counters().maxActiveWorkers >= 2` with a
 # bounded budget (`worker-arrival.maxon`), short-circuits when
-# `__Builtins.schedProcessorCount()` resolves to one — the row where the wait must not
+# `Scheduler.processorCount()` resolves to one — the row where the wait must not
 # happen — and reports expiry as `workerwait=timeout`. So a starved box is a NAMED
 # timeout in its own column rather than a `workers=1` reading indistinguishable from the
 # coroutine pin, and this script fails such a row instead of quietly passing it.
@@ -216,7 +216,7 @@
 # twelve services and `service-fanin-torture` moves 4,800 the other way — in both,
 # a record allocated on the M that built it is RELEASED on whichever M ran its
 # receiver, which is the remote-free push these two were written for. Both now READ that
-# push directly — `__Builtins.slabRemoteFreeCount()`, printed as `remoteFrees=` and
+# push directly — `HeapStats.slab().remoteFrees`, printed as `remoteFrees=` and
 # asserted by `validate.sh` — so a green run of the two service rows is a cross-P
 # allocation reading rather than a program that merely happens to produce one.
 #

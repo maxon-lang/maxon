@@ -63,115 +63,109 @@ end 'cacheReadFuncIndexArray'
 
 // @generated library-cache end
 
-// The result-value of a Maxon op: `value(id)` for an op that DEFINES an SSA value
-// (`literal`/`binOp`/`unaryOp`/`compare`/`call`), `none` for one that defines none
-// (`ret`/`retVoid`/`condBranch`/`branch` — they USE or branch, never produce a value).
-// A UNION, not a sentinel `ValueId`: `ValueId` has no "absent" member, and a sentinel is
-// exactly what the project forbids (No sentinel return values).
-export union MaxonOpResult
-	none
-	value(id ValueId)
-end 'MaxonOpResult'
-
 // The result-value an op defines, EXHAUSTIVE over every `MaxonOp` (no bare `default`),
 // so a new op variant is a COMPILE error here — it cannot slip into the IR minting a
 // value with no recorded origin. The value-producing arms return their `result` field;
-// the branch/return arms return `none`.
-export function maxonOpResultValue(op MaxonOp) returns MaxonOpResult
-	return match op 'result'
-		call(result, _, _, _, _, _, _, _) gives MaxonOpResult.value(result)
-		literal(result, _, _) gives MaxonOpResult.value(result)
+// the branch/return arms throw `AbsentError.absent`.
+export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentError
+	match op 'result'
+		call(result, _, _, _, _, _, _, _) then return result
+		literal(result, _, _) then return result
 		ret or
-		retVoid gives MaxonOpResult.none
-		binOp(result, _, _, _) gives MaxonOpResult.value(result)
-		unaryOp(result, _, _) gives MaxonOpResult.value(result)
-		compare(result, _, _, _, _) gives MaxonOpResult.value(result)
+		retVoid then throw AbsentError.absent
+		binOp(result, _, _, _) then return result
+		unaryOp(result, _, _) then return result
+		compare(result, _, _, _, _) then return result
 		condBranch or
-		branch gives MaxonOpResult.none
+		branch then throw AbsentError.absent
 
 		// The varAccess band: an address and a load DEFINE a value; a store is a statement and
 		// defines none — the same split `ret`/`retVoid` sit on either side of.
-		globalAddr(result, _) gives MaxonOpResult.value(result)
-		loadIndirect(result, _, _, _) gives MaxonOpResult.value(result)
-		storeIndirect gives MaxonOpResult.none
+		globalAddr(result, _) then return result
+		loadIndirect(result, _, _, _) then return result
+		storeIndirect then throw AbsentError.absent
 
 		// A string literal DEFINES a value — the `.rdata` record's address.
-		stringLiteral(result, _) gives MaxonOpResult.value(result)
+		stringLiteral(result, _) then return result
 
 		// A throwing call DEFINES its primary result (its error-flag second result is compiler-synthetic
 		// and needs no source origin); the throw/propagate terminators and `panicAbort` define none.
-		tryCall(result, _, _, _, _, _, _, _, _) gives MaxonOpResult.value(result)
+		tryCall(result, _, _, _, _, _, _, _, _) then return result
 		throwError or
 		propagateError or
-		panicAbort gives MaxonOpResult.none
+		panicAbort then throw AbsentError.absent
 
 		// A `functionRef` DEFINES its result (an address, like `literal`); an `indirectCall`
 		// DEFINES its result (the call's return value, like `call`).
-		functionRef(result, _, _) gives MaxonOpResult.value(result)
-		indirectCall(result, _, _) gives MaxonOpResult.value(result)
+		functionRef(result, _, _) then return result
+		indirectCall(result, _, _) then return result
 
 		// An async spawn DEFINES its promise handle; an await DEFINES its awaited scalar.
-		asyncCall(result, _, _, _, _, _, _) gives MaxonOpResult.value(result)
-		await (result, _) gives MaxonOpResult.value(result)
+		asyncCall(result, _, _, _, _, _, _) then return result
+		await (result, _) then return result
 
 		// A throwing await DEFINES its primary result (its error-flag second result is
 		// compiler-synthetic and needs no source origin), exactly as `tryCall` does.
-		tryAwait(result, _, _) gives MaxonOpResult.value(result)
+		tryAwait(result, _, _) then return result
 
 		// `sizeof(T)` DEFINES its result (the type's byte size), so it carries a source origin like
 		// any other value-producing op — the register-pressure diagnostic maps its ValueId back through this.
-		sizeofType(result, _) gives MaxonOpResult.value(result)
+		sizeofType(result, _) then return result
 
 		// A `b"…"` byte-string literal DEFINES a value — the owned Array record's pointer.
-		constArrayLiteral(result, _, _, _) gives MaxonOpResult.value(result)
+		constArrayLiteral(result, _, _, _) then return result
 
 		// The dense-match jump table is a terminator — it branches, defining no value, like `condBranch`/`branch`.
-		switch gives MaxonOpResult.none
+		switch then throw AbsentError.absent
 
 		// A witness dispatch DEFINES its result (the dispatched method's return value), so it carries a source
 		// origin like any other value-producing call.
-		witnessDispatch(result, _, _, _, _, _, _) gives MaxonOpResult.value(result)
+		witnessDispatch(result, _, _, _, _, _, _) then return result
 
 		// A throwing witness dispatch's PRIMARY result is its origin-bearing value, exactly as a `tryCall`'s
 		// is; its error flag is compiler-synthetic and needs no source origin.
-		witnessTryDispatch(result, _, _, _, _, _, _) gives MaxonOpResult.value(result)
+		witnessTryDispatch(result, _, _, _, _, _, _) then return result
 
 		// A rendered panic defines nothing, exactly as `panicAbort` does — it aborts.
-		panicAbortValue gives MaxonOpResult.none
+		panicAbortValue then throw AbsentError.absent
 
 		// The error-flag encode DEFINES the flag a routed bare `throw` hands its block handler — a value
 		// like any other arithmetic result, and the routed edge names it.
-		errorFlagEncode(result, _, _) gives MaxonOpResult.value(result)
+		errorFlagEncode(result, _, _) then return result
 
 		// A `spawn` DEFINES the mailbox pointer the parser stores into the handle box.
-		serviceSpawn(result, _, _) gives MaxonOpResult.value(result)
+		serviceSpawn(result, _, _) then return result
 
 		// A SEND defines a VOID result — a service message is fire-and-forget, so there is no reply for that slot
 		// to carry, and it exists for the reason a void `call`'s does: every op in this dialect that a statement
 		// can be names its result.
-		serviceSend(result, _, _, _) gives MaxonOpResult.value(result)
+		serviceSend(result, _, _, _) then return result
 
 		// ⭐ A REPLY CELL defines the PROMISE an awaitable send hands back — a value the parser binds,
 		// slots into the request box and awaits, so it needs an origin exactly as every other one does.
-		serviceReplyCell(result, _, _) gives MaxonOpResult.value(result)
-		immortalStructRecord(result, _, _) gives MaxonOpResult.value(result)
-		immortalStringTable(result, _, _, _) gives MaxonOpResult.value(result)
+		serviceReplyCell(result, _, _) then return result
+		immortalStructRecord(result, _, _) then return result
+		immortalStringTable(result, _, _, _) then return result
 
 		// A coverage counter is a statement, not an expression — it defines no value, like `storeIndirect`.
-		covPoint gives MaxonOpResult.none
+		covPoint then throw AbsentError.absent
 
 		// A raw intrinsic DEFINES its result for the reason a void `call`'s does: every op in this dialect a
 		// statement can be names its result, and a void row's is simply never read.
-		rawIntrinsic(result, _, _, _) gives MaxonOpResult.value(result)
+		rawIntrinsic(result, _, _, _) then return result
 
 		// The witness half a widening store writes is a value the parser pairs with the conformer.
-		existentialWitness(result, _, _) gives MaxonOpResult.value(result)
-	end 'result'
-end 'maxonOpResultValue'
+		existentialWitness(result, _, _) then return result
 
-// The SSA values an op READS, replacing `into`'s contents — `maxonOpResultValue`'s other half, and exhaustive
-// for its reason: an analysis that must not miss a use (`StorageProvenance`) asks here, so a new op fails to
-// compile until it is listed.
+		// A hold marker DEFINES the value its end releases, and its end defines the void result a drop names.
+		holdValue(result, _, _, _, _) then return result
+		holdEnd(result, _, _, _, _) then return result
+	end 'result'
+end 'maxonOpDefinedValue'
+
+// The SSA values an op READS, replacing `into`'s contents — `maxonOpDefinedValue`'s other half, and
+// exhaustive for its reason: an analysis that must not miss a use (`StorageProvenance`) asks here,
+// so a new op fails to compile until it is listed.
 export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
 	into.clear()
 
@@ -203,6 +197,8 @@ export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
 		errorFlagEncode(_, errorValue, _) then into.push(errorValue)
 		serviceSpawn(_, _, state) then into.push(state)
 		existentialWitness(_, _, conformer) then into.push(conformer)
+		holdValue(_, held, _, args, _) then appendValuesAndOne(into, values: args, one: held)
+		holdEnd(_, held, _, args, _) then appendValuesAndOne(into, values: args, one: held)
 		literal or
 		retVoid or
 		branch or
@@ -691,10 +687,10 @@ export type ValueOriginTable
 	// once, so the first match is authoritative". The second row would win or lose by table order, and the
 	// symptom would be an E5001 naming the wrong source line rather than anything that fails.
 	//
-	// ⚠ **A PARAMETER IS NOT "MINTED BY NO OP", SO SKIPPING IS THE ONLY SOUND ARM — A PANIC HERE FIRES ON
-	// ORDINARY PROGRAMS.** MEASURED: function 564 of the `sha256` program and function 412 of the
+	// ⚠ **A PARAMETER IS NOT "MINTED BY NO OP", SO SKIPPING IS THE ONLY SOUND ARM — A PANIC HERE FIRES
+	// ON ORDINARY PROGRAMS.** MEASURED: function 564 of the `sha256` program and function 412 of the
 	// `stdlib-loading` program each carry an op-origin row for value 1, inside their parameter ids.
-	// `maxonOpResultValue` admits any value-producing Maxon op, and the parser files one for some
+	// `maxonOpDefinedValue` admits any value-producing Maxon op, and the parser files one for some
 	// parameters (which producer is not identified here — `ParamOriginTable` also holds them, so
 	// `lookup`'s first match already decides between the two rows for a parameter). What this function
 	// owes is only to add no THIRD row: the value the parameter maps to at the splice is the caller's

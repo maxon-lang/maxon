@@ -137,7 +137,7 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __str_rec_31]  ; "a/b.txt"
+    x64.leaRegRdata rcx, [rip + __str_rec_37]  ; "a/b.txt"
   __il_body#5:
     x64.callDirect FilePath.create
     x64.movRegReg rbx, r8
@@ -211,7 +211,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#29
   tryerr#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_54]  ; "panic at FilePath.maxon:342: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_64]  ; "panic at FilePath.maxon:342: FilePath.filename: slice \xe2\x80\x94 sepPlusOne from lastSepPlusOne, always <= len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -240,7 +240,7 @@ func @main {
     x64.cmpRegImm32 r13, 1
     x64.jcc above, ifcont#12
   tooShort:
-    x64.leaRegRdata rcx, [rip + __str_rec_55]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_65]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
@@ -279,7 +279,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#17
   tryerr#18:
-    x64.leaRegRdata rcx, [rip + __str_blob_56]  ; "panic at FilePath.maxon:367: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_66]  ; "panic at FilePath.maxon:367: FilePath.fileExtension: slice \xe2\x80\x94 i from backwards scan, always <= nameLen\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -312,7 +312,7 @@ func @main {
     x64.cmpRegImm32 rax, 1
     x64.jcc above, scan#14
   whileexit#15:
-    x64.leaRegRdata rcx, [rip + __str_rec_55]  ; ""
+    x64.leaRegRdata rcx, [rip + __str_rec_65]  ; ""
     x64.callDirect __str_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r14
@@ -321,7 +321,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __str_decref
   __il_cont#8:
-    x64.leaRegRdata rdx, [rip + __str_rec_32]  ; ".txt"
+    x64.leaRegRdata rdx, [rip + __str_rec_38]  ; ".txt"
     x64.movRegReg rcx, r13
     x64.callDirect __str_eq
     x64.movRegReg r12, r8
@@ -356,7 +356,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryerr#7:
-    x64.leaRegRdata rcx, [rip + __str_blob_43]  ; "panic at FilePath.maxon:46: FilePath: invalid path\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_53]  ; "panic at FilePath.maxon:46: FilePath: invalid path\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -368,7 +368,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#42:
-    x64.leaRegRdata rcx, [rip + __str_blob_133]  ; "panic at FilePath.maxon:324: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_146]  ; "panic at FilePath.maxon:324: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -380,7 +380,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#44:
-    x64.leaRegRdata rcx, [rip + __str_blob_134]  ; "panic at FilePath.maxon:325: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_147]  ; "panic at FilePath.maxon:325: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -392,7 +392,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic#24:
-    x64.leaRegRdata rcx, [rip + __str_blob_135]  ; "panic at FilePath.maxon:365: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_148]  ; "panic at FilePath.maxon:365: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -1549,7 +1549,7 @@ func @__slab_alloc {
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, state#5
-  critsplit#43:
+  critsplit#31:
     x64.movRegReg r8, rax
   state#6:
     x64.loadRegBaseDisp.word64 rax, [r8 + 24]
@@ -1558,7 +1558,7 @@ func @__slab_alloc {
     x64.leaRegRegImm32 r12, r8, 138720
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, shard#13
-  critsplit#44:
+  critsplit#32:
     x64.movRegReg rax, r12
     x64.jmp shard#7
   shard#13:
@@ -1575,17 +1575,17 @@ func @__slab_alloc {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, shard#15
   shard#14:
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 256]
-    x64.aluBaseDispImm32.add [rdi + 304], 1
-    x64.aluBaseDispReg.add [rdi + 320], rcx
+    x64.loadRegBaseDisp.word64 rdi, [rdi + 264]
+    x64.aluBaseDispImm32.add [rdi + 312], 1
+    x64.aluBaseDispReg.add [rdi + 328], rcx
   shard#15:
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.cmpRegImm32 r13, 0
     x64.setccReg equal, rdi
-    x64.leaRegRegImm32 r14, rax, 584
+    x64.leaRegRegImm32 r14, rax, 592
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, shard#11
-  critsplit#47:
+  critsplit#35:
     x64.movRegReg r13, rdx
     x64.jmp shard#8
   shard#11:
@@ -1687,59 +1687,7 @@ func @__slab_alloc {
     x64.popReg rbp
     x64.ret
   osdirect:
-    x64.leaRegGlobal rax, __slab_state
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, critsplit#50
-  state#31:
-    x64.storeSlotReg slot0, rcx
-    x64.callDirect __slab_state_base
-    x64.loadRegSlot rcx, slot0
-    x64.jmp state#32
-  critsplit#50:
-    x64.movRegReg r8, rax
-  state#32:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 24]
-    x64.leaRegRegImm32 rdx, r8, 152152
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, shard#33
-  shard#39:
-    x64.mov rax, gs:[rax]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, shard#34
-  shard#35:
-    x64.loadRegBaseDisp.word64 rsi, [rax + 8]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, shard#41
-  shard#40:
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 256]
-    x64.aluBaseDispImm32.add [rsi + 304], 1
-    x64.aluBaseDispReg.add [rsi + 320], rcx
-  shard#41:
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, shard#34
-  shard#37:
-    x64.loadRegBaseDisp.word64 rax, [rax + 32]
-    x64.cmpRegImm32 rax, 255
-    x64.jcc less, shard#38
-  shard#34:
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rsi, rdx, 24
-    x64.lock add [rsi], rax
-    x64.leaRegRegImm32 rax, rdx, 40
-    x64.lock add [rax], rcx
-    x64.jmp oscall
-  shard#38:
-    x64.imulRegRegImm32 rax, rax, 48
-    x64.leaRegRegImm32 rdx, r8, 139912
-    x64.leaRegRegReg rax, rdx, rax
-    x64.movRegReg rdx, rax
-  shard#33:
-    x64.aluBaseDispImm32.add [rdx + 24], 1
-    x64.aluBaseDispReg.add [rdx + 40], rcx
-  oscall:
-    x64.callDirect __slab_os_direct_alloc
+    x64.callDirect __slab_alloc_oversize
     x64.epilogue 80
     x64.popReg r14
     x64.popReg r13
@@ -1764,13 +1712,10 @@ func @__slab_alloc {
     x64.loadRegSlot r8, slot3
     x64.jmp pop#18
   pop#22:
-    x64.leaRegRdata rdx, [rip + __abort_msg_86]  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
-    x64.movRegImm32 r8, 60
-    x64.movRegImm32 rcx, 4294967284
-    x64.callDirect mrt_write_stream
-    x64.movRegImm32 rcx, 86
-    x64.movReg32Reg32 rcx, rcx
-    x64.iatCall 0
+    x64.leaRegRdata rcx, [rip + __abort_msg_86]  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
+    x64.movRegImm32 rdx, 60
+    x64.movRegImm32 rax, 86
+    x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
     x64.epilogue 80
     x64.popReg r14
@@ -1854,8 +1799,8 @@ func @__slab_free {
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, shard#15
   shard#14:
-    x64.loadRegBaseDisp.word64 r8, [r8 + 256]
-    x64.aluBaseDispImm32.add [r8 + 312], 1
+    x64.loadRegBaseDisp.word64 r8, [r8 + 264]
+    x64.aluBaseDispImm32.add [r8 + 320], 1
   shard#15:
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.cmpRegImm32 rdi, 0
@@ -1934,46 +1879,8 @@ func @__slab_free {
     x64.popReg rbp
     x64.ret
   osdirect:
-    x64.leaRegGlobal rax, __slab_state
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rax + 24]
-    x64.leaRegRegImm32 rdx, rax, 152152
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#42
-  shard#48:
-    x64.mov rcx, gs:[rcx]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#43
-  shard#44:
-    x64.loadRegBaseDisp.word64 rsi, [rcx + 8]
-    x64.cmpRegImm32 rsi, 0
-    x64.jcc equal, shard#50
-  shard#49:
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 256]
-    x64.aluBaseDispImm32.add [rsi + 312], 1
-  shard#50:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#43
-  shard#46:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 32]
-    x64.cmpRegImm32 rcx, 255
-    x64.jcc less, shard#47
-  shard#43:
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rcx, rdx, 32
-    x64.lock add [rcx], rax
-    x64.jmp oscall
-  shard#47:
-    x64.imulRegRegImm32 rcx, rcx, 48
-    x64.leaRegRegImm32 rax, rax, 139912
-    x64.leaRegRegReg rax, rax, rcx
-    x64.movRegReg rdx, rax
-  shard#42:
-    x64.aluBaseDispImm32.add [rdx + 32], 1
-  oscall:
     x64.movRegReg rcx, rbx
-    x64.callDirect __slab_os_direct_free
+    x64.callDirect __slab_free_oversize
     x64.movRegReg rax, r8
     x64.epilogue 80
     x64.popReg r12
@@ -1992,7 +1899,7 @@ func @__slab_free {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, rawlocked#26
   rawlocked#27:
-    x64.leaRegRegImm32 rsi, rdi, 584
+    x64.leaRegRegImm32 rsi, rdi, 592
   rawlocked#26:
     x64.movRegImm32 rdi, 1
     x64.lock add [rsi], rdi
@@ -2046,7 +1953,7 @@ func @__slab_free {
     x64.cmpRegImm32 rdi, 0
     x64.jcc equal, relist#33
   relist#34:
-    x64.leaRegRegImm32 rsi, rdi, 584
+    x64.leaRegRegImm32 rsi, rdi, 592
   relist#33:
     x64.movRegImm32 rdi, 1
     x64.lock add [rsi], rdi
@@ -2096,13 +2003,11 @@ func @__slab_free {
     x64.popReg rbp
     x64.ret
   parked:
-    x64.leaRegRdata rdx, [rip + __abort_msg_89]  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
-    x64.movRegImm32 r8, 53
-    x64.movRegImm32 rcx, 4294967284
-    x64.callDirect mrt_write_stream
-    x64.movRegImm32 rcx, 89
-    x64.movReg32Reg32 rcx, rcx
-    x64.iatCall 0
+    x64.leaRegRdata rcx, [rip + __abort_msg_89]  ; "fatal error: runtime abort 89 (slabFreeOfParkedSpan)\x0a"
+    x64.movRegImm32 rdx, 53
+    x64.movRegImm32 rax, 89
+    x64.callDirect __rt_abort
+    x64.movRegReg rax, r8
     x64.epilogue 80
     x64.popReg r12
     x64.popReg rbx
@@ -5581,10 +5486,10 @@ func @main {
 
 chunk @mrt_panic {
     0000: 55 48 89 e5 48 83 ec 20 e8 00 00 00 00 48 8d 0d
-    0010: 27 00 00 00 e8 00 00 00 00 48 89 e9 48 89 ea 41
+    0010: 28 00 00 00 e8 00 00 00 00 48 89 e9 48 89 ea 41
     0020: b8 64 00 00 00 e8 00 00 00 00 b9 01 00 00 00 ff
-    0030: 15 00 00 00 00 48 83 c4 20 5d c3 53 74 61 63 6b
-    0040: 20 74 72 61 63 65 3a 0a 00
+    0030: 15 00 00 00 00 48 83 c4 20 5d c3 00 53 74 61 63
+    0040: 6b 20 74 72 61 63 65 3a 0a 00
 }
 ```
 
@@ -5668,54 +5573,55 @@ data {
   __gt_seed_sum_seen@144 = i64 0
   __gt_seed_count_seen@152 = i64 0
   __gt_keeps_cpu_clock@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_async_preempt_off@216 = i64 0
-  __sched_midle@224 = i64 0
-  __sched_pidle@232 = i64 0
-  __gt_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __sched_npidle@272 = i64 0
-  __sched_runq_size@280 = i64 0
-  __sched_global_pushes@288 = i64 0
-  __sched_timer_scan_steps@296 = i64 0
-  __sched_mcount@304 = i64 0
-  __sched_nmidle@312 = i64 0
-  __sched_main_m@320 = i64 0
-  __sched_phase@328 = i64 0
-  __sched_lastpoll@336 = i64 0
-  __sched_poll_until@344 = i64 0
-  __sched_regain_head@352 = i64 0
-  __np_poller@360 = i64 0
-  __np_break@368 = i64 0
-  __np_wake_sig@376 = i64 0
-  __np_pd_table@384 = i64 0
-  __np_pd_cap@392 = i64 0
-  __np_waiters@400 = i64 0
-  __sched_num_procs@408 = i64 0
-  __sched_shutdown_flag@416 = i64 0
-  __sched_lock@424 = i64 0
-  __sched_lock_depth_sink@432 = i64 0
-  __sched_nmspinning@440 = i64 0
-  __sched_needspinning@448 = i64 0
-  __sched_sysmon_event@456 = i64 0
-  __sched_sysmon_wait@464 = i64 0
-  __sched_timer_starts@472 = i64 0
-  __sched_preempt_ext_lock@480 = i64 0
-  __sched_preempt_context@488 = i64 0
-  __slab_arena_list@496 = i64 0
-  __slab_arena_map_l1@504 = i64 0
-  __slab_state@512 = i64 0
-  __mrt_console_probe_stdin@520 = i8 0
-  __mrt_console_probe_stdout@521 = i8 0
-  __mrt_console_probe_stderr@522 = i8 0
-  __mrt_program_started@523 = i8 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __sched_preempt_ext_lock@488 = i64 0
+  __sched_preempt_context@496 = i64 0
+  __slab_arena_list@504 = i64 0
+  __slab_arena_map_l1@512 = i64 0
+  __slab_state@520 = i64 0
+  __mrt_console_probe_stdin@528 = i8 0
+  __mrt_console_probe_stdout@529 = i8 0
+  __mrt_console_probe_stderr@530 = i8 0
+  __mrt_program_started@531 = i8 0
 }
 
 func @deepRecurse {
@@ -5757,7 +5663,7 @@ func @main {
     x64.leaRegFunc rcx, [rip + deepRecurse]
     x64.callDirect __gt_spawn
     x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 200], rbx
+    x64.storeBaseDispReg.word64 [r12 + 208], rbx
     x64.movRegReg rcx, r12
     x64.callDirect __gt_ready
     x64.movRegReg rcx, r12
@@ -5791,25 +5697,25 @@ chunk @__gt_morestack {
     0020: 44 24 20 f2 0f 11 4c 24 28 f2 0f 11 54 24 30 f2
     0030: 0f 11 5c 24 38 f2 0f 11 64 24 40 f2 0f 11 6c 24
     0040: 48 4c 89 db 65 4c 89 14 25 08 00 00 00 49 81 ea
-    0050: 00 00 01 00 65 4c 89 14 25 10 00 00 00 4c 8b 63
-    0060: 18 4c 8b 6b 20 4d 89 e7 4d 01 ef 4d 29 c7 49 81
-    0070: c7 a0 13 00 00 4d 89 ee 4d 01 f6 49 81 fe 00 00
-    0080: 00 40 0f 87 c9 00 00 00 4d 39 fe 0f 82 e7 ff ff
-    0090: ff 48 31 c9 4c 89 f2 41 b8 00 30 00 00 41 b9 04
-    00a0: 00 00 00 ff 15 00 00 00 00 48 85 c0 0f 8e b8 00
-    00b0: 00 00 49 89 c7 48 8b 8c 24 b8 00 00 00 48 89 0b
-    00c0: 48 89 6b 08 48 89 d9 4c 89 fa 4c 89 f0 e8 00 00
-    00d0: 00 00 b9 03 00 00 00 48 89 8b 80 01 00 00 48 8b
-    00e0: 4b 08 48 89 8c 24 b0 00 00 00 48 8b 8b 90 00 00
-    00f0: 00 65 48 89 0c 25 08 00 00 00 48 8b 8b 98 00 00
-    0100: 00 65 48 89 0c 25 10 00 00 00 4c 8b 13 f2 0f 10
-    0110: 44 24 20 f2 0f 10 4c 24 28 f2 0f 10 54 24 30 f2
-    0120: 0f 10 5c 24 38 f2 0f 10 64 24 40 f2 0f 10 6c 24
-    0130: 48 48 83 c4 58 5f 5e 41 59 58 5a 59 41 5f 41 5e
-    0140: 41 5d 41 5c 5b 5d 48 81 c4 08 00 00 00 4c 89 d4
-    0150: c3 48 8b 84 24 b8 00 00 00 48 8b 08 48 89 28 48
-    0160: 89 c2 49 89 c0 e8 00 00 00 00 b9 63 00 00 00 e8
-    0170: 00 00 00 00
+    0050: 00 00 01 00 65 4c 89 14 25 10 00 00 00 65 4c 89
+    0060: 14 25 78 14 00 00 4c 8b 63 18 4c 8b 6b 20 4d 89
+    0070: e7 4d 01 ef 4d 29 c7 49 81 c7 a0 13 00 00 4d 89
+    0080: ee 4d 01 f6 49 81 fe 00 00 00 40 0f 87 c9 00 00
+    0090: 00 4d 39 fe 0f 82 e7 ff ff ff 4c 89 f1 e8 00 00
+    00a0: 00 00 4d 85 c0 0f 8e c8 00 00 00 4d 89 c7 48 8b
+    00b0: 8c 24 b8 00 00 00 48 89 0b 48 89 6b 08 48 89 d9
+    00c0: 4c 89 fa 4c 89 f0 e8 00 00 00 00 b9 03 00 00 00
+    00d0: 48 89 8b 88 01 00 00 48 8b 4b 08 48 89 8c 24 b0
+    00e0: 00 00 00 48 8b 8b 90 00 00 00 65 48 89 0c 25 08
+    00f0: 00 00 00 48 8b 8b 98 00 00 00 65 48 89 0c 25 10
+    0100: 00 00 00 48 8b 8b c8 00 00 00 65 48 89 0c 25 78
+    0110: 14 00 00 4c 8b 13 f2 0f 10 44 24 20 f2 0f 10 4c
+    0120: 24 28 f2 0f 10 54 24 30 f2 0f 10 5c 24 38 f2 0f
+    0130: 10 64 24 40 f2 0f 10 6c 24 48 48 83 c4 58 5f 5e
+    0140: 41 59 58 5a 59 41 5f 41 5e 41 5d 41 5c 5b 5d 48
+    0150: 81 c4 08 00 00 00 4c 89 d4 c3 48 8b 84 24 b8 00
+    0160: 00 00 48 8b 08 48 89 28 48 89 c2 49 89 c0 e8 00
+    0170: 00 00 00 b9 63 00 00 00 e8 00 00 00 00
 }
 ```
 
@@ -6022,7 +5928,7 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.leaRegRdata rbx, [rip + __str_rec_8]  ; "  abc  "
+    x64.leaRegRdata rbx, [rip + __str_rec_12]  ; "  abc  "
   __il_body#7:
     x64.leaRegGlobal rax, __data_CharacterSet.cachedWhitespacesAndNewlines
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -6055,7 +5961,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_50]  ; "panic at a-library-body-named-into-the-golden.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_58]  ; "panic at a-library-body-named-into-the-golden.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -6120,7 +6026,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#35
   tryerr#36:
-    x64.leaRegRdata rcx, [rip + __str_blob_29]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_37]  ; "panic at grapheme.maxon:56: grapheme: firstByte OOB \xe2\x80\x94 caller guarantees startPos < len\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -6147,7 +6053,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#40
   tryerr#41:
-    x64.leaRegRdata rcx, [rip + __str_blob_30]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_38]  ; "panic at grapheme.maxon:63: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -6174,7 +6080,7 @@ func @String.trim {
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok#47
   tryerr#48:
-    x64.leaRegRdata rcx, [rip + __str_blob_31]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_39]  ; "panic at grapheme.maxon:75: grapheme: nextByte OOB \xe2\x80\x94 startPos+1 < len checked above\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -6605,7 +6511,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#24:
-    x64.leaRegRdata rcx, [rip + __str_blob_82]  ; "panic at String.maxon:729: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_92]  ; "panic at String.maxon:729: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -6617,7 +6523,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#131:
-    x64.leaRegRdata rcx, [rip + __str_blob_93]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_103]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -6629,7 +6535,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#134:
-    x64.leaRegRdata rcx, [rip + __str_blob_93]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_103]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'BreakProperty'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -6641,7 +6547,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#137:
-    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_104]  ; "panic at grapheme.maxon:644: Range check failed: value outside typealias 'Codepoint'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -6653,7 +6559,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#28:
-    x64.leaRegRdata rcx, [rip + __str_blob_83]  ; "panic at String.maxon:730: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_93]  ; "panic at String.maxon:730: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -6665,7 +6571,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#30:
-    x64.leaRegRdata rcx, [rip + __str_blob_84]  ; "panic at String.maxon:739: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_94]  ; "panic at String.maxon:739: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -6677,7 +6583,7 @@ func @String.trim {
     x64.popReg rbp
     x64.ret
   __rc_panic#15:
-    x64.leaRegRdata rcx, [rip + __str_blob_85]  ; "panic at String.maxon:750: Range check failed: value outside typealias 'BytePos'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_95]  ; "panic at String.maxon:750: Range check failed: value outside typealias 'BytePos'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104

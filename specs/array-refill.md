@@ -38,6 +38,11 @@ per-element loop itself; `refill` and `growFilled` are exactly that caller. The 
 the LIVE LENGTH, and `start < 0`, `count < 0` or `start + count > length` throws
 `__ManagedMemoryError.indexOutOfBounds`.
 
+`.managed` and the `__ManagedMemory` type are library-tier surface: only a source file under `stdlib/` or
+`runtime/` may name them (E3185). The cases that call `fill` directly, or read a buffer's `elementSize()`,
+therefore compile in the library tier (`<!-- tier: stdlib -->`); the `refill`/`growFilled` cases are
+ordinary programs.
+
 ## Tests
 
 <!-- test: refill-packed-bool -->
@@ -91,6 +96,7 @@ end 'main'
 ```
 
 <!-- test: refill-packed-ranged-int -->
+<!-- tier: stdlib -->
 ### refill writes every field of a 2-bit ranged-int array
 `int(0 to 3)` packs 4 elements per byte, so the same field-granular write has to hold at a width
 that is neither a byte nor a bit.
@@ -404,6 +410,7 @@ end 'main'
 ```
 
 <!-- test: fill-detaches-from-a-buffer-someone-is-viewing -->
+<!-- tier: stdlib -->
 ### the buffer fill detaches from a buffer someone is viewing
 `refill` reaches `fill` only after `resize`, which has already detached — so this calls the primitive
 DIRECTLY, which is the only program in which the fill's own copy-on-write detach is the one doing the work.
@@ -434,6 +441,7 @@ end 'main'
 ```
 
 <!-- test: fill-declines-a-managed-element-and-writes-nothing -->
+<!-- tier: stdlib -->
 ### the buffer fill declines a managed element and writes nothing
 The answer `refill` reads. A `String` element's slot holds exactly one reference, and the retain/release
 per slot is the compiler's to emit at each store — so the runtime loop refuses the range outright rather
@@ -462,6 +470,7 @@ end 'main'
 ```
 
 <!-- test: fill-refuses-a-window-past-the-live-length -->
+<!-- tier: stdlib -->
 ### the buffer fill refuses a window past the live length
 The window is `[start, start + count)` and the bound is the LIVE LENGTH, not the capacity: a fill writes
 slots a reader is entitled to read back, so a window ending above the length would publish bytes nothing
@@ -482,6 +491,7 @@ end 'main'
 ```
 
 <!-- test: fill-refuses-a-negative-start -->
+<!-- tier: stdlib -->
 ### the buffer fill refuses a negative start
 `StdCmpPred` is signed, so `start + count > length` is FALSE for a negative `start` and reads as in range —
 the address it would then compute sits BEFORE the buffer. The negative test is its own compare.
@@ -501,6 +511,7 @@ end 'main'
 ```
 
 <!-- test: fill-refuses-a-negative-count -->
+<!-- tier: stdlib -->
 ### the buffer fill refuses a negative count
 The other half of the same signed-compare hazard, and the one whose silent answer would be a LIE rather
 than a fault: `start + count` is below the length for every negative count, the loop then runs zero times,
@@ -521,6 +532,7 @@ end 'main'
 ```
 
 <!-- test: fill-refuses-a-window-whose-end-overflows -->
+<!-- tier: stdlib -->
 ### the buffer fill refuses a window whose end overflows
 The THIRD way a signed compare can read a wrong answer, and the one no negative ARGUMENT can produce:
 `start` and `count` are both non-negative here, so nothing above catches them, and `start + count` still
@@ -545,6 +557,7 @@ end 'main'
 ```
 
 <!-- test: fill-writes-only-its-own-window -->
+<!-- tier: stdlib -->
 ### the buffer fill writes only its own window
 `growFilled` reaches the primitive with a non-zero `start`, so the window's LOW end has to bind as well as
 its high one — a fill that started at 0 whatever it was asked would rewrite the prefix `growFilled` exists
@@ -572,6 +585,7 @@ end 'main'
 ```
 
 <!-- test: fill-writes-only-its-own-window-at-a-byte-stride -->
+<!-- tier: stdlib -->
 ### the buffer fill writes ONE BYTE per entry at a one-byte stride
 The stride is dispatched ONCE above the fill's loop and each width runs a loop of its own, so a BYTE
 element has an arm no word or packed case ever enters — and the ONLY way to see that arm's width from

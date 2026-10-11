@@ -187,8 +187,6 @@ function main() returns ExitCode
 	var cloned = try b.get(0) otherwise panic("no leaf")
 	cloned.label = "mutated"
 
-	// `cloned`'s last use is above: the borrow it holds on `b` has to end before `push`
-	// may grow `b` (E3070), which is why the clone is read back through a fresh `get`.
 	b.push(Leaf.create("second label long enough for a heap record", value: 20))
 
 	let kept = try a.get(0) otherwise panic("no leaf")
@@ -338,8 +336,8 @@ function main() returns ExitCode
 	var a = Ops.create()
 	a.push(Op.holds(Item.create("original label long enough for a heap record")))
 
-	let b = a.clone()
-	let bOp = try b.get(0) otherwise Op.none
+	var b = a.clone()
+	var bOp = try b.get(0) otherwise Op.none
 	match bOp 'mut'
 		holds(it) then it.rename("MUTATED")
 		none then return 3
@@ -604,7 +602,8 @@ end 'main'
 ### The clone is admitted only if EVERY conformer can be copied
 The conformer a field holds is not known until it runs, so the gate is the whole program's roster of
 conformers. One that cannot be duplicated refuses the clone at compile time, naming the field, the
-interface and the conformer that fails it.
+interface and the conformer that fails it — here `Tap`, which holds a `TcpClient`, although the only
+`Holder` the program builds holds a `Square`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -612,11 +611,23 @@ interface Shape
 	function area() returns Integer
 end 'Shape'
 
-type Tap implements Shape
-	var f as __ManagedFile
+type Square implements Shape
+	var side as Integer
 
-	static function create(f __ManagedFile) returns Self
-		return Self{f: f}
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Tap implements Shape
+	var client as TcpClient
+
+	static function create(client TcpClient) returns Self
+		return Self{client: client}
 	end 'create'
 
 	function area() returns Integer
@@ -632,14 +643,17 @@ type Holder
 	end 'create'
 end 'Holder'
 
-function main() returns ExitCode
-	let a = Holder.create(Tap.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
+function areaOfACopy(a Holder) returns ExitCode
 	let b = a.clone()
 	return b.shape.area() as ExitCode
+end 'areaOfACopy'
+
+function main() returns ExitCode
+	return areaOfACopy(Holder.create(Square.create(2)))
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:30:12: Unsupported: `clone` on `Holder`, whose field `shape` holds a `Shape` value that may be a `Tap`, which owns an OS handle (`__ManagedFile`) and cannot be duplicated
+error E2015: <fragment>:41:12: Unsupported: `clone` on `Holder`, whose field `shape` holds a `Shape` value that may be a `Tap`, which owns an OS handle (`__ManagedSocket`) and cannot be duplicated
 ```
 
 <!-- test: clone-of-a-record-holding-a-record-that-holds-an-interface-value-is-deep -->
@@ -783,11 +797,23 @@ interface Drawable extends Shape
 	function draw() returns Integer
 end 'Drawable'
 
-type Tap
-	var f as __ManagedFile
+type Square implements Shape
+	var side as Integer
 
-	static function create(f __ManagedFile) returns Self
-		return Self{f: f}
+	static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	function area() returns Integer
+		return self.side * self.side
+	end 'area'
+end 'Square'
+
+type Tap
+	var client as TcpClient
+
+	static function create(client TcpClient) returns Self
+		return Self{client: client}
 	end 'create'
 end 'Tap'
 
@@ -809,14 +835,17 @@ type Holder
 	end 'create'
 end 'Holder'
 
-function main() returns ExitCode
-	let a = Holder.create(Tap.create(try __ManagedFile.openRead(b"DATA.BIN".managed) otherwise return 3))
+function areaOfACopy(a Holder) returns ExitCode
 	let b = a.clone()
 	return b.shape.area() as ExitCode
+end 'areaOfACopy'
+
+function main() returns ExitCode
+	return areaOfACopy(Holder.create(Square.create(2)))
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:40:12: Unsupported: `clone` on `Holder`, whose field `shape` holds a `Shape` value that may be a `Tap`, which owns an OS handle (`__ManagedFile`) and cannot be duplicated
+error E2015: <fragment>:51:12: Unsupported: `clone` on `Holder`, whose field `shape` holds a `Shape` value that may be a `Tap`, which owns an OS handle (`__ManagedSocket`) and cannot be duplicated
 ```
 
 <!-- test: clone-of-struct-with-union-field-copies-the-payload -->
@@ -852,7 +881,7 @@ end 'Decl'
 
 function main() returns ExitCode
 	let a = Decl.create(Op.holds(Item.create("original label long enough for a heap record")))
-	let b = a.clone()
+	var b = a.clone()
 
 	match b.op 'mut'
 		holds(it) then it.rename("MUTATED")
@@ -871,6 +900,51 @@ end 'main'
 ```
 ```stdout
 a holds: original label long enough for a heap record
+```
+
+<!-- test: error.a-match-over-the-union-field-of-a-let-clone-is-read-only -->
+The refused twin of the case above: the match binding follows the binding its scrutinee is a field of, so over a
+`let` clone the payload is read-only and `rename` is refused, where over a `var` clone it is written.
+```maxon
+type Item
+	export var label as String
+
+	static function create(label String) returns Item
+		return Self{label: label}
+	end 'create'
+
+	function rename(to String)
+		self.label = to
+	end 'rename'
+end 'Item'
+
+union Op
+	holds(item Item)
+	none
+end 'Op'
+
+type Decl
+	export var op as Op
+
+	static function create(op Op) returns Decl
+		return Self{op: op}
+	end 'create'
+end 'Decl'
+
+function main() returns ExitCode
+	let a = Decl.create(Op.holds(Item.create("original label long enough for a heap record")))
+	let b = a.clone()
+
+	match b.op 'mut'
+		holds(it) then it.rename("MUTATED")
+		none then return 3
+	end 'mut'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:32:21: cannot pass 'it', which is read-only (a `match` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
 <!-- test: clone-of-a-many-case-union-dispatches-every-tag -->

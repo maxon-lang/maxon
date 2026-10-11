@@ -470,7 +470,7 @@ let CheckoutRuntimeDirName = "runtime"
 // `maxon test tests/mcp` compiles only this directory, so the outside-checkout helpers `CliHarness` and
 // `LspClient` define are copied here rather than imported.
 export function freshOutsideCheckoutDir(caseDirName String) returns FilePath
-	let dir = hostTempDir().join("{OutsideCheckoutStagingDirNamePrefix}-{__Builtins.currentProcessId()}-{caseDirName}")
+	let dir = hostTempDir().join("{OutsideCheckoutStagingDirNamePrefix}-{Process.id()}-{caseDirName}")
 	requireNoCheckoutAbove(dir)
 
 	if Directory.isDirectory(dir) 'leftByAnEndedProcess'
@@ -863,9 +863,7 @@ end 'StreamingHttpMcpServer'
 export let RpcInvalidParamsCode = -32602
 export let RpcMethodNotFoundCode = -32601
 
-export typealias OwnerId = int(0 to u64.max)
-
-export function endedProcessId() returns OwnerId
+export function endedProcessId() returns Pid
 	#if os(Windows)
 		let exe = Executable.name("cmd")
 		let argv = ["/c", "exit", "0"]

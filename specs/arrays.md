@@ -1015,6 +1015,7 @@ SENTENCE: `append` declares its parameter `other` and `appendMemory` declares it
 refusal names the parameter of the method the author actually wrote.
 
 <!-- test: appendMemory-copies-a-raw-buffers-elements -->
+<!-- tier: stdlib -->
 ### An `Array` receiver takes a raw `__ManagedMemory` — `stdlib/String.maxon:865`'s exact shape
 The receiver is a genuine `Array` and the argument is a buffer nothing wrapped, which is the whole
 point of the member existing beside `append`.
@@ -1043,44 +1044,31 @@ end 'main'
 57
 ```
 
-<!-- test: appendMemory-takes-another-arrays-managed -->
-### `stdlib/Array.maxon:315`'s own spelling — `append` is a caller of this member
-```maxon
-function main() returns ExitCode
-	var a = [1, 2, 3]
-	let b = [4, 5, 6]
-	a.appendMemory(b.managed)
-	var sum = 0
-	var i = 0
-	while i < a.count() 'loop'
-		sum = sum + (try a.get(i) otherwise 0)
-		i = i + 1
-	end 'loop'
-	return sum
-end 'main'
-```
-```exitcode
-21
-```
-
-<!-- test: appendMemory-preserves-its-source -->
-### The source is BORROWED and copied out of, exactly as `append`'s is
+<!-- test: appendMemory-takes-another-arrays-managed-and-preserves-it -->
+<!-- tier: stdlib -->
+### `stdlib/Array.maxon`'s own spelling — `append` is a caller of this member
+The receiver gains the source's elements, and the source is only read and copied out of, exactly as
+`append`'s is: the exit code is the receiver's sum (10) times ten plus the source's two elements (7).
 ```maxon
 function main() returns ExitCode
 	var a = [1, 2]
 	let b = [3, 4]
 	a.appendMemory(b.managed)
-	// b should still have its original elements
+	var sum = 0
+	for x in a 'each'
+		sum = sum + x
+	end 'each'
 	let b0 = try b.get(0) otherwise 0
 	let b1 = try b.get(1) otherwise 0
-	return b0 + b1
+	return sum * 10 + b0 + b1
 end 'main'
 ```
 ```exitcode
-7
+107
 ```
 
 <!-- test: error.appendMemory-names-its-own-parameter -->
+<!-- tier: stdlib -->
 ### The argument rule is `append`'s, and the sentence names `source`
 One rule (`ProgramSignatures.arrayAppendArgAdmits`) — a `Small` cannot walk into a `Bytes` through
 either spelling. Two sentences, because the corpus declares two parameter names for one operation
@@ -1104,9 +1092,10 @@ error E3005: <fragment>:11:4: argument type mismatch for 'source': expected 'Byt
 ```
 
 <!-- test: error.appendMemory-on-a-let-array -->
+<!-- tier: stdlib -->
 ### It WRITES the receiver, so a `let` array refuses it
 `appendMemory` is a receiver-writing method (`arrayMethodMutatesReceiver`), which is the same answer
-E3019, E3070 and the storage-written mask all read. Served as a member but omitted from that
+E3159 and the storage-written mask both read. Served as a member but omitted from that
 answer, this program would have compiled and silently written through an immutable binding.
 ```maxon
 function main() returns ExitCode
@@ -1117,26 +1106,34 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:5:4: cannot pass 'a' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:5:4: cannot write through 'a': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
-<!-- test: error.appendMemory-through-a-live-borrow -->
-### The same answer at E3070's door, naming the spelling the author wrote
+<!-- test: appendMemory-keeps-an-element-read-before-it -->
+<!-- tier: stdlib -->
+### An element read before the append stays readable after it
+`first` counts the element it hands back, so the receiver may be written while `s` is still in use.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.first() otherwise ""
 	let other = ["a second long string that also lives on the heap here"]
 	arr.appendMemory(other.managed)
 	print("[{s}]\n")
+	print("{arr.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:6:6: cannot mutate 'arr' via 'appendMemory' while it is borrowed by 's' (borrowed at line 4)
+```exitcode
+0
+```
+```stdout
+[hello world 42 this is a long string for heap allocation]
+2
 ```
 
 <!-- test: error.appendMemory-is-not-a-value -->
+<!-- tier: stdlib -->
 ### It is VOID, like every other `Array` mutator
 ```maxon
 function main() returns ExitCode
@@ -1163,21 +1160,27 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:4:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:4:6: cannot pass 'arr', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
-<!-- test: error.insert-through-a-live-borrow -->
+<!-- test: insert-keeps-an-element-read-before-it -->
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.first() otherwise ""
 	arr.insert(0, value: "a second long string that also lives on the heap")
+	let head = try arr.first() otherwise ""
 	print("[{s}]\n")
+	print("[{head}]\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:5:6: cannot mutate 'arr' via 'insert' while it is borrowed by 's' (borrowed at line 4)
+```exitcode
+0
+```
+```stdout
+[hello world 42 this is a long string for heap allocation]
+[a second long string that also lives on the heap]
 ```
 
 <!-- test: error.set-on-a-let-array -->
@@ -1195,13 +1198,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:4:10: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:4:10: cannot write through 'arr': 'arr' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
-<!-- test: error.set-through-a-live-borrow -->
+<!-- test: set-keeps-the-element-it-displaces-readable -->
+`set` releases the slot's occupant, and `s` still holds its own reference to it.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.first() otherwise ""
 	try arr.set(0, value: "a second long string that also lives on the heap") otherwise 'oob'
 		return 9
@@ -1210,8 +1214,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:5:10: cannot mutate 'arr' via 'set' while it is borrowed by 's' (borrowed at line 4)
+```exitcode
+0
+```
+```stdout
+[hello world 42 this is a long string for heap allocation]
 ```
 
 <!-- test: error.reserve-on-a-let-array -->
@@ -1227,23 +1234,26 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:4:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:4:6: cannot pass 'arr', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
-<!-- test: error.reserve-through-a-live-borrow -->
-The borrow half of the same pair. `reserve` REALLOCATES, so a live borrow of an element is looking at the
-old buffer — the one hazard on this list that is a dangling read rather than a bookkeeping slip.
+<!-- test: reserve-keeps-an-element-read-before-it -->
+`reserve` REALLOCATES the buffer; an element read before it holds its own reference, not a slot of the old
+buffer.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.first() otherwise ""
 	arr.reserve(64)
 	print("[{s}]\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:5:6: cannot mutate 'arr' via 'reserve' while it is borrowed by 's' (borrowed at line 4)
+```exitcode
+0
+```
+```stdout
+[hello world 42 this is a long string for heap allocation]
 ```
 
 <!-- test: error.clear-on-a-let-array -->
@@ -1253,7 +1263,7 @@ it exactly as `push` and `set` do.
 
 ⛔ **A WRITE REACHING A CALLER THROUGH A METHOD'S OWN FIELD IS A USE-AFTER-FREE WHEN IT IS MISSED**, and
 `borrow-liveness.receiver-method-writing-its-own-field-through-a-corpus-member` pins that rule on another
-corpus member. These two are the local half, and they are the half the corpus declaration's own write mask
+corpus member. This case is the local half, the one the corpus declaration's own write mask
 carries.
 ```maxon
 function main() returns ExitCode
@@ -1263,23 +1273,27 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:4:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:4:6: cannot pass 'arr', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
-<!-- test: error.clear-through-a-live-borrow -->
-The borrow half of the same pair. `clear` DESTROYS every element, so a live borrow of one is looking at a
-freed record — the same hazard `reserve` has through reallocation, arrived at by the shorter route.
+<!-- test: clear-keeps-an-element-read-before-it -->
+`clear` releases every element; the one `s` read keeps its own reference and outlives the clear.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.first() otherwise ""
 	arr.clear()
 	print("[{s}]\n")
+	print("{arr.count()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: <fragment>:5:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 4)
+```exitcode
+0
+```
+```stdout
+[hello world 42 this is a long string for heap allocation]
+0
 ```
 
 ### Set is bounded by the LIVE LENGTH, not by the capacity
@@ -2420,6 +2434,7 @@ error E3005: <fragment>:11:4: argument type mismatch for 'other': expected 'Byte
 ```
 
 <!-- test: error.append-narrower-element-array-through-the-buffer-surface -->
+<!-- tier: stdlib -->
 ### The BUFFER surface's `append` is the same door and answers the same way
 One record, two surfaces: `b.managed.append(s)` reaches `__ManagedMemory`'s `append`, whose rule
 is the `Array` one.
@@ -2535,6 +2550,7 @@ error E3005: <fragment>:12:4: argument type mismatch for 'other': expected 'Smal
 ```
 
 <!-- test: error.appendMemory-wider-element-array-refuses-a-narrower-one -->
+<!-- tier: stdlib -->
 ### … and the rule is the OPERATION's, so the `appendMemory` spelling refuses it identically
 `ProgramSignatures.arrayAppendArgAdmits` is ONE rule over ONE operation — `parseArrayAppend` serves
 `append`, `appendMemory` and the buffer's `append` from a single arm — so the two spellings answer the
@@ -2729,6 +2745,7 @@ end 'main'
 ```
 
 <!-- test: a-float-elements-buffer-is-an-ordinary-eight-byte-stride -->
+<!-- tier: stdlib -->
 ### The buffer under a float element answers the managed surface like any other
 The element's register file is the CALLER's question, never the buffer's: what the stride holds is
 64 bits whatever they decode to, which is the whole reason a float element needs no wider slot and
@@ -2822,6 +2839,7 @@ end 'main'
 ```
 
 <!-- test: error.a-raw-byte-write-is-refused-on-a-float-element -->
+<!-- tier: stdlib -->
 ### A raw byte write is refused on a float element, and it is the SLOT's rule that refuses it
 E3118 admits raw bytes into an element only when the element's own value set covers every bit
 pattern of its slot. A `float`'s bounds are IEEE-754 patterns that order nothing like integers, so
@@ -2840,6 +2858,7 @@ error E3118: <fragment>:4:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so w
 ```
 
 <!-- test: error.a-raw-byte-write-is-refused-on-a-declared-float-element -->
+<!-- tier: stdlib -->
 ### The same refusal, off the element's DECLARED float alias
 The alias arm of the element's value set (`integerAliasValueRange`) answers *"not integer valued"*
 for a float alias for the reason the bare keyword's arm does; before the element was nameable that
@@ -3092,4 +3111,108 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: <fragment>:13:11: typealias 'Smalls' is not exported
+```
+
+<!-- test: a-consumed-promise-slot-read-by-a-for-reaches-the-consume-abort -->
+A promise read out of an array and awaited leaves its slot empty: the await vacates it, so the array no
+longer owns the thread. An empty slot of a managed element is a panic when it is read, but a CONSUMED
+promise slot is not that — it is a promise already given away, and awaiting it again is the
+consumed-twice abort (**118**, `promiseSlotConsumedTwice`) on every read door. These three cases read slot
+0 again after its promise was awaited, through `for`, `get` and a cursor, and each reaches the abort.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	Scheduler.yield()
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var ps = IntPromiseArray.create()
+	ps.push(async plain(4))
+	ps.push(async plain(5))
+	let first = try ps.get(0) otherwise panic("two were pushed")
+	var sum = await first
+
+	for p in ps 'drain'
+		sum = sum + await p
+	end 'drain'
+
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
+```
+
+<!-- test: a-consumed-promise-slot-read-by-get-reaches-the-consume-abort -->
+`at(0)` is 0 at run time and a fresh value to the compiler, so the second `get` is a read the compiler
+cannot match to the first. It is not refused as an empty slot: it hands back the vacated handle, and the
+await aborts.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	Scheduler.yield()
+	return n
+end 'plain'
+
+function at(n Integer) returns ElementIndex
+	Scheduler.yield()
+	return n as ElementIndex
+end 'at'
+
+function main() returns ExitCode
+	var ps = IntPromiseArray.create()
+	ps.push(async plain(4))
+	ps.push(async plain(5))
+	let first = try ps.get(0) otherwise panic("two were pushed")
+	var sum = await first
+	let again = try ps.get(at(0)) otherwise panic("the slot is still in range")
+	sum = sum + await again
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
+```
+
+<!-- test: a-consumed-promise-slot-read-by-a-cursor-reaches-the-consume-abort -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function plain(n Integer) returns Integer
+	Scheduler.yield()
+	return n
+end 'plain'
+
+function main() returns ExitCode
+	var ps = IntPromiseArray.create()
+	ps.push(async plain(4))
+	ps.push(async plain(5))
+	let first = try ps.get(0) otherwise panic("two were pushed")
+	var sum = await first
+	let cursor = try ps.cursor() otherwise panic("two were pushed")
+	let again = cursor.current()
+	sum = sum + await again
+	return sum as ExitCode
+end 'main'
+```
+```exitcode
+118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
 ```

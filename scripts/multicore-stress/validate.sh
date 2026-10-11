@@ -167,7 +167,7 @@ sweep_determinism "$BIN_SERVICE" "$SERVICE"
 # ============================================================================
 hdr "Check 2: a spawned green thread reaches a worker M"
 
-# ⭐ BLOCKED ON, NOT SAMPLED. The program waits for `schedMaxActiveWorkers() >= 2` with a bounded
+# ⭐ BLOCKED ON, NOT SAMPLED. The program waits for `Scheduler.counters().maxActiveWorkers >= 2` with a bounded
 # budget and reports `workerwait`, so a box too busy to start the M in time is a NAMED timeout rather
 # than a reading of 1 that looks exactly like the coroutine pin.
 run_program "$BIN_SERVICE" ""; U_WK="$WK"; U_PROCS="$PROCS"; U_WAIT="$WAIT"
@@ -180,7 +180,7 @@ if [ "$U_WAIT" = timeout ]; then
 elif [ "${U_PROCS:-1}" -lt 2 ]; then
 	pass "this host resolves to $U_PROCS processor: workers=$U_WK is the correct reading and no second M can exist"
 elif [ "${U_WK:-0}" -ge 2 ]; then
-	pass "unclamped schedMaxActiveWorkers=$U_WK over $U_PROCS processors (a spawned green thread reached a worker M)"
+	pass "unclamped maxActiveWorkers=$U_WK over $U_PROCS processors (a spawned green thread reached a worker M)"
 else
 	bad "unclamped workers=$U_WK with workerwait=ok — the wait observed a second worker and the counter denies it"
 fi
@@ -240,7 +240,7 @@ fi
 # ============================================================================
 hdr "Check 4: cross-P remote frees"
 
-# `__Builtins.slabRemoteFreeCount()` sums one per-P word over `__sched_procs`, credited at every
+# `HeapStats.slab().remoteFrees` sums one per-P word over `__sched_procs`, credited at every
 # remote push. A record allocated on the M that built it and released on whichever M ran its receiver
 # is exactly that push, so a service program reads its own cross-P traffic.
 check_remote_free() {

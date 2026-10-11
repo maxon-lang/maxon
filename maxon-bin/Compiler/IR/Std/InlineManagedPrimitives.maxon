@@ -159,12 +159,6 @@ let InlineLoadedLabel = b"__im_loaded"
 // How many sites the pass expanded — a diagnostic counter, reported once per compile.
 typealias InlinedSiteCount = int(0 to u64.max)
 
-// The minter every `PrimitiveInliner` starts with and NONE OF THEM EVER MINTS FROM: `valueIds()` replaces
-// it with a real one before the first mint, so this exists only so that a function with no site pays no
-// allocation. Shared for the reason `InsertRangeChecks.sharedEmptyGuardChainTail` is shared, and safe for
-// the same reason — the one operation that would write to it is the one that replaces it.
-let sharedUnseededMinter = ValueMinter.create(0)
-
 // The error flag a call site defines: none for a `call`, the flag id for a `tryCall`.
 union ManagedCallFlag
 	none
@@ -208,11 +202,10 @@ end 'InlineFrame'
 // access uses. The two travel together for `SingleOpStride`'s own reason — a stride and the memory type an
 // access at that stride names are one statement, and a site able to spell them apart can spell them wrongly.
 //
-// ⚠ **IT NAMES THE BLOCK BY ITS REF AND NOT BY `IrBlock`.** An `IrBlock` reached through a `let`
-// binding — which is what a `for … in` element is — cannot be handed to the emitters, all of which
-// MUTATE the block they are given (E3019). The ref is an `int`, so it carries out of the loop and
-// `blockAt` hands back a block the emitter may write: the same discipline the expanders already
-// had, one indirection wider.
+// ⚠ **IT NAMES THE BLOCK BY ITS REF AND NOT BY `IrBlock`.** An `IrBlock` held in a `let` field is
+// read-only for the record's whole life, and the emitters all MUTATE the block they are given
+// (E3159). The ref is an `int`, so `blockAt` hands back a block the emitter may write: the same
+// discipline the expanders already had, one indirection wider.
 type StrideArm
 	export let blockRef as ElementIndex
 	export let stride as SingleOpStride
@@ -237,7 +230,7 @@ type BoundedLoad
 end 'BoundedLoad'
 
 // Expand every inlinable `__ManagedMemory` primitive call in the module.
-export function inlineManagedPrimitives(project Project, module StdModule)
+export function inlineManagedPrimitives(project Project, module StdModule, usesGreenThreads bool)
 	var expanded = 0 as InlinedSiteCount
 
 	// An INDEX loop: the function's position is the key its minted ids are filed under
@@ -254,7 +247,7 @@ export function inlineManagedPrimitives(project Project, module StdModule)
 			continue
 		end 'notInTheProgram'
 
-		var inliner = PrimitiveInliner.create(module, func: func, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites)
+		var inliner = PrimitiveInliner.create(module, func: func, usesGreenThreads: usesGreenThreads, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites)
 		inliner.run()
 		expanded = expanded + inliner.expanded
 	end 'eachFunc'
@@ -277,19 +270,19 @@ type PrimitiveInliner
 	// container's TYPE, which this one deliberately does not. Read through `stridePlanFor` and nowhere else;
 	// see `Project.stdOpElementStrides` for why the key survives `insertRangeChecks`, the only pass between
 	// the write and this read.
-	let strides as StdOpElementStrideMap
+	var strides as StdOpElementStrideMap
 
 	// The sites in that key space whose element owes no drop, written by the same door and read by the
 	// two checked expanders off the same op index.
-	let trivialElements as StdOpTrivialElementSiteSet
+	var trivialElements as StdOpTrivialElementSiteSet
+	let usesGreenThreads as bool
 
-	// ⚠ **SEEDED LAZILY, AND THAT IS A COST DECISION.** `nextFreeValueId` walks every block-arg and every
-	// live op of the function and MATERIALIZES the live-op index array to do it — and this pass visits
-	// EVERY function in the module, the overwhelming majority of which hold no managed primitive at all.
-	// Seeded in `create`, each of those would pay a second whole-function walk plus its allocation for
-	// nothing. It starts as `sharedUnseededMinter`, which is never minted from, and is REPLACED by a real
-	// minter at the first site — the same shared-empty-until-needed shape `InsertRangeChecks` gives its
-	// three chain columns, and for the same measured reason.
+	// ⚠ **SEEDED LAZILY, AND THAT IS A COST DECISION.** `nextFreeValueId` walks every block-arg and
+	// every live op of the function and MATERIALIZES the live-op index array to do it — and this pass
+	// visits EVERY function in the module, the overwhelming majority of which hold no managed
+	// primitive at all. Seeded in `create`, each of those would pay a second whole-function walk plus
+	// its allocation for nothing. It starts unseeded and never minted from, and is REPLACED by a
+	// seeded minter at the first site.
 	var ids as ValueMinter
 	var seeded as bool
 
@@ -299,8 +292,8 @@ type PrimitiveInliner
 	var origins as ValueOriginTable
 	export var expanded as InlinedSiteCount
 
-	static function create(module StdModule, func IrFunction, funcIndex ElementIndex, origins ValueOriginTable, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet) returns PrimitiveInliner
-		return Self{module: module, func: func, strides: strides, trivialElements: trivialElements, ids: sharedUnseededMinter, seeded: false, seedFloor: 0, funcIndex: funcIndex, origins: origins, expanded: 0}
+	static function create(module StdModule, func IrFunction, usesGreenThreads bool, funcIndex ElementIndex, origins ValueOriginTable, strides StdOpElementStrideMap, trivialElements StdOpTrivialElementSiteSet) returns PrimitiveInliner
+		return Self{module: module, func: func, usesGreenThreads: usesGreenThreads, strides: strides, trivialElements: trivialElements, ids: ValueMinter.create(0), seeded: false, seedFloor: 0, funcIndex: funcIndex, origins: origins, expanded: 0}
 	end 'create'
 
 	// The function's fresh-ValueId counter, seeded past every id it already uses on first use.
@@ -491,6 +484,7 @@ type PrimitiveInliner
 			osThreadCpuTicks or
 			osDecommitPages or
 			memFill or
+			osGuardPages or
 			osCommitPages or
 			osReservePages or
 			atomicCas or
@@ -645,7 +639,7 @@ type PrimitiveInliner
 	// no insert — the continuation takes the ORIGINAL result id as its block arg exactly as `closeFrame` does,
 	// so no op after the site changes, and `elimTrivialBlockArgs` folds the single-predecessor arg away.
 	function expandUncheckedGetUnguarded(blockRef ElementIndex, pos ElementIndex, arr ValueId, index ValueId, resultId ValueId, stride SingleOpStride) returns ElementIndex
-		let carve = self.carveContinuation(blockRef, pos: pos)
+		var carve = self.carveContinuation(blockRef, pos: pos)
 		var head = self.blockAt(blockRef)
 		let value = self.emitElementLoad(head, arr: arr, index: index, stride: stride)
 		attachBlockArgs(carve.cont, valueIds: argsOf(resultId), argType: StdType.i64)
@@ -749,7 +743,7 @@ type PrimitiveInliner
 			self.module.setTerminator(cur, op: StdOp.branch(frame.carve.cont.id))
 		end 'noEmptySlotToReport' else 'askTheRecord'
 			let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
-			let managed = emitElementIsManaged(self.module, block: cur, destroy: destroy, ids: self.valueIds())
+			let managed = emitSlotMustBeFilled(self.module, block: cur, destroy: destroy, ids: self.valueIds(), greenThreads: self.usesGreenThreads)
 
 			var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel, heat: BlockHeat.normal)
 			self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.carve.cont.id))
@@ -905,10 +899,10 @@ type PrimitiveInliner
 	// walked by all three expanders, so "how many widths does this site serve" is asked once rather than at
 	// each of them.
 	//
-	// ⭐ **A `singleArm` PLAN'S ARM IS THE SITE'S OWN BLOCK.** With one successor there is no fork to branch
-	// from, so the access is emitted where the call was, the head is not terminated here at all, and the arm
-	// costs neither a block nor a jump. It is `blockRef` and not the head's `IrBlock` for the reason
-	// `StrideArm` gives: the emitters MUTATE the block they are handed, and a `for … in` element is a `let`.
+	// ⭐ **A `singleArm` PLAN'S ARM IS THE SITE'S OWN BLOCK.** With one successor there is no fork to
+	// branch from, so the access is emitted where the call was, the head is not terminated here at
+	// all, and the arm costs neither a block nor a jump. It is `blockRef` and not the head's `IrBlock`
+	// for the reason `StrideArm` gives.
 	function openStrideArms(blockRef ElementIndex, arr ValueId, slow BlockId, plan StrideDispatchPlan) returns StrideArmArray
 		match plan 'plan'
 			runtimeFork then break

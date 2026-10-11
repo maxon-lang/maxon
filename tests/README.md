@@ -657,7 +657,7 @@ outside `temp/`, each for a premise the checkout would falsify: `spec-harness/` 
 `spec-test` where no tree lock is taken, `cli/` needs a working directory with no `vendor/` above it,
 and `lsp/` a tree with no `.maxproj` file above it.
 
-⛔ **A CASE STAGES INTO ONE FLAT DIRECTORY NAMED `<prefix>-<pid>-<case>`** (`__Builtins.currentProcessId()`),
+⛔ **A CASE STAGES INTO ONE FLAT DIRECTORY NAMED `<prefix>-<pid>-<case>`** (`Process.id()`),
 cleared first and removed when the case finishes, pass or fail. A name without the pid would let two runs
 on one machine — two checkouts, or two sessions — delete each other's directories mid-run: in-tree
 staging is covered by the checkout's tree lock, and the host temp area has nothing of the kind. A case
@@ -769,6 +769,12 @@ namespace whatever its visibility (E3006, measured here), so a second copy of a 
 A file-private `let` does NOT collide — two case files may each declare `TypesSectionName` and both are
 accepted — so duplicated CONSTANTS are the half nothing catches for you, and a name renamed to dodge a
 collision is the shape that duplication takes here.
+
+**A FAULT FIXTURE IS BUILT AS LIBRARY TIER.** `crash` and `faultcallee` reach a hardware fault through
+`__Builtins.forceSegfault()`, which only a source under `stdlib/` or `runtime/` may call (E3185).
+`builtLibraryTierFixture` runs `maxon stage-library-tier` into the case's staging directory, places the
+fixture under the staged `stdlib/`, and builds it with the staged compiler copy, so the fault stays a real
+hardware fault. `dap/` stages the same fixtures the same way, through `DapClient.maxon`.
 
 ### The `.mxdbg` sidecar
 
@@ -1110,7 +1116,7 @@ plain stores, acquires and releases and panics on any other shape.
 The other two cases build for this host and RUN the program, at one, two and four
 processors, because a failed hand-off takes a different form at each: at one the owner can never adopt a
 processor, and at several it loses the race for an idle one. Their subject is
-`__Builtins.pinToMachine`: a green thread pinned to its machine may not be resumed on another one, so the
+`Scheduler.pinToMachine`: a green thread pinned to its machine may not be resumed on another one, so the
 machine that finds it has to hand its processor to the owner rather than keep it.
 
 **`a-pinned-green-thread-stays-on-its-machine-across-a-park`** — 24 parks, and the program reports how many

@@ -1,0 +1,78 @@
+let DebuggeeStdlibFileName = "Debuggee.maxon"
+let SamplerStdlibFileName = "Sampler.maxon"
+
+let Win64ContextFlagsOffsetName = "Win64ContextFlagsOffset"
+let Win64ContextControlName = "Win64ContextControl"
+let Win64ContextIntegerName = "Win64ContextInteger"
+let Win64ContextRipOffsetName = "Win64ContextRipOffset"
+let Win64ContextRspOffsetName = "Win64ContextRspOffset"
+let Win64ContextRbpOffsetName = "Win64ContextRbpOffset"
+let SuspendThreadFailedName = "SuspendThreadFailed"
+
+let SampleContextRipOffsetName = "SampleContextRipOffset"
+let SampleContextRspOffsetName = "SampleContextRspOffset"
+let SampleContextRbpOffsetName = "SampleContextRbpOffset"
+let ProfileRegionRecordBytesName = "ProfileRegionRecordBytes"
+let Win64MbiBaseAddressOffsetName = "Win64MbiBaseAddressOffset"
+let ProfileRegionAllocationBaseOffsetName = "ProfileRegionAllocationBaseOffset"
+let Win64MbiRegionSizeOffsetName = "Win64MbiRegionSizeOffset"
+let ProfileRegionSuspendedCyclesOffsetName = "ProfileRegionSuspendedCyclesOffset"
+let ProfileSampleThreadGoneName = "ProfileSampleThreadGone"
+let ProfileSampleNoRegistersName = "ProfileSampleNoRegisters"
+
+// The Win64 `CONTEXT` and region-record layout the runtime shares with `stdlib/Debuggee.maxon` and
+// `stdlib/Sampler.maxon`, read from those files' own constants so the compiler holds no second copy
+// to drift.
+export type HostContextLayout
+	export let contextFlagsOffset as ParsedInt
+	export let contextControl as ParsedInt
+	export let contextInteger as ParsedInt
+	export let contextRipOffset as ParsedInt
+	export let contextRspOffset as ParsedInt
+	export let contextRbpOffset as ParsedInt
+	export let suspendThreadFailed as ParsedInt
+	export let regionRecordBytes as ParsedInt
+	export let mbiBaseAddressOffset as ParsedInt
+	export let regionAllocationBaseOffset as ParsedInt
+	export let mbiRegionSizeOffset as ParsedInt
+	export let regionSuspendedCyclesOffset as ParsedInt
+	export let sampleThreadGone as ParsedInt
+	export let sampleNoRegisters as ParsedInt
+
+	export static function read(signatures ProgramSignatures, target Target, project Project) returns HostContextLayout
+		let debuggee = librarySourcePath(project, fileName: DebuggeeStdlibFileName)
+		let ripOffset = signatures.integerConstantIn(Win64ContextRipOffsetName, filePath: debuggee)
+		let rspOffset = signatures.integerConstantIn(Win64ContextRspOffsetName, filePath: debuggee)
+		let rbpOffset = signatures.integerConstantIn(Win64ContextRbpOffsetName, filePath: debuggee)
+
+		var regionRecordBytes = 0 as ParsedInt
+		var mbiBaseAddressOffset = 0 as ParsedInt
+		var regionAllocationBaseOffset = 0 as ParsedInt
+		var mbiRegionSizeOffset = 0 as ParsedInt
+		var regionSuspendedCyclesOffset = 0 as ParsedInt
+		var sampleThreadGone = 0 as ParsedInt
+		var sampleNoRegisters = 0 as ParsedInt
+
+		if targetProvidesFacility(target, facility: HostFacility.processSampling) 'aSamplingLane'
+			let sampler = librarySourcePath(project, fileName: SamplerStdlibFileName)
+
+			if signatures.integerConstantIn(SampleContextRipOffsetName, filePath: sampler) != ripOffset or signatures.integerConstantIn(SampleContextRspOffsetName, filePath: sampler) != rspOffset or signatures.integerConstantIn(SampleContextRbpOffsetName, filePath: sampler) != rbpOffset 'contextOffsetsDrifted'
+				panic("HostContextLayout.read: {SamplerStdlibFileName} states the CONTEXT register offsets differently from {DebuggeeStdlibFileName} — the debugger and the sampler read one Win64 CONTEXT record, so the two files' constants must agree")
+			end 'contextOffsetsDrifted'
+
+			regionRecordBytes = signatures.integerConstantIn(ProfileRegionRecordBytesName, filePath: sampler)
+			mbiBaseAddressOffset = signatures.integerConstantIn(Win64MbiBaseAddressOffsetName, filePath: sampler)
+			regionAllocationBaseOffset = signatures.integerConstantIn(ProfileRegionAllocationBaseOffsetName, filePath: sampler)
+			mbiRegionSizeOffset = signatures.integerConstantIn(Win64MbiRegionSizeOffsetName, filePath: sampler)
+			regionSuspendedCyclesOffset = signatures.integerConstantIn(ProfileRegionSuspendedCyclesOffsetName, filePath: sampler)
+			sampleThreadGone = signatures.integerConstantIn(ProfileSampleThreadGoneName, filePath: sampler)
+			sampleNoRegisters = signatures.integerConstantIn(ProfileSampleNoRegistersName, filePath: sampler)
+		end 'aSamplingLane'
+
+		return Self{contextFlagsOffset: signatures.integerConstantIn(Win64ContextFlagsOffsetName, filePath: debuggee), contextControl: signatures.integerConstantIn(Win64ContextControlName, filePath: debuggee), contextInteger: signatures.integerConstantIn(Win64ContextIntegerName, filePath: debuggee), contextRipOffset: ripOffset, contextRspOffset: rspOffset, contextRbpOffset: rbpOffset, suspendThreadFailed: signatures.integerConstantIn(SuspendThreadFailedName, filePath: debuggee), regionRecordBytes: regionRecordBytes, mbiBaseAddressOffset: mbiBaseAddressOffset, regionAllocationBaseOffset: regionAllocationBaseOffset, mbiRegionSizeOffset: mbiRegionSizeOffset, regionSuspendedCyclesOffset: regionSuspendedCyclesOffset, sampleThreadGone: sampleThreadGone, sampleNoRegisters: sampleNoRegisters}
+	end 'read'
+
+	export static function unread() returns HostContextLayout
+		return Self{contextFlagsOffset: 0, contextControl: 0, contextInteger: 0, contextRipOffset: 0, contextRspOffset: 0, contextRbpOffset: 0, suspendThreadFailed: 0, regionRecordBytes: 0, mbiBaseAddressOffset: 0, regionAllocationBaseOffset: 0, mbiRegionSizeOffset: 0, regionSuspendedCyclesOffset: 0, sampleThreadGone: 0, sampleNoRegisters: 0}
+	end 'unread'
+end 'HostContextLayout'

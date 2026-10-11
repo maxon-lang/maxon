@@ -9,6 +9,18 @@ category: system
 
 ## Documentation
 
+A program reads these figures through `HeapStats.slab()` (the five levels, as `SlabUsage`'s `live`, `free`,
+`cachedFree`, `parked` and `committed`) and `HeapStats.census(mode)` (the tally, with `bucketCount(i)` and
+`bucketBytes(i)`, whose index is a `HeapBucketIndex`, `int(0 to 2047)`), and the cases below read them that
+way. The `__Builtins` intrinsics named in this section are what each figure is underneath; they are
+library-tier (E3185 outside `stdlib/` and `runtime/`).
+
+⚠ **A READING IS A RECORD, SO A CASE RELEASES IT BEFORE THE NEXT WALK.** `HeapStats.slab()` and
+`HeapStats.census(mode)` return heap records, and a record still live at the next reading is a slot that
+reading counts. Each case reads a level through a function that returns only the field it needs, so the
+`SlabUsage` is released before the function returns, and takes a snapshot of the buckets inside a function
+for the same reason.
+
 Five builtins report the allocator's **levels**. Every other memory figure this language exposes is a
 CUMULATIVE counter — `__Builtins.mmAllocBytes()` and its family say what a program has ASKED FOR since
 it started, and they move exactly as far for a program that allocates a gigabyte and frees it as for one
@@ -166,19 +178,27 @@ function build(seed Seed) returns ByteArray
 	return b
 end 'build'
 
+function freeBytes() returns HeapBytes
+	return HeapStats.slab().free
+end 'freeBytes'
+
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
 function main() returns ExitCode
 	var bufs = Bufs.create()
 	for k in 0 upto 16000 'alloc'
 		bufs.push(build(k as Seed))
 	end 'alloc'
 
-	let liveFull = __Builtins.slabLiveBytes()
-	let freeFull = __Builtins.slabFreeBytes()
+	let liveFull = liveBytes()
+	let freeFull = freeBytes()
 
 	bufs = Bufs.create()
 
-	let liveEmpty = __Builtins.slabLiveBytes()
-	let freeEmpty = __Builtins.slabFreeBytes()
+	let liveEmpty = liveBytes()
+	let freeEmpty = freeBytes()
 
 	if liveFull <= 0 'nothingLive'
 		return 1
@@ -225,6 +245,18 @@ function build(seed Seed) returns ByteArray
 	return b
 end 'build'
 
+function parkedBytes() returns HeapBytes
+	return HeapStats.slab().parked
+end 'parkedBytes'
+
+function cachedFreeBytes() returns HeapBytes
+	return HeapStats.slab().cachedFree
+end 'cachedFreeBytes'
+
+function freeBytes() returns HeapBytes
+	return HeapStats.slab().free
+end 'freeBytes'
+
 function main() returns ExitCode
 	var bufs = Bufs.create()
 	for k in 0 upto Population 'alloc'
@@ -233,9 +265,9 @@ function main() returns ExitCode
 
 	bufs = Bufs.create()
 
-	let free = __Builtins.slabFreeBytes()
-	let cached = __Builtins.slabCachedFreeBytes()
-	let parked = __Builtins.slabParkedBytes()
+	let free = freeBytes()
+	let cached = cachedFreeBytes()
+	let parked = parkedBytes()
 
 	if cached > free 'cachedIsNotASubset'
 		return 1
@@ -293,6 +325,10 @@ function build(seed Seed, n Seed) returns ByteArray
 	return b
 end 'build'
 
+function committedBytes() returns HeapBytes
+	return HeapStats.slab().committed
+end 'committedBytes'
+
 function main() returns ExitCode
 	var small = Bufs.create()
 	for k in 0 upto 16000 'allocSmall'
@@ -302,9 +338,9 @@ function main() returns ExitCode
 
 	// The one door reclamation is reached through: it destroys the spans the drop emptied and puts their
 	// chunks back in the arena's bitmap, where any class can reach them.
-	_ = __Builtins.scavengeMemory()
+	_ = HeapStats.scavenge()
 
-	let committedAfterDrop = __Builtins.slabCommittedBytes()
+	let committedAfterDrop = committedBytes()
 
 	if committedAfterDrop <= 0 'nothingCommitted'
 		return 1
@@ -315,7 +351,7 @@ function main() returns ExitCode
 		large.push(build(k as Seed, n: LargePayload as Seed))
 	end 'allocLarge'
 
-	if __Builtins.slabCommittedBytes() > committedAfterDrop 'theSecondClassGrewTheHeap'
+	if committedBytes() > committedAfterDrop 'theSecondClassGrewTheHeap'
 		return 2
 	end 'theSecondClassGrewTheHeap'
 
@@ -358,17 +394,29 @@ function build(seed Seed) returns ByteArray
 	return b
 end 'build'
 
+function committedBytes() returns HeapBytes
+	return HeapStats.slab().committed
+end 'committedBytes'
+
+function freeBytes() returns HeapBytes
+	return HeapStats.slab().free
+end 'freeBytes'
+
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
 function main() returns ExitCode
 	var bufs = Bufs.create()
 
-	if __Builtins.slabCommittedBytes() <= 0 'nothingCommittedAtStart'
+	if committedBytes() <= 0 'nothingCommittedAtStart'
 		return 1
 	end 'nothingCommittedAtStart'
 
 	for k in 0 upto 8000 'alloc'
 		bufs.push(build(k as Seed))
 
-		if __Builtins.slabCommittedBytes() < (__Builtins.slabLiveBytes() + __Builtins.slabFreeBytes()) 'slotsOutsideTheCommittedSet'
+		if committedBytes() < (liveBytes() + freeBytes()) 'slotsOutsideTheCommittedSet'
 			return 2
 		end 'slotsOutsideTheCommittedSet'
 	end 'alloc'
@@ -393,9 +441,17 @@ typealias ByteArray = Array with Byte
 
 let Big = 400000
 
+function committedBytes() returns HeapBytes
+	return HeapStats.slab().committed
+end 'committedBytes'
+
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
 function main() returns ExitCode
-	let committedBefore = __Builtins.slabCommittedBytes()
-	let liveBefore = __Builtins.slabLiveBytes()
+	let committedBefore = committedBytes()
+	let liveBefore = liveBytes()
 
 	var buf = ByteArray.create()
 	buf.reserve(Big)
@@ -403,19 +459,19 @@ function main() returns ExitCode
 		buf.push((i mod 251) as Byte)
 	end 'fill'
 
-	let committedHolding = __Builtins.slabCommittedBytes()
+	let committedHolding = committedBytes()
 
 	if (committedHolding - committedBefore) < Big 'mappingNotCounted'
 		return 1
 	end 'mappingNotCounted'
 
-	if (__Builtins.slabLiveBytes() - liveBefore) >= Big 'mappingCountedAsASlot'
+	if (liveBytes() - liveBefore) >= Big 'mappingCountedAsASlot'
 		return 2
 	end 'mappingCountedAsASlot'
 
 	buf = ByteArray.create()
 
-	if __Builtins.slabCommittedBytes() >= committedHolding 'mappingNotGivenBack'
+	if committedBytes() >= committedHolding 'mappingNotGivenBack'
 		return 3
 	end 'mappingNotGivenBack'
 
@@ -446,6 +502,18 @@ function build(seed Seed) returns ByteArray
 	return b
 end 'build'
 
+function committedBytes() returns HeapBytes
+	return HeapStats.slab().committed
+end 'committedBytes'
+
+function parkedBytes() returns HeapBytes
+	return HeapStats.slab().parked
+end 'parkedBytes'
+
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
 function main() returns ExitCode
 	var kept = Bufs.create()
 	for k in 0 upto 200 'keep'
@@ -458,22 +526,22 @@ function main() returns ExitCode
 	end 'alloc'
 	bufs = Bufs.create()
 
-	let committedBefore = __Builtins.slabCommittedBytes()
-	let parkedBefore = __Builtins.slabParkedBytes()
-	let liveBefore = __Builtins.slabLiveBytes()
+	let committedBefore = committedBytes()
+	let parkedBefore = parkedBytes()
+	let liveBefore = liveBytes()
 
-	_ = __Builtins.scavengeMemory()
-	_ = __Builtins.scavengeMemory()
+	_ = HeapStats.scavenge()
+	_ = HeapStats.scavenge()
 
-	if __Builtins.slabCommittedBytes() >= committedBefore 'nothingDecommitted'
+	if committedBytes() >= committedBefore 'nothingDecommitted'
 		return 1
 	end 'nothingDecommitted'
 
-	if __Builtins.slabParkedBytes() >= parkedBefore 'parkedSpansSurvived'
+	if parkedBytes() >= parkedBefore 'parkedSpansSurvived'
 		return 2
 	end 'parkedSpansSurvived'
 
-	if __Builtins.slabLiveBytes() != liveBefore 'theLiveSetMoved'
+	if liveBytes() != liveBefore 'theLiveSetMoved'
 		return 3
 	end 'theLiveSetMoved'
 
@@ -516,13 +584,17 @@ function build(seed Seed) returns ByteArray
 	return b
 end 'build'
 
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
 function main() returns ExitCode
 	var bufs = Bufs.create()
 	for k in 0 upto Population 'alloc'
 		bufs.push(build((k mod 65536) as Seed))
 	end 'alloc'
 
-	let live = __Builtins.slabLiveBytes()
+	let live = liveBytes()
 
 	if live < (Population * PayloadBytes) 'theWalkMissedSpans'
 		return 1
@@ -542,9 +614,10 @@ end 'main'
 <!-- test: slab-census.the-tally-totals-the-live-heap -->
 **THE TOTAL IS THE LEVEL, AND THE TWO WALKS MUST AGREE.** A census by bucket and the `live` level are
 two derivations from one lock-held walk, so summing every bucket must land exactly on the figure
-`slabLiveBytes()` reports — no byte of slot may be attributed twice and none may be dropped on the
-floor. The case allocates nothing between the two readings, which is what makes an EQUALITY legal here
-where every other case in this file asserts a bound.
+`HeapStats.slab().live` reports — no byte of slot may be attributed twice and none may be dropped on the
+floor. The case allocates nothing that is still live between the two readings — `liveBytes` releases the
+`SlabUsage` it read before it returns, and the `SlabCensus` is allocated after its own walk — which is what
+makes an EQUALITY legal here where every other case in this file asserts a bound.
 
 ⭐ It is the case a census can fail while every relation between the five levels stays intact: a walk
 that stops at the first metadata chunk, or one that files a free slot as live, moves the total off the
@@ -561,7 +634,6 @@ typealias Seed = int(0 to 65536)
 
 let Population = 16000
 let PayloadBytes = 96
-let SizeClassMode = 1
 let BucketCount = 2048
 
 function build(seed Seed) returns ByteArray
@@ -573,28 +645,31 @@ function build(seed Seed) returns ByteArray
 	return b
 end 'build'
 
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
 function main() returns ExitCode
 	var bufs = Bufs.create()
 	for k in 0 upto Population 'alloc'
 		bufs.push(build((k mod 65536) as Seed))
 	end 'alloc'
 
-	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theTallysOwnWalkMissedTheLevel'
+	let liveAtTheTally = liveBytes()
+	let census = HeapStats.census(HeapCensusMode.bySizeClass)
+
+	if census.tallyBytes != liveAtTheTally 'theTallysOwnWalkMissedTheLevel'
 		return 1
 	end 'theTallysOwnWalkMissedTheLevel'
 
 	var total = 0
 	for i in 0 upto BucketCount 'sum'
-		total = total + __Builtins.slabCensusBucketBytes(i)
+		total = total + census.bucketBytes(i)
 	end 'sum'
 
-	if total != __Builtins.slabLiveBytes() 'theCensusDisagreesWithTheLevel'
+	if total != liveAtTheTally 'theCensusDisagreesWithTheLevel'
 		return 2
 	end 'theCensusDisagreesWithTheLevel'
-
-	if __Builtins.mmRawAllocLive() < 0 'rawSlotsWentNegative'
-		return 3
-	end 'rawSlotsWentNegative'
 
 	return 0
 end 'main'
@@ -634,7 +709,6 @@ typealias Seed = int(0 to 65536)
 let Workers = 32
 let Churn = 200
 let PayloadBytes = 96
-let SizeClassMode = 1
 let BucketCount = 2048
 
 function build(seed Seed) returns ByteArray
@@ -660,6 +734,10 @@ function churn(idx Integer) returns ByteArray
 	return survivor
 end 'churn'
 
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
 function main() returns ExitCode
 	var spawned = PromiseArray.create()
 	for i in 0 upto Workers 'spawn'
@@ -681,16 +759,19 @@ function main() returns ExitCode
 		end 'even'
 	end 'dropHalfOnMain'
 
-	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theTallysOwnWalkMissedTheLevel'
+	let liveAtTheTally = liveBytes()
+	let census = HeapStats.census(HeapCensusMode.bySizeClass)
+
+	if census.tallyBytes != liveAtTheTally 'theTallysOwnWalkMissedTheLevel'
 		return 1
 	end 'theTallysOwnWalkMissedTheLevel'
 
 	var total = 0
 	for i in 0 upto BucketCount 'sum'
-		total = total + __Builtins.slabCensusBucketBytes(i)
+		total = total + census.bucketBytes(i)
 	end 'sum'
 
-	if total != __Builtins.slabLiveBytes() 'theCensusDisagreesWithTheLevel'
+	if total != liveAtTheTally 'theCensusDisagreesWithTheLevel'
 		return 2
 	end 'theCensusDisagreesWithTheLevel'
 
@@ -721,11 +802,9 @@ the largest riser rises by exactly N for any N above zero.
 <!-- MmTrace -->
 ```maxon
 typealias WidgetField = int(0 to 65536)
-typealias Tally = int(0 to u64.max)
-typealias TallyArray = Array with Tally
+typealias TallyArray = Array with HeapCount
 
 let Population = 64
-let TagMode = 0
 let BucketCount = 2048
 
 type Widget
@@ -739,6 +818,19 @@ end 'Widget'
 
 typealias Widgets = Array with Widget
 
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
+function snapshotCounts(into TallyArray, mode HeapCensusMode) returns bool
+	let live = liveBytes()
+	let census = HeapStats.census(mode)
+	for i in 0 upto BucketCount 'snapshot'
+		try into.set(i, value: census.bucketCount(i)) otherwise panic("the snapshot is sized to every bucket")
+	end 'snapshot'
+	return census.tallyBytes == live
+end 'snapshotCounts'
+
 function main() returns ExitCode
 	var holder = Widgets.create()
 	holder.reserve(Population)
@@ -749,26 +841,25 @@ function main() returns ExitCode
 		before.push(0)
 	end 'sizeTheSnapshot'
 
-	if __Builtins.slabCensusTally(TagMode) != __Builtins.slabLiveBytes() 'theFirstTallysOwnWalkMissedTheLevel'
+	if not snapshotCounts(before, mode: HeapCensusMode.byTag) 'theFirstTallysOwnWalkMissedTheLevel'
 		return 1
 	end 'theFirstTallysOwnWalkMissedTheLevel'
-
-	for i in 0 upto BucketCount 'snapshot'
-		try before.set(i, value: __Builtins.slabCensusBucketCount(i)) otherwise panic("the snapshot is sized to every bucket")
-	end 'snapshot'
 
 	for k in 0 upto Population 'buildWidgets'
 		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
 	end 'buildWidgets'
 
-	if __Builtins.slabCensusTally(TagMode) != __Builtins.slabLiveBytes() 'theSecondTallysOwnWalkMissedTheLevel'
+	let liveAtTheTally = liveBytes()
+	let census = HeapStats.census(HeapCensusMode.byTag)
+
+	if census.tallyBytes != liveAtTheTally 'theSecondTallysOwnWalkMissedTheLevel'
 		return 1
 	end 'theSecondTallysOwnWalkMissedTheLevel'
 
 	var biggestRise = 0
 	for i in 0 upto BucketCount 'compare'
 		let was = try before.get(i) otherwise panic("the snapshot is sized to every bucket")
-		let now = __Builtins.slabCensusBucketCount(i)
+		let now = census.bucketCount(i)
 
 		if now < was 'aBucketFell'
 			return 3
@@ -794,34 +885,98 @@ mm_alloc ArrayRecord #1 size=48
 mm_alloc ElementBuffer #2 size=512
 mm_alloc ArrayRecord #3 size=48
 mm_alloc ElementBuffer #4 size=16384
-mm_alloc Widget #5 size=16
-mm_alloc Widget #6 size=16
-mm_alloc Widget #7 size=16
-mm_alloc Widget #8 size=16
-mm_alloc Widget #9 size=16
-mm_alloc Widget #10 size=16
-mm_alloc Widget #11 size=16
-mm_alloc Widget #12 size=16
-mm_alloc Widget #13 size=16
-mm_alloc Widget #14 size=16
-mm_alloc Widget #15 size=16
-mm_alloc Widget #16 size=16
-mm_alloc Widget #17 size=16
-mm_alloc Widget #18 size=16
-mm_alloc Widget #19 size=16
-mm_alloc Widget #20 size=16
-mm_alloc Widget #21 size=16
-mm_alloc Widget #22 size=16
-mm_alloc Widget #23 size=16
-mm_alloc Widget #24 size=16
-mm_alloc Widget #25 size=16
-mm_alloc Widget #26 size=16
-mm_alloc Widget #27 size=16
-mm_alloc Widget #28 size=16
-mm_alloc Widget #29 size=16
-mm_alloc Widget #30 size=16
-mm_alloc Widget #31 size=16
-mm_alloc Widget #32 size=16
+mm_alloc SlabUsage #5 size=48
+mm_decref SlabUsage #5 rc=0
+mm_free SlabUsage #5
+mm_alloc ArrayRecord #6 size=48
+mm_alloc ArrayRecord #7 size=48
+mm_alloc ElementBuffer #8 size=32
+mm_alloc ElementBuffer #9 size=32
+mm_alloc ElementBuffer #10 size=64
+mm_decref ElementBuffer #8 rc=0
+mm_free ElementBuffer #8
+mm_alloc ElementBuffer #11 size=64
+mm_decref ElementBuffer #9 rc=0
+mm_free ElementBuffer #9
+mm_alloc ElementBuffer #12 size=128
+mm_decref ElementBuffer #10 rc=0
+mm_free ElementBuffer #10
+mm_alloc ElementBuffer #13 size=128
+mm_decref ElementBuffer #11 rc=0
+mm_free ElementBuffer #11
+mm_alloc ElementBuffer #14 size=256
+mm_decref ElementBuffer #12 rc=0
+mm_free ElementBuffer #12
+mm_alloc ElementBuffer #15 size=256
+mm_decref ElementBuffer #13 rc=0
+mm_free ElementBuffer #13
+mm_alloc ElementBuffer #16 size=512
+mm_decref ElementBuffer #14 rc=0
+mm_free ElementBuffer #14
+mm_alloc ElementBuffer #17 size=512
+mm_decref ElementBuffer #15 rc=0
+mm_free ElementBuffer #15
+mm_alloc ElementBuffer #18 size=1024
+mm_decref ElementBuffer #16 rc=0
+mm_free ElementBuffer #16
+mm_alloc ElementBuffer #19 size=1024
+mm_decref ElementBuffer #17 rc=0
+mm_free ElementBuffer #17
+mm_alloc ElementBuffer #20 size=2048
+mm_decref ElementBuffer #18 rc=0
+mm_free ElementBuffer #18
+mm_alloc ElementBuffer #21 size=2048
+mm_decref ElementBuffer #19 rc=0
+mm_free ElementBuffer #19
+mm_alloc ElementBuffer #22 size=4096
+mm_decref ElementBuffer #20 rc=0
+mm_free ElementBuffer #20
+mm_alloc ElementBuffer #23 size=4096
+mm_decref ElementBuffer #21 rc=0
+mm_free ElementBuffer #21
+mm_alloc ElementBuffer #24 size=6656
+mm_decref ElementBuffer #22 rc=0
+mm_free ElementBuffer #22
+mm_alloc ElementBuffer #25 size=6656
+mm_decref ElementBuffer #23 rc=0
+mm_free ElementBuffer #23
+mm_alloc ElementBuffer #26 size=9856
+mm_decref ElementBuffer #24 rc=0
+mm_free ElementBuffer #24
+mm_alloc ElementBuffer #27 size=9856
+mm_decref ElementBuffer #25 rc=0
+mm_free ElementBuffer #25
+mm_alloc ElementBuffer #28 size=13856
+mm_decref ElementBuffer #26 rc=0
+mm_free ElementBuffer #26
+mm_alloc ElementBuffer #29 size=13856
+mm_decref ElementBuffer #27 rc=0
+mm_free ElementBuffer #27
+mm_alloc ElementBuffer #30 size=18856
+mm_decref ElementBuffer #28 rc=0
+mm_free ElementBuffer #28
+mm_alloc ElementBuffer #31 size=18856
+mm_decref ElementBuffer #29 rc=0
+mm_free ElementBuffer #29
+mm_incref ArrayRecord #6 rc=2
+mm_incref ArrayRecord #7 rc=2
+mm_alloc SlabCensus #32 size=40
+mm_incref ArrayRecord #6 rc=3
+mm_incref ArrayRecord #7 rc=3
+mm_decref ArrayRecord #7 rc=2
+mm_decref ArrayRecord #6 rc=2
+mm_decref ArrayRecord #7 rc=1
+mm_decref ArrayRecord #6 rc=1
+mm_decref SlabCensus #32 rc=0
+mm_decref ArrayRecord #6 rc=0
+mm_decref ElementBuffer #30 rc=0
+mm_free ElementBuffer #30
+mm_free ArrayRecord #6
+mm_decref ArrayRecord #7 rc=0
+mm_decref ElementBuffer #31 rc=0
+mm_free ElementBuffer #31
+mm_free ArrayRecord #7
+mm_free SlabCensus #32
 mm_alloc Widget #33 size=16
 mm_alloc Widget #34 size=16
 mm_alloc Widget #35 size=16
@@ -858,67 +1013,131 @@ mm_alloc Widget #65 size=16
 mm_alloc Widget #66 size=16
 mm_alloc Widget #67 size=16
 mm_alloc Widget #68 size=16
+mm_alloc Widget #69 size=16
+mm_alloc Widget #70 size=16
+mm_alloc Widget #71 size=16
+mm_alloc Widget #72 size=16
+mm_alloc Widget #73 size=16
+mm_alloc Widget #74 size=16
+mm_alloc Widget #75 size=16
+mm_alloc Widget #76 size=16
+mm_alloc Widget #77 size=16
+mm_alloc Widget #78 size=16
+mm_alloc Widget #79 size=16
+mm_alloc Widget #80 size=16
+mm_alloc Widget #81 size=16
+mm_alloc Widget #82 size=16
+mm_alloc Widget #83 size=16
+mm_alloc Widget #84 size=16
+mm_alloc Widget #85 size=16
+mm_alloc Widget #86 size=16
+mm_alloc Widget #87 size=16
+mm_alloc Widget #88 size=16
+mm_alloc Widget #89 size=16
+mm_alloc Widget #90 size=16
+mm_alloc Widget #91 size=16
+mm_alloc Widget #92 size=16
+mm_alloc Widget #93 size=16
+mm_alloc Widget #94 size=16
+mm_alloc Widget #95 size=16
+mm_alloc Widget #96 size=16
+mm_alloc SlabUsage #97 size=48
+mm_decref SlabUsage #97 rc=0
+mm_free SlabUsage #97
+mm_alloc ArrayRecord #98 size=48
+mm_alloc ArrayRecord #99 size=48
+mm_alloc ElementBuffer #100 size=32
+mm_alloc ElementBuffer #101 size=32
+mm_alloc ElementBuffer #102 size=64
+mm_decref ElementBuffer #100 rc=0
+mm_free ElementBuffer #100
+mm_alloc ElementBuffer #103 size=64
+mm_decref ElementBuffer #101 rc=0
+mm_free ElementBuffer #101
+mm_alloc ElementBuffer #104 size=128
+mm_decref ElementBuffer #102 rc=0
+mm_free ElementBuffer #102
+mm_alloc ElementBuffer #105 size=128
+mm_decref ElementBuffer #103 rc=0
+mm_free ElementBuffer #103
+mm_alloc ElementBuffer #106 size=256
+mm_decref ElementBuffer #104 rc=0
+mm_free ElementBuffer #104
+mm_alloc ElementBuffer #107 size=256
+mm_decref ElementBuffer #105 rc=0
+mm_free ElementBuffer #105
+mm_alloc ElementBuffer #108 size=512
+mm_decref ElementBuffer #106 rc=0
+mm_free ElementBuffer #106
+mm_alloc ElementBuffer #109 size=512
+mm_decref ElementBuffer #107 rc=0
+mm_free ElementBuffer #107
+mm_alloc ElementBuffer #110 size=1024
+mm_decref ElementBuffer #108 rc=0
+mm_free ElementBuffer #108
+mm_alloc ElementBuffer #111 size=1024
+mm_decref ElementBuffer #109 rc=0
+mm_free ElementBuffer #109
+mm_alloc ElementBuffer #112 size=2048
+mm_decref ElementBuffer #110 rc=0
+mm_free ElementBuffer #110
+mm_alloc ElementBuffer #113 size=2048
+mm_decref ElementBuffer #111 rc=0
+mm_free ElementBuffer #111
+mm_alloc ElementBuffer #114 size=4096
+mm_decref ElementBuffer #112 rc=0
+mm_free ElementBuffer #112
+mm_alloc ElementBuffer #115 size=4096
+mm_decref ElementBuffer #113 rc=0
+mm_free ElementBuffer #113
+mm_alloc ElementBuffer #116 size=6656
+mm_decref ElementBuffer #114 rc=0
+mm_free ElementBuffer #114
+mm_alloc ElementBuffer #117 size=6656
+mm_decref ElementBuffer #115 rc=0
+mm_free ElementBuffer #115
+mm_alloc ElementBuffer #118 size=9856
+mm_decref ElementBuffer #116 rc=0
+mm_free ElementBuffer #116
+mm_alloc ElementBuffer #119 size=9856
+mm_decref ElementBuffer #117 rc=0
+mm_free ElementBuffer #117
+mm_alloc ElementBuffer #120 size=13856
+mm_decref ElementBuffer #118 rc=0
+mm_free ElementBuffer #118
+mm_alloc ElementBuffer #121 size=13856
+mm_decref ElementBuffer #119 rc=0
+mm_free ElementBuffer #119
+mm_alloc ElementBuffer #122 size=18856
+mm_decref ElementBuffer #120 rc=0
+mm_free ElementBuffer #120
+mm_alloc ElementBuffer #123 size=18856
+mm_decref ElementBuffer #121 rc=0
+mm_free ElementBuffer #121
+mm_incref ArrayRecord #98 rc=2
+mm_incref ArrayRecord #99 rc=2
+mm_alloc SlabCensus #124 size=40
+mm_incref ArrayRecord #98 rc=3
+mm_incref ArrayRecord #99 rc=3
+mm_decref ArrayRecord #99 rc=2
+mm_decref ArrayRecord #98 rc=2
+mm_decref ArrayRecord #99 rc=1
+mm_decref ArrayRecord #98 rc=1
+mm_decref SlabCensus #124 rc=0
+mm_decref ArrayRecord #98 rc=0
+mm_decref ElementBuffer #122 rc=0
+mm_free ElementBuffer #122
+mm_free ArrayRecord #98
+mm_decref ArrayRecord #99 rc=0
+mm_decref ElementBuffer #123 rc=0
+mm_free ElementBuffer #123
+mm_free ArrayRecord #99
+mm_free SlabCensus #124
 mm_decref ArrayRecord #3 rc=0
 mm_decref ElementBuffer #4 rc=0
 mm_free ElementBuffer #4
 mm_free ArrayRecord #3
 mm_decref ArrayRecord #1 rc=0
-mm_decref Widget #5 rc=0
-mm_free Widget #5
-mm_decref Widget #6 rc=0
-mm_free Widget #6
-mm_decref Widget #7 rc=0
-mm_free Widget #7
-mm_decref Widget #8 rc=0
-mm_free Widget #8
-mm_decref Widget #9 rc=0
-mm_free Widget #9
-mm_decref Widget #10 rc=0
-mm_free Widget #10
-mm_decref Widget #11 rc=0
-mm_free Widget #11
-mm_decref Widget #12 rc=0
-mm_free Widget #12
-mm_decref Widget #13 rc=0
-mm_free Widget #13
-mm_decref Widget #14 rc=0
-mm_free Widget #14
-mm_decref Widget #15 rc=0
-mm_free Widget #15
-mm_decref Widget #16 rc=0
-mm_free Widget #16
-mm_decref Widget #17 rc=0
-mm_free Widget #17
-mm_decref Widget #18 rc=0
-mm_free Widget #18
-mm_decref Widget #19 rc=0
-mm_free Widget #19
-mm_decref Widget #20 rc=0
-mm_free Widget #20
-mm_decref Widget #21 rc=0
-mm_free Widget #21
-mm_decref Widget #22 rc=0
-mm_free Widget #22
-mm_decref Widget #23 rc=0
-mm_free Widget #23
-mm_decref Widget #24 rc=0
-mm_free Widget #24
-mm_decref Widget #25 rc=0
-mm_free Widget #25
-mm_decref Widget #26 rc=0
-mm_free Widget #26
-mm_decref Widget #27 rc=0
-mm_free Widget #27
-mm_decref Widget #28 rc=0
-mm_free Widget #28
-mm_decref Widget #29 rc=0
-mm_free Widget #29
-mm_decref Widget #30 rc=0
-mm_free Widget #30
-mm_decref Widget #31 rc=0
-mm_free Widget #31
-mm_decref Widget #32 rc=0
-mm_free Widget #32
 mm_decref Widget #33 rc=0
 mm_free Widget #33
 mm_decref Widget #34 rc=0
@@ -991,6 +1210,62 @@ mm_decref Widget #67 rc=0
 mm_free Widget #67
 mm_decref Widget #68 rc=0
 mm_free Widget #68
+mm_decref Widget #69 rc=0
+mm_free Widget #69
+mm_decref Widget #70 rc=0
+mm_free Widget #70
+mm_decref Widget #71 rc=0
+mm_free Widget #71
+mm_decref Widget #72 rc=0
+mm_free Widget #72
+mm_decref Widget #73 rc=0
+mm_free Widget #73
+mm_decref Widget #74 rc=0
+mm_free Widget #74
+mm_decref Widget #75 rc=0
+mm_free Widget #75
+mm_decref Widget #76 rc=0
+mm_free Widget #76
+mm_decref Widget #77 rc=0
+mm_free Widget #77
+mm_decref Widget #78 rc=0
+mm_free Widget #78
+mm_decref Widget #79 rc=0
+mm_free Widget #79
+mm_decref Widget #80 rc=0
+mm_free Widget #80
+mm_decref Widget #81 rc=0
+mm_free Widget #81
+mm_decref Widget #82 rc=0
+mm_free Widget #82
+mm_decref Widget #83 rc=0
+mm_free Widget #83
+mm_decref Widget #84 rc=0
+mm_free Widget #84
+mm_decref Widget #85 rc=0
+mm_free Widget #85
+mm_decref Widget #86 rc=0
+mm_free Widget #86
+mm_decref Widget #87 rc=0
+mm_free Widget #87
+mm_decref Widget #88 rc=0
+mm_free Widget #88
+mm_decref Widget #89 rc=0
+mm_free Widget #89
+mm_decref Widget #90 rc=0
+mm_free Widget #90
+mm_decref Widget #91 rc=0
+mm_free Widget #91
+mm_decref Widget #92 rc=0
+mm_free Widget #92
+mm_decref Widget #93 rc=0
+mm_free Widget #93
+mm_decref Widget #94 rc=0
+mm_free Widget #94
+mm_decref Widget #95 rc=0
+mm_free Widget #95
+mm_decref Widget #96 rc=0
+mm_free Widget #96
 mm_decref ElementBuffer #2 rc=0
 mm_free ElementBuffer #2
 mm_free ArrayRecord #1
@@ -1008,11 +1283,9 @@ answers below the box it must actually hold. The bound is derived from the PROGR
 plus the box header — so it is not the geometry pinned against itself.
 ```maxon
 typealias WidgetField = int(0 to 65536)
-typealias Tally = int(0 to u64.max)
-typealias TallyArray = Array with Tally
+typealias TallyArray = Array with HeapCount
 
 let Population = 1000
-let SizeClassMode = 1
 let BucketCount = 2048
 let HeaderBytes = 24
 
@@ -1027,6 +1300,19 @@ end 'Widget'
 
 typealias Widgets = Array with Widget
 
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
+function snapshotCounts(into TallyArray, mode HeapCensusMode) returns bool
+	let live = liveBytes()
+	let census = HeapStats.census(mode)
+	for i in 0 upto BucketCount 'snapshot'
+		try into.set(i, value: census.bucketCount(i)) otherwise panic("the snapshot is sized to every bucket")
+	end 'snapshot'
+	return census.tallyBytes == live
+end 'snapshotCounts'
+
 function main() returns ExitCode
 	var holder = Widgets.create()
 	holder.reserve(Population)
@@ -1037,19 +1323,18 @@ function main() returns ExitCode
 		before.push(0)
 	end 'sizeTheSnapshot'
 
-	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theFirstTallysOwnWalkMissedTheLevel'
+	if not snapshotCounts(before, mode: HeapCensusMode.bySizeClass) 'theFirstTallysOwnWalkMissedTheLevel'
 		return 1
 	end 'theFirstTallysOwnWalkMissedTheLevel'
-
-	for i in 0 upto BucketCount 'snapshot'
-		try before.set(i, value: __Builtins.slabCensusBucketCount(i)) otherwise panic("the snapshot is sized to every bucket")
-	end 'snapshot'
 
 	for k in 0 upto Population 'buildWidgets'
 		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
 	end 'buildWidgets'
 
-	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theSecondTallysOwnWalkMissedTheLevel'
+	let liveAtTheTally = liveBytes()
+	let census = HeapStats.census(HeapCensusMode.bySizeClass)
+
+	if census.tallyBytes != liveAtTheTally 'theSecondTallysOwnWalkMissedTheLevel'
 		return 1
 	end 'theSecondTallysOwnWalkMissedTheLevel'
 
@@ -1057,7 +1342,7 @@ function main() returns ExitCode
 	var biggestIndex = 0
 	for i in 0 upto BucketCount 'compare'
 		let was = try before.get(i) otherwise panic("the snapshot is sized to every bucket")
-		let now = __Builtins.slabCensusBucketCount(i)
+		let now = census.bucketCount(i)
 
 		if now < was 'aBucketFell'
 			return 3
@@ -1073,8 +1358,8 @@ function main() returns ExitCode
 		return 2
 	end 'noBucketRoseByThePopulation'
 
-	let count = __Builtins.slabCensusBucketCount(biggestIndex)
-	let bytes = __Builtins.slabCensusBucketBytes(biggestIndex)
+	let count = census.bucketCount(biggestIndex) as HeapBytes
+	let bytes = census.bucketBytes(biggestIndex)
 	let slot = trunc(try (bytes / count) otherwise panic("the bucket that rose by the population holds slots"))
 
 	if (slot * count) != bytes 'theBucketMixesSlotSizes'
@@ -1103,11 +1388,9 @@ the accounting, and nothing here destroys one.
 ever grows, which is a residency table that cannot see a leak being fixed.
 ```maxon
 typealias WidgetField = int(0 to 65536)
-typealias Tally = int(0 to u64.max)
-typealias TallyArray = Array with Tally
+typealias TallyArray = Array with HeapCount
 
 let Population = 1000
-let SizeClassMode = 1
 let BucketCount = 2048
 
 type Widget
@@ -1120,6 +1403,23 @@ type Widget
 end 'Widget'
 
 typealias Widgets = Array with Widget
+
+function freeBytes() returns HeapBytes
+	return HeapStats.slab().free
+end 'freeBytes'
+
+function liveBytes() returns HeapBytes
+	return HeapStats.slab().live
+end 'liveBytes'
+
+function snapshotCounts(into TallyArray, mode HeapCensusMode) returns bool
+	let live = liveBytes()
+	let census = HeapStats.census(mode)
+	for i in 0 upto BucketCount 'snapshot'
+		try into.set(i, value: census.bucketCount(i)) otherwise panic("the snapshot is sized to every bucket")
+	end 'snapshot'
+	return census.tallyBytes == live
+end 'snapshotCounts'
 
 function main() returns ExitCode
 	var holder = Widgets.create()
@@ -1135,27 +1435,26 @@ function main() returns ExitCode
 		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
 	end 'buildWidgets'
 
-	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theFirstTallysOwnWalkMissedTheLevel'
+	if not snapshotCounts(before, mode: HeapCensusMode.bySizeClass) 'theFirstTallysOwnWalkMissedTheLevel'
 		return 1
 	end 'theFirstTallysOwnWalkMissedTheLevel'
 
-	for i in 0 upto BucketCount 'snapshot'
-		try before.set(i, value: __Builtins.slabCensusBucketCount(i)) otherwise panic("the snapshot is sized to every bucket")
-	end 'snapshot'
-
-	let liveHolding = __Builtins.slabLiveBytes()
-	let freeHolding = __Builtins.slabFreeBytes()
+	let liveHolding = liveBytes()
+	let freeHolding = freeBytes()
 
 	holder = Widgets.create()
 
-	if __Builtins.slabCensusTally(SizeClassMode) != __Builtins.slabLiveBytes() 'theSecondTallysOwnWalkMissedTheLevel'
+	let liveAtTheTally = liveBytes()
+	let census = HeapStats.census(HeapCensusMode.bySizeClass)
+
+	if census.tallyBytes != liveAtTheTally 'theSecondTallysOwnWalkMissedTheLevel'
 		return 1
 	end 'theSecondTallysOwnWalkMissedTheLevel'
 
 	var biggestFall = 0
 	for i in 0 upto BucketCount 'compare'
 		let was = try before.get(i) otherwise panic("the snapshot is sized to every bucket")
-		let now = __Builtins.slabCensusBucketCount(i)
+		let now = census.bucketCount(i)
 
 		if (was - now) > biggestFall 'fell'
 			biggestFall = was - now
@@ -1166,9 +1465,55 @@ function main() returns ExitCode
 		return 2
 	end 'noBucketFellByThePopulation'
 
-	if (__Builtins.slabLiveBytes() + __Builtins.slabFreeBytes()) > (liveHolding + freeHolding) 'slotsAppearedFromNowhere'
+	if (liveBytes() + freeBytes()) > (liveHolding + freeHolding) 'slotsAppearedFromNowhere'
 		return 3
 	end 'slotsAppearedFromNowhere'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: slab-census.the-census-carries-the-level-of-its-own-walk -->
+**THE LEVEL A CENSUS CARRIES IS THE ONE ITS WALK SAW, NOT ONE READ AFTER THE SNAPSHOT EXISTS.** `liveBytes` is read
+on the statement after the walk and before the snapshot allocates its two bucket arrays, so it equals `tallyBytes`
+with no reading taken beforehand. A `slab().live` read after the census returned counts those arrays, which is why
+the census carries its own figure for a caller that cross-checks the walk.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Bufs = Array with ByteArray
+
+let Population = 2000
+let PayloadBytes = 96
+
+function build(seed Byte) returns ByteArray
+	var b = ByteArray.create()
+	b.reserve(PayloadBytes)
+	for _ in 0 upto PayloadBytes 'fill'
+		b.push(seed)
+	end 'fill'
+	return b
+end 'build'
+
+function main() returns ExitCode
+	var bufs = Bufs.create()
+	for k in 0 upto Population 'alloc'
+		bufs.push(build((k mod 251) as Byte))
+	end 'alloc'
+
+	let census = HeapStats.census(HeapCensusMode.bySizeClass)
+	let afterTheCensus = HeapStats.slab().live
+
+	if census.liveBytes != census.tallyBytes 'theLevelIsNotTheWalks'
+		return 1
+	end 'theLevelIsNotTheWalks'
+
+	if afterTheCensus <= census.liveBytes 'theSnapshotWentUncounted'
+		return 2
+	end 'theSnapshotWentUncounted'
 
 	return 0
 end 'main'
@@ -1210,13 +1555,13 @@ function main() returns ExitCode
 	var holder = Widgets.create()
 	holder.reserve(Population)
 
-	let before = __Builtins.mmRawAllocLive() as Delta
+	let before = HeapStats.rawAllocationsLive() as Delta
 
 	for k in 0 upto Population 'buildWidgets'
 		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
 	end 'buildWidgets'
 
-	let rose = (__Builtins.mmRawAllocLive() as Delta) - before
+	let rose = (HeapStats.rawAllocationsLive() as Delta) - before
 
 	if holder.count() != Population 'theWidgetsWereNotHeld'
 		return 1
@@ -1231,4 +1576,17 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: slab-census.error.a-bucket-index-past-the-table-is-refused -->
+The table has 2048 buckets, and the index a bucket reader takes is a `HeapBucketIndex`, `int(0 to 2047)`, so
+an index past the last bucket is refused at the call rather than reading a word beyond the table.
+```maxon
+function main() returns ExitCode
+	let census = HeapStats.census(HeapCensusMode.bySizeClass)
+	return census.bucketCount(2048) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:4:16: Value 2048 is outside the range of 'HeapBucketIndex' (int(0 to 2047))
 ```

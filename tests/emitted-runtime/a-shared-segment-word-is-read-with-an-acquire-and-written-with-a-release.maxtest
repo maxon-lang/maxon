@@ -4,7 +4,7 @@ let SharedSegmentFixtureName = "shared-segment"
 let ReadWordName = "__shm_read_word"
 let WriteWordName = "__shm_write_word"
 
-let OrderedAccessesPerBody = 1 as AccessTally
+let OrderedAccessesPerBody = 1 as LineTally
 
 let OrderingReason = "A shared segment is the one memory two PROCESSES both map, and a word in it is how one of them tells the other that the bytes it covers are ready. No lock spans the two processes, so the edge has to travel on the accesses themselves. A plain `ldr` orders nothing after itself and a plain `str` nothing before itself, so armv8 may serve the reader bytes older than the word that announced them. The read is `StdOp.loadAcquire`, which is `ldar` on both arm64 lanes, and the write `StdOp.storeRelease`, which is `stlr`; both are the same plain `mov` on x64."
 

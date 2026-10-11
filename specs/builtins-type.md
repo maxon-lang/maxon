@@ -11,7 +11,7 @@ category: type-system
 
 ### Overview
 
-`__Builtins` is a compiler builtin type that provides static methods for low-level system operations. While accessible from any code, most users should prefer the stdlib wrappers: `print()`, `File`, `Directory`, `Subprocess`, `CommandLine`.
+`__Builtins` is a compiler builtin type that provides static methods for low-level system operations. It is library-tier: only a source file under `stdlib/` or `runtime/` may call a member, and a call from anywhere else is E3185. A program uses the stdlib wrappers: `print()`, `File`, `Directory`, `Subprocess`, `CommandLine`, `Process`, `Math`. The cases below that call a member compile in the library tier (`<!-- tier: stdlib -->`).
 
 All methods include safety checks to prevent crashes and memory corruption:
 - Buffer reads are clamped to capacity
@@ -105,6 +105,7 @@ end 'main'
 ```
 
 <!-- test: builtins-type.command-line-arg-out-of-bounds -->
+<!-- tier: stdlib -->
 <!-- Args: one -->
 ```maxon
 function main() returns ExitCode
@@ -121,6 +122,7 @@ end 'main'
 ```
 
 <!-- test: builtins-type.float-to-bits -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let bits = __Builtins.floatToBits(1.0)
@@ -136,6 +138,7 @@ end 'main'
 ```
 
 <!-- test: builtins-type.bits-to-float -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let value = __Builtins.bitsToFloat(4607182418800017408)
@@ -153,6 +156,7 @@ end 'main'
 ```
 
 <!-- test: builtins-type.bits-to-float-round-trip -->
+<!-- tier: stdlib -->
 `bitsToFloat` and `floatToBits` are exact inverses, so composing them in either
 order is the identity. Round-tripping bit patterns that no numeric conversion
 could reproduce — the smallest subnormal, the largest subnormal, negative zero —
@@ -218,6 +222,7 @@ not interchangeable. Passing the wrong one is always a mistake, and is rejected
 rather than reinterpreted.
 
 <!-- test: builtins-type.error.bits-to-float-float-arg -->
+<!-- tier: stdlib -->
 ⚠ **ONE SENTENCE FOR THE WHOLE SURFACE.** The compiler words a `__Builtins.*` operand rejection
 the same way for every intrinsic, naming the callee and the two SOURCE types and anchoring on the callee,
 rather than per ARGUMENT with the ABI type and the argument index. Every `__Builtins.*` operand refusal in
@@ -235,6 +240,7 @@ error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires a int, but its a
 ```
 
 <!-- test: builtins-type.error.bits-to-float-managed-arg -->
+<!-- tier: stdlib -->
 The wording divergence is `bits-to-float-float-arg`'s, one case up.
 A managed value is a heap pointer, and a heap pointer is not a float's bit
 pattern. This one matters most: the pointer shares the integer representation,
@@ -251,6 +257,7 @@ error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires a int, but its a
 ```
 
 <!-- test: builtins-type.error.bits-to-float-bool-arg -->
+<!-- tier: stdlib -->
 The wording divergence is `bits-to-float-float-arg`'s, one case up.
 ```maxon
 function main() returns ExitCode
@@ -263,6 +270,7 @@ error E3005: <fragment>:3:21: '__Builtins.bitsToFloat' requires a int, but its a
 ```
 
 <!-- test: builtins-type.error.float-to-bits-int-arg -->
+<!-- tier: stdlib -->
 The wording divergence is `bits-to-float-float-arg`'s, one case up.
 The mirror rejection: `floatToBits` takes the float, not the pattern.
 ```maxon
@@ -276,6 +284,7 @@ error E3005: <fragment>:3:21: '__Builtins.floatToBits' requires a float, but its
 ```
 
 <!-- test: builtins-type.direct-write-stdout -->
+<!-- tier: stdlib -->
 `__Builtins.writeStdout` returns the byte count written — an impure result like
 any other function's, so a bare statement-position call is rejected and the
 result must be explicitly discarded with `_ =`.

@@ -5,8 +5,8 @@
 /// decision points and then verify that the internal path it expected executed.
 ///
 /// Nothing in the standard library calls `trace`, so a capture holds only the keys the program emitted
-/// itself. `capturing` and `captured` are module-level `var`s, so a service message handler — and
-/// anything it calls — may not reach any function here (E3143).
+/// itself. The capture state is a registry `default`, a shared on/off switch beside a recorder
+/// service it spawns before `main` runs, so any green thread or service may call `trace`.
 ///
 /// Usage:
 ///   function parseHeader(line String) returns bool
@@ -25,38 +25,77 @@
 ///     panic("the blank-line branch did not engage on this input")
 ///   end 'missing'
 ///
-/// Capture is off by default. When off, trace() is a single bool load + branch
-/// and returns immediately. Programs that never reference any `TraceCapture.*` function
-/// pay nothing: the dead-top-level-var pass drops `capturing` and `captured`
-/// along with their initializer's `__module_init` chain.
+/// Capture is off by default. When off, trace() reads the switch and returns.
 /// @category System
 public typealias TraceKeyArray = Array with String
 
-var capturing = false
-var captured = TraceKeyArray.create()
+typealias TraceCaptureSwitch = SharedValue with bool
+
+type TraceRecorder
+	var keys as TraceKeyArray
+
+	static function create() returns Self
+		return Self{keys: TraceKeyArray.create()}
+	end 'create'
+
+	export function record(key String)
+		self.keys.push(key)
+	end 'record'
+
+	export function begin()
+		self.keys.clear()
+	end 'begin'
+
+	export function finish() returns TraceKeyArray
+		let result = self.keys
+		self.keys = TraceKeyArray.create()
+		return result
+	end 'finish'
+end 'TraceRecorder'
+
+type TraceCaptureControl
+	let capturing as TraceCaptureSwitch
+	let recorder as TraceRecorder.handle
+
+	static function create(capturing TraceCaptureSwitch, recorder TraceRecorder.handle) returns Self
+		return Self{capturing: capturing, recorder: recorder}
+	end 'create'
+
+	function note(key String)
+		if self.capturing.current() 'on'
+			self.recorder.record(key)
+		end 'on'
+	end 'note'
+
+	function start()
+		self.recorder.begin()
+		self.capturing.publish(true)
+	end 'start'
+
+	function stop() returns TraceKeyArray
+		self.capturing.publish(false)
+		return try await self.recorder.finish() otherwise panic("TraceCapture.stopCapture: the recorder service is gone")
+	end 'stop'
+end 'TraceCaptureControl'
+
+default TraceCaptureControl = TraceCaptureControl.create(TraceCaptureSwitch.create(false), recorder: spawn TraceRecorder.create())
 
 public type TraceCapture
 	/// Emit a trace key. No-op when capture is off.
 	/// Pass a stable identifier like "parseHeader.blank" — keys are matched
 	/// literally by tests, so they should not embed run-specific data.
 	public static function trace(key String)
-		if capturing 'on'
-			captured.push(key)
-		end 'on'
+		TraceCaptureControl.current().note(key)
 	end 'trace'
 
 	/// Begin recording trace keys. Discards any previously captured keys.
 	public static function startCapture()
-		captured.clear()
-		capturing = true
+		TraceCaptureControl.current().start()
 	end 'startCapture'
 
 	/// Stop recording and return the captured keys in emission order.
 	public static function stopCapture() returns TraceKeyArray
-		capturing = false
-		let result = captured.clone()
-		captured.clear()
-		return result
+		return TraceCaptureControl.current().stop()
 	end 'stopCapture'
 
 	/// Predicate: did `key` appear at least once in `capturedKeys`?

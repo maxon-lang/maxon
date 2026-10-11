@@ -10,7 +10,8 @@ category: types
 # A `Character` is MINTED per trip, and dropped per trip
 
 `for c in s` walks a `String`'s extended grapheme clusters (UAX #29). Unlike `for x in <Array>`,
-where the element is a **borrow** the array still owns, a String's clusters are **stored nowhere** —
+where the element is a counted reference to a value the array also holds, a String's clusters are
+**stored nowhere** —
 the record holds bytes, and a `Character` is a record — so each trip **allocates** one and this loop
 is its only owner.
 
@@ -527,53 +528,94 @@ end 'main'
 3
 ```
 
-<!-- test: iterating-a-string-locks-its-source -->
-### `for c in s` locks `s`, exactly as the array form locks its array
+<!-- test: rebinding-the-iterated-string-walks-the-old-string -->
+### Rebinding `s` inside `for c in s` leaves the loop on the string it started on
 
-The loop evaluates its source ONCE into the preheader and re-reads `length@8` / `buffer@0` off that
-record every trip. Rebinding the variable inside the body would decref the record the loop is still
-walking, and the next trip's read would fault (**0xC0000005**) — so the String form takes the same
-`lockIterationSource` the array form takes.
+The loop holds its own reference to the string it evaluated on entry, so rebinding the variable in
+the body changes what `s` names and not what the loop walks: all 20 clusters of the old string are
+visited.
 
 ```maxon
 function main() returns ExitCode
-	var s = "abcdefgh"
+	var s = "abcdefgh ijklmnop {40 + 2}"
 	var n = 0
+	var seen = ""
 	for c in s 'each'
-		n = n + 1 if c == c else n
+		n = n + 1
 		if n == 2 'swap'
 			s = "z"
 		end 'swap'
+
+		seen.append("{c}")
 	end 'each'
-	print("{n}\n")
+	print("{n} {seen} {s}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2013: specs/character-ownership/iterating-a-string-locks-its-source.maxon:8:4: cannot assign to immutable variable: 's'
+```exitcode
+0
+```
+```stdout
+20 abcdefgh ijklmnop 42 z
 ```
 
-<!-- test: mutating-a-string-being-iterated-is-refused -->
-### A method that mutates the iterated String is refused too
+<!-- test: appending-to-the-iterated-string-extends-the-iteration -->
+### Appending to the iterated String extends the walk
 
-The other half of the same lock: a mutating method would change the record the loop re-reads every trip.
+A mutating method changes the record the loop walks, and the loop re-reads its length every step,
+so the two bytes appended in the body are visited too.
 
 ```maxon
 function main() returns ExitCode
-	var s = "ab"
-	let t = "c"
+	var s = "heap string number {40 + 2} here"
 	var n = 0
+	var seen = ""
 	for c in s 'each'
-		n = n + 1 if c == c else n
-		s.append(t)
+		n = n + 1
+		if s.byteLength() < 28 'grow'
+			s.append("!")
+		end 'grow'
+
+		seen.append("{c}")
 	end 'each'
-	s = "done"
-	print("{n} {s}\n")
+	print("{n} {seen} {s}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3019: specs/character-ownership/mutating-a-string-being-iterated-is-refused.maxon:8:5: cannot pass 's' to function that mutates parameter 'self' (in main)
+```exitcode
+0
+```
+```stdout
+28 heap string number 42 here!! heap string number 42 here!!
+```
+
+<!-- test: rebinding-a-module-string-in-body-walks-the-old-string -->
+### Rebinding a module `var` String inside a `for` over it
+
+The same rule for a module `var`: the loop walks the 86-byte string it started on, and `k` totals
+the byte length of every cluster of it.
+
+```maxon
+typealias ByteTally = int(0 to 1000)
+
+var banner = "hello world this is a long string for heap allocation"
+
+function main() returns ExitCode
+	banner = "{banner} {40 + 2} and more text to make it heap"
+	var k = 0 as ByteTally
+	for c in banner 'l'
+		banner = "z"
+		k = k + (c.byteLength() as ByteTally)
+	end 'l'
+	print("{k} {banner}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+86 z
 ```
 
 <!-- test: a-character-array-takes-a-borrowed-literal -->

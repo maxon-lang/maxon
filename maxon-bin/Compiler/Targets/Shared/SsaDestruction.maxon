@@ -42,9 +42,7 @@ export type EdgeMovePlan
 	export var predBlockId as BlockId
 	export var succBlockId as BlockId
 
-	// Flat `module.blocks` indices — the splice mutates `module` while holding the
-	// block, which requires a FIELD-level borrow (`module.blocks.get`), not the
-	// whole-module borrow `getBlockByIdIn` takes.
+	// Flat `module.blocks` indices.
 	export var predBlockRef as ElementIndex
 	export var succBlockRef as ElementIndex
 	export var moveDsts as RegNumColumn
@@ -751,8 +749,7 @@ function spliceEdgeMoves(module TargetModule, plan EdgeMovePlan)
 end 'spliceEdgeMoves'
 
 // Pred has one successor: append the moves to its body (they run before the
-// terminator, on the only edge out). The block is re-fetched per move via a
-// FIELD-level borrow (`module.blocks.get`) so `appendOp` may mutate `module.ops`.
+// terminator, on the only edge out).
 function splicePredEnd(module TargetModule, plan EdgeMovePlan)
 	for i in 0 upto plan.moveCount() 'eachMove'
 		var predBlock = try module.blocks.get(plan.predBlockRef) otherwise panic("splicePredEnd: predBlockRef {plan.predBlockRef} not in module.blocks")
@@ -795,11 +792,8 @@ let CritSplitLabel = b"critsplit"
 // succ`, with the phi `branchEdge` MOVED onto `split` (which has one successor, so
 // SSA destruction places the moves at its end).
 //
-// Run before coloring so the mutation of `func.blockRefs`/`func.nextBlockId` happens
-// OUTSIDE the per-function coloring loop's borrow of `func`. Each function is driven
-// by INDEX and re-fetched inside `addSplitBlock`, so no `func` borrowed from
-// `module.functions` is ever passed to a function that mutates it. The module is a backend
-// UNIT's — one function — on a pool worker (`BackendWorker`) and on the E5001 re-run alike.
+// The module is a backend UNIT's — one function — on a pool worker (`BackendWorker`) and on the
+// E5001 re-run alike.
 export function splitCriticalEdges(module TargetModule, target Target)
 	for funcIdx in 0 upto module.funcCount() 'eachFunc'
 		splitCriticalEdgesInFunc(module, funcIdx: funcIdx, target: target)
@@ -807,10 +801,6 @@ export function splitCriticalEdges(module TargetModule, target Target)
 end 'splitCriticalEdges'
 
 function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, target Target)
-	// The SKELETON is built through a helper so `func`'s borrow is scoped to it — the
-	// split loop below mutates `module.functions[funcIdx]` (adding block refs), which
-	// must not overlap a live borrow of that function.
-	//
 	// A `FuncTopology`, not a `FuncCfg`: classifying a critical edge asks only for the
 	// successor and predecessor DEGREES. It has no use for the loop depths or the value count,
 	// and building them here — an operand scan of every op, plus a DFS and a BFS per natural
@@ -865,9 +855,7 @@ function performCriticalSplit(module TargetModule, funcIdx ElementIndex, predRef
 end 'performCriticalSplit'
 
 // Create the split block (an unconditional-branch terminator to `succId`) and register it in
-// `module.blocks` + `func.blockRefs`. `func` is fetched HERE by index and mutated
-// directly, so its borrow never escapes to a caller (which would clash with the
-// split loop mutating the same function). The branch op is the TARGET's — `jmp` for x64,
+// `module.blocks` + `func.blockRefs`. The branch op is the TARGET's — `jmp` for x64,
 // `arm64Branch` for arm64 — so the split block speaks the same ISA as the code around it.
 // The inline site is COPIED: the predecessor keeps its own box, and the module travels home from a
 // pool worker in a reply that must own everything it reaches.
@@ -894,9 +882,7 @@ end 'unconditionalBranchTo'
 
 // Move the predecessor's `branchEdge` to `succId` (its phi args) onto the split
 // block. The phi args now flow pred → split → succ, and the split block (one
-// successor) is where SSA destruction places their moves. The pred and split block
-// borrows are scoped to separate helpers so two live borrows of `module.blocks`
-// never coexist.
+// successor) is where SSA destruction places their moves.
 function moveBranchEdgeToSplit(module TargetModule, predRef ElementIndex, succId BlockId, splitRef ElementIndex)
 	let movedArgs = extractPredEdge(module, predRef: predRef, succId: succId)
 	addSplitEdge(module, splitRef: splitRef, succId: succId, argIds: movedArgs)
@@ -932,8 +918,6 @@ function addSplitEdge(module TargetModule, splitRef ElementIndex, succId BlockId
 	splitBlock.branchEdges.push(BranchEdge.create(succId, argIds: argIds))
 end 'addSplitEdge'
 
-// Build a function's CFG skeleton by INDEX, so the `func` borrow it needs is scoped to this
-// helper and never held across the caller's mutation of the same function.
 function buildFuncTopologyByIndex(module TargetModule, funcIdx ElementIndex) returns FuncTopology
 	let func = module.getFunc(funcIdx)
 	return buildFuncTopology(module, func: func)
@@ -957,13 +941,8 @@ end 'buildFuncTopologyByIndex'
 export function retargetControlOp(module TargetModule, predRef ElementIndex, oldTarget BlockId, newTarget BlockId)
 	var retargeted = false
 
-	// ⚠ **THE PREDECESSOR IS READ OUT AND LET GO BEFORE THE FIRST WRITE.** `module.blocks.get` hands back a
-	// BORROW of `module` (E3070), and every `retarget*` below writes `module.ops` — so holding the block
-	// across them is refused, and rightly: the block record belongs to the array being written through.
-	// Everything this function needs from it is three values that outlive the borrow — the two terminator
-	// slots (scalar-payload unions, copied out) and the id the conditional half's panic cites. That id
-	// is cited rather than the block's LABEL, which is a borrowed `ByteArray` that could not be held
-	// either — and is the worse citation anyway, since a block's label is not its identity.
+	// The conditional half's panic cites the block's id rather than its LABEL, since a label is not a
+	// block's identity.
 	//
 	// ⭐ The two halves are functions of their own, and not for tidiness: a `match`
 	// arm takes ONE statement, so reading the slot as the union it is — rather than through a

@@ -102,7 +102,7 @@ export union SectionPinExpectation
 	contiguousRun(bytes ByteArray)
 
 	// N independently-placed blobs, each found at or after the end of the previous one.
-	locatedPayloads(payloads ByteArrayArray)
+	locatedPayloads(payloads ByteBlobArray)
 end 'SectionPinExpectation'
 
 // Why a ```RequiredData block could not be turned into bytes.
@@ -200,7 +200,7 @@ end 'readPeSectionData'
 // eight bytes `3.14` actually lays down (`data-section-f64-*`).
 export function parseTypedSectionValues(block String) returns SectionPinExpectation throws TypedValueError
 	var out = ByteArray.create()
-	var payloads = ByteArrayArray.create()
+	var payloads = ByteBlobArray.create()
 
 	// Tracked rather than inferred from `out.count()`: an array line with no elements contributes zero
 	// bytes, and "a scalar line was written" is the question the mixed-form refusal asks.
@@ -472,7 +472,6 @@ let NulByte = 0 as Byte
 // costs is COMPILABILITY: the compiler's `requireCalleeIsNotReservedName` exempts the reserved `__` space only
 // for calls made from inside `Builtins.maxon` itself, so this file — user code as far as the compiler
 // is concerned — is refused with `E3004`.
-// `__Builtins.`-qualified callees short-circuit that check, which is why the second half stays direct.
 //
 // ⚠ **THE TWO FAILURE ARMS STILL COLLAPSE TO ONE THROW, AND THEY STILL HAVE TO.** `__FloatTextResult`
 // distinguishes `overflow` from `malformed`; `ParseError` — which `float.fromString` throws — has the
@@ -486,7 +485,7 @@ let NulByte = 0 as Byte
 function parseTypedValueBits(typeName String, text String) returns ParsedInt throws TypedValueError
 	if typeName == F64TypeName 'float'
 		let value = try float.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)
-		return __Builtins.floatToBits(value)
+		return bitsOfFloat(value)
 	end 'float'
 
 	return try int.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)

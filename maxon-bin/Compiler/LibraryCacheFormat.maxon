@@ -99,7 +99,7 @@ export type LibraryCacheWriter
 	end 'flag'
 
 	export function real(value ParsedFloat)
-		self.signed(__Builtins.floatToBits(value) as CacheSigned)
+		self.signed(bitsOfFloat(value) as CacheSigned)
 	end 'real'
 
 	export function bytes(value ByteArray)
@@ -116,7 +116,9 @@ export type LibraryCacheWriter
 	end 'raw'
 
 	export function payload() returns ByteArray
-		return self.buffer
+		let taken = self.buffer
+		self.buffer = ByteArray.create()
+		return taken
 	end 'payload'
 
 	export function sealed() returns ByteArray
@@ -306,7 +308,7 @@ export type LibraryCacheReader
 	end 'text'
 
 	export function real() returns ParsedFloat throws LibraryCacheDamage
-		return __Builtins.bitsToFloat(try self.signed())
+		return floatOfBits((try self.signed()) as ParsedInt)
 	end 'real'
 
 	export function path() returns FilePath throws LibraryCacheDamage
@@ -377,10 +379,10 @@ end 'rowPositionIn'
 // the cost of a load on Windows.
 export type LibraryPackBuilder
 	var rows as PackRowKeyArray
-	var sections as ByteArrayArray
+	var sections as ByteBlobArray
 
 	export static function create() returns LibraryPackBuilder
-		return Self{rows: PackRowKeyArray.create(), sections: ByteArrayArray.create()}
+		return Self{rows: PackRowKeyArray.create(), sections: ByteBlobArray.create()}
 	end 'create'
 
 	export function add(first HashDigest, second HashDigest, third HashDigest, payload ByteArray)

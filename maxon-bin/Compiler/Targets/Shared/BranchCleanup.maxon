@@ -238,10 +238,8 @@ end 'emptyJumpTargetOf'
 // implementation in the compiler (`retargetControlOp`, SsaDestruction) — which covers the `jcc`, the
 // `jmp`, the arm64 branches AND both multiway jump tables, so no edge kind can be silently missed.
 //
-// COLLECT FIRST, THEN WRITE: `retargetControlOp` writes `module.ops`, which no live borrow of a
-// block out of `module.blocks` may overlap (E3070). It is also `splitCriticalEdgesInFunc`'s
-// discipline for the second reason — the reads classify against ONE consistent CFG, and each
-// redirect is independent of the others.
+// COLLECT FIRST, THEN WRITE, `splitCriticalEdgesInFunc`'s discipline: the reads classify against
+// ONE consistent CFG, and each redirect is independent of the others.
 function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved CfgIndexArray)
 	var predRefs = BlockRefArray.create()
 	var oldTargets = BlockIdArray.create()
@@ -926,9 +924,6 @@ end 'invertBranchAndElide'
 
 // THE ONE PLACE THE CONDITIONAL BRANCH IS REWRITTEN. False when it names anything but the physically
 // next block, which is the case where there is no fall-through to trade the terminator for.
-//
-// The block is read for the target and let go before the write: `module.blocks.get` hands back a
-// borrow of `module`, and `module.ops.set` writes that same storage (E3070).
 function invertCondBranchOntoElse(module TargetModule, blockRef ElementIndex, condOpIndex ElementIndex, nextId BlockId, elseTarget BlockId) returns bool
 	let op = try module.ops.get(condOpIndex) otherwise panic("invertCondBranchOntoElse: conditional branch op {condOpIndex} not in module.ops")
 	let thenTarget = condBranchTargetOf(op, block: try module.blocks.get(blockRef) otherwise panic("invertCondBranchOntoElse: blockRef {blockRef} not in module.blocks"))

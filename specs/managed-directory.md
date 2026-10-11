@@ -13,6 +13,11 @@ category: type-system
 
 `__ManagedDirectory` is a compiler builtin type that wraps a Windows FindFirstFile/FindNextFile search handle with automatic cleanup via a destructor when the last reference goes out of scope — a managed, RAII-based API.
 
+`__ManagedDirectory` is library-tier, like the `__ManagedMemory` values its pattern argument and its
+`filename()` answer are: only a source file under `stdlib/` or `runtime/` may name the type or call its
+statics (E3185 anywhere else). `stdlib/Directory.maxon` is built on it, and a program uses `Directory`; the
+cases below that drive it directly compile in the library tier (`<!-- tier: stdlib -->`).
+
 ### Type Structure
 
 `__ManagedDirectory` has a single field:
@@ -82,6 +87,7 @@ end
 ## Tests
 
 <!-- test: managed-directory.exists -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
@@ -98,6 +104,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.not-exists -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let exists = __ManagedDirectory.exists("nonexistent_dir_xyz_99999".toByteArray().managed)
@@ -112,6 +119,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.current-path -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
@@ -127,6 +135,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.open-search-nonexistent -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888/*".toByteArray().managed) otherwise 'notFound'
@@ -144,6 +153,7 @@ not found
 ```
 
 <!-- test: managed-directory.open-search-throws -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888_throws/*".toByteArray().managed) otherwise 'err'
@@ -157,6 +167,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.create-throws -->
+<!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
 	try __ManagedDirectory.create("nonexistent_parent_xyz_88888/child".toByteArray().managed) otherwise 'err'
@@ -170,6 +181,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.next-without-try -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
@@ -183,6 +195,7 @@ error E3057: specs/managed-directory/managed-directory.next-without-try.maxon:4:
 ```
 
 <!-- test: managed-directory.search-and-list -->
+<!-- tier: stdlib -->
 ```maxon
 enum TestFileError implements Error
 	openFailed
@@ -281,6 +294,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.open-search-not-found-variant -->
+<!-- tier: stdlib -->
 
 The errno→variant mapping ensures that opening a search on a path that does
 not exist routes to the `notFound` arm (rather than the catch-all
@@ -304,6 +318,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.error-direct-construction -->
+A program outside the library tiers cannot name the type at all, so the construction is refused at the name.
 ```maxon
 function main() returns ExitCode
 	let d = __ManagedDirectory{_block: 0}
@@ -311,7 +326,21 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3072: specs/managed-directory/managed-directory.error-direct-construction.maxon:3:29: '__ManagedDirectory' is a compiler builtin type and cannot be constructed directly
+error E3185: <fragment>:3:10: '__ManagedDirectory' named outside the library tiers: the raw OS directory handle type is nameable only from a source file under stdlib/ or runtime/ — use 'Directory'
+```
+
+<!-- test: managed-directory.error-direct-construction-in-the-library-tier -->
+<!-- tier: stdlib -->
+Library code may name the type, and still cannot build one from a literal: a search comes only from
+`openSearch`.
+```maxon
+function main() returns ExitCode
+	let d = __ManagedDirectory{_block: 0}
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3072: <fragment>:3:29: '__ManagedDirectory' is a compiler builtin type and cannot be constructed directly
 ```
 
 ### the compiler's own cases
@@ -320,6 +349,7 @@ Each of the nine cases below pins a mechanism the ten cases above do not reach,
 rather than restating a passing one.
 
 <!-- test: managed-directory.next-does-not-skip-the-first-match -->
+<!-- tier: stdlib -->
 
 ⭐ **The advance-first PENDING flag.** `FindFirstFileW` does not merely open a
 search, it returns the FIRST entry — so a `next()` that fetches immediately
@@ -381,6 +411,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.filename-round-trip -->
+<!-- tier: stdlib -->
 
 ⭐ **`filename()` — which no case above reaches.** It answers with a FRESH
 owned `__ManagedMemory` copy rather than a pointer into the find block (which
@@ -442,6 +473,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.next-after-close-throws-closed -->
+<!-- tier: stdlib -->
 
 ⚠ **`next()` after `close()` throws `closed`.** Without the guard, `close()`
 followed by `next()` would reach Win32 with a NULL handle while the pending flag
@@ -468,6 +500,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.exists-discriminates-file-from-directory -->
+<!-- tier: stdlib -->
 
 `exists()` asks whether the path is a DIRECTORY, so an existing plain file is
 `false` — a `GetFileAttributesW` that merely succeeded is not the answer. The
@@ -505,6 +538,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.create-existing-is-create-failed -->
+<!-- tier: stdlib -->
 
 `CreateDirectoryW` on a path that already exists reports
 `ERROR_ALREADY_EXISTS`, which is neither of the two errno codes the shared
@@ -542,6 +576,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.auto-close -->
+<!-- tier: stdlib -->
 
 The RAII half: a search opened and NEVER closed explicitly, reclaimed only by
 the destructor at the scope exit. The exit code proves the memory half (a leaked
@@ -587,6 +622,7 @@ error E2051: <fragment>:2:6: identifier '__ManagedDirectoryError' is reserved: d
 ```
 
 <!-- test: managed-directory.dotfiles-are-entries-not-dot-pseudo-entries -->
+<!-- tier: stdlib -->
 
 ⭐ **THE DOT FILTER IS THREE BYTES, AND ALL SEVENTEEN CASES ABOVE PASS IF IT IS
 ONE.** `.` is byte0 `.` + NUL, `..` is `.` `.` + NUL — so a filter that tested
@@ -675,6 +711,7 @@ end 'main'
 ```
 
 <!-- test: managed-directory.eof-and-close-are-both-idempotent -->
+<!-- tier: stdlib -->
 
 Two contracts nothing above states. **EOF is a plain 0 and stays one**: an empty
 directory's very first `next()` is the end of the iteration, and a `next()` past

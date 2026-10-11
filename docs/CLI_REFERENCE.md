@@ -2852,6 +2852,22 @@ maxon verify-recheck <file|dir>
   unchanged input agree, and a diagnostic introduced by an edit clears when the edit is undone. It takes
   `--define=<name>=<value>` as `build` does, so a define is checked on every re-check.
 
+### `maxon stage-library-tier`
+
+Stages a private copy of this compiler's library tiers and its executable under a directory, so a program
+can be compiled as library-tier source: one placed under the staged `stdlib/` and built by the staged
+compiler may name what only `stdlib/` and `runtime/` sources may (`__Builtins`, `.managed`,
+`__ManagedMemory`, `cstring`; [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) elsewhere). The spec
+harness's `<!-- tier: stdlib -->` cases and the debugger's fault fixtures are staged this way.
+
+```bash
+maxon stage-library-tier <directory>
+```
+
+It writes `<directory>/stdlib`, `<directory>/runtime` and `<directory>/bin/<compiler>`: the sources this
+compiler loads, the unicode tables it embeds, and a copy of its executable. Anything already under
+`<directory>` is removed first. Exit 0 when the tier is staged, 1 when it could not be.
+
 ### A typical loop
 
 ```bash

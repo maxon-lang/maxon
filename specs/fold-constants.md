@@ -88,7 +88,7 @@ instruction's answer are the same number:
 
 - **The NaN decline** is visible only in `a-computed-nan-keeps-its-instruction`'s emitted code (`--emit-ir`),
   where removing it deletes the `subsd`. It CANNOT be reached by a runtime assertion: no user door
-  spells a NaN *constant* (there is no NaN literal, `__Builtins.bitsToFloat` is reserved), and every
+  spells a NaN *constant* (there is no NaN literal, and `__Builtins.bitsToFloat` is library-tier, E3185), and every
   program that can make one prints `nan` and answers `y != y` true whichever payload it holds. The
   divergence is between two MACHINES, and one host's suite cannot stage it.
 - **The `fpToSi` range guard** IS observable, on wasm, and is not pinned for a harness reason

@@ -47,17 +47,19 @@
 // for a parameter and `Parser.requireAsyncResult` for the result) rather than left to read the wrong
 // register file, which an argument check cannot catch because an int legally coerces to a float parameter.
 //
-// ⭐ RELOCATING STACKS. Each GT gets an `osAllocPages` seed stack of `__gt_seed_bytes`, which follows the stacks
-// recent threads finished with (`__gt_seed_adapt`, Go's `startingStackSize`); every guarded function's prologue
-// projects its frame against `gt.stackGuard` (X64GtRuntime's `emitGtStackGuard`) and, when it would overflow,
-// reaches the hand-assembled `__gt_morestack`, which doubles the size until the requesting frame fits (up to
-// `GtMaxStackBytes`) and moves the thread onto the larger stack (`__gt_stack_relocate`: copy the live region, walk
-// the saved frame-pointer chain fixing every interior pointer by the relocation offset). A parked thread using
-// under a quarter of its stack is moved onto one half the size (`__gt_stack_shrink`, Go's `shrinkstack`). So deep
-// recursion inside an `async` body just works, and a thread that once recursed deep does not keep that stack for
-// life. The GT record comes from the scheduler's record arena and its stack from `osAllocPages`, both INVISIBLE to
-// the heap leak gate's tracked live column (`GtLiveCountLabel` is the gate for them), and a finished GT's stack is
-// RELEASED on completion (`__gt_runner_done` → `osFreePages`).
+// ⭐ RELOCATING STACKS. Each GT gets a `__gt_stack_alloc` seed stack of `__gt_seed_bytes`, which
+// follows the stacks recent threads finished with (`__gt_seed_adapt`, Go's `startingStackSize`);
+// every guarded function's prologue projects its frame against `gt.stackGuard` (X64GtRuntime's
+// `emitGtStackGuard`) and, when it would overflow, reaches the hand-assembled `__gt_morestack`,
+// which doubles the size until the requesting frame fits (up to `GtMaxStackBytes`) and moves the
+// thread onto the larger stack (`__gt_stack_relocate`: copy the live region, walk the saved
+// frame-pointer chain fixing every interior pointer by the relocation offset). A parked thread
+// using under a quarter of its stack is moved onto one half the size (`__gt_stack_shrink`, Go's
+// `shrinkstack`). So deep recursion inside an `async` body just works, and a thread that once
+// recursed deep does not keep that stack for life. The GT record comes from the scheduler's record
+// arena and its stack from the stack pool, both INVISIBLE to the heap leak gate's tracked live
+// column (`GtLiveCountLabel` is the gate for them), and a finished GT's stack goes back to the pool
+// on completion (`__gt_runner_done` → `__gt_stack_free`).
 
 // --- GreenThread struct offsets ---
 // The offsets 0x00 through 0xA8 are a FIXED, portable layout: a field placed at a different offset later is a
@@ -69,7 +71,7 @@
 export let GtOffSp = 0x00  // saved stack pointer at the context-switch point
 export let GtOffFp = 0x08  // saved frame pointer (rbp) at the context-switch point
 export let GtOffStatus = 0x10  // GtStatus* below
-export let GtOffStackBase = 0x18  // low address of the osAllocPages'd stack (0 for an M's scheduler context and a reply cell)
+export let GtOffStackBase = 0x18  // low address of the GT's stack (0 for an M's scheduler context and a reply cell)
 
 // EXPORTED because the hand-assembled grower reads the CURRENT stack size to compute the doubled size, and
 // `__gt_stack_relocate` reads it for the old stack's top and writes the new size back.
@@ -130,6 +132,10 @@ export let GtOffIoStatus = 0x80
 // 0x60–0xA8 window, which is now assigned end to end — a further field takes 0xB8 or beyond.
 export let GtOffTibStackBase = 0x90
 export let GtOffTibStackLimit = 0x98
+
+// The TEB's `DeallocationStack` (`gs:[0x1478]`), saved, repointed and restored at every site that
+// moves the two bounds above, so the three always name one stack.
+export let GtOffTibDeallocation = 0xC8
 
 // ⭐ **THE PIPE HANDLE THE IN-FLIGHT READ WAS ISSUED ON.** Written before the read, read by
 // `__gt_promise_drop` to cancel it — and READ ONLY WHERE `io_source` IS NON-ZERO, which is exactly while the
@@ -225,7 +231,7 @@ export let GtOffIoMode = 0xC0
 // `__gt_release_<callee>` reloads the managed ones to drop them at the await or the drop, after the GT has
 // finished. Nothing between the spawn's stores and that read writes the region, so the values are still
 // there; a change that reused the region as scratch would be a wild free, not merely a mis-loaded argument.
-export let GtOffArgInline = 0xC8
+export let GtOffArgInline = 0xD0
 
 // ⭐⭐ **THE TEARDOWN RENDEZVOUS WORD — the ONE place the two halves of a green thread's
 // ownership meet, and the ONLY word in the struct that BOTH halves write.** Every green thread is owned by
@@ -591,10 +597,11 @@ let GtStackResizeWindowNs = 1000000000 as ParsedInt
 let GtSeedWindowShift = 6 as ParsedInt
 let GtSeedWindowMask = (1 shl GtSeedWindowShift) - 1
 
-// ⭐ **THE LARGEST SEED THE ADAPTIVE START MAY CHOOSE.** Go caps `startingStackSize` only at `maxstacksize`, because
-// its stacks come from a cache; every seed here is an `osAllocPages` commit paid at the spawn, before the thread
-// has used a byte. 64 KiB spares the average deep thread its first growths while ten thousand concurrent threads
-// commit 640 MB at most.
+// ⭐ **THE LARGEST SEED THE ADAPTIVE START MAY CHOOSE.** Go caps `startingStackSize` only at
+// `maxstacksize`, because its stacks come from a cache; every seed here is committed memory taken
+// at the spawn, before the thread has used a byte, and the cap is also the stack pool's largest
+// class (`requireStackPoolGeometry`). 64 KiB spares the average deep thread its first growths while
+// ten thousand concurrent threads commit 640 MB at most.
 let GtSeedMaxBytes = 0x10000 as ParsedInt
 
 // `GtOffStackMarks`' two bits. `resized`: the size was chosen since the thread last parked — set by the spawn and by
@@ -675,6 +682,63 @@ end 'gtStackSystemBytes'
 // frame, which has `stackSystem + 2 * margin` less its pushes — about 5.9 KB — beneath it. AVX-512's larger
 // XSAVE area adds about 1.6 KB and still fits.
 let GtWindowsExceptionDispatchBytes = 0x1000 as ParsedInt
+
+// How an M's system stack is guarded, decided by where a fault's frame lands (`FaultFrameHome`).
+enum SystemStackGuard
+	// Windows writes the fault's frame onto the faulting stack, so `PAGE_GUARD` sits above headroom
+	// that frame can still be written into.
+	pageGuardWithHeadroom
+
+	// The fault is delivered on the signal stack, so a no-access region alone suffices.
+	noAccessPage
+end 'SystemStackGuard'
+
+function systemStackGuardOf(target Target) returns SystemStackGuard
+	return match gtFaultFrameHome(target) 'home'
+		faultingStack gives SystemStackGuard.pageGuardWithHeadroom
+		signalStack gives SystemStackGuard.noAccessPage
+	end 'home'
+end 'systemStackGuardOf'
+
+function gtSystemStackFaultingBytes(target Target) returns ParsedInt
+	return match systemStackGuardOf(target) 'guard'
+		pageGuardWithHeadroom gives WindowsSystemStackGuardPageBytes
+		noAccessPage gives gtSystemStackGuardRegionBytes(target)
+	end 'guard'
+end 'gtSystemStackFaultingBytes'
+
+export function gtSystemStackGuardRegionBytes(target Target) returns ParsedInt
+	return match target.cpu 'cpu'
+		x64 gives x64SystemStackGuardRegionBytes(target.os)
+		arm64 gives arm64SystemStackGuardRegionBytes(target.os)
+		wasm32 panic("gtSystemStackGuardRegionBytes: wasm32 has no per-machine system stack — `targetProvidesFacility` denies `greenThreads` there, and reaching here means a compiler-inserted scheduler op got past that gate")
+	end 'cpu'
+end 'gtSystemStackGuardRegionBytes'
+
+function x64SystemStackGuardRegionBytes(os Os) returns ParsedInt
+	return match os 'os'
+		windows gives WindowsSystemStackGuardRegionBytes
+		linux gives X64LinuxSystemStackGuardRegionBytes
+		macos panic("x64SystemStackGuardRegionBytes: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend")
+		wasi panic("x64SystemStackGuardRegionBytes: wasm32-wasi is not an x64 target")
+	end 'os'
+end 'x64SystemStackGuardRegionBytes'
+
+function arm64SystemStackGuardRegionBytes(os Os) returns ParsedInt
+	return match os 'os'
+		macos gives Arm64MacosSystemStackGuardRegionBytes
+		linux gives Arm64LinuxSystemStackGuardRegionBytes
+		windows panic("arm64SystemStackGuardRegionBytes: there is no arm64-windows backend")
+		wasi panic("arm64SystemStackGuardRegionBytes: wasm32-wasi is not an arm64 target")
+	end 'os'
+end 'arm64SystemStackGuardRegionBytes'
+
+let WindowsSystemStackHeadroomBytes = GtWindowsExceptionDispatchBytes * 2
+let WindowsSystemStackGuardPageBytes = 0x1000 as ParsedInt
+let WindowsSystemStackGuardRegionBytes = WindowsSystemStackHeadroomBytes + WindowsSystemStackGuardPageBytes
+let X64LinuxSystemStackGuardRegionBytes = 0x1000 as ParsedInt
+let Arm64MacosSystemStackGuardRegionBytes = 0x4000 as ParsedInt
+let Arm64LinuxSystemStackGuardRegionBytes = 0x10000 as ParsedInt
 
 let GtWindowsExceptionDispatchMeasured = 0xA50 as StackSize
 
@@ -776,11 +840,12 @@ let GtAsyncPreemptMarginBytes = 0x400 as ParsedInt
 // subtracts it from the system-stack top to compute the TIB StackLimit it publishes for the call.
 export let GtSystemStackSize = 0x10000
 
-// The saved-register frame `__gt_context_switch` builds on a GT stack, and the ONE fact the Std tier and the
-// Target tier share about a fresh green thread. `__gt_spawn` lays a frame of exactly this size with the
-// trampoline's address in the word the first switch-in takes its return address from; every other word is the
-// fresh mapping's zeros, which is correct because they become this GT's initial callee-saved registers and the
-// user function establishes each before reading it.
+// The saved-register frame `__gt_context_switch` builds on a GT stack, and the ONE fact the Std
+// tier and the Target tier share about a fresh green thread. `__gt_spawn` lays a frame of exactly
+// this size with the trampoline's address in the word the first switch-in takes its return address
+// from; every other word is zero (`emitGtSeedInitialFrame` clears the frame, because a pooled stack
+// arrives holding another thread's words), which is correct because they become this GT's initial
+// callee-saved registers and the user function establishes each before reading it.
 //
 // **x64 — 128 bytes.** The five callee-saved GPRs (rbx, r12-r15 — `calleeSavedOrder`) as pushed words, the ten
 // callee-saved XMMs (xmm6-15 — `calleeSavedXmmOrder`) as `movsd` words below them, plus the RETURN-ADDRESS
@@ -1037,7 +1102,19 @@ export enum GtGuardSite
 	// `mrt_panic`, which runtime code reaches too — code that may hold `__sched_lock`, where a park would never
 	// end. Its guard withdraws a request before its compare and only ever grows.
 	mrtPanic
+
+	// A guarded runtime body (`IrFunction.pinsItsThread`), which runtime code may reach while it holds
+	// a lock: its guard behaves as `mrtPanic`'s does, and the body is never stopped asynchronously.
+	runtimeEntry
 end 'GtGuardSite'
+
+export function guardSiteMayPark(site GtGuardSite) returns bool
+	return match site 'site'
+		functionEntry gives true
+		mrtPanic or
+		runtimeEntry gives false
+	end 'site'
+end 'guardSiteMayPark'
 
 // ⭐⭐⭐ **`__gt_stack_relocate(gt, newBase, newSize)` — MOVE A STOPPED THREAD's STACK, IN EITHER DIRECTION.** The
 // one routine a grow and a shrink share: it copies the live region `[gt.sp, top)` to the top of the new stack,
@@ -1045,6 +1122,10 @@ end 'GtGuardSite'
 // on the GT and frees the old pages. A hand-assembled chunk on both ISAs, for `__gt_morestack`'s reason; EXPORTED
 // because `__gt_morestack` calls it by name and so does `__gt_stack_shrink` (Std).
 export let GtStackRelocateName = b"__gt_stack_relocate"
+
+export let GtStackAllocName = b"__gt_stack_alloc"
+export let GtStackFreeName = b"__gt_stack_free"
+export let GtSystemStackAllocName = b"__gt_system_stack_alloc"
 
 // ⭐⭐ **`__gt_stack_shrink(gt)` — Go's `shrinkstack`, at a park.** See `buildGtStackShrink`.
 let GtStackShrinkName = b"__gt_stack_shrink"
@@ -1610,12 +1691,13 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // region belongs to the M that is EXECUTING. `SchedRuntime.MOffSystemStackSP` carries the argument in full;
 // `GtSystemStackSize` below is the size of EACH M's region.
 
-// ⭐ **A STACK IS ALLOCATED FRESH ON SPAWN AND FREED ON COMPLETION, NEVER RECYCLED.** Stacks are VARIABLE-SIZED
-// (a seed, doubled on demand, halved at a park), so a stack free list would hand `__gt_spawn` a stack of some
-// size other than the one it records, which the guard then mis-projects against and the relocation mis-copies.
-// So `__gt_spawn` commits a fresh seed of `__gt_seed_bytes`, `__gt_stack_relocate` releases the OLD stack when a
-// grow or a shrink moves the thread, and `__gt_runner_done` releases the finished thread's stack via
-// `osFreePages`.
+// ⭐ **A STACK COMES FROM A POOL OF POWER-OF-TWO SIZE CLASSES AND GOES BACK TO IT**
+// (`__gt_stack_alloc`, `__gt_stack_free`). Stacks are VARIABLE-SIZED (a seed, doubled on demand,
+// halved at a park), so a free must land in the class its allocation came from: both round the size
+// the thread records up to the same class, and a size above the largest class is mapped and
+// unmapped directly. `__gt_spawn` takes a seed of `__gt_seed_bytes`, `__gt_stack_relocate` frees
+// the OLD stack when a grow or a shrink moves the thread, and `__gt_runner_done` frees the finished
+// thread's stack.
 //
 // ⭐⭐ **THE RECORD IS THE OPPOSITE: TYPE-STABLE, RECYCLED THROUGH FREE LISTS AND NEVER FREED.** It is carved
 // from the scheduler's record arena, `__gt_reclaim` hands it to `__gt_free_put` and `__gt_spawn` takes one from
@@ -1627,17 +1709,17 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // on a free list under the pending `await`, and the next spawn would zero it and overwrite its result. So the
 // struct goes back only when both the runner and the consumer are finished (`GtOffTeardown`).
 
-// ⭐ **THE GREEN-THREAD LIVE COUNT — the leak gate for GT records and stacks.** A GT record comes from the
-// scheduler's record arena and its seed stack from `osAllocPages`, and neither is a box, so both are
-// INVISIBLE to the tracked live column and a spawned-but-never-reclaimed green thread leaks past the `__mm`
-// gate silently. `__gt_spawn` increments this — not `main`'s thread, which has no promise and which
-// `__gt_run_main` reclaims before the count is read, nor an M's inline scheduler context, which is never
-// spawned; every reclaim decrements it — the `__gt_await`/`__gt_try_await` tail (an awaited GT) AND
-// `__gt_promise_drop` (an un-awaited, dropped GT). At program exit the leak gate
-// (`MmRuntime.buildMmLeakCheck`, the ONE OS-exit check) asserts it is zero: a non-zero count means a green
-// thread was neither awaited nor dropped — a leak (or, negative, an
-// over-reclaim). EXPORTED because that gate lives in `MmRuntime` and reads this slot directly. Its zero
-// image is the initial state — no GT spawned yet.
+// ⭐ **THE GREEN-THREAD LIVE COUNT — the leak gate for GT records and stacks.** A GT record comes
+// from the scheduler's record arena and its seed stack from the stack pool, and neither is a box,
+// so both are INVISIBLE to the tracked live column and a spawned-but-never-reclaimed green thread
+// leaks past the `__mm` gate silently. `__gt_spawn` increments this — not `main`'s thread, which
+// has no promise and which `__gt_run_main` reclaims before the count is read, nor an M's inline
+// scheduler context, which is never spawned; every reclaim decrements it — the
+// `__gt_await`/`__gt_try_await` tail (an awaited GT) AND `__gt_promise_drop` (an un-awaited,
+// dropped GT). At program exit the leak gate (`MmRuntime.buildMmLeakCheck`, the ONE OS-exit check)
+// asserts it is zero: a non-zero count means a green thread was neither awaited nor dropped — a
+// leak (or, negative, an over-reclaim). EXPORTED because that gate lives in `MmRuntime` and reads
+// this slot directly. Its zero image is the initial state — no GT spawned yet.
 export let GtLiveCountLabel = b"__gt_live_count"
 
 export let GtQuiesceName = b"__gt_quiesce"
@@ -2240,6 +2322,7 @@ export function gtRuntimeGlobals(usage RuntimeUsage, target Target) returns Data
 	pushRuntimeGlobal(out, label: GtSeedSumSeenLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtSeedCountSeenLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtKeepsCpuClockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked, seed: GtCpuClockKept if usage.usesThreadCpuTicks else GtCpuClockUnkept)
+	pushRuntimeGlobal(out, label: GtStackPoolLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	return out
 end 'gtRuntimeGlobals'
 
@@ -2333,6 +2416,9 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtCoroSweepDropped(module)
 	buildGtRunStrand(module, target: target)
 	buildGtStackShrink(module, target: target)
+	buildGtStackAlloc(module)
+	buildGtStackFree(module)
+	buildGtSystemStackAlloc(module, target: target)
 	buildGtSeedAdapt(module, target: target)
 	buildGtPark(module)
 	buildGtNowNs(module)
@@ -2433,6 +2519,13 @@ function buildGtInit(module StdModule)
 	module.appendOp(entry, op: StdOp.globalAddr(capAddr, label: GtTimerCapacityLabel))
 	module.appendOp(entry, op: StdOp.storeIndirect(capAddr, offset: 0, valueId: capSeedConst, valueType: StdType.i64))
 
+	let poolRaw = ids.mint()
+	module.appendOp(entry, op: StdOp.osAllocPages(poolRaw, sizeId: emitConst(module, block: entry, value: GtStackPoolHeaderBytes, ids: ids)))
+	let pool = ids.mint()
+	module.appendOp(entry, op: StdOp.call(pool, callee: SlabAssertOsAllocName, args: argsOf(poolRaw)))
+	module.appendOp(entry, op: StdOp.osLockInit(emitFieldAddr(module, block: entry, record: pool, offset: GtStackPoolLockOffset, ids: ids)))
+	emitStoreGlobalWord(module, block: entry, label: GtStackPoolLabel, value: pool, ids: ids)
+
 	module.setTerminator(entry, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildGtInit'
@@ -2527,13 +2620,12 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 		greenThread then break
 	end 'markMain'
 
-	// ⭐ COMMIT A FRESH SEED STACK, of the size the adaptive seed chose (`GtSeedBytesLabel`). The STACK is
-	// variable-sized, so it is NOT recycled with the struct — a completed GT's stack is RELEASED
-	// (`__gt_runner_done`) and a fresh seed is committed here every spawn (`MEM_COMMIT`, demand-paged so untouched
-	// pages cost nothing).
+	// ⭐ TAKE A SEED STACK, of the size the adaptive seed chose (`GtSeedBytesLabel`). The STACK is
+	// variable-sized, so it is NOT recycled with the struct — a completed GT's stack goes back to the
+	// stack pool (`__gt_runner_done` → `__gt_stack_free`) and every spawn takes one here.
 	let stackSizeVal = emitLoadGlobalWord(module, block: initBlock, label: GtSeedBytesLabel, ids: ids)
 	let stackBase = ids.mint()
-	module.appendOp(initBlock, op: StdOp.osAllocPages(stackBase, sizeId: stackSizeVal))
+	module.appendOp(initBlock, op: StdOp.call(stackBase, callee: GtStackAllocName, args: argsOf(stackSizeVal)))
 
 	// ⛔ **A REFUSED SEED IS AN ABORT, BECAUSE THE NEXT STORE IS THROUGH IT.** `emitGtSeedInitialFrame` writes
 	// the first switch-in's frame at `stackBase + size`.
@@ -2580,9 +2672,9 @@ function emitGtRestoreStackGuard(module StdModule, block IrBlock, gt ValueId, ta
 	emitStoreField(module, block: block, record: gt, offset: GtOffStackGuard, value: guard)
 end 'emitGtRestoreStackGuard'
 
-// 1 when the `osAllocPages` answer `stackBase` is a refusal, for a spawn's seed and a shrink's smaller stack
-// alike. The test is the sign, for `__slab_assert_os_alloc`'s reason: `VirtualAlloc` refuses with NULL and a raw
-// `mmap` with a negative errno.
+// 1 when a stack allocation's answer `stackBase` is a refusal, for a spawn's seed and a shrink's
+// smaller stack alike. The test is the sign, for `__slab_assert_os_alloc`'s reason: `VirtualAlloc`
+// refuses with NULL and a raw `mmap` with a negative errno.
 function emitGtStackRefused(module StdModule, block IrBlock, stackBase ValueId, ids ValueMinter) returns ValueId
 	return emitCmp(module, block: block, a: stackBase, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.le, ids: ids)
 end 'emitGtStackRefused'
@@ -2627,7 +2719,9 @@ end 'emitGtSpawnCountAndTraceId'
 // would be two stores maintaining a fact with no reader — see `Arm64GtRuntime`'s header, which states the
 // same split from the other side.
 function emitGtSeedInitialFrame(module StdModule, block IrBlock, gt ValueId, stackBase ValueId, stackTop ValueId, target Target, ids ValueMinter)
-	let frameBase = emitBin(module, block: block, a: stackTop, b: emitConst(module, block: block, value: gtInitialFrameBytes(target), ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let frameBytes = emitConst(module, block: block, value: gtInitialFrameBytes(target), ids: ids)
+	let frameBase = emitBin(module, block: block, a: stackTop, b: frameBytes, opcode: StdBinOpcode.sub, ids: ids)
+	module.appendOp(block, op: StdOp.memFill(frameBase, byteCountId: frameBytes, value: 0))
 	let trampAddr = ids.mint()
 	module.appendOp(block, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
 
@@ -2652,6 +2746,7 @@ let Arm64GtSeedLinkRegisterOffset = StackWordBytes as ByteOffset
 function emitGtSeedX64ReturnWord(module StdModule, block IrBlock, gt ValueId, stackBase ValueId, stackTop ValueId, trampAddr ValueId, ids ValueMinter)
 	emitStoreField(module, block: block, record: gt, offset: GtOffTibStackBase, value: stackTop)
 	emitStoreField(module, block: block, record: gt, offset: GtOffTibStackLimit, value: stackBase)
+	emitStoreField(module, block: block, record: gt, offset: GtOffTibDeallocation, value: stackBase)
 	let retSlotAddr = emitBin(module, block: block, a: stackTop, b: emitConst(module, block: block, value: StackWordBytes, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 	emitStoreField(module, block: block, record: retSlotAddr, offset: 0, value: trampAddr)
 end 'emitGtSeedX64ReturnWord'
@@ -3925,9 +4020,10 @@ let NoCompletedPromise = -1
 
 // ⭐ **THE WIDTH OF ONE `Promise with …` SLOT, WHICH IS WHY THE SCAN BELOW NEEDS NO ELEMENT-SIZE LOAD.**
 // `PromiseType.maxon`'s first fact: a promise handle owns no `__mm_alloc` box — the value IS the green-thread
-// pointer — so a `Promise` instance is a trivial one-word slot whatever its type arguments are, and the
+// pointer — so a `Promise` instance is a one-word slot whatever its type arguments are, and the
 // parser's argument rule for `__Builtins.awaitAny` is what guarantees the element type is one.
-// MEASURED on `Array with Promise with Integer`: `__managed_create(elementSize: 8, elementDestroy: 0)`.
+// An `Array with Promise with Integer` is created with `elementSize: 8`; its `elementDestroy` is the promise drop
+// (`Parser.arrayElementDestroyValue`), so a container dropped with un-awaited elements reclaims their green threads.
 //
 // ⚠⚠ **IT IS THE SAME WIDTH `ProgramSignatures.arrayElementSize` STAMPS INTO THE RECORD, AND THE TWO ARE
 // COMPARED RATHER THAN TRUSTED.** One compiled scan serves every array in every program, so the stride here
@@ -5148,7 +5244,7 @@ end 'buildGtCellComplete'
 // says `waiting`; whichever party got the lock first decides, exactly, and the tombstone the fall-through
 // leaves is reclaimed by whoever pops it.
 function buildGtPromiseDrop(module StdModule)
-	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5533,7 +5629,7 @@ function buildGtRunnerDone(module StdModule, target Target)
 	emitSchedLockLeave(module, block: closeSeedWindow, ids: ids)
 	module.setTerminator(closeSeedWindow, op: StdOp.branch(freeStack.id))
 
-	module.appendOp(freeStack, op: StdOp.osFreePages(stackBase, sizeId: stackSize))
+	module.appendOp(freeStack, op: StdOp.call(ids.mint(), callee: GtStackFreeName, args: twoArgs(stackBase, second: stackSize)))
 	module.setTerminator(freeStack, op: StdOp.branch(afterStack.id))
 
 	module.setTerminator(afterStack, op: StdOp.condBranch(isGreen, thenBlockId: greenDone.id, elseBlockId: coroDone.id))
@@ -6250,7 +6346,7 @@ function buildGtStackShrink(module StdModule, target Target)
 
 	let half = emitBin(module, block: halve, a: size, b: emitConst(module, block: halve, value: GtStackHalfShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
 	let newBase = ids.mint()
-	module.appendOp(halve, op: StdOp.osAllocPages(newBase, sizeId: half))
+	module.appendOp(halve, op: StdOp.call(newBase, callee: GtStackAllocName, args: argsOf(half)))
 	let refused = emitGtStackRefused(module, block: halve, stackBase: newBase, ids: ids)
 	module.setTerminator(halve, op: StdOp.condBranch(refused, thenBlockId: keep.id, elseBlockId: relocate.id))
 
@@ -6261,6 +6357,264 @@ function buildGtStackShrink(module StdModule, target Target)
 	module.setTerminator(keep, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildGtStackShrink'
+
+let GtStackPoolLabel = b"__gt_stack_pool"
+let GtStackPoolMinShift = 11 as ParsedInt
+let GtStackPoolMaxShift = 16 as ParsedInt
+let GtStackPoolClassCount = GtStackPoolMaxShift - GtStackPoolMinShift + 1
+let GtStackPoolMaxBytes = 1 shl GtStackPoolMaxShift
+let GtStackPoolChunkBytes = 0x100000 as ParsedInt
+let GtStackPoolWordBytes = 8 as ParsedInt
+let GtStackPoolCursorOffset = (GtStackPoolClassCount * GtStackPoolWordBytes) as ByteOffset
+let GtStackPoolLimitOffset = (GtStackPoolClassCount * GtStackPoolWordBytes + GtStackPoolWordBytes) as ByteOffset
+let GtStackPoolLockOffset = (GtStackPoolClassCount * GtStackPoolWordBytes + 2 * GtStackPoolWordBytes) as ByteOffset
+let GtStackPoolHeaderBytes = 0x1000 as ParsedInt
+
+function requireStackPoolGeometry()
+	if (1 shl GtStackPoolMinShift) != GtMinStackBytes 'minDrifted'
+		panic("requireStackPoolGeometry: the pool's smallest class is {1 shl GtStackPoolMinShift} bytes but `GtMinStackBytes` is {GtMinStackBytes} — a stack below the smallest class would be handed a larger one that the thread never records")
+	end 'minDrifted'
+
+	if GtStackPoolMaxBytes != GtSeedMaxBytes 'maxDrifted'
+		panic("requireStackPoolGeometry: the pool's largest class is {GtStackPoolMaxBytes} bytes but the adaptive seed may reach {GtSeedMaxBytes} — a seed above the pool would take the unpooled road on every spawn")
+	end 'maxDrifted'
+
+	if (GtStackPoolLockOffset as ParsedInt) + OsLockBytes > GtStackPoolHeaderBytes 'headerTooSmall'
+		panic("requireStackPoolGeometry: the pool header needs {(GtStackPoolLockOffset as ParsedInt) + OsLockBytes} bytes but is laid in {GtStackPoolHeaderBytes}")
+	end 'headerTooSmall'
+
+	if GtStackPoolChunkBytes < GtStackPoolMaxBytes 'chunkTooSmall'
+		panic("requireStackPoolGeometry: a pool chunk of {GtStackPoolChunkBytes} bytes cannot hold one stack of the largest class ({GtStackPoolMaxBytes})")
+	end 'chunkTooSmall'
+end 'requireStackPoolGeometry'
+
+type GtStackClass
+	export let shift as ValueId
+	export let bytes as ValueId
+
+	static function create(shift ValueId, bytes ValueId) returns GtStackClass
+		return Self{shift: shift, bytes: bytes}
+	end 'create'
+end 'GtStackClass'
+
+function emitGtStackClassOf(module StdModule, func IrFunction, cur IrBlock, found IrBlock, size ValueId, ids ValueMinter) returns GtStackClass
+	var header = module.addBlock(func, label: b"stkclasshdr", heat: BlockHeat.normal)
+	var step = module.addBlock(func, label: b"stkclassstep", heat: BlockHeat.normal)
+	let firstShift = emitConst(module, block: cur, value: GtStackPoolMinShift, ids: ids)
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(firstShift)))
+
+	let shift = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(shift, argType: StdType.i64))
+	let bytes = emitBin(module, block: header, a: emitConst(module, block: header, value: 1, ids: ids), b: shift, opcode: StdBinOpcode.shl, ids: ids)
+	let holds = emitCmp(module, block: header, a: bytes, b: size, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(holds, thenBlockId: found.id, elseBlockId: step.id))
+
+	let nextShift = emitBin(module, block: step, a: shift, b: emitConst(module, block: step, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(step, op: StdOp.branch(header.id))
+	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(nextShift)))
+
+	return GtStackClass.create(shift, bytes: bytes)
+end 'emitGtStackClassOf'
+
+function emitGtStackPoolLock(module StdModule, block IrBlock, pool ValueId, held bool, ids ValueMinter)
+	let lock = emitFieldAddr(module, block: block, record: pool, offset: GtStackPoolLockOffset, ids: ids)
+
+	if held 'enter'
+		module.appendOp(block, op: StdOp.osLockEnter(lock))
+	end 'enter' else 'leave'
+		module.appendOp(block, op: StdOp.osLockLeave(lock))
+	end 'leave'
+end 'emitGtStackPoolLock'
+
+function emitGtStackFreeListHead(module StdModule, block IrBlock, pool ValueId, shift ValueId, ids ValueMinter) returns ValueId
+	let index = emitBin(module, block: block, a: shift, b: emitConst(module, block: block, value: GtStackPoolMinShift, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	return emitWordSlotAddr(module, block: block, base: pool, index: index, ids: ids)
+end 'emitGtStackFreeListHead'
+
+// ⚠ Pooled stacks sit back to back in a chunk with no guard page between them. A green thread's
+// only overflow check is its prologue guard, so a frame that outgrew the guard margin would write
+// into a neighbour's stack without a fault — which is why `UnguardedChains` proves every unguarded
+// chain fits that margin (E5004).
+function buildGtStackAlloc(module StdModule)
+	requireStackPoolGeometry()
+
+	var func = IrFunction.createFromStd(GtStackAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var direct = module.addBlock(func, label: b"stkdirect", heat: BlockHeat.normal)
+	var pooled = module.addBlock(func, label: b"stkpooled", heat: BlockHeat.normal)
+	var pop = module.addBlock(func, label: b"stkpop", heat: BlockHeat.normal)
+	var carve = module.addBlock(func, label: b"stkcarve", heat: BlockHeat.normal)
+	var newChunk = module.addBlock(func, label: b"stknewchunk", heat: BlockHeat.normal)
+	var chunkRefused = module.addBlock(func, label: b"stkchunkrefused", heat: BlockHeat.cold)
+	var chunkMapped = module.addBlock(func, label: b"stkchunkmapped", heat: BlockHeat.normal)
+	var carved = module.addBlock(func, label: b"stkcarved", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let size = 0 as ValueId
+
+	let beyondPool = emitCmp(module, block: entry, a: size, b: emitConst(module, block: entry, value: GtStackPoolMaxBytes, ids: ids), pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(beyondPool, thenBlockId: direct.id, elseBlockId: pooled.id))
+
+	let mapped = ids.mint()
+	module.appendOp(direct, op: StdOp.osAllocPages(mapped, sizeId: size))
+	module.setTerminator(direct, op: StdOp.ret(mapped))
+
+	var found = module.addBlock(func, label: b"stkclassfound", heat: BlockHeat.normal)
+	let sized = emitGtStackClassOf(module, func: func, cur: pooled, found: found, size: size, ids: ids)
+	let pool = emitLoadGlobalWord(module, block: found, label: GtStackPoolLabel, ids: ids)
+	let headAddr = emitGtStackFreeListHead(module, block: found, pool: pool, shift: sized.shift, ids: ids)
+	emitGtStackPoolLock(module, block: found, pool: pool, held: true, ids: ids)
+	let head = emitLoadField(module, block: found, record: headAddr, offset: 0, ids: ids)
+	let listEmpty = emitCmp(module, block: found, a: head, b: emitConst(module, block: found, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(found, op: StdOp.condBranch(listEmpty, thenBlockId: carve.id, elseBlockId: pop.id))
+
+	let next = emitLoadField(module, block: pop, record: head, offset: 0, ids: ids)
+	emitStoreField(module, block: pop, record: headAddr, offset: 0, value: next)
+	emitGtStackPoolLock(module, block: pop, pool: pool, held: false, ids: ids)
+	module.setTerminator(pop, op: StdOp.ret(head))
+
+	let cursor = emitLoadField(module, block: carve, record: pool, offset: GtStackPoolCursorOffset, ids: ids)
+	let limit = emitLoadField(module, block: carve, record: pool, offset: GtStackPoolLimitOffset, ids: ids)
+	let pastCarve = emitBin(module, block: carve, a: cursor, b: sized.bytes, opcode: StdBinOpcode.add, ids: ids)
+	let fits = emitCmp(module, block: carve, a: pastCarve, b: limit, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(carve, op: StdOp.condBranch(fits, thenBlockId: carved.id, elseBlockId: newChunk.id))
+	carve.branchEdges.push(BranchEdge.create(carved.id, argIds: twoArgs(cursor, second: pastCarve)))
+
+	let chunkBytes = emitConst(module, block: newChunk, value: GtStackPoolChunkBytes, ids: ids)
+	let raw = ids.mint()
+	module.appendOp(newChunk, op: StdOp.osAllocPages(raw, sizeId: chunkBytes))
+	module.setTerminator(newChunk, op: StdOp.condBranch(emitGtStackRefused(module, block: newChunk, stackBase: raw, ids: ids), thenBlockId: chunkRefused.id, elseBlockId: chunkMapped.id))
+
+	emitGtStackPoolLock(module, block: chunkRefused, pool: pool, held: false, ids: ids)
+	module.setTerminator(chunkRefused, op: StdOp.ret(raw))
+
+	emitStoreField(module, block: chunkMapped, record: pool, offset: GtStackPoolLimitOffset, value: emitBin(module, block: chunkMapped, a: raw, b: chunkBytes, opcode: StdBinOpcode.add, ids: ids))
+	let pastFirst = emitBin(module, block: chunkMapped, a: raw, b: sized.bytes, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(chunkMapped, op: StdOp.branch(carved.id))
+	chunkMapped.branchEdges.push(BranchEdge.create(carved.id, argIds: twoArgs(raw, second: pastFirst)))
+
+	let address = ids.mint()
+	let nextCursor = ids.mint()
+	carved.blockArgs.push(IrBlockArg.create(address, argType: StdType.i64))
+	carved.blockArgs.push(IrBlockArg.create(nextCursor, argType: StdType.i64))
+	emitStoreField(module, block: carved, record: pool, offset: GtStackPoolCursorOffset, value: nextCursor)
+	emitGtStackPoolLock(module, block: carved, pool: pool, held: false, ids: ids)
+	module.setTerminator(carved, op: StdOp.ret(address))
+
+	module.functions.push(func)
+end 'buildGtStackAlloc'
+
+function buildGtStackFree(module StdModule)
+	var func = IrFunction.createFromStd(GtStackFreeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var direct = module.addBlock(func, label: b"stkfreedirect", heat: BlockHeat.normal)
+	var pooled = module.addBlock(func, label: b"stkfreepooled", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let base = 0 as ValueId
+	let size = 1 as ValueId
+
+	let beyondPool = emitCmp(module, block: entry, a: size, b: emitConst(module, block: entry, value: GtStackPoolMaxBytes, ids: ids), pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(beyondPool, thenBlockId: direct.id, elseBlockId: pooled.id))
+
+	module.appendOp(direct, op: StdOp.osFreePages(base, sizeId: size))
+	module.setTerminator(direct, op: StdOp.retVoid)
+
+	var found = module.addBlock(func, label: b"stkclassfound", heat: BlockHeat.normal)
+	let sized = emitGtStackClassOf(module, func: func, cur: pooled, found: found, size: size, ids: ids)
+	let pool = emitLoadGlobalWord(module, block: found, label: GtStackPoolLabel, ids: ids)
+	let headAddr = emitGtStackFreeListHead(module, block: found, pool: pool, shift: sized.shift, ids: ids)
+	emitGtStackPoolLock(module, block: found, pool: pool, held: true, ids: ids)
+	let head = emitLoadField(module, block: found, record: headAddr, offset: 0, ids: ids)
+	emitStoreField(module, block: found, record: base, offset: 0, value: head)
+	emitStoreField(module, block: found, record: headAddr, offset: 0, value: base)
+	emitGtStackPoolLock(module, block: found, pool: pool, held: false, ids: ids)
+	module.setTerminator(found, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtStackFree'
+
+function buildGtSystemStackAlloc(module StdModule, target Target)
+	requireProbeStrideFitsTheSystemStackGuard(target)
+
+	var func = IrFunction.createFromStd(GtSystemStackAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let size = 0 as ValueId
+
+	match systemStackGuardOf(target) 'guard'
+		pageGuardWithHeadroom then buildPageGuardedSystemStackBody(module, func: func, entry: entry, size: size, target: target, ids: ids)
+		noAccessPage then buildNoAccessSystemStackBody(module, func: func, entry: entry, size: size, target: target, ids: ids)
+	end 'guard'
+
+	module.functions.push(func)
+end 'buildGtSystemStackAlloc'
+
+function requireProbeStrideFitsTheSystemStackGuard(target Target)
+	let faulting = gtSystemStackFaultingBytes(target)
+
+	if (StackProbeStrideBytes as ParsedInt) > faulting 'strideSkipsTheGuard'
+		panic("requireProbeStrideFitsTheSystemStackGuard: the stack probe touches one byte per {StackProbeStrideBytes} but the part of {targetToString(target)}'s system-stack guard region that faults is {faulting} bytes — a frame could step over it between two touches and write below it without a fault")
+	end 'strideSkipsTheGuard'
+end 'requireProbeStrideFitsTheSystemStackGuard'
+
+function buildNoAccessSystemStackBody(module StdModule, func IrFunction, entry IrBlock, size ValueId, target Target, ids ValueMinter)
+	var reserveRefused = module.addBlock(func, label: b"stkreserverefused", heat: BlockHeat.cold)
+	var commit = module.addBlock(func, label: b"stkcommit", heat: BlockHeat.normal)
+	var commitRefused = module.addBlock(func, label: b"stkcommitrefused", heat: BlockHeat.cold)
+	var committed = module.addBlock(func, label: b"stkcommitted", heat: BlockHeat.normal)
+
+	let guardBytes = emitConst(module, block: entry, value: gtSystemStackGuardRegionBytes(target), ids: ids)
+	let reservedBytes = emitBin(module, block: entry, a: size, b: guardBytes, opcode: StdBinOpcode.add, ids: ids)
+	let reservation = ids.mint()
+	module.appendOp(entry, op: StdOp.osReservePages(reservation, sizeId: reservedBytes))
+	module.setTerminator(entry, op: StdOp.condBranch(emitGtStackRefused(module, block: entry, stackBase: reservation, ids: ids), thenBlockId: reserveRefused.id, elseBlockId: commit.id))
+
+	module.setTerminator(reserveRefused, op: StdOp.ret(reservation))
+
+	let usableBase = emitBin(module, block: commit, a: reservation, b: guardBytes, opcode: StdBinOpcode.add, ids: ids)
+	let mapped = ids.mint()
+	module.appendOp(commit, op: StdOp.osCommitPages(mapped, addrId: usableBase, sizeId: size))
+	module.setTerminator(commit, op: StdOp.condBranch(emitGtStackRefused(module, block: commit, stackBase: mapped, ids: ids), thenBlockId: commitRefused.id, elseBlockId: committed.id))
+
+	module.appendOp(commitRefused, op: StdOp.osFreePages(reservation, sizeId: reservedBytes))
+	module.setTerminator(commitRefused, op: StdOp.ret(mapped))
+
+	module.setTerminator(committed, op: StdOp.ret(usableBase))
+end 'buildNoAccessSystemStackBody'
+
+function buildPageGuardedSystemStackBody(module StdModule, func IrFunction, entry IrBlock, size ValueId, target Target, ids ValueMinter)
+	var arm = module.addBlock(func, label: b"stkarm", heat: BlockHeat.normal)
+	var allocRefused = module.addBlock(func, label: b"stkallocrefused", heat: BlockHeat.cold)
+	var armRefused = module.addBlock(func, label: b"stkarmrefused", heat: BlockHeat.cold)
+	var armed = module.addBlock(func, label: b"stkarmed", heat: BlockHeat.normal)
+
+	let regionBytes = emitConst(module, block: entry, value: gtSystemStackGuardRegionBytes(target), ids: ids)
+	let totalBytes = emitBin(module, block: entry, a: size, b: regionBytes, opcode: StdBinOpcode.add, ids: ids)
+	let whole = ids.mint()
+	module.appendOp(entry, op: StdOp.osAllocPages(whole, sizeId: totalBytes))
+	module.setTerminator(entry, op: StdOp.condBranch(emitGtStackRefused(module, block: entry, stackBase: whole, ids: ids), thenBlockId: allocRefused.id, elseBlockId: arm.id))
+
+	module.setTerminator(allocRefused, op: StdOp.ret(whole))
+
+	let guardAt = emitBin(module, block: arm, a: whole, b: emitConst(module, block: arm, value: WindowsSystemStackHeadroomBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let guardResult = ids.mint()
+	module.appendOp(arm, op: StdOp.osGuardPages(guardResult, addrId: guardAt, sizeId: emitConst(module, block: arm, value: WindowsSystemStackGuardPageBytes, ids: ids)))
+	module.setTerminator(arm, op: StdOp.condBranch(emitGtStackRefused(module, block: arm, stackBase: guardResult, ids: ids), thenBlockId: armRefused.id, elseBlockId: armed.id))
+
+	module.appendOp(armRefused, op: StdOp.osFreePages(whole, sizeId: totalBytes))
+	module.setTerminator(armRefused, op: StdOp.ret(guardResult))
+
+	module.setTerminator(armed, op: StdOp.ret(emitBin(module, block: armed, a: whole, b: regionBytes, opcode: StdBinOpcode.add, ids: ids)))
+end 'buildPageGuardedSystemStackBody'
 
 // 1 when `marks`, a `GtOffStackMarks` word, carries `mark`.
 function emitGtHasStackMark(module StdModule, block IrBlock, marks ValueId, mark ParsedInt, ids ValueMinter) returns ValueId
@@ -6720,30 +7074,39 @@ end 'buildGtResched'
 // `__gt_preempt(gt)` — see `GtPreemptName`. `gt` is the running thread, stopped at a prologue guard that found
 // `GtStackGuardPreempt` in its guard word.
 //
-// ⭐⭐ **IT RUNS ON THE THREAD's OWN STACK, BELOW A FRAME THAT DOES NOT EXIST YET**, so its whole call tree —
-// `__gt_guard_tripped`'s preempt arm, this function and the park's switch — rides the guard margin the way every
-// un-guarded runtime frame does. Each native backend adds that tree up from the frames it laid out and refuses
-// the build if it outgrows the margin (`PreemptionDepth.requirePreemptionFitsTheGuardMargin`).
+// ⭐⭐ **IT RUNS ON THE THREAD's OWN STACK, BELOW A FRAME THAT DOES NOT EXIST YET**, so its whole
+// call tree — `__gt_guard_tripped`'s preempt arm, this function and the park's switch — rides the
+// guard margin the way every un-guarded runtime frame does. Each native backend adds that tree up
+// from the frames it laid out and refuses the build if it outgrows the margin
+// (`UnguardedChains.requireUnguardedChainsFitTheGuardMargin`, E5004).
 //
-// ⭐ **ONLY A FUNCTION-ENTRY GUARD REACHES IT** (`GtGuardSite.functionEntry`). A guarded function is user-shaped
-// code, which the runtime never enters while it holds `__sched_lock` (`MailboxRuntime.buildMboxSend` states the
-// rule at a cascade), so no lock is held here — the question Go's `newstack` asks of `m.locks` has no subject.
+// ⭐ **ONLY A FUNCTION-ENTRY GUARD REACHES IT** (`GtGuardSite.functionEntry`), and it still asks
+// Go's `newstack` question of `m.locks`: a thread holding a runtime lock returns without parking,
+// because a park there might never end.
 //
-// The guard word is restored before anything else, so the request is answered once; the count is stepped on
-// the processor this thread is leaving.
+// The guard word is restored before anything else, so the request is answered once, parked or
+// declined; the count is stepped on the processor this thread is leaving.
 function buildGtPreempt(module StdModule, target Target)
 	var func = IrFunction.createFromStd(GtPreemptName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var park = module.addBlock(func, label: b"preemptpark", heat: BlockHeat.normal)
+	var declined = module.addBlock(func, label: b"preemptdeclined", heat: BlockHeat.normal)
 	var resumed = module.addBlock(func, label: b"preemptresumed", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
 	emitGtRestoreStackGuard(module, block: entry, gt: gt, target: target, ids: ids)
-	emitSchedCountPreemption(module, block: entry, ids: ids)
-	emitGtPark(module, ids: ids, cur: entry, kind: GtParkKind.preempt.rawValue, arg: emitConst(module, block: entry, value: GtParkArgUnused, ids: ids), cont: resumed)
+	let locksHeld = emitLoadField(module, block: entry, record: emitSchedLockDepthAddr(module, block: entry, ids: ids), offset: 0, ids: ids)
+	let holdsNone = emitCmp(module, block: entry, a: locksHeld, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(holdsNone, thenBlockId: park.id, elseBlockId: declined.id))
+
+	module.setTerminator(declined, op: StdOp.retVoid)
+
+	emitSchedCountPreemption(module, block: park, ids: ids)
+	emitGtPark(module, ids: ids, cur: park, kind: GtParkKind.preempt.rawValue, arg: emitConst(module, block: park, value: GtParkArgUnused, ids: ids), cont: resumed)
 	module.setTerminator(resumed, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -8371,7 +8734,7 @@ let SubpPosixNullDeviceName = b"/dev/null"
 // copy loop would carry four values across itself here, so each caller builds the buffer before any handle
 // exists.
 function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShape, streamState EnumLayout)
-	var func = IrFunction.createFromStd(SubpSpawnCoreName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var func = IrFunction.createFromStd(SubpSpawnCoreName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -9712,7 +10075,7 @@ end 'buildSubpWait'
 // Idempotent via the `inUse` guard; every closed handle field is zeroed so a stale/duplicate close cannot hit a
 // reused OS handle.
 function buildSubpRelease(module StdModule)
-	var func = IrFunction.createFromStd(SubpReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var func = IrFunction.createFromStd(SubpReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

@@ -937,16 +937,16 @@ end 'foldIntCompare'
 //
 // ⚠ **IT MUST COMPARE AS f64, NOT OVER THE RAW PATTERNS**, and that is the whole reason it exists
 // beside `foldIntCompare` rather than reusing it. A double's bit pattern is sign-and-magnitude: two
-// POSITIVE doubles happen to order exactly as their patterns do, so an integer compare of `3.5 > 2.5`
-// is right BY ACCIDENT — but a negative operand (whose sign bit inverts the integer order) or a NaN
-// (which no integer compare can call unordered) exposes it. Reinterpreting to f64
-// (`__Builtins.bitsToFloat`) and letting the host compare gets `-1.0 > -2.0` and `-0.0 == +0.0` right.
+// POSITIVE doubles happen to order exactly as their patterns do, so an integer compare of
+// `3.5 > 2.5` is right BY ACCIDENT — but a negative operand (whose sign bit inverts the
+// integer order) or a NaN (which no integer compare can call unordered) exposes it. Reinterpreting
+// to f64 (`floatOfBits`) and letting the host compare gets `-1.0 > -2.0` and `-0.0 == +0.0` right.
 //
 // Both operands are float here: a mixed int/float compare is E3005 (`comparableOperands`), so the
 // caller reaches this only when both sides carry float bits.
 export function foldFloatCompare(op MaxonCmpOp, lhs ParsedInt, rhs ParsedInt) returns ParsedInt
-	let a = __Builtins.bitsToFloat(lhs)
-	let b = __Builtins.bitsToFloat(rhs)
+	let a = floatOfBits(lhs)
+	let b = floatOfBits(rhs)
 
 	return match op 'o'
 		eq gives boolPayload(a == b)
@@ -2531,8 +2531,8 @@ end 'foldUnsignedIntDivision'
 
 // Fold `lhs <op> rhs` over two float BIT PATTERNS with the host's native f64 — the float twin of
 // `foldIntBinOp`, and the ONE place a constant float arithmetic answer is computed. Each operand is
-// reinterpreted to f64 (`__Builtins.bitsToFloat`), the host combines them, and the single result is
-// re-encoded (`__Builtins.floatToBits`) — ONE round-trip, so no double-rounding.
+// reinterpreted to f64 (`floatOfBits`), the host combines them, and the single result is
+// re-encoded (`bitsOfFloat`) — ONE round-trip, so no double-rounding.
 //
 // From the PARSER only `+ - * /` reach here. They are exactly the operators with an SSE form
 // (`operatorIsIntegral` is false for them); `requireBinOpOperands` turns a float away from `mod` / the
@@ -2553,19 +2553,19 @@ end 'foldUnsignedIntDivision'
 // because the host gives no float `/0` value and the compiler does not reimplement IEEE division in
 // software.)
 export function foldFloatBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
-	let a = __Builtins.bitsToFloat(lhs)
-	let b = __Builtins.bitsToFloat(rhs)
+	let a = floatOfBits(lhs)
+	let b = floatOfBits(rhs)
 
 	if op == MaxonBinOp.add 'add'
-		return FoldedInt.folded(__Builtins.floatToBits(a + b))
+		return FoldedInt.folded(bitsOfFloat(a + b))
 	end 'add'
 
 	if op == MaxonBinOp.sub 'sub'
-		return FoldedInt.folded(__Builtins.floatToBits(a - b))
+		return FoldedInt.folded(bitsOfFloat(a - b))
 	end 'sub'
 
 	if op == MaxonBinOp.mul 'mul'
-		return FoldedInt.folded(__Builtins.floatToBits(a * b))
+		return FoldedInt.folded(bitsOfFloat(a * b))
 	end 'mul'
 
 	if op == MaxonBinOp.div 'div'
@@ -2573,7 +2573,7 @@ export function foldFloatBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) retu
 			return FoldedInt.notFoldable
 		end 'divByZero'
 
-		return FoldedInt.folded(__Builtins.floatToBits(quotient))
+		return FoldedInt.folded(bitsOfFloat(quotient))
 	end 'div'
 
 	// ⭐⭐ **`min`/`max` SELECT AN OPERAND, SO THE ANSWER IS THAT OPERAND'S ORIGINAL PATTERN AND NEVER A
@@ -2628,10 +2628,10 @@ export function foldFloatUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Fol
 		trunc or
 		promoteToFloat or
 		promoteUnsignedToFloat gives FoldedInt.notFoldable
-		floor gives FoldedInt.folded(__Builtins.floatToBits(floor(__Builtins.bitsToFloat(operand))))
-		ceil gives FoldedInt.folded(__Builtins.floatToBits(ceil(__Builtins.bitsToFloat(operand))))
-		round gives FoldedInt.folded(__Builtins.floatToBits(round(__Builtins.bitsToFloat(operand))))
-		sqrt gives FoldedInt.folded(__Builtins.floatToBits(sqrt(__Builtins.bitsToFloat(operand))))
+		floor gives FoldedInt.folded(bitsOfFloat(floor(floatOfBits(operand))))
+		ceil gives FoldedInt.folded(bitsOfFloat(ceil(floatOfBits(operand))))
+		round gives FoldedInt.folded(bitsOfFloat(round(floatOfBits(operand))))
+		sqrt gives FoldedInt.folded(bitsOfFloat(sqrt(floatOfBits(operand))))
 		abs gives FoldedInt.folded(absFloatBits(operand))
 		fneg gives FoldedInt.folded(negatedFloatBits(operand))
 
@@ -2642,6 +2642,7 @@ export function foldFloatUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Fol
 		// itself. The sign-extension family has no float operand at all.
 		floatToBits or
 		bitsToFloat or
+		copy or
 		signExtendI8 or
 		signExtendI16 or
 		signExtendI32 gives FoldedInt.notFoldable
@@ -2660,7 +2661,7 @@ end 'foldFloatUnaryOp'
 // promotion (`Parser.constFloatBits`), `IR/Std/FoldConstants.evaluateIntSourceUnaryOp`'s `siToFp`,
 // and `foldUiToFp` for an unsigned value below `2^63`.
 export function foldSiToFp(value ParsedInt) returns ParsedInt
-	return __Builtins.floatToBits(0.0 + value)
+	return bitsOfFloat(0.0 + value)
 end 'foldSiToFp'
 
 // Above `i64.max` the pattern is halved with its dropped bit kept as a sticky low bit, so the
@@ -2673,8 +2674,16 @@ export function foldUiToFp(value ParsedInt) returns ParsedInt
 
 	let pattern = value as UnsignedScalarPattern
 	let rounded = ((pattern shr 1) or (pattern and 1)) as ParsedInt
-	return __Builtins.floatToBits((0.0 + rounded) * 2.0)
+	return bitsOfFloat((0.0 + rounded) * 2.0)
 end 'foldUiToFp'
+
+export function floatOfBits(bits ParsedInt) returns ParsedFloat
+	return Math.fromBits(bits as FloatBits) as ParsedFloat
+end 'floatOfBits'
+
+export function bitsOfFloat(value ParsedFloat) returns ParsedInt
+	return Math.bitsOf(value as Real) as ParsedInt
+end 'bitsOfFloat'
 
 // ⭐⭐ **THE COMPILE-TIME `cvttsd2si`, AND IT DECLINES EVERYWHERE THE THREE TARGETS DISAGREE.** `trunc`
 // rounds toward zero, which inside the `i64` range is one answer the host and every target compute
@@ -2698,7 +2707,7 @@ end 'foldUiToFp'
 // pinning it means pinning wasmtime's stderr, which names the module by absolute path and
 // `SpecTestRunner.checkRunStderr` compares exactly. `specs/fold-constants.md` records both facts.
 export function foldFpToSi(operand ParsedInt) returns FoldedInt
-	let value = __Builtins.bitsToFloat(operand)
+	let value = floatOfBits(operand)
 
 	if not (value >= FpToSiLowestFoldable and value < FpToSiFirstAboveFoldable) 'noI64Answer'
 		return FoldedInt.notFoldable
@@ -2769,7 +2778,8 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		abs or
 		fneg or
 		floatToBits or
-		bitsToFloat gives FoldedInt.notFoldable
+		bitsToFloat or
+		copy gives FoldedInt.notFoldable
 
 		// The SIGN-EXTENSION family is unreachable here for a STRUCTURAL reason, and its fold would be a real
 		// answer rather than an ambiguous one: `Parser.emitSignExtendFromSlot` is the only emit site, its

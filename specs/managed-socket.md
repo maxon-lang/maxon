@@ -31,6 +31,7 @@ category: type-system
 ## Tests
 
 <!-- test: managed-socket.error-direct-construction -->
+A program outside the library tiers cannot name the type at all, so the construction is refused at the name.
 ```maxon
 function main() returns ExitCode
 	let s = __ManagedSocket{_handle: 0}
@@ -38,10 +39,25 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3072: specs/managed-socket/managed-socket.error-direct-construction.maxon:3:26: '__ManagedSocket' is a compiler builtin type and cannot be constructed directly
+error E3185: <fragment>:3:10: '__ManagedSocket' named outside the library tiers: the raw OS socket handle type is nameable only from a source file under stdlib/ or runtime/ — use 'TcpClient' or 'TcpListener'
+```
+
+<!-- test: managed-socket.error-direct-construction-in-the-library-tier -->
+<!-- tier: stdlib -->
+Library code may name the type, and still cannot build one from a literal: a socket comes only from
+`tcpConnect` or `bindListener`.
+```maxon
+function main() returns ExitCode
+	let s = __ManagedSocket{_handle: 0}
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3072: <fragment>:3:26: '__ManagedSocket' is a compiler builtin type and cannot be constructed directly
 ```
 
 <!-- test: managed-socket.connect-bad-host -->
+<!-- tier: stdlib -->
 ⚠ The `default` arm says *unreachable*, and in a function declaring no `throws` it has to say so with
 `panic` rather than `throws`: `main` has no error channel, so a `default throws` here would be silently
 discarded — and with a payload-carrying error it would leak the box (`exit 101`). E3059 refuses it.
@@ -66,6 +82,7 @@ resolve failed
 ```
 
 <!-- test: managed-socket.connect-refused -->
+<!-- tier: stdlib -->
 ⚠ The `default` arm says *unreachable*, and in a function declaring no `throws` it has to say so with
 `panic` rather than `throws`: `main` has no error channel, so a `default throws` here would be silently
 discarded — and with a payload-carrying error it would leak the box (`exit 101`). E3059 refuses it.

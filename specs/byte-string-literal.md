@@ -671,7 +671,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-		let h = Holder.create(Keyword)
+		var h = Holder.create(Keyword)
 		h.b.push(88)
 		let k = try Keyword.get(0) otherwise 0
 		print("{h.b.count()} {Keyword.count()} {k}")

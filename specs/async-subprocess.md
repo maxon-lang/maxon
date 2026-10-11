@@ -14,6 +14,10 @@ thread** while the child runs, and returns the child's integer exit code once it
 wait: the thread parks on the child, hands control back to the scheduler, and RESUMES with its exit code once the
 child has exited — so other green threads run while a child is pending.
 
+Like every `__Builtins` member it is library-tier: only a source file under `stdlib/` or `runtime/` may call
+it, and a call from anywhere else is E3185. The cases below that call it therefore compile in the library tier
+(`<!-- tier: stdlib -->`); a program outside the library tiers runs a child through `stdlib/Subprocess.maxon`.
+
 ⭐ **IT IS SPELLED `__Builtins.runProcess`, AND THE BARE NAME `runProcess` IS AN ORDINARY NAME.** The entry lives in the
 reserved `__Builtins.` space, which `E2051` bars every declaration from, so no user name can contest it, and a
 program declaring its own `runProcess` reaches that declaration with its own arity — as
@@ -24,7 +28,7 @@ program declaring its own `runProcess` reaches that declaration with its own ari
 `stdlib/Sleep.maxon`, where the target gate is reachability-AWARE, so an unreached `sleep` compiles for wasm
 (`async-sleep.unreached-compiles-on-wasm`). There is no stdlib declaration for this one:
 `stdlib/Subprocess.maxon`'s `Subprocess.run` is a different mechanism (a poll-and-`__gt_sleep` drain over
-`__Builtins.subprocess*`). `__Builtins.runProcess` therefore emits `__gt_process_run` in USER code, where the
+`__Builtins.subprocess*`). `__Builtins.runProcess` therefore emits `__gt_process_run` in the program's own code, where the
 gate is reachability-BLIND — pinned by `rejected-on-wasm-when-unreached` below.
 
 `__Builtins.runProcess` is a **throwing** builtin: a spawn failure THROWS rather than aborting, so it
@@ -87,6 +91,7 @@ marker.
 ## Tests
 
 <!-- test: async-subprocess.exit-code -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 A spawned green thread runs a child that exits 3; the thread parks on the child (yielding), resumes once the child
 exits, and returns the exit code, which becomes the program's exit code. The spawn succeeds, so the
@@ -108,6 +113,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.posix-exit-code -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `exit-code`'s subject on the POSIX lane, and the case that proves `__Builtins.runProcess` runs a child here
 at all: a spawned green thread runs a child that exits 3, parks on it, resumes once it exits, and returns
@@ -137,6 +143,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.sequence -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 Two children run in sequence (spawn, await, spawn, await) with distinct exit codes; each thread's exit code is
 read back independently and combined, proving no cross-talk between the two parked-then-resumed threads.
@@ -163,6 +170,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.multi-concurrent -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 Three children are spawned BEFORE any await, so all three park on their processes SIMULTANEOUSLY — the poller
 holds THREE child sources at once and its readiness walk wakes each waiter separately (the path `sequence`,
@@ -198,6 +206,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.posix-a-child-that-has-already-exited -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 ⭐⭐ **A CHILD CAN FINISH BEFORE ITS PARENT FINISHES ARMING, AND THAT IS AN ANSWER RATHER THAN A REFUSAL.**
 Between the spawn and the registration the kernel may run the child to completion, and a source for a task
@@ -237,6 +246,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.posix-multi-concurrent -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 ⭐ **THE CONCURRENCY CASE — SEVERAL CHILDREN THROUGH THE NETPOLL AT ONCE.** Three children are spawned
 BEFORE any await, so all three park on their processes SIMULTANEOUSLY and the poller holds three child
@@ -278,6 +288,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.interleave-with-sleep -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 A slow child (a ~1 s `ping` delay) and a short (50 ms) sleeper run concurrently. The sleeper's timer fires WHILE
 the child is still running, so the sleeper resumes FIRST — proving the process wait YIELDS (it is bounded by the
@@ -313,6 +324,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.posix-interleave-with-sleep -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 ⭐ **THE CASE THAT PROVES THE PROCESS WAIT YIELDS ON THIS LANE.** A slow child (a one-second `sleep`) and a
 short 50 ms sleeper run concurrently. The sleeper's timer fires WHILE the child is still running, so the
@@ -354,6 +366,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.a-parked-child-costs-no-poll -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 <!-- procs: 1 -->
 ⭐ **A SECOND OF PARKED CHILD COSTS THE POLLER ONE WAIT, NOT A THOUSAND.** A child is a SOURCE on the
@@ -387,12 +400,12 @@ end 'slow'
 
 function main() returns ExitCode
 	sleep(1)
-	let beforeWakes = __Builtins.schedParkWakeCount()
-	let beforeParks = __Builtins.schedNetpollBlockCount()
+	let beforeWakes = Scheduler.counters().parkWakes
+	let beforeParks = Scheduler.counters().netpollBlocks
 	let p = async slow()
 	_ = await p
-	let wakes = __Builtins.schedParkWakeCount() - beforeWakes
-	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
+	let wakes = Scheduler.counters().parkWakes - beforeWakes
+	let parks = Scheduler.counters().netpollBlocks - beforeParks
 	print("quiet={wakes <= quietWakes} onpoller={parks >= pollerParks}\n")
 	return 0
 end 'main'
@@ -406,6 +419,7 @@ quiet=true onpoller=true
 ```
 
 <!-- test: async-subprocess.posix-a-parked-child-costs-no-poll -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 <!-- procs: 1 -->
 `a-parked-child-costs-no-poll`'s subject on the POSIX lane, where the child joins the poller as a source of
@@ -430,12 +444,12 @@ end 'slow'
 
 function main() returns ExitCode
 	sleep(1)
-	let beforeWakes = __Builtins.schedParkWakeCount()
-	let beforeParks = __Builtins.schedNetpollBlockCount()
+	let beforeWakes = Scheduler.counters().parkWakes
+	let beforeParks = Scheduler.counters().netpollBlocks
 	let p = async slow()
 	_ = await p
-	let wakes = __Builtins.schedParkWakeCount() - beforeWakes
-	let parks = __Builtins.schedNetpollBlockCount() - beforeParks
+	let wakes = Scheduler.counters().parkWakes - beforeWakes
+	let parks = Scheduler.counters().netpollBlocks - beforeParks
 	print("quiet={wakes <= quietWakes} onpoller={parks >= pollerParks}\n")
 	return 0
 end 'main'
@@ -449,6 +463,7 @@ quiet=true onpoller=true
 ```
 
 <!-- test: async-subprocess.spawn-loop -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 Robustness: twenty-five spawned threads each run a child that exits 1, awaited in turn. Each parks on its child
 (waiting, NOT completed — its stack must NOT be recycled while parked) then resumes and completes (stack recycled
@@ -476,6 +491,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.scratch-reuse-loop -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 Fifty children each exit 1, awaited in turn, summing to 50. The value is that `__gt_process_run`'s OS scratch —
 STARTUPINFOW, PROCESS_INFORMATION, the mutable cmdline copy and the exit-code slot — is REUSED across all fifty
@@ -507,6 +523,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.spawn-failure-caught -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 A command that names no runnable executable makes `CreateProcessW` fail outright, leaving a null child handle. The
 runtime THROWS its spawn-failure error rather than aborting the process — so the direct
@@ -523,6 +540,7 @@ end 'main'
 ```
 
 <!-- test: async-subprocess.spawn-failure-binds-its-case -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 The spawn failure is `RunProcessError.spawnFailed`, so an `otherwise (e)` handler can `match` on it.
 ```maxon
@@ -540,6 +558,7 @@ end 'main'
 ```
 
 <!-- test: async-subprocess.spawn-failure-recover-continue -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 Recovery leaves the scheduler CONSISTENT: after a caught `spawnFailed` (a command that cannot start), a SECOND
 A VALID command still spawns, parks and returns its exit code. `bad` catches the spawn failure and
@@ -557,6 +576,7 @@ end 'main'
 ```
 
 <!-- test: async-subprocess.sixty-five-concurrent-children-all-complete -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⭐ **SIXTY-FIVE CHILDREN PARKED AT ONCE, AND NOTHING IS FULL.** How many children a program may wait on
 concurrently is a property of the POLLER, which carries as many registered sources as the process has
@@ -726,6 +746,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.posix-sixty-five-concurrent-children-all-complete -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `sixty-five-concurrent-children-all-complete`'s subject on the POSIX lanes: sixty-five children parked
 together, each a source on the poller rather than a slot in a store, and `65` only if every one of them
@@ -885,6 +906,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-subprocess.error.non-string-arg-rejected -->
+<!-- tier: stdlib -->
 `__Builtins.runProcess` requires a `String` command line; a non-String argument is refused at compile time.
 ```maxon
 function main() returns ExitCode
@@ -897,6 +919,7 @@ error E3005: <fragment>:3:13: '__Builtins.runProcess' requires a String, but its
 ```
 
 <!-- test: async-subprocess.error.bare-call-requires-try -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 `__Builtins.runProcess` is a throwing builtin, so a bare call that drops its error flag is refused
 (E3057) — the exact mirror of the throwing-array-accessor rule. A bare call would read only the exit code (R8)
@@ -918,6 +941,7 @@ error E3057: <fragment>:3:24: throwing subprocess call requires try: wrap `__Bui
 ```
 
 <!-- test: async-subprocess.error.rejected-on-wasm -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The other half: it spawns a Windows child through `__gt_process_run`, so a program that reaches it
 on any other target is refused at the call's own span with **E3104**. ⚠ Outside that gate the same program
@@ -933,9 +957,10 @@ error E3104: <fragment>:3:28: this construct lowers to the runtime entry '__gt_p
 ```
 
 <!-- test: async-subprocess.rejected-on-wasm-when-unreached -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 **An unreached call is refused too, and that is the half worth pinning.** `spawner` is never called,
-yet its intrinsic is refused: `__Builtins.runProcess` emits `__gt_process_run` in USER code, where
+yet its intrinsic is refused: `__Builtins.runProcess` emits `__gt_process_run` in the program's own source — a library-tier case's files included, because a project rooted under `stdlib/` keeps its own files as the program's rather than recording them as library source (`StdlibLoader.setAsideTheUsersOwnLibraryFiles`), where
 `SemanticCheck.requireTargetSupportsCallee` is reachability-BLIND — it visits every function, and
 dead-function elimination runs two tiers later. The twin `async-sleep.unreached-compiles-on-wasm` shows the
 opposite outcome for an entry written in stdlib source, where the gate is reachability-AWARE; this entry has

@@ -16,7 +16,7 @@ an I/O event; every other idle machine parks on its own note with no timeout
 poller's deadline interrupts the poller (`wakeNetPoller`), so waking on time costs nothing while nothing is
 due.
 
-`__Builtins.schedParkWakeCount()` counts how many times a parked machine's wait has returned, for any
+`Scheduler.counters().parkWakes` counts how many times a parked machine's wait has returned, for any
 reason — a timeout, a hand-off, a stray signal. It is the number an idle program should keep near zero.
 
 ## Tests
@@ -31,9 +31,9 @@ let quietWakes = 2
 
 function main() returns ExitCode
 	sleep(1)
-	let before = __Builtins.schedParkWakeCount()
+	let before = Scheduler.counters().parkWakes
 	sleep(1000)
-	let wakes = __Builtins.schedParkWakeCount() - before
+	let wakes = Scheduler.counters().parkWakes - before
 	print("quiet={wakes <= quietWakes}\n")
 	return 0
 end 'main'
@@ -54,9 +54,9 @@ let quietWakes = 2
 
 function main() returns ExitCode
 	sleep(1)
-	let before = __Builtins.schedParkWakeCount()
+	let before = Scheduler.counters().parkWakes
 	sleep(1000)
-	let wakes = __Builtins.schedParkWakeCount() - before
+	let wakes = Scheduler.counters().parkWakes - before
 	print("quiet={wakes <= quietWakes}\n")
 	return 0
 end 'main'

@@ -387,6 +387,7 @@ error E3010: specs/raw-bit-patterns/error.a-cast-to-a-values-own-pattern-alias-i
 ```
 
 <!-- test: every-width-rides-the-storage-ladder -->
+<!-- tier: stdlib -->
 ### Storage is the existing ladder — 8/4/2/1 bytes, then 4/2/1 packed bits
 `bits(n)` adds no storage rule of its own: it lands on the same ladder a ranged `int` of the same
 value set does. A negative `elementSize` is the ladder's spelling for a SUB-BYTE packed element,
@@ -429,6 +430,7 @@ end 'main'
 ```
 
 <!-- test: a-pattern-and-the-range-with-its-value-set-share-a-slot -->
+<!-- tier: stdlib -->
 ### `bits(4)` and `int(0 to 15)` are one slot
 The control for the case above: the ladder is asked about the VALUE SET, so the two spellings cannot
 drift apart in layout. What separates them is the door, and nothing else.

@@ -32,11 +32,11 @@ let Iterations = @ITERATIONS@ as Count
 let IrFileExtension = ".ir"
 
 function allocs() returns Count
-	return __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
+	return HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
 end 'allocs'
 
 function allocBytes() returns Count
-	return __Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()
+	return HeapStats.bytesAllocated() + HeapStats.rawBytesAllocated()
 end 'allocBytes'
 
 // One failing File.delete: the path is not there. This is what a clean build sees, and what every

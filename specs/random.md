@@ -1,7 +1,7 @@
 ---
 feature: random
 status: stable
-keywords: [random, entropy, Random, fillRandom, __Builtins]
+keywords: [random, entropy, Random, fillRandom]
 category: stdlib
 ---
 
@@ -13,13 +13,15 @@ category: stdlib
 |---|---|
 | `Random.draw()` | a uniformly random `RandomDraw` in `0 to u64.max` |
 | `Random.below(bound)` | a uniformly random `RandomDraw` in `0 upto bound`; `bound` is a `RandomBound`, `1 to u64.max` |
-| `__Builtins.fillRandom(managed)` | fills the buffer's live length from the OS; `0` when every byte was filled |
+| `__Builtins.fillRandom(managed)` | library-tier: fills the buffer's live length from the OS; `0` when every byte was filled |
 
 Both `Random` calls throw `RandomError.unavailable` when the operating system refuses to supply random bytes.
 The bytes come from `ProcessPrng` on Windows, `getentropy` on macOS, the `getrandom` system call on Linux and
 `wasi:random/random`'s `get-random-u64` on wasm32-wasi.
 
-The answers are random, so the cases below assert properties of them rather than values.
+The answers are random, so the cases below assert properties of them rather than values. `fillRandom` is the
+intrinsic under both `Random` calls, callable only from a source file under `stdlib/` or `runtime/`, so the
+cases that drive it compile as library-tier sources (`<!-- tier: stdlib -->`).
 
 ## Tests
 
@@ -158,6 +160,7 @@ error E3005: <fragment>:3:24: Value 0 is outside the range of 'RandomBound' (int
 ```
 
 <!-- test: random.fill-random-fills-a-buffer-longer-than-one-request -->
+<!-- tier: stdlib -->
 A thousand bytes are filled in requests of at most 256, and the last request's bytes are filled too: the last
 request is bytes 768 to 999, and 232 bytes drawn at random are all zero with probability 2^-1856.
 ```maxon
@@ -191,6 +194,7 @@ end 'main'
 ```
 
 <!-- test: random.fill-random-arity-checked -->
+<!-- tier: stdlib -->
 `fillRandom` takes exactly one buffer.
 ```maxon
 function main() returns ExitCode

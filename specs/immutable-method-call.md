@@ -8,13 +8,9 @@ category: semantics
 
 ## Documentation
 
-Calling a receiver-writing method on an immutable (`let`) binding is a compile-time error. The receiver-writing methods are, exactly: `append` on a `String`, and `push`, `set`, `insert`, `append`, `reserve`, `resize`, `clear`, `pop` and `remove` on an `Array`. Every other method only reads its receiver and is legal on a `let`.
+Calling a receiver-writing method on a read-only (`let`) value is a compile-time error, `E3159`. A `let` is deeply read-only: nothing reachable through it may be written. The receiver-writing methods of the builtin containers are, exactly: `append` on a `String`, and `push`, `set`, `insert`, `append`, `reserve`, `resize`, `clear`, `pop` and `remove` on an `Array`. A method of a declared type — `Set` among them, since `stdlib/Set.maxon` declares it — is receiver-writing when its body writes `self`, and is refused on a `let` the same way: `let c = Counter.create(); c.bump()` is `E3159` for any user `type Counter` whose `bump` writes a field. Every method that only reads its receiver is legal on a `let`.
 
-⚠⚠ **THE RULE IS A BUILTIN-SURFACE ONE, AND A DECLARED TYPE IS EXEMPT (USER RULING).** It lives in the parser's hand-written `arrayMethodMutatesReceiver` / `setMethodMutatesReceiver` rosters and is read only through the BUILTIN dispatchers, so a type the compiler compiles rather than synthesizes never reaches it — `let c = Counter.create(); c.bump()` compiles for any user `type Counter`. `Set` is such a type (`stdlib/Set.maxon` declares it), so the three `Set` cases below are value-asserting `ok` cases, and the exemption is RECORDED rather than silently inherited.
-
-⚠ The `Array` and `String` cases are builtin-dispatched, so the rule reaches them.
-
-A **parameter** is exempt, and that is not a loophole: `mutable` asks whether the NAME may be rebound (a parameter's answer is no), while this rule asks whether the CONTAINER the name denotes may be written — and a parameter is a borrowed reference to the caller's record, so `dest.append(src)` inside a helper is ordinary Maxon. A `let` that merely *aliases* a parameter is still a `let`, and is still refused.
+A **parameter** is not a `let`: a parameter is a borrowed reference to the caller's record, so `dest.append(src)` inside a helper is ordinary Maxon, and the caller is refused at the call when it hands that parameter a `let` (`parameter-mutation.md`). A `let` that merely *aliases* a parameter is still a `let`, and is still refused.
 
 ## Tests
 
@@ -33,7 +29,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/immutable-method-call/push-on-let-array-error.maxon:8:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3159: specs/immutable-method-call/push-on-let-array-error.maxon:8:6: cannot write through 'arr': 'arr' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: append-on-let-string-error -->
@@ -48,7 +44,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/immutable-method-call/append-on-let-string-error.maxon:5:4: cannot pass 's' to function that mutates parameter 'self' (in main)
+error E3159: specs/immutable-method-call/append-on-let-string-error.maxon:5:4: cannot pass 's', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
 <!-- test: append-on-string-parameter-ok -->
@@ -86,7 +82,7 @@ VIOLATION on x64, and on wasm32-wasi the same write succeeds into a record share
 literal.
 
 ⚠ **The compiler NAMES THE BINDING** (⚖ user ruling): the merge does not lose the name, and every other
-E3019 in the canonical corpus names the binding, this file's own `push-on-let-array-error` and
+E3159 in the canonical corpus names the read-only root, this file's own `push-on-let-array-error` and
 `append-on-let-string-error` included.
 ```maxon
 function grow(s String)
@@ -101,7 +97,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/immutable-method-call/pass-let-string-through-inline-if-error.maxon:9:2: cannot pass 'g' to function that mutates parameter 's' (in main)
+error E3159: specs/immutable-method-call/pass-let-string-through-inline-if-error.maxon:9:2: cannot pass 'g', which is read-only (a `let` binding), to a function that writes parameter 's' (in main); pass a clone()
 ```
 
 <!-- test: pass-let-string-through-try-otherwise-error -->
@@ -127,7 +123,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/immutable-method-call/pass-let-string-through-try-otherwise-error.maxon:11:2: cannot pass 'g' to function that mutates parameter 's' (in main)
+error E3159: specs/immutable-method-call/pass-let-string-through-try-otherwise-error.maxon:11:2: cannot pass 'g', which is read-only (a `let` binding), to a function that writes parameter 's' (in main); pass a clone()
 ```
 
 <!-- test: push-on-let-alias-of-parameter-error -->
@@ -150,15 +146,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/immutable-method-call/push-on-let-alias-of-parameter-error.maxon:7:4: cannot pass 'a' to function that mutates parameter 'self' (in grow)
+error E3159: specs/immutable-method-call/push-on-let-alias-of-parameter-error.maxon:7:4: cannot write through 'a': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
-<!-- test: insert-on-let-set-ok -->
-⭐⭐ **A `Set` RECEIVER DOES NOT OBEY THIS RULE, AND THAT IS THE RULING RATHER THAN A DEFECT.**
-`stdlib/Set.maxon` declares `Set`, so it is a type the compiler COMPILES, `insert` is an ordinary declared
-method, and the parser's builtin `setMethodMutatesReceiver` roster is never reached — exactly as it is never
-reached for any user type. This VALUE-asserting case executes the surface, so the day something refuses it,
-this goes red.
+<!-- test: insert-on-let-set-error -->
+A `Set` is a type the compiler COMPILES: `insert` is an ordinary declared method whose body writes `self`, so
+it writes the receiver, and a `let` receiver is refused exactly as it is for an `Array`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -170,12 +163,29 @@ function main() returns ExitCode
 	return s.count() as ExitCode
 end 'main'
 ```
+```maxoncstderr
+error E3159: specs/immutable-method-call/insert-on-let-set-error.maxon:7:4: cannot pass 's', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: insert-on-var-set-ok -->
+The same call on a `var` Set writes it.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+
+function main() returns ExitCode
+	var s = IntSet.create()
+	s.insert(1)
+	return s.count() as ExitCode
+end 'main'
+```
 ```exitcode
 1
 ```
 
-<!-- test: remove-on-let-set-ok -->
-The `remove` half of the same ruling. The set is empty, so `remove` answers false and the count is zero.
+<!-- test: remove-on-let-set-error -->
+The `remove` half of the same ruling: `remove` writes the set even when it answers false.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -190,6 +200,26 @@ function main() returns ExitCode
 	return s.count() as ExitCode
 end 'main'
 ```
+```maxoncstderr
+error E3159: specs/immutable-method-call/remove-on-let-set-error.maxon:7:15: cannot pass 's', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: remove-on-var-set-ok -->
+The set is empty, so `remove` on a `var` answers false and the count is zero.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntSet = Set with Integer
+
+function main() returns ExitCode
+	var s = IntSet.create()
+	let gone = s.remove(1)
+	if gone 'g'
+		return 1
+	end 'g'
+	return s.count() as ExitCode
+end 'main'
+```
 ```exitcode
 0
 ```
@@ -197,8 +227,8 @@ end 'main'
 <!-- test: contains-on-let-set-ok -->
 A read-only `Set` method on a `let` receiver is fine.
 
-⚠ All three of this file's `Set` cases COMPILE a set (the ruling above), so they stand or fall together on
-whatever a `Set` instance's descriptor costs a target. None of them carries an `unsupported-targets:` marker.
+⚠ The `Set` run cases COMPILE a set, so they stand or fall together on whatever a `Set` instance's
+descriptor costs a target. None of them carries an `unsupported-targets:` marker.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -232,7 +262,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/immutable-method-call/set-on-let-array-error.maxon:8:10: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+error E3159: specs/immutable-method-call/set-on-let-array-error.maxon:8:10: cannot write through 'arr': 'arr' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: read-on-let-array-ok -->
@@ -401,7 +431,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/immutable-method-call/push-on-let-self-field-array-error.maxon:13:9: cannot pass 'items' to function that mutates parameter 'self' (in Bag.add)
+error E3159: specs/immutable-method-call/push-on-let-self-field-array-error.maxon:13:9: cannot write through 'items': 'items' is read-only (a `let` field) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 ⭐⭐ **AND A CHAIN THROUGH A MODULE-LEVEL `let` REFUSES IT TOO, WHICH IS THE HALF NO DOOR COULD SEE.** The
@@ -412,16 +442,14 @@ only whether an enclosing `for` had locked the base would compile the write. Whe
 image data the record is `.rdata`: the push reaches `__mm_cow_detach` and writes a page mapped read-only,
 which is a fault on x64 and, on wasm32-wasi, a silent rewrite of the constant.
 
-⛔ **THE RULE IS ASKED OF A TOP-LEVEL BASE ONLY.** Off a local `let` a CHAIN is judged more narrowly than
-a BINDING: after `let e = try xs.get(0)`, whether `e.counts.push(1)` or `e.counts.set(0, value: 9)` is a
-write turns on whether the callee REPUBLISHES the receiver's record, a split the compiler's mutation summary
-does not carry. Applied to every local `let`, the rule would refuse `IrModule.rewriteFuncBlockRefs`' own
-`func.blockRefs.set(…)`, which is legal. A top-level immutable base needs no such split: no callee may write
-an imaged record at all.
+⛔ **THE RULE IS ASKED OF EVERY ROOT, A LOCAL `let` INCLUDED.** A `let` is deeply read-only, so after
+`let e = Facts.create()` both `e.counts.push(1)` and `e.counts.set(0, value: 9)` are writes through `e` and are
+refused (`error.push-through-a-field-chain-off-a-local-let`); the same chain off a `var` is legal
+(`push-through-a-field-chain-off-a-local-var-ok`).
 
-⚠ **A `self`-ROOTED CHAIN AND A LOCAL ARE BOTH UNTOUCHED** — `self` is a parameter, a borrowed reference to
-the caller's record, so `self.items.push(v)` inside the type's own method stays legal, which is what
-`parameter-mutation:let-struct-with-array-field-to-mutating-method-ok` pins.
+⚠ **A `self`-ROOTED CHAIN IS UNTOUCHED** — `self` is a parameter, a borrowed reference to the caller's
+record, so `self.items.push(v)` inside the type's own method stays legal; the CALL of that method on a `let`
+is what is refused, which `parameter-mutation:let-struct-with-array-field-to-mutating-method-error` pins.
 
 <!-- test: error.push-through-a-field-chain-off-a-module-let -->
 ```maxon
@@ -445,7 +473,57 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:16:21: cannot pass 'SharedFacts' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:16:21: cannot write through 'SharedFacts.counts': 'SharedFacts' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
+```
+
+<!-- test: error.push-through-a-field-chain-off-a-local-let -->
+```maxon
+typealias Count = int(0 to 1000)
+typealias CountArray = Array with Count
+
+type Facts
+	export var counts = CountArray.create()
+
+	static function create() returns Facts
+		return Self{}
+	end 'create'
+end 'Facts'
+
+function main() returns ExitCode
+	let facts = Facts.create()
+	facts.counts.push(1)
+
+	return facts.counts.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:15:15: cannot write through 'facts.counts': 'facts' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```
+
+<!-- test: push-through-a-field-chain-off-a-local-var-ok -->
+The same chain off a `var` writes the record the field holds.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias CountArray = Array with Count
+
+type Facts
+	export var counts = CountArray.create()
+
+	static function create() returns Facts
+		return Self{}
+	end 'create'
+end 'Facts'
+
+function main() returns ExitCode
+	var facts = Facts.create()
+	facts.counts.push(1)
+
+	return facts.counts.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
 ```
 
 <!-- test: returned-alias-to-a-mutating-parameter -->
@@ -471,7 +549,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/immutable-method-call/returned-alias-to-a-mutating-parameter.maxon:13:2: cannot pass 'g' to function that mutates parameter 's' (in main)
+error E3159: specs/immutable-method-call/returned-alias-to-a-mutating-parameter.maxon:13:2: cannot pass 'g', which is read-only (a `let` binding), to a function that writes parameter 's' (in main); pass a clone()
 ```
 
 <!-- test: let-record-written-through-a-returned-container -->
@@ -493,7 +571,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/immutable-method-call/let-record-written-through-a-returned-container.maxon:11:10: cannot pass 'a' to function that mutates parameter 'self' (in main)
+error E3159: specs/immutable-method-call/let-record-written-through-a-returned-container.maxon:11:10: cannot write through 'pass(a)': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: let-record-alias-of-a-parameter-passed-through-a-call -->
@@ -526,5 +604,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/immutable-method-call/let-record-alias-of-a-parameter-passed-through-a-call.maxon:12:2: cannot pass 'q' to function that mutates parameter 's' (in tagIt)
+error E3159: specs/immutable-method-call/let-record-alias-of-a-parameter-passed-through-a-call.maxon:12:2: cannot pass 'q', which is read-only (a `let` binding), to a function that writes parameter 's' (in tagIt); pass a clone()
 ```

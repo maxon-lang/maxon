@@ -81,10 +81,13 @@ export let PromiseTypeName = b"Promise"
 // is what fills it when there is no result.
 export let PromiseVoidResultName = b"__Void"
 
-// The one member a promise carries — `p.cancel()`. `stdlib/Builtins.maxon` declares no methods on `Promise`
-// (its `inner` field is the whole of its written surface), so this name is the compiler's and lives with the
-// rest of what the compiler knows about the type rather than in a roster it is not on.
+// The two members a promise carries — `p.cancel()` here and `p.isComplete()` below.
+// `stdlib/Builtins.maxon` declares no methods on `Promise` (its `inner` field is the whole of its
+// written surface), so these names are the compiler's and live with the rest of what the compiler
+// knows about the type rather than in a roster it is not on.
 export let PromiseCancelMethodName = b"cancel"
+
+export let PromiseIsCompleteMethodName = b"isComplete"
 
 // ⭐⭐ **THE `await` KEYWORD, AS A DIAGNOSTIC QUOTES IT.** The lexer knows it as `TokenKind.await` and never
 // as text, so a message that names the door had been spelling it inline — once here, beside `cancel`, so the
@@ -152,11 +155,9 @@ export function promiseConsumeDoorName(kind PromiseConsume) returns ByteArray
 end 'promiseConsumeDoorName'
 
 // ⭐⭐ **THE ONE FIELD A PROMISE CARRIES — `stdlib/Builtins.maxon:124`'s `public let inner`**, and the ONE
-// spelling of its name. That declaration says what it is for in so many words: *"`inner` is exported
-// (read-only via `let`) so non-blocking pollers like the spec test dispatcher can peek at the underlying
-// GT's status"* — which is `__Builtins.gtIsComplete(promise.inner)`, and the whole reason the read below
-// has to be right.
-let PromiseInnerFieldName = b"inner"
+// spelling of its name. Only the library tier may read it (E3185); a program polls with
+// `isComplete()`.
+export let PromiseInnerFieldName = b"inner"
 
 // ⭐⭐ **IS THIS FIELD READ THE PROMISE'S OWN HANDLE RATHER THAN A LOAD?** The FIRST fact above says a
 // promise's runtime value IS the green-thread pointer, so `p.inner` is the identity — exactly as a fused

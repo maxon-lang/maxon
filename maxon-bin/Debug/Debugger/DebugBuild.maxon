@@ -43,11 +43,7 @@ union DebugBuildOutput
 	unavailable(reason String)
 end 'DebugBuildOutput'
 
-var debugBuildsMinted = 0 as DebugBuildSerial
-
-typealias DebugBuildSerial = int(0 to u64.max)
-
-export function debugProgramFor(spelled String, compiler FilePath, traced bool, argument DebugProgramArgument, timeoutMs DurationMs) returns DebugBuildOutcome
+export function debugProgramFor(spelled String, compiler FilePath, traced bool, argument DebugProgramArgument, timeoutMs DurationMs, serial MintedSerial) returns DebugBuildOutcome
 	let named = try FilePath.from(spelled) otherwise return DebugBuildOutcome.failed("`{spelled}` is not a spellable path")
 
 	if isTestSourceName(spelled) 'aTestFile'
@@ -77,7 +73,7 @@ export function debugProgramFor(spelled String, compiler FilePath, traced bool, 
 		return DebugBuildOutcome.failed("there is nothing to build at {spelled}")
 	end 'noSource'
 
-	return match debugBuildOutputFor(program) 'staged'
+	return match debugBuildOutputFor(program, serial: serial) 'staged'
 		unavailable(reason) gives DebugBuildOutcome.failed(reason)
 		at(output) gives buildForDebugging(program, compiler: compiler, output: output, traced: traced, timeoutMs: timeoutMs)
 	end 'staged'
@@ -85,7 +81,7 @@ end 'debugProgramFor'
 
 // The fields past the stem are read back by `debugBuildOwnerOf`: the owner's process id is how
 // `sweepStaleDebugBuilds` and `maxon cache clear` tell a live session's build from a leftover.
-function debugBuildOutputFor(source FilePath) returns DebugBuildOutput
+function debugBuildOutputFor(source FilePath, serial MintedSerial) returns DebugBuildOutput
 	let root = try hostCacheRoot() otherwise (e) 'noCache'
 		return DebugBuildOutput.unavailable("this host has no Maxon cache directory to build into: {e.name}")
 	end 'noCache'
@@ -96,9 +92,7 @@ function debugBuildOutputFor(source FilePath) returns DebugBuildOutput
 		return DebugBuildOutput.unavailable("could not create {directory.path}, where a debug session stages the program it builds")
 	end 'unusable'
 
-	debugBuildsMinted = debugBuildsMinted + 1
-
-	return DebugBuildOutput.at(directory.join("{debugBuildStem(source)}{DebugBuildNameSeparator}{__Builtins.currentProcessId()}{DebugBuildNameSeparator}{WallClock.nowUnixSeconds()}{DebugBuildNameSeparator}{debugBuildsMinted}{hostExecutableExtension()}"))
+	return DebugBuildOutput.at(directory.join("{debugBuildStem(source)}{DebugBuildNameSeparator}{Process.id()}{DebugBuildNameSeparator}{WallClock.nowUnixSeconds()}{DebugBuildNameSeparator}{serial}{hostExecutableExtension()}"))
 end 'debugBuildOutputFor'
 
 export function sweepStaleDebugBuilds()

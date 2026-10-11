@@ -13,7 +13,7 @@ typealias LspContentLength = int(0 to u64.max)
 // to buffer the remainder, and `stdlib/Console.maxon`'s buffer (the one that already does this) does not
 // export the byte-exact `readBytes` that would make it reusable. Header lines are a few dozen bytes
 // against an editor-paced message rate, so the syscalls cost nothing.
-let HeaderScanByteBudget = 1
+let HeaderScanByteBudget = 1 as BytePos
 
 // The one header this server reads, lowercased: LSP header field names are case-insensitive.
 let ContentLengthHeaderName = "content-length"
@@ -36,14 +36,14 @@ export union LspIncoming
 end 'LspIncoming'
 
 // Read the next framed message off standard input.
-export function readLspMessage() returns LspIncoming
+export function readLspMessage(stdin Stdin) returns LspIncoming
 	var statedLength = StatedFrameLength.unstated
 	var inHeaders = true
 
 	while inHeaders 'headers'
 		// EOF anywhere before a complete message is the same event however far in it lands: the client is
 		// gone and there is nothing left to frame.
-		let line = try readHeaderLine() otherwise return LspIncoming.endOfStream
+		let line = try readHeaderLine(stdin) otherwise return LspIncoming.endOfStream
 
 		if line.isEmpty() 'blankLine'
 			inHeaders = false
@@ -64,7 +64,7 @@ export function readLspMessage() returns LspIncoming
 	var body = ByteArray.create()
 
 	while body.count() < contentLength 'fill'
-		let chunk = ByteArray.init(__Builtins.readStdin(contentLength - body.count()))
+		let chunk = stdin.readBytes((contentLength - body.count()) as BytePos)
 
 		if chunk.count() == 0 'truncated'
 			return LspIncoming.framingError("stream ended after {body.count()} of {contentLength} body bytes")
@@ -85,12 +85,12 @@ end 'writeLspMessage'
 //
 // The only CR a header line may carry is the first half of its CRLF terminator, so a CR is never
 // content; skipping it here also reads a client that sends bare LF.
-function readHeaderLine() returns String throws LspFramingError
+function readHeaderLine(stdin Stdin) returns String throws LspFramingError
 	var line = ByteArray.create()
 	var complete = false
 
 	while not complete 'scan'
-		let chunk = ByteArray.init(__Builtins.readStdin(HeaderScanByteBudget))
+		let chunk = stdin.readBytes(HeaderScanByteBudget)
 
 		if chunk.count() == 0 'streamClosed'
 			throw LspFramingError.streamEnded

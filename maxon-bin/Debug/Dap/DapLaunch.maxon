@@ -29,10 +29,10 @@ union DapLaunchRead
 	refused(message String)
 end 'DapLaunchRead'
 
-export function dapLaunch(arguments DapObject) returns DapLaunch throws DapArgumentError
+export function dapLaunch(arguments DapObject, serial MintedSerial) returns DapLaunch throws DapArgumentError
 	match try launchRequestIn(arguments) 'asked'
 		refused(message) then return DapLaunch.refused(message)
-		read(request) then return launchedFrom(request)
+		read(request) then return launchedFrom(request, serial: serial)
 	end 'asked'
 end 'dapLaunch'
 
@@ -58,10 +58,10 @@ function launchRequestWith(arguments DapObject, targetEnv EnvMap, stopTimeoutMs 
 	return DapLaunchRead.read(DapLaunchRequest.create(try arguments.text(ProgramArgument), arguments: try arguments.texts(ArgsArgument), targetEnv: targetEnv, workingDirectory: workingDirectory, stopOnEntry: try arguments.flagOr(StopOnEntryArgument, fallback: false), traced: try arguments.flagOr(TraceArgument, fallback: false), stopTimeoutMs: stopTimeoutMs))
 end 'launchRequestWith'
 
-function launchedFrom(request DapLaunchRequest) returns DapLaunch
+function launchedFrom(request DapLaunchRequest, serial MintedSerial) returns DapLaunch
 	let compiler = try Process.executablePath() otherwise return DapLaunch.refused("this adapter cannot find its own executable, which is the compiler that builds {request.program}")
 
-	match debugProgramFor(request.program, compiler: compiler, traced: request.traced, argument: DebugProgramArgument.program, timeoutMs: CompilerChildTimeoutMs) 'resolved'
+	match debugProgramFor(request.program, compiler: compiler, traced: request.traced, argument: DebugProgramArgument.program, timeoutMs: CompilerChildTimeoutMs, serial: serial) 'resolved'
 		failed(diagnostics) then return DapLaunch.refused(diagnostics)
 		ready(image) then return startedOn(image, request: request)
 	end 'resolved'

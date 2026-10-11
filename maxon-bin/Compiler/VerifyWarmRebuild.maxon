@@ -32,13 +32,14 @@
 //   - Cache-hit calls ONLY `queryAllModule` between its two probes and never runs
 //     resolveTypes/the backend, so the memoized module is never mutated.
 
-// The names of the emitted byte arrays compared for byte-identity. `data` is the
-// `dataPrelude` (initial `.data` image); the rest map 1:1 to CodeResult fields.
-// Named so the comparison loop carries intent, not bare string literals.
-let SectionNameCode = "code"
-let SectionNameRdata = "rdata"
-let SectionNameSymdata = "symdata"
-let SectionNameData = "data"
+// The emitted byte arrays compared for byte-identity. `data` is the `dataPrelude`
+// (initial `.data` image); the rest map 1:1 to CodeResult fields.
+enum EmittedSection
+	code
+	rdata
+	symdata
+	data
+end 'EmittedSection'
 
 // A query moves its hit-or-miss counter by exactly one; a query that does no work
 // leaves it put. Named so the counter assertions read as intent, not magic 0/1.
@@ -59,20 +60,6 @@ union DeterminismOutcome
 	allIdentical(totalBytes BytePos)
 	sectionDiffers(detail String)
 end 'DeterminismOutcome'
-
-// A named pair of emitted byte arrays — one from each independent compile —
-// compared as one unit so the sections share a single comparison loop.
-type EmittedSection
-	export let name as String
-	export let left as ByteArray
-	export let right as ByteArray
-
-	static function create(name String, left ByteArray, right ByteArray) returns EmittedSection
-		return Self{name: name, left: left, right: right}
-	end 'create'
-end 'EmittedSection'
-
-typealias EmittedSectionArray = Array with EmittedSection
 
 // Run every property, printing a PASS/FAIL line for each and a final verdict. Returns whether ALL
 // held (the driver maps that to the process exit code). Each runs on its OWN fresh Project, so no
@@ -122,16 +109,29 @@ function verifyDeterminism(inputPath FilePath, target Target) returns bool throw
 	end 'outcome'
 end 'verifyDeterminism'
 
-// Every emitted section of two compiles, compared as one verdict.
+// Compare every emitted section of two compiles, summing identical bytes; stop at the
+// FIRST section that differs and report it (that is the actionable failure).
 function compareCodeResults(left CodeResult, right CodeResult) returns DeterminismOutcome
-	var sections = EmittedSectionArray.create()
-	sections.push(EmittedSection.create(SectionNameCode, left: left.code, right: right.code))
-	sections.push(EmittedSection.create(SectionNameRdata, left: left.rdata, right: right.rdata))
-	sections.push(EmittedSection.create(SectionNameSymdata, left: left.symdata, right: right.symdata))
-	sections.push(EmittedSection.create(SectionNameData, left: left.dataPrelude, right: right.dataPrelude))
+	var totalBytes = 0 as BytePos
 
-	return compareEmittedSections(sections)
+	for section in EmittedSection.allCases 'each'
+		match compareSection(section.name, left: emittedSectionOf(left, section: section), right: emittedSectionOf(right, section: section)) 'result'
+			identical(byteCount) then totalBytes = totalBytes + byteCount
+			mismatch(detail) then return DeterminismOutcome.sectionDiffers(detail)
+		end 'result'
+	end 'each'
+
+	return DeterminismOutcome.allIdentical(totalBytes)
 end 'compareCodeResults'
+
+function emittedSectionOf(result CodeResult, section EmittedSection) returns ByteArray
+	return match section 'which'
+		code gives result.code
+		rdata gives result.rdata
+		symdata gives result.symdata
+		data gives result.dataPrelude
+	end 'which'
+end 'emittedSectionOf'
 
 function reportDeterminismPass(totalBytes BytePos) returns bool
 	print("PASS determinism: {totalBytes} bytes identical across 2 cold compiles\n")
@@ -142,21 +142,6 @@ function reportDeterminismFail(detail String) returns bool
 	printError("FAIL determinism: {detail}\n")
 	return false
 end 'reportDeterminismFail'
-
-// Compare every section, summing identical bytes; stop at the FIRST section that
-// differs and report it (that is the actionable failure).
-function compareEmittedSections(sections EmittedSectionArray) returns DeterminismOutcome
-	var totalBytes = 0 as BytePos
-
-	for section in sections 'each'
-		match compareSection(section.name, left: section.left, right: section.right) 'result'
-			identical(byteCount) then totalBytes = totalBytes + byteCount
-			mismatch(detail) then return DeterminismOutcome.sectionDiffers(detail)
-		end 'result'
-	end 'each'
-
-	return DeterminismOutcome.allIdentical(totalBytes)
-end 'compareEmittedSections'
 
 // Byte-compare one section. Reports the first differing offset (with both byte
 // values), or a trailing length difference; otherwise identical with the count.
@@ -596,19 +581,10 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 		return false
 	end 'cannotProve'
 
-	// ⚠⚠ **BOTH OF THESE ARE OWNED COPIES, AND NEITHER IS DEFENSIVE.** What this gate does is EDIT the
-	// project repeatedly, and both values it carries across those edits are read out of the very
-	// storage an edit writes:
-	//   • `editedPath` is an element of `project.db.sourcePaths`, and `fileChanged` PUSHES to that array on
-	//     its `newFile` arm — so the element pointer can be invalidated by a call this function makes.
-	//   • `original` is the CONTENT of the `sourceFiles` entry for that same path, and every `fileChanged`
-	//     below UPSERTS that key — releasing the entry this string belongs to while later
-	//     interpolations still read it. The borrow checker does not watch a `Map` read, so nothing
-	//     refuses this one; it is the same defect one container over.
 	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("verifyInvalidation: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
-	let editedPath = try FilePath.from(firstPath.path.clone()) otherwise panic("verifyInvalidation: '{firstPath.path}' came out of the project's own source list, so it cannot fail to re-parse as a path")
+	let editedPath = try FilePath.from(firstPath.path) otherwise panic("verifyInvalidation: '{firstPath.path}' came out of the project's own source list, so it cannot fail to re-parse as a path")
 	let entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyInvalidation: sourcePaths lists {editedPath} but sourceFiles has no entry for it")
-	let original = entry.content.clone()
+	let original = entry.content
 
 	// Warm every per-file memo (and the signature index) against the UNEDITED program. Only
 	// `queryAllModule` runs, so nothing mutates the memoized module (the trap in this file's header).

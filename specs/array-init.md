@@ -21,6 +21,11 @@ where `ElementMemory = __ManagedMemory with Element`. It is the only way back fr
 buffer to the container around it — the inverse of `arr.managed`, which `array-slots.md`
 already uses to reach the buffer under an array.
 
+`__ManagedMemory` and `.managed` are library-tier: only a source file under `stdlib/` or `runtime/` may
+name them (E3185 anywhere else). A program outside the library tiers reaches `init` only with an `Array`
+argument; every case below that builds or holds a raw buffer compiles in the library tier
+(`<!-- tier: stdlib -->`).
+
 ### In the compiler it is an IDENTITY on the record, not a copy
 
 `Array with T` and `__ManagedMemory with T` are ONE RECORD with TWO SURFACES:
@@ -100,6 +105,7 @@ door admits it.
 ## Tests
 
 <!-- test: count-agrees-with-the-buffers-length -->
+<!-- tier: stdlib -->
 The adopted array's `count()` is the buffer's `length()`, because it is the same `length@8`. The
 value is pinned as well as the agreement — two readers of one field agree even when both are
 wrong.
@@ -108,7 +114,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	let a = ByteArray.init(mm)
 	if a.count() != mm.length() 'disagree'
@@ -122,6 +128,7 @@ end 'main'
 ```
 
 <!-- test: written-through-the-buffer-read-through-the-array -->
+<!-- tier: stdlib -->
 Bytes stored through the BUFFER surface (`setByte`) read back through the ARRAY surface (`get`).
 This is the whole purpose of the static: fill a raw buffer, then name it as the container.
 ```maxon
@@ -129,7 +136,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	try mm.setByte(0, value: 7) otherwise return 3
 	try mm.setByte(1, value: 9) otherwise return 3
@@ -146,6 +153,7 @@ end 'main'
 ```
 
 <!-- test: the-surface-flips -->
+<!-- tier: stdlib -->
 ⭐ **THE CASE A PURE IDENTITY FAILS.** `push` is an `Array` member the buffer surface does not
 have. If `init` handed back the argument's own `ValueId`, that value would still carry the buffer
 mark and this call would be refused as an unknown `Array` method — the roster, exactly inverted.
@@ -155,7 +163,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	var a = ByteArray.init(mm)
 	a.push(5)
 	a.push(6)
@@ -167,6 +175,7 @@ end 'main'
 ```
 
 <!-- test: the-buffer-keeps-its-own-surface -->
+<!-- tier: stdlib -->
 The other half of the flip, and it needs no error message to say it: the SOURCE is untouched by
 the adoption, so it still answers on the buffer roster (`setByte`, `length`) — while the result
 answers on the array roster (`push`, `get`). Both surfaces are live at once over one record, and
@@ -194,6 +203,7 @@ end 'main'
 ```
 
 <!-- test: a-differently-named-byte-alias-still-adopts -->
+<!-- tier: stdlib -->
 The receiver is matched by INSTANCE, never by alias NAME: a second alias over `Array with Byte`
 adopts the same buffer, and the two names denote one type.
 ```maxon
@@ -201,7 +211,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(0, value: 20) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
@@ -216,6 +226,7 @@ end 'main'
 ```
 
 <!-- test: both-owners-reach-scope-exit -->
+<!-- tier: stdlib -->
 ⭐ **THE REFCOUNT CASE.** The buffer and the array it was adopted into are two owners of one
 record, and both die at the same scope exit. A missing retain frees it twice; a retain with no
 matching drop leaks and the run exits **101**. Neither is expressible as a wrong exit code, which
@@ -225,7 +236,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
 	try mm.setLength(4) otherwise return 2
 	let a = ByteArray.init(mm)
 	let b = ByteArray.init(mm)
@@ -243,6 +254,7 @@ end 'main'
 ```
 
 <!-- test: an-unbound-result-is-dropped-at-the-statement -->
+<!-- tier: stdlib -->
 The result of `init` bound to no name is a statement-scoped owned temporary, exactly as a
 `create()`'s is. The buffer is still readable afterwards — the temporary's drop lowered the count,
 it did not free the record — and the program must not exit 101.
@@ -251,7 +263,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	if ByteArray.init(mm).count() != 2 'badTempCount'
 		return 3
@@ -264,6 +276,7 @@ end 'main'
 ```
 
 <!-- test: the-array-outlives-the-buffer-binding -->
+<!-- tier: stdlib -->
 ⭐ **THE HAND-OFF.** The buffer local dies at the end of `build`, lowering the count by one; the
 array it was adopted into is moved OUT and becomes the caller's sole owner. This is the shape
 `stdlib/File.maxon:135`'s `return ByteArray.init(managed)` has, and the one an unbalanced retain
@@ -273,7 +286,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function build() returns ByteArray
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
 	try mm.setLength(2) otherwise panic("setLength failed")
 	try mm.setByte(0, value: 6) otherwise panic("setByte failed")
 	try mm.setByte(1, value: 7) otherwise panic("setByte failed")
@@ -292,6 +305,7 @@ end 'main'
 ```
 
 <!-- test: a-declared-buffer-parameter-adopts -->
+<!-- tier: stdlib -->
 ⭐ **THE `stdlib/File.maxon:135` SHAPE, EXACTLY.** The buffer arrives as a parameter DECLARED
 `__ManagedMemory` — which is where the surface mark comes from at a function boundary
 (`markDeclaredBufferSurface`) rather than from a producing call — and the array is handed straight
@@ -306,7 +320,7 @@ function wrap(managed __ManagedMemory) returns ByteArray
 end 'wrap'
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(0, value: 20) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
@@ -321,6 +335,7 @@ end 'main'
 ```
 
 <!-- test: sixty-four-adoptions-of-one-buffer -->
+<!-- tier: stdlib -->
 The retain/drop pair has to balance every time round, not once: 64 adoptions of one record, each
 dropped at the loop body's scope exit. An off-by-one either way is exit 101 or a use-after-free on
 the next iteration.
@@ -329,7 +344,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	var i = 0
 	var total = 0
@@ -349,6 +364,7 @@ end 'main'
 ```
 
 <!-- test: a-reallocating-grow-is-visible-through-every-adoption -->
+<!-- tier: stdlib -->
 ⭐ **THE ADOPTION IS OF THE RECORD, NOT OF THE BYTES.** Two adoptions of one buffer, then 200
 `push`es through the first — enough to reallocate `buffer@0` several times. The second adoption
 must see all 200, because both names address the same record and the record is what holds the
@@ -378,6 +394,7 @@ end 'main'
 ```
 
 <!-- test: the-adopted-array-moves-into-a-struct-field -->
+<!-- tier: stdlib -->
 The adopted array is consumed by a static factory and stored in a field, while the buffer local
 dies at `build`'s exit. The record then has exactly one owner — the struct — and reaches `main`
 alive.
@@ -394,7 +411,7 @@ type Holder
 end 'Holder'
 
 function build() returns Holder
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
 	try mm.setLength(2) otherwise panic("setLength failed")
 	try mm.setByte(0, value: 30) otherwise panic("setByte failed")
 	try mm.setByte(1, value: 12) otherwise panic("setByte failed")
@@ -438,6 +455,7 @@ end 'main'
 ```
 
 <!-- test: a-captured-buffer-adopts-inside-a-closure -->
+<!-- tier: stdlib -->
 ⭐ **THE MARK DOES NOT CROSS A CLOSURE BOUNDARY AND THE ADOPTION MUST.** `bufferSurfaceValues` is a
 per-function fact about a `ValueId`, so a captured `mm` has lost it inside the closure body —
 `mm.length()` there is refused. `ByteArray.init(mm)` nonetheless adopts, because the door asks
@@ -455,7 +473,7 @@ function apply(f Counter, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	let length = mm.length()
 	let r = apply(function(n Integer) gives (ByteArray.init(mm).count() as Integer) + n, x: 5)
@@ -513,6 +531,7 @@ end 'main'
 ```
 
 <!-- test: an-inner-alias-adopts -->
+<!-- tier: stdlib -->
 `parseArrayStaticCall` has TWO call sites and both adopt: a top-level generic alias, and an
 alias declared INSIDE a type body (`enclosingInnerAliases` → `innerArrayStatic`). Every case above
 reaches only the first. This one reaches the second, in the shape it will actually be written — a
@@ -531,7 +550,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(0, value: 20) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
@@ -546,6 +565,7 @@ end 'main'
 ```
 
 <!-- test: the-adopted-array-drops-on-the-throw-edge -->
+<!-- tier: stdlib -->
 ⭐ **RELEASE ON EVERY PATH, INCLUDING THE ONE THAT DOES NOT RETURN.** The adopted array is a BOUND owner
 when the function throws past it. Its drop rides the unwind edge or it does not ride at all, and a
 missing one is invisible in a single call — so the pair is run 8 times over both edges, thrown and
@@ -559,7 +579,7 @@ enum Boom implements Error
 end 'Boom'
 
 function adoptThenThrow(fail bool) returns Integer throws Boom
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
 	try mm.setLength(2) otherwise panic("setLength failed")
 	let a = ByteArray.init(mm)
 	if fail 'boom'
@@ -585,6 +605,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: an-unbound-adoption-is-dropped-when-the-callee-throws -->
+<!-- tier: stdlib -->
 The other half of the same question, one owner-kind over: the adoption is UNBOUND — a statement-scoped
 pending temporary handed straight to a callee — and the callee throws before it ever reads it. The
 temporary's drop is owed by the statement, and the error edge leaves the statement early. 8 rounds of
@@ -605,7 +626,7 @@ function eat(xs ByteArray, fail bool) returns Integer throws Boom
 end 'eat'
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	var total = 0
 	var i = 0
@@ -639,6 +660,7 @@ error E3005: <fragment>:6:20: argument type mismatch for 'managed': expected '__
 ```
 
 <!-- test: error.a-buffer-of-the-wrong-element -->
+<!-- tier: stdlib -->
 ⭐ **THE SILENT WRONG ANSWER THIS DOOR EXISTS TO STOP.** An `Array with Integer` over a BYTE
 buffer would stride by 8 through a byte-packed allocation and read whichever bytes fell on the
 boundaries. The instances differ, so the call is refused.
@@ -647,7 +669,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(16, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(16, elementSize: 1) otherwise return 1
 	let a = IntArray.init(mm)
 	return a.count() as ExitCode
 end 'main'
@@ -657,6 +679,7 @@ error E3005: <fragment>:7:19: argument type mismatch for 'managed': expected '__
 ```
 
 <!-- test: error.a-word-buffer-has-no-nameable-array -->
+<!-- tier: stdlib -->
 ⚠ **THE ROW THIS DOOR OBSERVES RATHER THAN CAUSES.** `__ManagedMemory.create(n, elementSize: 8)`
 mints `Array with int` — and `Array with int` is a type no program can spell (E2061 refuses a bare
 `int` as a type argument), while every ranged alias over it interns a different instance. So there
@@ -668,7 +691,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(3, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(3, elementSize: 8) otherwise return 1
 	let a = IntArray.init(mm)
 	return a.count() as ExitCode
 end 'main'
@@ -695,22 +718,21 @@ error E2015: <fragment>:6:20: Unsupported: `Array` static method 'nosuch' — th
 ```
 
 <!-- test: a-synthesized-byte-buffer-adopts -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE BYTE-BUFFER BOUNDARY AT THIS DOOR.** A COMPILER-SYNTHESIZED buffer wears the
 reserved element `__ManagedByte`, deliberately a DIFFERENT instance from the user-visible `Byte` —
 a user may declare `Byte`, and a compiler-minted buffer's stride may not follow. Raw instance
 equality would therefore refuse it, and this is the NINTH door of the class
 `ProgramSignatures.byteBufferBoundaryAdmits`'s header enumerates — and the only one that does not
-ride `aggregatesConflict`, so the other eight do not cover it. `stdlib/Console.maxon:68` is
-`ByteArray.init(__Builtins.readStdin(n))`, which without it is an `E3005 argument type mismatch for
-'managed'` on a module that must compile.
+ride `aggregatesConflict`, so the other eight do not cover it. `stdlib/Console.maxon`'s `Stdin.fillOnce`
+adopts `__Builtins.readStdin(chunkSize)` with `ByteArray.init`, which without it is an `E3005 argument type
+mismatch for 'managed'` on a module that must compile.
 
 The buffer here is `__ManagedDirectory.currentPath()` rather than a stdin read, deliberately: the
 subject is the DOOR and not the intrinsic, and this producer is the same four-line shape that
-header uses for the other six. It is restricted to x64-windows by the marker line above, for that
-producer's substrate, which is the only reason this case is not target-neutral like the rest of the
-file. (Quoting the marker's TEXT in prose would be a second marker: `SpecParser` reads the directive
-with `line.contains`, so a sentence inside a test's region sets it too — see
-`bytearray-element-size.md`'s exit-code case.)
+header uses for the other six. Both producers are library-tier statics, so the case compiles in the
+library tier. It names no lane: every native lane implements `__md_current_path`, and wasm32-wasi
+answers E3104 for it.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -729,6 +751,7 @@ end 'main'
 ```
 
 <!-- test: error.a-synthesized-buffer-is-refused-at-a-narrowed-byte -->
+<!-- tier: stdlib -->
 ⛔ **AND THE ADMISSION IS THREE QUESTIONS, NOT ONE — THIS CASE IS THE THIRD.**
 The element is still NAMED `Byte` and the record still strides one byte, so a door that asked only
 those two would adopt a buffer of raw OS bytes as an array of `int(0 to 200)` and hand back

@@ -69,10 +69,11 @@ let OsDirectMagicOffset = 8
 // readable, which is the only thing this constant is ever looked at in.
 let OsDirectMagic = 0x2144534F42414C53 as MachineWord
 
-// The exit code this file ends the process with, restated from `RuntimeAbort` for
-// `runtime/SlabArena.maxon`'s reason: an exit rather than a panic, because a panic builds a message and
-// walks a stack and both allocate.
+// The exit codes this file ends the process with, restated from `RuntimeAbort` for
+// `runtime/SlabArena.maxon`'s reason: an exit rather than a panic, because a panic builds a message
+// and walks a stack and both allocate.
 let SlabOsDirectPointerNotOursExit = 87 as MachineWord
+let SlabStateReadBeforeCommitExit = 124 as MachineWord
 
 // `__slab_os_direct_alloc(size) -> ptr` — one mapping for one request, with its length in a prefix.
 module function __slab_os_direct_alloc(size MachineWord) returns MachineWord
@@ -111,7 +112,7 @@ module function __slab_os_direct_free(ptr MachineWord)
 end '__slab_os_direct_free'
 
 function slabStepOsDirectBytes(delta SlabWord)
-	_ = __Raw.atomicAddWord((__slab_state_base() as SlabWord + SlabStateOsDirectBytesOffset) as MachineWord, delta: delta as MachineWord)
+	_ = __Raw.atomicAddWord((__slab_state_committed() as SlabWord + SlabStateOsDirectBytesOffset) as MachineWord, delta: delta as MachineWord)
 end 'slabStepOsDirectBytes'
 
 // --- The state region, restated ---
@@ -275,6 +276,19 @@ module function __slab_state_base() returns MachineWord
 	return current
 end '__slab_state_base'
 
+// `__slab_state_committed() -> base` — the state for a reader that only runs once an allocation has
+// committed it, so it carries no commit path of its own; a reader that arrives first exits with
+// `SlabStateReadBeforeCommitExit`.
+module function __slab_state_committed() returns MachineWord
+	let state = __Raw.loadWord(__Raw.slabStateAddr(), offset: 0)
+
+	if (state as SlabWord) == SlabStateUncommitted 'beforeTheFirstAllocation'
+		__Raw.osExit(SlabStateReadBeforeCommitExit)
+	end 'beforeTheFirstAllocation'
+
+	return state
+end '__slab_state_committed'
+
 // `__slab_meta_alloc() -> span` — one mspan header, off the free list if there is one and off the metadata
 // slab's bump cursor otherwise.
 //
@@ -291,7 +305,7 @@ end '__slab_state_base'
 // P, and every caller is already inside the lock — so taking it here would be a recursive re-entry paying
 // for a fact the caller has established.
 module function __slab_meta_alloc() returns MachineWord
-	let state = __slab_state_base()
+	let state = __slab_state_committed()
 
 	// POP FIRST, AND THE BUMP IS THE ARM THAT FALLS THROUGH. The list is tested first because a recycled
 	// header is warm and costs one load; the layout is the other way round because the bump path is what runs
@@ -341,7 +355,7 @@ end '__slab_meta_alloc'
 // ⚠ **PRECONDITION: THE CALLER HOLDS `__slab_lock`** — see `__slab_meta_alloc`, whose cursor this list
 // shares.
 module function __slab_meta_free(span MachineWord)
-	let state = __slab_state_base()
+	let state = __slab_state_committed()
 
 	__Raw.storeWord(span, offset: MspanBaseAddrOffset, value: __Raw.loadWord(state, offset: SlabStateMetaFreeOffset))
 	__Raw.storeWord(span, offset: MspanOwningPOffset, value: MspanOwningPFreed as MachineWord)
@@ -397,7 +411,7 @@ let SlabCensusTallyUnsoundExit = 119 as MachineWord
 // the refill that fills it in. `SlabRuntime.buildSlabCensusEntry` is the caller that takes it.
 module function __slab_census(kind MachineWord) returns MachineWord
 	if (kind as SlabWord) == SlabCensusCommittedBytes 'committed'
-		return ((__slab_arena_committed_bytes() as SlabWord) + (__Raw.loadWord(__slab_state_base(), offset: SlabStateOsDirectBytesOffset) as SlabWord)) as MachineWord
+		return ((__slab_arena_committed_bytes() as SlabWord) + (__Raw.loadWord(__slab_state_committed(), offset: SlabStateOsDirectBytesOffset) as SlabWord)) as MachineWord
 	end 'committed'
 
 	if (kind as SlabWord) == SlabCensusCachedFreeBytes 'cached'
@@ -410,7 +424,7 @@ end '__slab_census'
 // The first chunk stops at the bump cursor and every other one at its end: the chunk the limit word
 // describes is the one being filled, and every chunk behind it on the link is full.
 function slabWalkSpans(what SlabWord) returns SlabWord
-	let state = __slab_state_base()
+	let state = __slab_state_committed()
 	var chunk = slabMetaChunkOf(__Raw.loadWord(state, offset: SlabStateMetaEndOffset) as SlabWord)
 	var limit = __Raw.loadWord(state, offset: SlabStateMetaBumpOffset) as SlabWord
 	var total = 0 as SlabWord
@@ -478,7 +492,7 @@ end 'slabVisitSpan'
 // Walked from the rows rather than from the spans, which is why it is a second walk: asking a span whether
 // any row points at it is 17,408 words per span, where asking each row is 17,408 words for the whole heap.
 function slabCensusMcache() returns SlabWord
-	let base = (__slab_state_base() as SlabWord) + SlabStateMcacheOffset
+	let base = (__slab_state_committed() as SlabWord) + SlabStateMcacheOffset
 	let entries = SlabMaxShards * SlabClassCount
 	var entry = 0 as SlabWord
 	var total = 0 as SlabWord
@@ -547,11 +561,11 @@ function slabCensusBucketEntry(index SlabWord) returns SlabWord
 end 'slabCensusBucketEntry'
 
 function slabCensusTableBase() returns SlabWord
-	return (__slab_state_base() as SlabWord) + SlabStateCensusTableOffset
+	return (__slab_state_committed() as SlabWord) + SlabStateCensusTableOffset
 end 'slabCensusTableBase'
 
 function slabCensusMarksBase() returns SlabWord
-	return (__slab_state_base() as SlabWord) + SlabStateCensusMarksOffset
+	return (__slab_state_committed() as SlabWord) + SlabStateCensusMarksOffset
 end 'slabCensusMarksBase'
 
 function slabCensusBucketAdd(bucket SlabWord, slots SlabWord, bytes SlabWord)

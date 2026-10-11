@@ -41,7 +41,7 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   ```
   **A SEED OLDER THAN NAMED MANIFEST TARGETS READS `maxon-bin` AS A PATH, NOT A TARGET**, and a path
   build picks its own output name. MEASURED with the v0.1.0 release as the seed: it wrote
-  `maxon-bin/Compiler/BorrowCheck.exe`, left the slot EMPTY, and **exited 0** — so the next command is
+  an executable named after a source under `maxon-bin/Compiler/`, left the slot EMPTY, and **exited 0** — so the next command is
   a bare `127` about a compiler that was never written. `scripts/build-from-seed.sh` passes `--output=` for this reason;
   `CONTRIBUTING.md` spells it too.
 - **Run the suite:** `./maxon-bin/.maxon/maxon.exe spec-test`.
@@ -315,7 +315,7 @@ root `fmt` walks every directory under `website/node_modules/`. The marker is a 
 never read, and both walks honour it — `fmt`'s and the compiler's own `collectMaxonSources`.
 
 ⚠ **THE FORMATTER ENGINE'S GATE IS `tests/fmt/engine-cases.maxtest`, NOT `spec-test`.** It formats
-the 64 sources in `tests/fmt/engine-cases/` (4 of them unlexable) with the real `maxon fmt`, twice, and
+the 70 sources in `tests/fmt/engine-cases/` (4 of them unlexable) with the real `maxon fmt`, twice, and
 goes red if an answer differs from its `.expected`, its content changed, a lexer-error sentinel is
 written into a file, or a second run moves anything. `UrlInPlainString`, `NoMultilineLiteral` and
 `PlainStringNoInterpolation` are negative controls that must stay GREEN. The content check is
@@ -390,6 +390,10 @@ no doc comment, which is how it finds them.
   `SoloReason` or a `<!-- process: own -->` marker. `SpecBatch.placementOf` is the one list of reasons a
   case runs alone. `--batch=off` runs every case alone, and the summary line says how many ran batched
   in how many programs.
+- **`<!-- tier: stdlib -->` compiles a case as library-tier source** (staged under a private copy of
+  `stdlib/`), so it may name `__Builtins`, `.managed`, `__ManagedMemory` and `cstring` (E3185 elsewhere). It
+  is for a case whose SUBJECT is that surface; a case that merely uses one moves to the safe stdlib API.
+  The compiler's own sources under `maxon-bin/` are user tier too.
 - A spec fence the harness does not read (` ```RequiredIR ` among them) is refused, naming the case.
 - `--update-required` re-mints the trace-capture blocks (` ```mm-trace `, ` ```log-trace `) and the
   ` ```TargetIr:<lane> ` pins in a spec file but **not** its `maxoncstderr` blocks — an error-code renumber

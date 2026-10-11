@@ -96,6 +96,7 @@ let ExcCodeAccessViolation = 0xC0000005
 // EXCEPTION_STACK_OVERFLOW — a touch of the stack's guard page with no stack left to grow into. The kernel
 // has already classified it, so the handler needs no address test the POSIX lanes make.
 let ExcCodeStackOverflow = 0xC00000FD
+let ExcCodeGuardPage = 0x80000001
 
 export function windowsFaultExceptionCode(kind HardwareFaultKind) returns ExceptionCode
 	return match kind 'kind'
@@ -114,9 +115,7 @@ let ExcPtrsOffContextRecord = 0x08
 // load. A 64-bit load would drag in the neighbouring ExceptionFlags field; a SIGN-extended
 // read would turn 0xC0000094 into a negative number that matches nothing.
 let ExcRecOffExceptionCode = 0x00
-
-// CONTEXT's RBP, the third register a backtrace needs; RIP and RSP are `ProfileSampleContract`'s.
-let ContextOffRbp = 0x0A0
+let ExcRecOffFaultAddress = 0x28
 
 // --- Hex formatting: the x64 writer's own two constants ---
 //
@@ -245,12 +244,12 @@ export let WriteStreamName = b"mrt_write_stream"
 // The vectored exception handler `AddVectoredExceptionHandler` registers. A different name from the
 // POSIX `FaultHandlerName` because the two are reached differently — one is a callback the OS invokes
 // with `EXCEPTION_POINTERS`, the other a signal handler.
-let FaultThunkName = b"mrt_fault_thunk"
+export let FaultThunkName = b"mrt_fault_thunk"
 
 // The rt_sigreturn trampoline `sa_restorer` points at. x86-64 has no kernel signal trampoline, so the
 // kernel demands a restorer address to build the return frame — mandatory even though this handler never
 // returns through it. Just `mov eax, 15; syscall` (rt_sigreturn).
-let LinuxSigreturnName = b"mrt_rt_sigreturn"
+export let LinuxSigreturnName = b"mrt_rt_sigreturn"
 
 // ==========================================================================
 // The chunk assembler
@@ -258,7 +257,10 @@ let LinuxSigreturnName = b"mrt_rt_sigreturn"
 
 typealias RuntimeStringLabelMap = Map with (ByteArray, BlockId)
 typealias RuntimeStringLabelArray = Array with BlockId
-typealias RuntimeStringBytesArray = Array with ByteArray
+
+// Every pooled string starts on an even offset, so a UTF-16 one (`MachineGuidSubKey`) lands
+// 2-aligned; a chunk itself starts on `BranchWindowBytes`.
+let RuntimeStringAlignment = 2 as ElementIndex
 
 // Assembles ONE hand-written runtime function into a FunctionCodeChunk: the buffers an
 // emitter needs, a label allocator for its branches and strings, and the frame contract.
@@ -285,7 +287,7 @@ export type X64RuntimeAsm
 	// function can address but never execute. Deduped by content within the chunk.
 	export var stringLabelOf as RuntimeStringLabelMap
 	export var stringLabels as RuntimeStringLabelArray
-	export var stringBytes as RuntimeStringBytesArray
+	export var stringBytes as ByteBlobArray
 	export var frameBytes as StackSize
 	export var slotAreaBytes as StackSize
 
@@ -339,7 +341,7 @@ export type X64RuntimeAsm
 			nextLabel: 0,
 			stringLabelOf: RuntimeStringLabelMap.create(),
 			stringLabels: RuntimeStringLabelArray.create(),
-			stringBytes: RuntimeStringBytesArray.create(),
+			stringBytes: ByteBlobArray.create(),
 			frameBytes: frameBytes,
 			slotAreaBytes: slotAreaBytes,
 			outgoingArgBytes: outgoingStackArgBytes
@@ -360,13 +362,18 @@ export type X64RuntimeAsm
 	//
 	// ONE exit per function, by construction: an early-out branches to a label placed just
 	// before this epilogue rather than emitting a second one.
-	export function finishFunction(name ByteArray) returns FunctionCodeChunk
+	export function finishFunction(name ByteArray, guarded bool = false) returns FunctionCodeChunk
 		encodeEpilogue(self.code, stackSize: self.frameBytes)
 		encodePopReg(self.code, reg: X64Register.rbp)
 		self.code.push(OpcodeRet)
 
 		for (iter, bytes) in self.stringBytes.withIterator() 'strings'
 			let label = try self.stringLabels.get(iter.index()) otherwise panic("finishFunction: stringLabels and stringBytes are appended together in stringLabel(), so index {iter.index()} must exist in both")
+
+			while self.code.count() mod RuntimeStringAlignment != 0 'padToAlignment'
+				self.code.push(0)
+			end 'padToAlignment'
+
 			self.placeLabel(label)
 			self.code.append(bytes)
 			self.code.push(0)  // the NUL every consumer here scans for
@@ -374,7 +381,9 @@ export type X64RuntimeAsm
 
 		resolveChunkRel32Fixups(self.code, labelOffsets: self.labelOffsets, rel32Fixups: self.rel32Fixups)
 
-		return FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs)
+		var chunk = FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs)
+		chunk.spendsCallerStack(self.stackBytesPerCall(), checks: guarded)
+		return chunk
 	end 'finishFunction'
 
 	// Mint a fresh chunk-local label id.
@@ -1450,6 +1459,28 @@ function emitFaultCodeArm(asm X64RuntimeAsm, codeReg X64Register, scratch X64Reg
 	asm.placeLabel(next)
 end 'emitFaultCodeArm'
 
+// A guard-page exception inside `[StackLimit − guardRegionBytes, StackLimit)` is the system stack's
+// own `PAGE_GUARD` (`GtRuntime.SystemStackGuard.pageGuardWithHeadroom`) and is reported as a stack
+// overflow: the page's guard status is one-shot, so resuming would let the write land past it.
+function emitSystemStackGuardFaultArm(asm X64RuntimeAsm, codeReg X64Register, guardRegionBytes ParsedInt, prefixSlot StackSize, classified BlockId)
+	let next = asm.newLabel()
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: ExcCodeGuardPage as MachineWord)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: codeReg, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: next)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: ExcPtrsOffExceptionRecord, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rdx, disp: ExcRecOffFaultAddress, wide: true)
+	encodeMovRegGsAbs(asm.code, dest: X64Register.r8, disp: TibStackLimitDisp, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: next)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.r8, imm: guardRegionBytes as Imm32)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: next)
+	emitClassifiedFault(asm, kind: HardwareFaultKind.stackOverflow, scratch: X64Register.rdx, prefixSlot: prefixSlot, classified: classified)
+	asm.placeLabel(next)
+end 'emitSystemStackGuardFaultArm'
+
 // Record `kind`'s panic prefix in `prefixSlot` and jump to `classified` — the end of every classification
 // arm on both OSes.
 function emitClassifiedFault(asm X64RuntimeAsm, kind HardwareFaultKind, scratch X64Register, prefixSlot StackSize, classified BlockId)
@@ -1468,7 +1499,7 @@ end 'emitClassifiedFault'
 // runs this handler in the room `mrt_runtime_init` guaranteed.
 //
 // Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp, 4 = panic prefix.
-function buildFaultThunkChunk(usesGt bool, target Target) returns FunctionCodeChunk
+function buildFaultThunkChunk(usesGt bool, target Target, context HostContextLayout) returns FunctionCodeChunk
 	let SlotExcPtrs = 0
 	let SlotFaultRip = 1
 	let SlotFaultRbp = 2
@@ -1491,6 +1522,8 @@ function buildFaultThunkChunk(usesGt bool, target Target) returns FunctionCodeCh
 		emitFaultCodeArm(asm, codeReg: X64Register.rax, scratch: X64Register.rdx, excCode: windowsFaultExceptionCode(kind), kind: kind, prefixSlot: SlotPanicPrefix, classified: classified)
 	end 'eachConvertedFault'
 
+	emitSystemStackGuardFaultArm(asm, codeReg: X64Register.rax, guardRegionBytes: gtSystemStackGuardRegionBytes(target), prefixSlot: SlotPanicPrefix, classified: classified)
+
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: continueSearch)
 
 	asm.placeLabel(classified)
@@ -1500,11 +1533,11 @@ function buildFaultThunkChunk(usesGt bool, target Target) returns FunctionCodeCh
 	// exactly as it stands.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffContextRecord, wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: Win64ContextRipOffset as Imm32, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: context.contextRipOffset as Imm32, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), srcReg: X64Register.rdx, wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRbp, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: context.contextRbpOffset as Imm32, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx, wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: Win64ContextRspOffset as Imm32, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: context.contextRspOffset as Imm32, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.rdx, wide: true)
 
 	// The panic line opens with whichever prefix the classification chose; the rest of the diagnostic
@@ -1639,7 +1672,7 @@ function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool
 	// (5) exit(PanicExitCode) — the one step with an OS in it.
 	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: usesGt, target: target)
 
-	var chunk = asm.finishFunction(PanicName)
+	var chunk = asm.finishFunction(PanicName, guarded: usesGt)
 	chunk.asyncUnsafePrefixBytes = guardBytes
 
 	return chunk
@@ -1975,11 +2008,11 @@ end 'emitLinuxSigactionCall'
 // (`x64OsCallKind`) — it is not re-stated as a literal inside each lane appender. This is the only place
 // in the x64 backend that holds a `Target` at the moment the chunk set is chosen, so it is the only place
 // that can answer without repeating itself; the lane appenders receive the answer and pass it on.
-export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool)
+export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool, context HostContextLayout)
 	let exitRoute = x64OsCallKind(target.os)
 
 	match target.os 'os'
-		windows then appendX64WindowsRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
+		windows then appendX64WindowsRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target, context: context)
 		linux then appendX64LinuxRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
 		macos or
 		wasi then panic("appendX64RuntimeChunks: no x64 fault runtime for {targetToString(target)} — this is appended only for windows/linux")
@@ -2041,9 +2074,9 @@ end 'buildGtStackOverflowChunk'
 // ⚠ `usesGt` travels this far because `mrt_write_stream` and both diagnostics' `ExitProcess` call the IAT by
 // hand, and a hand-assembled call is not routed through the green-thread shim by `emitFunctionChunk` the way a
 // compiled function's is — and because `mrt_panic` guards its own stack on a green thread.
-function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
+function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target, context HostContextLayout)
 	chunks.push(buildRuntimeInitChunk())
-	chunks.push(buildFaultThunkChunk(usesGt, target: target))
+	chunks.push(buildFaultThunkChunk(usesGt, target: target, context: context))
 	chunks.push(buildWriteStreamChunk(usesGt, target: target))
 	chunks.push(buildWriteStderrChunk())
 	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)

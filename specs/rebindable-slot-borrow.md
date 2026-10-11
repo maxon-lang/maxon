@@ -9,50 +9,29 @@ category: memory-management
 
 ## Documentation
 
-the compiler leaves an immutable binding of a BORROWED managed value borrowed — no retain, no scope-exit
-drop — and the reason is stated at `Parser.declareInitializedBinding`'s `aliasImmutableSource` arm:
-*"the owner always outlives every alias of it, structurally"*. A binding can only be declared after
-the name it reads, in that name's scope or one nested inside it, so the owner outlives the alias
-with no liveness analysis needed.
+A name bound to a managed value read out of storage holds its own reference to what it read. That
+matters most for storage the program can overwrite — a `var` field and a top-level `var`:
 
-**That argument reaches a PARAMETER and an immortal `.rdata` literal. It does not reach a writable
-storage SLOT**, and the difference is what this file pins. A `var` field and a `var` top-level
-global are storage this function can overwrite:
-
-```maxon
-let old = items      // a borrow of whatever the field holds
-items = fresh        // ...which this store DROPS
-sum(old)             // ...and this reads
+```text
+let old = items      // old holds its own reference to the array the field holds
+items = fresh        // the store releases only the field's reference
+sum(old)             // old still names the array it read
 ```
 
-The STORAGE outlives the alias. The VALUE in it does not. `emitFieldWrite` and
-`emitCheckedGlobalStore` each drop the old occupant on the way past, so the name is left pointing at
-freed memory.
+The storage outlives the name, but the value in it need not: a store into the slot releases the old
+occupant. Because the binding is counted, the store releases only the slot's reference, and the value
+the name read lives until the name goes out of scope. The count balances on every path — the store
+releases the slot's reference and the binding's scope exit releases its own.
 
-⇒ **A managed value read out of a rebindable slot is marked at the load** (`emitFieldLoad`,
-`recordGlobalReadValue`'s writable arm — see `Parser.rebindableSlotReads`) **and PROMOTED when it is
-bound to a name**, through the one `promoteBorrowedToOwned` door a `var` of the same read already
-took: a String copies, an aggregate increfs, an existential goes through its witness's
-`retainFunc@16`. The refcount balances on every path — the store's drop releases the slot's
-reference and the binding's scope exit releases its own.
-
-⚠ **The `var` spelling of every program below was ALREADY correct**, which is what pins the cure
-rather than inventing one: the mutable arm promotes and the identical program runs. What was missing
-was the answer to *which IMMUTABLE bindings owe the same promotion* — and the `mutable` gate alone
-answered the wrong half of it. The hazard is not this BINDING being rebound; it is the STORAGE the
-value came out of being rebound underneath it.
-
-⚠ **An IMMUTABLE field is deliberately not marked.** `let` storage refuses the store (E2013), so no
-write can replace its occupant and the structural argument holds for the original reason. The mark
-is about REBINDABILITY, not about being a slot.
+A `let` field cannot be stored to (E2013), so its occupant is never replaced; a binding of it is counted
+all the same, and the program answers what it read.
 
 ## Tests
 
 <!-- test: managed-field-read-survives-the-field-being-replaced -->
-⭐ **THE ORIGINAL REPRODUCER.** `let old = items` binds a borrow of the array the field holds;
-`items = fresh` then `__managed_decref`s that very record; the walk below reads it. Exit 0 with no leak
-is the whole claim — the sum proves the elements were still there, and the exit code proves the
-refcount balanced (a leak is exit 101).
+`let old = items` takes its own reference to the array the field holds; `items = fresh` releases the
+field's reference; the walk below reads `old`. The sum proves the elements are still there, and the exit
+code proves the count balanced (a leak is exit 101).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -94,10 +73,9 @@ end 'main'
 10
 ```
 
-<!-- test: the-var-spelling-was-always-correct -->
-**THE CONTROL.** One keyword apart from the case above. This spelling promotes (`mutable and
-valueIsManagedHeap and not valueIsOwnedHeap`) and runs; a change that altered its answer would be
-fixing the wrong thing.
+<!-- test: the-var-spelling-reads-the-same -->
+One keyword apart from the case above: a `var` bound to the field's array holds its own reference too,
+and the walk reads the array it was bound to.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -133,38 +111,11 @@ end 'main'
 ```
 
 <!-- test: string-field-read-survives-the-field-being-replaced -->
-⭐⭐ **THE SPELLING THAT DOES NOT CRASH, WHICH IS WHY IT IS HERE.** A `String` field is the same
-hazard with a quieter symptom: without the acquire, the store's `__str_decref` frees the record and
-the read comes back with whatever the allocator left behind — a garbage length, a WRONG ANSWER a
-green suite would not notice, where the array case at least announces itself with an access
-violation.
+⭐ **A `String` FIELD, WHERE AN UNCOUNTED READ WOULD BE A QUIET WRONG ANSWER.** A store that freed the
+record `old` names would leave the read with whatever the allocator put there next, so this case builds
+its strings at run time, allocates a filler after the store, and prints the text `old` read.
 
-The promotion here is the `binding` door (`let old = name`), and that door still COPIES:
-`promoteBorrowedToOwned` routes it to `promoteToOwnedString`, the `__mm_alloc` + `__str_copy` pair
-this case's emitted code shows. COPYING is not every door's protocol: a HAND-OFF (`return` / `gives`, or a
-merge edge) and a DURABLE store into a field, element or column both take a REFERENCE instead
-(`retainBorrowedByteRecord` → `__str_retain`), because Maxon is single-ownership with reference
-semantics and a copy the author did not write makes the caller's value stop being the callee's. Nor
-does the immortal-record argument force a copy: `__str_retain` tells an immortal `.rdata` record
-from a heap one at RUN TIME, off `capacity@16`, and clones only the former, so no door needs an
-unconditional copy to stay off read-only memory.
-
-⚠ **THE `binding` DOOR IS NOT THE ONLY ONE STILL COPYING, AND A LIST OF WHAT RETAINS IS NOT A
-LIST OF EVERY DOOR.** A CONSUMED ARGUMENT — a borrowed `String` handed to a callee that STORES
-it — takes `transferConsumedArg`'s byte-record arm, which is `promoteToOwnedString` as well.
-`relay(s String) returns Rec` whose whole body is `return Rec.create(s)` emits
-`__mm_alloc` + `__str_copy` on `s` BEFORE the call, and `let r = relay(v)` followed by
-`v.append("XY")` prints `v=abXY name=ab` — where the direct store of the same shape,
-`dst.name = src.name`, emits `__str_retain` and the two names share one record. So the answer a
-borrowed `String` gets at a durable sink still depends on whether it crossed a call boundary to
-reach it. What the `binding` door
-should do is a separate, still-open question about a REFUSAL rather than about a cost
-(`ownedFormOfBorrowedValue` states it), and this case is indifferent to the answer: a retain
-would keep the old record alive across the rebind exactly as the copy does — what must never
-happen is the read seeing a record the store already released.
 ```maxon
-typealias Len = int(0 to u64.max)
-
 type Holder
 	var name as String
 
@@ -172,28 +123,27 @@ type Holder
 		return Self{name: n}
 	end 'create'
 
-	function swapAndRead(fresh String) returns Len
+	function swapAndRead(fresh String) returns String
 		let old = name
 		name = fresh
-		return old.byteLength()
+		let filler = "filler {9} padded out long enough for the heap"
+		return "[{old}] [{name}] [{filler}]"
 	end 'swapAndRead'
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create("hello world")
-	let n = h.swapAndRead("hi")
-	print("len {n}")
+	var h = Holder.create("hello world {40 + 2} padded out long enough for the heap")
+	print(h.swapAndRead("replacement {7} padded out long enough for the heap"))
 	return 0
 end 'main'
 ```
 ```stdout
-len 11
+[hello world 42 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [filler 9 padded out long enough for the heap]
 ```
 
 <!-- test: mutable-global-read-survives-the-global-being-replaced -->
-**THE SECOND SLOT KIND.** A top-level `var` is rebindable storage exactly as a field is, and
-`emitCheckedGlobalStore` decrefs the old occupant on the way past — so the writable arm of
-`recordGlobalReadValue` marks exactly as the immutable arm does.
+**THE SECOND SLOT KIND.** A top-level `var` is rebindable storage exactly as a field is: the store
+releases the old occupant, and `old` holds its own reference.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -220,11 +170,9 @@ end 'main'
 sum 3
 ```
 
-<!-- test: an-immutable-field-is-not-promoted -->
-**THE OTHER HALF OF THE DISCRIMINATOR.** A `let` field cannot be stored to, so its occupant cannot
-be replaced and the borrow's owner outlives it for the original structural reason. The binding stays
-a borrow and the program still answers — a promotion here would be refcount traffic bought for
-nothing.
+<!-- test: an-immutable-field-read-is-counted-too -->
+A `let` field cannot be stored to, so its occupant is never replaced; the binding is counted like any
+other read, and the program answers what it read.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -260,17 +208,11 @@ end 'main'
 ```
 
 <!-- test: the-promoted-name-keeps-its-declared-surface -->
-⭐ **THE SURFACE A PROMOTION MUST CARRY, PINNED WHERE THE PROMOTION IS.** `__ManagedMemory` and the
-`Array` around it are one record told apart by PROVENANCE, and that provenance is keyed by ValueId
-— so a promotion, which mints a FRESH id, must carry it or `m.length()` becomes
-`E2015: Array member 'length'`. `let (m, n) = pair()` binds `m` to a field load off the hidden tuple
-temp, which is a rebindable-slot read, so this program takes the promotion with a surface to
-lose.
-
-⛔ The carry belongs to `promoteBorrowedToOwned` and NOT to `retainBorrowedAggregate` one level
-down: the ADOPTION door (`array-init.md`'s `the-surface-flips`) shares that retain and depends on
-the fresh name being UNMARKED. Carried there instead, nine `array-init` cases turn red with the
-roster exactly inverted.
+<!-- tier: stdlib -->
+⭐ **A COUNTED BINDING KEEPS ITS DECLARED SURFACE.** `__ManagedMemory` and the `Array` around it are
+one record told apart by provenance, keyed by the value — so a counted binding, which is a fresh value,
+must carry it, or `m.length()` becomes `E2015: Array member 'length'`. `let (m, _) = pair()` binds `m`
+to a field read off the hidden tuple temp, which is a read out of a rebindable slot.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 

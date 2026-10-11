@@ -77,9 +77,7 @@ export let ListRecordBytes = 32 as BytePos
 //
 // ⛔ Retaining the LIST would not keep the node alive, because `clear` FREES nodes:
 // `var chain = …; let k = Keeper.create(chain.insertLast(7)); chain.clear(); k.read()` would then
-// compile clean and print `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s poison, at exit 0. E3070 cannot reach
-// it: `mintPendingBorrow` files a borrow against the source NAME the mint saw, and a handle may
-// leave that name.
+// compile clean and print `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s poison, at exit 0.
 //
 // So a node is `__mm_alloc`'d like every other record and released through `__list_node_decref`.
 // Every unlink — `remove`, `remove_first`, `remove_last`, `detach`, `clear`, teardown — drops a
@@ -1008,13 +1006,11 @@ end 'emitListUnlinkNodeFrom'
 // becomes the sole owner (the parser marks the result OWNED), so consulting `element_drop@24` here would
 // destroy a value that now has an owner elsewhere.
 //
-// ⚠ **NON-THROWING, WHICH IS WHAT `/specs/managed-list.md` DECLARES IT — AND "THIS NODE IS NOT IN THIS
-// LIST" IS NOW A REACHABLE STATE, WHERE THIS COMMENT USED TO SAY IT WAS NOT.** It argued from E3070, which
-// refused a use of a handle after any write to its list; under a refcounted node a `remove` frees nothing,
-// so that refusal is gone (`Parser.managedListMethodFreesANode`) and a handle survives its own removal.
-// `chain.remove(n)` twice is therefore an ordinary compiling program, and the `owner@32` gate is what makes
-// the second call a no-op instead of a relink of stale neighbours. Where `remove_first` throws (an EMPTY
-// list has no head), this one is handed the node.
+// ⚠ **NON-THROWING, WHICH IS WHAT `/specs/managed-list.md` DECLARES IT — AND "THIS NODE IS NOT IN
+// THIS LIST" IS A REACHABLE STATE.** Under a refcounted node a `remove` frees nothing, so a handle
+// survives its own removal and `chain.remove(n)` twice is an ordinary compiling program; the
+// `owner@32` gate is what makes the second call a no-op instead of a relink of stale neighbours.
+// Where `remove_first` throws (an EMPTY list has no head), this one is handed the node.
 function buildListUnlinkNode(module StdModule, name ByteArray, movesElementOut bool)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
@@ -1825,7 +1821,7 @@ end 'emitListClonedElement'
 // ⚠ **A NODE THE STEP STOPS AT STILL ADVANCES THE CHAIN.** Stopping means nothing below THAT NODE needs the
 // walk — its element — and says nothing about the nodes after it, which are boxes of their own.
 function buildListWalk(module StdModule, name ByteArray, walksElements bool, action CascadeAction)
-	let walk = beginWalkBody(module, name: name, scope: WalkScope.graph, walksElements: walksElements, recursesPerLevel: false)
+	var walk = beginWalkBody(module, name: name, scope: WalkScope.graph, walksElements: walksElements, recursesPerLevel: false)
 	let list = WalkBoxParam
 	var header = module.addBlock(walk.func, label: b"walk", heat: BlockHeat.normal)
 	var body = module.addBlock(walk.func, label: b"body", heat: BlockHeat.normal)
@@ -1834,10 +1830,10 @@ function buildListWalk(module StdModule, name ByteArray, walksElements bool, act
 	// walk(node, visits): a 0 link is the chain's end — `buildListClone`'s own stopping test.
 	let node = walk.ids.mint()
 	header.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
-	let atNode = CascadeCursor.create(body, carried: appendCarriedBlockArgs(header, template: walk.entry.carried, ids: walk.ids))
+	var atNode = CascadeCursor.create(body, carried: appendCarriedBlockArgs(header, template: walk.entry.carried, ids: walk.ids))
 	let atLink = CascadeCursor.create(header, carried: linkThenCarried(node, carried: atNode.carried))
 
-	let walked = emitBoxWalkStep(module, func: walk.func, cursor: walk.entry, box: list, action: action, meeting: WalkMeeting.owner, stop: walk.done, ids: walk.ids)
+	var walked = emitBoxWalkStep(module, func: walk.func, cursor: walk.entry, box: list, action: action, meeting: WalkMeeting.owner, stop: walk.done, ids: walk.ids)
 	let head = emitLoadField(module, block: walked.block, record: list, offset: ListHeadOffset, ids: walk.ids)
 	emitCascadeBranch(module, from: CascadeCursor.create(walked.block, carried: linkThenCarried(head, carried: walked.carried)), to: atLink)
 
@@ -1846,7 +1842,7 @@ function buildListWalk(module StdModule, name ByteArray, walksElements bool, act
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: walk.done.block.id, elseBlockId: body.id))
 	pushCascadeEdge(header, to: walk.done, values: atNode.carried)
 
-	let nodeWalked = emitBoxWalkStep(module, func: walk.func, cursor: atNode, box: node, action: action, meeting: WalkMeeting.owner, stop: step, ids: walk.ids)
+	var nodeWalked = emitBoxWalkStep(module, func: walk.func, cursor: atNode, box: node, action: action, meeting: WalkMeeting.owner, stop: step, ids: walk.ids)
 	emitListElementWalk(module, body: nodeWalked, step: step, node: node, walk: walk, walksElements: walksElements)
 
 	let next = emitLoadField(module, block: step.block, record: node, offset: ListNextOffset, ids: walk.ids)

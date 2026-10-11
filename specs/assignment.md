@@ -518,7 +518,7 @@ function main() returns ExitCode
 	var p = Point.create(1, y: 2)
 	p = makePoint(7)
 	p.x = 9
-	let q = Point.create(5, y: 5)
+	var q = Point.create(5, y: 5)
 	p = q
 	return p.x as ExitCode
 end 'main'

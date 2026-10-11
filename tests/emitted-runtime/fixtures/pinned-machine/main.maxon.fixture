@@ -40,13 +40,13 @@ function main() returns ExitCode
 	let accepting = async accepted(listener)
 	let spinner = spawn Spinner.create()
 
-	if __Builtins.pinToMachine() == 0 'refused'
+	if not Scheduler.pinToMachine() 'refused'
 		print("refused\n")
 
 		return 1
 	end 'refused'
 
-	let pinned = __Builtins.currentMachine()
+	let pinned = Scheduler.currentMachine()
 
 	if pinned == 0 'noMachine'
 		print("no machine\n")
@@ -66,14 +66,14 @@ function main() returns ExitCode
 			return 1
 		end 'wrongAnswer'
 
-		if __Builtins.currentMachine() != pinned 'leftItsMachine'
+		if Scheduler.currentMachine() != pinned 'leftItsMachine'
 			moved = moved + 1
 		end 'leftItsMachine'
 
 		round = round + 1
 	end 'eachRound'
 
-	__Builtins.unpinFromMachine()
+	Scheduler.unpinFromMachine()
 
 	var knocker = try TcpClient.connect(LoopbackHost, port: port as NetworkPort) otherwise panic("pinned-machine: could not connect to the loopback listener this program bound")
 	_ = try knocker.send(Greeting) otherwise 0

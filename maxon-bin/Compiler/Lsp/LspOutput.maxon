@@ -99,17 +99,3 @@ function clientVersionText(clientVersion ClientDocumentVersion) returns String
 		unstated gives ProjectCheckLogUnversioned
 	end 'version'
 end 'clientVersionText'
-
-typealias LspStdoutWriterHandleArray = Array with LspStdoutWriter.handle
-
-var lspStdout = LspStdoutWriterHandleArray.create()
-
-module function startLspOutput()
-	lspStdout.push(spawn LspStdoutWriter.create())
-end 'startLspOutput'
-
-module function lspOutputWriter() returns LspStdoutWriter.handle
-	let writer = try lspStdout.get(0) otherwise panic("lspOutputWriter: `runLspServer` starts the writer before the session reads its first message, and nothing else writes to the client")
-
-	return writer.clone()
-end 'lspOutputWriter'

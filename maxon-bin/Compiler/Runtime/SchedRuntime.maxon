@@ -1633,7 +1633,7 @@ export let SchedInitProcsName = b"__sched_init_procs"
 // `__sched_worker_loop(m)` — a worker M's whole life. The `lpParameter` `osThreadCreate` hands it IS its M,
 // because a thread cannot learn its own joinable handle (`emitSchedAllocM`); the processor it is to run on
 // arrives on that machine's `MOffNextP`.
-let SchedWorkerLoopName = b"__sched_worker_loop"
+export let SchedWorkerLoopName = b"__sched_worker_loop"
 
 // ⭐⭐⭐ **`__sched_main_loop(until)` — THE MAIN MACHINE RUNNING THE SAME SCHEDULER LOOP AS EVERY WORKER** (Go's
 // `mstart` on M0), from one body (`buildSchedLoop`), until `until` says to stop: `main` has completed
@@ -1935,7 +1935,7 @@ let SchedPreemptOneName = b"__sched_preemptone"
 
 // ⭐⭐ `__sysmon(arg) -> 0` — the monitor thread's whole life. **No processor, no M, allocation-free after
 // start, and it never runs Maxon user code.** Started once, at bring-up; see `emitSchedSysmonStart`.
-let SchedSysmonName = b"__sysmon"
+export let SchedSysmonName = b"__sysmon"
 
 // ⭐⭐⭐ `__sched_syscall_regain()` — **"sysmon took my processor while I was in the kernel; get me another
 // before I touch the scheduler again."** The one road out of `MSyscallStolen`, called from the syscall shim's
@@ -2537,7 +2537,7 @@ end 'emitStepLockDepthAt'
 // `__sched_init_procs` publishes the offset, so this is a state the runtime really reaches.
 // `emitLoadCurrentMOrBail` is the guarded walk that answers both questions, and it cannot be used here: it
 // needs blocks the lock sites have no way to give it.
-function emitSchedLockDepthAddr(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+export function emitSchedLockDepthAddr(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let tebOffset = emitLoadGlobalWord(module, block: block, label: SchedTlsTebOffsetLabel, ids: ids)
 	let m = emitLoadCurrentM(module, block: block, ids: ids)
 	let scheduled = emitCmp(module, block: block, a: tebOffset, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
@@ -2578,7 +2578,7 @@ end 'emitSchedLockDepthAddr'
 // Where a LIFO's head word lives, which is also what serializes it.
 union SchedListHead
 	// A `.data` word, read and written only under `__sched_lock`.
-	lockedWord(label ByteArray)
+	lockedWord(let label ByteArray)
 
 	// A field of processor `p`, read and written only by the machine holding `p`, and so with no lock.
 	heldProcessorField(p ValueId, offset ByteOffset)
@@ -3096,8 +3096,9 @@ end 'emitSchedAllocM'
 // thread's TLS slot. It says nothing at all about a PROCESSOR — `emitSchedAdoptProc` is that, and the two
 // are kept apart so that a handoff can move a processor without disturbing any of this.
 //
-// ⭐ **THE SYSCALL STACK IS `osAllocPages` AND NOT `__slab_alloc`, so the region is its own PAGE-ALIGNED
-// commit** — the top is then 16-aligned, which the shim relies on to land RSP 16-aligned at the `call`.
+// ⭐ **THE SYSCALL STACK IS `__gt_system_stack_alloc` AND NOT `__slab_alloc`, so the region is its
+// own PAGE-ALIGNED commit above a guard region** — the top is then 16-aligned, which the shim
+// relies on to land RSP 16-aligned at the `call`.
 //
 // The inline GT arrives zeroed from the arena, and almost every one of those zeros is correct: `stackBase ==
 // 0` is what tells the syscall shim and the prologue guard that this context runs on a real OS-thread stack,
@@ -3114,8 +3115,10 @@ end 'emitSchedAllocM'
 // slot.
 function emitSchedBecomeM(module StdModule, block IrBlock, m ValueId, target Target, ids ValueMinter)
 	let sysStackSize = emitConst(module, block: block, value: GtSystemStackSize, ids: ids)
+	let sysStackRaw = ids.mint()
+	module.appendOp(block, op: StdOp.call(sysStackRaw, callee: GtSystemStackAllocName, args: argsOf(sysStackSize)))
 	let sysStackBase = ids.mint()
-	module.appendOp(block, op: StdOp.osAllocPages(sysStackBase, sizeId: sysStackSize))
+	module.appendOp(block, op: StdOp.call(sysStackBase, callee: SlabAssertOsAllocName, args: argsOf(sysStackRaw)))
 	emitStoreField(module, block: block, record: m, offset: MOffSystemStackSP, value: emitBin(module, block: block, a: sysStackBase, b: sysStackSize, opcode: StdBinOpcode.add, ids: ids))
 
 	let schedulerContext = emitFieldAddr(module, block: block, record: m, offset: MOffSchedulerContext, ids: ids)
@@ -4005,7 +4008,7 @@ end 'runqWordNameOf'
 
 let RunQueueCheckName = "assertRunQueueObservationIsOrdered"
 
-function pushNameCopy(column ByteArrayArray, name ByteArray)
+function pushNameCopy(column NameRoster, name ByteArray)
 	var copied = ByteArray.create()
 	copied.append(name)
 	column.push(copied)
@@ -4029,13 +4032,13 @@ end 'isMachineListLabel'
 
 type RunqTaintChannel
 	export var values as StdValueUseSet
-	export var argCallees as ByteArrayArray
+	export var argCallees as NameRoster
 	export var argIndices as ParsedIntArray
-	export var returningCallees as ByteArrayArray
+	export var returningCallees as NameRoster
 	export var crossedAFunction as bool
 
 	static function create() returns Self
-		return Self{values: StdValueUseSet.createRecordingIds(), argCallees: ByteArrayArray.create(), argIndices: ParsedIntArray.create(), returningCallees: ByteArrayArray.create(), crossedAFunction: false}
+		return Self{values: StdValueUseSet.createRecordingIds(), argCallees: NameRoster.create(), argIndices: ParsedIntArray.create(), returningCallees: NameRoster.create(), crossedAFunction: false}
 	end 'create'
 
 	// A value id means something only inside the function that minted it, so the ids go at each function.
@@ -4404,6 +4407,7 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -4577,8 +4581,8 @@ export function assertPublishedWordAccessIsOrdered(module StdModule, entries Dat
 	requireEveryPublishedWordWasSeen(labels, present: present, releases: releases, acquires: acquires)
 end 'assertPublishedWordAccessIsOrdered'
 
-function publishedFromTheLockLabels(entries DataSectionEntryArray) returns ByteArrayArray
-	var out = ByteArrayArray.create()
+function publishedFromTheLockLabels(entries DataSectionEntryArray) returns NameRoster
+	var out = NameRoster.create()
 
 	for entry in entries 'eachSlot'
 		if entryIsPublishedFromTheLock(entry) 'itClaimsTheClass'
@@ -4607,11 +4611,11 @@ function entryIsPublishedFromTheLock(entry DataSectionEntry) returns bool
 	end 'classified'
 end 'entryIsPublishedFromTheLock'
 
-function requireOrderedPublishedAccessIn(module StdModule, func IrFunction, labels ByteArrayArray, present BoolArray, releases BoolArray, acquires BoolArray, opIndices OpIndexArray, access StdAccessOperands, opUses StdValueUseSet)
+function requireOrderedPublishedAccessIn(module StdModule, func IrFunction, labels NameRoster, present BoolArray, releases BoolArray, acquires BoolArray, opIndices OpIndexArray, access StdAccessOperands, opUses StdValueUseSet)
 	module.collectLiveOpIndices(func, into: opIndices)
 
 	var addrValues = ValueIdArray.create()
-	var addrWords = ByteArrayArray.create()
+	var addrWords = NameRoster.create()
 
 	for opIdx in opIndices 'eachAddress'
 		classifyAccessOperands(liveRuntimeOpAt(module, opIdx: opIdx, reader: PublishedWordCheckName), access: access)
@@ -4637,7 +4641,7 @@ function requireOrderedPublishedAccessIn(module StdModule, func IrFunction, labe
 	requireNoPublishedWordCrossesABlockEdge(module, func: func, addrValues: addrValues, addrWords: addrWords)
 end 'requireOrderedPublishedAccessIn'
 
-function noteWordSeenIfPublished(column BoolArray, labels ByteArrayArray, label ByteArray) returns bool
+function noteWordSeenIfPublished(column BoolArray, labels NameRoster, label ByteArray) returns bool
 	for i in 0 upto labels.count() 'eachWord'
 		let published = try labels.get(i) otherwise panic("{PublishedWordCheckName}: labels.get OOB at {i}, inside a loop bounded by its own count")
 
@@ -4650,7 +4654,7 @@ function noteWordSeenIfPublished(column BoolArray, labels ByteArrayArray, label 
 	return false
 end 'noteWordSeenIfPublished'
 
-function noteWordSeen(column BoolArray, labels ByteArrayArray, label ByteArray)
+function noteWordSeen(column BoolArray, labels NameRoster, label ByteArray)
 	if noteWordSeenIfPublished(column, labels: labels, label: label) 'oneOfTheWords'
 		return
 	end 'oneOfTheWords'
@@ -4658,7 +4662,7 @@ function noteWordSeen(column BoolArray, labels ByteArrayArray, label ByteArray)
 	panic("{PublishedWordCheckName}: '{String.from(label)}' was attributed an access and the roster derived from the `.data` slots does not name it, so the address column carries a label the roster it was filtered against does not hold")
 end 'noteWordSeen'
 
-function judgePublishedWordAccess(access StdAccessOperands, func IrFunction, opUses StdValueUseSet, addrValues ValueIdArray, addrWords ByteArrayArray, labels ByteArrayArray, releases BoolArray, acquires BoolArray)
+function judgePublishedWordAccess(access StdAccessOperands, func IrFunction, opUses StdValueUseSet, addrValues ValueIdArray, addrWords NameRoster, labels NameRoster, releases BoolArray, acquires BoolArray)
 	for i in 0 upto addrValues.count() 'eachAddress'
 		let addr = try addrValues.get(i) otherwise panic("{PublishedWordCheckName}: addrValues.get OOB at {i}, inside a loop bounded by its own count")
 
@@ -4677,7 +4681,7 @@ function judgePublishedWordAccess(access StdAccessOperands, func IrFunction, opU
 	end 'eachAddress'
 end 'judgePublishedWordAccess'
 
-function judgeAccessOfPublishedWord(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels ByteArrayArray, releases BoolArray, acquires BoolArray)
+function judgeAccessOfPublishedWord(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels NameRoster, releases BoolArray, acquires BoolArray)
 	match access.shape 'anAccess'
 		load then judgePublishedWordRead(access, func: func, addr: addr, label: label, labels: labels, acquires: acquires)
 		store then judgePublishedWordWrite(access, func: func, addr: addr, label: label, labels: labels, releases: releases)
@@ -4688,7 +4692,7 @@ function judgeAccessOfPublishedWord(access StdAccessOperands, func IrFunction, a
 	end 'anAccess'
 end 'judgeAccessOfPublishedWord'
 
-function judgePublishedWordRead(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels ByteArrayArray, acquires BoolArray)
+function judgePublishedWordRead(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels NameRoster, acquires BoolArray)
 	requirePublishedWordIsTheWholeAccess(access, func: func, addr: addr, label: label)
 
 	match access.ordering 'ordered'
@@ -4697,7 +4701,7 @@ function judgePublishedWordRead(access StdAccessOperands, func IrFunction, addr 
 	end 'ordered'
 end 'judgePublishedWordRead'
 
-function judgePublishedWordWrite(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels ByteArrayArray, releases BoolArray)
+function judgePublishedWordWrite(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels NameRoster, releases BoolArray)
 	requirePublishedWordIsTheWholeAccess(access, func: func, addr: addr, label: label)
 
 	match access.ordering 'ordered'
@@ -4706,7 +4710,7 @@ function judgePublishedWordWrite(access StdAccessOperands, func IrFunction, addr
 	end 'ordered'
 end 'judgePublishedWordWrite'
 
-function judgePublishedWordAtomic(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels ByteArrayArray, releases BoolArray, acquires BoolArray)
+function judgePublishedWordAtomic(access StdAccessOperands, func IrFunction, addr ValueId, label ByteArray, labels NameRoster, releases BoolArray, acquires BoolArray)
 	requirePublishedWordIsTheWholeAccess(access, func: func, addr: addr, label: label)
 
 	noteWordSeen(releases, labels: labels, label: label)
@@ -4727,7 +4731,7 @@ function refusePublishedWordEscape(func IrFunction, label ByteArray)
 	panic("{PublishedWordCheckName}: '{String.from(func.name)}' hands the address of `{String.from(label)}` to an op that is not an ordered access of it — a call argument, a block-edge argument, an arithmetic operand, a stored value or a second use inside one op. That word is `MultiMSharing.publishedFromTheLock`, and this check can only prove the discipline it claims while every access stands at the address itself: once the address travels, a plain load or store through it is invisible here and the check stays green over an unordered publication. Read and write the word at its `globalAddr` through `MmRuntime.emitLoadAcquireGlobalWord` / `emitStoreReleaseGlobalWord`")
 end 'refusePublishedWordEscape'
 
-function requireNoPublishedWordCrossesABlockEdge(module StdModule, func IrFunction, addrValues ValueIdArray, addrWords ByteArrayArray)
+function requireNoPublishedWordCrossesABlockEdge(module StdModule, func IrFunction, addrValues ValueIdArray, addrWords NameRoster)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = module.getBlock(blockRef)
 
@@ -4739,7 +4743,7 @@ function requireNoPublishedWordCrossesABlockEdge(module StdModule, func IrFuncti
 	end 'eachBlock'
 end 'requireNoPublishedWordCrossesABlockEdge'
 
-function refusePublishedWordOnAnEdge(func IrFunction, argId ValueId, addrValues ValueIdArray, addrWords ByteArrayArray)
+function refusePublishedWordOnAnEdge(func IrFunction, argId ValueId, addrValues ValueIdArray, addrWords NameRoster)
 	for i in 0 upto addrValues.count() 'eachAddress'
 		let addr = try addrValues.get(i) otherwise panic("{PublishedWordCheckName}: addrValues.get OOB at {i}, inside a loop bounded by its own count")
 
@@ -4751,7 +4755,7 @@ function refusePublishedWordOnAnEdge(func IrFunction, argId ValueId, addrValues 
 	end 'eachAddress'
 end 'refusePublishedWordOnAnEdge'
 
-function requireEveryPublishedWordWasSeen(labels ByteArrayArray, present BoolArray, releases BoolArray, acquires BoolArray)
+function requireEveryPublishedWordWasSeen(labels NameRoster, present BoolArray, releases BoolArray, acquires BoolArray)
 	for i in 0 upto labels.count() 'eachWord'
 		let label = try labels.get(i) otherwise panic("{PublishedWordCheckName}: labels.get OOB at {i}, inside a loop bounded by its own count")
 
@@ -6998,7 +7002,7 @@ end 'emitSchedRaiseHighWater'
 // list is both cheaper than a linear scan and the only thing that can find a P-less machine. The gate above
 // runs lock-free, so a publish that wakes nobody costs one load.
 function buildSchedWakeOrSpawn(module StdModule)
-	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create())
+	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)

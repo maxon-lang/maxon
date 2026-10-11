@@ -2094,7 +2094,7 @@ function storeIt(h Handler, op UnaryOp) returns Handler
 end 'storeIt'
 
 function main() returns ExitCode
-	let h = Handler.create(double)
+	var h = Handler.create(double)
 	let h2 = storeIt(h, op: double)
 	return h2.op(20) + usesClosure(1)
 end 'main'
@@ -2696,7 +2696,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.capturing-closure-handed-to-async -->
-A capturing closure handed to an `async` call is moved into the coroutine, which owns it until it ends.
+A capturing closure handed to an `async` call is held by the coroutine until it ends.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Step = function(Integer) returns Integer
@@ -2780,7 +2780,7 @@ end 'plain'
 
 function main() returns ExitCode
 	let s = Slot.create(plain)
-	let w = SlotW.create(s)
+	var w = SlotW.create(s)
 	return w.put(5)
 end 'main'
 ```

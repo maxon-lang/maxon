@@ -279,7 +279,9 @@ export function buildArm64MainThreadEntryChunk(initGlobals bool, entryFunction B
 	arm64EmitLdpPostIndex(asm.code, frameSize: Arm64FrameRecordBytes)
 	arm64EmitRet(asm.code)
 
-	return asm.finishChunk(MainThreadEntryName)
+	var chunk = asm.finishChunk(MainThreadEntryName)
+	chunk.spendsCallerStack(Arm64FrameRecordBytes as StackSize, checks: false)
+	return chunk
 end 'buildArm64MainThreadEntryChunk'
 
 // ⭐ **STASH `argc` AND `argv` WHERE THE Std TIER CAN READ THEM.** Two `.data` words and two stores; the

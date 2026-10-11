@@ -1624,8 +1624,8 @@ actually is: the diagnostic does not apologise for the compiler, it points at th
 rather than at the receiver (`:8:9`), and it is the same sentence any user `type` gets for
 the same mistake instead of a container-specific copy of one.
 
-⚠ The field named here is deliberately NOT `managed`: that spelling is served —
-in both the chained (`arr.managed.setLength(2)`) and the value (`f(arr.managed)`) forms —
+⚠ The field named here is deliberately NOT `managed`: that spelling is library-tier (E3185 outside
+`stdlib/` and `runtime/`), and where it is legal it is served — in both the chained (`arr.managed.setLength(2)`) and the value (`f(arr.managed)`) forms —
 because it is routed to the array dispatcher ahead of the field machinery
 (`arrayManagedFieldAt`). It is ALSO the one field the corpus
 declaration genuinely has, so the two doors agree on the roster; `value`

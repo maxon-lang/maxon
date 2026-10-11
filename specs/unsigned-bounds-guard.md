@@ -74,7 +74,9 @@ and `specs/managed-memory-methods.md` pins that `arr.managed.get(-1)` still THRO
 that file, whose `bounds-negative-index` case returns its `otherwise 7`. (The `set(-1)`
 half of that exemption is pinned here rather than there, by the two cases below that use it.) So
 `a.managed.get/set/remove/swap` is exactly one thing: the single unsigned compare, standing alone,
-with a negative index in front of it. That is why every negative-index case below is written on it.
+with a negative index in front of it. That is why every negative-index case below is written on it. The
+buffer surface (`.managed`) is library-tier, so those cases compile as library-tier sources
+(`<!-- tier: stdlib -->`).
 
 ⚠ **The two surfaces answer DIFFERENTLY and that difference is itself pinned**, by
 `a-laundered-negative-is-a-panic-at-the-array-door-and-a-throw-at-the-buffers` below — one program
@@ -129,6 +131,7 @@ as they stand below.
 ## Tests
 
 <!-- test: a-negative-index-is-still-refused -->
+<!-- tier: stdlib -->
 ⭐ **THE CONTROL FOR THE WHOLE ROW.** The unsigned rewrite is only equivalent because a negative
 index wraps ABOVE the length; write the compare signed and `-1` reads as in bounds, the guard admits
 it, and `buffer + index·8` addresses the word BEFORE the buffer. All FOUR entries through the one
@@ -190,6 +193,7 @@ end 'main'
 ```
 
 <!-- test: a-runtime-negative-index-is-refused -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE SECOND CONTROL, AND THE ONE THAT PROVES THE FIRST IS NOT PASSING FOR A DIFFERENT REASON.**
 A literal `-1` is a CONSTANT the operand fold moves into the compare and swaps the operands of, so
 the case above pins `cmp length, -1` / `jbe` rather than `cmp index, length` / `jae` — a different
@@ -237,6 +241,7 @@ end 'main'
 ```
 
 <!-- test: the-two-extreme-indices-are-refused -->
+<!-- tier: stdlib -->
 `i64.max` and `i64.min` — the two ends of the index space, and the two the unsigned reading treats
 most differently from the signed one. `i64.max` is enormous under BOTH readings; `i64.min` is the
 most negative signed value and `2^63` unsigned, which is above every length a buffer can have. Both
@@ -274,6 +279,7 @@ end 'main'
 ```
 
 <!-- test: an-empty-container-refuses-every-index -->
+<!-- tier: stdlib -->
 `length == 0` is the edge where the unsigned compare has nothing to admit: `index >=u 0` is TRUE for
 every index there is, including 0 itself. Read through a container that has been filled and then
 cleared as well as one that was never filled, because `clear` publishes the 0 through a different
@@ -377,6 +383,7 @@ end 'main'
 ```
 
 <!-- test: a-laundered-negative-is-a-panic-at-the-array-door-and-a-throw-at-the-buffers -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE TWO SURFACES, IN ONE PROGRAM, DISAGREEING ON PURPOSE.** The same laundered `-1` is a
 CATCHABLE `indexOutOfBounds` at `a.managed.get` — which is this row's guard doing its job — and an
 UNCATCHABLE `Range check failed` panic at `a.get`, which is `ElementIndex`'s declared lower bound
@@ -428,6 +435,7 @@ Stack trace:
 ```
 
 <!-- test: one-past-the-end-is-a-legal-fill-window-and-one-more-is-not -->
+<!-- tier: stdlib -->
 The CLOSED-end twin, `emitBoundaryPositionOutOfRange`, reached through `__managed_fill`'s window end
 `start + count`. `stop == length` is legal — a window may reach the length exactly — and `ja` rather
 than `jae` is the whole of what makes it so. `stop == length + 1` is not.
@@ -470,6 +478,7 @@ end 'main'
 ```
 
 <!-- test: a-fill-window-that-overflows-is-refused -->
+<!-- tier: stdlib -->
 ⭐ **THE OVERFLOW GUARD, WHICH THE UNSIGNED READING KEEPS RATHER THAN INHERITS.** `start + count` for
 two non-negative operands lands in `[0, 2^64-2]`, so it either fits an `i64` or wraps into
 `[-2^63, -2]` — never into a small positive number. A signed test catches the wrapped end only
@@ -508,6 +517,7 @@ end 'main'
 ```
 
 <!-- test: a-byte-strided-element-is-guarded-the-same-way -->
+<!-- tier: stdlib -->
 The other single-op arm. `InlineManagedPrimitives` emits one fast arm per stride, and both call
 `guardIndexInRange`, so a rewrite that reached only the word arm would leave every `ByteArray` and
 every String element on a seven-instruction guard.

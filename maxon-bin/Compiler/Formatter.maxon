@@ -329,28 +329,40 @@ type CommentMapBuilder
 	let tokens as TokenArray
 	let firstCode as FirstCodeMap
 	var comments as SourceCommentMap
-	var inPlace as InPlaceCommentMap
 	var currentLine as LineNumber
 	var leadingText as String
 	var trailingText as String
 	var lineContinues as bool
 
 	static function create(lines SourceLines, tokens TokenArray) returns CommentMapBuilder
-		return Self{lines: lines, tokens: tokens, firstCode: firstCodeColumns(lines, tokens: tokens), comments: SourceCommentMap.create(), inPlace: InPlaceCommentMap.create(), currentLine: 0, leadingText: "", trailingText: "", lineContinues: false}
+		return Self{lines: lines, tokens: tokens, firstCode: firstCodeColumns(lines, tokens: tokens), comments: SourceCommentMap.create(), currentLine: 0, leadingText: "", trailingText: "", lineContinues: false}
 	end 'create'
 
-	function build(spans CommentSpanArray) returns SourceComments
-		for span in spans 'eachSpan'
-			self.take(span)
-		end 'eachSpan'
+	function build(log CommentLog) returns SourceComments
+		var anchored = InPlaceCommentMap.create()
+
+		match log 'sink'
+			recorded(spans) then self.takeAll(spans, anchored: anchored)
+			discarded then panic("CommentMapBuilder.build: the lexer was handed a recording log and discarded it")
+		end 'sink'
 
 		self.finishLine()
-		return SourceComments.create(self.comments, inPlace: self.inPlace)
+
+		let byLine = self.comments
+		self.comments = SourceCommentMap.create()
+
+		return SourceComments.create(byLine, inPlace: anchored)
 	end 'build'
 
-	function take(span CommentSpan)
+	function takeAll(spans CommentSpanArray, anchored InPlaceCommentMap)
+		for span in spans 'eachSpan'
+			self.take(span, anchored: anchored)
+		end 'eachSpan'
+	end 'takeAll'
+
+	function take(span CommentSpan, anchored InPlaceCommentMap)
 		if span.kind == CommentSpanKind.block and self.sitsBetweenCode(span) 'betweenCode'
-			self.anchorToToken(span)
+			self.anchorToToken(span, anchored: anchored)
 			return
 		end 'betweenCode'
 
@@ -370,10 +382,10 @@ type CommentMapBuilder
 		return next.line == span.endLine and next.kind != TokenKind.newline and next.kind != TokenKind.docComment and next.kind != TokenKind.eof
 	end 'sitsBetweenCode'
 
-	function anchorToToken(span CommentSpan)
+	function anchorToToken(span CommentSpan, anchored InPlaceCommentMap)
 		let text = self.lines.textBetween(span.startByte, to: span.endByte)
-		let before = try self.inPlace.get(span.followingToken) otherwise ""
-		self.inPlace.upsert(span.followingToken, value: joinedWith(before, piece: text))
+		let before = try anchored.get(span.followingToken) otherwise ""
+		anchored.upsert(span.followingToken, value: joinedWith(before, piece: text))
 	end 'anchorToToken'
 
 	function takeBlock(span CommentSpan)
@@ -582,8 +594,12 @@ function modIsCasePattern(prev TokenKind, prevBeganLine bool) returns bool
 	return prev == TokenKind.mod and prevBeganLine
 end 'modIsCasePattern'
 
+module function isReadonlyModifier(kind TokenKind, value ByteArray, prev TokenKind) returns bool
+	return kind == TokenKind.identifier and isReadonlyWord(value) and readonlyMayFollow(prev)
+end 'isReadonlyModifier'
+
 // Does a space go between `prev` and `cur`?
-function needsSpaceBefore(cur TokenKind, prev TokenKind, prevWasDot bool, inDataBlock bool, prevWasUnary bool, prevBeganLine bool) returns bool
+function needsSpaceBefore(cur TokenKind, prev TokenKind, prevWasDot bool, inDataBlock bool, prevWasUnary bool, prevBeganLine bool, prevIsReadonlyModifier bool, prevNamesAFunction bool) returns bool
 	if noSpaceBefore(cur) 'tightBefore'
 		return false
 	end 'tightBefore'
@@ -611,6 +627,14 @@ function needsSpaceBefore(cur TokenKind, prev TokenKind, prevWasDot bool, inData
 	if cur == TokenKind.leftParen and modIsCasePattern(prev, prevBeganLine: prevBeganLine) 'modPattern'
 		return false
 	end 'modPattern'
+
+	if cur == TokenKind.leftParen and prevNamesAFunction 'declaredName'
+		return false
+	end 'declaredName'
+
+	if cur == TokenKind.leftParen and prevIsReadonlyModifier 'readonlyElementType'
+		return true
+	end 'readonlyElementType'
 
 	if cur == TokenKind.leftParen 'parenthesis'
 		return not callableBeforeLeftParen(prev)
@@ -666,11 +690,11 @@ type FormatState
 	// `beginBodyAfterThisLine`.
 	var pendingScopeGrouping as ScopeGrouping
 
-	// The token before this one, ignoring newlines — kind and source bytes. The bytes are read by
-	// exactly one rule: `module` is a CONTEXTUAL keyword with no `TokenKind` of its own, so
-	// `module function f()` can only be recognized by the word.
+	// The token before this one, ignoring newlines — its kind, and whether it spelled `module`, which is a
+	// CONTEXTUAL keyword with no `TokenKind` of its own, so `module function f()` can only be recognized
+	// by the word.
 	var prevKind as TokenKind
-	var prevValue as ByteArray
+	var prevIsModuleKeyword as bool
 	var prevWasDot as bool
 
 	// True when the previous `-` or `+` was UNARY, so nothing goes between it and its operand.
@@ -679,6 +703,10 @@ type FormatState
 
 	// True when the previous token was the FIRST on its line. Read by `modIsCasePattern`.
 	var prevBeganLine as bool
+
+	var prevIsReadonlyModifier as bool
+	var prevNamesAFunction as bool
+	var prevDeclaresAFunction as bool
 
 	// Open `(` `[` `{`. A match arm's pattern is never inside one, so this is what keeps a line that
 	// merely CONTINUES a bracketed literal in an arm body from being read as a fresh arm.
@@ -711,7 +739,7 @@ type FormatState
 	var blankDecisionPending as bool
 
 	static function create(tokens TokenArray, options FormatOptions, lines SourceLines, comments SourceComments, keywords KeywordTable) returns FormatState
-		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), groupFrames: GroupFrameArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevValue: EmptySourceText, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, groupDepth: 0, inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, lineStartedWithEnd: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
+		return Self{out: StringBuilder.create(), options: options, tokens: tokens, lines: lines, comments: comments.byLine, inPlace: comments.inPlace, consumedLeading: ConsumedLineSet.create(), consumedTrailing: ConsumedLineSet.create(), blocks: FormatBlockKindArray.create(), groupFrames: GroupFrameArray.create(), indentLevel: 0, atLineStart: true, newlineRun: 0, pendingIndentIncrease: false, pendingScopeGrouping: ScopeGrouping.memberList, prevKind: TokenKind.eof, prevIsModuleKeyword: false, prevWasDot: false, prevWasUnary: false, prevProducedValue: false, prevBeganLine: false, prevIsReadonlyModifier: false, prevNamesAFunction: false, prevDeclaresAFunction: false, groupDepth: 0, inArmPattern: false, armContinuation: false, hasEmitted: false, lastEmittedSourceLine: 0, lineStartedWithEnd: false, lineHasLabeledOpener: false, lineHasMatch: false, prevGroupKey: GroupKey.of(GroupKeyKind.none), pendingGroupKey: GroupKey.of(GroupKeyKind.none), currentLineOpenedBlock: false, uniqueGroupCounter: 0, blankDecisionPending: false, keywords: keywords}
 	end 'create'
 
 	// Walk every token, then hand over the built text. A formatted file with content ends with
@@ -735,7 +763,6 @@ type FormatState
 
 	// Emit the token at `index`; returns the index the walk resumes at.
 	function emitToken(index ElementIndex) returns ElementIndex
-		// By VALUE, not a borrow — `emitRealToken` below mutates `self`. See `tokenAt`.
 		let tok = self.tokenAt(index)
 
 		if tok.kind == TokenKind.eof 'endOfFile'
@@ -885,7 +912,7 @@ type FormatState
 		end 'indent' else 'separate'
 			if tok.line > self.lastEmittedSourceLine and self.pendingCommentOn(self.lastEmittedSourceLine, slot: CommentSlot.afterCode) 'commentSwallowedTheBreak'
 				self.emitCommentAcrossLineBreak(tok.line)
-			end 'commentSwallowedTheBreak' else if self.inPlaceCommentNeedsSpace(index) or needsSpaceBefore(tok.kind, prev: self.prevKind, prevWasDot: self.prevWasDot, inDataBlock: self.inDataBlock(), prevWasUnary: self.prevWasUnary, prevBeganLine: self.prevBeganLine) 'needsSpace'
+			end 'commentSwallowedTheBreak' else if self.inPlaceCommentNeedsSpace(index) or needsSpaceBefore(tok.kind, prev: self.prevKind, prevWasDot: self.prevWasDot, inDataBlock: self.inDataBlock(), prevWasUnary: self.prevWasUnary, prevBeganLine: self.prevBeganLine, prevIsReadonlyModifier: self.prevIsReadonlyModifier, prevNamesAFunction: self.prevNamesAFunction) 'needsSpace'
 				self.out.append(" ")
 			end 'needsSpace'
 		end 'separate'
@@ -966,7 +993,10 @@ type FormatState
 				// left context is deliberately untouched: nothing between here and the `)` could have
 				// changed it.
 				self.prevKind = TokenKind.identifier
-				self.prevValue = tok.value
+				self.prevIsReadonlyModifier = false
+				self.prevNamesAFunction = false
+				self.prevDeclaresAFunction = false
+				self.prevIsModuleKeyword = spellsModuleModifier(tok.kind, value: tok.value)
 				self.prevProducedValue = true
 				return afterPattern + 1
 			end 'allDiscarded'
@@ -991,7 +1021,10 @@ type FormatState
 		if tok.kind == TokenKind.charLiteral and self.prevKind == TokenKind.end 'maybeChainLabel'
 			if self.chainsToNextBranch(index) 'chains'
 				self.prevKind = tok.kind
-				self.prevValue = tok.value
+				self.prevIsReadonlyModifier = false
+				self.prevNamesAFunction = false
+				self.prevDeclaresAFunction = false
+				self.prevIsModuleKeyword = spellsModuleModifier(tok.kind, value: tok.value)
 				self.prevProducedValue = true
 				self.lineStartedWithEnd = false
 				self.lineHasLabeledOpener = true
@@ -1000,7 +1033,7 @@ type FormatState
 		end 'maybeChainLabel'
 
 		let priorKind = self.prevKind
-		let priorValue = self.prevValue
+		let prevWasModuleKeyword = self.prevIsModuleKeyword
 		self.notePrevToken(tok.kind, value: tok.value, wasAtLineStart: wasAtLineStart)
 
 		// Case names, arguments and raw values never affect block-level indent; only `end 'label'`,
@@ -1011,8 +1044,7 @@ type FormatState
 
 		// A labelless opener pushes a block and indents the next line — at line start, or after a
 		// visibility/`static`/`module` modifier. `module` is a contextual keyword lexed as an identifier,
-		// so it is matched by its WORD; `Parser.ModuleModifierName` is where that word is written down.
-		let prevWasModuleKeyword = priorKind == TokenKind.identifier and priorValue.equals(ModuleModifierName)
+		// so it is matched by its WORD (`Parser.spellsModuleModifier`).
 		let openerPositionAllows = wasAtLineStart or priorKind == TokenKind.export or priorKind == TokenKind.public or priorKind == TokenKind.static or prevWasModuleKeyword
 
 		if kindOpensADeclarationBlock(tok.kind) and openerPositionAllows and not self.inMatchBlock() 'labellessOpener'
@@ -1345,7 +1377,7 @@ type FormatState
 
 				let tok = self.tokenAt(at)
 
-				if not tok.value.equals(ModuleModifierName) 'anOrdinaryName'
+				if not spellsModuleModifier(tok.kind, value: tok.value) 'anOrdinaryName'
 					return at
 				end 'anOrdinaryName'
 			end 'saysWhatItDeclares'
@@ -1395,8 +1427,11 @@ type FormatState
 		let operandBefore = not wasAtLineStart and self.prevProducedValue
 		self.prevWasUnary = (kind == TokenKind.minus or kind == TokenKind.plus) and not operandBefore
 		self.prevProducedValue = producesValue(kind, operandBefore: operandBefore, keywords: self.keywords)
+		self.prevIsReadonlyModifier = isReadonlyModifier(kind, value: value, prev: self.prevKind)
+		self.prevNamesAFunction = self.prevDeclaresAFunction
+		self.prevDeclaresAFunction = kind == TokenKind.function and self.prevKind != TokenKind.dot
 		self.prevKind = kind
-		self.prevValue = value
+		self.prevIsModuleKeyword = spellsModuleModifier(kind, value: value)
 		self.prevBeganLine = wasAtLineStart
 	end 'notePrevToken'
 
@@ -1513,11 +1548,6 @@ type FormatState
 
 	// --- Token-stream lookahead ---
 
-	// ⛔⛔ **A TOKEN IS FETCHED BY VALUE, NEVER HELD AS A BORROW ACROSS A `self.` CALL.** `tokens` is a
-	// FIELD, so `let tok = tokens.get(i)` borrows part of `self` — and every emit helper takes `self`
-	// mutably, so calling one while that borrow is live is **E3070**: `cannot mutate 'tokens' via
-	// 'emitRealToken' while it is borrowed by 'tok'`. Returning the token out of a function ends the
-	// borrow at the return, which is exactly why `Parser.tokenAt` exists in the same shape.
 	function tokenAt(index ElementIndex) returns Token
 		if index >= tokens.count() 'pastEnd'
 			return Token.eof()

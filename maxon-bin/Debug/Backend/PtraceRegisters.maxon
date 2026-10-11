@@ -1,33 +1,6 @@
-let PtraceRegsOffset = 0x000
-let PtraceIovecOffset = 0x110
-let PtraceFpRegsOffset = 0x120
-module let PtraceStatusOffset = 0x340
-module let PtracePeekOffset = 0x348
-module let PtraceReadCountOffset = 0x350
-module let PtraceSigInfoOffset = 0x358
-module let PtraceTransferOffset = 0x400
-
-let SigInfoBlockBytes = 128
-module let SigInfoCodeOffset = 8
-
 module typealias PtraceRegOffsetArray = Array with BackendWord
 
-let PtraceGetRegs = 12
-let PtraceSetRegs = 13
-let PtraceGetFpRegs = 14
-let PtraceGetRegSet = 0x4204
-let PtraceSetRegSet = 0x4205
-
-let NoteGeneralRegisters = 1
-let NoteFloatRegisters = 2
-
-let IovecBaseOffset = 0
-let IovecLengthOffset = 8
-
 #if arch(arm64)
-	let RegisterBlockBytes = 272
-	let VectorBlockBytes = 528
-
 	let StackPointerOffset = 248
 	let ProgramCounterOffset = 256
 	let StatusWordOffset = 264
@@ -37,9 +10,6 @@ let IovecLengthOffset = 8
 #endif
 
 #if not arch(arm64)
-	let RegisterBlockBytes = 216
-	let VectorBlockBytes = 512
-
 	let StackPointerOffset = 152
 	let ProgramCounterOffset = 128
 	let StatusWordOffset = 144
@@ -64,25 +34,29 @@ let IovecLengthOffset = 8
 	let UserRegsRdi = 112
 #endif
 
-module function ptraceStackPointerSlot() returns BackendPageOffset
-	return (PtraceRegsOffset + StackPointerOffset) as BackendPageOffset
-end 'ptraceStackPointerSlot'
+module function ptraceBlockWord(block RegisterBlock, at BackendWord) returns BackendWord
+	return (try block.word(at as RegisterOffset) otherwise panic("PtraceRegisters.ptraceBlockWord: the word at {at} is outside the register block or off a word boundary, and every displacement this backend reads is one of the record's fixed fields")) as BackendWord
+end 'ptraceBlockWord'
 
-module function ptraceProgramCounterSlot() returns BackendPageOffset
-	return (PtraceRegsOffset + ProgramCounterOffset) as BackendPageOffset
-end 'ptraceProgramCounterSlot'
+module function ptraceStackPointerOf(block RegisterBlock) returns BackendWord
+	return ptraceBlockWord(block, at: StackPointerOffset)
+end 'ptraceStackPointerOf'
 
-module function ptraceStatusWordSlot() returns BackendPageOffset
-	return (PtraceRegsOffset + StatusWordOffset) as BackendPageOffset
-end 'ptraceStatusWordSlot'
+module function ptraceProgramCounterOf(block RegisterBlock) returns BackendWord
+	return ptraceBlockWord(block, at: ProgramCounterOffset)
+end 'ptraceProgramCounterOf'
 
-module function ptraceVectorLaneSlot(lane BackendWord) returns BackendPageOffset
-	return (PtraceFpRegsOffset + VectorLaneBase + lane * VectorLaneBytes) as BackendPageOffset
-end 'ptraceVectorLaneSlot'
+module function ptraceStatusWordOf(block RegisterBlock) returns BackendWord
+	return ptraceBlockWord(block, at: StatusWordOffset)
+end 'ptraceStatusWordOf'
 
-module function ptraceGprBlockSlot(offset BackendWord) returns BackendPageOffset
-	return (PtraceRegsOffset + offset) as BackendPageOffset
-end 'ptraceGprBlockSlot'
+module function ptraceVectorLaneOf(block RegisterBlock, lane BackendWord) returns BackendWord
+	return ptraceBlockWord(block, at: VectorLaneBase + lane * VectorLaneBytes)
+end 'ptraceVectorLaneOf'
+
+module function ptraceWithProgramCounter(block RegisterBlock, address BackendWord) returns RegisterBlock throws DebuggeeError
+	return try block.with(ProgramCounterOffset as RegisterOffset, word: address as RegisterWord)
+end 'ptraceWithProgramCounter'
 
 module function ptraceGprBlockOffsets() returns PtraceRegOffsetArray
 	var offsets = PtraceRegOffsetArray.create()
@@ -114,66 +88,3 @@ module function ptraceGprBlockOffsets() returns PtraceRegOffsetArray
 
 	return offsets
 end 'ptraceGprBlockOffsets'
-
-function describedBlock(scratch BackendScratchPage, at BackendPageOffset, bytes BackendWord) returns BackendWord
-	scratch.setWord((PtraceIovecOffset + IovecBaseOffset) as BackendPageOffset, value: scratch.addressOf(at))
-	scratch.setWord((PtraceIovecOffset + IovecLengthOffset) as BackendPageOffset, value: bytes)
-
-	return scratch.addressOf(PtraceIovecOffset as BackendPageOffset)
-end 'describedBlock'
-
-module function ptraceRegistersRead(scratch BackendScratchPage, thread BackendWord) returns bool
-	#if arch(arm64)
-		return hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceGetRegSet, a1: thread, a2: NoteGeneralRegisters, a3: describedBlock(scratch, at: PtraceRegsOffset as BackendPageOffset, bytes: RegisterBlockBytes), a4: 0) != 0
-	#endif
-
-	#if not arch(arm64)
-		return hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceGetRegs, a1: thread, a2: 0, a3: scratch.addressOf(PtraceRegsOffset as BackendPageOffset), a4: 0) != 0
-	#endif
-end 'ptraceRegistersRead'
-
-module function ptraceRegistersWritten(scratch BackendScratchPage, thread BackendWord) returns bool
-	#if arch(arm64)
-		return hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceSetRegSet, a1: thread, a2: NoteGeneralRegisters, a3: describedBlock(scratch, at: PtraceRegsOffset as BackendPageOffset, bytes: RegisterBlockBytes), a4: 0) != 0
-	#endif
-
-	#if not arch(arm64)
-		return hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceSetRegs, a1: thread, a2: 0, a3: scratch.addressOf(PtraceRegsOffset as BackendPageOffset), a4: 0) != 0
-	#endif
-end 'ptraceRegistersWritten'
-
-module function ptraceVectorRegistersRead(scratch BackendScratchPage, thread BackendWord) returns bool
-	#if arch(arm64)
-		return hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceGetRegSet, a1: thread, a2: NoteFloatRegisters, a3: describedBlock(scratch, at: PtraceFpRegsOffset as BackendPageOffset, bytes: VectorBlockBytes), a4: 0) != 0
-	#endif
-
-	#if not arch(arm64)
-		return hostDebugCall(HostDebugVerb.traceRequest, a0: PtraceGetFpRegs, a1: thread, a2: 0, a3: scratch.addressOf(PtraceFpRegsOffset as BackendPageOffset), a4: 0) != 0
-	#endif
-end 'ptraceVectorRegistersRead'
-
-export function requirePtraceScratchLayoutIsDisjoint()
-	if PtraceRegsOffset + RegisterBlockBytes > PtraceIovecOffset 'theRegisterBlockReachesTheIovec'
-		panic("PtraceRegisters: a {RegisterBlockBytes}-byte register block at {PtraceRegsOffset} runs into the iovec at {PtraceIovecOffset}")
-	end 'theRegisterBlockReachesTheIovec'
-
-	if PtraceIovecOffset + 2 * DebuggeeWordBytes > PtraceFpRegsOffset 'theIovecReachesTheVectorBlock'
-		panic("PtraceRegisters: the iovec at {PtraceIovecOffset} runs into the vector block at {PtraceFpRegsOffset}")
-	end 'theIovecReachesTheVectorBlock'
-
-	if PtraceFpRegsOffset + VectorBlockBytes > PtraceStatusOffset 'theVectorBlockReachesTheStatusWord'
-		panic("PtraceRegisters: a {VectorBlockBytes}-byte vector block at {PtraceFpRegsOffset} runs into the wait status at {PtraceStatusOffset}")
-	end 'theVectorBlockReachesTheStatusWord'
-
-	if PtraceReadCountOffset + DebuggeeWordBytes > PtraceSigInfoOffset 'theReadCountReachesTheSignalBlock'
-		panic("PtraceRegisters: the read count at {PtraceReadCountOffset} runs into the signal block at {PtraceSigInfoOffset}")
-	end 'theReadCountReachesTheSignalBlock'
-
-	if PtraceSigInfoOffset + SigInfoBlockBytes > PtraceTransferOffset 'theSignalBlockReachesTheTransferWindow'
-		panic("PtraceRegisters: a {SigInfoBlockBytes}-byte signal block at {PtraceSigInfoOffset} runs into the transfer window at {PtraceTransferOffset}")
-	end 'theSignalBlockReachesTheTransferWindow'
-
-	if PtraceTransferOffset + TransferWindowBytes > MaxBackendPageOffset + DebuggeeWordBytes 'theTransferWindowLeavesThePage'
-		panic("PtraceRegisters: a {TransferWindowBytes}-byte transfer window at {PtraceTransferOffset} runs off a scratch page whose last whole word begins at {MaxBackendPageOffset}")
-	end 'theTransferWindowLeavesThePage'
-end 'requirePtraceScratchLayoutIsDisjoint'

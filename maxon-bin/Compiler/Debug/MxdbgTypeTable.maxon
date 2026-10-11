@@ -55,9 +55,9 @@ let MxdbgVoidAlign = 1 as MxdbgIndex
 // One field of a described type. Its type is held by NAME rather than by id, because the entry it names
 // may not be in the table yet when the field is recorded.
 type MxdbgFieldDesc
-	export var name as ByteArray
+	export let name as ByteArray
 	export var offset as MxdbgIndex
-	export var typeName as ByteArray
+	export let typeName as ByteArray
 
 	static function create(name ByteArray, offset MxdbgIndex, typeName ByteArray) returns MxdbgFieldDesc
 		return Self{name: name, offset: offset, typeName: typeName}
@@ -68,7 +68,7 @@ typealias MxdbgFieldDescArray = Array with MxdbgFieldDesc
 
 union MxdbgElementType
 	none
-	of(typeName ByteArray)
+	of(let typeName ByteArray)
 
 	function typeName() returns ByteArray throws AbsentError
 		match self 'element'
@@ -102,7 +102,7 @@ end 'MxdbgTypeDesc'
 // every local carries is the entry's POSITION, and two columns that could fall out of step would make
 // that position mean two different things.
 type MxdbgTypeEntry
-	export var name as ByteArray
+	export let name as ByteArray
 	export var desc as MxdbgTypeDesc
 
 	static function create(name ByteArray, desc MxdbgTypeDesc) returns MxdbgTypeEntry
@@ -116,7 +116,7 @@ typealias MxdbgTypeEntryArray = Array with MxdbgTypeEntry
 // id `idOf` answers the id the table was written under.
 typealias MxdbgTypePositionMap = Map with (ByteArray, ElementIndex)
 
-typealias MxdbgArrayElementMap = Map with (ByteArray, ByteArray)
+typealias MxdbgArrayElementMap = Map with (ByteArray, readonly ByteArray)
 
 typealias MxdbgClosureEnvMap = Map with (ByteArray, MxdbgFieldDescArray)
 
@@ -195,7 +195,7 @@ export type MxdbgTypeTable
 			return
 		end 'alreadyDescribed'
 
-		var pending = ByteArrayArray.create()
+		var pending = NameRoster.create()
 		pending.push(name)
 
 		var at = 0 as ElementIndex
@@ -208,10 +208,8 @@ export type MxdbgTypeTable
 				continue
 			end 'alreadyDescribed'
 
-			// ⚠ The names this one refers to are collected FIRST and appended only past `next`'s last use:
-			// `next` is an element borrow of the worklist, and growing the worklist under it is E3070.
 			let desc = try self.closureEnvDescOf(next) otherwise mxdbgDescribeType(project, signatures: signatures, name: next, element: self.arrayElementOf(next))
-			var referenced = ByteArrayArray.create()
+			var referenced = NameRoster.create()
 			referenced.reserve(desc.fields.count())
 
 			for field in desc.fields 'eachFieldType'
@@ -292,7 +290,7 @@ export type MxdbgTypeTable
 
 		// The names are lifted out before the map is refilled: an entry read from `entries` is an element
 		// borrow of it, and the map being rebuilt lives on the same record.
-		var names = ByteArrayArray.create()
+		var names = NameRoster.create()
 		names.reserve(self.entries.count())
 
 		for entry in self.entries 'eachName'

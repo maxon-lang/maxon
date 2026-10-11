@@ -50,13 +50,13 @@ header for why).
 
 ### ⭐⭐ "A WORKER M RAN" IS BLOCKED ON, NOT SAMPLED
 
-A program can publish every message and read `schedMaxActiveWorkers()` before the OS has run the
+A program can publish every message and read `Scheduler.counters().maxActiveWorkers` before the OS has run the
 thread `__sched_wake_or_spawn` created for it. Win that race and the row reads `workers=1 steals=0`
 — which is indistinguishable from the coroutine pin, so a starved box and a broken scheduler produce
 the same output.
 
-`awaitWorkerArrival()` closes that: it waits for `schedMaxActiveWorkers() >= 2` on a bounded budget,
-short-circuits when `__Builtins.schedProcessorCount()` resolves to one (the configuration where
+`awaitWorkerArrival()` closes that: it waits for `Scheduler.counters().maxActiveWorkers >= 2` on a bounded budget,
+short-circuits when `Scheduler.processorCount()` resolves to one (the configuration where
 `workers=1` is the correct answer and waiting would spend the budget to learn nothing), and reports
 expiry as **`workerwait=timeout`**. Both drivers fail such a row rather than reading it as a pin.
 
@@ -179,7 +179,7 @@ row from it, not from this prose. `pin-matrix.sh` agrees by construction: its `e
 `min(N, HOST_CPUS)` and its `default` row is `HOST_CPUS` itself.
 
 ⭐ **THE CROSS-P FREE COUNT IS A LANGUAGE SURFACE, NOT AN ENVIRONMENT DUMP.**
-`__Builtins.slabRemoteFreeCount()` sums a per-P word credited at every remote push, so a program
+`HeapStats.slab().remoteFrees` sums a per-P word credited at every remote push, so a program
 reads its own number; `specs/slab-sharding.md` asserts on it from inside a case, and check 4 below
 asserts it across processor counts.
 
@@ -193,7 +193,7 @@ asserts it across processor counts.
    ⭐ **BOTH FAMILIES ARE SWEPT ON PURPOSE.** Sweeping only the `async` program proves determinism of
    SINGLE-THREADED execution across processor counts, which is far weaker than it reads as.
 2. **A spawned green thread reaches a worker M.** `service-torture` BLOCKS on
-   `schedMaxActiveWorkers() >= 2` and reports `workerwait`. The check fails a `timeout` by name, fails
+   `Scheduler.counters().maxActiveWorkers >= 2` and reports `workerwait`. The check fails a `timeout` by name, fails
    `workers < 2` when the wait claims arrival (a contradiction, not a race), and at
    `MAXON_MAX_PROCS=1` requires `workers == 1` **and** `workerwait=ok` — the `ok` proving the
    one-processor short-circuit was taken rather than the budget having been spent.

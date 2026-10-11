@@ -51,8 +51,8 @@ export type TypeNameInterner
 	// Copies of the names interned since the baseline, in id order: the one at position `k` holds id `baselineCount + k`.
 	// Copies, because they cross a thread: a record the worker's own table also holds would give the reply
 	// a second owner.
-	export function namesSinceBaseline() returns ByteArrayArray
-		var added = ByteArrayArray.create()
+	export function namesSinceBaseline() returns NameRoster
+		var added = NameRoster.create()
 
 		for id in (self.baselineCount as NameId) upto table.count() 'eachAdded'
 			added.push(table.ownedCopyOf(id))
@@ -342,7 +342,7 @@ end 'remapValueNameId'
 // Rewrite the named-type id a `MaxonReturnType` may carry (its `value` inner).
 export function remapMaxonReturnType(rt MaxonReturnType, remap TypeIdRemap) returns MaxonReturnType
 	return match rt 'r'
-		void gives rt
+		void gives MaxonReturnType.void
 		value(inner) gives MaxonReturnType.value(remapMaxonType(inner, remap: remap))
 	end 'r'
 end 'remapMaxonReturnType'
@@ -387,7 +387,7 @@ export function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeIdRemap
 		var remappedFields = PayloadFieldArray.create()
 
 		for field in casePayloads 'eachField'
-			remappedFields.push(PayloadField.create(field.name, declaredType: remapMaxonType(field.declaredType, remap: remap), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand))
+			remappedFields.push(PayloadField.create(field.name, declaredType: remapMaxonType(field.declaredType, remap: remap), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, isLet: field.isLet))
 		end 'eachField'
 
 		remappedCases.push(remappedFields)

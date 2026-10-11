@@ -16,7 +16,7 @@ yields instead of growing (`vendor/go/src/runtime/proc.go`, `retake` and `preemp
 `vendor/go/src/runtime/stack.go`, `newstack`). A CPU-bound green thread here is asked the same way, through
 the prologue check its stack growth already uses.
 
-`__Builtins.schedPreemptCount()` counts the preemption requests green threads have honoured.
+`Scheduler.counters().preempts` counts the preemption requests green threads have honoured.
 
 A case that measures a bystander starts its CPU-bound work, then puts `main` to sleep for 20 ms before
 sending the bystander its request. With every processor busy, `main`'s own timer can only fire once a
@@ -105,7 +105,7 @@ function main() returns ExitCode
 	let pingAtMs = Clock.elapsedMs(start) as Integer
 	let q = try await spun otherwise 0
 	let spinEndedAtMs = try await s.endedAt() otherwise 0 - 1
-	print("prompt={pingAtMs < spinEndedAtMs} ping={p} spun={q > 0} preempted={__Builtins.schedPreemptCount() > 0}\n")
+	print("prompt={pingAtMs < spinEndedAtMs} ping={p} spun={q > 0} preempted={Scheduler.counters().preempts > 0}\n")
 	return 0
 end 'main'
 ```
@@ -263,7 +263,7 @@ end 'Bystander'
 function main() returns ExitCode
 	var spinners = SpinnerHandleArray.create()
 	var i = 0
-	while i < __Builtins.schedProcessorCount() 'spawnEach'
+	while i < Scheduler.processorCount() 'spawnEach'
 		spinners.push(spawn Spinner.create())
 		i = i + 1
 	end 'spawnEach'
@@ -325,7 +325,7 @@ and reddens the pinned line, so the retry is not a tolerance. `seenBySibling` is
 enqueued behind `busy` at its `async`, holds the later of the two deadlines so pop-min wakes `busy`
 first, and `busy` never waits once started. `attemptCap` is a time budget, every attempt paying the
 full 150 ms spin, and exhausting it prints its own non-matching line and exits 3. `preempted` reads
-`schedPreemptCount()` against a baseline taken inside the attempt: the counter is process-global and
+`Scheduler.counters().preempts` against a baseline taken inside the attempt: the counter is process-global and
 monotonic, so a discarded attempt's spin would otherwise leave it true for nothing.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -368,7 +368,7 @@ function main() returns ExitCode
 	while tries < attemptCap 'attempts'
 		tries = tries + 1
 		phase = 0
-		let preemptsBefore = __Builtins.schedPreemptCount()
+		let preemptsBefore = Scheduler.counters().preempts
 		let a = async busy()
 		let b = async nap()
 		sleep(30)
@@ -379,7 +379,7 @@ function main() returns ExitCode
 			continue
 		end 'neverStarted'
 
-		print("owner={seenByOwner} sibling={seenBySibling} busy={q > 0} preempted={__Builtins.schedPreemptCount() > preemptsBefore}\n")
+		print("owner={seenByOwner} sibling={seenBySibling} busy={q > 0} preempted={Scheduler.counters().preempts > preemptsBefore}\n")
 		return 0
 	end 'attempts'
 
@@ -462,7 +462,7 @@ function main() returns ExitCode
 	sleep(20)
 	let wrong1 = try await churned1 otherwise 0 - 1
 	let wrong2 = try await churned2 otherwise 0 - 1
-	print("wrong={wrong1 + wrong2} preempted={__Builtins.schedPreemptCount() > 1}\n")
+	print("wrong={wrong1 + wrong2} preempted={Scheduler.counters().preempts > 1}\n")
 	return 0
 end 'main'
 ```
@@ -534,7 +534,7 @@ function main() returns ExitCode
 	let pingAtMs = Clock.elapsedMs(start) as Integer
 	let q = try await spun otherwise 0
 	let spinEndedAtMs = try await s.endedAt() otherwise 0 - 1
-	print("prompt={pingAtMs < spinEndedAtMs} ping={p} spun={q > 0} preempted={__Builtins.schedPreemptCount() > 0}\n")
+	print("prompt={pingAtMs < spinEndedAtMs} ping={p} spun={q > 0} preempted={Scheduler.counters().preempts > 0}\n")
 	return 0
 end 'main'
 ```
@@ -600,7 +600,7 @@ end 'Bystander'
 function main() returns ExitCode
 	var spinners = SpinnerHandleArray.create()
 	var i = 0
-	while i < __Builtins.schedProcessorCount() 'spawnEach'
+	while i < Scheduler.processorCount() 'spawnEach'
 		spinners.push(spawn Spinner.create())
 		i = i + 1
 	end 'spawnEach'
@@ -749,7 +749,7 @@ function main() returns ExitCode
 	let churned = c.churn()
 	sleep(20)
 	let wrong = try await churned otherwise 0 - 1
-	print("wrong={wrong} preempted={__Builtins.schedPreemptCount() > 0}\n")
+	print("wrong={wrong} preempted={Scheduler.counters().preempts > 0}\n")
 	return 0
 end 'main'
 ```
@@ -767,7 +767,7 @@ wrong=0 preempted=true
 yield request nor the syscall retake is issued, so `main` keeps the only processor across 30 ms of work and
 the service it spawned first runs only when `main` parks. The hold is a LOWER bound of wall time — a loop
 until 30 ms have elapsed, three monitor thresholds — and never a budget, so host load can only lengthen it.
-The witness rides the reply: `ping()` answers `__Builtins.schedPreemptCount()` as the service saw it, so a
+The witness rides the reply: `ping()` answers `Scheduler.counters().preempts` as the service saw it, so a
 service that ran while `main` was off its processor answers the count that put it there, and `main`'s own
 reading after the hold pins that nothing was asked and nothing retaken. `held` is always `true`: it consumes
 the hold's accumulator so the loop's work is not dead.
@@ -792,7 +792,7 @@ type Echo
 	end 'create'
 
 	export function ping() returns Integer
-		return __Builtins.schedPreemptCount()
+		return Scheduler.counters().preempts as Integer
 	end 'ping'
 end 'Echo'
 
@@ -805,7 +805,7 @@ function main() returns ExitCode
 		acc = step(acc, depth: 4)
 	end 'hold'
 	let p = try await reply otherwise 0 - 1
-	print("ping={p} held={acc mod 2 + 1 > 0} preempted={__Builtins.schedPreemptCount()} retaken={__Builtins.schedRetakeCount()}\n")
+	print("ping={p} held={acc mod 2 + 1 > 0} preempted={Scheduler.counters().preempts} retaken={Scheduler.counters().retakes}\n")
 	return 0
 end 'main'
 ```
@@ -825,14 +825,14 @@ off a core for the monitor's 10 ms, `main` is asked to yield between its second 
 runs WITH preemption on, so it cannot choose where the monitor's request lands: a slow runner spends the
 10 ms on process start and the first `spawn`, and a request that lands before the window gives `first=0`,
 while one that lands after the hold gives
-`first=2`. So one ATTEMPT reads `schedPreemptCount` around its window and is discarded — its handles
+`first=2`. So one ATTEMPT reads `Scheduler.counters().preempts` around its window and is discarded — its handles
 dropped, its services shut down unasked — whenever the count moved before the hold or moved twice by the
 end; `main` retries up to `attemptCap` times and prints only from an attempt whose single preemption fell
 inside the window, so the line is produced only by the trace it describes. A preempted thread goes to the
 GLOBAL queue's tail and the machine takes `runnext` next, so `b` runs, sends nothing, and parks on its
 empty mailbox; `a` runs from the ring and parks; `main` resumes from the global queue and spawns `c` into
 `runnext`; `a.rank()` readies `a` into `runnext`, displacing `c` to the ring, and `b.rank()` readies `b`,
-displacing `a`; `awaitAny` parks `main`, `b` replies first, and the index is 1. Exactly ONE preemption per
+displacing `a`; `awaitAny()` parks `main`, `b` replies first, and the index is 1. Exactly ONE preemption per
 attempt: one request, one park — `main`'s schedule tick moves when it resumes, so the next monitor lap
 re-notes it rather than asking again. `burstCap` is a hang guard, not a budget: a monitor that never asks
 is not a disturbed attempt but its own printed line and exit 3, as is running out of attempts — each a
@@ -874,16 +874,16 @@ end 'Marker'
 // The monitor chooses when it asks, so an attempt is accepted only when its one preemption fell between
 // the second and third spawn; a throw drops the handles it spawned.
 function attempt() returns (Integer, Integer) throws Attempt
-	let c0 = __Builtins.schedPreemptCount()
+	let c0 = Scheduler.counters().preempts
 	let a = spawn Marker.create(1)
 	let b = spawn Marker.create(2)
-	if __Builtins.schedPreemptCount() != c0 'early'
+	if Scheduler.counters().preempts != c0 'early'
 		throw Attempt.preemptedBeforeTheWindow
 	end 'early'
 
 	var acc = 0
 	var bursts = 0
-	while __Builtins.schedPreemptCount() == c0 and bursts < burstCap 'hold'
+	while Scheduler.counters().preempts == c0 and bursts < burstCap 'hold'
 		var i = 0
 		while i < 1000 'burst'
 			acc = step(acc, depth: 4)
@@ -891,7 +891,7 @@ function attempt() returns (Integer, Integer) throws Attempt
 		end 'burst'
 		bursts = bursts + 1
 	end 'hold'
-	if __Builtins.schedPreemptCount() == c0 'silent'
+	if Scheduler.counters().preempts == c0 'silent'
 		throw Attempt.neverAsked
 	end 'silent'
 
@@ -900,12 +900,12 @@ function attempt() returns (Integer, Integer) throws Attempt
 	replies.push(a.rank())
 	replies.push(b.rank())
 	replies.push(c.rank())
-	let first = __Builtins.awaitAny(replies)
+	let first = replies.awaitAny()
 	var sum = 0
 	for p in replies 'drainthemall'
 		sum = sum + (try await p otherwise 0)
 	end 'drainthemall'
-	if __Builtins.schedPreemptCount() != c0 + 1 'late'
+	if Scheduler.counters().preempts != c0 + 1 'late'
 		throw Attempt.preemptedAfterTheWindow
 	end 'late'
 

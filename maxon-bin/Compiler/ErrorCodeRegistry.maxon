@@ -393,6 +393,13 @@ export enum ErrorCode
 	// inner `.maxproj`. Move the inner project out of the outer project's directory.
 	nestedProjectFile = "E2074"
 
+	// `readonly` qualifies a type argument it cannot qualify. It marks the element type of an `Array` or a
+	// `List` (`Array with readonly Name`) and the value type of a `Map` (`Map with Key, readonly Value`), whose
+	// stored values are then read-only. A `Map` key and a `Set` element are read-only once stored and take no
+	// qualifier; any other generic type's arguments, and a type outside a `with` list, take none either. Remove
+	// the qualifier, or use `let` for a binding or a field.
+	readonlyQualifierMisplaced = "E2075"
+
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"
 
@@ -491,6 +498,9 @@ export enum ErrorCode
 	// IMPLICITLY, where a value meets a declared type it cannot reach without loss
 	// (`takeInt(3.7)`, `return 3.7` from a `returns int`). One code, because it is one
 	// fact: the answer to every one of them is an explicit `trunc`/`round`/`floor`/`ceil`.
+	// A cast that would forge a value is refused here too: an integer cast to an enum (use
+	// `Enum.fromRawValue(raw)`, which throws `noSuchRawValue` for a value no case carries) or to a union (build
+	// it with its case constructor), and an interface value cast to another interface.
 	semanticUnsafeCast = "E3009"
 
 	// A cast converts nothing: it names the type the value already has -- its own typealias (`b as
@@ -537,20 +547,6 @@ export enum ErrorCode
 
 	// A field access names a field the type does not have.
 	semanticUnknownField = "E3018"
-
-	// An immutable binding's record reaches a parameter the callee writes, or the receiver of a container method that
-	// writes it (push/pop/set/append/...). A `let` local, a `let` alias of a parameter or a module-level `let` named at
-	// the call is refused wherever the callee writes that position, a write of a FIELD of the parameter included — how
-	// deep the callee reaches does not change whose record it wrote. A method writing a field of its own receiver is
-	// the one write that is not a parameter mutation, so `let acc = …` then `acc.add(10)` stands. A value — one a
-	// `var` holds included — is refused while an immutable binding is read after the call whose record it may be
-	// (`grow(pass(a))`, `pass(a).push(9)`), that borrows it out of the same mutable storage, or that may be the same
-	// record by another road — a module-level `let`'s record a call hands back through an `otherwise` fallback or a
-	// ternary arm included. Make the binding a `var`, or pass a `clone()`. Asked by name by the Maxon-tier mutation
-	// check and, of a value, by `StorageProvenance`. Inside a closure, a captured name the closure holds as its
-	// own copy is refused at a parameter the callee writes too: the write could not reach the binding the author
-	// named.
-	semanticImmutableRefToMutatingParam = "E3019"
 
 	// An enum declares the same case name twice.
 	enumDuplicateCase = "E3030"
@@ -745,23 +741,6 @@ export enum ErrorCode
 	// layout half.
 	refIdentityOnPrimitive = "E3068"
 
-	// borrow conflict -- a collection was mutated (e.g. `arr.push(x)`)
-	// while a reference into its backing buffer is still live (e.g.
-	// `let s = try arr.get(0) ...`). A growth could reallocate the buffer
-	// and dangle the outstanding reference. Passing that collection to a
-	// function that reassigns its parameter counts as such a mutation: the
-	// reassignment drops the record the caller's storage held, from another
-	// frame, which frees exactly what the outstanding reference points into.
-	// A borrow is any binding read out of a record -- an element or a field. The record it was read from may
-	// not be MOVED while the borrow is still read: into a message argument, an `async` call, or the value a
-	// `match` or ternary branch gives. Nor may the binding it moved into be dropped at the end of its block
-	// while the borrow is read after it. Each message names the write, the borrower and the line it borrowed
-	// at.
-	// A second message shares the code: an argument read from a binding that a later argument of the same
-	// call hands by reference to a function that may replace it. The value read may no longer be what the
-	// binding holds. Read it into a `let` first and pass that.
-	semanticBorrowConflict = "E3070"
-
 	// a statement appears in the same straight-line block body
 	// immediately after a `return`, `throw`, `panic(...)`, `break` or
 	// `continue`. The trailing statement is unreachable -- control never falls
@@ -822,16 +801,18 @@ export enum ErrorCode
 	// `var`'s place would meet a mutable door that moves or refuses it (`StorageProvenance.settleVarShouldBeLet`).
 	semanticVarShouldBeLet = "E3077"
 
-	// A mutable name would reach a record an immutable name still reads. `var b = a` or `b = a` from a `let` that is
-	// not its record's sole reference — an alias, a borrow of an element, a module-level `let` — while `a` is read
-	// after it; `var b = a.field` always, a module-level `let`'s field (`var m = H.index`) included; and
-	// `var b = f(a)`, or any value no name spells that may be or lie within the record of an immutable name read
-	// afterwards — a `return` hands back a reference rather than a copy — when `b` goes on to write that record.
-	// A `let` that is its record's sole reference moves instead (E3102). Keep `b` immutable (`let`), or bind an
-	// independent copy made with `clone()`; a value type (int/float/bool/byte) and a function value are copies
-	// and are allowed. Asked of a source the parser can name
-	// (`Parser.requireMutableBindingSource`) and, once every body is parsed, of the rest
-	// (`StorageProvenance.checkMoveSites`, `checkMutableBindingSites`).
+	// A read-only value would reach a place something may write. Read-only are a `let` binding, a `let` field, a
+	// `let` union payload, a module-level `let`, a value read from a `SharedValue` or a registry `default`, an
+	// element of a `readonly` element type, and a `for`, `if let` or `match` binding over a read-only source,
+	// each through everything it reaches. Refused: binding such a value, a field of it or a call result that may
+	// share its storage to a `var`; storing it
+	// into a `var` field or a mutable container element; passing it to a parameter the callee keeps where
+	// something may write it; and a module-level `var` initializer that may take a module-level `let`'s record.
+	// A `let` field, a `let` payload and a `readonly` element have no other writer, so what is stored into one,
+	// directly or through a parameter the callee stores there, must be read-only, a value type, or moved in (a
+	// sole-owned value, or a `var` at its last use). A generic body that keeps a value of its type parameter is
+	// judged at each instantiation. Use `let` for the binding, or bind or pass a `clone()`. Scalars, `String`,
+	// `Character`, function values and records whose fields are all `let` are value types and are allowed.
 	semanticVarFromImmutable = "E3078"
 
 	// A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
@@ -992,11 +973,10 @@ export enum ErrorCode
 
 	// A binding is READ after its owned heap value was MOVED OUT of it. Under the compiler's static
 	// single-owner model an owned value (an owned String, a struct box) has exactly one owner; a
-	// `let u = t` / `s = t` whose RHS is a bare `var` TRANSFERS ownership to the destination, and so does
-	// `var u = t` / `s = t` from a `let` that is its record's sole reference (`StorageProvenance.checkMoveSites`);
-	// the source is left moved-from. A `let` or `var` handed to a service message, to a `spawn` or to an
-	// `async` call moves the same way, a binding a closure captures moves into the closure, and one binding
-	// handed twice to one call is moved by the first. A later read of the source is refused -- it would read
+	// `let u = t` / `s = t` whose RHS is a bare `var` TRANSFERS ownership to the destination;
+	// the source is left moved-from. A `let` or `var` the sender owns, handed to a service message or to a
+	// `spawn`, moves the same way, a binding a closure captures moves into the closure, and one binding
+	// handed twice to one message is moved by the first. A later read of the source is refused -- it would read
 	// a value another owner now holds and will drop, and dropping it twice is a double-free. A value moved
 	// inside a loop is refused at its read on the next trip. A WRITE to a moved-from `var` is legal (it
 	// revives the binding). Read a `.clone()` instead, or move the value only after its last read.
@@ -1632,22 +1612,26 @@ export enum ErrorCode
 
 	// A value handed to another green thread cannot be proven to have exactly one owner, so it may not
 	// cross. It is asked of a message argument, of a `spawn`'s state, and of a service handler's reply.
-	// Each of them MOVES -- a `let` or `var` binding, a temporary or a literal alike -- and makes the service
-	// the value's one owner, and the sending frame gives up the reference it held; a later read of the binding
+	// A value this frame owns -- a `let` or `var` binding, a temporary or a literal alike -- MOVES and makes the
+	// service its one owner, and the sending frame gives up the reference it held; a later read of the binding
 	// is E3102. A box one green thread holds steps its count with a plain load/add/store, so a value this frame
 	// still shares with something else would put one box in two green threads' hands without saying so, which
 	// corrupts the heap.
-	// Three shapes fail it, and E3135 is the neighbouring rule about the argument's TYPE rather than its
+	// A read-only value the sender does not own -- a module-level `let`, a `let` field, a `SharedValue` or
+	// registry read, or a parameter the sending function never writes -- is SHARED instead: its graph is marked shared, so every count on it
+	// steps atomically, and nothing on either side may write it. Refused on that road: a parameter the
+	// sending function writes, and any shared value whose receiving handler writes or keeps its parameter.
+	// A borrowed `String` is copied at the send.
+	// Three shapes fail the move, and E3135 is the neighbouring rule about the argument's TYPE rather than its
 	// ownership. The first is an OWNED value this frame has already taken a second reference to -- a value
-	// pushed into a container, or handed to another consuming call. The second is a
-	// BORROWED value this frame does not own at all -- a struct or a `String` read out of a field, an element, or
-	// a parameter. Only a string LITERAL this frame wrote is promoted to a fresh owned copy at the send.
+	// pushed into a container, handed to another consuming call, or the source of a `for` loop the send sits in.
+	// The second is a BORROWED value this frame does not own at all that is not read-only -- a struct read out
+	// of a `var` field or an element of a container.
 	// The cure for those two is `.clone()`, which is explicit precisely because it is O(n) and the language
 	// makes costs visible; or restructuring so the value is freshly built at the send.
 	// A `spawn`'s factory argument that the factory keeps moves into the service's state on the same terms,
-	// so a borrowed one -- a parameter, a field, an element, a module-level `let`'s record, a borrowed
-	// `String` -- is refused, naming the argument and the `spawn`. A field read off a temporary built in the
-	// factory call's own argument list crosses, because the `spawn` releases that temporary.
+	// so a borrowed one is refused, naming the argument and the `spawn`. A field read off a temporary built in
+	// the factory call's own argument list crosses, because the `spawn` releases that temporary.
 	// The THIRD is about what the record HOLDS rather than about the record: SOLENESS IS NOT TRANSITIVE.
 	// A box this frame owns alone may point at a record a second owner holds too, because every co-owning
 	// store (a struct-field or union-payload move-in of a borrow, a consuming call, a container push) takes
@@ -1668,10 +1652,6 @@ export enum ErrorCode
 	// run time, so a conformer no walk can be built for aborts the same way (exit 96) instead.
 	// A service reply whose type an instantiation still fixes is asked at the `spawn`, over the substituted
 	// type, rather than at the `return` -- so the diagnostic fires at the `spawn`.
-	// An `async` call's argument moves too, into a coroutine that stays on this green thread, so only one
-	// shape fails there: a value this frame also reads through a name that holds no reference of its own. The
-	// coroutine releases the value when it ends, and that name would go on reading it. A co-owner holding its
-	// own count moves like any other binding. Pass a `.clone()`, or build the value at the call.
 	semanticServiceArgumentNotUnique = "E3138"
 
 	// Two or more services can await replies from each other, so a message of each could be blocked waiting
@@ -1758,8 +1738,8 @@ export enum ErrorCode
 	// consumes one thread on every iteration.
 	semanticPromiseAlreadyConsumed = "E3142"
 
-	// A module-level `var` is READ OR WRITTEN by a service MESSAGE, or by an ordinary function a message
-	// reaches through the call graph. A message runs on a green thread the scheduler may put on any OS
+	// A module-level `var` or a `static var` is READ OR WRITTEN by a service MESSAGE, or by an ordinary function
+	// a message reaches through the call graph. A message runs on a green thread the scheduler may put on any OS
 	// thread, and a module `var` is one word every one of them shares.
 	// THE TWO DIRECTIONS FAIL DIFFERENTLY AND BOTH ARE REFUSED BY THIS ONE CODE, because they are one rule
 	// with one cure and one reachability question; only the diagnostic's subject clause differs.
@@ -1792,7 +1772,7 @@ export enum ErrorCode
 	// The diagnostic anchors at the ACCESS -- which is where the program can be repaired -- names the message
 	// that reaches it, and carries the `spawn` that made the type a service as a note, because whether a
 	// type is a service is a whole-program property whose cause may be in another file.
-	semanticSharedGlobalAccessFromGreenThread = "E3143"
+	semanticModuleVarInServiceProgram = "E3143"
 
 	// A union case's payload argument carries a `name:` label naming no payload of that case --
 	// `TwoParts.values(10, z: 20)` where the case declares `a` and `b`.
@@ -1939,16 +1919,16 @@ export enum ErrorCode
 	// that survived and the rule that refused.
 	alwaysSplicedBodyIsStillCalled = "E3158"
 
-	// A field write, or a method that writes its receiver, went through a record an immutable name read after it
-	// still reaches, whichever was declared first — a `let` whose record it may be, a `let` of an immutable record it
-	// may lie within, a live `let` that borrows it out of the same mutable storage, or one that may be the same
-	// record by another road: `let p = box.item` followed by `box.item.x = 99`, or `let a = …` stored into `box.item`
-	// and then `box.item.x = 99`. A module-level `let`'s record that a call hands back — an `otherwise` fallback, a
-	// ternary or `match` arm — is refused at a field write the same way. A method writing a receiver that may be
-	// the `let`'s own record is E3019 instead. A
-	// record is reachable through immutable names or through mutable paths, never both at once. Finish with the `let`
-	// first, or write an independent copy made with `clone()`. Decided by `StorageProvenance.checkWriteThroughSites`
-	// and `checkReceiverWrites`.
+	// A write went through a read-only value. Read-only are a `let` binding, a `let` field, a `let` union
+	// payload, a module-level `let`, a value read from a `SharedValue` or a registry `default`, a stored `Map`
+	// key or `Set` element, an element of a `readonly` element type, and a `for`, `if let` or `match` binding
+	// over a read-only source, each through everything it reaches. Refused: a field store through one, a method
+	// that writes its receiver called on one, handing one to a parameter the callee writes (a call through a
+	// function value included), consuming a promise held in a `let` field, and a write through a record a call
+	// handed back out of one. Releasing a resource -- closing a handle, writing its raw memory -- writes its
+	// receiver too. Inside a closure, a captured name is the closure's own copy, so handing it to a parameter
+	// the callee writes is refused for the same reason. The diagnostic names the read-only root. Use `var`, or
+	// write a `clone()`.
 	semanticWriteThroughImmutableRecord = "E3159"
 
 	// A handler over a combined error -- a block-form `try` whose calls throw several error types, at least one
@@ -2004,15 +1984,6 @@ export enum ErrorCode
 	// declaration. Make the binding a `var`, or build its value without reading the `var`.
 	semanticLetInitializerReachesAVar = "E3165"
 
-	// A module-level `var`'s initializer calls a function whose result may be, lie within or hold a module-level
-	// `let`'s record. A `let` is fixed at startup and a `var` may write what it holds, so the two may not share a
-	// record; in a program that spawns a service the `let`'s graph could not be marked shared with the `var` as an
-	// outside owner. Decided by the storage-provenance summary of the call the initializer makes, carried through
-	// calls, witness dispatches and calls through function values. A value built fresh from what a `let` holds --
-	// a number read out of it -- is not refused. Reported at the `var`'s declaration, naming the call. Build the
-	// value without taking the `let`'s record, or make the binding a `let`.
-	semanticVarInitializerTakesALetRecord = "E3166"
-
 	// A function's signature names a type less visible than the function itself.
 	// Whoever may call a function must be able to name what the call takes and gives back, so every type the
 	// signature names -- each parameter type, the return type, the throws type -- must carry a written
@@ -2057,11 +2028,12 @@ export enum ErrorCode
 
 	// A type is used where every thread may read one value at once — as a `default` value key, or as
 	// the element of a `SharedValue` — and it cannot be shared that way. Readers take the value with
-	// no lock, so it must be immutable and its graph must be one a share walk can mark: every field a
-	// `let`, over types that are themselves shareable. A `SharedValue` element may also be a `String`,
-	// a service handle or a scalar. Reported at the key or the `SharedValue` type, naming the writable
-	// field or the type the walk cannot mark. Make the fields `let`, or hold the mutable part in a
-	// service.
+	// no lock, so every count in its graph is made atomic by a share walk before a second thread sees it,
+	// and the walk must be able to mark everything the graph reaches: a function value (a closure record
+	// owns what it captures), a promise (one owner reclaims its green thread), an OS handle and a generic
+	// instance with no base layout cannot be marked. Fields may be `var` and may hold containers: every
+	// reader sees the value read-only (E3159, E3078). Reported at the key or the `SharedValue` type, naming
+	// what the walk cannot mark. Hold that part in a service instead.
 	registryValueNotShareable = "E3171"
 
 	// Building one `default` reaches the lookup of another whose build reaches back, or its own
@@ -2149,6 +2121,25 @@ export enum ErrorCode
 	// with T`), or remove the recursion.
 	genericTypeGrowsWithoutBound = "E3184"
 
+	// A source file outside `stdlib/` and `runtime/` reached the raw memory surface: a `__Builtins` call, a
+	// `.managed` field, a `__ManagedMemory` or `__ManagedMemoryCursor` type or method, `.cstr()` or the
+	// `cstring` type, a promise's `.inner` handle, or a raw OS handle type (`__ManagedFile`,
+	// `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages`, `__ManagedHandle`). These read and write memory
+	// with no bounds or ownership check, so only the library tiers may name them; a program reaches the same
+	// facilities through the standard library's checked APIs, which the message names where there is one
+	// (`Process.id()`, `HeapStats.slab()`, `Scheduler.counters()`, `File`, `isComplete()`). Reported once per
+	// file, at its first raw use. `__Raw` is narrower still: E3152.
+	rawSurfaceOutsideLibraryTier = "E3185"
+
+	// One call hands a function a parameter it reassigns by reference together with another argument that
+	// reaches the same storage -- the same binding, or a field or element of it (`settle(h, other: h.inner)`).
+	// Reassigning the parameter releases the record the caller's storage held, so the other argument would
+	// go on naming a record the callee freed. Arguments are compared by the storage path they are written
+	// as; a call result, a `match`, `try` or ternary value is a fresh counted value and overlaps nothing. A
+	// parameter the callee only writes through, without reassigning it, may overlap a read argument, since
+	// reads are counted. Reported at the argument the callee does not reassign. Pass a `.clone()` of it.
+	argumentOverlapsWrittenParameter = "E3186"
+
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"
 
@@ -2201,6 +2192,15 @@ export enum ErrorCode
 	// data file nothing could ever interpret, so the combination is refused rather than silently
 	// dropping either half.
 	codeEmitterCoverageNeedsDebugInfo = "E5003"
+
+	// A chain of functions compiled without a green-thread stack check could overflow the margin below the
+	// stack limit. A function with no prologue check runs inside that margin, so every chain of such
+	// functions -- inlined callees included -- must fit it, and none may reach itself, directly or through a
+	// call through a function pointer (priced at the deepest function whose address is taken). Proven once
+	// per build over the finished code, on a target with green threads. Reported at the function that heads
+	// the chain, or program-wide for one no source declares. Give a function in the chain a stack check, or
+	// break the recursion.
+	unguardedStackChain = "E5004"
 
 	// The previous build output at this path could not be cleared, so this build cannot replace it.
 	// Refused ahead of the write, because the write is logged and swallowed: carrying on would print

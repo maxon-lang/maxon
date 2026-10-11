@@ -33,19 +33,19 @@ match b 'update'
 end 'update'
 ```
 
-When the enum variable is immutable (`let`), match bindings are read-only copies, preserving the existing behavior.
+When the enum variable is immutable (`let`), match bindings are read-only: a match binding follows its
+scrutinee, and a write through one is `E3159`.
 
 ### What counts as a mutable scrutinee
 
 A `var` local is one, and so is a union-typed **parameter**: a parameter is a borrowed reference to the
 caller's record, which the callee may already write — `s.append(…)` on a `String` parameter is ordinary
-Maxon — and the caller's argument answers for that write through `E3019`, whether the arm writes a field of
+Maxon — and the caller's argument answers for that write through `E3159`, whether the arm writes a field of
 a payload or assigns the payload outright.
 
-Nothing else is. A `let` local is not, and neither is a TEMPORARY, though the frame that made it owns it: a
-scrutinee's mutability also decides whether a matched payload is moved out of its box or retained from it,
-so admitting a temporary would change what every `match` over a constructed union does with its refcounts,
-for no rule that needs it.
+A TEMPORARY is one too: a union constructed at the `match` has no other holder, so a write through its
+payload binding is a write nobody else can see. A `let` local is not, and neither is a read-only value of
+any other origin.
 
 ## Tests
 
@@ -314,7 +314,7 @@ end 'main'
 
 <!-- test: parameter-payload-to-a-writing-callee -->
 The cross-function half of the same rule: the payload is handed to a callee that writes a field of it, which
-is `E3019`'s question rather than the arm's own. A parameter scrutinee's payload may fill that position.
+is `E3159`'s question rather than the arm's own. A parameter scrutinee's payload may fill that position.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -355,11 +355,9 @@ end 'main'
 42
 ```
 
-<!-- test: error.temporary-scrutinee-payload-is-read-only -->
-⚖ The control for the other half of the ruling: a union constructed AT the `match` is a temporary this frame
-owns, and its payload binding is still read-only. Admitting it would move the scrutinee off the destructive
-move-out and onto a retain, which is a refcount change on every `match` over a constructed union — and no
-rule asks for it.
+<!-- test: a-temporary-scrutinee-payload-is-writable -->
+⚖ A union constructed AT the `match` is a temporary this frame owns and nothing else holds, so its payload
+binding is writable: the callee below writes `c`, and the arm reads the write back.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -388,8 +386,8 @@ function main() returns ExitCode
 	end 'step'
 end 'main'
 ```
-```maxoncstderr
-error E3019: specs/mutable-enums/error.temporary-scrutinee-payload-is-read-only.maxon:24:26: cannot pass 'c' to function that mutates parameter 'c' (in main)
+```exitcode
+42
 ```
 
 <!-- test: error.let-to-a-callee-that-writes-back-a-payload -->
@@ -421,7 +419,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-payload.maxon:18:2: cannot pass 's' to function that mutates parameter 's' (in main)
+error E3159: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-payload.maxon:18:2: cannot pass 's', which is read-only (a `let` binding), to a function that writes parameter 's' (in main); pass a clone()
 ```
 
 <!-- test: error.let-to-a-callee-that-writes-back-a-managed-payload -->
@@ -450,7 +448,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-managed-payload.maxon:16:2: cannot pass 'n' to function that mutates parameter 'n' (in main)
+error E3159: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-managed-payload.maxon:16:2: cannot pass 'n', which is read-only (a `let` binding), to a function that writes parameter 'n' (in main); pass a clone()
 ```
 
 <!-- test: error.let-scrutinee-payload-is-read-only -->
@@ -486,5 +484,297 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/mutable-enums/error.let-scrutinee-payload-is-read-only.maxon:24:19: cannot pass 'c' to function that mutates parameter 'c' (in main)
+error E3159: specs/mutable-enums/error.let-scrutinee-payload-is-read-only.maxon:24:19: cannot pass 'c', which is read-only (a `match` binding), to a function that writes parameter 'c' (in main); pass a clone()
+```
+
+<!-- test: a-freshly-built-scalar-payload-union-passed-to-a-let-field-keeper-is-sole -->
+A union is a mutable box even when its payload is a scalar, so a `let` field takes one only when nothing
+else can write it. A union built in the argument itself is the only reference to its box.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Settle
+	moved
+	someMoved(count Integer)
+end 'Settle'
+
+type Holder
+	export let settle as Settle
+
+	static function create(settle Settle) returns Self
+		return Self{settle: settle}
+	end 'create'
+end 'Holder'
+
+typealias HolderArray = Array with Holder
+
+type Registry
+	export var held as HolderArray
+
+	static function create() returns Self
+		return Self{held: HolderArray.create()}
+	end 'create'
+
+	function keep(settle Settle)
+		self.held.push(Holder.create(settle))
+	end 'keep'
+
+	function run(count Integer)
+		self.keep(Settle.someMoved(count))
+		self.keep(Settle.moved)
+	end 'run'
+end 'Registry'
+
+function main() returns ExitCode
+	var registry = Registry.create()
+	registry.run(3)
+	return registry.held.count() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: a-scalar-payload-union-var-at-its-last-use-passed-to-a-let-field-keeper-is-sole -->
+A `var` holding a freshly built union whose last use is the call is moved into the `let` field's holder.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Settle
+	moved
+	someMoved(count Integer)
+end 'Settle'
+
+type Holder
+	export let settle as Settle
+
+	static function create(settle Settle) returns Self
+		return Self{settle: settle}
+	end 'create'
+end 'Holder'
+
+typealias HolderArray = Array with Holder
+
+type Registry
+	export var held as HolderArray
+
+	static function create() returns Self
+		return Self{held: HolderArray.create()}
+	end 'create'
+
+	function keep(settle Settle)
+		self.held.push(Holder.create(settle))
+	end 'keep'
+
+	function run(count Integer)
+		var settle = Settle.someMoved(count)
+		self.keep(settle)
+	end 'run'
+end 'Registry'
+
+function main() returns ExitCode
+	var registry = Registry.create()
+	registry.run(3)
+	return registry.held.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: a-scalar-payload-union-var-read-after-the-call-is-not-sole -->
+A `var` union the program reads again after the call has another reader, so the `let` field refuses it. The final call is the `var`'s last use, which moves it, so only the first call is refused.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Settle
+	moved
+	someMoved(count Integer)
+end 'Settle'
+
+type Holder
+	export let settle as Settle
+
+	static function create(settle Settle) returns Self
+		return Self{settle: settle}
+	end 'create'
+end 'Holder'
+
+typealias HolderArray = Array with Holder
+
+type Registry
+	export var held as HolderArray
+
+	static function create() returns Self
+		return Self{held: HolderArray.create()}
+	end 'create'
+
+	function keep(settle Settle)
+		self.held.push(Holder.create(settle))
+	end 'keep'
+
+	function run(count Integer)
+		var settle = Settle.someMoved(count)
+		self.keep(settle)
+		self.keep(settle)
+	end 'run'
+end 'Registry'
+
+function main() returns ExitCode
+	var registry = Registry.create()
+	registry.run(3)
+	return registry.held.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3078: specs/mutable-enums/a-scalar-payload-union-var-read-after-the-call-is-not-sole.maxon:32:8: cannot pass the `var` 'settle', which is read again, to parameter 'settle' of 'Registry.keep', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: a-scalar-payload-union-also-stored-elsewhere-is-not-sole -->
+A union pushed into a collection before the call is held by the collection too, so the `let` field refuses it.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Settle
+	moved
+	someMoved(count Integer)
+end 'Settle'
+
+typealias SettleArray = Array with Settle
+
+type Holder
+	export let settle as Settle
+
+	static function create(settle Settle) returns Self
+		return Self{settle: settle}
+	end 'create'
+end 'Holder'
+
+typealias HolderArray = Array with Holder
+
+type Registry
+	export var held as HolderArray
+
+	static function create() returns Self
+		return Self{held: HolderArray.create()}
+	end 'create'
+
+	function keep(settle Settle)
+		self.held.push(Holder.create(settle))
+	end 'keep'
+
+	function run(count Integer)
+		var settle = Settle.someMoved(count)
+		var spare = SettleArray.create()
+		spare.push(settle)
+		self.keep(settle)
+		spare.clear()
+	end 'run'
+end 'Registry'
+
+function main() returns ExitCode
+	var registry = Registry.create()
+	registry.run(3)
+	return registry.held.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3078: specs/mutable-enums/a-scalar-payload-union-also-stored-elsewhere-is-not-sole.maxon:36:8: cannot pass a value other names may still write to parameter 'settle' of 'Registry.keep', which stores it into a `let` field: a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+```
+
+<!-- test: a-var-scrutinee-from-a-call-writes-through-its-payload-binding -->
+A match binding follows its scrutinee BINDING: a `var` gives writable bindings whatever produced its value, so
+a `var` holding a call's result takes the same payload write a `var` holding a constructed union does.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function raise()
+		self.n = self.n + 32
+	end 'raise'
+end 'Counter'
+
+union Slot
+	empty
+	holding(c Counter)
+end 'Slot'
+
+function makeSlot() returns Slot
+	return Slot.holding(Counter.create(10))
+end 'makeSlot'
+
+function main() returns ExitCode
+	var s = makeSlot()
+	var seen = 0
+
+	match s 'step'
+		holding(c) then c.raise()
+		empty then seen = 1
+	end 'step'
+
+	match s 'read'
+		holding(c) then return c.n + seen
+		empty then return 0
+	end 'read'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.a-let-scrutinee-from-a-call-keeps-its-payload-binding-read-only -->
+The twin: the same call result bound by a `let` gives read-only bindings, so the arm may not write through one.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function raise()
+		self.n = self.n + 32
+	end 'raise'
+end 'Counter'
+
+union Slot
+	empty
+	holding(c Counter)
+end 'Slot'
+
+function makeSlot() returns Slot
+	return Slot.holding(Counter.create(10))
+end 'makeSlot'
+
+function main() returns ExitCode
+	let s = makeSlot()
+	var seen = 0
+
+	match s 'step'
+		holding(c) then c.raise()
+		empty then seen = 1
+	end 'step'
+
+	match s 'read'
+		holding(c) then return c.n + seen
+		empty then return 0
+	end 'read'
+end 'main'
+```
+```maxoncstderr
+error E3159: specs/mutable-enums/error.a-let-scrutinee-from-a-call-keeps-its-payload-binding-read-only.maxon:30:21: cannot pass 'c', which is read-only (a `match` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```

@@ -5,10 +5,10 @@
 // a composite type or over a call's result; the harness is in `hover-probe.maxtest`.
 //
 // ⚠ **THIS FILE CONCENTRATES THE PINS ON LIVE `stdlib/` CONTENT, ON PURPOSE.** `Append element to end` is
-// `Array.maxon`'s doc comment, `cstring` is read off `String.cstr`'s declaration, and `String.fromCString`
-// is a declaration in `String.maxon`. A frozen fixture copy of the stdlib would make all three pass
-// forever while testing nothing; pinned to the real tree they go red the day one of them moves — which is
-// exactly the day an editor's hover changes, and therefore worth being told about.
+// `Array.maxon`'s doc comment and `String.from` is a declaration in `String.maxon`. A frozen fixture copy
+// of the stdlib would make both pass forever while testing nothing; pinned to the real tree they go red
+// the day one of them moves — which is exactly the day an editor's hover changes, and therefore worth
+// being told about.
 
 test 'hover shows doc comment for function'
 	// "add" starts at column 11
@@ -51,16 +51,16 @@ test 'hover shows array push method with doc comment'
 end 'hover shows array push method with doc comment'
 
 test 'hover shows static method signature'
-	// Line 2: "    var name = String.fromCString(cs)"
+	// Line 2: "    var name = String.from(bytes)"
 	//          0         1         2
 	//          0123456789012345678901234567
 	//
-	// Another live `stdlib/` pin: `String.fromCString` is declared at `String.maxon:241`. The recovered
+	// Another live `stdlib/` pin: `String.from` is declared at `String.maxon:111`. The recovered
 	// ruler stops at 27 while the position is 22; it is still the derivation, so it is reproduced as-is.
 	let document = staticMethodDocument()
 	let rendering = hoverRendering(document, line: 2, character: 22)
 
-	Expect.contains(rendering, needle: "fromCString", message: "a STATIC method call hovers as that method. A resolver that only handled instance receivers would answer for `String` here, or for nothing.")
+	Expect.contains(rendering, needle: "static function from(bytes ByteArray) returns String", message: "a STATIC method call hovers as that method with its declared signature. A resolver that only handled instance receivers would answer for `String` here, or for nothing.")
 end 'hover shows static method signature'
 
 // ⚠ Every fixture below is a `b"…"` byte literal, closing quote IMMEDIATELY after the last source
@@ -99,7 +99,7 @@ end 'documentedCounterDocument'
 
 function staticMethodDocument() returns String
 	return String.from(b"function test()
-    var cs = \"hello\".cstr()
-    var name = String.fromCString(cs)
+    var bytes = \"hello\".toByteArray()
+    var name = String.from(bytes)
 end 'test'")
 end 'staticMethodDocument'

@@ -995,6 +995,7 @@ error E3131: pkg/<fragment>:19:30: Cannot cast to 'Highs': a container's element
 ```
 
 <!-- test: error.a-managed-buffer-of-one-brand-does-not-reach-another-brands-parameter -->
+<!-- tier: stdlib -->
 `Xs` and `Ys` are two brands of one instance. `ys.managed` is `ys`'s own record, so handing it to a
 parameter declared `Xs` crosses from `Ys` to `Xs` without the `as` that door requires.
 ```maxon
@@ -1016,6 +1017,7 @@ error E3005: <fragment>:12:9: argument type mismatch for 'x': expected 'Xs', got
 ```
 
 <!-- test: a-managed-view-reaches-a-parameter-of-its-own-arrays-alias -->
+<!-- tier: stdlib -->
 The control for the refusal above: `a.managed` keeps `a`'s brand, so it reaches a parameter declared with the
 alias `a` was built from, without a cast.
 ```maxon
@@ -1036,6 +1038,7 @@ end 'main'
 ```
 
 <!-- test: error.a-view-binding-does-not-take-another-aliass-view -->
+<!-- tier: stdlib -->
 A view keeps its array's brand wherever it is held, not only at a parameter. `m` is bound from
 `bytes.managed`, so it holds a view under `Bytes`; `other.managed` is under `Other`, and the rebind crosses
 from one brand to the other.
@@ -1058,6 +1061,7 @@ error E3005: <fragment>:11:2: cannot assign a value of type '__ManagedMemory wit
 ```
 
 <!-- test: error.a-view-join-does-not-merge-two-aliases-views -->
+<!-- tier: stdlib -->
 The same crossing at a join: the two arms of the `match` give views under two brands.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1081,6 +1085,7 @@ error E3005: <fragment>:7:10: match arms give incompatible types: '__ManagedMemo
 ```
 
 <!-- test: an-unbranded-view-reaches-a-branded-parameter-of-its-instance -->
+<!-- tier: stdlib -->
 A row read out of `Rows` is unbranded, because `Rows` spells its element inline, so its view carries no
 brand either and decays into `Bytes`, a brand of the same instance.
 ```maxon

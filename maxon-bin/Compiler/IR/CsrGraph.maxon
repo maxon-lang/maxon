@@ -349,6 +349,53 @@ export function postorderOf(graph CsrGraph) returns CsrColumn
 	return order
 end 'postorderOf'
 
+// One rank per strongly connected component of `graph`, callers first: a caller outside a callee's
+// component ranks below it. `callers` must be `graph` transposed — any other graph yields wrong
+// components with no error.
+export function callerFirstRanks(graph CsrGraph, callers CsrGraph) returns CsrColumn
+	let finished = postorderOf(graph)
+	var ranks = CsrColumn.create()
+	ranks.refill(graph.nodeCount(), value: 0)
+	var assigned = BoolArray.create()
+	assigned.refill(graph.nodeCount(), value: false)
+	var members = CsrColumn.create()
+	var rank = 0 as CsrIndex
+	var position = finished.count()
+
+	while position > 0 'eachRootLatestFinishedFirst'
+		position = position - 1
+		let root = try finished.get(position) otherwise panic("callerFirstRanks: finished.get({position}) below its own count()")
+
+		if (try assigned.get(root) otherwise panic("callerFirstRanks: assigned.get({root}) below the node count")) 'alreadyRanked'
+			continue
+		end 'alreadyRanked'
+
+		try assigned.set(root, value: true) otherwise panic("callerFirstRanks: assigned.set({root}) below the node count")
+		try ranks.set(root, value: rank) otherwise panic("callerFirstRanks: ranks.set({root}) below the node count")
+		members.push(root)
+
+		while members.count() > 0 'sweepTheComponent'
+			let node = try members.pop() otherwise panic("callerFirstRanks: pop from a non-empty members")
+
+			for k in 0 upto callers.degree(node) 'eachCaller'
+				let caller = callers.neighbour(node, k: k)
+
+				if (try assigned.get(caller) otherwise panic("callerFirstRanks: assigned.get({caller}) below the node count")) 'sameComponentRankedAlready'
+					continue
+				end 'sameComponentRankedAlready'
+
+				try assigned.set(caller, value: true) otherwise panic("callerFirstRanks: assigned.set({caller}) below the node count")
+				try ranks.set(caller, value: rank) otherwise panic("callerFirstRanks: ranks.set({caller}) below the node count")
+				members.push(caller)
+			end 'eachCaller'
+		end 'sweepTheComponent'
+
+		rank = rank + 1
+	end 'eachRootLatestFinishedFirst'
+
+	return ranks
+end 'callerFirstRanks'
+
 // Is `node` its own neighbour? The one way a component of ONE node is still a cycle, and the only reason
 // a component's size is not the whole test.
 function nodeNamesItself(graph CsrGraph, node CsrIndex) returns bool

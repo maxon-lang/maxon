@@ -17,7 +17,8 @@ let MaxOriginDepth = 4 as OriginDepth
 typealias OriginKey = int(0 to u64.max)
 typealias OriginByKey = Map with (OriginKey, OriginIndex)
 typealias HandleByKey = Map with (OriginKey, ElementIndex)
-typealias OriginNameMap = Map with (OriginIndex, ByteArray)
+typealias OriginNameMap = Map with (OriginIndex, readonly ByteArray)
+typealias OriginLabelMap = Map with (OriginIndex, readonly ByteArray)
 typealias OriginByLabel = Map with (ByteArray, OriginIndex)
 typealias ListMembership = Set with OriginKey
 typealias FunctionHoldingMemo = Map with (TypeNameId, bool)
@@ -299,7 +300,7 @@ type ClosureCycleChecker implements SummarizedBodies
 	end 'tracesFirst'
 
 	function traceAndWiden(index ElementIndex) returns bool
-		let traced = self.trace(index, mode: CycleTraceMode.summarize)
+		var traced = self.trace(index, mode: CycleTraceMode.summarize)
 		return self.summary.widen(index, row: traced.row)
 	end 'traceAndWiden'
 
@@ -456,15 +457,15 @@ end 'KnownFieldStores'
 // op sits and which loads a store forwards. A body is traced once per pass, so this is built once per body
 // and kept.
 type CycleBodyIndex
-	export let tracked as BoolArray
-	export let blockIndex as BlockIndexById
-	export let successors as OriginListArray
-	export let opPositions as OpPositionMap
-	export let forwarded as ForwardedLoads
-	export let fieldStoreOps as HandleByKey
-	export let fieldStoreOpsByLine as HandleByKey
-	export let elementSites as StoreSiteByValue
-	export let reachFrom as ReachMemo
+	export var tracked as BoolArray
+	export var blockIndex as BlockIndexById
+	export var successors as OriginListArray
+	export var opPositions as OpPositionMap
+	export var forwarded as ForwardedLoads
+	export var fieldStoreOps as HandleByKey
+	export var fieldStoreOpsByLine as HandleByKey
+	export var elementSites as StoreSiteByValue
+	export var reachFrom as ReachMemo
 
 	static function create() returns CycleBodyIndex
 		return Self{tracked: BoolArray.create(), blockIndex: BlockIndexById.create(), successors: OriginListArray.create(), opPositions: OpPositionMap.create(), forwarded: ForwardedLoads.create(), fieldStoreOps: HandleByKey.create(), fieldStoreOpsByLine: HandleByKey.create(), elementSites: StoreSiteByValue.create(), reachFrom: ReachMemo.create()}
@@ -493,7 +494,7 @@ type CycleTrace implements SummaryCallWalker
 	var freshOrigins as OptionalElementIndexColumn
 	var holdingsOrigins as OptionalElementIndexColumn
 	var globalOrigins as OriginByLabel
-	var globalLabels as OriginNameMap
+	var globalLabels as OriginLabelMap
 	var closureBodies as OriginNameMap
 	var originNames as OriginNameMap
 	var lists as OriginListArray
@@ -541,7 +542,7 @@ type CycleTrace implements SummaryCallWalker
 
 	static function over(checker ClosureCycleChecker, func IrFunction, index ElementIndex, body CycleBodyIndex) returns CycleTrace
 		let valueCount = func.valueTags.count()
-		return Self{checker: checker, traced: func, tracedIndex: index, tracked: body.tracked, blockIndex: body.blockIndex, kinds: OriginKindArray.create(), parents: OriginList.create(), depths: OriginDepthArray.create(), rootParams: ParamCountArray.create(), rootedInAParameter: BoolArray.create(), childOrigins: OriginByKey.create(), syntheticOrigins: OriginByKey.create(), freshOrigins: OptionalElementIndexColumn.absent(valueCount), holdingsOrigins: OptionalElementIndexColumn.absent(func.paramCount), globalOrigins: OriginByLabel.create(), globalLabels: OriginNameMap.create(), closureBodies: OriginNameMap.create(), originNames: OriginNameMap.create(), lists: checker.listPool, listsInUse: 0, noOrigins: checker.noOrigins, membership: ListMembership.create(), baseHandles: OptionalElementIndexColumn.absent(valueCount), heldHandles: OptionalElementIndexColumn.create(), containerHandles: OptionalElementIndexColumn.create(), edgeHolders: OriginList.create(), edgeOps: EntryIndexArray.create(), fieldStoreOps: body.fieldStoreOps, fieldStoreOpsByLine: body.fieldStoreOpsByLine, originEvents: OptionalElementIndexColumn.create(), fieldEvents: HandleByKey.create(), eventOps: EntryIndexArray.create(), eventRecords: EntryIndexArray.create(), forwarded: body.forwarded, opPositions: body.opPositions, successors: body.successors, reachFrom: body.reachFrom, elementSites: body.elementSites, operands: ValueIdArray.create(), returned: ValueIdArray.create(), scratch: BoolArray.create(), cycles: ClosureCycles.create(), changed: true, mode: CycleTraceMode.propagate, row: TracedCycleRow.create(func.paramCount)}
+		return Self{checker: checker, traced: func, tracedIndex: index, tracked: body.tracked, blockIndex: body.blockIndex, kinds: OriginKindArray.create(), parents: OriginList.create(), depths: OriginDepthArray.create(), rootParams: ParamCountArray.create(), rootedInAParameter: BoolArray.create(), childOrigins: OriginByKey.create(), syntheticOrigins: OriginByKey.create(), freshOrigins: OptionalElementIndexColumn.absent(valueCount), holdingsOrigins: OptionalElementIndexColumn.absent(func.paramCount), globalOrigins: OriginByLabel.create(), globalLabels: OriginLabelMap.create(), closureBodies: OriginNameMap.create(), originNames: OriginNameMap.create(), lists: checker.listPool, listsInUse: 0, noOrigins: checker.noOrigins, membership: ListMembership.create(), baseHandles: OptionalElementIndexColumn.absent(valueCount), heldHandles: OptionalElementIndexColumn.create(), containerHandles: OptionalElementIndexColumn.create(), edgeHolders: OriginList.create(), edgeOps: EntryIndexArray.create(), fieldStoreOps: body.fieldStoreOps, fieldStoreOpsByLine: body.fieldStoreOpsByLine, originEvents: OptionalElementIndexColumn.create(), fieldEvents: HandleByKey.create(), eventOps: EntryIndexArray.create(), eventRecords: EntryIndexArray.create(), forwarded: body.forwarded, opPositions: body.opPositions, successors: body.successors, reachFrom: body.reachFrom, elementSites: body.elementSites, operands: ValueIdArray.create(), returned: ValueIdArray.create(), scratch: BoolArray.create(), cycles: ClosureCycles.create(), changed: true, mode: CycleTraceMode.propagate, row: TracedCycleRow.create(func.paramCount)}
 	end 'over'
 
 	function bodyIndex() returns CycleBodyIndex
@@ -666,7 +667,9 @@ type CycleTrace implements SummaryCallWalker
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness then break
+			existentialWitness or
+			holdValue or
+			holdEnd then break
 		end 'op'
 	end 'noteKnownStores'
 
@@ -798,6 +801,8 @@ type CycleTrace implements SummaryCallWalker
 			serviceReplyCell(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
 			rawIntrinsic(result, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
 			existentialWitness(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			holdValue(result, held, _, _, _) then self.walkHeldAlias(result, held: held)
+			holdEnd(result, _, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
 			ret or
 			retVoid or
 			condBranch or
@@ -813,7 +818,7 @@ type CycleTrace implements SummaryCallWalker
 
 	function walkIndirectCall(op MaxonOp, opIdx ElementIndex)
 		match op 'indirect'
-			indirectCall(result, _, args) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.functionValueBodiesFor(args.count() as ParamCount))
+			indirectCall(result, callee, args) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.functionValueBodiesCalledThrough(self.traced, callee: callee))
 			default panic("CycleTrace.walkIndirectCall: handed an op that is not an indirect call")
 		end 'indirect'
 	end 'walkIndirectCall'
@@ -1019,6 +1024,14 @@ type CycleTrace implements SummaryCallWalker
 		end 'aRecordOfItsOwn'
 	end 'walkFresh'
 
+	function walkHeldAlias(result ValueId, held ValueId)
+		if not self.isTracked(result) 'holdsNoFunction'
+			return
+		end 'holdsNoFunction'
+
+		self.unionValueIntoBase(result, from: held)
+	end 'walkHeldAlias'
+
 	function walkUnknown(op MaxonOp, result ValueId, opIdx ElementIndex)
 		if not self.isTracked(result) 'holdsNoFunction'
 			return
@@ -1211,7 +1224,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'noteResultCapturesWithin'
 
 	function summarizeGlobals()
-		var labels = ByteArrayArray.create()
+		var labels = NameRoster.create()
 
 		for (label, _) in self.globalOrigins 'eachGlobal'
 			labels.push(label)

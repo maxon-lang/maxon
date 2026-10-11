@@ -37,7 +37,14 @@ A top-level `let` or `var` initializer is one of:
 - A `Type from "literal"` conversion
 - A call — a free function or a `create()`-style static factory — at the TOP of the initializer, which `__module_init` makes before `main`
 
-Anything else is refused (E2015, E2045) — a field read off another global, or a method call on a value. A struct literal is refused at file scope (E3076); inside a `type` body a static member may be initialized by a struct literal of that type (`specs/lazy-static.md`). What an initializer's calls may reach is restricted further: E3165, E3166 and E3164, below and in `specs/green-thread-globals.md`.
+Anything else is refused (E2015, E2045) — a field read off another global, or a method call on a value. A struct literal is refused at file scope (E3076); inside a `type` body a static member may be initialized by a struct literal of that type (`specs/lazy-static.md`). What an initializer's calls may reach is restricted further: E3165, E3078 and E3164, below and in `specs/green-thread-globals.md`.
+
+Code a service's message can run touches no module-level `var` and no `static var` (E3143, `specs/green-thread-globals.md`); a program that spawns a service may still declare one that only `main` and its callees use.
+
+A top-level `let`'s record is read-only through every name that reaches it — a `let` bound to it, a field
+read off it, a parameter it was passed to. Calling a method that writes its receiver on it, or passing it
+to a parameter the callee writes, is E3159 naming the root binding; storing it into a `var` field is
+E3078, at the store, since the function that later writes the field cannot see where its value came from. `.clone()` makes a record of one's own.
 
 ### Static Fields in Types
 
@@ -672,7 +679,7 @@ hi4
 
 <!-- test: error.static-let-array-mutate -->
 ⭐⭐ **THE WRITE-THROUGH-AN-IMMUTABLE-STATIC GUARD.** A receiver-writing method
-on a `static let` array is E3019 — the SAME `requireMutableReceiver` rule
+on a `static let` array is E3159 — the SAME rule
 `error.top-level-let-array-mutate` pins for a file-scope `let`, naming the qualified binding.
 
 The static read is routed through the receiver door so that the blame name reaches the check. Falling out
@@ -690,7 +697,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:7:23: cannot pass 'Cache.xs' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:7:23: cannot pass 'Cache.xs', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
 <!-- test: static-struct-member-field-write -->
@@ -924,7 +931,7 @@ end 'main'
 A top-level array is a HEAP record with a `.data` pointer slot, built by `__module_init` before `main`
 and released by `__maxon_global_cleanup` after it — for a `let` exactly as for a `var`. A `let` differs
 in one thing only: it refuses the write, both at an assignment (E2013) and at a receiver-writing method
-(E3019).
+(E3159).
 
 A never-mutated `let` array is NOT promoted to an immortal shared static record: an `Array`'s own methods
 rewrite its record (a `push` detaches the buffer by writing `buffer@0`/`capacity@16`/`length@8`), and a
@@ -1019,8 +1026,8 @@ end 'main'
 ```
 
 <!-- test: error.top-level-let-array-mutate -->
-A receiver-writing method on a `let`-bound array is E3019 — the SAME rule a `let`-bound String or Set
-receiver gets, through the one `requireMutableReceiver`. Without it a `let` array would be writable, since
+A receiver-writing method on a `let`-bound array is E3159 — the SAME rule a `let`-bound String or Set
+receiver gets, under the one deep-`let` rule. Without it a `let` array would be writable, since
 it has a real slot.
 ```maxon
 let fixed = [4, 5, 6]
@@ -1031,7 +1038,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:5:8: cannot pass 'fixed' to function that mutates parameter 'self' (in main)
+error E3159: <fragment>:5:8: cannot write through 'fixed': 'fixed' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: error.top-level-let-array-reassign -->
@@ -1080,36 +1087,24 @@ error E2004: <fragment>:2:9: Undefined constant 'A'
 ```
 
 <!-- test: error.top-level-let-array-var-alias -->
-A `let` array's record cannot be laundered into a mutable ALIAS **within the function that reads it**. A
-borrowed managed aggregate bound to a `var` is promoted to owned by an INCREF of the same box — reference
-semantics, deliberately, because the alias is observable — so without this refusal `var b = A` then
-`b.push(9)` would grow `A` with E2013 and E3019 both intact and nothing to report it. Refused where the
-SOURCE is immutable, and only there: the same binding off a `var` global shares.
+A `let` array's record cannot be laundered into a mutable ALIAS. A borrowed managed aggregate bound to a
+`var` is promoted to owned by an INCREF of the same box — reference semantics, deliberately, because the
+alias is observable — so without this refusal `var b = A` then `b.push(9)` would grow `A`. A `var` is a
+writable name, and the record it would name is one the program declared `let`, so the BINDING is refused
+(E3078). Refused where the SOURCE is immutable, and only there: the same binding off a `var` global shares.
 
-⚠ **THE REFUSAL IS ON THE WRITE, NOT ON THE BINDING.** `var b = A` is legal —
-reading a `let` global and naming the result is what the language means by reading it — and `b.push(9)`
-is the error. The mark rides the VALUE and is CARRIED through the promotion rather than refused at it, so
-it reaches every use in this function — the direct binding, a reassignment, a ternary/`match` merge that
-joins it, an `if`/loop merge that REBINDS it, a cell it is spilled into and a closure that captures it,
-each pinned below — and, through a whole-program fact, every caller of a function that returns one.
+⚠ **THE REFUSAL IS ON THE BINDING.** `var b = A` is E3078; `let b = A` is legal and can only read
+(`top-level-let-array-let-alias`). The mark rides the VALUE and is CARRIED through the promotion, so the
+same refusal covers every door that hands a `var` the record — the direct binding, a reassignment, a
+ternary/`match` merge that joins it, an `if`/loop merge that REBINDS it, a cell it is spilled into and a
+closure that captures it, each pinned below — and, through a whole-program fact, a call that hands the
+record back.
 
-⚠ **WHAT IS STILL OUTSIDE IT IS ONE BOUNDARY WITH SEVERAL SPELLINGS: A PARAMETER.** The mark is a fact
-about a VALUE in ONE function's SSA space; a callee's parameter is a fresh value in a fresh space, and
-whether it may alias an immutable global is a property of every CALL SITE rather than of the callee. So
-the taint neither enters a callee nor comes back out of one, and all of these are accepted:
-
-  • the callee ALIASES the parameter before writing — `g(A)` where `g(xs …)` does `var b = xs` then
-    `b.push(9)` (`A` grows). The argument check reads the callee's summary of what IT writes,
-    and the callee writes a LOCAL that happens to carry the same record;
-  • the callee RETURNS the parameter — `var c = idBox(a)` where `idBox(x Box)` is `return x`. The sweep
-    sees the `return x`, recognises `x` as this body's own binder and correctly declines to seed on it,
-    so `c` comes back unmarked (the caller's `c.n = 99` reaches the global);
-  • the callee STORES the parameter into a record it returns — `Holder.of(a)` then `h.inner.n = 99`.
-
-⚠ **NONE OF THE THREE NEEDS AN ACCESSOR OR ANY OTHER PART OF THE TAINT MACHINERY** — `g(A)` and
-`idBox(G)` are written against a bare `let` global. They are named together here so a cure is scoped to
-the BOUNDARY rather than to whichever spelling shows it. Closing it needs the taint to flow
-into (and back out of) a callee's SSA space, which is a per-call-site fact, not a per-function one.
+⚠ **A CALL BOUNDARY IS CROSSED BY THE CALLEE'S SUMMARY, NOT BY THE MARK.** A callee's parameter is a fresh
+value in a fresh space, so the mark does not enter it; what crosses is what the callee does with it.
+`g(A)` where `g(xs …)` binds `var b = xs` and writes `b` is E3159 at the call, because `g` writes `xs`.
+`var c = idBox(G)` where `idBox(x Box)` is `return x` is E3078, because the result may share storage with
+`G`. `Holder.of(G)` followed by `h.inner.n = 99` is E3159 at the write, because the record `h` holds is `G`'s.
 ```maxon
 let A = [1, 2]
 
@@ -1120,13 +1115,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:6:4: cannot pass 'b' to function that mutates parameter 'self' (in main)
+error E3078: <fragment>:5:6: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-let-array-var-reassign-alias -->
 The same refusal through the other door — a REASSIGNMENT of an already-owned `var`, which promotes a
 borrowed value through the identical single-sourced path and so CARRIES the mark through the identical
-one. `b = A` is legal; the push is not.
+one. `b = A` is refused at the reassignment, as `var b = A` is at the binding.
 ```maxon
 let A = [1, 2]
 
@@ -1138,7 +1133,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:7:4: cannot pass 'b' to function that mutates parameter 'self' (in main)
+error E3078: <fragment>:6:2: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-let-field-map-var-alias -->
@@ -1168,7 +1163,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:19:6: cannot assign a value, which may share storage with a field of an immutable variable, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:19:6: cannot assign a value read out of a module-level `let` to mutable binding 'm'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: top-level-let-field-accessor-read-only -->
@@ -1204,7 +1199,7 @@ end 'main'
 ```
 
 <!-- test: error.top-level-let-field-accessor-result-write -->
-Writing through what the accessor handed back is refused as the write through the field read in place is.
+A `var` may not hold what the accessor handed back out of a module-level `let`, so the write through it is refused at the binding.
 ```maxon
 typealias Key = int(0 to 1000)
 typealias Items = Array with Key
@@ -1233,7 +1228,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:24:4: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'self' (in main)
+error E3078: <fragment>:23:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-let-array-ternary-alias -->
@@ -1252,7 +1247,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:7:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)
+error E3078: <fragment>:6:6: cannot assign a value read out of a module-level `let` to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-let-array-match-arm-alias -->
@@ -1278,12 +1273,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:16:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)
+error E3078: <fragment>:12:6: cannot assign a value read out of a module-level `let` to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-let-array-handed-back-as-a-map-miss-fallback -->
 And through a call whose `otherwise` fallback is the `let` array: `pick` hands back `Empty`'s own record
-whenever the lookup misses, so the push through `mine` is refused as the direct alias is.
+whenever the lookup misses, so binding it to `var mine` is refused as the direct alias is.
 ```maxon
 typealias Count = int(0 to 1000)
 typealias Items = Array with Count
@@ -1306,7 +1301,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:18:7: cannot pass 'mine' to function that mutates parameter 'self' (in main)
+error E3078: <fragment>:17:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'mine'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: top-level-array-merge-of-mutable-globals-shares -->
@@ -1421,11 +1416,11 @@ end 'main'
 ```
 
 <!-- test: error.let-global-accessor-result-field-write -->
-And the write is where it is refused. `Box.get()` may hand the record out; writing a field through what
-it handed back would mutate a global declared `let`, so THAT is the diagnostic, on the write's own line.
-The caller learns this from a whole-program fact — "may this function's return alias an immutable
-global?" — because the accessor's body may be in another file, which is exactly why the refusal could
-not stay at the return.
+And the binding is where it is refused. `Box.get()` may hand the record out; a `var` bound to what it
+handed back would be a writable name for a global declared `let`, so THAT is the diagnostic, on the
+binding's own line. The caller learns this from a whole-program fact — "may this function's return alias
+an immutable global?" — because the accessor's body may be in another file, which is exactly why the refusal
+could not stay at the return.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1450,7 +1445,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:20:2: Unsupported: writing through 'a', which aliases a `let`-declared top-level global — an aggregate has no owning COPY in the compiler, so the write would reach the global's own record and mutate a global declared immutable; read through it instead, or declare the global `var`
+error E3078: <fragment>:19:6: cannot assign a value read out of a module-level `let` to mutable binding 'a'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-accessor-result-two-hops-of-return -->
@@ -1487,14 +1482,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:24:2: Unsupported: writing through 'a', which aliases a `let`-declared top-level global — an aggregate has no owning COPY in the compiler, so the write would reach the global's own record and mutate a global declared immutable; read through it instead, or declare the global `var`
+error E3078: <fragment>:23:6: cannot assign a value read out of a module-level `let` to mutable binding 'a'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-passed-to-field-writing-callee -->
 ⛔ **A `let`-DECLARED GLOBAL HANDED STRAIGHT TO A CALLEE THAT WRITES A FIELD OF IT** — without the
 record-write column it silently mutates the global (`g 99`, where the program declares `G` a `let`).
-Neither of the other two masks can see it: the narrow one E3019 reads alone at a receiver slot records no
-field write, and E3070's is scoped to fields whose drop frees something. The third column is this program.
+The narrow mask E3159 reads alone at a receiver slot records no field write, so it cannot see it; the
+record-write column is this program.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1518,7 +1513,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:19:2: cannot pass 'G' to function that mutates parameter 'b' (in main)
+error E3159: <fragment>:19:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
 ```
 
 <!-- test: error.let-global-to-a-callee-that-calls-a-self-writing-method -->
@@ -1553,7 +1548,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:23:2: cannot pass 'G' to function that mutates parameter 'b' (in main)
+error E3159: <fragment>:23:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
 ```
 
 <!-- test: error.let-global-to-a-callee-that-calls-a-self-writing-method-on-a-field -->
@@ -1594,7 +1589,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:31:2: cannot pass 'G' to function that mutates parameter 't' (in main)
+error E3159: <fragment>:31:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 't' (in main); pass a clone()
 ```
 
 <!-- test: error.let-global-to-a-callee-that-pushes-into-a-container-a-call-hands-back-from-inside-it -->
@@ -1628,7 +1623,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:24:2: cannot pass 'G' to function that mutates parameter 'h' (in main)
+error E3159: <fragment>:24:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'h' (in main); pass a clone()
 ```
 
 <!-- test: error.let-global-to-a-callee-that-pushes-into-a-var-merged-from-inside-it -->
@@ -1672,7 +1667,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:34:2: cannot pass 'G' to function that mutates parameter 't' (in main)
+error E3159: <fragment>:34:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 't' (in main); pass a clone()
 ```
 
 <!-- test: a-let-global-held-by-a-record-a-callee-builds-is-not-written-by-writing-that-record -->
@@ -1748,7 +1743,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:24:2: cannot pass 'a' to function that mutates parameter 'b' (in main)
+error E3078: <fragment>:23:6: cannot assign a value read out of a module-level `let` to mutable binding 'a'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-to-callee-that-forwards-the-write -->
@@ -1782,7 +1777,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:23:2: cannot pass 'G' to function that mutates parameter 'b' (in main)
+error E3159: <fragment>:23:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
 ```
 
 <!-- test: error.let-global-given-out-of-a-closure -->
@@ -1811,13 +1806,14 @@ error E2015: <fragment>:5:21: Unsupported: returning a read of a `let`-declared 
 ```
 
 <!-- test: error.let-global-alias-in-a-cell-keeps-its-mark -->
-⛔⛔ **A CELL IS A THIRD PLACE THE RECORD LIVES, AND IT MUST NOT DROP THE MARK.** A parameter its function
+⛔⛔ **A CELL IS A THIRD PLACE THE RECORD LIVES, AND THE REFUSAL REACHES IT.** A parameter its function
 reassigns is CELL-RESIDENT, and a cell binding's `boundValue` is the CELL, not the value the promotion marked —
-so write doors asking only about `boundValue` would see an unmarked binding and let `grow(xs)` through **in the
+so a door asking only about `boundValue` would see an unmarked binding and let `grow(xs)` through **in the
 very frame that rebound `xs`**, silently mutating the global.
 
-⇒ The mark is carried onto the cell at the store and back off it at the load, so where a binding's
-value lives cannot change what may be done through it.
+⇒ The reassignment `xs = expose()` hands that cell a `let` global's record, and it is refused where it
+happens (E3078), as `var xs = expose()` is: where a binding's value lives cannot change whether it may hold
+the record.
 ```maxon
 typealias Names = Array with String
 
@@ -1845,12 +1841,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3019: <fragment>:17:9: cannot pass 'xs' to function that mutates parameter 'xs' (in regrow)
+error E3078: <fragment>:16:2: cannot assign a value read out of a module-level `let` to mutable binding 'xs'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-read-reassigned-into-a-cell-keeps-its-mark -->
-A cell-resident parameter reassigned a bare read of the `let` global takes its own reference to that record,
-and the cell carries the global's mark through that reference just as it does through a call's result.
+A cell-resident parameter reassigned a bare read of the `let` global would take its own reference to that
+record; the reassignment is refused just as it is for a call's result.
 ```maxon
 typealias Names = Array with String
 
@@ -1874,20 +1870,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3019: <fragment>:13:9: cannot pass 'xs' to function that mutates parameter 'xs' (in regrow)
+error E3078: <fragment>:12:2: cannot assign a value read out of a module-level `let` to mutable binding 'xs'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-alias-captured-by-a-closure -->
-⛔⛔ **AND THE CAPTURE ITSELF IS THE OTHER HALF: A CLOSURE MUST NOT LAUNDER THE TAINT.** A closure body is its own SSA space, so the
-per-value marks are swapped out at its boundary — correctly, since an id means nothing there — but a
-CAPTURED binding names the very same record, and dropping the marks would make the capture read arrive
-clean — the global mutated, exit 3.
-The enclosing frame's marks therefore ride across the boundary and the capture re-mints one in the
-closure's own space.
+⛔⛔ **A CLOSURE MUST NOT LAUNDER THE TAINT.** A closure body is its own SSA space, so the per-value marks are
+swapped out at its boundary — correctly, since an id means nothing there — and the read of the module-level `let`
+that `expose()` hands back inside the closure has to be marked again in the closure's own space, or the write
+`grow` makes would reach the global — exit 3.
 
-⚠ **THE BLAME IS THE NOUN, not `b`.** A captured name publishes no bare-binding blame, and the value is
-what knows; the sentence is the one `bump(Box.get())` already uses. The FRAME named is the lifted closure,
-which is where the call is.
+⚠ **THE FRAME NAMED IS THE LIFTED CLOSURE**, which is where the call is.
 ```maxon
 typealias Names = Array with String
 typealias IntThunk = function() returns Integer
@@ -1908,15 +1900,13 @@ function callThunk(f IntThunk) returns Integer
 end 'callThunk'
 
 function main() returns ExitCode
-	var b = expose()
-	b = expose()
-	let n = callThunk(function() gives grow(b))
+	let n = callThunk(function() gives grow(expose()))
 	return A.count() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3019: <fragment>:23:37: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'xs' (in main$closure_0)
+error E3159: <fragment>:21:37: cannot pass a value read out of a module-level `let`, which is read-only, to a function that writes parameter 'xs' (in main$closure_0); pass a clone()
 ```
 
 <!-- test: error.let-global-alias-across-an-if-merge -->
@@ -1924,7 +1914,8 @@ error E3019: <fragment>:23:37: cannot pass 'a read of a `let`-declared global' t
 The ternary and `match … gives` merges carry it
 (`propagateImmutableGlobalReadToPhi`, and `error.top-level-let-array-owned-merge-alias` above pins one);
 an `if` that REBINDS a carried `var` mints its phi through a different door, and a phi that inherited
-nothing would bring `b` out of the merge clean and accept `grow(b)`.
+nothing would bring `b` out of the merge clean and accept `grow(b)`. The rebinding inside the `if` is the
+refused door.
 ```maxon
 typealias Names = Array with String
 
@@ -1950,7 +1941,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3019: <fragment>:20:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)
+error E3078: <fragment>:18:3: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-alias-carried-by-a-loop -->
@@ -1961,7 +1952,7 @@ is carried onto the loop's phi explicitly, at the one place the loop
 names it.
 
 ⚠ The condition is runtime and the body may run zero times; the refusal is deliberately independent of
-that, because "may alias" is the whole question.
+that, because "may alias" is the whole question. The rebinding inside the loop is the refused door.
 ```maxon
 typealias Names = Array with String
 
@@ -1987,7 +1978,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3019: <fragment>:20:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)
+error E3078: <fragment>:18:3: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-array-empty -->
@@ -2098,10 +2089,9 @@ Ada
 
 ⚖ **A `let` IS FIXED AT STARTUP, SO ITS INITIALIZER MAY NOT READ A MODULE-LEVEL `var` THAT HOLDS A RECORD.**
 An initializer cannot name another global, but it may call, and a callee may read one. A record read out of a
-`var` is still owned by the `var`, which can write it after `main` starts, and in a program that spawns a
-service the `let`'s graph must have no owner outside the `let`s to be marked shared. The refusal is E3165, at
-the read, with the `var`'s declaration as a note — whether or not the program spawns anything, and even when
-only a scalar is read out of the `var`: the compiler does not follow what the initializer keeps.
+`var` is still owned by the `var`, which can write it after `main` starts, so the `let` would not be fixed.
+The refusal is E3165, at the read, with the `var`'s declaration as a note — even when only a scalar is read out
+of the `var`: the compiler does not follow what the initializer keeps.
 
 "Reaches" is the call graph once overload resolution has chosen each callee, closed through run-time
 dispatches the way every whole-program service rule closes it. A scalar `var` owns no record and is not
@@ -2366,11 +2356,10 @@ a=7 b=7
 ### A `var` initializer may not take a `let`'s record
 
 ⚖ **THE OTHER DIRECTION: A MODULE-LEVEL `var` MAY NOT BE HANDED A RECORD A MODULE-LEVEL `let` HOLDS.** The `var` could
-write the record the `let` is fixed to, and in a program that spawns a service the `let` could not be marked shared
-with the `var` as an outside owner. Unlike E3165 this is a question about FLOW: what the initializer's call may
+write the record the `let` is fixed to. Unlike E3165 this is a question about FLOW: what the initializer's call may
 hand back, at any depth — the `let`'s record itself or a record built around it. It is answered by the
 storage-provenance summary of the call, carried through calls, witness dispatches and calls through function values.
-A value built fresh out of numbers read from a `let` is legal. The refusal is E3166, at the `var`'s declaration.
+A value built fresh out of numbers read from a `let` is legal. The refusal is E3078, at the `var`'s declaration.
 
 The same summary refuses a write, inside a function, through a record a call handed back out of a `let`
 (E3159).
@@ -2401,11 +2390,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3166: <fragment>:15:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
+error E3078: <fragment>:15:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
 ```
 
 <!-- test: error.a-var-initializer-may-not-take-a-record-holding-a-lets-record -->
-`around` builds a fresh record, but the record it holds is `a`'s.
+`around` builds a fresh record, but the record it holds is `a`'s. The `var` field `box` would let `w` write
+it, so the store into `box` is the refusal.
 ```maxon
 type Box
 	export var n as Integer
@@ -2434,7 +2424,45 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3166: <fragment>:19:5: the initializer of the module-level `var` `w` may hand it a record a module-level `let` holds, through `Wrap.around` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `w` a `let`
+error E3078: <fragment>:14:15: cannot store a value read out of a module-level `let` into mutable place 'Wrap.box'; use clone()
+```
+
+<!-- test: a-var-initializer-may-take-a-record-holding-a-lets-record-in-a-let-field -->
+**THE TWIN.** The same wrapper with `box` a `let` field: `w` holds `a`'s record read-only and writes only its own
+`count`.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+type Wrap
+	export let box as Box
+	export var count as Integer
+
+	static function around() returns Self
+		return Self{box: a, count: 0}
+	end 'around'
+end 'Wrap'
+
+let a = Box.create()
+var w = Wrap.around()
+
+function main() returns ExitCode
+	w.count = 3
+	print("a={a.n} w={w.box.n} {w.count}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+a=7 w=7 3
 ```
 
 <!-- test: error.a-var-initializer-may-not-take-a-lets-record-through-two-calls -->
@@ -2467,7 +2495,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3166: <fragment>:19:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
+error E3078: <fragment>:19:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
 ```
 
 <!-- test: error.a-var-initializer-may-not-take-a-lets-record-through-a-witness-dispatch -->
@@ -2516,12 +2544,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3166: <fragment>:35:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.viaSource` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
+error E3078: <fragment>:35:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.viaSource` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
 ```
 
-<!-- test: error.a-local-var-may-not-write-through-a-lets-record-a-call-built-around -->
-The same wrapper bound to a local `var`: holding `a`'s record is legal, and the write through `w.box` is what is
-refused.
+<!-- test: error.a-local-var-may-not-write-through-a-lets-record-a-call-hands-back -->
+A local `var` bound to the record a call hands back out of a module-level `let` is refused at the binding.
 ```maxon
 type Box
 	export var n as Integer
@@ -2529,28 +2556,24 @@ type Box
 	static function create() returns Self
 		return Self{n: 7}
 	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
 end 'Box'
-
-type Wrap
-	export var box as Box
-
-	static function around() returns Self
-		return Self{box: a}
-	end 'around'
-end 'Wrap'
 
 let a = Box.create()
 
 function main() returns ExitCode
-	var w = Wrap.around()
-	w.box.n = 9
-	print("w={w.box.n}\n")
+	var w = Box.current()
+	w.n = 9
+	print("w={w.n}\n")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:22:2: cannot write through 'w.box', which may be the record of a module-level `let` a call handed back; use clone()
+error E3078: <fragment>:17:6: cannot assign a value read out of a module-level `let` to mutable binding 'w'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: a-var-initializer-may-build-fresh-from-a-lets-scalars -->
@@ -2570,7 +2593,7 @@ type Box
 end 'Box'
 
 type Wrap
-	export var box as Box
+	export let box as Box
 	export var count as Integer
 
 	static function around() returns Self
@@ -2598,7 +2621,7 @@ a=7 b=9 w=3 7
 ```
 
 <!-- test: error.a-lets-record-a-call-handed-back-may-not-go-to-a-writing-parameter -->
-`main` names no `let`, and hands `bump` the record `around` holds out of `a`.
+`main` names no `let`, and hands `bump` the record `current` hands back out of `a`.
 ```maxon
 type Box
 	export var n as Integer
@@ -2606,15 +2629,11 @@ type Box
 	static function create() returns Self
 		return Self{n: 7}
 	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
 end 'Box'
-
-type Wrap
-	export var box as Box
-
-	static function around() returns Self
-		return Self{box: a}
-	end 'around'
-end 'Wrap'
 
 let a = Box.create()
 
@@ -2627,18 +2646,18 @@ function show() returns Integer
 end 'show'
 
 function main() returns ExitCode
-	bump(Wrap.around().box)
+	bump(Box.current())
 	print("a={show()}\n")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3019: <fragment>:29:2: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'b' (in main)
+error E3159: <fragment>:25:2: cannot pass a value read out of a module-level `let`, which is read-only, to a function that writes parameter 'b' (in main); pass a clone()
 ```
 
 <!-- test: error.a-local-var-may-not-write-through-a-lets-record-an-await-hands-back -->
-The record reaches `b` through a promise.
+The record reaches `b` through a promise, and a `var` may not hold a module-level `let`'s record.
 ```maxon
 type Box
 	export var n as Integer
@@ -2646,20 +2665,16 @@ type Box
 	static function create() returns Self
 		return Self{n: 7}
 	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
 end 'Box'
-
-type Wrap
-	export var box as Box
-
-	static function around() returns Self
-		return Self{box: a}
-	end 'around'
-end 'Wrap'
 
 let a = Box.create()
 
 function fetch() returns Box
-	return Wrap.around().box
+	return Box.current()
 end 'fetch'
 
 function show() returns Integer
@@ -2676,7 +2691,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:31:2: cannot write through 'b', which may be the record of a module-level `let` a call handed back; use clone()
+error E3078: <fragment>:26:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.a-local-var-may-not-write-through-a-lets-record-a-map-miss-hands-back -->
@@ -2713,7 +2728,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:26:2: cannot write through 'b', which may be the record of a module-level `let` a call handed back; use clone()
+error E3078: <fragment>:25:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: a-var-initializer-may-take-a-number-read-through-a-nested-call -->
@@ -2782,7 +2797,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3166: <fragment>:19:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.pass` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
+error E3078: <fragment>:19:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.pass` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
 ```
 
 ### A managed constant is the WEAKEST claim on `<base>.<member>(…)`
@@ -3032,7 +3047,7 @@ BINDING; this one reaches it as a MERGE that must be OWNED because its other arm
 so the borrowed arm is promoted, and for an aggregate a promotion is an INCREF of the same box. That is
 precisely the launder an unmarked incref would perform: the mark is therefore CARRIED across the
 promotion rather than the promotion being refused, so the phi that joins the two arms carries it
-too and `pick.push` is refused where it happens.
+too and the `var pick` binding is refused where it happens.
 ```maxon
 typealias Names = Array with String
 
@@ -3052,7 +3067,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:15:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)
+error E3078: <fragment>:14:6: cannot assign a value read out of a module-level `let` to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
 ```
 
 ### The returned-shape sweep — the INLINE CONDITIONAL
@@ -3216,7 +3231,7 @@ that names the global THROUGH AN ACCESSOR (`= shared()`) reaches the helper's re
 call result, so it never touches the promotion and there is no refusal to fall back on — the mark would
 stop at the helper and the caller would get an untainted value: a `grow(names Names = shared())`
 whose body pushes would print `a=1 b=2 g=2`, mutating a `let` global, while the written-out `grow(shared())`
-one line over is E3019. So this door is a matter of SOUNDNESS and not only of lifting a refusal.
+one line over is E3159. So this door is a matter of SOUNDNESS and not only of lifting a refusal.
 
 <!-- test: a-parameter-default-may-name-a-let-global -->
 The `sharedNoOpaqueParams` shape, and all three spellings of the same argument are exercised side by
@@ -3279,7 +3294,7 @@ omitted=0
 <!-- test: a-defaulted-global-may-not-reach-a-mutating-parameter -->
 ⭐ **THE CONTROL FOR THE NAME, AND IT IS THE HALF THAT MUST NOT BREAK.** Admitting the return is only
 half of the rule; the other half is that the refusal is at the write rather than dropped. The
-callee pushes, so the omitted argument is refused at the CALL — the same E3019, from the same one
+callee pushes, so the omitted argument is refused at the CALL — the same E3159, from the same one
 reporter, that the written-out `grow(sharedEmptyNames)` earns. **The blame is the shared noun and not a
 binding name**, because a filled default names nothing the author wrote.
 ```maxon
@@ -3299,7 +3314,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:13:12: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'names' (in main)
+error E3159: <fragment>:13:12: cannot pass a value read out of a module-level `let`, which is read-only, to a function that writes parameter 'names' (in main); pass a clone()
 ```
 
 <!-- test: a-defaulted-accessor-call-may-not-reach-a-mutating-parameter -->
@@ -3331,7 +3346,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:17:12: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'names' (in main)
+error E3159: <fragment>:17:12: cannot pass a value read out of a module-level `let`, which is read-only, to a function that writes parameter 'names' (in main); pass a clone()
 ```
 
 <!-- test: a-field-default-naming-a-let-global-is-still-refused -->
@@ -4374,4 +4389,459 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:14:9: argument type mismatch for 'xs': expected 'NumArray', got 'Counts'
+```
+
+<!-- test: error.let-global-alias-receives-a-self-writing-container-method-on-a-field -->
+The direct `G.items.push(1)` is refused; a `let` naming `G` is the same record, so pushing through it is
+refused the same way.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias CountArray = Array with Count
+
+type Holder
+	export var items as CountArray
+
+	static function make() returns Holder
+		return Holder{items: CountArray.create()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function main() returns ExitCode
+	let v = G
+	v.items.push(1)
+	return G.items.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:17:10: cannot write through 'v.items': 'v' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
+```
+
+<!-- test: error.let-global-field-passed-to-a-writing-callee -->
+`bump(G)` is refused; a field of `G` is `G`'s own graph, so handing it to a callee that writes it is
+refused too.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function make() returns Holder
+		return Holder{inner: Box.make()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function bump(b Box)
+	b.n = 99
+end 'bump'
+
+function main() returns ExitCode
+	bump(G.inner)
+	return G.inner.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:27:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
+```
+
+<!-- test: error.let-global-alias-field-passed-to-a-writing-callee -->
+The same field reached through a `let` naming `G`.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function make() returns Holder
+		return Holder{inner: Box.make()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function bump(b Box)
+	b.n = 99
+end 'bump'
+
+function main() returns ExitCode
+	let v = G
+	bump(v.inner)
+	return G.inner.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:28:2: cannot pass 'v', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
+```
+
+<!-- test: error.let-global-field-receives-a-self-writing-method -->
+A method that writes its own receiver, called on a field of `G`, writes `G`'s graph.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function make() returns Holder
+		return Holder{inner: Box.make()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function main() returns ExitCode
+	G.inner.bump()
+	return G.inner.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:27:10: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.let-global-alias-field-receives-a-self-writing-method -->
+The same method call through a `let` naming `G`.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function make() returns Holder
+		return Holder{inner: Box.make()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function main() returns ExitCode
+	let v = G
+	v.inner.bump()
+	return G.inner.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:28:10: cannot pass 'v', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.let-global-container-field-passed-to-a-pushing-callee -->
+A container field of `G` handed to a callee that pushes into it.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias CountArray = Array with Count
+
+type Holder
+	export var items as CountArray
+
+	static function make() returns Holder
+		return Holder{items: CountArray.create()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function fill(xs CountArray)
+	xs.push(1)
+end 'fill'
+
+function main() returns ExitCode
+	fill(G.items)
+	return G.items.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:20:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'xs' (in main); pass a clone()
+```
+
+<!-- test: error.let-global-alias-container-field-passed-to-a-pushing-callee -->
+The same container field reached through a `let` naming `G`.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias CountArray = Array with Count
+
+type Holder
+	export var items as CountArray
+
+	static function make() returns Holder
+		return Holder{items: CountArray.create()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function fill(xs CountArray)
+	xs.push(1)
+end 'fill'
+
+function main() returns ExitCode
+	let v = G
+	fill(v.items)
+	return G.items.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:21:2: cannot pass 'v', which is read-only (a module-level `let`), to a function that writes parameter 'xs' (in main); pass a clone()
+```
+
+<!-- test: error.let-binding-of-a-let-global-field-receives-a-self-writing-method -->
+A `let` binding's own record takes a self-writing method, but a `let` bound to a field of `G` holds
+`G`'s record, which nothing may write.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	function bump()
+		self.n = self.n + 1
+	end 'bump'
+end 'Box'
+
+type Holder
+	export var inner as Box
+
+	static function make() returns Holder
+		return Holder{inner: Box.make()}
+	end 'make'
+end 'Holder'
+
+let G = Holder.make()
+
+function main() returns ExitCode
+	let i = G.inner
+	i.bump()
+	return G.inner.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:28:4: cannot pass 'i', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.a-let-global-stored-into-a-var-field-is-refused-at-the-store -->
+A `var` field may be written by any function the record reaches, and the function that writes it cannot
+see where the field's value came from. So storing `G`'s record into a `var` field is refused at the store:
+`adopt` puts `G` into `b.cfg`, and `poke`, which knows only a `Bag`, would write `G.level`.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Config
+	export var level as Count
+
+	static function make() returns Config
+		return Config{level: 1}
+	end 'make'
+end 'Config'
+
+type Bag
+	export var cfg as Config
+
+	static function make() returns Bag
+		return Bag{cfg: Config.make()}
+	end 'make'
+end 'Bag'
+
+let G = Config.make()
+
+function adopt(b Bag)
+	b.cfg = G
+end 'adopt'
+
+function poke(b Bag)
+	b.cfg.level = 99
+end 'poke'
+
+function main() returns ExitCode
+	var b = Bag.make()
+	adopt(b)
+	poke(b)
+	return G.level as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:23:4: cannot store a value read out of a module-level `let` into mutable place 'Bag.cfg'; use clone()
+```
+
+<!-- test: a-clone-of-a-let-global-stored-into-a-var-field-may-be-written -->
+The same program storing a clone: `poke` writes the copy, and `G` keeps its level.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Config
+	export var level as Count
+
+	static function make() returns Config
+		return Config{level: 1}
+	end 'make'
+end 'Config'
+
+type Bag
+	export var cfg as Config
+
+	static function make() returns Bag
+		return Bag{cfg: Config.make()}
+	end 'make'
+end 'Bag'
+
+let G = Config.make()
+
+function adopt(b Bag)
+	b.cfg = G.clone()
+end 'adopt'
+
+function poke(b Bag)
+	b.cfg.level = 99
+end 'poke'
+
+function main() returns ExitCode
+	var b = Bag.make()
+	adopt(b)
+	poke(b)
+	print("{G.level} {b.cfg.level}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 99
+```
+
+<!-- test: error.a-let-initializer-may-not-read-a-managed-var-beside-a-spawn -->
+<!-- unsupported-targets: wasm32-wasi -->
+**A `let` THAT HOLDS WHAT A `var` OWNS CANNOT BE MARKED SHARED.** `l` is the record `g` owns, so marking `l`'s
+graph before `main` would meet an owner no `let` holds. The program is refused at compile time rather than
+stopping before `main` runs. The wasm lane cannot host the `spawn` the program makes, and it would answer that
+before this refusal.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return g
+	end 'current'
+end 'Box'
+
+var g = Box.create()
+let l = Box.current()
+
+type Reader
+	var asked as Integer
+
+	static function create() returns Self
+		return Self{asked: 0}
+	end 'create'
+
+	export function read() returns Integer
+		self.asked = self.asked + 1
+		return l.n
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let h = spawn Reader.create()
+	let n = try await h.read() otherwise 0
+	print("n={n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3165: <fragment>:10:10: the initializer of the `let` `l` reaches the module-level `var` `g` here — a `let` is fixed at startup and may not hold what a `var` owns, and the compiler does not follow what the initializer keeps of `g`. Make `l` a `var`, or build its value without reading `g`
+note: <fragment>:14:5: `g` is declared here
+```
+
+<!-- test: error.a-var-initializer-may-not-take-a-lets-record-beside-a-spawn -->
+<!-- unsupported-targets: wasm32-wasi -->
+**AND A `var` MAY NOT TAKE WHAT A `let` HOLDS.** `v` would be an owner of `a`'s record that no `let` is, so marking
+`a` shared before `main` would meet it. Refused at compile time. The wasm lane cannot host the `spawn` the program
+makes, and it would answer that before this refusal.
+```maxon
+type Box
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+
+	static function current() returns Self
+		return a
+	end 'current'
+end 'Box'
+
+let a = Box.create()
+var v = Box.current()
+
+type Reader
+	var asked as Integer
+
+	static function create() returns Self
+		return Self{asked: 0}
+	end 'create'
+
+	export function read() returns Integer
+		self.asked = self.asked + 1
+		return a.n
+	end 'read'
+end 'Reader'
+
+function main() returns ExitCode
+	let h = spawn Reader.create()
+	let n = try await h.read() otherwise 0
+	print("n={n} v={v.n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:15:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
 ```

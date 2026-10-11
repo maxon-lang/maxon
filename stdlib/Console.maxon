@@ -95,7 +95,7 @@ public type Stdin
 
 	/// Read up to `n` bytes. Returns fewer than `n` only when EOF is reached
 	/// before the count is satisfied. Returns an empty array at EOF.
-	function readBytes(n BytePos) returns ByteArray
+	public function readBytes(n BytePos) returns ByteArray
 		while pending.count() as BytePos < n and not eofSeen 'fillLoop'
 			fillOnce()
 		end 'fillLoop'
@@ -212,4 +212,10 @@ public type Console
 	public static function stdin() returns Stdin
 		return Stdin.create()
 	end 'stdin'
+
+	/// Whether output written to stdout may carry ANSI color escape sequences. A target that cannot
+	/// ask its host answers false.
+	public static function stdoutWantsColor() returns bool
+		return __Builtins.stdoutWantsAnsiColor()
+	end 'stdoutWantsColor'
 end 'Console'

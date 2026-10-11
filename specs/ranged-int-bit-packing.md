@@ -35,7 +35,8 @@ is built dynamically (`Array with int(0 to 3)` + `push`) or from a constant lite
 whose elements are pinned to the alias (`[0 as Q, 1 as Q, …]`). The tests below prove
 the representation two ways: reading the record's raw `element_size` via
 `arr.managed.elementSize()` (the packed negative width, cross-target) and round-tripping
-values across byte boundaries. The **static** tests additionally pin the exact packed
+values across byte boundaries. `.managed` is reachable only from a source file under `stdlib/` or
+`runtime/` (E3185), so these cases compile in the library tier (`<!-- tier: stdlib -->`). The **static** tests additionally pin the exact packed
 `.rdata` bytes with a `RequiredRdata` block — e.g. `[0 as Q, 1 as Q, 2 as Q, 3 as Q]`
 packs to the single byte `0b11_10_01_00 = 228` — which byte-for-byte proves both the
 LSB-first bit layout and the `ceil(count*bits/8)` sizing.
@@ -43,6 +44,7 @@ LSB-first bit layout and the `ceil(count*bits/8)` sizing.
 ## Tests
 
 <!-- test: dynamic-2bit-packed -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Q = int(0 to 3)
 typealias QArray = Array with Q
@@ -71,6 +73,7 @@ end 'main'
 ```
 
 <!-- test: dynamic-4bit-packed -->
+<!-- tier: stdlib -->
 ```maxon
 typealias N = int(0 to 15)
 typealias NArray = Array with N
@@ -91,6 +94,7 @@ end 'main'
 ```
 
 <!-- test: dynamic-1bit-int-packed -->
+<!-- tier: stdlib -->
 ```maxon
 typealias U = int(0 to 1)
 typealias UArray = Array with U
@@ -111,6 +115,7 @@ end 'main'
 ```
 
 <!-- test: boundary-16-is-byte -->
+<!-- tier: stdlib -->
 ```maxon
 typealias W = int(0 to 16)
 typealias WArray = Array with W
@@ -129,6 +134,7 @@ end 'main'
 ```
 
 <!-- test: boundary-255-is-byte -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Octet = int(0 to 255)
 typealias OctetArray = Array with Octet
@@ -147,6 +153,7 @@ end 'main'
 ```
 
 <!-- test: nonzero-lower-not-packed -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Offset = int(1 to 3)
 typealias OffsetArray = Array with Offset
@@ -165,6 +172,7 @@ end 'main'
 ```
 
 <!-- test: dynamic-bool-packed -->
+<!-- tier: stdlib -->
 ```maxon
 typealias BoolArray = Array with bool
 
@@ -184,6 +192,7 @@ end 'main'
 ```
 
 <!-- test: grow-stays-packed -->
+<!-- tier: stdlib -->
 ```maxon
 typealias Q = int(0 to 3)
 typealias QArray = Array with Q

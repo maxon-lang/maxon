@@ -13,9 +13,13 @@ End-to-end tests for the `__ManagedMemory` builtin struct and its method dispatc
 `byteAt`, `setByte`, `clear`) plus the throw-on-bounds-error path through
 `mrt_set_error` / `try ... otherwise`.
 
+`__ManagedMemory` is library-tier: only a source file under `stdlib/` or `runtime/` may name it (E3185
+anywhere else), so every case here compiles in the library tier (`<!-- tier: stdlib -->`).
+
 ## Tests
 
 <!-- test: create-and-length -->
+<!-- tier: stdlib -->
 `__ManagedMemory.create(4, elementSize: 8)` allocates a struct with capacity at
 least 4 and length 0. We verify both fields read back through the `length()` and
 `capacity()` getters (which lower to inline `loadIndirect` ops). Small requests
@@ -39,12 +43,13 @@ end 'main'
 ```
 
 <!-- test: set-and-get -->
+<!-- tier: stdlib -->
 After `setLength(3)` we set three values and read them back; all three must
 match. Exercises both the `set` and `get` runtime helpers' word path
 (elementSize=8).
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(3, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(3, elementSize: 8) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	try mm.set(0, value: 11) otherwise return 3
 	try mm.set(1, value: 22) otherwise return 3
@@ -69,12 +74,13 @@ end 'main'
 ```
 
 <!-- test: setlength-then-get -->
+<!-- tier: stdlib -->
 `create(8) + setLength(3)` makes length 3 while capacity stays at least 8 (the
 small-array inline path may report more than the requested count as spare
 capacity). After three sets, length and capacity are independently observable.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	try mm.set(0, value: 100) otherwise return 3
 	try mm.set(1, value: 200) otherwise return 3
@@ -97,11 +103,12 @@ end 'main'
 ```
 
 <!-- test: grow -->
+<!-- tier: stdlib -->
 `grow(8)` raises capacity from 2 to 8. Values written before the grow must still be
 readable through the (potentially relocated) buffer.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.set(0, value: 77) otherwise return 3
 	try mm.set(1, value: 88) otherwise return 3
@@ -125,16 +132,17 @@ end 'main'
 ```
 
 <!-- test: append -->
+<!-- tier: stdlib -->
 Appending another `__ManagedMemory` concatenates its bytes onto the end of the
 receiver. Length grows by `other.length`, capacity grows automatically if
 needed.
 ```maxon
 function main() returns ExitCode
-	let a = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	var a = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try a.setLength(2) otherwise return 2
 	try a.set(0, value: 1) otherwise return 3
 	try a.set(1, value: 2) otherwise return 3
-	let b = try __ManagedMemory.create(4, elementSize: 8) otherwise return 4
+	var b = try __ManagedMemory.create(4, elementSize: 8) otherwise return 4
 	try b.setLength(2) otherwise return 5
 	try b.set(0, value: 3) otherwise return 6
 	try b.set(1, value: 4) otherwise return 6
@@ -166,11 +174,12 @@ end 'main'
 ```
 
 <!-- test: slice -->
+<!-- tier: stdlib -->
 `slice(1, endIndex: 4)` produces a fresh `__ManagedMemory` of length 3 (and
 capacity 3), holding a copy of indices 1..3 of the source.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(5, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(5, elementSize: 8) otherwise return 1
 	try mm.setLength(5) otherwise return 2
 	try mm.set(0, value: 10) otherwise return 3
 	try mm.set(1, value: 20) otherwise return 3
@@ -201,11 +210,12 @@ end 'main'
 ```
 
 <!-- test: byte-at -->
+<!-- tier: stdlib -->
 A byte-sized `__ManagedMemory` (`elementSize: 1`) supports `setByte` /
 `byteAt`. Each byte is independently addressable.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
 	try mm.setLength(8) otherwise return 2
 	try mm.setByte(0, value: 11) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
@@ -230,12 +240,13 @@ end 'main'
 ```
 
 <!-- test: clear -->
+<!-- tier: stdlib -->
 `clear()` sets length to 0 without touching capacity. After clear, `length()`
 must read 0 and `capacity()` must still report the original allocated capacity
 (at least the requested count — the inline path reports the full size-class slack).
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	try mm.set(0, value: 42) otherwise return 3
 	try mm.set(1, value: 43) otherwise return 3
@@ -255,12 +266,13 @@ end 'main'
 ```
 
 <!-- test: out-of-bounds-get -->
+<!-- tier: stdlib -->
 `get(99)` on a length-1 `__ManagedMemory` triggers the index-out-of-bounds
 error path. The `try ... otherwise -1` branch must execute and the function
 must return -1 cast through ExitCode.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(0, value: 7) otherwise return 3
 	let _ = try mm.get(99) otherwise return 0
@@ -272,12 +284,13 @@ end 'main'
 ```
 
 <!-- test: out-of-bounds-set -->
+<!-- tier: stdlib -->
 `set(99, value: 0)` on a length-1 `__ManagedMemory` triggers the OOB path.
 The `try ... otherwise return 0` branch executes; the trailing return must not
 fire.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(99, value: 42) otherwise return 0
 	return 5
@@ -288,11 +301,12 @@ end 'main'
 ```
 
 <!-- test: slice-out-of-bounds -->
+<!-- tier: stdlib -->
 `slice(0, endIndex: 99)` triggers the slice-out-of-bounds error path (error
 2). The `otherwise return 0` branch must execute.
 ```maxon
 function main() returns ExitCode
-	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	let _ = try mm.slice(0, endIndex: 99) otherwise return 0
 	return 5

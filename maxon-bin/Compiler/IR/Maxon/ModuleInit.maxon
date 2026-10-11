@@ -450,7 +450,7 @@ function emitMapEntryUpsert(fn SynthesizedFunction, add ByteArray, record ValueI
 	let key = materializedValue(fn, value: entry.key.value, valueType: entry.key.valueType, calls: calls, site: site)
 	let value = materializedValue(fn, value: entry.value.value, valueType: entry.value.valueType, calls: calls, site: site)
 
-	var labels = ByteArrayArray.create()
+	var labels = NameRoster.create()
 	labels.push(EmptySourceText)
 	labels.push(entry.key.label)
 	labels.push(entry.value.label)
@@ -546,7 +546,7 @@ end 'initializerNodeRecord'
 // the call, on the decision the index already made per argument (`GlobalInitArgumentCleanup`).
 function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args GlobalInitArgumentArray, calls GlobalInitCallArray, valueType MaxonType, site SynthesizedSite) returns ValueId
 	var values = ValueIdArray.create()
-	var labels = ByteArrayArray.create()
+	var labels = NameRoster.create()
 
 	for arg in args 'eachArgument'
 		values.push(materializedValue(fn, value: arg.value, valueType: arg.valueType, calls: calls, site: site))
@@ -881,7 +881,7 @@ export type SynthesizedFunction
 			return nameId
 		end 'carriesNoNameToCross'
 
-		let signatures = try queryProgramSignatures(self.project) otherwise panic("ModuleInit.projectScopedNameId: queryProgramSignatures failed while synthesizing a module initializer — it is computed and memoized before the pipeline runs, so it cannot fail fresh here")
+		var signatures = try queryProgramSignatures(self.project) otherwise panic("ModuleInit.projectScopedNameId: queryProgramSignatures failed while synthesizing a module initializer — it is computed and memoized before the pipeline runs, so it cannot fail fresh here")
 		return self.project.typeNames.intern(signatures.indexSpaceTypeName(maxonTypeOfTag(tag, nameId: nameId)))
 	end 'projectScopedNameId'
 
@@ -926,7 +926,6 @@ export type SynthesizedFunction
 	end 'witnessOf'
 
 	export function recordExistentialFieldStore(store ExistentialFieldStore)
-		self.func.existentialFieldStores = writableExistentialFieldStores(self.func.existentialFieldStores)
 		self.func.existentialFieldStores.push(store)
 	end 'recordExistentialFieldStore'
 
@@ -985,10 +984,8 @@ export type SynthesizedFunction
 			declaredAt(filePath, _) then self.project.synthesizedOpFiles.upsert(opIndex, value: filePath)
 		end 'site'
 
-		match maxonOpResultValue(op) 'result'
-			none then break
-			value(id) then self.project.valueOrigins.record(self.funcIndex, valueId: id, opIndex: opIndex)
-		end 'result'
+		let id = try maxonOpDefinedValue(op) otherwise return
+		self.project.valueOrigins.record(self.funcIndex, valueId: id, opIndex: opIndex)
 	end 'recordOpTables'
 
 	// ⭐ **A `literal`** — an element's number, an `element_size` stride, a null `element_destroy`, a fixed
@@ -1096,7 +1093,7 @@ export type SynthesizedFunction
 	//
 	// `argDefaultSlots` is empty and that is exact: this walk passes every argument the source wrote and
 	// synthesizes none, so there is no supplied default whose declaration slot `slotCallArgs` would need.
-	function emitCall(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
+	function emitCall(callee ByteArray, args ValueIdArray, argLabels NameRoster, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
 		let result = self.mint(resultTag, nameId: resultNameId)
 		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted), site: site)
 		return result

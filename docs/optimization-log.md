@@ -257,6 +257,7 @@ ragged.
 | 2026-10-08 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | the ladder compiles again: the buffer-surface knob stops declaring its own `Byte`, which declaration-identity aliases (4105d4fd1) made a different element type from the library's, so rung 0 was refused with E3005 and every run since was BROKEN; tests/cli/scale-test-rung-zero-compiles-and-every-witness-holds.maxtest gates it. The delta vs the 2026-10-06 row therefore spans every commit since, including 1646b6d7f (protocol shadow contest table moved onto IrInterfaceMap) - not attributable to one change. | 7,699,792 | 10,593,626 | 16,373,275 | 27,978,203 | 51,316,054 | 98,547,780 |
 | 2026-10-08 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | a captured enum or union value dispatches its methods and accessors (capturedMethodCall and the accessor door (enumMemberReadableOff, parseEnumAccessor) offer the enum route; one typeIsEnumOrUnion predicate); spans bf83912969 (MCP result documents, no compile-path change) too. Ladder linear (parse allocs x1.90); flat per-rung delta, and the corpus captures no enum, so the feature itself is a blind spot here. | 7,718,643 | 10,610,502 | 16,382,490 | 27,988,229 | 51,327,524 | 98,562,245 |
 | 2026-10-10 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | phase:insertRangeChecks made linear: the per-guard rangeCheckMessage spelled each alias through contestedDeclarationSpelling, which walked every claimant of the alias's name (guards x claimants; the corpus's namespace knob gives NsScore one claimant per namespace). A pass-local DeclarationQualifierMemo summarizes each name once. 7-rung reading: insertRangeChecks allocs top ratio x2.83 -> x1.93, bytes x2.40 -> x2.01, CPU x2.62 -> x2.01. Regression ladder tests/ladders/gencontestedalias.sh. | 8,381,695 | 10,673,757 | 16,477,048 | 28,139,087 | 51,566,416 | 98,878,779 |
+| 2026-10-09 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | memory-safety first-principles change: counted borrows decided by hold markers (HoldResolution), E3070 + iteration lock + BorrowCheck deleted, by-ref argument overlap (E3186), library-tier raw surface (E3185), deep read-only provenance for module lets and SharedValue reads, guard pages, declaration-site E3143; lock-heartbeat upkeep excluded from the metered total (it made --repeat nondeterministic by 156 B, also on HEAD). The corpus changed too (bufferSurfaces knob deleted), so the delta vs the previous row is not attributable to the compiler alone. | 7,880,944 | 10,588,186 | 16,008,050 | 26,878,200 | 48,757,798 | 93,079,709 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -323,6 +324,7 @@ ragged.
 | 2026-10-08 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | the ladder compiles again: the buffer-surface knob stops declaring its own `Byte`, which declaration-identity aliases (4105d4fd1) made a different element type from the library's, so rung 0 was refused with E3005 and every run since was BROKEN; tests/cli/scale-test-rung-zero-compiles-and-every-witness-holds.maxtest gates it. The delta vs the 2026-10-06 row therefore spans every commit since, including 1646b6d7f (protocol shadow contest table moved onto IrInterfaceMap) - not attributable to one change. | 728,885,142 | 1,082,117,360 | 1,811,238,953 | 3,261,009,492 | 6,162,860,428 | 12,057,335,999 |
 | 2026-10-08 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | a captured enum or union value dispatches its methods and accessors (capturedMethodCall and the accessor door (enumMemberReadableOff, parseEnumAccessor) offer the enum route; one typeIsEnumOrUnion predicate); spans bf83912969 (MCP result documents, no compile-path change) too. Ladder linear (parse allocs x1.90); flat per-rung delta, and the corpus captures no enum, so the feature itself is a blind spot here. | 730,350,902 | 1,083,396,040 | 1,811,938,848 | 3,261,785,297 | 6,163,717,906 | 12,058,433,642 |
 | 2026-10-10 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | phase:insertRangeChecks made linear: the per-guard rangeCheckMessage spelled each alias through contestedDeclarationSpelling, which walked every claimant of the alias's name (guards x claimants; the corpus's namespace knob gives NsScore one claimant per namespace). A pass-local DeclarationQualifierMemo summarizes each name once. 7-rung reading: insertRangeChecks allocs top ratio x2.83 -> x1.93, bytes x2.40 -> x2.01, CPU x2.62 -> x2.01. Regression ladder tests/ladders/gencontestedalias.sh. | 813,290,740 | 1,087,613,222 | 1,817,737,713 | 3,269,639,078 | 6,174,035,057 | 12,065,161,580 |
+| 2026-10-09 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | memory-safety first-principles change: counted borrows decided by hold markers (HoldResolution), E3070 + iteration lock + BorrowCheck deleted, by-ref argument overlap (E3186), library-tier raw surface (E3185), deep read-only provenance for module lets and SharedValue reads, guard pages, declaration-site E3143; lock-heartbeat upkeep excluded from the metered total (it made --repeat nondeterministic by 156 B, also on HEAD). The corpus changed too (bufferSurfaces knob deleted), so the delta vs the previous row is not attributable to the compiler alone. | 731,250,246 | 1,064,243,496 | 1,728,066,379 | 3,067,752,613 | 5,781,134,978 | 11,309,084,385 |
 <!-- scale-history:bytes -->
 
 ## CPU
@@ -432,6 +434,7 @@ invisible to it. A run whose parse phase reads ×5.03 then ×1.78 on a doubling 
 | 2026-10-08 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | the ladder compiles again: the buffer-surface knob stops declaring its own `Byte`, which declaration-identity aliases (4105d4fd1) made a different element type from the library's, so rung 0 was refused with E3005 and every run since was BROKEN; tests/cli/scale-test-rung-zero-compiles-and-every-witness-holds.maxtest gates it. The delta vs the 2026-10-06 row therefore spans every commit since, including 1646b6d7f (protocol shadow contest table moved onto IrInterfaceMap) - not attributable to one change. | 2,889,620,210 | 3,894,351,101 | 5,961,362,285 | 10,145,492,720 | 18,892,087,827 | 37,464,478,092 |
 | 2026-10-08 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | a captured enum or union value dispatches its methods and accessors (capturedMethodCall and the accessor door (enumMemberReadableOff, parseEnumAccessor) offer the enum route; one typeIsEnumOrUnion predicate); spans bf83912969 (MCP result documents, no compile-path change) too. Ladder linear (parse allocs x1.90); flat per-rung delta, and the corpus captures no enum, so the feature itself is a blind spot here. | 2,770,894,640 | 3,733,542,180 | 5,705,024,360 | 10,174,295,940 | 19,246,945,660 | 39,756,164,300 |
 | 2026-10-10 | c:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus c:\Users\Eric\Dev\maxon\.scale-tmp) | phase:insertRangeChecks made linear: the per-guard rangeCheckMessage spelled each alias through contestedDeclarationSpelling, which walked every claimant of the alias's name (guards x claimants; the corpus's namespace knob gives NsScore one claimant per namespace). A pass-local DeclarationQualifierMemo summarizes each name once. 7-rung reading: insertRangeChecks allocs top ratio x2.83 -> x1.93, bytes x2.40 -> x2.01, CPU x2.62 -> x2.01. Regression ladder tests/ladders/gencontestedalias.sh. | 3,138,292,700 | 3,736,222,700 | 5,774,878,620 | 10,084,297,880 | 19,129,016,840 | 37,757,773,560 |
+| 2026-10-09 | C:\Users\Eric\Dev\maxon\maxon-bin\.maxon\maxon.exe (corpus C:\Users\Eric\Dev\maxon\.scale-tmp) | memory-safety first-principles change: counted borrows decided by hold markers (HoldResolution), E3070 + iteration lock + BorrowCheck deleted, by-ref argument overlap (E3186), library-tier raw surface (E3185), deep read-only provenance for module lets and SharedValue reads, guard pages, declaration-site E3143; lock-heartbeat upkeep excluded from the metered total (it made --repeat nondeterministic by 156 B, also on HEAD). The corpus changed too (bufferSurfaces knob deleted), so the delta vs the previous row is not attributable to the compiler alone. | 2,958,315,274 | 3,881,157,552 | 5,868,930,615 | 9,746,611,476 | 17,907,051,142 | 35,166,296,724 |
 <!-- scale-history:cpu -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
@@ -1665,3 +1668,118 @@ collapsing it needs either a third exported predicate in `Queries.maxon` or the 
 the call site. `emitLoadGlobalWord` emits `leaRegGlobal` + `loadRegBaseDisp` where x64 has a single
 RIP-relative `mov`, which is pre-existing, affects every runtime global read in every program, and is an
 isel change with reach far beyond this diff.
+
+### Result — 2026-10-10, the memory-safety change's self-compile cost, attributed
+
+The tree's own compiler building the tree (`build maxon-bin --metrics`), two runs per arm on one machine,
+raw: HEAD's compiler on HEAD's tree **57.94 s / 133.0 G ticks** and **56.97 s / 131.1 G**; this tree's
+compiler on this tree **61.29 s / 143.2 G** and **61.53 s / 143.3 G** (the stage-2 and stage-3 compilers,
+byte-identical, SHA-256 `205C1F2CC2020F5E47E16B12272468AAF093529D1C9E650006E1AE76479317F4`). Before the
+optimization pass the same tree read 64.24 s / 152.1 G and 63.71 s / 150.4 G. Mean wall: HEAD 57.45 s,
+before 63.97 s (+11.3%), after 61.41 s (+6.9%); against the 56.7 s anchor the figure is +8.3%.
+
+| phase (wall, s) | HEAD | before | after |
+|---|---|---|---|
+| semanticCheck | 10.05 | 13.82 | 11.61 |
+| parse (workers' summed wall) | 20.05 | 22.85 | 21.82 |
+| frontEndPool | 5.95 | 6.46 | 6.37 |
+| unattributed | 3.46 | 4.49 | 3.99 |
+| regalloc / isel / encode | 14.82 / 4.30 / 3.38 | 14.93 / 4.35 / 3.45 | 15.04 / 4.44 / 3.50 |
+
+Allocations: HEAD 303.5 M, before 341.7 M, after 303.0 M. `phase:semanticCheck` allocates 43.5 M on HEAD,
+66.2 M before and 29.1 M after.
+
+**Where the remaining +4.0 s is.** The emitted code grew 5.4% (18,709,388 → 19,723,122 bytes) and the
+code-proportional phases moved with it (regalloc +1.5%, isel +3%, encode +3.6%, inlineLeaves +5%,
+lowerMaxonToStd +6%): 56.7 s scaled by the code growth is 59.8 s, which is what a compiler spending nothing
+on the new passes would read. The rest is main-thread `semanticCheck`, +1.56 s over HEAD. Sampling profile
+(samples of the main thread's `semanticCheck`, 1,037 on this tree against 869 on HEAD's): `resolveHoldMarkers`
+54, the permanence settle 33, `checkStorageDoors` +32, `checkCalls` +37, `settleSummaries` +17; the effect
+summary is 365 samples against 399 for HEAD's `checkDiscardedResults`. Parse and lex run on the worker pool, so their summed wall is
+not elapsed time; only the pool's drain (`frontEndPool`) is.
+
+**What the optimization pass removed**, each seen as a profile-sample delta and then as a phase delta:
+
+- `ProgramSignatures.settledDeclarations()` returned the record counted, so every read paid a retain and a
+  `__destruct_SettledDeclarations` release: parse wall 23.7 → 21.9 s. The accessor hands back no reference
+  now (the borrowed field getter, below), so a read through it is a branch and loads with no count traffic.
+- `arrayMutationOf` and `runtimeCalleeStoreShape` asked `reservedCalleeReasonOf` per call, whose non-`__` arm
+  slices the name apart (~23 allocations a call): `semanticCheck` −37 M allocations in all with the items
+  below, the effect summary from +88 samples to +29 over HEAD. They ask the reason's first clause directly,
+  `wearsTheCompilerInternalPrefix`; `receiverWritingRuntimeCallee` and the hold judge classify a callee once
+  instead of three to five times.
+- The unguarded-chain proof read `TargetOp.rawValue` for every op of every function; a per-variant memo
+  (`PointerCallMemo`) makes it one column probe (49 → 9 samples on that line).
+- `ProvenanceTracer.indexDefinitions` rebuilt the use-count column on every re-index, and the four permanence
+  passes re-index every record-returning function; the column is now built when a use-count question is asked.
+- `maxonOpResultValue` boxed a union per op in the effect summary, the value-origin recorders and
+  `FunctionValueOrigins.fill`; `maxonOpDefinedValue` answers by `throws AbsentError` and the union form wraps it.
+- `overloadRegistrationBaseName` split a `String` per call and now slices once; `isBuiltinConformanceImplName`
+  slices only a name under `int.` / `float.` / `bool.` / `String.`; the ownership and release callee rosters
+  are gated by the prefix every member wears.
+
+**Filed, not fixed.** `resolveHoldMarkers` scans every op of every function twice (events, then windows),
+and the four permanence passes each re-index every function that returns a record; curing them means
+demand-driven events (only the callees of a marker's window) and one definition index shared by the settles.
+The effect summary walks every node twice and is the largest single cost in `semanticCheck`. No scale ladder
+was run for this pass: the figures above are the compiler's own self-compile.
+
+### Result — 2026-10-10, the memory-safety change on the same input, and a borrowed field getter
+
+The 5% rule is judged on one input compiled by both compilers, not on each compiler building its own source:
+the ladder's generated programs (`.scale-tmp/rung0` to `rung5`, 49 to 452 files, 0.17 to 5.0 MB), compiled from
+one directory by HEAD's compiler (`74931c8e2`, built by itself, run from its own checkout so it reads HEAD's
+stdlib and runtime) and by this tree's, with `build <rung> --metrics`. Wall and ticks are the `total` row, the
+least of three samples for HEAD and two for the tree (rung 0: seven and six), the two compilers alternated.
+
+| rung | HEAD wall (s) | tree wall (s) | | HEAD ticks (G) | tree ticks (G) | | allocations HEAD → tree |
+|---|---|---|---|---|---|---|---|
+| 0 | 1.341 | 1.341 | −0.0% | 2.792 | 2.813 | +0.8% | 7,548,647 → 7,975,108 (+5.7%) |
+| 1 | 2.040 | 2.053 | +0.7% | 3.744 | 3.767 | +0.6% | 10,277,065 → 10,712,802 (+4.2%) |
+| 2 | 3.490 | 3.454 | −1.0% | 5.660 | 5.517 | −2.5% | 15,742,326 → 16,183,667 (+2.8%) |
+| 3 | 6.618 | 6.467 | −2.3% | 9.672 | 9.358 | −3.2% | 26,705,269 → 27,162,822 (+1.7%) |
+| 4 | 12.672 | 12.425 | −1.9% | 17.890 | 17.218 | −3.8% | 48,772,181 → 49,270,552 (+1.0%) |
+| 5 | 25.306 | 25.044 | −1.0% | 35.795 | 34.503 | −3.6% | 93,488,508 → 94,075,350 (+0.6%) |
+
+Per-doubling ratios, rung r+1 over rung r, HEAD then tree. Wall: 1.521 / 1.532, 1.711 / 1.682, 1.897 / 1.873,
+1.915 / 1.921, 1.997 / 2.016. Ticks: 1.341 / 1.339, 1.512 / 1.464, 1.709 / 1.696, 1.850 / 1.840, 2.001 / 2.004.
+Both compilers are linear in the program, and the tree's fixed cost is the +426 K allocations at rung 0 that
+the signature fold and the new checks spend on the stdlib.
+
+The emitted programs differ by 658 bytes at every rung (273,015 bytes at rung 0 against 272,357; 3,667,075
+against 3,666,417 at rung 5), so the compiler is not compiling more code for the same input.
+
+**What moved the tree from +5% to parity**, each measured as an A/B of two compilers that differ in that change
+alone (rung 5, then rungs 3 and 4 in brackets):
+
+- **A method whose every `return` is `self.<field>` hands back no reference.** `ProgramSignatures.settledDeclarations()`
+  is one: it returned the record counted, so each of its reads paid a retain and a `__destruct_SettledDeclarations`.
+  The sweep proves the shape (an instance method with no parameter but its receiver, not generic, not `throws`, every
+  `return` of the form `return self.<ident>`), `Parser.emitOwnedValueReturn` then skips the promotion of the
+  returned record, and `Parser.emitCall` treats the call's result as a read of a rebindable slot of its receiver,
+  exactly as it treats the field read `receiver.field`. The hold resolver follows the chain through the call to
+  the receiver's field, so a hold on the result is deleted where nothing in its window stores to that field or
+  releases the receiver, and lowered to a retain otherwise. A name that an interface declares as a requirement
+  (`current`, `advance`, `toString`, `hash`, `equals`, `compare`, `clone` among the stdlib's) is excluded, since a
+  witness dispatch expects the counted reference. With the accessor read as `self.settledDeclarations()` at all
+  419 sites that had been hand-inlined, `Holder.view` in a probe compiles to a load of the flag, a branch and a load
+  of the field with no `__destruct`, and the two compilers read: counted accessor 26.390 s / 36.99 G, borrowed
+  25.645 s / 36.68 G at rung 5 (−2.8% wall, −0.8% ticks; rungs 3 and 4: −0.5% and −0.6% wall), and the borrowed
+  getter against the hand-inlined copies is a tie (25.921 s / 36.73 G, one sample, against 25.645 s / 36.68 G).
+  `ir-specs/borrowed-field-getters.md` pins the probe; under the compiler that had the copies both pins fail.
+- **`Parser.kindAt` and `Parser.at` read the kind without copying the token.** Both went through `tokenAt`, which
+  returns a counted `Token`, so every kind test in the sweep and the parse paid a retain, a release and a
+  `__destruct_Token`. `kindAt` now indexes the token array and reads `.kind` of the borrowed element; `at` asks
+  `kindAt`. Rung 5: 25.645 s / 36.68 G → 25.239 s / 34.83 G (−1.6% wall, −5.0% ticks; rungs 3 and 4: −3.8% and
+  −4.2% wall, −8.1% and −7.3% ticks). The by-reference scan `cellLocalNamesIn` tests the cheap argument-position
+  and following-token kinds before it copies a token for `tokenCanBeAName`, and no longer asks that twice.
+
+**For information, the compiler building itself:** 60.3 s for both the stage-3 compiler and the census build
+(61.5 s and 61.2 s for the first two stages, 62.6 s for the one built by the pre-`kindAt` compiler), against HEAD's
+57.45 s. The emitted code is 19,764,810 bytes against HEAD's 18,709,388 (+5.6%), and the tree has the new
+passes to run, which is why that figure is not the gate. The stage-2 and stage-3 compilers are byte-identical
+(SHA-256 `257CBE38ABD12F06E3637C554AD19D420192FDC506AE5FDE167C45B77167AE78`).
+
+**Filed, not fixed.** `resolveHoldMarkers` still scans every op of every function twice, and the four
+permanence passes still each re-index every function that returns a record. With the ladder at parity neither is
+on the gate's path: the hold resolver is 3 of 34 main-thread `semanticCheck` samples at rung 4.

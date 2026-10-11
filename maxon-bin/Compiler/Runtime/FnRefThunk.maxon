@@ -128,9 +128,9 @@ end 'functionValueNeedsFnRefThunk'
 // order, deduped — WHICH ones is `functionValueNeedsFnRefThunk`'s answer above and is not restated here. Read
 // post-pipeline by `installFnRefThunks`; the walk mirrors `StringRuntime.scanRuntimeUsage`'s — one linear pass
 // over the Maxon ops. `funcSignatures` rides along for that one predicate.
-export function collectFnRefThunkTargets(module MaxonModule, funcSignatures FuncSignatureMap) returns ByteArrayArray
+export function collectFnRefThunkTargets(module MaxonModule, funcSignatures FuncSignatureMap) returns NameRoster
 	var seen = FnRefThunkSet.create()
-	var targets = ByteArrayArray.create()
+	var targets = NameRoster.create()
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -149,7 +149,7 @@ end 'collectFnRefThunkTargets'
 // Record a `functionRef` op's PLAIN target for thunking. It RANGES over the whole `MaxonOp` union so a
 // an op added later FAILS TO COMPILE here rather than being silently ignored:
 // `call to panicAbort` is every op before `functionRef`, `indirectCall` the one after it.
-function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArray, funcSignatures FuncSignatureMap)
+function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets NameRoster, funcSignatures FuncSignatureMap)
 	match op 'op'
 		call or
 		literal or
@@ -207,7 +207,9 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 		rawIntrinsic then break
 
 		// A witness table's slots are relocations to impls, never a function VALUE's thunk target.
-		existentialWitness then break
+		existentialWitness or
+		holdValue or
+		holdEnd then break
 	end 'op'
 end 'noteIfFunctionRef'
 
@@ -401,6 +403,8 @@ function uncheckedCallPathOf(op MaxonOp, marks ValueMarkColumn) returns CallPath
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
+		holdValue or
+		holdEnd or
 		existentialWitness gives CallPath.none
 	end 'op'
 end 'uncheckedCallPathOf'
@@ -408,7 +412,7 @@ end 'uncheckedCallPathOf'
 // A target that needs the thunk (`functionValueNeedsFnRefThunk` — the one place that rule lives) joins the
 // ordered thunk list the first time it is seen. A `__` name that IS in `funcSignatures` reaches
 // `synthesizeFnRefThunk` from here and finds the signature that routine panics without.
-function noteFnRefTarget(funcName ByteArray, form FunctionRefForm, seen FnRefThunkSet, targets ByteArrayArray, funcSignatures FuncSignatureMap)
+function noteFnRefTarget(funcName ByteArray, form FunctionRefForm, seen FnRefThunkSet, targets NameRoster, funcSignatures FuncSignatureMap)
 	match form 'form'
 		codeAddress then return
 		functionValue then break
@@ -431,7 +435,7 @@ end 'noteFnRefTarget'
 // stated once, in `Compiler.compileToCodeResult`'s install block), and they still flow through the whole
 // backend (ISel, register allocation, frames) — and on wasm get a funcref-table
 // slot at their funcIdx, which is what a function record's code word names.
-export function installFnRefThunks(module StdModule, project Project, targets ByteArrayArray)
+export function installFnRefThunks(module StdModule, project Project, targets NameRoster)
 	for target in targets 'each'
 		synthesizeFnRefThunk(module, project: project, targetName: target)
 	end 'each'

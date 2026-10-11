@@ -188,15 +188,15 @@ export type PhaseResidency
 		return Self{liveBytes: liveBytes, freeBytes: freeBytes, cachedFreeBytes: cachedFreeBytes, parkedBytes: parkedBytes, committedBytes: committedBytes}
 	end 'create'
 
-	// Five separate walks rather than one: a shared record would have to live between the calls, which is
-	// state a second thread could read half-written.
 	export static function sample() returns PhaseResidency
+		let usage = HeapStats.slab()
+
 		return Self{
-			liveBytes: __Builtins.slabLiveBytes() as HeapByteCount,
-			freeBytes: __Builtins.slabFreeBytes() as HeapByteCount,
-			cachedFreeBytes: __Builtins.slabCachedFreeBytes() as HeapByteCount,
-			parkedBytes: __Builtins.slabParkedBytes() as HeapByteCount,
-			committedBytes: __Builtins.slabCommittedBytes() as HeapByteCount
+			liveBytes: usage.live as HeapByteCount,
+			freeBytes: usage.free as HeapByteCount,
+			cachedFreeBytes: usage.cachedFree as HeapByteCount,
+			parkedBytes: usage.parked as HeapByteCount,
+			committedBytes: usage.committed as HeapByteCount
 		}
 	end 'sample'
 end 'PhaseResidency'
@@ -307,12 +307,16 @@ export union TagCensusPhases
 	only(phase CompilePhase)
 end 'TagCensusPhases'
 
-function tagCensusModeForThisBuild() returns TagCensusMode
+function heapCensusModeForThisBuild() returns HeapCensusMode
 	#if debugstream(true)
-		return SlabCensusTagMode
+		return HeapCensusMode.byTag
 	#else
-		return SlabCensusClassMode
+		return HeapCensusMode.bySizeClass
 	#endif
+end 'heapCensusModeForThisBuild'
+
+function tagCensusModeForThisBuild() returns TagCensusMode
+	return heapCensusModeForThisBuild().rawValue as TagCensusMode
 end 'tagCensusModeForThisBuild'
 
 export type PhaseTagCensus
@@ -330,19 +334,20 @@ export type PhaseTagCensus
 		return Self{counts: phaseColumn(SlabCensusTagBuckets), bytes: phaseColumn(SlabCensusTagBuckets), tallyBytes: 0, liveBytes: 0, rawLiveSlots: 0}
 	end 'sized'
 
-	// Allocates nothing — `sized()` gave the columns their full width — because a sampling that grew an
-	// array would enter the very heap it is reading. The level is taken on the statement after the tally
-	// so the self-check compares two derivations of ONE instant.
+	// `sized()` gave the columns their full width, because a sampling that grew an array would enter the
+	// very heap it is reading. The level is the census's own, read on the statement after the tally and
+	// before the snapshot allocates, so the self-check compares two derivations of one instant.
 	export function take()
-		self.tallyBytes = __Builtins.slabCensusTally(tagCensusModeForThisBuild()) as HeapByteCount
-		self.liveBytes = __Builtins.slabLiveBytes() as HeapByteCount
+		let census = HeapStats.census(heapCensusModeForThisBuild())
+		self.tallyBytes = census.tallyBytes as HeapByteCount
+		self.liveBytes = census.liveBytes as HeapByteCount
 
 		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
-			writeColumn(self.counts, index: bucket as ElementIndex, value: __Builtins.slabCensusBucketCount(bucket) as ColumnCell)
-			writeColumn(self.bytes, index: bucket as ElementIndex, value: __Builtins.slabCensusBucketBytes(bucket) as ColumnCell)
+			writeColumn(self.counts, index: bucket as ElementIndex, value: census.bucketCount(bucket as HeapBucketIndex) as ColumnCell)
+			writeColumn(self.bytes, index: bucket as ElementIndex, value: census.bucketBytes(bucket as HeapBucketIndex) as ColumnCell)
 		end 'eachBucket'
 
-		self.rawLiveSlots = __Builtins.mmRawAllocLive() as AllocCount
+		self.rawLiveSlots = HeapStats.rawAllocationsLive() as AllocCount
 	end 'take'
 end 'PhaseTagCensus'
 
@@ -496,11 +501,11 @@ export type PhaseAllocTally
 	end 'sized'
 
 	export function take()
-		self.runTotal = __Builtins.mmAllocTotal() as AllocCount
+		self.runTotal = HeapStats.allocationsMade() as AllocCount
 
 		for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
-			writeColumn(self.counts, index: bucket as ElementIndex, value: __Builtins.mmAllocTotalByTag(bucket) as ColumnCell)
-			writeColumn(self.bytes, index: bucket as ElementIndex, value: __Builtins.mmAllocBytesByTag(bucket) as ColumnCell)
+			writeColumn(self.counts, index: bucket as ElementIndex, value: HeapStats.allocationsTagged(bucket as HeapBucketIndex) as ColumnCell)
+			writeColumn(self.bytes, index: bucket as ElementIndex, value: HeapStats.bytesTagged(bucket as HeapBucketIndex) as ColumnCell)
 		end 'eachBucket'
 	end 'take'
 end 'PhaseAllocTally'

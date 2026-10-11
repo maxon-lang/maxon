@@ -445,7 +445,7 @@ end 'lowerUnitWith'
 // sub-phase.
 module function lowerAndSplitUnit(lowering UnitLowering, unitModule StdModule, target Target, costs PoolPhaseCosts, iselCost PhaseDelta) returns LoweredUnit
 	let iselProbe = PhaseProbe.beginCounters()
-	let lowered = lowerUnitWith(lowering, unitModule: unitModule)
+	var lowered = lowerUnitWith(lowering, unitModule: unitModule)
 	iselProbe.elapsedInto(iselCost)
 
 	let edgeProbe = PhaseProbe.beginCounters()
@@ -564,7 +564,7 @@ export type BackendWorker
 		let chunk = self.encode(module, func: func, frame: frame, encoding: encoding)
 		encodeProbe.elapsedInto(encodeCost)
 
-		return BackendUnitTail.create(chunk, callStackBytes: frame.callStackBytes(), branchCleanupCost: branchCleanupCost, prologueEpilogueCost: prologueEpilogueCost, encodeCost: encodeCost)
+		return BackendUnitTail.create(chunk, branchCleanupCost: branchCleanupCost, prologueEpilogueCost: prologueEpilogueCost, encodeCost: encodeCost)
 	end 'finishFunction'
 
 	function insertFrame(module TargetModule, func IrFunction) returns UnitFrame
@@ -586,23 +586,16 @@ end 'BackendWorker'
 union UnitFrame
 	x64(frame X64PrologueFrame)
 	arm64(frameBytes StackSize)
-
-	function callStackBytes() returns StackSize
-		return match self 'isa'
-			x64(frame) gives frame.callStackBytes()
-			arm64(frameBytes) gives frameBytes
-		end 'isa'
-	end 'callStackBytes'
 end 'UnitFrame'
 
 // Take every function through the backend unit on a worker pool, and hand back the assembled Target
-// module; `chunks` and `callStackBytes` are filled in function-index order. The one entry both
+// module; `chunks` is filled in function-index order. The one entry both
 // native backends call; `PoolSizing` owns how the pool is sized.
 //
 // `throws CompileError` because a genuine hot-loop overflow is E5001, reported onto `project.diagnostics`.
 // Only USER functions are present here — x64's `mrt_start` is prepended AFTER this pass by
 // `augmentWithRuntime` (it is hand-built in physical registers).
-export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex, usesGt bool, chunks FunctionCodeChunkArray, callStackBytes StackSizeColumn) returns TargetModule throws CompileError
+export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex, usesGt bool, chunks FunctionCodeChunkArray) returns TargetModule throws CompileError
 	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
 		compilerLogger(CompilerLogGroup.codegen).debug("Register allocation ({targetToString(target)})")
 	end 'debugging'
@@ -652,9 +645,9 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	// processor found a runnable green thread on another's queue. Zero steals at sixteen processors would
 	// mean the whole pool ran on the M that dispatched it — a correct compile at one processor's speed,
 	// which every other reading here would report as success.
-	let stealsBefore = __Builtins.schedStealCount()
+	let stealsBefore = Scheduler.counters().steals
 	let refused = drainTheBackendPool(stdModule, module: module, workers: workers, workerCount: sizing.workerCount as PoolSize, landed: landed, slots: slots, runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
-	let stealsAfter = __Builtins.schedStealCount()
+	let stealsAfter = Scheduler.counters().steals
 
 	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
 		compilerLogger(CompilerLogGroup.codegen).debug("regalloc pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
@@ -667,7 +660,6 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	end 'aFunctionDidNotFitTheMachine'
 
 	chunks.reserve(funcCount)
-	callStackBytes.reserve(funcCount)
 
 	for funcIndex in 0 upto funcCount 'foldInIndexOrder'
 		var landing = try landed.get(slots.slotOf(funcIndex)) otherwise panic("lowerAndAllocateOnAWorkerPool: landed.get OOB for function {funcIndex}")
@@ -680,7 +672,6 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 		foldPoolPhaseDelta(project, phase: CompilePhase.encode, driver: CompilePhase.regalloc, delta: landing.tail.encodeCost)
 		foldFunctionAllocation(project, stats: stats, func: func, counters: landing.counters, costs: landing.costs, facts: landing.facts)
 		chunks.push(landing.tail.chunk)
-		callStackBytes.push(landing.tail.callStackBytes)
 	end 'foldInIndexOrder'
 
 	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
@@ -741,7 +732,7 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 	end 'debugging'
 
 	while replies.count() > 0 'serveWhoeverFinishedFirst'
-		let ready = __Builtins.awaitAny(replies)
+		let ready = replies.awaitAny()
 		let freedWorker = dispatch.workerAt(ready)
 		let job = dispatch.land(ready, outstanding: replies.count())
 		let funcIndex = job

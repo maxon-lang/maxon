@@ -92,13 +92,15 @@ type Sink
 		if self.taken == expectedTotal 'lastMessage'
 			print("aggregate={self.bytes}\n")
 			print("taken={self.taken}\n")
-			print("workers={__Builtins.schedMaxActiveWorkers()}\n")
-			print("steals={__Builtins.schedStealCount()}\n")
+			let counters = Scheduler.counters()
+
+			print("workers={counters.maxActiveWorkers}\n")
+			print("steals={counters.steals}\n")
 
 			// Conditional on the monitor at ONE processor — see `monitor-witness.maxon`.
 			print("monitor={monitorActions()}\n")
-			print("remoteFrees={__Builtins.slabRemoteFreeCount()}\n")
-			print("cpucount={__Builtins.cpuCount()}\n")
+			print("remoteFrees={HeapStats.slab().remoteFrees}\n")
+			print("cpucount={Scheduler.machineCpuCount()}\n")
 		end 'lastMessage'
 	end 'take'
 end 'Sink'
@@ -157,7 +159,7 @@ function main() returns ExitCode
 	// nothing left to wait for.
 	let waitVerdict = "ok" if awaitWorkerArrival() else "timeout"
 	print("workerwait={waitVerdict}\n")
-	print("procs={__Builtins.schedProcessorCount()}\n")
+	print("procs={Scheduler.processorCount()}\n")
 
 	// ⚠ THE AGGREGATE IS THE SINK'S AND CANNOT BE REPORTED HERE. `main` returns before a
 	// single sender has necessarily run; the array's element drop shuts each of them

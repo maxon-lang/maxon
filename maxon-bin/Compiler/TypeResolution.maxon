@@ -337,7 +337,7 @@ end 'UnknownTypeName'
 module function resolveTypes(project Project, module MaxonModule)
 	// Fetched ONCE for the whole pass, not per named type: `denotedNamedType` reads it for every
 	// reference, and the memoized query is a map probe that has no business being on that path.
-	let signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+	var signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
 
 	// Index-based so each function is a mutable binding (a `for x in ...` loop
 	// var is immutable; field assignment through it is rejected).
@@ -386,9 +386,6 @@ module function reportDeferredNameDiagnostics(project Project, signatures Progra
 	// suppress another that happens to share its line in a different file.
 	let alreadyReported = project.diagnostics.count()
 
-	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
-	// recorded as writing that same storage. ⚖ Canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for unusedIndex in 0 upto project.unusedTypeAliasDiagnostics.count() 'eachUnused'
 		let entry = try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")
 
@@ -420,15 +417,11 @@ module function reportDeferredNameDiagnostics(project Project, signatures Progra
 			continue
 		end 'namedAcrossTheFileBoundary'
 
-		// Scalars off the borrow, a fresh inline read for the managed halves — see the loop header's note.
 		let line = entry.line
 		let column = entry.column
 		reportPositioned(project, code: ErrorCode.semanticUnusedTypeAlias, message: "unused typealias: '{String.from((try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")).name)}'", line: line, column: column, filePath: (try project.unusedTypeAliasDiagnostics.get(unusedIndex) otherwise panic("reportDeferredNameDiagnostics: unusedIndex {unusedIndex} is below project.unusedTypeAliasDiagnostics.count()")).filePath)
 	end 'eachUnused'
 
-	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
-	// recorded as writing that same storage. ⚖ Canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for hiddenIndex in 0 upto project.hiddenTypeNameDiagnostics.count() 'eachHidden'
 		reportDiagnostic(project, diagnostic: (try project.hiddenTypeNameDiagnostics.get(hiddenIndex) otherwise panic("reportDeferredNameDiagnostics: hiddenIndex {hiddenIndex} is below project.hiddenTypeNameDiagnostics.count()")).clone())
 	end 'eachHidden'
@@ -494,8 +487,7 @@ end 'reportedAtTheDeclaration'
 // diagnostic. `resolveType`'s recovery answer for an unknown name is what lands in a resolved
 // shape, and the pipeline's error gate stops the build before anything reads it.
 function functionAliasShapesIn(project Project, signatures ProgramSignatures, form FunctionAliasShapeForm) returns FunctionShapeMap
-	// Keys out first, then the walk — `ConformanceCheck.checkGrantedEnumConformance` states why.
-	var names = ByteArrayArray.create()
+	var names = NameRoster.create()
 
 	for (name, _) in project.functionTypeAliases 'eachDeclaredAlias'
 		names.push(name)
@@ -504,9 +496,9 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 	var shapes = FunctionShapeMap.create()
 
 	for name in names 'eachAlias'
-		let alias = try project.functionTypeAliases.get(name) otherwise panic("functionAliasShapesIn: '{String.from(name)}' was read out of the alias registry and is no longer in it")
+		var alias = try project.functionTypeAliases.get(name) otherwise panic("functionAliasShapesIn: '{String.from(name)}' was read out of the alias registry and is no longer in it")
 		var params = MaxonTypeArray.create()
-		var preErasedNames = ByteArrayArray.create()
+		var preErasedNames = NameRoster.create()
 
 		for param in alias.paramTypes 'eachParam'
 			// The reader is the alias's OWN declaring file — a function alias's signature is written there
@@ -601,13 +593,13 @@ end 'parsedFunctionTypeRegistryOf'
 // keep a type name and a function name from colliding — so the order they are tried in cannot matter.
 //
 // `undeclared` is the honest answer for a name in neither, and every caller must handle it rather than assume.
-union DeclaredFunctionShape
+module union DeclaredFunctionShape
 	declared(shape FunctionShape)
 	undeclared
 end 'DeclaredFunctionShape'
 
 // The registries this reads travel as one `FunctionTypeRegistry` — see there for why all four move together.
-function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
+module function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
 	if let sig = try registry.funcSignatures.get(name) 'declaredFn'
 		let returnType = try registry.funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
 		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, returnAggregateName: sig.returnAggregateName))
@@ -735,8 +727,7 @@ export function shapeParamIdentity(shape FunctionShape, index ParamCount) return
 end 'shapeParamIdentity'
 
 // The pending list a top-level comparison starts from. ONE object for the whole compile and NEVER mutated
-// (`pendingWithPair` builds a fresh array), the pay-for-use discipline `FunctionPlaceholders.noBorrows` carries:
-// a nested function type is rare, so the overwhelming majority of comparisons must allocate nothing at all.
+// (`pendingWithPair` builds a fresh array): a nested function type is rare, so the overwhelming majority of comparisons must allocate nothing at all.
 let sharedEmptyFunctionTypePairs = FunctionTypePairArray.create()
 
 // Two resolved RETURN slots are the same slot: both return nothing, or both return the same type. A `void`
@@ -950,7 +941,6 @@ end 'pendingWithPair'
 // hashes the same names into the same slots), which is what the byte-identical-output gate needs;
 // and a program with two undeclared field types has two independent bugs, not an ordering.
 function checkStructFieldTypes(project Project, signatures ProgramSignatures)
-	// Layouts out first, then the walk — `ConformanceCheck.checkGrantedEnumConformance` states why.
 	var layouts = StructLayoutArray.create()
 
 	for (_, layout) in project.structTypes 'eachDeclaredStruct'

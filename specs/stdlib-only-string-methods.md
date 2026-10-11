@@ -32,7 +32,7 @@ has no gate at all. None of the five is synthesized.
 
 `setByte` WRITES its receiver, and `Parser.receiverOwnerMask` derives that bit from the ENVELOPE
 COLLAPSE (a fused wrapper's inline `managed` IS the receiver's record, so writing it writes the
-caller's own) — so a `let` receiver is still refused: `let s = "hello"; s.append(" world")` is E3019.
+caller's own) — so a `let` receiver is still refused: `let s = "hello"; s.append(" world")` is E3159.
 Its one caller, `mapAsciiCase`, names the second argument (`work.setByte(i, value: …)`):
 `specs/parameter-labels.md` rules that every argument after the first must be named, and the compiler
 enforces it (E2053), so a positional one would make `stdlib/` refuse itself.
@@ -73,12 +73,12 @@ pinned by every `url` case, which compiles `stdlib/URL.maxon` through the loader
 <!-- test: error.addressable-bytes-is-stdlib-only -->
 ```maxon
 function main() returns ExitCode
-	let b = "abc".addressableBytes()
-	return b.length()
+	_ = "abc".addressableBytes()
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:3:16: function 'String.addressableBytes' is module-scoped and not visible from this directory
+error E3088: <fragment>:3:12: function 'String.addressableBytes' is module-scoped and not visible from this directory
 ```
 
 <!-- test: error.byte-at-or-panic-is-stdlib-only -->
@@ -118,7 +118,7 @@ error E3088: <fragment>:3:11: function 'String.hasSingleByteGraphemes' is module
 The one of the five that WRITES, and the last one to be refused by its own declaration rather than by a
 parser arm. Its refusal matters most: reading a private byte is a privacy question, writing one is a
 MUTATION through a receiver the caller may only have borrowed. Note the RECEIVER here is a `let` — so
-this case would still be refused after the visibility gate, by E3019, which is what makes it worth
+this case would still be refused after the visibility gate, by E3159, which is what makes it worth
 keeping the same shape it had when a parser arm answered it.
 ```maxon
 function main() returns ExitCode
@@ -138,12 +138,12 @@ error E3088: <fragment>:4:8: function 'String.setByte' is module-scoped and not 
 function main() returns ExitCode
 	let s = "abc"
 	let t = s.trim()
-	let b = t.addressableBytes()
-	return b.length()
+	_ = t.addressableBytes()
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3088: <fragment>:5:12: function 'String.addressableBytes' is module-scoped and not visible from this directory
+error E3088: <fragment>:5:8: function 'String.addressableBytes' is module-scoped and not visible from this directory
 ```
 
 A NEAR MISS of a served member — `addressableByte` for `addressableBytes` — is a typo and must be

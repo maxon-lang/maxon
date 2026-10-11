@@ -499,6 +499,7 @@ function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -651,6 +652,7 @@ type ConstructorScan
 			osThreadCpuTicks or
 			osDecommitPages or
 			memFill or
+			osGuardPages or
 			osCommitPages or
 			osReservePages or
 			atomicCas or
@@ -1133,6 +1135,7 @@ function scanOneOp(module StdModule, opIdx ElementIndex, tracked BoolArray, byNa
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -1249,7 +1252,7 @@ function promoteInFunction(module StdModule, func IrFunction, byName FunctionNam
 	let candidates = collectConstructorResults(module, liveOps: liveOps, valueBound: valueBound, byName: byName, constructors: constructors)
 
 	let scan = scanPointerUses(module, func: func, liveOps: liveOps, tracked: candidates, byName: byName)
-	let plans = planPromotions(module, func: func, valueBound: valueBound, scan: scan, byName: byName, constructors: constructors, escapingParams: escapingParams)
+	var plans = planPromotions(module, func: func, valueBound: valueBound, scan: scan, byName: byName, constructors: constructors, escapingParams: escapingParams)
 
 	if plans.count() == 0 'nothingProvable'
 		return
@@ -1387,6 +1390,7 @@ function constructorCallAt(module StdModule, opIdx ElementIndex, byName Function
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -1735,6 +1739,7 @@ function opDropsAPromotedRecord(module StdModule, opIdx ElementIndex, promoted B
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or

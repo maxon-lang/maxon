@@ -89,6 +89,14 @@ export type PhaseDelta
 		return Self{nanos: 0, cpuTicks: 0, allocs: 0, frees: 0, bytes: 0}
 	end 'zero'
 
+	export function add(other PhaseDelta)
+		self.nanos = self.nanos + other.nanos
+		self.cpuTicks = self.cpuTicks + other.cpuTicks
+		self.allocs = self.allocs + other.allocs
+		self.frees = self.frees + other.frees
+		self.bytes = self.bytes + other.bytes
+	end 'add'
+
 	// This delta MINUS an inner one — the "subtract the inner delta" discipline, applied
 	// to every quantity at once (see `PoolPhaseCosts.recordExcluding`).
 	//
@@ -184,6 +192,10 @@ export type PhaseProbe
 		return Self.openOn(CounterSource.callingThread)
 	end 'beginCounters'
 
+	export static function beginProcessWideCounters() returns PhaseProbe
+		return Self.openOn(CounterSource.processWide)
+	end 'beginProcessWideCounters'
+
 	static function openOn(source CounterSource) returns PhaseProbe
 		var probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source}
 		probe.readCounters()
@@ -206,11 +218,14 @@ export type PhaseProbe
 
 	// Memory counters first, clock next, CPU last, exactly as this file's header requires.
 	function readCounters()
-		self.allocTotal = allocsSoFar(self.source)
-		self.freeTotal = freesSoFar(self.source)
-		self.bytes = bytesSoFar(self.source)
+		let allocationsRead = heapAllocationsOf(self.source)
+		let freesRead = heapFreesOf(self.source)
+		let bytesRead = heapBytesOf(self.source)
+		self.allocTotal = allocationsRead as AllocCount
+		self.freeTotal = freesRead as AllocCount
+		self.bytes = bytesRead as HeapByteCount
 		self.nanos = Clock.nowNanos()
-		self.cpuTicks = __Builtins.threadCpuTicks() as CpuTicks
+		self.cpuTicks = Clock.threadCpuTicks() as CpuTicks
 	end 'readCounters'
 
 	// Open a bracket around a pipeline phase. The name comes from the phase, so the span the
@@ -240,45 +255,45 @@ export type PhaseProbe
 	// A reading below its opening one is therefore a broken source, and the non-negative range traps on it
 	// rather than reporting a quietly wrong number.
 	export function elapsedInto(delta PhaseDelta)
-		let endCpuTicks = __Builtins.threadCpuTicks() as CpuTicks
+		let endCpuTicks = Clock.threadCpuTicks() as CpuTicks
 		let endNanos = Clock.nowNanos()
 
 		// CLOSED ON THE SOURCE IT WAS OPENED ON — see `CounterSource`.
-		let endAllocTotal = allocsSoFar(self.source)
-		let endFreeTotal = freesSoFar(self.source)
-		let endBytes = bytesSoFar(self.source)
+		let allocationsRead = heapAllocationsOf(self.source)
+		let freesRead = heapFreesOf(self.source)
+		let bytesRead = heapBytesOf(self.source)
 
 		delta.nanos = (endNanos - self.nanos) as DurationNanos
 		delta.cpuTicks = endCpuTicks - self.cpuTicks
-		delta.allocs = endAllocTotal - self.allocTotal
-		delta.frees = endFreeTotal - self.freeTotal
-		delta.bytes = endBytes - self.bytes
+		delta.allocs = (allocationsRead as AllocCount) - self.allocTotal
+		delta.frees = (freesRead as AllocCount) - self.freeTotal
+		delta.bytes = (bytesRead as HeapByteCount) - self.bytes
 	end 'elapsedInto'
 end 'PhaseProbe'
 
 // ⭐ **EVERY FIGURE COUNTS BOTH ALLOCATOR LAYERS**, because both sources count at the slab's doors, where
 // every request — a box, or a header-free scheduler or mailbox buffer — is one allocation and its whole
 // request, header included, is its bytes. So a pool worker's row and a main-thread row are one unit.
-function allocsSoFar(source CounterSource) returns AllocCount
+function heapAllocationsOf(source CounterSource) returns HeapCount
 	return match source 'which'
-		processWide gives __Builtins.processAllocTotal() as AllocCount
-		callingThread gives __Builtins.threadAllocTotal() as AllocCount
+		processWide gives HeapStats.processAllocations()
+		callingThread gives HeapStats.threadAllocations()
 	end 'which'
-end 'allocsSoFar'
+end 'heapAllocationsOf'
 
-function freesSoFar(source CounterSource) returns AllocCount
+function heapFreesOf(source CounterSource) returns HeapCount
 	return match source 'which'
-		processWide gives __Builtins.processFreeTotal() as AllocCount
-		callingThread gives __Builtins.threadFreeTotal() as AllocCount
+		processWide gives HeapStats.processFrees()
+		callingThread gives HeapStats.threadFrees()
 	end 'which'
-end 'freesSoFar'
+end 'heapFreesOf'
 
-function bytesSoFar(source CounterSource) returns HeapByteCount
+function heapBytesOf(source CounterSource) returns HeapBytes
 	return match source 'which'
-		processWide gives __Builtins.processAllocBytes() as HeapByteCount
-		callingThread gives __Builtins.threadAllocBytes() as HeapByteCount
+		processWide gives HeapStats.processBytes()
+		callingThread gives HeapStats.threadBytes()
 	end 'which'
-end 'bytesSoFar'
+end 'heapBytesOf'
 
 // --- Recording a closed bracket against a phase ---
 //

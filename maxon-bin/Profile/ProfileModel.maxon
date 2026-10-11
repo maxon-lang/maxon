@@ -4,10 +4,8 @@
 // JSON all read the SAME `ProfileReport` and the same aggregation. A second accumulation for a second face
 // is how three copies of one rule come to disagree about what was sampled.
 //
-// ⭐⭐ **EVERY AGGREGATION IS A FLAT MAP KEYED BY A PATH, NEVER A MUTABLE TREE.** A container element reached
-// through `get` is a BORROW and cannot be written (E3070), so a node whose sample count is incremented in
-// place is not expressible here — and the shape the coverage join already pays for is the right one anyway:
-// gather a flat table, sort it ONCE, and read the nesting back out of the keys.
+// ⭐⭐ **EVERY AGGREGATION IS A FLAT MAP KEYED BY A PATH, NEVER A MUTABLE TREE.** The shape the coverage join
+// already pays for: gather a flat table, sort it ONCE, and read the nesting back out of the keys.
 //
 // ⛔ **THE KEY SEPARATOR IS `\x01`, NOT THE `;` THE FOLDED FORMAT PRINTS**, and that is what makes a
 // parent's subtree a CONTIGUOUS RUN of the ordinally-sorted keys — which the tree walk relies on. A
@@ -242,7 +240,7 @@
 		// derived from that one list — so the hot-function table, the tree and the stack list cannot disagree
 		// about what was sampled. The tables are weighted by `charged`; the capture counts and the truncated and
 		// unreadable STACK counts are not, because each is a count of stacks read.
-		export function accept(frames ProfileStringArray, charged ProfileCharges, allocationBase ProfileStackBase, lostItsRoot bool, hadNoChain bool)
+		export function accept(frames ProfileStringArray, charged ProfileCharges, stackIdentity ProfileStackBase, lostItsRoot bool, hadNoChain bool)
 			let weight = charged as ProfileTally
 			self.samples = self.samples + weight
 			self.captures = self.captures + 1
@@ -282,7 +280,7 @@
 			end 'eachPrefix'
 
 			bumpProfileTally(self.pathSelf, key: path, by: weight)
-			bumpProfileTally(self.stackTotal, key: "{allocationBase}{ProfilePathSeparator}{profileOutermostNamedFrame(frames)}", by: weight)
+			bumpProfileTally(self.stackTotal, key: "{stackIdentity}{ProfilePathSeparator}{profileOutermostNamedFrame(frames)}", by: weight)
 		end 'accept'
 
 		export function finish(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, minPercent ProfileShare) returns ProfileReport

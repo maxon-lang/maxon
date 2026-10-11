@@ -151,7 +151,9 @@ function buildArm64GtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	emitArm64GtSavedBlock(asm, direction: Arm64GtBlockDirection.pop)
 	arm64EmitRet(asm.code)
 
-	return asm.finishChunk(GtContextSwitchName)
+	var chunk = asm.finishChunk(GtContextSwitchName)
+	chunk.leavesCallerStack(gtInitialFrameBytes(target) as StackSize)
+	return chunk
 end 'buildArm64GtContextSwitchChunk'
 
 let Arm64GtErrnoSlotReg = Arm64Register.x11
@@ -352,7 +354,9 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtContextSwitchName)
 	arm64EmitBrk(asm.code)
 
-	return asm.finishChunk(GtTrampolineName)
+	var chunk = asm.finishChunk(GtTrampolineName)
+	chunk.leavesCallerStack(0)
+	return chunk
 end 'buildArm64GtTrampolineChunk'
 
 // ==========================================================================
@@ -531,9 +535,9 @@ function arm64MorestackSavedGprs() returns Arm64RegisterArray
 	return gprs
 end 'arm64MorestackSavedGprs'
 
-// The whole frame, 16-aligned. SP at the `bl mmap` is `systemStackTop - frameBytes`, and the system stack's
-// top is page-aligned (`__sched_init_procs` takes it from `osAllocPages`), so a 16-aligned frame lands SP
-// on AAPCS64's required residue.
+// The whole frame, 16-aligned. SP at the `bl __gt_stack_alloc` is `systemStackTop - frameBytes`,
+// and the system stack's top is page-aligned (`__gt_system_stack_alloc`), so a 16-aligned frame
+// lands SP on AAPCS64's required residue.
 function arm64MorestackFrameBytes(savedGprs Arm64RegisterArray) returns StackSize
 	return alignUpStack(Arm64MorestackSaveBase as StackSize + arm64RegisterBlockBytes(savedGprs), alignment: StackFrameAlignment)
 end 'arm64MorestackFrameBytes'
@@ -574,15 +578,10 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	arm64EmitCmpRuntimeReg(asm, lhs: Arm64MoreNewSizeReg, rhs: Arm64MoreTempB)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: doubling)
 
-	// Step 4: new_base = mmap(NULL, new_size, RW, ANON|PRIVATE, -1, 0). A refusal is `MAP_FAILED` (-1) from
-	// libSystem and a negative errno from a raw `svc`, so one signed test catches both.
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64MoreNewSizeReg)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MmapProtReadWrite)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: mmapAnonPrivateFlags(target.os))
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: MmapAnonFd)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: MmapNoOffset)
-	arm64EmitOsPrimitive(asm, os: target.os, importSlot: OsImportSlot.mmap, syscallNumber: Arm64LinuxSyscallMmap)
+	// Step 4: new_base = __gt_stack_alloc(new_size). A refusal is `MAP_FAILED` (-1) from libSystem and a negative
+	// errno from a raw `svc`, so one signed test catches both.
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64MoreNewSizeReg)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtStackAllocName)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64IntReturnReg, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: refused)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreNewBaseReg, src: Arm64IntReturnReg)
@@ -632,7 +631,9 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	asm.placeLabel(refused)
 	arm64EmitProcessExit(asm, os: target.os, exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord)
 
-	return asm.finishChunk(GtMorestackName)
+	var chunk = asm.finishChunk(GtMorestackName)
+	chunk.leavesCallerStack(0)
+	return chunk
 end 'buildArm64GtMorestackChunk'
 
 // The index of x29 within `savedGprs` — found rather than written down, so moving the list cannot leave the
@@ -771,7 +772,7 @@ function buildArm64GtStackRelocateChunk(target Target) returns FunctionCodeChunk
 	// Give the old stack back. Every pointer into it has been rewritten, so nothing that survives this can read it.
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64RelocOldBaseReg)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64RelocOldSizeReg)
-	arm64EmitOsPrimitive(asm, os: target.os, importSlot: OsImportSlot.munmap, syscallNumber: Arm64LinuxSyscallMunmap)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtStackFreeName)
 
 	return asm.finishFunction(GtStackRelocateName)
 end 'buildArm64GtStackRelocateChunk'
@@ -877,7 +878,7 @@ export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray,
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 	let top = asm.newLabel()
 	let skip = asm.newLabel()
-	let mayPark = site == GtGuardSite.functionEntry
+	let mayPark = guardSiteMayPark(site)
 
 	asm.placeLabel(top)
 	emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64MorestackEntryGtReg, gtDest: Arm64MorestackEntryGtReg, scratch: Arm64GuardScratchReg, bail: skip, os: target.os)
@@ -955,7 +956,9 @@ function buildArm64GtGuardTrippedChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(grow)
 	arm64EmitTailBranch(asm.code, callFixups: asm.callFixups, targetName: GtMorestackName)
-	return asm.finishChunk(GtGuardTrippedName)
+	var chunk = asm.finishChunk(GtGuardTrippedName)
+	chunk.spendsCallerStack(arm64GtPreemptArmStackBytes(), checks: false)
+	return chunk
 end 'buildArm64GtGuardTrippedChunk'
 
 // One local per argument register, integer first.
@@ -963,10 +966,10 @@ function arm64GtPreemptArmSlots() returns StackSize
 	return (arm64ArgRegisters.count() + arm64FpArgRegisters.count()) as StackSize
 end 'arm64GtPreemptArmSlots'
 
-// ⭐ **WHAT A HONOURED PREEMPTION REQUEST COSTS THE GREEN THREAD's STACK BELOW THE GUARD, BEFORE `__gt_preempt`
-// RUNS**: the guard's x30 cell and the frame the arm opens. `requirePreemptionFitsTheGuardMargin` adds
-// `__gt_preempt`'s tree to it.
-export function arm64GtPreemptArmStackBytes() returns StackSize
+// ⭐ **WHAT A HONOURED PREEMPTION REQUEST COSTS THE GREEN THREAD's STACK BELOW THE GUARD, BEFORE
+// `__gt_preempt` RUNS**: the guard's x30 cell and the frame the arm opens.
+// `UnguardedChains.requireUnguardedChainsFitTheGuardMargin` adds `__gt_preempt`'s tree to it.
+function arm64GtPreemptArmStackBytes() returns StackSize
 	return Arm64GuardSaveBytes + buildArm64GtPreemptArm().stackBytesPerCall()
 end 'arm64GtPreemptArmStackBytes'
 
@@ -985,7 +988,7 @@ end 'buildArm64GtPreemptArm'
 
 // A libSystem call on a green thread leaves the thread's own stack untouched: the door moves SP to the machine's
 // system stack before it stores anything (`buildArm64DarwinLibcCallChunk`).
-export let Arm64ImportCallGtStackBytes = 0 as StackSize
+let Arm64ImportCallGtStackBytes = 0 as StackSize
 
 // ⭐ The M alone, where the caller has already PROVEN it exists and therefore has no branch to take. Not a
 // weaker version of `emitArm64LoadCurrentMOrBail` but a different PRECONDITION, and its one caller states
@@ -1087,7 +1090,9 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 	asm.placeLabel(direct)
 	arm64EmitBranchReg(asm.code, reg: Arm64ImportAddressReg)
 
-	return asm.finishChunk(DarwinLibcCallName)
+	var chunk = asm.finishChunk(DarwinLibcCallName)
+	chunk.leavesCallerStack(Arm64ImportCallGtStackBytes)
+	return chunk
 end 'buildArm64DarwinLibcCallChunk'
 
 // `[m + MOffLocks] += delta` — the bracket over the window where `m` names a machine this thread may stop
@@ -1256,7 +1261,9 @@ function buildArm64GtAsyncPreemptChunk() returns FunctionCodeChunk
 	arm64EmitStackFree(asm.code, amount: blockBytes + (Arm64GtPairBytes as StackSize))
 	arm64EmitBranchReg(asm.code, reg: arm64RuntimeReg(Arm64AsyncPreemptResumeReg))
 
-	return asm.finishChunk(AsyncPreemptName)
+	var chunk = asm.finishChunk(AsyncPreemptName)
+	chunk.spendsCallerStack(arm64GtAsyncPreemptStackBytes(), checks: false)
+	return chunk
 end 'buildArm64GtAsyncPreemptChunk'
 
 // Where the interrupted PC lands in the block: x30's slot, because the injection handed it over IN x30.

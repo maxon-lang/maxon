@@ -174,7 +174,7 @@ module function unswitchInFunc(module StdModule, func IrFunction, origins Derive
 	end 'loopless'
 
 	let tree = StdDominatorTree.buildFromSuccessors(succ, blockCount: blockCount)
-	let analysis = UnswitchFunction.gather(module, func: func, tree: tree, scratch: scratch)
+	var analysis = UnswitchFunction.gather(module, func: func, tree: tree, scratch: scratch)
 	var plans = UnswitchPlanArray.create()
 
 	// Outermost first: the discovery order is innermost-first for a nest (`NaturalLoops.headers`).
@@ -611,8 +611,6 @@ end 'sizeFits'
 
 // Every call of the loop, in any order: each must be a direct call whose effect the runtime states,
 // and each names the record it acts on. A writer's record must be defined outside the loop.
-// An INDEX loop over the members, here and below wherever the body writes another of the plan's
-// columns: a `for … in` element is a borrow of `plan` for the loop's whole body.
 function scanCalls(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch) returns bool
 	for index in 0 upto plan.members.count() 'eachMember'
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
@@ -1133,7 +1131,7 @@ function numberHoisted(module StdModule, func IrFunction, analysis UnswitchFunct
 end 'numberHoisted'
 
 function numberHoistedOp(analysis UnswitchFunction, scratch UnswitchScratch, numbering HoistNumbering, valueId ValueId) returns ValueId
-	let reader = analysis.reader
+	var reader = analysis.reader
 
 	if reader.loadDefining(valueId) 'aLoad'
 		return numbering.numberOf(HoistShape.load, left: canonicalOf(scratch.canonical, valueId: reader.load.addrId) as HoistKeyWord, right: reader.load.offset as HoistKeyWord, opcode: NoOpcodeInKey, operandWidth: reader.load.valueType.ordinal, valueId: valueId)
@@ -1345,8 +1343,7 @@ type RewriteColumns
 		self.mappedBlocks.push(original)
 	end 'mapBlock'
 
-	// Back to the identity, in O(what the rewrite mapped). Index loops: the element of a `for … in`
-	// over one column is a borrow of `self` while the body writes the other.
+	// Back to the identity, in O(what the rewrite mapped).
 	function reset()
 		for index in 0 upto self.mappedValues.count() 'eachValue'
 			let original = try self.mappedValues.get(index) otherwise panic("unswitchInvariantGuards: mappedValues.get OOB at {index}")

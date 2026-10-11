@@ -22,13 +22,13 @@ function readVia(reader Reader.handle) returns Tally
 end 'readVia'
 
 function main() returns ExitCode
-	if __Builtins.pinToMachine() == 0 'refused'
+	if not Scheduler.pinToMachine() 'refused'
 		print("refused\n")
 
 		return 1
 	end 'refused'
 
-	let pinned = __Builtins.currentMachine()
+	let pinned = Scheduler.currentMachine()
 
 	if pinned == 0 'noMachine'
 		print("no machine\n")
@@ -48,7 +48,7 @@ function main() returns ExitCode
 	while round < Rounds 'eachRound'
 		sleep(ParkMs)
 
-		if __Builtins.currentMachine() != pinned 'leftItsMachine'
+		if Scheduler.currentMachine() != pinned 'leftItsMachine'
 			moved = moved + 1
 		end 'leftItsMachine'
 
@@ -57,7 +57,7 @@ function main() returns ExitCode
 
 	let tookMs = Clock.elapsedMs(start)
 
-	__Builtins.unpinFromMachine()
+	Scheduler.unpinFromMachine()
 
 	let read = await reading
 

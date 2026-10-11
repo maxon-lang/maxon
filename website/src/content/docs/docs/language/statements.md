@@ -153,7 +153,11 @@ end 'loop'
 ```
 
 **Notes:**
-- The loop variable is immutable.
+- The loop variable cannot be reassigned. It follows its source: read-only all the way down over a
+  [read-only](/docs/language/memory-model/#read-only-values) source, writable through over a `var` one.
+- The loop holds a counted reference to its source, so the body may write the collection. A loop over an
+  `Array` or a `String` re-reads the live count each step: a `push` in the body extends the loop, and a
+  `clear` ends it.
 - Each loop obtains a fresh iterator (`createIterator()`), so a collection can be re-iterated and nested
   loops over one collection are safe.
 - Loop variables must be used (**E3012**). Write `_` for one you do not need: `for _ in items 'loop'`,

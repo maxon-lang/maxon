@@ -3,7 +3,7 @@ export typealias NameByteCount = int(0 to u32.max)
 export typealias NameTableRegrowthCount = int(0 to u64.max)
 
 typealias NameIdArray = Array with NameId
-typealias NameViewColumn = Array with NameView
+typealias NameViewColumn = Array with readonly NameView
 typealias NameSpanArray = Array with NameSpan
 typealias NameDigestArray = Array with HashDigest
 
@@ -24,7 +24,7 @@ end 'NameTableError'
 
 union NameView
 	unmaterialized
-	materialized(text ByteArray)
+	materialized(let text ByteArray)
 end 'NameView'
 
 // An all-`let` record of two narrow fields: one inline machine word where the compiler packs such a
@@ -139,9 +139,8 @@ export type NameTable
 			unmaterialized then break
 		end 'view'
 
-		let materialized = self.ownedCopyOf(id)
-		try self.views.set(id, value: NameView.materialized(materialized)) otherwise panic("NameTable.nameOf: views.set OOB at {id} of {self.views.count()}")
-		return materialized
+		try self.views.set(id, value: NameView.materialized(self.ownedCopyOf(id))) otherwise panic("NameTable.nameOf: views.set OOB at {id} of {self.views.count()}")
+		return try self.nameOf(id)
 	end 'nameOf'
 
 	// A copy nothing else holds — what a caller handing the name to another thread needs.

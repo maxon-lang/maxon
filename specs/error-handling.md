@@ -1988,7 +1988,7 @@ union Fault implements Error
 	bad(text String, at Tally)
 end 'Fault'
 
-typealias FaultArray = Array with Fault
+typealias FaultArray = Array with readonly Fault
 
 type Holder
 	export let fault as Fault

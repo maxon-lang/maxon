@@ -247,6 +247,7 @@ export let MmOwnDeepName = b"__mm_own_deep"
 export let MmAllocName = b"__mm_alloc"
 export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
+let MmReleaseName = b"__mm_release"
 export let MmLeakCheckName = b"__mm_leak_check"
 
 // ⭐⭐ **THE SIX MEMORY-TRAFFIC COUNTER ACCESSORS — the floor of `__Builtins.mmAllocTotal()` and its five
@@ -602,8 +603,12 @@ export enum ReservedCalleeReason
 	faultProbeEntry
 end 'ReservedCalleeReason'
 
+export function wearsTheCompilerInternalPrefix(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: CompilerInternalPrefix)
+end 'wearsTheCompilerInternalPrefix'
+
 export function reservedCalleeReasonOf(callee ByteArray) returns ReservedCalleeReason
-	if bytesStartWith(callee, prefix: CompilerInternalPrefix) 'wearsTheReservedPrefix'
+	if wearsTheCompilerInternalPrefix(callee) 'wearsTheReservedPrefix'
 		return ReservedCalleeReason.compilerInternalPrefix
 	end 'wearsTheReservedPrefix'
 
@@ -720,6 +725,7 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage, target Ta
 
 	buildMmAlloc(module, model: model)
 	buildMmDecref(module)
+	buildMmRelease(module)
 	buildMmFree(module, model: model)
 	buildMmLeakCheck(module, usage: usage)
 	buildMmCounterAccessors(module, model: model)
@@ -1895,15 +1901,15 @@ end 'buildMmOwnDeep'
 // `immortal` untouched. The acquire every incref-shaped entry makes, written once so the four cannot come to
 // step or trace a count differently.
 function emitOneMoreOwner(module StdModule, func IrFunction, entry IrBlock, ptr ValueId, immortal IrBlock, ids ValueMinter) returns IrBlock
-	let step = emitStepOwnerCount(module, func: func, entry: entry, ptr: ptr, delta: OneMore, immortal: immortal, ids: ids)
+	var step = emitStepOwnerCount(module, func: func, entry: entry, ptr: ptr, delta: OneMore, immortal: immortal, ids: ids)
 	return emitMmIncrefEvent(module, func: func, block: step.block, ptr: ptr, priorCount: step.prior, ids: ids)
 end 'emitOneMoreOwner'
 
 // `__mm_sole_box(box, visits)` / `__mm_share_box(box, visits)` — the handle's walk step as an entry of its own
 // (see `MmSoleBoxName`). A handle's box addresses no managed record, so there is nothing below it to descend into.
 function buildMmBoxWalk(module StdModule, action CascadeAction)
-	let body = beginWalkBody(module, name: serviceHandleCascadeCallee(action, clone: MboxHandleCloneBoxName), scope: WalkScope.graph, walksElements: false, recursesPerLevel: false)
-	let descend = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
+	var body = beginWalkBody(module, name: serviceHandleCascadeCallee(action, clone: MboxHandleCloneBoxName), scope: WalkScope.graph, walksElements: false, recursesPerLevel: false)
+	var descend = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
 	emitCascadeBranch(module, from: descend, to: body.done)
 	finishWalkBody(module, body: body)
 end 'buildMmBoxWalk'
@@ -1987,8 +1993,8 @@ end 'walkScopeOf'
 // clone or a walk over one record, the visit table for a walk over a graph. A join block takes each carried value
 // as a block argument, so a value one arm replaces reaches the code after the join.
 export type CascadeCursor
-	export let block as IrBlock
-	export let carried as ValueIdArray
+	export var block as IrBlock
+	export var carried as ValueIdArray
 
 	export static function create(block IrBlock, carried ValueIdArray) returns CascadeCursor
 		return Self{block: block, carried: carried}
@@ -2051,10 +2057,10 @@ end 'pushCascadeEdge'
 // join every stop and the fall-through reach, which returns the visit table over a graph and nothing over one
 // record.
 export type WalkBody
-	export let func as IrFunction
-	export let ids as ValueMinter
-	export let entry as CascadeCursor
-	export let done as CascadeCursor
+	export var func as IrFunction
+	export var ids as ValueMinter
+	export var entry as CascadeCursor
+	export var done as CascadeCursor
 	export let scope as WalkScope
 	let walksElements as bool
 
@@ -2286,7 +2292,7 @@ end 'emitLoadRefcount'
 // stood BEFORE the step in the `owners - 1` convention, whichever kind of count the box keeps. A record
 // rather than two out-parameters, so a caller cannot pair one step's block with another's count.
 type OwnerCountStep
-	export let block as IrBlock
+	export var block as IrBlock
 	export let prior as ValueId
 
 	static function create(block IrBlock, prior ValueId) returns OwnerCountStep
@@ -2489,11 +2495,9 @@ function buildMmIsNull(module StdModule)
 	module.functions.push(func)
 end 'buildMmIsNull'
 
-// `__mm_decref(ptr)` — one fewer owner; at the last, run the header's `destructor@0` and free the
-// box. The refcount read-modify-write is the shared `emitRefcountCheckToLastOwner`.
-//
-// A header destructor releases what the record holds and never frees the record: `__mm_free`
-// follows it here, so a destructor that freed would be a double free.
+// `__mm_decref(ptr)` — one fewer owner; at the last, `__mm_release` runs the header's
+// `destructor@0` and frees the box. The refcount read-modify-write is the shared
+// `emitRefcountCheckToLastOwner`.
 function buildMmDecref(module StdModule)
 	var func = IrFunction.createFromStd(MmDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -2501,19 +2505,40 @@ function buildMmDecref(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
-	var destroy = module.addBlock(func, label: b"destroy", heat: BlockHeat.cold)
-	var free = module.addBlock(func, label: b"free", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: ptr, lastOwner: release, ids: ids)
 
-	let header = emitHeaderBase(module, block: release, ptr: ptr, ids: ids)
-	let destructor = emitLoadField(module, block: release, record: header, offset: HeaderDestructorOffset, ids: ids)
-	let trivial = emitConst(module, block: release, value: TrivialDestructor, ids: ids)
-	let holdsReferences = emitCmp(module, block: release, a: destructor, b: trivial, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(release, op: StdOp.condBranch(holdsReferences, thenBlockId: destroy.id, elseBlockId: free.id))
+	module.appendOp(release, op: StdOp.call(ids.mint(), callee: MmReleaseName, args: argsOf(ptr)))
+	module.setTerminator(release, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMmDecref'
+
+// The last owner's half of `__mm_decref`, a function of its own so it carries a stack guard: a
+// destructor releases what its record holds, which recurses as deep as the data does, and an
+// unguarded chain may not recurse (E5004).
+//
+// A header destructor releases what the record holds and never frees the record: `__mm_free`
+// follows it here, so a destructor that freed would be a double free.
+function buildMmRelease(module StdModule)
+	var func = IrFunction.createFromStd(MmReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var destroy = module.addBlock(func, label: b"destroy", heat: BlockHeat.cold)
+	var free = module.addBlock(func, label: b"free", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
+	let destructor = emitLoadField(module, block: entry, record: header, offset: HeaderDestructorOffset, ids: ids)
+	let trivial = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
+	let holdsReferences = emitCmp(module, block: entry, a: destructor, b: trivial, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(holdsReferences, thenBlockId: destroy.id, elseBlockId: free.id))
 
 	module.appendOp(destroy, op: StdOp.callIndirect(ids.mint(), calleeReg: destructor, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(ptr)))
 	module.setTerminator(destroy, op: StdOp.branch(free.id))
@@ -2522,7 +2547,7 @@ function buildMmDecref(module StdModule)
 	module.setTerminator(free, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildMmDecref'
+end 'buildMmRelease'
 
 // The byte written over every freed payload. `0x3F` is chosen for what it does when a
 // use-after-free READS the dead memory it should not have: as a small integer it is a
@@ -2596,7 +2621,7 @@ end 'emitBoxAllocationBase'
 // cascade that frees its own box has already released its fields, so running it here would release
 // them twice.
 function buildMmFree(module StdModule, model MachineModel)
-	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var start = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2647,7 +2672,7 @@ function emitTrackedTrafficStep(module StdModule, func IrFunction, cur IrBlock, 
 	let done = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
 
 	let state = emitSlabStateCommitted(module, block: cur, ids: ids)
-	let arms = emitSlabResolveShard(module, func: func, cur: cur, state: state, model: model, need: SlabShardNeed.creditsOnly, traffic: ThreadTraffic.none, ids: ids, label: b"shard")
+	var arms = emitSlabResolveShard(module, func: func, cur: cur, state: state, model: model, need: SlabShardNeed.creditsOnly, traffic: ThreadTraffic.none, ids: ids, label: b"shard")
 
 	emitSlabCreditBothArms(module, arms: arms, layer: SlabTrafficLayer.tracked, event: event, next: done, ids: ids)
 
@@ -2862,7 +2887,7 @@ function emitCurrentThreadOrZero(module StdModule, func IrFunction, cur IrBlock,
 	var haveMachine = module.addBlock(func, label: b"thmachine", heat: BlockHeat.normal)
 	var haveGt = module.addBlock(func, label: b"thgt", heat: BlockHeat.normal)
 
-	let none = SlabBailEdge.create(merge, args: argsOf(noThread))
+	var none = SlabBailEdge.create(merge, args: argsOf(noThread))
 	let schedulerWord = emitSlabSchedulerWord(module, block: cur, state: state, model: model, ids: ids)
 	let m = emitSlabMachineOrBail(module, func: func, cur: cur, schedulerWord: schedulerWord, haveMachine: haveMachine, noScheduler: none, noMachine: none, ids: ids, label: b"thwalk")
 	let owner = emitSlabOwnerThreadOrBail(module, cur: haveMachine, m: m, haveOwner: haveGt, noThread: none, ids: ids)
@@ -3215,7 +3240,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	work.seed(usage.neededDestructors as CascadeSymbolSet)
 
 	while work.hasPending() 'drain'
-		let node = work.take()
+		var node = work.take()
 
 		match node 'node'
 			structLayout(entry) then addNestedStructDestructors(usage, layout: entry.layout, typeNames: entry.typeNames, signatures: signatures, work: work)
@@ -3472,9 +3497,7 @@ union StructRuntimeEntryKind
 end 'StructRuntimeEntryKind'
 
 function installStructRuntimeEntries(module StdModule, project Project, signatures ProgramSignatures, needed ReferencedEntrySymbols, kind StructRuntimeEntryKind)
-	let roster = structRuntimeRoster(project, signatures: signatures)
-
-	for entry in roster 'each'
+	for entry in structRuntimeRoster(project, signatures: signatures) 'each'
 		installOneStructRuntimeEntry(module, entry: entry, project: project, signatures: signatures, needed: needed, kind: kind)
 	end 'each'
 end 'installStructRuntimeEntries'
@@ -3483,15 +3506,12 @@ end 'installStructRuntimeEntries'
 // side and the two non-drop cascades part company, which is the property the shared walk exists to make
 // visible.
 function installOneStructRuntimeEntry(module StdModule, entry StructRosterEntry, project Project, signatures ProgramSignatures, needed ReferencedEntrySymbols, kind StructRuntimeEntryKind)
-	let layout = entry.layout
-	let typeNames = entry.typeNames
-
 	match kind 'entry'
-		destructor then installOneStructDestructor(module, layout: layout, typeNames: typeNames, signatures: signatures, needed: needed as DestructorSet)
+		destructor then installOneStructDestructor(module, layout: entry.layout, typeNames: entry.typeNames, signatures: signatures, needed: needed as DestructorSet)
 		dictionaryDestructor then installOneStructDictionaryDestructor(module, entry: entry, signatures: signatures, needed: needed as DestructorSet)
-		cloner then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.clone)
-		soleWalk then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.soleWalk)
-		shareWalk then installOneStructCascade(module, layout: layout, typeNames: typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.shareWalk)
+		cloner then installOneStructCascade(module, layout: entry.layout, typeNames: entry.typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.clone)
+		soleWalk then installOneStructCascade(module, layout: entry.layout, typeNames: entry.typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.soleWalk)
+		shareWalk then installOneStructCascade(module, layout: entry.layout, typeNames: entry.typeNames, project: project, signatures: signatures, needed: needed as CascadeSymbolSet, action: CascadeAction.shareWalk)
 	end 'entry'
 end 'installOneStructRuntimeEntry'
 
@@ -3833,7 +3853,7 @@ end 'installGenericInstanceDictionaryDestructors'
 export union FieldDropKind
 	// The ordinary field: one machine word holding a managed pointer, released by a STATICALLY chosen
 	// `(box) -> void` callee — `__str_decref`, `__mm_decref`, `__managed_decref`, a nested `__destruct_<T>`.
-	direct(callee ByteArray)
+	direct(let callee ByteArray)
 
 	// ⭐ A value held at an INTERFACE TYPE: a fat pointer whose conformer — and therefore whose destructor — is
 	// a RUN-TIME fact, so no static callee exists to name. The witness half at `+witnessDisplacement` from the
@@ -3851,7 +3871,7 @@ export union FieldDropKind
 	//
 	// ⚠ It carries the descriptor's `ValueId` rather than reading a well-known one, because it is a PARAMETER
 	// of the cascade being emitted and nothing outside that emit knows its number.
-	throughDescriptor(callee ByteArray, descriptor ValueId, blockOffset ByteOffset)
+	throughDescriptor(let callee ByteArray, descriptor ValueId, blockOffset ByteOffset)
 end 'FieldDropKind'
 
 // ⭐ **A FIELD'S RELEASE, OR THAT IT HAS NONE** — the answer `dictionaryFieldDropKind` gives, where
@@ -3869,7 +3889,7 @@ end 'FieldDropKindOption'
 // `emitFieldCascadeDestructor`, so the entry/lower/drop/free skeleton lives in ONE place.
 type ManagedFieldDrop
 	export let offset as ByteOffset
-	export let kind as FieldDropKind
+	export var kind as FieldDropKind
 
 	static function create(offset ByteOffset, kind FieldDropKind) returns ManagedFieldDrop
 		return Self{offset: offset, kind: kind}
@@ -4065,7 +4085,7 @@ export function noteCascadeUsage(usage RuntimeUsage, project Project, signatures
 	end 'anyClonerReferenced'
 
 	while work.hasPending() 'drain'
-		let node = work.take()
+		var node = work.take()
 
 		match node 'node'
 			structLayout(entry) then noteStructCascadeNeeds(usage, layout: entry.layout, typeNames: entry.typeNames, signatures: signatures, work: work, action: action)
@@ -4347,7 +4367,7 @@ end 'synthesizeElementRecordCloner'
 // alloc/blit/clone/ret skeleton lives in ONE place rather than once per shape of field list.
 type ManagedFieldCascade
 	export let offset as ByteOffset
-	export let strategy as ManagedCascadeStrategy
+	export var strategy as ManagedCascadeStrategy
 
 	static function create(offset ByteOffset, strategy ManagedCascadeStrategy) returns ManagedFieldCascade
 		return Self{offset: offset, strategy: strategy}
@@ -4501,10 +4521,10 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	let newBox = ids.mint()
 	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: layout.name, debugStream: module.debugStream), ids: ids)
 	var copied = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
-	let start = CascadeCursor.create(copied, carried: ValueIdArray.create())
+	var start = CascadeCursor.create(copied, carried: ValueIdArray.create())
 	let finish = start.at(done)
 
-	let fellThrough = emitUnionManagedCaseChain(module, func: func, cur: start, box: newBox, layout: layout, dest: finish, project: project, signatures: signatures, action: CascadeAction.clone, ids: ids)
+	var fellThrough = emitUnionManagedCaseChain(module, func: func, cur: start, box: newBox, layout: layout, dest: finish, project: project, signatures: signatures, action: CascadeAction.clone, ids: ids)
 
 	emitCascadeBranch(module, from: fellThrough, to: finish)
 	module.setTerminator(done, op: StdOp.ret(newBox))
@@ -4575,7 +4595,7 @@ function emitManagedFieldCascade(module StdModule, func IrFunction, cur CascadeC
 	module.setTerminator(cur.block, op: StdOp.condBranch(nonNull, thenBlockId: visitBlock.id, elseBlockId: cont.block.id))
 	pushCascadeEdge(cur.block, to: cont, values: cur.carried)
 
-	let visited = emitFieldVisit(module, visit: cur.at(visitBlock), box: box, offset: offset, oldPtr: oldPtr, strategy: strategy, action: action, ids: ids)
+	var visited = emitFieldVisit(module, visit: cur.at(visitBlock), box: box, offset: offset, oldPtr: oldPtr, strategy: strategy, action: action, ids: ids)
 	emitCascadeBranch(module, from: visited, to: cont)
 
 	return cont
@@ -4704,7 +4724,7 @@ end 'synthesizeElementRecordCascade'
 // deliberately: `emitElementWalkRange` and `emitListElementWalk` each test the slot one level up and never
 // `callIndirect` a null element.
 function synthesizeElementRecordWalk(module StdModule, id GenericInstanceId, signatures ProgramSignatures, action CascadeAction)
-	let body = beginWalkBody(module, name: perTypeCascadeSymbol(action, typeName: signatures.mangleGenericInstance(id)), scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
+	var body = beginWalkBody(module, name: perTypeCascadeSymbol(action, typeName: signatures.mangleGenericInstance(id)), scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
 	let walked = emitWalkCall(module, block: body.entry.block, ptr: WalkBoxParam, visits: body.entry.visits(), strategy: signatures.elementRecordFieldCascadeStrategy(id, action: action), ids: body.ids)
 	emitCascadeBranch(module, from: CascadeCursor.create(body.entry.block, carried: argsOf(walked)), to: body.done)
 	finishWalkBody(module, body: body)
@@ -4714,7 +4734,7 @@ end 'synthesizeElementRecordWalk'
 // own walk step, then each managed field behind the per-field null-guard a moved-out slot needs.
 // `emitFieldCascadeDestructor`'s shape minus the free, and `emitFieldCascadeCloner`'s minus the allocation.
 function emitFieldCascadeWalk(module StdModule, symbolName ByteArray, walks ManagedFieldCascadeArray, action CascadeAction)
-	let body = beginWalkBody(module, name: symbolName, scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
+	var body = beginWalkBody(module, name: symbolName, scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
 	var cur = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
 
 	for spec in walks 'eachField'
@@ -4729,9 +4749,9 @@ end 'emitFieldCascadeWalk'
 // tag-guard chain `synthesizeUnionCloner` walks — the LIVE case's managed payloads. A scalar-only union is the
 // box step alone.
 function synthesizeUnionWalk(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, action CascadeAction)
-	let body = beginWalkBody(module, name: perTypeCascadeSymbol(action, typeName: layout.name), scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
-	let walked = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
-	let fellThrough = emitUnionManagedCaseChain(module, func: body.func, cur: walked, box: WalkBoxParam, layout: layout, dest: body.done, project: project, signatures: signatures, action: action, ids: body.ids)
+	var body = beginWalkBody(module, name: perTypeCascadeSymbol(action, typeName: layout.name), scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
+	var walked = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
+	var fellThrough = emitUnionManagedCaseChain(module, func: body.func, cur: walked, box: WalkBoxParam, layout: layout, dest: body.done, project: project, signatures: signatures, action: action, ids: body.ids)
 
 	emitCascadeBranch(module, from: fellThrough, to: body.done)
 	finishWalkBody(module, body: body)

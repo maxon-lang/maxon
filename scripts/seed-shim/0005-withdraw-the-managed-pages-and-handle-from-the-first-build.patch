@@ -1,0 +1,126 @@
+--- a/stdlib/Debuggee.maxon
++++ b/stdlib/Debuggee.maxon
+@@ -73,11 +73,39 @@
+ 	return packed
+ end 'packedWord'
+ 
++module type SeedPages
++	var address as ScratchBase
++	var length as ScratchBytes
++
++	module static function reserve(capacity ScratchBytes) returns SeedPages
++		return Self{address: __Builtins.profileScratchAlloc(capacity) as ScratchBase, length: capacity}
++	end 'reserve'
++
++	module function base() returns DebuggeeAddress
++		return self.address as DebuggeeAddress
++	end 'base'
++
++	module function lend() returns DebuggeeAddress
++		return self.address as DebuggeeAddress
++	end 'lend'
++
++	module function bytes() returns DebuggeeByteCount
++		return self.length as DebuggeeByteCount
++	end 'bytes'
++
++	module function release()
++		if self.address != 0 'holdsPages'
++			__Builtins.profileScratchFree(self.address, self.length)
++			self.address = 0
++		end 'holdsPages'
++	end 'release'
++end 'SeedPages'
++
+ module type ScratchPages
+-	var box as __ManagedPages
++	var box as SeedPages
+ 
+ 	module static function reserve(capacity ScratchBytes) returns ScratchPages
+-		return Self{box: __ManagedPages.reserve(capacity)}
++		return Self{box: SeedPages.reserve(capacity)}
+ 	end 'reserve'
+ 
+ 	module function held() returns bool
+--- a/stdlib/Sampler.maxon
++++ b/stdlib/Sampler.maxon
+@@ -72,11 +72,34 @@
+ 		end 'rawHandle'
+ 	end 'SampledThread'
+ 
++	type SeedHandle
++		var word as RegisterWord
++
++		static function timer() returns SeedHandle
++			return Self{word: __Builtins.profileTimerCreate() as RegisterWord}
++		end 'timer'
++
++		static function adopting(handle RegisterWord) returns SeedHandle
++			return Self{word: handle}
++		end 'adopting'
++
++		function handle() returns DebuggeeAddress
++			return self.word as DebuggeeAddress
++		end 'handle'
++
++		function release()
++			if self.word != 0 'holdsHandle'
++				__Builtins.profileClose(self.word)
++				self.word = 0
++			end 'holdsHandle'
++		end 'release'
++	end 'SeedHandle'
++
+ 	type OpenThread
+ 		let id as SampledThreadId
+-		var handle as __ManagedHandle
+-
+-		static function holding(handle __ManagedHandle, id SampledThreadId) returns OpenThread
++		var handle as SeedHandle
++
++		static function holding(handle SeedHandle, id SampledThreadId) returns OpenThread
+ 			return Self{id: id, handle: handle}
+ 		end 'holding'
+ 
+@@ -159,7 +182,7 @@
+ 	/// Samples the threads of another process, on x64 Windows only. `close()` releases the handles and
+ 	/// scratch regions it holds.
+ 	public type SampledProcess
+-		var process as __ManagedHandle
++		var process as SeedHandle
+ 		let pid as RegisterWord
+ 		var scratch as ScratchPages
+ 		var window as ScratchPages
+@@ -167,7 +190,7 @@
+ 		let captures as CaptureSerialCell
+ 
+ 		public static function open(pid Pid) returns SampledProcess throws SamplerError
+-			let process = __ManagedHandle.adopting(__Builtins.profileOpenTarget(pid))
++			let process = SeedHandle.adopting(__Builtins.profileOpenTarget(pid))
+ 
+ 			if process.handle() == 0 'noSuchProcess'
+ 				throw SamplerError.noSuchProcess
+@@ -196,7 +219,7 @@
+ 				end 'endOfTheList'
+ 
+ 				let id = __Builtins.profileThreadId(handle) as SampledThreadId
+-				self.openThreads.push(OpenThread.holding(__ManagedHandle.adopting(handle), id: id))
++				self.openThreads.push(OpenThread.holding(SeedHandle.adopting(handle), id: id))
+ 				found.push(SampledThread.identified(handle, id: id))
+ 				cursor = handle
+ 			end 'eachThread'
+@@ -354,12 +377,12 @@
+ 	/// A periodic timer: each `wait()` blocks until `interval` past the previous deadline, at 100 ns
+ 	/// resolution. `wait()` after `close()` panics.
+ 	public type SampleTimer
+-		var timer as __ManagedHandle
++		var timer as SeedHandle
+ 		let stepTicks as RegisterWord
+ 		var deadline as RegisterWord
+ 
+ 		public static function create(interval SampleIntervalNanos) returns SampleTimer throws SamplerError
+-			let timer = __ManagedHandle.timer()
++			let timer = SeedHandle.timer()
+ 
+ 			if timer.handle() == 0 'noTimer'
+ 				throw SamplerError.noTimer

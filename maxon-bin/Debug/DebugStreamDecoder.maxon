@@ -202,6 +202,7 @@ function sharedMemoryReason(reason SharedMemoryError) returns String
 		mapFailed then return "{SegmentMapCallName} refused the view"
 		invalidName then panic("DebugStreamDecoder.sharedMemoryReason: `mintSegmentName` answers a name within `SharedSegment.publish`'s rule, so `invalidName` means the two disagree")
 		outOfBounds then panic("DebugStreamDecoder.sharedMemoryReason: `segmentUnavailable` carries only what `SharedSegment.publish` throws, and an accessor's `outOfBounds` is not among it")
+		closed then panic("DebugStreamDecoder.sharedMemoryReason: `segmentUnavailable` carries only what `SharedSegment.publish` throws, and an accessor's `closed` is not among it")
 	end 'k'
 end 'sharedMemoryReason'
 
@@ -233,7 +234,7 @@ module type DebugStreamDecoder
 	/// it, it is a run that would print `tag=1` for every event and a capture block that would fail
 	/// without ever saying why.
 	module static function create(target FilePath, filter FamilyFilter) returns DebugStreamDecoder throws DecoderError
-		let segment = try SharedSegment.publish(mintSharedSegmentName(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
+		var segment = try SharedSegment.publish(mintSharedSegmentName(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
 			throw DecoderError.segmentUnavailable(e)
 		end 'noSegment'
 
@@ -463,14 +464,14 @@ end 'copySegmentBytes'
 // living processes and the nonce covers the rest — see `SegmentNamePrefix`.
 function mintSharedSegmentName(prefix String) returns String
 	let nonce = Clock.nowNanos() and SegmentNonceMask
-	return "{prefix}{__Builtins.currentProcessId()}_{nonce:08x}"
+	return "{prefix}{Process.id()}_{nonce:08x}"
 end 'mintSharedSegmentName'
 
 // ⭐ Every header field the producer reads, written before it can read any of them.
 //
 // ⛔⛔ **`DsOffStartTimestamp` MUST BE THE COUNTER THE PRODUCER SUBTRACTS FROM, AND ONLY ONE EXPRESSION IS
 // IT.** Every entry is stamped `osTickCountMs() - start`, so the field is not "a time" — it is a reading of
-// `GetTickCount64`, and `__Builtins.tickCountMs()` is the door onto that same Std op. ⚠ `Clock.nowMs()`
+// `GetTickCount64`, and `Clock.osTickMs()` is the door onto that same Std op. ⚠ `Clock.nowMs()`
 // looks like a substitute and is NOT: it is `__gt_now_ns` scaled (see `Parser.emitMonotonicMs`), QPC-ms
 // LEADS the tick, and the producer's subtraction then UNDERFLOWS — measured, every event printed
 // `[+4294967.244]`. A zero seed does not underflow but makes every delta the raw tick, so each line reports
@@ -485,7 +486,7 @@ function seedHeader(segment SharedSegment)
 	storeSegmentWord(segment, at: DsOffReadCursor as SegmentOffset, value: 0)
 	storeSegmentWord(segment, at: DsOffFlags as SegmentOffset, value: 0)
 	storeSegmentWord(segment, at: DsOffProcessId as SegmentOffset, value: 0)
-	storeSegmentWord(segment, at: DsOffStartTimestamp as SegmentOffset, value: __Builtins.tickCountMs())
+	storeSegmentWord(segment, at: DsOffStartTimestamp as SegmentOffset, value: Clock.osTickMs() as SegmentWord)
 	storeSegmentWord(segment, at: DsOffTotalEvents as SegmentOffset, value: 0)
 	storeSegmentWord(segment, at: DsOffDroppedEvents as SegmentOffset, value: 0)
 	storeSegmentWord(segment, at: DsOffTagTableOffset as SegmentOffset, value: DsSharedMemoryBytes - DsTagReserveBytes)

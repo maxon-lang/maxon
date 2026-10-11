@@ -137,7 +137,7 @@ module function threadConstantBranchesInFunc(module StdModule, func IrFunction, 
 		return
 	end 'noCandidate'
 
-	let analysis = FunctionAnalysis.gather(module, func: func, scratch: scratch)
+	var analysis = FunctionAnalysis.gather(module, func: func, scratch: scratch)
 	let bound = blockArgIdBound(module, func: func)
 	var argOwner = ValueIdArray.create()
 	argOwner.resize(bound)
@@ -341,8 +341,7 @@ function predecessorBranchesOnlyTo(module StdModule, pred IrBlock, targetId Bloc
 	return branch.isBranch() and branch.targetBlockId == targetId
 end 'predecessorBranchesOnlyTo'
 
-// The one edge `pred` carries. Read through a function so the borrow of `pred` ends at the return —
-// the rewrite appends to the block while it still holds the edge's args.
+// The one edge `pred` carries.
 function soleEdge(pred IrBlock) returns BranchEdge
 	return try pred.branchEdges.get(0) otherwise panic("threadConstantBranches: branchEdges.get(0) on a one-edge block")
 end 'soleEdge'

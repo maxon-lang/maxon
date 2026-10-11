@@ -43,10 +43,9 @@ Output: `4`, `x+y+z x+y-z`, `5 Hello Hello`, `[h][é][l][l][o]`, `padded|HELLO`.
 | Member | Returns | Description |
 |--------|---------|-------------|
 | `String.from(bytes ByteArray)` | `String` | A string over the bytes. The bytes are not validated as UTF-8. |
-| `String.fromCString(cs cstring)` | `String` | Copy the NUL-terminated bytes at `cs`; the string owns its copy. Stops at the first zero byte. |
-| `String.init(managed)` | `String` | The compiler's literal initializer; programs write a literal instead. |
+| `String.init(managed)` | `String` | The compiler's literal initializer, over library-tier storage; programs write a literal. |
 | `toByteArray()` | `ByteArray` | The UTF-8 bytes as a new, independent array. |
-| `cstr()` | `cstring` | A NUL-terminated view of the bytes, for an intrinsic that takes `cstring`. Valid while the string is alive and unmodified. |
+| `cstr()` | `cstring` | Library tier ([E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier) elsewhere): a NUL-terminated view of the bytes, for an intrinsic that takes `cstring`. Valid while the string is alive and unmodified. |
 | `clone()` | `String` | An independent copy; writes to either never show through the other. |
 
 ### Properties

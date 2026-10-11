@@ -22,13 +22,16 @@ end 'DebugSessionHold'
 // debuggee runs on with nobody able to reach it.
 export type DebugSessionSlot
 	export var hold as DebugSessionHold
+	export var serials as SerialMint
 
-	export static function create() returns DebugSessionSlot
-		return Self{hold: DebugSessionHold.empty}
+	export static function create(serials SerialMint) returns DebugSessionSlot
+		return Self{hold: DebugSessionHold.empty, serials: serials}
 	end 'create'
 
 	export function reap(ending DebugSessionEnding) returns CollectedLines
-		let finalOutput = match self.hold 'which'
+		var holding = self.hold
+
+		let finalOutput = match holding 'which'
 			empty gives CollectedLines.create()
 			held(session) gives session.closed(ending)
 		end 'which'
@@ -56,7 +59,7 @@ let NeverStoppedReason = "the program ended before the debugger could stop it"
 export type DebugToolSession
 	export var conversation as DebugConversation
 	export var engine as DebugEngine
-	let image as DebugImage
+	var image as DebugImage
 
 	export static function launch(image DebugImage, arguments StringArray, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, workingDirectory FilePath = inheritedWorkingDirectory(), delivery DebugStopDelivery = DebugStopDelivery.awaited) returns DebugToolLaunch
 		let launched = launchedToolSession(image, arguments: arguments, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced, workingDirectory: workingDirectory, delivery: delivery)
@@ -118,7 +121,7 @@ end 'launchedToolSession'
 function startedToolSession(image DebugImage, code ByteArray, reader MxdbgReader, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, delivery DebugStopDelivery) returns DebugToolLaunch
 	let program = image.program()
 	let symbols = DebugSymbols.create(reader, code: code, executable: program)
-	let routing = ChildOutputRouting.collect(OutputSink.create())
+	var routing = ChildOutputRouting.collect(OutputSink.create())
 
 	match DebugEngine.start(program, reader: reader, textBytes: code.count() as DebugAddress, arguments: arguments, workingDirectory: workingDirectory, targetEnv: targetEnv, routing: routing, stopTimeoutMs: stopTimeoutMs, traced: traced) 'started'
 		refused(reason) then return DebugToolLaunch.refused(reason)

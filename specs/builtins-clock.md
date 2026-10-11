@@ -11,7 +11,7 @@ category: system
 
 `__Builtins` is the compiler's builtin TYPE: a name reserved for the compiler, whose static
 methods are INTRINSICS rather than functions any file declares. `stdlib/Clock.maxon` is written
-against three of them; a fourth has no stdlib surface and is read by the compiler itself. All four
+against all four (the fourth through `Clock.threadCpuTicks()`). All four
 are what this spec pins:
 
 | Intrinsic | Meaning |
@@ -121,9 +121,16 @@ serving the whole instrumentation family on that lane.
 `arity-checked` and `unknown-intrinsic` are refused in the front end, are target-neutral, and carry NO
 marker. See `async-scheduler.md`'s *Targets* section for the one statement of the substrate gate.
 
+Every `__Builtins` member is library-tier: only a source file under `stdlib/` or `runtime/` may call one,
+and a call from anywhere else is E3185. The cases below call the intrinsics themselves, so they compile in
+the library tier (`<!-- tier: stdlib -->`). A program reads these clocks through `Clock.nowNanos()`,
+`Clock.nowMs()`, `WallClock.nowUnixSeconds()` and `Clock.threadCpuTicks()`, and the machine's uptime through
+`Clock.osTickMs()`; the last two cases read them that way.
+
 ## Tests
 
 <!-- test: builtins-clock.nanos-monotonic -->
+<!-- tier: stdlib -->
 A monotonic clock never moves backwards: each successive reading is `>=` the previous one. The
 epoch is platform-defined, so only ordering is asserted, never a magnitude.
 ```maxon
@@ -146,6 +153,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.nanos-advances -->
+<!-- tier: stdlib -->
 The clock is LIVE, not a constant folded in at compile time: busy-work between two readings shows
 up as a positive delta, and the delta is in the units the intrinsic claims (a millisecond of
 spinning is at least 1,000 nanoseconds by a wide margin, which raw QPC ticks — ~10,000 for a
@@ -170,6 +178,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.ms-tracks-nanos -->
+<!-- tier: stdlib -->
 `currentTimeMs()` IS `currentTimeNanos()` scaled: two readings taken back to back must agree once
 the nanosecond one is divided by 1,000,000. The window is generous (a scheduler preemption between
 the two reads is legal) but tiny compared with any unit error — a millisecond reading that was
@@ -194,6 +203,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.ms-resolves-sub-tick -->
+<!-- tier: stdlib -->
 **The test that pins the millisecond resolution above.** It walks a tight loop, records the SMALLEST non-zero delta
 between two successive `currentTimeMs()` readings — which is precisely the source counter's period,
 expressed in milliseconds — and asserts it is 1.
@@ -229,6 +239,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.unix-seconds-is-a-calendar-time -->
+<!-- tier: stdlib -->
 `currentUnixTimeSeconds()` returns a real calendar time, and the bounds are the whole test.
 
 The LOWER bound catches the regression it exists for: a wall clock silently wired to the monotonic
@@ -256,6 +267,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.unix-seconds-advances -->
+<!-- tier: stdlib -->
 The wall clock is live, not a constant read once at startup. Sleeping 1.1 s must cross at least one
 whole-second boundary no matter where in the current second the first reading landed.
 ```maxon
@@ -274,6 +286,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.wall-clock-is-not-the-monotonic-clock -->
+<!-- tier: stdlib -->
 The two clocks are DIFFERENT instruments, and this is what says so: seconds-since-1970 is four
 orders of magnitude larger than seconds-since-boot on any machine that has not been running since
 1970, so a wall clock wired to the monotonic source collapses the gap.
@@ -292,6 +305,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.arity-checked -->
+<!-- tier: stdlib -->
 A clock intrinsic takes no arguments; one given an argument is refused by the same builtin-arity
 check `trunc`/`sleep` use, because a builtin has no signature for the ordinary arity check to read.
 ```maxon
@@ -304,6 +318,7 @@ error E3036: <fragment>:3:20: '__Builtins.currentTimeMs' takes exactly 0 argumen
 ```
 
 <!-- test: builtins-clock.unknown-intrinsic -->
+<!-- tier: stdlib -->
 `__Builtins.nope()` names no intrinsic. It is refused at the call site with `E3004` — the code a
 plain undefined function gets — instead of reaching the linker and panicking without a file or a
 line.
@@ -355,6 +370,7 @@ error E3004: <fragment>:3:16: call to undefined function '__whatever': the '__' 
 ```
 
 <!-- test: builtins-clock.rejected-on-wasm -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 wasm32-wasi has no clock substrate, so the call is refused at its source span with `E3104`, naming
 the runtime entry that has no lowering there — never a panic from inside the wasm backend.
@@ -368,6 +384,7 @@ error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__gt_n
 ```
 
 <!-- test: builtins-clock.wall-clock-rejected-on-wasm -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The wall clock is refused the same way, naming its own runtime entry.
 ```maxon
@@ -380,6 +397,7 @@ error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__cloc
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-monotonic -->
+<!-- tier: stdlib -->
 Three reads in one program never go backwards. A thread's consumed CPU time cannot decrease, so
 this is what a capture of the wrong register, a sign-extension of a 32-bit half or a stale value
 left in the out-param word would fail.
@@ -403,6 +421,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-advances-under-work -->
+<!-- tier: stdlib -->
 Two million additions move it. The direct statement of the contract, and the property a lowering
 that never called the OS — answering the `.data` scratch word's zero initializer forever — fails
 first.
@@ -429,6 +448,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-is-not-wall-time -->
+<!-- tier: stdlib -->
 **THE DISCRIMINATOR, AND THE WHOLE REASON THIS INTRINSIC EXISTS.** The program measures its own CPU
 across two intervals of comparable WALL length — one spent RUNNING, one spent asleep — and requires
 the running one to cost multiples more. A wall clock, which is the wrong lowering somebody would
@@ -485,6 +505,7 @@ end 'main'
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-arity-checked -->
+<!-- tier: stdlib -->
 The CPU clock takes no arguments, and earns the same `builtinArity` refusal its three wall siblings
 do. Front-end only and target-neutral, so it carries no marker.
 ```maxon
@@ -497,6 +518,7 @@ error E3036: <fragment>:3:20: '__Builtins.threadCpuTicks' takes exactly 0 argume
 ```
 
 <!-- test: builtins-clock.thread-cpu-ticks-rejected-on-wasm -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The CPU clock is refused the same way the other three are, naming its OWN runtime entry — which is
 what says the gate is keyed on the `__thread_` band rather than on the clock band it shares a file
@@ -511,4 +533,81 @@ end 'main'
 ```
 ```maxoncstderr
 error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__thread_cpu_ticks', which has no wasm32-wasi implementation
+```
+
+<!-- test: builtins-clock.the-public-cpu-clock-follows-the-thread-not-the-wall -->
+`thread-cpu-ticks-is-not-wall-time`'s discriminator, asked through the surface a program outside the library
+tiers reads: `Clock.threadCpuTicks()` across a busy interval must cost multiples of what it costs across a
+`sleep` of comparable wall length, timed with `Clock.nowNanos()`. wasm32-wasi has no per-thread CPU clock.
+```maxon
+typealias SpinCount = int(0 to 100000000)
+typealias SpinSum = int(0 to i64.max)
+
+function spin(n SpinCount) returns SpinSum
+	var sum = 0
+	for i in 0 upto n 'each'
+		sum = sum + i
+	end 'each'
+	return sum as SpinSum
+end 'spin'
+
+function main() returns ExitCode
+	let busyCpuBefore = Clock.threadCpuTicks()
+	let worked = spin(20000000)
+	let busyCpuAfter = Clock.threadCpuTicks()
+
+	let sleepWallBefore = Clock.nowNanos()
+	let sleepCpuBefore = Clock.threadCpuTicks()
+	sleep(200)
+	let sleepCpuAfter = Clock.threadCpuTicks()
+	let sleepWallAfter = Clock.nowNanos()
+
+	let busyCpu = busyCpuAfter - busyCpuBefore
+	let sleepCpu = sleepCpuAfter - sleepCpuBefore
+	let sleepWall = sleepWallAfter - sleepWallBefore
+	var score = 0
+	if worked > 0 'workReallyRan'
+		score = score + 1
+	end 'workReallyRan'
+	if sleepWall >= 200000000 'sleptTheWholeTime'
+		score = score + 2
+	end 'sleptTheWholeTime'
+	if busyCpu > sleepCpu * 4 'cpuFollowsTheThreadNotTheClock'
+		score = score + 4
+	end 'cpuFollowsTheThreadNotTheClock'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: builtins-clock.the-os-tick-clock-counts-the-machines-uptime -->
+`Clock.osTickMs()` is how long the MACHINE has been up, in milliseconds, so it is above zero in any program
+that runs, never moves backwards, and covers a 100 ms `sleep` — less a host tick's granularity, which is at
+most 16 ms on x64-windows. wasm32-wasi has no uptime clock.
+```maxon
+let SleepMs = 100
+
+let TickGranularityMs = 16
+
+function main() returns ExitCode
+	let before = Clock.osTickMs()
+	sleep(SleepMs)
+	let after = Clock.osTickMs()
+	var score = 0
+	if before > 0 'theMachineIsUp'
+		score = score + 1
+	end 'theMachineIsUp'
+	if after >= before 'neverBackwards'
+		score = score + 2
+	end 'neverBackwards'
+	if after - before >= SleepMs - TickGranularityMs 'theSleepWasCounted'
+		score = score + 4
+	end 'theSleepWasCounted'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```

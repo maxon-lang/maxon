@@ -97,7 +97,7 @@ export type Scope
 
 	// Every declaration made while a frame was open, in declaration order —
 	// innermost frame on top. Drained back to a frame's mark by popScope.
-	var declNames as ByteArrayArray
+	var declNames as NameRoster
 
 	// Parallel to `declNames`: did this declaration DISPLACE an existing binding of
 	// the same name? A dense bool column rather than an optional `VarInfo` per
@@ -115,7 +115,7 @@ export type Scope
 	export static function create() returns Scope
 		return Self{
 			vars: VarInfoMap.create(),
-			declNames: ByteArrayArray.create(),
+			declNames: NameRoster.create(),
 			declShadowed: BoolArray.create(),
 			shadowedInfos: VarInfoArray.create(),
 			frameMarks: ScopeMarkArray.create(),
@@ -126,7 +126,7 @@ export type Scope
 	// Reset the scope for a new function parse.
 	export function reset()
 		vars = VarInfoMap.create()
-		declNames = ByteArrayArray.create()
+		declNames = NameRoster.create()
 		declShadowed = BoolArray.create()
 		shadowedInfos = VarInfoArray.create()
 		frameMarks = ScopeMarkArray.create()
@@ -399,7 +399,7 @@ export type Scope
 	// @generated library-cache begin
 	export function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteVarInfoMap(writer, value: self.vars)
-		cacheWriteByteArrayArray(writer, value: self.declNames)
+		cacheWriteNameRoster(writer, value: self.declNames)
 		cacheWriteBoolArray(writer, value: self.declShadowed)
 		cacheWriteVarInfoArray(writer, value: self.shadowedInfos)
 		cacheWriteScopeMarkArray(writer, value: self.frameMarks)
@@ -408,7 +408,7 @@ export type Scope
 
 	export static function cacheRead(reader LibraryCacheReader) returns Scope throws LibraryCacheDamage
 		let f_vars = try cacheReadVarInfoMap(reader)
-		let f_declNames = try cacheReadByteArrayArray(reader)
+		let f_declNames = try cacheReadNameRoster(reader)
 		let f_declShadowed = try cacheReadBoolArray(reader)
 		let f_shadowedInfos = try cacheReadVarInfoArray(reader)
 		let f_frameMarks = try cacheReadScopeMarkArray(reader)

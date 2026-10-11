@@ -56,7 +56,7 @@ function task(idx Integer, args StringArray, churn Integer) returns Integer
 	// CPU-parallel checkpoint: marks this hand-written CPU-bound function as a
 	// legitimate `async` target (satisfies the E3073 yielding contract) without
 	// claiming fake I/O. No-op at runtime.
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 
 	var acc = idx
 
@@ -113,9 +113,9 @@ function main() returns ExitCode
 		total = total + await p
 	end 'await'
 
-	let workers = __Builtins.schedMaxActiveWorkers()
+	let workers = Scheduler.counters().maxActiveWorkers
 	let monitor = monitorActions()
-	let cpus = __Builtins.cpuCount()
+	let cpus = Scheduler.machineCpuCount()
 
 	// The driver parses these lines. `aggregate` is the core-count-invariant
 	// determinism signal; `workers` proves multi-core actually ran; `monitor` is

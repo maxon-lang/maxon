@@ -299,7 +299,7 @@ function codeOffsetIn(address DebugAddress) returns MxdbgCodeOffset
 end 'codeOffsetIn'
 
 export type DebugSymbols
-	let reader as MxdbgReader
+	var reader as MxdbgReader
 	let code as ByteArray
 	let programFiles as StringArray
 	let sourceFiles as DebugSourceFileArray
@@ -542,7 +542,7 @@ export type DebugSymbols
 			holdsTheAuthorsCode = holdsTheAuthorsCode or descent == DebugSpliceDescent.throughTheAuthors
 		end 'eachRange'
 
-		let ways = spliceWaysOf(self.code, ranges: ranges)
+		let ways = spliceWaysOf(self.code, ranges: ranges, panicEntries: self.panicEntries())
 
 		if ways.leavesUnknowably or ways.exits.count() != 1 'noOneWayOut'
 			return DebugSpliceExit.none
@@ -552,6 +552,21 @@ export type DebugSymbols
 
 		return DebugSpliceExit.at(exit as DebugAddress, reachesTheAuthorsCode: holdsTheAuthorsCode or self.someCalleeIsTheProgramsOwn(ways.callees), indirectCalls: ways.indirectCalls)
 	end 'exitOfSplice'
+
+	function panicEntries() returns MxdbgCodeOffsetArray
+		var entries = MxdbgCodeOffsetArray.create()
+		let panicName = String.from(PanicName)
+
+		for i in 0 upto self.reader.functionCount() 'eachFunction'
+			let fn = self.reader.functionRecord(i as MxdbgIndex)
+
+			if fn.name == panicName 'theRuntimesPanic'
+				entries.push(fn.codeStart)
+			end 'theRuntimesPanic'
+		end 'eachFunction'
+
+		return entries
+	end 'panicEntries'
 
 	function someCalleeIsTheProgramsOwn(callees MxdbgCodeOffsetArray) returns bool
 		for callee in callees 'eachCallee'
@@ -1357,11 +1372,11 @@ type DebugSpliceWays
 	end 'noteExit'
 end 'DebugSpliceWays'
 
-function spliceWaysOf(code ByteArray, ranges DebugCodeRangeArray) returns DebugSpliceWays
+function spliceWaysOf(code ByteArray, ranges DebugCodeRangeArray, panicEntries MxdbgCodeOffsetArray) returns DebugSpliceWays
 	var ways = DebugSpliceWays.create()
 
 	for range in ranges 'eachRange'
-		if not noteWaysOutOf(ways, code: code, range: range, ranges: ranges) 'controlGoesWhereNoRangeSays'
+		if not noteWaysOutOf(ways, code: code, range: range, ranges: ranges, panicEntries: panicEntries) 'controlGoesWhereNoRangeSays'
 			ways.leavesUnknowably = true
 
 			return ways
@@ -1371,9 +1386,10 @@ function spliceWaysOf(code ByteArray, ranges DebugCodeRangeArray) returns DebugS
 	return ways
 end 'spliceWaysOf'
 
-function noteWaysOutOf(ways DebugSpliceWays, code ByteArray, range DebugCodeRange, ranges DebugCodeRangeArray) returns bool
+function noteWaysOutOf(ways DebugSpliceWays, code ByteArray, range DebugCodeRange, ranges DebugCodeRangeArray, panicEntries MxdbgCodeOffsetArray) returns bool
 	var at = range.start as DecodedOffset
 	var fallsThrough = true
+	var afterAPanic = false
 
 	while at < (range.limit as DecodedOffset) 'eachInstruction'
 		var instruction = DecodedInstruction.create(0, instructionClass: DbgClassPlain as DecodedClass, target: DecodedTarget.none, callOperand: DecodedCallOperand.none)
@@ -1384,6 +1400,13 @@ function noteWaysOutOf(ways DebugSpliceWays, code ByteArray, range DebugCodeRang
 		end 'decoded'
 
 		let kind = instruction.instructionClass
+
+		if kind == DbgClassReturn and afterAPanic 'theDeadTailOfAPanicBlock'
+			fallsThrough = false
+			afterAPanic = false
+			at = at + (instruction.length as DecodedOffset)
+			continue
+		end 'theDeadTailOfAPanicBlock'
 
 		if kind == DbgClassReturn or kind == DbgClassIndirectJump 'noTargetThisScanCanName'
 			return false
@@ -1401,6 +1424,7 @@ function noteWaysOutOf(ways DebugSpliceWays, code ByteArray, range DebugCodeRang
 			ways.noteExit(instruction.target.reached() as MxdbgCodeOffset)
 		end 'aJumpOutOfTheSplice'
 
+		afterAPanic = (kind == DbgClassDirectCall and panicEntries.contains(instruction.target.reached() as MxdbgCodeOffset)) or (afterAPanic and kind == DbgClassPlain)
 		fallsThrough = kind != DbgClassDirectJump
 		at = at + (instruction.length as DecodedOffset)
 	end 'eachInstruction'

@@ -12,6 +12,7 @@ The cases of `specs/builtins-parallel-boundary.md` whose subject is the emitted 
 ## Tests
 
 <!-- test: builtins-parallel-boundary.checkpoint-body-is-runtime-source -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE CHECKPOINT'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE THAT
 SEES IT.** `runtime/ParallelBoundary.maxon` writes `__parallel_boundary` as `__Raw.ownFrame()` and nothing
 else, and the block below renders what the back end made of that: a prologue, an epilogue, a `ret`. Every

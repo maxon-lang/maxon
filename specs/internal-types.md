@@ -21,7 +21,7 @@ The builtin types are:
 
 ### Using __ManagedMemory
 
-`__ManagedMemory` provides low-level heap buffer operations. Most user code should use higher-level types like `Array` or `String`, but `__ManagedMemory` can be used directly for custom collection types.
+`__ManagedMemory` provides low-level heap buffer operations, and it is library-tier: only a source file under `stdlib/` or `runtime/` may name the type, its statics or its methods, or read a value's `.managed` buffer (E3185 anywhere else). The standard library builds `Array`, `String` and the other collections on it; a program uses those.
 
 ```text
 typealias Int = int(i64.min to i64.max)
@@ -43,8 +43,8 @@ Instance methods:
 - `get(index)` returns Element — read element at index (panics if index >= length)
 - `set(index, value)` — write element at index (panics if index >= capacity)
 - `grow(newCapacity)` — grow buffer via realloc (panics if newCapacity < current capacity)
-- `shiftRight(index, count)` — shift elements right (panics if index or index+count >= capacity)
-- `shiftLeft(index, count)` — shift elements left (panics if index or index+count >= capacity)
+- `shiftRight(index, count)` — shift elements right (throws `shiftOutOfBounds` unless `index + count < length`)
+- `shiftLeft(index, count)` — shift elements left (throws `shiftOutOfBounds` unless `index >= 1` and `index + count <= length`)
 - `byteAt(index)` returns int — read single byte (panics if index >= length * elementSize)
 - `setByte(index, value)` — write single byte (panics if index >= length * elementSize)
 - `append(other)` — append another buffer's data in-place (grows if needed)

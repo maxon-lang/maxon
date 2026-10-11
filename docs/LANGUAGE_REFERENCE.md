@@ -746,8 +746,9 @@ function main() returns ExitCode
 	rows.push(9)
 	let head = 1 as LoopHead
 	let r = try rows.get(head) otherwise 0    // a LoopHead is an ElementIndex
-	print("{r} {takesBlock(head)}\n")          // 9 1
-	// takesBlock(3 as VarId)                 // E3005: expected 'BlockId', got 'VarId'
+	let other = 3 as VarId
+	print("{r} {takesBlock(head)} {other}\n")  // 9 1 3
+	// takesBlock(other)                      // E3005: expected 'BlockId', got 'VarId'
 	return 0
 end 'main'
 ```
@@ -1204,7 +1205,7 @@ end 'main'
 - A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer
   may reach follows the [Top-Level Variables](#top-level-variables) rules: a `let`'s initializer may not reach
   a module-level `var` that holds a record (**E3165**), a `var`'s may not take a module-level `let`'s record
-  (**E3166**), and a `spawn` reachable from any global initializer is **E3164** — a
+  (**E3078**), and a `spawn` reachable from any global initializer is **E3164** — a
   [`default` declaration](#program-wide-defaults--default) starts a program-wide service before `main`.
 - A `let` without `static` in a type body is an ordinary field with a default.
 
@@ -1490,7 +1491,7 @@ type Digits implements InitableFromArrayLiteral with Digit
 		var total = 0 as Number
 
 		for d in digits 'each'
-			total = total * 10 + d
+			total = total * 10 + d as Number
 		end 'each'
 
 		return Self{value: total}
@@ -1514,11 +1515,11 @@ typealias Integer = int(i64.min to i64.max)
 type Box uses T
 	export var item as T
 
-	export static function create(item T) returns Self
+	static function create(item T) returns Self
 		return Self{item: item}
 	end 'create'
 
-	export function get() returns T
+	function get() returns T
 		return item
 	end 'get'
 end 'Box'
@@ -1846,7 +1847,7 @@ function makePair(a Amount, b Amount) returns (Amount, Amount)
 end 'makePair'
 
 function main() returns ExitCode
-	var t = (0, 0)
+	var t = makePair(0, b: 0)
 	t.0 = 20
 	t.1 = 22
 	print("{sum(t)}\n")                      // 42
@@ -2085,6 +2086,8 @@ type — an interface-typed parameter, an interface-typed return, or an interfac
 dispatch through the witness table, as they do for any other conformer:
 
 ```maxon
+typealias Integer = int(0 to 255)
+
 interface Greeter
 	function greet() returns Integer
 end 'Greeter'
@@ -2342,6 +2345,33 @@ enum case: `Outcome.pending`.
 Payloads may be integers, floats, booleans, strings, records, other unions and collections. An integer
 literal passed for a `float` payload widens to the float: `Reading.celsius(21)` carries `21.0`.
 
+### Read-Only Payloads
+
+A payload declared `let` is read-only for the whole life of the value, like a `let` field (see
+[Read-Only Values](#read-only-values)). A value stored into it must be read-only, a value type, or moved in
+(**E3078** otherwise); a match binding of it is read-only, and a write through it is **E3159**. A union whose
+payloads are all `let` and all value types is itself a value type.
+
+```maxon
+typealias Weight = int(0 to 100)
+
+union Op
+	call(let callee ByteArray, weight Weight)
+	nop
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.call(b"emit", weight: 3)
+
+	match op 'show'
+		call(callee, weight) then print("{callee.count()} {weight}\n")    // 4 3
+		nop then print("nop\n")
+	end 'show'
+
+	return 0
+end 'main'
+```
+
 ### Pattern Matching
 
 In a `match`, `caseName(a, b)` binds the payload for that arm; the bindings are local to the arm.
@@ -2386,7 +2416,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-When the matched value is a `let`, the bindings are immutable and assigning to one is **E2013**.
+When the matched value is a `let`, the bindings are immutable and assigning to one is **E2013**. They are
+also [read-only](#read-only-values) all the way down, so a write through one is **E3159**.
 
 ### Comparing Union Values
 
@@ -2547,8 +2578,9 @@ let name = "Maxon"
 // pi = 3.14            // E2013: cannot assign to immutable variable: 'pi'
 ```
 
-A `let` cannot be mutated through a method either: calling a method that writes its receiver (`push`,
-`append`, `set`, `remove`, `clear`, …) on a `let` is **E3019**.
+A `let` is read-only all the way down (see [Read-Only Values](#read-only-values)): calling a method that writes
+its receiver (`push`, `append`, `set`, `remove`, `clear`, …) on a `let`, or writing a field of anything it
+reaches, is **E3159**.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -2558,7 +2590,7 @@ function main() returns ExitCode
 	var items = TallyArray.create()
 	items.push(1)                    // fine: items is a var
 	// let fixed = TallyArray.create()
-	// fixed.push(1)                 // E3019: cannot pass 'fixed' to function that mutates parameter 'self'
+	// fixed.push(1)                 // E3159: cannot write through 'fixed': 'fixed' is read-only (a `let` binding)
 	print("{items.count()}\n")
 	return 0
 end 'main'
@@ -2580,8 +2612,8 @@ end 'main'
   `a.clone()` for an independent copy (see
   [Reference-by-Default Assignment](#reference-by-default-assignment)).
   Numbers, `bool` and other scalar values are always independent copies.
-- **A mutable name takes an immutable name's record only by moving it** (see
-  [Immutable XOR Mutable](#immutable-xor-mutable)):
+- **A read-only value stays read-only.** `var b = a` moves `a` when `a` is a `var`; from a read-only `a` (a
+  `let` included) it is **E3078**, and `a.clone()` is the mutable copy (see [Read-Only Values](#read-only-values)):
 
   ```maxon
   typealias Coord = int(i64.min to i64.max)
@@ -2595,13 +2627,14 @@ end 'main'
   end 'Point'
 
   function main() returns ExitCode
-  	let a = Point.create(1)
+  	var a = Point.create(1)
+  	a.x = 2
   	var b = a                 // a MOVES into b; reading a afterwards is E3102
   	b.x = 10
 
   	let c = Point.create(3)
-  	let d = c                 // d aliases c: two immutable names
-  	// var e = c              // E3078: cannot assign immutable variable 'c' to mutable binding 'e'
+  	let d = c                 // d shares c's record: both are read-only
+  	// var e = c              // E3078: a read-only value bound to a `var`
   	var f = c.clone()         // an independent record
   	f.x = 30
   	print("{b.x} {c.x} {d.x} {f.x}\n")   // 10 3 3 30
@@ -2655,21 +2688,20 @@ end 'main'
   included. A scalar `var` is readable, a `var`'s initializer may reach any global, and a `let`'s may reach
   other `let`s.
 - The other direction is refused too: a `var`'s initializer may not call anything whose result may be, lie
-  within or hold a module-level `let`'s record (**E3166**, at the `var`'s declaration, naming the call). What
+  within or hold a module-level `let`'s record (**E3078**, at the `var`'s declaration, naming the call). What
   a call hands back is followed through further calls, witness dispatches and calls through function values;
-  a record built fresh from numbers read out of a `let` is legal. The same fact refuses a write, inside a
-  function, through a record a call handed back out of a `let` — through its `otherwise` fallback, a ternary
-  or `match` arm — at a field write (**E3159**) and at a method that writes its receiver (**E3019**).
-- A field of a module-level `let` is that `let`'s own storage: a `var` made from it (`var m = H.index`) and
-  written through is **E3078**, as one made from a field of a local `let` is. Read it through a `let`, or bind
-  a `clone()`.
+  a record built fresh from numbers read out of a `let` is legal.
+- A module-level `let` is [read-only](#read-only-values) through everything it reaches, for the program's whole
+  life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
+  of it (`var m = H.index`) or such a call result to a `var` is **E3078**. Read it through a `let`, or bind a
+  `clone()`.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3173): the
   defaults are built after every global initializer has run.
 - A top-level declaration is private to its file unless marked `export`, `module` or `public`.
-- A [service](#services--spawn) handler may not read or write a module-level `var`
-  (**E3143**); keep service state in its fields.
+- A [service](#services--spawn) handler, and every function it reaches, may not read or write a module-level
+  `var` (**E3143**); keep service state in its fields.
 
 ---
 
@@ -2871,12 +2903,13 @@ end 'main'
   of the receiver (`count` or `self.count`), and a chain of them (`p.a.b`). The rule is exactly the
   assignment rule — an argument the callee writes is accepted here if and only if writing the same thing at
   the call site would be accepted.
-- Passing a `let` to a parameter the callee writes is **E3019** (`cannot pass 'y' to function that mutates
-  parameter 'n'`). A method writing a field of its **own** receiver is not a parameter write, so
-  `let acc = Accumulator.create()` followed by `acc.add(10)` is legal. An immutable field, or a field of an
-  immutable instance, is refused for the same reason the equivalent assignment is.
-- Passing a collection to a parameter the callee **reassigns** while a reference into that collection is
-  still live is **E3070**: the reassignment frees what the reference points into.
+- Passing a [read-only](#read-only-values) value to a parameter the callee writes is **E3159** (`cannot pass
+  'y', which is read-only (a `let` binding), to a function that writes parameter 'n'`). The receiver of a
+  method counts as a parameter, so `let acc = Accumulator.create()` followed by `acc.add(10)`, where `add`
+  writes a field of `acc`, is refused too. A `let` field, or anything reached through a read-only value, is
+  refused for the same reason the equivalent assignment is.
+- Passing storage to a parameter the callee **reassigns**, while another argument of the same call reaches
+  that storage, is **E3186** (see [Aliasing Between Arguments](#aliasing-between-arguments)).
 - Passing a literal or another expression gives the callee a temporary; its writes have no visible effect.
 - A parameter declared at a type parameter — in a method of a generic type or in a generic function — is
   passed by reference on the same terms.
@@ -2948,11 +2981,11 @@ Clone a local before the closure when the function still needs it (`let mine = w
 captured inside a loop is moved on the first trip, so the second is **E3102**. A capture moves its local
 before the call it is an argument of runs, so that call may not also consume the local, take it by
 reference or write it as its receiver (**E3102**); a call that only reads it may. Inside a closure, a captured name is the closure's own
-copy, so passing it to a parameter the callee writes is **E3019**.
+copy, so passing it to a parameter the callee writes is **E3159**.
 
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
 and the captures, so a closure may be returned, stored in a field, a module-level variable, a container or
-a union payload, and passed to `async`, which moves it into the coroutine. A plain function is a record that
+a union payload, and passed to `async`. A plain function is a record that
 lives for the whole program. Copies share: `var g = f` and `f.clone()` hold the same closure, and a function
 value is exempt from **E3078**. A module-level `let` or `var` may hold a function value, including a closure
 a factory call returns.
@@ -3431,7 +3464,11 @@ end 'loop'
 ```
 
 **Notes:**
-- The loop variable is immutable.
+- The loop variable cannot be reassigned. It follows its source: read-only all the way down over a
+  [read-only](#read-only-values) source, writable through over a `var` one.
+- The loop holds a counted reference to its source, so the body may write the collection. A loop over an
+  `Array` or a `String` re-reads the live count each step: a `push` in the body extends the loop, and a
+  `clear` ends it.
 - Each loop obtains a fresh iterator (`createIterator()`), so a collection can be re-iterated and nested
   loops over one collection are safe.
 - Loop variables must be used (**E3012**). Write `_` for one you do not need: `for _ in items 'loop'`,
@@ -4465,17 +4502,15 @@ not 80.
   argument rides a cell the coroutine owns.
 - A callee may keep an argument it is handed (move it into a record it returns, for one); a coroutine
   dropped before it runs releases what it was handed instead.
-- **The arguments move into the coroutine**, because it can outlive the caller's frame. A local `let` or
-  `var` passed to `async` is consumed: reading it afterwards is **E3102**, and so is handing one binding twice
-  to one call. A scalar is copied. A parameter the callee reassigns writes storage the coroutine owns, and
-  nothing is written back to the caller, so a coroutine may write an argument it was given as a `let`.
-  Clone a value the caller still needs (`async work(data.clone())`).
-- **A parameter or a field of `self` is shared, not moved**: the coroutine takes its own reference and the
-  function goes on using it. Passing a handle through a parameter is how a socket or a server is shared with
-  a coroutine. A module-level `let` is shared too.
-- A value the caller can also read through a second name that holds no reference of its own is **E3138**;
-  pass a `.clone()`. A value something still borrows — a field read out of it is read after the call — is
-  **E3070**, and a match payload of a `let` union handed to a parameter the coroutine writes is **E3019**.
+- **The arguments are shared, exactly as an ordinary call shares them.** The caller and its coroutines are
+  one strand of one green thread, so the coroutine takes a plain count of its own on each managed argument
+  and the caller's binding stays usable: a `var` handed to `async` is read and written after the call, a
+  `let` is shared read-only, and one binding may be handed twice in one call. A scalar is copied. Passing a
+  handle is how a socket or a server is shared with a coroutine.
+- A parameter the callee reassigns gets storage the coroutine owns, and nothing is written back to the
+  caller. A coroutine that writes a parameter is refused a [read-only](#read-only-values) argument
+  (**E3159**), as an ordinary call is.
+- A closure that captured a binding owns it, so handing that binding to `async` afterwards is **E3102**.
 - The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, or perform file, socket or
   process I/O, directly or through its callees. A function that never yields is **E3073** (`function never
   yields; 'async' is for I/O-concurrent work only`): there is nothing to overlap.
@@ -4550,7 +4585,7 @@ function main() returns ExitCode
 	naps.push(async nap(20, tag: 2))
 	naps.push(async nap(100, tag: 3))
 
-	let first = __Builtins.awaitAny(naps)
+	let first = naps.awaitAny()
 	print("first finished: index {first}\n")     // index 1
 
 	var sum = 0
@@ -4563,9 +4598,10 @@ function main() returns ExitCode
 end 'main'
 ```
 
-**Waiting for the first of several.** `__Builtins.awaitAny(array)` parks until any promise in the array has
-finished and returns its index. It consumes nothing: every promise, the winner included, is still awaited
-(or dropped) afterwards. An already-finished promise is returned without parking.
+**Waiting for the first of several.** `promises.awaitAny()`, on an `Array with Promise with …`, parks until
+any promise in the array has finished and returns its index. It consumes nothing: every promise, the winner
+included, is still awaited (or dropped) afterwards. An already-finished promise is returned without parking.
+`p.isComplete()` asks one promise whether it has finished, without parking or consuming it.
 
 **Reading a promise out of storage.** A promise has one owner, so reading one out of the array or the struct
 field that holds it starts a MOVE out of that slot: consuming the read empties the slot, and a read never
@@ -4634,11 +4670,11 @@ type Calc
 		return Self{count: 0}
 	end 'create'
 
-	function bump(by Count)
+	export function bump(by Count)
 		self.count = self.count + by
 	end 'bump'
 
-	function total() returns Count
+	export function total() returns Count
 		return self.count
 	end 'total'
 end 'Calc'
@@ -4688,14 +4724,19 @@ end 'main'
 **What crosses a message.** A value sent to a service must not stay reachable from the sender in a way
 either side could write, because the two green threads may run at the same time on different processors:
 
-- A `let` or `var`, a temporary or a literal argument is **moved** into the service; reading the sender's
-  variable afterwards is **E3102**. Replies are moved too, and so is every argument a `spawn`'s factory keeps
-  in the service's state. The handler owns what it was sent, so it may keep it or write it.
-- A value with an owner besides the sender — held in a container, borrowed from a parameter — is **E3138**;
-  send a `.clone()`. A factory argument the factory keeps follows the same rule: one borrowed from a
-  parameter, a field, an element or a module-level `let`'s record, or a borrowed `String`, is **E3138**, and
-  a field read off a temporary built inside the factory call's own argument list crosses, because the `spawn`
-  releases that temporary.
+- A local `let` or `var`, a temporary or a literal argument the sender owns is **moved** into the service;
+  reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
+  `spawn`'s factory keeps in the service's state. The handler owns what it was moved, so it may keep it or
+  write it.
+- A [read-only](#read-only-values) value the sender does not own — a module-level `let`, a `let` field, a
+  `SharedValue` or registry read, or a parameter nothing in the sending function writes — is **shared**: its graph is marked shared, so every
+  count on it steps atomically, and neither side may write it. Sending a parameter the sending function
+  writes, or any shared value the handler writes or keeps, is **E3138**. A borrowed `String` is copied at the
+  send.
+- A value with an owner besides the sender that is not read-only — held in a container, read out of a field
+  or an element of a `var`, or the source of an enclosing `for` loop — is **E3138**; send a `.clone()`. A factory
+  argument the factory keeps follows the same rule, and a field read off a temporary built inside the
+  factory call's own argument list crosses, because the `spawn` releases that temporary.
 - A `spawn` of a factory declared more than once, whose declarations keep an argument differently, is
   **E2015**; give the factories distinct names.
 - A parameter type that cannot cross at all — a promise, a function value, an opaque type parameter — is
@@ -4727,7 +4768,7 @@ holding an OS handle, a value held at an interface type, or a generic instance w
 **E3163** where a message can read it, and legal where only `main` does. A `spawn` a global initializer can
 reach is **E3164** (a [`default`](#program-wide-defaults--default) starts a program-wide service before
 `main`), a `let` whose initializer reaches a module-level `var` holding a record is **E3165**, and
-a `var` whose initializer may take a `let`'s record is **E3166** (see
+a `var` whose initializer may take a `let`'s record is **E3078** (see
 [Top-Level Variables](#top-level-variables)).
 
 **Output order.** Text printed by `main` and by a service handler may interleave in any order; sequence it
@@ -4798,10 +4839,11 @@ A top-level `default Key = expression` declares the program-wide default for `Ke
 - **A service key** is an interface. The expression spawns a type that implements it
   ([E3170](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3170) otherwise), and `Key.current()` returns an
   owned `Key.handle`.
-- **A value key** is a type whose fields are all `let`, over types a share walk can mark — scalars,
-  `String`, other such records, service handles and `SharedValue`s
-  ([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) otherwise). The expression builds one, and may
-  spawn services for its fields. `Key.current()` returns the published record.
+- **A value key** is a type whose graph a share walk can mark: one that reaches no OS handle, function value
+  or promise ([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) otherwise). Its fields may be `var`,
+  and may hold containers. The expression builds one, and may spawn services for its fields.
+  `Key.current()` returns the published record, [read-only](#read-only-values) all the way down: a write
+  through it is **E3159**, binding it to a `var` is **E3078**, and `clone()` makes a mutable copy.
 
 ```maxon
 typealias Count = int(i64.min to i64.max)
@@ -4912,8 +4954,9 @@ end 'main'
 - `ConfigCell.create(v)` makes a cell; `current()` reads its value lock-free; `publish(v)` replaces it
   for every holder; `publish(v, replacing: old)` is the conditional form, answering as
   `Key.register(new, replacing: old)` does.
-- Readers take an immutable snapshot and a writer publishes a whole new value, so a value a reader holds
-  stays valid across later publishes. A published value must be solely owned
+- Readers take a read-only snapshot and a writer publishes a whole new value, so a value a reader holds
+  stays valid across later publishes. A value `current()` returns is read-only all the way down, as a value
+  key's is. A published value must be solely owned
   ([E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174)).
 - The cell is shared by reference: `clone()` hands out another reference to the same value, and a cell
   crosses a message like a service handle.
@@ -5122,9 +5165,44 @@ own. Every task is an entry point, exempt from **E3092** like a target.
 
 ## Memory Model
 
-Maxon manages memory with **reference counting** decided at compile time. There is no garbage collector and
-no manual `free`: a record is released when its last reference goes away, and the compiler proves at compile
-time that no reference is used after that.
+Maxon manages memory with **reference counting**. There is no garbage collector and no manual `free`: a
+record is released when its last reference goes away. Programs cannot:
+
+- use freed memory, or free memory twice;
+- access out of bounds;
+- read null or uninitialized memory;
+- invalidate an iterator;
+- race on data.
+
+Three mechanisms carry this:
+
+- **Reference counting is the safety mechanism.** Every read that could outlive its owner is counted, so a
+  record is freed only when nothing can reach it.
+- **Mutable state belongs to one thread; read-only values may be shared.** `let` is deeply read-only, so a
+  read-only value can be shared by any number of holders and threads without copying.
+- **Raw memory is reachable only from the library tier** (`stdlib/` and `runtime/`). Programs reach it through
+  safe, bounds-checked standard-library APIs.
+
+### Safety Guarantees
+
+| Hazard | What Maxon does |
+|--------|-----------------|
+| Use after free, double free | Reference counting; a read that could outlive its owner takes its own reference |
+| Iterator invalidation | A `for` loop or cursor holds a counted reference to its source |
+| Out-of-range collection index | `get`/`set` throw `ArrayError.indexOutOfBounds`; there is no unchecked access |
+| Raw memory | Reachable only from the library tier (**E3185**) |
+| Forged values | No integer-to-enum or integer-to-union cast, and no interface-to-interface cast (**E3009**) |
+| Null | There is no null: every variable, field and element holds a value |
+| Uninitialized fields | Every field must be definitely assigned before its struct literal (**E3086**) |
+| Writing through read-only data | Compile error (**E3159**, **E3078**) |
+| Use after move | Compile error (**E3102**) |
+| Data races | Mutable state is owned by one thread, and only read-only values are shared |
+| Stack overflow | Checked function prologues; **E5004** for the unchecked runtime chains; guard pages on OS stacks |
+| Value outside a typealias's range | Compile error for a known value, **panic** at run time otherwise |
+| Division by zero | Compile error for a constant zero; otherwise the division throws `DivisionByZero` |
+| Negative shift count | Compile error for a known count, **panic** at run time otherwise |
+| Integer overflow | Wraps (two's complement); a range check catches it where the value reaches a checked place |
+| Leaks | Exit code **101** when `main` returns with memory still allocated (see [The Leak Checker](#the-leak-checker)) |
 
 ### Values and Records
 
@@ -5173,71 +5251,118 @@ end 'main'
 Reassigning a variable rebinds it to another record without touching the old one. Use
 [`clone()`](#explicit-cloning) when you need an independent copy.
 
-### Immutable XOR Mutable
+### Ownership and Lifetime
 
-A record is either **written through mutable holders** or **read through immutable names** — never both at
-once. The compiler enforces this, which is what makes sharing by reference safe.
+Every record carries a reference count and is freed when the count reaches zero. The compiler decides where
+counts are needed. A mistake in that analysis can only add a count, so it costs speed, never safety.
 
-**Immutable names** are `let` bindings (including `for` loop variables and `if let` bindings), module-level
-`let` constants, and parameters the function does not write. **Mutable holders** are `var` bindings, fields,
-container elements and parameters the function writes. Several holders may share a record: storing it into a
-field or container, or passing it to a callee that keeps it, adds a reference.
+- **Counted reads.** A value read out of a collection (`get`, `first`, a cursor) or out of a field takes its own
+  reference whenever something before its last use could release the record it came from. Mutating a
+  collection while an element read from it is still in use is therefore safe.
+- **Loops hold their source.** A `for` loop or cursor holds a counted reference to the collection it walks, so a
+  write to that collection inside the loop cannot free the elements being visited.
+- **Moves.** A move hands the reference over without changing the count, and consumes the source binding.
+  Reading the source afterwards is **E3102**. Assigning the binding a new value makes it usable again.
+- **Plain and atomic counts.** Counts are plain within one thread, and atomic only on values shared between
+  threads (see [Threads and Shared Data](#threads-and-shared-data)).
 
-The checks are by **liveness**: an immutable name matters only while some later statement still reads it.
+### Read-Only Values
 
-| Situation | Result |
-|-----------|--------|
-| `var b = a` where `a` is a `let` that is its record's only reference | `a` **moves** into `b`; reading `a` afterwards is **E3102** |
-| `var b = a` where the record is also named by another live `let`, or `a` is a field of an immutable name (`var i = o.inner`) | **E3078** |
-| a `var` bound to a value that may be a live `let`'s record — a call result, a container element — and then written | **E3078** |
-| a field write, or a method that writes its receiver, on a record a live `let` may still read | **E3159** |
-| a `let`, or a value that may be a live `let`'s record, passed to a parameter the callee writes | **E3019** |
-| mutating a collection while a `let` borrowed from it is live | **E3070** (see [Borrow Checking](#borrow-checking)) |
+`let` makes a value **read-only all the way down**: nothing reachable through it may be written, by any holder,
+for as long as it is read-only. That is what makes sharing by reference safe.
+
+| Read-only root | Read-only through |
+|----------------|-------------------|
+| a `let` binding | everything it reaches |
+| a `let` field | everything it reaches, for the record's whole life |
+| a module-level `let` | everything it reaches, for the program's whole life |
+| a value read from a `SharedValue` or a registry | everything it reaches |
+| a stored Map key or Set element | itself, while stored |
+| an element of a `readonly` element type | itself, while stored |
+| a `for` variable, `if let` binding or `match` binding | the same as its source: read-only from a read-only source, writable from a writable one |
+
+The rules:
+
+- **No write through a read-only value.** A field store, a method that writes its receiver, or an argument the
+  callee writes is **E3159**. The diagnostic names the read-only root.
+- **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is storing
+  it into a `var` field, a mutable container element, a parameter that keeps it mutably, or a module `var`
+  initializer. [`clone()`](#explicit-cloning) makes an independent mutable copy.
+- **A `let` field has no other writer.** A value stored into a `let` field must be:
+  - already read-only;
+  - a value type;
+  - or moved in, either as a sole-owned value or as a `var` at its last use.
+
+  A mutable value that is still shared elsewhere is **E3078**. The same rule applies to a parameter whose callee
+  stores it into a `let` field; the compiler reads that from the callee's body.
+- **`let b = a`, where `a` is a `var`, moves `a`.** `b` is then the record's only holder, and read-only.
+- **Keys are read-only.** A stored Map key or Set element cannot be written through its container, and a key read
+  back out is read-only. Storing a key follows the `let`-field rule. Map values and Array elements follow their
+  container.
+- **Read-only element types.** `Array with readonly T` and `Map with K, readonly V` hold read-only values
+  without copying:
+  - a read-only value can be stored directly;
+  - an element read out is read-only;
+  - the container itself stays mutable: elements can still be pushed, replaced and removed.
+
+  `readonly` appears only on a container's element or value type; bindings and fields use `let`.
+- **Value types are exempt.** Scalars, `String`, `Character` and records whose fields are all `let` cannot give a
+  stored value a second writer, so none of these rules apply to them. A `String` or `Character` a name does not
+  own is copied when it is bound to a `var` or stored.
 
 ```maxon
 typealias Coord = int(i64.min to i64.max)
 
 type Point
 	export var x as Coord
-	export var y as Coord
 
-	static function create(x Coord, y Coord) returns Point
-		return Point{x: x, y: y}
+	static function create(x Coord) returns Point
+		return Point{x: x}
 	end 'create'
 end 'Point'
 
 typealias PointArray = Array with Point
 
 function main() returns ExitCode
-	let a = Point.create(1, y: 2)
-	var arr = PointArray.create()
-	arr.push(a)                     // arr co-owns a's record
-	var b = a                       // a moves into b
+	var a = Point.create(1)
+	a.x = 2
+	let frozen = a                       // a moves into frozen, which is read-only
+	let view = frozen                    // view shares frozen's record, read-only
+	// frozen.x = 3                      // E3159: 'frozen' is read-only
+	// var copy = frozen                 // E3078: 'frozen' is read-only
+	var b = frozen.clone()               // an independent, mutable record
 	b.x = 5
-	// print("{a.x}\n")             // E3102: use of moved value 'a'
 
-	let first = try arr.get(0) otherwise panic("pushed")
-	// var e = try arr.get(0) otherwise panic("pushed")
-	// e.x = 9                      // E3078: 'get' may share storage with immutable variable 'first'
-	var e = (try arr.get(0) otherwise panic("pushed")).clone()
-	e.x = 9                         // fine: an independent record
-	print("{first.x} {b.x} {e.x}\n")   // 5 5 9
+	var points = PointArray.create()
+	points.push(b)                       // the array shares b's record
+	var first = try points.get(0) otherwise panic("pushed")
+	first.x = 9                          // an element follows its container
+	print("{view.x} {b.x} {first.x}\n")     // 2 9 9
 	return 0
 end 'main'
 ```
 
-Some consequences:
+### Moves and Sharing
 
-- A `var` that is only rebound and read — walking a chain with `cur = try cur.next()` — writes nothing and is
-  never refused.
-- A method writing a field of its **own** receiver is not a parameter write: `let acc = Accumulator.create()`
-  then `acc.add(10)` is legal.
-- A record whose type declares every field `let` can never be written, so none of these checks apply to it.
-- `String` and `Character` values a name does not own are copied when bound to a `var` or stored.
-- A `let` or `var` sent to a [service](#services--spawn), passed to [`async`](#starting-a-coroutine) or
-  captured by a [closure](#closures) is moved, and reading it afterwards is **E3102**.
-- The analysis tracks records made and used within one function. Two fields of a record received from
-  elsewhere — a parameter, module storage — are assumed to hold different records.
+| Where a value goes | What happens |
+|--------------------|--------------|
+| `var b = a`, `a` a `var` | `a` moves into `b` |
+| `let b = a`, `a` a `var` | `a` moves into `b`, and `b` is read-only |
+| `let b = a`, `a` read-only | `b` shares the record, read-only |
+| `var b = a`, `a` read-only (a `let` included) | **E3078**; `a.clone()` is the mutable copy |
+| an ordinary call argument | shared with the callee for the call, counted where needed; a parameter the callee reassigns gets its own storage |
+| an argument the callee keeps in a `let` field | must be read-only, a value type, or moved (a `var` at its last use) |
+| an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns |
+| a [closure](#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
+| a [service](#services--spawn) message or `spawn` factory argument | a mutable value moves to the service; a read-only value the sender does not own is shared |
+| `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**), and every reader sees it read-only |
+
+### Aliasing Between Arguments
+
+Reads are counted, so two arguments that reach the same storage are safe in most calls: `s.append(s)` is
+legal. The one refused overlap is a **by-reference parameter** whose storage another argument of the same call
+also reaches. A by-reference parameter is one the callee reassigns. The refusal is **E3186**; pass a `clone()` as
+one of the two.
 
 ### Explicit Cloning
 
@@ -5285,28 +5410,62 @@ A type that both conforms to an interface and holds a value at that interface ty
 all — it is a reference cycle, reported as **E4014** (see the ownership rules in `specs/ownership.md`), so no
 decorator of that shape reaches the clone check.
 
-### Borrow Checking
+### Threads and Shared Data
 
-A `let` bound to an element read out of a mutable collection **borrows** from that collection. While the
-borrow is live, the collection cannot be mutated — directly or through a function that mutates it:
+- **A green thread and its coroutines run one at a time.** The coroutines a green thread starts with `async` never
+  run in parallel with it or with each other. They switch only at `await`, `sleep`, `Scheduler.yield()` and I/O,
+  so their reference counts are plain and sharing between them needs no synchronization.
+- **Services own their state.** State that more than one thread uses lives in a [service](#services--spawn) and is
+  reached by message. Messages and replies move their mutable arguments.
+- **Module `var`s stay on one thread.** A module or static `var` that code running on another thread (a service,
+  or anything it calls) can reach is **E3143**.
+- **Read-only values are shared.** A module `let` reachable from another thread, a value published through
+  `SharedValue` or a registry `default`, and a read-only parameter sent in a message are marked shared before a
+  second thread can see them. A shared value uses atomic counts, and nothing can write it, because it is read-only.
+- **A shared graph must be walkable.** A `SharedValue` or registry value that holds an OS handle, a function value
+  or a promise is **E3171**. A module `let` read by a message that the share walk cannot mark is **E3163**.
+- **The send check.** At run time, a mutable value moved to another thread must be solely owned; a value that is
+  not stops the program with exit code **96**.
 
-```maxon
-function main() returns ExitCode
-	var arr = ["hello"]
-	let s = try arr.get(0) otherwise ""
-	// arr.push("world")      // E3070: cannot mutate 'arr' via 'push' while it is borrowed by 's'
-	print("{s}\n")            // the borrow ends at its last use...
-	arr.push("world")         // ...so this is fine
-	print("{arr.count()}\n")
-	return 0
-end 'main'
-```
+### Raw Memory and the Library Tier
 
-Borrows end at the borrowing variable's **last use**, not at the end of its scope.
+Raw memory is reached only through `__Builtins` and `.managed` / `__ManagedMemory`, and both are available only
+to the library tier: source files under `stdlib/` and `runtime/`. In any other code these are **E3185**:
 
-A field read into a binding borrows from its record the same way. While a borrow is still read, the record
-it came from may not be moved — into a message argument, an `async` call, or the value a `match` or ternary
-branch gives — and a binding it was moved into may not be dropped at the end of its block (**E3070**).
+- the whole `__Builtins` namespace;
+- `.managed`, `__ManagedMemory` and `__ManagedMemoryCursor`, and the methods of a value of either type;
+- `cstr()` and `cstring`;
+- `Promise.inner`;
+- the raw handle types `__ManagedFile`, `__ManagedDirectory`, `__ManagedSocket`, `__ManagedPages` and
+  `__ManagedHandle`.
+
+The diagnostic names the safe API that replaces the member, where there is one (`Process.id()` for
+`__Builtins.currentProcessId`, `HeapStats.slab()` for the slab counters).
+
+`__Raw`, the runtime's machine-level floor, is reachable only from `runtime/` (**E3152**).
+
+Programs use the safe standard-library APIs built on top of these, and each is handle-based and bounds-checked:
+`File`, `Directory`, the sockets, `Process`, `Scheduler`, `Clock`, `Console`, `Math`, `HeapStats`, `Debuggee` and
+`Sampler`.
+
+The rules that rule out forged and missing values:
+
+- **Casts.** An integer cannot be cast to an enum or a union, and an interface cannot be cast to another
+  interface; each is **E3009**. A plain enum value comes from `Enum.fromRawValue(raw)`, which throws
+  `noSuchRawValue` for a value no case carries, and a union value from its case constructor.
+- **Null.** There is none. A value that may be absent is reached with `try … otherwise`, and an operation that can
+  fail `throws`.
+- **Initialization.** A struct literal must give every field, and a field a factory assigns must be definitely
+  assigned on every path to the literal (**E3086**).
+
+### Stacks
+
+- **Green-thread stacks** are pooled. Each starts small and grows on demand up to 1 GiB; past that the program stops
+  with `panic: stack overflow`. Every ordinary function checks its stack in its prologue.
+- **Unchecked runtime functions.** A few runtime functions have no prologue check. The build proves that every
+  chain of them fits the 928-byte margin below the stack limit, and refuses recursion among them (**E5004**).
+- **OS stacks** — each machine's system stack, OS threads, the main stack and the signal stack — have guard pages.
+- **On arm64**, a frame large enough to skip past a guard is probed page by page.
 
 ### Stack Promotion
 
@@ -5351,8 +5510,8 @@ Freeing a record returns its slot to the allocator, not to the operating system.
 slot back to the size class it came from, so the next record of that size reuses it — but a program's
 resident set otherwise stays at its high-water mark for the life of the process.
 
-`__Builtins.scavengeMemory()` is the one call that changes that. It returns the number of bytes whose
-physical backing was handed back, and it does two things no other road does:
+`HeapStats.scavenge()` is the one call that changes that. It returns the number of bytes whose physical backing
+was handed back, and it does two things no other road does:
 
 - **Chunks go back to the page layer, where any size class can take them.** A size class the program has
   finished with is holding memory nothing else can use until this call releases it.
@@ -5360,8 +5519,8 @@ physical backing was handed back, and it does two things no other road does:
 
 ```maxon
 // after a burst has been allocated and released
-_ = __Builtins.scavengeMemory()            // chunks return to the page layer; nothing is decommitted yet
-let released = __Builtins.scavengeMemory() // granules still free are decommitted; `released` is the bytes
+_ = HeapStats.scavenge()            // chunks return to the page layer; nothing is decommitted yet
+let released = HeapStats.scavenge() // granules still free are decommitted; `released` is the bytes
 ```
 
 ⚠ **The first call after a population is dropped returns 0.** A granule is released only if it was
@@ -5373,44 +5532,41 @@ The address space is not returned and the reservation is not shrunk — only the
 the operating system then reports as the process's resident set is its own answer, which is why the figure
 here is bytes the allocator asked it to drop rather than bytes observed to leave.
 
-The five `__Builtins.slab*Bytes()` readings report what the heap holds at any moment, including how much of
-it is the backlog this call would return.
+`HeapStats.slab()` reports what the heap holds at any moment as a `SlabUsage`: live, free, cached-free,
+parked and committed bytes, and the count of frees made from another thread. Its free and cached-free
+figures include the backlog `scavenge()` would return.
 
 ### Attributing the Live Heap
 
-The five readings say how much is out; three more say what it is. `__Builtins.slabCensusTally(mode)` walks
-every live slot once and fills a table of 2048 buckets, which `__Builtins.slabCensusBucketCount(i)` and
-`__Builtins.slabCensusBucketBytes(i)` read back one bucket at a time.
+`HeapStats.slab()` says how much is out; `HeapStats.census(mode)` says what it is. It walks every live slot once
+and returns a `SlabCensus` of 2048 buckets, read back one at a time with `bucketCount(i)` and `bucketBytes(i)`.
 
 | `mode` | Bucket `i` holds |
 |--------|------------------|
-| `0` | the slots whose allocation tag is `i` — available only in a program built with `--debugstream`, which is what puts a tag on a box |
-| `1` | the slots of size class `i` |
+| `HeapCensusMode.byTag` | the slots whose allocation tag is `i` — available only in a program built with `--debugstream`, which is what puts a tag on a box |
+| `HeapCensusMode.bySizeClass` | the slots of size class `i` |
 
-The tally returns the live bytes *it* walked, which is an independent cross-check: the buckets' sum travels
-through the table and the return travels through nothing, so the two figures beside `slabLiveBytes()` tell a
-table fault from a walk fault. Bucket 2046 is the slots whose first word is not a tag — a string's bytes, an
-element buffer, a green thread's stack — and bucket 2047 is a tag past the end of the table. A `mode` that is
-neither `0` nor `1`, or a heap the walk finds inconsistent, ends the program with exit code **119** rather
-than answering.
+The census's `tallyBytes` is the live bytes the walk itself counted, which is an independent cross-check: the
+buckets' sum travels through the table and the tally travels through nothing, so the two figures beside
+`slab().live` tell a table fault from a walk fault. Bucket 2046 is the slots whose first word is not a tag — a
+string's bytes, an element buffer, a green thread's stack — and bucket 2047 is a tag past the end of the table.
+A heap the walk finds inconsistent ends the program with exit code **119** rather than answering.
 
-The compiler's own build uses these through
-[`--census-by-tag`](CLI_REFERENCE.md#logging).
+The compiler's own build uses this through [`--census-by-tag`](CLI_REFERENCE.md#logging).
 
 ### Attributing Allocation Churn
 
 A census says what is still held; it cannot see an allocation that was freed before it looked.
-`__Builtins.mmAllocTotalByTag(i)` and `__Builtins.mmAllocBytesByTag(i)` answer the other question — how
-many allocations tag `i` has made since the process started, and how many bytes they asked for. Nothing
-subtracts a free, so both figures only rise and a difference of two readings is the churn between them.
+`HeapStats.allocationsTagged(i)` and `HeapStats.bytesTagged(i)` answer the other question — how many
+allocations tag `i` has made since the process started, and how many bytes they asked for. Nothing subtracts a
+free, so both figures only rise and a difference of two readings is the churn between them.
 
-The table is 2048 buckets, like the census's. Bucket 0 is the allocations the compiler had no declared
-type to tag, and bucket 2047 collects every tag past the end of the table. An index outside `0` to `2047`
-answers 0.
+The table is 2048 buckets, like the census's. Bucket 0 is the allocations the compiler had no declared type to
+tag, and bucket 2047 collects every tag past the end of the table.
 
-Both are maintained only in a program built with `--debugstream`, which is what puts a tag on a box; in
-any other build they answer 0. Summed over every bucket they equal `__Builtins.mmAllocTotal()`, which is
-the cross-check to reach for. The compiler's own build uses them through
+Both are maintained only in a program built with `--debugstream`, which is what puts a tag on a box; in any other
+build they answer 0. Summed over every bucket they equal `HeapStats.allocationsMade()`, which is the cross-check
+to reach for. The compiler's own build uses them through
 [`--allocations-by-tag`](CLI_REFERENCE.md#logging).
 
 ### The Leak Checker
@@ -5421,19 +5577,25 @@ the compiler, so a leak is not something ordinary code is expected to cause; `ma
 test as leaked. A green thread that was never
 awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
 
-### Safety Summary
+### Memory Diagnostics
 
-| Hazard | What Maxon does |
-|--------|-----------------|
-| Out-of-range collection index | `get`/`set` throw `ArrayError.indexOutOfBounds`; there is no unchecked access |
-| Value outside a typealias's range | compile error for a known value, **panic** at run time otherwise |
-| Division by zero | compile error for a constant zero; otherwise the division throws `DivisionByZero` |
-| Negative shift count | compile error for a known count, **panic** at run time otherwise |
-| Integer overflow | wraps (two's complement); a range check catches it where the value reaches a checked place |
-| Null | there is no null: every variable, field and element holds a value |
-| Use after move, or writing a record an immutable name reads | compile error |
-| Mutating a collection while an element is borrowed | compile error (**E3070**) |
-| Use after free, double free | prevented by compile-time reference counting |
+| Code | Meaning |
+|------|---------|
+| [E3009](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3009) | a cast that could forge a value: integer to an enum or a union, or interface to interface |
+| [E3078](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3078) | a read-only value bound or stored where it could be written, or kept by a `let` field while another writer exists |
+| [E3086](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3086) | a field not definitely assigned before its struct literal |
+| [E3102](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3102) | use of a moved value |
+| [E3143](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3143) | a module `var` reachable from another thread |
+| [E3152](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3152) | `__Raw` used outside `runtime/` |
+| [E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159) | a write through a read-only value |
+| [E3163](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3163) | a module `let` read by a message that the share walk cannot mark |
+| [E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) | a shared value whose graph holds an OS handle, a function value or a promise |
+| [E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174) | a published value that is not solely owned |
+| [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) | raw memory or a raw handle used outside the library tier |
+| [E3186](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3186) | a by-reference parameter that overlaps another argument |
+| [E5004](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e5004) | a chain of unchecked runtime functions that can exceed the stack margin |
+| exit 96 | a mutable value sent to another thread while not solely owned |
+| exit 101 | memory still allocated when `main` returns |
 
 ---
 
@@ -5662,33 +5824,35 @@ parseDigit("7")               // E3057: throwing function requires try: 'parseDi
 
 ```maxon
 let items = TallyArray.create()
-items.push(1)                 // E3019: cannot pass 'items' to function that mutates parameter 'self'
+items.push(1)                 // E3159: cannot write through 'items': 'items' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
-**Moving out of a `let`**
+**Moving out of a `var`**
 
 ```maxon
-let a = Point.create(1)
+var a = Point.create(1)
 var b = a
 b.x = 2
 print("{a.x}\n")              // E3102: use of moved value 'a'
 ```
 
-**Sharing a record between a `var` and a live `let`**
+**Binding a read-only value to a `var`**
 
 ```maxon
 let a = Point.create(1)
-let b = a
-var c = a                     // E3078: cannot assign immutable variable 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
+var c = a                     // E3078: cannot assign the read-only 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
 ```
 
-**Mutating a borrowed collection**
+**Handing a by-reference parameter storage another argument reaches**
 
 ```maxon
-var arr = ["hello"]
-let s = try arr.get(0) otherwise ""
-arr.push("world")             // E3070: cannot mutate 'arr' via 'push' while it is borrowed by 's'
-print("{s}\n")
+rebindThenRead(h, inner: h.inner)   // E3186: argument 'h.inner' overlaps argument 'h', which 'rebindThenRead' reassigns (parameter 'h') — …
+```
+
+**Reaching raw memory from a program**
+
+```maxon
+let pid = __Builtins.currentProcessId()   // E3185: call to '__Builtins.currentProcessId' from outside the library tiers: … — use 'Process.id()'
 ```
 
 **Reading a local a closure captured**
@@ -5767,16 +5931,19 @@ Nothing in Maxon is undefined behaviour. At run time:
 | Event | Behavior |
 |-------|----------|
 | `panic("…")`, a failed range check, a negative shift count | the program prints `panic at <file>:<line>: <message>` and a stack trace to stderr and exits with code **1** |
+| a `for` loop or an array cursor's `current()` reading a slot that was never filled | a panic: `empty slot: element <i> of the array was never filled` |
+| an array cursor's `current()` past the last element | a panic, as an index out of range |
+| a green-thread stack past 1 GiB, or a recursion that overflows an OS stack | a panic: `stack overflow` |
 | an index past the end of a collection | `get`/`set` throw `ArrayError.indexOutOfBounds`, handled with `try` |
 | division or `mod` by zero | throws `DivisionByZero`, handled with `try` |
 | integer overflow | wraps around (two's complement), with no error |
 | an allocation never released | exit code **101** |
 | a green thread neither awaited nor dropped | exit code **75** |
 | a promise consumed through a second read of one container slot or struct field | exit code **118** |
-| `__Builtins.slabCensusTally` asked for a mode it does not implement, or walking a heap it cannot describe | exit code **119** |
+| `HeapStats.census(mode)` walking a heap it cannot describe | exit code **119** |
 | a deep copy of an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled | exit code **120** |
 | on x64-windows, the green-thread scheduler starting up with a thread-local slot Windows placed past the 64 slots of the thread's own block | exit code **121** |
-| a second green thread calling `__Builtins.gtQuiesce()` while another is waiting in it | exit code **123** |
+| a second green thread calling `Scheduler.quiesce()` while another is waiting in it | exit code **123** |
 | deadlock | exit code **92** |
 
 `maxon execute` and `maxon test` report these exit codes; see the [CLI reference](CLI_REFERENCE.md).

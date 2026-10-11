@@ -65,7 +65,7 @@ What the cases here can and cannot see of four of the layer's behaviours, and sa
 
 - **The arena's chunk FREE path (`__slab_arena_free_chunks`) IS OBSERVABLE, AND IT HAS ITS OWN FILE.**
   `__slab_scavenge` calls it for every span on a
-  class's list with no live slot, and `__Builtins.scavengeMemory()` reports what the OS then took back.
+  class's list with no live slot, and `HeapStats.scavenge()` reports what the OS then took back.
   The cases that drive it — including the one that proves a recycled chunk is handed back ZEROED, which
   is what the release path owes — are in `slab-scavenger.md` and `slab-census.md`. **No case in
   THIS file calls `scavengeMemory()`**, and no free and no refill destroys a span, so every case below
@@ -301,6 +301,7 @@ end 'main'
 ```
 
 <!-- test: slab-allocator.a-fresh-slot-reads-zero -->
+<!-- tier: stdlib -->
 **THE ZEROING CONTRACT.** The allocator hands back memory that is always zero, and the bump region is
 what makes that free: a slot that has never been handed out still holds the zeroes the OS gave the
 arena. This allocates a 4 KB buffer, exposes every byte of it without writing any, and requires all
@@ -315,7 +316,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function dirty()
-	let mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return
+	var mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return
 	try mm.setLength(4096) otherwise return
 	var arr = ByteArray.init(mm)
 	for i in 0 upto 4096 'fill'
@@ -324,7 +325,7 @@ function dirty()
 end 'dirty'
 
 function countNonZero() returns Integer
-	let mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return 1
+	var mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return 1
 	try mm.setLength(4096) otherwise return 2
 	let arr = ByteArray.init(mm)
 	var seen = 0

@@ -25,13 +25,14 @@ its processor's free list and serves the next spawn, so GT records are type-stab
 `spawn-await-loop-is-bounded` below carries that case.
 
 **What these cases can actually observe.** Nothing in the language names a slab slot, so each case
-below reads the RAW traffic columns (`builtins-mm-counters.md`) around a window of runtime work. The
+below reads the RAW traffic columns (`HeapStats.rawAllocationsMade()` and `HeapStats.rawAllocationsLive()`)
+around a window of runtime work. The
 two scratch cases ask two questions that only a reclaiming runtime answers together:
 
 | Question | Column | A runtime that never frees |
 |---|---|---|
-| did the window take scratch from the allocator? | `mmRawAllocTotal` grew | yes — or it hid the population |
-| did it give the scratch back? | `mmRawAllocLive` did NOT grow | **no** — live tracks total exactly |
+| did the window take scratch from the allocator? | `rawAllocationsMade()` grew | yes — or it hid the population |
+| did it give the scratch back? | `rawAllocationsLive()` did NOT grow | **no** — live tracks total exactly |
 
 Both halves are needed. `live` alone would pass against a runtime that allocates nothing in the
 window (one whose scratch is allocated once at init), and `total` alone would pass against one that
@@ -71,13 +72,13 @@ same road: it is renounced rather than abandoned, so it comes back and frees its
 ```maxon
 function main() returns ExitCode
 	let warm = spawnReadLine("cmd /c echo hello")
-	let totalBefore = __Builtins.mmRawAllocTotal()
-	let liveBefore = __Builtins.mmRawAllocLive()
+	let totalBefore = HeapStats.rawAllocationsMade()
+	let liveBefore = HeapStats.rawAllocationsLive()
 	let a = spawnReadLine("cmd /c echo hello")
 	let b = spawnReadLine("cmd /c echo hello")
 	let c = spawnReadLine("cmd /c echo hello")
-	let totalGrew = __Builtins.mmRawAllocTotal() - totalBefore
-	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
+	let totalGrew = HeapStats.rawAllocationsMade() - totalBefore
+	let liveGrew = HeapStats.rawAllocationsLive() - liveBefore
 	var score = 0
 	if warm + a + b + c == 28 'everyReadReturnedSevenBytes'
 		score = score + 1
@@ -96,12 +97,14 @@ end 'main'
 ```
 
 <!-- test: runtime-scratch-reclaim.subprocess-scratch-returns -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 **NO REUSED BUFFERS.** Fixed scratch regions taken at scheduler init and reused by every call
 would be safe only because of an argument about the code — that a call writes and consumes its
 scratch inside a window with no yield in it — which is exactly the argument the read probe cannot
 make. With a free path each `__gt_process_run` call takes its own scratch and hands it back, and no
-two calls can share anything.
+two calls can share anything. The runner is reached through the `__Builtins.runProcess` intrinsic, which
+is library-tier, so the case compiles as a library-tier source.
 
 The two spawns in the window take their GT structs from the free list the warm-up filled, so every
 region the window counts is the runner's own scratch.
@@ -113,14 +116,14 @@ end 'child'
 function main() returns ExitCode
 	let p0 = async child()
 	let w = await p0
-	let totalBefore = __Builtins.mmRawAllocTotal()
-	let liveBefore = __Builtins.mmRawAllocLive()
+	let totalBefore = HeapStats.rawAllocationsMade()
+	let liveBefore = HeapStats.rawAllocationsLive()
 	let p1 = async child()
 	let a = await p1
 	let p2 = async child()
 	let b = await p2
-	let totalGrew = __Builtins.mmRawAllocTotal() - totalBefore
-	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
+	let totalGrew = HeapStats.rawAllocationsMade() - totalBefore
+	let liveGrew = HeapStats.rawAllocationsLive() - liveBefore
 	var score = 0
 	if w + a + b == 9 'everyChildExitedThree'
 		score = score + 1
@@ -220,8 +223,8 @@ end 'attempt'
 
 function reportScratch(door Door)
 	var answered = attempt(door)
-	let totalBefore = __Builtins.mmRawAllocTotal()
-	let liveBefore = __Builtins.mmRawAllocLive()
+	let totalBefore = HeapStats.rawAllocationsMade()
+	let liveBefore = HeapStats.rawAllocationsLive()
 
 	for _ in 0 upto Rounds 'round'
 		if not attempt(door) 'wrong'
@@ -229,8 +232,8 @@ function reportScratch(door Door)
 		end 'wrong'
 	end 'round'
 
-	let tookScratch = __Builtins.mmRawAllocTotal() - totalBefore >= Rounds
-	let gaveItBack = __Builtins.mmRawAllocLive() - liveBefore < Rounds
+	let tookScratch = HeapStats.rawAllocationsMade() - totalBefore >= Rounds
+	let gaveItBack = HeapStats.rawAllocationsLive() - liveBefore < Rounds
 	print("{door.name}: answered={answered} took={tookScratch} gaveBack={gaveItBack}\n")
 end 'reportScratch'
 
@@ -256,7 +259,7 @@ streamingWithEnvironment: answered=true took=true gaveBack=true
 **THE GT RECORD ITSELF, AND IT IS RECYCLED RATHER THAN RETURNED.** `__gt_reclaim` puts a finished
 thread's record on its processor's free list (Go's `gfput`), and `__gt_spawn` takes the next one from
 there, zeroed, before it carves a fresh one from the scheduler's record arena (Go's `gfget`). The records
-are TYPE-STABLE, as Go's `g` records are: a read through a handle whose thread is gone — `awaitAny` over
+are TYPE-STABLE, as Go's `g` records are: a read through a handle whose thread is gone — `awaitAny()` over
 a promise already awaited (`await-any.md`) — lands in a GT record rather than in memory that has been
 given to something else.
 
@@ -267,13 +270,13 @@ hold, and a processor's list holds fewer than 64 — Go's bound for its `gFree` 
 and awaits one thread at a time cycles ONE record.
 
 Eight spawn/await pairs after a warm-up whose struct is already on the list: every spawn is served
-by the free list (`schedGtRecycleCount()` grows by exactly 8), none asks the allocator
-(`mmRawAllocTotal` does not move — a green thread's record comes from the scheduler's arena and its
+by the free list (`Scheduler.counters().recycledThreads` grows by exactly 8), none asks the allocator
+(`HeapStats.rawAllocationsMade()` does not move — a green thread's record comes from the scheduler's arena and its
 stack from `osAllocPages`, and the raw columns count neither), and nothing is left live
-(`mmRawAllocLive` does not move).
+(`HeapStats.rawAllocationsLive()` does not move).
 ```maxon
 function work(n Integer) returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	return n + 1
 end 'work'
 
@@ -284,9 +287,9 @@ end 'spawnAndAwait'
 
 function main() returns ExitCode
 	var acc = spawnAndAwait(0)
-	let totalBefore = __Builtins.mmRawAllocTotal()
-	let liveBefore = __Builtins.mmRawAllocLive()
-	let recycledBefore = __Builtins.schedGtRecycleCount()
+	let totalBefore = HeapStats.rawAllocationsMade()
+	let liveBefore = HeapStats.rawAllocationsLive()
+	let recycledBefore = Scheduler.counters().recycledThreads
 	acc = spawnAndAwait(acc)
 	acc = spawnAndAwait(acc)
 	acc = spawnAndAwait(acc)
@@ -295,9 +298,9 @@ function main() returns ExitCode
 	acc = spawnAndAwait(acc)
 	acc = spawnAndAwait(acc)
 	acc = spawnAndAwait(acc)
-	let totalGrew = __Builtins.mmRawAllocTotal() - totalBefore
-	let liveGrew = __Builtins.mmRawAllocLive() - liveBefore
-	let recycled = __Builtins.schedGtRecycleCount() - recycledBefore
+	let totalGrew = HeapStats.rawAllocationsMade() - totalBefore
+	let liveGrew = HeapStats.rawAllocationsLive() - liveBefore
+	let recycled = Scheduler.counters().recycledThreads - recycledBefore
 	var score = 0
 	if acc == 9 'everyThreadRanExactlyOnce'
 		score = score + 1

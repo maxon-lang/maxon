@@ -389,7 +389,7 @@ export function plantTreeLockOfAnotherHostsHolder(staged FilePath)
 end 'plantTreeLockOfAnotherHostsHolder'
 
 export function plantTreeLockOfThisRunningProcess(staged FilePath)
-	plantTreeLock(staged, record: lockRecord(__Builtins.currentProcessId(), token: ThisProcessToken, host: thisLockHost()))
+	plantTreeLock(staged, record: lockRecord(Process.id(), token: ThisProcessToken, host: thisLockHost()))
 end 'plantTreeLockOfThisRunningProcess'
 
 export function ageTreeLock(staged FilePath, seconds AgeSeconds)
@@ -652,15 +652,15 @@ end 'recordOf'
 function thisHostParts() returns NamedPartArray
 	#if os(Windows)
 		let hostName = try Process.environmentVariable(HostNameVariable) otherwise panic("build-manifest tests: the gate could not run — {HostNameVariable} is not set, so this host names itself nowhere the driver reads")
-		return [NamedPart.create(hostName, names: HostIdentityParts.create()), NamedPart.create(String.init(__Builtins.processNamespace()), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
+		return [NamedPart.create(hostName, names: HostIdentityParts.create()), NamedPart.create(Process.namespace(), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
 	#endif
 
 	#if os(Linux)
-		return [NamedPart.create(firstNamedIn([KernelHostNamePath]), names: HostIdentityParts.create()), NamedPart.create(firstNamedIn([MachineIdPath, DbusMachineIdPath]), names: [HostIdentityPart.machine]), NamedPart.create(String.init(__Builtins.processNamespace()), names: [HostIdentityPart.pidSpace])]
+		return [NamedPart.create(firstNamedIn([KernelHostNamePath]), names: HostIdentityParts.create()), NamedPart.create(firstNamedIn([MachineIdPath, DbusMachineIdPath]), names: [HostIdentityPart.machine]), NamedPart.create(Process.namespace(), names: [HostIdentityPart.pidSpace])]
 	#endif
 
 	#if os(Macos)
-		return [NamedPart.create(String.init(__Builtins.processNamespace()), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
+		return [NamedPart.create(Process.namespace(), names: [HostIdentityPart.machine, HostIdentityPart.pidSpace])]
 	#endif
 end 'thisHostParts'
 

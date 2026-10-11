@@ -19,7 +19,7 @@ usually opens. `function from`, `function if` and
 `function match` all compile, and to a byte-identical output size, because the name never reaches
 codegen.
 
-**`stdlib/FilePath.maxon` is the consumer** — `public static function from (path String) returns
+**`stdlib/FilePath.maxon` is the consumer** — `public static function from(path String) returns
 FilePath throws FilePathError` — and `from` is the only keyword any `stdlib/` file declares as a
 function name (4 sites, all `from`). `FilePath` gates `Process`/`File`/`Directory`.
 

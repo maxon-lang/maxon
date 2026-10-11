@@ -1001,7 +1001,7 @@ done
 ```
 
 <!-- test: a-cell-resident-var-moved-on-one-branch-is-released-once-on-every-path -->
-`word` lives in a cell because `fill` reassigns its parameter. It is moved by a send on one branch, by an `async` call on another, and not at all on the third; every path releases the cell and its contents exactly once.
+`word` lives in a cell because `fill` reassigns its parameter. It is moved by a send on one branch, shared with an `async` coroutine on another, and not handed anywhere on the third; every path releases the cell and its contents exactly once.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1065,7 +1065,62 @@ filled 2 padded out long enough to heap allocate?
 ```
 
 <!-- test: a-cell-resident-var-reassigned-and-moved-each-trip-with-a-continue -->
-The loop form for a cell: reassigned every trip, moved on one back edge, live on the `continue` edge.
+The loop form for a cell: reassigned every trip, moved by a send on one back edge, live on the `continue` edge.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Echo
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function shout(text String) returns String
+		self.count = self.count + 1
+		return "{text}!"
+	end 'shout'
+end 'Echo'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	let h = spawn Echo.create()
+	var word = "hello padded out long enough to heap allocate {0}"
+	var i = 0
+	var total = 0
+
+	while i < 4 'l'
+		i = i + 1
+		word = "word {i} padded out long enough to heap allocate"
+		fill(word, n: i)
+
+		if i mod 2 == 0 'skip'
+			continue
+		end 'skip'
+
+		let loud = try await h.shout(word) otherwise "stopped"
+		print("{loud}\n")
+		total = total + 1
+	end 'l'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+filled 1 padded out long enough to heap allocate!
+filled 3 padded out long enough to heap allocate!
+2
+```
+
+<!-- test: a-cell-resident-var-handed-to-async-each-trip-with-a-continue -->
+The same loop with an `async` call in place of the send: the coroutine SHARES the cell's contents rather than taking them, so nothing is moved on the back edge and the cell is released once at scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1111,7 +1166,51 @@ filled 3 padded out long enough to heap allocate!
 ```
 
 <!-- test: a-cell-resident-var-moved-in-a-loop-and-read-next-trip-is-use-after-move -->
-`fill(word, …)` at the top of the next trip reads the contents the previous trip moved.
+`fill(word, …)` at the top of the next trip reads the contents the previous trip's send moved.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Echo
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function shout(text String) returns String
+		self.count = self.count + 1
+		return "{text}!"
+	end 'shout'
+end 'Echo'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	let h = spawn Echo.create()
+	var word = "hello padded out long enough to heap allocate {0}"
+	var i = 0
+	var total = 0
+
+	while i < 4 'l'
+		i = i + 1
+		fill(word, n: i)
+		let loud = try await h.shout(word) otherwise "stopped"
+		print("{loud}\n")
+		total = total + 1
+	end 'l'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:29:8: use of moved value 'word': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-cell-resident-var-handed-to-async-in-a-loop-is-read-next-trip -->
+An `async` call shares its argument with the coroutine, so the same loop with `async` in place of the send moves nothing: `fill(word, …)` at the top of the next trip reads the contents it filled.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1141,12 +1240,68 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:21:8: use of moved value 'word': it was moved in an earlier iteration of this loop
+```exitcode
+0
+```
+```stdout
+filled 1 padded out long enough to heap allocate!
+filled 2 padded out long enough to heap allocate!
+filled 3 padded out long enough to heap allocate!
+filled 4 padded out long enough to heap allocate!
+4
 ```
 
 <!-- test: a-cell-resident-var-restored-on-some-trips-only-is-use-after-move -->
-The cell is re-stored on even trips only, so on an odd trip the read reaches the contents the previous trip moved.
+The cell is re-stored on even trips only, so on an odd trip the send reads the contents the previous trip's send moved.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Echo
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function shout(text String) returns String
+		self.count = self.count + 1
+		return "{text}!"
+	end 'shout'
+end 'Echo'
+
+function fill(dest String, n Integer)
+	dest = "filled {n} padded out long enough to heap allocate"
+end 'fill'
+
+function main() returns ExitCode
+	let h = spawn Echo.create()
+	var word = "hello padded out long enough to heap allocate {0}"
+	fill(word, n: 0)
+	var i = 0
+	var total = 0
+
+	while i < 4 'l'
+		i = i + 1
+
+		if i mod 2 == 0 'restore'
+			word = "word {i} padded out long enough to heap allocate"
+		end 'restore'
+
+		let loud = try await h.shout(word) otherwise "stopped"
+		print("{loud}\n")
+		total = total + 1
+	end 'l'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:35:32: use of moved value 'word': it was moved in an earlier iteration of this loop
+```
+
+<!-- test: a-cell-resident-var-restored-on-some-trips-only-and-handed-to-async-is-read-each-trip -->
+With `async` in place of the send nothing is moved, so the read on an odd trip reaches the contents the previous trip handed the coroutine.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1181,6 +1336,13 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:27:23: use of moved value 'word': it was moved in an earlier iteration of this loop
+```exitcode
+0
+```
+```stdout
+filled 0 padded out long enough to heap allocate!
+word 2 padded out long enough to heap allocate!
+word 2 padded out long enough to heap allocate!
+word 4 padded out long enough to heap allocate!
+4
 ```

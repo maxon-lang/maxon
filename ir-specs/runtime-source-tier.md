@@ -91,6 +91,7 @@ func @main {
 ```
 
 <!-- test: a-reached-runtime-entry-still-earns-its-word -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The reachability this measures is a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
 ⭐⭐ **THE CONTROL ON THE CASE ABOVE, AND WITHOUT IT THE RULE COULD BE *"CREDIT NO TIER BODY, EVER"*.** That
@@ -104,6 +105,11 @@ image.
 `__sched_active_workers` beside it is stepped by the scheduler's worker loop alone, which no program
 without a scheduler carries, so it is not laid out here — `.data` holds what a surviving function names,
 not a family's whole roster.
+
+⚠ **`main` CALLS THE INTRINSIC ITSELF, SO THE CASE COMPILES IN THE LIBRARY TIER.** `__Builtins` is callable
+only from a source file under `stdlib/` or `runtime/` (E3185). The public spelling,
+`Scheduler.counters().maxActiveWorkers`, reads all fourteen scheduler counters and lays out a word for each,
+and a roster that names one word cannot be pinned through it.
 
 ⚠ **WHAT ACTUALLY FIRES ON THE BAD ANSWER IS A PANIC, NOT A MISMATCH.** Uncredit this entry and it enters
 `LibraryFacts.unreachedRuntimeTier` while `main` still calls it, which is the disagreement
@@ -212,7 +218,7 @@ end 'probeWorkers'
 var used = 42
 
 function main() returns ExitCode
-	let pid = __Builtins.currentProcessId()
+	let pid = Process.id()
 	if pid > 0 'aRealProcess'
 		return used - 42
 	end 'aRealProcess'
@@ -244,9 +250,11 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
+  __il_body:
     x64.callDirect __proc_pid
+  __il_cont:
     x64.cmpRegImm32 r8, 0
-    x64.jcc lessEqual, ifcont
+    x64.jcc belowEqual, ifcont
   aRealProcess:
     x64.leaRegGlobal rax, __data_used
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -279,9 +287,9 @@ func @main {
 <!-- test: a-word-only-a-dead-user-function-reads-is-not-laid-out -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⭐⭐ **`.data` FOLLOWS REACHABILITY, NOT THE PROGRAM'S VOCABULARY.** The word behind
-`schedMaxActiveWorkers()` is laid out only when a function that survives dead-function elimination reads
+`Scheduler.counters()` is laid out only when a function that survives dead-function elimination reads
 it. `dormant` is a user function nothing calls, so its query reaches no body and lays out no word — the
-same answer the unreached tier probe above gets, here for the program's own dead code. The two sched words
+same answer the unreached tier probe above gets, here for the program's own dead code. The sched words
 would land between `used` and the console probes, which is where a prefix compare can see them.
 ```maxon
 typealias WorkerCount = int(0 to u64.max)
@@ -289,7 +297,7 @@ typealias WorkerCount = int(0 to u64.max)
 var used = 42
 
 function dormant() returns WorkerCount
-	return __Builtins.schedMaxActiveWorkers()
+	return Scheduler.counters().maxActiveWorkers
 end 'dormant'
 
 function main() returns ExitCode
@@ -309,10 +317,75 @@ i8 0
 ```TargetIr:x64-windows
 data {
   __data_used@0 = i64 42
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __gt_allg@8 = i64 0
+  __gt_allglen@16 = i64 0
+  __gt_allgcap@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_live_count@96 = i64 0
+  __gt_quiesce_waiter@104 = i64 0
+  __gt_quiesce_stuck@112 = i64 0
+  __gt_seed_bytes@120 = i64 8192
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __gt_keeps_cpu_clock@160 = i64 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __sched_preempt_ext_lock@488 = i64 0
+  __sched_preempt_context@496 = i64 0
+  __slab_arena_list@504 = i64 0
+  __slab_arena_map_l1@512 = i64 0
+  __slab_state@520 = i64 0
+  __mrt_console_probe_stdin@528 = i8 0
+  __mrt_console_probe_stdout@529 = i8 0
+  __mrt_console_probe_stderr@530 = i8 0
+  __mrt_program_started@531 = i8 0
 }
 
 func @main {
@@ -334,7 +407,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]  ; "panic at a-word-only-a-dead-user-function-reads-is-not-laid-out.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-word-only-a-dead-user-function-reads-is-not-laid-out.test:11: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32

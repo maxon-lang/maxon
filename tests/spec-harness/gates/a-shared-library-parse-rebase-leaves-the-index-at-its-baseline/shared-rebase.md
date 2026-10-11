@@ -225,16 +225,16 @@ end 'main'
 <!-- test: shared-rebase.case9 -->
 ```maxon
 type Holder
-	export var f as __ManagedFile
-	static function create(f __ManagedFile) returns Self
-		return Self{f: f}
+	export var data as ByteArray
+	static function create(data ByteArray) returns Self
+		return Self{data: data}
 	end 'create'
 end 'Holder'
 typealias Holders = Array with Holder
 function main() returns ExitCode
 	var a = Holders.create()
 	print("{a.count()}\n")
-	a.push(Holder.create(try __ManagedFile.openRead(b"no-such-file.bin".managed) otherwise return 3))
+	a.push(Holder.create(try File.readBinary(FilePath from "no-such-file.bin") otherwise return 3))
 
 	for _ in a 'each'
 		print("walked\n")

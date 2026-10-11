@@ -231,7 +231,7 @@ let NetpollFailDigitsSlot = 0 as SpillSlot
 
 // `__np_fail(verb, answer)` — see `NetpollFailName`.
 function buildNetpollFail(module StdModule)
-	var func = IrFunction.createFromStd(NetpollFailName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	var func = IrFunction.createFromStd(NetpollFailName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2001,7 +2001,7 @@ let NetpollOpSettleName = b"__np_op_settle"
 
 // `__np_child_fired(source, timerFired)` — the thread pool's wait callback, which does nothing but forward the
 // exit to the port under the child's key. Built only on the completion-port lane.
-let NetpollChildFiredName = b"__np_child_fired"
+export let NetpollChildFiredName = b"__np_child_fired"
 
 // `__np_child_open(childHandle)` — see `NetpollChildOpenName`.
 function buildNetpollChildOpen(module StdModule, target Target)

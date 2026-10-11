@@ -143,7 +143,7 @@ was written shows up as a wrong sum rather than as a crash — which is exactly 
 before the arguments are filled presents.
 ```maxon
 function widest(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	return a + b * 2 + c * 4 + d * 8 + e * 16 + f * 32
 end 'widest'
 
@@ -164,7 +164,7 @@ each switch, and an M that lost track of which thread it was running would retur
 for another. The sum is index-derived, so any mis-pairing lands on a different number.
 ```maxon
 function step(n Counted) returns Counted
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	return n * 3
 end 'step'
 
@@ -205,7 +205,7 @@ corrupts the return path rather than producing a wrong number, so the assertion 
 returns AT ALL with its own value intact.
 ```maxon
 function napper(n Integer) returns Integer
-	__Builtins.sleep(2)
+	sleep(2)
 	return n + 5
 end 'napper'
 
@@ -250,19 +250,21 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: sched-processor.idle-processor-count-before-any-work -->
 <!-- procs: 4 -->
 **THE IDLE-PROCESSOR COUNT, GO'S `sched.npidle`.** Nothing spawned: the main thread holds one processor and
-every other one sits on the idle list. `__Builtins.schedIdleProcessorCount()` reads the count the scheduler
+every other one sits on the idle list. `Scheduler.counters().idleProcessors` reads the count the scheduler
 keeps beside that list. Go reads the same number on every wake decision — whether to start a spinning machine
 when a processor is handed off, and how many spinners are worth having — which is why it is a maintained word
 rather than a walk of the list.
 
 ⚠ **IT ASSERTS AN AGREEMENT AND NOT A NUMBER.** The scheduler takes `procs: 4` exactly on every host, and
-the case checks the idle count against `schedProcessorCount() - 1`, the count the scheduler itself resolved,
+the case checks the idle count against `Scheduler.processorCount() - 1`, the count the scheduler itself resolved,
 so the two readings of one scheduler must agree. The idle count is read first, because it is the query that
 brings the scheduler up.
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function main() returns ExitCode
-	let idle = __Builtins.schedIdleProcessorCount()
-	print("everyButMain={idle == __Builtins.schedProcessorCount() - 1}\n")
+	let idle = Scheduler.counters().idleProcessors as Integer
+	print("everyButMain={idle == (Scheduler.processorCount() as Integer) - 1}\n")
 	return 0
 end 'main'
 ```
@@ -278,7 +280,7 @@ everyButMain=true
 **THE COUNT FOLLOWS THE PROCESSORS BACK TO THE IDLE LIST.** Four services each do a share of work on
 whatever machines the scheduler starts for them, and every reply is awaited. Once the last worker has found
 nothing to run it releases its processor, so the count settles back at every processor but the main thread's
-— an agreement with `schedProcessorCount()`, for the case above's reason. The settling is waited for on a
+— an agreement with `Scheduler.processorCount()`, for the case above's reason. The settling is waited for on a
 bounded budget rather than sampled once: a worker that has just finished a handler is still searching for a
 moment before it parks, and a single read taken in that moment would report a machine that is about to be idle
 as busy.
@@ -330,13 +332,13 @@ function main() returns ExitCode
 		total = total + (try await p otherwise 0)
 		n = n + 1
 	end 'collect'
-	let everyButMain = __Builtins.schedProcessorCount() - 1
+	let everyButMain = (Scheduler.processorCount() as Integer) - 1
 	var turn = 0
-	while turn < settleTurns and __Builtins.schedIdleProcessorCount() != everyButMain 'settle'
+	while turn < settleTurns and (Scheduler.counters().idleProcessors as Integer) != everyButMain 'settle'
 		sleep(1)
 		turn = turn + 1
 	end 'settle'
-	let settled = __Builtins.schedIdleProcessorCount() == everyButMain
+	let settled = (Scheduler.counters().idleProcessors as Integer) == everyButMain
 	print("total={total} settled={settled}\n")
 	return 0
 end 'main'
@@ -349,6 +351,7 @@ total=2400012 settled=true
 ```
 
 <!-- test: sched-processor.error.idle-processor-count-arity-checked -->
+<!-- tier: stdlib -->
 The query takes no argument, like every member of its family.
 ```maxon
 function main() returns ExitCode
@@ -360,6 +363,7 @@ error E3036: <fragment>:3:20: '__Builtins.schedIdleProcessorCount' takes exactly
 ```
 
 <!-- test: sched-processor.error.idle-processor-count-is-refused-on-wasm -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The count is a fact about processors, and a WASI component has none to count, so the query is refused where
 the green-thread substrate is: at the call's own span, with E3104.
@@ -373,6 +377,7 @@ error E3104: <fragment>:3:20: this construct lowers to the runtime entry '__sche
 ```
 
 <!-- test: sched-processor.error.gt-records-carved-arity-checked -->
+<!-- tier: stdlib -->
 The record-carve count takes no argument, like every member of its family.
 ```maxon
 function main() returns ExitCode
@@ -384,6 +389,7 @@ error E3036: <fragment>:3:20: '__Builtins.schedGtRecordsCarved' takes exactly 0 
 ```
 
 <!-- test: sched-processor.error.gt-records-carved-is-refused-on-wasm -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 The count is a fact about the scheduler's record arena, and a WASI component has no green threads to carve
 records for, so the query is refused where the green-thread substrate is: at the call's own span, with E3104.

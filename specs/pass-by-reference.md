@@ -54,11 +54,11 @@ var result2 = double(a + b)   // expression result creates a temporary
 
 ### Closure Capture
 
-A closure does not capture by reference. A captured scalar is copied when the closure is created, so a later change to the original variable is not visible inside the closure, and an assignment inside the closure does not reach the outer scope. A captured managed local moves into the closure; a captured parameter, `self` or field is retained (`closure-capture.md`). Because the closure holds its own copy, passing a captured name to a parameter the callee reassigns is E3019: the write could not reach the variable.
+A closure does not capture by reference. A captured scalar is copied when the closure is created, so a later change to the original variable is not visible inside the closure, and an assignment inside the closure does not reach the outer scope. A captured managed local moves into the closure; a captured parameter, `self` or field is retained (`closure-capture.md`). Because the closure holds its own copy, passing a captured name to a parameter the callee writes is E3159: the write could not reach the variable.
 
 ### Reassigning Reference-Typed Parameters
 
-A reference-typed (managed) parameter may be reassigned, and the caller observes the new value. The reassignment releases the caller's previous value exactly once and takes ownership of the new one, whether the new value is a borrow from a container, a freshly created value, or another local — no reference leaks and no value is released twice. This holds for a user `type` struct and for `String`.
+A reference-typed (managed) parameter may be reassigned, and the caller observes the new value. The reassignment releases the caller's previous value exactly once and takes ownership of the new one, whether the new value is an element read from a container, a freshly created value, or another local — no reference leaks and no value is released twice. This holds for a user `type` struct and for `String`.
 
 ### Reassigning Scalar Parameter Types
 
@@ -299,32 +299,34 @@ end 'main'
 2 beta
 ```
 
-<!-- test: pass-by-reference.borrowed-managed-global-to-reassigning-param-error -->
-### Handing a BORROWED managed global to a reassigning parameter is E3070
-The reassignment inside the callee drops the record the caller's slot was holding, freeing every element
-borrowed out of it — the same write `pool = StringArray.create()` performs at the caller, and refused on
-the same terms. The hand-over of real storage is what makes the two spellings one write: a callee that
-rebinds a by-reference parameter of a container type writes that argument's storage, which is the column
-E3070 settles every call site against.
+<!-- test: pass-by-reference.element-of-a-managed-global-outlives-a-reassigning-param -->
+### An element read out of a managed global outlives a reassigning parameter
+The reassignment inside the callee drops the record the caller's slot was holding — the same write
+`pool = StringArray.create()` performs at the caller. `held` holds its own reference to the element it read,
+so the element outlives the array and is still readable after the call.
 ```maxon
 
 typealias StringArray = Array with String
 
-var pool = ["hello world this is a long string for heap allocation"]
+var pool = ["alpha"]
 
 function wipe(items StringArray)
 	items = StringArray.create()
 end 'wipe'
 
 function main() returns ExitCode
-	let held = try pool.get(0) otherwise ""
+	pool.push("held padded out long enough to heap allocate {40 + 2}")
+	let held = try pool.get(1) otherwise ""
 	wipe(pool)
-	print("[{held}]")
+	print("[{held}] {pool.count()}")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/pass-by-reference/pass-by-reference.borrowed-managed-global-to-reassigning-param-error.maxon:13:2: cannot mutate 'pool' via 'wipe' while it is borrowed by 'held' (borrowed at line 12)
+```exitcode
+0
+```
+```stdout
+[held padded out long enough to heap allocate 42] 0
 ```
 
 <!-- test: pass-by-reference.mutate-ranged-float-alias-ref -->
@@ -679,7 +681,7 @@ type Node
 end 'Node'
 
 function replaceFromLocal(cur Node) returns Integer
-	let other = Node.create(42)
+	var other = Node.create(42)
 	cur = other
 	return cur.id
 end 'replaceFromLocal'
@@ -716,7 +718,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/pass-by-reference/pass-by-reference.let-to-mutating-param-error.maxon:11:2: cannot pass 'n' to function that mutates parameter 'x' (in main)
+error E3159: specs/pass-by-reference/pass-by-reference.let-to-mutating-param-error.maxon:11:2: cannot pass 'n', which is read-only (a `let` binding), to a function that writes parameter 'x' (in main); pass a clone()
 ```
 
 <!-- test: pass-by-reference.captured-let-to-mutating-param-error -->
@@ -737,7 +739,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.maxon:12:27: cannot pass 'x' to function that mutates parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach it
+error E3159: specs/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.maxon:12:27: cannot pass 'x' to a function that writes parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 <!-- test: pass-by-reference.captured-var-to-mutating-param-error -->
@@ -759,7 +761,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:13:27: cannot pass 'x' to function that mutates parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach it
+error E3159: <fragment>:13:27: cannot pass 'x' to a function that writes parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 <!-- test: pass-by-reference.captured-parameter-to-mutating-param-error -->
@@ -784,7 +786,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: <fragment>:11:27: cannot pass 'p' to function that mutates parameter 'dest' (in run$closure_0): the closure holds its own copy of 'p', so a write through 'dest' cannot reach it
+error E3159: <fragment>:11:27: cannot pass 'p' to a function that writes parameter 'dest' (in run$closure_0): the closure holds its own copy of 'p', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 <!-- test: pass-by-reference.overloads-disagreeing-on-by-reference-bind-each-by-its-own-convention -->
@@ -835,7 +837,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3019: specs/pass-by-reference/pass-by-reference.a-let-to-the-reassigning-overload-is-refused-and-to-the-by-value-one-is-not.maxon:15:2: cannot pass 'n' to function that mutates parameter 'dest' (in main)
+error E3159: specs/pass-by-reference/pass-by-reference.a-let-to-the-reassigning-overload-is-refused-and-to-the-by-value-one-is-not.maxon:15:2: cannot pass 'n', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
 ```
 
 <!-- test: pass-by-reference.an-out-of-range-literal-at-the-reassigning-overload-is-a-compile-error -->
@@ -1448,7 +1450,7 @@ end 'main'
 ```
 
 <!-- test: pass-by-reference.an-async-call-resolving-to-a-by-reference-member-writes-the-coroutines-own-storage -->
-The chosen member assigns `dest`. An `async` argument is moved into the coroutine, so the member writes a cell the coroutine owns.
+The chosen member assigns `dest`. A reassigned parameter of an `async` callee gets storage the coroutine owns, so the member writes a cell of its own.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1622,8 +1624,9 @@ renamed 7 padded out long enough to heap allocate
 awaited 7
 ```
 
-<!-- test: pass-by-reference.a-string-read-after-an-async-spawn-to-a-reassigning-callee-is-use-after-move -->
-The `var` is moved into the coroutine, not handed as storage, so reading it after the spawn is E3102.
+<!-- test: pass-by-reference.a-string-read-after-an-async-spawn-to-a-reassigning-callee-is-the-callers-own -->
+The coroutine writes a cell of its own, and an `async` argument is shared rather than moved, so the caller
+reads its `var` after the spawn and sees the value it passed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1641,8 +1644,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:14:14: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+7 orig-1
 ```
 
 <!-- test: pass-by-reference.a-reassigned-interface-parameter-writes-the-callers-variable -->

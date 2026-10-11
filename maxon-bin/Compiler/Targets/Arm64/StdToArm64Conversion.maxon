@@ -418,7 +418,7 @@ export type StdToArm64Lowering
 	// Every callee's declared ABI (`CalleeAbiTable`): which arguments a call routes to a SIMD register, and
 	// whether its result comes back in d0 or x0 (`callResultRegister`). The one table the value-class
 	// column reads too, so a float result's CAPTURE register and its allocation CLASS are the one fact.
-	let abi as CalleeAbiTable
+	var abi as CalleeAbiTable
 
 	// Fresh virtuals for the function being lowered (`mintVirtual`).
 	var fresh as ValueMinter
@@ -507,17 +507,14 @@ export type StdToArm64Lowering
 	// ==========================================================================
 
 	function lowerFunction(funcIdx ElementIndex)
-		// Every read of the source function happens HERE, before the walk, so the walk holds no borrow of it
-		// while `applyOutgoingArgSize` writes to the TARGET function of the same index (E3019).
 		self.prepareFunctionTables(funcIdx)
 		let outgoingArgBytes = self.lowerFunctionBlocks(funcIdx)
 		self.applyOutgoingArgSize(funcIdx, bytes: outgoingArgBytes)
 	end 'lowerFunction'
 
-	// The per-function analyses, all READS, decided before the walk in a SCOPED read of the source
-	// function: the borrow ends with this call, which is `lowerFunction`'s stated reason for reading
-	// everything up front. Both must precede the walk because a compare is lowered long before the branch
-	// or the phi edge that decides what it has to produce.
+	// The per-function analyses, all READS, decided before the walk. Both must precede the walk
+	// because a compare is lowered long before the branch or the phi edge that decides what it has to
+	// produce.
 	function prepareFunctionTables(funcIdx ElementIndex)
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, memoryForm: IndexedMemoryForm.accessWidthScaleAtZeroOffset)
@@ -556,9 +553,9 @@ export type StdToArm64Lowering
 		return outgoingArgBytes
 	end 'lowerFunctionBlocks'
 
-	// Record the function's outgoing stack-argument reservation on the TARGET function — the arm64 twin of
-	// x64's `applyOutgoingArgSize`, in a scope holding no `srcFunc` borrow of the same object. Skips the
-	// assignment when zero, so a function whose calls all fit the register files is untouched.
+	// Record the function's outgoing stack-argument reservation on the TARGET function — the arm64
+	// twin of x64's `applyOutgoingArgSize`. Skips the assignment when zero, so a function whose calls
+	// all fit the register files is untouched.
 	function applyOutgoingArgSize(funcIdx ElementIndex, bytes StackSize)
 		if bytes == 0 'none'
 			return
@@ -696,6 +693,7 @@ export type StdToArm64Lowering
 			osThreadCpuTicks or
 			osDecommitPages or
 			memFill or
+			osGuardPages or
 			osCommitPages or
 			osReservePages or
 			atomicCas or
@@ -739,15 +737,13 @@ export type StdToArm64Lowering
 		return (abiStackSlotsBefore(argFloatMask, index: argCount, capacity: arm64RegisterArgCapacity()) as StackSize) * SpillSlotBytes
 	end 'callOutgoingArgBytes'
 
-	// Scoped reads of a Std block: each returns a scalar or a COPIED op, never a borrowed block, so the
-	// walk never holds a `stdModule.blocks` borrow across an `emit` into `targetModule` (E3019).
 	function stdBlockOpCount(blockRef ElementIndex) returns ElementIndex
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpCount: blockRef {blockRef} not in stdModule.blocks")
 		return block.opRefs.count()
 	end 'stdBlockOpCount'
 
-	// The flat `stdModule.ops` index a block names at `index` — the coordinate a span is keyed by, which
-	// `stdBlockOpAt` resolves away. Read through a function for that helper's borrow reason.
+	// The flat `stdModule.ops` index a block names at `index` — the coordinate a span is keyed by,
+	// which `stdBlockOpAt` resolves away.
 	function stdBlockOpIndexAt(blockRef ElementIndex, index ElementIndex) returns ElementIndex
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpIndexAt: blockRef {blockRef} not in stdModule.blocks")
 		return try block.opRefs.get(index) otherwise panic("stdBlockOpIndexAt: opRefs.get OOB at {index}")
@@ -775,8 +771,6 @@ export type StdToArm64Lowering
 		return try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("stdBlockTerminator: terminatorIndex not in stdModule.ops")
 	end 'stdBlockTerminator'
 
-	// Append `op` to the Target block named by `dstRef`, in a scope that holds the block borrow only for
-	// the append.
 	function emit(dstRef ElementIndex, op TargetOp)
 		var block = try self.targetModule.blocks.get(dstRef) otherwise panic("emit: dstRef {dstRef} not in targetModule.blocks")
 		self.targetModule.appendOp(block, op: op)
@@ -879,6 +873,7 @@ export type StdToArm64Lowering
 			// The byte fill's size ladder — two pre-moves and the macro-op that IS the dispatch.
 			memFill(destId, byteCountId, value) then self.lowerMemFill(destId, byteCountId: byteCountId, value: value, dstRef: dstRef)
 			osCommitPages(resultId, addrId, sizeId) then self.lowerOsCommitPages(resultId, addrId: addrId, sizeId: sizeId, dstRef: dstRef)
+			osGuardPages then panic("StdToArm64Lowering: osGuardPages is the x64-Windows green-thread stack guard — an arm64 lane guards its stacks with a no-access mapping and never emits it")
 			osReservePages(resultId, sizeId) then self.lowerOsReservePages(resultId, sizeId: sizeId, dstRef: dstRef)
 
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
@@ -1229,6 +1224,7 @@ export type StdToArm64Lowering
 			osDecommitPages then panic("StdToArm64Lowering: an `osDecommitPages` op appeared as a block terminator (lowering bug — a decommit is a body op, like the page release above)")
 
 			// A reserve and a commit are value-producing body ops, for the decommit's reason.
+			osGuardPages or
 			osCommitPages or
 			osReservePages then panic("StdToArm64Lowering: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
 			memFill then panic("StdToArm64Lowering: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
@@ -3021,12 +3017,12 @@ end 'StdToArm64Lowering'
 
 union Arm64HostCallee
 	import(slot OsImportSlot)
-	chunk(name ByteArray)
+	chunk(let name ByteArray)
 	syscall(number MachineWord)
 end 'Arm64HostCallee'
 
 union Arm64LinuxRoute
-	chunk(name ByteArray)
+	chunk(let name ByteArray)
 	syscall(number MachineWord)
 end 'Arm64LinuxRoute'
 

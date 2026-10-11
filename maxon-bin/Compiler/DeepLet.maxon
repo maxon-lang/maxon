@@ -1,0 +1,221 @@
+// The kinds of read-only root a deep `let` write is blamed on, and the wording of every refusal through
+// one (E3078, E3159) for the parser, `SemanticCheck` and `StorageProvenance`; spec `maxoncstderr` blocks
+// pin that wording byte for byte.
+export enum ReadOnlyRootKind
+	letBinding
+	forElement
+	ifLetBinding
+	matchBinding
+	letField
+	letPayload
+	readOnlyElement
+	storedMapKey
+	storedSetElement
+	moduleLet
+	sharedView
+end 'ReadOnlyRootKind'
+
+// @generated library-cache begin
+let CacheCasesReadOnlyRootKind = [ReadOnlyRootKind.letBinding, ReadOnlyRootKind.forElement, ReadOnlyRootKind.ifLetBinding, ReadOnlyRootKind.matchBinding, ReadOnlyRootKind.letField, ReadOnlyRootKind.letPayload, ReadOnlyRootKind.readOnlyElement, ReadOnlyRootKind.storedMapKey, ReadOnlyRootKind.storedSetElement, ReadOnlyRootKind.moduleLet, ReadOnlyRootKind.sharedView]
+
+module function cacheReadReadOnlyRootKind(reader LibraryCacheReader) returns ReadOnlyRootKind throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesReadOnlyRootKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadReadOnlyRootKind'
+
+function cacheTableAgreesReadOnlyRootKind() returns bool
+	let declared = ReadOnlyRootKind.allCases
+
+	if CacheCasesReadOnlyRootKind.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesReadOnlyRootKind.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesReadOnlyRootKind'
+
+module function cacheEnumTablesAgreeInCompilerDeepLet() returns bool
+	if not cacheTableAgreesReadOnlyRootKind() 'disagreesCacheTableAgreesReadOnlyRootKind'
+		return false
+	end 'disagreesCacheTableAgreesReadOnlyRootKind'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerDeepLet'
+
+// @generated library-cache end
+
+export function readOnlyRootDescription(root ReadOnlyRootKind) returns String
+	return match root 'kind'
+		letBinding gives "a `let` binding"
+		forElement gives "a `for` element of a read-only source"
+		ifLetBinding gives "an `if let` binding"
+		matchBinding gives "a `match` binding"
+		letField gives "a `let` field"
+		letPayload gives "a `let` payload"
+		readOnlyElement gives "a `readonly` element"
+		storedMapKey gives "a stored Map key"
+		storedSetElement gives "a stored Set element"
+		moduleLet gives "a module-level `let`"
+		sharedView gives "a `SharedValue` or registry value"
+	end 'kind'
+end 'readOnlyRootDescription'
+
+function kindIsAPartOfItsHolder(kind ReadOnlyRootKind) returns bool
+	return kind == ReadOnlyRootKind.letField
+end 'kindIsAPartOfItsHolder'
+
+function readOnlyRootClause(root String, kind ReadOnlyRootKind) returns String
+	if root.isEmpty() 'aValueWithNoName'
+		return "a value read out of {readOnlyRootDescription(kind)}, which is read-only"
+	end 'aValueWithNoName'
+
+	if kindIsAPartOfItsHolder(kind) 'aPartOfTheNamedHolder'
+		return "{readOnlyRootDescription(kind)} of '{root}', which is read-only"
+	end 'aPartOfTheNamedHolder'
+
+	return "'{root}', which is read-only ({readOnlyRootDescription(kind)})"
+end 'readOnlyRootClause'
+
+function readOnlyRootStatement(root String, kind ReadOnlyRootKind) returns String
+	if root.isEmpty() 'aValueWithNoName'
+		return "a value read out of {readOnlyRootDescription(kind)} is read-only"
+	end 'aValueWithNoName'
+
+	return "'{root}' is read-only ({readOnlyRootDescription(kind)})"
+end 'readOnlyRootStatement'
+
+export function deepLetWriteMessage(place String, root String, kind ReadOnlyRootKind) returns String
+	let named = place if kindIsAPartOfItsHolder(kind) else root
+
+	return "cannot write through '{place}': {readOnlyRootStatement(named, kind: kind)} and nothing reachable through it may be written; use 'var', or write a clone()"
+end 'deepLetWriteMessage'
+
+export function deepLetConsumeMessage(door ByteArray, kind ReadOnlyRootKind) returns String
+	return "cannot consume with '{String.from(door)}' a promise held in {readOnlyRootDescription(kind)}: consuming a promise empties the slot it was read from, and nothing reachable through a read-only value may be written; hold it in a `var` field"
+end 'deepLetConsumeMessage'
+
+export function deepLetCallMessage(root String, kind ReadOnlyRootKind, paramName String, functionName String) returns String
+	return "cannot pass {readOnlyRootClause(root, kind: kind)}, to a function that writes parameter '{paramName}' (in {functionName}); pass a clone()"
+end 'deepLetCallMessage'
+
+export function deepLetConversionMessage(calleeText String, interfaceName String) returns String
+	return "cannot convert to '{interfaceName}' a type whose values something may write: its method '{calleeText}' keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type"
+end 'deepLetConversionMessage'
+
+export function deepLetBindMessage(subject String, binding String) returns String
+	return "cannot assign {subject} to mutable binding '{binding}'; use 'let' instead of 'var', or use clone()"
+end 'deepLetBindMessage'
+
+export function deepLetStoreMessage(subject String, place String) returns String
+	return "cannot store {subject} into mutable place '{place}'; use clone()"
+end 'deepLetStoreMessage'
+
+function deepLetKeptSlotName(into ReadOnlyRootKind) returns String
+	return match into 'kind'
+		readOnlyElement gives "`readonly` element"
+		letField gives "`let` field"
+		letPayload gives "`let` payload"
+		default panic("deepLetKeptSlotName: '{into.name}' is not a place a value is kept in")
+	end 'kind'
+end 'deepLetKeptSlotName'
+
+function deepLetNoOtherWriterReason(into ReadOnlyRootKind) returns String
+	return "a {deepLetKeptSlotName(into)} has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()"
+end 'deepLetNoOtherWriterReason'
+
+export function deepLetKeptStoreMessage(into ReadOnlyRootKind, subject String, place String) returns String
+	let reason = deepLetNoOtherWriterReason(into)
+
+	if into == ReadOnlyRootKind.readOnlyElement 'aContainerElement'
+		return "cannot store {subject} into a `readonly` element of the container written by '{place}': {reason}"
+	end 'aContainerElement'
+
+	return "cannot store {subject} into a {deepLetKeptSlotName(into)} '{place}': {reason}"
+end 'deepLetKeptStoreMessage'
+
+export function rootKindOfHolder(holder WriteBlameHolder) returns ReadOnlyRootKind
+	return match holder 'holder'
+		binding gives ReadOnlyRootKind.letBinding
+		closure gives ReadOnlyRootKind.letBinding
+		forElement gives ReadOnlyRootKind.forElement
+		ifLetBinding gives ReadOnlyRootKind.ifLetBinding
+		matchBinding gives ReadOnlyRootKind.matchBinding
+		letField gives ReadOnlyRootKind.letField
+		letPayload gives ReadOnlyRootKind.letPayload
+		readOnlyElement gives ReadOnlyRootKind.readOnlyElement
+		storedMapKey gives ReadOnlyRootKind.storedMapKey
+		storedSetElement gives ReadOnlyRootKind.storedSetElement
+		moduleLet gives ReadOnlyRootKind.moduleLet
+		sharedView gives ReadOnlyRootKind.sharedView
+	end 'holder'
+end 'rootKindOfHolder'
+
+export function holderOfRootKind(kind ReadOnlyRootKind) returns WriteBlameHolder
+	return match kind 'kind'
+		letBinding gives WriteBlameHolder.binding
+		forElement gives WriteBlameHolder.forElement
+		ifLetBinding gives WriteBlameHolder.ifLetBinding
+		matchBinding gives WriteBlameHolder.matchBinding
+		letField gives WriteBlameHolder.letField
+		letPayload gives WriteBlameHolder.letPayload
+		readOnlyElement gives WriteBlameHolder.readOnlyElement
+		storedMapKey gives WriteBlameHolder.storedMapKey
+		storedSetElement gives WriteBlameHolder.storedSetElement
+		moduleLet gives WriteBlameHolder.moduleLet
+		sharedView gives WriteBlameHolder.sharedView
+	end 'kind'
+end 'holderOfRootKind'
+
+export function moveDestinationOfLetSlot(slot ReadOnlyRootKind, movesAVar bool) returns MoveDestinationKind
+	return match slot 'slot'
+		letField gives MoveDestinationKind.letField if movesAVar else MoveDestinationKind.letFieldValue
+		letPayload gives MoveDestinationKind.letPayload if movesAVar else MoveDestinationKind.letPayloadValue
+		readOnlyElement gives MoveDestinationKind.readOnlyElement if movesAVar else MoveDestinationKind.readOnlyElementValue
+		letBinding or
+		forElement or
+		ifLetBinding or
+		matchBinding or
+		storedMapKey or
+		storedSetElement or
+		moduleLet or
+		sharedView panic("moveDestinationOfLetSlot: '{slot.name}' is not a place a store keeps a value in")
+	end 'slot'
+end 'moveDestinationOfLetSlot'
+
+export function holderIsPermanent(holder WriteBlameHolder) returns bool
+	return match holder 'holder'
+		binding gives false
+		closure gives false
+		forElement gives false
+		ifLetBinding gives false
+		matchBinding gives false
+		letField gives true
+		letPayload gives true
+		readOnlyElement gives true
+		storedMapKey gives true
+		storedSetElement gives true
+		moduleLet gives true
+		sharedView gives true
+	end 'holder'
+end 'holderIsPermanent'
+
+export function deepLetKeptMessage(root String, kind ReadOnlyRootKind, paramName String, functionName String) returns String
+	return "cannot pass {readOnlyRootClause(root, kind: kind)}, to parameter '{paramName}' of '{functionName}', which keeps it where something may write it; pass a clone()"
+end 'deepLetKeptMessage'
+
+export function deepLetKeptArgumentMessage(into ReadOnlyRootKind, subject String, paramName String, functionName String) returns String
+	return "cannot pass {subject} to parameter '{paramName}' of '{functionName}', which stores it into a {deepLetKeptSlotName(into)}: {deepLetNoOtherWriterReason(into)}"
+end 'deepLetKeptArgumentMessage'
+
+export function deepLetInstantiationMessage(functionName String) returns String
+	return "cannot call '{functionName}' with a type whose values something may write: its body keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type"
+end 'deepLetInstantiationMessage'

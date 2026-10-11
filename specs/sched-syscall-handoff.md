@@ -101,10 +101,10 @@ A POSIX twin of that program would run everywhere the others do.
 
 ### Counting the brackets
 
-`__Builtins.schedSyscallCount()` answers how many bracketed kernel calls have been entered by a machine
+`Scheduler.counters().syscalls` answers how many bracketed kernel calls have been entered by a machine
 holding a processor — exactly the calls a retake can take a processor out of. Every bracketing lane steps it
 where the bracket is entered, before the call is announced. It joins the scheduler-state roster beside
-`__Builtins.schedRetakeCount()`, which counts the retakes themselves: a retake count of 0 says the monitor took
+`Scheduler.counters().retakes`, which counts the retakes themselves: a retake count of 0 says the monitor took
 nothing, while a bracket count of 0 says there was nothing it could have taken.
 
 ## Tests
@@ -523,8 +523,8 @@ done sibling=1 read=5 blocked=yes
 <!-- stdin: delayed -->
 ⭐ **THIS CASE PINS THE MECHANISM, BECAUSE THE CASE ABOVE CAN BE GREENED BY THE WRONG CURE.** Routing
 `__con_read_stdin` through the existing overlapped-read road would reorder those two lines without a
-processor ever being retaken — a real improvement, and a **different** mechanism. `__Builtins.schedRetakeCount()`
-sums a per-P counter (the `schedStealCount` shape, so no `.data` word) and answers how
+processor ever being retaken — a real improvement, and a **different** mechanism. `Scheduler.counters().retakes`
+sums a per-P counter (the `Scheduler.counters().steals` shape, so no `.data` word) and answers how
 many times a `sysmon` actually took a processor away from a machine stuck in the kernel.
 
 ⇒ **`retaken=yes` is the claim that a processor was handed off, not merely that the output came out in a
@@ -593,7 +593,7 @@ function main() returns ExitCode
 	end 'unread'
 
 	var mark = "no"
-	if __Builtins.schedRetakeCount() > 0 'retaken'
+	if Scheduler.counters().retakes > 0 'retaken'
 		mark = "yes"
 	end 'retaken'
 	print("retaken={mark}\n")
@@ -669,11 +669,11 @@ type Waiter
 
 		print("W: waiting\n")
 		let tailReply = sentinel.ping()
-		let retakesBefore = __Builtins.schedRetakeCount()
+		let retakesBefore = Scheduler.counters().retakes
 		let start = Clock.nowMs()
 		let killed = endedByItsDeadline(child)
 		let waitedMs = Clock.elapsedMs(start)
-		let retakesDuring = __Builtins.schedRetakeCount() - retakesBefore
+		let retakesDuring = Scheduler.counters().retakes - retakesBefore
 		child.release()
 		print("W: wait returned\n")
 
@@ -883,16 +883,16 @@ end 'Spinner'
 
 // The lowest idle-processor count seen while the caller runs for `ms` without yielding.
 function lowestIdleOver(ms Integer) returns Integer
-	var lowest = __Builtins.schedIdleProcessorCount()
+	var lowest = Scheduler.counters().idleProcessors
 	let start = Clock.nowMs()
 	while (Clock.elapsedMs(start) as Integer) < ms 'watch'
-		let idle = __Builtins.schedIdleProcessorCount()
+		let idle = Scheduler.counters().idleProcessors
 		if idle < lowest 'lower'
 			lowest = idle
 		end 'lower'
 	end 'watch'
 
-	return lowest
+	return lowest as Integer
 end 'lowestIdleOver'
 
 function main() returns ExitCode
@@ -905,7 +905,7 @@ function main() returns ExitCode
 	let n = try await reader.read(sentinel) otherwise 0
 	let s = try await spun otherwise 0
 	var retaken = "no"
-	if __Builtins.schedRetakeCount() > 0 'retaken'
+	if Scheduler.counters().retakes > 0 'retaken'
 		retaken = "yes"
 	end 'retaken'
 
@@ -913,12 +913,12 @@ function main() returns ExitCode
 	let probe = spawn Spinner.create()
 	let reply = probe.spin(1)
 	let watchStart = Clock.nowMs()
-	var answered = 0
-	while (Clock.elapsedMs(watchStart) as Integer) < watchMs and answered == 0 'watch'
-		answered = __Builtins.gtIsComplete(reply.inner)
+	var answered = false
+	while (Clock.elapsedMs(watchStart) as Integer) < watchMs and not answered 'watch'
+		answered = reply.isComplete()
 	end 'watch'
 	let p = try await reply otherwise 0
-	print("retaken={retaken} woken={answered == 1} ran={n + s + p}\n")
+	print("retaken={retaken} woken={answered} ran={n + s + p}\n")
 
 	return 0
 end 'main'
@@ -993,14 +993,14 @@ done sibling=1 read=5 blocked=yes
 <!-- test: a-print-enters-a-kernel-bracket -->
 **THE CONTROL FOR EVERY ASSERTION THAT A WINDOW HOLDS NO BRACKET.** A write to standard output is
 `SyscallClass.blocking` on every lane that brackets — its far end may stop reading — so one `print` from `main`,
-a green thread, must move `schedSyscallCount()`. A zero there would make every `brackets=0` elsewhere a reading
+a green thread, must move `Scheduler.counters().syscalls`. A zero there would make every `brackets=0` elsewhere a reading
 of a counter nothing steps. It is a `> 0` test because the first print of a process may bring other bracketed
 calls with it.
 ```maxon
 function main() returns ExitCode
-	let before = __Builtins.schedSyscallCount()
+	let before = Scheduler.counters().syscalls
 	print("writing\n")
-	let entered = __Builtins.schedSyscallCount() - before
+	let entered = Scheduler.counters().syscalls - before
 	print("entered={entered > 0}\n")
 
 	return 0

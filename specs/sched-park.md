@@ -332,7 +332,7 @@ type Handler
 	export function work() returns Integer
 		let p = async flip(41)
 		sleep(200)
-		let doneDuringSleep = __Builtins.gtIsComplete(p.inner)
+		let doneDuringSleep = 1 if p.isComplete() else 0
 		let v = await p
 		return v * 10 + doneDuringSleep
 	end 'work'

@@ -166,21 +166,21 @@ var posB = 0
 var posC = 0
 
 function inner() returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	order = order + 1
 	posC = order
 	return 1
 end 'inner'
 
 function sibling() returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	order = order + 1
 	posB = order
 	return 1
 end 'sibling'
 
 function outer() returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	order = order + 1
 	posA = order
 	let c = async inner()
@@ -215,21 +215,21 @@ var a2 = 0
 var a3 = 0
 
 function first() returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	order = order + 1
 	a1 = order
 	return 1
 end 'first'
 
 function second() returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	order = order + 1
 	a2 = order
 	return 1
 end 'second'
 
 function third() returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	order = order + 1
 	a3 = order
 	return 1
@@ -258,14 +258,14 @@ s=3 a1=1 a2=2 a3=3
 **THE MOST RECENTLY READIED GREEN THREAD RUNS NEXT, AHEAD OF THE RING** — Go's `runnext`
 (`vendor/go/src/runtime/proc.go`, `runqput` with `next`). A `spawn` readies its service at once, so of three
 spawned in order the third holds the slot and the first two wait in the ring. Each service answers its
-message the moment it runs, so the index `awaitAny` names is the one that ran first: the third, then the
+message the moment it runs, so the index `awaitAny()` names is the one that ran first: the third, then the
 ring in its own order. The slot is what keeps a reply beside the thread that woke it, where its data is.
 
 ⚠ **THE ORDER ASSUMES `main` KEEPS THE PROCESSOR ACROSS ALL THREE `spawn`s, WHICH ONLY `preempt: off` MAKES
 TRUE.** The monitor asks a strand that has held its processor for 10 ms of WALL time to yield; a preempted
 `main` goes to the global tail and its machine takes `runnext`, so a `main` held off a core between the second
 and third spawn sees the FIRST service answer first, and reads `first=1 sum=6` against this pin. With the switch off nothing takes `main`'s processor until it
-parks in `awaitAny`; `specs/sched-preempt.md`'s
+parks in `awaitAny()`; `specs/sched-preempt.md`'s
 `a-main-preempted-between-two-spawns-runs-the-earlier-one-first` is the same program with the preemption
 forced, pinning the other order.
 ```maxon
@@ -293,7 +293,7 @@ function main() returns ExitCode
 	replies.push(a.rank())
 	replies.push(b.rank())
 	replies.push(c.rank())
-	let first = __Builtins.awaitAny(replies)
+	let first = replies.awaitAny()
 	var sum = 0
 	for p in replies 'drainthemall'
 		sum = sum + (try await p otherwise 0)
@@ -425,7 +425,7 @@ function yielder() returns Integer
 end 'yielder'
 
 function sibling() returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	siblingRan = 1
 	return 1
 end 'sibling'
@@ -458,13 +458,13 @@ a thread nobody awaits, which is the `__gt_live_count` abort (75) rather than 7.
 var ran = 0
 
 function marker() returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	ran = ran + 1
 	return 1
 end 'marker'
 
 function ok(v Integer) returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	return v
 end 'ok'
 
@@ -492,7 +492,7 @@ strand runner never reaches them, nothing would pop them and the mark alone woul
 records alive. Each drop instead sweeps the tombstones off the FRONT of the dropped coroutine's own owner's
 queue, where the one it just marked is sitting, and reclaims it — so the next spawn takes that same record
 back off the free list. The first spawn has nothing to reuse and each of the other 4,999 reuses the one
-before it, which `__Builtins.schedGtRecycleCount()` counts.
+before it, which `Scheduler.counters().recycledThreads` counts.
 
 ✅ **THIS CASE OWNS THE FRONT SWEEP.** With the drop's front sweep removed, this case reads `recycled=0`
 while the other two drop cases below stay GREEN, so the count is this case's road and nobody else's.
@@ -500,7 +500,7 @@ while the other two drop cases below stay GREEN, so the count is this case's roa
 var ran = 0
 
 function neverRuns() returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	ran = ran + 1
 	return 1
 end 'neverRuns'
@@ -512,7 +512,7 @@ function main() returns ExitCode
 		i = i + 1
 	end 'loop'
 
-	print("ran={ran} recycled={__Builtins.schedGtRecycleCount()}")
+	print("ran={ran} recycled={Scheduler.counters().recycledThreads}")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -531,9 +531,9 @@ while the promise is still live —
 the struct survives, because it still holds a result an un-awaited promise owns. The loop body's scope exit
 then drops `p`, and that dropper is the SECOND arrival: it finds the runner's ticket and reclaims. After a
 warm-up round has put both of its records back, each of the three rounds spawns twice and both spawns are
-served from the free list — `schedGtRecycleCount()` grows by exactly 6 — so every record came back. A
+served from the free list — `Scheduler.counters().recycledThreads` grows by exactly 6 — so every record came back. A
 dropper that failed to reclaim `p` would leave each round one record short, and its second spawn would carve
-a fresh one. `gtIsComplete` is what proves the case reached the order it names — a `p` that had NOT
+a fresh one. `isComplete()` is what proves the case reached the order it names — a `p` that had NOT
 completed would be the tombstone order the two cases above cover instead.
 
 ✅ **THIS CASE OWNS THE CONSUMER HALF.** With the drop's consumer half removed, this case reads
@@ -553,22 +553,22 @@ function main() returns ExitCode
 		let p = async done()
 		let q = async done()
 		total = total + await q
-		finished = finished + __Builtins.gtIsComplete(p.inner)
+		finished = finished + (1 if p.isComplete() else 0)
 		i = i + 1
 	end 'warm'
 
-	let recycledBefore = __Builtins.schedGtRecycleCount()
+	let recycledBefore = Scheduler.counters().recycledThreads
 	var j = 0
 
 	while j < 3 'completedThenDropped'
 		let p = async done()
 		let q = async done()
 		total = total + await q
-		finished = finished + __Builtins.gtIsComplete(p.inner)
+		finished = finished + (1 if p.isComplete() else 0)
 		j = j + 1
 	end 'completedThenDropped'
 
-	let recycled = __Builtins.schedGtRecycleCount() - recycledBefore
+	let recycled = Scheduler.counters().recycledThreads - recycledBefore
 	print("total={total} finished={finished} recycled={recycled}")
 	return 0
 end 'main'
@@ -633,11 +633,11 @@ function main() returns ExitCode
 		let s = async sleeper()
 		let f = async done()
 		total = total + await f
-		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s.inner))
+		stillParked = stillParked + (0 if s.isComplete() else 1)
 		i = i + 1
 	end 'warm'
 
-	let recycledBefore = __Builtins.schedGtRecycleCount()
+	let recycledBefore = Scheduler.counters().recycledThreads
 	var j = 0
 
 	while j < 3 'parkedThenDropped'
@@ -648,11 +648,11 @@ function main() returns ExitCode
 		let s = async sleeper()
 		let f = async done()
 		total = total + await f
-		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s.inner))
+		stillParked = stillParked + (0 if s.isComplete() else 1)
 		j = j + 1
 	end 'parkedThenDropped'
 
-	let recycled = __Builtins.schedGtRecycleCount() - recycledBefore
+	let recycled = Scheduler.counters().recycledThreads - recycledBefore
 	print("total={total} stillParked={stillParked} recycled={recycled}")
 	return 0
 end 'main'
@@ -672,12 +672,12 @@ every spawn and every reclaim share one processor's free list. A coroutine-only 
 processor count, because only `main`'s machine ever runs; a program whose green threads spread across
 machines does not, since a reclaimed record may wait on another processor's list while a spawn carves a
 fresh one — so there a reuse count can come up short with nothing lost, and a record lost every round can
-hide in that slack. `__Builtins.schedGtRecordsCarved()` is the reading that holds either way: how many
+hide in that slack. `Scheduler.counters().threadRecordsCarved` is the reading that holds either way: how many
 records the scheduler's arena has ever carved. A spawn carves only when its processor's list and the global
 one are both empty, so a runtime that reclaims every dropped sleeper carves no more than the records live at
 once — `main`, this round's sleeper and its finisher — plus fewer than 64 waiting on each other processor's
 list, however many rounds run. A thousand rounds is more than five times that bound at four processors, so a
-record stranded every round cannot stay under it. The bound is taken from `schedProcessorCount()` rather than
+record stranded every round cannot stay under it. The bound is taken from `Scheduler.processorCount()` rather than
 written as a number, so it follows the count the scheduler resolved.
 
 ✅ **THIS CASE OWNS THE RUNNER'S HALF, AND THE EXIT GATE CANNOT SEE IT.** With the runner's half removed from the parked-drop
@@ -714,12 +714,12 @@ function main() returns ExitCode
 		let s = async sleeper()
 		let f = async done()
 		total = total + await f
-		stillParked = stillParked + (1 - __Builtins.gtIsComplete(s.inner))
+		stillParked = stillParked + (0 if s.isComplete() else 1)
 		i = i + 1
 	end 'parkedThenDropped'
 
-	let bound = peakLive + listSlack * (__Builtins.schedProcessorCount() - 1)
-	let carved = __Builtins.schedGtRecordsCarved()
+	let bound = peakLive + listSlack * ((Scheduler.processorCount() as Integer) - 1)
+	let carved = Scheduler.counters().threadRecordsCarved as Integer
 	print("total={total} stillParked={stillParked} bounded={carved <= bound}\n")
 	return 0
 end 'main'
@@ -732,7 +732,7 @@ total=1000 stillParked=1000 bounded=true
 ```
 
 <!-- test: sched-runqueue.no-coroutine-is-ever-stolen -->
-**THE STEAL COUNTER, AND WHAT IT READS BY CONSTRUCTION.** `__Builtins.schedStealCount()` walks
+**THE STEAL COUNTER, AND WHAT IT READS BY CONSTRUCTION.** `Scheduler.counters().steals` walks
 `__sched_procs` and sums every processor's steal counter, so it is the only way a Maxon program can
 observe that work stealing happened at all. A coroutine is never a token on a run queue — it waits on its
 green thread's strand queue, which only the machine holding the strand reads — so **no coroutine is ever
@@ -746,14 +746,14 @@ counter it reads are all emitted and all answer. `multicore-stress/pin-matrix.sh
 `MAXON_MAX_PROCS`, is where the zero becomes a measurement of the pin.
 ```maxon
 function work(v Integer) returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	return v
 end 'work'
 
 function main() returns ExitCode
 	let p = async work(5)
 	let r = await p
-	print("r={r} steals={__Builtins.schedStealCount()}")
+	print("r={r} steals={Scheduler.counters().steals}")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -947,7 +947,7 @@ only after all of them; with it, it runs within 61 slices of the first leaf.
 ⭐ **THE QUANTITY IS SLICES, NOT POSITIONS, AND THE `runnext` SLOT IS WHY THAT DISTINCTION MATTERS.** A
 thread taken from the slot inherits the slice it was handed, so it costs no tick — here each leaf's `note`
 readies `Tally` into the slot, and `Tally` therefore rides the leaf's own slice. Counting RUNS would count
-those too and measure something the check does not act on. `__Builtins.schedSliceCount()` is the tick the
+those too and measure something the check does not act on. `Scheduler.counters().slices` is the tick the
 check itself tests, read in the LEAF, since reading it in `Tally` would time `Tally`.
 
 ⭐⭐ **THE SETUP IS A BURST OF SENDS TO PARKED SERVICES, AND THE SLEEP IS WHAT MAKES IT ONE.** Publishing by
@@ -957,7 +957,7 @@ nothing reaches the global queue. After the sleep every leaf is parked on an emp
 sends ready them all in id order — which costs no slices at all, on every lane — the 257th ready
 overflows the ring, and the batch it moves is leaves #1..#129 with #1 at its head.
 
-⛔ **THE CASE STATES WHETHER ITS OWN SETUP HAPPENED.** `__Builtins.schedGlobalPushCount()` across the burst
+⛔ **THE CASE STATES WHETHER ITS OWN SETUP HAPPENED.** `Scheduler.counters().globalPushes` across the burst
 is that witness: `pushed=true` means the overflow really did put threads on the global queue, so the
 reading below is about the check. A `pushed=false` reading is the setup having dissolved, and it fails
 this case rather than passing it quietly.
@@ -1025,7 +1025,7 @@ type Leaf
 	end 'create'
 
 	export function go(sink Tally.handle)
-		sink.note(self.id, slice: __Builtins.schedSliceCount())
+		sink.note(self.id, slice: Scheduler.counters().slices as Integer)
 	end 'go'
 end 'Leaf'
 
@@ -1043,7 +1043,7 @@ function main() returns ExitCode
 	// Every service reaches its park on an empty mailbox, so the burst below is what publishes them.
 	sleep(parkBarrierMs)
 
-	let pushedBefore = __Builtins.schedGlobalPushCount()
+	let pushedBefore = Scheduler.counters().globalPushes
 
 	var k = 0
 	while k < leafCount 'sendEach'
@@ -1053,7 +1053,7 @@ function main() returns ExitCode
 		k = k + 1
 	end 'sendEach'
 
-	let burstPushes = __Builtins.schedGlobalPushCount() - pushedBefore
+	let burstPushes = Scheduler.counters().globalPushes - pushedBefore
 
 	var runCount = 0
 	var spins = 0
@@ -1293,7 +1293,7 @@ function main() returns ExitCode
 		n = n + 1
 	end 'collect'
 
-	print("done={done} steals={__Builtins.schedStealCount()}")
+	print("done={done} steals={Scheduler.counters().steals}")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)

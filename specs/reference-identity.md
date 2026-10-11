@@ -351,24 +351,41 @@ end 'main'
 red green blue | green | 3
 ```
 
-<!-- test: a-durable-store-of-a-constant-copies-it -->
-⭐ **BINDING A CONSTANT KEEPS ITS IDENTITY; STORING ONE INTO A CONTAINER DOES NOT, AND THE DIFFERENCE IS
-THE POINT.** A module-level `let` is image data on a read-only page. `let b = A` is a borrow and shares
-the one record, so `b is A` — that is `assignment-creates-alias` and it holds here unchanged. But a
-container OUTLIVES the statement and may be written through later, and a write through it would land on
-the image. So a durable store takes a private copy, and a copy is a different object.
+<!-- test: a-durable-store-of-a-constant-is-refused -->
+⭐ **BINDING A CONSTANT KEEPS ITS IDENTITY; STORING ONE INTO A MUTABLE CONTAINER IS REFUSED, AND THE
+DIFFERENCE IS THE POINT.** A module-level `let` is image data on a read-only page. `let b = A` is a borrow
+and shares the one record, so `b is A` — that is `assignment-creates-alias` and it holds here unchanged. But
+a container OUTLIVES the statement and may be written through later, and a write through it would land on
+the image. So a store into a container whose elements are writable is `E3078`: the program takes its
+private copy with `.clone()` (`a-durable-store-of-a-cloned-constant-is-its-own-object`) or declares the
+container's elements `readonly` (`a-readonly-container-accepts-a-constant`).
 
-**The copy is not a cost the identity pays for; it is the thing that makes the store safe.** Push a
-constant into an array, take the element back out and `push` to it: without the copy that write reaches
-`.rdata` and faults on x64, or — with no read-only section — silently rewrites the constant on
-wasm32-wasi. The seven `*-detaches-from-rdata` cases in `byte-string-literal.md` pin the mutation half;
-this pins what the reader sees.
+⚠ **THE REFUSAL IS WHAT KEEPS THE PAGE UNWRITTEN.** Push a constant into an array, take the element back
+out and `push` to it: without the refusal that write reaches `.rdata` and faults on x64, or — with no
+read-only section — silently rewrites the constant on wasm32-wasi. The seven `*-detaches-from-rdata` cases
+in `byte-string-literal.md` pin the mutation half.
+```maxon
+typealias Num = int(0 to 1000)
+typealias NumArray = Array with Num
+typealias Holder = Array with NumArray
 
-⚠ **THE ANSWER FOLLOWS FROM THE REPRESENTATION, NOT FROM `is`.** A constant held as an ordinary heap
-record could co-own where this one must copy, and identity would survive its store; `is` is where the
-representation choice becomes visible. Nothing else in `specs/` pins a store, and this case is where the
-compiler says which answer is its own. `self-identity`, `assignment-creates-alias` and
-`byte-array-constant-identity` are unaffected.
+let Anchor = NumArray.create()
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.push(Anchor)
+	return h.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:10:4: cannot store a value read out of a module-level `let` into mutable place 'an element of the container push writes'; use clone()
+```
+
+<!-- test: a-durable-store-of-a-cloned-constant-is-its-own-object -->
+⭐ **A CLONE OF A CONSTANT IS A DIFFERENT OBJECT, AND THE STORE TAKES IT.** `let b = A` shares the one
+record, so `b is A`; the container's element is the private copy `.clone()` made, so it is not `A`. `is` is
+where the representation choice becomes visible, and this case is where the compiler says which answer is
+its own. `self-identity`, `assignment-creates-alias` and `byte-array-constant-identity` are unaffected.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
@@ -384,7 +401,7 @@ function main() returns ExitCode
 	end 'bindingBorrows'
 
 	var h = Holder.create()
-	h.push(Anchor)
+	h.push(Anchor.clone())
 	let stored = try h.get(0) otherwise NumArray.create()
 	if stored is not Anchor 'storeCopies'
 		result = result + 2
@@ -397,18 +414,61 @@ end 'main'
 3
 ```
 
-<!-- test: a-durable-store-of-a-let-map-copies-it -->
-⭐ **THE COPY RULE IS ABOUT IMAGE DATA, NOT ABOUT ARRAYS**, and a `Map` is the shape that proves it. The
-case above pins the rule with an `Array`, whose co-own already forks on `capacity@16`. A `Map` reaches the
-same sink by a different road — it is `genericInstance`-tagged, so it matches neither the buffer arm nor
-the `structRef` arm and falls through to a plain incref. The sink then holds the module-level `let` itself,
-and a write through it lands on the image: **a panic in `Map.ensureCapacity` on x64, and on wasm32-wasi —
-which has no read-only section — a SILENT rewrite of the constant.**
+<!-- test: a-readonly-container-accepts-a-constant -->
+⭐ **A `readonly` ELEMENT TYPE TAKES A READ-ONLY VALUE.** Nothing can write through the container's elements,
+so the image is never written and the store the case above refuses is accepted: the container holds the
+constant and reads it back.
+```maxon
+typealias Num = int(0 to 1000)
+typealias NumArray = Array with Num
+typealias Holder = Array with readonly NumArray
 
-⚠ **`11` here would mean the `upsert` reached `Shared`** and the module-level `let` came back holding
-an entry. That is the wrong answer the copy exists to prevent, and because a `let` Map is image data the
-same aliasing is also a write to a read-only page. `held` must see its own entry and `Shared` must still be
-empty — `1` and `0`, so `10`.
+let Anchor = NumArray.create()
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.push(Anchor)
+	let stored = try h.get(0) otherwise NumArray.create()
+	return (h.count() as ExitCode) + (stored.count() as ExitCode)
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: a-readonly-container-keeps-the-constants-identity -->
+⭐ **A `readonly` ELEMENT NEEDS NO PRIVATE COPY OF AN IMMORTAL IMAGE.** The container shares the constant's own
+record, so the element read back IS the constant: `stored is Anchor`, where a container of writable elements
+holds a private copy and `is` answers false (`a-durable-store-of-a-cloned-constant-is-its-own-object`).
+```maxon
+typealias Num = int(0 to 1000)
+typealias NumArray = Array with Num
+typealias Holder = Array with readonly NumArray
+
+let Anchor = NumArray.create()
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.push(Anchor)
+	let stored = try h.get(0) otherwise NumArray.create()
+
+	if stored is Anchor 'keepsIdentity'
+		return 1
+	end 'keepsIdentity'
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: a-durable-store-of-a-let-map-is-refused -->
+⭐ **THE REFUSAL IS ABOUT IMAGE DATA, NOT ABOUT ARRAYS**, and a `Map` is the shape that proves it. The
+case above pins the rule with an `Array`; a `Map` is `genericInstance`-tagged and would reach the same sink
+by a different road, holding the module-level `let` itself, where a write through it lands on the image: **a
+panic in `Map.ensureCapacity` on x64, and on wasm32-wasi — which has no read-only section — a SILENT rewrite
+of the constant.** The store is `E3078` for a `Map` as for an `Array`.
 ```maxon
 typealias Key = int(0 to 1000)
 typealias KeyMap = Map with (Key, Key)
@@ -419,6 +479,27 @@ let Shared = KeyMap.create()
 function main() returns ExitCode
 	var box = MapBox.create()
 	box.push(Shared)
+	return box.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:10:6: cannot store a value read out of a module-level `let` into mutable place 'an element of the container push writes'; use clone()
+```
+
+<!-- test: a-durable-store-of-a-cloned-let-map-copies-it -->
+⭐ **THE CLONE IS THE COPY, AND THE `Map` BEHIND IT IS WRITABLE.** `held` must see its own entry and `Shared`
+must still be empty — `1` and `0`, so `10`. `11` here would mean the `upsert` reached `Shared`: the wrong
+answer a copy exists to prevent, and a write to a read-only page besides.
+```maxon
+typealias Key = int(0 to 1000)
+typealias KeyMap = Map with (Key, Key)
+typealias MapBox = Array with KeyMap
+
+let Shared = KeyMap.create()
+
+function main() returns ExitCode
+	var box = MapBox.create()
+	box.push(Shared.clone())
 	var held = try box.get(0) otherwise KeyMap.create()
 	held.upsert(7, value: 7)
 	return ((held.count() as ExitCode) * 10) + (Shared.count() as ExitCode)

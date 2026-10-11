@@ -26,7 +26,6 @@ let LoopbackOriginScheme = "http://"
 
 typealias SessionMillis = int(0 to u64.max)
 typealias SessionTally = int(0 to 4096)
-typealias SessionSerial = int(0 to u64.max)
 
 export typealias McpIdleSeconds = int(1 to 86400)
 export typealias McpSessionLimit = int(1 to 4096)
@@ -53,11 +52,11 @@ end 'McpTransportChoice'
 type McpHttpSession
 	export let id as String
 	export var lastSeenMs as SessionMillis
-	export let debug as DebugSessionSlot
+	export var debug as DebugSessionSlot
 	export var fileMemos as SharedFileMemoMap
 
-	static function create(id String, nowMs SessionMillis) returns McpHttpSession
-		return Self{id: id, lastSeenMs: nowMs, debug: DebugSessionSlot.create(), fileMemos: SharedFileMemoMap.create()}
+	static function create(id String, nowMs SessionMillis, serials SerialMint) returns McpHttpSession
+		return Self{id: id, lastSeenMs: nowMs, debug: DebugSessionSlot.create(serials), fileMemos: SharedFileMemoMap.create()}
 	end 'create'
 
 	export function touch()
@@ -132,7 +131,7 @@ function stdinEnded(watcher McpStdinWatcher.handle) returns McpHttpWake
 end 'stdinEnded'
 
 export function runMcpHttpServer(devMode bool, exePath FilePath, options McpHttpOptions) returns ExitCode
-	let server = try HttpServer.bind(McpLoopbackAddress, port: options.port) otherwise (e) 'noListener'
+	var server = try HttpServer.bind(McpLoopbackAddress, port: options.port) otherwise (e) 'noListener'
 		printError("maxon {McpServerCommandName}: could not bind {McpLoopbackAddress}:{options.port} ({e.name})\n")
 
 		return OwnFailureExit
@@ -146,7 +145,7 @@ export function runMcpHttpServer(devMode bool, exePath FilePath, options McpHttp
 
 	// No route shuts the server down: one would be a denial of service for any page that got past the
 	// header checks. It ends with its process, or with its stdin under `exitOnStdinEof`.
-	let handler = McpHttpHandler.create(devMode, exePath: exePath, caps: options, port: port, server: server)
+	var handler = McpHttpHandler.create(devMode, exePath: exePath, caps: options, port: port, server: server)
 	var wakes = McpHttpWakePromiseArray.create()
 	wakes.push(async McpHttpHandler.servedSessions(handler))
 
@@ -156,7 +155,7 @@ export function runMcpHttpServer(devMode bool, exePath FilePath, options McpHttp
 	end 'watchingStdin'
 
 	while wakes.count() > 0 'untilServingEnds'
-		let ready = __Builtins.awaitAny(wakes)
+		let ready = wakes.awaitAny()
 		let woken = try wakes.remove(ready) otherwise panic("runMcpHttpServer: wakes.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		match await woken 'which'
@@ -184,14 +183,16 @@ end 'reportedListenerFailure'
 
 type McpHttpHandler implements HttpHandler
 	export var sessions as McpHttpSessionList
+	var requests as SerialMint
+	var serials as SerialMint
 	let devMode as bool
 	let exePath as FilePath
-	let caps as McpHttpOptions
+	var caps as McpHttpOptions
 	let port as NetworkPort
-	let server as HttpServer
+	var server as HttpServer
 
 	static function create(devMode bool, exePath FilePath, caps McpHttpOptions, port NetworkPort, server HttpServer) returns McpHttpHandler
-		return Self{sessions: McpHttpSessionList.create(), devMode: devMode, exePath: exePath, caps: caps, port: port, server: server}
+		return Self{sessions: McpHttpSessionList.create(), requests: SerialMint.create(), serials: SerialMint.create(), devMode: devMode, exePath: exePath, caps: caps, port: port, server: server}
 	end 'create'
 
 	static function servedSessions(handler McpHttpHandler) returns McpHttpWake
@@ -258,7 +259,7 @@ type McpHttpHandler implements HttpHandler
 		self.sweep()
 
 		match request.method() 'verb'
-			post then try servePostedMessage(exchange, request: request, sessions: self.sessions, devMode: self.devMode, exePath: self.exePath, caps: self.caps)
+			post then try servePostedMessage(exchange, request: request, sessions: self.sessions, devMode: self.devMode, exePath: self.exePath, caps: self.caps, serial: self.requests.mint(), serials: self.serials)
 			delete then try serveSessionDelete(exchange, request: request, sessions: self.sessions)
 			get then try refuse(exchange, code: StatusCode.methodNotAllowed, reason: "this transport carries no server-to-client stream")
 			put or
@@ -351,10 +352,12 @@ function reapSessions(sessions McpHttpSessionList, ending SessionEnds) returns S
 	return reaped
 end 'reapSessions'
 
-function servePostedMessage(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
-	match postedMessageOf(request.body()) 'posted'
+function servePostedMessage(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions, serial MintedSerial, serials SerialMint) throws HttpServerError
+	var posted = postedMessageOf(request.body())
+
+	match posted 'posted'
 		notOneObject then try refuse(exchange, code: StatusCode.badRequest, reason: "the body is not one JSON-RPC object")
-		message(doc) then try serveMessage(exchange, doc: doc, offered: sessionOfferedBy(request), sessions: sessions, devMode: devMode, exePath: exePath, caps: caps)
+		message(doc) then try serveMessage(exchange, doc: doc, offered: sessionOfferedBy(request), sessions: sessions, devMode: devMode, exePath: exePath, caps: caps, serial: serial, serials: serials)
 	end 'posted'
 end 'servePostedMessage'
 
@@ -368,7 +371,7 @@ function postedMessageOf(body String) returns PostedMessage
 	return PostedMessage.message(doc)
 end 'postedMessageOf'
 
-function serveMessage(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
+function serveMessage(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions, serial MintedSerial, serials SerialMint) throws HttpServerError
 	if rpcNamesMethod(doc, method: RpcInitializeMethod) 'initializing'
 		if rpcIsNotification(doc) 'asksForNothing'
 			try answerWith(exchange, code: StatusCode.accepted, body: McpAnswerBody.empty, minted: OfferedSession.absent)
@@ -376,12 +379,14 @@ function serveMessage(exchange HttpExchange, doc JsonDoc, offered OfferedSession
 			return
 		end 'asksForNothing'
 
-		try serveInitialize(exchange, doc: doc, offered: offered, sessions: sessions, devMode: devMode, exePath: exePath, caps: caps)
+		try serveInitialize(exchange, doc: doc, offered: offered, sessions: sessions, devMode: devMode, exePath: exePath, caps: caps, serial: serial, serials: serials)
 
 		return
 	end 'initializing'
 
-	match findSession(sessions, offered: offered) 'known'
+	var lookup = findSession(sessions, offered: offered)
+
+	match lookup 'known'
 		unknown then try refuse(exchange, code: StatusCode.notFound, reason: "unknown session")
 		found(session) then try serveOnSession(exchange, doc: doc, session: session, devMode: devMode, exePath: exePath, minted: OfferedSession.absent)
 	end 'known'
@@ -389,7 +394,7 @@ end 'serveMessage'
 
 // An `initialize` carrying any session id is refused: honoured under a live id, it would replace
 // that session and orphan its debuggee.
-function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
+function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSession, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions, serial MintedSerial, serials SerialMint) throws HttpServerError
 	if namesASession(offered) 'alreadyInASession'
 		try refuse(exchange, code: StatusCode.badRequest, reason: "`initialize` opens a session and must carry no Mcp-Session-Id")
 
@@ -402,7 +407,7 @@ function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSess
 		return
 	end 'full'
 
-	let session = McpHttpSession.create(mintSessionId(), nowMs: Clock.nowMs() as SessionMillis)
+	var session = McpHttpSession.create(mintSessionId(serial), nowMs: Clock.nowMs() as SessionMillis, serials: serials)
 	sessions.append(session)
 
 	try serveOnSession(exchange, doc: doc, session: session, devMode: devMode, exePath: exePath, minted: OfferedSession.named(session.id))
@@ -518,12 +523,9 @@ function loopbackAuthorities(port NetworkPort) returns StringArray
 	return ["{McpLoopbackAddress}:{port}", "{McpLocalhostName}:{port}"]
 end 'loopbackAuthorities'
 
-var sessionIdsMinted = 0 as SessionSerial
-
 // Hashed so the next id cannot be read off one a caller already holds.
-function mintSessionId() returns String
-	sessionIdsMinted = sessionIdsMinted + 1
-	let seed = "{__Builtins.currentProcessId()}-{Clock.nowNanos()}-{sessionIdsMinted}"
+function mintSessionId(serial MintedSerial) returns String
+	let seed = "{Process.id()}-{Clock.nowNanos()}-{serial}"
 
 	return hexOfLeadingBytes(sha256(seed.toByteArray()), count: SessionIdBytes)
 end 'mintSessionId'

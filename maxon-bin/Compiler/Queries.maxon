@@ -82,7 +82,7 @@ end 'TokenMemoMiss'
 
 // Read off the RAW stream, so a `__` spelling in an inactive `#if` branch counts. The facts held with
 // the bytes answer for a library file whose view came from the disk tier and was never lexed here.
-module function reservedSpellingsOf(project Project, path FilePath, entry SourceFileEntry) returns ByteArrayArray throws TokenMemoMiss
+module function reservedSpellingsOf(project Project, path FilePath, entry SourceFileEntry) returns NameRoster throws TokenMemoMiss
 	if let facts = try sharedRawStreamFactsOf(project, contentHash: entry.contentHash) 'heldWithTheBytes'
 		return facts.reservedSpellings
 	end 'heldWithTheBytes'
@@ -326,9 +326,9 @@ function extensionMethodKeysWritten(project Project, signatures ProgramSignature
 		seen.insert(key)
 	end 'eachFoldedKey'
 
-	for site in signatures.settled.extensionDeclSites 'eachExtensionSite'
+	for site in signatures.settledDeclarations().extensionDeclSites 'eachExtensionSite'
 		var reader = try siteFileReader(project, signatures: signatures, path: site.path, buildsBodies: false)
-		var written = ByteArrayArray.create()
+		var written = NameRoster.create()
 		reader.methodKeysOfAnUndeclaredExtension(site, into: written)
 
 		for key in written 'eachWrittenKey'
@@ -360,7 +360,7 @@ function foldExtensionsOfUserFiles(project Project, signatures ProgramSignatures
 end 'foldExtensionsOfUserFiles'
 
 type UserFileFold
-	export let signatures as ProgramSignatures
+	export var signatures as ProgramSignatures
 	export let paths as MaxonSourcePathArray
 
 	static function create(signatures ProgramSignatures, paths MaxonSourcePathArray) returns UserFileFold
@@ -369,7 +369,7 @@ type UserFileFold
 end 'UserFileFold'
 
 export function claimsOfUserFiles(project Project) returns SourceClaims throws CompileError
-	let fold = try foldedUserFilesOf(project, recordingClaims: true)
+	var fold = try foldedUserFilesOf(project, recordingClaims: true)
 	try foldExtensionsOfUserFiles(project, signatures: fold.signatures)
 	let nominals = fold.signatures.userDeclaredNominalNames()
 	let aliases = fold.signatures.userDeclaredAliasNames()
@@ -395,12 +395,33 @@ function identifierNamesWritten(project Project, paths MaxonSourcePathArray) ret
 
 			let name = String.from(token.value)
 
-			if seen.contains(name) 'alreadyListed'
-				continue
-			end 'alreadyListed'
+			if not seen.contains(name) 'firstMention'
+				seen.insert(name)
+				names.push(name)
+			end 'firstMention'
 
-			seen.insert(name)
-			names.push(name)
+			if i + 2 >= tokens.count() 'noMemberFollows'
+				continue
+			end 'noMemberFollows'
+
+			let dot = try tokens.get(i + 1) otherwise panic("identifierNamesWritten: tokens.get OOB at {i + 1} below count {tokens.count()}")
+
+			if dot.kind != TokenKind.dot 'notQualified'
+				continue
+			end 'notQualified'
+
+			let member = try tokens.get(i + 2) otherwise panic("identifierNamesWritten: tokens.get OOB at {i + 2} below count {tokens.count()}")
+
+			if member.kind != TokenKind.identifier 'notAMemberName'
+				continue
+			end 'notAMemberName'
+
+			let qualified = "{name}.{String.from(member.value)}"
+
+			if not seen.contains(qualified) 'firstQualifiedMention'
+				seen.insert(qualified)
+				names.push(qualified)
+			end 'firstQualifiedMention'
 		end 'eachToken'
 	end 'eachFile'
 
@@ -447,6 +468,17 @@ function adoptProgramFacts(project Project, signatures ProgramSignatures)
 	signatures.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
 end 'adoptProgramFacts'
 
+function projectRootModuleDirectoryOf(project Project) returns String
+	let cwd = Directory.currentPath()
+	var root = project.rootPath.resolve(cwd)
+
+	if not Directory.isDirectory(root) 'aSingleFileBuild'
+		root = try root.parent() otherwise panic("projectRootModuleDirectoryOf: '{root.toString()}' has no parent — a single-file build's root is an absolute FILE path, resolved against the cwd on the line above")
+	end 'aSingleFileBuild'
+
+	return moduleDirectoryOfRootPath(root, anchor: libraryConeAnchor(project.stdlibDir, cwd: cwd))
+end 'projectRootModuleDirectoryOf'
+
 function newProgramSignatures(project Project) returns ProgramSignatures
 	var signatures = ProgramSignatures.create(project.target.os)
 	adoptProgramFacts(project, signatures: signatures)
@@ -454,6 +486,10 @@ function newProgramSignatures(project Project) returns ProgramSignatures
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
 	// query) sees the answer rather than the seeded `false`. See `livesUnderStdlibDirectory`.
 	signatures.rootIsUnderStdlibDirectory = rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: Directory.currentPath())
+
+	if signatures.rootIsUnderStdlibDirectory 'aProjectInsideTheLibraryCone'
+		signatures.projectRootModuleDirectory = projectRootModuleDirectoryOf(project)
+	end 'aProjectInsideTheLibraryCone'
 
 	return signatures
 end 'newProgramSignatures'
@@ -658,8 +694,8 @@ function declarationsFoldedOntoTheLibraryBaseline(project Project) returns Basel
 
 	// With no contested name this settles only the alias-family spellings, which
 	// `closeTokenFactDiscovery` has just settled again with the user's claims in.
-	signatures.settleStdlibShadowSpellings(ByteArrayArray.create(), declaringFiles: FilePathArray.create())
-	adoptShadowSpellings(project, spellings: signatures.shadowSpellings())
+	signatures.settleStdlibShadowSpellings(NameRoster.create(), declaringFiles: FilePathArray.create())
+	adoptShadowSpellings(project, roster: signatures.shadowRoster())
 	signatures.settleNominalNameCollisions(project.db.sourcePaths)
 
 	for path in partition.userPaths 'eachUserFile'
@@ -685,7 +721,7 @@ end 'declinedForASharedName'
 function declinedBaseline(project Project, diagnosticsBefore ElementIndex, discovered DiscoveredTokenFacts) returns BaselineFold
 	project.diagnostics.truncate(diagnosticsBefore)
 	project.db.libraryBaseline = LibraryBaselineState.unused
-	adoptShadowSpellings(project, spellings: StdlibShadowSpellingArray.create())
+	adoptShadowSpellings(project, roster: ShadowSpellingRoster.none())
 
 	return BaselineFold.declined(discovered)
 end 'declinedBaseline'
@@ -769,8 +805,8 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// ⛔ **STRICTLY BEFORE THE FOLD, AND STRICTLY AFTER THE SWEEP.** Binding a define needs every
 	// declaration to exist — that is what makes two claimants for one name visible rather than one — and
 	// the fold is what would otherwise read the initializer this replaces.
-	signatures.settled.defines = project.defines
-	signatures.settled.defineProblems = signatures.resolveDefines()
+	var ownDeclarations = signatures.mainThreadSettled()
+	ownDeclarations.defineProblems = signatures.resolveDefines(project.defines)
 	signatures.evaluateInitializers(project.readerAnchors)
 
 	// Every declared `interface`'s requirements, for the same "the whole program is known now" reason.
@@ -1053,9 +1089,9 @@ typealias TokenFactsByPath = Map with (String, FileTokenFacts)
 typealias TokenFactEventArray = Array with TokenFactEvent
 
 union TokenFactEvent
-	defaultDeclaration(declaration DefaultDeclaration)
-	serviceSpawn(typeName ByteArray, member ByteArray, gate SpawnGate, line LineNumber, column ColumnNumber)
-	arrayLiteralConformer(name ByteArray)
+	defaultDeclaration(let declaration DefaultDeclaration)
+	serviceSpawn(let typeName ByteArray, let member ByteArray, let gate SpawnGate, let line LineNumber, let column ColumnNumber)
+	arrayLiteralConformer(let name ByteArray)
 
 	function noteInto(signatures ProgramSignatures, path FilePath, isStdlibSource bool)
 		match self 'event'
@@ -1144,10 +1180,10 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 	let moduleDirectory = moduleDirectoryForFile(project, path: path, livesUnderStdlibDirectory: livesUnderTheLibrary, livesUnderRuntimeDirectory: isRuntimeSource)
 
 	let job = parseJobFrom(project, path: path, namespace: namespaceForModuleDirectory(moduleDirectory), livesUnderStdlibDirectory: livesUnderTheLibrary, isStdlibSource: isStdlibSource, buildsBodies: false)
-	let reader = Parser.structuralReader(tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
+	var reader = Parser.structuralReader(tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
 	let headers = reader.topLevelDeclarationHeaders()
 
-	let declarations = FileDeclarationHeaders.runtimeTier(headers) if isRuntimeSource else FileDeclarationHeaders.otherTiers(headers, extents: reader.blockExtents())
+	let declarations = FileDeclarationHeaders.runtimeTier(headers) if isRuntimeSource else FileDeclarationHeaders.otherTiers(headers, extents: reader.takeBlockExtents())
 
 	for i in 0 upto tokens.count() 'eachToken'
 		let tok = try tokens.get(i) otherwise panic("discoveredTokenFactsOf: tokens.get OOB at {i} below count {tokens.count()}")
@@ -1323,16 +1359,16 @@ end 'tokenKindBelongsInATypeHeader'
 // complete picture also makes the mint independent of the order the loader happened to enumerate
 // `stdlib/` in.
 type StdlibDeclarations
-	export let names as ByteArrayArray
+	export let names as NameRoster
 	export let files as FilePathArray
 
-	static function create(names ByteArrayArray, files FilePathArray) returns StdlibDeclarations
+	static function create(names NameRoster, files FilePathArray) returns StdlibDeclarations
 		return Self{names: names, files: files}
 	end 'create'
 end 'StdlibDeclarations'
 
 function stdlibDeclarationsIn(project Project, stdlibPaths MaxonSourcePathArray) returns StdlibDeclarations throws CompileError
-	var declaredNames = ByteArrayArray.create()
+	var declaredNames = NameRoster.create()
 	var declaringFiles = FilePathArray.create()
 
 	for path in stdlibPaths 'eachStdlibFile'
@@ -1368,7 +1404,7 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 	end 'eachDeclaredName'
 
 	signatures.settleStdlibShadowSpellings(declared.names, declaringFiles: declared.files)
-	adoptShadowSpellings(project, spellings: signatures.shadowSpellings())
+	adoptShadowSpellings(project, roster: signatures.shadowRoster())
 
 	if not signatures.interfaceMap().hasLibraryRenames() 'nothingContested'
 		return
@@ -1376,7 +1412,7 @@ function contestStdlibDeclarationsAgainstUserNames(project Project, signatures P
 
 	// Re-seeded because `SettledDeclarations` seeds its registry before the contest exists, spelling a
 	// bare `Error` that a contest makes the author's interface.
-	seedCompilerOwnedErrorEnums(signatures.settled.enumTypes, interfaces: signatures.interfaceMap())
+	seedCompilerOwnedErrorEnums(signatures.mainThreadSettled().enumTypes, interfaces: signatures.interfaceMap())
 	try refuseContestedNamesUsedAsMembers(project, signatures: signatures, stdlibPaths: stdlibPaths)
 end 'contestStdlibDeclarationsAgainstUserNames'
 
@@ -1402,6 +1438,7 @@ function reportUnnameableNamespaceDirectories(project Project, signatures Progra
 	var checked = NamespaceDirectorySet.create()
 	var refusals = DiagnosticArray.create()
 	let reservedHeads = reservedNamespaceHeads()
+	let cwd = Directory.currentPath()
 
 	for path in project.db.sourcePaths 'eachFile'
 		if isStdlibSourceFile(project, path: path) or isRuntimeSourceFile(project, path: path) 'aLibraryFile'
@@ -1416,7 +1453,9 @@ function reportUnnameableNamespaceDirectories(project Project, signatures Progra
 
 		checked.insert(moduleDirectory)
 
-		match namespaceDirectoryFault(namespaceForModuleDirectory(moduleDirectory), keywords: project.keywords, reservedHeads: reservedHeads) 'fault'
+		let anchoredAtTheLibraryCone = signatures.rootIsUnderStdlibDirectory and path.resolve(cwd).isInside(project.stdlibDir)
+
+		match namespaceDirectoryFault(namespaceForModuleDirectory(moduleDirectory), keywords: project.keywords, reservedHeads: reservedHeads, anchoredAtTheLibraryCone: anchoredAtTheLibraryCone) 'fault'
 			nameable then continue
 			faulted(piece, reason) then refusals.push(Diagnostic.inFile(ErrorCode.namespaceDirectoryNotNameable, message: "Directory '{moduleDirectory}' cannot be a namespace: '{piece}' {namespacePieceReasonText(reason)}. Rename the directory", filePath: path.clone()))
 		end 'fault'
@@ -1471,11 +1510,16 @@ function reservedNamespaceHeads() returns ReservedNamespaceHeadArray
 	return heads
 end 'reservedNamespaceHeads'
 
-function namespaceDirectoryFault(namespace String, keywords KeywordTable, reservedHeads ReservedNamespaceHeadArray) returns NamespaceDirectoryFault
+function namespaceDirectoryFault(namespace String, keywords KeywordTable, reservedHeads ReservedNamespaceHeadArray, anchoredAtTheLibraryCone bool) returns NamespaceDirectoryFault
 	let pieces = namespace.split(".")
+	let firstAuthoredPiece = 1 if anchoredAtTheLibraryCone else 0
 
 	for (iter, piece) in pieces.withIterator() 'eachPiece'
-		let isHead = iter.index() == 0
+		if iter.index() < firstAuthoredPiece 'theLibraryConesOwnName'
+			continue
+		end 'theLibraryConesOwnName'
+
+		let isHead = iter.index() == firstAuthoredPiece
 		let tokens = try tokenize(piece, keywords: keywords) otherwise return NamespaceDirectoryFault.faulted(piece, reason: NamespacePieceReason.isNotAName)
 		let first = try tokens.get(0) otherwise return NamespaceDirectoryFault.faulted(piece, reason: NamespacePieceReason.isNotAName)
 
@@ -1578,7 +1622,7 @@ end 'tokenIsAMemberSpelling'
 // each — so the grouping is a WALK and not a map: an inner loop consumes the run of sites sharing a
 // path.
 function foldInterfaceDeclarations(project Project, signatures ProgramSignatures) throws CompileError
-	let sites = signatures.settled.interfaceDeclSites
+	let sites = signatures.settledDeclarations().interfaceDeclSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
@@ -1622,7 +1666,7 @@ end 'foldExtensionDeclarations'
 // and the OOB sentences are written once: two copies of this loop would be two chances for the
 // passes to disagree about which sites they visit.
 function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures, namesOnly bool) throws CompileError
-	let sites = signatures.settled.extensionDeclSites
+	let sites = signatures.settledDeclarations().extensionDeclSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
@@ -1680,7 +1724,7 @@ end 'siteFileReader'
 // witness and a per-site closure across the compiler's hottest fold. What can be shared is: one
 // reader constructor (`siteFileReader`) and one reader per file.
 function foldConformanceClauses(project Project, signatures ProgramSignatures) throws CompileError
-	let sites = signatures.settled.conformanceClauseSites
+	let sites = signatures.settledDeclarations().conformanceClauseSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
@@ -1723,7 +1767,7 @@ end 'foldConformanceClauses'
 // two stretches of the array. That costs at most a second `Parser` for that file and cannot change
 // the answer: the fixpoint is solved over the union, and the union is a set.
 function foldDescriptorNeeds(project Project, signatures ProgramSignatures) throws CompileError
-	let sites = signatures.settled.descriptorScanSites
+	let sites = signatures.settledDeclarations().descriptorScanSites
 
 	if sites.count() == 0 'noGenericTypeInThisProgram'
 		return
@@ -1732,7 +1776,7 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 	// The three columns of the fixpoint's input, accumulated across every site: each method's
 	// qualified name, its direct-need seed, and the siblings it calls on `self`. They are built here
 	// rather than per site so the solve sees one graph.
-	var methodNames = ByteArrayArray.create()
+	var methodNames = NameRoster.create()
 	var directSeeds = DescriptorNeedMap.create()
 
 	// The count column is a second seed AND a second edge set, not a share of the descriptor's: the
@@ -1767,11 +1811,18 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 	// Two solves, over two graphs and two seed columns, through ONE solver: the shape of the fixpoint
 	// is the same (reverse reachability from a seeded set over a call graph), and only its input
 	// differs.
-	let layout = solveDescriptorNeeds(methodNames, directSeeds: directSeeds, firmColumns: singleColumn(selfCallees), blindColumns: singleColumn(blindCallees))
-	let sourceable = withoutSourcelessStatics(layout, signatures: signatures)
-	signatures.recordDescriptorNeeds(sourceable.needing, speculative: sourceable.speculative)
-	logCompilerDebugSettled("descriptor needs: {sourceable.needing.count()} layout-needing method(s), {sourceable.speculative.count()} speculative")
-	signatures.recordFixedElementCountNeeds(solveDescriptorNeeds(methodNames, directSeeds: countSeeds, firmColumns: singleColumn(countCallees), blindColumns: SelfCalleesMapArray.create()).needing)
+	var layoutNeeding = DescriptorNeedNameSet.create()
+	var layoutSpeculative = DescriptorNeedNameSet.create()
+	solveDescriptorNeeds(methodNames, directSeeds: directSeeds, firmColumns: singleColumn(selfCallees), blindColumns: singleColumn(blindCallees), needing: layoutNeeding, speculative: layoutSpeculative)
+	var needing = DescriptorNeedNameSet.create()
+	var speculative = DescriptorNeedNameSet.create()
+	sourceableDescriptorNeeds(layoutNeeding, layoutSpeculative: layoutSpeculative, signatures: signatures, needing: needing, speculative: speculative)
+	logCompilerDebugSettled("descriptor needs: {needing.count()} layout-needing method(s), {speculative.count()} speculative")
+	signatures.recordDescriptorNeeds(needing, speculative: speculative)
+	var countNeeding = DescriptorNeedNameSet.create()
+	var countSpeculative = DescriptorNeedNameSet.create()
+	solveDescriptorNeeds(methodNames, directSeeds: countSeeds, firmColumns: singleColumn(countCallees), blindColumns: SelfCalleesMapArray.create(), needing: countNeeding, speculative: countSpeculative)
+	signatures.recordFixedElementCountNeeds(countNeeding)
 end 'foldDescriptorNeeds'
 
 function singleColumn(column SelfCalleesMap) returns SelfCalleesMapArray
@@ -1782,12 +1833,9 @@ end 'singleColumn'
 
 // A speculative need is dropped from a static that cannot source a descriptor: reserving one would
 // be `Parser.staticLayoutRefusal`'s refusal of a program whose need was only a guess.
-function withoutSourcelessStatics(solution DescriptorNeedSolution, signatures ProgramSignatures) returns DescriptorNeedSolution
-	var needing = DescriptorNeedNameSet.create()
-	var speculative = DescriptorNeedNameSet.create()
-
-	for name in solution.needing 'eachName'
-		if not solution.speculative.contains(name) 'aFirmNeed'
+function sourceableDescriptorNeeds(layoutNeeding DescriptorNeedNameSet, layoutSpeculative DescriptorNeedNameSet, signatures ProgramSignatures, needing DescriptorNeedNameSet, speculative DescriptorNeedNameSet)
+	for name in layoutNeeding 'eachName'
+		if not layoutSpeculative.contains(name) 'aFirmNeed'
 			needing.insert(name)
 			continue
 		end 'aFirmNeed'
@@ -1799,9 +1847,7 @@ function withoutSourcelessStatics(solution DescriptorNeedSolution, signatures Pr
 		needing.insert(name)
 		speculative.insert(name)
 	end 'eachName'
-
-	return DescriptorNeedSolution.create(needing, speculative: speculative)
-end 'withoutSourcelessStatics'
+end 'sourceableDescriptorNeeds'
 
 // A file's parse as a compile asks for it: the memo's artifact, or everything a parse of the file reads beside
 // the settled index, and the key its artifact is stamped with.
@@ -1827,7 +1873,7 @@ module function parseQueryOf(project Project, path FilePath) returns ParseQuery 
 	// Before the memo check, because half the memo's key is this (see `QueryEngine.parseMemoKey`): a
 	// parse reads this file's tokens AND every other file's declarations, so a memo validated against
 	// the file's bytes alone would serve a stale parse after a return type changed elsewhere.
-	let signatures = try queryProgramSignatures(project)
+	var signatures = try queryProgramSignatures(project)
 
 	// The key this parse must carry, computed ONCE: it validates the memo below and stamps the new one
 	// at the end of the query, so the check and the stamp are the same value rather than two
@@ -1869,7 +1915,7 @@ function parsedHere(project Project, path FilePath, job ParseJob, tokens TokenAr
 	// Opens only NOW, after the tokens query has returned, so it bills the parse alone and never
 	// absorbs the lexing it depends on.
 	let parseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.parse)
-	let outcome = parseFile(job, tokens: tokens, overrides: overrides, signatures: programSignaturesIn(project, asker: "parsedHere"))
+	var outcome = parseFile(job, tokens: tokens, overrides: overrides, signatures: programSignaturesIn(project, asker: "parsedHere"))
 	recordPhase(project, phase: CompilePhase.parse, probe: parseProbe)
 
 	return landParseOutcome(project, path: path, outcome: outcome, stamp: stamp)
@@ -2087,7 +2133,7 @@ function foldTheFrontEnd(project Project, pool FrontEndPool) returns MaxonModule
 end 'foldTheFrontEnd'
 
 function frontEndMustFoldAgain(project Project, module MaxonModule) returns bool throws CompileError
-	let signatures = try queryProgramSignatures(project)
+	var signatures = try queryProgramSignatures(project)
 	let reach = try libraryReachOf(project, module: module, signatures: signatures)
 	let demandGrew = try growStdlibBodyDemand(project, reach: reach)
 	try requireStillWanted(project)
@@ -2198,10 +2244,10 @@ end 'EmissionTier'
 
 type EmissionSlot
 	let tier as EmissionTier
-	let components as ByteArrayArray
+	let components as NameRoster
 	export let position as ElementIndex
 
-	static function create(tier EmissionTier, components ByteArrayArray, position ElementIndex) returns EmissionSlot
+	static function create(tier EmissionTier, components NameRoster, position ElementIndex) returns EmissionSlot
 		return Self{tier: tier, components: components, position: position}
 	end 'create'
 
@@ -2242,11 +2288,11 @@ function emissionTierOf(project Project, path FilePath) returns EmissionTier
 	return EmissionTier.author
 end 'emissionTierOf'
 
-function emissionComponentsOf(project Project, path FilePath, tier EmissionTier, cwd FilePath) returns ByteArrayArray
+function emissionComponentsOf(project Project, path FilePath, tier EmissionTier, cwd FilePath) returns NameRoster
 	let resolved = path.resolve(cwd)
 	let anchor = namespaceAnchorFor(project, cwd: cwd, livesUnderStdlibDirectory: tier == EmissionTier.stdlib, livesUnderRuntimeDirectory: tier == EmissionTier.runtime)
 	let relative = try resolved.relativeTo(anchor) otherwise resolved
-	var components = ByteArrayArray.create()
+	var components = NameRoster.create()
 
 	for component in relative.toString().replace(FilePath.separator(), with: EmissionPathSeparator).split(EmissionPathSeparator) 'eachComponent'
 		components.push(component.toByteArray())
@@ -2463,7 +2509,7 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 		return FoldVerdict.stands
 	end 'refused'
 
-	var needlessInstances = ByteArrayArray.create()
+	var needlessInstances = NameRoster.create()
 
 	for (name, _) in project.db.genericInstances.byName 'eachFiled'
 		if not requested.contains(name) 'noParseRequestsIt'
@@ -2566,10 +2612,8 @@ export function checkValueMergeSignatures(project Project)
 
 	// Built here, not read from `project.functionAliasShapes`: `resolveTypes` fills that after this
 	// runs, so a cold compile finds it empty and a retained project finds the previous compile's.
-	let registry = parsedFunctionTypeRegistryOf(project, signatures: programSignaturesIn(project, asker: "checkValueMergeSignatures"))
+	var registry = parsedFunctionTypeRegistryOf(project, signatures: programSignaturesIn(project, asker: "checkValueMergeSignatures"))
 
-	// Index loop, not `for … in`: the element is a BORROW of `project`, and the call below is recorded
-	// as writing that same storage. See `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for checkIndex in 0 upto project.pendingFnMergeChecks.count() 'eachCheck'
 		checkOneValueMergeSignature(project, registry: registry, check: try project.pendingFnMergeChecks.get(checkIndex) otherwise panic("checkValueMergeSignatures: checkIndex {checkIndex} is below project.pendingFnMergeChecks.count()"))
 	end 'eachCheck'
@@ -2677,8 +2721,6 @@ end 'reportUnverifiableFnMerge'
 //
 // `queryTokens`/`queryParseOps` stay file-private; this is the one exported entry the gate needs.
 export function probeRebuildCacheHits(project Project) throws CompileError
-	// Index loop, not `for … in`: the element is a BORROW of `project`, and the call below is recorded
-	// as writing that same storage. See `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for fileIndex in 0 upto project.db.sourcePaths.count() 'each'
 		try probeOnePathCacheHits(project, path: try project.db.sourcePaths.get(fileIndex) otherwise panic("probeRebuildCacheHits: fileIndex {fileIndex} is below project.db.sourcePaths.count()"))
 	end 'each'
@@ -3006,7 +3048,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 
 	// Carries the settled contest table, which `createEnumRegistry` below spells its seeds through, so it
 	// is reset first.
-	project.interfaces = signatures.interfaceMap().withSharedLibraryRenames()
+	project.interfaces = signatures.mainThreadSettled().interfaces.withSharedLibraryRenames()
 
 	// The accepted-member filing is derived from those two and is FIRST-WINS, not an upsert, because
 	// two routes to one slot must agree. Carried across a re-merge, a previous fold's selection would
@@ -3016,7 +3058,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	// Re-aimed at the SAME target the project was created with — a reset must not be a second chance
 	// to pick a platform for the builtin `ExitCode`'s range.
 	project.typeAliases = RangedAliasRegistry.create(project.target.os)
-	project.typeAliases.provenance.shareFilePartition(signatures.settled.fileModuleDirectories, libraryPaths: signatures.settled.libraryFilePaths)
+	project.typeAliases.provenance.shareFilePartition(signatures.mainThreadSettled().fileModuleDirectories, libraryPaths: signatures.mainThreadSettled().libraryFilePaths)
 
 	// FIRST-WINS, so it must reset: a warm rebuild that re-merged the same files would find every name
 	// already claimed by its own declaration and report the whole program as duplicates.
@@ -3048,7 +3090,6 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	// a key from the previous fold would name a different op, in a different function, carrying the
 	// previous fold's payload. `OpKeyedTable` is the roster `FoldLedger.requireTablesHeld` checks both
 	// against.
-	project.moduleVarAccessSites = ModuleVarAccessSiteMap.create()
 	project.synthesizedOpFiles = SynthesizedOpFileMap.create()
 	project.registryUseSites = RegistryUseSiteMap.create()
 	project.serviceAwaitSites = ServiceAwaitSiteMap.create()
@@ -3108,7 +3149,7 @@ function reservedNameReason(name String, reason ReservedCalleeReason) returns St
 	return match reason 'reason'
 		compilerInternalPrefix gives "the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists"
 		synthesizedConformanceImpl gives "that name is the symbol the compiler synthesizes for the builtin's conformance, which a program reaches through a value of the type (`value.method()`) and never by naming the symbol"
-		faultProbeEntry gives "that name is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()` and never by naming the symbol"
+		faultProbeEntry gives "that name is the compiler's own fault-probe entry point, which no program reaches by naming the symbol"
 		notReserved panic("reservedNameReason: asked to explain '{name}' as reserved while the classifier calls it ordinary — `Parser.requireCalleeIsNotReservedName` and `Parser.requireFunctionValueNameIsNotReserved` both return on that answer and are the only sites that raise these errors")
 	end 'reason'
 end 'reservedNameReason'
@@ -3119,10 +3160,9 @@ function unsupportedFeatureDiagnostic(feature String, line LineNumber, column Co
 	return Diagnostic.create(ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage(feature), line: line, column: column, filePath: path)
 end 'unsupportedFeatureDiagnostic'
 
-// E3078's one wire format: the parser refuses a source it can name, `StorageProvenance` one it cannot.
-module function varFromImmutableMessage(subject String, binding String) returns String
-	return "cannot assign {subject} to mutable binding '{binding}'; use 'let' instead of 'var', or use clone()"
-end 'varFromImmutableMessage'
+module function sharedFieldStorageSubject(producer String) returns String
+	return "{producer}, which may share storage with a field of an immutable variable,"
+end 'sharedFieldStorageSubject'
 
 // ⭐ **E3102's ONE WIRE FORMAT, for E3078's split.** The parser refuses a read after a move it made itself
 // (`Parser.requireBindingLive`); `StorageProvenance` one after a `var` took a `let` — whose verdict is a
@@ -3244,13 +3284,13 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		useAfterMove(name, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: useOfMovedValueMessage(name), line: line, column: column, filePath: path)
 		useAfterMoveInto(name, into, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: useOfValueMovedIntoMessage(name, into: into), line: line, column: column, filePath: path)
 		useAfterMoveInAnEarlierIteration(name, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: movedInAnEarlierIterationMessage(name), line: line, column: column, filePath: path)
-		staleCellOccupantRead(name, door, line, column) gives Diagnostic.create(ErrorCode.semanticBorrowConflict, message: "the value of '{name}' {door} was read before a later argument handed '{name}' by reference to a function that may replace it, so it may no longer be what '{name}' holds. Read '{name}' into a `let` first and pass that", line: line, column: column, filePath: path)
+		staleCellOccupantRead(name, callee, parameter, line, column) gives Diagnostic.create(ErrorCode.argumentOverlapsWrittenParameter, message: argumentOverlapMessage(name, blamed: "argument '{name}' of '{callee}'", callee: callee, parameter: parameter), line: line, column: column, filePath: path)
 		promiseCannotBeBorrowed(door, cure, line, column) gives Diagnostic.create(ErrorCode.semanticPromiseCannotBeBorrowed, message: "a promise cannot be borrowed through '{door}': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. {cure}", line: line, column: column, filePath: path)
 		promiseAlreadyConsumed(door, line, column) gives Diagnostic.create(ErrorCode.semanticPromiseAlreadyConsumed, message: "this promise was already consumed by an earlier '{door}': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again", line: line, column: column, filePath: path)
 
 		// `subject` rather than a hardcoded name: a field-chain spelling has no single source name to
 		// blame. Pinned by `specs/var-should-be-let.md`.
-		varFromImmutable(subject, binding, line, column) gives Diagnostic.create(ErrorCode.semanticVarFromImmutable, message: varFromImmutableMessage(subject, binding: binding), line: line, column: column, filePath: path)
+		deepLet(code, message, line, column) gives Diagnostic.create(code, message: message, line: line, column: column, filePath: path)
 
 		// `targets` rather than a hardcoded "loop": a `break` may also leave a MATCH statement.
 		controlOutsideLoop(keyword, targets, line, column) gives Diagnostic.create(ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a {targets}", line: line, column: column, filePath: path)
@@ -3309,6 +3349,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// E3009, the SAME code the explicit lossy `5.0 as int` gets — one fact (a cast that is not a
 		// legal conversion), one code.
 		invalidCast(sourceType, targetType, line, column) gives Diagnostic.create(ErrorCode.semanticUnsafeCast, message: "Cannot cast from {sourceType} to {targetType}", line: line, column: column, filePath: path)
+		castFormsAValue(sourceType, targetType, remedy, line, column) gives Diagnostic.create(ErrorCode.semanticUnsafeCast, message: "Cannot cast from {sourceType} to {targetType} — {remedy}", line: line, column: column, filePath: path)
 		castTargetIsAContainer(sourceType, targetType, line, column) gives Diagnostic.create(ErrorCode.castTargetIsAContainer, message: "Cannot cast to '{targetType}': a container's elements have a storage layout of their own, so '{sourceType}' cannot be retagged as one — build the container with the element type you need, or convert it element by element", line: line, column: column, filePath: path)
 
 		// E3011 and `unknownTypeMessage` — the SAME code and wording `TypeResolution` gives an undeclared
@@ -3387,7 +3428,6 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// suites run the same spec file.
 		localShadowsSelfField(name, typeName, line, column) gives Diagnostic.create(ErrorCode.duplicateDefinition, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
 		unexportedFieldAccess(typeName, fieldName, line, column) gives Diagnostic.create(ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
-		immutableMutatingCall(name, functionName, line, column) gives Diagnostic.create(ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(name, paramName: String.from(ReceiverSourceSpelling), functionName: functionName), line: line, column: column, filePath: path)
 
 		// Pinned byte-for-byte by the `maxoncstderr` blocks in `match-statements.md`/`match-simple.md`
 		// and `function-declaration.md`. Its raisers are listed on the union arm and deliberately not
@@ -3502,7 +3542,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// The reservation's SECOND arm — same code, a different name set and a different reason. Pinned
 		// byte-for-byte by `reserved-self.md`'s `maxoncstderr` block.
 		reservedReceiverName(line, column) gives Diagnostic.create(ErrorCode.reservedIdentifier, message: "identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code", line: line, column: column, filePath: path)
-		reservedFaultProbeName(line, column) gives Diagnostic.create(ErrorCode.reservedIdentifier, message: "identifier 'maxon_force_segfault' is reserved: it is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()`", line: line, column: column, filePath: path)
+		reservedFaultProbeName(line, column) gives Diagnostic.create(ErrorCode.reservedIdentifier, message: "identifier 'maxon_force_segfault' is reserved: it is the compiler's own fault-probe entry point, which the library tiers reach through `__Builtins.forceSegfault()`", line: line, column: column, filePath: path)
 
 		// Not every name here is synthesized by the compiler — `Ordering` and `IterationError` are read
 		// from `stdlib/Interfaces.maxon`. What is true of all of them is that the name has ONE meaning
@@ -3565,6 +3605,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// the author looking for a typo. The second names the BINDING and its type, because both halves are
 		// what has to change. The third says which of `public`/`export` is wrong, since only one is.
 		rawIntrinsicOutsideRuntimeTier(callee, line, column) gives Diagnostic.create(ErrorCode.rawIntrinsicOutsideRuntimeTier, message: "call to '{callee}' from outside the runtime source tier: '__Raw' names a raw runtime intrinsic, callable only from a source file under runtime/", line: line, column: column, filePath: path)
+		rawSurfaceOutsideLibraryTier(door, line, column) gives Diagnostic.create(ErrorCode.rawSurfaceOutsideLibraryTier, message: rawSurfaceRefusalMessage(door), line: line, column: column, filePath: path)
 		managedValueInRuntimeSource(name, typeName, line, column) gives Diagnostic.create(ErrorCode.managedValueInRuntimeSource, message: "'{name}' has managed type '{typeName}': a runtime source file may not name a managed value, because the reference-counting pass would emit calls into the very runtime this tier defines", line: line, column: column, filePath: path)
 		bareGenericSubjectUnbound(message, line, column) gives Diagnostic.create(ErrorCode.bareGenericSubjectUnbound, message: message, line: line, column: column, filePath: path)
 		contradictoryFrameDirectives(line, column) gives Diagnostic.create(ErrorCode.contradictoryFrameDirectives, message: "a runtime body may not spell both '__Raw.ownFrame()' and '__Raw.splicedAtEverySite()': the first says this function's frame is its product and nothing may splice the body away, the second that it has none worth keeping and the inliner must splice it into every call site", line: line, column: column, filePath: path)

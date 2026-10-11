@@ -69,9 +69,10 @@ covered — consecutive touches are one page apart and the base is less than a p
 
 ⚠ **x64-windows CANNOT SHOW THIS AND IS NOT EVIDENCE ABOUT IT.** That lane reserves
 `GtWindowsExceptionDispatchBytes` — one page — under the guard word for the OS's exception dispatch, so a
-page of overshoot fits inside a reservation that exists for an unrelated reason. arm64 opens even a large
-frame with one `sub sp` and walks nothing. **x64-linux is the only lane where the overshoot is a fault**,
-so the other four lanes can be green on a walk that overshoots.
+page of overshoot fits inside a reservation that exists for an unrelated reason. **x64-linux is the lane
+where this case's overshoot is a fault**, so a green result on another lane is not evidence that the walk
+stops at the base. arm64's prologue probes a frame over one page the same way, comparing before each
+touch (`specs/stack-guard-pages.md`).
 
 ⚠ **The cure the sibling ceilings took is not available here.** `wide-field-offsets.md`'s
 struct-field displacement is a compile-time constant at instruction selection, so the ISel

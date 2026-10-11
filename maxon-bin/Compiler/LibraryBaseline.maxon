@@ -1,9 +1,9 @@
 export type LibraryManifest
 	export let deferred as FilePathArray
 	export let streamed as FilePathArray
-	export let templates as ByteArrayArray
+	export let templates as NameRoster
 
-	export static function create(deferred FilePathArray, streamed FilePathArray, templates ByteArrayArray) returns LibraryManifest
+	export static function create(deferred FilePathArray, streamed FilePathArray, templates NameRoster) returns LibraryManifest
 		return Self{deferred: deferred, streamed: streamed, templates: templates}
 	end 'create'
 
@@ -19,7 +19,7 @@ export type LibraryManifest
 end 'LibraryManifest'
 
 export type LibraryDeclarations
-	export let signatures as ProgramSignatures
+	export var signatures as ProgramSignatures
 	export let manifest as LibraryManifest
 
 	export static function create(signatures ProgramSignatures, manifest LibraryManifest) returns LibraryDeclarations
@@ -106,7 +106,7 @@ function noteBaselineState(project Project, state LibraryBaselineState)
 end 'noteBaselineState'
 
 function startFrom(project Project, key HashDigest, kind LibraryEntryKind, loaded LibraryDeclarations, state LibraryBaselineState) returns LibraryStart
-	let library = project.session.fileMemos.library
+	var library = project.session.fileMemos.library
 	let remainder = remainderOf(loaded.manifest, kind: kind)
 	noteBaselineState(project, state: state)
 
@@ -134,9 +134,9 @@ module function libraryBaselineFor(project Project, partition ProgramPartition) 
 end 'libraryBaselineFor'
 
 function heldStart(project Project, key HashDigest) returns LibraryStart throws LibraryEntryMiss
-	let library = project.session.fileMemos.library
+	var library = project.session.fileMemos.library
 	let kind = kindFor(project, manifest: try library.heldManifest(key))
-	let chosen = try library.heldBaseline(key, kind: kind)
+	var chosen = try library.heldBaseline(key, kind: kind)
 	noteBaselineState(project, state: LibraryBaselineState.loaded)
 
 	return LibraryStart.create(copiedBaseline(chosen.signatures), remainder: remainderOf(chosen.manifest, kind: kind), streamed: chosen.manifest.streamed)
@@ -149,20 +149,20 @@ function rejecting(project Project, name String, damage LibraryCacheDamage) retu
 end 'rejecting'
 
 function loadedStart(project Project, key HashDigest) returns LibraryStart throws LibraryEntryMiss
-	let library = project.session.fileMemos.library
-	let completeName = libraryEntryName(LibraryEntryKind.baseline, parts: [key])
-	let reader = try library.open(project.target, name: completeName, tally: project.db.libraryTally)
+	var library = project.session.fileMemos.library
+	let entryClass = library.entryClassOf(project)
+	let completeName = libraryEntryName(LibraryEntryKind.baseline, entryClass: entryClass, parts: [key])
+	var reader = try library.open(project.target, name: completeName, tally: project.db.libraryTally)
 
 	let manifest = try decodedManifest(reader, key: key) otherwise (damage) 'damaged'
 		throw rejecting(project, name: completeName, damage: damage)
 	end 'damaged'
 
 	let kind = kindFor(project, manifest: manifest)
-	var name = completeName
+	let name = libraryEntryName(kind, entryClass: entryClass, parts: [key])
 	var source = reader
 
 	if kind == LibraryEntryKind.coreBaseline 'theCoreIsWanted'
-		name = libraryEntryName(kind, parts: [key])
 		source = try library.open(project.target, name: name, tally: project.db.libraryTally)
 
 		_ = try decodedManifest(source, key: key) otherwise (damage) 'damagedCore'
@@ -170,7 +170,7 @@ function loadedStart(project Project, key HashDigest) returns LibraryStart throw
 		end 'damagedCore'
 	end 'theCoreIsWanted'
 
-	let signatures = try decodedSignatures(source) otherwise (damage) 'undecodable'
+	var signatures = try decodedSignatures(source) otherwise (damage) 'undecodable'
 		throw rejecting(project, name: name, damage: damage)
 	end 'undecodable'
 
@@ -192,33 +192,34 @@ function builtStart(project Project, partition ProgramPartition, key HashDigest)
 	noteLibraryCacheTrouble("built the library state: {deferred.count()} file(s) deferred, {manifest.templates.count()} generic function template(s)")
 
 	let kind = kindFor(project, manifest: manifest)
-	let completeDeclarations = LibraryDeclarations.create(complete, manifest: manifest)
-	let coreDeclarations = LibraryDeclarations.create(core, manifest: manifest)
+	var completeDeclarations = LibraryDeclarations.create(complete, manifest: manifest)
+	var coreDeclarations = LibraryDeclarations.create(core, manifest: manifest)
 	project.db.libraryBaseline = LibraryBaselineState.built
 
 	if project.diagnostics.count() != diagnosticsBefore 'theSweepReported'
 		return startFrom(project, key: key, kind: kind, loaded: coreDeclarations if kind == LibraryEntryKind.coreBaseline else completeDeclarations, state: LibraryBaselineState.built)
 	end 'theSweepReported'
 
-	let completeCanonical = persistedBaseline(project, key: key, kind: LibraryEntryKind.baseline, declarations: completeDeclarations, wanted: kind == LibraryEntryKind.baseline)
+	var completeCanonical = persistedBaseline(project, key: key, kind: LibraryEntryKind.baseline, declarations: completeDeclarations, wanted: kind == LibraryEntryKind.baseline)
 
 	if kind == LibraryEntryKind.baseline 'theCompleteStateServes'
 		return startFrom(project, key: key, kind: kind, loaded: completeCanonical, state: LibraryBaselineState.built)
 	end 'theCompleteStateServes'
 
-	let coreCanonical = persistedBaseline(project, key: key, kind: LibraryEntryKind.coreBaseline, declarations: coreDeclarations, wanted: true)
+	var coreCanonical = persistedBaseline(project, key: key, kind: LibraryEntryKind.coreBaseline, declarations: coreDeclarations, wanted: true)
 
 	return startFrom(project, key: key, kind: kind, loaded: coreCanonical, state: LibraryBaselineState.built)
 end 'builtStart'
 
 function persistedBaseline(project Project, key HashDigest, kind LibraryEntryKind, declarations LibraryDeclarations, wanted bool) returns LibraryDeclarations
-	let library = project.session.fileMemos.library
+	var library = project.session.fileMemos.library
 
-	if not library.isAvailable(project.target) 'noDiskTier'
+	if not library.persistsFor(project) 'noDiskTier'
 		return declarations
 	end 'noDiskTier'
 
-	let name = libraryEntryName(kind, parts: [key])
+	let entryClass = library.entryClassOf(project)
+	let name = libraryEntryName(kind, entryClass: entryClass, parts: [key])
 
 	if not wanted and library.holds(project.target, name: name) 'writtenAlready'
 		return declarations
@@ -227,14 +228,14 @@ function persistedBaseline(project Project, key HashDigest, kind LibraryEntryKin
 	let image = try encodedBaseline(declarations, key: key) otherwise return declarations
 
 	if library.write(project.target, name: name, image: image, tally: project.db.libraryTally) 'written'
-		library.trimEntries(project.target, kind: kind, kept: name, most: MostEntriesOfAKind)
+		library.trimEntries(project.target, kind: kind, entryClass: entryClass, kept: name, most: MostEntriesOfAKind)
 	end 'written'
 
 	if not wanted 'onlyForTheNextCompile'
 		return declarations
 	end 'onlyForTheNextCompile'
 
-	let reader = try LibraryCacheReader.open(image) otherwise (damage) 'undecodable'
+	var reader = try LibraryCacheReader.open(image) otherwise (damage) 'undecodable'
 		panic("persistedBaseline: the baseline just encoded does not open: {damage.displayReason()}")
 	end 'undecodable'
 
@@ -242,7 +243,7 @@ function persistedBaseline(project Project, key HashDigest, kind LibraryEntryKin
 		panic("persistedBaseline: the baseline just encoded does not decode: {damage.displayReason()}")
 	end 'undecodable'
 
-	let signatures = try decodedSignatures(reader) otherwise (damage) 'undecodable'
+	var signatures = try decodedSignatures(reader) otherwise (damage) 'undecodable'
 		panic("persistedBaseline: the baseline just encoded does not decode: {damage.displayReason()}")
 	end 'undecodable'
 

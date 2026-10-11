@@ -292,7 +292,7 @@ end 'main'
 
 <!-- test: error.let-field-base-is-immutable -->
 The other half of the column: the SAME write, through a base field declared `let`. It is refused,
-and the E2013 names the BASE.
+and the E3159 names the BASE.
 Without this case a permission that always answered "writable" would look correct.
 ```maxon
 
@@ -325,7 +325,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:17:3: cannot assign to immutable variable: 'inner'
+error E3159: <fragment>:17:3: cannot write through 'inner': 'inner' is read-only (a `let` field) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: managed-field-write-through-the-base -->
@@ -391,22 +391,12 @@ end 'main'
 112
 ```
 
-<!-- test: error.an-iterated-container-reached-through-the-base-is-not-writable -->
-⛔ **THE ITERATION LOCK MUST SURVIVE THE MATERIALIZATION, AND IT SURVIVES ONLY BECAUSE
-`selfFieldValueBinding` ASKS THE ALIAS.** `baseBindingOf` MINTS A FRESH `VarInfo`, the lock is keyed
-on OBJECT IDENTITY, and that fresh object is not the one `iterationLockedBindings` holds — so the
-permission has to be computed from the ALIAS still in hand (`selfFieldIsWritable`, whose header
-states exactly this) and carried into the new binding's `mutable` column. Every case in
-`for-iterated-self-field` uses a BARE self field, so none of them crosses a materialized base; this
-is the only case in the suite whose WRITE does.
-
-**ITS SABOTAGE:** make `selfFieldIsWritable` ask the lock of a FRESH
-`VarInfo` instead of the alias it was handed — the exact drift `baseBindingOf` invites, since it
-mints one — and `--filter=self-field` fails three cases: this case
-*"expected a compile error but compilation succeeded"*, together with
-`for-iterated-self-field`'s two bare-**CALL** cases. The four bare-**ASSIGN** cases stay RED and
-catch nothing, because `parseSelfFieldAssignment` never materializes a binding at all. ⇒ the lock's
-survival across a materialized base is pinned HERE and by nothing else on the write side.
+<!-- test: an-iterated-container-rebound-through-the-base-walks-the-old-record -->
+**A `for` over a container reached through a materialized base holds its own reference to the
+record it started on**, so rebinding that container through the same base in the body leaves the
+loop walking the old record to its end. Every case in `for-iterated-self-field` uses a BARE self
+field; this is the one whose source and write both cross a materialized base. Both elements of
+the old record are printed after the rebind, and the exit code is their byte total, `22 + 23`.
 ```maxon
 
 typealias Small = int(0 to 1000)
@@ -417,7 +407,8 @@ type Inner
 
 	static function create() returns Self
 		var a = StringArray.create()
-		a.push("x")
+		a.push("first iterated text {40 + 2}")
+		a.push("second iterated text {40 + 5}")
 		return Self{items: a}
 	end 'create'
 end 'Inner'
@@ -429,9 +420,10 @@ type Outer
 		var n = 0 as Small
 		for it in inner.items 'loop'
 			inner.items = StringArray.create()
-			n = n + it.byteLength() as Small
+			print("{it}\n")
+			n = n + (it.byteLength() as Small)
 		end 'loop'
-		return n
+		return n + (inner.items.count() as Small)
 	end 'probe'
 
 	static function create(i Inner) returns Self
@@ -444,6 +436,10 @@ function main() returns ExitCode
 	return o.probe()
 end 'main'
 ```
-```maxoncstderr
-error E2013: <fragment>:22:4: cannot assign to immutable variable: 'inner'
+```exitcode
+45
+```
+```stdout
+first iterated text 42
+second iterated text 45
 ```

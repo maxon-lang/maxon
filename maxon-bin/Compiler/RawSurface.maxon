@@ -1,0 +1,225 @@
+// E3185's wording: what each raw-runtime door outside stdlib/ and runtime/ is refused with, and the public
+// API that replaces it. The parser decides which door a use is.
+typealias RawSurfaceHints = Map with (String, String)
+
+let RawBuiltinsNamespace = "__Builtins"
+let CStringMethodSpelling = "cstr"
+let NoPublicReplacement = "it has no public replacement"
+let UseArrayMethods = "use the 'Array' methods"
+let UseAForLoop = "use a 'for' loop over the 'Array'"
+
+export union RawSurfaceDoor
+	builtinsCall(member ByteArray)
+	managedField
+	promiseHandle
+	cstringView
+	bufferMember(member ByteArray)
+	cursorMember(member ByteArray)
+	bufferType(written ByteArray)
+	cursorType(written ByteArray)
+	cstringType
+	handleType(written ByteArray)
+end 'RawSurfaceDoor'
+
+export function isRawHandleTypeName(name ByteArray) returns bool
+	return name.equals(ManagedFileTypeName) or name.equals(ManagedDirectoryTypeName) or name.equals(ManagedSocketTypeName) or name.equals(ManagedPagesTypeName) or name.equals(ManagedHandleTypeName)
+end 'isRawHandleTypeName'
+
+function rawHandleTypeMessage(written ByteArray) returns String
+	if written.equals(ManagedFileTypeName) 'aFile'
+		return rawTypeNamedMessage(String.from(written), what: "the raw OS file handle type", tail: "use 'File'")
+	end 'aFile'
+
+	if written.equals(ManagedDirectoryTypeName) 'aDirectory'
+		return rawTypeNamedMessage(String.from(written), what: "the raw OS directory handle type", tail: "use 'Directory'")
+	end 'aDirectory'
+
+	if written.equals(ManagedSocketTypeName) 'aSocket'
+		return rawTypeNamedMessage(String.from(written), what: "the raw OS socket handle type", tail: "use 'TcpClient' or 'TcpListener'")
+	end 'aSocket'
+
+	if written.equals(ManagedPagesTypeName) 'aPageReservation'
+		return rawTypeNamedMessage(String.from(written), what: "the raw page-reservation handle type", tail: NoPublicReplacement)
+	end 'aPageReservation'
+
+	if written.equals(ManagedHandleTypeName) 'anOsHandle'
+		return rawTypeNamedMessage(String.from(written), what: "the raw OS handle type", tail: NoPublicReplacement)
+	end 'anOsHandle'
+
+	panic("rawHandleTypeMessage: '{String.from(written)}' is not one of the runtime's OS handle types")
+end 'rawHandleTypeMessage'
+
+export function rawSurfaceRefusalMessage(door RawSurfaceDoor) returns String
+	let buffer = String.from(ManagedMemoryTypeName)
+	let cursor = String.from(ManagedMemoryCursorBuiltinBaseName)
+
+	return match door 'door'
+		builtinsCall(member) gives "call to '{RawBuiltinsNamespace}.{String.from(member)}' from outside the library tiers: '{RawBuiltinsNamespace}' names a raw runtime intrinsic, callable only from a source file under stdlib/ or runtime/ — {rawBuiltinsReplacementTail(String.from(member))}"
+		managedField gives rawMemberReadMessage(".{String.from(ManagedMemoryFieldName)}", reaches: "a value's raw '{buffer}' buffer", tail: UseArrayMethods)
+		promiseHandle gives rawMemberReadMessage(".{String.from(PromiseInnerFieldName)}", reaches: "a promise's raw green-thread handle", tail: "use 'isComplete()' or 'await'")
+		cstringView gives rawMemberReadMessage(".{CStringMethodSpelling}()", reaches: "a String's raw NUL-terminated 'cstring' view", tail: NoPublicReplacement)
+		bufferMember(member) gives rawMemberReadMessage(".{String.from(member)}()", reaches: "a raw '{buffer}' buffer", tail: UseArrayMethods)
+		cursorMember(member) gives rawMemberReadMessage(".{String.from(member)}()", reaches: "a raw '{cursor}'", tail: UseAForLoop)
+		bufferType(written) gives rawTypeNamedMessage(String.from(written), what: "the raw buffer type", tail: "use 'Array'")
+		cursorType(written) gives rawTypeNamedMessage(String.from(written), what: "the raw buffer cursor type", tail: UseAForLoop)
+		cstringType gives rawTypeNamedMessage("cstring", what: "the raw NUL-terminated byte pointer type", tail: NoPublicReplacement)
+		handleType(written) gives rawHandleTypeMessage(written)
+	end 'door'
+end 'rawSurfaceRefusalMessage'
+
+function rawMemberReadMessage(member String, reaches String, tail String) returns String
+	return "'{member}' read from outside the library tiers: {reaches} is reachable only from a source file under stdlib/ or runtime/ — {tail}"
+end 'rawMemberReadMessage'
+
+function rawTypeNamedMessage(written String, what String, tail String) returns String
+	return "'{written}' named outside the library tiers: {what} is nameable only from a source file under stdlib/ or runtime/ — {tail}"
+end 'rawTypeNamedMessage'
+
+function rawBuiltinsReplacementTail(member String) returns String
+	if let api = try rawBuiltinsExactReplacements().get(member) 'anExactMember'
+		return "use '{api}'"
+	end 'anExactMember'
+
+	for family in rawBuiltinsFamilyReplacements() 'eachFamily'
+		if member.startsWith(family.prefix) 'aFamilyMember'
+			return "use '{family.api}'"
+		end 'aFamilyMember'
+	end 'eachFamily'
+
+	return NoPublicReplacement
+end 'rawBuiltinsReplacementTail'
+
+type RawSurfaceFamily
+	export let prefix as String
+	export let api as String
+
+	static function create(prefix String, api String) returns RawSurfaceFamily
+		return Self{prefix: prefix, api: api}
+	end 'create'
+end 'RawSurfaceFamily'
+
+typealias RawSurfaceFamilyArray = Array with RawSurfaceFamily
+
+function rawBuiltinsFamilyReplacements() returns RawSurfaceFamilyArray
+	var families = RawSurfaceFamilyArray.create()
+	families.push(RawSurfaceFamily.create("sched", api: "Scheduler.counters()"))
+	families.push(RawSurfaceFamily.create("slab", api: "HeapStats.slab()"))
+	families.push(RawSurfaceFamily.create("subprocess", api: "Subprocess"))
+	families.push(RawSurfaceFamily.create("sharedMemory", api: "SharedSegment"))
+	families.push(RawSurfaceFamily.create("debug", api: "DebugPort"))
+	families.push(RawSurfaceFamily.create("profile", api: "SampledProcess"))
+	return families
+end 'rawBuiltinsFamilyReplacements'
+
+function rawBuiltinsExactReplacements() returns RawSurfaceHints
+	var exact = RawSurfaceHints.create()
+
+	exact.upsert("currentProcessId", value: "Process.id()")
+	exact.upsert("processNamespace", value: "Process.namespace()")
+	exact.upsert("processIsAlive", value: "Process.isAlive(pid)")
+	exact.upsert("enterBackgroundPriority", value: "Process.enterBackgroundPriority()")
+	exact.upsert("executablePath", value: "Process.executablePath()")
+	exact.upsert("osEnvironmentEntry", value: "Process.currentEnvironmentEntries()")
+	exact.upsert("commandLineArg", value: "CommandLine.args()")
+	exact.upsert("commandLineCount", value: "CommandLine.args()")
+	exact.upsert("runProcess", value: "Subprocess.run(executable, arguments: arguments)")
+
+	exact.upsert("readStdin", value: "Console.stdin().readBytes(n)")
+	exact.upsert("stdoutWantsAnsiColor", value: "Console.stdoutWantsColor()")
+	exact.upsert("writeStdout", value: "print(text)")
+	exact.upsert("writeStderr", value: "printError(text)")
+
+	exact.upsert("tickCountMs", value: "Clock.osTickMs()")
+	exact.upsert("threadCpuTicks", value: "Clock.threadCpuTicks()")
+	exact.upsert("currentTimeMs", value: "Clock.nowMs()")
+	exact.upsert("currentTimeNanos", value: "Clock.nowNanos()")
+	exact.upsert("currentUnixTimeSeconds", value: "WallClock.nowUnixSeconds()")
+	exact.upsert("currentUnixTimeNanos", value: "WallClock.nowUnixNanos()")
+	exact.upsert("sleep", value: "sleep(milliseconds)")
+	exact.upsert("fillRandom", value: "Random.draw()")
+
+	exact.upsert("cpuCount", value: "Scheduler.machineCpuCount()")
+	exact.upsert("schedProcessorCount", value: "Scheduler.processorCount()")
+	exact.upsert("gtStackBytes", value: "Scheduler.currentStackBytes()")
+	exact.upsert("gtQuiesce", value: "Scheduler.quiesce()")
+	exact.upsert("parallelBoundary", value: "Scheduler.parallelBoundary()")
+	exact.upsert("pinToMachine", value: "Scheduler.pinToMachine()")
+	exact.upsert("unpinFromMachine", value: "Scheduler.unpinFromMachine()")
+	exact.upsert("currentMachine", value: "Scheduler.currentMachine()")
+	exact.upsert("yield", value: "Scheduler.yield()")
+	exact.upsert("gtIsComplete", value: "promise.isComplete()")
+	exact.upsert("awaitAny", value: "promises.awaitAny()")
+
+	exact.upsert("floatToBits", value: "Math.bitsOf(x)")
+	exact.upsert("bitsToFloat", value: "Math.fromBits(bits)")
+
+	exact.upsert("mmAllocTotal", value: "HeapStats.allocationsMade()")
+	exact.upsert("mmAllocLive", value: "HeapStats.allocationsLive()")
+	exact.upsert("mmAllocBytes", value: "HeapStats.bytesAllocated()")
+	exact.upsert("mmRawAllocTotal", value: "HeapStats.rawAllocationsMade()")
+	exact.upsert("mmRawAllocLive", value: "HeapStats.rawAllocationsLive()")
+	exact.upsert("mmRawAllocBytes", value: "HeapStats.rawBytesAllocated()")
+	exact.upsert("mmAllocTotalByTag", value: "HeapStats.allocationsTagged(tag)")
+	exact.upsert("mmAllocBytesByTag", value: "HeapStats.bytesTagged(tag)")
+	exact.upsert("threadAllocTotal", value: "HeapStats.threadAllocations()")
+	exact.upsert("threadFreeTotal", value: "HeapStats.threadFrees()")
+	exact.upsert("threadAllocBytes", value: "HeapStats.threadBytes()")
+	exact.upsert("processAllocTotal", value: "HeapStats.processAllocations()")
+	exact.upsert("processFreeTotal", value: "HeapStats.processFrees()")
+	exact.upsert("processAllocBytes", value: "HeapStats.processBytes()")
+	exact.upsert("slabCensusTally", value: "HeapStats.census(mode)")
+	exact.upsert("slabCensusBucketCount", value: "HeapStats.census(mode)")
+	exact.upsert("slabCensusBucketBytes", value: "HeapStats.census(mode)")
+	exact.upsert("scavengeMemory", value: "HeapStats.scavenge()")
+
+	return exact
+end 'rawBuiltinsExactReplacements'
+
+// The spec batcher runs a case naming one of these calls in a process of its own
+// (`SpecBatch.claimedPlacementFor`), because they read counters its neighbours move. A runtime-state API
+// whose spelling matches no prefix here is batched, and reads the other cases' activity.
+let RuntimeStateApiPrefixes = ["HeapStats.", "Scheduler.counters", "Scheduler.currentStackBytes", "Scheduler.quiesce", "Scheduler.currentMachine", "Clock.threadCpuTicks"]
+let ApiArgumentsOpening = "("
+
+function qualifiedCallOf(api String) returns String
+	let parts = api.split(ApiArgumentsOpening)
+
+	return try parts.get(0) otherwise panic("qualifiedCallOf: splitting '{api}' on '{ApiArgumentsOpening}' answered no parts")
+end 'qualifiedCallOf'
+
+export function runtimeStateReadingCalls() returns StringArray
+	var apis = StringArray.create()
+
+	for family in rawBuiltinsFamilyReplacements() 'eachFamily'
+		apis.push(family.api)
+	end 'eachFamily'
+
+	for (_, api) in rawBuiltinsExactReplacements() 'eachExact'
+		apis.push(api)
+	end 'eachExact'
+
+	var calls = StringArray.create()
+
+	for prefix in RuntimeStateApiPrefixes 'eachPrefix'
+		var matched = false
+
+		for api in apis 'eachApi'
+			if not api.startsWith(prefix) 'notThisPrefix'
+				continue
+			end 'notThisPrefix'
+
+			matched = true
+			let call = qualifiedCallOf(api)
+
+			if not calls.contains(call) 'firstOfItsSpelling'
+				calls.push(call)
+			end 'firstOfItsSpelling'
+		end 'eachApi'
+
+		if not matched 'driftedFromTheTables'
+			panic("runtimeStateReadingCalls: no raw-surface replacement starts with '{prefix}' — the tables and the roster of runtime-state calls have drifted apart")
+		end 'driftedFromTheTables'
+	end 'eachPrefix'
+
+	return calls
+end 'runtimeStateReadingCalls'

@@ -81,7 +81,7 @@ function parker(idx Integer) returns Integer
 	// CPU-parallel checkpoint: marks this hand-written function as a legitimate
 	// `async` target (satisfies the E3073 yielding contract) without claiming fake
 	// I/O. No-op at runtime.
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 
 	var acc = 0
 	var j = 0
@@ -115,8 +115,9 @@ function main() returns ExitCode
 		total = total + await p
 	end 'await'
 
-	let steals = __Builtins.schedStealCount()
-	let workers = __Builtins.schedMaxActiveWorkers()
+	let counters = Scheduler.counters()
+	let steals = counters.steals
+	let workers = counters.maxActiveWorkers
 	let monitor = monitorActions()
 
 	// The driver parses these. `aggregate` is the assertion; `workers` and `steals`

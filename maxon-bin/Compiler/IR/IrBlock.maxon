@@ -295,9 +295,7 @@ end 'cacheReadTerminatorOpIndex'
 
 // ⭐ **THE TWO QUESTIONS ABOUT A TERMINATOR SLOT, ASKED OF THE SLOT ITSELF.** `IrBlock.hasTerminatorOp` /
 // `terminatorIndex` are these read off `self.terminator`, and they delegate rather than restate — one rule,
-// one place, whichever half a caller holds. A caller that may NOT hold the block is why they exist: reading
-// a block out of `module.blocks` is a BORROW of that module (E3070), so a pass that writes while it walks
-// copies the slot out and asks these (see `LowerMaxonToStd`'s block walk).
+// one place, whichever half a caller holds.
 // Does control leave this block by falling into the NEXT one in layout order? The third way a block names
 // a successor, beside its terminator op and its conditional-branch op — and the one no op records, which is
 // why a CFG walk has to ask the slot.
@@ -553,7 +551,7 @@ end 'isSite'
 // always has the lower index, because the enclosing splice is recorded before anything is copied
 // into it; `MxdbgReader` refuses a sidecar where that does not hold.
 export type InlineSite
-	export var calleeName as ByteArray
+	export let calleeName as ByteArray
 	export var parent as InlineSiteRef
 	export var callSpan as SpanId
 	export var calleeSourceFile as FilePath
@@ -618,7 +616,7 @@ end 'cacheReadInlineSiteArray'
 
 export type IrBlock
 	export var id as BlockId
-	export var label as ByteArray
+	export let label as ByteArray
 	export var heat as BlockHeat
 	export var role as BlockRole
 
@@ -958,7 +956,7 @@ module function resolveFuncBlocks(blocks IrBlockArray, blockRefs BlockRefArray) 
 end 'resolveFuncBlocks'
 
 export type ExitWebBlock
-	export let block as IrBlock
+	export var block as IrBlock
 	export let slot as ElementIndex
 	export let phi as ValueId
 
@@ -970,7 +968,7 @@ end 'ExitWebBlock'
 export typealias ExitWebBlockArray = Array with ExitWebBlock
 
 export type ExitArrival
-	export let source as IrBlock
+	export var source as IrBlock
 	export let value as ValueId
 
 	export static function create(source IrBlock, value ValueId) returns Self
@@ -981,9 +979,9 @@ end 'ExitArrival'
 export typealias ExitArrivalArray = Array with ExitArrival
 
 export type ExitChain
-	export let web as ExitWebBlockArray
-	export let leaves as ExitArrivalArray
-	export let joins as ExitArrivalArray
+	export var web as ExitWebBlockArray
+	export var leaves as ExitArrivalArray
+	export var joins as ExitArrivalArray
 
 	export static function create(web ExitWebBlockArray, leaves ExitArrivalArray, joins ExitArrivalArray) returns Self
 		return Self{web: web, leaves: leaves, joins: joins}

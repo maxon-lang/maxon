@@ -30,13 +30,13 @@ end 'ListedProject'
 
 typealias ListedProjectArray = Array with ListedProject
 
-module function listProjectsAnswer(documents LspDocumentTextMap) returns LspExtensionOutcome
+module function listProjectsAnswer(workspace LspWorkspaceState, documents LspDocumentTextMap) returns LspExtensionOutcome
 	var listed = ListedProjectArray.create()
 	let search = lspRootSearch()
 
 	for (uri, _) in documents 'eachDocument'
 		let path = try FilePath.from(uri) otherwise continue
-		let entry = try listedProjectOf(path, search: search) otherwise continue
+		let entry = try listedProjectOf(workspace, readerPath: path, search: search) otherwise continue
 
 		addListedProject(entry, into: listed)
 	end 'eachDocument'
@@ -60,8 +60,8 @@ module function listProjectsAnswer(documents LspDocumentTextMap) returns LspExte
 	return LspExtensionOutcome.answered(LspAnswer.of(doc, result: result.finish()))
 end 'listProjectsAnswer'
 
-function listedProjectOf(readerPath FilePath, search LspRootSearch) returns ListedProject throws ListedProjectError
-	match lspProjectFactsOf(readerPath, search: search) 'facts'
+function listedProjectOf(workspace LspWorkspaceState, readerPath FilePath, search LspRootSearch) returns ListedProject throws ListedProjectError
+	match lspProjectFactsOf(workspace, readerPath: readerPath, search: search) 'facts'
 		swept(root, fileCount) then return ListedProject.create(root, isSingleFile: false, fileCount: fileCount)
 		unswept(root) then return ListedProject.create(root, isSingleFile: false, fileCount: UnsweptProjectFileCount)
 		singleFile(path) then return ListedProject.create(path, isSingleFile: true, fileCount: SingleFileProjectFileCount)

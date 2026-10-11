@@ -393,7 +393,7 @@ typealias JobWeight = int(0 to u64.max)
 // number here is worth nothing unrepeated, and worth less still if it is the first run after a build.
 //
 // ⚠ **SIZING FOR THROUGHPUT IS ONLY CORRECT BECAUSE THE RUN IS DE-PRIORITISED.** Keeping the box usable
-// is `__Builtins.enterBackgroundPriority()`'s job (see `Main.runSpecTest`), and it costs nothing
+// is `Process.enterBackgroundPriority()`'s job (see `Main.runSpecTest`), and it costs nothing
 // measurable; reserving slots for politeness INSTEAD would cost throughput (the 6-worker row) and still
 // not yield to a foreground process, because the OS time-slices rather than holding a core aside.
 //
@@ -402,20 +402,8 @@ typealias JobWeight = int(0 to u64.max)
 // optional-band import are now in the compiler's own binary rather than only in a program that asks. One
 // call at startup against a suite that runs for minutes; the alternative is a default nobody can resolve
 // without knowing which command is running.
-//
-// The floor is not decorative even though `__Builtins.cpuCount()` is clamped to at least 1 by the
-// runtime: that clamp lives in builder-built Std and nothing here PROVES it, while `WorkerCount` starts
-// at 1 because a pool of no workers runs nothing. The guard is what carries the count into the type.
 export function defaultWorkerCount() returns WorkerCount
-	let reported = __Builtins.cpuCount()
-
-	if reported < 1 'unreported'
-		return 1
-	end 'unreported'
-
-	// No cast: the guard above has already proved `reported >= 1`, which is `WorkerCount`'s own range,
-	// and E3010 refuses a cast that re-states what the compiler knows.
-	return reported
+	return Scheduler.machineCpuCount() as WorkerCount
 end 'defaultWorkerCount'
 
 export let MinWorkerCount = 1 as WorkerCount
@@ -1797,17 +1785,6 @@ export function formatSeconds(ms DurationMs) returns String
 	return "{whole}.{tenths} s"
 end 'formatSeconds'
 
-// Has this slot's drain green thread produced its answer yet? ONE spelling of the predicate, because
-// two places ask it for opposite reasons: `findReadyDrain` SERVES on it, and `abortOnWedgedPool`
-// REPORTS on it — and the report's entire diagnostic value is the claim that a busy slot printing
-// `drain complete: yes` means the scan missed an answer it should have served. That claim is only
-// true while the two ask the same question. Written twice they agreed, and nothing made them agree:
-// a clause added to the scan and not to the report would not fail to compile, it would make the
-// report confidently accuse the wrong half of the harness.
-function drainHasAnswered(drain DrainPromise) returns bool
-	return __Builtins.gtIsComplete(drain.inner) != 0
-end 'drainHasAnswered'
-
 // The pool has stopped moving. Print what every slot was doing and take the run down.
 //
 // THE REPORT IS THE POINT. A wedge is not reproducible on demand — the measured rate is a couple of
@@ -1857,7 +1834,7 @@ function abortOnWedgedPool(busy BoolArray, inFlight SpecJobArray, drains DrainPr
 		let since = try dispatchedAt.get(slot) otherwise panic("abortOnWedgedPool: dispatchedAt.get({slot}) is in bounds by construction")
 		let spoke = try spokeAt.get(slot) otherwise panic("abortOnWedgedPool: spokeAt.get({slot}) is in bounds by construction")
 		let drain = try drains.get(slot) otherwise panic("abortOnWedgedPool: a busy slot always has a drain promise, and slot {slot} is busy")
-		let answered = "yes" if drainHasAnswered(drain) else "no"
+		let answered = "yes" if drain.isComplete() else "no"
 		let deadlineFired = try expired.get(slot) otherwise panic("abortOnWedgedPool: expired.get({slot}) is in bounds by construction")
 		let givenUpOn = "yes" if deadlineFired else "no"
 		report.push("  slot {slot}: '{job.specName}' sent {formatSeconds(Clock.elapsedMs(since))} ago, last spoke {formatSeconds(Clock.elapsedMs(spoke))} ago, drain complete: {answered}, bound fired: {givenUpOn}")
@@ -2540,7 +2517,7 @@ function findReadyDrain(busy BoolArray, drains DrainPromiseArray, cursor WorkerI
 
 		let drain = try drains.get(slot) otherwise panic("findReadyDrain: a busy slot always has a drain promise, and slot {slot} is busy")
 
-		if drainHasAnswered(drain) 'hasAnswered'
+		if drain.isComplete() 'hasAnswered'
 			return slot
 		end 'hasAnswered'
 	end 'scan'

@@ -81,7 +81,7 @@ export function promoteArgsNeedingAWritableRecord(project Project, module MaxonM
 	end 'alreadyRefused'
 
 	for i in 0 upto module.functions.count() 'eachFunc'
-		let func = functionAt(module, index: i)
+		let func = try module.functions.get(i) otherwise panic("promoteArgsNeedingAWritableRecord: module.functions.get OOB at {i}")
 
 		// The same reachability gate `scanRuntimeUsage` and `lowerMaxonToStd` apply: a stdlib body no back
 		// end will receive is not worth rewriting, and an op inserted into one would sit in front of a scan
@@ -93,18 +93,6 @@ export function promoteArgsNeedingAWritableRecord(project Project, module MaxonM
 		promoteInFunction(project, module: module, func: func, funcIndex: i, mutationSummary: mutationSummary)
 	end 'eachFunc'
 end 'promoteArgsNeedingAWritableRecord'
-
-// ⭐⭐ **THE FUNCTION RECORD AS A REFERENCE THIS FRAME OWNS, NOT AS A BORROW OF THE MODULE.** Reading an
-// element out of `module.functions` and BINDING it makes the binding a borrow of the whole module for as
-// long as it lives (E3070) — and the promotion below writes `module.ops` throughout, which is precisely
-// what the rule forbids holding a borrow across. Returning it takes the reference instead: the compiler's return
-// convention promotes a BORROWED managed value to an owned one (`Parser.emitOwnedValueReturn` — *"a
-// borrowed struct/union/instance INCREFS"*), so the caller holds a `+1` that no write to the module can
-// invalidate. That is the language's answer to "I need to keep this element", and it costs one incref per
-// function of the program.
-function functionAt(module MaxonModule, index ElementIndex) returns IrFunction
-	return try module.functions.get(index) otherwise panic("functionAt: module.functions.get OOB at {index}")
-end 'functionAt'
 
 // One function, in three walks — and every function in almost every program leaves after the first,
 // having allocated nothing.
@@ -193,7 +181,9 @@ function opCallsAWritingCallee(op MaxonOp, mutationSummary ParamMutationSummary)
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness gives false
+		existentialWitness or
+		holdValue or
+		holdEnd gives false
 	end 'op'
 end 'opCallsAWritingCallee'
 
@@ -323,7 +313,9 @@ type ArgProvenance
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness then break
+			existentialWitness or
+			holdValue or
+			holdEnd then break
 		end 'op'
 	end 'noteOp'
 
@@ -416,7 +408,9 @@ function promoteCallAt(project Project, module MaxonModule, opIdx ElementIndex, 
 		immortalStringTable or
 		covPoint or
 		rawIntrinsic or
-		existentialWitness then break
+		existentialWitness or
+		holdValue or
+		holdEnd then break
 	end 'op'
 
 	newRefs.push(opIdx)
@@ -429,10 +423,7 @@ end 'promoteCallAt'
 // A callee with NO signature is left alone for `addCallParamEdges`' reason — it is compiler-internal
 // (`__managed_append` and friends, whose receiver writes the parser recorded directly) or undeclared, which
 // is E3004 and so cannot reach a pass that runs only on an error-free project.
-// ⚠ **IT REPLACES THE OP AT `opIdx`, SO IT DOES NOT TAKE THE OP.** The store releases the record, and a
-// caller that had handed its own borrow in would be left holding a released pointer — E3070's shape, and the
-// reason this door reads the op back for itself at the one line that needs it.
-function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, func IrFunction, funcIndex ElementIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
+function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, func IrFunction, funcIndex ElementIndex, callee ByteArray, args ValueIdArray, argLabels NameRoster, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
 	let mask = mutationSummary.maskOf(callee)
 
 	// Short-circuited, so the second lookup is paid only by the handful of calls whose callee writes
@@ -455,7 +446,7 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 	var promotedArgs = ValueIdArray.create()
 	var promoted = ValueIdArray.create()
 	var sources = ValueIdArray.create()
-	var callees = ByteArrayArray.create()
+	var callees = NameRoster.create()
 
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("promoteArgsOf: args.get OOB at {i}")
@@ -504,7 +495,7 @@ end 'promoteArgsOf'
 
 // Does ANY of this call's arguments need a writable record? The plan loop's own predicate, asked over the
 // whole argument list first — one question, two askers, so the cheap gate cannot drift from what it gates.
-function anyArgNeedsAWritableRecord(sig FuncSignature, mask ParamPositionMask, args ValueIdArray, argLabels ByteArrayArray, provenance ArgProvenance) returns bool
+function anyArgNeedsAWritableRecord(sig FuncSignature, mask ParamPositionMask, args ValueIdArray, argLabels NameRoster, provenance ArgProvenance) returns bool
 	for i in 0 upto args.count() 'eachArg'
 		if promotionAtWrittenPosition(sig, mask: mask, argIndex: i, argId: try args.get(i) otherwise panic("anyArgNeedsAWritableRecord: args.get OOB at {i}"), argLabels: argLabels, provenance: provenance) != WritableRecordPromotion.none 'needsOne'
 			return true
@@ -522,7 +513,7 @@ end 'anyArgNeedsAWritableRecord'
 // while the mask is indexed by DECLARATION position, and `grow(1, dest: "x")` writes parameter 1 with the
 // offending argument at source position 1 only by coincidence. Inverting the permutation by hand would be
 // a second slotting.
-function promotionAtWrittenPosition(sig FuncSignature, mask ParamPositionMask, argIndex ParamCount, argId ValueId, argLabels ByteArrayArray, provenance ArgProvenance) returns WritableRecordPromotion
+function promotionAtWrittenPosition(sig FuncSignature, mask ParamPositionMask, argIndex ParamCount, argId ValueId, argLabels NameRoster, provenance ArgProvenance) returns WritableRecordPromotion
 	let promotion = provenance.promotionFor(argId)
 
 	if promotion == WritableRecordPromotion.none 'alreadyWritable'

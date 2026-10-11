@@ -195,33 +195,35 @@ parseDigit("7")               // E3057: throwing function requires try: 'parseDi
 
 ```maxon
 let items = TallyArray.create()
-items.push(1)                 // E3019: cannot pass 'items' to function that mutates parameter 'self'
+items.push(1)                 // E3159: cannot write through 'items': 'items' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
-**Moving out of a `let`**
+**Moving out of a `var`**
 
 ```maxon
-let a = Point.create(1)
+var a = Point.create(1)
 var b = a
 b.x = 2
 print("{a.x}\n")              // E3102: use of moved value 'a'
 ```
 
-**Sharing a record between a `var` and a live `let`**
+**Binding a read-only value to a `var`**
 
 ```maxon
 let a = Point.create(1)
-let b = a
-var c = a                     // E3078: cannot assign immutable variable 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
+var c = a                     // E3078: cannot assign the read-only 'a' to mutable binding 'c'; use 'let' instead of 'var', or use clone()
 ```
 
-**Mutating a borrowed collection**
+**Handing a by-reference parameter storage another argument reaches**
 
 ```maxon
-var arr = ["hello"]
-let s = try arr.get(0) otherwise ""
-arr.push("world")             // E3070: cannot mutate 'arr' via 'push' while it is borrowed by 's'
-print("{s}\n")
+rebindThenRead(h, inner: h.inner)   // E3186: argument 'h.inner' overlaps argument 'h', which 'rebindThenRead' reassigns (parameter 'h') — …
+```
+
+**Reaching raw memory from a program**
+
+```maxon
+let pid = __Builtins.currentProcessId()   // E3185: call to '__Builtins.currentProcessId' from outside the library tiers: … — use 'Process.id()'
 ```
 
 **Reading a local a closure captured**
@@ -300,16 +302,19 @@ Nothing in Maxon is undefined behaviour. At run time:
 | Event | Behavior |
 |-------|----------|
 | `panic("…")`, a failed range check, a negative shift count | the program prints `panic at <file>:<line>: <message>` and a stack trace to stderr and exits with code **1** |
+| a `for` loop or an array cursor's `current()` reading a slot that was never filled | a panic: `empty slot: element <i> of the array was never filled` |
+| an array cursor's `current()` past the last element | a panic, as an index out of range |
+| a green-thread stack past 1 GiB, or a recursion that overflows an OS stack | a panic: `stack overflow` |
 | an index past the end of a collection | `get`/`set` throw `ArrayError.indexOutOfBounds`, handled with `try` |
 | division or `mod` by zero | throws `DivisionByZero`, handled with `try` |
 | integer overflow | wraps around (two's complement), with no error |
 | an allocation never released | exit code **101** |
 | a green thread neither awaited nor dropped | exit code **75** |
 | a promise consumed through a second read of one container slot or struct field | exit code **118** |
-| `__Builtins.slabCensusTally` asked for a mode it does not implement, or walking a heap it cannot describe | exit code **119** |
+| `HeapStats.census(mode)` walking a heap it cannot describe | exit code **119** |
 | a deep copy of an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled | exit code **120** |
 | on x64-windows, the green-thread scheduler starting up with a thread-local slot Windows placed past the 64 slots of the thread's own block | exit code **121** |
-| a second green thread calling `__Builtins.gtQuiesce()` while another is waiting in it | exit code **123** |
+| a second green thread calling `Scheduler.quiesce()` while another is waiting in it | exit code **123** |
 | deadlock | exit code **92** |
 
 `maxon execute` and `maxon test` report these exit codes; see the [CLI reference](/docs/cli/).

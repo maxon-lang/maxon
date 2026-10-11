@@ -170,7 +170,7 @@ GUARD_ALIAS="LeafReg"
 	onefunc|nosites|guardone)
 		# ⚠ The result is folded into ONE accumulator rather than bound to <n> distinct `let`s: <n>
 		# simultaneously-live values drives the REGISTER ALLOCATOR off a cliff long before this phase
-		# says anything (`genrangesites.sh` and `genmanagedsites.sh` both measured that trap). A ladder
+		# says anything (`genrangesites.sh` measured that trap). A ladder
 		# moves ONE axis.
 		echo "function leafMany(a LadderInt) returns LadderInt"
 		echo "	var acc = 0"

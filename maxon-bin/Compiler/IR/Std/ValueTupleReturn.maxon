@@ -214,8 +214,8 @@ type FunctionTupleFlow
 	// is true, so no absent-marker value is needed.
 	export var hasRow as BoolArray
 	export var rowAt as UseTallyArray
-	export let exitChains as ExitChainsByReturn
-	export let returnPlumbing as BlockIdSet
+	export var exitChains as ExitChainsByReturn
+	export var returnPlumbing as BlockIdSet
 
 	static function create(valueBound ValueId, exitChains ExitChainsByReturn) returns FunctionTupleFlow
 		var hasRow = BoolArray.create()
@@ -352,7 +352,7 @@ function convertWithNameIndex(project Project, module StdModule, byName Function
 	// PHASE 1 — the structural candidates, and one analysis per function a verdict can turn on or that
 	// holds a frame-local pair.
 	var onTheConvention = collectCandidates(project, module: module)
-	let flows = analyseAffectedFunctions(module, byName: byName, onTheConvention: onTheConvention)
+	var flows = analyseAffectedFunctions(module, byName: byName, onTheConvention: onTheConvention)
 
 	// PHASES 2 and 3 — the two verdict lists, and the fixpoint that removes every candidate one of them
 	// refuses. Only where a candidate exists: a frame-local pair needs no convention and is rewritten
@@ -369,7 +369,7 @@ function convertWithNameIndex(project Project, module StdModule, byName Function
 	end 'someCandidateKeptIt'
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		let flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
+		var flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
 		rewriteOneFunction(module, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention)
 	end 'eachFunc'
 end 'convertWithNameIndex'
@@ -560,6 +560,7 @@ function noteAddressTakenByOp(op StdOp, taken FnRefThunkSet)
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -827,6 +828,7 @@ function opCallsACandidate(op StdOp, byName FunctionNameIndex, onTheConvention B
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -919,11 +921,11 @@ function trackReturnedValue(retValId ValueId, flow FunctionTupleFlow)
 		flow.track(value)
 	end 'eachExitValue'
 
-	let chain = try flow.exitChains.get(retValId) otherwise return
-
-	for entry in chain.web 'eachWebBlock'
-		flow.returnPlumbing.insert(entry.block.id)
-	end 'eachWebBlock'
+	if let chain = try flow.exitChains.get(retValId) 'aSharedReturn'
+		for entry in chain.web 'eachWebBlock'
+			flow.returnPlumbing.insert(entry.block.id)
+		end 'eachWebBlock'
+	end 'aSharedReturn'
 end 'trackReturnedValue'
 
 function returnedValuesOf(module StdModule, liveOps OpIndexArray) returns ValueIdArray
@@ -1042,6 +1044,7 @@ function trackValueOrigin(op StdOp, byName FunctionNameIndex, onTheConvention Bo
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -1206,6 +1209,7 @@ function classifyOneOp(op StdOp, flow FunctionTupleFlow, readByOneOp StdValueUse
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -1351,6 +1355,7 @@ function opAccountsForTheValue(op StdOp, value ValueId) returns bool
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -1645,6 +1650,7 @@ function noteCallSite(op StdOp, funcIndex ElementIndex, byName FunctionNameIndex
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -1837,7 +1843,7 @@ type ValueTuplePlan
 	export var highOf as ValueIdArray
 	export var anyRewrite as bool
 
-	export let chainHighs as ChainHighByBlock
+	export var chainHighs as ChainHighByBlock
 
 	// Whether the fixpoint left THIS function on the convention. Only such a function may hand back two
 	// registers, and `markRegisterPair` marks a captured pair as returnable without knowing which function
@@ -2077,6 +2083,7 @@ function noteOrphanedConstant(op StdOp, stillRead StdValueUseSet, orphaned StdVa
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -2212,6 +2219,7 @@ function planOneOp(op StdOp, funcIndex ElementIndex, flow FunctionTupleFlow, onT
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -2413,6 +2421,7 @@ function rewriteOneOp(module StdModule, opIdx ElementIndex, plan ValueTuplePlan,
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or
@@ -2454,19 +2463,20 @@ function widenTheExitChain(retValId ValueId, flow FunctionTupleFlow, plan ValueT
 		return
 	end 'notAPairReturn'
 
-	let chain = try flow.exitChains.get(retValId) otherwise return
-	var webById = ExitWebByBlock.create()
-	var webByPhi = ExitWebByPhi.create()
-	var rewritten = BlockIdSet.create()
+	if let chain = try flow.exitChains.get(retValId) 'aSharedReturn'
+		var webById = ExitWebByBlock.create()
+		var webByPhi = ExitWebByPhi.create()
+		var rewritten = BlockIdSet.create()
 
-	for entry in chain.web 'eachWebBlock'
-		webById.upsert(entry.block.id, value: entry)
-		webByPhi.upsert(entry.phi, value: entry)
-		widenBlockArgs(entry.block, high: plan.chainHighOf(entry.block.id))
-	end 'eachWebBlock'
+		for entry in chain.web 'eachWebBlock'
+			webById.upsert(entry.block.id, value: entry)
+			webByPhi.upsert(entry.phi, value: entry)
+			widenBlockArgs(entry.block, high: plan.chainHighOf(entry.block.id))
+		end 'eachWebBlock'
 
-	widenArrivalSources(chain.joins, rewritten: rewritten, webById: webById, webByPhi: webByPhi, plan: plan)
-	widenArrivalSources(chain.leaves, rewritten: rewritten, webById: webById, webByPhi: webByPhi, plan: plan)
+		widenArrivalSources(chain.joins, rewritten: rewritten, webById: webById, webByPhi: webByPhi, plan: plan)
+		widenArrivalSources(chain.leaves, rewritten: rewritten, webById: webById, webByPhi: webByPhi, plan: plan)
+	end 'aSharedReturn'
 end 'widenTheExitChain'
 
 function widenArrivalSources(arrivals ExitArrivalArray, rewritten BlockIdSet, webById ExitWebByBlock, webByPhi ExitWebByPhi, plan ValueTuplePlan)

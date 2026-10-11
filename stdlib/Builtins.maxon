@@ -118,9 +118,9 @@ public type Promise uses Element, ErrorType
 	// `errorIsHeapPtr` bit beside it could only approximate, and a static type
 	// decrefs straight-line where such a bit forces a runtime branch.
 	//
-	// `inner` is exported (read-only via `let`) so non-blocking pollers like the spec
-	// test dispatcher can peek at the underlying GT's status. Don't mutate; the field
-	// is a raw GT pointer and the compiler depends on its stability through await.
+	// `inner` is readable only from library-tier source (E3185 elsewhere); code outside it asks
+	// `isComplete()`. Don't mutate; the field is a raw GT pointer and the compiler depends on its
+	// stability through await.
 	public let inner = 0 as GreenThreadHandle
 end 'Promise'
 
@@ -523,6 +523,15 @@ let __DecimalWindowSpan = __SignificantDigitBudget - __LeastRoundableDecimalExpo
 // budget. That justification died with the i64, and 18 digits was measurably wrong: 3 of 203 random
 // literals carrying 19-30 significant digits landed a full ULP off the correctly-rounded value.
 let __SignificantDigitBudget = 768
+
+// Read by name from this file by `ManagedMemoryRuntime.emptySlotTextIn`, which spells the same message
+// in the emitted runtime; renaming or moving either constant breaks that lookup.
+let EmptySlotMessagePrefix = "empty slot: element "
+let EmptySlotMessageSuffix = " of the array was never filled\n"
+
+public function __emptySlotMessage(site String, index ElementIndex) returns String
+	return "{site}{EmptySlotMessagePrefix}{index}{EmptySlotMessageSuffix}"
+end '__emptySlotMessage'
 
 // Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
 // Answers `__FloatTextResult.overflow` if the magnitude exceeds binary64 range, and
@@ -2168,7 +2177,8 @@ end '__radixDigitText'
 /// (`typealias ConfigCell = SharedValue with Config`), `ConfigCell.create(v)` makes one;
 /// `current()` returns the value in force; `publish(v)` replaces it; `publish(v, replacing: old)`
 /// replaces it only while `old` is still current, answers whether it did, and drops `v` when it did
-/// not. `Value` is a record of `let` fields, a `String`, a handle or a scalar (E3171).
+/// not. `current()` is read-only; `publish` takes a solely owned value (E3174). `Value`'s graph holds
+/// no OS handle, function value or promise (E3171).
 public type SharedValue uses Value
 	// The runtime cell's address, at the offset `ServiceRegistryRuntime` reads; every operation is a
 	// call the compiler emits.

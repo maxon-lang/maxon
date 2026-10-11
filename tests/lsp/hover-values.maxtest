@@ -64,12 +64,12 @@ end 'hover shows correct type for function parameter'
 // reinstated. The rule pinned here is the general one, so it also covers `"hello".count()`,
 // `[1,2].first()`, `Point{…}.x`, `1 + other()`, `[1,2][0]`, `1 < 2` and `42 as Byte`.
 test 'hover does not read a chained expression as its head literal'
-	// Line 1: "    var path = \"out.bin\".toByteArray().managed"
+	// Line 1: "    var path = \"out.bin\".toByteArray().count()"
 	//          01234567890
 	let document = chainedInitializerDocument()
 	let rendering = hoverRendering(document, line: 1, character: 8)
 
-	Expect.contains(rendering, needle: "could not infer", message: "a literal describes the value only when it IS the whole initializer. `\"out.bin\".toByteArray().managed` opens with a string literal and is NOT a `String`; a hover that reads the head token alone answers `String` here, which is worse than answering nothing because a reader has no way to tell it from a right answer.")
+	Expect.contains(rendering, needle: "could not infer", message: "a literal describes the value only when it IS the whole initializer. `\"out.bin\".toByteArray().count()` opens with a string literal and is NOT a `String`; a hover that reads the head token alone answers `String` here, which is worse than answering nothing because a reader has no way to tell it from a right answer.")
 end 'hover does not read a chained expression as its head literal'
 
 // ⚠ Every fixture below is a `b"…"` byte literal, closing quote IMMEDIATELY after the last source
@@ -78,7 +78,7 @@ end 'hover does not read a chained expression as its head literal'
 // adding or trimming one byte silently shifts them all.
 function chainedInitializerDocument() returns String
 	return String.from(b"function main() returns int
-    var path = \"out.bin\".toByteArray().managed
+    var path = \"out.bin\".toByteArray().count()
     return 0
 end 'main'")
 end 'chainedInitializerDocument'

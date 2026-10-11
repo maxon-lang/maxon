@@ -113,8 +113,7 @@ public extension Array
 		var j = hi - 1
 
 		while i <= j 'sweep'
-			// Read on every trip: the swap below writes `managed`, so a pivot read held across it would be
-			// a live borrow of what it writes.
+			// Read on every trip rather than held across the swap below, which writes `managed`.
 			let pv = try managed.get(lo) otherwise panic("partition: get OOB at pivot")
 
 			// Advance i while arr[i] < pivot.
@@ -197,9 +196,7 @@ public extension Array
 				return
 			end 'heapOk'
 
-			// Raw swap, not get+set: `set`'s overwrite decref would free the
-			// displaced occupant while its borrow is still in flight (see
-			// `Array.swap`).
+			// Raw swap, not get+set: a swap moves ownership with refcounts unchanged (see `Array.swap`).
 			self.swap(lo + root, j: lo + child)
 			root = child
 		end 'sift'

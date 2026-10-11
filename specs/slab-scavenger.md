@@ -9,7 +9,7 @@ category: system
 
 ## Documentation
 
-`__Builtins.scavengeMemory()` returns the number of **bytes handed back to the operating system** by
+`HeapStats.scavenge()` returns the number of **bytes handed back to the operating system** by
 this call. It is the only door onto the allocator's reclamation path, and the number is the only thing
 a Maxon program can see of it — `slab-allocator.md` explains why a program can never name a span, a
 class or a chunk.
@@ -146,12 +146,12 @@ function main() returns ExitCode
 	end 'alloc'
 	bufs = Bufs.create()
 
-	let first = __Builtins.scavengeMemory()
+	let first = HeapStats.scavenge()
 	if first != 0 'graceSkipped'
 		return 1
 	end 'graceSkipped'
 
-	let second = __Builtins.scavengeMemory()
+	let second = HeapStats.scavenge()
 	if second <= 0 'nothingReleased'
 		return 2
 	end 'nothingReleased'
@@ -171,12 +171,12 @@ tested the commit bit without also testing that every chunk in the granule is fr
 granule holding its own bookkeeping and fault on the next allocation.
 ```maxon
 function main() returns ExitCode
-	let first = __Builtins.scavengeMemory()
+	let first = HeapStats.scavenge()
 	if first != 0 'releasedSomething'
 		return 1
 	end 'releasedSomething'
 
-	let second = __Builtins.scavengeMemory()
+	let second = HeapStats.scavenge()
 	if second != 0 'releasedSomethingLater'
 		return 2
 	end 'releasedSomethingLater'
@@ -217,8 +217,8 @@ function main() returns ExitCode
 		bufs.push(build(k as Seed))
 	end 'alloc'
 
-	_ = __Builtins.scavengeMemory()
-	_ = __Builtins.scavengeMemory()
+	_ = HeapStats.scavenge()
+	_ = HeapStats.scavenge()
 
 	var bad = 0
 	for k in 0 upto 16000 'check'
@@ -278,8 +278,8 @@ function main() returns ExitCode
 	end 'allocFirst'
 	first = Bufs.create()
 
-	_ = __Builtins.scavengeMemory()
-	let released = __Builtins.scavengeMemory()
+	_ = HeapStats.scavenge()
+	let released = HeapStats.scavenge()
 	if released <= 0 'nothingToReuse'
 		return 1
 	end 'nothingToReuse'
@@ -287,7 +287,7 @@ function main() returns ExitCode
 	// The second population's HOLDER is created before the reading, so the two live counts describe the same
 	// set of bindings and the only difference between them is the population itself.
 	var second = Bufs.create()
-	let liveBefore = __Builtins.mmAllocLive()
+	let liveBefore = HeapStats.allocationsLive()
 
 	for k in 0 upto 16000 'allocSecond'
 		second.push(build((k + 7) as Seed))
@@ -308,7 +308,7 @@ function main() returns ExitCode
 	end 'corrupted'
 
 	second = Bufs.create()
-	if __Builtins.mmAllocLive() != liveBefore 'refcountsDrifted'
+	if HeapStats.allocationsLive() != liveBefore 'refcountsDrifted'
 		return 5
 	end 'refcountsDrifted'
 
@@ -350,8 +350,8 @@ function main() returns ExitCode
 	end 'allocSmall'
 	small = Bufs.create()
 
-	_ = __Builtins.scavengeMemory()
-	if __Builtins.scavengeMemory() <= 0 'nothingReleased'
+	_ = HeapStats.scavenge()
+	if HeapStats.scavenge() <= 0 'nothingReleased'
 		return 1
 	end 'nothingReleased'
 
@@ -406,8 +406,8 @@ function main() returns ExitCode
 		big.push((i mod 251) as Byte)
 	end 'fill'
 
-	_ = __Builtins.scavengeMemory()
-	_ = __Builtins.scavengeMemory()
+	_ = HeapStats.scavenge()
+	_ = HeapStats.scavenge()
 
 	var bad = 0
 	for i in 0 upto 512 'check'
@@ -421,8 +421,8 @@ function main() returns ExitCode
 	end 'corrupted'
 
 	big = ByteArray.create()
-	_ = __Builtins.scavengeMemory()
-	_ = __Builtins.scavengeMemory()
+	_ = HeapStats.scavenge()
+	_ = HeapStats.scavenge()
 
 	return 0
 end 'main'

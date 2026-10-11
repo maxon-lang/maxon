@@ -13,9 +13,8 @@
 #     `byteLength` / interpolation across the six rungs — which is why the rung's committed
 #     −181 allocations / −8,132 bytes WAS visible: that delta is the shared `__str_eq` / `String.equals`
 #     byte loop getting smaller, i.e. the ONE part of Slice C the corpus can express. A reader who takes
-#     that non-zero as coverage of the rung repeats E3070's mistake in reverse: there, a corpus that
-#     contained the shape at degree 1 read as coverage; here, a corpus that contains a NEIGHBOUR of the
-#     shape reads as coverage. Neither is.
+#     that non-zero as coverage of the rung takes a corpus that contains a NEIGHBOUR of the shape as
+#     coverage of the shape. It is not.
 #
 # THE TWO FAMILIES:
 #
@@ -34,7 +33,7 @@
 #
 #   `data-*`  — a RUN ladder, the odd family out (`genfsprobe.sh`'s footing). `<n>` is a number of
 #              DOUBLINGS of the subject string, so the data doubles and the SOURCE does not, and the
-#              program brackets ONLY the operation with `__Builtins.currentTimeNanos()` and prints a CSV
+#              program brackets ONLY the operation with `Clock.nowNanos()` and prints a CSV
 #              line. It answers what no compile ladder can: are the emitted runtime GRAPHS linear in the
 #              data? `split` restarting its search from 0 per segment would be quadratic in segments;
 #              `replace` sizing its output by growth instead of by the two-pass count would be another;
@@ -186,7 +185,7 @@ emit_data_program() {
 		# The realistic search: a needle whose first byte occurs NOWHERE in the haystack, so the
 		# first-byte fast reject answers every position and the scan is one pass.
 		echo -e "\tlet hay = grown(\"abcdefgh,\", doublings: $N)"
-		echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tvar r = 0"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tif hay.contains(\"zzz\") 'hit'"
@@ -194,7 +193,7 @@ emit_data_program() {
 		echo -e "\t\tend 'hit'"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
-		echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t1 = Clock.nowNanos()"
 		echo -e "\tprint(\"$MODE,{hay.byteLength()},{hay.byteLength()},{t1 - t0},$REPS\\\\n\")"
 		;;
 	data-findquad)
@@ -206,7 +205,7 @@ emit_data_program() {
 		echo -e "\tlet hay = grown(\"aaaaaaaa\", doublings: $N)"
 		echo -e "\tvar needle = grown(\"aaaaaaaa\", doublings: $(( N - 1 )))"
 		echo -e "\tneedle.append(\"b\")"
-		echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tvar r = 0"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tif hay.contains(needle) 'hit'"
@@ -214,7 +213,7 @@ emit_data_program() {
 		echo -e "\t\tend 'hit'"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
-		echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t1 = Clock.nowNanos()"
 		echo -e "\tprint(\"$MODE,{hay.byteLength()},{needle.byteLength()},{t1 - t0},$REPS\\\\n\")"
 		;;
 	data-split)
@@ -222,7 +221,7 @@ emit_data_program() {
 		# each segment the total would be quadratic in them.
 		echo -e "\tlet hay = grown(\"abcdefgh,\", doublings: $N)"
 		echo -e "\tvar units = 0"
-		echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tvar r = 0"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tlet parts = hay.split(\",\")"
@@ -230,7 +229,7 @@ emit_data_program() {
 		echo -e "\t\ttotal = total + units"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
-		echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t1 = Clock.nowNanos()"
 		echo -e "\tprint(\"$MODE,{hay.byteLength()},{units},{t1 - t0},$REPS\\\\n\")"
 		;;
 	data-replace)
@@ -238,7 +237,7 @@ emit_data_program() {
 		# receiver and the two-pass count is actually load-bearing rather than incidentally right.
 		echo -e "\tlet hay = grown(\"abcdefgh,\", doublings: $N)"
 		echo -e "\tvar units = 0"
-		echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tvar r = 0"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tlet out = hay.replace(\",\", with: \";;\")"
@@ -246,7 +245,7 @@ emit_data_program() {
 		echo -e "\t\ttotal = total + units"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
-		echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t1 = Clock.nowNanos()"
 		echo -e "\tprint(\"$MODE,{hay.byteLength()},{units},{t1 - t0},$REPS\\\\n\")"
 		;;
 	data-appendloop)
@@ -261,27 +260,27 @@ emit_data_program() {
 		echo -e "\t\tchunks = chunks * 2"
 		echo -e "\t\td = d + 1"
 		echo -e "\tend 'dbl'"
-		echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tvar s = \"\""
 		echo -e "\tvar i = 0"
 		echo -e "\twhile i < chunks 'grow'"
 		echo -e "\t\ts.append(\"abcdefgh,\")"
 		echo -e "\t\ti = i + 1"
 		echo -e "\tend 'grow'"
-		echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t1 = Clock.nowNanos()"
 		echo -e "\ttotal = total + s.byteLength()"
 		echo -e "\tprint(\"$MODE,{s.byteLength()},{chunks},{t1 - t0},1\\\\n\")"
 		;;
 	data-case)
 		echo -e "\tlet hay = grown(\"abcdefgh,\", doublings: $N)"
-		echo -e "\tlet t0 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tvar r = 0"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tlet up = hay.toUpper()"
 		echo -e "\t\ttotal = total + up.byteLength()"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
-		echo -e "\tlet t1 = __Builtins.currentTimeNanos()"
+		echo -e "\tlet t1 = Clock.nowNanos()"
 		echo -e "\tprint(\"$MODE,{hay.byteLength()},{hay.byteLength()},{t1 - t0},$REPS\\\\n\")"
 		;;
 	esac

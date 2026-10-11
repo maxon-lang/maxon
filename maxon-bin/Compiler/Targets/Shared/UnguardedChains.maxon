@@ -1,0 +1,723 @@
+typealias ChunkIndexByName = Map with (ByteArray, ElementIndex)
+typealias ChunkIndexColumn = Array with ElementIndex
+typealias ChainVisitColumn = Array with ChainVisit
+typealias ChainEdgeArray = Array with ChainEdge
+
+enum ChainVisit
+	unvisited
+	visiting
+	finished
+end 'ChainVisit'
+
+enum ChainOverflow
+	tooDeep
+	pointerRecursion
+end 'ChainOverflow'
+
+export union UnguardedCallStep
+	callee(name ByteArray, below StackSize)
+	fixed(bytes StackSize)
+end 'UnguardedCallStep'
+
+type ChunkNameList
+	var names as NameRoster
+
+	static function create() returns ChunkNameList
+		return Self{names: NameRoster.create()}
+	end 'create'
+
+	function noteOnce(name ByteArray)
+		if self.names.contains(name) 'already'
+			return
+		end 'already'
+
+		self.names.push(name)
+	end 'noteOnce'
+
+	function count() returns ElementIndex
+		return self.names.count()
+	end 'count'
+
+	function joined() returns String
+		var text = StringBuilder.create()
+
+		for name in self.names 'eachName'
+			text.append("'{String.from(name)}' ")
+		end 'eachName'
+
+		return text.build()
+	end 'joined'
+end 'ChunkNameList'
+
+// ⭐ THE E5004 PROOF. A function with no prologue guard runs inside the margin its guarded caller's
+// guard projected (`GtRuntime.gtStackGuardMargin`), and green-thread stacks have no guard page
+// below them, so every chain of unguarded frames under a guarded caller must fit that margin. A
+// recursion among unguarded functions, direct or through function pointers, has no depth the margin
+// could bound and is refused outright. With the codegen debug log on, every overflow is logged and
+// the first one is refused at the end.
+export function requireUnguardedChainsFitTheGuardMargin(project Project, module TargetModule, globalData GlobalDataTable, funcNames FunctionNameIndex, chunks FunctionCodeChunkArray, target Target) throws CompileError
+	var walk = UnguardedChainWalk.create(project, funcNames: funcNames, chunks: chunks, target: target, margin: gtStackGuardMargin(target) as StackSize)
+	walk.notePointerCallers(module)
+	walk.noteIndirectTargets(globalData)
+	try walk.measureIndirectTargets()
+
+	for index in 0 upto chunks.count() 'eachChunk'
+		let chunk = try chunks.get(index) otherwise panic("requireUnguardedChainsFitTheGuardMargin: chunks.get OOB at {index}")
+
+		if chunk.checksStack 'aGuardedCaller'
+			try walk.requireCalleesFit(index)
+		end 'aGuardedCaller'
+	end 'eachChunk'
+
+	try walk.refuseTheFirstOverflow()
+
+	let stopsThreads = targetStopsThreadsForPreemption(target)
+	var stoppedThreadTree = 0 as StackSize
+
+	if stopsThreads 'measureTheStop'
+		stoppedThreadTree = try walk.stoppedThreadTreeBytes()
+	end 'measureTheStop'
+
+	// After the stop tree, so a chunk only that tree reaches is held to a declared cost too.
+	walk.requireEverythingWasSized()
+
+	if stopsThreads 'proveTheStop'
+		requireAsyncPreemptionFitsItsMargin(stoppedThreadTree, target: target)
+	end 'proveTheStop'
+end 'requireUnguardedChainsFitTheGuardMargin'
+
+// The functions whose address is taken only to hand to the OS or to a fresh thread's first
+// switch-in — entry points, thread starts, fault and signal handlers — which no pointer call in the
+// program reaches, so they are not priced as pointer targets. `edgesOf` panics on a by-name call to
+// one, which keeps the roster honest.
+function nameIsEnteredByTheOs(name ByteArray) returns bool
+	return name.equals(EntryPointName) or name.equals(SchedWorkerLoopName) or name.equals(SchedSysmonName) or name.equals(FaultThunkName) or name.equals(FaultHandlerName) or name.equals(PreemptHandlerName) or name.equals(LinuxSigreturnName) or name.equals(AsyncPreemptName) or name.equals(GtTrampolineName) or name.equals(NetpollChildFiredName)
+end 'nameIsEnteredByTheOs'
+
+function targetFunctionCallsThroughAPointer(module TargetModule, func IrFunction, verdicts PointerCallMemo) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("targetFunctionCallsThroughAPointer: blockRef from func.blockRefs not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			if verdicts.callsThroughAPointer(try module.ops.get(opIdx) otherwise panic("targetFunctionCallsThroughAPointer: opIdx {opIdx} not in module.ops")) 'indirect'
+				return true
+			end 'indirect'
+		end 'eachOp'
+
+		if block.hasTerminatorOp() and verdicts.callsThroughAPointer(try module.ops.get(block.terminatorIndex()) otherwise panic("targetFunctionCallsThroughAPointer: terminator not in module.ops")) 'indirectTerminator'
+			return true
+		end 'indirectTerminator'
+	end 'eachBlock'
+
+	return false
+end 'targetFunctionCallsThroughAPointer'
+
+function opCallsThroughAPointer(op TargetOp) returns bool
+	if not op.rawValue.isCall 'notACall'
+		return false
+	end 'notACall'
+
+	return match op 'call'
+		callReg or
+		callMem or
+		arm64BranchLinkReg gives true
+		callDirect or
+		arm64BranchLink or
+		iatCall or
+		arm64ImportCall or
+		x64Syscall or
+		arm64Syscall gives false
+		default panic("opCallsThroughAPointer: a call op the unguarded-chain proof does not know — state whether it reaches its callee through a pointer")
+	end 'call'
+end 'opCallsThroughAPointer'
+
+enum PointerCallVerdict
+	unlearned
+	direct
+	throughAPointer
+end 'PointerCallVerdict'
+
+typealias PointerCallVerdictColumn = Array with PointerCallVerdict
+
+type PointerCallMemo
+	var verdicts as PointerCallVerdictColumn
+
+	static function create() returns PointerCallMemo
+		return Self{verdicts: PointerCallVerdictColumn.create()}
+	end 'create'
+
+	function callsThroughAPointer(op TargetOp) returns bool
+		let variant = op.ordinal as ElementIndex
+		self.verdicts.growFilled(variant + 1, value: PointerCallVerdict.unlearned)
+
+		match try self.verdicts.get(variant) otherwise panic("PointerCallMemo.callsThroughAPointer: verdicts.get OOB at {variant} after growing to hold it") 'learned'
+			throughAPointer then return true
+			direct then return false
+			unlearned then break
+		end 'learned'
+
+		let answer = opCallsThroughAPointer(op)
+		try self.verdicts.set(variant, value: PointerCallVerdict.throughAPointer if answer else PointerCallVerdict.direct) otherwise panic("PointerCallMemo.callsThroughAPointer: verdicts.set OOB at {variant}")
+		return answer
+	end 'callsThroughAPointer'
+end 'PointerCallMemo'
+
+type ChainEdge
+	let bytes as StackSize
+	let callee as ElementIndex
+	let hasCallee as bool
+
+	static function throughCallee(bytes StackSize, callee ElementIndex) returns ChainEdge
+		return Self{bytes: bytes, callee: callee, hasCallee: true}
+	end 'throughCallee'
+
+	static function fixedBytes(bytes StackSize) returns ChainEdge
+		return Self{bytes: bytes, callee: 0, hasCallee: false}
+	end 'fixedBytes'
+
+	function bytesBelow() returns StackSize
+		return self.bytes
+	end 'bytesBelow'
+
+	function isThroughACallee() returns bool
+		return self.hasCallee
+	end 'isThroughACallee'
+
+	function calleeIndex() returns ElementIndex
+		return self.callee
+	end 'calleeIndex'
+
+	function rootAt(caller ElementIndex) returns ElementIndex
+		return self.callee if self.hasCallee else caller
+	end 'rootAt'
+end 'ChainEdge'
+
+type DeepestBelow
+	var bytes as StackSize
+	var via as ElementIndex
+	var hasVia as bool
+	var found as bool
+
+	static function create() returns DeepestBelow
+		return Self{bytes: 0, via: 0, hasVia: false, found: false}
+	end 'create'
+
+	function consider(candidate StackSize, through ElementIndex, isCallee bool)
+		if (not self.found) or candidate > self.bytes 'deeper'
+			self.bytes = candidate
+			self.via = through
+			self.hasVia = isCallee
+			self.found = true
+		end 'deeper'
+	end 'consider'
+
+	function total() returns StackSize
+		return self.bytes
+	end 'total'
+
+	function viaIndex() returns ElementIndex
+		return self.via
+	end 'viaIndex'
+
+	function chainContinues() returns bool
+		return self.found and self.hasVia
+	end 'chainContinues'
+end 'DeepestBelow'
+
+type UnguardedChainWalk
+	var project as Project
+	var funcNames as FunctionNameIndex
+	var chunks as FunctionCodeChunkArray
+	var target as Target
+	var margin as StackSize
+	var indexOf as ChunkIndexByName
+	var viaPointer as BoolArray
+	var addressTaken as BoolArray
+	var reachesPointer as BoolArray
+	var visits as ChainVisitColumn
+	var depths as StackSizeColumn
+	var deepest as ChunkIndexColumn
+	var hasDeepest as BoolArray
+	var path as ChunkIndexColumn
+	var unsized as ChunkNameList
+	var indirectTargets as ChunkIndexColumn
+	var indirectBytes as StackSize
+	var worstIndirect as ElementIndex
+	var hasWorstIndirect as bool
+	var firstOverflow as ElementIndex
+	var firstKind as ChainOverflow
+	var overflowed as bool
+
+	static function create(project Project, funcNames FunctionNameIndex, chunks FunctionCodeChunkArray, target Target, margin StackSize) returns UnguardedChainWalk
+		var indexOf = ChunkIndexByName.create()
+		var viaPointer = BoolArray.create()
+		var addressTaken = BoolArray.create()
+		var reachesPointer = BoolArray.create()
+		var visits = ChainVisitColumn.create()
+		var depths = StackSizeColumn.create()
+		var deepest = ChunkIndexColumn.create()
+		var hasDeepest = BoolArray.create()
+
+		for index in 0 upto chunks.count() 'eachChunk'
+			let chunk = try chunks.get(index) otherwise panic("UnguardedChainWalk.create: chunks.get OOB at {index}")
+			indexOf.upsert(chunk.funcName, value: index)
+			viaPointer.push(false)
+			addressTaken.push(false)
+			reachesPointer.push(false)
+			visits.push(ChainVisit.unvisited)
+			depths.push(0)
+			deepest.push(index)
+			hasDeepest.push(false)
+		end 'eachChunk'
+
+		return Self{project: project, funcNames: funcNames, chunks: chunks, target: target, margin: margin, indexOf: indexOf, viaPointer: viaPointer, addressTaken: addressTaken, reachesPointer: reachesPointer, visits: visits, depths: depths, deepest: deepest, hasDeepest: hasDeepest, path: ChunkIndexColumn.create(), unsized: ChunkNameList.create(), indirectTargets: ChunkIndexColumn.create(), indirectBytes: 0, worstIndirect: 0, hasWorstIndirect: false, firstOverflow: 0, firstKind: ChainOverflow.tooDeep, overflowed: false}
+	end 'create'
+
+	function notePointerCallers(module TargetModule)
+		var verdicts = PointerCallMemo.create()
+
+		for position in 0 upto module.funcCount() 'eachFunction'
+			let func = module.getFunc(position)
+
+			if not targetFunctionCallsThroughAPointer(module, func: func, verdicts: verdicts) 'direct'
+				continue
+			end 'direct'
+
+			let index = self.indexOfName(func.name)
+			try self.viaPointer.set(index, value: true) otherwise panic("UnguardedChainWalk.notePointerCallers: viaPointer.set OOB at {index}")
+
+			if self.surveying() and not self.chunkAt(index).checksStack 'unguardedCaller'
+				self.logPointerCaller(index)
+			end 'unguardedCaller'
+		end 'eachFunction'
+	end 'notePointerCallers'
+
+	function noteIndirectTargets(globalData GlobalDataTable)
+		for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
+			self.noteAddressTaken(reloc.funcName)
+		end 'eachRdataSlot'
+
+		for index in 0 upto self.chunks.count() 'eachChunk'
+			let chunk = self.chunkAt(index)
+
+			for fixup in chunk.callFixups 'eachFixup'
+				if fixup.takesAddressOnly 'addressOnly'
+					self.noteAddressTaken(fixup.targetName)
+				end 'addressOnly'
+			end 'eachFixup'
+
+			for reloc in chunk.funcAdrpRelocs 'eachAdrp'
+				self.noteAddressTaken(reloc.funcName)
+			end 'eachAdrp'
+		end 'eachChunk'
+	end 'noteIndirectTargets'
+
+	function noteAddressTaken(name ByteArray)
+		let index = try self.indexOf.get(name) otherwise return
+
+		if nameIsEnteredByTheOs(name) 'noPointerReachesIt'
+			return
+		end 'noPointerReachesIt'
+
+		if self.isAddressTaken(index) 'already'
+			return
+		end 'already'
+
+		try self.addressTaken.set(index, value: true) otherwise panic("UnguardedChainWalk.noteAddressTaken: addressTaken.set OOB at {index}")
+		self.indirectTargets.push(index)
+	end 'noteAddressTaken'
+
+	// ⚠ Every function whose address is taken may be the target of any call through a pointer — the
+	// proof cannot see which one a pointer holds — so a pointer call is priced at the deepest of them.
+	// They are measured with pointer calls priced at 0, which is sound only because a target that
+	// itself reaches a pointer call is refused (`ChainOverflow.pointerRecursion`); the depths memoized
+	// at that price are then forgotten.
+	function measureIndirectTargets() throws CompileError
+		var worst = 0 as StackSize
+		var worstIndex = 0 as ElementIndex
+		var found = false
+
+		for candidate in self.indirectTargets 'eachTarget'
+			let bytes = try self.edgeBytes(candidate)
+
+			if self.reachesPointerCall(candidate) 'pointerRecursion'
+				try self.noteOverflow(candidate, kind: ChainOverflow.pointerRecursion)
+			end 'pointerRecursion'
+
+			if self.surveying() 'logging'
+				self.logIndirectTarget(candidate, bytes: bytes)
+			end 'logging'
+
+			if (not found) or bytes > worst 'deeper'
+				worst = bytes
+				worstIndex = candidate
+				found = true
+			end 'deeper'
+		end 'eachTarget'
+
+		self.indirectBytes = worst
+		self.worstIndirect = worstIndex
+		self.hasWorstIndirect = found
+
+		if found and self.surveying() 'worstTarget'
+			self.logChain(worstIndex)
+		end 'worstTarget'
+
+		if worst > self.margin 'overflowsTheMargin'
+			try self.noteOverflow(worstIndex, kind: ChainOverflow.tooDeep)
+		end 'overflowsTheMargin'
+
+		self.forgetTheMeasurement()
+
+		if found 'chainOfTheWorst'
+			_ = try self.edgeBytes(worstIndex)
+		end 'chainOfTheWorst'
+	end 'measureIndirectTargets'
+
+	function forgetTheMeasurement()
+		for index in 0 upto self.chunks.count() 'resetEach'
+			try self.visits.set(index, value: ChainVisit.unvisited) otherwise panic("UnguardedChainWalk.forgetTheMeasurement: visits.set OOB at {index}")
+			try self.hasDeepest.set(index, value: false) otherwise panic("UnguardedChainWalk.forgetTheMeasurement: hasDeepest.set OOB at {index}")
+			try self.reachesPointer.set(index, value: false) otherwise panic("UnguardedChainWalk.forgetTheMeasurement: reachesPointer.set OOB at {index}")
+		end 'resetEach'
+	end 'forgetTheMeasurement'
+
+	function chunkAt(index ElementIndex) returns FunctionCodeChunk
+		return try self.chunks.get(index) otherwise panic("UnguardedChainWalk.chunkAt: chunks.get OOB at {index}")
+	end 'chunkAt'
+
+	function indexOfName(name ByteArray) returns ElementIndex
+		return try self.indexOf.get(name) otherwise panic("UnguardedChainWalk.indexOfName: '{String.from(name)}' is called or laid out but no chunk carries the name — the chunk list is complete at this point, so a call to it would not link")
+	end 'indexOfName'
+
+	function requireCalleesFit(index ElementIndex) throws CompileError
+		let edges = try self.edgesOf(index)
+
+		for edge in edges 'eachEdge'
+			if edge.bytesBelow() > self.margin 'overflowsTheMargin'
+				try self.noteOverflow(edge.rootAt(index), kind: ChainOverflow.tooDeep)
+			end 'overflowsTheMargin'
+		end 'eachEdge'
+	end 'requireCalleesFit'
+
+	function stoppedThreadTreeBytes() returns StackSize throws CompileError
+		return try self.depthBelow(self.indexOfName(AsyncPreemptParkName))
+	end 'stoppedThreadTreeBytes'
+
+	function edgeBytes(callee ElementIndex) returns StackSize throws CompileError
+		let chunk = self.chunkAt(callee)
+
+		if chunk.checksStack 'guardedCallee'
+			return StackWordBytes as StackSize
+		end 'guardedCallee'
+
+		match chunk.stackUse 'use'
+			onCallerStack then return try self.depthBelow(callee)
+			leavesTheStack then return chunk.stackBytesPerCall
+			unmeasured then break
+		end 'use'
+
+		self.unsized.noteOnce(chunk.funcName)
+		return 0
+	end 'edgeBytes'
+
+	function edgesOf(index ElementIndex) returns ChainEdgeArray throws CompileError
+		let chunk = self.chunkAt(index)
+		var edges = ChainEdgeArray.create()
+
+		for fixup in chunk.callFixups 'eachCall'
+			if fixup.takesAddressOnly 'notACall'
+				continue
+			end 'notACall'
+
+			if nameIsEnteredByTheOs(fixup.targetName) 'calledByName'
+				panic("UnguardedChainWalk.edgesOf: '{String.from(chunk.funcName)}' calls '{String.from(fixup.targetName)}' by name, which `nameIsEnteredByTheOs` lists as entered by the OS and never called — one of the two is wrong")
+			end 'calledByName'
+
+			let callee = self.indexOfName(fixup.targetName)
+			let below = try self.edgeBytes(callee)
+
+			if self.chunkAt(callee).checksStack 'guardedCallee'
+				edges.push(ChainEdge.fixedBytes(below))
+				continue
+			end 'guardedCallee'
+
+			edges.push(ChainEdge.throughCallee(below, callee: callee))
+		end 'eachCall'
+
+		try self.addImportEdges(chunk, into: edges)
+		return edges
+	end 'edgesOf'
+
+	function addImportEdges(chunk FunctionCodeChunk, into ChainEdgeArray) throws CompileError
+		if chunk.iatRelocs.isEmpty() 'noImports'
+			return
+		end 'noImports'
+
+		// An arm64 import goes through the libSystem door, a call `edgesOf` already prices
+		// (`Arm64GtRuntime.buildArm64DarwinLibcCallChunk`); an x64-windows one is an inline shimmed call.
+		match self.target.cpu 'cpu'
+			x64 then try self.addX64ImportEdges(chunk, into: into)
+			arm64 then return
+			wasm32 then panic("UnguardedChainWalk.addImportEdges: wasm32 lays out no native chunks")
+		end 'cpu'
+	end 'addImportEdges'
+
+	function addX64ImportEdges(chunk FunctionCodeChunk, into ChainEdgeArray) throws CompileError
+		if self.target.os != Os.windows 'notWindows'
+			panic("UnguardedChainWalk.addX64ImportEdges: '{String.from(chunk.funcName)}' carries import relocations on {targetToString(self.target)}, and only x64-windows imports go through the shim this walk prices")
+		end 'notWindows'
+
+		for reloc in chunk.iatRelocs 'eachImport'
+			let edge = try self.edgeOfStep(x64ShimmedImportStep(reloc.slotIndex))
+			into.push(edge)
+		end 'eachImport'
+	end 'addX64ImportEdges'
+
+	function edgeOfStep(step UnguardedCallStep) returns ChainEdge throws CompileError
+		match step 'step'
+			callee(name, below) then return try self.edgeThroughNamedCallee(name, below: below)
+			fixed(bytes) then return ChainEdge.fixedBytes(bytes)
+		end 'step'
+	end 'edgeOfStep'
+
+	function edgeThroughNamedCallee(name ByteArray, below StackSize) returns ChainEdge throws CompileError
+		let callee = self.indexOfName(name)
+		let under = try self.edgeBytes(callee)
+		return ChainEdge.throughCallee(below + under, callee: callee)
+	end 'edgeThroughNamedCallee'
+
+	function depthBelow(index ElementIndex) returns StackSize throws CompileError
+		match self.visitOf(index) 'visit'
+			finished then return self.depthOf(index)
+			visiting then try self.refuseRecursion(index)
+			unvisited then break
+		end 'visit'
+
+		let chunk = self.chunkAt(index)
+		try self.visits.set(index, value: ChainVisit.visiting) otherwise panic("UnguardedChainWalk.depthBelow: visits.set OOB at {index}")
+		self.path.push(index)
+
+		var lowest = DeepestBelow.create()
+		var sawPointer = self.callsThroughAPointer(index)
+		let edges = try self.edgesOf(index)
+
+		for edge in edges 'eachEdge'
+			lowest.consider(edge.bytesBelow(), through: edge.calleeIndex(), isCallee: edge.isThroughACallee())
+
+			if edge.isThroughACallee() 'viaCallee'
+				sawPointer = sawPointer or self.reachesPointerCall(edge.calleeIndex())
+			end 'viaCallee'
+		end 'eachEdge'
+
+		if self.callsThroughAPointer(index) 'pointerCall'
+			lowest.consider(self.indirectBytes, through: self.worstIndirect, isCallee: self.hasWorstIndirect)
+		end 'pointerCall'
+
+		_ = try self.path.pop() otherwise panic("UnguardedChainWalk.depthBelow: the path stack was empty at {index}, which pushed itself above")
+		let total = chunk.stackBytesPerCall + lowest.total()
+		try self.deepest.set(index, value: lowest.viaIndex()) otherwise panic("UnguardedChainWalk.depthBelow: deepest.set OOB at {index}")
+		try self.hasDeepest.set(index, value: lowest.chainContinues()) otherwise panic("UnguardedChainWalk.depthBelow: hasDeepest.set OOB at {index}")
+		try self.reachesPointer.set(index, value: sawPointer) otherwise panic("UnguardedChainWalk.depthBelow: reachesPointer.set OOB at {index}")
+		try self.depths.set(index, value: total) otherwise panic("UnguardedChainWalk.depthBelow: depths.set OOB at {index}")
+		try self.visits.set(index, value: ChainVisit.finished) otherwise panic("UnguardedChainWalk.depthBelow: visits.set OOB at {index}")
+
+		return total
+	end 'depthBelow'
+
+	function visitOf(index ElementIndex) returns ChainVisit
+		return try self.visits.get(index) otherwise panic("UnguardedChainWalk.visitOf: visits.get OOB at {index}")
+	end 'visitOf'
+
+	function depthOf(index ElementIndex) returns StackSize
+		return try self.depths.get(index) otherwise panic("UnguardedChainWalk.depthOf: depths.get OOB at {index}")
+	end 'depthOf'
+
+	function callsThroughAPointer(index ElementIndex) returns bool
+		return try self.viaPointer.get(index) otherwise panic("UnguardedChainWalk.callsThroughAPointer: viaPointer.get OOB at {index}")
+	end 'callsThroughAPointer'
+
+	function reachesPointerCall(index ElementIndex) returns bool
+		return try self.reachesPointer.get(index) otherwise panic("UnguardedChainWalk.reachesPointerCall: reachesPointer.get OOB at {index}")
+	end 'reachesPointerCall'
+
+	function isAddressTaken(index ElementIndex) returns bool
+		return try self.addressTaken.get(index) otherwise panic("UnguardedChainWalk.isAddressTaken: addressTaken.get OOB at {index}")
+	end 'isAddressTaken'
+
+	function hasDeepestOf(index ElementIndex) returns bool
+		return try self.hasDeepest.get(index) otherwise panic("UnguardedChainWalk.hasDeepestOf: hasDeepest.get OOB at {index}")
+	end 'hasDeepestOf'
+
+	function quotedNames(names NameRoster) returns String
+		var text = StringBuilder.create()
+
+		for position in 0 upto names.count() 'eachName'
+			let name = try names.get(position) otherwise panic("UnguardedChainWalk.quotedNames: names.get OOB at {position}")
+
+			if position > 0 'separator'
+				text.append(" → ")
+			end 'separator'
+
+			text.append("'{String.from(name)}'")
+		end 'eachName'
+
+		return text.build()
+	end 'quotedNames'
+
+	function framedNames(indices ChunkIndexColumn) returns String
+		var text = StringBuilder.create()
+
+		for index in indices 'eachIndex'
+			let chunk = self.chunkAt(index)
+			text.append("{String.from(chunk.funcName)}[{chunk.stackBytesPerCall}] ")
+		end 'eachIndex'
+
+		return text.build()
+	end 'framedNames'
+
+	function namesOf(indices ChunkIndexColumn, expandInlined bool) returns NameRoster
+		var names = NameRoster.create()
+
+		for index in indices 'eachIndex'
+			let chunk = self.chunkAt(index)
+			names.push(chunk.funcName)
+
+			if not expandInlined 'plain'
+				continue
+			end 'plain'
+
+			for site in chunk.inlineSites 'eachSite'
+				if not names.contains(site.calleeName) 'fresh'
+					names.push(site.calleeName)
+				end 'fresh'
+			end 'eachSite'
+		end 'eachIndex'
+
+		return names
+	end 'namesOf'
+
+	function refuseRecursion(index ElementIndex) throws CompileError
+		var cycle = ChunkIndexColumn.create()
+		var inCycle = false
+
+		for onPath in self.path 'eachOnPath'
+			if onPath == index 'entersTheCycle'
+				inCycle = true
+			end 'entersTheCycle'
+
+			if inCycle 'collect'
+				cycle.push(onPath)
+			end 'collect'
+		end 'eachOnPath'
+
+		cycle.push(index)
+		try self.refuseAt(index, message: "'{String.from(self.chunkAt(index).funcName)}' has no stack guard and reaches itself ({self.quotedNames(self.namesOf(cycle, expandInlined: false))}) — an unguarded function runs inside the {self.margin}-byte guard margin, and a recursion has no depth that margin could bound")
+	end 'refuseRecursion'
+
+	function surveying() returns bool
+		return compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug)
+	end 'surveying'
+
+	function chainFrom(root ElementIndex) returns ChunkIndexColumn
+		var chain = ChunkIndexColumn.create()
+		var current = root
+		chain.push(current)
+
+		while self.hasDeepestOf(current) 'follow'
+			current = try self.deepest.get(current) otherwise panic("UnguardedChainWalk.chainFrom: deepest.get OOB at {current}")
+			let repeats = chain.contains(current)
+			chain.push(current)
+
+			if repeats 'closesTheLoop'
+				break
+			end 'closesTheLoop'
+		end 'follow'
+
+		return chain
+	end 'chainFrom'
+
+	function logChain(root ElementIndex)
+		compilerLogger(CompilerLogGroup.codegen).debug("unguarded chain of {self.depthOf(root)} bytes against a {self.margin}-byte margin, indirect calls cost {self.indirectBytes}: {self.framedNames(self.chainFrom(root))}")
+	end 'logChain'
+
+	function logIndirectTarget(index ElementIndex, bytes StackSize)
+		let reaching = " and reaches a pointer call" if self.reachesPointerCall(index) else ""
+		compilerLogger(CompilerLogGroup.codegen).debug("function whose address is taken: '{String.from(self.chunkAt(index).funcName)}' costs {bytes} bytes below a pointer call{reaching}")
+	end 'logIndirectTarget'
+
+	function logPointerCaller(index ElementIndex)
+		compilerLogger(CompilerLogGroup.codegen).debug("unguarded function that calls through a pointer: '{String.from(self.chunkAt(index).funcName)}'")
+	end 'logPointerCaller'
+
+	function noteOverflow(root ElementIndex, kind ChainOverflow) throws CompileError
+		if not self.surveying() 'refuseNow'
+			try self.refuse(root, kind: kind)
+		end 'refuseNow'
+
+		self.logChain(root)
+
+		if not self.overflowed 'first'
+			self.firstOverflow = root
+			self.firstKind = kind
+			self.overflowed = true
+		end 'first'
+	end 'noteOverflow'
+
+	function refuseTheFirstOverflow() throws CompileError
+		if self.overflowed 'anOverflow'
+			try self.refuse(self.firstOverflow, kind: self.firstKind)
+		end 'anOverflow'
+	end 'refuseTheFirstOverflow'
+
+	function refuse(root ElementIndex, kind ChainOverflow) throws CompileError
+		match kind 'kind'
+			tooDeep then try self.refuseChain(root)
+			pointerRecursion then try self.refuseThroughPointer(root)
+		end 'kind'
+	end 'refuse'
+
+	function refuseChain(root ElementIndex) throws CompileError
+		let chain = self.chainFrom(root)
+
+		try self.refuseAt(root, message: "the unguarded chain {self.quotedNames(self.namesOf(chain, expandInlined: true))} may need more stack than the {self.margin}-byte guard margin — an unguarded function runs inside that margin, so every chain of them must fit it")
+	end 'refuseChain'
+
+	function refuseThroughPointer(root ElementIndex) throws CompileError
+		try self.refuseAt(root, message: "'{String.from(self.chunkAt(root).funcName)}' has no stack guard, has its address taken, and reaches a call through a function pointer — every call through a pointer is priced at the deepest function whose address is taken, so a pointer call below this one is a recursion through pointers that no depth the {self.margin}-byte guard margin could bound")
+	end 'refuseThroughPointer'
+
+	function refuseAt(index ElementIndex, message String) throws CompileError
+		if self.declaredInSource(index) 'sourced'
+			reportAtFunctionName(self.project, func: self.sourceFunctionOf(index), code: ErrorCode.unguardedStackChain, message: message)
+		end 'sourced' else 'programWide'
+			reportDiagnostic(self.project, diagnostic: Diagnostic.programWide(ErrorCode.unguardedStackChain, message: message))
+		end 'programWide'
+
+		throw CompileError.compileError
+	end 'refuseAt'
+
+	function declaredInSource(index ElementIndex) returns bool
+		let located = try self.funcNames.funcNamed(self.chunkAt(index).funcName) otherwise return false
+		return not located.sourceFilePath.isEmpty()
+	end 'declaredInSource'
+
+	function sourceFunctionOf(index ElementIndex) returns IrFunction
+		return try self.funcNames.funcNamed(self.chunkAt(index).funcName) otherwise panic("UnguardedChainWalk.sourceFunctionOf: '{String.from(self.chunkAt(index).funcName)}' was found a moment ago and is gone")
+	end 'sourceFunctionOf'
+
+	function requireEverythingWasSized()
+		if self.unsized.count() == 0 'allSized'
+			return
+		end 'allSized'
+
+		let message = "requireUnguardedChainsFitTheGuardMargin: {self.unsized.count()} hand-assembled chunk(s) sit on an unguarded chain and declare no stack footprint: {self.unsized.joined()} — state what each costs the caller's stack (`FunctionCodeChunk.spendsCallerStack` / `leavesCallerStack`)"
+
+		if self.surveying() 'reportOnly'
+			compilerLogger(CompilerLogGroup.codegen).debug(message)
+			return
+		end 'reportOnly'
+
+		panic("{message}")
+	end 'requireEverythingWasSized'
+end 'UnguardedChainWalk'

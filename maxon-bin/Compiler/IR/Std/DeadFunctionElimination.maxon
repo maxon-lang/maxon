@@ -130,7 +130,7 @@ end 'eliminateDeadFunctions'
 // What the prune leaves behind: the index over the surviving functions, and every `.data` label one of them
 // names in a `globalAddr` — the set `GlobalDataTable.layOut` keeps a walked runtime word for.
 export type DeadFunctionSurvivors
-	export let funcNames as FunctionNameIndex
+	export var funcNames as FunctionNameIndex
 	export let referencedGlobals as ReferencedGlobalLabelSet
 
 	static function create(funcNames FunctionNameIndex, referencedGlobals ReferencedGlobalLabelSet) returns DeadFunctionSurvivors
@@ -334,7 +334,7 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	end 'eachRdataSlot'
 end 'seedRoots'
 
-typealias FunctionRecordCodeMap = Map with (ByteArray, ByteArray)
+typealias FunctionRecordCodeMap = Map with (ByteArray, readonly ByteArray)
 
 function functionRecordCodesOf(globalData GlobalDataTable) returns FunctionRecordCodeMap
 	var codes = FunctionRecordCodeMap.create()
@@ -396,6 +396,8 @@ module function compilerOwnedRoots(target Target, stub EntryStubCalls) returns C
 	roots.push(CompilerOwnedRoot.create(GtDrainAtExitName, isCalledHere: stub.runsMainOnAGreenThread))
 	roots.push(CompilerOwnedRoot.create(GtRunMainName, isCalledHere: stub.runsMainOnAGreenThread))
 	roots.push(CompilerOwnedRoot.create(GtPreemptName, isCalledHere: true))
+	roots.push(CompilerOwnedRoot.create(GtStackAllocName, isCalledHere: true))
+	roots.push(CompilerOwnedRoot.create(GtStackFreeName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(DsInitName, isCalledHere: stub.bracketsDebugStream))
 	roots.push(CompilerOwnedRoot.create(DsShutdownName, isCalledHere: stub.bracketsDebugStream))
 	roots.push(CompilerOwnedRoot.create(CoverageDumpName, isCalledHere: stub.dumpsCoverage))
@@ -711,6 +713,7 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 		osThreadCpuTicks or
 		osDecommitPages or
 		memFill or
+		osGuardPages or
 		osCommitPages or
 		osReservePages or
 		atomicCas or

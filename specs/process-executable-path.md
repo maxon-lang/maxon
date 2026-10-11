@@ -1,7 +1,7 @@
 ---
 feature: process-executable-path
 status: stable
-keywords: [process, executablePath, introspection, __Builtins, intrinsics, FilePath]
+keywords: [process, executablePath, introspection, FilePath]
 category: stdlib
 ---
 
@@ -10,15 +10,16 @@ category: stdlib
 ## Documentation
 
 `stdlib/Process.maxon` is introspection of the CURRENT process (for launching children, see
-`stdlib/Subprocess.maxon`). It carries one function, and that function bottoms out in one compiler
-intrinsic:
+`stdlib/Subprocess.maxon`). `Process.executablePath()` bottoms out in one library-tier compiler intrinsic,
+callable only from a source file under `stdlib/` or `runtime/`:
 
 | Intrinsic | Meaning |
 |---|---|
 | `__Builtins.executablePath()` | the absolute path of the running executable, as a FRESH owned `__ManagedMemory` |
 
 `Process.executablePath()` turns that buffer into a `String`, parses it as a `FilePath`, and
-surfaces a parse failure as `ProcessIntrospectionError.pathUnavailable`.
+surfaces a parse failure as `ProcessIntrospectionError.pathUnavailable`. The `builtin-*` cases drive the
+intrinsic directly, so they compile as library-tier sources (`<!-- tier: stdlib -->`).
 
 ### The path is MACHINE-SPECIFIC, so every case here asserts a PROPERTY
 
@@ -193,6 +194,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.builtin-answers-a-non-empty-buffer -->
+<!-- tier: stdlib -->
 The intrinsic under the module, driven directly, so a failure attributes to the runtime entry
 rather than to `FilePath` parsing above it.
 ```maxon
@@ -209,6 +211,7 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.builtin-result-is-owned -->
+<!-- tier: stdlib -->
 Each call answers a FRESH owned `__ManagedMemory`, dropped at the end of the statement that bound
 it. Fifty of them in a loop is the leak gate's shape: a missing drop is a non-zero mm balance at
 exit, which the runtime reports as exit 101 rather than as a wrong number. The lengths are summed
@@ -235,7 +238,8 @@ end 'main'
 ```
 
 <!-- test: process-executable-path.builtin-arity-checked -->
-`executablePath` takes no arguments. An intrinsic has no signature for the ordinary arity check to
+<!-- tier: stdlib -->
+The intrinsic takes no arguments. An intrinsic has no signature for the ordinary arity check to
 read, so it is refused by the same `builtinArity` check `trunc`/`sleep`/`commandLineCount` use.
 ```maxon
 function main() returns ExitCode
@@ -248,15 +252,15 @@ error E3036: <fragment>:3:20: '__Builtins.executablePath' takes exactly 0 argume
 
 <!-- test: process-executable-path.rejected-on-wasm -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
-wasm32-wasi has no process-introspection substrate, so the call is refused at its source span with
-`E3104`, naming the runtime entry that has no lowering there — never a panic from inside the wasm
-backend.
+wasm32-wasi has no process-introspection substrate, so the call is refused at the span the program wrote
+with `E3104`, naming the library function and the runtime entry that has no lowering there — never a
+panic from inside the wasm backend.
 ```maxon
 function main() returns ExitCode
-	let mm = __Builtins.executablePath()
-	return mm.length() as ExitCode
+	let path = try Process.executablePath() otherwise return 1
+	return path.toString().byteLength() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:22: this construct lowers to the runtime entry '__proc_exe_path', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:25: 'Process.executablePath' lowers to the runtime entry '__proc_exe_path', which has no wasm32-wasi implementation
 ```

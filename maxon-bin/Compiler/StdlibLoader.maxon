@@ -340,50 +340,20 @@ function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePat
 	return setAside
 end 'setAsideTheUsersOwnLibraryFiles'
 
-type LibraryNameRoster
-	let stamps as SourceFileStampMap
-	export let names as ByteArrayArray
-
-	static function create(stamps SourceFileStampMap, names ByteArrayArray) returns LibraryNameRoster
-		return Self{stamps: stamps, names: names}
-	end 'create'
-
-	function describes(paths MaxonSourcePathArray) returns bool
-		if paths.count() != self.stamps.count() 'anotherFileSet'
-			return false
-		end 'anotherFileSet'
-
-		for path in paths 'eachFile'
-			let stamp = try self.stamps.get(path) otherwise return false
-			let info = try File.info(path) otherwise return false
-
-			if not stamp.describes(info) 'rewritten'
-				return false
-			end 'rewritten'
-		end 'eachFile'
-
-		return true
-	end 'describes'
-end 'LibraryNameRoster'
-
-typealias LibraryNameRosterMap = Map with (String, LibraryNameRoster)
-
-var libraryNameRosters = LibraryNameRosterMap.create()
-
-// The type names `stdlib/` declares, held per process and re-read when any file's stamp stops describing
-// it. `observedAt` is sampled before any file is read, because a whole-second mtime cannot tell a
+// The type names `stdlib/` declares, held on the session's shared file memos and re-read when any file's
+// stamp stops describing it. `observedAt` is sampled before any file is read, because a whole-second mtime cannot tell a
 // same-size edit made in that second (see `SourceFileStamp`).
-export function libraryDeclaredTypeNames(project Project) returns ByteArrayArray throws CompileError
+export function libraryDeclaredTypeNames(project Project) returns NameRoster throws CompileError
 	var found = MaxonSourcePathArray.create()
 
 	if not Directory.exists(project.stdlibDir) 'theTierDidNotArrive'
-		return ByteArrayArray.create()
+		return NameRoster.create()
 	end 'theTierDidNotArrive'
 
 	_ = try collectMaxonSources(project.stdlibDir, into: found)
 	let key = project.stdlibDir.toString()
 
-	if let held = try libraryNameRosters.get(key) 'aRosterOfTheseFiles'
+	if let held = try project.session.fileMemos.libraryNames.get(key) 'aRosterOfTheseFiles'
 		if held.describes(found) 'stillCurrent'
 			return held.names
 		end 'stillCurrent'
@@ -391,7 +361,7 @@ export function libraryDeclaredTypeNames(project Project) returns ByteArrayArray
 
 	let observedAt = WallClock.nowUnixSeconds() as Timestamp
 	var stamps = SourceFileStampMap.create()
-	var names = ByteArrayArray.create()
+	var names = NameRoster.create()
 
 	for path in found 'eachFile'
 		let info = try File.info(path) otherwise throw CompileError.readError(path)
@@ -404,11 +374,13 @@ export function libraryDeclaredTypeNames(project Project) returns ByteArrayArray
 		end 'eachName'
 	end 'eachFile'
 
-	libraryNameRosters.upsert(key, value: LibraryNameRoster.create(stamps, names: names))
-	return names
+	let roster = LibraryNameRoster.create(stamps, names: names)
+	let rostered = roster.names
+	project.session.fileMemos.libraryNames.upsert(key, value: roster)
+	return rostered
 end 'libraryDeclaredTypeNames'
 
-function declaredTypeNamesOfLibraryFile(project Project, path FilePath) returns ByteArrayArray throws CompileError
+function declaredTypeNamesOfLibraryFile(project Project, path FilePath) returns NameRoster throws CompileError
 	try loadOneSourceFile(project, path: path)
 	try markSharedTokenSource(project, path: path)
 

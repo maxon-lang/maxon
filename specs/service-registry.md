@@ -11,11 +11,28 @@ category: concurrency
 
 A service type that `implements I` is reached through `I.handle`, and a `T.handle` converts to `I.handle` at
 every door. A top-level `default Key = <expression>` declares the program-wide default for `Key`: a spawn
-of a service implementing the interface `Key`, or a value of the all-`let` type `Key`. `Key.current()`
+of a service implementing the interface `Key`, or a value of the type `Key`. `Key.current()`
 looks it up from any thread, and `Key.register(x)` replaces it for every later lookup. A default is built
 before `main` only when something reaches its key, and the program's own default wins over the stdlib's.
 `SharedValue with T` is the same live slot made at run time: `current()`, `publish(v)`, and the conditional
 `publish(v, replacing: old)`.
+
+A registry value and a `SharedValue`'s value are read by every thread at once. Their type may hold `var`
+fields, `Array`s and `Map`s, and every read — `Key.current()`, `cell.current()`, or a function returning
+either — hands back a deep read-only view of the published value, the same one a module-level `let`'s
+record gets. Every write through it is refused: binding it, or anything reached through it, to a `var`
+(E3078); calling a method that writes its receiver on it or on anything reached through it, or passing
+either to a parameter the callee writes or reassigns (E3159, naming the root binding the view was read
+into); storing it, or anything reached through it, into a `var` field (E3078), since the function that
+later writes the field cannot see where its value came from; and a field store through a record that may
+hold it (E3159). A store written on the read itself, `cell.current().inner.x = 9`, is not a statement at
+all: an assignment's target begins at a binding (E2001), so every write reaches the view through one. The
+view is the published record itself, so a read copies nothing; `.clone()` makes a value of one's own to
+change.
+
+A type whose graph a share walk cannot mark — one reaching an OS handle, a function value or a promise —
+cannot be a registry value or a `SharedValue` (E3171). A value handed to `register` or `publish` must be
+solely owned (E3174).
 
 ## Tests
 
@@ -644,10 +661,9 @@ line 2 (2)
 line 3 (3)
 ```
 
-<!-- test: a-table-send-in-a-handler-does-not-widen-the-global-rule -->
-A send through an interface handle reaches a bounded set of send stubs, never a closure: `bookKeeping`'s
-address is taken and it writes a module `var`, yet the handler that sends through `Greeter.handle` does not
-implicate it.
+<!-- test: a-module-var-beside-a-handler-that-sends-through-an-interface-handle -->
+A module-level `var` no message reaches is legal in a program that spawns (`green-thread-globals.md`, E3143):
+`Caller.call` sends through `Greeter.handle` and never reaches `bookKeeping`, so `ledger` is `main`'s alone.
 ```maxon
 var ledger = 0
 
@@ -2241,7 +2257,8 @@ typealias Integer = int(i64.min to i64.max)
 error E3170: <fragment>:19:9: the `default` for `Greeter` spawns `Stranger`, which does not implement `Greeter` — declare `type Stranger implements Greeter`, or spawn a type that does
 ```
 
-<!-- test: error.a-value-default-of-a-writable-type -->
+<!-- test: a-value-default-of-a-writable-type-is-read-by-a-service -->
+A `var` field does not keep a type out of the registry: every reader gets a read-only view of the value.
 ```maxon
 type Config
 	export var n as Integer
@@ -2253,13 +2270,32 @@ end 'Config'
 
 default Config = Config.create(3)
 
+type Reader
+	var reads as Integer
+
+	static function create() returns Self
+		return Self{reads: 0}
+	end 'create'
+
+	export function read() returns Integer
+		self.reads = self.reads + 1
+		return Config.current().n
+	end 'read'
+end 'Reader'
+
 function main() returns ExitCode
-	return Config.current().n as ExitCode
+	let reader = spawn Reader.create()
+	let seen = try await reader.read() otherwise 0
+	print("service={seen} main={Config.current().n}\n")
+	return seen as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```maxoncstderr
-error E3171: <fragment>:10:9: `Config` cannot be a registry value or a `SharedValue`: its field `n` is writable — every field must be a `let` of a type a share walk can mark
+```exitcode
+3
+```
+```stdout
+service=3 main=3
 ```
 
 <!-- test: error.defaults-that-reach-each-other -->
@@ -2364,7 +2400,8 @@ typealias Integer = int(i64.min to i64.max)
 error E3174: <fragment>:15:18: the value published to `Config` is not solely owned here — publish a `.clone()`
 ```
 
-<!-- test: error.a-shared-value-of-a-writable-type -->
+<!-- test: a-shared-value-of-a-writable-type-is-read-across-threads -->
+`next` is written while `main` still owns it, then published; the spawned reader sees each published value.
 ```maxon
 type Config
 	export var n as Integer
@@ -2376,14 +2413,232 @@ end 'Config'
 
 typealias ConfigCell = SharedValue with Config
 
+type Reader
+	let cell as ConfigCell
+
+	static function create(cell ConfigCell) returns Self
+		return Self{cell: cell}
+	end 'create'
+
+	export function read() returns Integer
+		return self.cell.current().n
+	end 'read'
+end 'Reader'
+
 function main() returns ExitCode
 	let cell = ConfigCell.create(Config.create(2))
-	return cell.current().n as ExitCode
+	let reader = spawn Reader.create(cell.clone())
+	let before = try await reader.read() otherwise 0
+	var next = Config.create(2)
+	next.n = next.n + 5
+	cell.publish(next)
+	let after = try await reader.read() otherwise 0
+	print("before={before} after={after}\n")
+	return (before * 10 + after) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+27
+```
+```stdout
+before=2 after=7
+```
+
+<!-- test: a-value-default-whose-let-field-holds-a-writable-type-is-read-by-a-service -->
+`tally` holds a `Tally` whose `count` is a `var`; a service reads through the whole path.
+```maxon
+type Tally
+	export var count as Integer
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Tally'
+
+type Config
+	export let tally as Tally
+
+	static function create(count Integer) returns Self
+		return Self{tally: Tally.create(count)}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(3)
+
+type Reader
+	var reads as Integer
+
+	static function create() returns Self
+		return Self{reads: 0}
+	end 'create'
+
+	export function count() returns Integer
+		self.reads = self.reads + 1
+		return Config.current().tally.count
+	end 'count'
+end 'Reader'
+
+function main() returns ExitCode
+	let reader = spawn Reader.create()
+	let seen = try await reader.count() otherwise 0
+	print("service={seen} main={Config.current().tally.count}\n")
+	return seen as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+3
+```
+```stdout
+service=3 main=3
+```
+
+<!-- test: a-shared-value-of-a-type-holding-an-array-is-read-across-threads -->
+An `Array` field is published like any other; the spawned reader walks it with a `for`.
+```maxon
+typealias Scores = Array with Integer
+
+type Board
+	export let scores as Scores
+
+	static function create(top Integer) returns Self
+		var scores = Scores.create()
+		scores.push(top)
+		scores.push(top * 2)
+		return Self{scores: scores}
+	end 'create'
+end 'Board'
+
+typealias BoardCell = SharedValue with Board
+
+type Summer
+	let cell as BoardCell
+
+	static function create(cell BoardCell) returns Self
+		return Self{cell: cell}
+	end 'create'
+
+	export function total() returns Integer
+		var sum = 0
+		for score in self.cell.current().scores 'eachScore'
+			sum = sum + score
+		end 'eachScore'
+		return sum
+	end 'total'
+end 'Summer'
+
+function main() returns ExitCode
+	let cell = BoardCell.create(Board.create(1))
+	let summer = spawn Summer.create(cell.clone())
+	let before = try await summer.total() otherwise 0
+	cell.publish(Board.create(4))
+	let after = try await summer.total() otherwise 0
+	print("before={before} after={after} count={cell.current().scores.count()}\n")
+	return (before * 10 + after) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+42
+```
+```stdout
+before=3 after=12 count=2
+```
+
+<!-- test: a-shared-value-of-a-type-holding-a-map-is-read-across-threads -->
+The same for a `Map`: the spawned reader looks a key up in the published value.
+```maxon
+typealias Ranks = Map with (String, Integer)
+
+type Ladder
+	export let ranks as Ranks
+
+	static function create(first Integer) returns Self
+		var ranks = Ranks.create()
+		ranks.upsert("first", value: first)
+		return Self{ranks: ranks}
+	end 'create'
+end 'Ladder'
+
+typealias LadderCell = SharedValue with Ladder
+
+type Lookup
+	let cell as LadderCell
+
+	static function create(cell LadderCell) returns Self
+		return Self{cell: cell}
+	end 'create'
+
+	export function first() returns Integer
+		return try self.cell.current().ranks.get("first") otherwise 0
+	end 'first'
+end 'Lookup'
+
+function main() returns ExitCode
+	let cell = LadderCell.create(Ladder.create(1))
+	let lookup = spawn Lookup.create(cell.clone())
+	let before = try await lookup.first() otherwise 0
+	cell.publish(Ladder.create(6))
+	let after = try await lookup.first() otherwise 0
+	print("before={before} after={after}\n")
+	return (before * 10 + after) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+16
+```
+```stdout
+before=1 after=6
+```
+
+<!-- test: error.a-value-default-whose-graph-reaches-a-function-value -->
+A function value is a closure record that owns what it captures, and no share walk can mark it.
+```maxon
+typealias Step = function(Integer) returns Integer
+
+type Config
+	export let step as Step
+
+	static function create() returns Self
+		return Self{step: function(n Integer) gives n + 1}
+	end 'create'
+end 'Config'
+
+default Config = Config.create()
+
+function main() returns ExitCode
+	return Config.current().step(2) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3171: <fragment>:10:24: `Config` cannot be a registry value or a `SharedValue`: its field `n` is writable — every field must be a `let` of a type a share walk can mark
+error E3171: <fragment>:12:9: `Config` cannot be a registry value or a `SharedValue`: it is a `Config` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
+```
+
+<!-- test: error.a-shared-value-whose-graph-reaches-a-function-value -->
+```maxon
+typealias Step = function(Integer) returns Integer
+
+type Config
+	export let step as Step
+
+	static function create() returns Self
+		return Self{step: function(n Integer) gives n + 1}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create())
+	return cell.current().step(2) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:12:24: `Config` cannot be a registry value or a `SharedValue`: it is a `Config` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
 ```
 
 <!-- test: a-cell-resident-var-is-published -->
@@ -2444,4 +2699,855 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3102: <fragment>:21:9: use of moved value 'next': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: error.a-field-store-through-a-shared-value-read -->
+**A READ IS A READ-ONLY VIEW.** `around` builds a record of its own around the `Inner` the shared value
+holds, so the field store through `w.inner` would change the value under every other reader.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+type Wrap
+	export var inner as Inner
+
+	static function around(cell ConfigCell) returns Self
+		return Self{inner: cell.current().inner}
+	end 'around'
+end 'Wrap'
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	var w = Wrap.around(cell)
+	w.inner.x = 9
+	return cell.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3159: <fragment>:31:2: cannot write through 'w.inner', which may be the record of a `SharedValue` or registry value a call handed back; use clone()
+```
+
+<!-- test: error.a-field-store-through-a-value-default-read -->
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+type Wrap
+	export var inner as Inner
+
+	static function around() returns Self
+		return Self{inner: Config.current().inner}
+	end 'around'
+end 'Wrap'
+
+function main() returns ExitCode
+	var w = Wrap.around()
+	w.inner.x = 9
+	return Config.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3159: <fragment>:30:2: cannot write through 'w.inner', which may be the record of a `SharedValue` or registry value a call handed back; use clone()
+```
+
+<!-- test: error.a-mutating-method-through-a-shared-value-read -->
+A method that writes its receiver is a write too, on anything reached through the read.
+```maxon
+typealias Items = Array with Integer
+
+type Config
+	export var items as Items
+
+	static function create() returns Self
+		var items = Items.create()
+		items.push(1)
+		return Self{items: items}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create())
+	cell.current().items.push(2)
+	return cell.current().items.count() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3159: <fragment>:18:23: cannot write through 'cell.current().items', which may be the record of a `SharedValue` or registry value a call handed back; use clone()
+```
+
+<!-- test: error.a-mutating-method-through-a-value-default-read -->
+```maxon
+typealias Items = Array with Integer
+
+type Config
+	export var items as Items
+
+	static function create() returns Self
+		var items = Items.create()
+		items.push(1)
+		return Self{items: items}
+	end 'create'
+end 'Config'
+
+default Config = Config.create()
+
+function main() returns ExitCode
+	Config.current().items.push(2)
+	return Config.current().items.count() as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3159: <fragment>:17:25: cannot write through 'Config.current().items', which may be the record of a `SharedValue` or registry value a call handed back; use clone()
+```
+
+<!-- test: error.a-shared-value-read-passed-to-a-writing-parameter -->
+`bump` writes its parameter, so handing it a record reached through the read is refused at the call.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function bump(i Inner)
+	i.x = 9
+end 'bump'
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	bump(cell.current().inner)
+	return cell.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3159: <fragment>:26:2: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'i' (in main); pass a clone()
+```
+
+<!-- test: error.a-value-default-read-passed-to-a-writing-parameter -->
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+function bump(i Inner)
+	i.x = 9
+end 'bump'
+
+function main() returns ExitCode
+	bump(Config.current().inner)
+	return Config.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3159: <fragment>:25:2: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'i' (in main); pass a clone()
+```
+
+<!-- test: error.a-var-bound-to-a-shared-value-read -->
+A `var` may write what it holds, so binding the read to one is refused at the binding.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	var w = cell.current()
+	w.inner.x = 9
+	return cell.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:22:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: error.a-var-bound-to-a-value-default-read -->
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+function main() returns ExitCode
+	var w = Config.current()
+	w.inner.x = 9
+	return Config.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:21:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: error.a-var-bound-to-a-field-of-a-shared-value-read -->
+A field reached through the read is the shared value's own storage too.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	var m = cell.current().inner
+	m.x = 9
+	return cell.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:22:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: error.a-var-bound-to-a-field-of-a-value-default-read -->
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+function main() returns ExitCode
+	var m = Config.current().inner
+	m.x = 9
+	return Config.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:21:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: a-var-bound-to-a-clone-of-a-shared-value-read-may-be-written -->
+**THE CONTROL.** A `.clone()` of the read is a value of its own; writing it leaves the published value as it was.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	var w = cell.current().clone()
+	w.inner.x = 9
+	print("copy={w.inner.x} shared={cell.current().inner.x}\n")
+	return cell.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+1
+```
+```stdout
+copy=9 shared=1
+```
+
+<!-- test: a-var-bound-to-a-clone-of-a-value-default-read-may-be-written -->
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+function main() returns ExitCode
+	var w = Config.current().clone()
+	w.inner.x = 9
+	print("copy={w.inner.x} registry={Config.current().inner.x}\n")
+	return Config.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+1
+```
+```stdout
+copy=9 registry=1
+```
+
+<!-- test: error.a-write-through-a-shared-value-read-a-function-returned -->
+The view rides the value through a function that returns it.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function read(cell ConfigCell) returns Config
+	return cell.current()
+end 'read'
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	var w = read(cell)
+	w.inner.x = 9
+	return cell.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:26:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: error.a-write-through-a-value-default-read-a-function-returned -->
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+function read() returns Config
+	return Config.current()
+end 'read'
+
+function main() returns ExitCode
+	var w = read()
+	w.inner.x = 9
+	return Config.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:25:6: cannot assign a value, which may share storage with a `SharedValue` or registry value, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: error.a-write-through-a-value-default-read-a-function-passed-on -->
+What the function returned is still the view, and so is anything handed on from it.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+function read() returns Config
+	return Config.current()
+end 'read'
+
+function bump(i Inner)
+	i.x = 9
+end 'bump'
+
+function main() returns ExitCode
+	bump(read().inner)
+	return Config.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3159: <fragment>:29:2: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'i' (in main); pass a clone()
+```
+
+<!-- test: error.a-module-var-initializer-may-not-take-a-shared-value-read -->
+A module-level `var` may write what it holds, so its initializer may not hand it the published record.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function seed() returns Config
+	let cell = ConfigCell.create(Config.create(1))
+	return cell.current()
+end 'seed'
+
+var g = seed()
+
+function main() returns ExitCode
+	g.inner.x = 9
+	return g.inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:25:5: the initializer of the module-level `var` `g` may hand it a record a `SharedValue` or registry value holds, through `seed` — every thread reads that record at once and a `var` may write what it holds, so the two may not share a record. Build the value from a clone() of the read, or make `g` a `let`
+```
+
+<!-- test: error.a-module-var-initializer-may-not-take-a-shared-value-read-a-module-let-holds -->
+The cell sits in a module-level `let`, but the record `current` hands back is the published value, not the `let`'s.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+type Holder
+	export let cell as ConfigCell
+
+	static function create() returns Self
+		return Self{cell: ConfigCell.create(Config.create(1))}
+	end 'create'
+
+	static function current() returns Config
+		return holder.cell.current()
+	end 'current'
+end 'Holder'
+
+let holder = Holder.create()
+var g = Holder.current()
+
+function main() returns ExitCode
+	g.inner.x = 9
+	return holder.cell.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:33:5: the initializer of the module-level `var` `g` may hand it a record a `SharedValue` or registry value holds, through `Holder.current` — every thread reads that record at once and a `var` may write what it holds, so the two may not share a record. Build the value from a clone() of the read, or make `g` a `let`
+```
+
+<!-- test: error.a-module-var-initializer-may-not-take-a-shared-value-read-through-two-calls -->
+`seed` names no `current`; the read comes back from `read`, one call further down.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function read(cell ConfigCell) returns Config
+	return cell.current()
+end 'read'
+
+function seed() returns Config
+	let cell = ConfigCell.create(Config.create(1))
+	return read(cell)
+end 'seed'
+
+var g = seed()
+
+function main() returns ExitCode
+	g.inner.x = 9
+	return g.inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:29:5: the initializer of the module-level `var` `g` may hand it a record a `SharedValue` or registry value holds, through `seed` — every thread reads that record at once and a `var` may write what it holds, so the two may not share a record. Build the value from a clone() of the read, or make `g` a `let`
+```
+
+<!-- test: error.a-shared-value-read-stored-into-a-var-field-is-refused-at-the-store -->
+A `var` field may be written by any function the record reaches, and the function that writes it cannot
+see where the field's value came from. So storing a record reached through a read into a `var` field is
+refused at the store: `adopt` puts the published `Inner` into `h.inner`, and `poke`, which knows only a
+`Holder`, would write it under every other reader.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+type Holder
+	export var inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create(0)}
+	end 'create'
+end 'Holder'
+
+function adopt(h Holder, cell ConfigCell)
+	h.inner = cell.current().inner
+end 'adopt'
+
+function poke(h Holder)
+	h.inner.x = 9
+end 'poke'
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	var h = Holder.create()
+	adopt(h, cell: cell)
+	poke(h)
+	return cell.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:29:2: cannot store a value, which may share storage with a `SharedValue` or registry value, into writable field 'h.inner'; use clone()
+```
+
+<!-- test: error.a-value-default-read-stored-into-a-var-field-is-refused-at-the-store -->
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export var inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+type Holder
+	export var inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create(0)}
+	end 'create'
+end 'Holder'
+
+function adopt(h Holder)
+	h.inner = Config.current().inner
+end 'adopt'
+
+function poke(h Holder)
+	h.inner.x = 9
+end 'poke'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	adopt(h)
+	poke(h)
+	return Config.current().inner.x as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3078: <fragment>:29:2: cannot store a value, which may share storage with a `SharedValue` or registry value, into writable field 'h.inner'; use clone()
+```
+
+<!-- test: a-clone-of-a-shared-value-read-stored-into-a-var-field-may-be-written -->
+The same store of a clone: `poke` writes the copy, and the published value keeps its `x`.
+```maxon
+type Inner
+	export var x as Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Config
+	export let inner as Inner
+
+	static function create(x Integer) returns Self
+		return Self{inner: Inner.create(x)}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+type Holder
+	export var inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create(0)}
+	end 'create'
+end 'Holder'
+
+function adopt(h Holder, cell ConfigCell)
+	h.inner = cell.current().inner.clone()
+end 'adopt'
+
+function poke(h Holder)
+	h.inner.x = 9
+end 'poke'
+
+function main() returns ExitCode
+	let cell = ConfigCell.create(Config.create(1))
+	var h = Holder.create()
+	adopt(h, cell: cell)
+	poke(h)
+	print("{cell.current().inner.x} {h.inner.x}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+1 9
+```
+
+<!-- test: error.a-shared-value-holding-an-os-handle-is-refused -->
+An OS handle is closed by its one owner, and a share walk cannot mark it for every thread at once.
+```maxon
+type Config
+	export let client as TcpClient
+
+	static function create(client TcpClient) returns Self
+		return Self{client: client}
+	end 'create'
+end 'Config'
+
+typealias ConfigCell = SharedValue with Config
+
+function publish(client TcpClient) returns ConfigCell
+	return ConfigCell.create(Config.create(client))
+end 'publish'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3171: <fragment>:10:24: `Config` cannot be a registry value or a `SharedValue`: it is a `Config` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
+```
+
+<!-- test: error.a-value-default-holding-a-promise-is-refused -->
+A promise owns a green thread that exactly one owner may reclaim, so it cannot be read by every thread.
+```maxon
+typealias IntPromise = Promise with Integer
+
+function work() returns Integer
+	Scheduler.yield()
+	return 7
+end 'work'
+
+type Config
+	export let pending as IntPromise
+
+	static function create() returns Self
+		return Self{pending: async work()}
+	end 'create'
+end 'Config'
+
+default Config = Config.create()
+
+function main() returns ExitCode
+	return (await Config.current().pending) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3171: <fragment>:17:9: `Config` cannot be a registry value or a `SharedValue`: it is a `Config` whose graph reaches a promise, which owns a green thread that exactly one owner may reclaim — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
 ```

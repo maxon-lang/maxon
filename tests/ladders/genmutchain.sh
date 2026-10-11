@@ -14,7 +14,8 @@
 # way to tell a depth term from a size term, which a ladder that doubles all three at once cannot.
 #
 # `main` allocates ONE set of `var` arrays and hands them to every chain head, so main's own body
-# is constant across the `chains` axis and the arguments are legal (a `let` would be E3019).
+# is constant across the `chains` axis and the arguments are legal (a `let` is read-only, so a writing
+# parameter refuses it).
 #
 # ⚠ The parameter/argument lists are LOOP-INVARIANT and are built ONCE. They were originally
 # `$(...)` helpers called per function, which forks a subshell per line — on Windows that made the

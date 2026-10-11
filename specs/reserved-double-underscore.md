@@ -417,7 +417,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3155: <fragment>:3:10: reference to undefined function 'maxon_force_segfault': that name is the compiler's own fault-probe entry point, which a program reaches through `__Builtins.forceSegfault()` and never by naming the symbol
+error E3155: <fragment>:3:10: reference to undefined function 'maxon_force_segfault': that name is the compiler's own fault-probe entry point, which no program reaches by naming the symbol
 ```
 
 <!-- test: error.function-backed-enum-case-cannot-name-a-reserved-entry -->

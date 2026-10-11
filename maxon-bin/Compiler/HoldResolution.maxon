@@ -1,0 +1,2294 @@
+// Each counted read is a `holdValue` marker and its `holdEnd`. Both are lowered to the retain and release,
+// or deleted when no op in the window between them may release or displace anything on the read's chain of
+// field and element hops back to its source. Every effect this file cannot place counts as a release.
+typealias HoldIndexColumn = Array with ElementIndex
+typealias HoldVerdictColumn = Array with HoldVerdict
+typealias HoldKindArray = Array with HoldKind
+typealias HoldKey = int(0 to u64.max)
+typealias HoldKeyColumn = Array with HoldKey
+typealias HoldWord = bits(64)
+typealias HoldWordColumn = Array with HoldWord
+typealias HoldEventIds = Map with (HoldKey, ElementIndex)
+
+let HoldBlockKeyShift = 32 as HoldKey
+let RecordKindShift = 32 as HoldKey
+let UnknownRecord = 0 as HoldKey
+let LeafRecord = 1 as HoldKey
+let StructRecordKind = 2 as HoldKey
+let NamedRecordKind = 3 as HoldKey
+let InstanceBaseRecordKind = 4 as HoldKey
+let ArrayRecordKind = 5 as HoldKey
+let ByteRecordKind = 6 as HoldKey
+let ElementEventFlag = 1152921504606846976 as HoldKey
+let FieldOffsetMask = 4095 as HoldKey
+let FieldKeyShift = 12 as HoldKey
+let EverythingEvent = 0 as ElementIndex
+let AnyElementEvent = 1 as ElementIndex
+let WildElementEvent = 2 as ElementIndex
+let OpaqueAnyElementEvent = 3 as ElementIndex
+let OpaqueWildElementEvent = 4 as ElementIndex
+let FirstInternedEvent = 5 as ElementIndex
+let OpaqueEventsMask = 24 as HoldWord
+let WordShift = 6 as ElementIndex
+let WordMask = 63 as ElementIndex
+let WordBits = 64 as ElementIndex
+let MaxChainDepth = 8 as ElementIndex
+let ReceiverValue = 0 as ValueId
+let AlwaysConflicts = 1 as HoldWord
+let TopConflicts = 2 as HoldWord
+let AnyElementConflicts = 4 as HoldWord
+let WildElementConflicts = 8 as HoldWord
+let ExitConflicts = 16 as HoldWord
+
+enum HoldVerdict
+	undecided
+	lowered
+	deleted
+end 'HoldVerdict'
+
+enum HoldOpClass
+	inert
+	load
+	loud
+	namedCall
+	store
+	dispatch
+	exit
+	marker
+	markerEnd
+end 'HoldOpClass'
+
+enum HoldEffect
+	none
+	everything
+	field
+	element
+	wildElement
+	opaqueElement
+	declaredCall
+	dispatch
+	release
+	releaseUnknown
+end 'HoldEffect'
+
+enum Instantiation
+	displaces
+	keepsOpaque
+	unknown
+end 'Instantiation'
+
+enum WindowScan
+	jumped
+	ended
+	open
+end 'WindowScan'
+
+type HoldJudge
+	export var signatures as ProgramSignatures
+	var typeNames as TypeNameInterner
+	export let byName as FuncIndexByName
+	var filePath as FilePath
+	export var valueTags as ValueTypeTagArray
+	export var valueNameIds as TypeNameIdArray
+	var operands as ValueIdArray
+	export var effectKey as HoldKey
+	export var effectCallee as ElementIndex
+	export var effectCandidates as NameRoster
+	var dispatch as WitnessDispatchTargets
+	export var instKind as Instantiation
+	export var instKeys as HoldKeyColumn
+	let columnContainers as NameRoster
+
+	static function create(signatures ProgramSignatures, typeNames TypeNameInterner, byName FuncIndexByName, functions IrFunctionArray, columnContainers NameRoster) returns HoldJudge
+		return Self{instKind: Instantiation.displaces, instKeys: HoldKeyColumn.create(), columnContainers: columnContainers, signatures: signatures, typeNames: typeNames, byName: byName, effectCandidates: NameRoster.create(), dispatch: WitnessDispatchTargets.create(signatures, functions: functions), filePath: FilePath from "", valueTags: ValueTypeTagArray.create(), valueNameIds: TypeNameIdArray.create(), operands: ValueIdArray.create(), effectKey: UnknownRecord, effectCallee: 0}
+	end 'create'
+
+	function beginFunction(func IrFunction)
+		self.filePath = func.sourceFilePath
+		self.valueTags = func.valueTags
+		self.valueNameIds = func.valueNameIds
+	end 'beginFunction'
+
+	function classify(op MaxonOp) returns HoldOpClass
+		return match op 'op'
+			call or
+			tryCall gives HoldOpClass.namedCall
+			holdValue gives HoldOpClass.marker
+			holdEnd gives HoldOpClass.markerEnd
+			storeIndirect gives HoldOpClass.store
+			loadIndirect gives HoldOpClass.load
+			witnessDispatch or
+			witnessTryDispatch gives HoldOpClass.dispatch
+			ret or
+			retVoid or
+			throwError or
+			propagateError gives HoldOpClass.exit
+			literal or
+			binOp or
+			unaryOp or
+			compare or
+			condBranch or
+			branch or
+			globalAddr or
+			stringLiteral or
+			panicAbort or
+			functionRef or
+			sizeofType or
+			constArrayLiteral or
+			switch or
+			panicAbortValue or
+			errorFlagEncode or
+			immortalStructRecord or
+			immortalStringTable or
+			covPoint or
+			existentialWitness gives HoldOpClass.inert
+			indirectCall or
+			asyncCall or
+			await or
+			tryAwait or
+			serviceSpawn or
+			serviceSend or
+			serviceReplyCell or
+			rawIntrinsic gives HoldOpClass.loud
+		end 'op'
+	end 'classify'
+
+	function effectOf(op MaxonOp, opClass HoldOpClass) returns HoldEffect
+		return match opClass 'class'
+			inert or
+			load or
+			exit or
+			marker gives HoldEffect.none
+			loud gives HoldEffect.everything
+			store gives self.storeEffect(op)
+			markerEnd gives self.releaseEffectOfValue(holdEndHeld(op))
+			namedCall gives self.callEffect(op)
+			dispatch gives self.dispatchEffect(op)
+		end 'class'
+	end 'effectOf'
+
+	function dispatchEffect(op MaxonOp) returns HoldEffect
+		self.effectCandidates = self.dispatchCandidates(op)
+
+		if self.effectCandidates.isEmpty() 'noImplementationIsKnown'
+			return HoldEffect.everything
+		end 'noImplementationIsKnown'
+
+		return HoldEffect.dispatch
+	end 'dispatchEffect'
+
+	function dispatchCandidates(op MaxonOp) returns NameRoster
+		return match op 'op'
+			witnessDispatch(_, _, _, methodIndex, interfaceDeclIndex, _, _) gives self.dispatch.candidatesFor(self.dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
+			witnessTryDispatch(_, _, _, _, methodIndex, interfaceDeclIndex, _) gives self.dispatch.candidatesFor(self.dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
+			default panic("HoldJudge.dispatchCandidates: handed an op that is not a witness dispatch")
+		end 'op'
+	end 'dispatchCandidates'
+
+	function storeEffect(op MaxonOp) returns HoldEffect
+		return match op 'op'
+			storeIndirect(addr, offset, _, valueType) gives self.fieldStoreEffect(addr, offset: offset, valueType: valueType)
+			default panic("HoldJudge.storeEffect: handed an op that is not a store")
+		end 'op'
+	end 'storeEffect'
+
+	function fieldStoreEffect(addr ValueId, offset ElementIndex, valueType MaxonType) returns HoldEffect
+		if not self.typeMayDisplaceAnOccupant(valueType) 'nothingDisplaced'
+			return HoldEffect.none
+		end 'nothingDisplaced'
+
+		let record = self.recordKeyOfValue(addr)
+
+		if record == UnknownRecord or record == LeafRecord 'anUnknownSlot'
+			return HoldEffect.everything
+		end 'anUnknownSlot'
+
+		self.effectKey = fieldEventKey(record, offset: offset)
+		return HoldEffect.field
+	end 'fieldStoreEffect'
+
+	function typeMayDisplaceAnOccupant(valueType MaxonType) returns bool
+		let tag = maxonTypeTag(valueType)
+
+		if tagOwnsNoHeapValue(tag) or tag == ValueTypeTag.exitCode or tag == ValueTypeTag.cstring 'aScalarWord'
+			return false
+		end 'aScalarWord'
+
+		if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.unresolved or tag == ValueTypeTag.void 'anUnknownOccupant'
+			return true
+		end 'anUnknownOccupant'
+
+		return self.signatures.typeOwesDropFor(valueType, from: self.typeNames, readerFilePath: self.filePath)
+	end 'typeMayDisplaceAnOccupant'
+
+	function releaseEffectOfValue(value ValueId) returns HoldEffect
+		let record = self.recordKeyOfValue(value)
+
+		if record == UnknownRecord 'anUnknownRecord'
+			return HoldEffect.releaseUnknown
+		end 'anUnknownRecord'
+
+		self.effectKey = record
+		return HoldEffect.release
+	end 'releaseEffectOfValue'
+
+	function callEffect(op MaxonOp) returns HoldEffect
+		let callee = maxonOpCalleeName(op)
+
+		if let index = try self.byName.get(callee) 'aDeclaredCallee'
+			self.effectCallee = index
+			return HoldEffect.declaredCall
+		end 'aDeclaredCallee'
+
+		return self.runtimeCallEffect(op, callee: callee)
+	end 'callEffect'
+
+	function runtimeCallEffect(op MaxonOp, callee ByteArray) returns HoldEffect
+		let mutation = arrayMutationOf(callee)
+
+		// A hold keeps the record it read, not the slot it read it from, so a mutation that grows or moves a
+		// buffer without releasing an occupant ends no hold.
+		if quietRuntimeCallee(callee) or mutation == ArrayMutation.pushesAnElement or mutation == ArrayMutation.appendsASource 'noRecordIsReleased'
+			return HoldEffect.none
+		end 'noRecordIsReleased'
+
+		if callee.equals(DropTypeParamName) or callee.equals(DropExistentialName) 'anUnknownRelease'
+			return HoldEffect.releaseUnknown
+		end 'anUnknownRelease'
+
+		if mutation == ArrayMutation.writesRawElements 'aRawElementWrite'
+			maxonOpOperandValues(op, into: self.operands)
+			return self.rawElementWriteEffect(try self.operands.get(0) otherwise return HoldEffect.wildElement)
+		end 'aRawElementWrite'
+
+		if mutation == ArrayMutation.movesLayout 'noOccupantMoves'
+			return HoldEffect.none
+		end 'noOccupantMoves'
+
+		if mutation != ArrayMutation.overwritesElements and mutation != ArrayMutation.removesElements and not releasesItsOperandCallee(callee) 'anUnknownEntry'
+			return HoldEffect.everything
+		end 'anUnknownEntry'
+
+		maxonOpOperandValues(op, into: self.operands)
+		let receiver = try self.operands.get(0) otherwise return HoldEffect.everything
+
+		if callee.equals(MmDecrefName) and (try self.valueTags.get(receiver) otherwise ValueTypeTag.void) == ValueTypeTag.integer 'aCellBox'
+			return HoldEffect.none
+		end 'aCellBox'
+
+		if releasesItsOperandCallee(callee) 'aRelease'
+			return self.releaseEffectOfValue(receiver)
+		end 'aRelease'
+
+		return self.elementDisplacementEffect(receiver)
+	end 'runtimeCallEffect'
+
+	function rawElementWriteEffect(receiver ValueId) returns HoldEffect
+		let tag = try self.valueTags.get(receiver) otherwise return HoldEffect.wildElement
+		let nameId = try self.valueNameIds.get(receiver) otherwise return HoldEffect.wildElement
+
+		if self.signatures.isArrayInstanceAt(tag, nameId: nameId) and self.elementsAreOpaque(nameId as GenericInstanceId) 'opaqueElements'
+			return HoldEffect.opaqueElement
+		end 'opaqueElements'
+
+		return HoldEffect.wildElement
+	end 'rawElementWriteEffect'
+
+	function elementsAreOpaque(instance GenericInstanceId) returns bool
+		return maxonTypeTag(self.signatures.containerElementType(instance)) == ValueTypeTag.typeParameter
+	end 'elementsAreOpaque'
+
+	function elementDisplacementEffect(receiver ValueId) returns HoldEffect
+		let record = self.recordKeyOfValue(receiver)
+
+		if record == LeafRecord 'aByteRecord'
+			return HoldEffect.none
+		end 'aByteRecord'
+
+		let tag = try self.valueTags.get(receiver) otherwise return HoldEffect.everything
+		let nameId = try self.valueNameIds.get(receiver) otherwise return HoldEffect.everything
+
+		if not self.signatures.isArrayInstanceAt(tag, nameId: nameId) 'notAnArray'
+			return HoldEffect.everything
+		end 'notAnArray'
+
+		let instance = nameId as GenericInstanceId
+
+		if not self.elementsMayHoldRecords(instance) 'trivialElements'
+			return HoldEffect.none
+		end 'trivialElements'
+
+		let element = self.elementKeyOf(instance)
+
+		if element == UnknownRecord and self.elementsAreOpaque(instance) 'opaqueElements'
+			return HoldEffect.opaqueElement
+		end 'opaqueElements'
+
+		if element == UnknownRecord 'wildElements'
+			return HoldEffect.wildElement
+		end 'wildElements'
+
+		self.effectKey = element or ElementEventFlag
+		return HoldEffect.element
+	end 'elementDisplacementEffect'
+
+	function elementsMayHoldRecords(instance GenericInstanceId) returns bool
+		let tag = maxonTypeTag(self.signatures.containerElementType(instance))
+
+		if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.unresolved or tag == ValueTypeTag.function 'anUnknownElement'
+			return true
+		end 'anUnknownElement'
+
+		return self.signatures.containerElementOwesDrop(instance)
+	end 'elementsMayHoldRecords'
+
+	function elementKeyOf(instance GenericInstanceId) returns HoldKey
+		return self.elementKeyOfType(self.signatures.containerElementType(instance))
+	end 'elementKeyOf'
+
+	function instantiate(op MaxonOp)
+		self.instKind = Instantiation.displaces
+		self.instKeys.clear()
+		maxonOpOperandValues(op, into: self.operands)
+
+		for value in self.operands 'eachOperand'
+			self.noteOperandReach(value)
+		end 'eachOperand'
+	end 'instantiate'
+
+	function noteOperandReach(value ValueId)
+		let tag = try self.valueTags.get(value) otherwise 'anUnknownOperand'
+			self.noteUnknownReach()
+			return
+		end 'anUnknownOperand'
+
+		let nameId = try self.valueNameIds.get(value) otherwise 'anUnknownOperand'
+			self.noteUnknownReach()
+			return
+		end 'anUnknownOperand'
+
+		if tagIsByteRecord(tag) 'aByteRecord'
+			return
+		end 'aByteRecord'
+
+		match tag 'tag'
+			genericInstance then self.noteInstanceReach(nameId as GenericInstanceId)
+			structRef then self.noteStructReach(nameId)
+			typeParameter then self.noteOpaqueReach()
+			interfaceRef or
+			function or
+			unresolved then self.noteUnknownReach()
+			boolean or
+			integer or
+			float or
+			exitCode or
+			void or
+			string or
+			character or
+			cstring or
+			named then break
+		end 'tag'
+	end 'noteOperandReach'
+
+	function noteStructReach(nameId TypeNameId)
+		let name = try self.typeNames.nameOf(nameId) otherwise 'anUnknownStruct'
+			self.noteUnknownReach()
+			return
+		end 'anUnknownStruct'
+
+		if self.signatures.structDeclaresTypeParams(name) 'aGenericRecord'
+			self.noteOpaqueReach()
+		end 'aGenericRecord'
+	end 'noteStructReach'
+
+	function noteInstanceReach(instance GenericInstanceId)
+		if self.signatures.isArrayInstance(instance) 'anArray'
+			if self.elementsMayHoldRecords(instance) 'recordElements'
+				self.noteElementReach(self.signatures.containerElementType(instance))
+			end 'recordElements'
+
+			return
+		end 'anArray'
+
+		if not self.isColumnContainer(instance) 'anUnderstoodContainer'
+			self.noteUnknownReach()
+			return
+		end 'anUnderstoodContainer'
+
+		for position in 0 upto self.signatures.genericInstanceArgCount(instance) 'eachTypeArgument'
+			self.noteElementReach(self.signatures.substitutedInstanceArg(instance, position: position))
+		end 'eachTypeArgument'
+	end 'noteInstanceReach'
+
+	function isColumnContainer(instance GenericInstanceId) returns bool
+		let base = self.signatures.genericInstanceBaseName(instance)
+
+		for known in self.columnContainers 'eachKnownBase'
+			if known.equals(base) 'sameBase'
+				return true
+			end 'sameBase'
+		end 'eachKnownBase'
+
+		return false
+	end 'isColumnContainer'
+
+	function noteElementReach(element MaxonType)
+		let tag = maxonTypeTag(element)
+
+		if tag == ValueTypeTag.typeParameter 'anOpaqueElement'
+			self.noteOpaqueReach()
+			return
+		end 'anOpaqueElement'
+
+		if tagOwnsNoHeapValue(tag) or tag == ValueTypeTag.exitCode or tag == ValueTypeTag.cstring or tag == ValueTypeTag.void 'aScalarWord'
+			return
+		end 'aScalarWord'
+
+		let key = self.elementKeyOfType(element)
+
+		if key == UnknownRecord 'anUnknownElement'
+			self.noteUnknownReach()
+			return
+		end 'anUnknownElement'
+
+		self.instKeys.push(key or ElementEventFlag)
+	end 'noteElementReach'
+
+	function noteOpaqueReach()
+		if self.instKind == Instantiation.displaces 'nothingWorseYet'
+			self.instKind = Instantiation.keepsOpaque
+		end 'nothingWorseYet'
+	end 'noteOpaqueReach'
+
+	function noteUnknownReach()
+		self.instKind = Instantiation.unknown
+	end 'noteUnknownReach'
+
+	function elementKeyOfType(element MaxonType) returns HoldKey
+		let tag = maxonTypeTag(element)
+
+		if tagIsByteRecord(tag) 'aByteRecordElement'
+			return ByteRecordKind shl RecordKindShift
+		end 'aByteRecordElement'
+
+		return match tag 'tag'
+			structRef gives (StructRecordKind shl RecordKindShift) or (typeNameIdOf(element) as HoldKey)
+			named gives (NamedRecordKind shl RecordKindShift) or (typeNameIdOf(element) as HoldKey)
+			genericInstance gives self.instanceRecordKey(genericInstanceIdOf(element))
+			boolean or
+			integer or
+			float or
+			exitCode or
+			unresolved or
+			void or
+			string or
+			function or
+			typeParameter or
+			character or
+			interfaceRef or
+			cstring gives UnknownRecord
+		end 'tag'
+	end 'elementKeyOfType'
+
+	function instanceRecordKey(instance GenericInstanceId) returns HoldKey
+		if self.signatures.isArrayInstance(instance) 'anArray'
+			return (ArrayRecordKind shl RecordKindShift) or (instance as HoldKey)
+		end 'anArray'
+
+		return (InstanceBaseRecordKind shl RecordKindShift) or (self.signatures.genericInstanceBaseId(instance) as HoldKey)
+	end 'instanceRecordKey'
+
+	function recordKeyOfValue(value ValueId) returns HoldKey
+		let tag = try self.valueTags.get(value) otherwise return UnknownRecord
+		let nameId = try self.valueNameIds.get(value) otherwise return UnknownRecord
+
+		if tagIsByteRecord(tag) 'aByteRecord'
+			return LeafRecord
+		end 'aByteRecord'
+
+		return match tag 'tag'
+			structRef gives (StructRecordKind shl RecordKindShift) or (nameId as HoldKey)
+			named gives (NamedRecordKind shl RecordKindShift) or (nameId as HoldKey)
+			genericInstance gives self.instanceRecordKey(nameId as GenericInstanceId)
+			boolean or
+			integer or
+			float or
+			exitCode or
+			unresolved or
+			void or
+			string or
+			function or
+			typeParameter or
+			character or
+			interfaceRef or
+			cstring gives UnknownRecord
+		end 'tag'
+	end 'recordKeyOfValue'
+end 'HoldJudge'
+
+function fieldEventKey(record HoldKey, offset ElementIndex) returns HoldKey
+	return (record shl FieldKeyShift) or ((offset as HoldKey) and FieldOffsetMask)
+end 'fieldEventKey'
+
+function quietRuntimeCallee(callee ByteArray) returns bool
+	if not wearsTheCompilerInternalPrefix(callee) 'notACompilerEntry'
+		return false
+	end 'notACompilerEntry'
+
+	return containerReadCallee(callee) or pureComputationCallee(callee) or bytesStartWith(callee, prefix: ClonerPrefix) or callee.equals(SharedValueCurrentName) or callee.equals(ThreadCpuTicksName) or callee.equals(GtNowNsName) or callee.equals(DsLogEnabledMarkerName) or callee.equals(DebugStreamNameIdMarkerName) or callee.equals(TerminalStdoutWantsColorName) or callee.equals(MmAllocName) or callee.equals(StrCopyName) or callee.equals(StrCloneName) or callee.equals(MmOwnName) or callee.equals(MmOwnDeepName) or callee.equals(ManagedCloneName) or callee.equals(ManagedCloneManagedName) or callee.equals(MmRetainName) or callee.equals(MmIncrefName) or callee.equals(StrRetainName) or callee.equals(ManagedRetainName) or callee.equals(ManagedIncrefName) or callee.equals(RetainTypeParamName) or callee.equals(RetainExistentialName)
+end 'quietRuntimeCallee'
+
+export function indexedElementReadCallee(callee ByteArray) returns bool
+	return callee.equals(ManagedGetName) or callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedFirstName)
+end 'indexedElementReadCallee'
+
+export function borrowedElementReadCallee(callee ByteArray) returns bool
+	return indexedElementReadCallee(callee) or callee.equals(ManagedCursorCurrentName) or callee.equals(ManagedCursorPeekName) or callee.equals(ListNodeValueName)
+end 'borrowedElementReadCallee'
+
+module function releasesItsOperandCallee(callee ByteArray) returns bool
+	return wearsTheCompilerInternalPrefix(callee) and (callee.equals(StrDecrefName) or callee.equals(MmDecrefName) or callee.equals(ManagedDecrefName) or callee.equals(ManagedCursorDecrefName) or callee.equals(ListDecrefName) or callee.equals(ListNodeDecrefName) or bytesStartWith(callee, prefix: DestructorPrefix))
+end 'releasesItsOperandCallee'
+
+function holdFunctionAt(funcNames FunctionNameIndex, index ElementIndex) returns IrFunction
+	return try funcNames.functions.get(index) otherwise panic("holdFunctionAt: functions.get OOB at {index}")
+end 'holdFunctionAt'
+
+enum HoldReachState
+	uncomputed
+	cut
+	whole
+end 'HoldReachState'
+
+typealias HoldReachStateColumn = Array with HoldReachState
+
+type HoldEventSummary
+	export let eventIds as HoldEventIds
+	let flags as HoldWordColumn
+	let callers as CsrGraph
+	let ranks as CsrColumn
+	let storers as CsrGraph
+	var reachStates as HoldReachStateColumn
+	var reachFloors as HoldIndexColumn
+	var reachBegin as HoldIndexColumn
+	var reachEnd as HoldIndexColumn
+	var reachNodes as HoldIndexColumn
+	var reachStamps as HoldIndexColumn
+	var reachStamp as ElementIndex
+	var reachQueue as HoldIndexColumn
+
+	static function create(eventIds HoldEventIds, flags HoldWordColumn, callers CsrGraph, ranks CsrColumn, storers CsrGraph) returns HoldEventSummary
+		var reachStates = HoldReachStateColumn.create()
+		reachStates.growFilled(eventIds.count(), value: HoldReachState.uncomputed)
+		var reachFloors = HoldIndexColumn.create()
+		reachFloors.growFilled(eventIds.count(), value: 0)
+		var reachBegin = HoldIndexColumn.create()
+		reachBegin.growFilled(eventIds.count(), value: 0)
+		var reachEnd = HoldIndexColumn.create()
+		reachEnd.growFilled(eventIds.count(), value: 0)
+		var reachStamps = HoldIndexColumn.create()
+		reachStamps.growFilled(flags.count(), value: 0)
+		return Self{eventIds: eventIds, flags: flags, callers: callers, ranks: ranks, storers: storers, reachStates: reachStates, reachFloors: reachFloors, reachBegin: reachBegin, reachEnd: reachEnd, reachNodes: HoldIndexColumn.create(), reachStamps: reachStamps, reachStamp: 0, reachQueue: HoldIndexColumn.create()}
+	end 'create'
+
+	function rowFlags(row ElementIndex) returns HoldWord
+		return try self.flags.get(row) otherwise panic("HoldEventSummary.rowFlags: no row {row}")
+	end 'rowFlags'
+
+	function rowHasEvent(row ElementIndex, event ElementIndex) returns bool
+		if event >= FirstInternedEvent 'anInternedEvent'
+			panic("HoldEventSummary.rowHasEvent: event {event} is interned, which only `rowReaches` can answer")
+		end 'anInternedEvent'
+
+		return (self.rowFlags(row) and eventBit(event)) != 0
+	end 'rowHasEvent'
+
+	function rowIsEmpty(row ElementIndex) returns bool
+		return self.rowFlags(row) == 0
+	end 'rowIsEmpty'
+
+	function rowHasOpaqueEvent(row ElementIndex) returns bool
+		return (self.rowFlags(row) and OpaqueEventsMask) != 0
+	end 'rowHasOpaqueEvent'
+
+	function rowHasEventOutsideOpaque(row ElementIndex) returns bool
+		return (self.rowFlags(row) and not OpaqueEventsMask) != 0
+	end 'rowHasEventOutsideOpaque'
+
+	function rowReaches(row ElementIndex, event ElementIndex, prober ElementIndex) returns bool
+		let slot = event - FirstInternedEvent
+		self.ensureReach(slot, floor: self.reachFloorFor(row, prober: prober))
+		return self.reachContains(slot, row: row)
+	end 'rowReaches'
+
+	function reachFloorFor(row ElementIndex, prober ElementIndex) returns ElementIndex
+		let rowRank = try self.ranks.get(row) otherwise panic("HoldEventSummary.reachFloorFor: no rank for row {row}")
+		let proberRank = try self.ranks.get(prober) otherwise panic("HoldEventSummary.reachFloorFor: no rank for function {prober}")
+
+		if proberRank < rowRank 'theProberIsTheShallowerOne'
+			return proberRank
+		end 'theProberIsTheShallowerOne'
+
+		return rowRank
+	end 'reachFloorFor'
+
+	function ensureReach(slot ElementIndex, floor ElementIndex)
+		let state = try self.reachStates.get(slot) otherwise panic("HoldEventSummary.ensureReach: no event slot {slot}")
+
+		if state == HoldReachState.uncomputed 'firstAsk'
+			self.computeReach(slot, floor: floor, state: HoldReachState.cut)
+			return
+		end 'firstAsk'
+
+		if state == HoldReachState.cut and floor < (try self.reachFloors.get(slot) otherwise panic("HoldEventSummary.ensureReach: reachFloors.get OOB at {slot}")) 'aDeeperAsk'
+			self.computeReach(slot, floor: 0, state: HoldReachState.whole)
+		end 'aDeeperAsk'
+	end 'ensureReach'
+
+	function computeReach(slot ElementIndex, floor ElementIndex, state HoldReachState)
+		self.reachStamp = self.reachStamp + 1
+		self.reachQueue.clear()
+
+		for k in 0 upto self.storers.degree(slot as CsrIndex) 'eachStorer'
+			self.visitReach(self.storers.neighbour(slot as CsrIndex, k: k), floor: floor)
+		end 'eachStorer'
+
+		var head = 0 as ElementIndex
+
+		while head < self.reachQueue.count() 'eachReached'
+			let node = try self.reachQueue.get(head) otherwise panic("HoldEventSummary.computeReach: reachQueue.get OOB at {head}")
+			head = head + 1
+
+			for k in 0 upto self.callers.degree(node as CsrIndex) 'eachCaller'
+				self.visitReach(self.callers.neighbour(node as CsrIndex, k: k), floor: floor)
+			end 'eachCaller'
+		end 'eachReached'
+
+		self.reachQueue.sort()
+		try self.reachBegin.set(slot, value: self.reachNodes.count()) otherwise panic("HoldEventSummary.computeReach: reachBegin.set OOB at {slot}")
+
+		for node in self.reachQueue 'eachMember'
+			self.reachNodes.push(node)
+		end 'eachMember'
+
+		try self.reachEnd.set(slot, value: self.reachNodes.count()) otherwise panic("HoldEventSummary.computeReach: reachEnd.set OOB at {slot}")
+		try self.reachFloors.set(slot, value: floor) otherwise panic("HoldEventSummary.computeReach: reachFloors.set OOB at {slot}")
+		try self.reachStates.set(slot, value: state) otherwise panic("HoldEventSummary.computeReach: reachStates.set OOB at {slot}")
+	end 'computeReach'
+
+	function visitReach(node ElementIndex, floor ElementIndex)
+		if (try self.ranks.get(node) otherwise panic("HoldEventSummary.visitReach: no rank for function {node}")) < floor 'aboveEveryProber'
+			return
+		end 'aboveEveryProber'
+
+		if (try self.reachStamps.get(node) otherwise panic("HoldEventSummary.visitReach: reachStamps.get OOB at {node}")) == self.reachStamp 'alreadyReached'
+			return
+		end 'alreadyReached'
+
+		try self.reachStamps.set(node, value: self.reachStamp) otherwise panic("HoldEventSummary.visitReach: reachStamps.set OOB at {node}")
+		self.reachQueue.push(node)
+	end 'visitReach'
+
+	function reachContains(slot ElementIndex, row ElementIndex) returns bool
+		var low = try self.reachBegin.get(slot) otherwise panic("HoldEventSummary.reachContains: reachBegin.get OOB at {slot}")
+		var high = try self.reachEnd.get(slot) otherwise panic("HoldEventSummary.reachContains: reachEnd.get OOB at {slot}")
+
+		while low < high 'search'
+			let middle = low + ((high - low) shr 1)
+			let member = try self.reachNodes.get(middle) otherwise panic("HoldEventSummary.reachContains: reachNodes.get OOB at {middle}")
+
+			if member == row 'found'
+				return true
+			end 'found'
+
+			if member < row 'below'
+				low = middle + 1
+			end 'below' else 'atOrAbove'
+				high = middle
+			end 'atOrAbove'
+		end 'search'
+
+		return false
+	end 'reachContains'
+end 'HoldEventSummary'
+
+enum HoldEdgeMode
+	pending
+	keepsOpaque
+	displaces
+	unknown
+end 'HoldEdgeMode'
+
+typealias HoldEdgeModeColumn = Array with HoldEdgeMode
+
+type HoldEventBuilder
+	var directBegin as HoldIndexColumn
+	var directEvents as HoldIndexColumn
+	var topFlags as BoolArray
+	var callers as CsrColumn
+	var callees as CsrColumn
+	var edgeIds as CsrColumn
+	var edgeOps as HoldIndexColumn
+	var edgeDispatch as BoolArray
+	var edgeModes as HoldEdgeModeColumn
+	var edgeEventBegin as HoldIndexColumn
+	var edgeEventEnd as HoldIndexColumn
+	var edgeEvents as HoldIndexColumn
+
+	static function create() returns HoldEventBuilder
+		return Self{directBegin: HoldIndexColumn.create(), directEvents: HoldIndexColumn.create(), topFlags: BoolArray.create(), callers: CsrColumn.create(), callees: CsrColumn.create(), edgeIds: CsrColumn.create(), edgeOps: HoldIndexColumn.create(), edgeDispatch: BoolArray.create(), edgeModes: HoldEdgeModeColumn.create(), edgeEventBegin: HoldIndexColumn.create(), edgeEventEnd: HoldIndexColumn.create(), edgeEvents: HoldIndexColumn.create()}
+	end 'create'
+
+	function internEvent(eventIds HoldEventIds, key HoldKey) returns ElementIndex
+		if let known = try eventIds.get(key) 'alreadyInterned'
+			return known
+		end 'alreadyInterned'
+
+		let fresh = FirstInternedEvent + eventIds.count()
+		eventIds.upsert(key, value: fresh)
+		return fresh
+	end 'internEvent'
+
+	function scanFunction(module MaxonModule, func IrFunction, callerIndex ElementIndex, judge HoldJudge, runtimeTier FunctionNameSet, eventIds HoldEventIds) returns bool
+		if bodyIsUnreadable(func) or runtimeTier.contains(func.name) 'noBodyToProveAnythingAbout'
+			return true
+		end 'noBodyToProveAnythingAbout'
+
+		judge.beginFunction(func)
+		var reachesEverything = false
+
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("HoldEventBuilder.scanFunction: blockRef from func.blockRefs not in module.blocks")
+
+			for opIdx in block.opRefs 'eachOp'
+				if self.noteOp(module.getOp(opIdx), opIdx: opIdx, callerIndex: callerIndex, judge: judge, eventIds: eventIds) 'everything'
+					reachesEverything = true
+				end 'everything'
+			end 'eachOp'
+
+			if block.hasTerminatorOp() and self.noteOp(module.getOp(block.terminatorIndex()), opIdx: block.terminatorIndex(), callerIndex: callerIndex, judge: judge, eventIds: eventIds) 'everythingAtTheTerminator'
+				reachesEverything = true
+			end 'everythingAtTheTerminator'
+		end 'eachBlock'
+
+		return reachesEverything
+	end 'scanFunction'
+
+	function noteOp(op MaxonOp, opIdx ElementIndex, callerIndex ElementIndex, judge HoldJudge, eventIds HoldEventIds) returns bool
+		return match judge.effectOf(op, opClass: judge.classify(op)) 'effect'
+			everything gives true
+			none or
+			release or
+			releaseUnknown gives false
+			field gives self.noteEvent(eventIds, key: judge.effectKey)
+			element gives self.noteElementEvent(eventIds, key: judge.effectKey)
+			wildElement gives self.noteWildElementEvent()
+			opaqueElement gives self.noteOpaqueElementEvent()
+			declaredCall gives self.noteEdge(callerIndex, callee: judge.effectCallee, opIdx: opIdx, dispatched: false)
+			dispatch gives self.noteCandidateEdges(callerIndex, opIdx: opIdx, judge: judge)
+		end 'effect'
+	end 'noteOp'
+
+	function noteCandidateEdges(callerIndex ElementIndex, opIdx ElementIndex, judge HoldJudge) returns bool
+		for candidate in judge.effectCandidates 'eachCandidate'
+			if let index = try judge.byName.get(candidate) 'aDeclaredImplementation'
+				_ = self.noteEdge(callerIndex, callee: index, opIdx: opIdx, dispatched: true)
+				continue
+			end 'aDeclaredImplementation'
+
+			if not quietRuntimeCallee(candidate) 'anUnknownImplementation'
+				return true
+			end 'anUnknownImplementation'
+		end 'eachCandidate'
+
+		return false
+	end 'noteCandidateEdges'
+
+	function noteEvent(eventIds HoldEventIds, key HoldKey) returns bool
+		self.directEvents.push(self.internEvent(eventIds, key: key))
+		return false
+	end 'noteEvent'
+
+	function noteElementEvent(eventIds HoldEventIds, key HoldKey) returns bool
+		self.directEvents.push(AnyElementEvent)
+		return self.noteEvent(eventIds, key: key)
+	end 'noteElementEvent'
+
+	function noteWildElementEvent() returns bool
+		self.directEvents.push(AnyElementEvent)
+		self.directEvents.push(WildElementEvent)
+		return false
+	end 'noteWildElementEvent'
+
+	function noteOpaqueElementEvent() returns bool
+		self.directEvents.push(OpaqueAnyElementEvent)
+		self.directEvents.push(OpaqueWildElementEvent)
+		return false
+	end 'noteOpaqueElementEvent'
+
+	function noteEdge(callerIndex ElementIndex, callee ElementIndex, opIdx ElementIndex, dispatched bool) returns bool
+		self.edgeIds.push(self.callers.count())
+		self.callers.push(callerIndex)
+		self.callees.push(callee)
+		self.edgeOps.push(opIdx)
+		self.edgeDispatch.push(dispatched)
+		return false
+	end 'noteEdge'
+
+	function build(module MaxonModule, funcNames FunctionNameIndex, judge HoldJudge, runtimeTier FunctionNameSet) returns HoldEventSummary
+		let functionCount = funcNames.functions.count()
+		var eventIds = HoldEventIds.create()
+
+		for i in 0 upto functionCount 'eachFunc'
+			self.directBegin.push(self.directEvents.count())
+			self.topFlags.push(self.scanFunction(module, func: holdFunctionAt(funcNames, index: i), callerIndex: i, judge: judge, runtimeTier: runtimeTier, eventIds: eventIds))
+		end 'eachFunc'
+
+		self.directBegin.push(self.directEvents.count())
+
+		var flags = HoldWordColumn.create()
+		flags.growFilled(functionCount, value: 0)
+
+		for i in 0 upto functionCount 'eachRow'
+			self.seedRow(flags, row: i)
+		end 'eachRow'
+
+		let graph = buildCsr(self.callers, to: self.callees, nodeCount: functionCount as CsrIndex)
+		self.propagate(flags, graph: graph, module: module, funcNames: funcNames, judge: judge, eventIds: eventIds)
+
+		let callersOf = buildCsr(self.callees, to: self.callers, nodeCount: functionCount as CsrIndex)
+		let storers = self.eventStorers(eventIds)
+		return HoldEventSummary.create(eventIds, flags: flags, callers: callersOf, ranks: callerFirstRanks(graph, callers: callersOf), storers: storers)
+	end 'build'
+
+	function seedRow(flags HoldWordColumn, row ElementIndex)
+		if (try self.topFlags.get(row) otherwise panic("HoldEventBuilder.seedRow: topFlags.get OOB at {row}")) 'everything'
+			_ = raiseRowFlags(flags, row: row, bits: eventBit(EverythingEvent))
+		end 'everything'
+
+		let first = try self.directBegin.get(row) otherwise panic("HoldEventBuilder.seedRow: directBegin.get OOB at {row}")
+		let stop = try self.directBegin.get(row + 1) otherwise panic("HoldEventBuilder.seedRow: directBegin.get OOB at {row + 1}")
+
+		for k in first upto stop 'eachDirectEvent'
+			_ = raiseRowFlags(flags, row: row, bits: eventBit(try self.directEvents.get(k) otherwise panic("HoldEventBuilder.seedRow: directEvents.get OOB at {k}")))
+		end 'eachDirectEvent'
+	end 'seedRow'
+
+	function eventStorers(eventIds HoldEventIds) returns CsrGraph
+		var events = CsrColumn.create()
+		var nodes = CsrColumn.create()
+		let rowCount = self.directBegin.count() - 1
+
+		for node in 0 upto rowCount 'eachNode'
+			let first = try self.directBegin.get(node) otherwise panic("HoldEventBuilder.eventStorers: directBegin.get OOB at {node}")
+			let stop = try self.directBegin.get(node + 1) otherwise panic("HoldEventBuilder.eventStorers: directBegin.get OOB at {node + 1}")
+
+			for k in first upto stop 'eachDirectEvent'
+				noteStorer(try self.directEvents.get(k) otherwise panic("HoldEventBuilder.eventStorers: directEvents.get OOB at {k}"), node: node, events: events, nodes: nodes)
+			end 'eachDirectEvent'
+		end 'eachNode'
+
+		for edge in 0 upto self.edgeIds.count() 'eachEdge'
+			let first = try self.edgeEventBegin.get(edge) otherwise panic("HoldEventBuilder.eventStorers: edgeEventBegin.get OOB at {edge}")
+			let stop = try self.edgeEventEnd.get(edge) otherwise panic("HoldEventBuilder.eventStorers: edgeEventEnd.get OOB at {edge}")
+			let caller = try self.callers.get(edge) otherwise panic("HoldEventBuilder.eventStorers: callers.get OOB at {edge}")
+
+			for k in first upto stop 'eachEdgeEvent'
+				noteStorer(try self.edgeEvents.get(k) otherwise panic("HoldEventBuilder.eventStorers: edgeEvents.get OOB at {k}"), node: caller, events: events, nodes: nodes)
+			end 'eachEdgeEvent'
+		end 'eachEdge'
+
+		return buildCsr(events, to: nodes, nodeCount: eventIds.count() as CsrIndex)
+	end 'eventStorers'
+
+	function propagate(flags HoldWordColumn, graph CsrGraph, module MaxonModule, funcNames FunctionNameIndex, judge HoldJudge, eventIds HoldEventIds)
+		let edgeGraph = buildCsr(self.callers, to: self.edgeIds, nodeCount: graph.nodeCount())
+		let order = postorderOf(graph)
+
+		self.edgeModes.growFilled(self.edgeIds.count(), value: HoldEdgeMode.pending)
+		self.edgeEventBegin.growFilled(self.edgeIds.count(), value: 0)
+		self.edgeEventEnd.growFilled(self.edgeIds.count(), value: 0)
+
+		var changed = true
+
+		while changed 'untilStable'
+			changed = false
+
+			for node in order 'eachCalleeFirst'
+				for k in 0 upto graph.degree(node) 'eachCallee'
+					if self.mergeEdge(flags, node: node, callee: graph.neighbour(node, k: k), edge: edgeGraph.neighbour(node, k: k), module: module, funcNames: funcNames, judge: judge, eventIds: eventIds) 'grew'
+						changed = true
+					end 'grew'
+				end 'eachCallee'
+			end 'eachCalleeFirst'
+		end 'untilStable'
+	end 'propagate'
+
+	function mergeEdge(flags HoldWordColumn, node ElementIndex, callee ElementIndex, edge ElementIndex, module MaxonModule, funcNames FunctionNameIndex, judge HoldJudge, eventIds HoldEventIds) returns bool
+		let calleeFlags = try flags.get(callee) otherwise panic("HoldEventBuilder.mergeEdge: flags.get OOB at {callee}")
+
+		if calleeFlags == 0 'nothingToMerge'
+			return false
+		end 'nothingToMerge'
+
+		let grew = raiseRowFlags(flags, row: node, bits: calleeFlags and not OpaqueEventsMask)
+
+		if (calleeFlags and OpaqueEventsMask) == 0 'nothingToInstantiate'
+			return grew
+		end 'nothingToInstantiate'
+
+		var mode = try self.edgeModes.get(edge) otherwise panic("HoldEventBuilder.mergeEdge: edgeModes.get OOB at {edge}")
+
+		if mode == HoldEdgeMode.pending 'firstTimeSeen'
+			mode = self.instantiateEdge(edge, node: node, module: module, funcNames: funcNames, judge: judge, eventIds: eventIds)
+			try self.edgeModes.set(edge, value: mode) otherwise panic("HoldEventBuilder.mergeEdge: edgeModes.set OOB at {edge}")
+		end 'firstTimeSeen'
+
+		let raised = match mode 'mode'
+			keepsOpaque gives raiseRowFlags(flags, row: node, bits: OpaqueEventsMask)
+			unknown gives raiseRowFlags(flags, row: node, bits: eventBit(AnyElementEvent) or eventBit(WildElementEvent))
+			displaces gives self.raiseEdgeEvents(flags, node: node, edge: edge)
+			default panic("HoldEventBuilder.mergeEdge: edge {edge} is still pending after it was instantiated")
+		end 'mode'
+
+		return raised or grew
+	end 'mergeEdge'
+
+	function raiseEdgeEvents(flags HoldWordColumn, node ElementIndex, edge ElementIndex) returns bool
+		let first = try self.edgeEventBegin.get(edge) otherwise panic("HoldEventBuilder.raiseEdgeEvents: edgeEventBegin.get OOB at {edge}")
+		let stop = try self.edgeEventEnd.get(edge) otherwise panic("HoldEventBuilder.raiseEdgeEvents: edgeEventEnd.get OOB at {edge}")
+
+		if first == stop 'nothingDisplaceable'
+			return false
+		end 'nothingDisplaceable'
+
+		return raiseRowFlags(flags, row: node, bits: eventBit(AnyElementEvent) or eventBit(FirstInternedEvent))
+	end 'raiseEdgeEvents'
+
+	function instantiateEdge(edge ElementIndex, node ElementIndex, module MaxonModule, funcNames FunctionNameIndex, judge HoldJudge, eventIds HoldEventIds) returns HoldEdgeMode
+		let dispatched = try self.edgeDispatch.get(edge) otherwise panic("HoldEventBuilder.instantiateEdge: edgeDispatch.get OOB at {edge}")
+
+		if dispatched 'aDispatchedCall'
+			return HoldEdgeMode.unknown
+		end 'aDispatchedCall'
+
+		judge.beginFunction(holdFunctionAt(funcNames, index: node))
+		judge.instantiate(module.getOp(try self.edgeOps.get(edge) otherwise panic("HoldEventBuilder.instantiateEdge: edgeOps.get OOB at {edge}")))
+
+		match judge.instKind 'kind'
+			keepsOpaque then return HoldEdgeMode.keepsOpaque
+			unknown then return HoldEdgeMode.unknown
+			displaces then break
+		end 'kind'
+
+		try self.edgeEventBegin.set(edge, value: self.edgeEvents.count()) otherwise panic("HoldEventBuilder.instantiateEdge: edgeEventBegin.set OOB at {edge}")
+
+		for key in judge.instKeys 'eachInternedKey'
+			self.edgeEvents.push(self.internEvent(eventIds, key: key))
+		end 'eachInternedKey'
+
+		try self.edgeEventEnd.set(edge, value: self.edgeEvents.count()) otherwise panic("HoldEventBuilder.instantiateEdge: edgeEventEnd.set OOB at {edge}")
+		return HoldEdgeMode.displaces
+	end 'instantiateEdge'
+end 'HoldEventBuilder'
+
+function noteStorer(event ElementIndex, node ElementIndex, events CsrColumn, nodes CsrColumn)
+	if event < FirstInternedEvent 'aNamedEvent'
+		return
+	end 'aNamedEvent'
+
+	events.push(event - FirstInternedEvent)
+	nodes.push(node)
+end 'noteStorer'
+
+function eventBit(event ElementIndex) returns HoldWord
+	if event < FirstInternedEvent 'aNamedEvent'
+		return 1 shl event
+	end 'aNamedEvent'
+
+	return 1 shl FirstInternedEvent
+end 'eventBit'
+
+function raiseRowFlags(flags HoldWordColumn, row ElementIndex, bits HoldWord) returns bool
+	let word = try flags.get(row) otherwise panic("raiseRowFlags: flags.get OOB at {row}")
+	let raised = word or bits
+
+	if raised == word 'alreadyRaised'
+		return false
+	end 'alreadyRaised'
+
+	try flags.set(row, value: raised) otherwise panic("raiseRowFlags: flags.set OOB at {row}")
+	return true
+end 'raiseRowFlags'
+
+type HoldStampedIndex
+	var stamps as HoldIndexColumn
+	var values as HoldIndexColumn
+
+	static function create() returns HoldStampedIndex
+		return Self{stamps: HoldIndexColumn.create(), values: HoldIndexColumn.create()}
+	end 'create'
+
+	function valueAt(index ElementIndex, stamp ElementIndex) returns ElementIndex throws AbsentError
+		if (try self.stamps.get(index) otherwise throw AbsentError.absent) != stamp 'anotherStampsEntry'
+			throw AbsentError.absent
+		end 'anotherStampsEntry'
+
+		return try self.values.get(index) otherwise panic("HoldStampedIndex.valueAt: values.get OOB at {index} — the two columns grow together")
+	end 'valueAt'
+
+	function record(index ElementIndex, value ElementIndex, stamp ElementIndex)
+		self.stamps.growFilled(index + 1, value: 0)
+		self.values.growFilled(index + 1, value: 0)
+		try self.stamps.set(index, value: stamp) otherwise panic("HoldStampedIndex.record: stamps.set OOB at {index} after growing past it")
+		try self.values.set(index, value: value) otherwise panic("HoldStampedIndex.record: values.set OOB at {index} after growing past it")
+	end 'record'
+end 'HoldStampedIndex'
+
+type HoldTally
+	export var lowered as OrdinalTally
+	export var deleted as OrdinalTally
+
+	static function create() returns HoldTally
+		return Self{lowered: OrdinalTally.create(HoldKind.allCases.count()), deleted: OrdinalTally.create(HoldKind.allCases.count())}
+	end 'create'
+end 'HoldTally'
+
+type HoldResolver
+	var project as Project
+	var module as MaxonModule
+	var judge as HoldJudge
+	var events as HoldEventSummary
+	var tally as HoldTally
+
+	var entryOps as HoldIndexColumn
+	var entryBlocks as HoldIndexColumn
+	var entryPositions as HoldIndexColumn
+	var entryHelds as ValueIdArray
+	var entryIsEnd as BoolArray
+
+	var siteEntries as HoldIndexColumn
+	var siteSources as ValueIdArray
+	var siteReplacing as BoolArray
+	var siteKinds as HoldKindArray
+	var siteVerdicts as HoldVerdictColumn
+	var siteOfHeld as HoldIndexColumn
+	var isSiteResult as BoolArray
+
+	var defKnown as BoolArray
+	var defOps as HoldIndexColumn
+	var isBlockArg as BoolArray
+
+	var chainCursor as ValueId
+	var chainTop as bool
+	var chainHasElement as bool
+	var chainHasWildElement as bool
+	var hopEvents as HoldIndexColumn
+	var nodeKeys as HoldKeyColumn
+
+	var visited as HoldIndexColumn
+	var stack as HoldIndexColumn
+	var stackFroms as HoldIndexColumn
+	var successors as BlockIdArray
+	var blockIndex as BlockIndexById
+	var deletedKeys as HoldKeyColumn
+
+	var siteMasks as HoldWordColumn
+	var siteTokenBegin as HoldIndexColumn
+	var siteTokens as HoldIndexColumn
+	var chainStamp as ElementIndex
+	var hopLocals as HoldStampedIndex
+	var nodeSlots as HoldEventIds
+	var nodeLocals as HoldStampedIndex
+	var hopLocalEvents as HoldIndexColumn
+	var hopLocalBits as HoldIndexColumn
+	var localCount as ElementIndex
+
+	var wordsPerSummary as ElementIndex
+	var summaryWords as HoldWordColumn
+	var summaryFlags as HoldWordColumn
+	var summaryEarlierEnds as HoldIndexColumn
+	var summaryEndBegin as HoldIndexColumn
+	var summaryEndStop as HoldIndexColumn
+	var jumpedStamps as HoldIndexColumn
+	var endBlocks as HoldIndexColumn
+	var endPositions as HoldIndexColumn
+
+	var calleeTokenSlots as HoldStampedIndex
+	var calleeTokenBegin as HoldIndexColumn
+	var calleeTokenStop as HoldIndexColumn
+	var calleeTokens as HoldIndexColumn
+
+	var accWords as HoldWordColumn
+	var accFlags as HoldWord
+	var accEarlierEnds as ElementIndex
+	var prober as ElementIndex
+
+	var functions as IrFunctionArray
+	var projectionRead as BoolArray
+	var projectionBegin as HoldIndexColumn
+	var projectionEnd as HoldIndexColumn
+	var projectionOffsets as HoldIndexColumn
+	var receiverLoadResults as ValueIdArray
+	var receiverLoadOffsets as HoldIndexColumn
+
+	static function create(project Project, module MaxonModule, judge HoldJudge, events HoldEventSummary, functions IrFunctionArray) returns HoldResolver
+		var projectionRead = BoolArray.create()
+		projectionRead.growFilled(functions.count(), value: false)
+		var projectionBegin = HoldIndexColumn.create()
+		projectionBegin.growFilled(functions.count(), value: 0)
+		var projectionEnd = HoldIndexColumn.create()
+		projectionEnd.growFilled(functions.count(), value: 0)
+		return Self{functions: functions, projectionRead: projectionRead, projectionBegin: projectionBegin, projectionEnd: projectionEnd, projectionOffsets: HoldIndexColumn.create(), receiverLoadResults: ValueIdArray.create(), receiverLoadOffsets: HoldIndexColumn.create(), project: project, module: module, judge: judge, events: events, tally: HoldTally.create(), entryOps: HoldIndexColumn.create(), entryBlocks: HoldIndexColumn.create(), entryPositions: HoldIndexColumn.create(), entryHelds: ValueIdArray.create(), entryIsEnd: BoolArray.create(), siteEntries: HoldIndexColumn.create(), siteSources: ValueIdArray.create(), siteReplacing: BoolArray.create(), siteKinds: HoldKindArray.create(), siteVerdicts: HoldVerdictColumn.create(), siteOfHeld: HoldIndexColumn.create(), isSiteResult: BoolArray.create(), defKnown: BoolArray.create(), defOps: HoldIndexColumn.create(), isBlockArg: BoolArray.create(), chainCursor: 0, chainTop: false, chainHasElement: false, chainHasWildElement: false, hopEvents: HoldIndexColumn.create(), nodeKeys: HoldKeyColumn.create(), visited: HoldIndexColumn.create(), stack: HoldIndexColumn.create(), stackFroms: HoldIndexColumn.create(), successors: BlockIdArray.create(), blockIndex: BlockIndexById.create(), deletedKeys: HoldKeyColumn.create(), siteMasks: HoldWordColumn.create(), siteTokenBegin: HoldIndexColumn.create(), siteTokens: HoldIndexColumn.create(), chainStamp: 0, hopLocals: HoldStampedIndex.create(), nodeSlots: HoldEventIds.create(), nodeLocals: HoldStampedIndex.create(), hopLocalEvents: HoldIndexColumn.create(), hopLocalBits: HoldIndexColumn.create(), localCount: 0, wordsPerSummary: 0, summaryWords: HoldWordColumn.create(), summaryFlags: HoldWordColumn.create(), summaryEarlierEnds: HoldIndexColumn.create(), summaryEndBegin: HoldIndexColumn.create(), summaryEndStop: HoldIndexColumn.create(), jumpedStamps: HoldIndexColumn.create(), endBlocks: HoldIndexColumn.create(), endPositions: HoldIndexColumn.create(), calleeTokenSlots: HoldStampedIndex.create(), calleeTokenBegin: HoldIndexColumn.create(), calleeTokenStop: HoldIndexColumn.create(), calleeTokens: HoldIndexColumn.create(), accWords: HoldWordColumn.create(), accFlags: 0, accEarlierEnds: 0, prober: 0}
+	end 'create'
+
+	function resolveFunction(func IrFunction, index ElementIndex)
+		self.prober = index
+		self.clearScratch()
+		self.collectEntries(func)
+
+		if self.siteEntries.count() == 0 'noMarkers'
+			return
+		end 'noMarkers'
+
+		self.judge.beginFunction(func)
+		self.prepareSiteLookup(func)
+		self.collectDefs(func)
+		self.decideSites(func)
+		self.applyVerdicts(func)
+	end 'resolveFunction'
+
+	function clearScratch()
+		self.entryOps.clear()
+		self.entryBlocks.clear()
+		self.entryPositions.clear()
+		self.entryHelds.clear()
+		self.entryIsEnd.clear()
+		self.siteEntries.clear()
+		self.siteSources.clear()
+		self.siteReplacing.clear()
+		self.siteKinds.clear()
+		self.siteVerdicts.clear()
+		self.deletedKeys.clear()
+	end 'clearScratch'
+
+	function collectEntries(func IrFunction)
+		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
+			let block = self.module.blockAtPosition(func, position: blockPosition)
+
+			for position in 0 upto block.opRefs.count() 'eachOp'
+				let opIdx = try block.opRefs.get(position) otherwise panic("HoldResolver.collectEntries: opRefs.get OOB at {position}")
+				self.noteEntry(self.module.getOp(opIdx), opIdx: opIdx, blockPosition: blockPosition, position: position)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'collectEntries'
+
+	function noteEntry(op MaxonOp, opIdx ElementIndex, blockPosition ElementIndex, position ElementIndex)
+		match self.judge.classify(op) 'class'
+			marker then self.noteMarker(op, opIdx: opIdx, blockPosition: blockPosition, position: position)
+			markerEnd then self.noteMarkerEnd(op, opIdx: opIdx, blockPosition: blockPosition, position: position)
+			inert or
+			load or
+			loud or
+			namedCall or
+			dispatch or
+			exit or
+			store then break
+		end 'class'
+	end 'noteEntry'
+
+	function noteMarker(op MaxonOp, opIdx ElementIndex, blockPosition ElementIndex, position ElementIndex)
+		match op 'op'
+			holdValue(result, source, callee, _, kind) then self.pushMarker(opIdx, blockPosition: blockPosition, position: position, result: result, source: source, replacing: holdCalleeReplacesItsSource(callee), kind: kind)
+			default panic("HoldResolver.noteMarker: handed an op that is not a hold marker")
+		end 'op'
+	end 'noteMarker'
+
+	function pushMarker(opIdx ElementIndex, blockPosition ElementIndex, position ElementIndex, result ValueId, source ValueId, replacing bool, kind HoldKind)
+		self.pushEntry(opIdx, blockPosition: blockPosition, position: position, held: result, isEnd: false, kind: kind)
+		self.siteSources.push(source)
+		self.siteReplacing.push(replacing)
+	end 'pushMarker'
+
+	function noteMarkerEnd(op MaxonOp, opIdx ElementIndex, blockPosition ElementIndex, position ElementIndex)
+		match op 'op'
+			holdEnd(_, held, _, _, kind) then self.pushEntry(opIdx, blockPosition: blockPosition, position: position, held: held, isEnd: true, kind: kind)
+			default panic("HoldResolver.noteMarkerEnd: handed an op that is not a hold end")
+		end 'op'
+	end 'noteMarkerEnd'
+
+	function pushEntry(opIdx ElementIndex, blockPosition ElementIndex, position ElementIndex, held ValueId, isEnd bool, kind HoldKind)
+		if not isEnd 'aMarker'
+			self.siteEntries.push(self.entryOps.count())
+			self.siteKinds.push(kind)
+			self.siteVerdicts.push(HoldVerdict.undecided)
+		end 'aMarker'
+
+		self.entryOps.push(opIdx)
+		self.entryBlocks.push(blockPosition)
+		self.entryPositions.push(position)
+		self.entryHelds.push(held)
+		self.entryIsEnd.push(isEnd)
+	end 'pushEntry'
+
+	function prepareSiteLookup(func IrFunction)
+		let valueCount = func.valueTags.count()
+		self.isSiteResult.clear()
+		self.isSiteResult.growFilled(valueCount, value: false)
+		self.siteOfHeld.clear()
+		self.siteOfHeld.growFilled(valueCount, value: 0)
+
+		for site in 0 upto self.siteEntries.count() 'eachSite'
+			let held = self.entryHeldOfSite(site)
+			try self.isSiteResult.set(held, value: true) otherwise panic("HoldResolver.prepareSiteLookup: v{held} is outside the function's {valueCount} values")
+			try self.siteOfHeld.set(held, value: site) otherwise panic("HoldResolver.prepareSiteLookup: v{held} is outside the function's {valueCount} values")
+		end 'eachSite'
+
+		self.visited.clear()
+		self.visited.growFilled(func.blockRefs.count(), value: 0)
+		self.module.refillBlockIndexById(func, into: self.blockIndex)
+	end 'prepareSiteLookup'
+
+	function collectDefs(func IrFunction)
+		let valueCount = func.valueTags.count()
+		self.defKnown.clear()
+		self.defKnown.growFilled(valueCount, value: false)
+		self.defOps.clear()
+		self.defOps.growFilled(valueCount, value: 0)
+		self.isBlockArg.clear()
+		self.isBlockArg.growFilled(valueCount, value: false)
+
+		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
+			let block = self.module.blockAtPosition(func, position: blockPosition)
+
+			for arg in block.blockArgs 'eachBlockArg'
+				try self.isBlockArg.set(arg.valueId, value: true) otherwise panic("HoldResolver.collectDefs: block arg v{arg.valueId} is outside the function's {valueCount} values")
+			end 'eachBlockArg'
+
+			for opIdx in block.opRefs 'eachOp'
+				self.noteDef(self.module.getOp(opIdx), opIdx: opIdx)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'collectDefs'
+
+	function noteDef(op MaxonOp, opIdx ElementIndex)
+		match self.judge.classify(op) 'class'
+			load then self.recordLoadDef(op, opIdx: opIdx)
+			namedCall then self.recordElementReadDef(op, opIdx: opIdx)
+			inert or
+			loud or
+			store or
+			dispatch or
+			exit or
+			marker or
+			markerEnd then break
+		end 'class'
+	end 'noteDef'
+
+	function recordLoadDef(op MaxonOp, opIdx ElementIndex)
+		match op 'op'
+			loadIndirect(result, _, _, _) then self.recordDef(result, opIdx: opIdx)
+			default panic("HoldResolver.recordLoadDef: handed an op that is not a load")
+		end 'op'
+	end 'recordLoadDef'
+
+	function recordElementReadDef(op MaxonOp, opIdx ElementIndex)
+		let callee = maxonOpCalleeName(op)
+		var borrowsItsResult = borrowedElementReadCallee(callee)
+
+		match op 'kind'
+			call then borrowsItsResult = borrowsItsResult or self.judge.signatures.returnsAReceiverField(callee)
+			tryCall then break
+			default panic("HoldResolver.recordElementReadDef: handed an op that is not a call")
+		end 'kind'
+
+		if not borrowsItsResult 'notABorrowedRead'
+			return
+		end 'notABorrowedRead'
+
+		match op 'op'
+			call(result, _, _, _, _, _, _, _) then self.recordDef(result, opIdx: opIdx)
+			tryCall(result, _, _, _, _, _, _, _, _) then self.recordDef(result, opIdx: opIdx)
+			default panic("HoldResolver.recordElementReadDef: handed an op that is not a call")
+		end 'op'
+	end 'recordElementReadDef'
+
+	function recordDef(result ValueId, opIdx ElementIndex)
+		try self.defKnown.set(result, value: true) otherwise panic("HoldResolver.recordDef: v{result} is outside the function's values")
+		try self.defOps.set(result, value: opIdx) otherwise panic("HoldResolver.recordDef: v{result} is outside the function's values")
+	end 'recordDef'
+
+	function entryHeldOfSite(site ElementIndex) returns ValueId
+		return try self.entryHelds.get(try self.siteEntries.get(site) otherwise panic("HoldResolver.entryHeldOfSite: siteEntries.get OOB at {site}")) otherwise panic("HoldResolver.entryHeldOfSite: entryHelds.get OOB for site {site}")
+	end 'entryHeldOfSite'
+
+	function siteOfEnd(held ValueId) returns ElementIndex
+		if not (try self.isSiteResult.get(held) otherwise panic("HoldResolver.siteOfEnd: v{held} is outside the function's values")) 'orphanEnd'
+			panic("HoldResolver.siteOfEnd: a hold end releases v{held}, which no hold marker of its function defines")
+		end 'orphanEnd'
+
+		return try self.siteOfHeld.get(held) otherwise panic("HoldResolver.siteOfEnd: siteOfHeld.get OOB for v{held}")
+	end 'siteOfEnd'
+
+	function decideSites(func IrFunction)
+		self.deriveAllChains()
+		self.sizeSummaries()
+
+		var site = self.siteEntries.count()
+
+		// Latest first: an earlier window jumps over a later one through that window's stored summary, and
+		// reads a later end it meets as no release only once that site is decided `deleted`. A later site
+		// still unsummarized would merge as an empty summary and hide its releases.
+		while site > 0 'eachSiteLatestFirst'
+			site = site - 1
+
+			self.summarizeWindow(func, site: site)
+
+			if self.summaryConflicts(site) 'somethingMayRelease'
+				try self.siteVerdicts.set(site, value: HoldVerdict.lowered) otherwise panic("HoldResolver.decideSites: siteVerdicts.set OOB at {site}")
+			end 'somethingMayRelease' else 'nothingInTheWindowReleases'
+				try self.siteVerdicts.set(site, value: HoldVerdict.deleted) otherwise panic("HoldResolver.decideSites: siteVerdicts.set OOB at {site}")
+			end 'nothingInTheWindowReleases'
+		end 'eachSiteLatestFirst'
+	end 'decideSites'
+
+	function deriveAllChains()
+		self.siteMasks.clear()
+		self.siteTokenBegin.clear()
+		self.siteTokens.clear()
+		self.chainStamp = self.chainStamp + 1
+		self.hopLocalEvents.clear()
+		self.hopLocalBits.clear()
+		self.localCount = 0
+
+		for site in 0 upto self.siteEntries.count() 'eachSite'
+			self.deriveChain(try self.siteSources.get(site) otherwise panic("HoldResolver.deriveAllChains: siteSources.get OOB at {site}"))
+			self.siteMasks.push(self.chainSensitivity(site))
+			self.siteTokenBegin.push(self.siteTokens.count())
+
+			for hop in self.hopEvents 'eachHop'
+				self.siteTokens.push(self.hopLocalOf(hop))
+			end 'eachHop'
+
+			for key in self.nodeKeys 'eachNode'
+				self.siteTokens.push(self.nodeLocalOf(key))
+			end 'eachNode'
+		end 'eachSite'
+
+		self.siteTokenBegin.push(self.siteTokens.count())
+	end 'deriveAllChains'
+
+	function chainSensitivity(site ElementIndex) returns HoldWord
+		var mask = AlwaysConflicts
+
+		if self.chainTop 'anUnknownChain'
+			mask = mask or TopConflicts
+		end 'anUnknownChain'
+
+		if self.chainHasWildElement 'aWildElementHop'
+			mask = mask or AnyElementConflicts
+		end 'aWildElementHop'
+
+		if self.chainHasElement 'anElementHop'
+			mask = mask or WildElementConflicts
+		end 'anElementHop'
+
+		if (try self.siteReplacing.get(site) otherwise panic("HoldResolver.chainSensitivity: siteReplacing.get OOB at {site}")) 'replacesItsSource'
+			mask = mask or ExitConflicts
+		end 'replacesItsSource'
+
+		return mask
+	end 'chainSensitivity'
+
+	function hopLocalOf(event ElementIndex) returns ElementIndex
+		if let known = try self.hopLocals.valueAt(event, stamp: self.chainStamp) 'alreadyLocal'
+			return known
+		end 'alreadyLocal'
+
+		let fresh = self.freshLocal()
+		self.hopLocals.record(event, value: fresh, stamp: self.chainStamp)
+		self.hopLocalEvents.push(event)
+		self.hopLocalBits.push(fresh)
+		return fresh
+	end 'hopLocalOf'
+
+	function nodeLocalOf(key HoldKey) returns ElementIndex
+		let slot = self.nodeSlotOf(key)
+
+		if let known = try self.nodeLocals.valueAt(slot, stamp: self.chainStamp) 'alreadyLocal'
+			return known
+		end 'alreadyLocal'
+
+		let fresh = self.freshLocal()
+		self.nodeLocals.record(slot, value: fresh, stamp: self.chainStamp)
+		return fresh
+	end 'nodeLocalOf'
+
+	function nodeSlotOf(key HoldKey) returns ElementIndex
+		if let known = try self.nodeSlots.get(key) 'alreadySlotted'
+			return known
+		end 'alreadySlotted'
+
+		let fresh = self.nodeSlots.count()
+		self.nodeSlots.upsert(key, value: fresh)
+		return fresh
+	end 'nodeSlotOf'
+
+	function freshLocal() returns ElementIndex
+		let fresh = self.localCount
+		self.localCount = self.localCount + 1
+		return fresh
+	end 'freshLocal'
+
+	function sizeSummaries()
+		let siteCount = self.siteEntries.count()
+		self.wordsPerSummary = (self.localCount + WordMask) shr WordShift
+		self.summaryWords.refill(siteCount * self.wordsPerSummary, value: 0)
+		self.summaryFlags.refill(siteCount, value: 0)
+		self.summaryEarlierEnds.refill(siteCount, value: 0)
+		self.summaryEndBegin.refill(siteCount, value: 0)
+		self.summaryEndStop.refill(siteCount, value: 0)
+		self.jumpedStamps.refill(siteCount, value: 0)
+		self.endBlocks.clear()
+		self.endPositions.clear()
+		self.calleeTokenBegin.clear()
+		self.calleeTokenStop.clear()
+		self.calleeTokens.clear()
+	end 'sizeSummaries'
+
+	function summarizeWindow(func IrFunction, site ElementIndex)
+		let entry = try self.siteEntries.get(site) otherwise panic("HoldResolver.summarizeWindow: siteEntries.get OOB at {site}")
+		let startBlock = try self.entryBlocks.get(entry) otherwise panic("HoldResolver.summarizeWindow: entryBlocks.get OOB at {entry}")
+		let startPosition = try self.entryPositions.get(entry) otherwise panic("HoldResolver.summarizeWindow: entryPositions.get OOB at {entry}")
+		let stamp = site + 1
+
+		self.accWords.refill(self.wordsPerSummary, value: 0)
+		self.accFlags = 0
+		self.accEarlierEnds = 0
+		self.stack.clear()
+		self.stackFroms.clear()
+		let endBegin = self.endBlocks.count()
+
+		self.scanWindowBlock(func, site: site, blockPosition: startBlock, from: startPosition + 1, stamp: stamp)
+
+		while self.stack.count() > 0 'eachPendingScan'
+			let blockPosition = try self.stack.pop() otherwise panic("HoldResolver.summarizeWindow: stack.pop on a non-empty stack")
+			let resumeAt = try self.stackFroms.pop() otherwise panic("HoldResolver.summarizeWindow: stackFroms.pop out of step with stack")
+			self.scanWindowBlock(func, site: site, blockPosition: blockPosition, from: resumeAt, stamp: stamp)
+		end 'eachPendingScan'
+
+		self.storeSummary(site, endBegin: endBegin)
+	end 'summarizeWindow'
+
+	function storeSummary(site ElementIndex, endBegin ElementIndex)
+		let base = site * self.wordsPerSummary
+
+		for w in 0 upto self.wordsPerSummary 'eachWord'
+			try self.summaryWords.set(base + w, value: try self.accWords.get(w) otherwise panic("HoldResolver.storeSummary: accWords.get OOB at {w}")) otherwise panic("HoldResolver.storeSummary: summaryWords.set OOB at {base + w}")
+		end 'eachWord'
+
+		try self.summaryFlags.set(site, value: self.accFlags) otherwise panic("HoldResolver.storeSummary: summaryFlags.set OOB at {site}")
+		try self.summaryEarlierEnds.set(site, value: self.accEarlierEnds) otherwise panic("HoldResolver.storeSummary: summaryEarlierEnds.set OOB at {site}")
+		try self.summaryEndBegin.set(site, value: endBegin) otherwise panic("HoldResolver.storeSummary: summaryEndBegin.set OOB at {site}")
+		try self.summaryEndStop.set(site, value: self.endBlocks.count()) otherwise panic("HoldResolver.storeSummary: summaryEndStop.set OOB at {site}")
+	end 'storeSummary'
+
+	function scanWindowBlock(func IrFunction, site ElementIndex, blockPosition ElementIndex, from ElementIndex, stamp ElementIndex)
+		let block = self.module.blockAtPosition(func, position: blockPosition)
+		let count = block.opRefs.count()
+		var position = from
+
+		while position < count 'eachOp'
+			let opIdx = try block.opRefs.get(position) otherwise panic("HoldResolver.scanWindowBlock: opRefs.get OOB at {position}")
+
+			if self.noteWindowOp(self.module.getOp(opIdx), site: site, blockPosition: blockPosition, position: position, stamp: stamp) != WindowScan.open 'leftTheWindow'
+				return
+			end 'leftTheWindow'
+
+			position = position + 1
+		end 'eachOp'
+
+		if block.hasTerminatorOp() and self.noteWindowOp(self.module.getOp(block.terminatorIndex()), site: site, blockPosition: blockPosition, position: count, stamp: stamp) != WindowScan.open 'leftAtTheTerminator'
+			return
+		end 'leftAtTheTerminator'
+
+		self.pushSuccessors(func, blockPosition: blockPosition, stamp: stamp)
+	end 'scanWindowBlock'
+
+	function pushSuccessors(func IrFunction, blockPosition ElementIndex, stamp ElementIndex)
+		self.successors.clear()
+		collectMaxonBlockSuccessors(self.module, block: self.module.blockAtPosition(func, position: blockPosition), into: self.successors)
+
+		for targetId in self.successors 'eachSuccessor'
+			let target = self.positionOfBlock(targetId)
+			let seen = try self.visited.get(target) otherwise panic("HoldResolver.pushSuccessors: visited.get OOB at block position {target}")
+
+			if seen == stamp 'alreadyScanned'
+				continue
+			end 'alreadyScanned'
+
+			try self.visited.set(target, value: stamp) otherwise panic("HoldResolver.pushSuccessors: visited.set OOB at block position {target}")
+			self.pushScan(target, from: 0)
+		end 'eachSuccessor'
+	end 'pushSuccessors'
+
+	function positionOfBlock(id BlockId) returns ElementIndex
+		return try self.blockIndex.get(id) otherwise panic("HoldResolver.positionOfBlock: block {id} is not a block of the function being resolved")
+	end 'positionOfBlock'
+
+	function pushScan(blockPosition ElementIndex, from ElementIndex)
+		self.stack.push(blockPosition)
+		self.stackFroms.push(from)
+	end 'pushScan'
+
+	function noteWindowOp(op MaxonOp, site ElementIndex, blockPosition ElementIndex, position ElementIndex, stamp ElementIndex) returns WindowScan
+		let opClass = self.judge.classify(op)
+
+		return match opClass 'class'
+			markerEnd gives self.noteWindowEnd(op, site: site, blockPosition: blockPosition, position: position)
+			marker gives self.jumpOverLaterWindow(op, site: site, stamp: stamp)
+			exit gives self.raiseFlags(ExitConflicts)
+			inert or
+			load or
+			loud or
+			namedCall or
+			dispatch or
+			store gives self.noteEffect(self.judge.effectOf(op, opClass: opClass), op: op)
+		end 'class'
+	end 'noteWindowOp'
+
+	function noteWindowEnd(op MaxonOp, site ElementIndex, blockPosition ElementIndex, position ElementIndex) returns WindowScan
+		let held = holdEndHeld(op)
+		let owner = self.siteOfEnd(held)
+
+		if owner == site 'theWindowsOwnEnd'
+			self.endBlocks.push(blockPosition)
+			self.endPositions.push(position)
+			return WindowScan.ended
+		end 'theWindowsOwnEnd'
+
+		if owner > site and (try self.siteVerdicts.get(owner) otherwise panic("HoldResolver.noteWindowEnd: siteVerdicts.get OOB at {owner}")) == HoldVerdict.deleted 'aDeletedEnd'
+			return WindowScan.open
+		end 'aDeletedEnd'
+
+		if owner < site and owner + 1 > self.accEarlierEnds 'anUndecidedEnd'
+			self.accEarlierEnds = owner + 1
+		end 'anUndecidedEnd'
+
+		return self.noteEffect(self.judge.releaseEffectOfValue(held), op: op)
+	end 'noteWindowEnd'
+
+	function jumpOverLaterWindow(op MaxonOp, site ElementIndex, stamp ElementIndex) returns WindowScan
+		let later = self.siteOfEnd(holdMarkerResult(op))
+
+		if later <= site 'notALaterWindow'
+			return WindowScan.open
+		end 'notALaterWindow'
+
+		if (try self.summaryEarlierEnds.get(later) otherwise panic("HoldResolver.jumpOverLaterWindow: summaryEarlierEnds.get OOB at {later}")) > site 'itsSummaryReadsThisWindowsEnds'
+			return WindowScan.open
+		end 'itsSummaryReadsThisWindowsEnds'
+
+		if (try self.jumpedStamps.get(later) otherwise panic("HoldResolver.jumpOverLaterWindow: jumpedStamps.get OOB at {later}")) == stamp 'alreadyMerged'
+			return WindowScan.jumped
+		end 'alreadyMerged'
+
+		try self.jumpedStamps.set(later, value: stamp) otherwise panic("HoldResolver.jumpOverLaterWindow: jumpedStamps.set OOB at {later}")
+		self.mergeSummary(later)
+
+		let first = try self.summaryEndBegin.get(later) otherwise panic("HoldResolver.jumpOverLaterWindow: summaryEndBegin.get OOB at {later}")
+		let stop = try self.summaryEndStop.get(later) otherwise panic("HoldResolver.jumpOverLaterWindow: summaryEndStop.get OOB at {later}")
+
+		for k in first upto stop 'eachEndOfTheLaterWindow'
+			self.pushScan(try self.endBlocks.get(k) otherwise panic("HoldResolver.jumpOverLaterWindow: endBlocks.get OOB at {k}"), from: try self.endPositions.get(k) otherwise panic("HoldResolver.jumpOverLaterWindow: endPositions.get OOB at {k}"))
+		end 'eachEndOfTheLaterWindow'
+
+		return WindowScan.jumped
+	end 'jumpOverLaterWindow'
+
+	function mergeSummary(later ElementIndex)
+		let base = later * self.wordsPerSummary
+
+		for w in 0 upto self.wordsPerSummary 'eachWord'
+			let word = try self.summaryWords.get(base + w) otherwise panic("HoldResolver.mergeSummary: summaryWords.get OOB at {base + w}")
+
+			if word != 0 'someTokens'
+				let before = try self.accWords.get(w) otherwise panic("HoldResolver.mergeSummary: accWords.get OOB at {w}")
+				try self.accWords.set(w, value: before or word) otherwise panic("HoldResolver.mergeSummary: accWords.set OOB at {w}")
+			end 'someTokens'
+		end 'eachWord'
+
+		self.accFlags = self.accFlags or (try self.summaryFlags.get(later) otherwise panic("HoldResolver.mergeSummary: summaryFlags.get OOB at {later}"))
+		let earlier = try self.summaryEarlierEnds.get(later) otherwise panic("HoldResolver.mergeSummary: summaryEarlierEnds.get OOB at {later}")
+
+		if earlier > self.accEarlierEnds 'anEarlierEnd'
+			self.accEarlierEnds = earlier
+		end 'anEarlierEnd'
+	end 'mergeSummary'
+
+	function raiseFlags(flags HoldWord) returns WindowScan
+		self.accFlags = self.accFlags or flags
+		return WindowScan.open
+	end 'raiseFlags'
+
+	function raiseLocal(local ElementIndex)
+		let at = local shr WordShift
+		let word = try self.accWords.get(at) otherwise panic("HoldResolver.raiseLocal: accWords.get OOB at {at}")
+		try self.accWords.set(at, value: word or (1 shl (local and WordMask))) otherwise panic("HoldResolver.raiseLocal: accWords.set OOB at {at}")
+	end 'raiseLocal'
+
+	function noteEffect(effect HoldEffect, op MaxonOp) returns WindowScan
+		match effect 'effect'
+			none then break
+			everything or
+			releaseUnknown then self.accFlags = self.accFlags or AlwaysConflicts
+			field then self.noteHopKey(self.judge.effectKey, flags: TopConflicts)
+			element then self.noteHopKey(self.judge.effectKey, flags: TopConflicts or AnyElementConflicts)
+			wildElement or
+			opaqueElement then self.accFlags = self.accFlags or TopConflicts or WildElementConflicts
+			declaredCall then self.noteCall(self.judge.effectCallee, op: op)
+			dispatch then self.noteCandidates(self.judge.effectCandidates)
+			release then self.noteNodeKey(self.judge.effectKey)
+		end 'effect'
+
+		return WindowScan.open
+	end 'noteEffect'
+
+	function noteHopKey(key HoldKey, flags HoldWord)
+		self.accFlags = self.accFlags or flags
+		let event = try self.events.eventIds.get(key) otherwise 'anUninternedEvent'
+			self.accFlags = self.accFlags or AlwaysConflicts
+			return
+		end 'anUninternedEvent'
+
+		self.noteHopEvent(event)
+	end 'noteHopKey'
+
+	function noteHopEvent(event ElementIndex)
+		if let local = try self.hopLocals.valueAt(event, stamp: self.chainStamp) 'aHopOfSomeWindow'
+			self.raiseLocal(local)
+		end 'aHopOfSomeWindow'
+	end 'noteHopEvent'
+
+	function noteNodeKey(key HoldKey)
+		self.accFlags = self.accFlags or TopConflicts
+
+		let slot = try self.nodeSlots.get(key) otherwise return
+
+		if let local = try self.nodeLocals.valueAt(slot, stamp: self.chainStamp) 'aNodeOfSomeWindow'
+			self.raiseLocal(local)
+		end 'aNodeOfSomeWindow'
+	end 'noteNodeKey'
+
+	function noteCandidates(candidates NameRoster)
+		for candidate in candidates 'eachCandidate'
+			if let index = try self.judge.byName.get(candidate) 'aDeclaredImplementation'
+				self.noteRow(index)
+				continue
+			end 'aDeclaredImplementation'
+
+			if not quietRuntimeCallee(candidate) 'anUnknownImplementation'
+				self.accFlags = self.accFlags or AlwaysConflicts
+			end 'anUnknownImplementation'
+		end 'eachCandidate'
+	end 'noteCandidates'
+
+	function noteRow(row ElementIndex)
+		if self.events.rowHasEvent(row, event: EverythingEvent) 'everything'
+			self.accFlags = self.accFlags or AlwaysConflicts
+			return
+		end 'everything'
+
+		if not self.events.rowIsEmpty(row) 'someEvent'
+			self.accFlags = self.accFlags or TopConflicts
+		end 'someEvent'
+
+		if self.events.rowHasEvent(row, event: AnyElementEvent) or self.events.rowHasEvent(row, event: OpaqueAnyElementEvent) 'someElementDisplaced'
+			self.accFlags = self.accFlags or AnyElementConflicts
+		end 'someElementDisplaced'
+
+		if self.events.rowHasEvent(row, event: WildElementEvent) or self.events.rowHasEvent(row, event: OpaqueWildElementEvent) 'someUnknownElementsDisplaced'
+			self.accFlags = self.accFlags or WildElementConflicts
+		end 'someUnknownElementsDisplaced'
+
+		self.noteRowHops(row)
+	end 'noteRow'
+
+	function noteCall(row ElementIndex, op MaxonOp)
+		if not self.events.rowHasOpaqueEvent(row) or self.events.rowHasEvent(row, event: EverythingEvent) 'nothingGeneric'
+			self.noteRow(row)
+			return
+		end 'nothingGeneric'
+
+		self.judge.instantiate(op)
+
+		let displacesUnknown = self.judge.instKind != Instantiation.displaces
+		let displacesSomething = displacesUnknown or self.judge.instKeys.count() > 0
+
+		if self.events.rowHasEventOutsideOpaque(row) or displacesSomething 'anUnknownChainMeetsIt'
+			self.accFlags = self.accFlags or TopConflicts
+		end 'anUnknownChainMeetsIt'
+
+		if self.events.rowHasEvent(row, event: AnyElementEvent) or displacesSomething 'someElementDisplaced'
+			self.accFlags = self.accFlags or AnyElementConflicts
+		end 'someElementDisplaced'
+
+		if self.events.rowHasEvent(row, event: WildElementEvent) or displacesUnknown 'someUnknownElementsDisplaced'
+			self.accFlags = self.accFlags or WildElementConflicts
+		end 'someUnknownElementsDisplaced'
+
+		self.noteRowHops(row)
+
+		for key in self.judge.instKeys 'eachInstantiatedKey'
+			if let event = try self.events.eventIds.get(key) 'interned'
+				self.noteHopEvent(event)
+				continue
+			end 'interned'
+
+			if not displacesUnknown 'aKeyNobodyInterned'
+				self.accFlags = self.accFlags or AlwaysConflicts
+			end 'aKeyNobodyInterned'
+		end 'eachInstantiatedKey'
+	end 'noteCall'
+
+	function noteRowHops(row ElementIndex)
+		let slot = self.calleeTokenSlotOf(row)
+		let first = try self.calleeTokenBegin.get(slot) otherwise panic("HoldResolver.noteRowHops: calleeTokenBegin.get OOB at {slot}")
+		let stop = try self.calleeTokenStop.get(slot) otherwise panic("HoldResolver.noteRowHops: calleeTokenStop.get OOB at {slot}")
+
+		for k in first upto stop 'eachHopTheRowMeets'
+			self.raiseLocal(try self.calleeTokens.get(k) otherwise panic("HoldResolver.noteRowHops: calleeTokens.get OOB at {k}"))
+		end 'eachHopTheRowMeets'
+	end 'noteRowHops'
+
+	function calleeTokenSlotOf(row ElementIndex) returns ElementIndex
+		if let known = try self.calleeTokenSlots.valueAt(row, stamp: self.chainStamp) 'alreadyMet'
+			return known
+		end 'alreadyMet'
+
+		let slot = self.calleeTokenBegin.count()
+		self.calleeTokenBegin.push(self.calleeTokens.count())
+
+		for k in 0 upto self.hopLocalEvents.count() 'eachHopEvent'
+			if self.events.rowReaches(row, event: try self.hopLocalEvents.get(k) otherwise panic("HoldResolver.calleeTokenSlotOf: hopLocalEvents.get OOB at {k}"), prober: self.prober) 'theRowRaisesIt'
+				self.calleeTokens.push(try self.hopLocalBits.get(k) otherwise panic("HoldResolver.calleeTokenSlotOf: hopLocalBits.get OOB at {k}"))
+			end 'theRowRaisesIt'
+		end 'eachHopEvent'
+
+		self.calleeTokenStop.push(self.calleeTokens.count())
+		self.calleeTokenSlots.record(row, value: slot, stamp: self.chainStamp)
+		return slot
+	end 'calleeTokenSlotOf'
+
+	function summaryConflicts(site ElementIndex) returns bool
+		let mask = try self.siteMasks.get(site) otherwise panic("HoldResolver.summaryConflicts: siteMasks.get OOB at {site}")
+
+		if (mask and (try self.summaryFlags.get(site) otherwise panic("HoldResolver.summaryConflicts: summaryFlags.get OOB at {site}"))) != 0 'aFlagMeetsTheChain'
+			return true
+		end 'aFlagMeetsTheChain'
+
+		let base = site * self.wordsPerSummary
+		let first = try self.siteTokenBegin.get(site) otherwise panic("HoldResolver.summaryConflicts: siteTokenBegin.get OOB at {site}")
+		let stop = try self.siteTokenBegin.get(site + 1) otherwise panic("HoldResolver.summaryConflicts: siteTokenBegin.get OOB at {site + 1}")
+
+		for k in first upto stop 'eachToken'
+			let local = try self.siteTokens.get(k) otherwise panic("HoldResolver.summaryConflicts: siteTokens.get OOB at {k}")
+			let word = try self.summaryWords.get(base + (local shr WordShift)) otherwise panic("HoldResolver.summaryConflicts: summaryWords.get OOB for local {local}")
+
+			if ((word shr (local and WordMask)) and 1) != 0 'theWindowRaisesIt'
+				return true
+			end 'theWindowRaisesIt'
+		end 'eachToken'
+
+		return false
+	end 'summaryConflicts'
+
+	function deriveChain(from ValueId)
+		self.chainCursor = from
+		self.chainTop = false
+		self.chainHasElement = false
+		self.chainHasWildElement = false
+		self.hopEvents.clear()
+		self.nodeKeys.clear()
+
+		for _ in 0 upto MaxChainDepth 'eachHop'
+			if not self.stepChain() 'finished'
+				return
+			end 'finished'
+		end 'eachHop'
+
+		self.chainTop = true
+	end 'deriveChain'
+
+	function stepChain() returns bool
+		let current = self.chainCursor
+
+		if (try self.isBlockArg.get(current) otherwise panic("HoldResolver.stepChain: isBlockArg.get OOB at v{current}")) 'aMerge'
+			self.chainTop = true
+			return false
+		end 'aMerge'
+
+		if not (try self.defKnown.get(current) otherwise panic("HoldResolver.stepChain: defKnown.get OOB at v{current}")) 'aRoot'
+			self.noteRootNode(current)
+			return false
+		end 'aRoot'
+
+		return self.hopThroughDef(self.module.getOp(try self.defOps.get(current) otherwise panic("HoldResolver.stepChain: defOps.get OOB at v{current}")))
+	end 'stepChain'
+
+	function hopThroughDef(defOp MaxonOp) returns bool
+		return match defOp 'def'
+			loadIndirect(_, addr, offset, _) gives self.hopThroughLoad(addr, offset: offset)
+			call(_, callee, args, _, _, _, _, _) gives self.hopThroughCall(callee, args: args)
+			tryCall(_, _, _, args, _, _, _, _, _) gives self.hopThroughElementRead(args)
+			default panic("HoldResolver.hopThroughDef: a recorded definition is neither a load nor a borrowed call")
+		end 'def'
+	end 'hopThroughDef'
+
+	function hopThroughCall(callee ByteArray, args ValueIdArray) returns bool
+		if borrowedElementReadCallee(callee) 'anElementRead'
+			return self.hopThroughElementRead(args)
+		end 'anElementRead'
+
+		return self.hopThroughReceiverField(callee, args: args)
+	end 'hopThroughCall'
+
+	function hopThroughReceiverField(callee ByteArray, args ValueIdArray) returns bool
+		let receiver = holdFirstArg(args)
+		let record = self.judge.recordKeyOfValue(receiver)
+
+		if record == UnknownRecord or record == LeafRecord 'anUnknownContainer'
+			self.chainTop = true
+			return false
+		end 'anUnknownContainer'
+
+		let index = try self.judge.byName.get(callee) otherwise 'anUndeclaredCallee'
+			self.chainTop = true
+			return false
+		end 'anUndeclaredCallee'
+
+		self.readProjection(index)
+		let first = try self.projectionBegin.get(index) otherwise panic("HoldResolver.hopThroughReceiverField: projectionBegin.get OOB at {index}")
+		let stop = try self.projectionEnd.get(index) otherwise panic("HoldResolver.hopThroughReceiverField: projectionEnd.get OOB at {index}")
+
+		if first == stop 'noFieldIsProved'
+			self.chainTop = true
+			return false
+		end 'noFieldIsProved'
+
+		self.nodeKeys.push(record)
+
+		for k in first upto stop 'eachReturnedField'
+			let offset = try self.projectionOffsets.get(k) otherwise panic("HoldResolver.hopThroughReceiverField: projectionOffsets.get OOB at {k}")
+
+			if let event = try self.events.eventIds.get(fieldEventKey(record, offset: offset)) 'someoneStoresIt'
+				self.hopEvents.push(event)
+			end 'someoneStoresIt'
+		end 'eachReturnedField'
+
+		self.chainCursor = receiver
+		return true
+	end 'hopThroughReceiverField'
+
+	function readProjection(index ElementIndex)
+		let memoized = try self.projectionRead.get(index) otherwise panic("HoldResolver.readProjection: projectionRead.get OOB at {index}")
+
+		if memoized 'alreadyRead'
+			return
+		end 'alreadyRead'
+
+		try self.projectionRead.set(index, value: true) otherwise panic("HoldResolver.readProjection: projectionRead.set OOB at {index}")
+		let first = self.projectionOffsets.count()
+		let func = try self.functions.get(index) otherwise panic("HoldResolver.readProjection: functions.get OOB at {index}")
+		self.collectReceiverLoads(func)
+
+		if not self.everyReturnIsAReceiverLoad(func) 'aReturnIsNotAReceiverField'
+			while self.projectionOffsets.count() > first 'unwind'
+				_ = try self.projectionOffsets.pop() otherwise panic("HoldResolver.readProjection: projectionOffsets.pop on a non-empty column")
+			end 'unwind'
+		end 'aReturnIsNotAReceiverField'
+
+		try self.projectionBegin.set(index, value: first) otherwise panic("HoldResolver.readProjection: projectionBegin.set OOB at {index}")
+		try self.projectionEnd.set(index, value: self.projectionOffsets.count()) otherwise panic("HoldResolver.readProjection: projectionEnd.set OOB at {index}")
+	end 'readProjection'
+
+	function collectReceiverLoads(func IrFunction)
+		self.receiverLoadResults.clear()
+		self.receiverLoadOffsets.clear()
+
+		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
+			let block = self.module.blockAtPosition(func, position: blockPosition)
+
+			for opIdx in block.opRefs 'eachOp'
+				self.noteReceiverLoad(self.module.getOp(opIdx))
+			end 'eachOp'
+		end 'eachBlock'
+	end 'collectReceiverLoads'
+
+	function noteReceiverLoad(op MaxonOp)
+		if self.judge.classify(op) != HoldOpClass.load 'notALoad'
+			return
+		end 'notALoad'
+
+		match op 'op'
+			loadIndirect(result, addr, offset, _) then self.pushReceiverLoad(result, addr: addr, offset: offset)
+			default panic("HoldResolver.noteReceiverLoad: handed an op that is not a load")
+		end 'op'
+	end 'noteReceiverLoad'
+
+	function pushReceiverLoad(result ValueId, addr ValueId, offset ElementIndex)
+		if addr == ReceiverValue 'aLoadFromTheReceiver'
+			self.receiverLoadResults.push(result)
+			self.receiverLoadOffsets.push(offset)
+		end 'aLoadFromTheReceiver'
+	end 'pushReceiverLoad'
+
+	function everyReturnIsAReceiverLoad(func IrFunction) returns bool
+		var sawAReturn = false
+
+		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
+			let block = self.module.blockAtPosition(func, position: blockPosition)
+
+			if not block.hasTerminatorOp() 'noExit'
+				continue
+			end 'noExit'
+
+			let value = try holdReturnedValue(self.module.getOp(block.terminatorIndex())) otherwise continue
+			sawAReturn = true
+
+			if not self.noteReturnedReceiverLoad(value) 'notAReceiverLoad'
+				return false
+			end 'notAReceiverLoad'
+		end 'eachBlock'
+
+		return sawAReturn
+	end 'everyReturnIsAReceiverLoad'
+
+	function noteReturnedReceiverLoad(value ValueId) returns bool
+		for k in 0 upto self.receiverLoadResults.count() 'eachLoad'
+			if (try self.receiverLoadResults.get(k) otherwise panic("HoldResolver.noteReturnedReceiverLoad: receiverLoadResults.get OOB at {k}")) == value 'theReturnedLoad'
+				self.projectionOffsets.push(try self.receiverLoadOffsets.get(k) otherwise panic("HoldResolver.noteReturnedReceiverLoad: receiverLoadOffsets.get OOB at {k}"))
+				return true
+			end 'theReturnedLoad'
+		end 'eachLoad'
+
+		return false
+	end 'noteReturnedReceiverLoad'
+
+	function hopThroughLoad(addr ValueId, offset ElementIndex) returns bool
+		if not self.noteFieldHop(addr, offset: offset) 'unknownContainer'
+			return false
+		end 'unknownContainer'
+
+		self.chainCursor = addr
+		return true
+	end 'hopThroughLoad'
+
+	function hopThroughElementRead(args ValueIdArray) returns bool
+		if not self.noteElementHop(args) 'unknownArray'
+			return false
+		end 'unknownArray'
+
+		self.chainCursor = holdFirstArg(args)
+		return true
+	end 'hopThroughElementRead'
+
+	function noteRootNode(root ValueId)
+		let key = self.judge.recordKeyOfValue(root)
+
+		if key == UnknownRecord 'anUnknownRoot'
+			self.chainTop = true
+			return
+		end 'anUnknownRoot'
+
+		self.nodeKeys.push(key)
+	end 'noteRootNode'
+
+	function noteFieldHop(addr ValueId, offset ElementIndex) returns bool
+		let record = self.judge.recordKeyOfValue(addr)
+
+		if record == UnknownRecord or record == LeafRecord 'anUnknownContainer'
+			self.chainTop = true
+			return false
+		end 'anUnknownContainer'
+
+		self.nodeKeys.push(record)
+
+		if let event = try self.events.eventIds.get(fieldEventKey(record, offset: offset)) 'someoneStoresIt'
+			self.hopEvents.push(event)
+		end 'someoneStoresIt'
+
+		return true
+	end 'noteFieldHop'
+
+	function noteElementHop(args ValueIdArray) returns bool
+		let array = holdFirstArg(args)
+		let tag = try self.judge.valueTags.get(array) otherwise 'unknownArray'
+			self.chainTop = true
+			return false
+		end 'unknownArray'
+
+		let nameId = try self.judge.valueNameIds.get(array) otherwise 'unknownArray'
+			self.chainTop = true
+			return false
+		end 'unknownArray'
+
+		if not self.judge.signatures.isArrayInstanceAt(tag, nameId: nameId) 'notAnArray'
+			self.chainTop = true
+			return false
+		end 'notAnArray'
+
+		let instance = nameId as GenericInstanceId
+		self.nodeKeys.push(self.judge.recordKeyOfValue(array))
+		self.chainHasElement = true
+
+		let element = self.judge.elementKeyOf(instance)
+
+		if element == UnknownRecord 'wildElements'
+			self.chainHasWildElement = true
+			return true
+		end 'wildElements'
+
+		if let event = try self.events.eventIds.get(element or ElementEventFlag) 'someoneDisplacesIt'
+			self.hopEvents.push(event)
+		end 'someoneDisplacesIt'
+
+		return true
+	end 'noteElementHop'
+
+	function applyVerdicts(func IrFunction)
+		for entry in 0 upto self.entryOps.count() 'eachEntry'
+			self.applyEntry(entry)
+		end 'eachEntry'
+
+		if self.deletedKeys.count() == 0 'nothingDeleted'
+			return
+		end 'nothingDeleted'
+
+		self.removeDeletedOps(func)
+		self.adjustRangeSites(func)
+	end 'applyVerdicts'
+
+	function applyEntry(entry ElementIndex)
+		let isEnd = try self.entryIsEnd.get(entry) otherwise panic("HoldResolver.applyEntry: entryIsEnd.get OOB at {entry}")
+		let held = try self.entryHelds.get(entry) otherwise panic("HoldResolver.applyEntry: entryHelds.get OOB at {entry}")
+		let site = self.siteOfEnd(held)
+		let verdict = try self.siteVerdicts.get(site) otherwise panic("HoldResolver.applyEntry: siteVerdicts.get OOB at {site}")
+		let kind = try self.siteKinds.get(site) otherwise panic("HoldResolver.applyEntry: siteKinds.get OOB at {site}")
+
+		match verdict 'verdict'
+			deleted then self.deleteEntry(entry, isEnd: isEnd, kind: kind, replacing: try self.siteReplacing.get(site) otherwise panic("HoldResolver.applyEntry: siteReplacing.get OOB at {site}"))
+			lowered then self.lowerEntry(entry, isEnd: isEnd, kind: kind)
+			undecided then panic("HoldResolver.applyEntry: hold v{held} reached the apply step undecided — `decideSites` decides every marker of the function")
+		end 'verdict'
+	end 'applyEntry'
+
+	function deleteEntry(entry ElementIndex, isEnd bool, kind HoldKind, replacing bool)
+		if replacing and not isEnd 'anAliasOfItsSource'
+			self.aliasEntry(entry)
+			self.tally.deleted.add(kind.ordinal as ElementIndex, count: 1)
+			return
+		end 'anAliasOfItsSource'
+
+		let block = try self.entryBlocks.get(entry) otherwise panic("HoldResolver.deleteEntry: entryBlocks.get OOB at {entry}")
+		let position = try self.entryPositions.get(entry) otherwise panic("HoldResolver.deleteEntry: entryPositions.get OOB at {entry}")
+		self.deletedKeys.push(holdKey(block, position: position))
+
+		if not isEnd 'aMarker'
+			self.tally.deleted.add(kind.ordinal as ElementIndex, count: 1)
+		end 'aMarker'
+	end 'deleteEntry'
+
+	function aliasEntry(entry ElementIndex)
+		let opIdx = try self.entryOps.get(entry) otherwise panic("HoldResolver.aliasEntry: entryOps.get OOB at {entry}")
+		try self.module.ops.set(opIdx, value: aliasedHoldOp(self.module.getOp(opIdx))) otherwise panic("HoldResolver.aliasEntry: ops.set OOB at {opIdx}")
+	end 'aliasEntry'
+
+	function lowerEntry(entry ElementIndex, isEnd bool, kind HoldKind)
+		let opIdx = try self.entryOps.get(entry) otherwise panic("HoldResolver.lowerEntry: entryOps.get OOB at {entry}")
+		let lowered = loweredHoldCall(self.module.getOp(opIdx), range: self.project.opRanges.get(opIdx))
+		try self.module.ops.set(opIdx, value: lowered) otherwise panic("HoldResolver.lowerEntry: ops.set OOB at {opIdx}")
+
+		if not isEnd 'aMarker'
+			self.tally.lowered.add(kind.ordinal as ElementIndex, count: 1)
+		end 'aMarker'
+	end 'lowerEntry'
+
+	function removeDeletedOps(func IrFunction)
+		var cursor = 0 as ElementIndex
+
+		while cursor < self.deletedKeys.count() 'eachAffectedBlock'
+			let first = try self.deletedKeys.get(cursor) otherwise panic("HoldResolver.removeDeletedOps: deletedKeys.get OOB at {cursor}")
+			let blockPosition = holdKeyBlock(first)
+			var block = self.module.blockAtPosition(func, position: blockPosition)
+			var kept = OpIndexArray.create()
+			var next = cursor
+
+			for position in 0 upto block.opRefs.count() 'eachOp'
+				if next < self.deletedKeys.count() and (try self.deletedKeys.get(next) otherwise panic("HoldResolver.removeDeletedOps: deletedKeys.get OOB at {next}")) == holdKey(blockPosition, position: position) 'aDeletedOp'
+					next = next + 1
+					continue
+				end 'aDeletedOp'
+
+				kept.push(try block.opRefs.get(position) otherwise panic("HoldResolver.removeDeletedOps: opRefs.get OOB at {position}"))
+			end 'eachOp'
+
+			block.opRefs = kept
+			cursor = next
+		end 'eachAffectedBlock'
+	end 'removeDeletedOps'
+
+	function adjustRangeSites(func IrFunction)
+		var checks = try self.project.rangeChecks.get(func.name) otherwise return
+
+		if checks.sites.count() == 0 'noSites'
+			return
+		end 'noSites'
+
+		var shifts = HoldIndexColumn.create()
+		var anyShifted = false
+
+		for site in checks.sites 'eachSite'
+			let sitePosition = self.positionOfBlock(site.block)
+			let below = countKeysBelow(self.deletedKeys, target: holdKey(sitePosition, position: site.maxonOpPos)) - countKeysBelow(self.deletedKeys, target: holdKey(sitePosition, position: 0))
+			shifts.push(below)
+
+			if below > 0 'shifted'
+				anyShifted = true
+			end 'shifted'
+		end 'eachSite'
+
+		if not anyShifted 'nothingShifts'
+			return
+		end 'nothingShifts'
+
+		for index in 0 upto checks.sites.count() 'eachAdjustedSite'
+			var site = try checks.sites.get(index) otherwise panic("HoldResolver.adjustRangeSites: sites.get OOB at {index}")
+			site.maxonOpPos = site.maxonOpPos - (try shifts.get(index) otherwise panic("HoldResolver.adjustRangeSites: shifts.get OOB at {index}"))
+		end 'eachAdjustedSite'
+	end 'adjustRangeSites'
+
+	function logTally()
+		if compilerLogEnabled(CompilerLogGroup.semantic, level: LogLevel.debug) 'debugging'
+			compilerLogger(CompilerLogGroup.semantic).debug("holds: lowered {self.tally.lowered.summary(HoldKind.allCaseNames)}; deleted {self.tally.deleted.summary(HoldKind.allCaseNames)}")
+		end 'debugging'
+	end 'logTally'
+end 'HoldResolver'
+
+function holdCalleeReplacesItsSource(callee ByteArray) returns bool
+	return callee.equals(RetainTypeParamName) or callee.equals(RetainExistentialName)
+end 'holdCalleeReplacesItsSource'
+
+function holdFirstArg(args ValueIdArray) returns ValueId
+	return try args.get(0) otherwise panic("holdFirstArg: an element read carries no receiver")
+end 'holdFirstArg'
+
+function holdKey(block ElementIndex, position ElementIndex) returns HoldKey
+	return ((block as HoldKey) shl HoldBlockKeyShift) or (position as HoldKey)
+end 'holdKey'
+
+function holdKeyBlock(key HoldKey) returns ElementIndex
+	return (key shr HoldBlockKeyShift) as ElementIndex
+end 'holdKeyBlock'
+
+function countKeysBelow(keys HoldKeyColumn, target HoldKey) returns ElementIndex
+	var low = 0 as ElementIndex
+	var high = 0 as ElementIndex
+	high = keys.count()
+
+	while low < high 'search'
+		let middle = low + ((high - low) shr 1)
+
+		if (try keys.get(middle) otherwise panic("countKeysBelow: keys.get OOB at {middle}")) < target 'below'
+			low = middle + 1
+		end 'below' else 'atOrAbove'
+			high = middle
+		end 'atOrAbove'
+	end 'search'
+
+	return low
+end 'countKeysBelow'
+
+function holdReturnedValue(op MaxonOp) returns ValueId throws AbsentError
+	match op 'op'
+		ret(value) then return value
+		default throws AbsentError.absent
+	end 'op'
+end 'holdReturnedValue'
+
+function holdEndHeld(op MaxonOp) returns ValueId
+	return match op 'op'
+		holdEnd(_, held, _, _, _) gives held
+		default panic("holdEndHeld: handed an op that is not a hold end")
+	end 'op'
+end 'holdEndHeld'
+
+function holdMarkerResult(op MaxonOp) returns ValueId
+	return match op 'op'
+		holdValue(result, _, _, _, _) gives result
+		default panic("holdMarkerResult: handed an op that is not a hold marker")
+	end 'op'
+end 'holdMarkerResult'
+
+function loweredHoldCall(op MaxonOp, range SourceRange) returns MaxonOp
+	return match op 'op'
+		holdValue(result, _, callee, args, _) gives holdCallOp(result, callee: callee, args: args, range: range)
+		holdEnd(result, _, callee, args, _) gives holdCallOp(result, callee: callee, args: args, range: range)
+		default panic("loweredHoldCall: handed an op that is not a hold marker")
+	end 'op'
+end 'loweredHoldCall'
+
+function aliasedHoldOp(op MaxonOp) returns MaxonOp
+	return match op 'op'
+		holdValue(result, held, _, _, _) gives MaxonOp.unaryOp(result, operand: held, op: MaxonUnaryOp.copy)
+		default panic("aliasedHoldOp: handed an op that is not a hold marker")
+	end 'op'
+end 'aliasedHoldOp'
+
+function holdCallOp(result ValueId, callee ByteArray, args ValueIdArray, range SourceRange) returns MaxonOp
+	return MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NoImmutableArgNames, argDefaultSlots: NoDefaultArgSlots, mint: CalleeMint.notMinted)
+end 'holdCallOp'
+
+function libraryColumnContainers(project Project, signatures ProgramSignatures) returns NameRoster
+	var bases = NameRoster.create()
+
+	if declaredInTheLibrary(project, signatures: signatures, name: MapBuiltinBaseName) 'theLibrarysMap'
+		bases.push(MapBuiltinBaseName)
+	end 'theLibrarysMap'
+
+	if declaredInTheLibrary(project, signatures: signatures, name: SetBuiltinBaseName) 'theLibrarysSet'
+		bases.push(SetBuiltinBaseName)
+	end 'theLibrarysSet'
+
+	return bases
+end 'libraryColumnContainers'
+
+function declaredInTheLibrary(project Project, signatures ProgramSignatures, name ByteArray) returns bool
+	return match signatures.structInAnyFile(name) 'declared'
+		declared(layout) gives isStdlibSourceFile(project, path: layout.declFilePath)
+		undeclared gives false
+	end 'declared'
+end 'declaredInTheLibrary'
+
+export function resolveHoldMarkers(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
+	if projectHasErrors(project) 'alreadyRefused'
+		return
+	end 'alreadyRefused'
+
+	var judge = HoldJudge.create(signatures, typeNames: project.typeNames, byName: funcNames.byName, functions: funcNames.functions, columnContainers: libraryColumnContainers(project, signatures: signatures))
+	var builder = HoldEventBuilder.create()
+	let events = builder.build(module, funcNames: funcNames, judge: judge, runtimeTier: project.libraryFacts.runtimeTier)
+	var resolver = HoldResolver.create(project, module: module, judge: judge, events: events, functions: funcNames.functions)
+
+	for i in 0 upto funcNames.functions.count() 'eachFunc'
+		let func = holdFunctionAt(funcNames, index: i)
+
+		if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+
+		resolver.resolveFunction(func, index: i)
+	end 'eachFunc'
+
+	resolver.logTally()
+end 'resolveHoldMarkers'

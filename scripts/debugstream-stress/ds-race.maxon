@@ -41,7 +41,7 @@
 //     seq) was already consumed => a DUPLICATE.
 // verify.awk checks for both, in both streams, plus exact counts and zero drops.
 //
-// The green threads run on real OS worker threads (`__Builtins.parallelBoundary()` marks the
+// The green threads run on real OS worker threads (`Scheduler.parallelBoundary()` marks the
 // CPU-bound task functions as legitimate `async` targets), so producers genuinely interleave.
 
 typealias Integer = int(i64.min to i64.max)
@@ -101,12 +101,13 @@ function parseDecimal(text String, fallback Integer) returns Integer
 	var value = 0
 	var i = 0
 	let n = text.byteLength()
+
 	// One view for the whole scan: `String.addressableBytes()` is stdlib-internal, so code out here
 	// reaches the bytes through an independent `toByteArray()`.
 	let bytes = text.toByteArray()
 
 	while i < n 'digits'
-		let b = try bytes.managed.byteAt(i) otherwise panic("parseDecimal: byteAt OOB — i < byteLength invariant")
+		let b = try bytes.get(i) otherwise panic("parseDecimal: get OOB — i < byteLength invariant")
 		let digit = (b as Integer) - asciiZero
 
 		if digit < 0 or digit > asciiNine - asciiZero 'nonDigit'
@@ -153,7 +154,7 @@ end 'burnCycles'
 function emitBurst(idx Integer, events Integer, texts Integer, pad String, spin Integer) returns Integer
 	// Marks this CPU-bound function as a legitimate `async` target (the E3073 yielding contract)
 	// without claiming fake I/O. No-op at runtime.
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 
 	// Interned at COMPILE time into the MXDS_STRS blob, so the loop below builds no name and the
 	// only thing racing on the ring is the event write itself.
@@ -178,9 +179,8 @@ function emitBurst(idx Integer, events Integer, texts Integer, pad String, spin 
 		// from a previous ring generation shows up as a duplicate.
 		if sinceText == eventsPerText and textSeq < texts 'text'
 			let msg = "t{idx}s{textSeq}-{pad}"
-			let msgBytes = msg.toByteArray()
 
-			__DebugStream.text(logCategory, logLevel, unit, msgBytes.managed)
+			__DebugStream.text(logCategory, logLevel, unit, msg)
 
 			textSeq = textSeq + 1
 			sinceText = 0
@@ -215,7 +215,7 @@ function main() returns ExitCode
 	// Queue every task before awaiting any, so the scheduler spins up worker Ms to service the
 	// backlog — that is what puts more than one producer on the ring at once.
 	for i in 0 upto threadCount 'spawn'
-		promises.push(async emitBurst(i, events: eventsPerThread, texts: textsPerThread, pad: pad, spin: spin))
+		promises.push(async emitBurst(i, events: eventsPerThread, texts: textsPerThread, pad: pad.clone(), spin: spin))
 	end 'spawn'
 
 	var emitted = 0

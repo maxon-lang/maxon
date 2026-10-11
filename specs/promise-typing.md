@@ -40,8 +40,10 @@ Integer` — which is what `rangeRenderedInstanceName` does for every alias-less
 the alias is exactly the thing that was ambiguous. Declare `typealias IntPromise = Promise with Integer` and
 the diagnostics say `IntPromise`.
 
-The one sanctioned promise → `int` conversion is **`p.inner`** (see `promise-peek.md`): a non-blocking
-peek at the handle word, which reads the promise without consuming it.
+A promise converts to no `int`. Its result arrives through `await`, and **`p.isComplete()`** (see
+`promise-peek.md`) asks whether it has finished without consuming it. The handle word under a promise,
+`p.inner`, is library-tier surface: read outside a source file under `stdlib/` or `runtime/` it is
+**E3185**.
 
 ## Tests
 
@@ -133,7 +135,7 @@ end 'plain'
 function main() returns ExitCode
 		let p = async plain()
 		let copy = p.clone()
-		print("copied {copy.inner > 0}")
+		print("copied {copy.isComplete()}")
 		return (await p) as ExitCode
 end 'main'
 ```
@@ -293,7 +295,7 @@ end 'plain'
 function main() returns ExitCode
 		var pending = IntPromiseList.create()
 		pending.append(async plain())
-		let kept = pending.filter(function(p IntPromise) gives p.inner > 0)
+		let kept = pending.filter(function(p IntPromise) gives p.isComplete())
 		return kept.count() as ExitCode
 end 'main'
 ```
@@ -347,29 +349,36 @@ error E3141: <fragment>:4:11: a promise cannot be borrowed through 'slice': it o
 note: stdlib/Array.maxon:83:32: raised inside the library, on behalf of the construct above
 ```
 
-<!-- test: promise-typing.inner-is-the-one-unwrap -->
-The sanctioned promise → `int` conversion. `.inner` peeks at the handle word without consuming the
-promise, so the `await` that follows still reclaims the thread and the program still balances to zero.
+<!-- test: promise-typing.error.inner-is-library-tier -->
+A program has no promise → `int` conversion, and a service REPLY is a promise like any other: its handle
+word `.inner` is library-tier surface, so a read of it from a program is refused at the member and the
+remedy names the safe peek. `services.md:a-reply-inner-compiles-in-the-library-tier` is the same program
+in the library tier; `library-tier-surface.md` pins the door on an `async` promise.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function plain() returns Integer
-		_ = File.exists(FilePath from "noyield.txt")
-		return 7
-end 'plain'
+type Calc
+	var count as Integer
+
+	static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
 
 function main() returns ExitCode
-		let p = async plain()
-		let named = p.inner > 0
-		print("names a thread {named}")
-		return (await p) as ExitCode
+	let h = spawn Calc.create()
+	let p = h.total()
+	let named = p.inner > 0
+	print("names a thread {named}")
+	return (try await p otherwise 0) as ExitCode
 end 'main'
 ```
-```stdout
-names a thread true
-```
-```exitcode
-7
+```maxoncstderr
+error E3185: <fragment>:19:16: '.inner' read from outside the library tiers: a promise's raw green-thread handle is reachable only from a source file under stdlib/ or runtime/ — use 'isComplete()' or 'await'
 ```
 
 <!-- test: promise-typing.a-promise-array-element-may-be-spelled-inline -->

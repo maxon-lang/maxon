@@ -2531,7 +2531,7 @@ end 'Box'
 function main() returns ExitCode
 	var result = Box.create(0)
 	if true 'blk'
-		let inner = Box.create(42)
+		var inner = Box.create(42)
 		result = inner
 	end 'blk'
 	return result.value

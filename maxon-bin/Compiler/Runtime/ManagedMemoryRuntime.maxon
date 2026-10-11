@@ -238,7 +238,7 @@ end 'ImmortalStringTable'
 // the record's `buffer@0` seed makes its bytes injective in the buffer, the buffer's bytes are injective in
 // its elements, and every element is a String — so two byte-identical records cannot name different
 // destructors.
-export function registerImmortalStringTableRecord(globalData GlobalDataTable, texts ByteArrayArray, elementSize ElementStride, debugStream bool) returns ImmortalStringTable
+export function registerImmortalStringTableRecord(globalData GlobalDataTable, texts ByteBlobArray, elementSize ElementStride, debugStream bool) returns ImmortalStringTable
 	if elementSize != ManagedArrayElementBytes 'notAPointerSlot'
 		panic("registerImmortalStringTableRecord: a table of addresses is being registered at element stride {elementSize}, not the {ManagedArrayElementBytes}-byte pointer slot a managed element occupies — the buffer this lays down and the stride the record is stamped with would describe different geometry")
 	end 'notAPointerSlot'
@@ -603,6 +603,7 @@ export let ManagedByteAtName = b"__managed_byte_at"
 // `-1` off an `Array with bool`, and `boundary-16-is-byte` reads `1`. The field is stored as a full machine
 // word, so the two's-complement negative comes back as one and needs no decoding here.
 export let ManagedElementSizeName = b"__managed_element_size"
+export let ManagedSlotUnfilledName = b"__managed_slot_unfilled"
 
 // ⭐⭐ **THE THREE RELOCATORS — `swap`, `shiftRight`, `shiftLeft`.** They are what `stdlib/Array.maxon` builds
 // `insert`/`remove` out of and what `stdlib/helpers/sort/smallSort.maxon` builds every sort out of, and they
@@ -627,12 +628,6 @@ export let ManagedElementSizeName = b"__managed_element_size"
 // corpus caller binds it — `stdlib/Array.maxon:289,328` both write `otherwise throw ArrayError.…` — so the
 // difference is unobservable, and a second byte-identical entry to relabel one enum would be the twin this
 // file spends its whole header avoiding.
-//
-// ⚠ **THE TWO SHIFTS ARE BOUNDED BY `capacity`, NOT `length`, AND THAT IS NOT A LOOSENING.** They are the
-// STAGING half of a publish: `Array.insert` reserves, shifts a hole open ABOVE the live range, writes into it
-// and only then calls `setLength` to publish (`stdlib/Array.maxon:303-323`). A `length` bound would refuse
-// the very sequence they exist for; the corpus's own prose says so
-// (`specs/managed-memory-methods.md:23-24`, `specs/internal-types.md:46-47`).
 export let ManagedMemSwapName = b"__managed_mem_swap"
 export let ManagedMemShiftRightName = b"__managed_mem_shift_right"
 export let ManagedMemShiftLeftName = b"__managed_mem_shift_left"
@@ -779,10 +774,11 @@ let MemorySliceOutOfBoundsOrdinal = 2 as ParsedInt
 let MemoryInvalidLengthOrdinal = 3 as ParsedInt
 let MemoryInvalidCapacityOrdinal = 4 as ParsedInt
 
-// ⭐ **THE TWO SHIFTS' OWN CASE, AND IT BLAMES A RANGE RATHER THAN AN INDEX.** `shiftOutOfBounds` is the case
-// `stdlib/Builtins.maxon:157` declares for exactly this pair, and it is a different complaint from
-// `indexOutOfBounds`: a shift is handed `(index, count)` and refuses when their SUM leaves the capacity, so
-// naming one index would blame a value that may be perfectly in range on its own.
+// ⭐ **THE TWO SHIFTS' OWN CASE, AND IT BLAMES A RANGE RATHER THAN AN INDEX.** `shiftOutOfBounds` is
+// the case `stdlib/Builtins.maxon:157` declares for exactly this pair, and it is a different
+// complaint from `indexOutOfBounds`: a shift is handed `(index, count)` and refuses when their SUM
+// leaves the live length, so naming one index would blame a value that may be perfectly in range on
+// its own.
 let MemoryShiftOutOfBoundsOrdinal = 5 as ParsedInt
 let MemoryInvalidByteRangeOrdinal = 6 as ParsedInt
 let MemoryInvalidAllocationOrdinal = 7 as ParsedInt
@@ -1199,7 +1195,7 @@ function claimManagedMemoryOrdinals(project Project, declaration EnumLayout)
 	memoryErrors.requireTotal()
 end 'claimManagedMemoryOrdinals'
 
-export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage)
+export function installManagedMemoryRuntime(module StdModule, globalData GlobalDataTable, usage RuntimeUsage, slotText EmptySlotText)
 	// Ahead of the gate, for `checkSlabRuntimeGeometry`'s reason: a rule that only runs for whichever
 	// program happens to use arrays is the check that never runs on the compile that breaks it.
 	checkManagedGeometry()
@@ -1219,17 +1215,18 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildManagedGrow(module)
 	buildManagedCreate(module)
 	buildManagedPush(module)
-	buildManagedGet(module)
+	buildManagedGet(module, greenThreads: usage.usesGt)
 	buildManagedGetUnchecked(module)
 
 	buildManagedSet(module)
 	buildManagedVacate(module)
 	buildManagedCount(module)
 	buildManagedCapacity(module)
+	buildManagedSlotUnfilled(module, greenThreads: usage.usesGt)
 	buildManagedElementSize(module)
 	buildManagedReserve(module)
 	buildManagedResize(module)
-	buildManagedFirst(module)
+	buildManagedFirst(module, greenThreads: usage.usesGt)
 	buildManagedClear(module)
 	buildManagedRemove(module)
 	buildManagedSlice(module)
@@ -1259,7 +1256,7 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildManagedCursorCreate(module)
 	buildManagedCursorDecref(module)
 	buildManagedCursorIndex(module)
-	buildManagedCursorCurrent(module)
+	buildManagedCursorCurrent(module, greenThreads: usage.usesGt, pastEnd: registerPanicLabel(globalData, message: CursorPastEndPanicText), slotText: slotText)
 	buildManagedCursorPeek(module)
 	buildManagedCursorNavigator(module, name: ManagedCursorAdvanceName, step: CursorStep.forward)
 	buildManagedCursorNavigator(module, name: ManagedCursorRetreatName, step: CursorStep.backward)
@@ -1841,7 +1838,7 @@ end 'emitLoadElem'
 // treated as an empty slot and THROWS `indexOutOfBounds`, routing the caller's `try … otherwise` to its
 // fallback. A TRIVIAL element's 0 is a genuine value (not empty), so the null-check is gated on the destructor
 // and never fires for a trivial array — its ok-return is unchanged.
-function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, index ValueId, es ValueId, ids ValueMinter)
+function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, index ValueId, es ValueId, greenThreads bool, ids ValueMinter)
 	var checkDtor = module.addBlock(func, label: b"gchkdtor", heat: BlockHeat.normal)
 	let value = emitLoadElemAt(module, func: func, cur: cur, exit: checkDtor, buffer: buffer, index: index, es: es, ids: ids)
 
@@ -1851,7 +1848,7 @@ function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock,
 
 	// checkDtor: a trivial element (destructor 0) skips the null-check; a managed one falls to checkNull.
 	let dtor = emitLoadField(module, block: checkDtor, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
-	let managed = emitElementIsManaged(module, block: checkDtor, destroy: dtor, ids: ids)
+	let managed = emitSlotMustBeFilled(module, block: checkDtor, destroy: dtor, ids: ids, greenThreads: greenThreads)
 	module.setTerminator(checkDtor, op: StdOp.condBranch(managed, thenBlockId: checkNull.id, elseBlockId: ok.id))
 
 	// checkNull: a NULL managed slot is empty → throw; a live one returns ok.
@@ -2947,7 +2944,7 @@ function managedCalleeRole(callee ByteArray) returns ManagedCalleeRole
 		return ManagedCalleeRole.boundedRead
 	end 'theCheckedGet'
 
-	if callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedCountName) or callee.equals(ManagedCapacityName) or callee.equals(ManagedElementSizeName) or callee.equals(ManagedFirstName) or callee.equals(ManagedByteAtName) 'pureRead'
+	if callee.equals(ManagedGetUncheckedName) or callee.equals(ManagedCountName) or callee.equals(ManagedCapacityName) or callee.equals(ManagedSlotUnfilledName) or callee.equals(ManagedElementSizeName) or callee.equals(ManagedFirstName) or callee.equals(ManagedByteAtName) 'pureRead'
 		return ManagedCalleeRole.pureRead
 	end 'pureRead'
 
@@ -3723,7 +3720,7 @@ function buildManagedPush(module StdModule)
 end 'buildManagedPush'
 
 // `__managed_get(arr, index) -> (value, flag)` — bounds-checked element read (throws indexOutOfBounds).
-function buildManagedGet(module StdModule)
+function buildManagedGet(module StdModule, greenThreads bool)
 	var func = IrFunction.createFromStd(ManagedGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(2)
 
@@ -3741,17 +3738,17 @@ function buildManagedGet(module StdModule)
 
 	emitOobReturn(module, block: oob, ids: ids)
 
-	emitGetLoadAndReturn(module, func: func, cur: load, arr: arr, index: index, ids: ids)
+	emitGetLoadAndReturn(module, func: func, cur: load, arr: arr, index: index, greenThreads: greenThreads, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedGet'
 
 // The READ half of the checked `get` — the two record fields the element load needs, then the load
 // itself. ⚠ File-local: the read is this record's own, and this is its one caller.
-function emitGetLoadAndReturn(module StdModule, func IrFunction, cur IrBlock, arr ValueId, index ValueId, ids ValueMinter)
+function emitGetLoadAndReturn(module StdModule, func IrFunction, cur IrBlock, arr ValueId, index ValueId, greenThreads bool, ids ValueMinter)
 	let buffer = emitLoadField(module, block: cur, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	emitLoadElemAndOkReturn(module, func: func, cur: cur, record: arr, buffer: buffer, index: index, es: es, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: cur, record: arr, buffer: buffer, index: index, es: es, greenThreads: greenThreads, ids: ids)
 end 'emitGetLoadAndReturn'
 
 // `__managed_get_unchecked(arr, index) -> value` — the for-in element read. See `ManagedGetUncheckedName` for
@@ -3939,6 +3936,30 @@ function buildManagedCount(module StdModule)
 	module.functions.push(func)
 end 'buildManagedCount'
 
+function buildManagedSlotUnfilled(module StdModule, greenThreads bool)
+	var func = IrFunction.createFromStd(ManagedSlotUnfilledName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var checkSlot = module.addBlock(func, label: b"slotchk", heat: BlockHeat.normal)
+	var filled = module.addBlock(func, label: b"slotfilled", heat: BlockHeat.normal)
+	var unfilled = module.addBlock(func, label: b"slotunfilled", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let value = 1 as ValueId
+
+	let dtor = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
+	let slotMustBeFilled = emitSlotMustBeFilled(module, block: entry, destroy: dtor, ids: ids, greenThreads: greenThreads)
+	module.setTerminator(entry, op: StdOp.condBranch(slotMustBeFilled, thenBlockId: checkSlot.id, elseBlockId: filled.id))
+
+	let isNull = emitCmp(module, block: checkSlot, a: value, b: emitConst(module, block: checkSlot, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkSlot, op: StdOp.condBranch(isNull, thenBlockId: unfilled.id, elseBlockId: filled.id))
+
+	module.setTerminator(unfilled, op: StdOp.ret(emitConst(module, block: unfilled, value: 1, ids: ids)))
+	module.setTerminator(filled, op: StdOp.ret(emitConst(module, block: filled, value: 0, ids: ids)))
+	module.functions.push(func)
+end 'buildManagedSlotUnfilled'
+
 // `__managed_element_size(arr) -> element_size@24`, signed — see `ManagedElementSizeName`.
 function buildManagedElementSize(module StdModule)
 	var func = IrFunction.createFromStd(ManagedElementSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
@@ -4031,7 +4052,7 @@ function buildManagedResize(module StdModule)
 end 'buildManagedResize'
 
 // `__managed_first(arr) -> (value, flag)` — element 0 (throws on empty).
-function buildManagedFirst(module StdModule)
+function buildManagedFirst(module StdModule, greenThreads bool)
 	var func = IrFunction.createFromStd(ManagedFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
 
@@ -4052,7 +4073,7 @@ function buildManagedFirst(module StdModule)
 	let buffer = emitLoadField(module, block: load, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: load, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let firstIdx = emitConst(module, block: load, value: 0, ids: ids)
-	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, buffer: buffer, index: firstIdx, es: es, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, buffer: buffer, index: firstIdx, es: es, greenThreads: greenThreads, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedFirst'
@@ -4571,7 +4592,7 @@ function buildManagedSetLength(module StdModule)
 
 	emitCowDetach(module, block: checkHigh, arr: arr, ids: ids)
 	let capacity = emitLoadField(module, block: checkHigh, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
-	let overCapacity = emitCmp(module, block: checkHigh, a: n, b: capacity, pred: StdCmpPred.gt, ids: ids)
+	let overCapacity = emitBoundaryPositionOutOfRange(module, block: checkHigh, position: n, length: capacity, ids: ids)
 	module.setTerminator(checkHigh, op: StdOp.condBranch(overCapacity, thenBlockId: bad.id, elseBlockId: pick.id))
 
 	emitMemoryThrow(module, block: bad, flag: MemoryInvalidLengthFlag, ids: ids)
@@ -5061,10 +5082,9 @@ end 'buildManagedMemSwap'
 // `[length, capacity)`-reads-zero rule every other vacating path here obeys — see `emitZeroElems`, whose
 // header names the five callers this joins.
 //
-// ⚠ **A `count` OF 0 STILL ERASES SLOT `index`, WHICH IS THE CONTRACT AND NOT AN EDGE CASE.** The operation
-// is "open a hole at `index`"; how many elements had to move to open it is the argument, not the outcome.
-// `Array.insert` — the only corpus caller — never asks for one (it
-// calls this only when `index < length`, so `count >= 1`).
+// ⚠ **THE SLIDE STAYS INSIDE THE LIVE LENGTH AND RELEASES WHAT IT OVERWRITES.** `index + count`
+// must be below `length` — `Array.insert`, the only corpus caller, resizes first — and the element
+// in that slot is released before the slide lands on it. A `count` of 0 moves and erases nothing.
 function buildManagedMemShiftRight(module StdModule)
 	var func = IrFunction.createFromStd(ManagedMemShiftRightName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(3)
@@ -5072,7 +5092,9 @@ function buildManagedMemShiftRight(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var checkRange = module.addBlock(func, label: b"srrange", heat: BlockHeat.normal)
 	var bad = module.addBlock(func, label: b"srbad", heat: BlockHeat.normal)
+	var nothing = module.addBlock(func, label: b"srnothing", heat: BlockHeat.normal)
 	var shift = module.addBlock(func, label: b"srshift", heat: BlockHeat.normal)
+	var move = module.addBlock(func, label: b"srmove", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let arr = 0 as ValueId
@@ -5082,18 +5104,28 @@ function buildManagedMemShiftRight(module StdModule)
 	let negativeArgument = emitShiftArgumentIsNegative(module, block: entry, index: index, count: count, floor: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(negativeArgument, thenBlockId: bad.id, elseBlockId: checkRange.id))
 
-	let pastCapacity = emitShiftRangePastCapacity(module, block: checkRange, arr: arr, index: index, count: count, ids: ids)
-	module.setTerminator(checkRange, op: StdOp.condBranch(pastCapacity, thenBlockId: bad.id, elseBlockId: shift.id))
+	let rangeEnd = emitShiftDetachedRangeEnd(module, block: checkRange, arr: arr, index: index, count: count, ids: ids)
+	let liveLength = emitLoadField(module, block: checkRange, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let pastLength = emitIndexOutOfRange(module, block: checkRange, index: rangeEnd, length: liveLength, ids: ids)
+	module.setTerminator(checkRange, op: StdOp.condBranch(pastLength, thenBlockId: bad.id, elseBlockId: shift.id))
 
 	emitMemoryThrow(module, block: bad, flag: MemoryShiftOutOfBoundsFlag, ids: ids)
 
-	let es = emitLoadField(module, block: shift, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let buffer = emitLoadField(module, block: shift, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	let one = emitConst(module, block: shift, value: 1, ids: ids)
-	let openedAt = emitBin(module, block: shift, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitMoveElems(module, block: shift, destBuffer: buffer, destIndex: openedAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
-	emitZeroElems(module, block: shift, buffer: buffer, start: index, count: one, es: es, ids: ids)
-	emitVoidOkReturn(module, block: shift, ids: ids)
+	let noElements = emitCmp(module, block: shift, a: count, b: emitConst(module, block: shift, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(shift, op: StdOp.condBranch(noElements, thenBlockId: nothing.id, elseBlockId: move.id))
+
+	emitVoidOkReturn(module, block: nothing, ids: ids)
+
+	let es = emitLoadField(module, block: move, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: move, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let one = emitConst(module, block: move, value: 1, ids: ids)
+	let openedAt = emitBin(module, block: move, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let overwrittenAt = emitBin(module, block: move, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
+	let overwrittenEnd = emitBin(module, block: move, a: overwrittenAt, b: one, opcode: StdBinOpcode.add, ids: ids)
+	var released = emitDestroyRangeIfManaged(module, func: func, cur: move, record: arr, buffer: buffer, start: overwrittenAt, stop: overwrittenEnd, elementSize: es, ids: ids)
+	emitMoveElems(module, block: released, destBuffer: buffer, destIndex: openedAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
+	emitZeroElems(module, block: released, buffer: buffer, start: index, count: one, es: es, ids: ids)
+	emitVoidOkReturn(module, block: released, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedMemShiftRight'
@@ -5105,11 +5137,9 @@ end 'buildManagedMemShiftRight'
 // write at `buffer - element_size` — before the buffer, over the `__mm_alloc` header — which is the one
 // out-of-buffer write a DETACH cannot fix, exactly as `arrayNegativeResize` records for the shrink path.
 //
-// ⚠ **IT ZEROES NOTHING, AND THAT ASYMMETRY WITH ITS TWIN IS THE CONTRACT.** A shift-right opens a hole its
-// caller is about to fill; a shift-left closes one and leaves a DUPLICATE at the top, which the caller
-// disposes of by republishing a shorter `length` — and `__managed_set_length`'s shrink path is what erases the
-// slots that leave the live range. Zeroing here as well would erase a slot the caller may still be about to
-// read, and would duplicate a rule that already has one home.
+// ⚠ **IT RELEASES THE ELEMENT AT `index - 1` THE SLIDE OVERWRITES AND ZEROES THE TOP SLOT IT
+// VACATES**, so no managed element is left held twice or overwritten unreleased. `index + count`
+// must not pass `length`.
 function buildManagedMemShiftLeft(module StdModule)
 	var func = IrFunction.createFromStd(ManagedMemShiftLeftName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
 	var ids = ValueMinter.create(3)
@@ -5117,7 +5147,9 @@ function buildManagedMemShiftLeft(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var checkRange = module.addBlock(func, label: b"slrange", heat: BlockHeat.normal)
 	var bad = module.addBlock(func, label: b"slbad", heat: BlockHeat.normal)
+	var nothing = module.addBlock(func, label: b"slnothing", heat: BlockHeat.normal)
 	var shift = module.addBlock(func, label: b"slshift", heat: BlockHeat.normal)
+	var move = module.addBlock(func, label: b"slmove", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let arr = 0 as ValueId
@@ -5127,17 +5159,28 @@ function buildManagedMemShiftLeft(module StdModule)
 	let belowFloor = emitShiftArgumentIsNegative(module, block: entry, index: index, count: count, floor: 1, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(belowFloor, thenBlockId: bad.id, elseBlockId: checkRange.id))
 
-	let pastCapacity = emitShiftRangePastCapacity(module, block: checkRange, arr: arr, index: index, count: count, ids: ids)
-	module.setTerminator(checkRange, op: StdOp.condBranch(pastCapacity, thenBlockId: bad.id, elseBlockId: shift.id))
+	let rangeEnd = emitShiftDetachedRangeEnd(module, block: checkRange, arr: arr, index: index, count: count, ids: ids)
+	let liveLength = emitLoadField(module, block: checkRange, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let pastLength = emitBoundaryPositionOutOfRange(module, block: checkRange, position: rangeEnd, length: liveLength, ids: ids)
+	module.setTerminator(checkRange, op: StdOp.condBranch(pastLength, thenBlockId: bad.id, elseBlockId: shift.id))
 
 	emitMemoryThrow(module, block: bad, flag: MemoryShiftOutOfBoundsFlag, ids: ids)
 
-	let es = emitLoadField(module, block: shift, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let buffer = emitLoadField(module, block: shift, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	let one = emitConst(module, block: shift, value: 1, ids: ids)
-	let landsAt = emitBin(module, block: shift, a: index, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	emitMoveElems(module, block: shift, destBuffer: buffer, destIndex: landsAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
-	emitVoidOkReturn(module, block: shift, ids: ids)
+	let noElements = emitCmp(module, block: shift, a: count, b: emitConst(module, block: shift, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(shift, op: StdOp.condBranch(noElements, thenBlockId: nothing.id, elseBlockId: move.id))
+
+	emitVoidOkReturn(module, block: nothing, ids: ids)
+
+	let es = emitLoadField(module, block: move, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: move, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
+	let one = emitConst(module, block: move, value: 1, ids: ids)
+	let landsAt = emitBin(module, block: move, a: index, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	var released = emitDestroyRangeIfManaged(module, func: func, cur: move, record: arr, buffer: buffer, start: landsAt, stop: index, elementSize: es, ids: ids)
+	emitMoveElems(module, block: released, destBuffer: buffer, destIndex: landsAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
+	let rangeEnd = emitBin(module, block: released, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
+	let vacatedAt = emitBin(module, block: released, a: rangeEnd, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	emitZeroElems(module, block: released, buffer: buffer, start: vacatedAt, count: one, es: es, ids: ids)
+	emitVoidOkReturn(module, block: released, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedMemShiftLeft'
@@ -5147,10 +5190,8 @@ end 'buildManagedMemShiftLeft'
 // real slot), so the two spellings that would otherwise sit in two builders are one function with the
 // difference passed in.
 //
-// ⚠ **IT IS ASKED BEFORE THE DETACH, AND THAT ORDER IS `__managed_set_length`'s RULE APPLIED** — a detach
-// ALLOCATES, and a call refused on every possible buffer must not copy one first. The CAPACITY half cannot
-// come first for the same reason in reverse: a view's `capacity@16` is negative until the detach republishes
-// it, so comparing against it before would answer about the encoding rather than about the buffer.
+// ⚠ **IT IS ASKED BEFORE THE DETACH, AND THAT ORDER IS `__managed_set_length`'s RULE APPLIED** — a
+// detach ALLOCATES, and a call refused on every possible buffer must not copy one first.
 function emitShiftArgumentIsNegative(module StdModule, block IrBlock, index ValueId, count ValueId, floor ParsedInt, ids ValueMinter) returns ValueId
 	let limit = emitConst(module, block: block, value: floor, ids: ids)
 	let indexTooLow = emitCmp(module, block: block, a: index, b: limit, pred: StdCmpPred.lt, ids: ids)
@@ -5158,19 +5199,10 @@ function emitShiftArgumentIsNegative(module StdModule, block IrBlock, index Valu
 	return emitBin(module, block: block, a: indexTooLow, b: countNegative, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitShiftArgumentIsNegative'
 
-// ⭐ **THE OTHER HALF: `index + count > capacity`, ASKED OF A DETACHED RECORD.** The detach happens HERE
-// rather than in each builder because it is the precondition of the comparison rather than of the shift —
-// `__managed_mem_grow` states the identical order for the identical reason.
-//
-// ⚠ **THE BOUND IS CAPACITY, NOT LENGTH.** A shift is the staging half of a publish: `Array.insert` reserves,
-// shifts a hole open ABOVE the live range and only then calls `setLength`, so a `length` bound would refuse
-// the one sequence these members exist to serve.
-function emitShiftRangePastCapacity(module StdModule, block IrBlock, arr ValueId, index ValueId, count ValueId, ids ValueMinter) returns ValueId
+function emitShiftDetachedRangeEnd(module StdModule, block IrBlock, arr ValueId, index ValueId, count ValueId, ids ValueMinter) returns ValueId
 	emitCowDetach(module, block: block, arr: arr, ids: ids)
-	let capacity = emitLoadField(module, block: block, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
-	let reach = emitBin(module, block: block, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
-	return emitCmp(module, block: block, a: reach, b: capacity, pred: StdCmpPred.gt, ids: ids)
-end 'emitShiftRangePastCapacity'
+	return emitBin(module, block: block, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
+end 'emitShiftDetachedRangeEnd'
 
 // ⭐ `__managed_cursor_create(arr) -> (cursor, flag)` — a fresh cursor at position 0, or throw when the buffer is
 // EMPTY. The refusal is what makes `current()` and `index()` infallible: a cursor that exists points at a
@@ -5297,29 +5329,116 @@ function buildManagedCursorIndex(module StdModule)
 	module.functions.push(func)
 end 'buildManagedCursorIndex'
 
-// `__managed_cursor_current(cursor) -> element` — INFALLIBLE, because the position invariant is what every other
-// member maintains: `create` refuses an empty buffer and `advance`/`retreat`/`seek` refuse rather than move.
-//
-// ⚠ **INFALLIBLE IS NOT UNCHECKED-BY-ACCIDENT — it is the corpus's declaration.** `stdlib/Array.maxon:497`
-// declares `current()` with no `throws` and forwards straight to it, which is only sound while the invariant
-// above holds; a member that moved on failure would break it silently, which is why all four navigators test
-// BEFORE they store.
-function buildManagedCursorCurrent(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCursorCurrentName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+// `__managed_cursor_current(cursor, site) -> element` — it PANICS where it cannot answer, because
+// `stdlib/Array.maxon` declares `current()` with no `throws`. The navigators keep the position
+// inside the buffer (`create` refuses an empty one and `advance`/`retreat`/`seek` refuse rather
+// than move), but the source may shrink under a live cursor, so the position is checked against the
+// live length; an unfilled managed slot panics with `site` in the empty-slot message
+// `stdlib/Builtins.maxon` states.
+function buildManagedCursorCurrent(module StdModule, greenThreads bool, pastEnd ByteArray, slotText EmptySlotText)
+	var func = IrFunction.createFromStd(ManagedCursorCurrentName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var pastEndBlock = module.addBlock(func, label: b"curpastend", heat: BlockHeat.cold)
+	var read = module.addBlock(func, label: b"curread", heat: BlockHeat.normal)
+	var loaded = module.addBlock(func, label: b"curloaded", heat: BlockHeat.normal)
+	var checkSlot = module.addBlock(func, label: b"curchkslot", heat: BlockHeat.normal)
+	var emptySlot = module.addBlock(func, label: b"curempty", heat: BlockHeat.normal)
 	var ret = module.addBlock(func, label: b"curret", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 1)
+	emitParams(module, block: entry, count: 2)
 	let cursor = 0 as ValueId
+	let site = 1 as ValueId
 
 	let position = emitLoadField(module, block: entry, record: cursor, offset: CursorPositionOffset, ids: ids)
-	let value = emitCursorElementAt(module, func: func, cur: entry, exit: ret, cursor: cursor, index: position, ids: ids)
+	let outOfRange = emitCursorPositionOutOfRange(module, block: entry, cursor: cursor, position: position, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: pastEndBlock.id, elseBlockId: read.id))
+
+	emitRuntimePanic(module, func: func, block: pastEndBlock, label: pastEnd, ids: ids)
+
+	let value = emitCursorElementAt(module, func: func, cur: read, exit: loaded, cursor: cursor, index: position, ids: ids)
+
+	let source = emitLoadField(module, block: loaded, record: cursor, offset: CursorSourceOffset, ids: ids)
+	let dtor = emitLoadField(module, block: loaded, record: source, offset: ManagedRecordElementDestroyOffset, ids: ids)
+	let slotMustBeFilled = emitSlotMustBeFilled(module, block: loaded, destroy: dtor, ids: ids, greenThreads: greenThreads)
+
+	module.setTerminator(loaded, op: StdOp.condBranch(slotMustBeFilled, thenBlockId: checkSlot.id, elseBlockId: ret.id))
+
+	let isNull = emitCmp(module, block: checkSlot, a: value, b: emitConst(module, block: checkSlot, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkSlot, op: StdOp.condBranch(isNull, thenBlockId: emptySlot.id, elseBlockId: ret.id))
+
+	emitCursorEmptySlotPanic(module, func: func, block: emptySlot, position: position, site: site, text: slotText, ids: ids)
+
 	module.setTerminator(ret, op: StdOp.ret(value))
 
 	module.functions.push(func)
 end 'buildManagedCursorCurrent'
+
+// The one empty-slot test every element load asks: a NULL slot is unfilled when the element is
+// managed, except in a promise array (element destroy `__gt_promise_drop`).
+export function emitSlotMustBeFilled(module StdModule, block IrBlock, destroy ValueId, ids ValueMinter, greenThreads bool) returns ValueId
+	let managed = emitElementIsManaged(module, block: block, destroy: destroy, ids: ids)
+
+	if not greenThreads 'noPromiseArrayExists'
+		return managed
+	end 'noPromiseArrayExists'
+
+	let promiseDrop = ids.mint()
+	module.appendOp(block, op: StdOp.funcAddr(promiseDrop, funcName: GtPromiseDropName))
+	let isNotPromiseArray = emitCmp(module, block: block, a: destroy, b: promiseDrop, pred: StdCmpPred.ne, ids: ids)
+	return emitBin(module, block: block, a: managed, b: isNotPromiseArray, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitSlotMustBeFilled'
+
+let CursorPastEndPanicText = b"panic: index out of range: the cursor's position is past the end of its array\n"
+let CursorPanicLineBytes = 96 as ParsedInt
+let EmptySlotMessagePrefixName = "EmptySlotMessagePrefix"
+let EmptySlotMessageSuffixName = "EmptySlotMessageSuffix"
+export let EmptySlotMessageStdlibFileName = "Builtins.maxon"
+let TextTerminator = 0 as Byte
+
+export type EmptySlotText
+	export let prefix as ByteArray
+	export let terminatedSuffix as ByteArray
+
+	export static function create(prefix ByteArray, terminatedSuffix ByteArray) returns EmptySlotText
+		return Self{prefix: prefix, terminatedSuffix: terminatedSuffix}
+	end 'create'
+end 'EmptySlotText'
+
+export function emptySlotTextIn(signatures ProgramSignatures, stdlibPath FilePath) returns EmptySlotText
+	var suffix = signatures.byteConstantIn(EmptySlotMessageSuffixName, filePath: stdlibPath).clone()
+	suffix.push(TextTerminator)
+
+	return EmptySlotText.create(signatures.byteConstantIn(EmptySlotMessagePrefixName, filePath: stdlibPath), terminatedSuffix: suffix)
+end 'emptySlotTextIn'
+
+function emitCursorEmptySlotPanic(module StdModule, func IrFunction, block IrBlock, position ValueId, site ValueId, text EmptySlotText, ids ValueMinter)
+	let siteBytes = emitLoadField(module, block: block, record: site, offset: ManagedRecordBufferOffset, ids: ids)
+	let siteLength = emitLoadField(module, block: block, record: site, offset: ManagedRecordLengthOffset, ids: ids)
+	module.appendOp(block, op: StdOp.osWriteStderr(ids.mint(), bufId: siteBytes, lenId: siteLength))
+
+	let lineBytes = emitConst(module, block: block, value: CursorPanicLineBytes, ids: ids)
+	let lineDestructor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
+	let line = ids.mint()
+	emitMmAllocCall(module, block: block, result: line, size: lineBytes, destructor: lineDestructor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
+	emitStoreLiteralBytes(module, block: block, base: line, offset: 0, text: text.prefix, ids: ids)
+
+	let digits = emitBin(module, block: block, a: line, b: emitConst(module, block: block, value: text.prefix.count() as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let digitCount = ids.mint()
+	module.appendOp(block, op: StdOp.call(digitCount, callee: IntToStringName, args: twoArgs(position, second: digits)))
+
+	let suffixAt = emitBin(module, block: block, a: digits, b: digitCount, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreLiteralBytes(module, block: block, base: suffixAt, offset: 0, text: text.terminatedSuffix, ids: ids)
+
+	module.appendOp(block, op: StdOp.osPanicValue(line))
+	emitDeadTerminator(module, func: func, block: block, ids: ids)
+end 'emitCursorEmptySlotPanic'
+
+function emitRuntimePanic(module StdModule, func IrFunction, block IrBlock, label ByteArray, ids ValueMinter)
+	module.appendOp(block, op: StdOp.osPanic(label))
+	emitDeadTerminator(module, func: func, block: block, ids: ids)
+end 'emitRuntimePanic'
 
 // `__managed_cursor_peek(cursor, ahead) -> (element, flag)` — read `position + ahead` WITHOUT moving. Throwing,
 // because the offset is the caller's and may leave the buffer in either direction (`emitIndexOutOfRange`
@@ -5466,7 +5585,7 @@ end 'emitMemoryThrow'
 // "not mine" about their buffer while sitting in an ordinary `__mm_alloc` box that must be freed. This is
 // the one provenance whose RECORD is image data, so it is the one value compared against.
 function buildManagedDecref(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var func = IrFunction.createFromStd(ManagedDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5521,7 +5640,7 @@ end 'buildManagedDecref'
 // Threads `cur` (sets its terminator) and returns the continuation block.
 function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, srcBase ValueId, destBase ValueId, count ValueId, elementSize ValueId, cloneFn ValueId, ids ValueMinter) returns IrBlock
 	var visit = module.addBlock(func, label: b"clndo", heat: BlockHeat.normal)
-	let loop = emitElementRange(module, func: func, cur: cur, base: srcBase, count: count, elementSize: elementSize, visit: visit, carried: ValueIdArray.create(), labels: elementRangeLabels(CascadeAction.clone), ids: ids)
+	var loop = emitElementRange(module, func: func, cur: cur, base: srcBase, count: count, elementSize: elementSize, visit: visit, carried: ValueIdArray.create(), labels: elementRangeLabels(CascadeAction.clone), ids: ids)
 
 	let cloned = ids.mint()
 
@@ -5587,9 +5706,9 @@ end 'emitElementRange'
 export type ElementRangeLoop
 	export let element as ValueId
 	export let index as ValueId
-	export let carried as ValueIdArray
-	export let step as CascadeCursor
-	export let done as IrBlock
+	export var carried as ValueIdArray
+	export var step as CascadeCursor
+	export var done as IrBlock
 
 	static function create(element ValueId, index ValueId, carried ValueIdArray, step CascadeCursor, done IrBlock) returns ElementRangeLoop
 		return Self{element: element, index: index, carried: carried, step: step, done: done}
@@ -5676,10 +5795,10 @@ function buildManagedWalks(module StdModule, action CascadeAction)
 end 'buildManagedWalks'
 
 function buildManagedWalk(module StdModule, name ByteArray, scope WalkScope, walksElements bool, action CascadeAction)
-	let body = beginWalkBody(module, name: name, scope: scope, walksElements: walksElements, recursesPerLevel: false)
+	var body = beginWalkBody(module, name: name, scope: scope, walksElements: walksElements, recursesPerLevel: walksElements)
 	let arr = WalkBoxParam
-	let stepped = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: arr, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
-	let walked = emitWalkedRecordBytes(module, func: body.func, cursor: stepped, arr: arr, action: action, ids: body.ids)
+	var stepped = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: arr, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
+	var walked = emitWalkedRecordBytes(module, func: body.func, cursor: stepped, arr: arr, action: action, ids: body.ids)
 
 	if walksElements 'eachElement'
 		// Read AFTER the detach: it replaces `buffer@0`, so a pointer taken above it would walk the abandoned
@@ -5687,7 +5806,7 @@ function buildManagedWalk(module StdModule, name ByteArray, scope WalkScope, wal
 		let buffer = emitLoadField(module, block: walked.block, record: arr, offset: ManagedRecordBufferOffset, ids: body.ids)
 		let length = emitLoadField(module, block: walked.block, record: arr, offset: ManagedRecordLengthOffset, ids: body.ids)
 		let es = emitLoadField(module, block: walked.block, record: arr, offset: ManagedRecordElementSizeOffset, ids: body.ids)
-		let afterWalk = emitElementWalkRange(module, func: body.func, cur: walked, base: buffer, count: length, elementSize: es, elementWalk: body.elementWalk(), action: action, ids: body.ids)
+		var afterWalk = emitElementWalkRange(module, func: body.func, cur: walked, base: buffer, count: length, elementSize: es, elementWalk: body.elementWalk(), action: action, ids: body.ids)
 		emitCascadeBranch(module, from: afterWalk, to: body.done)
 	end 'eachElement' else 'noElementWalk'
 		emitCascadeBranch(module, from: walked, to: body.done)
@@ -5704,7 +5823,7 @@ function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor Cascade
 	var ownedBytes = module.addBlock(func, label: b"ownbytes", heat: BlockHeat.normal)
 	var viewedBytes = module.addBlock(func, label: b"viewbytes", heat: BlockHeat.normal)
 	var meetParent = module.addBlock(func, label: b"viewparent", heat: BlockHeat.normal)
-	let bytesWalked = emitCascadeJoin(module, func: func, label: b"byteswalked", template: cursor.carried, ids: ids)
+	var bytesWalked = emitCascadeJoin(module, func: func, label: b"byteswalked", template: cursor.carried, ids: ids)
 
 	let notOwned = emitBufferNotOwned(module, block: cursor.block, record: arr, ids: ids)
 	module.setTerminator(cursor.block, op: StdOp.condBranch(notOwned, thenBlockId: viewedBytes.id, elseBlockId: ownedBytes.id))
@@ -5719,7 +5838,7 @@ function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor Cascade
 	emitRouteOnOwedBase(module, block: viewedBytes, base: parent, whenOwed: meetParent, whenNone: bytesWalked.block, ids: ids)
 	pushCascadeEdge(viewedBytes, to: bytesWalked, values: cursor.carried)
 
-	let parentMet = emitBoxWalkStep(module, func: func, cursor: cursor.at(meetParent), box: parent, action: action, meeting: WalkMeeting.view, stop: bytesWalked, ids: ids)
+	var parentMet = emitBoxWalkStep(module, func: func, cursor: cursor.at(meetParent), box: parent, action: action, meeting: WalkMeeting.view, stop: bytesWalked, ids: ids)
 	emitCascadeBranch(module, from: parentMet, to: bytesWalked)
 
 	if action == CascadeAction.soleWalk 'aMoveWrites'
@@ -5741,7 +5860,7 @@ end 'emitSharedOwnBuffer'
 // `cur` and returns the continuation.
 function emitElementWalkRange(module StdModule, func IrFunction, cur CascadeCursor, base ValueId, count ValueId, elementSize ValueId, elementWalk ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
 	var visit = module.addBlock(func, label: b"walkdo", heat: BlockHeat.normal)
-	let loop = emitElementRange(module, func: func, cur: cur.block, base: base, count: count, elementSize: elementSize, visit: visit, carried: cur.carried, labels: elementRangeLabels(action), ids: ids)
+	var loop = emitElementRange(module, func: func, cur: cur.block, base: base, count: count, elementSize: elementSize, visit: visit, carried: cur.carried, labels: elementRangeLabels(action), ids: ids)
 	let trip = CascadeCursor.create(visit, carried: loop.carried)
 
 	// Both ABI masks are 0 for `emitElementDestructorCall`'s reason: a stamped element walk takes two

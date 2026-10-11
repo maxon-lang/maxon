@@ -174,7 +174,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
-	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream, session: session)
+	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream, session: session, defines: defines, productVersion: productVersion)
 	project.openPhaseSpans = spans
 	project.asyncTrace = asyncTrace
 	project.debugInfo = debugInfo
@@ -182,8 +182,6 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	project.rendersTargetIr = emitIr
 	project.compilesOnceAndExits = true
 	project.coverage = coverage
-	project.productVersion = productVersion
-	project.defines = defines
 
 	// Set before the first `recordPhase*`, which is the next statement: the census is sampled by the phase
 	// recorder, so a flag raised later leaves the compile's largest phase with no reading.
@@ -325,7 +323,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	let total = whole.elapsed()
 	project.timings.total = PhaseCost.create(total.nanos, cpuTicks: total.cpuTicks)
-	project.memory.total = total
+	project.memory.total = total.minus(project.session.treeLock.upkeep())
 	project.retiredWorkers.release()
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
@@ -707,21 +705,20 @@ end 'writeTargetIr'
 //
 // File and IO errors (`fileNotFound`, `noSourceFiles`, `readError`, raised by `loadSourceFiles`)
 // carry no diagnostics and propagate straight to the caller, which prints a specific message.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included) returns Project throws CompileError
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, entryFunction ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(), productVersion VersionComponentArray = VersionComponentArray.create()) returns Project throws CompileError
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
-	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), debugStream: debugStream, session: session)
+	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
 
 	if rootIsUnder(project, libraryRoot: project.runtimeDir, cwd: Directory.currentPath()) 'aRuntimeTierRoot'
 		throw CompileError.runtimeTierIsNotAProgram(project.rootPath)
 	end 'aRuntimeTierRoot'
 
-	// Both set before the first file is registered. `Queries.parseJobFor` reads the minted names while
+	// Set before the first file is registered. `Queries.parseJobFor` reads the minted names while
 	// a file is being read, so an index filled after the load would classify every synthesized file as
 	// ordinary user source, and the reserved-name door would refuse a generated call.
-	project.entryFunctionName = entryFunction
 	project.compilerWrittenSources = CompilerWrittenIndex.of(compilerWrittenSources)
 
-	// Set WITH them and before the load, for their reason: a diagnostic can be raised while a file is
+	// Set before the load too: a diagnostic can be raised while a file is
 	// being READ, and a mapping filled in afterwards would let those — the parse errors, which are
 	// most of them — go on naming the staged copy.
 	project.stagedSourceOrigins = StagedOriginIndex.of(stagedSourceOrigins)
@@ -752,8 +749,7 @@ end 'claimsOfSources'
 
 function userFilesProjectOf(inputPaths MaxonSourcePathArray, target Target, session CompileSession, stdlibDirOverride StatedText, runtimeDirOverride StatedText, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, compilerWrittenSources CompilerWrittenSourceArray, defines DefineArray) returns Project throws CompileError
 	let probe = CompileSession.create(DiagnosticSink.discarding(), fileMemos: session.fileMemos, treeLock: LockHold.none())
-	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, session: probe, library: LibraryLoad.omitted)
-	project.defines = defines
+	let project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, session: probe, library: LibraryLoad.omitted, defines: defines)
 	return project
 end 'userFilesProjectOf'
 
@@ -820,7 +816,7 @@ end 'stagedOverrideDirectory'
 // The diagnostics carry no file position, because a `--define` has none. What each message DOES carry is where the
 // declarations it reached are, which is the part a reader cannot look up.
 function reportDefineProblems(project Project)
-	for problem in programSignaturesIn(project, asker: "reportDefineProblems").settled.defineProblems 'eachProblem'
+	for problem in programSignaturesIn(project, asker: "reportDefineProblems").settledDeclarations().defineProblems 'eachProblem'
 		reportDiagnostic(project, diagnostic: Diagnostic.programWide(problem.code, message: problem.message))
 	end 'eachProblem'
 end 'reportDefineProblems'
@@ -1155,6 +1151,12 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	let parksOnIo = targetProvidesFacility(project.target, facility: HostFacility.greenThreads)
 	var usage = scanRuntimeUsage(module, libraryFacts: project.libraryFacts, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
 
+	// The managed-memory runtime's empty-slot panic renders the cursor's position through `__int_to_string`
+	// from a synthesized body, which the scan cannot see.
+	if usage.usesManagedMemory 'cursorPanicRendersAPosition'
+		usage.usesIntToString = true
+	end 'cursorPanicRendersAPosition'
+
 	// ⭐ A TRACED build carries what `__gt_trace_emit` calls, and the scan cannot see any of it: the trace is
 	// emitted BELOW the Maxon tier (into the synthesized `__gt_*` runtime), so no Maxon call site exists for
 	// `scanRuntimeUsage` to walk. Declared here for the same reason the streaming-subprocess family declares
@@ -1274,6 +1276,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// reachability roots and the inliner's called-once census read it (`Project.entryStubCalls`), and the
 	// census runs inside the pipeline below, where no usage record is in reach.
 	project.entryStubCalls = EntryStubCalls.fromUsage(usage)
+	project.hostContext = HostContextLayout.read(signatures, target: project.target, project: project)
 
 	// ⭐⭐ **THE MIRROR QUESTION, SETTLED HERE ON THE MINTERS' COMMON GATE: WHICH TIER BODIES THIS PROGRAM
 	// SWEEPS.** The compiler-called tier files (`runtimeTierFileIsCompilerCalled`) were credited reached
@@ -1313,11 +1316,11 @@ type LoweredProgram
 	module var usage as RuntimeUsage
 	module var signatures as ProgramSignatures
 	module let asyncSpawnTargets as AsyncSpawnTargetArray
-	module let serviceReplyTargets as ByteArrayArray
+	module let serviceReplyTargets as NameRoster
 	module let userGlobals as DataSectionEntryArray
 	module let parksOnIo as bool
 
-	static function create(pipeline PassPipeline, usage RuntimeUsage, signatures ProgramSignatures, asyncSpawnTargets AsyncSpawnTargetArray, serviceReplyTargets ByteArrayArray, userGlobals DataSectionEntryArray, parksOnIo bool) returns LoweredProgram
+	static function create(pipeline PassPipeline, usage RuntimeUsage, signatures ProgramSignatures, asyncSpawnTargets AsyncSpawnTargetArray, serviceReplyTargets NameRoster, userGlobals DataSectionEntryArray, parksOnIo bool) returns LoweredProgram
 		return Self{pipeline: pipeline, usage: usage, signatures: signatures, asyncSpawnTargets: asyncSpawnTargets, serviceReplyTargets: serviceReplyTargets, userGlobals: userGlobals, parksOnIo: parksOnIo}
 	end 'create'
 end 'LoweredProgram'
@@ -1558,6 +1561,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 
 	checkSharedMemoryAnswers(signatures, stdlibPath: librarySourcePath(project, fileName: sharedMemoryStdlibFileName()))
 	checkSubprocessAnswers(signatures, stdlibPath: librarySourcePath(project, fileName: subprocessStdlibFileName()))
+	checkHeapStatsBuckets(signatures, stdlibPath: librarySourcePath(project, fileName: HeapStatsStdlibFileName))
 
 	// The slab's OBJECT LAYER (`__slab_alloc`/`__slab_free`, the size classes, the spans and the mcache) —
 	// the allocator `__mm_alloc` takes its boxes from. Called unconditionally and gated inside, because it
@@ -1643,7 +1647,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// already-lowered way, on its own `usesProcessSampling` bit. It sits beside the shared-memory family
 	// because both reach the host through one op apiece and neither builds anything managed; unlike every
 	// install around it, it needs none of the array or string helpers, which is why it is a leaf here too.
-	installProfileRuntime(pipeline.stdModule, usage: usage)
+	installProfileRuntime(pipeline.stdModule, usage: usage, context: project.hostContext)
 
 	installDebugHostRuntime(pipeline.stdModule, usage: usage, target: project.target)
 
@@ -1679,7 +1683,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// `__mm_alloc`/`__mm_free` the record and its element buffer). It installs the WHOLE managed-memory runtime as
 	// one closure — the helpers call each other, and `__`-prefixed functions are excluded from the
 	// rendered Target IR, so an all-or-nothing install needs no per-helper dependency tracking.
-	installManagedMemoryRuntime(pipeline.stdModule, usage: usage)
+	installManagedMemoryRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, slotText: emptySlotTextIn(signatures, stdlibPath: librarySourcePath(project, fileName: EmptySlotMessageStdlibFileName)))
 
 	// The List runtime (`__list_create`/`__list_append`/`__list_get`/…) — installed the same already-lowered
 	// way, keyed on its own `usesList` bit.
@@ -1811,7 +1815,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 		installDebugStreamRuntime(pipeline.stdModule, globalData: project.globalData, usesGt: usage.usesGt)
 	end 'installDebugStream'
 
-	let dataSection = dataSectionRoster(userGlobals, usage: usage, target: project.target)
+	var dataSection = dataSectionRoster(userGlobals, usage: usage, target: project.target)
 	assertPublishedWordAccessIsOrdered(pipeline.stdModule, entries: dataSection, firstFuncIndex: firstEmittedFuncIndex)
 
 	recordPhase(project, phase: CompilePhase.synthesizeBodies, probe: synthesizeProbe)
@@ -1891,9 +1895,6 @@ function reportBindingHygieneDiagnostics(project Project) throws CompileError
 		return
 	end 'nothingToSayOrSomethingRealerSaidIt'
 
-	// An INDEX loop, not `for … in`: the element is a BORROW of `project`, and the call below is
-	// recorded as writing that same storage. ⚖ Ruling of 2026-08-26 — canonical note at
-	// `IR/Std/ElimTrivialBlockArgs.elimTrivialBlockArgs`.
 	for hygieneIndex in 0 upto project.bindingHygieneDiagnostics.count() 'each'
 		reportDiagnostic(project, diagnostic: try project.bindingHygieneDiagnostics.get(hygieneIndex) otherwise panic("reportBindingHygieneDiagnostics: hygieneIndex {hygieneIndex} is below project.bindingHygieneDiagnostics.count()"))
 	end 'each'
@@ -2399,9 +2400,9 @@ export type CompilerWrittenSource
 	// declares at least the symbol its caller reaches it by, and `stageTestBuild` refuses to stage one
 	// that does not — which is what lets emptiness mean "the author wrote every byte of this file"
 	// rather than needing a second flag to say so.
-	export let mintedNames as ByteArrayArray
+	export let mintedNames as NameRoster
 
-	export static function create(path FilePath, mintedNames ByteArrayArray) returns CompilerWrittenSource
+	export static function create(path FilePath, mintedNames NameRoster) returns CompilerWrittenSource
 		return Self{path: path, mintedNames: mintedNames}
 	end 'create'
 end 'CompilerWrittenSource'
@@ -2441,7 +2442,7 @@ end 'StagedSourceOrigin'
 export typealias StagedSourceOriginArray = Array with StagedSourceOrigin
 
 typealias ReportedPathMap = Map with (FilePath, FilePath)
-typealias MintedNamesByPath = Map with (FilePath, ByteArrayArray)
+typealias MintedNamesByPath = Map with (FilePath, readonly NameRoster)
 
 export type StagedOriginIndex
 	let reportedPaths as ReportedPathMap
@@ -2494,8 +2495,8 @@ export type CompilerWrittenIndex
 		return self.mintedNames.contains(path)
 	end 'wrote'
 
-	export function mintedNamesIn(path FilePath) returns ByteArrayArray
-		return try self.mintedNames.get(path) otherwise ByteArrayArray.create()
+	export function mintedNamesIn(path FilePath) returns NameRoster
+		return try self.mintedNames.get(path) otherwise NameRoster.create()
 	end 'mintedNamesIn'
 
 	export function minted(path FilePath, name ByteArray) returns bool
@@ -2503,7 +2504,7 @@ export type CompilerWrittenIndex
 	end 'minted'
 end 'CompilerWrittenIndex'
 
-export function mintedNamesInclude(names ByteArrayArray, name ByteArray) returns bool
+export function mintedNamesInclude(names NameRoster, name ByteArray) returns bool
 	for minted in names 'eachMintedName'
 		if minted.equals(name) 'thisName'
 			return true

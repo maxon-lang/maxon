@@ -1,7 +1,7 @@
 ---
 feature: for-iterated-self-field
 status: experimental
-keywords: [for, iteration, lock, self, field, borrow, use-after-free]
+keywords: [for, iteration, self, field, rebind, clear, use-after-free]
 category: control-flow
 ---
 
@@ -9,317 +9,348 @@ category: control-flow
 
 # Iterating a field of the enclosing `self`
 
-A `for … in <array>` hands the body a **borrowed** element the array still owns, and re-reads the
-array's length live in the loop header on every trip. So the iterated storage is made unwritable for
-the body — a write that reallocates it, clears it, or drops the record entirely would leave both the
-borrow and the header's next length read pointing at freed memory.
+A `for … in <array>` holds its own counted reference to the record it starts on, takes a counted
+reference to each element it hands the body, and re-reads that record's live count on every step.
+A field of the enclosing type can be named **two** ways as a source (`items`, `self.items`) and
+**four** ways as a write (`items = …`, `self.items = …`, `items.clear()`, `self.items.clear()`), and
+all eight programs compile and behave alike:
 
-That storage has **one** identity, and this file is the test that keeps it that way. A field of the
-enclosing type can be named **two** ways as a source (`items`, `self.items`) and **four** ways as a
-write (`items = …`, `self.items = …`, `items.clear()`, `self.items.clear()`), which is eight programs
-that must all reach the same verdict. They did not: the lock keyed the `self.`-spelled source on the
-*receiver parameter* while the write doors keyed on the *field's alias*, and the store door did not
-consult the lock at all. Four of the eight spellings compiled, and all four **segfaulted**
-(0xC0000005), while their twins were correctly refused.
+- an **assignment** rebinds the field, and the loop keeps walking the record it started on, to that
+  record's end;
+- a **mutating method** changes the record the loop walks: after `clear()` the next step sees a
+  count of 0 and the loop ends.
 
-An **assignment** to the iterated storage is **E2013**, whichever way it is spelled — the same code and
-the same wording the local spelling `arr = other` has always produced. A **mutating method call** on it
-is **E3019**. Both blame the field, never the receiver: `self` is a parameter, and telling a reader to
-make it writable names a change that does not work.
+Either way the element the body already holds stays valid.
 
 ```text
 for it in items 'scan'
-    items = IntArray.create()   // E2013 — the loop is still walking the old record
+    items = Labels.create()   // the loop still walks the old record
+    print("{it}\n")
 end 'scan'
 ```
 
 ## Tests
 
-<!-- test: iterated-self-field-bare-source-bare-assign -->
-The bare source, the bare write.
+<!-- test: iterated-self-field-bare-source-bare-assign-walks-the-old-record -->
+The bare source, the bare write. Both elements of the old record are visited, and the field ends
+up holding the fresh empty array: `21 + 22 + 0`.
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Tally = int(0 to 1000)
+typealias Labels = Array with String
 
 type Bag
-	export var items as IntArray
+	export var items as Labels
 
 	static function create() returns Self
-		var a = IntArray.create()
-		a.push(5)
-		a.push(7)
+		var a = Labels.create()
+		a.push("first heap element {40 + 2}")
+		a.push("second heap element {40 + 5}")
 		return Self{items: a}
 	end 'create'
 
-	function sum() returns Int
-		var total = 0
+	function sum() returns Tally
+		var total = 0 as Tally
 		for it in items 'scan'
-			items = IntArray.create()
-			total = total + it
+			items = Labels.create()
+			print("{it}\n")
+			total = total + (it.byteLength() as Tally)
 		end 'scan'
-		return total
+		return total + (items.count() as Tally)
 	end 'sum'
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2013: specs/for-iterated-self-field/iterated-self-field-bare-source-bare-assign.maxon:18:4: cannot assign to immutable variable: 'items'
+```exitcode
+43
+```
+```stdout
+first heap element 42
+second heap element 45
 ```
 
-<!-- test: iterated-self-field-bare-source-explicit-assign -->
+<!-- test: iterated-self-field-bare-source-explicit-assign-walks-the-old-record -->
 The bare source, the `self.`-spelled write — the same storage, so the same answer.
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Tally = int(0 to 1000)
+typealias Labels = Array with String
 
 type Bag
-	export var items as IntArray
+	export var items as Labels
 
 	static function create() returns Self
-		var a = IntArray.create()
-		a.push(5)
-		a.push(7)
+		var a = Labels.create()
+		a.push("first heap element {40 + 2}")
+		a.push("second heap element {40 + 5}")
 		return Self{items: a}
 	end 'create'
 
-	function sum() returns Int
-		var total = 0
+	function sum() returns Tally
+		var total = 0 as Tally
 		for it in items 'scan'
-			self.items = IntArray.create()
-			total = total + it
+			self.items = Labels.create()
+			print("{it}\n")
+			total = total + (it.byteLength() as Tally)
 		end 'scan'
-		return total
+		return total + (items.count() as Tally)
 	end 'sum'
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2013: specs/for-iterated-self-field/iterated-self-field-bare-source-explicit-assign.maxon:18:9: cannot assign to immutable variable: 'items'
+```exitcode
+43
+```
+```stdout
+first heap element 42
+second heap element 45
 ```
 
-<!-- test: iterated-self-field-explicit-source-bare-assign -->
-The `self.`-spelled source, the bare write. This is the combination the lock keyed on the receiver
-parameter and the store door never asked about at all.
+<!-- test: iterated-self-field-explicit-source-bare-assign-walks-the-old-record -->
+The `self.`-spelled source, the bare write.
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Tally = int(0 to 1000)
+typealias Labels = Array with String
 
 type Bag
-	export var items as IntArray
+	export var items as Labels
 
 	static function create() returns Self
-		var a = IntArray.create()
-		a.push(5)
-		a.push(7)
+		var a = Labels.create()
+		a.push("first heap element {40 + 2}")
+		a.push("second heap element {40 + 5}")
 		return Self{items: a}
 	end 'create'
 
-	function sum() returns Int
-		var total = 0
+	function sum() returns Tally
+		var total = 0 as Tally
 		for it in self.items 'scan'
-			items = IntArray.create()
-			total = total + it
+			items = Labels.create()
+			print("{it}\n")
+			total = total + (it.byteLength() as Tally)
 		end 'scan'
-		return total
+		return total + (items.count() as Tally)
 	end 'sum'
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2013: specs/for-iterated-self-field/iterated-self-field-explicit-source-bare-assign.maxon:18:4: cannot assign to immutable variable: 'items'
+```exitcode
+43
+```
+```stdout
+first heap element 42
+second heap element 45
 ```
 
-<!-- test: iterated-self-field-explicit-source-explicit-assign -->
+<!-- test: iterated-self-field-explicit-source-explicit-assign-walks-the-old-record -->
 Both halves spelled with `self.`.
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Tally = int(0 to 1000)
+typealias Labels = Array with String
 
 type Bag
-	export var items as IntArray
+	export var items as Labels
 
 	static function create() returns Self
-		var a = IntArray.create()
-		a.push(5)
-		a.push(7)
+		var a = Labels.create()
+		a.push("first heap element {40 + 2}")
+		a.push("second heap element {40 + 5}")
 		return Self{items: a}
 	end 'create'
 
-	function sum() returns Int
-		var total = 0
+	function sum() returns Tally
+		var total = 0 as Tally
 		for it in self.items 'scan'
-			self.items = IntArray.create()
-			total = total + it
+			self.items = Labels.create()
+			print("{it}\n")
+			total = total + (it.byteLength() as Tally)
 		end 'scan'
-		return total
+		return total + (items.count() as Tally)
 	end 'sum'
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2013: specs/for-iterated-self-field/iterated-self-field-explicit-source-explicit-assign.maxon:18:9: cannot assign to immutable variable: 'items'
+```exitcode
+43
+```
+```stdout
+first heap element 42
+second heap element 45
 ```
 
-<!-- test: iterated-self-field-bare-source-bare-call -->
-A mutating METHOD on the iterated field is E3019, and it blames the field.
+<!-- test: iterated-self-field-bare-source-bare-call-ends-the-iteration -->
+A mutating METHOD on the iterated field changes the record the loop walks: the element already
+read stays valid, and the next step sees the cleared count and ends.
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Tally = int(0 to 1000)
+typealias Labels = Array with String
 
 type Bag
-	export var items as IntArray
+	export var items as Labels
 
 	static function create() returns Self
-		var a = IntArray.create()
-		a.push(5)
-		a.push(7)
+		var a = Labels.create()
+		a.push("first heap element {40 + 2}")
+		a.push("second heap element {40 + 5}")
 		return Self{items: a}
 	end 'create'
 
-	function sum() returns Int
-		var total = 0
+	function sum() returns Tally
+		var total = 0 as Tally
 		for it in items 'scan'
 			items.clear()
-			total = total + it
+			print("{it}\n")
+			total = total + (it.byteLength() as Tally)
 		end 'scan'
-		return total
+		return total + (items.count() as Tally)
 	end 'sum'
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3019: specs/for-iterated-self-field/iterated-self-field-bare-source-bare-call.maxon:18:10: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
+```exitcode
+21
+```
+```stdout
+first heap element 42
 ```
 
-<!-- test: iterated-self-field-bare-source-explicit-call -->
-The chain spelling of the same call. It reaches a different door and must reach the same verdict.
+<!-- test: iterated-self-field-bare-source-explicit-call-ends-the-iteration -->
+The chain spelling of the same call. It reaches a different door and must reach the same answer.
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Tally = int(0 to 1000)
+typealias Labels = Array with String
 
 type Bag
-	export var items as IntArray
+	export var items as Labels
 
 	static function create() returns Self
-		var a = IntArray.create()
-		a.push(5)
-		a.push(7)
+		var a = Labels.create()
+		a.push("first heap element {40 + 2}")
+		a.push("second heap element {40 + 5}")
 		return Self{items: a}
 	end 'create'
 
-	function sum() returns Int
-		var total = 0
+	function sum() returns Tally
+		var total = 0 as Tally
 		for it in items 'scan'
 			self.items.clear()
-			total = total + it
+			print("{it}\n")
+			total = total + (it.byteLength() as Tally)
 		end 'scan'
-		return total
+		return total + (items.count() as Tally)
 	end 'sum'
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3019: specs/for-iterated-self-field/iterated-self-field-bare-source-explicit-call.maxon:18:15: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
+```exitcode
+21
+```
+```stdout
+first heap element 42
 ```
 
-<!-- test: iterated-self-field-explicit-source-bare-call -->
+<!-- test: iterated-self-field-explicit-source-bare-call-ends-the-iteration -->
 The `self.`-spelled source with the bare call.
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Tally = int(0 to 1000)
+typealias Labels = Array with String
 
 type Bag
-	export var items as IntArray
+	export var items as Labels
 
 	static function create() returns Self
-		var a = IntArray.create()
-		a.push(5)
-		a.push(7)
+		var a = Labels.create()
+		a.push("first heap element {40 + 2}")
+		a.push("second heap element {40 + 5}")
 		return Self{items: a}
 	end 'create'
 
-	function sum() returns Int
-		var total = 0
+	function sum() returns Tally
+		var total = 0 as Tally
 		for it in self.items 'scan'
 			items.clear()
-			total = total + it
+			print("{it}\n")
+			total = total + (it.byteLength() as Tally)
 		end 'scan'
-		return total
+		return total + (items.count() as Tally)
 	end 'sum'
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3019: specs/for-iterated-self-field/iterated-self-field-explicit-source-bare-call.maxon:18:10: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
+```exitcode
+21
+```
+```stdout
+first heap element 42
 ```
 
-<!-- test: iterated-self-field-explicit-source-explicit-call -->
-The eighth cell. It was already refused before the lock was single-keyed — but it blamed `self`,
-which is a parameter nothing can be done about.
+<!-- test: iterated-self-field-explicit-source-explicit-call-ends-the-iteration -->
+Both halves of the call spelled with `self.`.
 ```maxon
-typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
+typealias Tally = int(0 to 1000)
+typealias Labels = Array with String
 
 type Bag
-	export var items as IntArray
+	export var items as Labels
 
 	static function create() returns Self
-		var a = IntArray.create()
-		a.push(5)
-		a.push(7)
+		var a = Labels.create()
+		a.push("first heap element {40 + 2}")
+		a.push("second heap element {40 + 5}")
 		return Self{items: a}
 	end 'create'
 
-	function sum() returns Int
-		var total = 0
+	function sum() returns Tally
+		var total = 0 as Tally
 		for it in self.items 'scan'
 			self.items.clear()
-			total = total + it
+			print("{it}\n")
+			total = total + (it.byteLength() as Tally)
 		end 'scan'
-		return total
+		return total + (items.count() as Tally)
 	end 'sum'
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3019: specs/for-iterated-self-field/iterated-self-field-explicit-source-explicit-call.maxon:18:15: cannot pass 'items' to function that mutates parameter 'self' (in Bag.sum)
+```exitcode
+21
+```
+```stdout
+first heap element 42
 ```
 
 <!-- test: unrelated-self-field-stays-writable -->
-The lock is keyed on the FIELD, not on the receiver — so every OTHER field of the same `self` is
-still writable inside the body. A lock that keyed on `self` would refuse this.
+Every OTHER field of the same `self` is writable inside the body too, and its write takes effect.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -355,7 +386,8 @@ end 'main'
 ```
 
 <!-- test: self-field-writable-after-the-loop -->
-The lock is released at the loop's `end`, so the very next line may write the field.
+The loop's reference to its source is released at its `end`: the field is written on the very
+next line, and a reference the loop kept would leak the record (exit 101).
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -381,7 +413,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	let b = Bag.create()
+	var b = Bag.create()
 	return b.sumThenClear() as ExitCode
 end 'main'
 ```

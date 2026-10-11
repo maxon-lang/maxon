@@ -133,7 +133,7 @@ typealias WrapperB = Wrapper with Integer
 
 function main() returns ExitCode
 	let a = WrapperA.create(1, tag: 5)
-	let b = WrapperB.create(2, tag: 0)
+	var b = WrapperB.create(2, tag: 0)
 	let aTag = a.getTag()
 	b.setTag(aTag)
 	return 0

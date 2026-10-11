@@ -12,6 +12,7 @@ The cases of `specs/builtins-cpu-parallel.md` whose subject is the emitted code.
 ## Tests
 
 <!-- test: builtins-cpu-parallel.cpu-count-body-is-runtime-source -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE MACHINE QUERY'S BODY IS MAXON SOURCE THE COMPILER READS OUT OF THE TREE, AND THIS IS THE CASE
 THAT SEES IT.** `runtime/CpuParallel.maxon` writes `__cpu_count` against the `__Raw` floor — the host read
 and the floor test over it — and the block below renders what the back end made of that source. Every other
@@ -261,6 +262,7 @@ func @__cpu_count {
 ```
 
 <!-- test: builtins-cpu-parallel.sched-processor-count-body-is-runtime-source -->
+<!-- tier: stdlib -->
 ⭐⭐ **THE QUERY READS A `.data` WORD WHOSE LABEL IS NOT ITS OWN NAME, AND ONLY A RENDERED BODY SAYS WHICH
 WORD.** `runtime/CpuParallel.maxon` writes `__sched_processor_count` as an address row plus a load, and the
 address row names `__sched_num_procs` — the P array's length wearing this query's second hat. Its band-mate
@@ -316,54 +318,55 @@ data {
   __gt_seed_sum_seen@136 = i64 0
   __gt_seed_count_seen@144 = i64 0
   __gt_keeps_cpu_clock@152 = i64 0
-  __sched_active_workers@160 = i64 1
-  __sched_max_active_workers@168 = i64 1
-  __sched_tls_index@176 = i64 0
-  __sched_tls_teb_offset@184 = i64 0
-  __sched_procs@192 = i64 0
-  __sched_allm@200 = i64 0
-  __sched_async_preempt_off@208 = i64 0
-  __sched_midle@216 = i64 0
-  __sched_pidle@224 = i64 0
-  __gt_gfree_head@232 = i64 0
-  __sched_arena_cursor@240 = i64 0
-  __sched_arena_limit@248 = i64 0
-  __gt_records_carved@256 = i64 0
-  __sched_npidle@264 = i64 0
-  __sched_runq_size@272 = i64 0
-  __sched_global_pushes@280 = i64 0
-  __sched_timer_scan_steps@288 = i64 0
-  __sched_mcount@296 = i64 0
-  __sched_nmidle@304 = i64 0
-  __sched_main_m@312 = i64 0
-  __sched_phase@320 = i64 0
-  __sched_lastpoll@328 = i64 0
-  __sched_poll_until@336 = i64 0
-  __sched_regain_head@344 = i64 0
-  __np_poller@352 = i64 0
-  __np_break@360 = i64 0
-  __np_wake_sig@368 = i64 0
-  __np_pd_table@376 = i64 0
-  __np_pd_cap@384 = i64 0
-  __np_waiters@392 = i64 0
-  __sched_num_procs@400 = i64 0
-  __sched_shutdown_flag@408 = i64 0
-  __sched_lock@416 = i64 0
-  __sched_lock_depth_sink@424 = i64 0
-  __sched_nmspinning@432 = i64 0
-  __sched_needspinning@440 = i64 0
-  __sched_sysmon_event@448 = i64 0
-  __sched_sysmon_wait@456 = i64 0
-  __sched_timer_starts@464 = i64 0
-  __sched_preempt_ext_lock@472 = i64 0
-  __sched_preempt_context@480 = i64 0
-  __slab_arena_list@488 = i64 0
-  __slab_arena_map_l1@496 = i64 0
-  __slab_state@504 = i64 0
-  __mrt_console_probe_stdin@512 = i8 0
-  __mrt_console_probe_stdout@513 = i8 0
-  __mrt_console_probe_stderr@514 = i8 0
-  __mrt_program_started@515 = i8 0
+  __gt_stack_pool@160 = i64 0
+  __sched_active_workers@168 = i64 1
+  __sched_max_active_workers@176 = i64 1
+  __sched_tls_index@184 = i64 0
+  __sched_tls_teb_offset@192 = i64 0
+  __sched_procs@200 = i64 0
+  __sched_allm@208 = i64 0
+  __sched_async_preempt_off@216 = i64 0
+  __sched_midle@224 = i64 0
+  __sched_pidle@232 = i64 0
+  __gt_gfree_head@240 = i64 0
+  __sched_arena_cursor@248 = i64 0
+  __sched_arena_limit@256 = i64 0
+  __gt_records_carved@264 = i64 0
+  __sched_npidle@272 = i64 0
+  __sched_runq_size@280 = i64 0
+  __sched_global_pushes@288 = i64 0
+  __sched_timer_scan_steps@296 = i64 0
+  __sched_mcount@304 = i64 0
+  __sched_nmidle@312 = i64 0
+  __sched_main_m@320 = i64 0
+  __sched_phase@328 = i64 0
+  __sched_lastpoll@336 = i64 0
+  __sched_poll_until@344 = i64 0
+  __sched_regain_head@352 = i64 0
+  __np_poller@360 = i64 0
+  __np_break@368 = i64 0
+  __np_wake_sig@376 = i64 0
+  __np_pd_table@384 = i64 0
+  __np_pd_cap@392 = i64 0
+  __np_waiters@400 = i64 0
+  __sched_num_procs@408 = i64 0
+  __sched_shutdown_flag@416 = i64 0
+  __sched_lock@424 = i64 0
+  __sched_lock_depth_sink@432 = i64 0
+  __sched_nmspinning@440 = i64 0
+  __sched_needspinning@448 = i64 0
+  __sched_sysmon_event@456 = i64 0
+  __sched_sysmon_wait@464 = i64 0
+  __sched_timer_starts@472 = i64 0
+  __sched_preempt_ext_lock@480 = i64 0
+  __sched_preempt_context@488 = i64 0
+  __slab_arena_list@496 = i64 0
+  __slab_arena_map_l1@504 = i64 0
+  __slab_state@512 = i64 0
+  __mrt_console_probe_stdin@520 = i8 0
+  __mrt_console_probe_stdout@521 = i8 0
+  __mrt_console_probe_stderr@522 = i8 0
+  __mrt_program_started@523 = i8 0
 }
 
 func @main {

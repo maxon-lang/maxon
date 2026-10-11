@@ -3067,10 +3067,10 @@ export type SplitDriver
 			var choice = chooseVictim(module, index: index, liveness: funcLiveness, peak: peak, pool: self.pool, scratch: work, placement: placementOf(peak))
 
 			if (not choiceFound(choice)) and (not peak.clobberOnly) 'theAbiHasNotFinishedYet'
-				let confined = confinedOverflowAtPeak(funcLiveness, peak: peak, pool: self.pool, scratch: work)
+				var confined = confinedOverflowAtPeak(funcLiveness, peak: peak, pool: self.pool, scratch: work)
 
 				if confined.found 'dischargeTheForcedWorkFirst'
-					let bracketed = chooseVictim(module, index: index, liveness: funcLiveness, peak: confined, pool: self.pool, scratch: work, placement: placementOf(confined))
+					var bracketed = chooseVictim(module, index: index, liveness: funcLiveness, peak: confined, pool: self.pool, scratch: work, placement: placementOf(confined))
 
 					if choiceFound(bracketed) 'relievable'
 						peak = confined
@@ -3626,7 +3626,7 @@ function findConfiningClobber(module TargetModule, liveness LivenessResult, scra
 				continue
 			end 'readsTheValueItself'
 
-			let hit = ConfiningClobber.create(true, blockLocal: blockLocal, pos: pressure.positionOfSlot(blockLocal, slot: slot))
+			var hit = ConfiningClobber.create(true, blockLocal: blockLocal, pos: pressure.positionOfSlot(blockLocal, slot: slot))
 
 			if (clobber and free) != 0 'coversAFreeRegister'
 				return hit
@@ -4234,7 +4234,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	var best = PeakRank.create(false, pressure: 0, blockLocal: 0, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: pool, witnessClass: RegClass.gpr, atFixedRegisterOp: false)
 
 	for i in 0 upto topo.numBlocks 'eachBlock'
-		let rank = analyzeBlockPressure(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: i, wantFullPool: not intoTree, wantConfined: true)
+		var rank = analyzeBlockPressure(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: i, wantFullPool: not intoTree, wantConfined: true)
 
 		if intoTree 'recordTheLeaf'
 			scratch.tree.setLeaf(i, rank: rank)
@@ -7280,7 +7280,7 @@ function verifyIncremental(module TargetModule, cfg FuncCfg, func IrFunction, li
 	// original column would be short by exactly those ids and trip `assertClassColumnCovers` — so this
 	// is the one place the verifier must read the incremental state rather than reconstruct it. It is
 	// sound because a class cannot drift: nothing after lowering ever WRITES an existing entry.
-	let fresh = computeLivenessOn(module, cfg: cfg, func: func, valueClass: liveness.valueClass, file: liveness.registerFile, opFacts: liveness.opFacts)
+	var fresh = computeLivenessOn(module, cfg: cfg, func: func, valueClass: liveness.valueClass, file: liveness.registerFile, opFacts: liveness.opFacts)
 	var freshScratch = SplitScratch.create(cfg.topo.numBlocks)
 
 	// `intoTree: false` — the WALK, which is the independent derivation the index is checked against.

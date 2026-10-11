@@ -263,7 +263,7 @@ var buffer = ByteArray.create()         // needs push/set operations
 
 ### Keep Variable Scope Narrow
 
-Declare variables as close to their first use as possible. This improves readability and ensures borrow lifetimes are short.
+Declare variables as close to their first use as possible. This improves readability.
 
 ```maxon
 // Good: variable declared where it is needed
@@ -332,20 +332,19 @@ function sortedCopy(items ItemArray) returns ItemArray
 end 'sortedCopy'
 ```
 
-### Respect Borrow Lifetimes
+### Share Read-Only Values, and Clone Only to Write
 
-When you take a reference from a collection (via `get`), do not mutate the collection until you are done with the reference. Use the reference first, then mutate.
+A `let` is read-only all the way down, so any number of holders can share it without a copy. Keep a value in a `let` until something must write it, and clone only where a mutable copy is needed.
 
 ```maxon
-// Good: use the reference before mutating
-var first = try list.get(0) otherwise ""
-print("{first}\n")        // last use of first, borrow expires
-list.push("new item")     // OK: borrow has expired
+// Good: the defaults are shared read-only; only the edited copy is cloned
+let defaults = loadDefaults()
+var edited = defaults.clone()
+edited.retries = 5
 
-// Bad: mutation while borrow is live
-var first = try list.get(0) otherwise ""
-list.push("new item")     // ERROR E3070: list borrowed by first
-print("{first}\n")
+// Bad: writing through the read-only value
+let defaults = loadDefaults()
+defaults.retries = 5      // ERROR E3159: 'defaults' is read-only (a `let` binding)
 ```
 
 ---

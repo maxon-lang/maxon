@@ -26,23 +26,12 @@
 //
 // The gate and every conjunct of its reason are `ProfileModel`'s.
 #if os(Windows) and arch(x64)
-	// A machine word this tool passes through: an address, a handle, a cycle count or a FILETIME. Signed and
-	// full width, so a stray all-ones register arrives as −1 and is refused by an ordinary comparison rather
-	// than trapping a range check on its way in.
-	export typealias ProfileWord = int(i64.min to i64.max)
+	module typealias ProfileWordArray = Array with RegisterWord
 
-	module typealias ProfileWordArray = Array with ProfileWord
-
-	// How many frames a walk produced. A byte extent inside the copied window is an ordinary `ProfileWord`,
+	// How many frames a walk produced. A byte extent inside the copied window is an ordinary `RegisterWord`,
 	// because that is what it is compared and added to on every step — a second alias of the same range
 	// would only be a cast at each of them.
 	typealias ProfileFrameCount = int(0 to 4096)
-
-	// ⭐ **THE MOST STACK ONE SAMPLE COPIES OUT OF THE TARGET.** Frames are tens of bytes, so 64 KB is
-	// thousands of them — far past `ProfileMaxWalkFrames` — while keeping the copy small enough that sampling
-	// at a kilohertz moves single-digit megabytes a second. A thread stack's RESERVATION is up to a megabyte,
-	// and copying that per sample would cost more than the program being measured.
-	module let ProfileStackWindowBytes = 65536
 
 	// ⭐ **THE DEEPEST CHAIN ONE SAMPLE WALKS.** Generous, because a truncated PROFILE stack is worse than a
 	// truncated backtrace: the walk runs leaf-to-ROOT, so losing the tail loses the ROOT, and a stack with no
@@ -52,38 +41,8 @@
 
 	// ⭐ **A FRAME LINK IS TWO WORDS** — the saved frame pointer at `[fp]` and the return address at `[fp+8]`
 	// — and the bound below must leave room for BOTH before either is read.
-	let ProfileWordBytes = 8 as ProfileWord
-	let ProfileFrameLinkBytes = 16 as ProfileWord
-
-	// The scratch this sampler reserves, as ONE block carved into equal slots. Each slot is far above the
-	// largest Win32 record passed through it (a `CONTEXT` is 1232 bytes and a `MODULEENTRY32W` 1080), and the
-	// block comes back page-aligned, which is what satisfies `GetThreadContext`'s 16-byte requirement.
-	let ProfileScratchSlotBytes = 2048
-	module let ProfileScratchBlockBytes = 8192
-	let ProfileContextSlot = 0
-	let ProfileRegionSlot = ProfileScratchSlotBytes
-	let ProfileModuleEntrySlot = ProfileScratchSlotBytes * 2
-
-	// ⭐ **`MODULEENTRY32W.dwSize`, WHICH `Module32FirstW` REFUSES A RECORD WITHOUT.** 1080 bytes: 48 of
-	// scalars, then `szModule[256]` and `szExePath[260]`, both UTF-16. Stated HERE because this is what
-	// reserves the record — see `ProfileRuntime.buildProfileModuleFirst`.
-	let ProfileModuleEntryBytes = 1080
-	let ProfileModuleEntrySizeOffset = 0
-	let ProfileModuleEntryBaseOffset = 24
-	let ProfileModuleEntryExtentOffset = 32
-	let ProfileModuleEntryNameOffset = 48
-
-	// The one x64 `CONTEXT` displacement only this walk reads. RSP and RIP are
-	// `ProfileSampleContract.maxon`'s `Win64Context*`, shared with the two runtime readers of the same
-	// record — as are the two negative answers `__prof_sample` gives and the allocation base a region query
-	// fills in.
-	let ProfileContextRbpOffset = 0xA0
-
-	let ProfileUtf16UnitMask = 0xFFFF
-	let ProfileUtf16UnitBits = 16
-	let ProfileUtf16UnitsPerWord = 4
-	let ProfileAsciiCeiling = 128
-	let ProfileNonAsciiPlaceholder = "?"
+	let ProfileWordBytes = 8 as RegisterWord
+	let ProfileFrameLinkBytes = 16 as RegisterWord
 
 	// How often the target's thread list is re-enumerated, as opposed to how often it is SAMPLED. They are
 	// different rates on purpose: the scheduler creates its workers LAZILY, so a one-shot enumeration at
@@ -92,8 +51,6 @@
 	// handle starts refusing.
 	let ProfileThreadRefreshNanos = 100000000
 
-	// One tick's period in the units a waitable timer's absolute due time is spelled in.
-	let ProfileFileTimeTicksPerSecond = 10000000.0
 	let ProfileNanosPerSecond = 1000000000.0
 
 	// The two names a PE image's own header answers with, and the flag that says its base is not a promise.
@@ -125,12 +82,12 @@
 	// Where the target's `.text` was mapped and what names the code inside it. Everything a sampled
 	// instruction pointer is resolved through.
 	export type ProfileImage
-		export var textBase as ProfileWord
-		export var textSize as ProfileWord
+		export var textBase as RegisterWord
+		export var textSize as RegisterWord
 		export var sidecar as MxdbgReader
 		export var modules as ProfileModuleMap
 
-		static function create(textBase ProfileWord, textSize ProfileWord, sidecar MxdbgReader, modules ProfileModuleMap) returns ProfileImage
+		static function create(textBase RegisterWord, textSize RegisterWord, sidecar MxdbgReader, modules ProfileModuleMap) returns ProfileImage
 			return Self{textBase: textBase, textSize: textSize, sidecar: sidecar, modules: modules}
 		end 'create'
 	end 'ProfileImage'
@@ -149,21 +106,27 @@
 		var ends as ProfileWordArray
 		var names as ProfileStringArray
 
-		static function create(starts ProfileWordArray, ends ProfileWordArray, names ProfileStringArray) returns ProfileModuleMap
-			return Self{starts: starts, ends: ends, names: names}
-		end 'create'
+		static function over(modules SampledModuleArray) returns ProfileModuleMap
+			var starts = ProfileWordArray.create()
+			var ends = ProfileWordArray.create()
+			var names = ProfileStringArray.create()
 
-		static function empty() returns ProfileModuleMap
-			return Self{starts: ProfileWordArray.create(), ends: ProfileWordArray.create(), names: ProfileStringArray.create()}
-		end 'empty'
+			for loaded in modules 'eachModule'
+				starts.push(loaded.base)
+				ends.push(loaded.limit)
+				names.push(loaded.name)
+			end 'eachModule'
+
+			return Self{starts: starts, ends: ends, names: names}
+		end 'over'
 
 		// The base the FIRST module was loaded at, which for a Toolhelp module walk is the executable itself.
 		// Zero when nothing was enumerated.
-		export function mainModuleBase() returns ProfileWord
+		export function mainModuleBase() returns RegisterWord
 			return try self.starts.get(0) otherwise 0
 		end 'mainModuleBase'
 
-		export function nameAt(address ProfileWord) returns String throws AbsentError
+		export function nameAt(address RegisterWord) returns String throws AbsentError
 			for (iter, start) in self.starts.withIterator() 'eachModule'
 				if address >= start and address < (try self.ends.get(iter.index()) otherwise start) 'inThisModule'
 					return try self.names.get(iter.index()) otherwise panic("ProfileModuleMap.nameAt: module {iter.index()} has a start and no name — the three columns are pushed together")
@@ -176,13 +139,13 @@
 
 	// Where a PE image says its `.text` will be mapped, and whether that promise is one the loader keeps.
 	module type ProfilePlacement
-		export var preferredTextBase as ProfileWord
-		export var textRva as ProfileWord
-		export var textSize as ProfileWord
+		export var preferredTextBase as RegisterWord
+		export var textRva as RegisterWord
+		export var textSize as RegisterWord
 		export var relocatable as bool
 		export var codeBytes as ByteArray
 
-		static function create(preferredTextBase ProfileWord, textRva ProfileWord, textSize ProfileWord, relocatable bool, codeBytes ByteArray) returns ProfilePlacement
+		static function create(preferredTextBase RegisterWord, textRva RegisterWord, textSize RegisterWord, relocatable bool, codeBytes ByteArray) returns ProfilePlacement
 			return Self{preferredTextBase: preferredTextBase, textRva: textRva, textSize: textSize, relocatable: relocatable, codeBytes: codeBytes}
 		end 'create'
 	end 'ProfilePlacement'
@@ -215,7 +178,7 @@
 		let optional = coff + ProfileCoffHeaderBytes as ByteOffset
 		let firstSection = optional + optionalHeaderSize as ByteOffset
 
-		let preferredBase = imageReadU64(image, at: optional + ProfileOptionalImageBaseOffset) as ProfileWord
+		let preferredBase = imageReadU64(image, at: optional + ProfileOptionalImageBaseOffset) as RegisterWord
 		let relocatable = (imageReadU16(image, at: optional + ProfileOptionalDllCharacteristicsOffset) and ProfileDynamicBaseFlag) != 0
 
 		for index in 0 upto sectionCount 'eachSection'
@@ -225,7 +188,7 @@
 				continue
 			end 'notTheCode'
 
-			let virtualSize = imageReadU32(image, at: header + ProfileSectionVirtualSizeOffset) as ProfileWord
+			let virtualSize = imageReadU32(image, at: header + ProfileSectionVirtualSizeOffset) as RegisterWord
 			let rawSize = imageReadU32(image, at: header + ProfileSectionRawSizeOffset) as BytePos
 			let rawPointer = imageReadU32(image, at: header + ProfileSectionRawPointerOffset) as ByteOffset
 			let stored = virtualSize as BytePos if (virtualSize as BytePos) < rawSize else rawSize
@@ -234,7 +197,7 @@
 				return ProfilePlacementRead.refused("{reportPathDisplay(binary)} claims a {ProfileTextSectionName} section that runs past the end of the file")
 			end 'runsPastTheEnd'
 
-			return ProfilePlacementRead.found(ProfilePlacement.create(preferredBase, textRva: imageReadU32(image, at: header + ProfileSectionVirtualAddressOffset) as ProfileWord, textSize: virtualSize, relocatable: relocatable, codeBytes: imageSlice(image, start: rawPointer, count: stored)))
+			return ProfilePlacementRead.found(ProfilePlacement.create(preferredBase, textRva: imageReadU32(image, at: header + ProfileSectionVirtualAddressOffset) as RegisterWord, textSize: virtualSize, relocatable: relocatable, codeBytes: imageSlice(image, start: rawPointer, count: stored)))
 		end 'eachSection'
 
 		return ProfilePlacementRead.refused("{reportPathDisplay(binary)} has no {ProfileTextSectionName} section, so there is no code for a profile to land in")
@@ -245,107 +208,13 @@
 	end 'profileNotAPeImage'
 
 	// ========================================================================================
-	// THE MODULE WALK
-	// ========================================================================================
-
-	// The target's loaded modules, or an EMPTY map when the snapshot could not be taken — the profile is
-	// still perfectly valid then, it simply names fewer of its foreign frames.
-	//
-	// ⚠ The retry is a real race rather than defensiveness: a snapshot of a process that is still loading
-	// fails, and the walk is taken the moment the child exists.
-	function snapshotProfileModules(pid ProfileWord, entryPtr ProfileWord) returns ProfileModuleMap
-		var attempt = 0
-
-		while attempt < ProfileSnapshotAttempts 'retry'
-			attempt = attempt + 1
-			let snapshot = __Builtins.profileModuleSnapshot(pid)
-
-			if snapshot == ProfileInvalidHandle or snapshot == 0 'notYet'
-				sleep(ProfileSnapshotRetryMs)
-				continue
-			end 'notYet'
-
-			let map = walkProfileModules(snapshot, entryPtr: entryPtr)
-			__Builtins.profileClose(snapshot)
-
-			return map
-		end 'retry'
-
-		return ProfileModuleMap.empty()
-	end 'snapshotProfileModules'
-
-	let ProfileSnapshotAttempts = 20
-	let ProfileSnapshotRetryMs = 5
-	let ProfileInvalidHandle = 0 - 1
-
-	function walkProfileModules(snapshot ProfileWord, entryPtr ProfileWord) returns ProfileModuleMap
-		var starts = ProfileWordArray.create()
-		var ends = ProfileWordArray.create()
-		var names = ProfileStringArray.create()
-
-		// The record's size is what the API refuses a walk without, and this is the side that reserved it.
-		__Builtins.profileWriteWord(entryPtr, ProfileModuleEntrySizeOffset, ProfileModuleEntryBytes)
-		var more = __Builtins.profileModuleFirst(snapshot, entryPtr)
-
-		while more != 0 'eachModule'
-			let base = __Builtins.profileReadWord(entryPtr, ProfileModuleEntryBaseOffset)
-			starts.push(base)
-			ends.push(base + (__Builtins.profileReadWord(entryPtr, ProfileModuleEntryExtentOffset) and DwordMask))
-			names.push(profileModuleName(entryPtr))
-			more = __Builtins.profileModuleNext(snapshot, entryPtr)
-		end 'eachModule'
-
-		return ProfileModuleMap.create(starts, ends: ends, names: names)
-	end 'walkProfileModules'
-
-	// One module's name, out of the UTF-16 field the record carries. Read a WORD at a time — four code units
-	// each — because a word is the only width this tier can name an address at.
-	function profileModuleName(entryPtr ProfileWord) returns String
-		var name = ""
-		var offset = ProfileModuleEntryNameOffset
-
-		while offset < ProfileModuleEntryBytes 'eachWord'
-			let packed = __Builtins.profileReadWord(entryPtr, offset)
-			var unit = 0
-
-			while unit < ProfileUtf16UnitsPerWord 'eachUnit'
-				let code = (packed shr (unit * ProfileUtf16UnitBits)) and ProfileUtf16UnitMask
-
-				if code == 0 'endOfName'
-					return name
-				end 'endOfName'
-
-				name.append(profileModuleNameCharacter(code))
-				unit = unit + 1
-			end 'eachUnit'
-
-			offset = offset + ProfileWordBytes
-		end 'eachWord'
-
-		return name
-	end 'profileModuleName'
-
-	// A module file name is ASCII on every Windows this runs on; anything else is marked rather than
-	// transcoded, because a module map exists to be RECOGNIZED and a mangled name recognizes as nothing.
-	function profileModuleNameCharacter(code ProfileWord) returns String
-		if code >= ProfileAsciiCeiling 'notAscii'
-			return ProfileNonAsciiPlaceholder
-		end 'notAscii'
-
-		var one = ByteArray.create()
-		one.push(code as Byte)
-
-		return String.from(one)
-	end 'profileModuleNameCharacter'
-
-	// ========================================================================================
 	// SYMBOLIZATION
 	// ========================================================================================
 
 	// ⭐ **AN ADDRESS BELOW `.text` IS OUTSIDE IT, AND THE TEST SAYS SO IN TWO HALVES BECAUSE THE ARITHMETIC
 	// HERE IS SIGNED.** The reference subtracts unsigned and lets an underflow fail one upper bound; a signed
 	// difference goes NEGATIVE instead, which passes that bound — so the lower half is stated outright.
-	function profileAddressInText(image ProfileImage, address ProfileWord) returns bool
+	function profileAddressInText(image ProfileImage, address RegisterWord) returns bool
 		return address >= image.textBase and address - image.textBase < image.textSize
 	end 'profileAddressInText'
 
@@ -390,7 +259,7 @@
 	// foreign code has no obligation to maintain a frame pointer, so following RBP out of it would produce a
 	// return address that might well resolve to a real function of ours and attribute the sample to a caller
 	// that never called it. One unnamed frame is the honest answer; a plausible wrong one is not.
-	function profileForeignLeafFrame(image ProfileImage, address ProfileWord) returns String
+	function profileForeignLeafFrame(image ProfileImage, address RegisterWord) returns String
 		let name = try image.modules.nameAt(address) otherwise return ProfileOutsideTextFrame
 		return "[{name}]"
 	end 'profileForeignLeafFrame'
@@ -419,18 +288,20 @@
 	// reads the CALLER's frame pointer, so that one sample attributes the leaf correctly and misses its
 	// immediate caller. It is a per-sample error of one frame over a window of one or two instructions per
 	// call, and it does not accumulate.
-	function walkProfileFrames(frames ProfileStringArray, image ProfileImage, leafPc ProfileWord, framePointer ProfileWord, stackPointer ProfileWord, windowPtr ProfileWord, windowBytes ProfileWord) returns bool
+	function walkProfileFrames(frames ProfileStringArray, image ProfileImage, leafPc RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, window StackWindow) returns ProfileWalk
 		frames.clear()
 
 		if not profileAddressInText(image, address: leafPc) 'foreignLeaf'
 			frames.push(profileForeignLeafFrame(image, address: leafPc))
-			return false
+			return ProfileWalk.of(false, rootFrame: 0)
 		end 'foreignLeaf'
 
 		pushProfileFramesAt(frames, image: image, offset: (leafPc - image.textBase) as MxdbgCodeOffset)
 
+		let windowBytes = window.byteCount()
+
 		if windowBytes < ProfileFrameLinkBytes 'nothingToWalk'
-			return false
+			return ProfileWalk.of(false, rootFrame: 0)
 		end 'nothingToWalk'
 
 		// The largest offset at which BOTH words of a frame link still fit, computed ONCE by SUBTRACTING the
@@ -441,20 +312,20 @@
 
 		while walked < ProfileMaxWalkFrames 'eachFrame'
 			if fp < stackPointer 'belowTheWindow'
-				return false
+				return ProfileWalk.of(false, rootFrame: 0)
 			end 'belowTheWindow'
 
 			let offset = fp - stackPointer
 
 			if offset > lastFrameLinkOffset 'pastTheWindow'
-				return false
+				return ProfileWalk.of(false, rootFrame: 0)
 			end 'pastTheWindow'
 
-			let savedFp = __Builtins.profileReadWord(windowPtr, offset)
-			let returnAddress = __Builtins.profileReadWord(windowPtr, offset + ProfileWordBytes)
+			let savedFp = try window.word(offset as StackWindowOffset) otherwise return ProfileWalk.of(false, rootFrame: 0)
+			let returnAddress = try window.word((offset + ProfileWordBytes) as StackWindowOffset) otherwise return ProfileWalk.of(false, rootFrame: 0)
 
 			if returnAddress == 0 or not profileAddressInText(image, address: returnAddress) 'endOfOurCode'
-				return false
+				return ProfileWalk.of(false, rootFrame: fp)
 			end 'endOfOurCode'
 
 			// ⭐ A frame above the leaf is a RETURN address, so it resolves through the ONE call-site bias
@@ -464,13 +335,13 @@
 			walked = walked + 1
 
 			if savedFp <= fp 'notGrowingOutwards'
-				return false
+				return ProfileWalk.of(false, rootFrame: fp)
 			end 'notGrowingOutwards'
 
 			fp = savedFp
 		end 'eachFrame'
 
-		return true
+		return ProfileWalk.of(true, rootFrame: 0)
 	end 'walkProfileFrames'
 
 	// ========================================================================================
@@ -507,14 +378,14 @@
 
 		for _ in 0 upto ProfileCalibrationWindows 'eachWindow'
 			let started = Clock.nowNanos()
-			let startCycles = __Builtins.threadCpuTicks()
+			let startCycles = Clock.threadCpuTicks()
 			var spinning = Clock.elapsedNanos(started)
 
 			while spinning < ProfileCalibrationWindowNanos 'spin'
 				spinning = Clock.elapsedNanos(started)
 			end 'spin'
 
-			let spentCycles = __Builtins.threadCpuTicks() - startCycles
+			let spentCycles = Clock.threadCpuTicks() - startCycles
 			let spun = Clock.elapsedNanos(started)
 			let cyclesPerNano = try ((spentCycles as ProfileCalibrationSpan) / (spun as ProfileCalibrationSpan)) otherwise panic("measureProfileCyclesPerTick: the window ended only once {spun} ns had passed, which is not zero")
 			fastest = max(fastest, cyclesPerNano as ProfileCyclesPerNano)
@@ -533,36 +404,38 @@
 	// THE SESSION
 	// ========================================================================================
 
-	// The handles, scratch and thread table one profiling run holds. The thread table is four PARALLEL
-	// arrays of machine words rather than one array of records, because a record reached through `get` is a
-	// BORROW and the cycle baseline and the uncharged credit are written on every tick (E3070).
+	// The sampled process and thread table one profiling run holds. The thread table is three PARALLEL
+	// arrays — the threads, their cycle baselines and their uncharged credit — rather than one array of
+	// records, so the baseline and the credit written on every tick are plain word columns.
 	export type ProfileSession
-		var process as ProfileWord
-		var timer as ProfileWord
-		var scratch as ProfileWord
-		var window as ProfileWord
+		var process as SampledProcess
 		var cyclesPerTick as ProfileCyclesPerTick
-		var threadHandles as ProfileWordArray
-		var threadIds as ProfileWordArray
+		var threads as SampledThreadArray
 		var threadCycles as ProfileWordArray
 		var threadCredit as ProfileWordArray
 		export var ticks as ProfileTally
 
-		export static function create(process ProfileWord, timer ProfileWord, scratch ProfileWord, window ProfileWord, cyclesPerTick ProfileCyclesPerTick) returns ProfileSession
-			return Self{process: process, timer: timer, scratch: scratch, window: window, cyclesPerTick: cyclesPerTick, threadHandles: ProfileWordArray.create(), threadIds: ProfileWordArray.create(), threadCycles: ProfileWordArray.create(), threadCredit: ProfileWordArray.create(), ticks: 0}
+		export static function create(process SampledProcess, cyclesPerTick ProfileCyclesPerTick) returns ProfileSession
+			return Self{process: process, cyclesPerTick: cyclesPerTick, threads: SampledThreadArray.create(), threadCycles: ProfileWordArray.create(), threadCredit: ProfileWordArray.create(), ticks: 0}
 		end 'create'
 
-		export function contextPtr() returns ProfileWord
-			return self.scratch + ProfileContextSlot
-		end 'contextPtr'
+		function loadedModules() returns ProfileModuleMap throws SamplerError
+			return ProfileModuleMap.over(try self.process.modules())
+		end 'loadedModules'
 
-		export function regionPtr() returns ProfileWord
-			return self.scratch + ProfileRegionSlot
-		end 'regionPtr'
+		function cyclesOf(thread SampledThread) returns RegisterWord
+			return (try self.process.cycles(thread) otherwise panic("ProfileSession.cyclesOf: every thread this session reads was handed out by its own process and is released only by this session")) as RegisterWord
+		end 'cyclesOf'
 
-		export function moduleEntryPtr() returns ProfileWord
-			return self.scratch + ProfileModuleEntrySlot
-		end 'moduleEntryPtr'
+		function tracks(id SampledThreadId) returns bool
+			for tracked in self.threads 'eachTracked'
+				if tracked.id == id 'thisOne'
+					return true
+				end 'thisOne'
+			end 'eachTracked'
+
+			return false
+		end 'tracks'
 
 		// ⭐ Re-enumerate the target's threads, keeping a handle for each NEW one.
 		//
@@ -570,60 +443,34 @@
 		// two refreshes is charged nothing meanwhile — its count reads zero, below its baseline — unless a charge
 		// was already due, in which case the suspend that refuses drops it sooner.
 		export function refreshThreads()
-			var seen = ProfileWordArray.create()
+			var seen = ProfileThreadIdArray.create()
 
-			// ⚠ **THE WALK'S CURSOR IS A HANDLE, AND A SPARE ONE MAY ONLY BE CLOSED AFTER THE NEXT STEP HAS
-			// USED IT.** Each step is given the handle the previous one produced; a second handle to a thread
-			// this table already holds is therefore kept in `spare` and released one iteration later, because
-			// a handle VALUE is recycled the moment it is closed and closing it early would eventually close
-			// something else this session owns.
-			var cursor = 0 as ProfileWord
-			var spare = 0 as ProfileWord
+			for thread in self.process.threads() 'eachThread'
+				seen.push(thread.id)
 
-			while true 'eachThread'
-				let handle = __Builtins.profileNextThread(self.process, cursor)
-
-				if handle == 0 'endOfTheList'
-					break
-				end 'endOfTheList'
-
-				if spare != 0 'theOneBefore'
-					__Builtins.profileClose(spare)
-					spare = 0
-				end 'theOneBefore'
-
-				cursor = handle
-				let id = __Builtins.profileThreadId(handle)
-				seen.push(id)
-
-				if profileWordArrayContains(self.threadIds, wanted: id) 'alreadyTracked'
-					spare = handle
+				if self.tracks(thread.id) 'alreadyTracked'
+					self.process.release(thread)
 					continue
 				end 'alreadyTracked'
 
-				self.threadHandles.push(handle)
-				self.threadIds.push(id)
+				self.threads.push(thread)
 
 				// ⭐ The baseline is seeded the instant the thread is discovered: one left at zero would charge
 				// the thread's whole prior CPU on the next tick, as a burst against whichever stack it is on.
-				self.threadCycles.push(__Builtins.profileThreadCycles(handle))
+				self.threadCycles.push(self.cyclesOf(thread))
 				self.threadCredit.push(0)
 			end 'eachThread'
-
-			if spare != 0 'theLastOne'
-				__Builtins.profileClose(spare)
-			end 'theLastOne'
 
 			self.dropDepartedThreads(seen)
 		end 'refreshThreads'
 
-		function dropDepartedThreads(seen ProfileWordArray)
-			var index = self.threadIds.count()
+		function dropDepartedThreads(seen ProfileThreadIdArray)
+			var index = self.threads.count()
 
 			while index > 0 'eachTracked'
 				index = index - 1
 
-				if profileWordArrayContains(seen, wanted: try self.threadIds.get(index) otherwise panic("dropDepartedThreads: index {index} is below the table's count")) 'stillThere'
+				if profileThreadIdsContain(seen, wanted: (try self.threads.get(index) otherwise panic("dropDepartedThreads: index {index} is below the table's count")).id) 'stillThere'
 					continue
 				end 'stillThere'
 
@@ -632,8 +479,7 @@
 		end 'dropDepartedThreads'
 
 		function forgetThread(index ElementIndex)
-			__Builtins.profileClose(try self.threadHandles.remove(index) otherwise panic("forgetThread: index {index} is outside the handle column"))
-			_ = try self.threadIds.remove(index) otherwise panic("forgetThread: index {index} is outside the id column")
+			self.process.release(try self.threads.remove(index) otherwise panic("forgetThread: index {index} is outside the thread column"))
 			_ = try self.threadCycles.remove(index) otherwise panic("forgetThread: index {index} is outside the baseline column")
 			_ = try self.threadCredit.remove(index) otherwise panic("forgetThread: index {index} is outside the credit column")
 		end 'forgetThread'
@@ -645,13 +491,13 @@
 		// stack is captured is not Go's: SIGPROF interrupts the thread the instant its period expires, while this
 		// captures once, at the tick the charge falls due, and that one capture carries every sample charged there.
 		export function sampleOnce(accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray)
-			let tickOfCpu = self.cyclesPerTick as ProfileWord
-			var index = self.threadHandles.count()
+			let tickOfCpu = self.cyclesPerTick as RegisterWord
+			var index = self.threads.count()
 
 			while index > 0 'eachThread'
 				index = index - 1
-				let handle = try self.threadHandles.get(index) otherwise panic("sampleOnce: index {index} is below the handle column's count")
-				let cycles = __Builtins.profileThreadCycles(handle)
+				let thread = try self.threads.get(index) otherwise panic("sampleOnce: index {index} is below the thread column's count")
+				let cycles = self.cyclesOf(thread)
 				let baseline = try self.threadCycles.get(index) otherwise panic("sampleOnce: index {index} is outside the baseline column")
 				var credit = (try self.threadCredit.get(index) otherwise panic("sampleOnce: index {index} is outside the credit column")) + cycles - baseline
 				try self.threadCycles.set(index, value: cycles) otherwise panic("sampleOnce: index {index} is outside the baseline column")
@@ -668,110 +514,101 @@
 					continue
 				end 'owesNoSample'
 
-				if not self.sampleThread(handle, charges: charges as ProfileCharges, accumulator: accumulator, image: image, frames: frames) 'threadHasGone'
-					self.forgetThread(index)
-					continue
-				end 'threadHasGone'
-
-				// ⭐⭐ **THE BASELINE IS THE COUNT READ WHILE THE THREAD WAS SUSPENDED** (`__prof_sample`). Suspending
-				// a thread costs it kernel cycles and the counter counts them, so a baseline read before the
-				// suspend would charge a sampled thread for its own sampling; one read after the walk would drop
-				// what the thread ran, resumed, while the sampler walked and aggregated its copied stack — most for
-				// the busiest, deepest threads. Only the resume's own cost reaches the next charge.
-				try self.threadCycles.set(index, value: __Builtins.profileReadWord(self.regionPtr(), ProfileRegionSuspendedCyclesOffset)) otherwise panic("sampleOnce: index {index} is outside the baseline column")
+				match self.sampleThread(thread, charges: charges as ProfileCharges, accumulator: accumulator, image: image, frames: frames) 'sampled'
+					gone then self.forgetThread(index)
+					charged(suspendedCycles) then self.baselineAt(index, cycles: suspendedCycles)
+				end 'sampled'
 			end 'eachThread'
 
 			self.ticks = self.ticks + 1
 		end 'sampleOnce'
 
-		// One captured stack, carrying `charges` samples. FALSE means the thread is gone and should be dropped.
-		function sampleThread(handle ProfileWord, charges ProfileCharges, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns bool
-			let windowBytes = __Builtins.profileSample(self.process, handle, self.contextPtr(), self.regionPtr(), self.window, ProfileStackWindowBytes)
+		// ⭐⭐ **THE BASELINE IS THE COUNT READ WHILE THE THREAD WAS SUSPENDED** (`__prof_sample`). Suspending
+		// a thread costs it kernel cycles and the counter counts them, so a baseline read before the
+		// suspend would charge a sampled thread for its own sampling; one read after the walk would drop
+		// what the thread ran, resumed, while the sampler walked and aggregated its copied stack — most for
+		// the busiest, deepest threads. Only the resume's own cost reaches the next charge.
+		function baselineAt(index ElementIndex, cycles RegisterWord)
+			try self.threadCycles.set(index, value: cycles) otherwise panic("sampleOnce: index {index} is outside the baseline column")
+		end 'baselineAt'
 
-			if windowBytes == ProfileSampleThreadGone 'exited'
-				return false
-			end 'exited'
+		// One captured stack, carrying `charges` samples. `gone` means the thread has exited and should be dropped.
+		function sampleThread(thread SampledThread, charges ProfileCharges, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns ProfileThreadSample
+			let capture = try self.process.capture(thread) otherwise panic("ProfileSession.sampleThread: every thread this session samples was handed out by its own process and is released only by this session")
 
-			let allocationBase = __Builtins.profileReadWord(self.regionPtr(), ProfileRegionAllocationBaseOffset) as ProfileStackBase
-
-			if windowBytes == ProfileSampleNoRegisters 'nothingToRead'
-				frames.clear()
-				frames.push(ProfileUnreadableStackFrame)
-				accumulator.accept(frames, charged: charges, allocationBase: allocationBase, lostItsRoot: false, hadNoChain: true)
-				return true
-			end 'nothingToRead'
-
-			// Everything below runs with the thread ALREADY RESUMED, over the copy. Nothing about walking or
-			// symbolizing needs the target held, and holding it would multiply the suspension by the stack's
-			// depth.
-			let programCounter = __Builtins.profileReadWord(self.contextPtr(), Win64ContextRipOffset)
-			let framePointer = __Builtins.profileReadWord(self.contextPtr(), ProfileContextRbpOffset)
-			let stackPointer = __Builtins.profileReadWord(self.contextPtr(), Win64ContextRspOffset)
-			let lostItsRoot = walkProfileFrames(frames, image: image, leafPc: programCounter, framePointer: framePointer, stackPointer: stackPointer, windowPtr: self.window, windowBytes: windowBytes as ProfileWord)
-			accumulator.accept(frames, charged: charges, allocationBase: allocationBase, lostItsRoot: lostItsRoot, hadNoChain: windowBytes == 0)
-
-			return true
+			return match capture 'captured'
+				threadGone gives ProfileThreadSample.gone
+				unreadable(allocationBase, suspendedCycles) gives self.chargedWithNoRegisters(allocationBase, suspendedCycles: suspendedCycles, charges: charges, accumulator: accumulator, frames: frames)
+				captured(stack) gives self.chargedWithStack(stack, charges: charges, accumulator: accumulator, image: image, frames: frames)
+			end 'captured'
 		end 'sampleThread'
 
-		// Arm an ABSOLUTE deadline and wait for it, so the ticks keep their rate however long one tick's work
-		// took — a RELATIVE wait would drift late by every tick's cost. The price is that a stall is repaid as a
-		// burst of back-to-back ticks, which charges nothing extra: each tick charges only the CPU consumed
-		// since the one before.
-		export function waitUntil(deadline ProfileWord)
-			__Builtins.profileTimerWait(self.timer, deadline)
-		end 'waitUntil'
+		function chargedWithNoRegisters(allocationBase RegisterWord, suspendedCycles RegisterWord, charges ProfileCharges, accumulator ProfileAccumulator, frames ProfileStringArray) returns ProfileThreadSample
+			frames.clear()
+			frames.push(ProfileUnreadableStackFrame)
+			accumulator.accept(frames, charged: charges, stackIdentity: allocationBase as ProfileStackBase, lostItsRoot: false, hadNoChain: true)
 
-		// ⚠ **THE THREE SAMPLING SLOTS ARE TESTED, BECAUSE A SESSION MAY BE BUILT OVER A REFUSAL.** A caller
-		// that could not take its timer or its pages still releases through here rather than through a second
-		// close sequence of its own, so a slot that was never taken arrives as 0 and is skipped. The process
-		// handle is not tested: a session is only ever built once one is open.
+			return ProfileThreadSample.charged(suspendedCycles)
+		end 'chargedWithNoRegisters'
+
+		// Everything here runs with the thread ALREADY RESUMED, over the copy. Nothing about walking or
+		// symbolizing needs the target held, and holding it would multiply the suspension by the stack's
+		// depth.
+		function chargedWithStack(stack SampledStack, charges ProfileCharges, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns ProfileThreadSample
+			let walk = walkProfileFrames(frames, image: image, leafPc: stack.programCounter, framePointer: stack.framePointer, stackPointer: stack.stackPointer, window: stack.window)
+			let identity = walk.rootFrame if walk.rootFrame != 0 else stack.allocationBase
+			accumulator.accept(frames, charged: charges, stackIdentity: identity as ProfileStackBase, lostItsRoot: walk.lostItsRoot, hadNoChain: stack.window.byteCount() == 0)
+
+			return ProfileThreadSample.charged(stack.suspendedCycles)
+		end 'chargedWithStack'
+
 		export function release()
-			for handle in self.threadHandles 'eachThread'
-				__Builtins.profileClose(handle)
-			end 'eachThread'
-
-			self.threadHandles.clear()
-			self.threadIds.clear()
+			self.threads.clear()
 			self.threadCycles.clear()
 			self.threadCredit.clear()
-
-			__Builtins.profileClose(self.process)
-
-			if self.timer != 0 'timerTaken'
-				__Builtins.profileClose(self.timer)
-			end 'timerTaken'
-
-			if self.scratch != 0 'scratchTaken'
-				__Builtins.profileScratchFree(self.scratch, ProfileScratchBlockBytes)
-			end 'scratchTaken'
-
-			if self.window != 0 'windowTaken'
-				__Builtins.profileScratchFree(self.window, ProfileStackWindowBytes)
-			end 'windowTaken'
+			self.process.close()
 		end 'release'
 	end 'ProfileSession'
 
-	function profileWordArrayContains(words ProfileWordArray, wanted ProfileWord) returns bool
-		for word in words 'each'
-			if word == wanted 'found'
+	type ProfileWalk
+		export let lostItsRoot as bool
+		export let rootFrame as RegisterWord
+
+		static function of(lostItsRoot bool, rootFrame RegisterWord) returns ProfileWalk
+			return Self{lostItsRoot: lostItsRoot, rootFrame: rootFrame}
+		end 'of'
+	end 'ProfileWalk'
+
+	union ProfileThreadSample
+		gone
+		charged(suspendedCycles RegisterWord)
+	end 'ProfileThreadSample'
+
+	typealias ProfileThreadIdArray = Array with SampledThreadId
+
+	function profileThreadIdsContain(ids ProfileThreadIdArray, wanted SampledThreadId) returns bool
+		for id in ids 'each'
+			if id == wanted 'found'
 				return true
 			end 'found'
 		end 'each'
 
 		return false
-	end 'profileWordArrayContains'
+	end 'profileThreadIdsContain'
 
 	// The image a session symbolizes against: the sidecar it was handed, plus a module snapshot taken while
 	// the target is certainly alive and before a single sample.
-	module function profileImageFor(session ProfileSession, pid ProfileWord, placement ProfilePlacement, sidecar MxdbgReader) returns ProfileImageLoad
-		let modules = snapshotProfileModules(pid, entryPtr: session.moduleEntryPtr())
+	module function profileImageFor(session ProfileSession, placement ProfilePlacement, sidecar MxdbgReader) returns ProfileImageLoad
+		let modules = try session.loadedModules() otherwise 'unlisted'
+			return profileImageWithoutModules(placement, sidecar: sidecar)
+		end 'unlisted'
 
 		// ⭐ A PINNED image is arithmetic on its own header; a RELOCATABLE one has to be asked where it
 		// landed, and refusing beats symbolizing every sample to a function that is wrong by the slide.
 		let mapped = modules.mainModuleBase()
 
 		if placement.relocatable and mapped == 0 'slidByAnUnknownAmount'
-			return ProfileImageLoad.refused("this binary sets DYNAMIC_BASE, so where its code was mapped is not what its header says, and the module list could not be read to find out. Every sample would be attributed to the wrong function.")
+			return ProfileImageLoad.refused(ProfileSlidImageReason)
 		end 'slidByAnUnknownAmount'
 
 		let base = placement.preferredTextBase if mapped == 0 else mapped
@@ -779,19 +616,28 @@
 		return ProfileImageLoad.loaded(ProfileImage.create(base + placement.textRva, textSize: placement.textSize, sidecar: sidecar, modules: modules))
 	end 'profileImageFor'
 
+	let ProfileSlidImageReason = "this binary sets DYNAMIC_BASE, so where its code was mapped is not what its header says, and the module list could not be read to find out. Every sample would be attributed to the wrong function."
+
+	function profileImageWithoutModules(placement ProfilePlacement, sidecar MxdbgReader) returns ProfileImageLoad
+		if placement.relocatable 'slidByAnUnknownAmount'
+			return ProfileImageLoad.refused(ProfileSlidImageReason)
+		end 'slidByAnUnknownAmount'
+
+		return ProfileImageLoad.loaded(ProfileImage.create(placement.preferredTextBase + placement.textRva, textSize: placement.textSize, sidecar: sidecar, modules: ProfileModuleMap.over(SampledModuleArray.create())))
+	end 'profileImageWithoutModules'
+
 	module union ProfileImageLoad
 		loaded(image ProfileImage)
 		refused(reason String)
 	end 'ProfileImageLoad'
 
-	// One tick's period as a step of the ABSOLUTE deadline `__prof_timer_wait` arms — 100 ns intervals, which
-	// is the unit a waitable timer's due time is spelled in. Floored at one so a rate past the timer's own
-	// granularity still steps the schedule forward rather than re-arming the same instant.
-	module function profileIntervalTicks(rateHz ProfileRate) returns ProfileWord
-		let ticks = trunc(try (ProfileFileTimeTicksPerSecond / rateHz) otherwise panic("profileIntervalTicks: `--rate=` refuses a non-positive rate, so the divisor here cannot be zero"))
+	// One tick's period, in nanoseconds: the unit `SampleTimer` is created in. Floored at one so a rate past the
+	// timer's own granularity still steps the schedule forward rather than re-arming the same instant.
+	module function profileIntervalNanos(rateHz ProfileRate) returns SampleIntervalNanos
+		let nanos = trunc(try (ProfileNanosPerSecond / rateHz) otherwise panic("profileIntervalNanos: `--rate=` refuses a non-positive rate, so the divisor here cannot be zero"))
 
-		return ticks if ticks > 0 else 1
-	end 'profileIntervalTicks'
+		return (nanos if nanos > 0 else 1) as SampleIntervalNanos
+	end 'profileIntervalNanos'
 
 	// How long the thread table has gone unrefreshed, in the units `Clock.nowNanos()` answers.
 	module function profileThreadRefreshDue(sinceNanos DurationNanos) returns bool

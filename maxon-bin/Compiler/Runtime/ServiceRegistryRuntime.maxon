@@ -94,7 +94,7 @@ end 'installServiceRegistryRuntime'
 let RegistryReleasedMessage = b"a `default` key was looked up or registered after the exit drain released the registry"
 
 function releasedRegistryPanicLabel(globalData GlobalDataTable) returns ByteArray
-	return globalData.labelBytesOf(registerStringBlob(globalData, bytes: RegistryReleasedMessage))
+	return registerPanicLabel(globalData, message: RegistryReleasedMessage)
 end 'releasedRegistryPanicLabel'
 
 function emitHeldOrPanic(module StdModule, func IrFunction, block IrBlock, held ValueId, released ByteArray, holdsSchedLock bool, ids ValueMinter) returns IrBlock
@@ -119,8 +119,8 @@ function emitSkipIfReleased(module StdModule, func IrFunction, block IrBlock, he
 	return live
 end 'emitSkipIfReleased'
 
-function openRuntimeFunction(name ByteArray, paramCount ParamCount, returnsAWord bool) returns IrFunction
-	return IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64) if returnsAWord else StdReturnType.void, paramCount: paramCount, paramTypes: i64Params(paramCount))
+function openRuntimeFunction(name ByteArray, paramCount ParamCount, returnsAWord bool, guarded bool = false) returns IrFunction
+	return IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64) if returnsAWord else StdReturnType.void, paramCount: paramCount, paramTypes: i64Params(paramCount), needsGreenThreadStackGuard: guarded, pinsItsThread: guarded)
 end 'openRuntimeFunction'
 
 function i64Params(count ParamCount) returns StdTypeArray
@@ -328,7 +328,7 @@ function buildSharedValueRegistryRelease(module StdModule)
 end 'buildSharedValueRegistryRelease'
 
 function buildSharedValueReleaseCell(module StdModule)
-	var func = openRuntimeFunction(SharedValueReleaseCellName, paramCount: 1, returnsAWord: false)
+	var func = openRuntimeFunction(SharedValueReleaseCellName, paramCount: 1, returnsAWord: false, guarded: true)
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var lastRef = module.addBlock(func, label: b"shvlastref", heat: BlockHeat.normal)

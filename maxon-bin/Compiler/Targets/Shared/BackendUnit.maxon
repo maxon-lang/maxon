@@ -111,6 +111,7 @@ export type FunctionEncodingFacts
 	export var lines as SpanLineTable
 	export var compilerScaffolding as bool
 	export var skipsStackGuard as bool
+	export var pinsItsThread as bool
 
 	export static function of(func IrFunction, blocks IrBlockArray, spans DebugSpanColumn, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns FunctionEncodingFacts
 		var siteCallSpans = SpanIdArray.create()
@@ -131,7 +132,7 @@ export type FunctionEncodingFacts
 			lines = SpanLineTable.covering(wanted, table: spanTable)
 		end 'carriesLines'
 
-		return Self{siteCount: func.inlineSites.count(), siteCallSpans: siteCallSpans, siteParentKeys: siteParentKeys, lines: lines, compilerScaffolding: isRuntimeFunction(func, runtimeTier: runtimeTier), skipsStackGuard: skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier)}
+		return Self{siteCount: func.inlineSites.count(), siteCallSpans: siteCallSpans, siteParentKeys: siteParentKeys, lines: lines, compilerScaffolding: isRuntimeFunction(func, runtimeTier: runtimeTier), skipsStackGuard: skipsGreenThreadStackGuard(func, runtimeTier: runtimeTier), pinsItsThread: func.pinsItsThread}
 	end 'of'
 
 	export function callerOfSite(index ElementIndex) returns (SpanId, InlineSiteRef)
@@ -300,15 +301,12 @@ export typealias StackSizeColumn = Array with StackSize
 
 export type BackendUnitTail
 	export var chunk as FunctionCodeChunk
-
-	// Everything one call of the function puts on the stack below its caller's frame.
-	export var callStackBytes as StackSize
 	export var branchCleanupCost as PhaseDelta
 	export var prologueEpilogueCost as PhaseDelta
 	export var encodeCost as PhaseDelta
 
-	export static function create(chunk FunctionCodeChunk, callStackBytes StackSize, branchCleanupCost PhaseDelta, prologueEpilogueCost PhaseDelta, encodeCost PhaseDelta) returns BackendUnitTail
-		return Self{chunk: chunk, callStackBytes: callStackBytes, branchCleanupCost: branchCleanupCost, prologueEpilogueCost: prologueEpilogueCost, encodeCost: encodeCost}
+	export static function create(chunk FunctionCodeChunk, branchCleanupCost PhaseDelta, prologueEpilogueCost PhaseDelta, encodeCost PhaseDelta) returns BackendUnitTail
+		return Self{chunk: chunk, branchCleanupCost: branchCleanupCost, prologueEpilogueCost: prologueEpilogueCost, encodeCost: encodeCost}
 	end 'create'
 end 'BackendUnitTail'
 

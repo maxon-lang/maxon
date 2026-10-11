@@ -1,0 +1,929 @@
+public typealias DebuggeeAddress = int(0 to u64.max)
+public typealias DebuggeeThreadId = int(0 to u64.max)
+public typealias DebuggeeProcessId = int(0 to u64.max)
+public typealias DebuggeeByteCount = int(0 to 0x40000000)
+public typealias DebuggeeWaitMs = int(0 to 0xFFFFFFFF)
+public typealias DebuggeeExitCode = int(i64.min to i64.max)
+public typealias DebuggeeFaultCode = int(0 to u32.max)
+public typealias DebuggeeSignal = int(0 to 255)
+public typealias RegisterWord = int(i64.min to i64.max)
+public typealias RegisterOffset = int(0 to 0xFFFF)
+public typealias Win64GprIndex = int(0 to 15)
+public typealias Win64XmmIndex = int(0 to 15)
+
+/// The most bytes one `readMemory` or `writeCode` moves; a longer transfer throws before the target
+/// is touched.
+public let DebugTransferBytes = 512
+
+let Win64ContextFlagsOffset = 0x30
+let Win64ContextControl = 0x00100001
+let Win64ContextInteger = 0x00100002
+let Win64ContextRspOffset = 0x98
+let Win64ContextRbpOffset = 0xA0
+let Win64ContextRipOffset = 0xF8
+let SuspendThreadFailed = 0xFFFFFFFF
+
+public enum DebuggeeError implements Error
+	unreadable
+	unwritable
+	outOfBounds
+end 'DebuggeeError'
+
+typealias ScratchBase = int(0 to u64.max)
+public typealias TransferByteCount = int(0 to u64.max)
+module typealias ScratchBytes = int(0 to 0x20000)
+module typealias ScratchOffset = int(0 to 0x1FFF8)
+typealias BitShift = int(0 to 63)
+typealias RegisterWordArray = Array with RegisterWord
+
+let WordBytes = 8
+let BitsPerByte = 8
+let SignBearingByte = 128
+let ByteModulus = 256
+let LowDwordMask = 0xFFFFFFFF
+let HighDwordShift = 32
+
+function wordToBytes(word RegisterWord) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for lane in 0 upto WordBytes 'eachByte'
+		bytes.push((word shr ((lane * BitsPerByte) as BitShift)) and 0xFF)
+	end 'eachByte'
+
+	return bytes
+end 'wordToBytes'
+
+function packedWord(content ByteArray, from RegisterOffset) returns RegisterWord
+	var packed = 0 as RegisterWord
+	var lane = 0
+
+	while lane < WordBytes and from + lane < (content.count() as RegisterOffset) 'eachByte'
+		let byte = (try content.get((from + lane) as ElementIndex) otherwise panic("packedWord: byte {from + lane} of {content.count()} was bounds-checked by the loop")) as RegisterWord
+		let weight = (1 as RegisterWord) shl ((lane * BitsPerByte) as BitShift)
+
+		if lane + 1 == WordBytes and byte >= SignBearingByte 'theWordsSignByte'
+			packed = packed + (byte - ByteModulus) * weight
+		end 'theWordsSignByte' else 'anotherByte'
+			packed = packed + byte * weight
+		end 'anotherByte'
+
+		lane = lane + 1
+	end 'eachByte'
+
+	return packed
+end 'packedWord'
+
+module type ScratchPages
+	var box as __ManagedPages
+
+	module static function reserve(capacity ScratchBytes) returns ScratchPages
+		return Self{box: __ManagedPages.reserve(capacity)}
+	end 'reserve'
+
+	module function held() returns bool
+		return self.box.base() != 0
+	end 'held'
+
+	module function readHandle() returns ScratchPages
+		return Self{box: self.box}
+	end 'readHandle'
+
+	module function release()
+		self.box.release()
+	end 'release'
+
+	function requireWordInside(offset ScratchOffset)
+		if self.box.base() == 0 'notHeld'
+			panic("ScratchPages: offset {offset} was asked of pages that are not held — a caller used them before reserving them or after releasing them")
+		end 'notHeld'
+
+		if (offset as ScratchBytes) + WordBytes > (self.box.bytes() as ScratchBytes) 'pastTheEnd'
+			panic("ScratchPages: a word at {offset} runs past the {self.box.bytes()} bytes this region holds")
+		end 'pastTheEnd'
+	end 'requireWordInside'
+
+	function heldBase(offset ScratchOffset) returns ScratchBase
+		self.requireWordInside(offset)
+
+		return self.box.base() as ScratchBase
+	end 'heldBase'
+
+	module function word(offset ScratchOffset) returns RegisterWord
+		return __Builtins.profileReadWord(self.heldBase(offset), offset)
+	end 'word'
+
+	module function setWord(offset ScratchOffset, value RegisterWord)
+		__Builtins.profileWriteWord(self.heldBase(offset), offset, value)
+	end 'setWord'
+
+	module function addressOf(offset ScratchOffset) returns RegisterWord
+		self.requireWordInside(offset)
+
+		return (self.box.lend() as RegisterWord) + (offset as RegisterWord)
+	end 'addressOf'
+
+	module function bytesAt(offset ScratchOffset, count DebuggeeByteCount) returns ByteArray
+		var taken = ByteArray.create()
+		var index = 0
+
+		while index < count 'eachWord'
+			let lanes = wordToBytes(self.word((offset + index) as ScratchOffset))
+
+			for lane in 0 upto WordBytes 'eachByte'
+				if index + lane >= count 'pastTheCount'
+					break
+				end 'pastTheCount'
+
+				taken.push(try lanes.get(lane as ElementIndex) otherwise panic("ScratchPages.bytesAt: a word has {WordBytes} bytes and lane {lane} is below that"))
+			end 'eachByte'
+
+			index = index + WordBytes
+		end 'eachWord'
+
+		return taken
+	end 'bytesAt'
+
+	module function fill(offset ScratchOffset, content ByteArray)
+		var index = 0
+
+		while index < content.count() 'eachWord'
+			self.setWord((offset + index) as ScratchOffset, value: packedWord(content, from: index as RegisterOffset))
+			index = index + WordBytes
+		end 'eachWord'
+	end 'fill'
+end 'ScratchPages'
+
+/// The registers a debuggee hands back: words read at word-aligned byte offsets. The named-register
+/// accessors read a Win64 CONTEXT and throw `outOfBounds` on a block of any other size.
+public type RegisterBlock
+	let words as RegisterWordArray
+
+	module static function readFrom(pages ScratchPages, at ScratchOffset, length ScratchBytes) returns RegisterBlock
+		var words = RegisterWordArray.create()
+		var index = 0
+
+		while index < length 'eachWord'
+			words.push(pages.word((at + index) as ScratchOffset))
+			index = index + WordBytes
+		end 'eachWord'
+
+		return Self{words: words}
+	end 'readFrom'
+
+	module function storeInto(pages ScratchPages, at ScratchOffset)
+		for (iter, packed) in self.words.withIterator() 'eachWord'
+			pages.setWord(((at as ElementIndex) + iter.index() * WordBytes) as ScratchOffset, value: packed)
+		end 'eachWord'
+	end 'storeInto'
+
+	module function byteCount() returns ScratchBytes
+		return (self.words.count() * WordBytes) as ScratchBytes
+	end 'byteCount'
+
+	function slotOf(offset RegisterOffset) returns ElementIndex throws DebuggeeError
+		if offset mod WordBytes != 0 'notOnAWord'
+			throw DebuggeeError.outOfBounds
+		end 'notOnAWord'
+
+		let slot = (offset shr 3) as ElementIndex
+
+		if slot >= self.words.count() 'pastTheEnd'
+			throw DebuggeeError.outOfBounds
+		end 'pastTheEnd'
+
+		return slot
+	end 'slotOf'
+
+	/// Throws `outOfBounds` for an offset that is not a multiple of 8 or is at or past the block's end.
+	public function word(offset RegisterOffset) returns RegisterWord throws DebuggeeError
+		let slot = try self.slotOf(offset)
+
+		return try self.words.get(slot) otherwise throw DebuggeeError.outOfBounds
+	end 'word'
+
+	/// A new block with the word at `offset` replaced, under the conditions `word` throws on.
+	public function with(offset RegisterOffset, word RegisterWord) returns RegisterBlock throws DebuggeeError
+		let slot = try self.slotOf(offset)
+		var changed = self.words.clone()
+		try changed.set(slot, value: word) otherwise throw DebuggeeError.outOfBounds
+
+		return Self{words: changed}
+	end 'with'
+
+	function requireWin64Context() throws DebuggeeError
+		if self.byteCount() != Win64ContextBytes 'notAContext'
+			throw DebuggeeError.outOfBounds
+		end 'notAContext'
+	end 'requireWin64Context'
+
+	function win64Word(offset RegisterOffset) returns RegisterWord throws DebuggeeError
+		try self.requireWin64Context()
+
+		return try self.word(offset)
+	end 'win64Word'
+
+	public function programCounter() returns RegisterWord throws DebuggeeError
+		return try self.win64Word(Win64ContextRipOffset)
+	end 'programCounter'
+
+	public function stackPointer() returns RegisterWord throws DebuggeeError
+		return try self.win64Word(Win64ContextRspOffset)
+	end 'stackPointer'
+
+	public function framePointer() returns RegisterWord throws DebuggeeError
+		return try self.win64Word(Win64ContextRbpOffset)
+	end 'framePointer'
+
+	public function flags() returns RegisterWord throws DebuggeeError
+		return ((try self.win64Word(Win64ContextSegWordOffset)) shr HighDwordShift) and LowDwordMask
+	end 'flags'
+
+	public function gpr(index Win64GprIndex) returns RegisterWord throws DebuggeeError
+		return try self.win64Word((Win64ContextGprBase + index * WordBytes) as RegisterOffset)
+	end 'gpr'
+
+	public function xmmLane(index Win64XmmIndex) returns RegisterWord throws DebuggeeError
+		return try self.win64Word((Win64ContextXmm0Offset + index * Win64ContextXmmBytes) as RegisterOffset)
+	end 'xmmLane'
+
+	public function withProgramCounter(address RegisterWord) returns RegisterBlock throws DebuggeeError
+		try self.requireWin64Context()
+
+		return try self.with(Win64ContextRipOffset as RegisterOffset, word: address)
+	end 'withProgramCounter'
+
+	public function withFlags(flags RegisterWord) returns RegisterBlock throws DebuggeeError
+		let segments = (try self.win64Word(Win64ContextSegWordOffset)) and LowDwordMask
+
+		return try self.with(Win64ContextSegWordOffset as RegisterOffset, word: segments or ((flags and LowDwordMask) shl HighDwordShift))
+	end 'withFlags'
+end 'RegisterBlock'
+
+public type DebugHandle
+	let raw as RegisterWord
+
+	static function wrapping(raw RegisterWord) returns DebugHandle
+		return Self{raw: raw}
+	end 'wrapping'
+
+	function word() returns RegisterWord
+		return self.raw
+	end 'word'
+end 'DebugHandle'
+
+public enum DebugDisposition
+	handled
+	unhandled
+end 'DebugDisposition'
+
+public union DebugPortEvent
+	timedOut
+	processCreated(processId DebuggeeProcessId, thread DebuggeeThreadId, process DebugHandle, threadHandle DebugHandle, imageBase DebuggeeAddress)
+	threadCreated(thread DebuggeeThreadId, threadHandle DebugHandle, startAddress DebuggeeAddress)
+	threadExited(thread DebuggeeThreadId)
+	processExited(thread DebuggeeThreadId, exitCode DebuggeeExitCode)
+	libraryLoaded(thread DebuggeeThreadId)
+	exception(thread DebuggeeThreadId, code DebuggeeFaultCode, address DebuggeeAddress)
+	other(thread DebuggeeThreadId)
+end 'DebugPortEvent'
+
+enum WindowsDebugVerb
+	readMemory
+	writeMemory
+	readContext
+	writeContext
+	waitEvent
+	continueEvent
+	breakProcess
+	detachProcess
+	protectRegion
+	flushCode
+	closeHandle
+	suspendThread
+	resumeThread
+end 'WindowsDebugVerb'
+
+function windowsDebugCall(verb WindowsDebugVerb, a0 RegisterWord, a1 RegisterWord, a2 RegisterWord, a3 RegisterWord, a4 RegisterWord) returns RegisterWord
+	#if os(Windows)
+		var answer = 0 as RegisterWord
+
+		match verb 'verb'
+			readMemory then answer = __Builtins.debugReadMemory(a0, a1, a2, a3, a4)
+			writeMemory then answer = __Builtins.debugWriteMemory(a0, a1, a2, a3, a4)
+			readContext then answer = __Builtins.debugReadContext(a0, a1)
+			writeContext then answer = __Builtins.debugWriteContext(a0, a1)
+			waitEvent then answer = __Builtins.debugWaitEvent(a0, a1)
+			continueEvent then answer = __Builtins.debugContinueEvent(a0, a1, a2)
+			breakProcess then answer = __Builtins.debugBreakProcess(a0)
+			detachProcess then answer = __Builtins.debugDetachProcess(a0)
+			protectRegion then answer = __Builtins.debugProtectRegion(a0, a1, a2, a3, a4)
+			flushCode then answer = __Builtins.debugFlushCode(a0, a1, a2)
+			closeHandle then answer = __Builtins.debugCloseHandle(a0)
+			suspendThread then answer = __Builtins.debugSuspendThread(a0)
+			resumeThread then answer = __Builtins.debugResumeThread(a0)
+		end 'verb'
+
+		return answer
+	#else
+		panic("windowsDebugCall: `{verb.name}`({a0}, {a1}, {a2}, {a3}, {a4}) asks a host with no Win32 debug port — a debug session here drives its debuggee through the backend `backendForHost` vouched for")
+	#endif
+end 'windowsDebugCall'
+
+let DebugScratchBytes = 0x1000 as ScratchBytes
+
+let ContextSlot = 0 as ScratchOffset
+let EventSlot = 0x600 as ScratchOffset
+let TransferSlot = 0x700 as ScratchOffset
+let OutWordSlot = (TransferSlot + DebugTransferBytes) as ScratchOffset
+let SecondOutWordSlot = (OutWordSlot + WordBytes) as ScratchOffset
+
+let Win64DebugEventBytes = 0xB0
+let EventCodeAndPidOffset = 0x00
+let EventThreadIdOffset = 0x08
+let EventPayloadOffset = 0x10
+let EventCreateProcessHandleOffset = 0x18
+let EventCreateProcessThreadOffset = 0x20
+let EventCreateProcessImageBaseOffset = 0x28
+let EventExceptionAddressOffset = 0x20
+let EventCreateThreadStartOffset = 0x20
+
+let EventHeaderSlot = (EventSlot + EventCodeAndPidOffset) as ScratchOffset
+let EventThreadSlot = (EventSlot + EventThreadIdOffset) as ScratchOffset
+let EventPayloadSlot = (EventSlot + EventPayloadOffset) as ScratchOffset
+let EventProcessHandleSlot = (EventSlot + EventCreateProcessHandleOffset) as ScratchOffset
+let EventProcessThreadSlot = (EventSlot + EventCreateProcessThreadOffset) as ScratchOffset
+let EventProcessImageBaseSlot = (EventSlot + EventCreateProcessImageBaseOffset) as ScratchOffset
+let EventExceptionAddressSlot = (EventSlot + EventExceptionAddressOffset) as ScratchOffset
+let EventThreadStartSlot = (EventSlot + EventCreateThreadStartOffset) as ScratchOffset
+
+public enum TransferSize
+	nothing
+	withinTheWindow
+	pastTheWindow
+end 'TransferSize'
+
+public function transferSizeOf(count TransferByteCount) returns TransferSize
+	if count > DebugTransferBytes 'pastTheWindow'
+		return TransferSize.pastTheWindow
+	end 'pastTheWindow'
+
+	return TransferSize.withinTheWindow if count > 0 else TransferSize.nothing
+end 'transferSizeOf'
+
+function transferIsWanted(count TransferByteCount, refusal DebuggeeError) returns bool throws DebuggeeError
+	let size = transferSizeOf(count)
+
+	if size == TransferSize.pastTheWindow 'pastTheWindow'
+		throw refusal
+	end 'pastTheWindow'
+
+	return size == TransferSize.withinTheWindow
+end 'transferIsWanted'
+
+function requireDebugScratchLayoutIsDisjoint()
+	if (ContextSlot as ScratchBytes) + Win64ContextBytes > (EventSlot as ScratchBytes) 'theContextReachesTheEventRecord'
+		panic("DebugPort: a {Win64ContextBytes}-byte CONTEXT at {ContextSlot} runs into the debug event record at {EventSlot}")
+	end 'theContextReachesTheEventRecord'
+
+	if EventSlot + Win64DebugEventBytes > TransferSlot 'theEventRecordReachesTheTransferWindow'
+		panic("DebugPort: a {Win64DebugEventBytes}-byte DEBUG_EVENT at {EventSlot} runs into the transfer window at {TransferSlot}")
+	end 'theEventRecordReachesTheTransferWindow'
+
+	if TransferSlot + DebugTransferBytes > OutWordSlot 'theTransferWindowReachesTheOutWord'
+		panic("DebugPort: a {DebugTransferBytes}-byte transfer window at {TransferSlot} runs into the byte-count word at {OutWordSlot}")
+	end 'theTransferWindowReachesTheOutWord'
+
+	if (SecondOutWordSlot as ScratchBytes) + WordBytes > DebugScratchBytes 'theOutWordsLeaveThePages'
+		panic("DebugPort: the saved-protection word at {SecondOutWordSlot} runs off a {DebugScratchBytes}-byte scratch region")
+	end 'theOutWordsLeaveThePages'
+end 'requireDebugScratchLayoutIsDisjoint'
+
+let Win64ContextBytes = 0x4D0 as ScratchBytes
+let Win64ContextFloatingPoint = 0x00100008
+let Win64ContextGprBase = 0x78
+let Win64ContextXmm0Offset = 0x1A0
+let Win64ContextXmmBytes = 16
+let Win64ContextSegWordOffset = 0x40
+let ContextFlagsSlot = (ContextSlot + Win64ContextFlagsOffset) as ScratchOffset
+
+let DebugEventCodeException = 1
+let DebugEventCodeCreateThread = 2
+let DebugEventCodeCreateProcess = 3
+let DebugEventCodeExitThread = 4
+let DebugEventCodeExitProcess = 5
+let DebugEventCodeLoadDll = 6
+
+let ContinueHandled = 0x00010002
+let ContinueUnhandled = 0x80010001
+
+let PageExecuteReadWrite = 0x40
+let Win32True = 1
+
+/// Drives a debuggee through the Win32 debug API, on Windows only. It owns a scratch region that
+/// `close()` releases, and a call that needs the region after `close()` panics.
+public type DebugPort
+	var scratch as ScratchPages
+	var pendingProcessId as RegisterWord
+	var pendingThreadId as RegisterWord
+
+	public static function create() returns DebugPort
+		requireDebugScratchLayoutIsDisjoint()
+
+		return Self{scratch: ScratchPages.reserve(DebugScratchBytes), pendingProcessId: 0, pendingThreadId: 0}
+	end 'create'
+
+	public function isReady() returns bool
+		return self.scratch.held()
+	end 'isReady'
+
+	public function close()
+		self.scratch.release()
+	end 'close'
+
+	public function eventThread() returns DebuggeeThreadId
+		return self.pendingThreadId as DebuggeeThreadId
+	end 'eventThread'
+
+	public function waitEvent(budgetMs DebuggeeWaitMs) returns DebugPortEvent
+		if windowsDebugCall(WindowsDebugVerb.waitEvent, a0: self.scratch.addressOf(EventSlot), a1: budgetMs as RegisterWord, a2: 0, a3: 0, a4: 0) != Win32True 'nothingArrived'
+			return DebugPortEvent.timedOut
+		end 'nothingArrived'
+
+		let header = self.scratch.word(EventHeaderSlot)
+		self.pendingProcessId = (header shr HighDwordShift) and LowDwordMask
+		self.pendingThreadId = self.scratch.word(EventThreadSlot) and LowDwordMask
+
+		return self.decodedEvent(header and LowDwordMask)
+	end 'waitEvent'
+
+	function decodedEvent(code RegisterWord) returns DebugPortEvent
+		let thread = self.pendingThreadId as DebuggeeThreadId
+
+		if code == DebugEventCodeCreateProcess 'processArrived'
+			let process = DebugHandle.wrapping(self.scratch.word(EventProcessHandleSlot))
+			let threadHandle = DebugHandle.wrapping(self.scratch.word(EventProcessThreadSlot))
+			let imageBase = self.scratch.word(EventProcessImageBaseSlot) as DebuggeeAddress
+			self.closeEventImageFile()
+
+			return DebugPortEvent.processCreated(self.pendingProcessId as DebuggeeProcessId, thread: thread, process: process, threadHandle: threadHandle, imageBase: imageBase)
+		end 'processArrived'
+
+		if code == DebugEventCodeLoadDll 'libraryArrived'
+			self.closeEventImageFile()
+
+			return DebugPortEvent.libraryLoaded(thread)
+		end 'libraryArrived'
+
+		if code == DebugEventCodeCreateThread 'threadArrived'
+			return DebugPortEvent.threadCreated(thread, threadHandle: DebugHandle.wrapping(self.scratch.word(EventPayloadSlot)), startAddress: self.scratch.word(EventThreadStartSlot) as DebuggeeAddress)
+		end 'threadArrived'
+
+		if code == DebugEventCodeExitThread 'threadLeft'
+			return DebugPortEvent.threadExited(thread)
+		end 'threadLeft'
+
+		if code == DebugEventCodeExitProcess 'processLeft'
+			return DebugPortEvent.processExited(thread, exitCode: (self.scratch.word(EventPayloadSlot) and LowDwordMask) as DebuggeeExitCode)
+		end 'processLeft'
+
+		if code == DebugEventCodeException 'exceptionRaised'
+			return DebugPortEvent.exception(thread, code: (self.scratch.word(EventPayloadSlot) and LowDwordMask) as DebuggeeFaultCode, address: self.scratch.word(EventExceptionAddressSlot) as DebuggeeAddress)
+		end 'exceptionRaised'
+
+		return DebugPortEvent.other(thread)
+	end 'decodedEvent'
+
+	function closeEventImageFile()
+		let file = self.scratch.word(EventPayloadSlot)
+
+		if file == 0 'noFileWasHandedOver'
+			return
+		end 'noFileWasHandedOver'
+
+		_ = windowsDebugCall(WindowsDebugVerb.closeHandle, a0: file, a1: 0, a2: 0, a3: 0, a4: 0)
+	end 'closeEventImageFile'
+
+	public function continueEvent(disposition DebugDisposition) returns bool
+		let status = match disposition 'which'
+			handled gives ContinueHandled
+			unhandled gives ContinueUnhandled
+		end 'which'
+
+		return windowsDebugCall(WindowsDebugVerb.continueEvent, a0: self.pendingProcessId, a1: self.pendingThreadId, a2: status, a3: 0, a4: 0) == Win32True
+	end 'continueEvent'
+
+	public function readMemory(process DebugHandle, address DebuggeeAddress, count DebuggeeByteCount) returns ByteArray throws DebuggeeError
+		let wanted = try transferIsWanted(count as TransferByteCount, refusal: DebuggeeError.unreadable)
+
+		if not wanted 'nothingAsked'
+			return ByteArray.create()
+		end 'nothingAsked'
+
+		self.scratch.setWord(OutWordSlot, value: 0)
+
+		if windowsDebugCall(WindowsDebugVerb.readMemory, a0: process.word(), a1: address as RegisterWord, a2: self.scratch.addressOf(TransferSlot), a3: count as RegisterWord, a4: self.scratch.addressOf(OutWordSlot)) != Win32True 'notMapped'
+			throw DebuggeeError.unreadable
+		end 'notMapped'
+
+		if (self.scratch.word(OutWordSlot) and LowDwordMask) < (count as RegisterWord) 'aShortRead'
+			throw DebuggeeError.unreadable
+		end 'aShortRead'
+
+		return self.scratch.bytesAt(TransferSlot, count: count)
+	end 'readMemory'
+
+	public function writeCode(process DebugHandle, address DebuggeeAddress, content ByteArray) throws DebuggeeError
+		let count = content.count()
+
+		let wanted = try transferIsWanted(count as TransferByteCount, refusal: DebuggeeError.unwritable)
+
+		if not wanted 'nothingToWrite'
+			return
+		end 'nothingToWrite'
+
+		self.scratch.fill(TransferSlot, content: content)
+		self.scratch.setWord(OutWordSlot, value: 0)
+		self.scratch.setWord(SecondOutWordSlot, value: 0)
+
+		// `.text` is mapped read and execute, so a breakpoint write lifts the page's protection and puts
+		// it back.
+		let lifted = windowsDebugCall(WindowsDebugVerb.protectRegion, a0: process.word(), a1: address as RegisterWord, a2: count as RegisterWord, a3: PageExecuteReadWrite, a4: self.scratch.addressOf(SecondOutWordSlot)) == Win32True
+		let wrote = windowsDebugCall(WindowsDebugVerb.writeMemory, a0: process.word(), a1: address as RegisterWord, a2: self.scratch.addressOf(TransferSlot), a3: count as RegisterWord, a4: self.scratch.addressOf(OutWordSlot)) == Win32True
+
+		if lifted 'protectionWasChanged'
+			_ = windowsDebugCall(WindowsDebugVerb.protectRegion, a0: process.word(), a1: address as RegisterWord, a2: count as RegisterWord, a3: self.scratch.word(SecondOutWordSlot) and LowDwordMask, a4: self.scratch.addressOf(OutWordSlot))
+		end 'protectionWasChanged'
+
+		_ = windowsDebugCall(WindowsDebugVerb.flushCode, a0: process.word(), a1: address as RegisterWord, a2: count as RegisterWord, a3: 0, a4: 0)
+
+		if not wrote 'theWriteFailed'
+			throw DebuggeeError.unwritable
+		end 'theWriteFailed'
+	end 'writeCode'
+
+	public function readContext(thread DebugHandle) returns RegisterBlock throws DebuggeeError
+		self.scratch.setWord(ContextSlot, value: 0)
+
+		// The requested families are the low dword of this word and `MxCsr` is the high one, which is kept
+		// as the host left it because `writeContext` writes the whole record back.
+		let held = self.scratch.word(ContextFlagsSlot)
+		self.scratch.setWord(ContextFlagsSlot, value: (held - (held and LowDwordMask)) or (Win64ContextControl or Win64ContextInteger or Win64ContextFloatingPoint))
+
+		if windowsDebugCall(WindowsDebugVerb.readContext, a0: thread.word(), a1: self.scratch.addressOf(ContextSlot), a2: 0, a3: 0, a4: 0) != Win32True 'theContextIsUnreadable'
+			throw DebuggeeError.unreadable
+		end 'theContextIsUnreadable'
+
+		return RegisterBlock.readFrom(self.scratch, at: ContextSlot, length: Win64ContextBytes)
+	end 'readContext'
+
+	public function writeContext(thread DebugHandle, context RegisterBlock) throws DebuggeeError
+		if context.byteCount() != Win64ContextBytes 'notAContext'
+			throw DebuggeeError.unwritable
+		end 'notAContext'
+
+		context.storeInto(self.scratch, at: ContextSlot)
+
+		if windowsDebugCall(WindowsDebugVerb.writeContext, a0: thread.word(), a1: self.scratch.addressOf(ContextSlot), a2: 0, a3: 0, a4: 0) != Win32True 'theKernelRefused'
+			throw DebuggeeError.unwritable
+		end 'theKernelRefused'
+	end 'writeContext'
+
+	public function suspend(thread DebugHandle) returns bool
+		return (windowsDebugCall(WindowsDebugVerb.suspendThread, a0: thread.word(), a1: 0, a2: 0, a3: 0, a4: 0) and LowDwordMask) != SuspendThreadFailed
+	end 'suspend'
+
+	public function resume(thread DebugHandle) returns bool
+		return (windowsDebugCall(WindowsDebugVerb.resumeThread, a0: thread.word(), a1: 0, a2: 0, a3: 0, a4: 0) and LowDwordMask) != SuspendThreadFailed
+	end 'resume'
+
+	public function breakIn(process DebugHandle) returns bool
+		return windowsDebugCall(WindowsDebugVerb.breakProcess, a0: process.word(), a1: 0, a2: 0, a3: 0, a4: 0) == Win32True
+	end 'breakIn'
+
+	public function detach(processId DebuggeeProcessId) returns bool
+		return windowsDebugCall(WindowsDebugVerb.detachProcess, a0: processId as RegisterWord, a1: 0, a2: 0, a3: 0, a4: 0) == Win32True
+	end 'detach'
+end 'DebugPort'
+
+enum TraceHostVerb
+	request
+	readTracee
+	awaitTracee
+	signalThread
+	signalProcess
+end 'TraceHostVerb'
+
+function traceHostCall(verb TraceHostVerb, a0 RegisterWord, a1 RegisterWord, a2 RegisterWord, a3 RegisterWord, a4 RegisterWord) returns RegisterWord
+	#if os(Linux)
+		var answer = 0 as RegisterWord
+
+		match verb 'verb'
+			request then answer = __Builtins.debugTraceRequest(a0, a1, a2, a3)
+			readTracee then answer = __Builtins.debugTraceeRead(a0, a1, a2, a3, a4)
+			awaitTracee then answer = __Builtins.debugAwaitTracee(a0, a1, a2)
+			signalThread then answer = __Builtins.debugThreadSignal(a0, a1, a2)
+			signalProcess then answer = __Builtins.debugProcessSignal(a0, a1)
+		end 'verb'
+
+		return answer
+	#else
+		panic("traceHostCall: `{verb.name}`({a0}, {a1}, {a2}, {a3}, {a4}) asks a host with no process-trace channel — a debug session here drives its debuggee through the backend `backendForHost` vouched for")
+	#endif
+end 'traceHostCall'
+
+#if arch(arm64)
+	let GeneralBlockBytes = 272 as ScratchBytes
+	let VectorBlockBytes = 528 as ScratchBytes
+#else
+	let GeneralBlockBytes = 216 as ScratchBytes
+	let VectorBlockBytes = 512 as ScratchBytes
+#endif
+
+let TraceScratchBytes = 0x1000 as ScratchBytes
+
+let SigInfoBlockBytes = 128
+let SigInfoCodeOffset = 8
+
+let TraceRegsSlot = 0 as ScratchOffset
+let TraceIovecSlot = ((TraceRegsSlot as ScratchBytes) + GeneralBlockBytes) as ScratchOffset
+let TraceIovecLengthSlot = (TraceIovecSlot + WordBytes) as ScratchOffset
+let TraceFpRegsSlot = (TraceIovecLengthSlot + WordBytes) as ScratchOffset
+let TraceStatusSlot = ((TraceFpRegsSlot as ScratchBytes) + VectorBlockBytes) as ScratchOffset
+let TracePeekSlot = (TraceStatusSlot + WordBytes) as ScratchOffset
+let TraceReadCountSlot = (TracePeekSlot + WordBytes) as ScratchOffset
+let TraceSigInfoSlot = (TraceReadCountSlot + WordBytes) as ScratchOffset
+let TraceSigInfoCodeSlot = (TraceSigInfoSlot + SigInfoCodeOffset) as ScratchOffset
+let TraceTransferSlot = (TraceSigInfoSlot + SigInfoBlockBytes) as ScratchOffset
+
+function requireTraceScratchLayoutIsDisjoint()
+	if (TraceRegsSlot as ScratchBytes) + GeneralBlockBytes > (TraceIovecSlot as ScratchBytes) 'theRegisterBlockReachesTheIovec'
+		panic("ProcessTrace: a {GeneralBlockBytes}-byte register block at {TraceRegsSlot} runs into the iovec at {TraceIovecSlot}")
+	end 'theRegisterBlockReachesTheIovec'
+
+	if TraceIovecSlot + 2 * WordBytes > TraceFpRegsSlot 'theIovecReachesTheVectorBlock'
+		panic("ProcessTrace: the iovec at {TraceIovecSlot} runs into the vector block at {TraceFpRegsSlot}")
+	end 'theIovecReachesTheVectorBlock'
+
+	if (TraceFpRegsSlot as ScratchBytes) + VectorBlockBytes > (TraceStatusSlot as ScratchBytes) 'theVectorBlockReachesTheStatusWord'
+		panic("ProcessTrace: a {VectorBlockBytes}-byte vector block at {TraceFpRegsSlot} runs into the wait status at {TraceStatusSlot}")
+	end 'theVectorBlockReachesTheStatusWord'
+
+	if TraceReadCountSlot + WordBytes > TraceSigInfoSlot 'theReadCountReachesTheSignalBlock'
+		panic("ProcessTrace: the read count at {TraceReadCountSlot} runs into the signal block at {TraceSigInfoSlot}")
+	end 'theReadCountReachesTheSignalBlock'
+
+	if TraceSigInfoSlot + SigInfoBlockBytes > TraceTransferSlot 'theSignalBlockReachesTheTransferWindow'
+		panic("ProcessTrace: a {SigInfoBlockBytes}-byte signal block at {TraceSigInfoSlot} runs into the transfer window at {TraceTransferSlot}")
+	end 'theSignalBlockReachesTheTransferWindow'
+
+	if (TraceTransferSlot as ScratchBytes) + DebugTransferBytes > TraceScratchBytes 'theTransferWindowLeavesThePages'
+		panic("ProcessTrace: a {DebugTransferBytes}-byte transfer window at {TraceTransferSlot} runs off a {TraceScratchBytes}-byte scratch region")
+	end 'theTransferWindowLeavesThePages'
+end 'requireTraceScratchLayoutIsDisjoint'
+
+let PtracePeekData = 2
+let PtracePokeData = 5
+let PtraceCont = 7
+let PtraceSingleStep = 9
+let PtraceDetach = 17
+let PtraceSetOptions = 0x4200
+let PtraceGetSigInfo = 0x4202
+let PtraceGetRegs = 12
+let PtraceSetRegs = 13
+let PtraceGetFpRegs = 14
+let PtraceGetRegSet = 0x4204
+let PtraceSetRegSet = 0x4205
+
+let NoteGeneralRegisters = 1
+let NoteFloatRegisters = 2
+
+let PtraceOptionTraceClone = 0x00000008
+let PtraceOptionExitKill = 0x00100000
+
+let PtraceEventClone = 3
+let SignalCodeSentByKill = 0
+public let NoTraceSignal = 0 as DebuggeeSignal
+
+let WaitSignalMask = 0x7F
+let WaitStoppedMask = 0xFF
+let WaitStoppedMarker = 0x7F
+let WaitCodeShift = 8
+let WaitEventShift = 16
+
+public enum TraceEvent
+	signalStop
+	cloneEvent
+	otherEvent
+end 'TraceEvent'
+
+public union TraceReport
+	nothing
+	exited(thread DebuggeeThreadId, code DebuggeeExitCode)
+	killed(thread DebuggeeThreadId, status DebuggeeExitCode)
+	stopped(thread DebuggeeThreadId, signal DebuggeeSignal, event TraceEvent)
+
+	public function arrived() returns bool
+		return match self 'which'
+			nothing gives false
+
+			exited or
+			killed or
+			stopped gives true
+		end 'which'
+	end 'arrived'
+end 'TraceReport'
+
+/// Drives a debuggee through `ptrace`, on Linux only. It owns a scratch region that `close()`
+/// releases, and a call that needs the region after `close()` panics.
+public type ProcessTrace
+	var scratch as ScratchPages
+
+	public static function create() returns ProcessTrace
+		requireTraceScratchLayoutIsDisjoint()
+
+		return Self{scratch: ScratchPages.reserve(TraceScratchBytes)}
+	end 'create'
+
+	public function isReady() returns bool
+		return self.scratch.held()
+	end 'isReady'
+
+	public function close()
+		self.scratch.release()
+	end 'close'
+
+	public function wait(budgetMs DebuggeeWaitMs, process DebuggeeProcessId) returns TraceReport
+		self.scratch.setWord(TraceStatusSlot, value: 0)
+
+		let reporter = traceHostCall(TraceHostVerb.awaitTracee, a0: self.scratch.addressOf(TraceStatusSlot), a1: budgetMs as RegisterWord, a2: process as RegisterWord, a3: 0, a4: 0)
+
+		if reporter == 0 'nothingArrived'
+			return TraceReport.nothing
+		end 'nothingArrived'
+
+		return self.decodedReport(reporter as DebuggeeThreadId, waited: self.scratch.word(TraceStatusSlot) and LowDwordMask)
+	end 'wait'
+
+	function decodedReport(thread DebuggeeThreadId, waited RegisterWord) returns TraceReport
+		if (waited and WaitSignalMask) == 0 'itLeftOnItsOwn'
+			return TraceReport.exited(thread, code: ((waited shr WaitCodeShift) and 0xFF) as DebuggeeExitCode)
+		end 'itLeftOnItsOwn'
+
+		if (waited and WaitStoppedMask) != WaitStoppedMarker 'aSignalKilledIt'
+			return TraceReport.killed(thread, status: waited as DebuggeeExitCode)
+		end 'aSignalKilledIt'
+
+		let event = (waited shr WaitEventShift) and 0xFF
+
+		if event == 0 'aPlainSignal'
+			return TraceReport.stopped(thread, signal: ((waited shr WaitCodeShift) and 0xFF) as DebuggeeSignal, event: TraceEvent.signalStop)
+		end 'aPlainSignal'
+
+		return TraceReport.stopped(thread, signal: ((waited shr WaitCodeShift) and 0xFF) as DebuggeeSignal, event: TraceEvent.cloneEvent if event == PtraceEventClone else TraceEvent.otherEvent)
+	end 'decodedReport'
+
+	public function configure(process DebuggeeProcessId) returns bool
+		return traceHostCall(TraceHostVerb.request, a0: PtraceSetOptions, a1: process as RegisterWord, a2: 0, a3: PtraceOptionExitKill or PtraceOptionTraceClone, a4: 0) != 0
+	end 'configure'
+
+	public function resume(thread DebuggeeThreadId, signal DebuggeeSignal, stepping bool) returns bool
+		let request = PtraceSingleStep if stepping else PtraceCont
+
+		return traceHostCall(TraceHostVerb.request, a0: request, a1: thread as RegisterWord, a2: 0, a3: signal as RegisterWord, a4: 0) != 0
+	end 'resume'
+
+	public function detach(thread DebuggeeThreadId, signal DebuggeeSignal) returns bool
+		return traceHostCall(TraceHostVerb.request, a0: PtraceDetach, a1: thread as RegisterWord, a2: 0, a3: signal as RegisterWord, a4: 0) != 0
+	end 'detach'
+
+	public function signalThread(process DebuggeeProcessId, thread DebuggeeThreadId, signal DebuggeeSignal) returns bool
+		return traceHostCall(TraceHostVerb.signalThread, a0: process as RegisterWord, a1: thread as RegisterWord, a2: signal as RegisterWord, a3: 0, a4: 0) != 0
+	end 'signalThread'
+
+	public function signalProcess(process DebuggeeProcessId, signal DebuggeeSignal) returns bool
+		return traceHostCall(TraceHostVerb.signalProcess, a0: process as RegisterWord, a1: signal as RegisterWord, a2: 0, a3: 0, a4: 0) != 0
+	end 'signalProcess'
+
+	public function signalWasSentByKill(thread DebuggeeThreadId) returns bool
+		self.scratch.setWord(TraceSigInfoCodeSlot, value: 0)
+
+		if traceHostCall(TraceHostVerb.request, a0: PtraceGetSigInfo, a1: thread as RegisterWord, a2: 0, a3: self.scratch.addressOf(TraceSigInfoSlot), a4: 0) == 0 'theKernelRefused'
+			return false
+		end 'theKernelRefused'
+
+		return (self.scratch.word(TraceSigInfoCodeSlot) and LowDwordMask) == SignalCodeSentByKill
+	end 'signalWasSentByKill'
+
+	public function readMemory(process DebuggeeProcessId, address DebuggeeAddress, count DebuggeeByteCount) returns ByteArray throws DebuggeeError
+		let wanted = try transferIsWanted(count as TransferByteCount, refusal: DebuggeeError.unreadable)
+
+		if not wanted 'nothingAsked'
+			return ByteArray.create()
+		end 'nothingAsked'
+
+		self.scratch.setWord(TraceReadCountSlot, value: 0)
+
+		if traceHostCall(TraceHostVerb.readTracee, a0: process as RegisterWord, a1: address as RegisterWord, a2: self.scratch.addressOf(TraceTransferSlot), a3: count as RegisterWord, a4: self.scratch.addressOf(TraceReadCountSlot)) == 0 'notMapped'
+			throw DebuggeeError.unreadable
+		end 'notMapped'
+
+		return self.scratch.bytesAt(TraceTransferSlot, count: count)
+	end 'readMemory'
+
+	public function writeCode(thread DebuggeeThreadId, address DebuggeeAddress, content ByteArray) throws DebuggeeError
+		let count = content.count() as RegisterWord
+
+		let wanted = try transferIsWanted(count as TransferByteCount, refusal: DebuggeeError.unwritable)
+
+		if not wanted 'nothingToWrite'
+			return
+		end 'nothingToWrite'
+
+		var written = 0 as RegisterWord
+
+		while written < count 'eachWord'
+			let target = (address as RegisterWord) + written
+			let aligned = target - (target mod WordBytes)
+			let inWord = target - aligned
+			let room = WordBytes - inWord
+			let left = count - written
+			let take = room if left > room else left
+			try self.wordOverlaid(thread, aligned: aligned, at: inWord, taking: take, from: content, startingAt: written)
+			written = written + take
+		end 'eachWord'
+	end 'writeCode'
+
+	function wordOverlaid(thread DebuggeeThreadId, aligned RegisterWord, at RegisterWord, taking RegisterWord, from ByteArray, startingAt RegisterWord) throws DebuggeeError
+		self.scratch.setWord(TracePeekSlot, value: 0)
+
+		if traceHostCall(TraceHostVerb.request, a0: PtracePeekData, a1: thread as RegisterWord, a2: aligned, a3: self.scratch.addressOf(TracePeekSlot), a4: 0) == 0 'unreadable'
+			throw DebuggeeError.unwritable
+		end 'unreadable'
+
+		var bytes = wordToBytes(self.scratch.word(TracePeekSlot))
+
+		for step in 0 upto taking 'eachByte'
+			let value = try from.get((startingAt + step) as ElementIndex) otherwise throw DebuggeeError.outOfBounds
+			try bytes.set((at + step) as ElementIndex, value: value) otherwise throw DebuggeeError.outOfBounds
+		end 'eachByte'
+
+		if traceHostCall(TraceHostVerb.request, a0: PtracePokeData, a1: thread as RegisterWord, a2: aligned, a3: packedWord(bytes, from: 0), a4: 0) == 0 'unwritable'
+			throw DebuggeeError.unwritable
+		end 'unwritable'
+	end 'wordOverlaid'
+
+	public function registers(thread DebuggeeThreadId) returns RegisterBlock throws DebuggeeError
+		if not self.generalBlockMoved(thread, writing: false) 'unreadable'
+			throw DebuggeeError.unreadable
+		end 'unreadable'
+
+		return RegisterBlock.readFrom(self.scratch, at: TraceRegsSlot, length: GeneralBlockBytes)
+	end 'registers'
+
+	public function setRegisters(thread DebuggeeThreadId, block RegisterBlock) throws DebuggeeError
+		if block.byteCount() != GeneralBlockBytes 'notAGeneralBlock'
+			throw DebuggeeError.unwritable
+		end 'notAGeneralBlock'
+
+		block.storeInto(self.scratch, at: TraceRegsSlot)
+
+		if not self.generalBlockMoved(thread, writing: true) 'theKernelRefused'
+			throw DebuggeeError.unwritable
+		end 'theKernelRefused'
+	end 'setRegisters'
+
+	public function vectorRegisters(thread DebuggeeThreadId) returns RegisterBlock throws DebuggeeError
+		if not self.vectorBlockRead(thread) 'unreadable'
+			throw DebuggeeError.unreadable
+		end 'unreadable'
+
+		return RegisterBlock.readFrom(self.scratch, at: TraceFpRegsSlot, length: VectorBlockBytes)
+	end 'vectorRegisters'
+
+	function described(at ScratchOffset, length ScratchBytes) returns RegisterWord
+		self.scratch.setWord(TraceIovecSlot, value: self.scratch.addressOf(at))
+		self.scratch.setWord(TraceIovecLengthSlot, value: length as RegisterWord)
+
+		return self.scratch.addressOf(TraceIovecSlot)
+	end 'described'
+
+	function generalBlockMoved(thread DebuggeeThreadId, writing bool) returns bool
+		#if arch(arm64)
+			let request = PtraceSetRegSet if writing else PtraceGetRegSet
+
+			return traceHostCall(TraceHostVerb.request, a0: request, a1: thread as RegisterWord, a2: NoteGeneralRegisters, a3: self.described(TraceRegsSlot, length: GeneralBlockBytes), a4: 0) != 0
+		#else
+			let request = PtraceSetRegs if writing else PtraceGetRegs
+
+			return traceHostCall(TraceHostVerb.request, a0: request, a1: thread as RegisterWord, a2: 0, a3: self.scratch.addressOf(TraceRegsSlot), a4: 0) != 0
+		#endif
+	end 'generalBlockMoved'
+
+	function vectorBlockRead(thread DebuggeeThreadId) returns bool
+		#if arch(arm64)
+			return traceHostCall(TraceHostVerb.request, a0: PtraceGetRegSet, a1: thread as RegisterWord, a2: NoteFloatRegisters, a3: self.described(TraceFpRegsSlot, length: VectorBlockBytes), a4: 0) != 0
+		#else
+			return traceHostCall(TraceHostVerb.request, a0: PtraceGetFpRegs, a1: thread as RegisterWord, a2: 0, a3: self.scratch.addressOf(TraceFpRegsSlot), a4: 0) != 0
+		#endif
+	end 'vectorBlockRead'
+end 'ProcessTrace'

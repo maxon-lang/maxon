@@ -55,7 +55,7 @@ counters are stepped ATOMICALLY. Those need a second OS thread crediting the sam
 covered by `multicore-stress/` instead.
 
 ⭐ **THE REMOTE-FREE TREIBER PUSH IS COUNTABLE, WHICH IS NOT THE SAME AS BEING PINNED HERE.**
-`__Builtins.slabRemoteFreeCount()` sums a per-P counter, so the road that `service-torture` and
+`HeapStats.slab().remoteFrees` sums a per-P counter, so the road that `service-torture` and
 `service-fanin-torture` drive moves a number. ⚠ **The
 non-zero reading is `multicore-stress`'s and not this file's** — see the last case for why.
 What this file pins is the counter's other edge: at one processor it must be exactly **0**, because a
@@ -359,12 +359,12 @@ function main() returns ExitCode
 		return 1
 	end 'lost'
 
-	let first = __Builtins.scavengeMemory()
+	let first = HeapStats.scavenge()
 	if first != 0 'graceSkipped'
 		return 2
 	end 'graceSkipped'
 
-	let second = __Builtins.scavengeMemory()
+	let second = HeapStats.scavenge()
 	if second <= 0 'nothingReleased'
 		return 3
 	end 'nothingReleased'
@@ -409,7 +409,7 @@ system monitor steps it whatever `async` does. It means the ORACLE for that arm 
 ⚠⚠ **THAT ORACLE IS DISCHARGEABLE AND NOT DISCHARGED — SAID PLAINLY SO IT
 IS NOT READ AS PAID.** A spawned
 program at four processors really does put two Ms on one column. What the case at the end of this file adds
-is NOT that — it observes that the remote-free ROAD IS TAKEN (`slabRemoteFreeCount() > 0`), which is a
+is NOT that — it observes that the remote-free ROAD IS TAKEN (`HeapStats.slab().remoteFrees > 0`), which is a
 different subject from whether a contended column loses an update. ⇒ **the `lock`-prefix oracle is still
 owed**, and what it needs is this case's two waves driven by `spawn` rather than `async`, with the atomic
 forced off as the positive control, where the leak gate (exit 101) is the lost-update oracle.
@@ -440,19 +440,19 @@ function main() returns ExitCode
 		return 1
 	end 'warmupLost'
 
-	let liveBefore = __Builtins.mmAllocLive()
-	let totalBefore = __Builtins.mmAllocTotal()
+	let liveBefore = HeapStats.allocationsLive()
+	let totalBefore = HeapStats.allocationsMade()
 
 	if wave(10) != 800 'firstLost'
 		return 2
 	end 'firstLost'
-	let totalMid = __Builtins.mmAllocTotal()
+	let totalMid = HeapStats.allocationsMade()
 
 	if wave(20) != 800 'secondLost'
 		return 3
 	end 'secondLost'
-	let totalAfter = __Builtins.mmAllocTotal()
-	let liveAfter = __Builtins.mmAllocLive()
+	let totalAfter = HeapStats.allocationsMade()
+	let liveAfter = HeapStats.allocationsLive()
 
 	let first = totalMid - totalBefore
 	let second = totalAfter - totalMid
@@ -476,7 +476,7 @@ end 'main'
 
 <!-- test: slab-sharding.a-local-free-is-never-counted-as-a-remote-one -->
 <!-- procs: 1 -->
-⭐ **`__Builtins.slabRemoteFreeCount()` IS THE CROSS-P FREE'S OBSERVER.** A
+⭐ **`HeapStats.slab().remoteFrees` IS THE CROSS-P FREE'S OBSERVER.** A
 box `main` allocates and a `spawn`ed service drops is released by whichever machine ran that receiver —
 `SlabRuntime`'s remote-free road, a CAS push onto the SPAN's own Treiber stack, credited to the PUSHER. So
 what it counts is frees PERFORMED across processors rather than frees received. `service-torture` and
@@ -553,7 +553,7 @@ function main() returns ExitCode
 		wave = wave + 1
 	end 'waves'
 
-	print("delivered={delivered} remote={__Builtins.slabRemoteFreeCount()}\n")
+	print("delivered={delivered} remote={HeapStats.slab().remoteFrees}\n")
 
 	return 0
 end 'main'

@@ -428,6 +428,13 @@ export let StrCloneName = b"__str_clone"
 // reference declares those needs explicitly (`recordCallUsage`).
 export let StrRetainName = b"__str_retain"
 
+// `__str_unshare(record) -> ownedRecord` — hands back `record` itself when the caller is its sole
+// owner, and otherwise a `__str_clone` copy with the shared reference released. The parser calls it
+// where a `String` a name does not own is copied into mutable storage, so a write through the copy
+// leaves the source unchanged; like `__str_retain`, it must be read for its result. Its body's
+// needs are declared in `recordCallUsage`.
+export let StrUnshareName = b"__str_unshare"
+
 // ⭐ **WHERE A STRING RECORD KEEPS THE BUFFER-OWNERSHIP ENCODING** (`BufferOwnership`) — the three slots
 // its predicates read, built from THIS file's offsets. All three provenances the record format admits are
 // ordinary values of that encoding, and no String-only branch stands in front of it:
@@ -527,6 +534,10 @@ export function registerStringBlob(globalData GlobalDataTable, bytes ByteArray) 
 	return globalData.registerRdataConstant(StringBlobPrefix, bytes: stringBlobBytes(bytes), kind: RdataPayloadKind.stringBlob)
 end 'registerStringBlob'
 
+export function registerPanicLabel(globalData GlobalDataTable, message ByteArray) returns ByteArray
+	return globalData.labelBytesOf(registerStringBlob(globalData, bytes: message))
+end 'registerPanicLabel'
+
 // Register a literal's record, seeded with its blob's offset (see `buildStringRecordBytes` for why the
 // offset, not 0). `blobLabel` must already be registered — its offset is read back here.
 function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength BytePos, singleByteGraphemes bool, debugStream bool) returns String
@@ -601,6 +612,10 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrRetain 'strretain'
 		buildStrRetain(module)
 	end 'strretain'
+
+	if usage.usesStrUnshare 'strunshare'
+		buildStrUnshare(module)
+	end 'strunshare'
 
 	if usage.usesStrFromBytes 'strfrombytes'
 		buildStrFromBytes(module)
@@ -1270,6 +1285,38 @@ function buildStrRetain(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrRetain'
+
+function buildStrUnshare(module StdModule)
+	var func = IrFunction.createFromStd(StrUnshareName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var copyShared = module.addBlock(func, label: b"copy", heat: BlockHeat.normal)
+	var keepSole = module.addBlock(func, label: b"sole", heat: BlockHeat.normal)
+	var join = module.addBlock(func, label: b"owned", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let record = 0 as ValueId
+
+	let isShared = emitIsSharedAllocation(module, block: entry, ptr: record, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isShared, thenBlockId: copyShared.id, elseBlockId: keepSole.id))
+
+	let owned = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(owned, argType: StdType.i64))
+
+	let copied = ids.mint()
+	module.appendOp(copyShared, op: StdOp.call(copied, callee: StrCloneName, args: argsOf(record)))
+	module.appendOp(copyShared, op: StdOp.call(ids.mint(), callee: StrDecrefName, args: argsOf(record)))
+	module.setTerminator(copyShared, op: StdOp.branch(join.id))
+	copyShared.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(copied)))
+
+	module.setTerminator(keepSole, op: StdOp.branch(join.id))
+	keepSole.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(record)))
+
+	module.setTerminator(join, op: StdOp.ret(owned))
+
+	module.functions.push(func)
+end 'buildStrUnshare'
 
 // ⭐ **`__str_from_bytes(arr) -> newStr` — the fused-wrapper literal whose declaration carries NO flag
 // field to pass (`Character{managed: X}`); see the constant's header.** The argument's buffer holds exactly

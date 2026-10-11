@@ -13,6 +13,11 @@ category: system
 the scheduler's live count has finished, and answers how many have not. It takes no arguments and answers an
 `int`.
 
+Every `__Builtins` member is library-tier: only a source file under `stdlib/` or `runtime/` may call one,
+and a call from anywhere else is E3185. The cases below call the intrinsics themselves, so they compile in
+the library tier (`<!-- tier: stdlib -->`). A program calls `Scheduler.quiesce()`, which answers a
+`GreenThreadCount`.
+
 It is not the exit drain. It releases no registry slot, runs no global cleanup and stops no worker, so the
 program carries on afterwards exactly as it was.
 
@@ -27,6 +32,7 @@ wasm32-wasi has no green threads, so a program naming it is refused at the call 
 ## Tests
 
 <!-- test: builtins-gt-quiesce.waits-for-a-service-that-was-shut-down -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 The service prints from its own green thread after `main` has asked for the shutdown, and the print precedes the
 line that follows the wait.
@@ -66,6 +72,7 @@ quiesced 0
 ```
 
 <!-- test: builtins-gt-quiesce.with-nothing-outstanding-answers-zero-at-once -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
@@ -82,6 +89,7 @@ outstanding 0
 ```
 
 <!-- test: builtins-gt-quiesce.answers-what-nothing-can-finish -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 The service waits on its mailbox for a message that only `main` could send, so nothing can ever finish it. The wait answers the one green thread that is left instead of ending the program, and a second wait after the
 shutdown finds none.
@@ -124,6 +132,7 @@ outstanding 0
 ```
 
 <!-- test: builtins-gt-quiesce.a-second-waiter-aborts -->
+<!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
 The service waits for every green thread while `main` waits too. One waiter at a time is all the scheduler holds,
 so whichever arrives second ends the program with runtime abort 123.

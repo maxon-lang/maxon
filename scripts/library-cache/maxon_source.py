@@ -15,7 +15,7 @@ STATIC_MEMBER = re.compile(r"^(?:(?:export|module|public)\s+)?static\b")
 UNION_CASE = re.compile(r"^([a-z][A-Za-z0-9_]*)(?:\((.*)\))?(?:\s*=\s*.+)?\s*$")
 ENUM_CASE = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)\s*(?:=\s*.+)?\s*$")
 MEMBER_KEYWORDS = re.compile(r"^(?:(?:export|module|public)\s+)?(?:static\s+)?(?:function|var|let)\s+[A-Za-z_]")
-PAYLOAD_PARAMETER = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$")
+PAYLOAD_PARAMETER = re.compile(r"^(?:let\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$")
 USES_CLAUSE = re.compile(r"\buses\s+(.+?)(?:\s+implements\b|\s+where\b|$)")
 
 

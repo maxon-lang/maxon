@@ -1,0 +1,29 @@
+let CaseDirName = "stage-library-tier-stages-the-tier-and-the-compiler"
+let StageCommandWord = "stage-library-tier"
+let TierDirName = "tier"
+let BinDirName = "bin"
+let RuntimeTierDirName = "runtime"
+let StagedStdlibSource = "Array.maxon"
+let StagedRuntimeSource = "Clock.maxon"
+let UsageLine = "Usage: maxon stage-library-tier <directory>"
+
+test 'stage-library-tier copies both tiers and the compiler into the directory it is given'
+	let dir = freshCaseDir(CaseDirName)
+	let tier = dir.join(TierDirName)
+
+	let staged = runDriver([StageCommandWord, tier.toString()], workingDirectory: dir)
+	let said = "It wrote to stdout: {staged.stdout} and to stderr: {staged.stderr}"
+
+	Expect.equal(staged.exitCode(), expected: 0, message: "`maxon {StageCommandWord} {tier.toString()}` did not exit 0. {said}")
+	Expect.isTrue(File.exists(tier.join(StdlibDirName).join(StagedStdlibSource)), message: "`maxon {StageCommandWord}` staged no {StagedStdlibSource} under {StdlibDirName}/. {said}")
+	Expect.isTrue(File.exists(tier.join(RuntimeTierDirName).join(StagedRuntimeSource)), message: "`maxon {StageCommandWord}` staged no {StagedRuntimeSource} under {RuntimeTierDirName}/. {said}")
+	Expect.isTrue(File.exists(tier.join(BinDirName).join("maxon{executableSuffix()}")), message: "`maxon {StageCommandWord}` staged no compiler under {BinDirName}/. {said}")
+end 'stage-library-tier copies both tiers and the compiler into the directory it is given'
+
+test 'stage-library-tier with no directory prints its usage and exits 1'
+	let refused = runDriver([StageCommandWord])
+	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
+
+	Expect.equal(refused.exitCode(), expected: 1, message: "`maxon {StageCommandWord}` with no directory did not exit 1. {said}")
+	Expect.contains(refused.stderr, needle: UsageLine, message: "`maxon {StageCommandWord}` with no directory did not print its usage. {said}")
+end 'stage-library-tier with no directory prints its usage and exits 1'

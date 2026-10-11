@@ -170,9 +170,12 @@ naming `Clock.elapsedMs` and still naming the entry that has no lowering. A user
 code, so `main → myHelper → Clock.nowMs` is blamed inside `myHelper`. And a stdlib function no path
 from `main` reaches is refused nowhere at all, which is what keeps an unused module byte-neutral.
 
-The gate is therefore reachability-BLIND for user code and reachability-AWARE for stdlib source: an
-`__Builtins.sleep(1)` in a function `main` never calls is still refused for wasm
-(`builtins-sleep.rejected-on-wasm-when-unreached`), while a `Clock.nowMs()` in one is not.
+The gate is therefore reachability-BLIND for user code and reachability-AWARE for stdlib source: a
+construct user code lowers straight to a target-gated runtime entry — `spawn`, a message send — is refused for
+wasm even in a function `main` never calls (`user-code-is-refused-on-wasm-even-where-unreached` below), while a
+`Clock.nowMs()` in one is not. User code here is the program's own source — a library-tier case's files
+included, because a project rooted under `stdlib/` keeps its own files as the program's rather than recording
+them as library source (`StdlibLoader.setAsideTheUsersOwnLibraryFiles`).
 
 A retired bare-name builtin puts a program in the second case rather than the first: `sleep(1)` is a
 call into stdlib rather than a `__gt_sleep` in user code, so an unreached one compiles for wasm
@@ -414,6 +417,40 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
 4
+```
+
+<!-- test: stdlib-loading.user-code-is-refused-on-wasm-even-where-unreached -->
+<!-- unsupported-targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
+The other half, in an ordinary program: `launcher` is never called, yet the `spawn` and the message send it
+writes lower straight to runtime entries wasm32-wasi does not have, and both are refused. The crossing gate
+exempts an unreached STDLIB body; it does not exempt the program's own code, which `SemanticCheck` visits
+whole, as it does to report a type error in a function nothing calls.
+```maxon
+type Plot
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function at(x Integer)
+		self.n = self.n + x
+	end 'at'
+end 'Plot'
+
+function launcher()
+	let h = spawn Plot.create()
+	h.at(1)
+end 'launcher'
+
+function main() returns ExitCode
+	return 4
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3104: <fragment>:15:10: 'spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation
+error E3104: <fragment>:16:2: a message send lowers to the runtime entry '__mbox_send', which has no wasm32-wasi implementation
 ```
 
 ### A user's own declaration outranks a stdlib module's free function

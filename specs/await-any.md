@@ -1,11 +1,11 @@
 ---
 feature: await-any
 status: stable
-keywords: [async, promise, awaitAny, select, __Builtins, intrinsics, scheduler]
+keywords: [async, promise, awaitAny, select, scheduler]
 category: concurrency
 ---
 
-# `__Builtins.awaitAny` — ONE WAITING PRIMITIVE FOR REPLIES, FILE IO AND SUBPROCESS DRAINS
+# `promises.awaitAny()` — ONE WAITING PRIMITIVE FOR REPLIES, FILE IO AND SUBPROCESS DRAINS
 
 ## Documentation
 
@@ -13,12 +13,12 @@ category: concurrency
 cannot use it: awaiting slot 0 while slot 3 has already answered is head-of-line blocking, and the whole
 point of running N children is that whichever finishes first is served first.
 
-`__Builtins.awaitAny(promises)` is the way out. It takes an array whose element type is a
-`Promise with …`, parks the caller until **some** element has completed, and returns that element's
-**index**.
+`promises.awaitAny()` is the way out. It is a member of every array whose element type is a
+`Promise with …`: it parks the caller until **some** element has completed, and returns that element's
+**index** as an unnamed `int`, which indexes the array (`get(ready)`) and adds to an `Integer` with no cast.
 
 ```maxon
-let ready = __Builtins.awaitAny(drains)
+let ready = drains.awaitAny()
 ```
 
 ### It returns an INDEX, and it does NOT consume
@@ -100,8 +100,8 @@ A slot is skipped when it holds `0` — the zero a `resize` leaves in a slot nob
 is read as a green-thread handle and its status word compared against `completed`.
 
 ⚠ **A promise that has already been AWAITED leaves a stale handle in its slot**, because `await` recycles
-the green-thread struct and nothing writes the slot back. That is the same contract
-`__Builtins.gtIsComplete` has — the intrinsic asks nothing of its handle beyond it being one
+the green-thread struct and nothing writes the slot back. That is the same contract a promise's
+`isComplete()` has — the read asks nothing of its handle beyond it being one
 — and the same slot-level linearity gap named above. A caller that re-selects over an array must
 overwrite a consumed slot, exactly as `Testing/SpecWorkerPool.sendAndDrain` re-arms a drain with `set`.
 The registration writes the awaiter word of every slot it parks on, so a stale handle there is a write
@@ -116,15 +116,15 @@ machine running, no timer, child or read pending, and `main` not finished — **
 plain `await` of a thread nobody can run gets. Go's `select {}` reaches its own deadlock detector for
 exactly this reason. `an-empty-array-is-a-scheduler-deadlock` pins it.
 
-### `Scheduler.awaitAny` — the nicer spelling, and why it is not here
+### Why it is a member the compiler serves
 
-The surface a program would rather write is `awaitAny(drains)`, an ordinary stdlib declaration whose body
-is this intrinsic, exactly as `sleep(ms)` is `stdlib/Sleep.maxon`'s declaration over `__Builtins.sleep`.
-It cannot be written yet: the declaration's parameter is `Array with Promise with T` for a type parameter
-`T`, and the intrinsic's argument rule is *"the element type is a `Promise with …`"*, which no type
-parameter can be proven to be. That is a stdlib-generics question and not this primitive's, and adding a
-BARE-name `awaitAny` builtin instead would be the wart `print`/`sleep`/`runProcess` were moved into the
-reserved `__Builtins.` space to remove.
+`awaitAny` is not an ordinary stdlib declaration, as `sleep(ms)` is `stdlib/Sleep.maxon`'s declaration over
+`__Builtins.sleep`: such a declaration's parameter would be `Array with Promise with T` for a type parameter
+`T`, and the primitive's rule is *"the element type is a `Promise with …`"*, which no type parameter can be
+proven to be. So the compiler serves `awaitAny()` as a member of a promise array, the way it serves
+`isComplete()` on a promise, and lowers it to the runtime intrinsic `__Builtins.awaitAny`. The intrinsic is
+library-tier like every `__Builtins` member (E3185 outside `stdlib/` and `runtime/`); `arity-checked` and
+`error.operand-type` are about the intrinsic's own argument rules, so they compile in the library tier.
 
 ### Targets — the lanes with a green-thread substrate, refused by name everywhere else
 
@@ -133,7 +133,7 @@ reserved `__Builtins.` space to remove.
 **E3104 at the call's own span**, naming the runtime entry — never a panic from inside a backend.
 `error.rejected-on-wasm` pins that attribution. All four native lanes provide it; wasm32-wasi does not.
 
-The two front-end cases (`arity-checked`, `error.operand-type`) reach no substrate at all and carry no
+The two front-end cases (`arity-checked`, `error.operand-type`) reach no substrate at all and carry no target
 marker. Neither does `over-service-replies`: a service runs on every lane with a green-thread substrate,
 and wasm32-wasi refuses `__svc_spawn` with the same E3104, which the harness counts as a SKIP.
 
@@ -164,7 +164,7 @@ function main() returns ExitCode
 	arr.push(async slow(120))
 	arr.push(async quick())
 	arr.push(async slow(240))
-	let ready = __Builtins.awaitAny(arr)
+	let ready = arr.awaitAny()
 	var score = 0
 	if ready == 1 'themiddleonefinishedfirst'
 		score = score + 3
@@ -208,17 +208,17 @@ function main() returns ExitCode
 	arr.push(async makeValue())
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
 	var spins = 0
-	var done = 0
-	while spins < maxSpins and done == 0 'drive'
+	var done = false
+	while spins < maxSpins and not done 'drive'
 		Scheduler.yield()
-		done = __Builtins.gtIsComplete(p.inner)
+		done = p.isComplete()
 		spins = spins + 1
 	end 'drive'
 	var score = 0
-	if done == 1 'itwasalreadycompletebeforethecall'
+	if done 'itwasalreadycompletebeforethecall'
 		score = score + 1
 	end 'itwasalreadycompletebeforethecall'
-	if __Builtins.awaitAny(arr) == 0 'thecompletedslotisnamed'
+	if arr.awaitAny() == 0 'thecompletedslotisnamed'
 		score = score + 2
 	end 'thecompletedslotisnamed'
 	if await p == 42 'stillawaitable'
@@ -251,8 +251,8 @@ function main() returns ExitCode
 	arr.push(async value(10))
 	arr.push(async value(20))
 	arr.push(async value(30))
-	let first = __Builtins.awaitAny(arr)
-	let second = __Builtins.awaitAny(arr)
+	let first = arr.awaitAny()
+	let second = arr.awaitAny()
 	var score = 0
 	if first == second 'aselectiswithoutsideeffect'
 		score = score + 1
@@ -292,7 +292,7 @@ function main() returns ExitCode
 	arr.push(async nap(200, tag: 1))
 	arr.push(async nap(20, tag: 2))
 	arr.push(async nap(400, tag: 3))
-	let ready = __Builtins.awaitAny(arr)
+	let ready = arr.awaitAny()
 	var score = 0
 	if ready == 1 'theearliestdeadlinewon'
 		score = score + 3
@@ -357,7 +357,7 @@ function main() returns ExitCode
 	var ps = ReplyPromiseArray.create()
 	ps.push(slow.value())
 	ps.push(quick.value())
-	let ready = __Builtins.awaitAny(ps)
+	let ready = ps.awaitAny()
 	var score = 0
 	if ready == 1 'thequickreplywonthoughitwassentsecond'
 		score = score + 3
@@ -399,7 +399,7 @@ function selectOver() returns Integer
 	var ps = IntPromiseArray.create()
 	ps.push(async inner(3))
 	ps.push(async inner(4))
-	let ready = __Builtins.awaitAny(ps)
+	let ready = ps.awaitAny()
 	var sum = 0
 	for p in ps 'all'
 		sum = sum + await p
@@ -439,7 +439,7 @@ function main() returns ExitCode
 	var arr = IntPromiseArray.create()
 	arr.resize(2)
 	arr.push(async makeValue())
-	let ready = __Builtins.awaitAny(arr)
+	let ready = arr.awaitAny()
 	let p = try arr.get(ready) otherwise panic("awaitAny named a slot that is in range")
 	return (ready * 10 + await p) as ExitCode
 end 'main'
@@ -460,7 +460,7 @@ typealias IntPromiseArray = Array with IntPromise
 
 function main() returns ExitCode
 	var arr = IntPromiseArray.create()
-	let ready = __Builtins.awaitAny(arr)
+	let ready = arr.awaitAny()
 	return ready as ExitCode
 end 'main'
 ```
@@ -489,7 +489,7 @@ function main() returns ExitCode
 	var arr = IntPromiseArray.create()
 	arr.push(async value(1))
 	arr.push(async value(2))
-	let ready = __Builtins.awaitAny(arr)
+	let ready = arr.awaitAny()
 	let winner = try arr.get(ready) otherwise panic("awaitAny named a slot that is in range")
 	_ = await winner
 	return 0
@@ -500,9 +500,10 @@ end 'main'
 ```
 
 <!-- test: await-any.arity-checked -->
-`awaitAny` takes exactly one argument — the array. An intrinsic has no signature for the ordinary arity
-check to read, so it is refused by the same `builtinArity` check every other `__Builtins` member uses.
-Front-end only and target-neutral, so no marker.
+<!-- tier: stdlib -->
+The intrinsic `__Builtins.awaitAny` takes exactly one argument — the array. An intrinsic has no signature
+for the ordinary arity check to read, so it is refused by the same `builtinArity` check every other
+`__Builtins` member uses. Front-end only and target-neutral, so no target marker.
 ```maxon
 function main() returns ExitCode
 	let ready = __Builtins.awaitAny()
@@ -514,6 +515,7 @@ error E3036: <fragment>:3:25: '__Builtins.awaitAny' takes exactly 1 argument, bu
 ```
 
 <!-- test: await-any.error.operand-type -->
+<!-- tier: stdlib -->
 The argument must be an array whose element type is a `Promise with …`. An `Array with Integer` carries
 plain numbers, and reading one as a green-thread handle would dereference an integer — so it is refused at
 the call, where the element type is still known.
@@ -538,7 +540,7 @@ A WASI component has no addressable call stack for a context switch to move, so 
 scheduler and a program that selects over promises is refused at its own source span with `E3104` naming
 `__gt_await_any` — never a panic from inside a backend.
 
-⚠ **THE THUNK YIELDS THROUGH `__Builtins.parallelBoundary()` AND NOT `Scheduler.yield()`, WHICH IS THE
+⚠ **THE THUNK YIELDS THROUGH `Scheduler.parallelBoundary()` AND NOT `Scheduler.yield()`, WHICH IS THE
 DIFFERENCE BETWEEN PINNING THIS RULE AND PINNING A NEIGHBOUR'S.** A legal `async` needs a callee that can
 suspend (E3073), and `Scheduler.yield` lowers to `__gt_resched`, which is on the SAME target roster — so it
 raises its own E3104 four lines earlier and the case would pass against a compiler that had never heard of
@@ -550,17 +552,17 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function value(v Integer) returns Integer
-	__Builtins.parallelBoundary()
+	Scheduler.parallelBoundary()
 	return v
 end 'value'
 
 function main() returns ExitCode
 	var arr = IntPromiseArray.create()
 	arr.push(async value(10))
-	let ready = __Builtins.awaitAny(arr)
+	let ready = arr.awaitAny()
 	return ready as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:14:25: this construct lowers to the runtime entry '__gt_await_any', which has no wasm32-wasi implementation
+error E3104: <fragment>:14:18: this construct lowers to the runtime entry '__gt_await_any', which has no wasm32-wasi implementation
 ```

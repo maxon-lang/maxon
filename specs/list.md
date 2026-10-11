@@ -714,7 +714,7 @@ end 'clearList'
 
 function main() returns ExitCode
 	var list = StringList.create()
-	list.append("hello world!!!!!!!!!!!!!!")
+	list.append("hello world {40 + 2}!!!!!!!!!!!!!!")
 	let result = clearList(list)
 	print("{result}\n")
 	return 0
@@ -724,7 +724,7 @@ end 'main'
 0
 ```
 ```stdout
-hello world!!!!!!!!!!!!!!
+hello world 42!!!!!!!!!!!!!!
 ```
 
 <!-- test: memory.value-survives-clear-error -->
@@ -741,7 +741,7 @@ end 'clearList'
 
 function main() returns ExitCode
 	var list = StringList.create()
-	list.append("hello world!!!!!!!!!!!!!!")
+	list.append("hello world {40 + 2}!!!!!!!!!!!!!!")
 	let val = try list.first() otherwise "none"
 	clearList(list)
 	print("{val}\n")
@@ -752,26 +752,21 @@ end 'main'
 0
 ```
 ```stdout
-hello world!!!!!!!!!!!!!!
+hello world 42!!!!!!!!!!!!!!
 ```
 
 <!-- test: memory.value-survives-clear -->
 ### The value survives the clear
-⚖ **RULED: THE VALUE `first()` RETURNS IS OWNED, AND THE CASE NAME IS THE ACCEPTING ANSWER.** `first()` is
-served from `stdlib/List.maxon` and discharges a real `+1` through `coOwnBorrowedOpaque` — the value is
-OWNED, the `clear()` cannot reach it, and all three programs run correctly at exit 0 with no leak.
-
-⚠ **NO `E3070` HERE.** The borrow rule `BorrowCheck.maxon` documents for `arr.last()` — *"a borrow
-composes through a borrow, and NOT through a call"* — applies: `List`'s `first`/`get`/`clear` are corpus-served,
-not compiler-minted, so no borrow ties `val` to the list. **`arr.get(0)` + `arr.clear()` is refused** (the
-compiler's own `dispatchArrayMethod` mints that borrow), so the refusal itself is intact; it reaches only the
-containers whose accessors the compiler mints.
+The value `first()` returns holds its own reference, so the `clear()` cannot reach it. This program and
+the two above, which move the `clear()` into a helper, run correctly at exit 0 with no leak — the same
+answer `Array`'s `get` + `clear` gives. Each builds its string at run time, because a literal is an
+immortal record no `clear()` could free.
 ```maxon
 typealias StringList = List with String
 
 function main() returns ExitCode
 	var list = StringList.create()
-	list.append("hello world!!!!!!!!!!!!!!")
+	list.append("hello world {40 + 2}!!!!!!!!!!!!!!")
 	let val = try list.first() otherwise "none"
 	list.clear()
 	print("{val}\n")
@@ -782,7 +777,7 @@ end 'main'
 0
 ```
 ```stdout
-hello world!!!!!!!!!!!!!!
+hello world 42!!!!!!!!!!!!!!
 ```
 
 <!-- test: memory.get-in-loop-no-over-release -->
@@ -827,10 +822,9 @@ sum=660
 ```
 
 <!-- test: memory.mutating-the-list-inside-for-in-ends-the-loop -->
-### Clearing a list from inside `for … in` ends the walk instead of being refused
-⭐ **`l.clear()` UNDER A LIVE WALK COMPILES.** `List with T` is a declaration (`stdlib/List.maxon`), `l`
-is a `var`, and `clear` is an ordinary mutating method on it; neither `E3019` (a mutating call on an
-immutable receiver) nor the borrow checker refuses it.
+### Clearing a list from inside `for … in` ends the walk
+⭐ **`l.clear()` UNDER A LIVE WALK COMPILES.** `l` is a `var`, and `clear` is an ordinary mutating method
+on it; the loop holds its own reference to the list it walks.
 
 ⭐ **IT IS SAFE BECAUSE THE NODES ARE REFCOUNTED.** The cursor holds a `+1` on the node it is parked at,
 so `clear()` cannot free it underneath the walk. The observable answer is that the iterator finds no

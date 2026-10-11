@@ -448,6 +448,10 @@ export enum RuntimeAbort
 	// waiting. The waiter is one word naming one thread, the one the last thread to finish wakes.
 	schedulerQuiesceWaiterTaken = 123
 
+	// `__slab_state_committed`: a path that reads the slab allocator's state record ran before the
+	// first allocation committed it; reading on would dereference the uncommitted sentinel.
+	slabStateReadBeforeCommit = 124
+
 	// ⚠ **108 IS VACANT, NOT REUSABLE.** The fault it would name — `__np_pd_open` / `__np_pd_release` finding
 	// a green thread still PUBLISHED on a direction word of the record they are about to reset — is not a
 	// fault: it rests on the false claim that no two green threads can name one socket box, where a co-owning
@@ -513,28 +517,30 @@ function lastSegment(s String, separator String) returns String
 end 'lastSegment'
 
 // ⭐ **ABORT THE PROCESS FROM A BUILDER-BUILT RUNTIME FUNCTION — THE ONE HOME OF THE ABORT SHAPE.**
-// `osExit` DIVERGES, so the block it sits in never falls out; but a block must still carry a
-// terminator, so a DEAD one follows. That fact was open-coded four times (`ManagedMemoryRuntime.emitVoidAbort`
-// plus `GtRuntime`'s process-store append and `__gt_process_run`, and `ManagedMemoryRuntime.__managed_create`), and it
-// is written here once.
+// The write and the exit live in `__rt_abort`, a guarded door that never returns, so an unguarded
+// runtime body that aborts spends only the call on its unguarded chain (E5004). The block must
+// still carry a terminator, so a DEAD one follows.
 //
 // ⭐ **THE TERMINATOR KIND IS DERIVED FROM THE FUNCTION, NOT PASSED IN.** A void function's dead
 // terminator is `retVoid` and a value-returning one's is `ret <0>`; that is exactly what
-// `func.returnType` already says, so it is read rather than restated. A caller therefore cannot pick
-// the wrong one — which is the failure the previous split into a void helper plus two open-coded
-// value-returning copies left available. (A THROWING runtime function returns `value(i64)` through the
-// dual-register ABI; its `ret` is dead too, so the same answer is right there.)
+// `func.returnType` already says, so it is read rather than restated, and a caller cannot pick the
+// wrong one. (A THROWING runtime function returns `value(i64)` through the dual-register ABI; its
+// `ret` is dead too, so the same answer is right there.)
 //
 // The stderr line is `.rdata` text, so an abort path allocates nothing — an allocator-failure abort
 // among them.
 export function emitRuntimeAbort(module StdModule, func IrFunction, block IrBlock, abort RuntimeAbort, ids ValueMinter)
+	if not module.runtimeAbortDoorBuilt 'firstSite'
+		buildRuntimeAbortDoor(module)
+		module.runtimeAbortDoorBuilt = true
+	end 'firstSite'
+
 	module.runtimeAbortSites.push(RuntimeAbortSite.create(abort, funcName: func.name.clone()))
 
 	let messageAddr = ids.mint()
 	module.appendOp(block, op: StdOp.rdataAddr(messageAddr, label: runtimeAbortMessageLabel(abort)))
 	let messageLength = ids.mint()
 	module.appendOp(block, op: StdOp.const(messageLength, value: runtimeAbortMessage(abort).count() as ParsedInt, valueType: StdType.i64))
-	module.appendOp(block, op: StdOp.osWriteStderr(ids.mint(), bufId: messageAddr, lenId: messageLength))
 
 	// Bound to a local FIRST: the union-case argument type-checker cannot lower an
 	// `EnumMember.rawValue` written directly as a case argument (E9001) — the same reason
@@ -542,9 +548,25 @@ export function emitRuntimeAbort(module StdModule, func IrFunction, block IrBloc
 	let code = abort.rawValue as ParsedInt
 	let codeId = ids.mint()
 	module.appendOp(block, op: StdOp.const(codeId, value: code, valueType: StdType.i64))
-	module.appendOp(block, op: StdOp.osExit(codeId))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: RuntimeAbortName, args: threeArgs(messageAddr, second: messageLength, third: codeId)))
 	emitDeadTerminator(module, func: func, block: block, ids: ids)
 end 'emitRuntimeAbort'
+
+let RuntimeAbortName = b"__rt_abort"
+
+function buildRuntimeAbortDoor(module StdModule)
+	var func = IrFunction.createFromStd(RuntimeAbortName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 3)
+	module.appendOp(entry, op: StdOp.osWriteStderr(ids.mint(), bufId: 0, lenId: 1))
+	module.appendOp(entry, op: StdOp.osExit(2))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildRuntimeAbortDoor'
 
 export type RuntimeAbortSite
 	export let abort as RuntimeAbort

@@ -257,7 +257,7 @@ end 'churn'
 var kept = Point.create(0, y: 0)
 
 function stash()
-	let p = Point.create(11, y: 22)
+	var p = Point.create(11, y: 22)
 	kept = p
 end 'stash'
 

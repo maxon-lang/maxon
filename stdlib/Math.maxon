@@ -1,6 +1,7 @@
 /// Mathematical functions including trigonometry, logarithms, and exponentiation.
 /// @category Math
 public typealias Real = float(f64.min to f64.max)
+public typealias FloatBits = int(i64.min to i64.max)
 
 /// How far a series in this module is pushed. Every series here converges geometrically, so the
 /// limit is small; the upper bound is generous enough for any of them and narrow enough that a
@@ -288,29 +289,39 @@ public type Math
 	// ⭐ THE NON-FINITE AND SIGN VOCABULARY, DECLARED ONCE. `log`, `log2`, `exp`, `pow` and `atan2`
 	// all have to NAME an infinity or a NaN, or ask which side of zero a value sits on — and Maxon
 	// can spell none of those, so every such site would otherwise carry its own
-	// `bitsToFloat`/`floatToBits` call against a raw constant. These eight one-line functions are
-	// what stops `pow`'s twenty-odd IEEE arms from becoming twenty-odd bit-twiddles. They are not
-	// wrappers over a call: the call is meaningless without the constant, and the pair together is
-	// the value's only NAME.
+	// `bitsToFloat`/`floatToBits` call against a raw constant. These one-line functions are what
+	// stops `pow`'s twenty-odd IEEE arms from becoming twenty-odd bit-twiddles. Each constant's
+	// call is meaningless without the constant, and the pair together is the value's only NAME.
+	// `bitsOf` and `fromBits` are the bit-pattern doors a program outside the library tier has.
 
-	static function positiveInfinity() returns Real
-		return __Builtins.bitsToFloat(mathInfinityBits)
+	/// The IEEE 754 binary64 bit pattern of `x`, read as a signed 64-bit integer.
+	public static function bitsOf(x Real) returns FloatBits
+		return __Builtins.floatToBits(x)
+	end 'bitsOf'
+
+	/// The double whose IEEE 754 binary64 bit pattern is `bits`.
+	public static function fromBits(bits FloatBits) returns Real
+		return __Builtins.bitsToFloat(bits)
+	end 'fromBits'
+
+	public static function positiveInfinity() returns Real
+		return Math.fromBits(mathInfinityBits)
 	end 'positiveInfinity'
 
-	static function negativeInfinity() returns Real
-		return __Builtins.bitsToFloat(mathNegativeInfinityBits)
+	public static function negativeInfinity() returns Real
+		return Math.fromBits(mathNegativeInfinityBits)
 	end 'negativeInfinity'
 
-	static function quietNaN() returns Real
-		return __Builtins.bitsToFloat(mathQuietNaNBits)
+	public static function quietNaN() returns Real
+		return Math.fromBits(mathQuietNaNBits)
 	end 'quietNaN'
 
 	static function isPositiveInfinity(z Real) returns bool
-		return __Builtins.floatToBits(z) == mathInfinityBits
+		return Math.bitsOf(z) == mathInfinityBits
 	end 'isPositiveInfinity'
 
 	static function isNegativeInfinity(z Real) returns bool
-		return __Builtins.floatToBits(z) == mathNegativeInfinityBits
+		return Math.bitsOf(z) == mathNegativeInfinityBits
 	end 'isNegativeInfinity'
 
 	static function isInfinite(z Real) returns bool
@@ -319,7 +330,7 @@ public type Math
 
 	/// True when `z`'s IEEE 754 sign bit is set — which includes -0.0, the one thing no COMPARISON
 	/// can report: -0.0 == 0.0, so `z < 0.0` and `z >= 0.0` both answer as though every zero were
-	/// positive. Reading the bit pattern is the only way to ask, and `__Builtins.floatToBits` is
+	/// positive. Reading the bit pattern is the only way to ask, and `bitsOf` is
 	/// the only way to see it (`stdlib/Builtins.maxon`'s `__float_toString` asks the same question
 	/// the same way, which is why an interpolated -0.0 prints with its sign).
 	///
@@ -327,14 +338,14 @@ public type Math
 	/// zero and an infinity alike: `floatToBits(-inf)` is `0xFFF0000000000000`, negative as an i64,
 	/// exactly as `floatToBits(-0.0)` is. Nothing here is special-cased to the zeros.
 	public static function hasNegativeSignBit(z Real) returns bool
-		return __Builtins.floatToBits(z) < 0
+		return Math.bitsOf(z) < 0
 	end 'hasNegativeSignBit'
 
 	/// ⚠ The ONE test that cannot be done on bits: a NaN is not a bit pattern but a whole CLASS of
 	/// them (any non-zero significand under an all-ones exponent), so comparing against
 	/// `mathQuietNaNBits` would recognise exactly the one this file mints and miss every other. The
 	/// unordered-with-itself property is the only total test, and it is IEEE 754's own.
-	static function isNaN(z Real) returns bool
+	public static function isNaN(z Real) returns bool
 		return z != z
 	end 'isNaN'
 
