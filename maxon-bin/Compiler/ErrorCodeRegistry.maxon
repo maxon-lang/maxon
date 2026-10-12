@@ -984,6 +984,9 @@ export enum ErrorCode
 	// or a union case, or passing it to a call by value, gives its green thread to that new owner, and a
 	// later use of the name it was stored from would name a thread this frame no longer holds. Awaiting or
 	// cancelling a promise is not a move but a consume, and is E3142.
+	// One promise, or one value of an opaque type parameter, passed at two arguments of one call whose
+	// parameters take it is refused at the second argument, naming the binding written there: the first
+	// argument already moved it. Pass it at one argument.
 	useAfterMove = "E3102"
 
 	// A `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, `a mod 0`, a
@@ -1723,6 +1726,11 @@ export enum ErrorCode
 	// a generic instance (`Map`, `Set`, a declared `Box with T`) or an array element -- would give two
 	// owners one thread. A generic type whose body copies an `Array with T` field is refused where the
 	// program instantiates it with a promise. `await` the promise and copy a value holding its result.
+	// An `async` call refuses a promise, or a value whose type holds one, at a parameter the callee only
+	// reads -- or that any overload the call may bind only reads. A coroutine can still be running after the
+	// frame that started it has ended, and by then the promise may have been awaited out of what holds it
+	// and its thread reclaimed. Pass the promise to a parameter every overload takes (one it awaits,
+	// cancels, stores or returns), or await it and pass the result.
 	semanticPromiseCannotBeBorrowed = "E3141"
 
 	// A promise is USED after it was consumed. A promise owns a green thread, and a green thread has

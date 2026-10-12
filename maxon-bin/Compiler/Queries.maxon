@@ -3175,6 +3175,10 @@ function useOfValueMovedIntoMessage(name String, into String) returns String
 	return "use of moved value '{name}': its ownership moved to {into}"
 end 'useOfValueMovedIntoMessage'
 
+function passedAtTwoArgumentsMessage(name String) returns String
+	return "use of moved value '{name}': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it"
+end 'passedAtTwoArgumentsMessage'
+
 module function movedInAnEarlierIterationMessage(name String) returns String
 	return "use of moved value '{name}': it was moved in an earlier iteration of this loop"
 end 'movedInAnEarlierIterationMessage'
@@ -3284,6 +3288,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		useAfterMove(name, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: useOfMovedValueMessage(name), line: line, column: column, filePath: path)
 		useAfterMoveInto(name, into, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: useOfValueMovedIntoMessage(name, into: into), line: line, column: column, filePath: path)
 		useAfterMoveInAnEarlierIteration(name, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: movedInAnEarlierIterationMessage(name), line: line, column: column, filePath: path)
+		useAfterMovePassedTwice(name, line, column) gives Diagnostic.create(ErrorCode.useAfterMove, message: passedAtTwoArgumentsMessage(name), line: line, column: column, filePath: path)
 		staleCellOccupantRead(name, callee, parameter, line, column) gives Diagnostic.create(ErrorCode.argumentOverlapsWrittenParameter, message: argumentOverlapMessage(name, blamed: "argument '{name}' of '{callee}'", callee: callee, parameter: parameter), line: line, column: column, filePath: path)
 		promiseCannotBeBorrowed(door, cure, line, column) gives Diagnostic.create(ErrorCode.semanticPromiseCannotBeBorrowed, message: "a promise cannot be borrowed through '{door}': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. {cure}", line: line, column: column, filePath: path)
 		promiseAlreadyConsumed(door, line, column) gives Diagnostic.create(ErrorCode.semanticPromiseAlreadyConsumed, message: "this promise was already consumed by an earlier '{door}': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again", line: line, column: column, filePath: path)

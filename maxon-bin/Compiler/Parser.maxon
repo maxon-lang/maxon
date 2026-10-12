@@ -486,6 +486,7 @@ export union SourceParseError implements Error
 	useAfterMove(name String, line LineNumber, column ColumnNumber)
 	useAfterMoveInto(name String, into String, line LineNumber, column ColumnNumber)
 	useAfterMoveInAnEarlierIteration(name String, line LineNumber, column ColumnNumber)
+	useAfterMovePassedTwice(name String, line LineNumber, column ColumnNumber)
 	staleCellOccupantRead(name String, callee String, parameter String, line LineNumber, column ColumnNumber)
 
 	// A promise read out of a holder through a door that cannot NAME the slot it came from — a list node's
@@ -6300,8 +6301,11 @@ union PromiseSlotResolution
 end 'PromiseSlotResolution'
 
 // E3141's cures for a promise read that names no slot: one for an element handed back alone, one for an element
-// handed back inside a pair.
+// handed back inside a pair. Between them sit the cures for a promise, and for a value holding one, at a
+// parameter an `async` callee only reads.
 let PromiseSlotReadCure = "Read it through a door that names its slot (`get(i)`, `first()`, `for … in`, or an array's cursor), or move it out with `pop`/`remove`"
+let AsyncPromiseBorrowCure = "A coroutine can still be running after the frame that started it has ended, and by then that frame has reclaimed the thread, so a coroutine that only reads this promise would read a reclaimed thread. Pass the promise to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead"
+let AsyncPromiseHolderBorrowCure = "This argument holds a promise, and a coroutine can still be running after the frame that started it has ended — by then the promise may have been awaited out of what holds it, or its thread reclaimed, and a coroutine that only reads it would read a thread that is gone. Pass the promise itself to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead"
 let PromisePairReadCure = "A pair keeps no slot for the promise it carries: destructure an array's `withIterator()` pair in the loop header (`for (it, p) in a.withIterator()`), read the array with `get(i)`, or move the promise out with `pop`/`remove`"
 
 // `WithIterIterator.current()`'s `(Source, Element)` — the iterator, and the element it stands on.
@@ -6497,7 +6501,7 @@ type PendingArgumentBinding
 	export let label as ByteArray
 	export let storage as DeferredStorage
 	export let transfer as DeferredTransfer
-	export var takingSites as NameRoster
+	export let takingSites as NameRoster
 	export var blame as WriteBlame
 
 	static function create(column ParamCount, label ByteArray, storage DeferredStorage, transfer DeferredTransfer, takingSites NameRoster, blame WriteBlame) returns Self
@@ -6517,6 +6521,24 @@ union ConsumingDeclaration
 end 'ConsumingDeclaration'
 
 let noTakingDeclaration = ConsumingDeclaration.borrows
+
+function tokenStartsAt(token Token, range SourceRange) returns bool
+	return token.line == range.line and token.column == range.column
+end 'tokenStartsAt'
+
+type ColumnTakers
+	export let infos as ParamConsumeInfoArray
+	export let sites as NameRoster
+	export let declarationCount as Count
+
+	static function create(infos ParamConsumeInfoArray, sites NameRoster, declarationCount Count) returns Self
+		return Self{infos: infos, sites: sites, declarationCount: declarationCount}
+	end 'create'
+
+	function everyDeclarationTakes() returns bool
+		return not self.infos.isEmpty() and self.sites.count() == self.declarationCount
+	end 'everyDeclarationTakes'
+end 'ColumnTakers'
 
 type ConditionalGive
 	export let value as ValueId
@@ -85776,7 +85798,7 @@ export type Parser
 		// `builtinConformanceReceiverValue` are the other two, and the census says it is the last: every
 		// other reader either guards on `isSelfField` first (`receiverOwnerMask`, and `baseBoxOf` for the
 		// field-chain base), or cannot see an alias at
-		// all (`parseVariableReference`'s local arm runs under `not isSelfField`; `consumedArgName` and the
+		// all (`parseVariableReference`'s local arm runs under `not isSelfField`; the
 		// move/alias searches scan `ownedBindings`, which a `trivial`-ownership alias never joins).
 		//
 		// ⚠ It cannot recurse: the receiver's OWN binding is a parameter, so the capture this delegation
@@ -95360,6 +95382,7 @@ export type Parser
 		// both gates, so only arguments that fit the channel are ever transferred — and after
 		// `fillOmittedArgDefaults`, so a MANAGED default is transferred exactly as a written argument is.
 		try self.transferAsyncSpawnArgs(callee, args: args, argImmutableNames: argImmutableNames, argAnchors: argAnchors, anchor: anchor)
+		try self.transferAsyncPromiseArgs(callee, args: args, argLabels: argLabels, argRanges: argRanges, argDefaultSlots: argDefaultSlots, anchor: anchor)
 		let result = self.mintSpawnPromise(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 		self.markValuePromise(result)
 
@@ -95427,9 +95450,9 @@ export type Parser
 	// ⚠ **IT TRANSFERS EVERY MANAGED ARGUMENT, NOT ONLY THE DECLARED-CONSUMED ONES**, which is where it
 	// departs from `transferConsumedArgs`: an ordinary call's BORROWED argument needs no transfer because the
 	// caller's frame provably outlives the call, and a spawn's provably does not. The declared-consume bits
-	// therefore say nothing here — and a callee that genuinely consumes a managed parameter is refused one
-	// tier up (`SemanticCheck.requireAsyncScalarParams`), because it would drop the parameter itself when it
-	// ran and the releaser would drop it again.
+	// therefore say nothing here. A parameter the callee takes is released by the releaser only for a thread
+	// that never ran (`AsyncReleasePlan.consumedArgSlots`), and a promise the callee takes is moved by
+	// `transferAsyncPromiseArgs`.
 	//
 	// The RESULT replaces the argument, for `transferConsumedArgs`' reason: a promoted borrowed String is a
 	// DIFFERENT record, and it is the one the inline argument region must carry.
@@ -95450,6 +95473,63 @@ export type Parser
 			end 'theBindingIsNoLongerTheCallers'
 		end 'eachHandedOver'
 	end 'transferAsyncSpawnArgs'
+
+	// Unlike an ordinary call, which leaves the hand-over to the overload it binds (`transferTakenColumn`), a
+	// spawn moves the promise now or refuses it: the coroutine can outlive this frame, so a declaration that
+	// only reads the promise would read a thread this frame reclaims. The E3141 waits for the loop, so a
+	// promise also handed to a taking parameter is E3102 at its second argument, as
+	// `specs/async-promise-drop.md` pins.
+	function transferAsyncPromiseArgs(callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argDefaultSlots ParamCountArray, anchor Token) throws SourceParseError
+		if not self.signatures.declaresCallee(callee) 'anUndeclaredCallee'
+			return
+		end 'anUndeclaredCallee'
+
+		var promiseColumns = ParamCountArray.create()
+
+		for column in 0 upto args.count() as ParamCount 'eachArg'
+			if self.argumentHoldsAPromise(try args.get(column) otherwise panic("transferAsyncPromiseArgs: args.get OOB at {column}")) 'aPromiseTravels'
+				promiseColumns.push(column)
+			end 'aPromiseTravels'
+		end 'eachArg'
+
+		if promiseColumns.isEmpty() 'noPromiseTravels'
+			return
+		end 'noPromiseTravels'
+
+		let declarations = self.declarationFactsBoundBy(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+		var borrowedColumns = ParamCountArray.create()
+
+		for column in promiseColumns 'eachPromiseColumn'
+			let argValue = try args.get(column) otherwise panic("transferAsyncPromiseArgs: args.get OOB at {column}")
+			let taking = self.columnTakers(declarations, column: column, label: callArgumentLabel(argLabels, argIndex: column), argValue: argValue, constructorInstance: ConstructorInstance.none)
+
+			if not taking.everyDeclarationTakes() 'someDeclarationOnlyReadsIt'
+				borrowedColumns.push(column)
+				continue
+			end 'someDeclarationOnlyReadsIt'
+
+			if self.valueIsPromise(argValue) 'aPromiseItself'
+				try self.takePromiseIntoCallee(argValue, column: column, args: args, argRanges: argRanges, anchor: anchor)
+			end 'aPromiseItself'
+		end 'eachPromiseColumn'
+
+		let borrowed = try borrowedColumns.get(0) otherwise return
+		let range = try argRanges.get(borrowed) otherwise panic("transferAsyncPromiseArgs: argRanges.get OOB at {borrowed} — args and argRanges are pushed in lockstep")
+		let cure = AsyncPromiseBorrowCure if self.valueIsPromise(try args.get(borrowed) otherwise panic("transferAsyncPromiseArgs: args.get OOB at {borrowed}")) else AsyncPromiseHolderBorrowCure
+		throw SourceParseError.promiseCannotBeBorrowed(String.from(anchor.value), cure: cure, line: range.line, column: range.column)
+	end 'transferAsyncPromiseArgs'
+
+	function argumentHoldsAPromise(value ValueId) returns bool
+		if self.valueIsPromise(value) 'aPromise'
+			return true
+		end 'aPromise'
+
+		if not self.valueIsManagedHeap(value) 'aWordHoldsNone'
+			return false
+		end 'aWordHoldsNone'
+
+		return self.signatures.transferSubjectHoldsAPromise(transferSubjectOf(self.tagOf(value), nameId: self.valueNameId(value), typeNames: self.artifact.typeNames))
+	end 'argumentHoldsAPromise'
 
 	function handOffArgumentAnchor(argAnchors TokenIndexArray, index ElementIndex, fallback Token) returns Token
 		if index >= argAnchors.count() 'aSuppliedDefault'
@@ -95888,17 +95968,8 @@ export type Parser
 			end 'theCallersOwnCell'
 
 			let label = callArgumentLabel(argLabels, argIndex: column)
-			var takingSites = NameRoster.create()
-			var takers = ParamConsumeInfoArray.create()
-
-			for declaration in declarations 'eachDeclaration'
-				match self.declarationTakesArgument(declaration, column: column, label: label, argValue: argValue, constructorInstance: constructorInstance) 'takes'
-					borrows then continue
-					takes(info) then takers.push(info)
-				end 'takes'
-
-				takingSites.push(declaration.site.clone())
-			end 'eachDeclaration'
+			let taking = self.columnTakers(declarations, column: column, label: label, argValue: argValue, constructorInstance: constructorInstance)
+			let takers = taking.infos
 
 			if takers.isEmpty() 'everyDeclarationBorrowsIt'
 				continue
@@ -95907,7 +95978,7 @@ export type Parser
 			let first = try takers.get(0) otherwise panic("applyCallerConsume: takers.get(0) on a list just found non-empty")
 			let asPromise = self.takesAsAPromise(first, column: column, label: label, argValue: argValue)
 
-			if takingSites.count() == declarations.count() and self.everyTakerTakesAlike(takers, asPromise: asPromise, column: column, label: label, argValue: argValue) 'everyDeclarationTakesItAlike'
+			if taking.everyDeclarationTakes() and self.everyTakerTakesAlike(takers, asPromise: asPromise, column: column, label: label, argValue: argValue) 'everyDeclarationTakesItAlike'
 				try self.transferConsumedColumn(first, column: column, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance, consumedOwned: consumedOwned, spawned: spawned, callee: callee)
 				continue
 			end 'everyDeclarationTakesItAlike'
@@ -95916,11 +95987,27 @@ export type Parser
 				throw SourceParseError.unsupported("`spawn {String.from(callee)}(…)` — `{String.from(callee)}` is declared {declarations.count()} times and they do not all keep argument {column + 1} alike. A `spawn` MOVES every argument its factory keeps into the service, and which declaration this call binds is settled after this point, so there is no one move to make. Give the factories distinct names", line: anchor.line, column: anchor.column)
 			end 'aSpawnCannotMoveConditionally'
 
-			try self.transferTakenColumn(self.anyTakerTakesAsAPromise(takers, column: column, label: label, argValue: argValue), column: column, label: label, takingSites: takingSites, args: args, argRanges: argRanges, anchor: anchor, consumedOwned: consumedOwned, transfers: transfers, callResult: callResult)
+			try self.transferTakenColumn(self.anyTakerTakesAsAPromise(takers, column: column, label: label, argValue: argValue), column: column, label: label, takingSites: taking.sites, args: args, argRanges: argRanges, anchor: anchor, consumedOwned: consumedOwned, transfers: transfers, callResult: callResult)
 		end 'eachArg'
 
 		return transfers
 	end 'applyCallerConsume'
+
+	function columnTakers(declarations DeclarationFactsArray, column ParamCount, label ByteArray, argValue ValueId, constructorInstance ConstructorInstance) returns ColumnTakers
+		var takingSites = NameRoster.create()
+		var takers = ParamConsumeInfoArray.create()
+
+		for declaration in declarations 'eachDeclaration'
+			match self.declarationTakesArgument(declaration, column: column, label: label, argValue: argValue, constructorInstance: constructorInstance) 'takes'
+				borrows then continue
+				takes(info) then takers.push(info)
+			end 'takes'
+
+			takingSites.push(declaration.site.clone())
+		end 'eachDeclaration'
+
+		return ColumnTakers.create(takers, sites: takingSites, declarationCount: declarations.count())
+	end 'columnTakers'
 
 	function takesAsAPromise(info ParamConsumeInfo, column ParamCount, label ByteArray, argValue ValueId) returns bool
 		if not self.valueIsPromise(argValue) 'notAPromise'
@@ -95955,6 +96042,7 @@ export type Parser
 		let argValue = try args.get(column) otherwise panic("transferTakenColumn: args.get OOB at {column}")
 
 		if asPromise 'aPromise'
+			try self.requirePromiseNamedOnceInTheCall(argValue, column: column, args: args, argRanges: argRanges)
 			self.handPromiseOnHandoff(argValue, anchor: anchor, handoff: handoff)
 			transfers.push(PendingArgumentBinding.create(column, label: label, storage: DeferredStorage.none, transfer: DeferredTransfer.transferred(argValue), takingSites: takingSites, blame: WriteBlame.unblamed))
 			return
@@ -96052,8 +96140,7 @@ export type Parser
 		end 'theCallersOwnCell'
 
 		if self.valueIsPromise(argValue) and info.takesPromiseAt(position) 'aPromiseTheCalleeTakes'
-			try self.requireConsumedPromiseIsOwned(argValue, anchor: anchor, door: anchor.value)
-			self.consumePromiseThread(argValue, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
+			try self.takePromiseIntoCallee(argValue, column: column, args: args, argRanges: argRanges, anchor: anchor)
 		end 'aPromiseTheCalleeTakes'
 
 		if not self.argIsConsumedAt(info, position: position, constructorInstance: constructorInstance) and not self.isOpaqueOwnedFeedArg(info, position: position, argValue: argValue) 'borrowed'
@@ -96080,24 +96167,55 @@ export type Parser
 		throw serviceArgumentRefusal(blame, borrowed: true, sourceClause: self.transferSourceClause(argValue), at: range)
 	end 'requireSpawnedArgumentIsOneThisFrameOwns'
 
-	// The declared name of the owning binding a consumed argument value came from — the source name the
-	// cross-argument double-consume diagnostic (`transferConsumedArgs`' E3102) reports. A value passed at TWO
-	// argument positions is always a bare local referenced twice (a temporary is minted by ONE expression and
-	// cannot appear at two positions), so its owning binding — live, or already poisoned by the first position's
-	// move — is always present, and the poison leaves its `boundValue` unchanged.
-	function consumedArgName(value ValueId) returns ByteArray
-		for binding in self.bodyState.ownedBindings 'each'
-			if binding.boundValue == value 'found'
-				return binding.name
-			end 'found'
-		end 'each'
+	// Read off the source, not off the binding that holds the value: an alias and its original share one
+	// value, and E3102 names the one written at this argument (`specs/async-promise-drop.md` pins both orders).
+	function writtenArgumentName(range SourceRange) returns ByteArray
+		var index = self.pos
 
-		panic("consumedArgName: v{value} consumed at two argument positions has no owning binding — a value at two positions is a bare local referenced twice, which is always an owned binding")
-	end 'consumedArgName'
+		while index > 0 and (index >= self.tokens.count() or not tokenStartsAt(self.tokenAt(index), range: range)) 'backToTheArgument'
+			index = index - 1
+		end 'backToTheArgument'
+
+		if not tokenStartsAt(self.tokenAt(index), range: range) 'noTokenThere'
+			panic("writtenArgumentName: no token of this file stands at {range.line}:{range.column} — an argument range is the range of its first token")
+		end 'noTokenThere'
+
+		if self.kindAt(index + 1) == TokenKind.colon 'aLabel'
+			index = index + 2
+		end 'aLabel'
+
+		while self.kindAt(index) == TokenKind.leftParen 'aParenthesizedValue'
+			index = index + 1
+		end 'aParenthesizedValue'
+
+		if not tokenCanBeAName(self.tokenAt(index)) 'notABinding'
+			panic("writtenArgumentName: the argument at {range.line}:{range.column} does not start with a name — a value handed over at two argument positions is a binding written twice")
+		end 'notABinding'
+
+		return self.tokenAt(index).value
+	end 'writtenArgumentName'
+
+	function requirePromiseNamedOnceInTheCall(promise ValueId, column ParamCount, args ValueIdArray, argRanges SourceRangeArray) throws SourceParseError
+		for other in 0 upto args.count() as ParamCount 'eachArgument'
+			if other == column or (try args.get(other) otherwise panic("requirePromiseNamedOnceInTheCall: args.get OOB at {other}")) != promise 'anotherValue'
+				continue
+			end 'anotherValue'
+
+			let later = other if other > column else column
+			let range = try argRanges.get(later) otherwise panic("requirePromiseNamedOnceInTheCall: argRanges.get OOB at {later} — args and argRanges are pushed in lockstep")
+			throw SourceParseError.useAfterMovePassedTwice(String.from(self.writtenArgumentName(range)), line: range.line, column: range.column)
+		end 'eachArgument'
+	end 'requirePromiseNamedOnceInTheCall'
+
+	function takePromiseIntoCallee(promise ValueId, column ParamCount, args ValueIdArray, argRanges SourceRangeArray, anchor Token) throws SourceParseError
+		try self.requireConsumedPromiseIsOwned(promise, anchor: anchor, door: anchor.value)
+		try self.requirePromiseNamedOnceInTheCall(promise, column: column, args: args, argRanges: argRanges)
+		self.consumePromiseThread(promise, range: SourceRange.ofToken(anchor), reclaimedBy: PromiseConsume.notConsumed)
+	end 'takePromiseIntoCallee'
 
 	function requireConsumedArgumentStillOwned(argValue ValueId, consumedOwned ValueIdArray, range SourceRange) throws SourceParseError
 		if self.repeatedOwningDestinationWouldDoubleFree(argValue) and self.isRepeatedOwningMove(consumedOwned, value: argValue) 'doubleConsume'
-			throw SourceParseError.useAfterMove(String.from(self.consumedArgName(argValue)), line: range.line, column: range.column)
+			throw SourceParseError.useAfterMovePassedTwice(String.from(self.writtenArgumentName(range)), line: range.line, column: range.column)
 		end 'doubleConsume'
 
 		try self.requireNotMovedSinceItWasRead(argValue, range: range)

@@ -43029,10 +43029,172 @@ export type ProgramSignatures
 		end 'subject'
 	end 'transferWalkOf'
 
+	function instanceGraphHoldsAPromise(id GenericInstanceId) returns bool
+		return self.typeReachesAPromise(MaxonType.genericInstance(id), visited: ClonerSet.create())
+	end 'instanceGraphHoldsAPromise'
+
+	function aggregateGraphHoldsAPromise(name ByteArray) returns bool
+		return self.aggregateReachesAPromise(name, visited: ClonerSet.create())
+	end 'aggregateGraphHoldsAPromise'
+
+	module function transferSubjectHoldsAPromise(subject TransferSubject) returns bool
+		return match subject 'subject'
+			instance(id) gives self.instanceGraphHoldsAPromise(id)
+			aggregate(name) gives self.aggregateGraphHoldsAPromise(name)
+			byteRecord or
+			existential or
+			opaqueParameter or
+			nameless or
+			functionValue gives false
+		end 'subject'
+	end 'transferSubjectHoldsAPromise'
+
+	function typeReachesAPromise(type MaxonType, visited ClonerSet) returns bool
+		if self.typeIsAGreenThreadHandle(type, from: self.typeNames) 'aPromise'
+			return true
+		end 'aPromise'
+
+		if not self.typeOwesDrop(type, from: self.typeNames) 'ownsNothing'
+			return false
+		end 'ownsNothing'
+
+		let tag = maxonTypeTag(type)
+
+		if tagIsByteRecord(tag) 'noPromiseInBytes'
+			return false
+		end 'noPromiseInBytes'
+
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return self.instanceReachesAPromise(genericInstanceIdOf(type), visited: visited)
+		end 'instance'
+
+		if tag == ValueTypeTag.interfaceRef 'anExistential'
+			return self.anyConformerReachesAPromise(self.nameOfId(typeNameIdOf(type)), visited: visited)
+		end 'anExistential'
+
+		if not tagMayNameAggregate(tag) 'notAnAggregate'
+			return false
+		end 'notAnAggregate'
+
+		let name = self.denotedSlotAggregateName(type)
+
+		if self.isFunctionAliasInAnyFile(name) 'aFunctionAlias'
+			return false
+		end 'aFunctionAlias'
+
+		if self.isGenericAliasInAnyFile(name) 'genericAlias'
+			let live = try self.liveGenericAliasInstance(name) otherwise return false
+
+			if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyInFlight'
+				return false
+			end 'alreadyInFlight'
+
+			return self.instanceReachesAPromise(live, visited: visited)
+		end 'genericAlias'
+
+		return self.aggregateReachesAPromise(name, visited: visited)
+	end 'typeReachesAPromise'
+
+	function aggregateReachesAPromise(name ByteArray, visited ClonerSet) returns bool
+		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
+			managedFile or
+			managedDirectory or
+			managedSocket or
+			managedPages or
+			managedHandle or
+			serviceHandle then return false
+
+			userDeclared then break
+		end 'compilerOwned'
+
+		if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyInFlight'
+			return false
+		end 'alreadyInFlight'
+
+		if self.containsStructInAnyFile(name) 'struct'
+			return self.structFieldsReachAPromise(name, visited: visited)
+		end 'struct'
+
+		match self.enumInAnyFile(name) 'union'
+			declared(layout) then return self.unionPayloadsReachAPromise(layout, visited: visited)
+			undeclared then return false
+		end 'union'
+	end 'aggregateReachesAPromise'
+
+	function instanceReachesAPromise(id GenericInstanceId, visited ClonerSet) returns bool
+		if self.instanceIsPromiseHandle(id) 'aPromise'
+			return true
+		end 'aPromise'
+
+		if self.isElementBearingRecordInstance(id) 'anElementRecord'
+			return self.typeReachesAPromise(self.containerElementType(id), visited: visited)
+		end 'anElementRecord'
+
+		if not self.genericInstanceHasBaseLayout(id) 'noFieldsToRead'
+			return false
+		end 'noFieldsToRead'
+
+		if not self.cloneWalkMayDescendInto(self.mangleGenericInstance(id), visited: visited) 'alreadyInFlight'
+			return false
+		end 'alreadyInFlight'
+
+		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+			if self.typeReachesAPromise(self.substituteInstanceFieldType(id, index: i), visited: visited) 'aPromiseField'
+				return true
+			end 'aPromiseField'
+		end 'eachField'
+
+		return false
+	end 'instanceReachesAPromise'
+
+	function structFieldsReachAPromise(structName ByteArray, visited ClonerSet) returns bool
+		let layout = self.structLayoutOf(structName)
+
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.structFieldsReachAPromise: fieldTypes.get OOB at {i}")
+
+			if self.typeReachesAPromise(fieldType, visited: visited) 'aPromiseField'
+				return true
+			end 'aPromiseField'
+		end 'eachField'
+
+		return false
+	end 'structFieldsReachAPromise'
+
+	function unionPayloadsReachAPromise(layout EnumLayout, visited ClonerSet) returns bool
+		for ci in 0 upto layout.caseCount() 'eachCase'
+			let payloads = layout.payloadsAt(ci)
+
+			for fi in 0 upto payloads.count() 'eachPayload'
+				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.unionPayloadsReachAPromise: payloadsAt count disagrees with get at {fi}")
+
+				if self.typeReachesAPromise(field.declaredType, visited: visited) 'aPromisePayload'
+					return true
+				end 'aPromisePayload'
+			end 'eachPayload'
+		end 'eachCase'
+
+		return false
+	end 'unionPayloadsReachAPromise'
+
+	function anyConformerReachesAPromise(interfaceName ByteArray, visited ClonerSet) returns bool
+		if not self.cloneWalkMayDescendInto(interfaceName, visited: visited) 'alreadyInFlight'
+			return false
+		end 'alreadyInFlight'
+
+		for conformer in self.cloneConformerRosterOf(interfaceName) 'eachConformer'
+			if self.aggregateReachesAPromise(conformer, visited: visited) 'aPromiseConformer'
+				return true
+			end 'aPromiseConformer'
+		end 'eachConformer'
+
+		return false
+	end 'anyConformerReachesAPromise'
+
 	function instanceTransferWalk(id GenericInstanceId, action CascadeAction) returns TransferWalk
 		let display = String.from(self.instanceDisplayName(id))
 
-		if action == CascadeAction.shareWalk and self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone) and not self.instanceGraphSupportsDeepClone(id, visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'aSharedPromise'
+		if action == CascadeAction.shareWalk and self.instanceGraphHoldsAPromise(id) 'aSharedPromise'
 			return TransferWalk.refused("a `{display}` whose graph reaches {PromiseSharedNoun}")
 		end 'aSharedPromise'
 
@@ -43064,7 +43226,7 @@ export type ProgramSignatures
 			return TransferWalk.closed
 		end 'aWordRecord'
 
-		if action == CascadeAction.shareWalk and self.aggregateNameSupportsDeepClone(name, visited: ClonerSet.create(), purpose: GraphCascadePurpose.deepClone) and not self.aggregateNameSupportsDeepClone(name, visited: ClonerSet.create(), purpose: GraphCascadePurpose.sourceClone) 'aSharedPromise'
+		if action == CascadeAction.shareWalk and self.aggregateGraphHoldsAPromise(name) 'aSharedPromise'
 			return TransferWalk.refused("a `{String.from(name)}` whose graph reaches {PromiseSharedNoun}")
 		end 'aSharedPromise'
 

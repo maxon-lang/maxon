@@ -194,7 +194,7 @@ end 'main'
 | `var b = a`, `a` read-only (a `let` included) | **E3078**; `a.clone()` is the mutable copy |
 | an ordinary call argument | shared with the callee for the call, counted where needed; a parameter the callee reassigns gets its own storage |
 | an argument the callee keeps in a `let` field | must be read-only, a value type, or moved (a `var` at its last use) |
-| an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns |
+| an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
 | a [closure](/docs/language/functions/#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
 | a [service](/docs/language/async/#services--spawn) message or `spawn` factory argument | a mutable value moves to the service; a read-only value the sender does not own is shared |
 | `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**), and every reader sees it read-only |
@@ -204,7 +204,8 @@ end 'main'
 Reads are counted, so two arguments that reach the same storage are safe in most calls: `s.append(s)` is
 legal. The one refused overlap is a **by-reference parameter** whose storage another argument of the same call
 also reaches. A by-reference parameter is one the callee reassigns. The refusal is **E3186**; pass a `clone()` as
-one of the two.
+one of the two. A promise, or a value of an opaque type parameter, passed at two arguments whose parameters
+take it moves at the first, so the second is **E3102**.
 
 ### Explicit Cloning
 

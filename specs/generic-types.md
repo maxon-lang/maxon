@@ -4267,3 +4267,37 @@ end 'main'
 ```maxoncstderr
 error E3184: <fragment>:15:21: field 'next' of generic type 'A' is declared 'A.Next', which holds 'A' again over a type built from its own type parameters: instantiating it would nest without end. Declare the field over the type's own parameters, or remove the recursion
 ```
+
+<!-- test: error.generic-value-passed-at-two-consuming-arguments -->
+A value of an opaque type parameter handed to two parameters that each keep it would be released twice, so the
+second argument is refused: it names a value the first already gave away.
+```maxon
+type DPair uses T
+	export var a as T
+	export var b as T
+
+	static function create(a T, b T) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+
+	static function echo(v T) returns T
+		return v
+	end 'echo'
+
+	static function twice(v T) returns Self
+		let w = DPair.echo(v)
+		return DPair.create(w, b: w)
+	end 'twice'
+end 'DPair'
+
+typealias StrDPair = DPair with String
+
+function main() returns ExitCode
+	let p = StrDPair.twice("{7}")
+	print("{p.a}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:26: use of moved value 'w': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
+```

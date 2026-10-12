@@ -50,6 +50,14 @@ waits in `__gt_subp_wait_collect`, which drains the child's pipes while it waits
 child out (the program lives as long as the child does), so it exercises another road than the one these cases
 pin.
 
+A promise handed to a call moves into a parameter the callee takes (one it awaits, cancels, stores or returns)
+and stays with the caller at a parameter that only reads it; where the overloads a call may bind differ, the
+overload it binds decides. An `async` call moves a promise only into a parameter every overload takes: the
+coroutine can outlive the frame that started it, so a promise, or a value whose type holds one, at a parameter
+that only reads it is E3141. A coroutine dropped before it runs reclaims the promise it was handed. One promise
+at two arguments of one call where a parameter takes it is E3102, reported at the second argument and naming
+the binding written there. `p.isComplete()` on a read of a slot another read already emptied aborts with 118.
+
 ## Tests
 
 <!-- test: async-promise-drop.never-ran-drop-no-leak -->
@@ -2263,4 +2271,657 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: async-promise-drop.an-async-callee-awaits-the-promise-it-is-handed -->
+A promise handed to an `async` call is handed exactly as an ordinary call hands it: the coroutine's `finish`
+awaits `q`, so it owns the thread and the caller has stopped naming it. The caller's scope exit must not drop
+the thread the coroutine reclaimed, and the coroutine must not leave it for nobody to reclaim.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function finish(q IntPromise) returns Integer
+	return (await q) + 1
+end 'finish'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let r = async finish(p)
+	print("{await r}\n")
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.an-async-callee-dropped-before-it-runs-releases-the-promise-it-was-handed -->
+<!-- procs: 1 -->
+The coroutine owns the thread it was handed, so a coroutine that is dropped before it ever runs must release
+that thread itself: nobody else names it. On one processor `main` never yields, so neither thread starts.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function finish(q IntPromise) returns Integer
+	return (await q) + 1
+end 'finish'
+
+function main() returns ExitCode
+	let p = async work(1)
+	_ = async finish(p)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.error.a-promise-handed-to-peeking-parameters-of-an-async-call -->
+A coroutine can still be running after the frame that started it has ended, and that frame reclaims the threads
+it owns when it ends. A promise the coroutine only reads would then name a reclaimed thread, so an `async` call
+hands a promise only to a parameter the callee takes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function watch(p IntPromise, q IntPromise, n Integer) returns Integer
+	if p.isComplete() or q.isComplete() 'finished'
+		Scheduler.yield()
+	end 'finished'
+
+	return n
+end 'watch'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let q = async work(2)
+	let r = async watch(p, q: q, n: 5)
+	print("{await r} {await p}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:21:22: a promise cannot be borrowed through 'watch': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. A coroutine can still be running after the frame that started it has ended, and by then that frame has reclaimed the thread, so a coroutine that only reads this promise would read a reclaimed thread. Pass the promise to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead
+```
+
+<!-- test: async-promise-drop.error.one-promise-handed-to-two-awaiting-parameters-of-an-async-call -->
+Both parameters would reclaim the one thread, so exactly one of them may be handed it. The second argument
+names a promise the first already gave away, which is the ordinary use-after-move.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function both(p IntPromise, q IntPromise) returns Integer
+	return (await q) + (await p)
+end 'both'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let r = async both(p, q: p)
+	print("{await r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:24: use of moved value 'p': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
+```
+
+<!-- test: async-promise-drop.error.one-promise-handed-to-two-awaiting-parameters-of-a-call -->
+The ordinary call refuses the same program for the same reason: the callee would await the one thread twice.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function both(p IntPromise, q IntPromise) returns Integer
+	return (await q) + (await p)
+end 'both'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let r = both(p, q: p)
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:16:18: use of moved value 'p': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
+```
+
+<!-- test: async-promise-drop.error.one-promise-handed-to-an-awaiting-and-a-peeking-parameter-of-an-async-call -->
+The awaiting parameter reclaims the thread the peeking parameter still names, so a read through the second
+name can land on a reclaimed thread. The one promise may be handed to one parameter that takes it, and to no other.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function finish(p IntPromise, q IntPromise) returns Integer
+	let ran = 1 if p.isComplete() else 0
+	return (await q) + ran
+end 'finish'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let r = async finish(p, q: p)
+	print("{await r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:17:26: use of moved value 'p': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
+```
+
+<!-- test: async-promise-drop.error.one-promise-read-out-of-an-array-handed-to-two-awaiting-parameters-of-an-async-call -->
+A promise read out of a container is bound to a name like any other, and handing that name to two parameters
+that take it is refused at the second argument, naming the binding.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function both(p IntPromise, q IntPromise) returns Integer
+	return (await q) + (await p)
+end 'both'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async work(1))
+	let p = try a.get(0) otherwise panic("one")
+	let r = async both(p, q: p)
+	print("{await r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:24: use of moved value 'p': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
+```
+
+<!-- test: async-promise-drop.error.a-coroutine-that-reads-a-promise-can-outlive-the-frame-that-owns-it -->
+`launch` ends while `watch` is still running, and `main` then awaits `p`, which reclaims the thread — and a
+later spawn reuses its record. `watch` would read `p` through a name for a thread that is no longer `p`'s, and
+answer for another coroutine's thread.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function slow(n Integer) returns Integer
+	for _ in 0 upto 20 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	return n
+end 'slow'
+
+function watch(p IntPromise) returns Integer
+	for _ in 0 upto 5 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	let done = 1 if p.isComplete() else 0
+	print("watch saw {done}\n")
+	return done
+end 'watch'
+
+function launch(p IntPromise) returns bool
+	let r = async watch(p)
+	Scheduler.yield()
+	return r.isComplete()
+end 'launch'
+
+function main() returns ExitCode
+	let p = async work(1)
+	_ = launch(p)
+	let v = await p
+	let q = async slow(7)
+	print("{v} {await q}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:29:22: a promise cannot be borrowed through 'watch': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. A coroutine can still be running after the frame that started it has ended, and by then that frame has reclaimed the thread, so a coroutine that only reads this promise would read a reclaimed thread. Pass the promise to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead
+```
+
+<!-- test: async-promise-drop.error.a-promise-handed-to-overloads-that-disagree-about-taking-it-by-an-async-call -->
+Which overload an `async` call binds is settled after the arguments are handed over, so the promise cannot be
+moved into a coroutine that may or may not own it. A promise is handed to an `async` call only when every
+overload the call may bind takes it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function relay(p IntPromise, n Integer) returns Integer
+	return (await p) + n
+end 'relay'
+
+function relay(p IntPromise, n bool) returns Integer
+	if n and p.isComplete() 'done'
+		Scheduler.yield()
+	end 'done'
+
+	return 7
+end 'relay'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let r = async relay(p, n: 1)
+	print("{await r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:24:22: a promise cannot be borrowed through 'relay': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. A coroutine can still be running after the frame that started it has ended, and by then that frame has reclaimed the thread, so a coroutine that only reads this promise would read a reclaimed thread. Pass the promise to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead
+```
+
+<!-- test: async-promise-drop.error.one-promise-handed-to-overloads-that-disagree-about-taking-it-twice -->
+Overloads that disagree about taking a promise settle the hand-over after the call is parsed; the one promise
+at two arguments is still refused at the second.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function both(p IntPromise, q IntPromise, n Integer) returns Integer
+	return (await q) + (await p) + n
+end 'both'
+
+function both(p IntPromise, q IntPromise, n bool) returns Integer
+	if n and p.isComplete() and q.isComplete() 'done'
+		Scheduler.yield()
+	end 'done'
+
+	return 7
+end 'both'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let r = both(p, q: p, n: 1)
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:24:18: use of moved value 'p': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
+```
+
+<!-- test: async-promise-drop.a-peek-of-an-emptied-slot-aborts-instead-of-reading-null -->
+Another read consumed the slot, so this read names no thread. A peek is not a consume, so it never reaches the
+vacate that aborts a consume of such a read: it aborts with **118** itself rather than loading through a null
+handle.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async work(1))
+	let first = try a.get(0) otherwise panic("one")
+	let v = await first
+	let i = a.count() - 1
+	let again = try a.get(i) otherwise panic("two")
+	let done = again.isComplete()
+	print("{v} {done}\n")
+	return 0
+end 'main'
+```
+```exitcode
+118
+```
+```stderr
+fatal error: runtime abort 118 (promiseSlotConsumedTwice)
+```
+
+<!-- test: async-promise-drop.error.a-record-holding-a-promise-handed-to-a-peeking-coroutine -->
+A record that holds a promise is a promise's holder: the coroutine reads the field after the caller has
+awaited it out of the record, and the slot is empty.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+type Holder
+	public var p as IntPromise
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p}
+	end 'of'
+end 'Holder'
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function slow(n Integer) returns Integer
+	for _ in 0 upto 20 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	return n
+end 'slow'
+
+function watch(h Holder) returns Integer
+	for _ in 0 upto 5 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	let done = 1 if h.p.isComplete() else 0
+	print("watch saw {done}\n")
+	return done
+end 'watch'
+
+function launch(h Holder) returns bool
+	let r = async watch(h)
+	Scheduler.yield()
+	return r.isComplete()
+end 'launch'
+
+function main() returns ExitCode
+	var h = Holder.of(async work(1))
+	_ = launch(h)
+	let v = await h.p
+	let q = async slow(7)
+	print("{v} {await q}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:37:22: a promise cannot be borrowed through 'watch': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. This argument holds a promise, and a coroutine can still be running after the frame that started it has ended — by then the promise may have been awaited out of what holds it, or its thread reclaimed, and a coroutine that only reads it would read a thread that is gone. Pass the promise itself to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead
+```
+
+<!-- test: async-promise-drop.error.an-array-of-promises-handed-to-a-peeking-coroutine -->
+The same hazard through an array: the caller awaits the element out of its slot while the coroutine still
+holds the array.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function slow(n Integer) returns Integer
+	for _ in 0 upto 20 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	return n
+end 'slow'
+
+function watch(a IntPromiseArray) returns Integer
+	for _ in 0 upto 5 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	let p = try a.get(0) otherwise panic("none")
+	let done = 1 if p.isComplete() else 0
+	print("watch saw {done}\n")
+	return done
+end 'watch'
+
+function launch(a IntPromiseArray) returns bool
+	let r = async watch(a)
+	Scheduler.yield()
+	return r.isComplete()
+end 'launch'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async work(1))
+	_ = launch(a)
+	let p = try a.get(0) otherwise panic("none")
+	let v = await p
+	let q = async slow(7)
+	print("{v} {await q}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:31:22: a promise cannot be borrowed through 'watch': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. This argument holds a promise, and a coroutine can still be running after the frame that started it has ended — by then the promise may have been awaited out of what holds it, or its thread reclaimed, and a coroutine that only reads it would read a thread that is gone. Pass the promise itself to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead
+```
+
+<!-- test: async-promise-drop.error.an-undeclared-async-callee-is-undefined-not-a-borrowed-promise -->
+<!-- unsupported-targets: wasm32-wasi -->
+A callee nothing declares has no parameters to take a promise, so the call is refused for what it is. The
+coroutine must yield to be spawned at all, and wasm32-wasi refuses the yield first (E3104).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let r = async nosuch(p)
+	print("{await r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:11:16: call to undefined function 'nosuch'
+```
+
+<!-- test: async-promise-drop.error.the-alias-written-at-the-second-argument-is-the-name-reported -->
+The refusal names the binding the author wrote at the argument it points at, not another name for the same
+promise.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function both(p IntPromise, q IntPromise) returns Integer
+	return (await q) + (await p)
+end 'both'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async work(1))
+	let x = try a.get(0) otherwise panic("one")
+	let z = x
+	let r = async both(x, q: z)
+	print("{await r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:20:24: use of moved value 'z': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
+```
+
+<!-- test: async-promise-drop.error.the-original-written-at-the-second-argument-is-the-name-reported -->
+The same promise under the other order: the second argument spells the original name, and that is the name
+reported.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function both(p IntPromise, q IntPromise) returns Integer
+	return (await q) + (await p)
+end 'both'
+
+function main() returns ExitCode
+	var a = IntPromiseArray.create()
+	a.push(async work(1))
+	let x = try a.get(0) otherwise panic("one")
+	let z = x
+	let r = async both(z, q: x)
+	print("{await r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:20:24: use of moved value 'x': it is passed at two arguments of this call, and handing it to a parameter that takes it moves it
+```
+
+<!-- test: async-promise-drop.an-async-call-moves-a-promise-into-overloads-that-all-take-it -->
+Every overload the call may bind awaits the promise, so the coroutine owns it whichever one is chosen.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function relay(p IntPromise, n Integer) returns Integer
+	return (await p) + n
+end 'relay'
+
+function relay(p IntPromise, n bool) returns Integer
+	if n 'done'
+		Scheduler.yield()
+	end 'done'
+
+	return await p
+end 'relay'
+
+function main() returns ExitCode
+	let p = async work(1)
+	let r = async relay(p, n: 1)
+	let v = await r
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+```exitcode
+0
+```
+
+<!-- test: async-promise-drop.error.a-record-holding-a-promise-and-an-os-handle-handed-to-a-peeking-coroutine -->
+Whether a graph reaches a promise does not depend on what else it holds: the record also holds a union whose
+payload is a socket, which no copy can duplicate, and the coroutine still reads a promise the caller awaits
+out of the record.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+union Link
+	none
+	open(client TcpClient)
+end 'Link'
+
+type Holder
+	public var p as IntPromise
+	public var link as Link
+
+	static function of(p IntPromise) returns Holder
+		return Holder{p: p, link: Link.none}
+	end 'of'
+end 'Holder'
+
+function work(n Integer) returns Integer
+	Scheduler.yield()
+	return n + 1
+end 'work'
+
+function slow(n Integer) returns Integer
+	for _ in 0 upto 20 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	return n
+end 'slow'
+
+function watch(h Holder) returns Integer
+	for _ in 0 upto 5 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	let done = 1 if h.p.isComplete() else 0
+	print("watch saw {done}\n")
+	return done
+end 'watch'
+
+function launch(h Holder) returns bool
+	let r = async watch(h)
+	Scheduler.yield()
+	return r.isComplete()
+end 'launch'
+
+function main() returns ExitCode
+	var h = Holder.of(async work(1))
+	_ = launch(h)
+	let v = await h.p
+	let q = async slow(7)
+	print("{v} {await q}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3141: <fragment>:43:22: a promise cannot be borrowed through 'watch': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. This argument holds a promise, and a coroutine can still be running after the frame that started it has ended — by then the promise may have been awaited out of what holds it, or its thread reclaimed, and a coroutine that only reads it would read a thread that is gone. Pass the promise itself to a parameter the callee takes (`await`, `.cancel()`, a store or a `return` of it), or pass the result instead
 ```

@@ -375,6 +375,13 @@ function asyncReleasePlanFor(target AsyncSpawnTarget, funcSignatures FuncSignatu
 			continue
 		end 'theCoroutinesOwnCell'
 
+		// Ahead of `asyncSlotsAt`, whose `typeIsManaged` answers no for a promise: a coroutine dropped before it
+		// runs would otherwise leave the thread it was handed for nobody to reclaim.
+		if consume.takesPromiseAt(i) and signatures.typeIsAGreenThreadHandle(paramType, from: typeNames) 'aPromiseTheCalleeTakes'
+			consumedArgSlots.push(AsyncManagedSlot.create(offset, drop: FieldDropKind.direct(managedFieldDropCallee(signatures, typeNames: typeNames, fieldType: paramType))))
+			continue
+		end 'aPromiseTheCalleeTakes'
+
 		let slots = asyncSlotsAt(offset, signatures: signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName)
 
 		if consume.isConsumedAt(i) 'theCalleeTakesIt'

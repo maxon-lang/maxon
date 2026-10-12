@@ -2091,8 +2091,9 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		call(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges)
 
 		// ⚠ An `async` spawn carries the same edge a direct call does. A managed argument is legal
-		// (`requireAsyncScalarParams` refuses a non-integer channel and a consumed parameter, not a
-		// managed one) and the spawn hands the coroutine a reference to it, so `async g(p)` where `g`
+		// (`requireAsyncScalarParams` refuses a parameter that cannot ride the integer channel — a
+		// `float`, an interface value or an opaque type parameter — not a managed one) and the spawn
+		// hands the coroutine a reference to it, so `async g(p)` where `g`
 		// writes its parameter writes the caller's own, before the await or after it. Without the edge,
 		// `relay(q)` spawning a writing `replace(q)` would read as writing nothing, and E3159 would admit
 		// a `let` handed to `relay`.

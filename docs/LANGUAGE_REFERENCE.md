@@ -4505,8 +4505,14 @@ not 80.
 - **The arguments are shared, exactly as an ordinary call shares them.** The caller and its coroutines are
   one strand of one green thread, so the coroutine takes a plain count of its own on each managed argument
   and the caller's binding stays usable: a `var` handed to `async` is read and written after the call, a
-  `let` is shared read-only, and one binding may be handed twice in one call. A scalar is copied. Passing a
-  handle is how a socket or a server is shared with a coroutine.
+  `let` is shared read-only, and one binding other than a promise may be handed twice in one call. A scalar
+  is copied. Passing a handle is how a socket or a server is shared with a coroutine.
+- **A promise argument moves.** A coroutine can still be running after the frame that started it has ended,
+  so an `async` call hands a promise, or a value whose type holds one, only to a parameter that every
+  overload the call may bind takes — one the callee awaits, cancels, stores or returns. The coroutine then
+  owns the thread, and the caller's binding is spent. A parameter that only reads it is **E3141**: pass the
+  promise to one that takes it, or await it and pass the result. One promise at two arguments of one call is
+  **E3102**.
 - A parameter the callee reassigns gets storage the coroutine owns, and nothing is written back to the
   caller. A coroutine that writes a parameter is refused a [read-only](#read-only-values) argument
   (**E3159**), as an ordinary call is.
@@ -4616,22 +4622,24 @@ alive to the end of the enclosing scope, so the promise outlives the expression 
 or a union case, and passing it to a parameter the callee takes all consume it: each empties the slot the
 promise was read out of, and hands the thread either back to the runtime or to its new owner. A callee takes
 a promise parameter it awaits, cancels, stores or returns; a promise passed to a parameter the callee only
-reads stays with the caller. A store into a promise field also releases the thread that field was holding,
-exactly once. Three refusals follow:
+reads stays with the caller. Where the overloads a call may bind differ about taking it, the overload the
+call binds decides. An `async` call is stricter (see [Starting a Coroutine](#starting-a-coroutine)): every
+overload must take the promise. A store into a promise field also releases the thread that field was
+holding, exactly once. Three refusals follow:
 
 - **E3141** — the slot a read came out of has already been spent, at any of those doors. Two reads of one slot
   hold one promise, so only one of them may be consumed; where the compiler cannot see that both name one slot,
-  the program aborts at run time with exit code **118** instead.
-- **E3102** — a promise already moved into storage is used again afterwards.
+  the program aborts at run time with exit code **118** instead, and so does `p.isComplete()` on such a read.
+  An `async` call that hands a promise to a parameter the callee only reads is **E3141** too.
+- **E3102** — a promise already moved into storage is used again afterwards, or one promise is passed at two
+  arguments of one call where a parameter takes it.
 - **E2015** — a promise read outside a loop is given away inside it, or inside a `while` condition. Read it
   inside the loop instead.
 
 **Returning a promise.** A function may return a promise it owns — a spawn, a bound spawn, one taken with
 `pop`/`remove`, or a promise parameter — and the caller then owns it, to await, cancel or drop. A `return` of
 a promise no frame owns is **E3141**: one read out of a container that still holds it, a merge of two
-promises (`p if c else q`), or a second name for a parameter. Because the whole program's ownership facts are
-recorded per function name, an overload set with a promise parameter is refused (**E2015**) when one of its
-members takes ownership of a parameter or returns one; give those overloads distinct names.
+promises (`p if c else q`), or a second name for a parameter.
 
 ### Cancellation and Dropped Promises
 
@@ -5352,7 +5360,7 @@ end 'main'
 | `var b = a`, `a` read-only (a `let` included) | **E3078**; `a.clone()` is the mutable copy |
 | an ordinary call argument | shared with the callee for the call, counted where needed; a parameter the callee reassigns gets its own storage |
 | an argument the callee keeps in a `let` field | must be read-only, a value type, or moved (a `var` at its last use) |
-| an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns |
+| an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
 | a [closure](#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
 | a [service](#services--spawn) message or `spawn` factory argument | a mutable value moves to the service; a read-only value the sender does not own is shared |
 | `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**), and every reader sees it read-only |
@@ -5362,7 +5370,8 @@ end 'main'
 Reads are counted, so two arguments that reach the same storage are safe in most calls: `s.append(s)` is
 legal. The one refused overlap is a **by-reference parameter** whose storage another argument of the same call
 also reaches. A by-reference parameter is one the callee reassigns. The refusal is **E3186**; pass a `clone()` as
-one of the two.
+one of the two. A promise, or a value of an opaque type parameter, passed at two arguments whose parameters
+take it moves at the first, so the second is **E3102**.
 
 ### Explicit Cloning
 

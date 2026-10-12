@@ -1285,7 +1285,7 @@ let GtReclaimName = b"__gt_reclaim"
 // ACCUSES on it) ask it about the same slot and get the same answer.
 //
 // ⚠ **AND IT IS TARGET-NEUTRAL, so it deliberately names no `HostFacility` in `calleeHostFacility`.** A
-// load, a compare and a return; what restricts a peeking program elsewhere is its THUNK, and
+// null test, a load, a compare and a return; what restricts a peeking program elsewhere is its THUNK, and
 // `specs/promise-peek.md:rejected-on-wasm` pins that attribution.
 export let GtIsCompleteName = b"__gt_is_complete"
 
@@ -5079,8 +5079,8 @@ end 'buildGtPromiseFieldVacate'
 // floor of `__Builtins.gtIsComplete(promise.inner)`. See `GtIsCompleteName` for what it is for, why it must
 // have no side effect, and why it is target-neutral.
 //
-// **THE WHOLE BODY IS THE PREDICATE `emitGtStatusEquals` NAMES**, which is the point: the same comparison
-// the await and drop paths make, reachable from a program. It dereferences the handle and nothing else — no drive, no queue walk, no status write — so it composes with
+// **THE BODY IS THE PREDICATE `emitGtStatusEquals` NAMES**, which is the point: the same comparison
+// the await and drop paths make, reachable from a program. It tests and dereferences the handle and nothing else — no drive, no queue walk, no status write — so it composes with
 // `await`'s linearity for free (a peek is not an await, so E3100 counts none of them) and a caller may ask
 // it in a scan loop as often as it likes.
 //
@@ -5089,18 +5089,29 @@ end 'buildGtPromiseFieldVacate'
 // `__proc_` split was worth making because the cheap entry's neighbour drags in `usesHeap` AND
 // `usesManagedMemory` transitively, i.e. two whole runtimes. Here the family is already installed as ONE
 // closure (`installGtRuntime` builds `__gt_sleep`, `__gt_process_run`, `__gt_io_park` and the timer/proc
-// stores for every async program, each far larger than this), and this entry is four ops that reference
-// nothing. A bit for it would be a mechanism whose whole yield is a few bytes.
+// stores for every async program, each far larger than this), and this entry is a few ops that reference
+// nothing but the abort. A bit for it would be a mechanism whose whole yield is a few bytes.
+//
+// A handle of 0 is a read of a slot another read already emptied. A peek never reaches the vacate that
+// aborts a consume of such a read, so it aborts with 118 here rather than loading through null.
 function buildGtIsComplete(module StdModule)
 	var func = IrFunction.createFromStd(GtIsCompleteName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var vacated = module.addBlock(func, label: b"vacated", heat: BlockHeat.cold)
+	var peek = module.addBlock(func, label: b"peek", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0 as ValueId
 
-	let status = emitGtLoadPublishedStatus(module, block: entry, gt: gt, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(emitGtStatusEquals(module, block: entry, status: status, want: GtStatusCompleted, ids: ids)))
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let namesNoThread = emitCmp(module, block: entry, a: gt, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(namesNoThread, thenBlockId: vacated.id, elseBlockId: peek.id))
+
+	emitRuntimeAbort(module, func: func, block: vacated, abort: RuntimeAbort.promiseSlotConsumedTwice, ids: ids)
+
+	let status = emitGtLoadPublishedStatus(module, block: peek, gt: gt, ids: ids)
+	module.setTerminator(peek, op: StdOp.ret(emitGtStatusEquals(module, block: peek, status: status, want: GtStatusCompleted, ids: ids)))
 
 	module.functions.push(func)
 end 'buildGtIsComplete'
