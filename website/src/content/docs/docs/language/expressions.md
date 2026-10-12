@@ -191,7 +191,8 @@ Both take a **type** and produce a compile-time integer.
   `sizeof(bool)` is `1`, and a record type is the size of its fields — except an
   [inline packed record](/docs/language/composite-types/#inline-packed-records), which is `8` whatever its fields sum to.
 - `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(Vector with 3 Int)`
-  is `3`. Inside such a container's own body, `countof(Self)` is the receiver's count. A type with no fixed
+  is `3`. Inside such a container's own body, `countof(Self)` is the count of the instance a method is
+  called on, or that a `static function`'s call names. A type with no fixed
   element count — a record, a primitive, a growable `Array` — is refused (**E2015**); ask an `Array` for its
   `count()` instead.
 

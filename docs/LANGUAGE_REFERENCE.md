@@ -1535,15 +1535,19 @@ end 'main'
 ```
 
 - Several parameters: `type Pair uses A, B`, instantiated `Pair with (Integer, String)`.
-- A static factory called on the bare generic name infers the arguments from its parameters.
+- A static called on the bare generic name infers the arguments from its parameters: a parameter written
+  at a type parameter, or at an instance over one (`Array with T`, or the generic itself).
 - One compiled body serves every instantiation. A method learns how its type arguments are laid out and
   owned from the instance it is called on, and that includes instances the body composes over its own
   parameters — `Array with (Pair with T)`, `Box with (T, Integer)`. A closure uses what the function it is
   written in received.
-- A `static function` has no instance to learn it from. One that needs it — it reads `sizeof` of a type
-  parameter, builds an `Array with T`, stores a borrowed type-parameter value (an element or a field it
-  read, a `for` element), or hands one to a parameter the callee reassigns — must return `Self`, so the
-  caller reads it off the instance the static builds; otherwise it is **E2015**.
+- A `static function` learns it from the instance its call names: the typealias it is called through
+  (`IntBox.create(42)`), the instance its arguments fix on the bare generic name, or, called from a method
+  of the same generic, what that method received. This covers every static, whatever it returns, that
+  reads `sizeof` of a type parameter or `countof(Self)`, builds an `Array with T`, stores a borrowed
+  type-parameter value, or calls a method of a `where` constraint on one. A call that names no instance,
+  from a function holding none to hand on, is **E2015**, and **E3162** when it needs a layout descriptor
+  through a bare generic base (below).
 - A generic type whose methods reach an instance of itself through an ever-growing type argument
   (`Node with (Pair with T)` inside `Node`) has no finite set of instances, and is **E2015**.
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a type argument to a non-generic
@@ -3243,7 +3247,8 @@ Both take a **type** and produce a compile-time integer.
   `sizeof(bool)` is `1`, and a record type is the size of its fields — except an
   [inline packed record](#inline-packed-records), which is `8` whatever its fields sum to.
 - `countof(T)` is the number of elements a **fixed-size** container type holds: `countof(Vector with 3 Int)`
-  is `3`. Inside such a container's own body, `countof(Self)` is the receiver's count. A type with no fixed
+  is `3`. Inside such a container's own body, `countof(Self)` is the count of the instance a method is
+  called on, or that a `static function`'s call names. A type with no fixed
   element count — a record, a primitive, a growable `Array` — is refused (**E2015**); ask an `Array` for its
   `count()` instead.
 

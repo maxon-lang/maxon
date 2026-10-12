@@ -961,6 +961,13 @@ union LayoutSource
 	forwardedFromTheCaller
 end 'LayoutSource'
 
+union HiddenArgumentSource
+	ofReceiver(value ValueId)
+	ofResult(value ValueId)
+	ofQualifier(instance GenericInstanceId)
+	forwardedFromTheCaller
+end 'HiddenArgumentSource'
+
 union ByReferenceParamSource
 	indirectCallee
 	directCallee(let name ByteArray)
@@ -1414,9 +1421,10 @@ type MaxonToStdLowering
 	var hasImplicitFixedElementCount as bool
 
 	// The number of hidden WITNESS parameters the CURRENT function carries — one per `where`
-	// constraint of its enclosing type, for an instance method of a constrained generic type (0 otherwise).
-	// The witness parameters occupy the FINAL `currentWitnessCount` ValueIds, so witness slot `i` is
-	// `witnessParamBase + i`. `bindImplicitParams` sets both from the type's constraint count.
+	// constraint of its enclosing type, for a method `witnessParamCountForCallee` gives them (0
+	// otherwise). The witness parameters occupy the FINAL `currentWitnessCount` ValueIds, so witness
+	// slot `i` is `witnessParamBase + i`. `bindImplicitParams` sets both from the type's constraint
+	// count.
 	var currentWitnessCount as ParamCount
 
 	// The ValueId of the CURRENT function's FIRST witness parameter — `paramCount -
@@ -2635,12 +2643,10 @@ type MaxonToStdLowering
 	// descriptor. `out` is the fresh argument array `finalizeCallArgsWithLayout` built (never `argIds`), so
 	// pushing is safe.
 	//
-	// ⭐ **THE SOURCE VALUE IS THE RECEIVER, OR — FOR A `Self`-RETURNING STATIC — THE RESULT.** It is
-	// `materializeLayoutArgFor`'s split exactly, one dictionary column over, and the two are decided by the
-	// same predicate (`sig.takesReceiver()`) so a call can never take its descriptor from one value and its
-	// witnesses from another.
+	// ⭐ The source is `hiddenArgumentSourceOf`'s, the one the layout descriptor and the count read
+	// too, so a call can never take its descriptor from one instance and its witnesses from another.
 	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock)
-		let source = self.witnessSourceValue(argIds, sig: sig, result: result, callee: callee)
+		let source = self.hiddenArgumentSourceOf(argIds, sig: sig, result: result, callee: callee)
 		let constraints = self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints)
 
 		for i in 0 upto constraints.count() 'eachConstraint'
@@ -2649,18 +2655,31 @@ type MaxonToStdLowering
 		end 'eachConstraint'
 	end 'appendWitnessArgs'
 
-	// The value a call's witness tables are read off — the RECEIVER for an instance method, the RESULT for a
-	// `Self`-returning static. It is `materializeLayoutArgFor`'s split, decided by the same
-	// `sig.takesReceiver()`, so a call cannot take its layout descriptor from one value and its witnesses
-	// from another. A receiverless callee that is NOT a generic constructor carries no witness block at all
-	// (`witnessParamCountForCallee`), so it never reaches here.
-	function witnessSourceValue(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray) returns ValueId
-		if not sig.takesReceiver() 'staticConstructor'
-			return result
-		end 'staticConstructor'
+	function witnessSourceInstance(source HiddenArgumentSource) returns GenericInstanceId throws AbsentError
+		match source 'source'
+			ofReceiver(value) then return try self.instanceOfInstanceValue(value)
+			ofResult(value) then return try self.instanceOfInstanceValue(value)
+			ofQualifier(instance) then return instance
+			forwardedFromTheCaller then throw AbsentError.absent
+		end 'source'
+	end 'witnessSourceInstance'
 
-		return try argIds.get(0) otherwise panic("witnessSourceValue: witness-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
-	end 'witnessSourceValue'
+	function instanceOfInstanceValue(value ValueId) returns GenericInstanceId throws AbsentError
+		if self.valueTagOf(value) != ValueTypeTag.genericInstance 'notAnInstance'
+			throw AbsentError.absent
+		end 'notAnInstance'
+
+		return self.instanceIdOfValue(value)
+	end 'instanceOfInstanceValue'
+
+	function materializeWitnessArg(source HiddenArgumentSource, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
+		match source 'source'
+			ofReceiver(value) then return self.materializeWitnessArgFromValue(value, constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
+			ofResult(value) then return self.materializeWitnessArgFromValue(value, constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
+			ofQualifier(gid) then return self.materializeInstanceWitnessArg(gid, constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
+			forwardedFromTheCaller then return self.forwardCallerWitness(constraintIndex, callee: callee)
+		end 'source'
+	end 'materializeWitnessArg'
 
 	// The witness-table address to pass for ONE constraint. A CONCRETE generic-instance receiver → the
 	// RIP-relative address of `__witness_<ConcreteArg>.<Iface>` (`rdataAddr`), emitting the table on
@@ -2669,31 +2688,11 @@ type MaxonToStdLowering
 	// enclosing generic body's OWN `self` (`structRef`) or a value of its type parameter → FORWARD the
 	// caller's own witness slot for the same constraint index (a generic→generic call, both of the
 	// same type, so the slots align). Mirrors `receiverLayoutSource`.
-	function materializeWitnessArg(receiver ValueId, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
+	function materializeWitnessArgFromValue(receiver ValueId, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
 		let tag = self.valueTagOf(receiver)
 
 		if tag == ValueTypeTag.genericInstance 'concrete'
-			let gid = self.instanceIdOfValue(receiver)
-
-			// ⭐⭐ **AN INSTANCE OVER THE ENCLOSING BODY'S OWN TYPE PARAMETER FORWARDS, IT DOES NOT MATERIALIZE
-			// The receiver IS a concrete `genericInstance` — but the argument at the constrained
-			// position may be an OPAQUE parameter of the function we are lowering: `Map.createIterator` building
-			// a `MapIterator with (Key, Value)` while `Key` is still `Map`'s own parameter. There is no table to
-			// name (`conformerTypeArgName` answers a mangled `T<digest>` that no conformance is filed under, and
-			// `ensureWitnessTable` on it PANICS in `witnessSlotImpl`), and there does not need to be: the caller
-			// was handed one, and its own `where` clause says which slot.
-			//
-			// ⚠ **THE SLOT COMES FROM THE SHARED VERDICT, NEVER FROM `constraintIndex`.** The two constraint
-			// lists here belong to DIFFERENT declarations (`Map`'s and `MapIterator`'s), so the prefix-alignment
-			// that lets the `structRef`/`typeParameter` arm below forward slot `i` to slot `i` does not hold and
-			// must not be assumed — a wrong forwarding index here is a witness read out of the wrong slot.
-			// `opaqueParamDischarge` is the same answer `checkWhereConstraints` accepted the program on, so the
-			// slot placed here is the slot the check verified.
-			match self.witnessArgSourceOf(gid, constraint: constraint) 'source'
-				forwardedBareParameter(token) then return self.forwardOpaqueParamWitness(token, constraint: constraint, callee: callee)
-				staticTable(conformer, instance) then return self.addressOfWitnessTable(conformer, instance: instance, interfaceName: constraint.interfaceName, dstBlock: dstBlock)
-				parametricInstance(conformer, argGid) then return self.parametricWitnessArg(conformer, argGid: argGid, constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
-			end 'source'
+			return self.materializeInstanceWitnessArg(self.instanceIdOfValue(receiver), constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
 		end 'concrete'
 
 		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.typeParameter 'forward'
@@ -2701,7 +2700,30 @@ type MaxonToStdLowering
 		end 'forward'
 
 		panic("materializeWitnessArg: call to witness-carrying '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
-	end 'materializeWitnessArg'
+	end 'materializeWitnessArgFromValue'
+
+	function materializeInstanceWitnessArg(gid GenericInstanceId, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
+		// ⭐⭐ **AN INSTANCE OVER THE ENCLOSING BODY'S OWN TYPE PARAMETER FORWARDS, IT DOES NOT MATERIALIZE
+		// The instance IS a concrete `genericInstance` — but the argument at the constrained
+		// position may be an OPAQUE parameter of the function we are lowering: `Map.createIterator` building
+		// a `MapIterator with (Key, Value)` while `Key` is still `Map`'s own parameter. There is no table to
+		// name (`conformerTypeArgName` answers a mangled `T<digest>` that no conformance is filed under, and
+		// `ensureWitnessTable` on it PANICS in `witnessSlotImpl`), and there does not need to be: the caller
+		// was handed one, and its own `where` clause says which slot.
+		//
+		// ⚠ **THE SLOT COMES FROM THE SHARED VERDICT, NEVER FROM `constraintIndex`.** The two constraint
+		// lists here belong to DIFFERENT declarations (`Map`'s and `MapIterator`'s), so the
+		// prefix-alignment that lets `materializeWitnessArgFromValue`'s `structRef`/`typeParameter` arm
+		// forward slot `i` to slot `i` does not hold and must not be assumed — a wrong forwarding index
+		// here is a witness read out of the wrong slot. `opaqueParamDischarge` is the same answer
+		// `checkWhereConstraints` accepted the program on, so the slot placed here is the slot the check
+		// verified.
+		match self.witnessArgSourceOf(gid, constraint: constraint) 'source'
+			forwardedBareParameter(token) then return self.forwardOpaqueParamWitness(token, constraint: constraint, callee: callee)
+			staticTable(conformer, instance) then return self.addressOfWitnessTable(conformer, instance: instance, interfaceName: constraint.interfaceName, dstBlock: dstBlock)
+			parametricInstance(conformer, argGid) then return self.parametricWitnessArg(conformer, argGid: argGid, constraint: constraint, constraintIndex: constraintIndex, callee: callee, dstBlock: dstBlock)
+		end 'source'
+	end 'materializeInstanceWitnessArg'
 
 	// The conformer is `conformerTypeArgName`'s CANONICAL reduction (`Box with Integer` -> `int`) —
 	// the reducer the E3017 check keys its conformance lookup by — so the table label
@@ -3436,7 +3458,7 @@ type MaxonToStdLowering
 	end 'appendInstanceAdapterDictionary'
 
 	// The witness table one `where` constraint of `gid`'s BASE resolves to at this instantiation — the
-	// `concrete` arm of `materializeWitnessArg`, asked of an instance rather than of a receiver value, and
+	// concrete-instance arm of `materializeWitnessArgFromValue`, asked of an instance rather than of a receiver value, and
 	// through the SAME two reducers (`conformerTypeArgName` for the label's conformer,
 	// `constraintArgumentInstance` for whether that conformer's own table is per-instance) so a constraint
 	// discharged at a call site and the same constraint discharged inside an adapter name one table.
@@ -3833,57 +3855,48 @@ type MaxonToStdLowering
 		end 'source'
 	end 'materializeLayoutArgFor'
 
-	// The layout-descriptor argument a layout-needing call must pass, from the RIGHT source. An INSTANCE
-	// method reads it from its RECEIVER (`self` at slotted position 0 — the value of
-	// the concrete generic instance). A receiverless STATIC constructor (`IntContainer.create(…)`) has no
-	// receiver — its first argument is an ordinary user value — but its RESULT is the concrete instance it
-	// builds, and the parser has already retyped that result to `genericInstance(gid)`, so the concrete gid is
-	// read off the result. The discriminator is the callee's own parameter list (`__self` at position 0), not
-	// the shape of `argIds`, so a static whose first argument happens to be a generic instance is unambiguous.
 	// `planDescriptorTables` asks it too, so the table plan and the call lowering read one source.
 	function layoutSourceOf(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray) returns LayoutSource
-		if sig.takesReceiver() 'instanceMethod'
-			// Read from `argIds` (the ORIGINAL receiver), never from the widened `baseArgs`.
-			let receiver = try argIds.get(0) otherwise panic("layoutSourceOf: layout-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`")
-			return self.receiverLayoutSource(receiver, callee: callee)
-		end 'instanceMethod'
-
-		if let qualifier = try self.currentCallInstances.get(result) 'calledThroughAnInstance'
-			return LayoutSource.ofInstance(qualifier)
-		end 'calledThroughAnInstance'
-
-		// ⭐ **A FIELD-DEFAULT HELPER IS THE ONE RECEIVERLESS LAYOUT-NEEDING CALLEE WHOSE DESCRIPTOR COMES
-		// FROM THE CALLER.** Its result is the FIELD's type (`Array with Key`), not the enclosing
-		// instance, so there is nothing to read a descriptor off — but its only call site is a `Self{…}`
-		// inside the declaring type's own body (`requireConstructible`'s E3076), which is a method of that
-		// type and therefore holds the descriptor to forward. `Parser.scanDescriptorNeedsInto` gives that
-		// method the slot for exactly this reason, so `forwardCallerLayout` always finds one.
-		//
-		// ⭐⭐ **`Self.create()` INSIDE THE GENERIC'S OWN BODY IS THE SECOND RECEIVERLESS SHAPE, AND ITS
-		// DESCRIPTOR IS THE CALLER'S — a forward, exactly as the field-default helper's is.** A `Self` call
-		// names the type over its own parameters, not a concrete instantiation, so there is no gid to read a
-		// blob address off and nothing to read it off: `Parser.scopedGenericInstanceOf` answers `notInScope`
-		// for the scope's OWN name deliberately (its header carries the measurement — resolving `Self` to an
-		// instance over its own parameters made `Box.make(x)` return a `Box_T…` that stopped satisfying
-		// `returns Self`), so the result keeps the base's `structRef` and there is nothing concrete here by
-		// construction. The enclosing body is a member of that very generic, so the descriptor it was handed
-		// IS this call's.
-		//
-		// ⛔⛔ **A RECEIVERLESS SHAPE NEED NOT BE A CONCRETE INSTANCE, SO THIS FORWARDS RATHER THAN PANICS.**
-		// `BlockKeyedTable.forBlockCount` opens with `var table = Self.create()` — the ordinary way a generic's
-		// sized constructor reuses its empty one — and that result is a `structRef`, not a generic instance. A
-		// panic asserting otherwise aborts the compile on the compiler's own source.
-		if isFieldDefaultHelperName(callee) or self.valueTagOf(result) != ValueTypeTag.genericInstance 'forwarded'
-			return LayoutSource.forwardedFromTheCaller
-		end 'forwarded'
-
-		return LayoutSource.ofInstance(self.instanceIdOfValue(result))
+		match self.hiddenArgumentSourceOf(argIds, sig: sig, result: result, callee: callee) 'source'
+			ofReceiver(receiver) then return self.receiverLayoutSource(receiver, callee: callee)
+			ofResult(built) then return LayoutSource.ofInstance(self.instanceIdOfValue(built))
+			ofQualifier(instance) then return LayoutSource.ofInstance(instance)
+			forwardedFromTheCaller then return LayoutSource.forwardedFromTheCaller
+		end 'source'
 	end 'layoutSourceOf'
 
-	// The descriptor address for a generic-instance VALUE — the shared core of the two ways a layout-needing
-	// call finds its descriptor source, an instance-method RECEIVER and a static-constructor RESULT
-	// One home so the gid read, the forward/mint decision and the address op
-	// cannot drift between the two.
+	// One decision for a call's layout descriptor, fixed element count and witness tables, so the
+	// three cannot come from different instances. `argIds` holds the original receiver, never the
+	// widened `baseArgs`. A field-default helper forwards: its result is the FIELD's type, so reading
+	// it would describe the wrong instance, and its only call site is a `Self{…}` inside the declaring
+	// type's own body, which holds the words to forward. A call to a static that does not return
+	// `Self` and names no instance arrives here only from a caller holding the words; the parser
+	// refuses every other (`Parser.requireALayoutSourceForAStaticCall` and its count and witness
+	// twins).
+	function hiddenArgumentSourceOf(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray) returns HiddenArgumentSource
+		if sig.takesReceiver() 'instanceMethod'
+			return HiddenArgumentSource.ofReceiver(try argIds.get(0) otherwise panic("hiddenArgumentSourceOf: dictionary-carrying instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`"))
+		end 'instanceMethod'
+
+		if isFieldDefaultHelperName(callee) 'fieldDefaultHelper'
+			return HiddenArgumentSource.forwardedFromTheCaller
+		end 'fieldDefaultHelper'
+
+		if let qualifier = try self.currentCallInstances.get(result) 'calledThroughAnInstance'
+			return HiddenArgumentSource.ofQualifier(qualifier)
+		end 'calledThroughAnInstance'
+
+		if self.valueTagOf(result) == ValueTypeTag.genericInstance and self.signatures.callBuildsTheInstanceOfItsOwnType(callee, instance: self.instanceIdOfValue(result)) 'aStaticBuildingTheInstance'
+			return HiddenArgumentSource.ofResult(result)
+		end 'aStaticBuildingTheInstance'
+
+		return HiddenArgumentSource.forwardedFromTheCaller
+	end 'hiddenArgumentSourceOf'
+
+	// The descriptor address for a generic instance — the shared core of every way a layout-needing
+	// call finds its descriptor source: an instance-method RECEIVER, a static's call-site qualifier
+	// and a static-constructor RESULT. One home so the gid read, the forward/mint decision and the
+	// address op cannot drift between them.
 	//
 	// ⭐⭐ **A `genericInstance` IS NOT ALWAYS CONCRETE — AN INSTANCE OVER THE ENCLOSING BODY'S OWN
 	// PARAMETERS HAS NO BLOB TO POINT AT, AND IT FORWARDS.** `type Holder uses T` whose field is written with
@@ -4241,13 +4254,7 @@ type MaxonToStdLowering
 	end 'planHiddenArguments'
 
 	function fileWitnessTableEntriesOfSlottedCall(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray)
-		let source = self.witnessSourceValue(argIds, sig: sig, result: result, callee: callee)
-
-		if self.valueTagOf(source) != ValueTypeTag.genericInstance 'aForwardedTable'
-			return
-		end 'aForwardedTable'
-
-		let gid = self.instanceIdOfValue(source)
+		let gid = try self.witnessSourceInstance(self.hiddenArgumentSourceOf(argIds, sig: sig, result: result, callee: callee)) otherwise return
 
 		for constraint in self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints) 'eachConstraint'
 			match self.witnessArgSourceOf(gid, constraint: constraint) 'source'
@@ -4322,9 +4329,7 @@ type MaxonToStdLowering
 
 	// ⭐⭐ **THE ELEMENT COUNT A COUNT-NEEDING CALL PASSES — A COMPILE-TIME CONSTANT AT EVERY CALL SITE,
 	// WHICH IS THE WHOLE REASON THE COUNT IS A PARAMETER AND NOT A DESCRIPTOR WORD.**
-	// `materializeLayoutArgFor`'s twin, with the same two doors and the same authority: the CALLEE's own
-	// parameter list decides whether the count is read off the RECEIVER's instance or off the static's RESULT
-	// instance, so a static whose first argument happens to be a generic instance is unambiguous.
+	// `materializeLayoutArgFor`'s twin, reading the same `hiddenArgumentSourceOf`.
 	//
 	// ⛔⛔ **AND IT IS CORRECT WHERE THE DESCRIPTOR IS NOT.** `emitInstanceDescriptorAddr` may FORWARD the
 	// caller's own blocks when the callee's instance is written over the caller's parameters, which is sound
@@ -4335,24 +4340,12 @@ type MaxonToStdLowering
 	// site actually holds, the same shape answers 4 — and it does so without asking that call site for a
 	// descriptor at all, which matters because a frame holding such a field is not guaranteed to have one.
 	function materializeFixedElementCountArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
-		if sig.takesReceiver() 'instanceMethod'
-			// The ORIGINAL receiver, never the widened `baseArgs` — `materializeLayoutArgFor`'s rule.
-			return self.emitFixedElementCountOf(try argIds.get(0) otherwise panic("materializeFixedElementCountArgFor: count-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`"), callee: callee, dstBlock: dstBlock)
-		end 'instanceMethod'
-
-		// ⭐ **A FIELD-DEFAULT HELPER IS THE ONE RECEIVERLESS COUNT-NEEDING CALLEE WHOSE ANSWER COMES FROM THE
-		// CALLER, AND READING ITS RESULT WOULD BE A WRONG NUMBER RATHER THAN A MISSING ONE.** Its result is the
-		// FIELD's type — which for a `var slot as Vector with 4 Element` STATES 4 — while the count it reads
-		// through `countof(Self)` is the ENCLOSING instance's. `materializeLayoutArgFor` splits the same two
-		// cases apart for the same reason; its only call site is a `Self{…}` inside the declaring type's own
-		// body, which is a method of that type and therefore holds the count to forward.
-		if isFieldDefaultHelperName(callee) 'fieldDefault'
-			return self.forwardCallerFixedElementCount(callee)
-		end 'fieldDefault'
-
-		// A receiverless count-needing callee is a constructor whose RESULT is the instance —
-		// `staticLayoutNeedsSelfReturn` refuses every other shape — so the result carries the concrete gid.
-		return self.emitFixedElementCountOf(result, callee: callee, dstBlock: dstBlock)
+		match self.hiddenArgumentSourceOf(argIds, sig: sig, result: result, callee: callee) 'source'
+			ofReceiver(value) then return self.emitFixedElementCountOf(value, callee: callee, dstBlock: dstBlock)
+			ofResult(value) then return self.emitFixedElementCountOf(value, callee: callee, dstBlock: dstBlock)
+			ofQualifier(instance) then return self.emitFixedElementCountOfInstance(instance, callee: callee, dstBlock: dstBlock)
+			forwardedFromTheCaller then return self.forwardCallerFixedElementCount(callee)
+		end 'source'
 	end 'materializeFixedElementCountArgFor'
 
 	// Forward the CURRENT function's own count slot — `forwardCallerLayout`'s twin, and the single home of
@@ -4377,20 +4370,24 @@ type MaxonToStdLowering
 		let tag = self.valueTagOf(instanceValue)
 
 		if tag == ValueTypeTag.genericInstance 'anInstance'
-			let gid = try self.valueNameIds.get(instanceValue) otherwise panic("emitFixedElementCountOf: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
-
-			// ⚠ The BRANCH is `elementCountStatedBy`'s, not a second reading of the same two clauses:
-			// `Parser.requireFixedElementCountSourceForForwarding` refuses on that predicate, and a refusal that
-			// disagrees with this branch is either a rejected legal program or this routine's own abort.
-			if let count = try self.signatures.elementCountStatedBy(tag, nameId: gid) 'statesItsOwnCount'
-				let countId = self.mintStdValueId()
-				self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: count as ParsedInt, valueType: StdType.i64))
-				return countId
-			end 'statesItsOwnCount'
+			return self.emitFixedElementCountOfInstance(self.instanceIdOfValue(instanceValue), callee: callee, dstBlock: dstBlock)
 		end 'anInstance'
 
 		return self.forwardCallerFixedElementCount(callee)
 	end 'emitFixedElementCountOf'
+
+	function emitFixedElementCountOfInstance(gid GenericInstanceId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		// ⚠ The BRANCH is `elementCountStatedBy`'s, not a second reading of the same two clauses:
+		// `Parser.requireFixedElementCountSourceForForwarding` refuses on that predicate, and a refusal that
+		// disagrees with this branch is either a rejected legal program or this routine's own abort.
+		if let count = try self.signatures.elementCountStatedBy(ValueTypeTag.genericInstance, nameId: gid as TypeNameId) 'statesItsOwnCount'
+			let countId = self.mintStdValueId()
+			self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: count as ParsedInt, valueType: StdType.i64))
+			return countId
+		end 'statesItsOwnCount'
+
+		return self.forwardCallerFixedElementCount(callee)
+	end 'emitFixedElementCountOfInstance'
 
 	// Forward the CURRENT (generic) function's own layout slot to a callee — when a generic body calls another
 	// layout-needing method on `self` or on a value of its own type parameter. For a FIRM need the
@@ -4452,7 +4449,7 @@ type MaxonToStdLowering
 			return "this method carries no layout descriptor of its own to forward — the receiver it calls on was not recognised as the enclosing type, so none was reserved. Reach the callee {ReachThroughSelfClause}, or through a concrete instance instead"
 		end 'anInstanceMethod'
 
-		return "this `static function` carries none to hand it — a static sources a descriptor {StaticSourcesFromTheReturnedInstance}. Declare it `returns Self`, or make it an instance method"
+		return "this `static function` carries none to hand it — a static takes a descriptor {StaticTakesItsDictionaryFromItsCall}, and this call names no instance. Call it through a typealias, or make it an instance method"
 	end 'nullLayoutHolderSentence'
 
 	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA —
@@ -5168,6 +5165,7 @@ type MaxonToStdLowering
 		let value = try args.get(0) otherwise panic("appendTypeParamDescriptor: `{String.from(callee)}` has no value argument")
 		var fullArgs = ValueIdArray.create()
 		fullArgs.push(self.descriptorBlockAddr(self.typeParamValueBlockOffset(value, callee: callee), dstBlock: dstBlock))
+
 		fullArgs.append(args)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
 	end 'appendTypeParamDescriptor'

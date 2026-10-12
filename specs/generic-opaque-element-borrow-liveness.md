@@ -1008,10 +1008,10 @@ second call refused
 [alpha 42 value long enough for a heap record] 0 1
 ```
 
-<!-- test: error.a-static-reached-through-a-bare-generic-base-has-no-descriptor-to-take -->
-`Box.moveWhileClearing` names the generic base without type arguments, so nothing fixes the instantiation whose
-descriptor the static takes its references through, and the call is refused rather than handed a descriptor that
-describes some other type. Naming the instance through a `typealias` is the remedy.
+<!-- test: a-static-reached-through-a-bare-generic-base-takes-the-descriptor-of-the-instance-its-arguments-fix -->
+`Box.moveWhileClearing` names the generic base without type arguments, and its arguments `xs` and `ys` are an
+`Array with String`, which fixes `Box with String` through the `Items` parameters. The static takes its
+references through that instance's descriptor, exactly as `StrBox.moveWhileClearing` does.
 ```maxon
 type Box uses T
 	export typealias Items = Array with T
@@ -1040,12 +1040,236 @@ function main() returns ExitCode
 	var ys = Words.create()
 	let moved = Box.moveWhileClearing(xs, into: ys)
 	let named = StrBox.moveWhileClearing(xs, into: ys)
-	print("{moved} {named}\n")
+	print("{moved} {named} {xs.count()} {try ys.get(0) otherwise "?"}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 1 0 alpha 42 value long enough for a heap record
+```
+
+<!-- test: a-static-reached-through-a-bare-generic-base-takes-the-descriptor-of-a-record-its-arguments-fix -->
+The instance the arguments fix is a record type, whose `String` field the shared body retains and releases through the descriptor the call site builds for `Box with Entry`.
+```maxon
+typealias Small = int(0 to 1000)
+
+type Entry
+	export var name as String
+	export var n as Small
+
+	static function create(name String, n Small) returns Self
+		return Self{name: name, n: n}
+	end 'create'
+end 'Entry'
+
+type Box uses T
+	export typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	static function moveWhileClearing(items Items, into Items) returns Count
+		for item in items 'scan'
+			items.clear()
+			into.push(item)
+		end 'scan'
+
+		return into.count()
+	end 'moveWhileClearing'
+end 'Box'
+
+typealias Entries = Array with Entry
+
+function main() returns ExitCode
+	var xs = Entries.create()
+	xs.push(Entry.create("alpha {40 + 2} value long enough for a heap record", n: 5))
+	var ys = Entries.create()
+	let moved = Box.moveWhileClearing(xs, into: ys)
+	let first = try ys.get(0) otherwise panic("empty")
+	print("{moved} {xs.count()} {first.name} {first.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 0 alpha 42 value long enough for a heap record 5
+```
+
+<!-- test: a-static-storing-a-borrowed-element-of-a-never-instantiated-generic-compiles -->
+No instantiation of `Box` exists, so no call can hand `moveWhileClearing` a descriptor and nothing runs the body. The declaration is legal: no descriptor is reserved and the program compiles.
+```maxon
+type Box uses T
+	export typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	static function moveWhileClearing(items Items, into Items) returns Count
+		for item in items 'scan'
+			items.clear()
+			into.push(item)
+		end 'scan'
+
+		return into.count()
+	end 'moveWhileClearing'
+end 'Box'
+
+function main() returns ExitCode
+	print("declared\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+declared
+```
+
+<!-- test: a-static-building-an-opaque-array-with-no-type-parameter-value-takes-the-call-sites-descriptor -->
+The static takes no value written over `T`, and builds an opaque `Array` of it. A call names its instance through the alias, so the descriptor comes from `StrBox` and from `IntBox` alike.
+```maxon
+type Box uses T
+	export typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	static function emptyCount(n Count) returns Count
+		var scratch = Items.create()
+		return scratch.count() + n
+	end 'emptyCount'
+end 'Box'
+
+typealias StrBox = Box with String
+typealias IntBox = Box with Count
+
+function main() returns ExitCode
+	print("{StrBox.emptyCount(1)} {IntBox.emptyCount(2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: error.a-static-building-an-opaque-array-called-through-a-bare-generic-base-is-refused -->
+The same static reached through the bare `Box`: no argument fixes `T`, so the call names no instance to read a descriptor from and is refused at the call.
+```maxon
+type Box uses T
+	export typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	static function emptyCount(n Count) returns Count
+		var scratch = Items.create()
+		return scratch.count() + n
+	end 'emptyCount'
+end 'Box'
+
+typealias StrBox = Box with String
+typealias IntBox = Box with Count
+
+function main() returns ExitCode
+	print("{StrBox.emptyCount(1)} {IntBox.emptyCount(2)}\n")
+	print("{Box.emptyCount(3)}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3162: <fragment>:27:18: 'Box' is named without type arguments and nothing binds its parameter 'T', so 'Box.moveWhileClearing' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument
+error E3162: <fragment>:21:14: 'Box' is named without type arguments and nothing binds its parameter 'T', so 'Box.emptyCount' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument
+```
+
+<!-- test: an-overloaded-static-takes-the-call-sites-descriptor-for-the-overload-that-needs-it -->
+Only one of the two `copied` overloads builds an opaque `Array`, and the reservation and the call decide on the set's one name, so the call to the overload that needs nothing passes the descriptor slot the pair reserves.
+```maxon
+type Box uses T
+	export typealias Items = Array with T
+	var items as Items
+
+	static function copied(n Count) returns Count
+		return n + 1
+	end 'copied'
+
+	static function copied(items Items) returns Count
+		var scratch = Items.create()
+
+		for x in items 'each'
+			scratch.push(x)
+		end 'each'
+
+		return scratch.count()
+	end 'copied'
+end 'Box'
+
+typealias StrBox = Box with String
+typealias Words = Array with String
+
+function main() returns ExitCode
+	var words = Words.create()
+	words.push("one {40 + 2} value long enough for a heap record")
+	words.push("two {40 + 2} value long enough for a heap record")
+	print("{StrBox.copied(words)} {StrBox.copied(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 5
+```
+
+<!-- test: error.an-overloaded-factory-through-a-bare-generic-base-names-no-instance -->
+An overloaded factory fixes no instantiation from its arguments, and nothing else names one, so the static that needs a descriptor to copy its argument is reached through no instance and the call is refused rather than handed a zero descriptor.
+```maxon
+type Box uses T
+	export typealias Items = Array with T
+	export var v as T
+
+	function touch() returns Count
+		return 1
+	end 'touch'
+
+	static function keep(x T) returns Count
+		var copy = x
+		copy = x
+		let pair = Self{v: copy}
+		return pair.touch()
+	end 'keep'
+
+	static function keep(x T, n Count) returns Count
+		let pair = Self{v: x}
+		return pair.touch() + n
+	end 'keep'
+end 'Box'
+
+function main() returns ExitCode
+	let s = "alpha {40 + 2} value long enough for a heap record"
+	let k = Box.keep(s)
+	print("{k} {s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3162: <fragment>:25:14: 'Box' is named without type arguments and nothing binds its parameter 'T', so 'Box.keep' has no layout descriptor to be handed: the base has none, and neither does this function. Name the instance with a typealias, giving each of its parameters a type argument
 ```
 
 <!-- test: a-field-read-binary-operand-survives-a-later-call-releasing-its-owner -->

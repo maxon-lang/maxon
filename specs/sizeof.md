@@ -379,13 +379,53 @@ end 'main'
 8
 ```
 
-<!-- test: error.sizeof-in-a-closure-in-a-static-is-refused -->
-`sizeof` of a type parameter in a closure written in a static has no instance receiver to read the size from.
+<!-- test: sizeof-in-a-static-reads-the-descriptor-of-the-instance-the-call-names -->
+`sizeof(T)` in statics, one through an alias (`ByteCell`, `WideCell`) and one through a bare generic base whose argument fixes the instance (`Cell.widthOf(true)`). `width` is reached directly, through `Self.width` from a sibling static, and each answers the size of the instance its call names.
+```maxon
+typealias Byte = int(0 to 255)
+typealias Wide = int(i64.min to i64.max)
+
+type Cell uses T where T is Equatable
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	static function width(n Count) returns Count
+		return (sizeof(T) as Count) + n
+	end 'width'
+
+	static function widthOf(x T) returns Count
+		let c = Self{v: x}
+		return Self.width(0) + (sizeof(T) as Count) + (0 if c.v == c.v else 0)
+	end 'widthOf'
+end 'Cell'
+
+typealias ByteCell = Cell with bool
+typealias WideCell = Cell with Wide
+
+function main() returns ExitCode
+	print("{sizeof(Byte)} {sizeof(Wide)} {sizeof(bool)} {sizeof(String)}\n")
+	print("{ByteCell.width(0)} {WideCell.width(0)} {ByteCell.widthOf(true)} {WideCell.widthOf(1)} {Cell.widthOf(true)} {Cell.widthOf(1 as Wide)} {ByteCell.make(true).v} {WideCell.make(1).v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8 8 1 56
+1 8 2 16 2 16 true 1
+```
+
+<!-- test: sizeof-in-a-closure-in-a-static-reads-the-call-sites-descriptor -->
+`sizeof` of a type parameter in a closure written in a static reads the descriptor the static took from its call site.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
 type Cell uses T
-	var v as T
+	export var v as T
 
 	static function create(v T) returns Self
 		return Self{v: v}
@@ -393,7 +433,10 @@ type Cell uses T
 
 	static function sized(v T, n Int) returns Self
 		let f = function() gives sizeof(T) + n
-		_ = f()
+		if f() != 9 'theSizeOfAnIntegerPlusOne'
+			panic("the closure read the wrong size")
+		end 'theSizeOfAnIntegerPlusOne'
+
 		return Self{v: v}
 	end 'sized'
 end 'Cell'
@@ -406,6 +449,6 @@ function main() returns ExitCode
 	return (d.v + c.v) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:12:28: Unsupported: sizeof of a type parameter with no instance receiver in scope — a `static function`, and a closure written inside one, are receiverless, and the layout descriptor is threaded from the instance a method is called on; read the size through an instance method on `self`, or a concrete instance, instead
+```exitcode
+6
 ```

@@ -2627,11 +2627,9 @@ end 'main'
 
 ### A `Self`-returning static dispatches through the constraints on the value it builds
 
-A `static function` has no `self`, so without a witness source a static that builds a `Self{…}` and
-calls a constraint-dispatching method on it would abort the compiler:
-`forwardCallerWitness: caller 'Map.init' carries 0 witness parameter(s) and was asked to forward slot 0
-to 'Map.upsert'`. A static that RETURNS its own type has the same witness source the layout descriptor
-uses — the concrete instance it builds — so it carries the block on the same terms.
+A `static function` has no `self`. A static that returns its own type has the same witness source the
+layout descriptor uses — the concrete instance it builds — so it carries the block on the same terms and
+can call a constraint-dispatching method on the `Self{…}` it builds.
 `stdlib/Map.maxon`'s `static function init(…) returns Self` is this program.
 
 <!-- test: where-clauses.self-returning-static-dispatches-on-its-own-value -->
@@ -2669,13 +2667,12 @@ end 'main'
 41
 ```
 
-### Error: a static that does NOT return `Self` has no witness source
+### A static that does NOT return `Self` takes its witness tables from its call site
 
-The other half of the rule above, stated as a refusal rather than an abort. Threading the dictionary
-from the static CALL SITE's alias — `H.digestOf(41)` knows `H = Holder with Integer` — is outside this
-rule, as it is for the layout descriptor's own static rule.
+The other half of the rule above. `H.digestOf(41)` knows `H = Holder with Integer`, so the call hands the
+static the tables the instance method it reaches dispatches through, as it does the layout descriptor.
 
-<!-- test: where-clauses.error.static-without-self-return-cannot-dispatch -->
+<!-- test: where-clauses.static-without-self-return-dispatches-through-the-call-sites-tables -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2695,16 +2692,21 @@ end 'Holder'
 typealias H = Holder with Integer
 
 function main() returns ExitCode
-	return H.digestOf(41)
+	let value = 41 as Integer
+	print("{H.digestOf(value) == value.hash()}\n")
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/where-clauses/where-clauses.error.static-without-self-return-cannot-dispatch.maxon:13:12: Unsupported: calling 'digest' (which dispatches through the type's `where` constraints) on a value of the enclosing type, from a `static function` that carries no witness tables of its own to forward — a static sources them from the instance it RETURNS, so declare this one `returns Self` and call the method on the result, or make it an instance method
+```exitcode
+0
+```
+```stdout
+true
 ```
 
-### Error: a static that does NOT return `Self` cannot dispatch on a type-parameter value
+### A static that does NOT return `Self` dispatches on a type-parameter value through its call site's tables
 
-<!-- test: where-clauses.error.static-hashing-a-type-parameter-value-cannot-dispatch -->
+<!-- test: where-clauses.static-hashing-a-type-parameter-value-dispatches-through-the-call-sites-tables -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2724,13 +2726,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/where-clauses/where-clauses.error.static-hashing-a-type-parameter-value-cannot-dispatch.maxon:8:12: Unsupported: calling 'hash' (which dispatches through the type's `where` constraints) on a value of a type parameter, from a `static function` that carries no witness tables of its own to dispatch through — a static sources them from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method, or take the operation as a function parameter
+```exitcode
+0
+```
+```stdout
+true
 ```
 
-### Error: a static that does NOT return `Self` cannot dispatch on an array of the type parameter
+### A static that does NOT return `Self` dispatches on an array of the type parameter through its call site's tables
 
-<!-- test: where-clauses.error.static-hashing-an-array-of-the-type-parameter-cannot-dispatch -->
+<!-- test: where-clauses.static-hashing-an-array-of-the-type-parameter-dispatches-through-the-call-sites-tables -->
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -2750,12 +2755,48 @@ typealias ValArray = Array with Val
 function main() returns ExitCode
 	var items = ValArray.create()
 	items.push(41)
-	print("{H.digestAll(items)}\n")
+	print("{H.digestAll(items) == items.hash()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+### A closure has no witness tables to hand a witness-only static
+
+<!-- test: where-clauses.error.a-closure-calling-a-witness-only-static-is-refused -->
+`hashOf` dispatches through `Holder`'s constraints and so takes the tables from its call site. A closure inherits a witness table only for a direct dispatch, so it has none to hand `Self.hashOf`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T where T is Hashable and Equatable
+	var v as T
+
+	static function hashOf(v T) returns HashValue
+		return v.hash()
+	end 'hashOf'
+
+	function viaClosure(x T) returns HashValue
+		let f = function(y T) gives Self.hashOf(y)
+		return f(x)
+	end 'viaClosure'
+end 'Holder'
+
+typealias H = Holder with Integer
+
+function main() returns ExitCode
+	let value = 41 as Integer
+	let h = H{v: value}
+	print("{h.viaClosure(value)}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/where-clauses/where-clauses.error.static-hashing-an-array-of-the-type-parameter-cannot-dispatch.maxon:10:16: Unsupported: calling 'hash' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter, from a `static function` that carries no witness tables of its own to dispatch through — a static sources them from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method, or take the operation as a function parameter
+error E2015: <fragment>:12:36: Unsupported: a closure that calls 'hashOf' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter — a closure inherits a witness table through its environment only for a direct dispatch on a type-parameter value, so it has none to hand on to a callee. Make the call in the method that builds the closure and let the closure use the result, or take the operation as a function parameter
 ```
 
 ### Error: an array of an unconstrained type parameter is not `Hashable`
@@ -2826,9 +2867,9 @@ end 'main'
 error E2015: specs/where-clauses/where-clauses.error.a-closure-in-an-instance-method-hashing-a-type-parameter-array.maxon:14:40: Unsupported: a closure that calls 'hash' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter — a closure inherits a witness table through its environment only for a direct dispatch on a type-parameter value, so it has none to hand on to a callee. Make the call in the method that builds the closure and let the closure use the result, or take the operation as a function parameter
 ```
 
-### Error: a static calling an overloaded extension method on a type-parameter instance
+### A static calling an overloaded extension method on a type-parameter instance
 
-<!-- test: where-clauses.error.a-static-calling-an-overloaded-extension-method-on-a-type-parameter-instance -->
+<!-- test: where-clauses.a-static-calling-an-overloaded-extension-method-on-a-type-parameter-instance -->
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -2866,12 +2907,16 @@ typealias O = Owner with Val
 typealias ValBox = Box with Val
 
 function main() returns ExitCode
-	print("{O.measure(ValBox.create(5))}\n")
+	let five = 5 as Val
+	print("{O.measure(ValBox.create(five)) == five.hash() + 1}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/where-clauses/where-clauses.error.a-static-calling-an-overloaded-extension-method-on-a-type-parameter-instance.maxon:30:12: Unsupported: calling 'describe' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter, from a `static function` that carries no witness tables of its own to dispatch through — a static sources them from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method, or take the operation as a function parameter
+```exitcode
+0
+```
+```stdout
+true
 ```
 
 ### A static may call an instance method that hashes a concrete field
@@ -2950,9 +2995,9 @@ end 'main'
 true
 ```
 
-### Error: a static that does NOT return `Self` cannot call a descriptor-carrying method on a run instance
+### A static that does NOT return `Self` calls a descriptor-carrying method on a run instance
 
-<!-- test: where-clauses.error.a-static-calls-a-descriptor-method-on-a-run-instance -->
+<!-- test: where-clauses.a-static-calls-a-descriptor-method-on-a-run-instance -->
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -2989,17 +3034,584 @@ typealias R = Runner with Val
 typealias ValOuter = Outer with Val
 
 function main() returns ExitCode
-	print("{R.run(ValOuter.create(41))}\n")
+	let o = ValOuter.create(41)
+	print("{R.run(o) == o.tally()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+### The same hand-off at a managed type argument
+
+<!-- test: where-clauses.a-static-calls-a-descriptor-method-on-a-run-instance-of-strings -->
+```maxon
+type Outer uses E where E is Hashable and Equatable
+	export typealias Items = Array with E
+
+	var e as E
+
+	static function create(e E) returns Self
+		return Self{e: e}
+	end 'create'
+
+	function tally() returns HashValue
+		var items = Items.create()
+		items.push(e)
+		if items.count() == 1 'one'
+			return e.hash() + 1
+		end 'one'
+		return 0
+	end 'tally'
+end 'Outer'
+
+type Runner uses D where D is Hashable and Equatable
+	export typealias OuterD = Outer with D
+
+	var d as D
+
+	static function run(o OuterD) returns HashValue
+		return o.tally()
+	end 'run'
+end 'Runner'
+
+typealias R = Runner with String
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	let o = StrOuter.create("outer {40 + 2} value long enough for a heap record")
+	print("{R.run(o) == o.tally()} {R.run(o) == "outer 42 value long enough for a heap record".hash() + 1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true true
+```
+
+### The same hand-off at a record type argument
+
+<!-- test: where-clauses.a-static-calls-a-descriptor-method-on-a-run-instance-of-records -->
+```maxon
+type Key implements Hashable, Equatable
+	var name as String
+
+	function hash() returns HashValue
+		return self.name.hash()
+	end 'hash'
+
+	function equals(other Key) returns bool
+		return self.name == other.name
+	end 'equals'
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Key'
+
+type Outer uses E where E is Hashable and Equatable
+	export typealias Items = Array with E
+
+	var e as E
+
+	static function create(e E) returns Self
+		return Self{e: e}
+	end 'create'
+
+	function tally() returns HashValue
+		var items = Items.create()
+		items.push(e)
+		if items.count() == 1 'one'
+			return e.hash() + 1
+		end 'one'
+		return 0
+	end 'tally'
+end 'Outer'
+
+type Runner uses D where D is Hashable and Equatable
+	export typealias OuterD = Outer with D
+
+	var d as D
+
+	static function run(o OuterD) returns HashValue
+		return o.tally()
+	end 'run'
+end 'Runner'
+
+typealias KeyRunner = Runner with Key
+typealias KeyOuter = Outer with Key
+
+function main() returns ExitCode
+	let o = KeyOuter.create(Key.create("record {40 + 2} value long enough for a heap record"))
+	print("{KeyRunner.run(o) == o.tally()} {KeyRunner.run(o) == "record 42 value long enough for a heap record".hash() + 1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true true
+```
+
+### A closure has no witness tables to hand a static that carries them
+
+<!-- test: where-clauses.error.a-closure-calling-a-witness-carrying-static-is-refused -->
+`run` reaches a method that dispatches through `Outer`'s constraints, so it takes `Runner`'s witness tables from its call site. A closure inherits a witness table only for a direct dispatch, so it has none to hand `Self.run`.
+```maxon
+type Outer uses E where E is Hashable and Equatable
+	export typealias Items = Array with E
+
+	var e as E
+
+	static function create(e E) returns Self
+		return Self{e: e}
+	end 'create'
+
+	function tally() returns HashValue
+		var items = Items.create()
+		items.push(e)
+		if items.count() == 1 'one'
+			return e.hash() + 1
+		end 'one'
+
+		return 0
+	end 'tally'
+end 'Outer'
+
+type Runner uses D where D is Hashable and Equatable
+	export typealias OuterD = Outer with D
+
+	var d as D
+
+	static function run(o OuterD) returns HashValue
+		return o.tally()
+	end 'run'
+
+	function viaClosure(o OuterD) returns HashValue
+		let f = function(x OuterD) gives Self.run(x)
+		return f(o)
+	end 'viaClosure'
+end 'Runner'
+
+typealias R = Runner with String
+typealias StrOuter = Outer with String
+
+function main() returns ExitCode
+	let o = StrOuter.create("outer")
+	let r = R{d: "d"}
+	print("{r.viaClosure(o)}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/where-clauses/where-clauses.error.a-static-calls-a-descriptor-method-on-a-run-instance.maxon:28:18: Unsupported: calling 'tally' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method
+error E2015: <fragment>:32:41: Unsupported: a closure that calls 'run' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter — a closure inherits a witness table through its environment only for a direct dispatch on a type-parameter value, so it has none to hand on to a callee. Make the call in the method that builds the closure and let the closure use the result, or take the operation as a function parameter
 ```
 
-### Error: a static that does NOT return `Self` cannot call a method that reads its layout through a blind edge
+### A static compares two type-parameter values through its call site's tables
 
-<!-- test: where-clauses.error.a-static-calls-a-method-that-reads-its-layout-through-a-blind-edge -->
+<!-- test: where-clauses.a-static-comparing-type-parameter-values-for-equality-takes-the-call-sites-tables -->
+`a == b` on two `T` values dispatches through `Equatable`, so `same` takes the table from the alias its call names, for a managed argument and a trivial one alike.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function same(a T, b T) returns bool
+		return a == b
+	end 'same'
+
+	static function differs(a T, b T) returns bool
+		return a != b
+	end 'differs'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+typealias IntHolder = Holder with Integer
+
+function main() returns ExitCode
+	let left = "left {40 + 2} value long enough for a heap record"
+	let same = "left {40 + 2} value long enough for a heap record"
+	print("{StrHolder.same(left, b: same)} {StrHolder.differs(left, b: "right")} {IntHolder.same(3, b: 3)} {IntHolder.differs(3, b: 3)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true true true false
+```
+
+<!-- test: where-clauses.a-static-ordering-type-parameter-values-takes-the-call-sites-tables -->
+`<` on two `T` values dispatches through `Comparable`. `Rev` orders descending, so a static that read the table of the wrong type, or compared the integers it holds instead of calling `compare`, answers differently. Every call form is exercised: through the alias, through `Self.`, by the bare sibling name, from another static of the generic, from a generic that holds the instance over its own parameter, from an instance method of that generic, and through a bare generic base whose arguments fix the instance.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Rev implements Comparable, Equatable
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function compare(other Self) returns Ordering
+		if self.n > other.n 'gt'
+			return Ordering.lessThan
+		end 'gt'
+
+		if self.n < other.n 'lt'
+			return Ordering.greaterThan
+		end 'lt'
+
+		return Ordering.equalTo
+	end 'compare'
+
+	function equals(other Self) returns bool
+		return self.n == other.n
+	end 'equals'
+end 'Rev'
+
+type Pair uses T where T is Comparable
+	var v as T
+
+	static function smaller(a T, b T) returns bool
+		return a < b
+	end 'smaller'
+
+	static function viaSelf(a T, b T) returns bool
+		return Self.smaller(a, b: b)
+	end 'viaSelf'
+
+	static function viaBare(a T, b T) returns bool
+		return smaller(a, b: b)
+	end 'viaBare'
+
+	static function crossInt(a T, b T) returns String
+		return "{IntPair.smaller(1, b: 2)} {smaller(a, b: b)}"
+	end 'crossInt'
+end 'Pair'
+
+type Runner uses D where D is Comparable
+	export typealias PD = Pair with D
+	var d as D
+
+	static function make(d D) returns Self
+		return Self{d: d}
+	end 'make'
+
+	static function run(a D, b D) returns bool
+		return PD.smaller(a, b: b)
+	end 'run'
+
+	function runInstance(a D, b D) returns bool
+		return PD.viaSelf(a, b: b)
+	end 'runInstance'
+end 'Runner'
+
+typealias IntPair = Pair with Integer
+typealias RevPair = Pair with Rev
+typealias RevRunner = Runner with Rev
+typealias IntRunner = Runner with Integer
+
+function main() returns ExitCode
+	let one = Rev.create(1)
+	let two = Rev.create(2)
+	print("{IntPair.smaller(1, b: 2)} {RevPair.smaller(one, b: two)}\n")
+	print("{IntPair.viaSelf(1, b: 2)} {RevPair.viaSelf(one, b: two)}\n")
+	print("{IntPair.viaBare(1, b: 2)} {RevPair.viaBare(one, b: two)}\n")
+	print("{RevPair.crossInt(one, b: two)}\n")
+	print("{IntRunner.run(1, b: 2)} {RevRunner.run(one, b: two)}\n")
+	let r = RevRunner.make(one)
+	print("{r.runInstance(one, b: two)}\n")
+	print("{Pair.smaller(one, b: two)} {Pair.smaller(1 as Integer, b: 2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false
+true false
+true false
+true false
+true false
+false
+false true
+```
+
+<!-- test: where-clauses.error.a-closure-calling-a-comparing-static-is-refused -->
+`same` compares `T` values and so takes its tables from its call site. The closure inherits a table only for a direct dispatch, so it has none to hand `Self.same`.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function same(a T, b T) returns bool
+		return a == b
+	end 'same'
+
+	function viaClosure(x T, y T) returns bool
+		let f = function(p T, q T) gives Self.same(p, b: q)
+		return f(x, y)
+	end 'viaClosure'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let h = StrHolder.create("a")
+	print("{h.viaClosure("a", y: "a")}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:14:41: Unsupported: a closure that calls 'same' (which dispatches through the type's `where` constraints) on a value of a generic type over a type parameter — a closure inherits a witness table through its environment only for a direct dispatch on a type-parameter value, so it has none to hand on to a callee. Make the call in the method that builds the closure and let the closure use the result, or take the operation as a function parameter
+```
+
+<!-- test: where-clauses.a-static-comparing-integers-in-a-constrained-type-carries-no-tables -->
+Control: the comparison is between two `Count` values, not type-parameter values, so `below` takes no witness tables and a closure may call it without a qualifier.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function below(i Count, n Count) returns bool
+		return i < n
+	end 'below'
+
+	function viaClosure() returns bool
+		let f = function(i Count) gives Self.below(i, n: 3)
+		return f(2)
+	end 'viaClosure'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let h = StrHolder.create("a")
+	print("{h.viaClosure()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true
+```
+
+### A comparison dispatches whatever expression produces the type-parameter value
+
+<!-- test: where-clauses.a-static-comparing-field-reads-takes-the-call-sites-tables -->
+`a.v == b.v` compares two reads of a field typed at `T`, through the `Self` parameters that hold them.
+```maxon
+type Holder uses T where T is Equatable
+	export var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function sameField(a Self, b Self) returns bool
+		return a.v == b.v
+	end 'sameField'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	let left = StrHolder.create("field {40 + 2} value long enough for a heap record")
+	let same = StrHolder.create("field {40 + 2} value long enough for a heap record")
+	let other = StrHolder.create("other")
+	print("{StrHolder.sameField(left, b: same)} {StrHolder.sameField(left, b: other)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false
+```
+
+<!-- test: where-clauses.a-static-comparing-call-results-takes-the-call-sites-tables -->
+`keep(a) == keep(b)` compares two call results typed at `T`.
+```maxon
+type Holder uses T where T is Equatable
+	var v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+
+	static function keep(x T) returns T
+		return x
+	end 'keep'
+
+	static function sameKept(a T, b T) returns bool
+		return keep(a) == keep(b)
+	end 'sameKept'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	print("{StrHolder.sameKept("kept {40 + 2} value long enough for a heap record", b: "kept {40 + 2} value long enough for a heap record")} {StrHolder.sameKept("a", b: "b")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false
+```
+
+<!-- test: where-clauses.a-static-ordering-element-reads-takes-the-call-sites-tables -->
+`a < b` orders two elements read out of an array of `T`, under a `Comparable` whose order is the reverse of the integers' own.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Rev implements Comparable, Equatable
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function compare(other Self) returns Ordering
+		if self.n > other.n 'gt'
+			return Ordering.lessThan
+		end 'gt'
+
+		if self.n < other.n 'lt'
+			return Ordering.greaterThan
+		end 'lt'
+
+		return Ordering.equalTo
+	end 'compare'
+
+	function equals(other Self) returns bool
+		return self.n == other.n
+	end 'equals'
+end 'Rev'
+
+type Holder uses T where T is Comparable
+	export typealias Items = Array with T
+
+	var v as T
+
+	static function firstBelowSecond(items Items) returns bool
+		let a = try items.get(0) otherwise return false
+		let b = try items.get(1) otherwise return false
+		return a < b
+	end 'firstBelowSecond'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+typealias RevHolder = Holder with Rev
+typealias IntArray = Array with Integer
+typealias RevArray = Array with Rev
+
+function main() returns ExitCode
+	var rising = IntArray.create()
+	rising.push(1)
+	rising.push(2)
+	var reversed = RevArray.create()
+	reversed.push(Rev.create(1))
+	reversed.push(Rev.create(2))
+	print("{IntHolder.firstBelowSecond(rising)} {RevHolder.firstBelowSecond(reversed)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false
+```
+
+### An overloaded static takes its tables per overload
+
+<!-- test: where-clauses.an-overloaded-static-takes-the-call-sites-tables-for-the-overload-that-dispatches -->
+`pick(a, b)` dispatches through `Comparable` and `pick(n)` dispatches through nothing. Both ends of the hidden-argument ABI decide on the overload set's one name, so each call passes what its overload reserved.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair uses T where T is Comparable
+	var v as T
+
+	static function pick(a T, b T) returns bool
+		return a < b
+	end 'pick'
+
+	static function pick(n Integer) returns Integer
+		return n + 1
+	end 'pick'
+end 'Pair'
+
+typealias IntPair = Pair with Integer
+typealias StrPair = Pair with String
+
+function main() returns ExitCode
+	print("{IntPair.pick(1, b: 2)} {StrPair.pick("b", b: "a")} {IntPair.pick(4)} {StrPair.pick(5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true false 5 6
+```
+
+### A generic nothing instantiates may still dispatch in its statics
+
+<!-- test: where-clauses.a-static-dispatching-in-a-generic-nothing-instantiates-compiles -->
+No instantiation of `Holder` exists, so nothing calls `below` or `hashBoth`; both reserve the tables a call would hand them and the program compiles.
+```maxon
+type Holder uses T where T is Comparable
+	var v as T
+
+	static function below(a T, b T) returns bool
+		return a < b
+	end 'below'
+
+	static function hashBoth(a T) returns bool
+		return a.compare(a) == 0
+	end 'hashBoth'
+end 'Holder'
+
+function main() returns ExitCode
+	print("declared\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+declared
+```
+
+### A static that does NOT return `Self` calls a method that reads its layout through a blind edge
+
+<!-- test: where-clauses.a-static-calls-a-method-that-reads-its-layout-through-a-blind-edge -->
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -3033,13 +3645,16 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/where-clauses/where-clauses.error.a-static-calls-a-method-that-reads-its-layout-through-a-blind-edge.maxon:19:18: Unsupported: calling 'copyCount' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method
+```exitcode
+0
+```
+```stdout
+1
 ```
 
-### Error: a static that does NOT return `Self` cannot call a method that forwards to a layout reader
+### A static that does NOT return `Self` calls a method that forwards to a layout reader
 
-<!-- test: where-clauses.error.a-static-calls-a-method-that-forwards-to-a-layout-reader -->
+<!-- test: where-clauses.a-static-calls-a-method-that-forwards-to-a-layout-reader -->
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -3077,8 +3692,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/where-clauses/where-clauses.error.a-static-calls-a-method-that-forwards-to-a-layout-reader.maxon:23:18: Unsupported: calling 'viaSibling' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method
+```exitcode
+0
+```
+```stdout
+1
 ```
 
 ### A static's local named like a field compares as its own type

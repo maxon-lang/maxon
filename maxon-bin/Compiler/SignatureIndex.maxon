@@ -5263,8 +5263,7 @@ export enum FeedSinkQuery
 	// the value. It asks the sink and not merely `isFeed()`: only a callee-storage feed is enrolled
 	// owned, so only it can be left live at an exit and dropped through the descriptor. A `Self{item: p}` constructor feed
 	// is settled at the concrete call site, and seeding the descriptor off it would reserve a slot a
-	// generic constructor has no receiver to source (the refusal at `parseFunction`'s
-	// `staticLayoutNeedsSelfReturn`).
+	// generic constructor has no receiver to source.
 	calleeStorageSink
 
 	// The question for a body that forwards a borrowed opaque `T` into another generic's `create()`
@@ -30246,7 +30245,7 @@ export type ProgramSignatures
 	// as one declared in the type's own body. See `descriptorNeeds` for the compiler abort the per-type-body
 	// version cost.
 	export function functionNeedsLayoutDescriptor(callee ByteArray) returns bool
-		return self.settledDeclarations().descriptorNeeds.contains(callee)
+		return self.nameIsInNeedSet(self.settledDeclarations().descriptorNeeds, callee: callee)
 	end 'functionNeedsLayoutDescriptor'
 
 	// Does ANY method in the whole program carry a descriptor — the allocation-free gate `parseFunction` opens
@@ -30268,7 +30267,7 @@ export type ProgramSignatures
 	end 'recordDescriptorNeeds'
 
 	export function functionLayoutNeedIsSpeculative(callee ByteArray) returns bool
-		return self.settledDeclarations().speculativeDescriptorNeeds.contains(callee)
+		return self.nameIsInNeedSet(self.settledDeclarations().speculativeDescriptorNeeds, callee: callee)
 	end 'functionLayoutNeedIsSpeculative'
 
 	export function cannotSourceALayoutDescriptor(callee ByteArray) returns bool
@@ -30290,8 +30289,19 @@ export type ProgramSignatures
 	// `MaxonToStdLowering.functionHasDescriptorParam`, which subtracts this slot before testing for the
 	// layout one.
 	export function functionReadsFixedElementCount(callee ByteArray) returns bool
-		return self.settledDeclarations().fixedElementCountNeeds.contains(callee)
+		return self.nameIsInNeedSet(self.settledDeclarations().fixedElementCountNeeds, callee: callee)
 	end 'functionReadsFixedElementCount'
+
+	// The sets are keyed by the declared `Type.method`, and an overload is asked by its registration
+	// name, so a miss retries the base name: every overload of one name shares one answer, at both
+	// ends of the ABI.
+	function nameIsInNeedSet(needs DescriptorNeedNameSet, callee ByteArray) returns bool
+		if needs.count() == 0 'nothingIsNeeded'
+			return false
+		end 'nothingIsNeeded'
+
+		return needs.contains(callee) or needs.contains(overloadRegistrationBaseName(callee))
+	end 'nameIsInNeedSet'
 
 	// Does ANY method in the whole program read a fixed element count — the allocation-free gate
 	// `parseFunction` opens with, for `anyFunctionNeedsLayoutDescriptor`'s stated reason.
@@ -43886,19 +43896,41 @@ export type ProgramSignatures
 		end 'declared'
 	end 'declaredReturnNamesStruct'
 
-	// The number of witness parameters the CALLEE `callee` carries: its witness-constraint count for
-	// an INSTANCE method or a static returning its own type, zero otherwise. Both the callee side
-	// (append witness arguments) and the current-function side (bind witness parameters) read this ONE
-	// rule, so they cannot drift on how many witnesses a call passes — and it is the count OF the very
-	// list `appendWitnessArgs` then walks (`ProgramSignatures.witnessConstraintsOfMethod`), rather
-	// than a second lookup that could answer for a different list.
+	// The number of witness parameters the CALLEE `callee` carries: its witness-constraint count when
+	// `calleeCarriesWitnessSlots`, zero otherwise. Both the callee side (append witness arguments) and
+	// the current-function side (bind witness parameters) read this ONE rule, so they cannot drift on
+	// how many witnesses a call passes — and it is the count OF the very list `appendWitnessArgs` then
+	// walks (`ProgramSignatures.witnessConstraintsOfMethod`), rather than a second lookup that could
+	// answer for a different list.
 	export function witnessParamCountForCallee(callee ByteArray, sig FuncSignature) returns ParamCount
-		if self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: sig.takesReceiver()) 'noWitnessSource'
+		if not self.calleeCarriesWitnessSlots(callee, takesReceiver: sig.takesReceiver()) 'noWitnessSource'
 			return 0
 		end 'noWitnessSource'
 
 		return self.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints).count()
 	end 'witnessParamCountForCallee'
+
+	export function calleeCarriesWitnessSlots(callee ByteArray, takesReceiver bool) returns bool
+		return not self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: takesReceiver) or self.staticSourcesWitnessesFromItsCallSite(callee)
+	end 'calleeCarriesWitnessSlots'
+
+	export function callBuildsTheInstanceOfItsOwnType(callee ByteArray, instance GenericInstanceId) returns bool
+		match splitQualifiedName(callee) 'qualified'
+			notQualified then return false
+			parts(typeName, _) then return self.genericInstanceBaseName(instance).equals(typeName)
+		end 'qualified'
+	end 'callBuildsTheInstanceOfItsOwnType'
+
+	export function memberAlwaysCarriesWitnessSlots(qualified ByteArray) returns bool
+		return self.declaresCallee(qualified) and not self.hasNoInstanceToTakeHiddenArgumentsFrom(qualified, takesReceiver: self.declaredMethodTakesReceiver(qualified)) and not self.witnessConstraintsOfMethod(qualified, extensionConstraints: self.extensionMethodConstraintsOf(qualified)).isEmpty()
+	end 'memberAlwaysCarriesWitnessSlots'
+
+	// A static that does not return `Self` carries witness slots exactly when it needs a descriptor:
+	// both are read off the instance its call names, and the parser seeds the descriptor need for a
+	// static that dispatches through the constraints (`Parser.scanDescriptorNeedsInto`).
+	export function staticSourcesWitnessesFromItsCallSite(callee ByteArray) returns bool
+		return self.anyFunctionNeedsLayoutDescriptor() and self.hasNoInstanceToTakeHiddenArgumentsFrom(callee, takesReceiver: false) and self.functionNeedsLayoutDescriptor(callee) and not isFieldDefaultHelperName(callee)
+	end 'staticSourcesWitnessesFromItsCallSite'
 
 	// ⭐⭐ **DOES `callee` DECLARE A BARE TYPE-PARAMETER RETURN — a `returns T` whose value the shared body
 	// compiling it cannot classify?** The descriptor-need seed for the RETURN door: such a

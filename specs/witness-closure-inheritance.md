@@ -29,9 +29,11 @@ Closures NEST by chaining, one hop per level: a closure inside a closure capture
 immediate enclosing closure's record, which in turn captured it from the declaring function — the same
 chaining an ordinary variable captured from a frame further out takes.
 
-A `static function` (and a synthesized field-default helper) reserves no witness parameters, so there is
-no table anywhere in the chain for a closure written inside one to inherit. That is refused with a
-position, the same shape and for the same reason a static may not FORWARD its witnesses to a call on a
+A `static function` that dispatches through the type's constraints takes its witness tables from its call
+site, and a closure written inside one inherits them as it would from an instance method. A synthesized
+field-default helper, or a static whose dispatch the compiler does not see, reserves no witness parameters,
+so there is no table in the chain for a closure written inside one to inherit. That is refused with a
+position, the same shape and for the same reason such a static may not FORWARD witnesses to a call on a
 value of its own type.
 
 ## Tests
@@ -506,10 +508,8 @@ s=155
 0
 ```
 
-<!-- test: witness-closure-inheritance.static-function-has-no-witness-to-lend -->
-A `static function` carries no witness tables, so a closure written inside one has nothing to inherit and
-is refused with a position rather than aborting the compiler. The refusal is the closure twin of the
-forwarding refusal a static gets when it calls a dispatching method on a value of its own type.
+<!-- test: witness-closure-inheritance.a-closure-in-a-static-inherits-the-tables-the-call-site-handed-it -->
+A `static function` that dispatches through the type's constraints takes its witness tables from its call site, so a closure written inside one inherits them through its environment as a closure in an instance method does.
 ```maxon
 typealias Code = int(0 to u32.max)
 
@@ -542,6 +542,9 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:21:33: Unsupported: a closure that dispatches through the type's `where` constraints, written inside a `static function` (or a field-default helper) that carries no witness tables of its own — the closure inherits its table through its environment from the function that built it, and a static has no receiver to source one from. Write the closure in an instance method, or take the operation as a function parameter
+```stdout
+d=93
+```
+```exitcode
+0
 ```

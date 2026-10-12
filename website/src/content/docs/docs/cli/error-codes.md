@@ -81,7 +81,7 @@ One parameter list declares the same name twice. The second parameter would be d
 
 ### E2015 — `parserUnsupportedFeature`
 
-The source uses a language construct this compiler does not implement yet. It also refuses a user declaration of a type name the compiler owns, such as `String`, `ExitCode` or the literal marker interface `BuiltinStringLiteral`: rename the declaration.
+The source uses a language construct this compiler does not implement yet. It also refuses a user declaration of a type name the compiler owns, such as `String`, `ExitCode` or the literal marker interface `BuiltinStringLiteral`: rename the declaration. A call to a generic type's `static function` that needs the instance's layout, element count or `where` witness tables is refused here when the call names no instance and the calling function holds none to hand on: call it through a typealias that names the instance (`IntBox.make()`), or from a method of the type.
 
 ### E2016 — `parserInvalidCharacterLiteral`
 
@@ -730,7 +730,7 @@ A handler over a combined error -- a block-form `try` whose calls throw several 
 
 ### E3162 — `bareGenericSubjectUnbound`
 
-A call's subject is a generic type named without `with` arguments that nothing binds — written statically (`Box.create(first)`) or as the type of the receiver. Such a base has no instance behind it. Inside a generic type body whose parameters do not bind it by name (`Box uses Element` inside `type Outer uses T`), the call may not hand a slot written over one of the base's type parameters (`Element`, `Array with Element`) a value typed at the enclosing type's parameters (nothing would release what it stores), and may not reach a callee that needs a layout descriptor (the base has none, and the enclosing frame's describes the enclosing type's parameters). An overloaded callee is judged by the member its arguments pick. Outside a generic type body, a layout-needing callee, static or through a receiver, is refused where the calling function has no descriptor of its own (`Holder.create()` in `main`). A static call whose arguments fix every parameter to a concrete type builds that instance and is not refused. Name the instance with a typealias: `typealias Inner = Box with T`.
+A call's subject is a generic type named without `with` arguments that nothing binds — written statically (`Box.create(first)`) or as the type of the receiver. Such a base has no instance behind it. Inside a generic type body whose parameters do not bind it by name (`Box uses Element` inside `type Outer uses T`), the call may not hand a slot written over one of the base's type parameters (`Element`, `Array with Element`) a value typed at the enclosing type's parameters (nothing would release what it stores), and may not reach a callee that needs a layout descriptor (the base has none, and the enclosing frame's describes the enclosing type's parameters). An overloaded callee is judged by the member its arguments pick. Outside a generic type body, a layout-needing callee, static or through a receiver, is refused where the calling function has no descriptor of its own (`Holder.create()` in `main`). A static call whose arguments fix every parameter to a concrete type, through parameters written at a type parameter or at an instance over one (`Array with T`), names that instance and is not refused. Name the instance with a typealias: `typealias Inner = Box with T`.
 
 ### E3163 — `semanticUnmarkableLetReadByAMessage`
 

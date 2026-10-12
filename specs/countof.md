@@ -43,19 +43,18 @@ an instance is impossible — the blob would have to carry that parameter's SIZE
 itself a descriptor read.
 
 A parameter has none of that, because **the count is a compile-time constant at every call
-site**: the receiver's instance states it, a static's RESULT instance states it, and a
+site**: the receiver's instance states it, a static's RESULT instance or the instance its call
+names states it, and a
 `Vector` method calling a sibling on `self` forwards the slot its own caller filled. It also
 costs the descriptor nothing — a body that reads only `countof(Self)` reserves no descriptor
 at all, so it can be called from a frame that carries none.
 
-### `countof` in a `static`, where `sizeof` is refused
+### `countof` in a `static`
 
-`sizeof(T)` refuses a receiverless body: it asks whether `__self` is in scope, and no
-`static function` can answer yes. `countof` asks the question that actually decides whether
-the answer can be supplied — does the CALL SITE hold something that states the count? — and a
-`static function … returns Self` does: the instance it builds. That is the whole reason this
-expression exists, since a fixed-size container's `create()` is a static and its answer IS
-the size.
+A `static function` has no receiver, so its count comes from the CALL SITE: the instance a
+`static function … returns Self` builds, or the instance the call names. That is the whole
+reason this expression exists, since a fixed-size container's `create()` is a static and its
+answer IS the size. `sizeof(T)` in a static reads the layout descriptor from the same places.
 
 ## Tests
 
@@ -123,7 +122,7 @@ end 'main'
 ```
 
 <!-- test: a-static-reads-the-count -->
-The case `sizeof` cannot serve. `counted()` is a `static function` — no receiver, no `self`,
+`counted()` is a `static function` — no receiver, no `self`,
 no `__self` in scope — and it reads its own instance's count once per element. Called through
 two different sizes it walks 3 trips and then 5, which is what the global counter shows: the
 count reached a receiverless body, and it was the right one both times.
@@ -181,12 +180,198 @@ end 'main'
 8
 ```
 
-<!-- test: error.sizeof-of-a-type-parameter-in-a-static-is-still-refused -->
-The door `countof` deliberately does NOT copy. In the very position the case above serves,
-`sizeof` of the type parameter is refused — its answer arrives through the layout descriptor,
-which is threaded from the instance a method is called on, and a static has no such receiver.
-The two are not the same question and must not share a gate: a count has a second source (the
-instance the static RETURNS) and a size, today, does not.
+<!-- test: a-static-that-returns-another-type-reads-the-count-of-the-instance-its-call-names -->
+A `static function` that returns an `Int` builds no instance, so the count comes from the instance the CALL names: `Vec3.slotsOf()` states 3 and `Vec5.slotsOf()` states 5, through one compiled body. An instance method reaching the same static through `Self` forwards the count it was handed, and a static with a parameter of its own reads it the same way.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+typealias Vec5 = Vector with 5 Int
+
+extension Vector
+	static function slotsOf() returns Int
+		return countof(Self)
+	end 'slotsOf'
+
+	static function scaled(factor Int) returns Int
+		return countof(Self) * factor
+	end 'scaled'
+
+	function viaSelf() returns Int
+		return Self.slotsOf()
+	end 'viaSelf'
+end 'Vector'
+
+function main() returns ExitCode
+	var a = Vec3.create()
+	var b = Vec5.create()
+	print("{Vec3.slotsOf()} {Vec5.slotsOf()} {Vec3.scaled(2)} {Vec5.scaled(3)} {a.viaSelf()} {b.viaSelf()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 5 6 15 3 5
+```
+
+<!-- test: overloaded-statics-that-read-the-count-each-take-the-call-sites-count -->
+Two statics of one name read `countof`, the one without a parameter declared after the one with it. Both ends of the hidden count slot decide on the overload set's one name, so each call hands the count its overload reads.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	static function slotsOf(extra Int) returns Int
+		return countof(Self) + extra
+	end 'slotsOf'
+
+	static function slotsOf() returns Int
+		return countof(Self)
+	end 'slotsOf'
+
+	static function makeOf(extra Int) returns Self
+		if countof(Self) + extra == 0 'never'
+			panic("never")
+		end 'never'
+
+		return Self{}
+	end 'makeOf'
+
+	static function makeOf() returns Self
+		return Self{}
+	end 'makeOf'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	_ = Vec3.makeOf(1)
+	print("{Vec3.slotsOf(1)} {Vec3.slotsOf()} {v.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 3 3
+```
+
+<!-- test: overloaded-statics-that-read-the-count-in-the-other-declaration-order -->
+The same two statics declared the other way round.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	static function slotsOf() returns Int
+		return countof(Self)
+	end 'slotsOf'
+
+	static function slotsOf(extra Int) returns Int
+		return countof(Self) + extra
+	end 'slotsOf'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	print("{Vec3.slotsOf(1)} {Vec3.slotsOf()} {v.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 3 3
+```
+
+<!-- test: overloaded-instance-methods-that-read-the-count-each-take-the-receivers-count -->
+Two instance methods of one name read `countof` of the sized receiver, in both widths.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+typealias Vec5 = Vector with 5 Int
+
+extension Vector
+	function slotsPlus() returns Int
+		return countof(Self)
+	end 'slotsPlus'
+
+	function slotsPlus(extra Int) returns Int
+		return countof(Self) + extra
+	end 'slotsPlus'
+end 'Vector'
+
+function main() returns ExitCode
+	var a = Vec3.create()
+	var b = Vec5.create()
+	print("{a.slotsPlus(1)} {a.slotsPlus()} {b.slotsPlus(1)} {b.slotsPlus()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 3 6 5
+```
+
+<!-- test: overloaded-instance-methods-that-read-the-count-in-the-other-declaration-order -->
+The same two methods declared the other way round.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+typealias Vec5 = Vector with 5 Int
+
+extension Vector
+	function slotsPlus(extra Int) returns Int
+		return countof(Self) + extra
+	end 'slotsPlus'
+
+	function slotsPlus() returns Int
+		return countof(Self)
+	end 'slotsPlus'
+end 'Vector'
+
+function main() returns ExitCode
+	var a = Vec3.create()
+	var b = Vec5.create()
+	print("{a.slotsPlus(1)} {a.slotsPlus()} {b.slotsPlus(1)} {b.slotsPlus()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 3 6 5
+```
+
+<!-- test: error.a-static-reading-the-count-through-a-bare-container-name-is-refused -->
+The count of a static that returns another type comes from the instance its call names. `Vector.slotsOf()` names no sized instance, and `main` carries no count to forward, so the call is refused with a position rather than handed a count nobody holds.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	static function slotsOf() returns Int
+		return countof(Self)
+	end 'slotsOf'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	print("{Vector.slotsOf()} {v.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:17: Unsupported: calling 'slotsOf' (which reads `countof` of the sized container's own `Self`) through a name that states no element count, from a function that carries no fixed-element-count parameter of its own to forward — a `static function` that does not return `Self` takes the count from the instance its call names. Name a sized instance with a typealias (`Vector with 3 Int`) and call it through that, or call it from a method of the sized container
+```
+
+<!-- test: sizeof-of-a-type-parameter-in-a-static-reads-the-call-sites-descriptor -->
+`sizeof` of the type parameter in a `static function` is read from the layout descriptor the call site hands the static, the way `countof` reads the count it is handed. `elementBytes` returns `Self`, so the instance it builds supplies both.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -213,8 +398,8 @@ function main() returns ExitCode
 	return v.reach()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:7:6: Unsupported: sizeof of a type parameter with no instance receiver in scope — a `static function`, and a closure written inside one, are receiverless, and the layout descriptor is threaded from the instance a method is called on; read the size through an instance method on `self`, or a concrete instance, instead
+```exitcode
+0
 ```
 
 <!-- test: a-sized-field-of-another-generic-answers-its-own-count -->
@@ -353,10 +538,8 @@ error E2015: <fragment>:9:10: Unsupported: countof of the sized container's own 
 <!-- test: error.an-ordinary-generics-static-is-refused-for-the-right-reason -->
 ⭐ **THE NARROWING THIS CASE EXISTS TO PIN.** The token pre-scan that reserves the hidden count
 slot asks first whether the enclosing declaration IS the sized container. Without that
-question it would reserve a slot here too — and a reservation drags in the receiverless rule
-(*a `static function` needing the enclosing instance's dictionary must return `Self`*), so this
-program would be refused for failing to return `Self` rather than for the thing that is
-actually wrong with it. The narrowing cannot go the other way and hide a real read: `Self`
+question it would reserve a slot here too, and this program would reach that slot's machinery
+rather than being refused for the thing that is actually wrong with it. The narrowing cannot go the other way and hide a real read: `Self`
 denotes a countable instance for exactly the declarations it admits.
 ```maxon
 typealias Int = int(i64.min to i64.max)

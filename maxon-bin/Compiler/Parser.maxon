@@ -2449,15 +2449,15 @@ module enum NoWitnessTablesArrival
 	forwardedFromAClosure
 end 'NoWitnessTablesArrival'
 
-module let StaticSourcesFromTheReturnedInstance = "from the instance it RETURNS"
+module let StaticTakesItsDictionaryFromItsCall = "from the instance its call names (a typealias, or an instance its arguments fix), or from the function that calls it"
 
 module let ReachThroughSelfClause = "through `self`, through a local bound to a `Self\{…}`"
 
-let NoWitnessTablesDispatchRemedy = ", or make it an instance method, or take the operation as a function parameter"
+let NoWitnessTablesDispatchRemedy = ". Make it an instance method, or take the operation as a function parameter"
 
 module function noWitnessTablesSentence(methodName ByteArray, arrival NoWitnessTablesArrival) returns String
 	return match arrival 'arrival'
-		forwardedToACallee gives noWitnessTablesCallSentence(methodName, receiver: "the enclosing type", verb: "forward", remedy: " and call the method on the result, or make it an instance method")
+		forwardedToACallee gives noWitnessTablesCallSentence(methodName, receiver: "the enclosing type", verb: "forward", remedy: ". Make it an instance method, or return `Self` and call the method on the result")
 		dispatchedOnATypeParameter gives noWitnessTablesCallSentence(methodName, receiver: "a type parameter", verb: "dispatch through", remedy: NoWitnessTablesDispatchRemedy)
 		dispatchedOnAnInstanceOverATypeParameter gives noWitnessTablesCallSentence(methodName, receiver: "a generic type over a type parameter", verb: "dispatch through", remedy: NoWitnessTablesDispatchRemedy)
 		dispatchedInAClosure gives NoWitnessTablesClosureSentence
@@ -2466,10 +2466,10 @@ module function noWitnessTablesSentence(methodName ByteArray, arrival NoWitnessT
 end 'noWitnessTablesSentence'
 
 function noWitnessTablesCallSentence(methodName ByteArray, receiver String, verb String, remedy String) returns String
-	return "calling '{String.from(methodName)}' (which dispatches through the type's `where` constraints) on a value of {receiver}, from a `static function` that carries no witness tables of its own to {verb} — a static sources them {StaticSourcesFromTheReturnedInstance}, so declare this one `returns Self`{remedy}"
+	return "calling '{String.from(methodName)}' (which dispatches through the type's `where` constraints) on a value of {receiver}, from a `static function` that carries no witness tables of its own to {verb} — a static takes its witness tables {StaticTakesItsDictionaryFromItsCall}, and only when its body is seen to dispatch on a value typed at a type parameter (a parameter, a field read, a call result, or a local bound from one); this dispatch is not seen as one{remedy}"
 end 'noWitnessTablesCallSentence'
 
-let NoWitnessTablesClosureSentence = "a closure that dispatches through the type's `where` constraints, written inside a `static function` (or a field-default helper) that carries no witness tables of its own — the closure inherits its table through its environment from the function that built it, and a static has no receiver to source one from. Write the closure in an instance method, or take the operation as a function parameter"
+let NoWitnessTablesClosureSentence = "a closure that dispatches through the type's `where` constraints, written inside a `static function` (or a field-default helper) that carries no witness tables of its own — the closure inherits its table through its environment from the function that built it, and this static reserved none, because nothing in its body was seen to dispatch on a value typed at a type parameter (a static takes its witness tables from the instance its call names). Write the closure in an instance method, or take the operation as a function parameter"
 
 // The empty `ParamPositionMask` — this function writes none of its parameters, which is the overwhelmingly
 // common answer and the initial value of every function's mask.
@@ -3020,6 +3020,7 @@ let ScanSignalBuildsRecordOtherThanSelf = 13 as ScanSignal
 let ScanSignalClosureHandsBackAName = 14 as ScanSignal
 let ScanSignalReadsAnOpaqueFieldValue = 15 as ScanSignal
 let ScanSignalIteratesAnIndexedSource = 16 as ScanSignal
+let ScanSignalDispatchesThroughTheType = 17 as ScanSignal
 
 // Is `signal`'s bit set? The read half of the pair.
 function maskHasSignal(mask ScanSignalMask, signal ScanSignal) returns bool
@@ -3970,6 +3971,7 @@ type MethodDescriptorScan
 	export let closureHandsBackAName as bool
 	export let readsAnOpaqueFieldValue as bool
 	export let iteratesAnIndexedSource as bool
+	export let dispatchesThroughTheType as bool
 
 	// ⭐⭐ **THE CROSS-TYPE CALL EDGES — `Array.<member>` NAMES THIS REGION CALLS THAT THE CORPUS, NOT THE
 	// ROSTER, SERVES.** Every other entry above is a fact about what this body DOES; this one is a fact
@@ -3978,14 +3980,15 @@ type MethodDescriptorScan
 	// `Parser.corpusServesArrayMember`, which decides which names are on it.
 	export let corpusContainerCallees as NameRoster
 
-	// ⭐⭐ **THE OTHER CROSS-TYPE EDGE — `<Base>.<member>` FOR A CALL ON A NESTED PARAMETERISED INSTANCE.**
-	// `EChain.create()` on a `typealias EChain = Inner with Element` links to `Inner.create`, and
-	// `chain.count()` on a field declared at one links to `Inner.count`; both callees read a descriptor the
-	// caller must SUPPLY by forwarding its own blocks. Recorded apart from `corpusContainerCallees` because
-	// the two carry OPPOSITE static gates, and for the same reason: that edge is receiver-BLIND, so a static
-	// reached through it may be one the call site cannot source a descriptor for; this one RESOLVES the
-	// receiver, and a static constructor of a nested instance is precisely the shape whose RESULT is the
-	// source (`LowerMaxonToStd.emitInstanceDescriptorAddr`).
+	// ⭐⭐ **THE OTHER CROSS-TYPE EDGE — `<Base>.<member>` FOR A CALL ON A NESTED PARAMETERISED
+	// INSTANCE.** `EChain.create()` on a `typealias EChain = Inner with Element` links to
+	// `Inner.create`, and `chain.count()` on a field declared at one links to `Inner.count`; both
+	// callees read a descriptor the caller must SUPPLY by forwarding its own blocks. Recorded apart
+	// from `corpusContainerCallees` because the two carry OPPOSITE static gates, and for the same
+	// reason: that edge is receiver-BLIND, so a static reached through it may be one the call site
+	// cannot source a descriptor for; this one RESOLVES the receiver, so a static reached through it
+	// has that nested instance to take its descriptor from
+	// (`LowerMaxonToStd.emitInstanceDescriptorAddr`).
 	export let nestedInstanceCallees as NameRoster
 
 	// ⭐ Does this region READ `countof(Self)` — the sized container's own element count? Its own
@@ -4002,8 +4005,8 @@ type MethodDescriptorScan
 	export let sizedContainerSelfCallees as NameRoster
 	export let endPos as ElementIndex
 
-	static function create(direct bool, callees NameRoster, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, buildsRecordOtherThanSelf bool, adoptsOpaqueCallResult bool, forwardsToATypeParamFeed bool, storesContainerElement bool, walksReceiverAsACursor bool, feedsAResolvedInstanceParameter bool, closureHandsBackAName bool, readsAnOpaqueFieldValue bool, iteratesAnIndexedSource bool, corpusContainerCallees NameRoster, nestedInstanceCallees NameRoster, readsFixedElementCount bool, sizedContainerSelfCallees NameRoster, endPos ElementIndex) returns MethodDescriptorScan
-		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, buildsRecordOtherThanSelf: buildsRecordOtherThanSelf, adoptsOpaqueCallResult: adoptsOpaqueCallResult, forwardsToATypeParamFeed: forwardsToATypeParamFeed, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, feedsAResolvedInstanceParameter: feedsAResolvedInstanceParameter, closureHandsBackAName: closureHandsBackAName, readsAnOpaqueFieldValue: readsAnOpaqueFieldValue, iteratesAnIndexedSource: iteratesAnIndexedSource, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, readsFixedElementCount: readsFixedElementCount, sizedContainerSelfCallees: sizedContainerSelfCallees, endPos: endPos}
+	static function create(direct bool, callees NameRoster, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, buildsRecordOtherThanSelf bool, adoptsOpaqueCallResult bool, forwardsToATypeParamFeed bool, storesContainerElement bool, walksReceiverAsACursor bool, feedsAResolvedInstanceParameter bool, closureHandsBackAName bool, readsAnOpaqueFieldValue bool, iteratesAnIndexedSource bool, dispatchesThroughTheType bool, corpusContainerCallees NameRoster, nestedInstanceCallees NameRoster, readsFixedElementCount bool, sizedContainerSelfCallees NameRoster, endPos ElementIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, buildsRecordOtherThanSelf: buildsRecordOtherThanSelf, adoptsOpaqueCallResult: adoptsOpaqueCallResult, forwardsToATypeParamFeed: forwardsToATypeParamFeed, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, feedsAResolvedInstanceParameter: feedsAResolvedInstanceParameter, closureHandsBackAName: closureHandsBackAName, readsAnOpaqueFieldValue: readsAnOpaqueFieldValue, iteratesAnIndexedSource: iteratesAnIndexedSource, dispatchesThroughTheType: dispatchesThroughTheType, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, readsFixedElementCount: readsFixedElementCount, sizedContainerSelfCallees: sizedContainerSelfCallees, endPos: endPos}
 	end 'create'
 end 'MethodDescriptorScan'
 
@@ -4681,6 +4684,12 @@ union UninferredFactoryReason
 	// The factory is declared more than once, so which parameter list the arguments fill is not settled here.
 	theFactoryIsOverloaded(declarationCount FieldIndex)
 end 'UninferredFactoryReason'
+
+enum CallSiteWord
+	layout
+	count
+	witnesses
+end 'CallSiteWord'
 
 // The two calls E3162 refuses on a bare generic base the enclosing scope does not bind.
 enum BareGenericSubjectUse
@@ -17223,8 +17232,7 @@ type FunctionBodyState
 	// `LowerMaxonToStd.appendDropTypeParamDescriptor` reports by ABORTING THE COMPILER, with no source position
 	// at all (measured: `self.sink.push(x)` where `sink` is a user generic type whose `push` borrows). No token
 	// signal separates that body from `Container.push`'s — the two are the same shape, one receiver type apart —
-	// so the disagreement is caught at the end of the body and REFUSED, the exact sibling of
-	// `parseFunction`'s `staticLayoutNeedsSelfReturn`.
+	// so the disagreement is caught at the end of the body and REFUSED.
 	//
 	// ⚠ **IT DOES NOT ONLY CATCH BODIES THAT ABORT.** A drop with no descriptor also arises where the
 	// RESERVATION side is the one that is missing, on a program that is otherwise correct: a conditional
@@ -21645,6 +21653,8 @@ export type Parser
 		// rather than once per method.
 		let receiverElementIsOpaque = self.receiverCursorElementIsOpaque(site.typeName)
 
+		let constraintDispatchNames = self.constraintDispatchNamesOf(site.typeName)
+
 		var q = site.bodyStart
 
 		while self.kindAt(q) != TokenKind.eof 'walk'
@@ -21658,13 +21668,18 @@ export type Parser
 			// `functionDeclarationAt` so a KEYWORD-named method is a method here too.
 			if self.functionDeclarationAt(q) 'method'
 				let qualified = qualifiedMethodName(site.typeName, methodName: self.tokenAt(q + 1).value)
-				let scan = self.scanOneMethodDescriptorSignals(q + 2, edgeScratch: edgeScratch, region: self.scanRegionOfMethodAt(q, inAnInterfaceExtension: site.bodyIsAnInterfaceExtension))
+				let scan = self.scanOneMethodDescriptorSignals(q + 2, edgeScratch: edgeScratch, region: self.scanRegionOfMethodAt(q, inAnInterfaceExtension: site.bodyIsAnInterfaceExtension), dispatchNames: constraintDispatchNames)
 
 				let isStatic = self.functionDeclIsStatic(q)
 				let returnsItsDeclaringType = isStatic and self.signatures.calleeReturnsItsDeclaringType(qualified)
-				let sourcesFromTheCallSite = isStatic and not returnsItsDeclaringType and self.staticTakesATypeParameterValue(q + 2)
-				let staticCanSourceADescriptor = not isStatic or returnsItsDeclaringType or sourcesFromTheCallSite
+
+				// A static that does not return `Self` takes its hidden words from the instance its call names,
+				// or from a caller holding them, and a call with neither is refused at the call site
+				// (`requireALayoutSourceForAStaticCall`). So it reserves even for a type no `with` names, where
+				// `instantiated` alone would decline it.
+				let sourcesFromTheCallSite = isStatic and not returnsItsDeclaringType
 				let holdsADescriptorSource = not isStatic or sourcesFromTheCallSite
+				let reachable = instantiated or sourcesFromTheCallSite
 
 				// ⭐ A method that DROPS a consumed opaque CALLEE-STORAGE feed parameter needs the descriptor too
 				// — the runtime `__drop_type_param` reads the instance's `destroyFunc@40`. That
@@ -21683,24 +21698,20 @@ export type Parser
 
 				// ⭐ A method that MOVES an opaque container element OUT (`.pop()`/`.remove()`/`.removeFirst()`) drops the owned
 				// `typeParameter` result at scope exit through `__drop_type_param`, so it needs the descriptor too.
-				// `not isStatic` for `dropsFeed`'s reason — a generic constructor cannot
-				// materialize a descriptor it does not receive; a static never moves an element out of a shared-body
-				// opaque array (it has no `self` to reach one and no threaded `T` instance). Over-reserving an unused
+				// Over-reserving an unused
 				// descriptor for a move-out that turns out concrete is sound; seeded like a direct `sizeof(T)` so the
 				// fixpoint gives every self-caller a descriptor to forward.
 				let movesOutContainerElement = scan.hasContainerMoveOut and holdsADescriptorSource
 
 				// ⭐ A method that COPIES an opaque array element (`.slice()`/`.clone()`/`.append()`) lowers to an
 				// `__managed_*_opaque(arr, …, descriptor)` wrapper reading `copyFunc@32`, so it needs the descriptor too.
-				// `not isStatic` mirrors the sibling opaque signals — a static generic method
-				// has no `self`-threaded instance descriptor to source. Over-reserving for a concrete-array copy in a
+				// Over-reserving for a concrete-array copy in a
 				// generic body is sound; seeded like a direct `sizeof(T)` so the fixpoint forwards it to self-callers.
 				let copiesArrayElement = scan.hasArrayCopy and holdsADescriptorSource
 
 				// ⭐ A method that REASSIGNS a bare opaque MANAGED type-parameter field (`self.saved = next`)
 				// drops the field's OLD value through the descriptor-gated `__drop_type_param`, so it
-				// needs the descriptor. `not isStatic` mirrors the sibling signals — a static has no `self` to reach
-				// a field, and one that needed a descriptor would have no receiver to source it from.
+				// needs the descriptor. `not isStatic`: a static has no `self` to reach a field.
 				// `scan.reassignsOpaqueField` is already gated on the field being managed for some instantiation
 				// (`isManagedOpaqueTypeParamField`), so a trivial-only instantiation reserves nothing and stays
 				// byte-identical; seeded like a direct `sizeof(T)` so the fixpoint gives every self-caller a
@@ -21737,13 +21748,12 @@ export type Parser
 				// the program instantiates is the one this must decline for: its value is held as a bare
 				// `structRef(Base)` that no call site can source a descriptor for.
 				//
-				// A STATIC reserves only when it returns `Self` (`staticCanSourceADescriptor`): the caller sources
-				// the descriptor from the instance the static builds. It does so when it builds any record but its
-				// own literal, or when its own literal stores a value that is not the feed shape
-				// (`ownRecordLiteralStoresABorrow`) — a feed-shaped value is one the static already owns, so the
-				// store takes no reference. Any other static that stores a borrowed opaque value is refused with
-				// a position (`requireDescriptorForOpaqueStores`).
-				let buildsRecordFromOpaqueSource = instantiated and ((scan.buildsRecord and not isStatic) or (isStatic and staticCanSourceADescriptor and (scan.buildsRecordOtherThanSelf or (scan.buildsRecord and self.ownRecordLiteralStoresABorrow(q + 2, regionEnd: scan.endPos)))))
+				// A STATIC reserves when it builds any record but its own literal, or when its own literal
+				// stores a value that is not the feed shape (`ownRecordLiteralStoresABorrow`) — a feed-shaped
+				// value is one the static already owns, so the store takes no reference. A static left without
+				// a reservation that stores a borrowed opaque value is refused with a position
+				// (`requireDescriptorForOpaqueStores`).
+				let buildsRecordFromOpaqueSource = reachable and ((scan.buildsRecord and not isStatic) or (isStatic and (scan.buildsRecordOtherThanSelf or (scan.buildsRecord and self.ownRecordLiteralStoresABorrow(q + 2, regionEnd: scan.endPos)))))
 
 				// ⭐⭐ **A METHOD DECLARED `returns <its own type parameter>` HANDS THE CALLER A `+1`, AND THE
 				// SHAPE IT CANNOT DISCHARGE STATICALLY IS A BORROW.** `return self.value`,
@@ -21767,10 +21777,6 @@ export type Parser
 				// answerable from the declaration alone, so this one is, and the retain in
 				// `emitOwnedValueReturn` is ungated to match. A type no `with` ever names reserves a parameter
 				// nobody passes, which is the sibling signals' stated asymmetry and costs one ignored slot.
-				//
-				// `not isStatic` mirrors those siblings: the corpus declares no `static function` with a bare
-				// type-parameter return at all, and one that did would have no receiver to source a descriptor
-				// from — `staticLayoutNeedsSelfReturn` says so with a position.
 				let returnsBorrowableOpaque = self.signatures.calleeReturnsBareTypeParameter(qualified) and holdsADescriptorSource
 				let closureHandsBackABorrow = scan.closureHandsBackAName and not self.enclosingTypeParams.isEmpty() and holdsADescriptorSource
 
@@ -21781,9 +21787,7 @@ export type Parser
 				// against the calls its body makes — and folded here so one reservation covers a body that does
 				// both.
 				//
-				// `not isStatic` mirrors every sibling opaque signal: a static generic method has no receiver to
-				// source a descriptor from, and one that needed one is `E2015` (`staticLayoutNeedsSelfReturn`).
-				// Gated on the enclosing type being GENERIC as well, which the siblings get for free from the
+				// Gated on the enclosing type being GENERIC, which the siblings get for free from the
 				// questions they ask and this one does not: a non-generic type's method has no opaque `T` to
 				// adopt and no `uses` position a descriptor could describe.
 				// ⭐⭐ **A METHOD THAT FORWARDS A BORROWED OPAQUE `T` TO A SIBLING GENERIC'S CONSTRUCTOR TAKES A
@@ -21791,26 +21795,19 @@ export type Parser
 				// `adoptsOpaqueResult`: that one reserves for the body that TAKES a bare `T` over, this one for
 				// the body that HANDS one to something that will keep it.
 				//
-				// ⚠⚠ **ITS STATIC GATE IS NOT THE SIBLINGS' PLAIN `not isStatic`, AND THE DIFFERENCE IS A
-				// COMMITTED PROGRAM.** `generic-opaque-value-store`'s
+				// It carries no static gate: a `Self`-returning static takes the descriptor off the instance it
+				// builds, and any other static from the instance its call names (`hiddenArgumentSourceOf`).
+				// `generic-opaque-value-store`'s
 				// `a-record-over-the-enclosing-parameter-in-a-plain-field-round-trips` feeds its record from
-				// `static create(x Element, tag Integer) returns Self` — the constructor feed's static
-				// spelling, and exactly what this signal serves — so excluding every static refuses it.
-				//
-				// ⇒ the gate is the one `staticLayoutNeedsSelfReturn` itself draws: a static that RETURNS its
-				// declaring type HAS a descriptor source (`layoutSourceOf` reads it off the
-				// instance the static builds) and a static returning anything else has none. Asking that
-				// refusal's own question here is what keeps the reservation and the refusal from disagreeing;
-				// reserving where the refusal would throw is an E2015 on a program that compiles —
-				// `generic-type-nested-array-typealias.static-forward-keeps-its-constructor-feed` is what a gate
-				// admitting every static AND reading both feed sinks refuses.
+				// `static create(x Element, tag Integer) returns Self`, the constructor feed's static spelling,
+				// and excluding statics refuses it.
 				//
 				// Gated on the enclosing type being GENERIC, which the sibling signals get for free from the
 				// questions they ask: a non-generic type's method has no opaque `T` to forward. And gated on the
 				// method being ABLE to hold a borrowed `T` at all (`methodCanForwardABorrowedOpaque`), which is
 				// what keeps a `.create(` — a name everything wears — from reserving across the whole corpus.
-				let forwardsBorrowedOpaqueToAFeed = scan.forwardsToATypeParamFeed and not self.enclosingTypeParams.isEmpty() and staticCanSourceADescriptor and self.signatures.methodCanForwardABorrowedOpaque(qualified, typeName: site.typeName)
-				let feedsAParameterThroughAResolvedCall = scan.feedsAResolvedInstanceParameter and staticCanSourceADescriptor
+				let forwardsBorrowedOpaqueToAFeed = scan.forwardsToATypeParamFeed and not self.enclosingTypeParams.isEmpty() and self.signatures.methodCanForwardABorrowedOpaque(qualified, typeName: site.typeName)
+				let feedsAParameterThroughAResolvedCall = scan.feedsAResolvedInstanceParameter
 
 				// ⭐⭐ **AND IT CARRIES `instantiated`, WHICH ITS SIBLINGS ALREADY DO — because the reference this
 				// signal reserves for is taken through THE ENCLOSING INSTANCE'S descriptor, and a type no
@@ -21831,7 +21828,7 @@ export type Parser
 				// question the pre-scan cannot answer the same way, which cost 38 `map/*` cases when it was
 				// tried. That argument is about a RETURN the body itself makes; this signal is about a value
 				// the body ADOPTS from elsewhere, which is exactly the shape the gate describes.
-				let adoptsOpaqueResult = scan.adoptsOpaqueCallResult and instantiated and not self.enclosingTypeParams.isEmpty() and holdsADescriptorSource
+				let adoptsOpaqueResult = scan.adoptsOpaqueCallResult and reachable and not self.enclosingTypeParams.isEmpty() and holdsADescriptorSource
 
 				// ⭐⭐ **A method that STORES INTO A CONTAINER may store a BORROWED opaque `T`, and that store
 				// takes its reference through the descriptor's `retainFunc@64`, so it needs the
@@ -21842,10 +21839,8 @@ export type Parser
 				// It is `buildsRecordFromOpaqueSource`'s twin and carries the identical gates for the identical
 				// reasons: the SOURCE of the element is not resolved here (a borrow reaches a container from an
 				// array read, a bare field read or a non-consumed parameter, and no token separates a body that
-				// will store one from a body that will not), `instantiated` is the weakest gate that declines
-				// for a type no `with` ever names, and `not isStatic` mirrors every sibling opaque signal — a
-				// static has no receiver to source a descriptor from, and one that needs one is refused with a
-				// position (`requireDescriptorForOpaqueStores`).
+				// will store one from a body that will not), and `instantiated` is the weakest gate that
+				// declines for a type no `with` ever names.
 				// ⛔⛔ **AN INTERFACE-EXTENSION BODY IS THE ONE PLACE THIS SEED IS A FALSE POSITIVE AND THE
 				// FALSE POSITIVE IS NOT FREE.** `stdlib/Interfaces.maxon`'s `extension Iterable.map` is
 				// `var result = ElementArray{}` … `result.push(transform(item))`, and no token separates that
@@ -21871,7 +21866,7 @@ export type Parser
 				// are measured: with the shallow tuple copy the array's element points at a freed record, and
 				// with the copy co-owning instead the record leaks (exit 101). The chain is sound only while it
 				// is inert on BOTH ends, which is what this keeps.
-				let storesBorrowedOpaqueElement = scan.storesContainerElement and instantiated and holdsADescriptorSource and (not site.bodyIsAnInterfaceExtension or self.signatures.methodCanForwardABorrowedOpaque(qualified, typeName: site.typeName))
+				let storesBorrowedOpaqueElement = scan.storesContainerElement and reachable and holdsADescriptorSource and (not site.bodyIsAnInterfaceExtension or self.signatures.methodCanForwardABorrowedOpaque(qualified, typeName: site.typeName))
 
 				// ⭐⭐ **A `for … in self` OWNS ITS ELEMENT FOR ONE TRIP, AND RELEASES IT THROUGH THE
 				// DESCRIPTOR.** The element is `current()`'s result, which the impl hands over as a `+1`
@@ -21890,9 +21885,7 @@ export type Parser
 				// deliberately does not carry: `receiverElementIsOpaque` is the narrowing that keeps a
 				// concrete-element traversal out (see it). `not enclosingTypeParams.isEmpty()` because a
 				// descriptor describes the ENCLOSING type's parameters and a non-generic type has none;
-				// `not isStatic` mirrors every sibling opaque signal — a static cannot name `self`, so it has
-				// no receiver to source a descriptor from and one that needed one is `E2015`
-				// (`staticLayoutNeedsSelfReturn`).
+				// `not isStatic` because a static cannot name `self`, so it has no `for … in self` to walk.
 				let walksAnOwnedOpaqueElement = scan.walksReceiverAsACursor and receiverElementIsOpaque and not self.enclosingTypeParams.isEmpty() and not self.functionDeclIsStatic(q)
 
 				// ⭐⭐ **TWO DECLARATIONS CAN WEAR ONE QUALIFIED NAME, AND THE MERGE IS A UNION — NOT THE LAST
@@ -21920,13 +21913,21 @@ export type Parser
 
 				// A `T` cell that crosses by reference owns its occupant through the descriptor
 				// (`cellOwnsItsOccupant`).
-				let writesAnOpaqueCell = instantiated and staticCanSourceADescriptor and (self.signatures.reassignsAnOpaqueParameter(qualified) or self.bodyHandsATypeParameterByReference(self.matchingRightParenOf(q + 2) + 1))
+				let writesAnOpaqueCell = reachable and (self.signatures.reassignsAnOpaqueParameter(qualified) or self.bodyHandsATypeParameterByReference(self.matchingRightParenOf(q + 2) + 1))
 
 				let holdsAnOpaqueFieldRead = scan.readsAnOpaqueFieldValue and instantiated and not isStatic and not self.enclosingTypeParams.isEmpty()
 
-				let holdsAnOpaqueIndexedElement = scan.iteratesAnIndexedSource and instantiated and staticCanSourceADescriptor and not self.enclosingTypeParams.isEmpty() and (not site.bodyIsAnInterfaceExtension or self.signatures.methodCanForwardABorrowedOpaque(qualified, typeName: site.typeName))
+				let holdsAnOpaqueIndexedElement = scan.iteratesAnIndexedSource and reachable and not self.enclosingTypeParams.isEmpty() and (not site.bodyIsAnInterfaceExtension or self.signatures.methodCanForwardABorrowedOpaque(qualified, typeName: site.typeName))
 
 				var directlyNeeded = writesAnOpaqueCell or scan.direct or dropsFeed or movesOutContainerElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or closureHandsBackABorrow or adoptsOpaqueResult or forwardsBorrowedOpaqueToAFeed or feedsAParameterThroughAResolvedCall or storesBorrowedOpaqueElement or walksAnOwnedOpaqueElement or holdsAnOpaqueFieldRead or holdsAnOpaqueIndexedElement
+
+				// A static carries witness slots only while it needs a descriptor
+				// (`ProgramSignatures.staticSourcesWitnessesFromItsCallSite`), so a static that dispatches
+				// through the constraints, or calls a member that always carries them, is seeded here.
+				if sourcesFromTheCallSite and ((scan.dispatchesThroughTheType and not constraintDispatchNames.isEmpty()) or self.callsAWitnessCarryingMember(site.typeName, scan: scan)) 'needsTheCallSitesWitnesses'
+					directlyNeeded = true
+				end 'needsTheCallSitesWitnesses'
+
 				var edges = self.descriptorEdgesFor(site.typeName, scan: scan, isStatic: self.functionDeclIsStatic(q))
 				var blindEdges = self.descriptorBlindEdgesFor(scan, isStatic: self.functionDeclIsStatic(q))
 				var countEdges = self.fixedElementCountEdgesFor(site.typeName, scan: scan)
@@ -22090,9 +22091,7 @@ export type Parser
 	function descriptorEdgesFor(typeName ByteArray, scan MethodDescriptorScan, isStatic bool) returns NameRoster
 		var edges = self.qualifiedSelfCallees(typeName, callees: scan.callees)
 
-		// Gated as `adoptsOpaqueResult` is and for its reasons: a NON-generic enclosing type has no
-		// descriptor to forward, and a STATIC has no receiver to source one from
-		// (`staticLayoutNeedsSelfReturn` refuses one that needs it, with a position).
+		// A NON-generic enclosing type has no descriptor to forward, and a STATIC has no `self` to walk.
 		if self.holdsAnInstanceToForwardFrom(isStatic) 'aGenericInstanceMethod'
 			// ⭐⭐ **THE CALLS A `for … in self` MAKES.** The loop's
 			// `createIterator()`/`current()`/`advance()` are emitted by the parser and appear in NO token,
@@ -22104,11 +22103,9 @@ export type Parser
 			end 'anEmittedCursorWalk'
 		end 'aGenericInstanceMethod'
 
-		// The nested-instance edge carries NO static gate: it is recorded only for a receiver already resolved to a
-		// nested parameterised instance, whose static constructor sources its descriptor from the RESULT it
-		// builds. A static that could not source one is `staticLayoutNeedsSelfReturn`'s positioned refusal,
-		// which is the answer that shape has always owed and is strictly better than the compiler abort it
-		// replaces.
+		// The nested-instance edge carries NO static gate: it is recorded only for a receiver already
+		// resolved to a nested parameterised instance, and a static called through one takes its
+		// descriptor from that instance (`LowerMaxonToStd.hiddenArgumentSourceOf`).
 		edges.append(scan.nestedInstanceCallees)
 		return edges
 	end 'descriptorEdgesFor'
@@ -22178,8 +22175,158 @@ export type Parser
 		return ScanRegion.typeStaticMethod if self.functionDeclIsStatic(functionTok) else ScanRegion.typeMemberMethod
 	end 'scanRegionOfMethodAt'
 
-	function scanOneMethodDescriptorSignals(bodyStart ElementIndex, edgeScratch DescriptorEdgeScratch, region ScanRegion) returns MethodDescriptorScan
-		return self.scanDescriptorSignalsIn(bodyStart, regionEnd: self.methodBodyEndFrom(bodyStart), edges: edgeScratch, region: region)
+	function identifierIsTValued(name ByteArray, tracker ParamReceiverTracker, selfLocals NameRoster, tLocals NameRoster) returns bool
+		if tracker.declares(name) or selfLocals.contains(name) or tLocals.contains(name) 'aTypeDependentName'
+			return true
+		end 'aTypeDependentName'
+
+		if let belief = try tracker.operandBeliefOf(name) 'aParameterOverTheType'
+			return equalityOperandIsKnown(belief)
+		end 'aParameterOverTheType'
+
+		return false
+	end 'identifierIsTValued'
+
+	function receiverIsTDependent(at ElementIndex, tracker ParamReceiverTracker, selfLocals NameRoster, tLocals NameRoster) returns bool
+		let kind = self.kindAt(at)
+
+		if kind == TokenKind.self 'theInstanceItself'
+			return true
+		end 'theInstanceItself'
+
+		return kind == TokenKind.identifier and self.identifierIsTValued(self.tokenAt(at).value, tracker: tracker, selfLocals: selfLocals, tLocals: tLocals)
+	end 'receiverIsTDependent'
+
+	function fieldReadIsTValued(baseAt ElementIndex, fieldAt ElementIndex, selfLocals NameRoster) returns bool
+		let baseKind = self.kindAt(baseAt)
+
+		if baseKind != TokenKind.self and not (baseKind == TokenKind.identifier and selfLocals.contains(self.tokenAt(baseAt).value)) 'notAValueOfTheType'
+			return false
+		end 'notAValueOfTheType'
+
+		let typeName = try self.enclosingType.typeName() otherwise return false
+		return self.signatures.fieldIsABareTypeParameter(typeName, fieldName: self.tokenAt(fieldAt).value)
+	end 'fieldReadIsTValued'
+
+	function callReturnsATValue(nameAt ElementIndex, dotted bool, tracker ParamReceiverTracker, selfLocals NameRoster, tLocals NameRoster) returns bool
+		let name = self.tokenAt(nameAt).value
+		let typeName = try self.enclosingType.typeName() otherwise return false
+
+		if not dotted or self.kindAt((nameAt - 2) as ElementIndex) == TokenKind.selfType 'aSiblingOfTheType'
+			return self.signatures.calleeReturnsBareTypeParameter(qualifiedMethodName(typeName, methodName: name))
+		end 'aSiblingOfTheType'
+
+		return self.signatures.methodNameEverReturnsBareTypeParameter(name) and self.receiverIsTDependent((nameAt - 2) as ElementIndex, tracker: tracker, selfLocals: selfLocals, tLocals: tLocals)
+	end 'callReturnsATValue'
+
+	function valueStartIsTValued(at ElementIndex, tracker ParamReceiverTracker, selfLocals NameRoster, tLocals NameRoster) returns bool
+		var start = at
+
+		if self.kindAt(start) == TokenKind.try 'aTryPrefix'
+			start = start + 1
+		end 'aTryPrefix'
+
+		let kind = self.kindAt(start)
+
+		if kind == TokenKind.leftParen 'aGroup'
+			return self.valueStartIsTValued(start + 1, tracker: tracker, selfLocals: selfLocals, tLocals: tLocals)
+		end 'aGroup'
+
+		if kind != TokenKind.identifier and kind != TokenKind.self and kind != TokenKind.selfType 'notAChainHead'
+			return false
+		end 'notAChainHead'
+
+		let next = self.kindAt(start + 1)
+
+		if next == TokenKind.leftParen and kind == TokenKind.identifier 'aSiblingCall'
+			return not self.operandChainContinuesAt(self.matchingRightParenOf(start + 1) + 1) and self.callReturnsATValue(start, dotted: false, tracker: tracker, selfLocals: selfLocals, tLocals: tLocals)
+		end 'aSiblingCall'
+
+		if next != TokenKind.dot or not tokenCanBeAName(self.tokenAt(start + 2)) 'noMember'
+			return not self.operandChainContinuesAt(start + 1) and kind == TokenKind.identifier and self.identifierIsTValued(self.tokenAt(start).value, tracker: tracker, selfLocals: selfLocals, tLocals: tLocals)
+		end 'noMember'
+
+		if self.kindAt(start + 3) == TokenKind.leftParen 'aMemberCall'
+			return not self.operandChainContinuesAt(self.matchingRightParenOf(start + 3) + 1) and self.callReturnsATValue(start + 2, dotted: true, tracker: tracker, selfLocals: selfLocals, tLocals: tLocals)
+		end 'aMemberCall'
+
+		return not self.operandChainContinuesAt(start + 3) and self.fieldReadIsTValued(start, fieldAt: start + 2, selfLocals: selfLocals)
+	end 'valueStartIsTValued'
+
+	function operandEndingAtIsTValued(at ElementIndex, tracker ParamReceiverTracker, selfLocals NameRoster, tLocals NameRoster) returns bool
+		let kind = self.kindAt(at)
+
+		if kind == TokenKind.identifier 'aName'
+			if at >= 2 and self.kindAt((at - 1) as ElementIndex) == TokenKind.dot 'aMemberRead'
+				return not (at >= 3 and self.kindAt((at - 3) as ElementIndex) == TokenKind.dot) and self.fieldReadIsTValued((at - 2) as ElementIndex, fieldAt: at, selfLocals: selfLocals)
+			end 'aMemberRead'
+
+			return self.identifierIsTValued(self.tokenAt(at).value, tracker: tracker, selfLocals: selfLocals, tLocals: tLocals)
+		end 'aName'
+
+		if kind != TokenKind.rightParen 'notACallOrGroup'
+			return false
+		end 'notACallOrGroup'
+
+		let openAt = try self.matchingLeftParenOf(at) otherwise return false
+
+		if openAt >= 1 and self.kindAt((openAt - 1) as ElementIndex) == TokenKind.identifier 'aCall'
+			let nameAt = (openAt - 1) as ElementIndex
+			let dotted = nameAt >= 1 and self.kindAt((nameAt - 1) as ElementIndex) == TokenKind.dot
+
+			if dotted and nameAt >= 3 and self.kindAt((nameAt - 3) as ElementIndex) == TokenKind.dot 'aDeeperChain'
+				return false
+			end 'aDeeperChain'
+
+			return self.callReturnsATValue(nameAt, dotted: dotted, tracker: tracker, selfLocals: selfLocals, tLocals: tLocals)
+		end 'aCall'
+
+		return self.valueStartIsTValued(openAt + 1, tracker: tracker, selfLocals: selfLocals, tLocals: tLocals)
+	end 'operandEndingAtIsTValued'
+
+	function constraintDispatchNamesOf(typeName ByteArray) returns NameRoster
+		var names = NameRoster.create()
+
+		for constraint in self.signatures.typeExtensionWitnessConstraints(typeName, extensionConstraints: sharedEmptyWhereConstraints) 'eachConstraint'
+			match lookupInterface(self.signatures.interfaceMap(), name: constraint.interfaceName) 'lookup'
+				found(iface) then self.appendReceiverRequirementNames(names, iface: iface)
+				notFound then continue
+			end 'lookup'
+		end 'eachConstraint'
+
+		return names
+	end 'constraintDispatchNamesOf'
+
+	function appendReceiverRequirementNames(names NameRoster, iface IrInterface)
+		let slots = self.witnessSlotsOf(iface)
+
+		for slotIndex in 0 upto slots.count() 'eachSlot'
+			let method = (try slots.get(slotIndex) otherwise panic("appendReceiverRequirementNames: slots.get OOB at {slotIndex} below count {slots.count()}")).method
+
+			if not method.isStatic and not names.contains(method.name) 'aNewReceiverRequirement'
+				names.push(method.name)
+			end 'aNewReceiverRequirement'
+		end 'eachSlot'
+	end 'appendReceiverRequirementNames'
+
+	function callsAWitnessCarryingMember(typeName ByteArray, scan MethodDescriptorScan) returns bool
+		for callee in scan.callees 'eachSelfCallee'
+			if self.signatures.memberAlwaysCarriesWitnessSlots(qualifiedMethodName(typeName, methodName: callee)) 'carriesThem'
+				return true
+			end 'carriesThem'
+		end 'eachSelfCallee'
+
+		for callee in scan.nestedInstanceCallees 'eachNestedCallee'
+			if self.signatures.memberAlwaysCarriesWitnessSlots(callee) 'nestedCarriesThem'
+				return true
+			end 'nestedCarriesThem'
+		end 'eachNestedCallee'
+
+		return false
+	end 'callsAWitnessCarryingMember'
+
+	function scanOneMethodDescriptorSignals(bodyStart ElementIndex, edgeScratch DescriptorEdgeScratch, region ScanRegion, dispatchNames NameRoster) returns MethodDescriptorScan
+		return self.scanDescriptorSignalsIn(bodyStart, regionEnd: self.methodBodyEndFrom(bodyStart), edges: edgeScratch, region: region, dispatchNames: dispatchNames)
 	end 'scanOneMethodDescriptorSignals'
 
 	// The token index just past the `end` that closes the method body opening at `bodyStart`. `depth` starts at
@@ -22236,7 +22383,7 @@ export type Parser
 	// construction. `hasControlFlow` and `reassignsOpaqueField` come back false from a one-line nullary
 	// expression, which is the truth about it rather than an omission: it opens no block and has no `self`.
 	function scanFieldDefaultDescriptorSignals(start ElementIndex, regionEnd ElementIndex, edgeScratch DescriptorEdgeScratch) returns MethodDescriptorScan
-		return self.scanDescriptorSignalsIn(start, regionEnd: regionEnd, edges: edgeScratch, region: ScanRegion.fieldDefault)
+		return self.scanDescriptorSignalsIn(start, regionEnd: regionEnd, edges: edgeScratch, region: ScanRegion.fieldDefault, dispatchNames: NameRoster.create())
 	end 'scanFieldDefaultDescriptorSignals'
 
 	// The signal walk itself, over `[start, regionEnd)`. ALSO records `hasControlFlow`: the
@@ -22247,7 +22394,7 @@ export type Parser
 	// (`maskHasParam`'s `ParamPositionMask`, whose two accessors these mirror): a bare `1 shl 7` in a `match`
 	// arm is a fact nothing can check. See the mask's declaration inside the function for why the flags are
 	// not separate `var bool`s.
-	function scanDescriptorSignalsIn(start ElementIndex, regionEnd ElementIndex, edges DescriptorEdgeScratch, region ScanRegion) returns MethodDescriptorScan
+	function scanDescriptorSignalsIn(start ElementIndex, regionEnd ElementIndex, edges DescriptorEdgeScratch, region ScanRegion, dispatchNames NameRoster) returns MethodDescriptorScan
 		// ⭐⭐ **THE ANSWERS THIS WALK COLLECTS TRAVEL AS ONE MASK — E5001's OWN CURE, NOT A STYLE CHOICE.** A
 		// `var bool` per answer, set inside the token loop below and read only after it, would be a value live
 		// across the loop that the allocator owes a register for the whole body, and that pressure is an E5001
@@ -22266,6 +22413,7 @@ export type Parser
 		// ⭐ **THE LOCALS THIS BODY BINDS TO A `Self{…}` — a call on one of them is a SELF-CALL**. See
 		// `selfTypedLocalBoundAt` for why the binding is read rather than every receiver over-approximated.
 		var selfTypedLocals = NameRoster.create()
+		var tValuedLocals = NameRoster.create()
 
 		// ⭐ **THE LOCALS THIS BODY BINDS TO A NESTED PARAMETERISED INSTANCE, AND THE INSTANCE EACH DENOTES**
 		// — two columns in lockstep, so a later `<local>.<m>(` draws the same edge the field or alias it
@@ -22506,20 +22654,50 @@ export type Parser
 			//
 			// Read at the `.` rather than at the name, so a keyword-named method is seen for
 			// `tokenCanBeAName`'s reason and a bare `name(` — which is a SIBLING call, and covered — is not.
-			if kind == TokenKind.dot and tokenCanBeAName(self.tokenAt(q + 1)) and self.kindAt(q + 2) == TokenKind.leftParen and self.signatures.methodNameEverReturnsBareTypeParameter(self.tokenAt(q + 1).value) 'adoptsOpaqueResult'
-				signals = maskWithSignal(signals, signal: ScanSignalAdoptsOpaqueCallResult)
-			end 'adoptsOpaqueResult'
+			if let calledMember = try self.calledMemberNameAt(q) 'aMemberCall'
+				if self.signatures.methodNameEverReturnsBareTypeParameter(calledMember) 'adoptsOpaqueResult'
+					signals = maskWithSignal(signals, signal: ScanSignalAdoptsOpaqueCallResult)
+				end 'adoptsOpaqueResult'
 
-			// ⭐⭐ **THE CALLER'S HALF OF THE CONSTRUCTOR-FEED RETAIN** — the exact twin of the arm
-			// above, one direction over: that one is a `.<name>(` whose callee HANDS BACK a bare `T`, this one
-			// a `.<name>(` whose callee will KEEP one. `EBox.create(x, tag: tag)` inside `type Bag uses
-			// Element` is the shape, and the reference it owes is taken through `retainFunc@64`
-			// (`handleEscapingBorrowFeed`), so the body needs the descriptor. Read at the `.` for that arm's
-			// reason: a keyword-named method is seen, and a bare `name(` is a SIBLING call the fixpoint
-			// already reaches through its own edge.
-			if kind == TokenKind.dot and tokenCanBeAName(self.tokenAt(q + 1)) and self.kindAt(q + 2) == TokenKind.leftParen and self.signatures.methodNameEverFeedsATypeParameter(self.tokenAt(q + 1).value) 'forwardsToAFeed'
-				signals = maskWithSignal(signals, signal: ScanSignalForwardsToATypeParamFeed)
-			end 'forwardsToAFeed'
+				if self.signatures.methodNameEverFeedsATypeParameter(calledMember) 'forwardsToAFeed'
+					signals = maskWithSignal(signals, signal: ScanSignalForwardsToATypeParamFeed)
+				end 'forwardsToAFeed'
+
+				// Only an operand this token walk can type at a type parameter counts. A dispatch it misses
+				// leaves a static without witness slots, and the parse refuses it with a position
+				// (`noWitnessTablesCallSentence`).
+				if kind == TokenKind.dot and q != 0 and dispatchNames.contains(calledMember) and self.operandEndingAtIsTValued((q - 1) as ElementIndex, tracker: tracker, selfLocals: selfTypedLocals, tLocals: tValuedLocals) 'dispatchesOnATypeValue'
+					signals = maskWithSignal(signals, signal: ScanSignalDispatchesThroughTheType)
+				end 'dispatchesOnATypeValue'
+			end 'aMemberCall'
+
+			if kind == TokenKind.function and self.kindAt(q + 1) == TokenKind.leftParen 'aClosureLiteral'
+				let closeAt = self.matchingRightParenOf(q + 1)
+				var parameterAt = q + 2
+
+				while parameterAt < closeAt 'eachClosureParameterToken'
+					if self.kindAt(parameterAt) == TokenKind.identifier 'maybeAParameterName'
+						self.noteTypeParamParameter(tracker, at: parameterAt)
+					end 'maybeAParameterName'
+
+					parameterAt = parameterAt + 1
+				end 'eachClosureParameterToken'
+			end 'aClosureLiteral'
+
+			if kind == TokenKind.let or kind == TokenKind.var 'aBinding'
+				if self.kindAt(q + 1) == TokenKind.identifier and self.kindAt(q + 2) == TokenKind.equals and self.valueStartIsTValued(q + 3, tracker: tracker, selfLocals: selfTypedLocals, tLocals: tValuedLocals) 'boundFromATValue'
+					tValuedLocals.push(self.tokenAt(q + 1).value)
+				end 'boundFromATValue'
+			end 'aBinding'
+
+			if kind == TokenKind.for and self.kindAt(q + 1) == TokenKind.identifier and self.kindAt(q + 2) == TokenKind.in and self.valueStartIsTValued(q + 3, tracker: tracker, selfLocals: selfTypedLocals, tLocals: tValuedLocals) 'walksATValueSource'
+				tValuedLocals.push(self.tokenAt(q + 1).value)
+			end 'walksATValueSource'
+
+			// A comparison of a `T`-valued operand calls `equals` or `compare` through the constraints.
+			if q != 0 and comparisonOperator(kind) and (self.operandEndingAtIsTValued((q - 1) as ElementIndex, tracker: tracker, selfLocals: selfTypedLocals, tLocals: tValuedLocals) or self.valueStartIsTValued(q + 1, tracker: tracker, selfLocals: selfTypedLocals, tLocals: tValuedLocals)) 'aComparisonOfDispatchedValues'
+				signals = maskWithSignal(signals, signal: ScanSignalDispatchesThroughTheType)
+			end 'aComparisonOfDispatchedValues'
 
 			// ⭐⭐ **THE CROSS-TYPE EDGE** — a `.<member>(` the CORPUS serves on a builtin generic
 			// container. Read at the `.` for the arm above's reason, and recorded as an EDGE rather than as a
@@ -22638,7 +22816,7 @@ export type Parser
 
 		self.settleDeferredCorpusEdges(edges, tracker: tracker)
 
-		return MethodDescriptorScan.create(maskHasSignal(signals, signal: ScanSignalDirect), callees: callees, hasControlFlow: maskHasSignal(signals, signal: ScanSignalHasControlFlow), hasContainerMoveOut: maskHasSignal(signals, signal: ScanSignalHasContainerMoveOut), reassignsOpaqueField: maskHasSignal(signals, signal: ScanSignalReassignsOpaqueField), hasArrayCopy: maskHasSignal(signals, signal: ScanSignalHasArrayCopy), constructsSelfLiteral: maskHasSignal(signals, signal: ScanSignalConstructsSelfLiteral), buildsRecord: maskHasSignal(signals, signal: ScanSignalBuildsRecord), buildsRecordOtherThanSelf: maskHasSignal(signals, signal: ScanSignalBuildsRecordOtherThanSelf), adoptsOpaqueCallResult: maskHasSignal(signals, signal: ScanSignalAdoptsOpaqueCallResult), forwardsToATypeParamFeed: maskHasSignal(signals, signal: ScanSignalForwardsToATypeParamFeed), storesContainerElement: maskHasSignal(signals, signal: ScanSignalStoresContainerElement), walksReceiverAsACursor: maskHasSignal(signals, signal: ScanSignalWalksReceiverAsACursor), feedsAResolvedInstanceParameter: maskHasSignal(signals, signal: ScanSignalFeedsAResolvedInstanceParameter), closureHandsBackAName: maskHasSignal(signals, signal: ScanSignalClosureHandsBackAName), readsAnOpaqueFieldValue: maskHasSignal(signals, signal: ScanSignalReadsAnOpaqueFieldValue), iteratesAnIndexedSource: maskHasSignal(signals, signal: ScanSignalIteratesAnIndexedSource), corpusContainerCallees: edgeColumnSnapshot(edges.corpusContainerCallees, anchor: sharedEmptyCorpusContainerCallees), nestedInstanceCallees: edgeColumnSnapshot(edges.nestedInstanceCallees, anchor: sharedEmptyNestedInstanceCallees), readsFixedElementCount: maskHasSignal(signals, signal: ScanSignalReadsFixedElementCount), sizedContainerSelfCallees: edgeColumnSnapshot(edges.sizedContainerSelfCallees, anchor: sharedEmptySizedContainerSelfCallees), endPos: regionEnd)
+		return MethodDescriptorScan.create(maskHasSignal(signals, signal: ScanSignalDirect), callees: callees, hasControlFlow: maskHasSignal(signals, signal: ScanSignalHasControlFlow), hasContainerMoveOut: maskHasSignal(signals, signal: ScanSignalHasContainerMoveOut), reassignsOpaqueField: maskHasSignal(signals, signal: ScanSignalReassignsOpaqueField), hasArrayCopy: maskHasSignal(signals, signal: ScanSignalHasArrayCopy), constructsSelfLiteral: maskHasSignal(signals, signal: ScanSignalConstructsSelfLiteral), buildsRecord: maskHasSignal(signals, signal: ScanSignalBuildsRecord), buildsRecordOtherThanSelf: maskHasSignal(signals, signal: ScanSignalBuildsRecordOtherThanSelf), adoptsOpaqueCallResult: maskHasSignal(signals, signal: ScanSignalAdoptsOpaqueCallResult), forwardsToATypeParamFeed: maskHasSignal(signals, signal: ScanSignalForwardsToATypeParamFeed), storesContainerElement: maskHasSignal(signals, signal: ScanSignalStoresContainerElement), walksReceiverAsACursor: maskHasSignal(signals, signal: ScanSignalWalksReceiverAsACursor), feedsAResolvedInstanceParameter: maskHasSignal(signals, signal: ScanSignalFeedsAResolvedInstanceParameter), closureHandsBackAName: maskHasSignal(signals, signal: ScanSignalClosureHandsBackAName), readsAnOpaqueFieldValue: maskHasSignal(signals, signal: ScanSignalReadsAnOpaqueFieldValue), iteratesAnIndexedSource: maskHasSignal(signals, signal: ScanSignalIteratesAnIndexedSource), dispatchesThroughTheType: maskHasSignal(signals, signal: ScanSignalDispatchesThroughTheType), corpusContainerCallees: edgeColumnSnapshot(edges.corpusContainerCallees, anchor: sharedEmptyCorpusContainerCallees), nestedInstanceCallees: edgeColumnSnapshot(edges.nestedInstanceCallees, anchor: sharedEmptyNestedInstanceCallees), readsFixedElementCount: maskHasSignal(signals, signal: ScanSignalReadsFixedElementCount), sizedContainerSelfCallees: edgeColumnSnapshot(edges.sizedContainerSelfCallees, anchor: sharedEmptySizedContainerSelfCallees), endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
 
 	// ⭐⭐⭐ **THE ONE EDGE IN THE DESCRIPTOR-NEED FIXPOINT THAT LEAVES THE ENCLOSING TYPE.** A `.<m>(`
@@ -23157,12 +23335,13 @@ export type Parser
 	// `result.upsert(k, value: v)`, where `upsert` reads the layout descriptor. Without this the fixpoint would give
 	// `Map.init` no descriptor to forward and `requireSelfForDescriptorForwarding` would refuse the call outright.
 	//
-	// ⛔ **IT IS A BINDING TEST AND DELIBERATELY NOT A RECEIVER-BLIND OVER-APPROXIMATION.** The sibling signals
-	// above (`containerMoveOutMethodAt`, `arrayCopyMethodAt`) DO ignore the receiver, because over-reserving a
-	// descriptor there is free. It is not free here: a STATIC that needs one and does not return `Self` is a
-	// hard `E2015` (`staticLayoutNeedsSelfReturn` — a static has no descriptor source), so a receiver-blind
-	// edge from a static whose inner-container method merely SHARES A NAME with a descriptor-needing sibling
-	// would turn a legal program into a refused one. Reading the binding costs one name list and refuses nothing.
+	// ⛔ **IT IS A BINDING TEST AND DELIBERATELY NOT A RECEIVER-BLIND OVER-APPROXIMATION.** The sibling
+	// signals above (`containerMoveOutMethodAt`, `arrayCopyMethodAt`) DO ignore the receiver, because
+	// over-reserving a descriptor there is free. It is not free here: a STATIC that needs one and does
+	// not return `Self` makes every call to it that names no instance an `E2015`
+	// (`requireALayoutSourceForAStaticCall`), so a receiver-blind edge from a static whose
+	// inner-container method merely SHARES A NAME with a descriptor-needing sibling would turn a legal
+	// program into a refused one. Reading the binding costs one name list and refuses nothing.
 	//
 	// A local later reassigned to something else only ever ADDS edges the fixpoint's own name filter may drop,
 	// so the over-approximation that remains is in the sound direction.
@@ -23217,6 +23396,25 @@ export type Parser
 	function isBareCallAt(q ElementIndex) returns bool
 		return self.kindAt(q + 1) == TokenKind.leftParen and (q == 0 or self.kindAt(q - 1) != TokenKind.dot)
 	end 'isBareCallAt'
+
+	function bareNameIsAMemberOfTheType(name ByteArray) returns bool
+		let typeName = try self.enclosingType.typeName() otherwise return false
+		return self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: name))
+	end 'bareNameIsAMemberOfTheType'
+
+	function calledMemberNameAt(q ElementIndex) returns ByteArray throws AbsentError
+		let kind = self.kindAt(q)
+
+		if kind == TokenKind.dot and tokenCanBeAName(self.tokenAt(q + 1)) and self.kindAt(q + 2) == TokenKind.leftParen 'dottedCall'
+			return self.tokenAt(q + 1).value
+		end 'dottedCall'
+
+		if tokenCanBeAName(self.tokenAt(q)) and not kindSpellsBlockStructure(kind) and self.isBareCallAt(q) and (q == 0 or self.kindAt(q - 1) != TokenKind.function) and self.bareNameIsAMemberOfTheType(self.tokenAt(q).value) 'bareCall'
+			return self.tokenAt(q).value
+		end 'bareCall'
+
+		throw AbsentError.absent
+	end 'calledMemberNameAt'
 
 	// Does the `function` keyword at `functionTok` carry a `static` modifier — the token IMMEDIATELY before it?
 	// `[export] static function` is the only member shape (`export` precedes `static`; `parseTypeMember`), so the
@@ -23850,40 +24048,6 @@ export type Parser
 		return self.signatures.fieldIsABareTypeParameter(typeName, fieldName: self.tokenAt(nameAt).value)
 	end 'opaqueFieldValueIsReadAt'
 
-	function staticTakesATypeParameterValue(parameterListStart ElementIndex) returns bool
-		if self.kindAt(parameterListStart) != TokenKind.leftParen 'noParameterList'
-			return false
-		end 'noParameterList'
-
-		let listEnd = self.matchingRightParenOf(parameterListStart)
-		var q = parameterListStart + 1
-
-		while q < listEnd 'eachToken'
-			if self.tokenNamesTheEnclosingTypeAt(q) or (self.kindAt(q) == TokenKind.identifier and self.nameIsWrittenOverATypeParameter(self.tokenAt(q).value)) 'aDependentType'
-				return true
-			end 'aDependentType'
-
-			q = q + 1
-		end 'eachToken'
-
-		return false
-	end 'staticTakesATypeParameterValue'
-
-	function nameIsWrittenOverATypeParameter(name ByteArray) returns bool
-		if self.enclosingTypeParams.contains(name) 'aTypeParameter'
-			return true
-		end 'aTypeParameter'
-
-		let typeName = try self.enclosingType.typeName() otherwise return false
-		let inner = joinQualifiedName(typeName, member: name)
-
-		if not self.signatures.isAliasOfFormFor(inner, readerFilePath: self.filePath, wanted: FormAliasKind.generic) 'notAnInstanceAlias'
-			return false
-		end 'notAnInstanceAlias'
-
-		return self.signatures.instanceIsBuiltOnATypeParameter(self.signatures.genericAliasInstanceFrom(inner, readerFilePath: self.filePath))
-	end 'nameIsWrittenOverATypeParameter'
-
 	function forStatementIteratesAnIndexedSourceAt(forPos ElementIndex, tracker ParamReceiverTracker) returns bool
 		let source = try self.forSourceAt(forPos) otherwise return false
 
@@ -23952,19 +24116,20 @@ export type Parser
 	// compiler owns is `ownRecordSelfInstance` — the countless instance whose count only the caller can
 	// supply. A check filed against one spelling would be narrower than the fact it is about.
 	//
-	// ⚠ **AN OPERAND THIS CANNOT SEE IS A POSITIONED REFUSAL, NOT A COMPILER ABORT**, which is the one place
-	// `countof`'s door is stronger than `sizeof`'s: `parseCountof` gates the read on the slot ACTUALLY being
-	// reserved, so a spelling that reaches the read without passing here (an inner `typealias` naming the
-	// countless instance) is refused with a line and a column rather than reaching the lowering's panic.
+	// ⚠ **AN OPERAND THIS CANNOT SEE IS A POSITIONED REFUSAL, NOT A COMPILER ABORT**: `parseCountof`
+	// gates the read on the slot ACTUALLY being reserved, so a spelling that reaches the read without
+	// passing here (an inner `typealias` naming the countless instance) is refused with a line and a
+	// column rather than reaching the lowering's panic.
 	//
-	// ⛔ **AND IT ASKS WHETHER THE ENCLOSING TYPE IS THE SIZED CONTAINER, WHICH IS A NARROWING AND NOT AN
-	// OVER-APPROXIMATION.** The sibling signals may over-match freely because an unread descriptor parameter
-	// costs one slot; this one may not, because a reservation ALSO drags in `staticLayoutNeedsSelfReturn` —
-	// so a `countof(Self)` inside an ordinary generic's `static function f() returns Int`, which
-	// `parseCountof` refuses as *"a type that states no element count"*, would instead be refused for
-	// failing to return `Self`: a diagnostic about the wrong thing entirely. The narrowing cannot
-	// UNDER-match, which is the direction that aborts the compiler: `enclosingSelfType` yields a countable
-	// instance for exactly the names this admits, so every operand the parse serves passes here first.
+	// ⛔ **AND IT ASKS WHETHER THE ENCLOSING TYPE IS THE SIZED CONTAINER, WHICH IS A NARROWING AND NOT
+	// AN OVER-APPROXIMATION.** The sibling signals may over-match freely because an unread descriptor
+	// parameter costs one slot; this one may not, because a reservation ALSO drags in
+	// `requireACountSourceForAStaticCall` at every call — so a `countof(Self)` inside an ordinary
+	// generic's `static function f() returns Int`, which `parseCountof` refuses as *"a type that
+	// states no element count"*, would instead be refused at its calls for naming no sized instance: a
+	// diagnostic about the wrong thing entirely. The narrowing cannot UNDER-match, which is the
+	// direction that aborts the compiler: `enclosingSelfType` yields a countable instance for exactly
+	// the names this admits, so every operand the parse serves passes here first.
 	function countofOperandIsTheOwnInstanceAt(countofPos ElementIndex) returns bool
 		if not self.enclosedBySizedContainer() 'notTheSizedContainersOwnBody'
 			return false
@@ -33051,7 +33216,6 @@ export type Parser
 		let nameTok = head.nameTok
 		let sourceName = head.sourceName
 		let sweptOwnerName = head.sweptOwnerName
-		let parameterListStart = head.parameterListStart
 		let ownTypeParams = head.ownTypeParams
 
 		// ⭐ **A STRUCT PARAMETER OR RETURN TYPE IS RE-TAGGED `structRef` HERE**, in the real parse where
@@ -33158,14 +33322,6 @@ export type Parser
 			needsCountParam = self.signatures.functionReadsFixedElementCount(qualifiedMethodName(self.enclosingTypeName(), methodName: nameTok.value))
 		end 'aMethodOfSomeTypeReadsACount'
 
-		// ⛔ **A RECEIVERLESS (static) LAYOUT-NEEDING function must RETURN `Self`.** A `static`
-		// has no `self` to carry the type parameter's layout descriptor; a caller sources it instead from the
-		// call's RESULT, which is the concrete instance ONLY when the static returns the enclosing type
-		// (`create() returns Self`, retyped by `retypeGenericAliasConstructorResult`). A static that constructs an
-		// opaque `Array` (or reads `sizeof(T)`) but returns some other type leaves the caller no descriptor
-		// source, so `layoutSourceOf` would forward a descriptor the call site does not carry — reject it here
-		// cleanly, the way a receiverless `sizeof(T)` body is. An instance method sources it from `self`, so this
-		// is gated on `not takesReceiver`.
 		// ⭐⭐ **AN INTERFACE RETURN TYPE IS THE SECOND WRITER OF THE ONE SECONDARY RETURN REGISTER
 		// (the return ABI).** A non-throwing function hands the witness half back in exactly the
 		// register a throwing one spends on the error flag — same register convention, same op shape
@@ -33179,19 +33335,6 @@ export type Parser
 				value(inner) then try self.requireStorableDeclaredType(inner, position: DeclaredStoragePosition.throwingReturnType, line: nameTok.line, column: nameTok.column)
 			end 'declaredReturn'
 		end 'theErrorFlagAlreadyOwnsTheSecondRegister'
-
-		// ⚠ **THE COUNT SLOT IS SOURCED THE SAME WAY AND SO CARRIES THE SAME REFUSAL.** A static has no
-		// receiver whose instance states the count; the only instance a caller can read one off is the static's
-		// own RESULT, and that is a concrete instance only when the static returns `Self`. ONE refusal for both
-		// slots, because it is one rule about where a receiverless callee's dictionary comes from — and
-		// `countof(Self)` in a static is exactly the shape the fixed-element-count slot exists to serve (`Vector.create()`), so
-		// this arm must ADMIT it rather than refusing it the way `parseSizeof` refuses a receiverless
-		// `sizeof(T)`. That is the one place `countof`'s door deliberately differs from `sizeof`'s: `sizeof`
-		// asks whether `__self` is in scope, which no static can answer yes to, while this asks whether the
-		// call site has anything to source the answer FROM — and a `returns Self` static does.
-		if not takesReceiver and not self.returnsEnclosingType(returnType) and (needsCountParam or (needsLayoutParam and not self.staticLayoutIsSourcedFromTheCallSite(parameterListStart))) 'staticLayoutNeedsSelfReturn'
-			throw self.staticLayoutRefusal(nameTok, needsCount: needsCountParam, parameterListStart: parameterListStart)
-		end 'staticLayoutNeedsSelfReturn'
 
 		// ⭐ **THE ONE DECLARATION SHAPE `self.<field> = …` MEANS ANYTHING IN.** A `static function` of a
 		// `type` returning that type is the factory `/specs/field-initialization.md`'s third rule is about:
@@ -36546,10 +36689,12 @@ export type Parser
 		return self.enclosingType.names(name)
 	end 'namesEnclosingType'
 
-	// The number of hidden witness parameters a function of the enclosing type carries — one
-	// per `where` constraint of a constrained generic type, for every method that has somewhere to source them
-	// FROM. The reservation is uniform (no per-method need analysis), so this is a pure function of the
-	// declaration's shape and the type's constraint count.
+	// The number of hidden witness parameters a function of the enclosing type carries — one per
+	// `where` constraint of a constrained generic type, for every method that has somewhere to source
+	// them FROM. For an instance method and a `Self`-returning static the reservation is uniform, a
+	// pure function of the declaration's shape and the type's constraint count; any other static
+	// carries them only while it needs a descriptor
+	// (`ProgramSignatures.staticSourcesWitnessesFromItsCallSite`).
 	//
 	// ⭐ **AND A `Self`-RETURNING STATIC HAS SOMEWHERE, EXACTLY AS IT DOES FOR THE LAYOUT DESCRIPTOR.**
 	// A static has no `self`, so gating on `takesReceiver` alone would exclude it — but a static that returns
@@ -36561,16 +36706,16 @@ export type Parser
 	// carrying 0 witness parameters and asked to forward slot 0, which is a panic in `forwardCallerWitness`.
 	//
 	// ⚠ **THE SUPPLY SIDE IS `ProgramSignatures.witnessParamCountForCallee`, AND BOTH ASK ONE DOOR**
-	// (`ProgramSignatures.calleeReturnsItsDeclaringType`). A witness-slot count is ABI: a reservation and a
-	// supply that disagree is an argument-register mismatch nothing downstream can notice
-	// (`witnessConstraintsOfMethod`'s header records what two such disagreements cost), so the `Self`-return
-	// test is asked in ONE place off the whole-program declared return type rather than spelled on each side.
+	// (`ProgramSignatures.calleeCarriesWitnessSlots`). A witness-slot count is ABI: a reservation and
+	// a supply that disagree is an argument-register mismatch nothing downstream can notice
+	// (`witnessConstraintsOfMethod`'s header records what two such disagreements cost), so the test is
+	// asked in ONE place rather than spelled on each side.
 	function witnessParamCountFor(takesReceiver bool, registrationName ByteArray) returns ParamCount
 		if self.enclosingWhereConstraints.isEmpty() 'unconstrainedType'
 			return 0
 		end 'unconstrainedType'
 
-		if not takesReceiver and not self.signatures.calleeReturnsItsDeclaringType(registrationName) 'noWitnessSource'
+		if not self.signatures.calleeCarriesWitnessSlots(registrationName, takesReceiver: takesReceiver) 'noWitnessSource'
 			return 0
 		end 'noWitnessSource'
 
@@ -36864,19 +37009,16 @@ export type Parser
 	end 'resolveNamedStructReturn'
 
 	// Does `returnType` name the ENCLOSING type — `Self`, the base struct, `structRef` after
-	// `resolveNamedStructReturn`? It is the return a receiverless layout-needing constructor
-	// must have: only then does the call's RESULT get retyped to the concrete instance
-	// (`retypeGenericAliasConstructorResult`) the caller reads the layout descriptor off. Compared by interned
-	// id in `self.artifact.typeNames` — the interner both the resolved return type and `self.enclosingType`
-	// live in — so no `nameOf` round-trip is needed.
+	// `resolveNamedStructReturn`? Compared by interned id in `self.artifact.typeNames` — the interner
+	// both the resolved return type and `self.enclosingType` live in — so no `nameOf` round-trip is
+	// needed.
 	//
 	// ⭐⭐ **AND A `Self` THAT RESOLVED TO AN INSTANCE ANSWERS TRUE TOO.** `enclosingSelfType` gives a
-	// container whose record the compiler owns the INSTANCE over its own parameters rather than the base
-	// `structRef`, so `stdlib/Array.maxon`'s `static function from(source) returns Self` arrives here as a
-	// `genericInstance` and would be told a static returning `Self` has no descriptor source — a refusal naming
-	// the very cure the declaration already wrote. The question this asks stays the same; only the two
-	// spellings `Self` can take have to be read, and an ORDINARY generic still cannot reach the second
-	// one, so nothing else's answer moves.
+	// container whose record the compiler owns the INSTANCE over its own parameters rather than the
+	// base `structRef`, so `stdlib/Array.maxon`'s `static function from(source) returns Self` arrives
+	// here as a `genericInstance`, and it returns `Self` all the same. The question this asks stays
+	// the same; only the two spellings `Self` can take have to be read, and an ORDINARY generic still
+	// cannot reach the second one, so nothing else's answer moves.
 	function returnsEnclosingType(returnType MaxonReturnType) returns bool
 		return match returnType 'r'
 			void gives false
@@ -47038,8 +47180,8 @@ export type Parser
 	// a descriptor-less body all store what they take.
 	//
 	// Closing it properly is a descriptor-RESERVATION question (which method shapes get one) and not a
-	// drop-routing one — and widening the reservation was MEASURED to refuse programs of its own against
-	// `staticLayoutNeedsSelfReturn`, so the residue is stated as a bound.
+	// drop-routing one — and widening the reservation was MEASURED to refuse programs of its own, so
+	// the residue is stated as a bound.
 	//
 	// ⭐ It is ALSO the guarantee `emitDecref` does not restate: because the dictionary callee is chosen only
 	// where the descriptor exists, no drop site can emit one without a descriptor to prepend — which is why
@@ -63460,7 +63602,7 @@ export type Parser
 			return
 		end 'nothingToForwardOrSomewhereToForwardFrom'
 
-		throw SourceParseError.unsupported("comparing two values of a generic type over a type parameter with `==` or `!=` (which calls 'equals', and 'equals' reads the type parameter's layout descriptor) from a function that carries no layout descriptor of its own to hand it — a static sources a descriptor {StaticSourcesFromTheReturnedInstance}, so declare this one `returns Self`, or make it an instance method", line: anchor.line, column: anchor.column)
+		throw SourceParseError.unsupported("comparing two values of a generic type over a type parameter with `==` or `!=` (which calls 'equals', and 'equals' reads the type parameter's layout descriptor) from a function that carries no layout descriptor of its own to hand it — a static takes a descriptor {StaticTakesItsDictionaryFromItsCall}; make this one an instance method, or compare values the compiler can see are typed at a type parameter", line: anchor.line, column: anchor.column)
 	end 'requireALayoutToCompareAnOpaqueArray'
 
 	// The one place the comparison operators are split into equality and ordering, because both
@@ -64221,17 +64363,12 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 
 		if maxonTypeTag(operand) == ValueTypeTag.typeParameter 'runtimeSize'
-			// ⚠ **A RECEIVER MUST BE IN SCOPE.** The layout descriptor reaches a body by being THREADED
-			// from the receiver instance a method is called on (dictionary-passing). A `static function` (called
-			// on the TYPE) is RECEIVERLESS, so a caller has no instance whose descriptor to pass, and a closure
-			// carries the descriptor of the body it is written in, so one inside a static has none either
-			// (`declaringBodyHasAReceiver`). The parser would still reserve the hidden slot for such a body, but a
-			// call site would then reach `finalizeCallArgsWithLayout` with no receiver argument and PANIC. So
-			// reject `sizeof(T)` here, cleanly (E2015), exactly like the multi-parameter case below. Read the size
-			// through an instance method on `self` (or a concrete instance).
-			if not self.declaringBodyHasAReceiver() 'noReceiver'
-				throw SourceParseError.unsupported("sizeof of a type parameter with no instance receiver in scope — a `static function`, and a closure written inside one, are receiverless, and the layout descriptor is threaded from the instance a method is called on; read the size through an instance method on `self`, or a concrete instance, instead", line: sizeofTok.line, column: sizeofTok.column)
-			end 'noReceiver'
+			// The read is this function's own descriptor slot, which a static fills from its call site like
+			// any method. A body the pre-scan reserved none for is refused here rather than reaching
+			// `lowerSizeofType`'s panic.
+			if not self.bodyState.carriesLayoutParam() 'noDescriptor'
+				throw SourceParseError.unsupported("sizeof of a type parameter in a function that carries no layout descriptor to read the size from — the descriptor is handed in by the call site or the caller, and this function reserves none", line: sizeofTok.line, column: sizeofTok.column)
+			end 'noDescriptor'
 
 			// ⚠ **SINGLE-TYPE-PARAMETER ONLY.** The layout descriptor carries ONE `elementLogicalSize`
 			// slot, so `sizeof(K)` in a `uses K, V` generic — which would need a per-parameter size — is a
@@ -64344,13 +64481,10 @@ export type Parser
 	// therefore cannot carry a fact about the INSTANCE — a `Vector with 4 Element` reached from inside
 	// `type Holder uses Element` read Holder's count, 0, instead of 4.
 	//
-	// ⭐ **ITS GATE IS THE COUNT SLOT, NOT `sizeof`'s `__self`-IN-SCOPE, AND THAT DIFFERENCE IS THE POINT.**
-	// `parseSizeof` refuses a receiverless body because the descriptor is threaded from the instance a method is
-	// called on; a STATIC has a second source — its own RESULT, when it returns `Self`
-	// (`staticLayoutNeedsSelfReturn` is what makes that true) — and `Vector.create()` is exactly that shape and
-	// is the whole reason this expression exists. So the question asked here is the one that actually decides
-	// whether the read can be served: does THIS function carry the count parameter? A body the pre-scan did not
-	// see gets a positioned refusal rather than the compiler abort `lowerSizeofType`'s divergence produces.
+	// ⭐ Its gate is the count slot, as `parseSizeof`'s is the descriptor slot. A static fills it from
+	// the instance it returns (`Vector.create()`, the whole reason this expression exists) or the
+	// instance its call names. A body the pre-scan did not see gets a positioned refusal rather than
+	// the compiler abort `lowerSizeofType`'s divergence produces.
 	function parseCountof() returns ValueId throws SourceParseError
 		let countofTok = try self.consume(TokenKind.countof)
 		try self.consume(TokenKind.leftParen)
@@ -70386,6 +70520,75 @@ export type Parser
 		throw SourceParseError.unsupported("'{String.from(overloadRegistrationBaseName(callee))}' is called on '{String.from(self.signatures.instanceDisplayName(subject))}', whose type arguments mix this type's own parameters with other types, so the layout descriptor it is handed is composed at run time from the calling method's own descriptor — and this method reserves none. A method reserves one when its body reaches that instance through a field, an inner typealias, a parameter or a local bound from one of those; call it through one of them (e.g. 'self.<field>.<method>(…)')", line: anchor.line, column: anchor.column)
 	end 'requireADescriptorToComposeFrom'
 
+	function staticTakesItsWordFromTheCallSite(callee ByteArray, word CallSiteWord) returns bool
+		if self.calleeTakesReceiver(callee) or isFieldDefaultHelperName(callee) or self.signatures.calleeReturnsItsDeclaringType(callee) 'theWordHasAnotherSource'
+			return false
+		end 'theWordHasAnotherSource'
+
+		return match word 'word'
+			layout gives self.signatures.functionNeedsLayoutDescriptor(callee)
+			count gives self.signatures.functionReadsFixedElementCount(callee)
+			witnesses gives self.signatures.staticSourcesWitnessesFromItsCallSite(callee) and not self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: self.signatures.extensionMethodConstraintsOf(callee)).isEmpty()
+		end 'word'
+	end 'staticTakesItsWordFromTheCallSite'
+
+	function requireALayoutSourceForAStaticCall(callee ByteArray, constructed ConstructorInstance, anchor Token) throws SourceParseError
+		if self.bodyState.carriesLayoutParam() or not self.signatures.anyFunctionNeedsLayoutDescriptor() or not self.staticTakesItsWordFromTheCallSite(callee, word: CallSiteWord.layout) 'somewhereToForwardFromOrNothingToHand'
+			return
+		end 'somewhereToForwardFromOrNothingToHand'
+
+		let needsTheCallersDescriptor = match constructed 'qualifier'
+			instance(gid) gives not self.signatures.instanceArgsAreFullyConcrete(gid)
+			none gives true
+		end 'qualifier'
+
+		if not needsTheCallersDescriptor 'theQualifierHoldsIt'
+			return
+		end 'theQualifierHoldsIt'
+
+		throw SourceParseError.unsupported("calling '{String.from(unqualifiedMemberOf(callee))}' (which reads the enclosing instance's layout descriptor) through a name that fixes no instance, from a function that carries no layout descriptor of its own to forward — the call names no instance and the caller has no descriptor to hand on. Name the instance with a typealias and call it through that, or call it from a method of the type", line: anchor.line, column: anchor.column)
+	end 'requireALayoutSourceForAStaticCall'
+
+	function requireACountSourceForAStaticCall(callee ByteArray, constructed ConstructorInstance, anchor Token) throws SourceParseError
+		if not self.signatures.anyFunctionReadsFixedElementCount() or not self.staticTakesItsWordFromTheCallSite(callee, word: CallSiteWord.count) 'theCountHasAnotherSource'
+			return
+		end 'theCountHasAnotherSource'
+
+		let callNamesTheCount = match constructed 'qualifier'
+			instance(gid) gives self.signatures.valueStatesItsOwnElementCount(ValueTypeTag.genericInstance, nameId: gid as TypeNameId)
+			none gives false
+		end 'qualifier'
+
+		if callNamesTheCount 'theQualifierStatesIt'
+			return
+		end 'theQualifierStatesIt'
+
+		match self.bodyState.fixedElementCountParam 'hasOneToForward'
+			slot or
+			enclosingThroughEnv then return
+			none then break
+		end 'hasOneToForward'
+
+		throw SourceParseError.unsupported("calling '{String.from(unqualifiedMemberOf(callee))}' (which reads `countof` of the sized container's own `Self`) through a name that states no element count, from a function that carries no fixed-element-count parameter of its own to forward — a `static function` that does not return `Self` takes the count from the instance its call names. Name a sized instance with a typealias (`Vector with 3 Int`) and call it through that, or call it from a method of the sized container", line: anchor.line, column: anchor.column)
+	end 'requireACountSourceForAStaticCall'
+
+	function requireWitnessTablesForAStaticCall(callee ByteArray, constructed ConstructorInstance, anchor Token) throws SourceParseError
+		if self.emittingFunctionCarriesWitnessParams() or not self.staticTakesItsWordFromTheCallSite(callee, word: CallSiteWord.witnesses) 'nothingToForwardOrSomewhereToForwardFrom'
+			return
+		end 'nothingToForwardOrSomewhereToForwardFrom'
+
+		let needsTheCallersTables = match constructed 'qualifier'
+			instance(gid) gives self.signatures.constraintsNameABareTypeParameter(callee, extensionConstraints: self.signatures.extensionMethodConstraintsOf(callee), gid: gid)
+			none gives true
+		end 'qualifier'
+
+		if not needsTheCallersTables 'theQualifierNamesEveryTable'
+			return
+		end 'theQualifierNamesEveryTable'
+
+		throw self.noWitnessTablesRefusal(unqualifiedMemberOf(callee), arrival: arrivalWhenWithoutTables(self.emittingFunctionTableHolder(), outsideAClosure: NoWitnessTablesArrival.forwardedToACallee), anchor: anchor)
+	end 'requireWitnessTablesForAStaticCall'
+
 	function descriptorSubjectOf(callee ByteArray, args ValueIdArray, constructed ConstructorInstance) returns GenericInstanceId throws MapError
 		if self.calleeTakesReceiver(callee) 'aReceiverCall'
 			let receiver = try args.get(0) otherwise panic("descriptorSubjectOf: a receiver call to '{String.from(callee)}' carries no receiver argument")
@@ -70665,7 +70868,7 @@ export type Parser
 		for position in 0 upto params.count() 'eachTypeParam'
 			let paramName = try params.get(position) otherwise panic("spawnFactoryConstructorInstance: params.get OOB at {position} on a list walked to its own count")
 
-			match self.factoryTypeArgumentAt(base, paramName: paramName, decl: decl, args: args, argLabels: argLabels) 'argument'
+			match self.factoryTypeArgumentAt(base, paramName: paramName, position: position, decl: decl, args: args, argLabels: argLabels) 'argument'
 				found(t) then typeArgs.push(try self.requireInferableTypeArgument(t, anchor: anchor))
 
 				// ⭐ **A MISS IS A REFUSAL ONLY AT A `spawn`.** There the instantiation is the whole point and
@@ -70725,19 +70928,22 @@ export type Parser
 		throw SourceParseError.unsupported(refusal, line: anchor.line, column: anchor.column)
 	end 'uninferredFactoryInstance'
 
-	// What the arguments fix one type parameter to, or `absent`. The FIRST factory parameter declared at that
-	// parameter decides, and the argument standing in its position carries the type; labels are mapped
-	// through `argSlotPosition`, the one home of the label-to-position rule, so `create(item: x)` fixes `T`
-	// exactly as `create(x)` does.
-	function factoryTypeArgumentAt(typeName ByteArray, paramName ByteArray, decl OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns InferredTypeArgument
+	// What the arguments fix one type parameter to, or `absent`. The FIRST factory parameter declared
+	// at that parameter, or at an instance written over it, whose argument fixes it decides; labels
+	// are mapped through `argSlotPosition`, the one home of the label-to-position rule, so
+	// `create(item: x)` fixes `T` exactly as `create(x)` does.
+	function factoryTypeArgumentAt(typeName ByteArray, paramName ByteArray, position ElementIndex, decl OverloadedDecl, args ValueIdArray, argLabels NameRoster) returns InferredTypeArgument
 		let token = typeParamTokenFor(typeName, paramName: paramName)
 
 		for p in 0 upto decl.paramTypes.count() 'eachFactoryParam'
-			let declared = try decl.paramTypes.get(p) otherwise panic("factoryTypeArgumentAt: paramTypes.get OOB at {p} below count {decl.paramTypes.count()}")
+			let swept = try decl.paramTypes.get(p) otherwise panic("factoryTypeArgumentAt: paramTypes.get OOB at {p} below count {decl.paramTypes.count()}")
+			let sweptTag = maxonTypeTag(swept)
 
-			if maxonTypeTag(declared) != ValueTypeTag.typeParameter or typeParamIdOf(declared) != token 'notThisParameter'
+			if sweptTag == ValueTypeTag.unresolved or (sweptTag == ValueTypeTag.typeParameter and typeParamIdOf(swept) != token) 'notThisParameter'
 				continue
 			end 'notThisParameter'
+
+			let declared = swept if sweptTag == ValueTypeTag.typeParameter else self.sweptParamType(swept, scopeFilePath: decl.declFilePath)
 
 			for i in 0 upto args.count() 'eachArgument'
 				let label = try argLabels.get(i) otherwise panic("factoryTypeArgumentAt: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
@@ -70748,12 +70954,63 @@ export type Parser
 					continue
 				end 'anotherPosition'
 
-				return InferredTypeArgument.found(self.spawnTypeArgumentOfValue(try args.get(i) otherwise panic("factoryTypeArgumentAt: args.get OOB at {i}")))
+				match self.typeArgumentFixedByArgument(declared, actual: self.spawnTypeArgumentOfValue(try args.get(i) otherwise panic("factoryTypeArgumentAt: args.get OOB at {i}")), token: token, base: typeName, position: position) 'atThisArgument'
+					found(fixed) then return InferredTypeArgument.found(fixed)
+					absent then break
+				end 'atThisArgument'
 			end 'eachArgument'
 		end 'eachFactoryParam'
 
 		return InferredTypeArgument.absent
 	end 'factoryTypeArgumentAt'
+
+	// A parameter written as the bare base inside its own type is the instance over the type's own
+	// parameters, so the argument's type argument at `position` is the one it fixes.
+	function typeArgumentFixedByArgument(declared MaxonType, actual MaxonType, token TypeParamId, base ByteArray, position ElementIndex) returns InferredTypeArgument
+		if maxonTypeTag(declared) != ValueTypeTag.structRef 'notTheBaseItself'
+			return self.typeArgumentFixedByType(declared, actual: actual, token: token)
+		end 'notTheBaseItself'
+
+		if maxonTypeTag(actual) != ValueTypeTag.genericInstance or not self.internedName(typeNameIdOf(declared)).equals(base) 'notAnInstanceOfTheBase'
+			return InferredTypeArgument.absent
+		end 'notAnInstanceOfTheBase'
+
+		let actualId = genericInstanceIdOf(actual)
+
+		if not self.signatures.genericInstanceBaseName(actualId).equals(base) 'anotherBase'
+			return InferredTypeArgument.absent
+		end 'anotherBase'
+
+		return InferredTypeArgument.found(self.signatures.canonicalInstanceArg(self.signatures.substitutedInstanceArg(actualId, position: position)))
+	end 'typeArgumentFixedByArgument'
+
+	function typeArgumentFixedByType(declared MaxonType, actual MaxonType, token TypeParamId) returns InferredTypeArgument
+		let declaredTag = maxonTypeTag(declared)
+
+		if declaredTag == ValueTypeTag.typeParameter 'aTypeParameter'
+			return InferredTypeArgument.found(self.signatures.canonicalInstanceArg(actual)) if typeParamIdOf(declared) == token else InferredTypeArgument.absent
+		end 'aTypeParameter'
+
+		if declaredTag != ValueTypeTag.genericInstance or maxonTypeTag(actual) != ValueTypeTag.genericInstance 'nothingToMatchInside'
+			return InferredTypeArgument.absent
+		end 'nothingToMatchInside'
+
+		let declaredId = genericInstanceIdOf(declared)
+		let actualId = genericInstanceIdOf(actual)
+
+		if self.signatures.genericInstanceBaseId(declaredId) != self.signatures.genericInstanceBaseId(actualId) 'anotherBase'
+			return InferredTypeArgument.absent
+		end 'anotherBase'
+
+		for argumentPosition in 0 upto self.signatures.genericInstanceArgCount(declaredId) 'eachArgument'
+			match self.typeArgumentFixedByType(self.signatures.substitutedInstanceArg(declaredId, position: argumentPosition), actual: self.signatures.substitutedInstanceArg(actualId, position: argumentPosition), token: token) 'atThisPosition'
+				found(fixed) then return InferredTypeArgument.found(fixed)
+				absent then continue
+			end 'atThisPosition'
+		end 'eachArgument'
+
+		return InferredTypeArgument.absent
+	end 'typeArgumentFixedByType'
 
 	// An argument's type as a TYPE ARGUMENT of the SIGNATURE INDEX's registry. A name crosses interners as a
 	// NAME — the value's id belongs to this file's table — and the canonical `structRef`/`named` split is the
@@ -70789,19 +71046,17 @@ export type Parser
 	function retypeGenericAliasConstructorResult(result ValueId, gid GenericInstanceId, aliasName ByteArray)
 		self.retypeConstructorResultToInstance(result, gid: gid)
 
-		// ⛔⛔ **PROVENANCE IS ABOUT WHAT THE SITE WROTE, NOT ABOUT WHETHER A RETYPE WAS NEEDED — and it used
-		// to sit BEHIND the retype's two guards, so a factory whose result was ALREADY the instance recorded
-		// NOTHING.** That is the common case, not the rare one: only a DECLARED generic's `create() returns
-		// Self` comes back as the shared body's base `structRef` and needs retyping, while every builtin
-		// container's factory — `OtherCol.create()` over `Array` — is already typed and fell straight out of
-		// the first guard. **MEASURED with a probe at the display door: `named=''` for exactly that value,
-		// while its own function's brand column existed** — which is why a diagnostic could not say which of
-		// two aliases of one instance the blamed statement had written, and named the first-declared instead.
+		// ⛔⛔ **PROVENANCE IS ABOUT WHAT THE SITE WROTE, NOT ABOUT WHETHER A RETYPE WAS NEEDED**, so it is
+		// not written behind the retype's guards. A factory whose result is ALREADY the instance is the
+		// common case: only a DECLARED generic's `create() returns Self` comes back as the shared body's
+		// base `structRef` and needs retyping, while every builtin container's factory —
+		// `OtherCol.create()` over `Array` — is already typed. Unrecorded, a diagnostic cannot say which
+		// of two aliases of one instance the blamed statement wrote.
 		//
 		// ⚠ The guards below are the ones this fact needs, and they are NOT the retype's: the value must BE an
 		// instance and it must be THIS one. A result that is some other base's struct is not described by
 		// this alias and must not be stamped with its name.
-		if self.tagOf(result) != ValueTypeTag.genericInstance or self.valueNameId(result) != gid as TypeNameId 'notTheInstanceBuilt'
+		if not self.resultIsTheInstance(result, gid: gid) 'notTheInstanceBuilt'
 			self.recordValueCallInstance(result, instance: gid)
 			return
 		end 'notTheInstanceBuilt'
@@ -70825,6 +71080,21 @@ export type Parser
 		// and it is the same spelling `brandValue` is here for.
 		self.markDeclaredSurface(result, declared: surfaceOfRootBits(self.signatures.aliasSpellingSurfaceBits(aliasName, readerFilePath: self.filePath)))
 	end 'retypeGenericAliasConstructorResult'
+
+	function resultIsTheInstance(result ValueId, gid GenericInstanceId) returns bool
+		return self.tagOf(result) == ValueTypeTag.genericInstance and self.valueNameId(result) == gid as TypeNameId
+	end 'resultIsTheInstance'
+
+	// A static returning another type keeps its result's type, so the inferred instance is recorded as
+	// the call's qualifier, which is where `LowerMaxonToStd.hiddenArgumentSourceOf` reads its hidden
+	// words from.
+	function stampInferredFactoryResult(result ValueId, gid GenericInstanceId)
+		self.retypeConstructorResultToInstance(result, gid: gid)
+
+		if not self.resultIsTheInstance(result, gid: gid) 'aStaticReturningAnotherType'
+			self.recordValueCallInstance(result, instance: gid)
+		end 'aStaticReturningAnotherType'
+	end 'stampInferredFactoryResult'
 
 	// ⭐ **THE RETYPE HALF.** A DECLARED generic's `create() returns Self` hands back the shared body's base
 	// `structRef`, and only the call site knows which instance was asked for. A result that is already an
@@ -72806,7 +73076,7 @@ export type Parser
 	// Two receiver shapes, and both are the same question asked of what the call site actually knows:
 	//
 	//   • A CONCRETE generic instance — the type argument is known, so ask whether it conforms. This is the
-	//     `materializeWitnessArg` `concrete` arm's precondition, checked where a position exists.
+	//     `materializeWitnessArgFromValue`'s concrete-instance arm's precondition, checked where a position exists.
 	//   • ANYTHING ELSE (the enclosing generic body's own `self`, a value of its type parameter) — the
 	//     argument is opaque and the witness is FORWARDED from the caller's own slots, so the caller must
 	//     carry the SAME constraints in the SAME order. Inside the extension's own body it does, by
@@ -73169,21 +73439,14 @@ export type Parser
 		end 'reject'
 	end 'requireFixedElementCountSourceForForwarding'
 
-	// ⚠ **THE WITNESS TWIN OF `requireSelfForDescriptorForwarding`, AND IT REPLACES A COMPILER ABORT.**
-	// A dictionary-passing call on a value of the enclosing generic type FORWARDS the caller's own witness
-	// tables (`LowerMaxonToStd.materializeWitnessArg`'s `structRef` arm), so the caller must carry them. An
-	// INSTANCE method always does, and so does a `Self`-returning static, which sources them at
-	// its call site from the concrete instance it builds. What is left with no source at all is a static that
-	// returns something ELSE, and that reached `forwardCallerWitness`'s panic:
-	// **MEASURED, `panic at LowerMaxonToStd.maxon:1404: forwardCallerWitness: caller 'Holder.digestOf'
-	// carries 0 witness parameter(s) and was asked to forward slot 0 to 'Holder.digest'`**, on
-	// `static function digestOf(v T) returns HashValue` building a `Self{v: v}` and calling `.digest()` on it —
-	// a program the oracle compiles and runs (exit 41).
+	// ⚠ **THE WITNESS TWIN OF `requireSelfForDescriptorForwarding`.** A dictionary-passing call on a
+	// value of the enclosing generic type FORWARDS the caller's own witness tables
+	// (`LowerMaxonToStd.materializeWitnessArgFromValue`'s `structRef` arm), so the caller must carry
+	// them. An INSTANCE method and a `Self`-returning static always do. Any other static carries them only when
+	// the pre-scan saw it dispatch (`scanDescriptorNeedsInto`'s `needsTheCallSitesWitnesses`), and one
+	// it did not see would reach `forwardCallerWitness`'s panic; this refuses it with a position
+	// instead.
 	//
-	// ⚠ **IT IS A CLEAN REFUSAL AND NOT THE FULL ANSWER, WHICH IS THE SAME "LATER SLICE" THE DESCRIPTOR'S
-	// `staticLayoutNeedsSelfReturn` NAMES:** threading the dictionary from a static CALL SITE's alias
-	// (`H.digestOf(41)` knows `H = Holder with Integer`). Until that exists, both columns want the same source
-	// and this refuses the same shape in the same words rather than aborting the compiler.
 	// ⚠ **IT ASKS `emittingFunctionCarriesWitnessParams`, NOT the declaring function's COUNT, and the difference
 	// is a LIFTED CLOSURE.** Forwarding copies the caller's hidden witness PARAMETERS into the callee's,
 	// by position (`LowerMaxonToStd.forwardCallerWitness`) — so the question is what the function being EMITTED
@@ -73205,64 +73468,6 @@ export type Parser
 
 		throw self.noWitnessTablesRefusal(memberTok.value, arrival: arrivalWhenWithoutTables(self.emittingFunctionTableHolder(), outsideAClosure: NoWitnessTablesArrival.forwardedToACallee), anchor: memberTok)
 	end 'requireWitnessSourceForForwarding'
-
-	function staticLayoutRefusal(nameTok Token, needsCount bool, parameterListStart ElementIndex) returns SourceParseError
-		let scan = self.scanOneMethodDescriptorSignals(parameterListStart, edgeScratch: DescriptorEdgeScratch.create(), region: ScanRegion.typeStaticMethod)
-
-		if not needsCount and not scan.direct 'maybeAnEdgeIsTheCause'
-			if let callee = try self.layoutReadingCalleeOf(scan) 'namesTheCallee'
-				return SourceParseError.unsupported("calling '{String.from(unqualifiedMemberName(callee))}' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor {StaticSourcesFromTheReturnedInstance}, so declare this one `returns Self`, or make it an instance method", line: nameTok.line, column: nameTok.column)
-			end 'namesTheCallee'
-		end 'maybeAnEdgeIsTheCause'
-
-		return SourceParseError.unsupported("a `static function` that needs the enclosing instance's dictionary — it constructs an opaque type-parameter `Array` (`ElementArray.create()`), reads `sizeof` of the type parameter, or reads `countof` of the sized container's own `Self` — must return `Self` so the caller can source it from the instance the static builds, or (for the descriptor) take a parameter whose type is written over the type's parameters so the call site can pass one; a static that does neither has no source (build the array, read the size or read the count through an instance method on `self`, or return `Self`)", line: nameTok.line, column: nameTok.column)
-	end 'staticLayoutRefusal'
-
-	function layoutReadingCalleeOf(scan MethodDescriptorScan) returns ByteArray throws AbsentError
-		for callee in scan.callees 'eachSelfCallee'
-			let qualified = qualifiedMethodName(self.enclosingTypeName(), methodName: callee)
-
-			if self.signatures.functionNeedsLayoutDescriptor(qualified) 'itReadsTheLayout'
-				return qualified
-			end 'itReadsTheLayout'
-		end 'eachSelfCallee'
-
-		for callee in scan.nestedInstanceCallees 'eachNestedCallee'
-			if self.signatures.functionNeedsLayoutDescriptor(callee) 'nestedReadsTheLayout'
-				return callee.clone()
-			end 'nestedReadsTheLayout'
-		end 'eachNestedCallee'
-
-		throw AbsentError.absent
-	end 'layoutReadingCalleeOf'
-
-	function staticReachesAnInstanceMethodNeedingALayout(scan MethodDescriptorScan) returns bool
-		for callee in scan.callees 'eachSelfCallee'
-			let qualified = qualifiedMethodName(self.enclosingTypeName(), methodName: callee)
-
-			if self.signatures.functionNeedsLayoutDescriptor(qualified) and self.signatures.declaredMethodTakesReceiver(qualified) 'anInstanceMethodReadsTheLayout'
-				return true
-			end 'anInstanceMethodReadsTheLayout'
-		end 'eachSelfCallee'
-
-		for callee in scan.nestedInstanceCallees 'eachNestedCallee'
-			if self.signatures.functionNeedsLayoutDescriptor(callee) 'nestedReadsTheLayout'
-				return true
-			end 'nestedReadsTheLayout'
-		end 'eachNestedCallee'
-
-		return false
-	end 'staticReachesAnInstanceMethodNeedingALayout'
-
-	function staticLayoutIsSourcedFromTheCallSite(parameterListStart ElementIndex) returns bool
-		if not self.staticTakesATypeParameterValue(parameterListStart) 'noValueOfTheTypeParameter'
-			return false
-		end 'noValueOfTheTypeParameter'
-
-		let scan = self.scanOneMethodDescriptorSignals(parameterListStart, edgeScratch: DescriptorEdgeScratch.create(), region: ScanRegion.typeStaticMethod)
-
-		return not self.staticReachesAnInstanceMethodNeedingALayout(scan)
-	end 'staticLayoutIsSourcedFromTheCallSite'
 
 	function emittingFunctionTableHolder() returns TableHolder
 		return deriveTableHolder(not self.closureEnclosingFrames.isEmpty(), carriedTables: self.declaringWitnessParamCount)
@@ -76504,7 +76709,7 @@ export type Parser
 	//   * **IT MUST BE NAMEABLE FROM THIS FILE** — `requireGlobalInitCalleeIsVisible`'s rule, which the user
 	//     factory form asks too and which carries the measurement for both.
 	//   * **IT MUST RETURN ITS OWN TYPE.** The slot is typed `genericInstance(giid)` and the record's layout
-	//     descriptor and constraint witnesses are sourced from the call's RESULT, which is the concrete
+	//     descriptor and constraint witnesses are sourced from the call's RESULT (`hiddenArgumentSourceOf` takes a recorded call qualifier first, and `__module_init`'s call records none), which is the concrete
 	//     instance only for a `Self`-returning static (`ProgramSignatures.calleeReturnsItsDeclaringType`, whose
 	//     header states both sides of that ABI). A `create()` returning anything else would have its result
 	//     minted as a record the callee never built — a wrong answer at run time and a decref of it at exit.
@@ -87309,14 +87514,6 @@ export type Parser
 		return fields
 	end 'closureEnvFieldsOf'
 
-	function declaringBodyHasAReceiver() returns bool
-		if self.closureEnclosingFrames.isEmpty() 'theDeclaringBody'
-			return self.bodyState.scope.contains(SelfParamName)
-		end 'theDeclaringBody'
-
-		return self.bodyState.carriesLayoutParam() and (try self.closureEnclosingFrames.get(0) otherwise panic("declaringBodyHasAReceiver: closureEnclosingFrames is non-empty by the guard and has no first frame")).scope.contains(SelfParamName)
-	end 'declaringBodyHasAReceiver'
-
 	function hiddenWordParamOf(word ClosureHiddenWord) returns HiddenWordParam
 		return match word 'word'
 			descriptor gives self.bodyState.layoutParam
@@ -87397,8 +87594,8 @@ export type Parser
 			return false
 		end 'passesNoCount'
 
-		let subject = (try args.get(0) otherwise panic("callForwardsTheFixedElementCount: a receiver call to '{String.from(callee)}' carries no receiver argument")) if self.calleeTakesReceiver(callee) else result
-		return not self.signatures.valueStatesItsOwnElementCount(self.tagOf(subject), nameId: self.valueNameId(subject))
+		let instance = try self.descriptorSubjectInstance(result, callee: callee, args: args) otherwise return true
+		return not self.signatures.valueStatesItsOwnElementCount(ValueTypeTag.genericInstance, nameId: instance as TypeNameId)
 	end 'callForwardsTheFixedElementCount'
 
 	function callReadsTheDescriptor(result ValueId, callee ByteArray, args ValueIdArray) returns bool
@@ -87415,15 +87612,31 @@ export type Parser
 			return false
 		end 'passesNoDescriptor'
 
-		let subject = (try args.get(0) otherwise panic("callReadsTheDescriptor: a receiver call to '{String.from(callee)}' carries no receiver argument")) if self.calleeTakesReceiver(callee) else result
-
-		if self.tagOf(subject) != ValueTypeTag.genericInstance 'notTheInstanceItself'
-			let qualifier = try self.callInstanceOfValue(subject) otherwise return true
-			return not self.signatures.instanceArgsAreFullyConcrete(qualifier)
-		end 'notTheInstanceItself'
-
-		return not self.signatures.instanceArgsAreFullyConcrete(self.valueNameId(subject) as GenericInstanceId)
+		let instance = try self.descriptorSubjectInstance(result, callee: callee, args: args) otherwise return true
+		return not self.signatures.instanceArgsAreFullyConcrete(instance)
 	end 'callReadsTheDescriptor'
+
+	function descriptorSubjectInstance(result ValueId, callee ByteArray, args ValueIdArray) returns GenericInstanceId throws AbsentError
+		if self.calleeTakesReceiver(callee) 'aReceiverCall'
+			let receiver = try args.get(0) otherwise panic("descriptorSubjectInstance: a receiver call to '{String.from(callee)}' carries no receiver argument")
+
+			if self.tagOf(receiver) != ValueTypeTag.genericInstance 'receiverIsNoInstance'
+				throw AbsentError.absent
+			end 'receiverIsNoInstance'
+
+			return self.valueNameId(receiver) as GenericInstanceId
+		end 'aReceiverCall'
+
+		if let qualifier = try self.callInstanceOfValue(result) 'calledThroughAnInstance'
+			return qualifier
+		end 'calledThroughAnInstance'
+
+		if self.tagOf(result) != ValueTypeTag.genericInstance 'theResultIsNoInstance'
+			throw AbsentError.absent
+		end 'theResultIsNoInstance'
+
+		return self.valueNameId(result) as GenericInstanceId
+	end 'descriptorSubjectInstance'
 
 	function handCapturesOver(captureNames NameRoster, capturedValues CapturedValueArray, captureAnchors TokenArray) returns EnvSlotIndexArray throws SourceParseError
 		var released = EnvSlotIndexArray.create()
@@ -93644,6 +93857,9 @@ export type Parser
 		let constructed = try self.spawnFactoryConstructorInstance(constructorInstance, inferInstanceOf: inferInstanceOf, callee: callee, args: args, argLabels: argLabels, anchor: anchor, spawned: spawned)
 		try self.requireBareGenericSubjectIsBound(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, constructed: constructed, inferInstanceOf: inferInstanceOf, anchor: anchor)
 		try self.requireADescriptorToComposeFrom(callee, args: args, constructed: constructed, anchor: anchor)
+		try self.requireALayoutSourceForAStaticCall(callee, constructed: constructed, anchor: anchor)
+		try self.requireACountSourceForAStaticCall(callee, constructed: constructed, anchor: anchor)
+		try self.requireWitnessTablesForAStaticCall(callee, constructed: constructed, anchor: anchor)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 		self.adoptPendingOverlaps(result, mint: mint, anchor: anchor)
 		let opaqueWordReading = try self.retypeOpaqueMethodResult(result, callee: callee, args: args, anchor: anchor)
@@ -93720,7 +93936,7 @@ export type Parser
 		if inferInstanceOf.isOf() 'aSpawnFactory'
 			match constructed 'inferred'
 				none then break
-				instance(gid) then self.retypeConstructorResultToInstance(result, gid: gid)
+				instance(gid) then self.stampInferredFactoryResult(result, gid: gid)
 			end 'inferred'
 		end 'aSpawnFactory'
 

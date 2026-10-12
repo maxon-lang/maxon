@@ -1406,8 +1406,8 @@ end 'main'
 source 42 value long enough for a heap record true
 ```
 
-<!-- test: error.a-static-handing-a-local-to-a-by-reference-parameter-is-refused -->
-A static that does not return `Self` hands a local holding a type-parameter value to an instance method that takes it by reference, and a call on another instance has no descriptor for the static to hand on.
+<!-- test: a-static-handing-a-local-to-a-by-reference-parameter-takes-the-call-sites-descriptor -->
+A static that does not return `Self` hands a local holding a type-parameter value to an instance method of another instance that takes it by reference. The static takes the descriptor from its call site and hands it on to that method.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -1430,17 +1430,20 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function main() returns ExitCode
-	let c = StrCell.make("payload")
-	print(StrCell.viaLocal(c))
+	let c = StrCell.make("payload {40 + 2} value long enough for a heap record")
+	print("{StrCell.viaLocal(c)} {c.v}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:13:18: Unsupported: calling 'setOnce' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method
+```exitcode
+0
+```
+```stdout
+payload 42 value long enough for a heap record payload 42 value long enough for a heap record
 ```
 
-<!-- test: error.a-static-handing-a-field-to-a-by-reference-parameter-is-refused -->
-A static that does not return `Self` hands a field of another instance to an instance method that takes it by reference, and a call on another instance has no descriptor for the static to hand on.
+<!-- test: a-static-handing-a-field-to-a-by-reference-parameter-takes-the-call-sites-descriptor -->
+A static that does not return `Self` hands a field of another instance to an instance method that takes it by reference. The static takes the descriptor from its call site and hands it on to that method.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -1453,25 +1456,78 @@ type Cell uses T
 		dest = self.v
 	end 'setOnce'
 
-	static function poke(other Self)
-		other.setOnce(other.v)
+	static function poke(into Self, donor Self)
+		into.setOnce(donor.v)
 	end 'poke'
 end 'Cell'
 
 typealias StrCell = Cell with String
 
 function main() returns ExitCode
-	let c = StrCell.make("payload")
-	StrCell.poke(c)
+	var src = StrCell.make("source {40 + 2} value long enough for a heap record")
+	var dst = StrCell.make("target {40 + 2} value long enough for a heap record")
+	StrCell.poke(dst, donor: src)
+	print("{src.v} {dst.v}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:13:18: Unsupported: calling 'setOnce' (which reads the enclosing instance's layout descriptor) from a `static function` that carries none to hand it — a static sources a descriptor from the instance it RETURNS, so declare this one `returns Self`, or make it an instance method
+```exitcode
+0
+```
+```stdout
+target 42 value long enough for a heap record target 42 value long enough for a heap record
 ```
 
-<!-- test: error.a-static-needing-sizeof-that-also-passes-an-int-by-reference-names-sizeof -->
-A static that does not return `Self` reads `sizeof` of the type parameter and also hands an integer local to an unrelated by-reference parameter, and the refusal names the dictionary need rather than the hand-off.
+<!-- test: a-static-handing-a-record-field-to-a-by-reference-parameter-takes-the-call-sites-descriptor -->
+The same hand-off at a record instantiation: the record's `String` field is retained through the call site's descriptor and released once when the cell dies.
+```maxon
+typealias Small = int(0 to 1000)
+
+type Entry
+	export var name as String
+	export var n as Small
+
+	static function create(name String, n Small) returns Self
+		return Self{name: name, n: n}
+	end 'create'
+end 'Entry'
+
+type Cell uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+
+	function setOnce(dest T)
+		dest = self.v
+	end 'setOnce'
+
+	static function viaLocal(other Self) returns T
+		var x = other.v
+		other.setOnce(x)
+		return x
+	end 'viaLocal'
+end 'Cell'
+
+typealias EntryCell = Cell with Entry
+
+function main() returns ExitCode
+	let c = EntryCell.make(Entry.create("entry {40 + 2} value long enough for a heap record", n: 7))
+	let got = EntryCell.viaLocal(c)
+	print("{got.name} {got.n} {c.v.name}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+entry 42 value long enough for a heap record 7 entry 42 value long enough for a heap record
+```
+
+<!-- test: a-static-reading-sizeof-that-also-passes-an-int-by-reference-reads-the-call-sites-descriptor -->
+A static that does not return `Self` reads `sizeof` of the type parameter and also hands an integer local to an unrelated by-reference parameter. The size comes from the descriptor the call site hands the static.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -1496,12 +1552,15 @@ end 'Cell'
 typealias CountCell = Cell with Count
 
 function main() returns ExitCode
-	print("{CountCell.width(1)} {CountCell.make(2).v}\n")
+	print("{CountCell.width(1) == (sizeof(Count) as Count) + 2} {CountCell.make(2).v}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:18: Unsupported: a `static function` that needs the enclosing instance's dictionary — it constructs an opaque type-parameter `Array` (`ElementArray.create()`), reads `sizeof` of the type parameter, or reads `countof` of the sized container's own `Self` — must return `Self` so the caller can source it from the instance the static builds, or (for the descriptor) take a parameter whose type is written over the type's parameters so the call site can pass one; a static that does neither has no source (build the array, read the size or read the count through an instance method on `self`, or return `Self`)
+```exitcode
+0
+```
+```stdout
+true 2
 ```
 
 <!-- test: a-call-reaching-a-generic-and-a-concrete-declaration-binds-each-by-its-own-convention -->
@@ -3763,9 +3822,9 @@ pointer into freed memory, `main`'s read of it would fault, and the concrete des
 record nobody had referenced. The constructor feed takes the reference through the descriptor's `retainFunc@64`
 (`Parser.referenceOrMarkOpaqueFeed`), and the pair balances.
 
-⚠ **A `static` SPELLING OF `wrap` IS ADMITTED TOO — provided it returns the enclosing type**, which is the
-gate `staticLayoutNeedsSelfReturn` draws and which the descriptor-need seed asks (see
-`a-record-over-the-enclosing-parameter-in-a-plain-field-round-trips`, whose feeding `create` is exactly that).
+⚠ **A `static` SPELLING OF `wrap` IS ADMITTED TOO.** One that returns the enclosing type takes the descriptor
+off the instance it builds (see `a-record-over-the-enclosing-parameter-in-a-plain-field-round-trips`, whose
+feeding `create` is exactly that), and any other static takes it from the instance its call names.
 
 <!-- test: a-returned-record-outlives-the-borrows-source -->
 ```maxon
@@ -4612,4 +4671,109 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: an-unqualified-sibling-static-fed-a-borrowed-parameter-stores-it-through-the-call-sites-descriptor -->
+A static calls its sibling static by its bare name and hands it the borrowed type-parameter parameter twice. The bare call is the same call as `DPair.create(v, b: v)`: the sibling stores both arguments, so the caller takes its references through the call site's descriptor.
+```maxon
+type DPair uses T
+	export var a as T
+	export var b as T
+
+	static function create(a T, b T) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+
+	static function twice(v T) returns Self
+		return create(v, b: v)
+	end 'twice'
+end 'DPair'
+
+typealias StrPair = DPair with String
+
+function main() returns ExitCode
+	let p = StrPair.twice("dup {40 + 2} value long enough for a heap record")
+	print("{p.a} {p.b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+dup 42 value long enough for a heap record dup 42 value long enough for a heap record
+```
+
+<!-- test: an-unqualified-sibling-static-fed-a-borrowed-record-stores-it-through-the-call-sites-descriptor -->
+The same bare sibling call at a record instantiation, whose `String` field the shared body retains once per stored reference.
+```maxon
+typealias Small = int(0 to 1000)
+
+type Entry
+	export var name as String
+	export var n as Small
+
+	static function create(name String, n Small) returns Self
+		return Self{name: name, n: n}
+	end 'create'
+end 'Entry'
+
+type DPair uses T
+	export var a as T
+	export var b as T
+
+	static function create(a T, b T) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+
+	static function twice(v T) returns Self
+		return create(v, b: v)
+	end 'twice'
+end 'DPair'
+
+typealias EntryPair = DPair with Entry
+
+function main() returns ExitCode
+	let p = EntryPair.twice(Entry.create("entry {40 + 2} value long enough for a heap record", n: 9))
+	print("{p.a.name} {p.b.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+entry 42 value long enough for a heap record 9
+```
+
+<!-- test: an-unqualified-sibling-static-called-in-a-closure-of-a-static-stores-through-the-call-sites-descriptor -->
+A closure written in a static calls the sibling static by its bare name with its own type-parameter parameter.
+```maxon
+type DPair uses T
+	export var a as T
+	export var b as T
+
+	static function create(a T, b T) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+
+	static function viaClosure(v T) returns Self
+		let build = function(x T) gives create(x, b: x)
+		return build(v)
+	end 'viaClosure'
+end 'DPair'
+
+typealias StrPair = DPair with String
+
+function main() returns ExitCode
+	let p = StrPair.viaClosure("dup {40 + 2} value long enough for a heap record")
+	print("{p.a} {p.b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+dup 42 value long enough for a heap record dup 42 value long enough for a heap record
 ```
