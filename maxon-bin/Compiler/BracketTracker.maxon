@@ -1,0 +1,77 @@
+enum OpenGroupRole
+	typeList
+	expression
+end 'OpenGroupRole'
+
+typealias OpenGroupRoleArray = Array with OpenGroupRole
+
+module type BracketTracker
+	var groups as OpenGroupRoleArray
+	var prevKind as TokenKind
+	var prevIsReadonlyModifier as bool
+	var inTypealiasDeclaration as bool
+	var inBareTypeList as bool
+
+	module static function create() returns BracketTracker
+		return Self{groups: OpenGroupRoleArray.create(), prevKind: TokenKind.eof, prevIsReadonlyModifier: false, inTypealiasDeclaration: false, inBareTypeList: false}
+	end 'create'
+
+	module function observe(kind TokenKind, value ByteArray)
+		if kind == TokenKind.newline 'statementEnds'
+			self.inTypealiasDeclaration = false
+			self.inBareTypeList = false
+			return
+		end 'statementEnds'
+
+		if kind == TokenKind.docComment 'prose'
+			return
+		end 'prose'
+
+		let isModifier = kind == TokenKind.identifier and isReadonlyWord(value) and readonlyMayFollow(self.prevKind) and (self.prevKind == TokenKind.with or self.innermostGroupIsTypeList())
+
+		if tokenKindOpensABracket(kind) 'opensGroup'
+			self.groups.push(self.roleOfGroupOpenedBy(kind))
+		end 'opensGroup' else if tokenKindClosesABracket(kind) 'closesGroup'
+			if self.groups.count() > 0 'notUnbalanced'
+				_ = try self.groups.pop() otherwise panic("BracketTracker.observe: a group is open — the count is checked on the line above")
+			end 'notUnbalanced'
+		end 'closesGroup'
+
+		// A typealias never sits inside a bracket, so clearing here keeps a bracket left unclosed in
+		// half-typed code from misclassifying `readonly` in every typealias after it.
+		if kind == TokenKind.typealias 'typealiasBegins'
+			self.groups.clear()
+			self.inTypealiasDeclaration = true
+		end 'typealiasBegins' else if kind == TokenKind.with and self.inTypealiasDeclaration and self.groups.count() == 0 'bareTypeListBegins'
+			self.inBareTypeList = true
+		end 'bareTypeListBegins'
+
+		self.prevIsReadonlyModifier = isModifier
+		self.prevKind = kind
+	end 'observe'
+
+	module function lastWasReadonlyModifier() returns bool
+		return self.prevIsReadonlyModifier
+	end 'lastWasReadonlyModifier'
+
+	module function hasOpenGroup() returns bool
+		return self.groups.count() > 0
+	end 'hasOpenGroup'
+
+	function innermostGroupIsTypeList() returns bool
+		if self.groups.count() == 0 'atStatementLevel'
+			return self.inBareTypeList
+		end 'atStatementLevel'
+
+		let role = try self.groups.get(self.groups.count() - 1) otherwise panic("BracketTracker.innermostGroupIsTypeList: the count is non-zero on the line above")
+		return role == OpenGroupRole.typeList
+	end 'innermostGroupIsTypeList'
+
+	function roleOfGroupOpenedBy(kind TokenKind) returns OpenGroupRole
+		if kind == TokenKind.leftParen and (self.prevKind == TokenKind.with or self.prevIsReadonlyModifier or self.innermostGroupIsTypeList()) 'typeListParenthesis'
+			return OpenGroupRole.typeList
+		end 'typeListParenthesis'
+
+		return OpenGroupRole.expression
+	end 'roleOfGroupOpenedBy'
+end 'BracketTracker'

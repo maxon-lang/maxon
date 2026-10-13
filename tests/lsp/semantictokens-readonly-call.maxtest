@@ -1,0 +1,145 @@
+let ReadonlyCallUri = "file:///test.maxon"
+
+let ReadonlyCallQuintupleWidth = 5
+let ReadonlyCallDeltaLineSlot = 0
+let ReadonlyCallDeltaCharacterSlot = 1
+let ReadonlyCallTypeSlot = 3
+
+let ReadonlyCallKeywordType = 0 as SemanticTokenValue
+
+typealias ReadonlyCallTally = int(0 to i64.max)
+
+type ReadonlyCallToken
+	export var line as SemanticTokenValue
+	export var character as SemanticTokenValue
+	export var tokenType as SemanticTokenValue
+
+	static function create(line SemanticTokenValue, character SemanticTokenValue, tokenType SemanticTokenValue) returns ReadonlyCallToken
+		return Self{line: line, character: character, tokenType: tokenType}
+	end 'create'
+end 'ReadonlyCallToken'
+
+typealias ReadonlyCallTokenArray = Array with ReadonlyCallToken
+
+union ReadonlyCallOutcome
+	observed(data SemanticTokenValueArray)
+	broke(detail String)
+end 'ReadonlyCallOutcome'
+
+function readonlyCallOutcomeOf(source String) returns ReadonlyCallOutcome
+	var client = LspClient.start()
+	var outcome = ReadonlyCallOutcome.broke(UnreportedSessionEnding)
+
+	try 'session'
+		_ = client.initialize()
+		client.initialized()
+		client.openDocument(ReadonlyCallUri, content: source)
+		outcome = ReadonlyCallOutcome.observed(client.semanticTokensFull(ReadonlyCallUri).data)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+			malformedResponse or
+			serverRefused then outcome = ReadonlyCallOutcome.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	client.release()
+	return outcome
+end 'readonlyCallOutcomeOf'
+
+test 'semantic tokens colour a call named readonly as a name and a readonly qualifier as a keyword'
+	match readonlyCallOutcomeOf(readonlyCallFixture()) 'tokens'
+		observed(data) then assertReadonlyCallColours(readonlyCallDecode(data))
+		broke(detail) then Expect.fail("the semantic-tokens request did not complete: {detail}")
+	end 'tokens'
+end 'semantic tokens colour a call named readonly as a name and a readonly qualifier as a keyword'
+
+test 'semantic tokens keep colouring a readonly qualifier after an unclosed bracket'
+	match readonlyCallOutcomeOf(readonlyDriftFixture()) 'tokens'
+		observed(data) then assertReadonlyDriftColours(readonlyCallDecode(data))
+		broke(detail) then Expect.fail("the semantic-tokens request did not complete: {detail}")
+	end 'tokens'
+end 'semantic tokens keep colouring a readonly qualifier after an unclosed bracket'
+
+function assertReadonlyDriftColours(tokens ReadonlyCallTokenArray) throws TestFailure
+	try assertReadonlyCallColour(tokens, line: 4, character: 31, isKeyword: true, what: "the qualifier in `Map with String, readonly V` after an unclosed `(` on an earlier line")
+	try assertReadonlyCallColour(tokens, line: 5, character: 32, isKeyword: true, what: "the qualifier in `Map with (String, readonly V)` after an unclosed `(` on an earlier line")
+end 'assertReadonlyDriftColours'
+
+function assertReadonlyCallColours(tokens ReadonlyCallTokenArray) throws TestFailure
+	try assertReadonlyCallColour(tokens, line: 0, character: 28, isKeyword: true, what: "the qualifier in `Array with readonly (Array with ByteArray)`")
+	try assertReadonlyCallColour(tokens, line: 2, character: 9, isKeyword: false, what: "the name in `function readonly(value Count)`")
+	try assertReadonlyCallColour(tokens, line: 12, character: 17, isKeyword: false, what: "the call in `pass(readonly(x))`")
+	try assertReadonlyCallColour(tokens, line: 13, character: 13, isKeyword: false, what: "the first call in `(readonly(x), readonly(y))`")
+	try assertReadonlyCallColour(tokens, line: 13, character: 26, isKeyword: false, what: "the second call in `(readonly(x), readonly(y))`")
+	try assertReadonlyCallColour(tokens, line: 17, character: 32, isKeyword: true, what: "the qualifier in `Map with (String, readonly V)`")
+	try assertReadonlyCallColour(tokens, line: 18, character: 31, isKeyword: true, what: "the qualifier in `Map with String, readonly V`")
+end 'assertReadonlyCallColours'
+
+function assertReadonlyCallColour(tokens ReadonlyCallTokenArray, line SemanticTokenValue, character SemanticTokenValue, isKeyword bool, what String) throws TestFailure
+	var matched = 0 as ReadonlyCallTally
+	var keyword = false
+
+	for token in tokens 'eachToken'
+		if token.line == line and token.character == character 'atThePosition'
+			matched = matched + 1
+			keyword = token.tokenType == ReadonlyCallKeywordType
+		end 'atThePosition'
+	end 'eachToken'
+
+	try Expect.equal(matched, expected: 1, message: "exactly one token should start at line {line}, column {character} ({what}), and {matched} did.")
+	try Expect.equal(keyword, expected: isKeyword, message: "{what} is expected to be a keyword: {isKeyword}. `readonly` is a contextual word — the qualifier only where a type list can hold one, and an ordinary name everywhere else.")
+end 'assertReadonlyCallColour'
+
+function readonlyCallDecode(data SemanticTokenValueArray) returns ReadonlyCallTokenArray
+	var tokens = ReadonlyCallTokenArray.create()
+	var currentLine = 0 as SemanticTokenValue
+	var currentCharacter = 0 as SemanticTokenValue
+	var lineAdvanced = false
+
+	for (position, value) in data.withIterator() 'eachValue'
+		let slot = position.index() mod ReadonlyCallQuintupleWidth
+
+		if slot == ReadonlyCallDeltaLineSlot 'delta'
+			currentLine = currentLine + value
+			lineAdvanced = value > 0
+		end 'delta' else if slot == ReadonlyCallDeltaCharacterSlot 'deltaCharacter'
+			currentCharacter = value if lineAdvanced else currentCharacter + value
+		end 'deltaCharacter' else if slot == ReadonlyCallTypeSlot 'tokenType'
+			tokens.push(ReadonlyCallToken.create(currentLine, character: currentCharacter, tokenType: value))
+		end 'tokenType'
+	end 'eachValue'
+
+	return tokens
+end 'readonlyCallDecode'
+
+function readonlyCallFixture() returns String
+	return String.from(b"typealias Grid = Array with readonly (Array with ByteArray)
+
+function readonly(value Count) returns Count
+    return value
+end 'readonly'
+
+function pass(value Count) returns Count
+    return value
+end 'pass'
+
+function main() returns ExitCode
+    let x = 3 as Count
+    let y = pass(readonly(x))
+    let t = (readonly(x), readonly(y))
+    return 0
+end 'main'
+
+typealias T = Map with (String, readonly V)
+typealias K = Map with String, readonly V")
+end 'readonlyCallFixture'
+
+function readonlyDriftFixture() returns String
+	return String.from(b"function broken() returns Count
+    return pass(
+end 'broken'
+
+typealias K = Map with String, readonly V
+typealias T = Map with (String, readonly V)")
+end 'readonlyDriftFixture'

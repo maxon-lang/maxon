@@ -84,7 +84,7 @@ end 'hoverRenderingOf'
 // FUNCTION, written as a call or as a member — both of which `reservedWordOutOfNamePosition` lets
 // past — while a parameter is local and the buffer rung has already answered it.
 function hoverBeyondTheBuffer(request LspRequest, document HoverDocument, cursor ElementIndex) returns HoverRendering
-	if document.cursorIsReadonlyModifier(cursor) 'aContextualKeyword'
+	if lspIsReadonlyModifier(document.tokens, at: cursor) 'aContextualKeyword'
 		return keywordRendering(document.tokenAt(cursor))
 	end 'aContextualKeyword'
 
@@ -322,7 +322,7 @@ end 'HoverNaming'
 module type HoverDocument
 	let text as String
 	let bytes as ByteArray
-	let tokens as TokenArray
+	module let tokens as TokenArray
 	let lines as LspLineIndex
 	let keywords as KeywordTable
 	var corpus as LspCorpus
@@ -428,10 +428,6 @@ module type HoverDocument
 
 		return tokenAt(cursor + 1).kind != TokenKind.leftParen
 	end 'reservedWordOutOfNamePosition'
-
-	function cursorIsReadonlyModifier(cursor ElementIndex) returns bool
-		return lspIsReadonlyModifier(tokens, at: cursor)
-	end 'cursorIsReadonlyModifier'
 
 	function renderingForToken(index ElementIndex) returns HoverRendering
 		let tok = tokenAt(index)

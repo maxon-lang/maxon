@@ -140,8 +140,12 @@ function encodedTokensOf(source String, keywords KeywordTable) returns LspSemant
 	var previousLine = 0 as LspLineNumber
 	var previousCharacter = 0 as LspCharacter
 	var lineOfPreviousToken = PreviousTokenLine.none
+	var brackets = BracketTracker.create()
 
 	for (position, token) in tokens.withIterator() 'eachToken'
+		// Ahead of the layout skip: the newline is what ends a typealias's bare type list.
+		brackets.observe(token.kind, value: token.value)
+
 		if token.kind == TokenKind.eof or tokenKindIsSkippedLayout(token.kind) and token.kind != TokenKind.docComment 'notCode'
 			continue
 		end 'notCode'
@@ -159,7 +163,7 @@ function encodedTokensOf(source String, keywords KeywordTable) returns LspSemant
 
 		let start = index.positionOf(source, offset: token.startByte)
 		let finish = index.positionOf(source, offset: token.endByte)
-		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: insideCaseList(blocks, line: start.line))
+		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: insideCaseList(blocks, line: start.line), readonlyModifier: lspTrackedReadonlyModifier(brackets, tokens: tokens, at: position.index()))
 
 		let deltaLine = start.line - previousLine
 		var deltaCharacter = start.character
@@ -186,7 +190,7 @@ union PreviousTokenLine
 	at(line LineNumber)
 end 'PreviousTokenLine'
 
-function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLine bool, inCaseList bool) returns LspSemanticTokenType
+function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLine bool, inCaseList bool, readonlyModifier bool) returns LspSemanticTokenType
 	// A case list is spelled one name per line, so the line's FIRST word is the case and anything after it
 	// belongs to its associated values.
 	if inCaseList and firstOnLine 'aCaseName'
@@ -211,7 +215,7 @@ function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLin
 		return StringTokenType
 	end 'text'
 
-	if lspIsReadonlyModifier(tokens, at: at) 'readonlyModifier'
+	if readonlyModifier 'readonlyModifier'
 		return KeywordTokenType
 	end 'readonlyModifier'
 

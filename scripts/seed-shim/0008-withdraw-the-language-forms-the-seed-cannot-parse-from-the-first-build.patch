@@ -53,6 +53,19 @@ index e8a9fd2..8468d75 100644
  
  	reportPositioned(project, code: ErrorCode.argumentOverlapsWrittenParameter, message: argumentOverlapMessage(String.from(anchored.text), blamed: "argument '{String.from(blamed.text)}'", callee: String.from(unqualifiedMemberOf(overloadRegistrationBaseName(callee))), parameter: parameter), line: anchored.line, column: anchored.sourceColumn, filePath: func.sourceFilePath)
  end 'reportArgumentOverlap'
+diff --git a/maxon-bin/Compiler/BracketTracker.maxon b/maxon-bin/Compiler/BracketTracker.maxon
+index 946afab..59b5be2 100644
+--- a/maxon-bin/Compiler/BracketTracker.maxon
++++ b/maxon-bin/Compiler/BracketTracker.maxon
+@@ -63,7 +63,7 @@ module type BracketTracker
+ 			return self.inBareTypeList
+ 		end 'atStatementLevel'
+ 
+-		let role = try self.groups.get(self.groups.count() - 1) otherwise panic("BracketTracker.innermostGroupIsTypeList: the count is non-zero on the line above")
++		let role = try self.groups.get(((self.groups.count() - 1) as ElementIndex)) otherwise panic("BracketTracker.innermostGroupIsTypeList: the count is non-zero on the line above")
+ 		return role == OpenGroupRole.typeList
+ 	end 'innermostGroupIsTypeList'
+ 
 diff --git a/maxon-bin/Compiler/ClosureCycleCheck.maxon b/maxon-bin/Compiler/ClosureCycleCheck.maxon
 index a68dc81..679c909 100644
 --- a/maxon-bin/Compiler/ClosureCycleCheck.maxon
@@ -1775,10 +1788,10 @@ index 1b73998..b0ac1dd 100644
  			if writesShallow and self.passOnWrite(caller, origin: origin, reach: WriteReach.own) 'shallowMoved'
  				moved = true
 diff --git a/maxon-bin/Compiler/Formatter.maxon b/maxon-bin/Compiler/Formatter.maxon
-index 33a353c..db6fe50 100644
+index 41dc01a..ab82eb2 100644
 --- a/maxon-bin/Compiler/Formatter.maxon
 +++ b/maxon-bin/Compiler/Formatter.maxon
-@@ -257,7 +257,7 @@ type SourceLines
+@@ -252,7 +252,7 @@ type SourceLines
  	end 'byteAt'
  
  	function textBetween(from ByteOffset, to ByteOffset) returns String
@@ -1787,7 +1800,7 @@ index 33a353c..db6fe50 100644
  		return String.from(span)
  	end 'textBetween'
  
-@@ -285,8 +285,8 @@ type SourceLines
+@@ -280,8 +280,8 @@ type SourceLines
  		var low = 0 as ElementIndex
  		var high = self.starts.count() - 1
  
@@ -1798,7 +1811,7 @@ index 33a353c..db6fe50 100644
  
  			if self.startOf(middle) <= offset 'atOrAfter'
  				low = middle
-@@ -748,7 +748,7 @@ type FormatState
+@@ -738,7 +738,7 @@ type FormatState
  	export function run() returns String
  		var index = 0 as ElementIndex
  
@@ -1807,7 +1820,7 @@ index 33a353c..db6fe50 100644
  			index = self.emitToken(index)
  		end 'eachToken'
  
-@@ -1359,7 +1359,7 @@ type FormatState
+@@ -1344,7 +1344,7 @@ type FormatState
  	function firstDeclaredIndexOnLine(index ElementIndex) returns ElementIndex
  		var at = index
  
@@ -1816,7 +1829,7 @@ index 33a353c..db6fe50 100644
  			let kind = self.kindAt(at)
  
  			if kind == TokenKind.newline or kind == TokenKind.eof 'endOfLine'
-@@ -1506,7 +1506,7 @@ type FormatState
+@@ -1490,7 +1490,7 @@ type FormatState
  			return FormatBlockKind.other
  		end 'atFileScope'
  
@@ -1825,7 +1838,7 @@ index 33a353c..db6fe50 100644
  	end 'innermostBlock'
  
  	function inDataBlock() returns bool
-@@ -1530,7 +1530,7 @@ type FormatState
+@@ -1514,7 +1514,7 @@ type FormatState
  			return ScopeGrouping.memberList
  		end 'atFileScope'
  
@@ -1834,7 +1847,7 @@ index 33a353c..db6fe50 100644
  		return frame.grouping
  	end 'currentGrouping'
  
-@@ -1549,7 +1549,7 @@ type FormatState
+@@ -1533,7 +1533,7 @@ type FormatState
  	// --- Token-stream lookahead ---
  
  	function tokenAt(index ElementIndex) returns Token
@@ -1843,7 +1856,7 @@ index 33a353c..db6fe50 100644
  			return Token.eof()
  		end 'pastEnd'
  
-@@ -1572,7 +1572,7 @@ type FormatState
+@@ -1556,7 +1556,7 @@ type FormatState
  	function indexPastNewlinesFrom(index ElementIndex) returns ElementIndex
  		var at = index
  
@@ -1852,7 +1865,7 @@ index 33a353c..db6fe50 100644
  			at = at + 1
  		end 'skip'
  
-@@ -1630,7 +1630,7 @@ type FormatState
+@@ -1614,7 +1614,7 @@ type FormatState
  	function allDiscardedBindingsEndAt(index ElementIndex) returns ElementIndex
  		var at = index
  
@@ -1861,7 +1874,7 @@ index 33a353c..db6fe50 100644
  			let tok = try tokens.get(at) otherwise panic("FormatState.allDiscardedBindingsEndAt: index {at} below the {tokens.count()}-token stream")
  
  			if tok.kind != TokenKind.identifier or not tok.value.equals(DiscardBindingName) 'notADiscard'
-@@ -1662,7 +1662,7 @@ type FormatState
+@@ -1646,7 +1646,7 @@ type FormatState
  		var depth = 1
  		var at = index + 1
  
@@ -1870,7 +1883,7 @@ index 33a353c..db6fe50 100644
  			let kind = self.kindAt(at)
  
  			if kind == tok.kind 'opens'
-@@ -1845,7 +1845,7 @@ function findSectionSeparator(bytes ByteArray) returns SectionSeparator
+@@ -1829,7 +1829,7 @@ function findSectionSeparator(bytes ByteArray) returns SectionSeparator
  	let lines = SourceLines.of(bytes)
  	var index = 0 as ElementIndex
  
@@ -1879,7 +1892,7 @@ index 33a353c..db6fe50 100644
  		var at = 0 as ByteOffset
  
  		while at < lines.length(index) and isLayoutByte(lines.byteAt(index, offset: at)) 'skipIndent'
-@@ -1865,7 +1865,7 @@ function findSectionSeparator(bytes ByteArray) returns SectionSeparator
+@@ -1849,7 +1849,7 @@ function findSectionSeparator(bytes ByteArray) returns SectionSeparator
  end 'findSectionSeparator'
  
  function sliceOf(bytes ByteArray, from ByteOffset, to ByteOffset) returns String
@@ -7889,7 +7902,7 @@ index c1f24f6..eb8ba60 100644
  	var edit = LspJsonObject.create(doc)
  	edit.putNode(LspRangeKey, value: lspRangeNode(doc, startLine: 0, startCharacter: 0, endLine: (lines.count() - 1) as LspLineNumber, endCharacter: lastLine.utf16().count() as LspCharacter))
 diff --git a/maxon-bin/Compiler/Lsp/LspHover.maxon b/maxon-bin/Compiler/Lsp/LspHover.maxon
-index ee73ffd..5eea0d6 100644
+index 79fd7bc..3e419bd 100644
 --- a/maxon-bin/Compiler/Lsp/LspHover.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspHover.maxon
 @@ -250,7 +250,7 @@ let NoDeclarationHopsLeft = 0 as HoverReceiverReach
@@ -7901,7 +7914,7 @@ index ee73ffd..5eea0d6 100644
  	unknown
  end 'HoverType'
  
-@@ -638,7 +638,7 @@ module type HoverDocument
+@@ -634,7 +634,7 @@ module type HoverDocument
  		let total = tokens.count()
  		var index = functionIndex + 1
  
@@ -7910,7 +7923,7 @@ index ee73ffd..5eea0d6 100644
  			index = index + 1
  
  			if tokenAt(index).kind != TokenKind.dot 'thePathEnds'
-@@ -660,7 +660,7 @@ module type HoverDocument
+@@ -656,7 +656,7 @@ module type HoverDocument
  		var index = openIndex
  		var atParameterStart = false
  
@@ -7919,7 +7932,7 @@ index ee73ffd..5eea0d6 100644
  			let tok = tokenAt(index)
  
  			if tokenKindOpensABracket(tok.kind) 'opens'
-@@ -874,7 +874,7 @@ module type HoverDocument
+@@ -870,7 +870,7 @@ module type HoverDocument
  		var last = tokenAt(index).endByte
  		var at = index
  
@@ -7928,7 +7941,7 @@ index ee73ffd..5eea0d6 100644
  			let tok = tokenAt(at)
  
  			if tok.kind == TokenKind.newline or tok.kind == TokenKind.equals or tok.kind == TokenKind.comma or tok.kind == TokenKind.rightParen or tok.kind == TokenKind.throws 'typeEnds'
-@@ -901,7 +901,7 @@ module type HoverDocument
+@@ -897,7 +897,7 @@ module type HoverDocument
  		var depth = 0
  		var index = functionIndex
  
@@ -7937,7 +7950,7 @@ index ee73ffd..5eea0d6 100644
  			let kind = tokenAt(index).kind
  
  			if kind == TokenKind.newline and depth == 0 'signatureEnds'
-@@ -1007,7 +1007,7 @@ module type HoverDocument
+@@ -1003,7 +1003,7 @@ module type HoverDocument
  		var depth = 0
  		var at = index
  
@@ -7946,7 +7959,7 @@ index ee73ffd..5eea0d6 100644
  			let kind = tokenAt(at).kind
  
  			if kind == TokenKind.stringInterpStart 'opensAHole'
-@@ -1038,7 +1038,7 @@ module type HoverDocument
+@@ -1034,7 +1034,7 @@ module type HoverDocument
  		var depth = 0
  		var index = openIndex
  
@@ -7955,7 +7968,7 @@ index ee73ffd..5eea0d6 100644
  			let kind = tokenAt(index).kind
  
  			if tokenKindOpensABracket(kind) 'opens'
-@@ -1782,7 +1782,7 @@ module type HoverDocument
+@@ -1778,7 +1778,7 @@ module type HoverDocument
  		var depth = 0
  		var index = start
  
@@ -7964,7 +7977,7 @@ index ee73ffd..5eea0d6 100644
  			let tok = tokenAt(index)
  
  			if tok.kind == TokenKind.newline and depth == 0 'headEnds'
-@@ -1809,7 +1809,7 @@ module type HoverDocument
+@@ -1805,7 +1805,7 @@ module type HoverDocument
  		var last = tokenAt(nameIndex).endByte
  		var index = nameIndex
  
@@ -7973,7 +7986,7 @@ index ee73ffd..5eea0d6 100644
  			let tok = tokenAt(index)
  
  			if depth == 0 and (tok.kind == TokenKind.comma or tok.kind == TokenKind.rightParen or tok.kind == TokenKind.newline) 'parameterEnds'
-@@ -1844,7 +1844,7 @@ module type HoverDocument
+@@ -1840,7 +1840,7 @@ module type HoverDocument
  	end 'lineContentEnd'
  
  	function sourceBetween(startByte ByteOffset, endByte ByteOffset) returns String
@@ -8005,7 +8018,7 @@ index cc70756..b4fd213 100644
  
  		if token.endByte > token.startByte or token.kind == TokenKind.newline 'theRunEnds'
 diff --git a/maxon-bin/Compiler/Lsp/LspSemanticTokens.maxon b/maxon-bin/Compiler/Lsp/LspSemanticTokens.maxon
-index 8953121..0322622 100644
+index 163f72e..0e86eb8 100644
 --- a/maxon-bin/Compiler/Lsp/LspSemanticTokens.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspSemanticTokens.maxon
 @@ -18,7 +18,7 @@
@@ -8040,7 +8053,7 @@ index d840ea7..36564bc 100644
  			return
  		end 'badParams'
 diff --git a/maxon-bin/Compiler/Lsp/LspSymbols.maxon b/maxon-bin/Compiler/Lsp/LspSymbols.maxon
-index 428e1ad..37eee4a 100644
+index b77c3fe..e5e2500 100644
 --- a/maxon-bin/Compiler/Lsp/LspSymbols.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspSymbols.maxon
 @@ -276,7 +276,7 @@ function pastTheLastLine(lines LspTokenLineArray) returns LspLineNumber
@@ -20584,7 +20597,7 @@ index 59e7a1b..5af5883 100644
  
  				if branchWindowRoleOf(opAt(module, opIdx: nextIdx)) == BranchWindowRole.condBranch 'fuses'
 diff --git a/maxon-bin/Compiler/Targets/X64/X64GtRuntime.maxon b/maxon-bin/Compiler/Targets/X64/X64GtRuntime.maxon
-index 9c5d1de..129781d 100644
+index c90caa7..7cd9885 100644
 --- a/maxon-bin/Compiler/Targets/X64/X64GtRuntime.maxon
 +++ b/maxon-bin/Compiler/Targets/X64/X64GtRuntime.maxon
 @@ -272,7 +272,7 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
@@ -20596,7 +20609,7 @@ index 9c5d1de..129781d 100644
  		encodePopReg(code, reg: reg)
  	end 'pop'
  
-@@ -1358,7 +1358,7 @@ function emitGtRegisterBlock(code ByteArray, gprs X64RegisterArray, stackedBytes
+@@ -1360,7 +1360,7 @@ function emitGtRegisterBlock(code ByteArray, gprs X64RegisterArray, stackedBytes
  		encodeEpilogue(code, stackSize: frameBytes)
  
  		for i in 0 upto gprs.count() 'pop'
@@ -20605,7 +20618,7 @@ index 9c5d1de..129781d 100644
  			encodePopReg(code, reg: reg)
  		end 'pop'
  	end 'restore'
-@@ -1605,7 +1605,7 @@ function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
+@@ -1623,7 +1623,7 @@ function buildGtStackRelocateChunk(target Target) returns FunctionCodeChunk
  	encodeEpilogue(code, stackSize: ShadowSpaceBytes)
  
  	for i in 0 upto calleeSavedOrder.count() 'pop'

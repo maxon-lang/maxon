@@ -573,15 +573,29 @@ module function lspLineOf(line LineNumber) returns LspLineNumber
 end 'lspLineOf'
 
 module function lspIsReadonlyModifier(tokens TokenArray, at ElementIndex) returns bool
-	if at == 0 'nothingBefore'
-		return false
-	end 'nothingBefore'
+	let cursor = lspTokenAt(tokens, index: at)
 
-	let token = lspTokenAt(tokens, index: at)
+	if cursor.kind != TokenKind.identifier or not isReadonlyWord(cursor.value) 'notTheWord'
+		return false
+	end 'notTheWord'
+
+	var brackets = BracketTracker.create()
+	var index = 0 as ElementIndex
+
+	while index <= at 'eachTokenUpToTheCursor'
+		let token = lspTokenAt(tokens, index: index)
+		brackets.observe(token.kind, value: token.value)
+		index = index + 1
+	end 'eachTokenUpToTheCursor'
+
+	return lspTrackedReadonlyModifier(brackets, tokens: tokens, at: at)
+end 'lspIsReadonlyModifier'
+
+module function lspTrackedReadonlyModifier(brackets BracketTracker, tokens TokenArray, at ElementIndex) returns bool
 	let next = try tokens.get(at + 1) otherwise Token.eof()
 
-	return isReadonlyModifier(token.kind, value: token.value, prev: lspTokenAt(tokens, index: at - 1).kind) and readonlyOperandStartsWith(next.kind)
-end 'lspIsReadonlyModifier'
+	return brackets.lastWasReadonlyModifier() and readonlyOperandStartsWith(next.kind)
+end 'lspTrackedReadonlyModifier'
 
 // Every index this file forms is derived from an `LspTokenLine`, whose bounds came from the same array — so an
 // out-of-range read is a defect in this walk and not an input a document can present.

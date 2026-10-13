@@ -1,0 +1,21 @@
+test 'hover on a readonly qualifier shows the keyword'
+	let rendering = hoverRendering(readonlyHoverDocument(), line: 0, character: 30)
+
+	Expect.contains(rendering, needle: "readonly", message: "the rendering names the word it hovered.")
+
+	Expect.contains(rendering, needle: "Maxon language keyword.", message: "the qualifier in `Array with readonly (...)` is a language word, and hovering it says so.")
+end 'hover on a readonly qualifier shows the keyword'
+
+test 'hover on a call named readonly is not the keyword'
+	expectNoHover(readonlyHoverDocument(), line: 4, character: 19, note: "`readonly(x)` in an expression is a call to a name, and the language-keyword rendering belongs to the qualifier in a type list only.")
+end 'hover on a call named readonly is not the keyword'
+
+function readonlyHoverDocument() returns String
+	return String.from(b"typealias Grid = Array with readonly (Array with ByteArray)
+
+function main() returns ExitCode
+    let x = 3 as Count
+    let y = pass(readonly(x))
+    return 0
+end 'main'")
+end 'readonlyHoverDocument'
