@@ -409,7 +409,7 @@ a struct literal (`Type{...}`) is written outside the type's own methods. Constr
 
 ### E3077 — `semanticVarShouldBeLet`
 
-A local declared with `var` is never reassigned, so it should be a `let`. E3012 (unused variable) takes precedence: an unused `var` reports as unused, not as should-be-let. Decided at the declaring function's `end` (`Parser.reportVarShouldBeLet`) off the candidate list E3012 walks, reading the per-function name set (`mutabilityExercisedNames`) the mutable doors record into, and REPORTED past the backend so a body with any other diagnostic never also reports this one. A MOVE-OUT counts as a use of mutability: the keyword decides move-vs-alias, so advising `let` would silently turn a move into an alias. Withheld where a `let` in the `var`'s place would meet a mutable door that moves or refuses it (`StorageProvenance.settleVarShouldBeLet`).
+A local declared with `var` is never reassigned, so it should be a `let`. E3012 (unused variable) takes precedence: an unused `var` reports as unused, not as should-be-let. Decided at the declaring function's `end` (`Parser.reportVarShouldBeLet`) off the candidate list E3012 walks, reading the per-function name set (`mutabilityExercisedNames`) the mutable doors record into, and REPORTED after every check ahead of code generation, only when none of them raised a diagnostic; it takes precedence over a code-generation error (E5001, E4015). A MOVE-OUT counts as a use of mutability: the keyword decides move-vs-alias, so advising `let` would silently turn a move into an alias. Withheld where a `let` in the `var`'s place would meet a mutable door that moves or refuses it (`StorageProvenance.settleVarShouldBeLet`).
 
 ### E3078 — `semanticVarFromImmutable`
 

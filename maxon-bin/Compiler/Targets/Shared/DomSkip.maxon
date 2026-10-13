@@ -1,0 +1,196 @@
+let SkipMinBlocks = 48 as ElementIndex
+let SkipScanLimit = 1024 as ElementIndex
+let SkipMinSpan = 4 as ElementIndex
+
+// Lets a liveness walk mark a value live over a whole chain of blocks in one step (`coversUpTo`).
+// The interval from block `b` up to its immediate dominator `a` is CLEAN when `b` has no retreating
+// predecessor and every block strictly between them is entered only from inside `[a, b)` and
+// reaches `b` by forward edges: a value live into `b` and not defined inside is then live through
+// every block between and out of `a`. `edge[b]` is the top of the chain of clean intervals above
+// `b` — `b` itself when its own is not clean — so one step covers `(edge[b], b]`. Block indices are
+// assumed to be a layout in which every reachable block has an earlier predecessor; a CFG that
+// breaks that disables the skip.
+export type DomSkip
+	export var enabled as bool
+	var idom as CfgIndexArray
+	var edge as CfgIndexArray
+	var pre as CfgIndexArray
+	var size as CfgIndexArray
+
+	export static function disabled() returns DomSkip
+		return Self{enabled: false, idom: CfgIndexArray.create(), edge: CfgIndexArray.create(), pre: CfgIndexArray.create(), size: CfgIndexArray.create()}
+	end 'disabled'
+
+	export static function build(topo FuncTopology, force bool) returns DomSkip
+		let n = topo.numBlocks
+
+		if n < SkipMinBlocks and not force 'tooSmallToPay'
+			return DomSkip.disabled()
+		end 'tooSmallToPay'
+
+		var idom = CfgIndexArray.create()
+		idom.refill(n, value: 0)
+		var processed = BoolArray.create()
+		processed.resize(n)
+		try processed.set(0, value: true) otherwise panic("DomSkip.build: processed.set OOB")
+		var changed = true
+
+		while changed 'untilStable'
+			changed = false
+
+			for b in 1 upto n 'eachBlock'
+				var candidate = 0 as ElementIndex
+				var haveForward = false
+				let deg = topo.pred.degree(b as CsrIndex)
+
+				for k in 0 upto deg 'firstForwardPred'
+					let p = topo.pred.neighbour(b as CsrIndex, k: k)
+
+					if not haveForward and p < b and (try processed.get(p) otherwise panic("DomSkip.build: processed.get OOB")) 'aForwardPred'
+						candidate = p
+						haveForward = true
+					end 'aForwardPred'
+				end 'firstForwardPred'
+
+				if not haveForward 'unreachableByLayout'
+					return DomSkip.disabled()
+				end 'unreachableByLayout'
+
+				for k in 0 upto deg 'eachPred'
+					let p = topo.pred.neighbour(b as CsrIndex, k: k)
+
+					if p != candidate and (try processed.get(p) otherwise panic("DomSkip.build: processed.get OOB")) 'aProcessedPred'
+						candidate = intersectDominators(idom, a: p, b: candidate)
+					end 'aProcessedPred'
+				end 'eachPred'
+
+				if not (try processed.get(b) otherwise panic("DomSkip.build: processed.get OOB")) or (try idom.get(b) otherwise panic("DomSkip.build: idom.get OOB")) != candidate 'moved'
+					try idom.set(b, value: candidate) otherwise panic("DomSkip.build: idom.set OOB")
+					try processed.set(b, value: true) otherwise panic("DomSkip.build: processed.set OOB")
+					changed = true
+				end 'moved'
+			end 'eachBlock'
+		end 'untilStable'
+
+		var edge = CfgIndexArray.create()
+		edge.refill(n, value: 0)
+		var reach = CfgIndexArray.create()
+		reach.refill(n, value: 0)
+
+		for b in 1 upto n 'eachEdge'
+			let a = try idom.get(b) otherwise panic("DomSkip.build: idom.get OOB")
+
+			if intervalIsClean(topo, reach: reach, a: a, b: b) 'cleanBundle'
+				try edge.set(b, value: try edge.get(a) otherwise panic("DomSkip.build: edge.get OOB")) otherwise panic("DomSkip.build: edge.set OOB")
+			end 'cleanBundle' else 'ownBundle'
+				try edge.set(b, value: b) otherwise panic("DomSkip.build: edge.set OOB")
+			end 'ownBundle'
+		end 'eachEdge'
+
+		var size = CfgIndexArray.create()
+		size.refill(n, value: 1)
+
+		for ri in 1 upto n 'eachSubtree'
+			let b = n - ri
+			let a = try idom.get(b) otherwise panic("DomSkip.build: idom.get OOB")
+			try size.set(a, value: (try size.get(a) otherwise panic("DomSkip.build: size.get OOB")) + (try size.get(b) otherwise panic("DomSkip.build: size.get OOB"))) otherwise panic("DomSkip.build: size.set OOB")
+		end 'eachSubtree'
+
+		var pre = CfgIndexArray.create()
+		pre.refill(n, value: 0)
+		var cursor = CfgIndexArray.create()
+		cursor.refill(n, value: 0)
+		try cursor.set(0, value: 1) otherwise panic("DomSkip.build: cursor.set OOB")
+
+		for b in 1 upto n 'eachPreorder'
+			let a = try idom.get(b) otherwise panic("DomSkip.build: idom.get OOB")
+			let at = try cursor.get(a) otherwise panic("DomSkip.build: cursor.get OOB")
+			try pre.set(b, value: at) otherwise panic("DomSkip.build: pre.set OOB")
+			try cursor.set(a, value: at + (try size.get(b) otherwise panic("DomSkip.build: size.get OOB"))) otherwise panic("DomSkip.build: cursor.set OOB")
+			try cursor.set(b, value: at + 1) otherwise panic("DomSkip.build: cursor.set OOB")
+		end 'eachPreorder'
+
+		return Self{enabled: true, idom: idom, edge: edge, pre: pre, size: size}
+	end 'build'
+
+	export function edgeOf(b ElementIndex) returns ElementIndex
+		return try self.edge.get(b) otherwise panic("DomSkip.edgeOf: block {b} out of range")
+	end 'edgeOf'
+
+	export function coversEnough(b ElementIndex) returns bool
+		return b - self.edgeOf(b) >= SkipMinSpan
+	end 'coversEnough'
+
+	export function dominates(x ElementIndex, y ElementIndex) returns bool
+		let preX = try self.pre.get(x) otherwise panic("DomSkip.dominates: block {x} out of range")
+		let preY = try self.pre.get(y) otherwise panic("DomSkip.dominates: block {y} out of range")
+		return preX <= preY and preY < preX + (try self.size.get(x) otherwise panic("DomSkip.dominates: block {x} out of range"))
+	end 'dominates'
+end 'DomSkip'
+
+function intersectDominators(idom CfgIndexArray, a ElementIndex, b ElementIndex) returns ElementIndex
+	var left = a
+	var right = b
+
+	while left != right 'untilTheyMeet'
+		while left > right 'leftClimbs'
+			left = try idom.get(left) otherwise panic("intersectDominators: idom.get OOB")
+		end 'leftClimbs'
+
+		while right > left 'rightClimbs'
+			right = try idom.get(right) otherwise panic("intersectDominators: idom.get OOB")
+		end 'rightClimbs'
+	end 'untilTheyMeet'
+
+	return left
+end 'intersectDominators'
+
+function intervalIsClean(topo FuncTopology, reach CfgIndexArray, a ElementIndex, b ElementIndex) returns bool
+	if b - a > SkipScanLimit 'tooWideToScan'
+		return false
+	end 'tooWideToScan'
+
+	let ownDeg = topo.pred.degree(b as CsrIndex)
+
+	for k in 0 upto ownDeg 'eachOwnPred'
+		if topo.pred.neighbour(b as CsrIndex, k: k) >= b 'aRetreatingEdge'
+			return false
+		end 'aRetreatingEdge'
+	end 'eachOwnPred'
+
+	let mark = b + 1
+	try reach.set(b, value: mark) otherwise panic("intervalIsClean: reach.set OOB")
+	var y = b
+
+	while y > a + 1 'eachInterior'
+		y = y - 1
+		let predDeg = topo.pred.degree(y as CsrIndex)
+
+		for k in 0 upto predDeg 'eachPred'
+			let q = topo.pred.neighbour(y as CsrIndex, k: k)
+
+			if q < a or q >= b 'leavesTheInterval'
+				return false
+			end 'leavesTheInterval'
+		end 'eachPred'
+
+		var reaches = false
+		let succDeg = topo.succ.degree(y as CsrIndex)
+
+		for k in 0 upto succDeg 'eachSucc'
+			let s = topo.succ.neighbour(y as CsrIndex, k: k)
+
+			if s > y and s <= b and (try reach.get(s) otherwise panic("intervalIsClean: reach.get OOB")) == mark 'reachesB'
+				reaches = true
+			end 'reachesB'
+		end 'eachSucc'
+
+		if not reaches 'strandedInside'
+			return false
+		end 'strandedInside'
+
+		try reach.set(y, value: mark) otherwise panic("intervalIsClean: reach.set OOB")
+	end 'eachInterior'
+
+	return true
+end 'intervalIsClean'

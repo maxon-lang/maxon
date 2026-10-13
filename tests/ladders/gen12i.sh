@@ -33,7 +33,7 @@ N="$1"; FLOATS_PER="$2"; OUT="$3"
     v=0
     while [ "$v" -lt "$FLOATS_PER" ]; do
       d=$(( v % 9 + 1 ))
-      echo -e "\tvar g${i}_${v} = s + $d"
+      echo -e "\tlet g${i}_${v} = s + $d"
       v=$(( v + 1 ))
     done
     echo -e "\tlet k$i = scaleOpaque($i)"

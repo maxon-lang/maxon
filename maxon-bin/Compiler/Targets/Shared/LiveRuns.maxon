@@ -1,0 +1,196 @@
+// The runs of blocks each value is live straight through. Each run is threaded on its value and
+// hung on the segment-tree nodes covering it (`collectCoveringNodes`), so `stab` lists the values
+// live through one block in O(log blocks + answer) and `removeValue` unhooks a value in
+// O(its entries) — never a write per block a run covers.
+export type LiveRuns
+	var leafBase as ElementIndex
+	var runValue as ValueIdArray
+	var runLo as CfgIndexArray
+	var runHi as CfgIndexArray
+	var runNextOfValue as CfgIndexArray
+	var runFirstEntry as CfgIndexArray
+	var freeRuns as CfgIndexArray
+	var firstRunOfValue as CfgIndexArray
+	var entryRun as CfgIndexArray
+	var entryNextAtNode as CfgIndexArray
+	var entryPrevAtNode as CfgIndexArray
+	var entryNextOfRun as CfgIndexArray
+	var entryNode as CfgIndexArray
+	var freeEntries as CfgIndexArray
+	var nodeHead as CfgIndexArray
+	var nodes as CfgIndexArray
+
+	export static function create() returns LiveRuns
+		return Self{leafBase: 1, runValue: ValueIdArray.create(), runLo: CfgIndexArray.create(), runHi: CfgIndexArray.create(), runNextOfValue: CfgIndexArray.create(), runFirstEntry: CfgIndexArray.create(), freeRuns: CfgIndexArray.create(), firstRunOfValue: CfgIndexArray.create(), entryRun: CfgIndexArray.create(), entryNextAtNode: CfgIndexArray.create(), entryPrevAtNode: CfgIndexArray.create(), entryNextOfRun: CfgIndexArray.create(), entryNode: CfgIndexArray.create(), freeEntries: CfgIndexArray.create(), nodeHead: CfgIndexArray.create(), nodes: CfgIndexArray.create()}
+	end 'create'
+
+	export function begin(numBlocks ElementIndex, valueCount ValueId)
+		self.leafBase = roundUpToPowerOfTwo(numBlocks as BytePos)
+		self.nodeHead.refill(self.leafBase + self.leafBase, value: 0)
+		self.runValue.clear()
+		self.runLo.clear()
+		self.runHi.clear()
+		self.runNextOfValue.clear()
+		self.runFirstEntry.clear()
+		self.freeRuns.clear()
+		self.entryRun.clear()
+		self.entryNextAtNode.clear()
+		self.entryPrevAtNode.clear()
+		self.entryNextOfRun.clear()
+		self.entryNode.clear()
+		self.freeEntries.clear()
+		self.firstRunOfValue.refill(valueCount, value: 0)
+	end 'begin'
+
+	export function growValues(valueCount ValueId)
+		self.firstRunOfValue.growFilled(valueCount, value: 0)
+	end 'growValues'
+
+	export function firstRunOf(v ValueId) returns ElementIndex
+		return try self.firstRunOfValue.get(v) otherwise panic("LiveRuns.firstRunOf: firstRunOfValue.get OOB for value {v}")
+	end 'firstRunOf'
+
+	export function nextRunOf(run ElementIndex) returns ElementIndex
+		return try self.runNextOfValue.get(run - 1) otherwise panic("LiveRuns.nextRunOf: runNextOfValue.get OOB at {run - 1}")
+	end 'nextRunOf'
+
+	export function loOf(run ElementIndex) returns ElementIndex
+		return try self.runLo.get(run - 1) otherwise panic("LiveRuns.loOf: runLo.get OOB at {run - 1}")
+	end 'loOf'
+
+	export function hiOf(run ElementIndex) returns ElementIndex
+		return try self.runHi.get(run - 1) otherwise panic("LiveRuns.hiOf: runHi.get OOB at {run - 1}")
+	end 'hiOf'
+
+	export function holds(v ValueId, blockLocal ElementIndex) returns bool
+		var run = self.firstRunOf(v)
+
+		while run != 0 'eachRun'
+			if self.loOf(run) <= blockLocal and blockLocal <= self.hiOf(run) 'covers'
+				return true
+			end 'covers'
+
+			run = self.nextRunOf(run)
+		end 'eachRun'
+
+		return false
+	end 'holds'
+
+	export function stab(blockLocal ElementIndex, out ValueIdArray)
+		if self.runValue.count() == self.freeRuns.count() 'noRunIsHeld'
+			return
+		end 'noRunIsHeld'
+
+		var node = self.leafBase + blockLocal
+
+		while node >= 1 'towardTheRoot'
+			var entry = try self.nodeHead.get(node) otherwise panic("LiveRuns.stab: nodeHead.get OOB at {node}")
+
+			while entry != 0 'eachEntry'
+				let run = try self.entryRun.get(entry - 1) otherwise panic("LiveRuns.stab: entryRun.get OOB at {entry - 1}")
+				out.push(try self.runValue.get(run) otherwise panic("LiveRuns.stab: runValue.get OOB at {run}"))
+				entry = try self.entryNextAtNode.get(entry - 1) otherwise panic("LiveRuns.stab: entryNextAtNode.get OOB at {entry - 1}")
+			end 'eachEntry'
+
+			node = node / 2
+		end 'towardTheRoot'
+	end 'stab'
+
+	export function addRun(v ValueId, lo ElementIndex, hi ElementIndex)
+		var run = 0 as ElementIndex
+
+		if self.freeRuns.count() > 0 'reuse'
+			run = try self.freeRuns.pop() otherwise panic("LiveRuns.addRun: pop on a non-empty free list failed")
+			try self.runValue.set(run, value: v) otherwise panic("LiveRuns.addRun: runValue.set OOB at {run}")
+			try self.runLo.set(run, value: lo) otherwise panic("LiveRuns.addRun: runLo.set OOB at {run}")
+			try self.runHi.set(run, value: hi) otherwise panic("LiveRuns.addRun: runHi.set OOB at {run}")
+			try self.runFirstEntry.set(run, value: 0) otherwise panic("LiveRuns.addRun: runFirstEntry.set OOB at {run}")
+		end 'reuse' else 'fresh'
+			run = self.runValue.count()
+			self.runValue.push(v)
+			self.runLo.push(lo)
+			self.runHi.push(hi)
+			self.runNextOfValue.push(0)
+			self.runFirstEntry.push(0)
+		end 'fresh'
+
+		try self.runNextOfValue.set(run, value: try self.firstRunOfValue.get(v) otherwise panic("LiveRuns.addRun: firstRunOfValue.get OOB for value {v}")) otherwise panic("LiveRuns.addRun: runNextOfValue.set OOB at {run}")
+		try self.firstRunOfValue.set(v, value: run + 1) otherwise panic("LiveRuns.addRun: firstRunOfValue.set OOB for value {v}")
+
+		var covering = self.nodes
+		collectCoveringNodes(self.leafBase, lo: lo, hi: hi, out: covering)
+
+		for node in covering 'eachCoveringNode'
+			self.addEntry(run, node: node)
+		end 'eachCoveringNode'
+	end 'addRun'
+
+	function addEntry(run ElementIndex, node ElementIndex)
+		var entry = 0 as ElementIndex
+		let head = try self.nodeHead.get(node) otherwise panic("LiveRuns.addEntry: nodeHead.get OOB at {node}")
+
+		if self.freeEntries.count() > 0 'reuse'
+			entry = try self.freeEntries.pop() otherwise panic("LiveRuns.addEntry: pop on a non-empty free list failed")
+			try self.entryRun.set(entry, value: run) otherwise panic("LiveRuns.addEntry: entryRun.set OOB at {entry}")
+			try self.entryNode.set(entry, value: node) otherwise panic("LiveRuns.addEntry: entryNode.set OOB at {entry}")
+		end 'reuse' else 'fresh'
+			entry = self.entryRun.count()
+			self.entryRun.push(run)
+			self.entryNode.push(node)
+			self.entryNextAtNode.push(0)
+			self.entryPrevAtNode.push(0)
+			self.entryNextOfRun.push(0)
+		end 'fresh'
+
+		try self.entryNextAtNode.set(entry, value: head) otherwise panic("LiveRuns.addEntry: entryNextAtNode.set OOB at {entry}")
+		try self.entryPrevAtNode.set(entry, value: 0) otherwise panic("LiveRuns.addEntry: entryPrevAtNode.set OOB at {entry}")
+
+		if head != 0 'hasAHead'
+			try self.entryPrevAtNode.set(head - 1, value: entry + 1) otherwise panic("LiveRuns.addEntry: entryPrevAtNode.set OOB at {head - 1}")
+		end 'hasAHead'
+
+		try self.nodeHead.set(node, value: entry + 1) otherwise panic("LiveRuns.addEntry: nodeHead.set OOB at {node}")
+		try self.entryNextOfRun.set(entry, value: try self.runFirstEntry.get(run) otherwise panic("LiveRuns.addEntry: runFirstEntry.get OOB at {run}")) otherwise panic("LiveRuns.addEntry: entryNextOfRun.set OOB at {entry}")
+		try self.runFirstEntry.set(run, value: entry + 1) otherwise panic("LiveRuns.addEntry: runFirstEntry.set OOB at {run}")
+	end 'addEntry'
+
+	export function removeValue(v ValueId)
+		var run = self.firstRunOf(v)
+
+		while run != 0 'eachRun'
+			let id = run - 1
+			let next = try self.runNextOfValue.get(id) otherwise panic("LiveRuns.removeValue: runNextOfValue.get OOB at {id}")
+			var entry = try self.runFirstEntry.get(id) otherwise panic("LiveRuns.removeValue: runFirstEntry.get OOB at {id}")
+
+			while entry != 0 'eachEntry'
+				let e = entry - 1
+				let nextOfRun = try self.entryNextOfRun.get(e) otherwise panic("LiveRuns.removeValue: entryNextOfRun.get OOB at {e}")
+				self.unlinkEntry(e)
+				self.freeEntries.push(e)
+				entry = nextOfRun
+			end 'eachEntry'
+
+			self.freeRuns.push(id)
+			run = next
+		end 'eachRun'
+
+		if v < self.firstRunOfValue.count() 'hadASlot'
+			try self.firstRunOfValue.set(v, value: 0) otherwise panic("LiveRuns.removeValue: firstRunOfValue.set OOB for value {v}")
+		end 'hadASlot'
+	end 'removeValue'
+
+	function unlinkEntry(e ElementIndex)
+		let prev = try self.entryPrevAtNode.get(e) otherwise panic("LiveRuns.unlinkEntry: entryPrevAtNode.get OOB at {e}")
+		let next = try self.entryNextAtNode.get(e) otherwise panic("LiveRuns.unlinkEntry: entryNextAtNode.get OOB at {e}")
+
+		if prev != 0 'hasAPredecessor'
+			try self.entryNextAtNode.set(prev - 1, value: next) otherwise panic("LiveRuns.unlinkEntry: entryNextAtNode.set OOB at {prev - 1}")
+		end 'hasAPredecessor' else 'wasTheHead'
+			try self.nodeHead.set(try self.entryNode.get(e) otherwise panic("LiveRuns.unlinkEntry: entryNode.get OOB at {e}"), value: next) otherwise panic("LiveRuns.unlinkEntry: nodeHead.set OOB")
+		end 'wasTheHead'
+
+		if next != 0 'hasASuccessor'
+			try self.entryPrevAtNode.set(next - 1, value: prev) otherwise panic("LiveRuns.unlinkEntry: entryPrevAtNode.set OOB at {next - 1}")
+		end 'hasASuccessor'
+	end 'unlinkEntry'
+end 'LiveRuns'

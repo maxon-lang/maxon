@@ -42,7 +42,7 @@ esac
 # actually observed (a `Word` zero-fills where a bare int sign-fills) — the shift rule is what
 # makes the declared type load-bearing rather than decorative.
 if [ "$MODE" = "ranged" ]; then
-  READ_EXPR_FMT='(p%d shr 62)'
+  READ_EXPR_FMT='((p%d shr 62) as Integer)'
 else
   READ_EXPR_FMT='(p%d + 1)'
 fi
@@ -71,7 +71,9 @@ done
 {
   echo "// ladder: $CLOSURES closure(s), $CAPTURES capture(s) each, $READS read(s) per capture, $MODE"
   echo "typealias Integer = int(i64.min to i64.max)"
-  echo "typealias Word = int(0 to u64.max)"
+  if [ "$MODE" = "ranged" ]; then
+    echo "typealias Word = int(0 to u64.max)"
+  fi
   echo "typealias ClosureFn = function(Integer) returns Integer"
   echo ""
   echo "function applyClosure(f ClosureFn, x Integer) returns Integer"

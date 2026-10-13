@@ -58,7 +58,7 @@
 #   data-appendloop                                                               (<n> = DOUBLINGS)
 #
 #   e.g. genstring.sh 512 sites-split a.maxon   and   genstring.sh 1024 sites-split b.maxon
-#        genstring.sh 512 sites-control c.maxon is the same size in the P1.2 surface only.
+#        genstring.sh 512 sites-control c.maxon has the same site count, in the P1.2 surface only.
 #        genstring.sh 12 data-split d.maxon     builds 9*2^12 = 36,864 bytes and 4,096 segments.
 #
 # The `data-*` programs each print ONE CSV line — `mode,bytes,units,nanos,reps` — where `units` is the
@@ -88,6 +88,21 @@ emit_sites_program() {
 	FNS=$(( N / SITES_PER_FN ))
 	if [ "$FNS" -lt 1 ]; then FNS=1; fi
 
+	case "$MODE" in
+	sites-case)
+		SITE_PARAMS="s String"
+		SITE_ARGS='"alpha,beta,gamma"'
+		;;
+	sites-split)
+		SITE_PARAMS="s String, p String"
+		SITE_ARGS='"alpha,beta,gamma", p: ","'
+		;;
+	*)
+		SITE_PARAMS="s String, p String, q String"
+		SITE_ARGS='"alpha,beta,gamma", p: ",", q: ";"'
+		;;
+	esac
+
 	echo "// string ladder: $N sites, mode $MODE — see tests/ladders/genstring.sh"
 	echo "typealias Int = int(i64.min to i64.max)"
 	echo "typealias ExitCode = int(0 to 255)"
@@ -95,7 +110,7 @@ emit_sites_program() {
 
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
-		echo "function fn${f}(s String, p String, q String) returns Int"
+		echo "function fn${f}(${SITE_PARAMS}) returns Int"
 		echo -e "\tvar total = 0"
 		n=0
 		while [ "$n" -lt "$SITES_PER_FN" ]; do
@@ -153,7 +168,7 @@ emit_sites_program() {
 	echo -e "\tvar sum = 0"
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
-		echo -e "\tsum = sum + fn${f}(\"alpha,beta,gamma\", p: \",\", q: \";\")"
+		echo -e "\tsum = sum + fn${f}(${SITE_ARGS})"
 		f=$(( f + 1 ))
 	done
 	echo -e "\treturn 0 if sum >= 0 else 1"

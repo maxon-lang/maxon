@@ -1581,3 +1581,52 @@ end 'main'
 ```stdout
 7273 7273
 ```
+
+<!-- test: rematerialized-constant-defined-before-a-stack-argument-store -->
+Eight wide constants live across a call, then passed to an eight-argument call whose last two arguments go to the stack. The splitter rematerializes them and removes the original definitions; a constant defined earlier in the block than a stack-argument store has the stack pointer established at its definition, and a constant whose definition is gone has nothing established. With `VerifyIncrementalSplit` on, the incremental state must equal a full rebuild after every split.
+```maxon
+typealias Wide = int(0 to 100000000000000)
+
+var sink = 0 as Wide
+
+function opaque(a Wide) returns Wide
+	if a > 100 'big'
+		return a - 100
+	end 'big'
+	return a + 1
+end 'opaque'
+
+function eight(a Wide, b Wide, c Wide, d Wide, e Wide, f Wide, g Wide, h Wide) returns Wide
+	sink = sink + a + b + c + d + e + f + g + h
+	return sink
+end 'eight'
+
+function install(p Wide) returns Wide
+	let c0 = 5000000000 as Wide
+	let c1 = 5000007919 as Wide
+	let c2 = 5000015838 as Wide
+	let c3 = 5000023757 as Wide
+	let c4 = 5000031676 as Wide
+	let c5 = 5000039595 as Wide
+	let c6 = 5000047514 as Wide
+	let c7 = 5000055433 as Wide
+	var total = opaque(p)
+	total = total + eight(c0, b: c1, c: c2, d: c3, e: c4, f: c5, g: c6, h: c7)
+	total = total + opaque(total)
+	total = total + eight(c0, b: c1, c: c2, d: c3, e: c4, f: c5, g: c6, h: c7)
+	total = total + opaque(total)
+	return total
+end 'install'
+
+function main() returns ExitCode
+	let r = install(1)
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+320001773564
+```

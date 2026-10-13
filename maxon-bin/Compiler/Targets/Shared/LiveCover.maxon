@@ -1,0 +1,314 @@
+// Per register class, how many values are live straight through each block — their runs, which
+// neither a block sweep nor the positional index sees. A range add and a point query are both
+// O(log blocks), so re-marking a run that spans Θ(blocks) costs O(log), not a write per block.
+//
+// While `arm`ed, which is while splitting runs in full-pool mode, each class also keeps a
+// `DemandTree` of every block's whole demand — its index peak plus dead phis (`setBase`) plus this
+// cover — so the function's full-pool peak is the tree's root (`fullPoolRank`). A block whose index
+// holds no peak has no leaf there (`found`), so it never wins.
+typealias DemandTreeArray = Array with DemandTree
+
+export type LiveCover
+	var leafBase as ElementIndex
+	var cells as PressureDeltaColumn
+	var trees as DemandTreeArray
+	var armed as bool
+	var nodes as CfgIndexArray
+
+	export static function create() returns LiveCover
+		return Self{leafBase: 1, cells: PressureDeltaColumn.create(), trees: DemandTreeArray.create(), armed: false, nodes: CfgIndexArray.create()}
+	end 'create'
+
+	export function begin(numBlocks ElementIndex)
+		self.leafBase = roundUpToPowerOfTwo(numBlocks as BytePos)
+		self.cells.refill(self.leafBase * 2 * RegClassCount, value: 0)
+		self.armed = false
+	end 'begin'
+
+	export function disarm()
+		self.armed = false
+	end 'disarm'
+
+	export function isArmed() returns bool
+		return self.armed
+	end 'isArmed'
+
+	export function arm(numBlocks ElementIndex)
+		self.armed = true
+
+		if self.trees.count() == 0 'firstArming'
+			self.trees.push(DemandTree.create())
+			self.trees.push(DemandTree.create())
+		end 'firstArming'
+
+		for tree in self.trees 'eachTree'
+			tree.begin(numBlocks)
+		end 'eachTree'
+	end 'arm'
+
+	function cellBase(class RegClass) returns ElementIndex
+		return class.ordinal * 2 * self.leafBase
+	end 'cellBase'
+
+	function treeOf(class RegClass) returns DemandTree
+		return try self.trees.get(class.ordinal) otherwise panic("LiveCover.treeOf: the {class.name} demand tree was asked for before the cover was armed")
+	end 'treeOf'
+
+	export function add(class RegClass, lo ElementIndex, hi ElementIndex, by PressureDelta)
+		let base = self.cellBase(class)
+		var covering = self.nodes
+		collectCoveringNodes(self.leafBase, lo: lo, hi: hi, out: covering)
+
+		for node in covering 'eachCoveringNode'
+			self.bump(base + node, by: by)
+		end 'eachCoveringNode'
+
+		if self.armed 'treesFollow'
+			var tree = self.treeOf(class)
+			tree.addRange(lo, hi: hi, by: by)
+		end 'treesFollow'
+	end 'add'
+
+	function bump(cell ElementIndex, by PressureDelta)
+		try self.cells.set(cell, value: (try self.cells.get(cell) otherwise panic("LiveCover.bump: cells.get OOB at {cell}")) + by) otherwise panic("LiveCover.bump: cells.set OOB at {cell}")
+	end 'bump'
+
+	export function at(class RegClass, blockLocal ElementIndex) returns PressureDelta
+		let base = self.cellBase(class)
+		var node = self.leafBase + blockLocal
+		var total = 0 as PressureDelta
+
+		while node >= 1 'towardTheRoot'
+			total = total + (try self.cells.get(base + node) otherwise panic("LiveCover.at: cells.get OOB at {base + node}"))
+			node = node / 2
+		end 'towardTheRoot'
+
+		return total
+	end 'at'
+
+	export function setBase(class RegClass, blockLocal ElementIndex, base PressureDelta, found bool)
+		var tree = self.treeOf(class)
+		tree.setLeaf(blockLocal, effective: base + self.at(class, blockLocal: blockLocal), found: found)
+	end 'setBase'
+
+	// Only between `arm` and `pullAllTrees`, with no `add` in between: `pullAll` recomputes every
+	// inner node from its children, which would silently drop a range add still pending on one.
+	export function setBaseUnpulled(class RegClass, blockLocal ElementIndex, base PressureDelta, found bool)
+		var tree = self.treeOf(class)
+		tree.setLeafUnpulled(blockLocal, effective: base + self.at(class, blockLocal: blockLocal), found: found)
+	end 'setBaseUnpulled'
+
+	export function pullAllTrees()
+		for tree in self.trees 'eachTree'
+			tree.pullAll()
+		end 'eachTree'
+	end 'pullAllTrees'
+
+	export function leafValue(class RegClass, blockLocal ElementIndex) returns PressureDelta
+		var tree = self.treeOf(class)
+		return tree.leafValue(blockLocal)
+	end 'leafValue'
+
+	export function leafPresent(class RegClass, blockLocal ElementIndex) returns bool
+		var tree = self.treeOf(class)
+		return tree.leafPresent(blockLocal)
+	end 'leafPresent'
+
+	export function hasTop(class RegClass) returns bool
+		var tree = self.treeOf(class)
+		return tree.hasTop()
+	end 'hasTop'
+
+	export function topValue(class RegClass) returns PressureDelta
+		var tree = self.treeOf(class)
+		return tree.topValue()
+	end 'topValue'
+
+	export function topBlock(class RegClass) returns ElementIndex
+		var tree = self.treeOf(class)
+		return tree.topBlock()
+	end 'topBlock'
+end 'LiveCover'
+
+type DemandTree
+	var leafBase as ElementIndex
+	var maxv as PressureDeltaColumn
+	var lazy as PressureDeltaColumn
+	var arg as CfgIndexArray
+	var present as BoolArray
+	var path as CfgIndexArray
+
+	static function create() returns DemandTree
+		return Self{leafBase: 1, maxv: PressureDeltaColumn.create(), lazy: PressureDeltaColumn.create(), arg: CfgIndexArray.create(), present: BoolArray.create(), path: CfgIndexArray.create()}
+	end 'create'
+
+	function begin(numBlocks ElementIndex)
+		self.leafBase = roundUpToPowerOfTwo(numBlocks as BytePos)
+		self.maxv.refill(self.leafBase + self.leafBase, value: 0)
+		self.present.refill(self.leafBase + self.leafBase, value: false)
+		self.lazy.refill(self.leafBase + self.leafBase, value: 0)
+		self.arg.refill(self.leafBase + self.leafBase, value: 0)
+
+		for b in 0 upto self.leafBase 'eachLeaf'
+			try self.arg.set(self.leafBase + b, value: b) otherwise panic("DemandTree.begin: arg.set OOB at leaf {b}")
+		end 'eachLeaf'
+
+		for ri in 1 upto self.leafBase 'eachNode'
+			self.pull(self.leafBase - ri)
+		end 'eachNode'
+	end 'begin'
+
+	function applyTo(node ElementIndex, by PressureDelta)
+		try self.maxv.set(node, value: (try self.maxv.get(node) otherwise panic("DemandTree.applyTo: maxv.get OOB at {node}")) + by) otherwise panic("DemandTree.applyTo: maxv.set OOB at {node}")
+
+		if node < self.leafBase 'inner'
+			try self.lazy.set(node, value: (try self.lazy.get(node) otherwise panic("DemandTree.applyTo: lazy.get OOB at {node}")) + by) otherwise panic("DemandTree.applyTo: lazy.set OOB at {node}")
+		end 'inner'
+	end 'applyTo'
+
+	function pushDown(node ElementIndex)
+		let pending = try self.lazy.get(node) otherwise panic("DemandTree.pushDown: lazy.get OOB at {node}")
+
+		if pending != 0 'somethingPending'
+			self.applyTo(node + node, by: pending)
+			self.applyTo(node + node + 1, by: pending)
+			try self.lazy.set(node, value: 0) otherwise panic("DemandTree.pushDown: lazy.set OOB at {node}")
+		end 'somethingPending'
+	end 'pushDown'
+
+	function pull(node ElementIndex)
+		let leftPresent = try self.present.get(node + node) otherwise panic("DemandTree.pull: present.get OOB at {node + node}")
+		let rightPresent = try self.present.get(node + node + 1) otherwise panic("DemandTree.pull: present.get OOB at {node + node + 1}")
+		try self.present.set(node, value: leftPresent or rightPresent) otherwise panic("DemandTree.pull: present.set OOB at {node}")
+
+		if not (leftPresent or rightPresent) 'nothingBelow'
+			return
+		end 'nothingBelow'
+
+		let left = try self.maxv.get(node + node) otherwise panic("DemandTree.pull: maxv.get OOB at {node + node}")
+		let right = try self.maxv.get(node + node + 1) otherwise panic("DemandTree.pull: maxv.get OOB at {node + node + 1}")
+		let takeRight = rightPresent and (not leftPresent or right >= left)
+		let source = (node + node + 1) if takeRight else (node + node)
+
+		try self.maxv.set(node, value: right if takeRight else left) otherwise panic("DemandTree.pull: maxv.set OOB at {node}")
+		try self.arg.set(node, value: try self.arg.get(source) otherwise panic("DemandTree.pull: arg.get OOB at {source}")) otherwise panic("DemandTree.pull: arg.set OOB at {node}")
+	end 'pull'
+
+	function pushPath(blockLocal ElementIndex)
+		self.path.clear()
+		var node = (self.leafBase + blockLocal) / 2
+
+		while node >= 1 'collect'
+			self.path.push(node)
+			node = node / 2
+		end 'collect'
+
+		for ri in 0 upto self.path.count() 'topDown'
+			self.pushDown(try self.path.get(self.path.count() - 1 - ri) otherwise panic("DemandTree.pushPath: path.get OOB"))
+		end 'topDown'
+	end 'pushPath'
+
+	function setLeaf(blockLocal ElementIndex, effective PressureDelta, found bool)
+		self.pushPath(blockLocal)
+		try self.maxv.set(self.leafBase + blockLocal, value: effective) otherwise panic("DemandTree.setLeaf: maxv.set OOB at block {blockLocal}")
+		try self.present.set(self.leafBase + blockLocal, value: found) otherwise panic("DemandTree.setLeaf: present.set OOB at block {blockLocal}")
+
+		for k in 0 upto self.path.count() 'bottomUp'
+			self.pull(try self.path.get(k) otherwise panic("DemandTree.setLeaf: path.get OOB at {k}"))
+		end 'bottomUp'
+	end 'setLeaf'
+
+	function setLeafUnpulled(blockLocal ElementIndex, effective PressureDelta, found bool)
+		try self.maxv.set(self.leafBase + blockLocal, value: effective) otherwise panic("DemandTree.setLeafUnpulled: maxv.set OOB at block {blockLocal}")
+		try self.present.set(self.leafBase + blockLocal, value: found) otherwise panic("DemandTree.setLeafUnpulled: present.set OOB at block {blockLocal}")
+	end 'setLeafUnpulled'
+
+	function pullAll()
+		for ri in 1 upto self.leafBase 'eachNode'
+			self.pull(self.leafBase - ri)
+		end 'eachNode'
+	end 'pullAll'
+
+	function leafPresent(blockLocal ElementIndex) returns bool
+		return try self.present.get(self.leafBase + blockLocal) otherwise panic("DemandTree.leafPresent: present.get OOB at block {blockLocal}")
+	end 'leafPresent'
+
+	function hasTop() returns bool
+		return try self.present.get(1) otherwise panic("DemandTree.hasTop: present.get(1) OOB")
+	end 'hasTop'
+
+	function leafValue(blockLocal ElementIndex) returns PressureDelta
+		self.pushPath(blockLocal)
+		return try self.maxv.get(self.leafBase + blockLocal) otherwise panic("DemandTree.leafValue: maxv.get OOB at block {blockLocal}")
+	end 'leafValue'
+
+	function addRange(lo ElementIndex, hi ElementIndex, by PressureDelta)
+		self.addRec(1, nodeLo: 0, nodeHi: self.leafBase - 1, lo: lo, hi: hi, by: by)
+	end 'addRange'
+
+	function addRec(node ElementIndex, nodeLo ElementIndex, nodeHi ElementIndex, lo ElementIndex, hi ElementIndex, by PressureDelta)
+		if hi < nodeLo or nodeHi < lo 'outside'
+			return
+		end 'outside'
+
+		if lo <= nodeLo and nodeHi <= hi 'covered'
+			self.applyTo(node, by: by)
+			return
+		end 'covered'
+
+		self.pushDown(node)
+		let mid = nodeLo + (nodeHi - nodeLo) / 2
+		self.addRec(node + node, nodeLo: nodeLo, nodeHi: mid, lo: lo, hi: hi, by: by)
+		self.addRec(node + node + 1, nodeLo: mid + 1, nodeHi: nodeHi, lo: lo, hi: hi, by: by)
+		self.pull(node)
+	end 'addRec'
+
+	function topValue() returns PressureDelta
+		return try self.maxv.get(1) otherwise panic("DemandTree.topValue: maxv.get(1) OOB")
+	end 'topValue'
+
+	function topBlock() returns ElementIndex
+		return try self.arg.get(1) otherwise panic("DemandTree.topBlock: arg.get(1) OOB")
+	end 'topBlock'
+end 'DemandTree'
+
+// Each block's whole clobber mask, OR-ed over a range of blocks in O(log) — what a value live
+// straight through those blocks must avoid (`LiveSets.runClobbersOf`). Built once by the first
+// liveness build and never updated: the ops a split inserts clobber nothing.
+export type BlockClobbers
+	var leafBase as ElementIndex
+	var tree as RegMaskColumn
+	var nodes as CfgIndexArray
+
+	export static function create() returns BlockClobbers
+		return Self{leafBase: 1, tree: RegMaskColumn.create(), nodes: CfgIndexArray.create()}
+	end 'create'
+
+	export function begin(numBlocks ElementIndex)
+		self.leafBase = roundUpToPowerOfTwo(numBlocks as BytePos)
+		self.tree.refill(self.leafBase + self.leafBase, value: 0)
+	end 'begin'
+
+	export function set(blockLocal ElementIndex, mask RegMask)
+		try self.tree.set(self.leafBase + blockLocal, value: mask) otherwise panic("BlockClobbers.set: tree.set OOB at block {blockLocal}")
+	end 'set'
+
+	export function build()
+		for ri in 1 upto self.leafBase 'eachNode'
+			let node = self.leafBase - ri
+			try self.tree.set(node, value: (try self.tree.get(node + node) otherwise panic("BlockClobbers.build: tree.get OOB at {node + node}")) or (try self.tree.get(node + node + 1) otherwise panic("BlockClobbers.build: tree.get OOB at {node + node + 1}"))) otherwise panic("BlockClobbers.build: tree.set OOB at {node}")
+		end 'eachNode'
+	end 'build'
+
+	export function query(lo ElementIndex, hi ElementIndex) returns RegMask
+		var covering = self.nodes
+		collectCoveringNodes(self.leafBase, lo: lo, hi: hi, out: covering)
+		var mask = 0 as RegMask
+
+		for node in covering 'eachCoveringNode'
+			mask = mask or (try self.tree.get(node) otherwise panic("BlockClobbers.query: tree.get OOB at {node}"))
+		end 'eachCoveringNode'
+
+		return mask
+	end 'query'
+end 'BlockClobbers'

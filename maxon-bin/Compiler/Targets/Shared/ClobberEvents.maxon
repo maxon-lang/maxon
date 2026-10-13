@@ -1,0 +1,61 @@
+// The clobber windows of one backward block sweep, in O(clobbered registers) per value rather than
+// a walk of the live row at every clobbering op. A value's window opens where the sweep first finds
+// it live (`enter`) and closes at its def or the block's entry (`finalize`), and the value is
+// forbidden every register clobbered inside it. Only each register's latest clobber — the lowest
+// position yet — is kept: every window closes at the sweep's current point, so that one lies inside
+// whenever any does.
+export type ClobberEvents
+	var seenAt as DenseColumn
+	var seenMask as RegMask
+	var entry as DenseColumn
+
+	export static function create() returns ClobberEvents
+		var seenAt = DenseColumn.create()
+		seenAt.refill(RegisterFileSize, value: 0)
+		return Self{seenAt: seenAt, seenMask: 0, entry: DenseColumn.create()}
+	end 'create'
+
+	export function widen(valueCount ValueId)
+		self.entry.growFilled(valueCount, value: 0)
+	end 'widen'
+
+	export function beginBlock()
+		self.seenMask = 0
+	end 'beginBlock'
+
+	export function record(pos ElementIndex, mask RegMask)
+		var remaining = mask
+
+		while remaining != 0 'eachRegister'
+			let regNum = regMaskLowest(remaining)
+			try self.seenAt.set(regNum, value: pos) otherwise panic("ClobberEvents.record: seenAt.set OOB at register {regNum}")
+			remaining = regMaskRemove(remaining, regNum: regNum)
+		end 'eachRegister'
+
+		self.seenMask = self.seenMask or mask
+	end 'record'
+
+	export function enter(v ValueId, pos ElementIndex)
+		try self.entry.set(v, value: pos) otherwise panic("ClobberEvents.enter: entry.set OOB for value {v}")
+	end 'enter'
+
+	export function finalize(v ValueId, forbidden RegMaskColumn)
+		let entryPos = try self.entry.get(v) otherwise panic("ClobberEvents.finalize: entry.get OOB for value {v}")
+		var remaining = self.seenMask
+		var crossed = 0 as RegMask
+
+		while remaining != 0 'eachSeenRegister'
+			let regNum = regMaskLowest(remaining)
+
+			if (try self.seenAt.get(regNum) otherwise panic("ClobberEvents.finalize: seenAt.get OOB at register {regNum}")) < entryPos 'insideTheWindow'
+				crossed = regMaskAdd(crossed, regNum: regNum)
+			end 'insideTheWindow'
+
+			remaining = regMaskRemove(remaining, regNum: regNum)
+		end 'eachSeenRegister'
+
+		if crossed != 0 'somethingCrossed'
+			try forbidden.set(v, value: (try forbidden.get(v) otherwise panic("ClobberEvents.finalize: forbidden.get OOB for value {v}")) or crossed) otherwise panic("ClobberEvents.finalize: forbidden.set OOB for value {v}")
+		end 'somethingCrossed'
+	end 'finalize'
+end 'ClobberEvents'

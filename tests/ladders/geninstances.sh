@@ -56,8 +56,11 @@ fi
   # the whole value of the pair is that subtracting them cancels everything but the contest, and a
   # 2-character difference in a comment would put that claim on a program of a different size.
   printf '// ladder: %s generic instance(s), chain depth %s, mode %-9s\n' "$INSTANCES" "$CHAIN" "$MODE"
-  echo "typealias Num = int(0 to 100)"
-  echo ""
+  if [ -n "$STEM" ] || [ "$CHAIN" -gt 0 ]; then
+    echo "typealias Num = int(0 to 100)"
+    echo ""
+  fi
+
   echo "type Box uses T"
   echo -e "\texport var v as T"
   echo -e "\tstatic function create(v T) returns Self"
@@ -76,6 +79,13 @@ fi
   i=0
   while [ "$i" -lt "$INSTANCES" ]; do
     printf 'typealias I%06d = Box with A%06d\n' "$i" "$i"
+    i=$(( i + 1 ))
+  done
+  echo ""
+
+  i=0
+  while [ "$i" -lt "$INSTANCES" ]; do
+    printf 'function r%06d(b I%06d) returns I%06d\n\treturn b\nend '\''r%06d'\''\n' "$i" "$i" "$i" "$i"
     i=$(( i + 1 ))
   done
   echo ""

@@ -1,0 +1,697 @@
+export type GapPlan
+	var starts as CfgIndexArray
+	var entries as CfgIndexArray
+	var ends as CfgIndexArray
+	var opens as BoolArray
+	var tailKeys as OpSeqArray
+
+	export static function create() returns GapPlan
+		return Self{starts: CfgIndexArray.create(), entries: CfgIndexArray.create(), ends: CfgIndexArray.create(), opens: BoolArray.create(), tailKeys: OpSeqArray.create()}
+	end 'create'
+
+	export function clear()
+		self.starts.clear()
+		self.entries.clear()
+		self.ends.clear()
+		self.opens.clear()
+		self.tailKeys.clear()
+	end 'clear'
+
+	export function push(start ElementIndex, entry ElementIndex, endRecord ElementIndex, isOpen bool, tailKey OpSeq)
+		self.starts.push(start)
+		self.entries.push(entry)
+		self.ends.push(endRecord)
+		self.opens.push(isOpen)
+		self.tailKeys.push(tailKey)
+	end 'push'
+
+	export function count() returns ElementIndex
+		return self.starts.count()
+	end 'count'
+
+	export function startAt(k ElementIndex) returns ElementIndex
+		return try self.starts.get(k) otherwise panic("GapPlan.startAt: gap {k} out of range")
+	end 'startAt'
+
+	export function entryAt(k ElementIndex) returns ElementIndex
+		return try self.entries.get(k) otherwise panic("GapPlan.entryAt: gap {k} out of range")
+	end 'entryAt'
+
+	export function endAt(k ElementIndex) returns ElementIndex
+		return try self.ends.get(k) otherwise panic("GapPlan.endAt: gap {k} out of range")
+	end 'endAt'
+
+	export function tailKeyAt(k ElementIndex) returns OpSeq
+		return try self.tailKeys.get(k) otherwise panic("GapPlan.tailKeyAt: gap {k} out of range")
+	end 'tailKeyAt'
+
+	export function openAt(k ElementIndex) returns bool
+		return try self.opens.get(k) otherwise panic("GapPlan.openAt: gap {k} out of range")
+	end 'openAt'
+end 'GapPlan'
+
+let GapCellShift = 6 as DenseInt
+
+function gapCellOf(slot ElementIndex) returns ElementIndex
+	return slot shr GapCellShift
+end 'gapCellOf'
+
+function gapCellCountOf(slotCount ElementIndex) returns ElementIndex
+	return gapCellOf(slotCount - 1) + 1
+end 'gapCellCountOf'
+
+export type GapTreePair
+	export var finite as GapTree
+	export var tail as GapTree
+	let sleepable as bool
+
+	export static function create(sleepable bool) returns GapTreePair
+		return Self{finite: GapTree.create(), tail: GapTree.create(), sleepable: sleepable}
+	end 'create'
+
+	export function begin(slotCount ElementIndex, valueCount ValueId)
+		self.finite.size(slotCount, valueCount: valueCount)
+		self.tail.size(slotCount, valueCount: valueCount)
+	end 'begin'
+
+	export function growValues(valueCount ValueId)
+		self.finite.growValues(valueCount)
+		self.tail.growValues(valueCount)
+	end 'growValues'
+
+	export function dropValue(v ValueId, index UseIndex)
+		self.finite.dropValue(v, index: index)
+		self.tail.dropValue(v, index: index)
+	end 'dropValue'
+
+	export function relocate(scratch PressureRelayoutScratch, pressure PressureIndex, index UseIndex)
+		self.finite.relocate(scratch, pressure: pressure, index: index)
+		self.tail.relocate(scratch, pressure: pressure, index: index)
+	end 'relocate'
+
+	export function sleepForever(v ValueId, index UseIndex)
+		self.requireSleepable()
+		self.finite.sleepForever(v, index: index)
+		self.tail.sleepForever(v, index: index)
+	end 'sleepForever'
+
+	export function sleepUntil(v ValueId, epoch DenseInt, index UseIndex)
+		self.requireSleepable()
+		self.finite.sleepUntil(v, epoch: epoch, index: index)
+		self.tail.sleepUntil(v, epoch: epoch, index: index)
+	end 'sleepUntil'
+
+	export function wakeUpTo(epoch DenseInt, index UseIndex)
+		self.requireSleepable()
+		self.finite.wakeUpTo(epoch, index: index)
+		self.tail.wakeUpTo(epoch, index: index)
+	end 'wakeUpTo'
+
+	function requireSleepable()
+		if not self.sleepable 'neverSleeps'
+			panic("GapTreePair: a rematerializable value has no store gate to wait on, so its gaps are never put to sleep")
+		end 'neverSleeps'
+	end 'requireSleepable'
+end 'GapTreePair'
+
+// Every value's live range cut into GAPS between consecutive op reads (from its def, or its phi
+// block's entry, up to its next read), each filed under the slot it starts at. The value Belady
+// wants at a peak — live across it, farthest next use, lowest id on a tie — owns the gap starting
+// at or before the peak's slot with the latest end, so `chooseVictim` reads it off a tree instead
+// of walking the peak's live row. An offered gap is still checked (`candidateAtPeak`): one that
+// starts before the peak and ends after it need not hold it on every path. A rejected one is masked
+// for the rest of the query.
+//
+// A gap past a value's last read is an open TAIL. Its next use is Belady's `seqLimit`, so every
+// tail ties and they are tried in ascending id, ahead of the finite gaps. `constant` holds only
+// rematerializable values (tier 1), `spill` every value (tier 2). Only `spill` sleeps — a value
+// whose store cannot fit the pool yet (`storeFitsPoolRemembering`), or that is already stored —
+// because a remat has no store gate to wait on.
+export type VictimGaps
+	export var spill as GapTreePair
+	export var constant as GapTreePair
+	export var plan as GapPlan
+
+	export static function create() returns VictimGaps
+		return Self{spill: GapTreePair.create(true), constant: GapTreePair.create(false), plan: GapPlan.create()}
+	end 'create'
+
+	export function beginBulk()
+		self.spill.finite.beginBulk()
+		self.spill.tail.beginBulk()
+		self.constant.finite.beginBulk()
+		self.constant.tail.beginBulk()
+	end 'beginBulk'
+
+	export function endBulk(index UseIndex)
+		self.spill.finite.endBulk(index)
+		self.spill.tail.endBulk(index)
+		self.constant.finite.endBulk(index)
+		self.constant.tail.endBulk(index)
+	end 'endBulk'
+
+	export function begin(slotCount ElementIndex, valueCount ValueId)
+		self.spill.begin(slotCount, valueCount: valueCount)
+		self.constant.begin(slotCount, valueCount: valueCount)
+	end 'begin'
+
+	export function growValues(valueCount ValueId)
+		self.spill.growValues(valueCount)
+		self.constant.growValues(valueCount)
+	end 'growValues'
+
+	export function dropValue(v ValueId, index UseIndex)
+		self.spill.dropValue(v, index: index)
+		self.constant.dropValue(v, index: index)
+	end 'dropValue'
+
+	export function relocate(scratch PressureRelayoutScratch, pressure PressureIndex, index UseIndex)
+		self.spill.relocate(scratch, pressure: pressure, index: index)
+		self.constant.relocate(scratch, pressure: pressure, index: index)
+	end 'relocate'
+
+	export function sleepForever(v ValueId, index UseIndex)
+		self.spill.sleepForever(v, index: index)
+	end 'sleepForever'
+
+	export function sleepUntil(v ValueId, epoch DenseInt, index UseIndex)
+		self.spill.sleepUntil(v, epoch: epoch, index: index)
+	end 'sleepUntil'
+
+	export function wakeUpTo(epoch DenseInt, index UseIndex)
+		self.spill.wakeUpTo(epoch, index: index)
+	end 'wakeUpTo'
+end 'VictimGaps'
+
+export type GapTree
+	var leafBase as ElementIndex
+	var best as CfgIndexArray
+	var headAt as CfgIndexArray
+	var gapValue as ValueIdArray
+	var gapStart as PressureSlotColumn
+	var gapEnd as CfgIndexArray
+	var gapOpen as BoolArray
+	var gapTailKey as OpSeqArray
+	var gapEntryBlock as CfgIndexArray
+	var gapNextAt as CfgIndexArray
+	var gapPrevAt as CfgIndexArray
+	var gapNextOfValue as CfgIndexArray
+	var gapMasked as BoolArray
+	var firstOfValue as CfgIndexArray
+	var asleep as BoolArray
+	var wakeAt as DenseColumn
+	var wakeEpochs as DenseColumn
+	var wakeValues as ValueIdArray
+	var freeIds as CfgIndexArray
+	var maskedStack as CfgIndexArray
+	var moving as CfgIndexArray
+	var bulk as bool
+
+	export static function create() returns GapTree
+		return Self{leafBase: 1, best: CfgIndexArray.create(), headAt: CfgIndexArray.create(), gapValue: ValueIdArray.create(), gapStart: PressureSlotColumn.create(), gapEnd: CfgIndexArray.create(), gapOpen: BoolArray.create(), gapTailKey: OpSeqArray.create(), gapEntryBlock: CfgIndexArray.create(), gapNextAt: CfgIndexArray.create(), gapPrevAt: CfgIndexArray.create(), gapNextOfValue: CfgIndexArray.create(), gapMasked: BoolArray.create(), firstOfValue: CfgIndexArray.create(), asleep: BoolArray.create(), wakeAt: DenseColumn.create(), wakeEpochs: DenseColumn.create(), wakeValues: ValueIdArray.create(), freeIds: CfgIndexArray.create(), maskedStack: CfgIndexArray.create(), moving: CfgIndexArray.create(), bulk: false}
+	end 'create'
+
+	function size(slotCount ElementIndex, valueCount ValueId)
+		self.leafBase = roundUpToPowerOfTwo(gapCellCountOf(slotCount) as BytePos)
+		self.best.refill(self.leafBase + self.leafBase, value: 0)
+		self.headAt.refill(self.leafBase, value: 0)
+		self.gapValue.clear()
+		self.gapStart.clear()
+		self.gapEnd.clear()
+		self.gapOpen.clear()
+		self.gapTailKey.clear()
+		self.gapEntryBlock.clear()
+		self.gapNextAt.clear()
+		self.gapPrevAt.clear()
+		self.gapNextOfValue.clear()
+		self.gapMasked.clear()
+		self.freeIds.clear()
+		self.maskedStack.clear()
+		self.wakeEpochs.clear()
+		self.wakeValues.clear()
+		self.firstOfValue.refill(valueCount, value: 0)
+		self.asleep.refill(valueCount, value: false)
+		self.wakeAt.refill(valueCount, value: 0)
+	end 'size'
+
+	function growValues(valueCount ValueId)
+		self.firstOfValue.growFilled(valueCount, value: 0)
+		self.asleep.growFilled(valueCount, value: false)
+		self.wakeAt.growFilled(valueCount, value: 0)
+	end 'growValues'
+
+	export function gapCountOf(value ValueId) returns ElementIndex
+		var count = 0 as ElementIndex
+		var g = try self.firstOfValue.get(value) otherwise panic("GapTree.gapCountOf: firstOfValue.get OOB for value {value}")
+
+		while g != 0 'eachGap'
+			count = count + 1
+			g = try self.gapNextOfValue.get(g - 1) otherwise panic("GapTree.gapCountOf: gapNextOfValue.get OOB at {g - 1}")
+		end 'eachGap'
+
+		return count
+	end 'gapCountOf'
+
+	export function holdsGap(value ValueId, startSlot ElementIndex, endRecord ElementIndex, isOpen bool, tailKey OpSeq) returns bool
+		var g = try self.firstOfValue.get(value) otherwise panic("GapTree.holdsGap: firstOfValue.get OOB for value {value}")
+
+		while g != 0 'eachGap'
+			let id = g - 1
+
+			if (try self.gapStart.get(id) otherwise panic("GapTree.holdsGap: gapStart.get OOB at {id}")) == startSlot and (try self.gapOpen.get(id) otherwise panic("GapTree.holdsGap: gapOpen.get OOB at {id}")) == isOpen and ((isOpen and (try self.gapTailKey.get(id) otherwise panic("GapTree.holdsGap: gapTailKey.get OOB at {id}")) == tailKey) or (not isOpen and (try self.gapEnd.get(id) otherwise panic("GapTree.holdsGap: gapEnd.get OOB at {id}")) == endRecord)) 'thisOne'
+				return true
+			end 'thisOne'
+
+			g = try self.gapNextOfValue.get(id) otherwise panic("GapTree.holdsGap: gapNextOfValue.get OOB at {id}")
+		end 'eachGap'
+
+		return false
+	end 'holdsGap'
+
+	export function aggregatesAreExact(index UseIndex) returns bool
+		for cell in 0 upto self.leafBase 'eachLeaf'
+			if (try self.best.get(self.leafBase + cell) otherwise panic("GapTree.aggregatesAreExact: best.get OOB at cell {cell}")) != self.leafWinner(cell, index: index) 'staleLeaf'
+				return false
+			end 'staleLeaf'
+		end 'eachLeaf'
+
+		for ri in 1 upto self.leafBase 'eachNode'
+			let node = self.leafBase - ri
+			let left = try self.best.get(node + node) otherwise panic("GapTree.aggregatesAreExact: best.get OOB at {node + node}")
+			let right = try self.best.get(node + node + 1) otherwise panic("GapTree.aggregatesAreExact: best.get OOB at {node + node + 1}")
+
+			if (try self.best.get(node) otherwise panic("GapTree.aggregatesAreExact: best.get OOB at {node}")) != self.better(left, b: right, index: index) 'staleNode'
+				return false
+			end 'staleNode'
+		end 'eachNode'
+
+		return true
+	end 'aggregatesAreExact'
+
+	export function valueOf(gap ElementIndex) returns ValueId
+		return try self.gapValue.get(gap - 1) otherwise panic("GapTree.valueOf: gap {gap} out of range")
+	end 'valueOf'
+
+	function endSeqOf(gap ElementIndex, index UseIndex) returns OpSeq
+		let isOpen = try self.gapOpen.get(gap) otherwise panic("GapTree.endSeqOf: gapOpen.get OOB at {gap}")
+
+		if isOpen 'open'
+			return try self.gapTailKey.get(gap) otherwise panic("GapTree.endSeqOf: gapTailKey.get OOB at {gap}")
+		end 'open'
+
+		return index.useSeqAt(try self.gapEnd.get(gap) otherwise panic("GapTree.endSeqOf: gapEnd.get OOB at {gap}"))
+	end 'endSeqOf'
+
+	function better(a ElementIndex, b ElementIndex, index UseIndex) returns ElementIndex
+		if a == 0 'noFirst'
+			return b
+		end 'noFirst'
+
+		if b == 0 'noSecond'
+			return a
+		end 'noSecond'
+
+		let keyA = self.endSeqOf(a - 1, index: index)
+		let keyB = self.endSeqOf(b - 1, index: index)
+
+		if keyA != keyB 'byEnd'
+			return a if keyA > keyB else b
+		end 'byEnd'
+
+		let valueA = try self.gapValue.get(a - 1) otherwise panic("GapTree.better: gapValue.get OOB at {a - 1}")
+		let valueB = try self.gapValue.get(b - 1) otherwise panic("GapTree.better: gapValue.get OOB at {b - 1}")
+		return a if valueA <= valueB else b
+	end 'better'
+
+	function leafWinner(cell ElementIndex, index UseIndex) returns ElementIndex
+		var winner = 0 as ElementIndex
+		var g = try self.headAt.get(cell) otherwise panic("GapTree.leafWinner: headAt.get OOB at cell {cell}")
+
+		while g != 0 'eachInBucket'
+			let id = g - 1
+			let masked = try self.gapMasked.get(id) otherwise panic("GapTree.leafWinner: gapMasked.get OOB at {id}")
+			let value = try self.gapValue.get(id) otherwise panic("GapTree.leafWinner: gapValue.get OOB at {id}")
+			let sleeping = try self.asleep.get(value) otherwise panic("GapTree.leafWinner: asleep.get OOB for value {value}")
+
+			if not masked and not sleeping 'awake'
+				winner = self.better(winner, b: g, index: index)
+			end 'awake'
+
+			g = try self.gapNextAt.get(id) otherwise panic("GapTree.leafWinner: gapNextAt.get OOB at {id}")
+		end 'eachInBucket'
+
+		return winner
+	end 'leafWinner'
+
+	function beginBulk()
+		self.bulk = true
+	end 'beginBulk'
+
+	function endBulk(index UseIndex)
+		self.bulk = false
+		self.rebuildRange(0, span: self.leafBase, index: index)
+	end 'endBulk'
+
+	function refreshLeaf(slot ElementIndex, index UseIndex)
+		if self.bulk 'deferredToTheBulkBuild'
+			return
+		end 'deferredToTheBulkBuild'
+
+		let cell = gapCellOf(slot)
+		let node = self.leafBase + cell
+		try self.best.set(node, value: self.leafWinner(cell, index: index)) otherwise panic("GapTree.refreshLeaf: best.set OOB at slot {slot}")
+		self.refreshAncestors(node, index: index)
+	end 'refreshLeaf'
+
+	function refreshAncestors(node ElementIndex, index UseIndex)
+		var parent = node / 2
+
+		while parent >= 1 'towardTheRoot'
+			let left = try self.best.get(parent + parent) otherwise panic("GapTree.refreshAncestors: best.get OOB at {parent + parent}")
+			let right = try self.best.get(parent + parent + 1) otherwise panic("GapTree.refreshAncestors: best.get OOB at {parent + parent + 1}")
+			let winner = self.better(left, b: right, index: index)
+
+			if winner == (try self.best.get(parent) otherwise panic("GapTree.refreshAncestors: best.get OOB at {parent}")) 'ancestorsAreUnchanged'
+				return
+			end 'ancestorsAreUnchanged'
+
+			try self.best.set(parent, value: winner) otherwise panic("GapTree.refreshAncestors: best.set OOB at {parent}")
+			parent = parent / 2
+		end 'towardTheRoot'
+	end 'refreshAncestors'
+
+	export function bestStartingUpTo(slot ElementIndex, afterSeq OpSeq, index UseIndex) returns ElementIndex
+		let cell = gapCellOf(slot)
+		var left = self.leafBase
+		var right = self.leafBase + cell
+		var winner = self.bestInCellUpTo(cell, slot: slot, index: index)
+
+		while left < right 'climb'
+			if left - (left / 2) * 2 == 1 'leftIsARightChild'
+				winner = self.better(winner, b: try self.best.get(left) otherwise panic("GapTree.bestStartingUpTo: best.get OOB at {left}"), index: index)
+				left = left + 1
+			end 'leftIsARightChild'
+
+			if right - (right / 2) * 2 == 1 'rightIsARightChild'
+				right = right - 1
+				winner = self.better(winner, b: try self.best.get(right) otherwise panic("GapTree.bestStartingUpTo: best.get OOB at {right}"), index: index)
+			end 'rightIsARightChild'
+
+			left = left / 2
+			right = right / 2
+		end 'climb'
+
+		if winner == 0 'nothingStartsThere'
+			return 0
+		end 'nothingStartsThere'
+
+		if self.endSeqOf(winner - 1, index: index) <= afterSeq 'allPast'
+			return 0
+		end 'allPast'
+
+		return winner
+	end 'bestStartingUpTo'
+
+	export function mask(gap ElementIndex, index UseIndex)
+		try self.gapMasked.set(gap - 1, value: true) otherwise panic("GapTree.mask: gapMasked.set OOB at {gap - 1}")
+		self.maskedStack.push(gap)
+		self.refreshLeaf((try self.gapStart.get(gap - 1) otherwise panic("GapTree.mask: gapStart.get OOB at {gap - 1}")), index: index)
+	end 'mask'
+
+	export function unmaskAll(index UseIndex)
+		while self.maskedStack.count() > 0 'eachMasked'
+			let gap = try self.maskedStack.pop() otherwise panic("GapTree.unmaskAll: pop on a non-empty stack failed")
+			try self.gapMasked.set(gap - 1, value: false) otherwise panic("GapTree.unmaskAll: gapMasked.set OOB at {gap - 1}")
+			self.refreshLeaf((try self.gapStart.get(gap - 1) otherwise panic("GapTree.unmaskAll: gapStart.get OOB at {gap - 1}")), index: index)
+		end 'eachMasked'
+	end 'unmaskAll'
+
+	function bestInCellUpTo(cell ElementIndex, slot ElementIndex, index UseIndex) returns ElementIndex
+		var winner = 0 as ElementIndex
+		var g = try self.headAt.get(cell) otherwise panic("GapTree.bestInCellUpTo: headAt.get OOB at cell {cell}")
+
+		while g != 0 'eachInBucket'
+			let id = g - 1
+			let value = try self.gapValue.get(id) otherwise panic("GapTree.bestInCellUpTo: gapValue.get OOB at {id}")
+
+			if (try self.gapStart.get(id) otherwise panic("GapTree.bestInCellUpTo: gapStart.get OOB at {id}")) <= slot and not (try self.gapMasked.get(id) otherwise panic("GapTree.bestInCellUpTo: gapMasked.get OOB at {id}")) and not (try self.asleep.get(value) otherwise panic("GapTree.bestInCellUpTo: asleep.get OOB for value {value}")) 'startsInTime'
+				winner = self.better(winner, b: g, index: index)
+			end 'startsInTime'
+
+			g = try self.gapNextAt.get(id) otherwise panic("GapTree.bestInCellUpTo: gapNextAt.get OOB at {id}")
+		end 'eachInBucket'
+
+		return winner
+	end 'bestInCellUpTo'
+
+	function linkIntoBucket(id ElementIndex, slot ElementIndex)
+		let cell = gapCellOf(slot)
+		let head = try self.headAt.get(cell) otherwise panic("GapTree.linkIntoBucket: headAt.get OOB at cell {cell}")
+		try self.gapNextAt.set(id, value: head) otherwise panic("GapTree.linkIntoBucket: gapNextAt.set OOB at {id}")
+		try self.gapPrevAt.set(id, value: 0) otherwise panic("GapTree.linkIntoBucket: gapPrevAt.set OOB at {id}")
+
+		if head != 0 'hasAHead'
+			try self.gapPrevAt.set(head - 1, value: id + 1) otherwise panic("GapTree.linkIntoBucket: gapPrevAt.set OOB at {head - 1}")
+		end 'hasAHead'
+
+		try self.headAt.set(cell, value: id + 1) otherwise panic("GapTree.linkIntoBucket: headAt.set OOB at cell {cell}")
+	end 'linkIntoBucket'
+
+	function unlinkFromBucket(id ElementIndex, slot ElementIndex)
+		let prev = try self.gapPrevAt.get(id) otherwise panic("GapTree.unlinkFromBucket: gapPrevAt.get OOB at {id}")
+		let next = try self.gapNextAt.get(id) otherwise panic("GapTree.unlinkFromBucket: gapNextAt.get OOB at {id}")
+
+		if prev != 0 'hasAPredecessor'
+			try self.gapNextAt.set(prev - 1, value: next) otherwise panic("GapTree.unlinkFromBucket: gapNextAt.set OOB at {prev - 1}")
+		end 'hasAPredecessor' else 'wasTheHead'
+			try self.headAt.set(gapCellOf(slot), value: next) otherwise panic("GapTree.unlinkFromBucket: headAt.set OOB at slot {slot}")
+		end 'wasTheHead'
+
+		if next != 0 'hasASuccessor'
+			try self.gapPrevAt.set(next - 1, value: prev) otherwise panic("GapTree.unlinkFromBucket: gapPrevAt.set OOB at {next - 1}")
+		end 'hasASuccessor'
+	end 'unlinkFromBucket'
+
+	export function addGap(value ValueId, startSlot ElementIndex, entryBlock ElementIndex, endRecord ElementIndex, isOpen bool, tailKey OpSeq, index UseIndex)
+		var id = 0 as ElementIndex
+
+		if self.freeIds.count() > 0 'reuse'
+			id = try self.freeIds.pop() otherwise panic("GapTree.addGap: pop on a non-empty free list failed")
+			try self.gapValue.set(id, value: value) otherwise panic("GapTree.addGap: gapValue.set OOB at {id}")
+			try self.gapStart.set(id, value: startSlot as PressureSlot) otherwise panic("GapTree.addGap: gapStart.set OOB at {id}")
+			try self.gapEnd.set(id, value: endRecord) otherwise panic("GapTree.addGap: gapEnd.set OOB at {id}")
+			try self.gapOpen.set(id, value: isOpen) otherwise panic("GapTree.addGap: gapOpen.set OOB at {id}")
+			try self.gapTailKey.set(id, value: tailKey) otherwise panic("GapTree.addGap: gapTailKey.set OOB at {id}")
+			try self.gapEntryBlock.set(id, value: entryBlock) otherwise panic("GapTree.addGap: gapEntryBlock.set OOB at {id}")
+			try self.gapMasked.set(id, value: false) otherwise panic("GapTree.addGap: gapMasked.set OOB at {id}")
+		end 'reuse' else 'fresh'
+			id = self.gapValue.count()
+			self.gapValue.push(value)
+			self.gapStart.push(startSlot as PressureSlot)
+			self.gapEnd.push(endRecord)
+			self.gapOpen.push(isOpen)
+			self.gapTailKey.push(tailKey)
+			self.gapEntryBlock.push(entryBlock)
+			self.gapNextAt.push(0)
+			self.gapPrevAt.push(0)
+			self.gapNextOfValue.push(0)
+			self.gapMasked.push(false)
+		end 'fresh'
+
+		let first = try self.firstOfValue.get(value) otherwise panic("GapTree.addGap: firstOfValue.get OOB for value {value}")
+		try self.gapNextOfValue.set(id, value: first) otherwise panic("GapTree.addGap: gapNextOfValue.set OOB at {id}")
+		try self.firstOfValue.set(value, value: id + 1) otherwise panic("GapTree.addGap: firstOfValue.set OOB for value {value}")
+		self.linkIntoBucket(id, slot: startSlot)
+		self.refreshLeaf(startSlot, index: index)
+	end 'addGap'
+
+	function dropValue(value ValueId, index UseIndex)
+		var g = try self.firstOfValue.get(value) otherwise panic("GapTree.dropValue: firstOfValue.get OOB for value {value}")
+
+		while g != 0 'eachGap'
+			let id = g - 1
+			let slot = (try self.gapStart.get(id) otherwise panic("GapTree.dropValue: gapStart.get OOB at {id}"))
+			let next = try self.gapNextOfValue.get(id) otherwise panic("GapTree.dropValue: gapNextOfValue.get OOB at {id}")
+			self.unlinkFromBucket(id, slot: slot)
+			self.refreshLeaf(slot, index: index)
+			self.freeIds.push(id)
+			g = next
+		end 'eachGap'
+
+		try self.firstOfValue.set(value, value: 0) otherwise panic("GapTree.dropValue: firstOfValue.set OOB for value {value}")
+		try self.asleep.set(value, value: false) otherwise panic("GapTree.dropValue: asleep.set OOB for value {value}")
+		try self.wakeAt.set(value, value: 0) otherwise panic("GapTree.dropValue: wakeAt.set OOB for value {value}")
+	end 'dropValue'
+
+	function refreshValue(value ValueId, index UseIndex)
+		var g = try self.firstOfValue.get(value) otherwise panic("GapTree.refreshValue: firstOfValue.get OOB for value {value}")
+
+		while g != 0 'eachGap'
+			let id = g - 1
+			self.refreshLeaf((try self.gapStart.get(id) otherwise panic("GapTree.refreshValue: gapStart.get OOB at {id}")), index: index)
+			g = try self.gapNextOfValue.get(id) otherwise panic("GapTree.refreshValue: gapNextOfValue.get OOB at {id}")
+		end 'eachGap'
+	end 'refreshValue'
+
+	export function sleepForever(value ValueId, index UseIndex)
+		try self.asleep.set(value, value: true) otherwise panic("GapTree.sleepForever: asleep.set OOB for value {value}")
+		try self.wakeAt.set(value, value: 0) otherwise panic("GapTree.sleepForever: wakeAt.set OOB for value {value}")
+		self.refreshValue(value, index: index)
+	end 'sleepForever'
+
+	export function sleepUntil(value ValueId, epoch DenseInt, index UseIndex)
+		try self.asleep.set(value, value: true) otherwise panic("GapTree.sleepUntil: asleep.set OOB for value {value}")
+		try self.wakeAt.set(value, value: epoch) otherwise panic("GapTree.sleepUntil: wakeAt.set OOB for value {value}")
+		self.refreshValue(value, index: index)
+		self.pushWake(epoch, value: value)
+	end 'sleepUntil'
+
+	export function wakeUpTo(epoch DenseInt, index UseIndex)
+		while self.wakeEpochs.count() > 0 and (try self.wakeEpochs.get(0) otherwise panic("GapTree.wakeUpTo: wakeEpochs.get(0) on a non-empty heap failed")) <= epoch 'eachDue'
+			let due = try self.wakeEpochs.get(0) otherwise panic("GapTree.wakeUpTo: wakeEpochs.get(0) failed")
+			let value = try self.wakeValues.get(0) otherwise panic("GapTree.wakeUpTo: wakeValues.get(0) failed")
+			self.popWake()
+			let sleeping = try self.asleep.get(value) otherwise panic("GapTree.wakeUpTo: asleep.get OOB for value {value}")
+			let scheduled = try self.wakeAt.get(value) otherwise panic("GapTree.wakeUpTo: wakeAt.get OOB for value {value}")
+
+			if sleeping and scheduled == due 'stillAsleepForThisWake'
+				try self.asleep.set(value, value: false) otherwise panic("GapTree.wakeUpTo: asleep.set OOB for value {value}")
+				try self.wakeAt.set(value, value: 0) otherwise panic("GapTree.wakeUpTo: wakeAt.set OOB for value {value}")
+				self.refreshValue(value, index: index)
+			end 'stillAsleepForThisWake'
+		end 'eachDue'
+	end 'wakeUpTo'
+
+	function pushWake(epoch DenseInt, value ValueId)
+		self.wakeEpochs.push(epoch)
+		self.wakeValues.push(value)
+		var node = self.wakeEpochs.count() - 1
+
+		while node > 0 'siftUp'
+			let parent = (node - 1) / 2
+			let nodeEpoch = try self.wakeEpochs.get(node) otherwise panic("GapTree.pushWake: wakeEpochs.get OOB at {node}")
+			let parentEpoch = try self.wakeEpochs.get(parent) otherwise panic("GapTree.pushWake: wakeEpochs.get OOB at {parent}")
+
+			if parentEpoch <= nodeEpoch 'settled'
+				return
+			end 'settled'
+
+			self.swapWake(node, b: parent)
+			node = parent
+		end 'siftUp'
+	end 'pushWake'
+
+	function popWake()
+		let last = self.wakeEpochs.count() - 1
+		self.swapWake(0, b: last)
+		_ = try self.wakeEpochs.pop() otherwise panic("GapTree.popWake: pop on a non-empty heap failed")
+		_ = try self.wakeValues.pop() otherwise panic("GapTree.popWake: pop on a non-empty heap failed")
+		let size = self.wakeEpochs.count()
+		var node = 0 as ElementIndex
+
+		while node * 2 + 1 < size 'siftDown'
+			var child = node * 2 + 1
+
+			if child + 1 < size and (try self.wakeEpochs.get(child + 1) otherwise panic("GapTree.popWake: wakeEpochs.get OOB at {child + 1}")) < (try self.wakeEpochs.get(child) otherwise panic("GapTree.popWake: wakeEpochs.get OOB at {child}")) 'rightIsEarlier'
+				child = child + 1
+			end 'rightIsEarlier'
+
+			if (try self.wakeEpochs.get(node) otherwise panic("GapTree.popWake: wakeEpochs.get OOB at {node}")) <= (try self.wakeEpochs.get(child) otherwise panic("GapTree.popWake: wakeEpochs.get OOB at {child}")) 'settled'
+				return
+			end 'settled'
+
+			self.swapWake(node, b: child)
+			node = child
+		end 'siftDown'
+	end 'popWake'
+
+	function swapWake(a ElementIndex, b ElementIndex)
+		let epochA = try self.wakeEpochs.get(a) otherwise panic("GapTree.swapWake: wakeEpochs.get OOB at {a}")
+		let epochB = try self.wakeEpochs.get(b) otherwise panic("GapTree.swapWake: wakeEpochs.get OOB at {b}")
+		let valueA = try self.wakeValues.get(a) otherwise panic("GapTree.swapWake: wakeValues.get OOB at {a}")
+		let valueB = try self.wakeValues.get(b) otherwise panic("GapTree.swapWake: wakeValues.get OOB at {b}")
+		try self.wakeEpochs.set(a, value: epochB) otherwise panic("GapTree.swapWake: wakeEpochs.set OOB at {a}")
+		try self.wakeEpochs.set(b, value: epochA) otherwise panic("GapTree.swapWake: wakeEpochs.set OOB at {b}")
+		try self.wakeValues.set(a, value: valueB) otherwise panic("GapTree.swapWake: wakeValues.set OOB at {a}")
+		try self.wakeValues.set(b, value: valueA) otherwise panic("GapTree.swapWake: wakeValues.set OOB at {b}")
+	end 'swapWake'
+
+	function relocate(scratch PressureRelayoutScratch, pressure PressureIndex, index UseIndex)
+		let newBase = roundUpToPowerOfTwo(gapCellCountOf(pressure.slotTotal()) as BytePos)
+		let first = scratch.windowFirstSlot()
+		let count = scratch.windowSlotCount()
+		self.moving.clear()
+
+		if count == 0 'nothingMoved'
+			return
+		end 'nothingMoved'
+
+		let firstCell = gapCellOf(first)
+		let lastCell = gapCellOf(first + count - 1)
+
+		for cell in firstCell upto lastCell + 1 'eachWindowCell'
+			var g = try self.headAt.get(cell) otherwise panic("GapTree.relocate: headAt.get OOB at cell {cell}")
+
+			while g != 0 'eachInBucket'
+				let id = g - 1
+				let next = try self.gapNextAt.get(id) otherwise panic("GapTree.relocate: gapNextAt.get OOB at {id}")
+				let start = try self.gapStart.get(id) otherwise panic("GapTree.relocate: gapStart.get OOB at {id}")
+
+				if start >= first and start < first + count 'inTheWindow'
+					self.moving.push(id)
+					self.unlinkFromBucket(id, slot: start)
+				end 'inTheWindow'
+
+				g = next
+			end 'eachInBucket'
+		end 'eachWindowCell'
+
+		var lo = firstCell
+		var span = lastCell + 1 - firstCell
+
+		if newBase != self.leafBase 'theTreeIsResized'
+			self.leafBase = newBase
+			self.best.refill((newBase + newBase) as ElementIndex, value: 0)
+			self.headAt.refill(newBase, value: 0)
+			lo = 0
+			span = newBase
+		end 'theTreeIsResized'
+
+		for k in 0 upto self.moving.count() 'eachMovingGap'
+			let id = try self.moving.get(k) otherwise panic("GapTree.relocate: moving.get OOB at {k}")
+			let entry = try self.gapEntryBlock.get(id) otherwise panic("GapTree.relocate: gapEntryBlock.get OOB at {id}")
+			let oldSlot = try self.gapStart.get(id) otherwise panic("GapTree.relocate: gapStart.get OOB at {id}")
+			let newSlot = pressure.firstSlotOf(entry - 1) if entry != 0 else scratch.movedTo(oldSlot)
+			try self.gapStart.set(id, value: newSlot) otherwise panic("GapTree.relocate: gapStart.set OOB at {id}")
+			self.linkIntoBucket(id, slot: newSlot)
+		end 'eachMovingGap'
+
+		self.rebuildRange(lo, span: span, index: index)
+	end 'relocate'
+
+	function rebuildRange(first ElementIndex, span ElementIndex, index UseIndex)
+		for k in 0 upto span 'eachLeaf'
+			let cell = first + k
+			try self.best.set(self.leafBase + cell, value: self.leafWinner(cell, index: index)) otherwise panic("GapTree.rebuildRange: best.set OOB at cell {cell}")
+		end 'eachLeaf'
+
+		var lo = self.leafBase + first
+		var hi = self.leafBase + first + span - 1
+		var width = 2 as ElementIndex
+
+		while width <= span 'eachLevel'
+			lo = lo / 2
+			hi = hi / 2
+
+			for node in lo upto hi + 1 'eachNode'
+				let left = try self.best.get(node + node) otherwise panic("GapTree.rebuildRange: best.get OOB at {node + node}")
+				let right = try self.best.get(node + node + 1) otherwise panic("GapTree.rebuildRange: best.get OOB at {node + node + 1}")
+				try self.best.set(node, value: self.better(left, b: right, index: index)) otherwise panic("GapTree.rebuildRange: best.set OOB at {node}")
+			end 'eachNode'
+
+			width = width + width
+		end 'eachLevel'
+
+		self.refreshAncestors(lo, index: index)
+	end 'rebuildRange'
+end 'GapTree'

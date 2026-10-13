@@ -95,7 +95,7 @@
 #   loop-trim | loop-trim-shared | loop-charset | loop-control              (<n> = DOUBLINGS of trips)
 #
 #   e.g. gentrim.sh 512 sites-trim a.maxon
-#        gentrim.sh 512 sites-control c.maxon    (same size, no trim surface)
+#        gentrim.sh 512 sites-control c.maxon    (same site count, no trim surface)
 #        gentrim.sh 16 data-trim-clean d.maxon   (8*2^16 = 524,288 bytes, none of it trimmable)
 #        gentrim.sh 16 edge-prefix    e.maxon    (2^16 spaces in front of a fixed 8-byte body)
 #        gentrim.sh 16 loop-trim      f.maxon    (65,536 trims of a 12-byte string)
@@ -227,7 +227,11 @@ trim_method_for_mode() {
 
 emit_prelude() {
 	echo "// trim ladder: $N, mode $MODE — see tests/ladders/gentrim.sh"
-	echo "typealias Int = int(i64.min to i64.max)"
+
+	if [ "$FAMILY" != "loop" ]; then
+		echo "typealias Int = int(i64.min to i64.max)"
+	fi
+
 	echo "typealias ExitCode = int(0 to 255)"
 	echo ""
 }
@@ -252,11 +256,26 @@ emit_sites_program() {
 	FNS=$(( N / SITES_PER_FN ))
 	if [ "$FNS" -lt 1 ]; then FNS=1; fi
 
+	case "$MODE" in
+	sites-trim|sites-trim-shared)
+		SITE_PARAMS="s String"
+		SITE_ARGS='"  alpha beta  "'
+		;;
+	sites-charset)
+		SITE_PARAMS="p String"
+		SITE_ARGS='"  gamma  "'
+		;;
+	*)
+		SITE_PARAMS="s String, p String"
+		SITE_ARGS='"  alpha beta  ", p: "  gamma  "'
+		;;
+	esac
+
 	emit_prelude
 
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
-		echo "function fn${f}(s String, p String) returns Int"
+		echo "function fn${f}(${SITE_PARAMS}) returns Int"
 		echo -e "\tvar total = 0"
 		if [ "$MODE" = "sites-trim-shared" ]; then
 			# ONE set per function, so the per-SITE cost is the trim call alone and the preset construction
@@ -305,7 +324,7 @@ emit_sites_program() {
 	echo -e "\tvar sum = 0"
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
-		echo -e "\tsum = sum + fn${f}(\"  alpha beta  \", p: \"  gamma  \")"
+		echo -e "\tsum = sum + fn${f}(${SITE_ARGS})"
 		f=$(( f + 1 ))
 	done
 	echo -e "\treturn 0 if sum >= 0 else 1"
@@ -345,12 +364,13 @@ emit_edge_program() {
 	echo -e "\tvar total = 0"
 	# The PAD doubles and the BODY does not, so `units` is the trimmed run and the unmatched body is a
 	# constant. That is the axis `data-*` cannot separate: there the body doubles and the pad is empty.
-	echo -e "\tlet pad = grown(\" \", doublings: $N)"
-	echo -e "\tlet units = pad.byteLength()"
 	if [ "$MODE" = "edge-prefix" ]; then
-		echo -e "\tvar built = pad"
+		echo -e "\tvar built = grown(\" \", doublings: $N)"
+		echo -e "\tlet units = built.byteLength()"
 		echo -e "\tbuilt.append(\"abcdefgh\")"
 	else
+		echo -e "\tlet pad = grown(\" \", doublings: $N)"
+		echo -e "\tlet units = pad.byteLength()"
 		echo -e "\tvar built = \"abcdefgh\""
 		echo -e "\tbuilt.append(pad)"
 	fi

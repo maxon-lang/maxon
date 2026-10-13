@@ -54,10 +54,11 @@
 # per call however the ladder is turned. A quadratic in a variable the type system caps at 64 is a
 # constant, and this is the ladder that establishes which one.
 #
-# ⚠ EVERY interface-method parameter is a plain `int`, deliberately — an indirect call declares every
-# non-float argument an i64, so a `bool` or an `ExitCode` formal on an indirectly-reachable callee is
-# refused by `requireIndirectlyReachableParamsAreMachineWords`. Same constraint, same reason, as
-# `genwitness.sh`; see its header for how that refusal doubles as a reach check.
+# ⚠ EVERY interface-method parameter is a full-width `LadderInt`, deliberately — an indirect call
+# declares every non-float argument an i64, so a `bool` or an `ExitCode` formal on an
+# indirectly-reachable callee is refused by `requireIndirectlyReachableParamsAreMachineWords`. Same
+# constraint, same reason, as `genwitness.sh`; see its header for how that refusal doubles as a
+# reach check.
 #
 # ⚠ Conformer, method and parameter names are all FIXED-WIDTH (`P000123`, `m00012`, `a0001`), so every
 # rung's program differs in COUNT and never in how many digits N has — a byte column that moved because
@@ -94,10 +95,10 @@ i=0
 while [ "$i" -lt "$ARGS" ]; do
   NAME=$(printf 'a%04d' "$i")
   if [ "$i" -eq 0 ]; then
-    PARAM_DECL="$NAME int"
+    PARAM_DECL="$NAME LadderInt"
     ARGS_DECL="$NAME: 1"
   else
-    PARAM_DECL="$PARAM_DECL, $NAME int"
+    PARAM_DECL="$PARAM_DECL, $NAME LadderInt"
     ARGS_DECL="$ARGS_DECL, $NAME: 1"
   fi
   BODY_SUM="$BODY_SUM + $NAME"

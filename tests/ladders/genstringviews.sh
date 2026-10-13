@@ -188,7 +188,7 @@
 #   loop-tobytes | loop-clone | loop-codepoints | loop-utf16 | loop-control           (<n> = DOUBLINGS)
 #
 #   e.g. genstringviews.sh 512 sites-tobytes a.maxon
-#        genstringviews.sh 512 sites-control c.maxon        (same size, none of the rung's surface)
+#        genstringviews.sh 512 sites-control c.maxon        (same site count, none of the rung's surface)
 #        SEED=supp genstringviews.sh 16 data-utf16 d.maxon  (8·2^16 bytes of supplementary codepoints)
 #        genstringviews.sh 16 loop-clone f.maxon            (65,536 clones of a 10-byte string)
 #
@@ -297,7 +297,11 @@ seed_bytes() {
 
 emit_prelude() {
 	echo "// string-views ladder: $N, mode $MODE, seed $SEED — see tests/ladders/genstringviews.sh"
-	echo "typealias Int = int(i64.min to i64.max)"
+
+	if [ "$FAMILY" != "loop" ]; then
+		echo "typealias Int = int(i64.min to i64.max)"
+	fi
+
 	echo "typealias ExitCode = int(0 to 255)"
 	echo ""
 }
@@ -380,11 +384,30 @@ emit_sites_program() {
 	FNS=$((N / SITES_PER_FN))
 	if [ "$FNS" -lt 1 ]; then FNS=1; fi
 
+	case "$MODE" in
+	sites-replacefirst)
+		SITE_PARAMS="s String, p String, q String"
+		SITE_ARGS='"alpha beta", p: "gamma", q: "delta"'
+		;;
+	sites-control)
+		SITE_PARAMS="s String, p String"
+		SITE_ARGS='"alpha beta", p: "gamma"'
+		;;
+	sites-utf16fns)
+		SITE_PARAMS=""
+		SITE_ARGS=""
+		;;
+	*)
+		SITE_PARAMS="s String"
+		SITE_ARGS='"alpha beta"'
+		;;
+	esac
+
 	emit_prelude
 
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
-		echo "function fn${f}(s String, p String, q String) returns Int"
+		echo "function fn${f}(${SITE_PARAMS}) returns Int"
 		echo -e "\tvar total = 0"
 		n=0
 		while [ "$n" -lt "$SITES_PER_FN" ]; do
@@ -401,7 +424,7 @@ emit_sites_program() {
 	echo -e "\tvar sum = 0"
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
-		echo -e "\tsum = sum + fn${f}(\"alpha beta\", p: \"gamma\", q: \"delta\")"
+		echo -e "\tsum = sum + fn${f}(${SITE_ARGS})"
 		f=$((f + 1))
 	done
 	echo -e "\treturn 0 if sum >= 0 else 1"

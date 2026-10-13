@@ -1396,6 +1396,7 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 	var startOrd = DebugAnchorColumn.absent(roster.valueIds.count())
 	var endOrd = DebugAnchorColumn.absent(roster.valueIds.count())
 	var active = DebugNamedSlotColumn.create()
+	var members = ValueIdArray.create()
 
 	for (place, local) in localOfPlace.withIterator() 'eachBlocksRuns'
 		let first = try blockFirst.get(place.index()) otherwise continue
@@ -1404,7 +1405,9 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 
 		active.clear()
 
-		for value in liveness.live.liveIn(local) 'eachLiveIn'
+		liveness.live.liveInInto(local, out: members)
+
+		for value in members 'eachLiveIn'
 			openNamedRuns(active, startOrd: startOrd, endOrd: endOrd, names: names, value: value, siteKey: siteKey, at: first, scratch: scratch)
 		end 'eachLiveIn'
 
@@ -1416,7 +1419,9 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 			end 'eachTouchHere'
 		end 'eachAnchor'
 
-		for value in liveness.live.liveOut(local) 'eachLiveOut'
+		liveness.live.liveOutInto(local, out: members)
+
+		for value in members 'eachLiveOut'
 			openNamedRuns(active, startOrd: startOrd, endOrd: endOrd, names: names, value: value, siteKey: siteKey, at: last, scratch: scratch)
 		end 'eachLiveOut'
 
@@ -1847,13 +1852,13 @@ function repairStuckValues(module TargetModule, driver SplitDriver, func IrFunct
 		panic("repairStuckValues: '{String.from(func.name)}' — the colorer could not place {stuck.count()} value(s) and BOTH cures were refused for every one of them. Taking the first: {driver.describeUnrepairable(stuck.valueAt(0), free: stuck.freeAt(0), occupants: stuck.occupantCountAt(0))}")
 	end 'nothingRepairable'
 
-	// The function's per-file maximum, re-folded from the per-block demands this round moved.
+	// Every block's demand restated, and the function's per-file maximum re-folded from them.
 	//
 	// ⚠ ONCE PER ROUND, NOT ONCE PER REPAIR. It is a fold over EVERY block, so inside the loop above it
 	// would be Θ(repairs × blocks) — the same shape of quadratic the batched repair loop exists to avoid,
 	// bought back one line down. Nothing between the repairs reads it: a split can only LOWER a demand,
 	// so the figure is a valid upper bound throughout the round.
-	driver.liveness.refreshMaxPressure()
+	driver.refreshDemands()
 end 'repairStuckValues'
 
 // ==========================================================================

@@ -144,7 +144,7 @@ function measure(name String, which Count, absent FilePath, present FilePath, fo
 	let da = allocs() - a0
 	let db = allocBytes() - b0
 
-	print("{name},{Iterations},{total},{total / Iterations},{da / Iterations},{db / Iterations}")
+	print("{name},{Iterations},{total},{total / (Iterations as DurationNanos)},{da / Iterations},{db / Iterations}")
 end 'measure'
 
 function main() returns ExitCode

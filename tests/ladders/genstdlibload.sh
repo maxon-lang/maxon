@@ -157,7 +157,7 @@ FUNCS_PER_FILE="${FUNCS_PER_FILE:-8}"
 # The real module the `real` mode copies. Resolved off THIS script's own location rather than off the
 # caller's working directory, so the ladder can be driven from anywhere.
 LADDER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REAL_MODULE="$LADDER_DIR/../../../stdlib/helpers/string/utf16.maxon"
+REAL_MODULE="$LADDER_DIR/../../stdlib/helpers/string/utf16.maxon"
 
 mkdir -p "$OUT"
 # Prune only `.maxon`, never the directory: an `--output=` file or a metrics TSV a caller parked here is
@@ -165,8 +165,7 @@ mkdir -p "$OUT"
 find "$OUT" -maxdepth 1 -name '*.maxon' -delete
 
 emit_prelude() {
-	echo "typealias Int = int(i64.min to i64.max)"
-	echo "typealias ExitCode = int(0 to 255)"
+	echo "export typealias Int = int(i64.min to i64.max)"
 	echo ""
 }
 
@@ -186,7 +185,7 @@ emit_corpus() {
 			i=0
 			while [ "$i" -lt "$FUNCS_PER_FILE" ]; do
 				idx=$((f * FUNCS_PER_FILE + i))
-				echo "function corpus${idx}(a Int, b Int) returns Int"
+				echo "export function corpus${idx}(a Int, b Int) returns Int"
 				echo -e "\tvar acc = a"
 				# Two `if`s rather than an if/else: the compiler does not accept `else` (E2015), and
 				# the corpus this ladder sits beside does not emit one either.
@@ -243,18 +242,18 @@ emit_synth_module() {
 	M="$1"
 	{
 		echo "// stdlib-load ladder: synthetic stdlib-shaped module $M — never called by the corpus"
-		echo "export typealias LadderUnit${M} = int(0 to u16.max)"
-		echo "export typealias LadderCount${M} = int(1 to 2)"
+		echo "public typealias LadderUnit${M} = int(0 to u16.max)"
+		echo "public typealias LadderCount${M} = int(1 to 2)"
 		echo ""
 		d=0
 		while [ "$d" -lt "$DECLS_PER_MODULE" ]; do
-			echo "export function ladder${M}_fn${d}(unit LadderUnit${M}, other LadderUnit${M}) returns bool"
+			echo "public function ladder${M}_fn${d}(unit LadderUnit${M}, other LadderUnit${M}) returns bool"
 			echo -e "\treturn unit >= ${d} and other <= 56319"
 			echo "end 'ladder${M}_fn${d}'"
 			echo ""
 			d=$((d + 1))
 		done
-		echo "export function ladder${M}_width(unit LadderUnit${M}) returns LadderCount${M}"
+		echo "public function ladder${M}_width(unit LadderUnit${M}) returns LadderCount${M}"
 		echo -e "\tif unit < 1024 'small'"
 		echo -e "\t\treturn 1"
 		echo -e "\tend 'small'"

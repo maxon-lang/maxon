@@ -118,18 +118,25 @@ colouring, which is NP-hard. [Colouring](#colouring) repairs the values it canno
 
 `TargetLiveness.maxon` computes per-block live-in and live-out sets with no dataflow fixpoint: for each SSA
 value it walks backward from every use to the def (`solveLivenessSsa`). Because the walk is per value, a split
-re-marks only the victim and the values it created, over the blocks the split touched.
+re-marks only the victim and the values it created, over the blocks the split touched. A block where a value
+is defined or read holds it in an explicit per-block list; a stretch of blocks it is live straight through is
+one *run* (`LiveRuns`), counted per class by `LiveCover`. In a function of 48 blocks or more, a walk that
+reaches a chain of blocks between a block and its immediate dominator, entered only from inside and all
+leading forward to that block, marks the whole chain in one step (`DomSkip`).
 
 Alongside the live sets it records a `UseIndex` (each value's def and using ops, with edge uses to phis
 recorded at the branch), per-op and peak pressure per class, each value's `forbidden` mask (the clobbers of
-every op it is live across), and the call runs inside cold blocks. Ops are ordered by `OpSeq`, a
-block-relative sequence number, so inserting an op renumbers only its block.
+every op it is live across, gathered per block by `ClobberEvents` and, for a run, as one OR over its blocks'
+clobber masks), and the call runs inside cold blocks. Ops are ordered by `OpSeq`, a block-relative sequence
+number whose offset is the op's slot label, so an inserted op takes a free label between its neighbours and
+every other op keeps its number.
 
 ## Splitting
 
 `SplitDriver.relievePressure` (`SplitLiveRanges.maxon`) repeats until no point exceeds its pool: find the
 worst point, the *peak*; split one value live across it; repair the analysis over the region the split
-touched. A `PeakTree` over blocks and a `PressureIndex` segment tree over ops keep the peak current.
+touched. A `PeakTree` over blocks and a `PressureIndex` segment tree over ops keep the peak current, and gap
+trees over each value's live range (`VictimGaps`) find the victim.
 
 **The peak.** A full-pool overflow ranks above a confined one, then higher pressure wins, then a
 fixed-register op. Confined points are searched only once no full-pool overflow is left.
@@ -203,12 +210,26 @@ used (`ColouredRegisters.maxon`), which each target's prologue pass saves and re
 ## Scaling
 
 Every structure is sized per function and reused: scratch buffers are allocated once and reused across calls,
-candidates are read off one live row, the peak is maintained in trees, and liveness is repaired over the
-region a split touched. Two costs remain per split and proportional to that region: the backward pressure
-sweep that rebuilds `forbidden` masks, and the confined (Hall) sweep. They are ordered, not redundant — the
-second reads effective pools the first finishes writing — and cannot be fused. In a single function that
-keeps growing the region grows with it, so `regalloc:splitting` is the phase to expect to bend on a scale
-ladder built that way.
+and liveness and pressure are repaired over the region a split touched, in O(log) per op or value the split
+names.
+
+- **Liveness.** The first build is near-linear in the function: each run is one entry however many blocks it
+  spans, and the walk skips clean dominator chains. A split re-marks the victim and the values it created
+  through their own entries; a run is added or removed in O(log blocks).
+- **Pressure.** A segment tree over op slots (`PressureIndex`) holds every op's live-before count; a split
+  changes the counts at the ops naming the victim or its new values, and a run's contribution is a range add
+  on `LiveCover`. While some point overflows its whole pool, the peak is the root of a per-class tree of block
+  demands. The whole-function pressure passes carry the values live straight through each block from block
+  to block (`TransparentCarry`) and sweep only the explicit ones.
+- **The victim.** Each value's live range is cut into gaps between its reads and held in trees keyed by
+  where each gap starts (`VictimGaps`), so the farthest-next-use victim is a tree query. The live row of the
+  peak is walked only when the first two tiers find no victim.
+- **`forbidden` masks** are rebuilt for the moved values from range queries over clobber masks.
+- **The confined (Hall) check** runs only once no point overflows its whole pool; it then re-ranks, per
+  dirty block, the ops inside the window the victim was live over.
+
+The confined check is the remaining cost proportional to the region a split touches, so `regalloc:splitting`
+is the phase to watch on a scale ladder whose functions keep growing and stay over the callee-saved pool.
 
 ## Verification
 
@@ -216,8 +237,9 @@ There is no allocation verifier pass. A wrong allocation computes a wrong answer
 suite catches; a worse one — an extra spill, a lost coalesce — shows in the Target IR, which the
 `TargetIr:<lane>` pins in `ir-specs/` hold block by block for the cases that carry them. The allocator asserts its invariants as it runs, and
 two compile-time constants, off in shipping builds, add exhaustive self-checks: `VerifyIncrementalSplit`
-compares every incremental repair with a full rebuild, and `VerifyOpVariantFacts` checks the per-op fact
-cache.
+compares every incremental repair with a full rebuild, the first liveness build with a walk that skips
+nothing, and the gap trees' victim with a scan of the peak's live row; `VerifyOpVariantFacts` checks the
+per-op fact cache.
 
 To watch it work: `--emit-ir` (or the MCP `dump_ir` tool) shows the target IR after allocation;
 `--log=codegen:debug` prints copies, hints taken and missed, values split, reloads, rematerializations, forced

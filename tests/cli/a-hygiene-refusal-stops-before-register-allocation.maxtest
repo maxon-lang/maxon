@@ -1,0 +1,40 @@
+let HygieneRefusalCaseDirName = "hygiene-refusal-before-codegen"
+
+let HygieneRefusalLogFlag = "--log=codegen:debug"
+
+let HygieneRefusalMainFileName = "main.maxon"
+let HygieneRefusalMainSource = "function main() returns ExitCode\n\tlet unused = 5\n\treturn 0\nend 'main'\n"
+
+let HygieneCleanMainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+let HygieneRefusalDiagnosticMarker = "error E3012:"
+let RegisterAllocationLogMarker = "Register allocation ("
+
+test 'a program refused only for an unused binding never reaches register allocation'
+	requireHeldOutsideCheckout(HygieneRefusalCaseDirName, check: HygieneRefusalStopsBeforeCodegen.create())
+end 'a program refused only for an unused binding never reaches register allocation'
+
+type HygieneRefusalStopsBeforeCodegen implements OutsideCheckoutCase
+	static function create() returns HygieneRefusalStopsBeforeCodegen
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		writeStagedFile(dir.join(HygieneRefusalMainFileName), content: HygieneRefusalMainSource)
+
+		let built = runDriver([BuildCommandWord, HygieneRefusalMainFileName, HygieneRefusalLogFlag], workingDirectory: dir)
+		let said = "It wrote to stderr: {built.stderr}"
+
+		try Expect.equal(built.exitCode(), expected: 1, message: "a program whose only fault is an unused binding did not fail the build. {said}")
+		try Expect.isTrue(built.stderr.contains(HygieneRefusalDiagnosticMarker), message: "the refused build did not report the unused binding (E3012). {said}")
+		try Expect.isFalse(built.stderr.contains(RegisterAllocationLogMarker), message: "the build ran register allocation for a program the hygiene check refuses, so a refusal that needs no codegen still paid for it. {said}")
+
+		writeStagedFile(dir.join(HygieneRefusalMainFileName), content: HygieneCleanMainSource)
+
+		let control = runDriver([BuildCommandWord, HygieneRefusalMainFileName, HygieneRefusalLogFlag], workingDirectory: dir)
+		let controlSaid = "It wrote to stderr: {control.stderr}"
+
+		try Expect.equal(control.exitCode(), expected: 0, message: "the control program, which is hygiene-clean, did not build. {controlSaid}")
+		try Expect.isTrue(control.stderr.contains(RegisterAllocationLogMarker), message: "the same log flag on a hygiene-clean program did not print the register-allocation marker, so the refused build's lack of it proves nothing: the log line was renamed or the flag stopped reaching it. {controlSaid}")
+	end 'requireHeldIn'
+end 'HygieneRefusalStopsBeforeCodegen'

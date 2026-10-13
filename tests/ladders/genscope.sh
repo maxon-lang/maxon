@@ -102,7 +102,7 @@ esac
   # The V dimension: in scope for every construct below, live for one instruction each.
   v=0
   while [ "$v" -lt "$V" ]; do
-    echo -e "\tvar l${v} = a + $(( v + 1 ))"
+    echo -e "\tlet l${v} = a + $(( v + 1 ))"
     echo -e "\tw$(( v % 6 )) = w$(( v % 6 )) + l${v}"
     v=$(( v + 1 ))
   done

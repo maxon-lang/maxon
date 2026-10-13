@@ -68,7 +68,7 @@
 #   data-countloop | data-bytes                                                 (<n> = DOUBLINGS)
 #
 #   e.g. genstring-grapheme.sh 512 sites-iter a.maxon
-#        genstring-grapheme.sh 512 sites-control c.maxon   (same size, no Character surface)
+#        genstring-grapheme.sh 512 sites-control c.maxon   (same site count, no Character surface)
 #        genstring-grapheme.sh 14 data-iter-ascii d.maxon  (8*2^14 = 131,072 bytes)
 #
 # --- WHAT IT READ ON THE DAY IT WAS BUILT (2026-07-28), so a later run has a
@@ -141,6 +141,21 @@ emit_sites_program() {
 	FNS=$(( N / SITES_PER_FN ))
 	if [ "$FNS" -lt 1 ]; then FNS=1; fi
 
+	case "$MODE" in
+	sites-iter|sites-bytes)
+		SITE_PARAMS="s String"
+		SITE_ARGS='"alpha beta"'
+		;;
+	sites-charlit)
+		SITE_PARAMS=""
+		SITE_ARGS=""
+		;;
+	*)
+		SITE_PARAMS="s String, p String"
+		SITE_ARGS='"alpha beta", p: "gamma"'
+		;;
+	esac
+
 	echo "// grapheme ladder: $N sites, mode $MODE — see tests/ladders/genstring-grapheme.sh"
 	echo "typealias Int = int(i64.min to i64.max)"
 	echo "typealias ExitCode = int(0 to 255)"
@@ -148,7 +163,7 @@ emit_sites_program() {
 
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
-		echo "function fn${f}(s String, p String) returns Int"
+		echo "function fn${f}(${SITE_PARAMS}) returns Int"
 		echo -e "\tvar total = 0"
 		if [ "$MODE" = "sites-charlit" ]; then
 			# The Character the literals are compared AGAINST. Minted once per function from a lone literal
@@ -158,7 +173,7 @@ emit_sites_program() {
 			# minted a Character without a loop; every character literal is a `Character` now, so `'a'`
 			# would serve equally. It is left multi-byte so a reading taken against a PARENT binary stays
 			# apples-to-apples with the ones recorded below.
-			echo -e "\tvar ch = 'é'"
+			echo -e "\tlet ch = 'é'"
 		fi
 		n=0
 		while [ "$n" -lt "$SITES_PER_FN" ]; do
@@ -227,7 +242,7 @@ emit_sites_program() {
 	echo -e "\tvar sum = 0"
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
-		echo -e "\tsum = sum + fn${f}(\"alpha beta\", p: \"gamma\")"
+		echo -e "\tsum = sum + fn${f}(${SITE_ARGS})"
 		f=$(( f + 1 ))
 	done
 	echo -e "\treturn 0 if sum >= 0 else 1"
@@ -277,7 +292,7 @@ emit_data_program() {
 		echo -e "\tvar r = 0"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tunits = 0"
-		echo -e "\t\tfor c in subject 'walk'"
+		echo -e "\t\tfor _ in subject 'walk'"
 		echo -e "\t\t\tunits = units + 1"
 		echo -e "\t\tend 'walk'"
 		echo -e "\t\ttotal = total + units"
@@ -307,7 +322,7 @@ emit_data_program() {
 		# before to be measured against.
 		echo -e "\tvar units = 0"
 		echo -e "\tlet t0 = Clock.nowNanos()"
-		echo -e "\tfor c in subject 'walk'"
+		echo -e "\tfor _ in subject 'walk'"
 		echo -e "\t\ttotal = total + subject.count()"
 		echo -e "\t\tunits = units + 1"
 		echo -e "\tend 'walk'"

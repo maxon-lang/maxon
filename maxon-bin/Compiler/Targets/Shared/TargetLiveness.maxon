@@ -57,38 +57,66 @@ export typealias LoopDepthArray = Array with LoopDepth
 export typealias OpSeq = int(0 to u64.max) implements ElementIndex
 export typealias OpSeqArray = Array with OpSeq
 
-// An `OpSeq` is `blockLocal * SeqStride + positionInBlock` — BLOCK-RELATIVE, not a dense global
-// counter, and that is what makes the splitter's per-split cost proportional to what it changed.
+// An `OpSeq` is `blockLocal * SeqStride + offset`, the offset being the op's slot LABEL within its
+// block: `(position + 1) × FreshSeqGap` when the function is indexed (`freshSeqAt`), and the slot
+// the positional index seats it at once splitting begins (`PressureIndex.seqOfSlot`).
+// BLOCK-RELATIVE and GAP-LABELLED, not a dense global counter, and that is what makes the
+// splitter's per-split cost proportional to what it changed.
 //
 // A dense counter numbers ops 0,1,2,… straight through the function, so INSERTING one op (which is
 // what a split does) renumbers every op after it, in every later block. Every `useSeq` in the
 // function goes stale at once, and the only repair is to rebuild the whole index — which is the
-// O(function × splits) the splitter's driver would pay. With a stride, an insert into block `b`
-// shifts positions only WITHIN `b`: every other block's numbers are exactly what they were.
+// O(function × splits) the splitter's driver would pay. Here an inserted op takes a free label
+// between its neighbours and no existing number moves; only a re-space relabels.
 //
 // Nothing reads a sequence number as an INDEX; every consumer only ORDERS by it (Belady's next-use
 // distance, the before/after-the-peak partition). So the numbering may be sparse, and only its total
 // order has to match the layout — which it does, because blocks are numbered in layout order and
-// positions within a block are unchanged.
+// labels ascend with position within a block.
 //
-// The stride bounds a block at 2^32 ops. A block that big is not a program, so it panics rather than
-// silently aliasing into the next block's sequence space (which would make a use in block b+1 look
-// EARLIER than one in block b, and Belady would evict the wrong value — a silent miscompile).
+// The stride bounds a block's labels at 2^32. A block that big is not a program, so `freshSeqAt`
+// panics rather than silently aliasing into the next block's sequence space (which would make a use
+// in block b+1 look EARLIER than one in block b, and Belady would evict the wrong value — a silent
+// miscompile).
 let SeqStride = 4294967296 as OpSeq
 
-// The sequence number of the op at forward position `pos` of local block `blockLocal`.
-export function seqAt(blockLocal ElementIndex, pos ElementIndex) returns OpSeq
-	if pos >= SeqStride 'blockTooLong'
-		panic("seqAt: block {blockLocal} has more than {SeqStride} ops — the sequence stride cannot separate it from the next block")
+export let FreshSeqGap = 4 as OpSeq
+
+export function freshSeqAt(blockLocal ElementIndex, pos ElementIndex) returns OpSeq
+	let offset = ((pos + 1) as OpSeq) * FreshSeqGap
+
+	if offset >= SeqStride 'blockTooLong'
+		panic("freshSeqAt: block {blockLocal} has too many ops for the sequence stride {SeqStride}, which could no longer separate it from the next block")
 	end 'blockTooLong'
 
-	return (blockLocal as OpSeq) * SeqStride + (pos as OpSeq)
-end 'seqAt'
+	return (blockLocal as OpSeq) * SeqStride + offset
+end 'freshSeqAt'
 
-// The block a sequence number sits in — `seqAt`'s inverse.
-function seqBlock(seq OpSeq) returns ElementIndex
+export function freshPositionOfSeq(seq OpSeq) returns ElementIndex
+	let slots = seqOffset(seq) / FreshSeqGap
+
+	if slots == 0 'beforeTheFirstOp'
+		panic("freshPositionOfSeq: sequence {seq} sits at offset 0 of its block, which no op is ever laid out at")
+	end 'beforeTheFirstOp'
+
+	return (slots - 1) as ElementIndex
+end 'freshPositionOfSeq'
+
+export function seqBlock(seq OpSeq) returns ElementIndex
 	return (seq / SeqStride) as ElementIndex
 end 'seqBlock'
+
+export function seqOffset(seq OpSeq) returns OpSeq
+	return seq - (seqBlock(seq) as OpSeq) * SeqStride
+end 'seqOffset'
+
+export function seqEndOfBlock(blockLocal ElementIndex) returns OpSeq
+	return seqOfBlockOffset(blockLocal, offset: SeqStride - 1)
+end 'seqEndOfBlock'
+
+export function seqOfBlockOffset(blockLocal ElementIndex, offset OpSeq) returns OpSeq
+	return (blockLocal as OpSeq) * SeqStride + offset
+end 'seqOfBlockOffset'
 
 // Strictly greater than every real sequence number in a function of `numBlocks` blocks — Belady's
 // "no later use" sentinel. It must NOT be `u64.max`: on `int(0 to u64.max)` that all-ones pattern
@@ -434,15 +462,17 @@ end 'emptyListColumn'
 // It stays a free function because it is not generic over anything it needs to be: every list it is
 // used on IS a `DenseColumn`. Handing it a narrower column is a compile error (E3005), not the silent
 // width corruption a type-erased `refillColumn` can be tricked into — see `HallScratch.regOfValue`.
-function removeFromDenseList(list ValueIdArray, value ValueId)
+function removeFromDenseList(list ValueIdArray, value ValueId) returns bool
 	for i in 0 upto list.count() 'each'
 		let entry = try list.get(i) otherwise panic("removeFromDenseList: list.get({i}) OOB")
 
 		if entry == value 'found'
 			_ = try list.remove(i) otherwise panic("removeFromDenseList: list.remove({i}) OOB")
-			return
+			return true
 		end 'found'
 	end 'each'
+
+	return false
 end 'removeFromDenseList'
 
 // A physical-register mask per value id (`forbiddenPhys`): the registers a value
@@ -492,18 +522,24 @@ export type FuncTopology
 	end 'create'
 end 'FuncTopology'
 
-// The full per-function CFG the ALLOCATOR consumes: the skeleton (`topo`) plus the two
-// analyses derived from it that only the allocator needs — per-block loop nesting depth and
-// the function's value-space size. Built ONCE per function and reused across every split
-// iteration (see `splitLiveRanges`).
+// The full per-function CFG the ALLOCATOR consumes: the skeleton (`topo`) plus the three
+// analyses derived from it that only the allocator needs — per-block loop nesting depth, the
+// function's value-space size, and the dominator chains a liveness walk may skip (`skip`). Built
+// ONCE per function and reused across every split iteration (see `splitLiveRanges`); a split never
+// changes the CFG, so `skip` stays valid throughout.
 export type FuncCfg
 	export var topo as FuncTopology
 	export var loopDepth as LoopDepthArray
 	export var valueCount as ValueId
+	export var skip as DomSkip
 
-	export static function create(topo FuncTopology, loopDepth LoopDepthArray, valueCount ValueId) returns FuncCfg
-		return Self{topo: topo, loopDepth: loopDepth, valueCount: valueCount}
+	export static function create(topo FuncTopology, loopDepth LoopDepthArray, valueCount ValueId, skip DomSkip) returns FuncCfg
+		return Self{topo: topo, loopDepth: loopDepth, valueCount: valueCount, skip: skip}
 	end 'create'
+
+	export function withoutSkip() returns FuncCfg
+		return Self{topo: self.topo, loopDepth: self.loopDepth, valueCount: self.valueCount, skip: DomSkip.disabled()}
+	end 'withoutSkip'
 
 	// The maximum loop nesting depth over all blocks (a stat + a health check that
 	// the parser's structured loops were recognised).
@@ -520,9 +556,15 @@ export type FuncCfg
 	end 'maxLoopDepth'
 end 'FuncCfg'
 
-// The live-in / live-out sets of every block, SPARSE and EDITABLE: `inSets[b]` holds the value ids
-// live on entry to block `b`, `outSets[b]` those live on exit. One list per block per direction —
-// never a bitset.
+// The live-in / live-out sets of every block, SPARSE and EDITABLE, in two parts. `inSets[b]` and
+// `outSets[b]` hold the values EXPLICITLY live on entry to and exit from block `b` — never a bitset
+// — and `runs` holds each value live straight THROUGH a stretch of blocks, neither defined nor read
+// there, as one run per stretch. A block's whole set is both (`liveInInto`, `liveOutInto`).
+//
+// RUNS are what keep a value live across Θ(blocks) from costing Θ(blocks) to mark, unmark, count
+// (`cover`) or clobber (`clobbers`): each of those is O(log blocks) per run. The per-value ENTRY
+// THREAD lists a value's own explicit entries, so `liveInHolds`/`liveOutHolds` and an unmark read
+// those rather than scanning a block's list, which holds that block's whole explicit population.
 //
 // Sparse is the point. A dense `blocks × ceil(values/64)` bitset matrix is proportional to the
 // value space, not to the information: it allocates and zeroes a full row per block EVEN WHEN ONLY
@@ -540,67 +582,249 @@ end 'FuncCfg'
 // lists make that same edit O(1) amortised. The price is one heap object per block, allocated ONCE
 // by the walk and then mutated in place, never per split.
 export type LiveSets
-	// One live list per block — `[b]` is block `b`'s. A block's list is SHORT: it is bounded by the
-	// values SIMULTANEOUSLY LIVE at that block boundary (tens), never by the value space, which is what
-	// makes a linear scan through one the right way to find or remove a member rather than a compromise.
-	export var inSets as ValueIdListColumn
-	export var outSets as ValueIdListColumn
+	var inSets as ValueIdListColumn
+	var outSets as ValueIdListColumn
+	export var ledger as LiveOutLedger
 
-	// Empty sets for a function of `numBlocks` blocks — the shape `solveLivenessSsa` fills in place.
-	export static function create(numBlocks ElementIndex) returns LiveSets
-		return Self{inSets: emptyListColumn(numBlocks), outSets: emptyListColumn(numBlocks)}
+	// The highest block each value is live in — an open tail gap's key (`planGapsOf`). It only ever
+	// rises, so an unmark resets it before the range is re-marked (`collectVictimRegion`).
+	var high as CfgIndexArray
+
+	export var runs as LiveRuns
+	export var cover as LiveCover
+	export var clobbers as BlockClobbers
+	var entryBlock as CfgIndexArray
+	var entryIsOut as BoolArray
+	var entryNext as CfgIndexArray
+	var firstEntry as CfgIndexArray
+	var freeEntries as CfgIndexArray
+
+	export static function create(numBlocks ElementIndex, valueCount ValueId) returns LiveSets
+		var runs = LiveRuns.create()
+		runs.begin(numBlocks, valueCount: valueCount)
+		var cover = LiveCover.create()
+		cover.begin(numBlocks)
+		var clobbers = BlockClobbers.create()
+		clobbers.begin(numBlocks)
+		var firstEntry = CfgIndexArray.create()
+		firstEntry.refill(valueCount, value: 0)
+		return Self{inSets: emptyListColumn(numBlocks), outSets: emptyListColumn(numBlocks), ledger: LiveOutLedger.create(), high: CfgIndexArray.create(), runs: runs, cover: cover, clobbers: clobbers, entryBlock: CfgIndexArray.create(), entryIsOut: BoolArray.create(), entryNext: CfgIndexArray.create(), firstEntry: firstEntry, freeEntries: CfgIndexArray.create()}
 	end 'create'
 
-	// The values live on ENTRY to `blockLocal`. THE LIST ITSELF, not a copy: a caller that only reads
-	// it (seeds a bitset from it, counts it) needs no copy, and one that must hold it across an edit
-	// copies it explicitly (`LivenessResult.liveInInto`).
-	export function liveIn(blockLocal ElementIndex) returns ValueIdArray
-		return try self.inSets.get(blockLocal) otherwise panic("LiveSets.liveIn: block {blockLocal} out of range")
-	end 'liveIn'
+	export function growValues(valueCount ValueId)
+		self.firstEntry.growFilled(valueCount, value: 0)
+		self.runs.growValues(valueCount)
+	end 'growValues'
 
-	// The values live on EXIT from `blockLocal`. The list itself — see `liveIn`.
-	export function liveOut(blockLocal ElementIndex) returns ValueIdArray
-		return try self.outSets.get(blockLocal) otherwise panic("LiveSets.liveOut: block {blockLocal} out of range")
-	end 'liveOut'
+	export function explicitIn(blockLocal ElementIndex) returns ValueIdArray
+		return try self.inSets.get(blockLocal) otherwise panic("LiveSets.explicitIn: block {blockLocal} out of range")
+	end 'explicitIn'
 
-	// Add `v` to a block's live-in / live-out set, IDEMPOTENTLY: these are SETS, and a duplicate is
-	// not merely redundant — every consumer either seeds a bitset from a list (where it is harmless)
-	// or takes the list's COUNT as the block's register demand, where a second copy of a value
-	// invents a register that is not needed and can push a function to a false E5001.
-	export function addLiveIn(blockLocal ElementIndex, v ValueId)
-		var list = self.liveIn(blockLocal)
-		addToLiveList(list, v: v)
-	end 'addLiveIn'
+	export function explicitOut(blockLocal ElementIndex) returns ValueIdArray
+		return try self.outSets.get(blockLocal) otherwise panic("LiveSets.explicitOut: block {blockLocal} out of range")
+	end 'explicitOut'
 
-	export function addLiveOut(blockLocal ElementIndex, v ValueId)
-		var list = self.liveOut(blockLocal)
-		addToLiveList(list, v: v)
-	end 'addLiveOut'
+	export function liveInInto(blockLocal ElementIndex, out ValueIdArray)
+		copyLiveList(self.explicitIn(blockLocal), out: out)
+		self.runs.stab(blockLocal, out: out)
+	end 'liveInInto'
 
-	// Remove `v` from a block's live-in / live-out set; a no-op if it is not in it.
-	export function removeLiveIn(blockLocal ElementIndex, v ValueId)
-		var list = self.liveIn(blockLocal)
-		removeFromDenseList(list, value: v)
-	end 'removeLiveIn'
+	export function liveOutInto(blockLocal ElementIndex, out ValueIdArray)
+		copyLiveList(self.explicitOut(blockLocal), out: out)
+		self.runs.stab(blockLocal, out: out)
+	end 'liveOutInto'
 
-	export function removeLiveOut(blockLocal ElementIndex, v ValueId)
-		var list = self.liveOut(blockLocal)
-		removeFromDenseList(list, value: v)
-	end 'removeLiveOut'
+	export function liveInHolds(blockLocal ElementIndex, v ValueId) returns bool
+		return self.explicitEntryHolds(blockLocal, v: v, isOut: false) or self.runs.holds(v, blockLocal: blockLocal)
+	end 'liveInHolds'
+
+	export function liveOutHolds(blockLocal ElementIndex, v ValueId) returns bool
+		return self.explicitEntryHolds(blockLocal, v: v, isOut: true) or self.runs.holds(v, blockLocal: blockLocal)
+	end 'liveOutHolds'
+
+	function explicitEntryHolds(blockLocal ElementIndex, v ValueId, isOut bool) returns bool
+		var entry = self.firstEntryOf(v)
+
+		while entry != 0 'eachEntryOfTheValue'
+			if self.entryBlockAt(entry) == blockLocal and self.entryIsOutAt(entry) == isOut 'theEntry'
+				return true
+			end 'theEntry'
+
+			entry = self.nextEntryOf(entry)
+		end 'eachEntryOfTheValue'
+
+		return false
+	end 'explicitEntryHolds'
+
+	export function explicitListHolds(blockLocal ElementIndex, v ValueId, isOut bool) returns bool
+		return listContains(self.explicitOut(blockLocal) if isOut else self.explicitIn(blockLocal), v: v)
+	end 'explicitListHolds'
+
+	export function explicitEntryAgrees(blockLocal ElementIndex, v ValueId, isOut bool) returns bool
+		return self.explicitEntryHolds(blockLocal, v: v, isOut: isOut) == self.explicitListHolds(blockLocal, v: v, isOut: isOut)
+	end 'explicitEntryAgrees'
+
+	export function highBlockOf(v ValueId) returns ElementIndex
+		if v >= self.high.count() 'neverMarked'
+			return 0
+		end 'neverMarked'
+
+		return try self.high.get(v) otherwise panic("LiveSets.highBlockOf: high.get OOB for value {v}")
+	end 'highBlockOf'
+
+	export function resetHigh(v ValueId)
+		if v < self.high.count() 'hasAnEntry'
+			try self.high.set(v, value: 0) otherwise panic("LiveSets.resetHigh: high.set OOB for value {v}")
+		end 'hasAnEntry'
+	end 'resetHigh'
+
+	function noteHigh(blockLocal ElementIndex, v ValueId)
+		self.high.growFilled(v + 1, value: 0)
+
+		if blockLocal > (try self.high.get(v) otherwise panic("LiveSets.noteHigh: high.get OOB for value {v}")) 'higher'
+			try self.high.set(v, value: blockLocal) otherwise panic("LiveSets.noteHigh: high.set OOB for value {v}")
+		end 'higher'
+	end 'noteHigh'
+
+	// No membership check: callers install only for a value with no range yet, once per block and side
+	// (the walk's stamps), so a repeat would be a duplicate entry counted twice as demand.
+	export function installExplicit(blockLocal ElementIndex, v ValueId, isOut bool)
+		self.noteHigh(blockLocal, v: v)
+		var list = self.explicitOut(blockLocal) if isOut else self.explicitIn(blockLocal)
+		list.push(v)
+
+		if isOut 'ledgered'
+			self.ledger.note(blockLocal, v: v, didGain: true)
+		end 'ledgered'
+
+		var entry = 0 as ElementIndex
+
+		if self.freeEntries.count() > 0 'reuse'
+			entry = try self.freeEntries.pop() otherwise panic("LiveSets.installExplicit: pop on a non-empty free list failed")
+			try self.entryBlock.set(entry, value: blockLocal) otherwise panic("LiveSets.installExplicit: entryBlock.set OOB at {entry}")
+			try self.entryIsOut.set(entry, value: isOut) otherwise panic("LiveSets.installExplicit: entryIsOut.set OOB at {entry}")
+		end 'reuse' else 'fresh'
+			entry = self.entryBlock.count()
+			self.entryBlock.push(blockLocal)
+			self.entryIsOut.push(isOut)
+			self.entryNext.push(0)
+		end 'fresh'
+
+		try self.entryNext.set(entry, value: try self.firstEntry.get(v) otherwise panic("LiveSets.installExplicit: firstEntry.get OOB for value {v}")) otherwise panic("LiveSets.installExplicit: entryNext.set OOB at {entry}")
+		try self.firstEntry.set(v, value: entry + 1) otherwise panic("LiveSets.installExplicit: firstEntry.set OOB for value {v}")
+	end 'installExplicit'
+
+	export function installRun(v ValueId, class RegClass, lo ElementIndex, hi ElementIndex)
+		self.noteHigh(hi, v: v)
+		self.runs.addRun(v, lo: lo, hi: hi)
+		self.cover.add(class, lo: lo, hi: hi, by: 1)
+	end 'installRun'
+
+	export function runClobbersOf(v ValueId) returns RegMask
+		var mask = 0 as RegMask
+		var run = self.runs.firstRunOf(v)
+
+		while run != 0 'eachRun'
+			mask = mask or self.clobbers.query(self.runs.loOf(run), hi: self.runs.hiOf(run))
+			run = self.runs.nextRunOf(run)
+		end 'eachRun'
+
+		return mask
+	end 'runClobbersOf'
+
+	export function hasRange(v ValueId) returns bool
+		return self.firstEntryOf(v) != 0 or self.runs.firstRunOf(v) != 0
+	end 'hasRange'
+
+	export function firstEntryOf(v ValueId) returns ElementIndex
+		return try self.firstEntry.get(v) otherwise panic("LiveSets.firstEntryOf: firstEntry.get OOB for value {v}")
+	end 'firstEntryOf'
+
+	export function entryBlockAt(entry ElementIndex) returns ElementIndex
+		return try self.entryBlock.get(entry - 1) otherwise panic("LiveSets.entryBlockAt: entryBlock.get OOB at {entry - 1}")
+	end 'entryBlockAt'
+
+	export function entryIsOutAt(entry ElementIndex) returns bool
+		return try self.entryIsOut.get(entry - 1) otherwise panic("LiveSets.entryIsOutAt: entryIsOut.get OOB at {entry - 1}")
+	end 'entryIsOutAt'
+
+	export function nextEntryOf(entry ElementIndex) returns ElementIndex
+		return try self.entryNext.get(entry - 1) otherwise panic("LiveSets.nextEntryOf: entryNext.get OOB at {entry - 1}")
+	end 'nextEntryOf'
+
+	export function removeExplicit(blockLocal ElementIndex, v ValueId, isOut bool)
+		var list = self.explicitOut(blockLocal) if isOut else self.explicitIn(blockLocal)
+
+		if removeFromDenseList(list, value: v) and isOut 'ledgeredLoss'
+			self.ledger.note(blockLocal, v: v, didGain: false)
+		end 'ledgeredLoss'
+	end 'removeExplicit'
+
+	export function releaseEntries(v ValueId)
+		var entry = self.firstEntryOf(v)
+
+		while entry != 0 'eachEntry'
+			let next = self.nextEntryOf(entry)
+			self.freeEntries.push(entry - 1)
+			entry = next
+		end 'eachEntry'
+
+		try self.firstEntry.set(v, value: 0) otherwise panic("LiveSets.releaseEntries: firstEntry.set OOB for value {v}")
+	end 'releaseEntries'
+
+	export function explicitInInto(blockLocal ElementIndex, out ValueIdArray)
+		copyLiveList(self.explicitIn(blockLocal), out: out)
+	end 'explicitInInto'
+
+	export function explicitOutInto(blockLocal ElementIndex, out ValueIdArray)
+		copyLiveList(self.explicitOut(blockLocal), out: out)
+	end 'explicitOutInto'
 end 'LiveSets'
 
-// Add `v` to one block's live list unless it is already there. O(list), and a live list holds the
-// values live at ONE block boundary — tens of entries — so the membership scan is a constant beside
-// the path exploration that discovered the value in the first place.
-function addToLiveList(list ValueIdArray, v ValueId)
-	for u in list 'each'
-		if u == v 'alreadyPresent'
+// Every explicit live-out gain and loss since the last `clear`, once splitting has begun. A split
+// replays them onto the positional index's exit leaves (`applyLiveOutLedger`) instead of recounting
+// each dirty block's live-out.
+export type LiveOutLedger
+	var recording as bool
+	export var blocks as CfgIndexArray
+	export var values as ValueIdArray
+	export var gained as BoolArray
+
+	static function create() returns LiveOutLedger
+		return Self{recording: false, blocks: CfgIndexArray.create(), values: ValueIdArray.create(), gained: BoolArray.create()}
+	end 'create'
+
+	export function begin()
+		self.recording = true
+		self.clear()
+	end 'begin'
+
+	export function clear()
+		self.blocks.clear()
+		self.values.clear()
+		self.gained.clear()
+	end 'clear'
+
+	function note(blockLocal ElementIndex, v ValueId, didGain bool)
+		if not self.recording 'off'
 			return
-		end 'alreadyPresent'
+		end 'off'
+
+		self.blocks.push(blockLocal)
+		self.values.push(v)
+		self.gained.push(didGain)
+	end 'note'
+end 'LiveOutLedger'
+
+function listContains(list ValueIdArray, v ValueId) returns bool
+	for u in list 'each'
+		if u == v 'found'
+			return true
+		end 'found'
 	end 'each'
 
-	list.push(v)
-end 'addToLiveList'
+	return false
+end 'listContains'
 
 // Copy one block's live list into `out` (cleared first) — the O(live) read a consumer does into a
 // scratch buffer it reuses across blocks, for the cases that must not alias the stored list.
@@ -802,6 +1026,7 @@ export type LivenessResult
 		end 'shrink'
 
 		self.forbidden.growFilled(newValueCount, value: 0)
+		self.live.growValues(newValueCount)
 
 		// A fresh id establishes nothing until the dirty-block re-sweep says what was pending where the
 		// split put its def (`sweepEstablishedRegisters`), which runs before its mask is rebuilt.
@@ -837,12 +1062,12 @@ export type LivenessResult
 	// the colorer's in-use mask is built from. `out` is meant to be a scratch buffer reused across
 	// blocks.
 	export function liveInInto(local ElementIndex, out ValueIdArray)
-		copyLiveList(self.live.liveIn(local), out: out)
+		self.live.liveInInto(local, out: out)
 	end 'liveInInto'
 
 	// The values live on EXIT from `local`, into `out` (cleared first). O(live).
 	export function liveOutInto(local ElementIndex, out ValueIdArray)
-		copyLiveList(self.live.liveOut(local), out: out)
+		self.live.liveOutInto(local, out: out)
 	end 'liveOutInto'
 
 	// Seed a dense working ROW with `local`'s live-out set. One dense row (not a matrix) is the
@@ -856,6 +1081,26 @@ export type LivenessResult
 			row.add(v as BitIndex)
 		end 'each'
 	end 'seedRowFromLiveOut'
+
+	export function seedRowFromExplicitLiveOut(local ElementIndex, row BitRow, scratch ValueIdArray)
+		self.live.explicitOutInto(local, out: scratch)
+
+		for v in scratch 'each'
+			row.add(v as BitIndex)
+		end 'each'
+	end 'seedRowFromExplicitLiveOut'
+
+	export function clearRowAfterExplicitSweep(local ElementIndex, block IrBlock, row BitRow, scratch ValueIdArray)
+		self.live.explicitInInto(local, out: scratch)
+
+		for v in scratch 'eachLiveIn'
+			row.remove(v as BitIndex)
+		end 'eachLiveIn'
+
+		for arg in block.blockArgs 'eachPhi'
+			row.remove(arg.valueId as BitIndex)
+		end 'eachPhi'
+	end 'clearRowAfterExplicitSweep'
 
 	// Clear a dense working row that `seedRowFromLiveOut` seeded and a backward block sweep then
 	// mutated. What such a row holds at the end of the sweep is the block's LIVE-IN set plus any of
@@ -971,20 +1216,22 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	// The variant memo is the CALLER's — one per register-allocation worker, held for the whole compile,
 	// because its contents are a property of the DIALECT rather than of this function (see
 	// `OpVariantFacts`).
+	assertClassColumnCovers(valueClass, valueCount: valueCount, func: func)
 	let useIndex = buildUseIndex(module, cfg: cfg, valueCount: valueCount, opFacts: opFacts)
 	var marks = LivenessMarkScratch.create()
 	marks.begin(numBlocks)
 	var touched = BlockSet.create()
 	touched.begin(numBlocks)
-	let walk = solveLivenessSsa(cfg.topo, useIndex: useIndex, valueCount: valueCount, marks: marks, touched: touched)
+	var walk = solveLivenessSsa(cfg, useIndex: useIndex, valueCount: valueCount, valueClass: valueClass, marks: marks, touched: touched)
 
 	var forbidden = makeRegMaskColumn(valueCount)
 	var establishedAtDef = makeRegMaskColumn(valueCount)
-	assertClassColumnCovers(valueClass, valueCount: valueCount, func: func)
 	var deadPhis = zeroClassRows(numBlocks)
 	var blockPressure = zeroClassRows(numBlocks)
 	var sweep = PressureSweepScratch.create()
 	sweep.widenRow(wordsPerRow)
+	var events = sweep.events
+	events.widen(valueCount)
 
 	var maxPressure = zeroClassRow()
 	var demand = zeroClassRow()
@@ -994,7 +1241,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 
 	for i in 0 upto numBlocks 'eachBlock'
 		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, runs: coldRuns.of(i), live: walk.live, forbidden: forbidden, classes: valueClass, deadPhis: deadPhis, scratch: sweep, demandOut: demand, opFacts: opFacts)
-		sweepEstablishedRegisters(module, topo: cfg.topo, blockLocal: i, establishedAtDef: establishedAtDef, scratch: sweep, opFacts: opFacts)
+		sweepEstablishedRegisters(module, topo: cfg.topo, blockLocal: i, establishedAtDef: establishedAtDef, scratch: sweep, opFacts: opFacts, recordWindows: false)
 
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
@@ -1002,6 +1249,12 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 			classRowSet(maxPressure, class: class, value: maxRegCount(classRowGet(maxPressure, class: class), b: classRowGet(demand, class: class)))
 		end 'eachClass'
 	end 'eachBlock'
+
+	walk.live.clobbers.build()
+
+	for v in 0 upto valueCount 'eachTransparentRange'
+		try forbidden.set(v, value: (try forbidden.get(v) otherwise panic("computeLivenessOn: forbidden.get OOB for value {v}")) or walk.live.runClobbersOf(v)) otherwise panic("computeLivenessOn: forbidden.set OOB for value {v}")
+	end 'eachTransparentRange'
 
 	let paramCross = ParamCrossForbid.resolve(module, topo: cfg.topo, paramCount: func.paramCount)
 
@@ -1314,18 +1567,20 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns 
 	return FuncTopology.create(numBlocks, blockRefByLocal: blockRefByLocal, localByBlockId: localByBlockId, succ: succ, pred: pred)
 end 'buildFuncTopology'
 
-// Complete a topology into the CFG the ALLOCATOR consumes, by adding the two analyses only it
-// needs: the function's value-space size (an operand scan of every op) and the per-block loop
-// nesting depth (a DFS plus a BFS per natural loop).
+// Complete a topology into the CFG the ALLOCATOR consumes, by adding the three analyses only it
+// needs: the function's value-space size (an operand scan of every op), the per-block loop nesting
+// depth (a DFS plus a BFS per natural loop), and the skippable dominator chains (`DomSkip`).
+// `forceSkip` builds those even below `DomSkip`'s size threshold, so verify mode checks the
+// skipping walk on every function.
 //
 // The topology is an ARGUMENT rather than something built here, so that the caller must have
 // one already — which is the point: the RPO reorder has just built one, and its skeleton is
 // still exactly this function's, so the allocator completes it instead of re-deriving it.
-export function buildFuncCfg(module TargetModule, func IrFunction, topo FuncTopology) returns FuncCfg
+export function buildFuncCfg(module TargetModule, func IrFunction, topo FuncTopology, forceSkip bool) returns FuncCfg
 	assertCondBranchIndicesComplete(module, func: func, topo: topo)
 	let valueCount = scanFunctionValueCount(module, func: func)
 	let loopDepth = computeLoopDepth(topo.succ, pred: topo.pred, numBlocks: topo.numBlocks)
-	return FuncCfg.create(topo, loopDepth: loopDepth, valueCount: valueCount)
+	return FuncCfg.create(topo, loopDepth: loopDepth, valueCount: valueCount, skip: DomSkip.build(topo, force: forceSkip))
 end 'buildFuncCfg'
 
 // THE COMPLETENESS half of the `condBranch`-index invariant: assert, against the OPS, that every
@@ -2438,7 +2693,7 @@ export type UseIndex
 	export var numBlocks as ElementIndex
 
 	// Layout-ordered op count: body ops + terminators, over all blocks. A COUNT, not a bound on the
-	// sequence space — sequence numbers are block-relative and sparse (see `seqAt`), so the two are
+	// sequence space — sequence numbers are block-relative and sparse (see `OpSeq`), so the two are
 	// not the same number. This one bounds the splitter's runaway check; `seqLimit` is what
 	// Belady's "no later use" sentinel needs.
 	export var opCount as OpSeq
@@ -2453,8 +2708,8 @@ export type UseIndex
 	// compacting it would renumber every later record, and renumbering the function to drop one use is
 	// exactly the O(function) edit this representation exists to avoid.
 	//
-	// There is no `useBlock` column: a record's BLOCK is `useSeq / SeqStride` (see `seqAt` — a sequence
-	// number IS `block × SeqStride + position`). Storing it as well would be storing the same fact twice
+	// There is no `useBlock` column: a record's BLOCK is `useSeq / SeqStride` (`seqBlock` — a sequence
+	// number IS `block × SeqStride + offset`). Storing it as well would be storing the same fact twice
 	// and leaving room for the two to disagree.
 	var useOpIdx as OpIndexArray
 	var useSeq as OpSeqArray
@@ -2487,17 +2742,17 @@ export type UseIndex
 	var lastUseOfValue as UseRecordIndexArray
 	var nextUseOfValue as UseRecordIndexArray
 
-	// The BLOCK thread. This is the index an op INSERT needs: a sequence number is
-	// `block × SeqStride + position`, so inserting an op at position `p` of block `b` shifts the
-	// position of every op after it IN `b` and of nothing anywhere else — but that still restates the
-	// sequence number of every use record sited in `b` past `p`. Without this thread, finding those
-	// records means scanning the function's uses; with it, the repair costs only the block that changed.
+	// The BLOCK thread. This is the index a RE-SPACE needs: a sequence number is its op's slot offset
+	// in its block, so a re-space that moves ops of block `b` relabels use records sited in `b` and
+	// nothing anywhere else (`PressureRelayoutScratch.relabelBlockUses`). Without this thread, finding
+	// those records means scanning the function's uses; with it, the repair costs only the block that
+	// changed.
 	//
 	// It is UNORDERED, which is why it is pushed at the HEAD and needs no tail column: nothing asks a
 	// block for its first use, only for all of them.
 	//
 	// ⚠ It holds every record ever SITED in the block, including ones `removeUseRecordsOf` has detached
-	// from their value. That is deliberate, and it is what the thread is for — REPAIRING SEQUENCE
+	// from their value. That is deliberate, and it is what the thread is for — RELABELLING SEQUENCE
 	// NUMBERS, which there is no point doing selectively. It is NOT an answer to "who uses what in this
 	// block": a detached record still names the op it used to be read at. Nothing can currently mistake
 	// one for a live use, because no record carries its value and no walk of this thread reaches one —
@@ -2509,6 +2764,7 @@ export type UseIndex
 
 	// Def site: an op def (`hasOpDef` + where), a phi (`isPhi` + its block), or neither.
 	var hasOpDef as BoolArray
+	var constDef as BoolArray
 	var defOpIdx as OpIndexArray
 	var defOpBlock as CfgIndexArray
 	var isPhi as BoolArray
@@ -2565,7 +2821,7 @@ export type UseIndex
 		var spillSlot = SpillSlotArray.create()
 		spillSlot.resize(valueCount)
 
-		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount), phiBlock: phiBlock, edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), slotResident: falseColumn(valueCount), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount)}
+		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount), constDef: falseColumn(valueCount), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount), phiBlock: phiBlock, edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), slotResident: falseColumn(valueCount), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount)}
 	end 'create'
 
 	// How many use sites `valueId` has — the BOUND of the walk below, and the only thing that says a
@@ -2631,23 +2887,6 @@ export type UseIndex
 		return seqBlock(self.useSeqAt(record))
 	end 'useBlockAt'
 
-	// The `collectBlockOps` POSITION a use sits at within its block — derived from its sequence number
-	// exactly as `useBlockAt` is, and by the same identity: a number IS `block × SeqStride + position`,
-	// so this is literally `seqAt` read backwards.
-	//
-	// It is what lets a splitter anchor a reload without SEARCHING its block for the anchor op. That
-	// search was O(block) at every single reload, so a split placing K of them into one block cost
-	// Θ(K × block) — while the answer was sitting in the record that asked for the reload. It is exact
-	// only while nothing has moved, which is precisely the window a split materializes in: the
-	// insertions are held back and every position it computes is stated in the block's PRE-SPLIT
-	// layout (see `SplitEdits`).
-	//
-	// A position EQUAL to the block's `opRefs` count is the block's TERMINATOR — `collectBlockOps`
-	// numbers it one past the body, and every EDGE use is anchored there.
-	export function usePosAt(record ElementIndex) returns ElementIndex
-		return (self.useSeqAt(record) - (self.useBlockAt(record) as OpSeq) * SeqStride) as ElementIndex
-	end 'usePosAt'
-
 	// The op the use reads through; for an EDGE use, the block's LAST op (its sequence anchor —
 	// the edge is read after every body op).
 	export function useOpAt(record ElementIndex) returns ElementIndex
@@ -2662,6 +2901,10 @@ export type UseIndex
 		let onEdge = try self.useOnEdge.get(record) otherwise panic("UseIndex.useKindAt: use record {record} out of range")
 		return UseKind.edge if onEdge else UseKind.op
 	end 'useKindAt'
+
+	export function isConstDef(valueId ValueId) returns bool
+		return try self.constDef.get(valueId) otherwise panic("UseIndex.isConstDef: value {valueId} out of range")
+	end 'isConstDef'
 
 	// True iff `valueId` is a block-arg (phi) of any block in the function.
 	export function isPhiValue(valueId ValueId) returns bool
@@ -2877,20 +3120,19 @@ export type UseIndex
 		try self.useCountOfValue.set(valueId, value: 0) otherwise panic("UseIndex.removeUseRecordsOf: value {valueId} out of range (valueCount={self.valueCount})")
 	end 'removeUseRecordsOf'
 
-	// Repoint one record's sequence number — what an op INSERTED into a block costs its uses.
+	// Repoint one record's sequence number — what a RE-SPACE costs the uses of the ops it moved
+	// (`PressureRelayoutScratch.relabelBlockUses`).
 	//
-	// It cannot disturb the ascending order the value threads are held in, and that is a property of the
-	// numbering rather than a thing to be careful about: a sequence number is
-	// `block × SeqStride + position`, so an op inserted at position `p` of block `b` shifts a SUFFIX of
-	// `b`'s records by exactly one each and touches no other block at all. A uniform shift of a suffix
-	// reorders nothing.
+	// It cannot disturb the ascending order the value threads are held in: a sequence number is its
+	// op's slot offset within its block, and a re-space keeps every block's op order, so the new
+	// labels order exactly as the old ones did.
 	//
 	// A record may NOT be moved to another block, and this refuses to: the block a record is sited in is
 	// DERIVED from this number (there is no `useBlock` column), so a sequence number that crossed a
 	// stride boundary would silently move the use into the next block.
 	export function setUseSeq(record ElementIndex, seq OpSeq)
 		if seqBlock(seq) != self.useBlockAt(record) 'crossesBlocks'
-			panic("UseIndex.setUseSeq: sequence {seq} would move use record {record} from block {self.useBlockAt(record)} into block {seq / SeqStride} — a resequenced use stays in its own block")
+			panic("UseIndex.setUseSeq: sequence {seq} would move use record {record} from block {self.useBlockAt(record)} into block {seq / SeqStride} — a relabelled use stays in its own block")
 		end 'crossesBlocks'
 
 		try self.useSeq.set(record, value: seq) otherwise panic("UseIndex.setUseSeq: use record {record} out of range")
@@ -2920,6 +3162,7 @@ export type UseIndex
 	export function resetValue(valueId ValueId)
 		self.removeUseRecordsOf(valueId)
 		try self.hasOpDef.set(valueId, value: false) otherwise panic("UseIndex.resetValue: value {valueId} out of range (valueCount={self.valueCount})")
+		try self.constDef.set(valueId, value: false) otherwise panic("UseIndex.resetValue: constDef.set OOB for value {valueId}")
 		try self.isPhi.set(valueId, value: false) otherwise panic("UseIndex.resetValue: isPhi.set OOB for value {valueId}")
 		try self.edgePassed.set(valueId, value: false) otherwise panic("UseIndex.resetValue: edgePassed.set OOB for value {valueId}")
 		try self.spillStored.set(valueId, value: false) otherwise panic("UseIndex.resetValue: spillStored.set OOB for value {valueId}")
@@ -2929,8 +3172,9 @@ export type UseIndex
 
 	// Record `valueId`'s def: an op at `opIdx`, in block `blockLocal`. A split MINTS values — each
 	// reload defines a fresh id — and a fresh id has no def site until this gives it one.
-	export function setOpDef(valueId ValueId, opIdx ElementIndex, blockLocal ElementIndex)
+	export function setOpDef(valueId ValueId, opIdx ElementIndex, blockLocal ElementIndex, constMaterialization bool)
 		try self.hasOpDef.set(valueId, value: true) otherwise panic("UseIndex.setOpDef: value {valueId} out of range (valueCount={self.valueCount})")
+		try self.constDef.set(valueId, value: constMaterialization) otherwise panic("UseIndex.setOpDef: constDef.set OOB for value {valueId}")
 		try self.defOpIdx.set(valueId, value: opIdx) otherwise panic("UseIndex.setOpDef: defOpIdx.set OOB for value {valueId}")
 		try self.defOpBlock.set(valueId, value: blockLocal) otherwise panic("UseIndex.setOpDef: defOpBlock.set OOB for value {valueId}")
 	end 'setOpDef'
@@ -3002,6 +3246,7 @@ export type UseIndex
 		self.lastUseOfValue.growFilled(newValueCount, value: 0)
 
 		self.hasOpDef.growFilled(newValueCount, value: false)
+		self.constDef.growFilled(newValueCount, value: false)
 		self.defOpIdx.growFilled(newValueCount, value: 0)
 		self.defOpBlock.growFilled(newValueCount, value: 0)
 		self.isPhi.growFilled(newValueCount, value: false)
@@ -3094,10 +3339,11 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 	let opCount = ordered.count()
 
 	for pos in 0 upto opCount 'eachOp'
-		indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, heat: block.heat, pos: pos, opIdx: try ordered.get(pos) otherwise panic("indexBlockFacts: ordered.get OOB"), which: which, buf: buf, opFacts: opFacts)
+		indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, heat: block.heat, seq: freshSeqAt(blockLocal, pos: pos), opIdx: try ordered.get(pos) otherwise panic("indexBlockFacts: ordered.get OOB"), which: which, buf: buf, opFacts: opFacts)
 	end 'eachOp'
 
-	indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: opCount as OpSeq, which: which)
+	let terminatorSeq = freshSeqAt(blockLocal, pos: opCount - 1) if opCount > 0 else 0 as OpSeq
+	indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: opCount as OpSeq, terminatorSeq: terminatorSeq, which: which)
 	return opCount
 end 'indexBlockFacts'
 
@@ -3128,7 +3374,7 @@ end 'indexBlockArgDefs'
 // ⚠ THE CALLER OWNS THE ORDER. `addUseRecord` appends at each value's tail and REFUSES a record that
 // would land out of sequence, so ops must be offered in ascending (block, position) — which the
 // whole-block walk gets from its own loop and the split gets by sorting its candidate positions.
-function indexOneOpFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal ElementIndex, heat BlockHeat, pos ElementIndex, opIdx ElementIndex, which ScannedValues, buf OperandList, opFacts OpVariantFacts)
+function indexOneOpFacts(module TargetModule, cfg FuncCfg, index UseIndex, blockLocal ElementIndex, heat BlockHeat, seq OpSeq, opIdx ElementIndex, which ScannedValues, buf OperandList, opFacts OpVariantFacts)
 	let onHotPath = not blockIsOffTheHotPath(cfg, blockLocal: blockLocal, heat: heat)
 	let op = try module.ops.get(opIdx) otherwise panic("indexOneOpFacts: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
@@ -3160,14 +3406,14 @@ function indexOneOpFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 		index.recordSlotResidency(slotRole, op: op, valueId: v)
 
 		if operandIsDef(o) 'def'
-			index.setOpDef(v, opIdx: opIdx, blockLocal: blockLocal)
+			index.setOpDef(v, opIdx: opIdx, blockLocal: blockLocal, constMaterialization: opIsConstMaterialization(module, opIdx: opIdx))
 			continue
 		end 'def'
 
 		index.recordSpillStore(slotRole, valueId: v)
 
 		if isFirstUseOfValueInOp(buf, upto: k as OperandIndex, valueId: v) 'firstOccurrence'
-			index.addUseRecord(v, blockLocal: blockLocal, opIdx: opIdx, seq: seqAt(blockLocal, pos: pos), onEdge: false)
+			index.addUseRecord(v, blockLocal: blockLocal, opIdx: opIdx, seq: seq, onEdge: false)
 		end 'firstOccurrence'
 	end 'eachOperand'
 end 'indexOneOpFacts'
@@ -3175,7 +3421,7 @@ end 'indexOneOpFacts'
 // The EDGE uses of one block, which go LAST for it, at the terminator's sequence — where the edge is
 // genuinely read (after every body op). That ordering is what lets the reload a split places before the
 // block's first after-peak use dominate the edge too.
-function indexBlockEdgeUses(index UseIndex, cfg FuncCfg, block IrBlock, blockLocal ElementIndex, opCount OpSeq, which ScannedValues)
+function indexBlockEdgeUses(index UseIndex, cfg FuncCfg, block IrBlock, blockLocal ElementIndex, opCount OpSeq, terminatorSeq OpSeq, which ScannedValues)
 	// An edge arg is READ at the end of this block, so a block inside a loop touches its args once per
 	// iteration exactly as an op operand does — and `touchesHotLoop` is the one column that says so. It
 	// is recorded here rather than left to `isColdSpillable`'s old blanket edge bar, which could not tell
@@ -3203,7 +3449,7 @@ function indexBlockEdgeUses(index UseIndex, cfg FuncCfg, block IrBlock, blockLoc
 				panic("indexBlockEdgeUses: block local {blockLocal} ('{String.from(block.label)}') passes value {argId} on a branch edge but has no ops to branch with")
 			end 'noTerminator'
 
-			index.addUseRecord(argId, blockLocal: blockLocal, opIdx: lastOpOf(block), seq: seqAt(blockLocal, pos: ((opCount - 1) as ElementIndex)), onEdge: true)
+			index.addUseRecord(argId, blockLocal: blockLocal, opIdx: lastOpOf(block), seq: terminatorSeq, onEdge: true)
 		end 'eachArg'
 	end 'eachEdge'
 end 'indexBlockEdgeUses'
@@ -3299,18 +3545,19 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
 			end 'inAnUnregisteredEarlierBlock'
 
 			if next == 0 or slot != (try candidates.get(next - 1) otherwise panic("reindexSplitValues: candidates.get OOB at {next - 1}")) 'notAlreadyDone'
-				indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, heat: block.heat, pos: pressure.positionOfSlot(blockLocal, slot: slot as PressureSlot), opIdx: pressure.opAtSlot(slot as PressureSlot), which: which, buf: scratch.buf, opFacts: opFacts)
+				indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, heat: block.heat, seq: pressure.seqOfSlot(blockLocal, slot: slot as PressureSlot), opIdx: pressure.opAtSlot(slot as PressureSlot), which: which, buf: scratch.buf, opFacts: opFacts)
 			end 'notAlreadyDone'
 
 			next = next + 1
 		end 'eachCandidateHere'
 
 		// `blockOpCount`, not the positional index's occupancy — the SAME source the whole-block walk
-		// counts with. An edge use is anchored at `seqAt(block, opCount - 1)`, i.e. at the terminator's
-		// BLOCK POSITION, and block positions are stated by `opRefs` + the terminator; the index's count
-		// is a copy derived from that. Reading the copy here would put an edge record at a sequence the
-		// block does not have the moment the two ever disagree.
-		indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: blockOpCount(block) as OpSeq, which: which)
+		// counts with. An edge use is anchored at the sequence of position `opCount - 1`, the
+		// terminator's BLOCK POSITION, and block positions are stated by `opRefs` + the terminator; the
+		// index's count is a copy derived from that. Reading the copy here would put an edge record at a
+		// sequence the block does not have the moment the two ever disagree.
+		let terminatorSeq = pressure.seqOfPosition(blockLocal, pos: blockOpCount(block) - 1) if blockOpCount(block) > 0 else 0 as OpSeq
+		indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: blockOpCount(block) as OpSeq, terminatorSeq: terminatorSeq, which: which)
 	end 'eachDirtyBlock'
 
 	if next != candidates.count() 'candidatesOutsideTheDirtyRegion'
@@ -3337,7 +3584,7 @@ function collectReindexCandidates(index UseIndex, pressure PressureIndex, edits 
 			// re-records it.
 			match index.useKindAt(record) 'kind'
 				edge then break
-				op then out.push(pressure.slotOfPosition(index.useBlockAt(record), pos: index.usePosAt(record)))
+				op then out.push(pressure.slotOfSeq(index.useSeqAt(record)))
 			end 'kind'
 
 			record = index.nextUseOf(record)
@@ -3372,6 +3619,21 @@ function isFirstUseOfValueInOp(buf OperandList, upto OperandIndex, valueId Value
 	return true
 end 'isFirstUseOfValueInOp'
 
+let SpanLoShift = 32 as DenseInt
+let SpanHiMask = 4294967295 as DenseInt
+
+function spanOf(lo ElementIndex, hi ElementIndex) returns DenseInt
+	return (lo shl SpanLoShift) or hi
+end 'spanOf'
+
+function spanLoOf(packed DenseInt) returns ElementIndex
+	return packed shr SpanLoShift
+end 'spanLoOf'
+
+function spanHiOf(packed DenseInt) returns ElementIndex
+	return packed and SpanHiMask
+end 'spanHiOf'
+
 // The number of block-marking steps a walk took — the cost counter that replaces the fixpoint's
 // iteration count (there is no fixpoint). Returned alongside the sets.
 type LivenessWalk
@@ -3386,23 +3648,22 @@ end 'LivenessWalk'
 // The SPARSE per-block live-in/live-out sets: ONE backward path exploration per value, from its uses
 // up to its def.
 //
-// The walk itself is `LivenessMarkScratch.walkValue` — THE SAME ONE the splitter unmarks a victim's
-// old range and marks its new one with. That is not tidiness; it is the whole correctness argument of
-// the incremental splitter. The splitter's unmark claims to remove EXACTLY the marks this build laid
-// down, and the only thing that can make that true is the two being one function. Two copies would
-// agree today and drift on the next edit to either — leaving a value in a block's live set it is not
-// live in (an invented register demand) or, worse, out of one it IS live in (the colorer reuses its
-// register while it is still live).
+// The walk itself is `LivenessMarkScratch.walkValue` — THE SAME ONE the splitter marks a value's
+// new range with, so the incremental answer and a rebuild's cannot drift apart. The splitter's
+// unmark removes exactly what the value's own entry thread and runs record (`unmarkValue`) rather
+// than re-deriving it. A drift would leave a value in a block's live set it is not live in (an
+// invented register demand) or, worse, out of one it IS live in (the colorer reuses its register
+// while it is still live).
 //
 // `touched` is a scratch region the walk records into and this build throws away, one value at a time
 // — `BlockSet.clear()` is O(1), so collecting it costs a stamp check per mark step and nothing else.
-function solveLivenessSsa(topo FuncTopology, useIndex UseIndex, valueCount ValueId, marks LivenessMarkScratch, touched BlockSet) returns LivenessWalk
-	var live = LiveSets.create(topo.numBlocks)
+function solveLivenessSsa(cfg FuncCfg, useIndex UseIndex, valueCount ValueId, valueClass ValueClassColumn, marks LivenessMarkScratch, touched BlockSet) returns LivenessWalk
+	var live = LiveSets.create(cfg.topo.numBlocks, valueCount: valueCount)
 	var markSteps = 0 as EventCount
 
 	for v in 0 upto valueCount 'eachValue'
 		touched.clear()
-		markSteps = markSteps + marks.walkValue(topo, index: useIndex, v: v, live: live, adding: true, touched: touched)
+		markSteps = markSteps + marks.walkValue(cfg, index: useIndex, v: v, class: try valueClass.get(v) otherwise panic("solveLivenessSsa: value {v} has no recorded register class"), live: live, adding: true, touched: touched)
 	end 'eachValue'
 
 	return LivenessWalk.create(live, markSteps: markSteps)
@@ -3457,6 +3718,10 @@ export type BlockSet
 		self.members.push(blockLocal)
 	end 'add'
 
+	export function holds(blockLocal ElementIndex) returns bool
+		return (try self.stamp.get(blockLocal) otherwise panic("BlockSet.holds: block {blockLocal} out of range")) == self.generation + 1
+	end 'holds'
+
 	export function count() returns Count
 		return self.members.count()
 	end 'count'
@@ -3488,70 +3753,70 @@ end 'BlockSet'
 export type LivenessMarkScratch
 	var liveInStamp as VersionStampColumn
 	var liveOutStamp as VersionStampColumn
+	var touchStamp as VersionStampColumn
 	var generation as VersionStamp
 	var worklist as CfgIndexArray
+	var inVisited as CfgIndexArray
+	var outVisited as CfgIndexArray
+	var transparent as DenseColumn
+	var sortBuf as DenseColumn
+	var expandRuns as bool
+	var candStamp as VersionStampColumn
+	var candidates as DenseColumn
+	var intervals as DenseColumn
+	var mergedLo as CfgIndexArray
+	var mergedHi as CfgIndexArray
+	var pieces as DenseColumn
+	var cuts as CfgIndexArray
+	var cutCursor as ElementIndex
 
 	export static function create() returns LivenessMarkScratch
-		return Self{liveInStamp: VersionStampColumn.create(), liveOutStamp: VersionStampColumn.create(), generation: 0, worklist: CfgIndexArray.create()}
+		return Self{liveInStamp: VersionStampColumn.create(), liveOutStamp: VersionStampColumn.create(), touchStamp: VersionStampColumn.create(), generation: 0, worklist: CfgIndexArray.create(), inVisited: CfgIndexArray.create(), outVisited: CfgIndexArray.create(), transparent: DenseColumn.create(), sortBuf: DenseColumn.create(), expandRuns: false, candStamp: VersionStampColumn.create(), candidates: DenseColumn.create(), intervals: DenseColumn.create(), mergedLo: CfgIndexArray.create(), mergedHi: CfgIndexArray.create(), pieces: DenseColumn.create(), cuts: CfgIndexArray.create(), cutCursor: 0}
 	end 'create'
 
-	// Size the memo for a function — deferred to the first split, exactly as `BlockSet.begin` is.
 	export function begin(numBlocks ElementIndex)
 		self.liveInStamp.refill(numBlocks, value: 0)
 		self.liveOutStamp.refill(numBlocks, value: 0)
+		self.touchStamp.refill(numBlocks, value: 0)
+		self.candStamp.refill(numBlocks, value: 0)
 		self.generation = 0
 	end 'begin'
 
-	// ONE VALUE'S LIVENESS, marked (`adding`) or UNMARKED, in place. This is THE liveness walk: the
-	// whole-function build runs it once per value (`solveLivenessSsa`) and the splitter runs it on the
-	// two kinds of value a split moves. There is deliberately no second copy — see `solveLivenessSsa`.
+	export function expandTransparent(on bool)
+		self.expandRuns = on
+	end 'expandTransparent'
+
+	// ONE value's liveness, marked (`adding`) or unmarked, in place. In strict SSA the def dominates
+	// every use, so the value is live exactly on the paths running backward from each use up to its
+	// def: the walk starts at the uses, climbs predecessors and stops at the def block, visiting each
+	// block at most once. A phi stops it at its block's entry and a phi ARG starts it at the end of
+	// the predecessor, so a block's live-in excludes its own phis (`seedInUse` panics on one).
 	//
-	// **In strict SSA the def DOMINATES every use, so liveness needs no iteration at all.** A value is
-	// live exactly on the CFG paths running backward from each of its uses up to its (single) def. So:
-	// start at a use, walk up through predecessors marking the value live, and STOP at the def. Nothing
-	// to converge — every block is visited at most once per value, and only the blocks where the value
-	// is genuinely live are visited at all. (Boissinot et al., "Computing Liveness Sets for SSA-Form
-	// Programs".) Cost is O(the size of the liveness information itself), not O(blocks × values).
-	//
-	// Two subtleties, and both are what make it exact:
-	//
-	//  • **A back edge needs no special handling.** Walking up from a use inside a loop reaches the loop
-	//    header's predecessors — including the latch — and marks the value live around the back edge,
-	//    all in the same walk. The live-in memo below is what makes it terminate.
-	//
-	//  • **A PHI is where the walk stops, and a phi ARG is where it starts.** A block-arg is defined at
-	//    its block's entry, so the walk halts there and does NOT propagate into the predecessors: the
-	//    incoming values, not the phi, are live on those edges. Symmetrically, a value passed on an edge
-	//    is live at the END of the PREDECESSOR (not live-in to the phi's block), so its walk seeds at the
-	//    predecessor. Getting this backwards is the classic phi-liveness bug; the two arms below are the
-	//    whole of it.
-	//
-	// WHY IT IS THE WHOLE OF THE SPLITTER'S INCREMENTAL LIVENESS, and why that is EXACT rather than
-	// approximate: a split changes the live range of exactly two kinds of value — the VICTIM (its range
-	// shrinks, because its after-peak uses now read reloads) and the FRESH reload/remat ids (short new
-	// ranges inside the block that minted them). No other value's liveness changes, because the walk is
-	// PER VALUE and reads only that value's uses and def, so a value the split did not touch walks the
-	// same blocks and marks the same sets by construction.
-	//
-	// Every block the walk touches is added to `touched`: a superset of the blocks whose live sets moved,
-	// which is what the caller's dirty region is grown from.
-	//
-	// The UNMARK direction re-derives the value's OLD range from the PRE-split index and removes exactly
-	// the marks the marking walk laid down — the same function, so "exactly" is structural — and it must
-	// therefore run BEFORE the index is rebuilt.
-	export function walkValue(topo FuncTopology, index UseIndex, v ValueId, live LiveSets, adding bool, touched BlockSet) returns EventCount
+	// A block the value is live straight through, neither defined nor read there, becomes part of a
+	// RUN (`LiveSets.runs`) rather than an explicit entry; `expandTransparent` adds those blocks to
+	// `touched` too. A skipping walk (`DomSkip`, on a value with no range yet) covers a clean
+	// dominator chain in one step.
+	export function walkValue(cfg FuncCfg, index UseIndex, v ValueId, class RegClass, live LiveSets, adding bool, touched BlockSet) returns EventCount
+		let topo = cfg.topo
+		self.generation = self.generation + 1
+		let gen = self.generation
 		let useSites = index.useCount(v)
 
 		if useSites == 0 'neverUsed'
-			// A value nothing reads is live nowhere — no walk to run, and nothing to unmark.
 			return 0
 		end 'neverUsed'
 
-		self.generation = self.generation + 1
-		let gen = self.generation
+		if not adding 'unmark'
+			return self.unmarkValue(live, v: v, class: class, gen: gen, touched: touched)
+		end 'unmark'
+
 		let defBlock = index.defBlockOrNone(v)
+		let skipping = cfg.skip.enabled and not self.expandRuns and not live.hasRange(v)
 		var pending = self.worklist
 		pending.clear()
+		self.inVisited.clear()
+		self.outVisited.clear()
+		self.intervals.clear()
 
 		var record = index.firstUseOf(v)
 
@@ -3559,13 +3824,18 @@ export type LivenessMarkScratch
 			let useBlock = index.useBlockAt(record)
 
 			match index.useKindAt(record) 'kind'
-				edge then self.editLiveOut(live, gen: gen, blockLocal: useBlock, v: v, adding: adding, touched: touched)
+				edge then self.visitLiveOut(gen, blockLocal: useBlock)
 				op then break
 			end 'kind'
 
 			pending.push(useBlock)
+			try self.touchStamp.set(useBlock, value: gen) otherwise panic("LivenessMarkScratch.walkValue: touchStamp.set OOB")
 			record = index.nextUseOf(record)
 		end 'eachUse'
+
+		if defBlock < topo.numBlocks 'definedHere'
+			try self.touchStamp.set(defBlock, value: gen) otherwise panic("LivenessMarkScratch.walkValue: touchStamp.set OOB")
+		end 'definedHere'
 
 		var markSteps = 0 as EventCount
 
@@ -3573,19 +3843,6 @@ export type LivenessMarkScratch
 			let b = try pending.pop() otherwise panic("LivenessMarkScratch.walkValue: pending.pop on non-empty failed")
 			markSteps = markSteps + 1
 
-			// STOP at the def block, BEFORE marking. Above the def the value does not exist, and it is
-			// not live-IN to the block that defines it — for EITHER kind of def:
-			//
-			//   • an ordinary op def: the value is born mid-block, and (Rule 1: def dominates every use)
-			//     nothing in the block reads it earlier, so it is not live on entry.
-			//   • a PHI def: the value is born at the block's ENTRY. `liveIn` EXCLUDES a block's own phi
-			//     defs by convention — the colorer seeds its in-use mask from `liveIn` and THEN colors
-			//     the block-args, so a phi appearing in its own `liveIn` would demand it be already
-			//     colored (`seedInUse` panics exactly there). And the walk must not continue into the
-			//     predecessors either: what they carry are the phi's incoming ARGS, which are different
-			//     values with their own walks.
-			//
-			// One rule covers both, which is why the def's KIND never needs to be recorded.
 			if defBlock == b 'reachedDef'
 				continue
 			end 'reachedDef'
@@ -3596,48 +3853,350 @@ export type LivenessMarkScratch
 				continue
 			end 'alreadyWalked'
 
+			if skipping and (try self.touchStamp.get(b) otherwise panic("LivenessMarkScratch.walkValue: touchStamp.get OOB")) != gen and cfg.skip.coversEnough(b) and self.coversUpTo(cfg, b: b, defBlock: defBlock, pending: pending, gen: gen) 'bulk'
+				continue
+			end 'bulk'
+
 			try self.liveInStamp.set(b, value: gen) otherwise panic("LivenessMarkScratch.walkValue: liveInStamp.set OOB")
-
-			touched.add(b)
-
-			if adding 'mark'
-				live.addLiveIn(b, v: v)
-			end 'mark' else 'unmark'
-				live.removeLiveIn(b, v: v)
-			end 'unmark'
+			self.inVisited.push(b)
 
 			let deg = topo.pred.degree(b as CsrIndex)
 
 			for k in 0 upto deg 'eachPred'
 				let p = topo.pred.neighbour(b as CsrIndex, k: k)
-				self.editLiveOut(live, gen: gen, blockLocal: p, v: v, adding: adding, touched: touched)
+				self.visitLiveOut(gen, blockLocal: p)
 				pending.push(p)
 			end 'eachPred'
 		end 'walkUp'
 
+		if skipping and self.intervals.count() > 0 'installSparse'
+			self.collectCandidates(index, v: v, gen: gen, defBlock: defBlock, numBlocks: topo.numBlocks)
+			self.installSkipped(topo, live: live, v: v, class: class, gen: gen, touched: touched, defBlock: defBlock)
+		end 'installSparse' else 'installDense'
+			self.installVisited(live, v: v, class: class, gen: gen, touched: touched)
+		end 'installDense'
+
 		return markSteps
 	end 'walkValue'
 
-	// Record (or forget) `v` as live-out of `blockLocal`, at most once per walk. `LiveSets.addLiveOut` is
-	// idempotent on its own, but it pays a scan of the block's list to be — so the O(1) stamp is what
-	// keeps a mark step O(1).
-	function editLiveOut(live LiveSets, gen VersionStamp, blockLocal ElementIndex, v ValueId, adding bool, touched BlockSet)
-		let cur = try self.liveOutStamp.get(blockLocal) otherwise panic("LivenessMarkScratch.editLiveOut: liveOutStamp.get OOB")
+	function collectCandidates(index UseIndex, v ValueId, gen VersionStamp, defBlock ElementIndex, numBlocks ElementIndex)
+		self.candidates.clear()
+		var record = index.firstUseOf(v)
+
+		for _ in 0 upto index.useCount(v) 'eachUse'
+			self.noteCandidate(index.useBlockAt(record), gen: gen)
+			record = index.nextUseOf(record)
+		end 'eachUse'
+
+		if defBlock < numBlocks 'definedHere'
+			self.noteCandidate(defBlock, gen: gen)
+		end 'definedHere'
+	end 'collectCandidates'
+
+	function noteCandidate(b ElementIndex, gen VersionStamp)
+		if (try self.candStamp.get(b) otherwise panic("LivenessMarkScratch.noteCandidate: candStamp.get OOB")) == gen 'already'
+			return
+		end 'already'
+
+		try self.candStamp.set(b, value: gen) otherwise panic("LivenessMarkScratch.noteCandidate: candStamp.set OOB")
+		self.candidates.push(b)
+	end 'noteCandidate'
+
+	// `b` is live-in, reads nothing of the value, and heads a clean chain up to `edgeOf(b)`
+	// (`DomSkip`), so the value is live into every block of `(top, b]` and out of `top`, which the
+	// walk resumes from. `top` is the chain's top, or the def when it lies inside and dominates `b`; a
+	// def inside that does not dominate `b` refuses the step.
+	function coversUpTo(cfg FuncCfg, b ElementIndex, defBlock ElementIndex, pending CfgIndexArray, gen VersionStamp) returns bool
+		let edge = cfg.skip.edgeOf(b)
+		var top = edge
+
+		if defBlock > edge and defBlock < b 'defInsideTheRegion'
+			if not cfg.skip.dominates(defBlock, y: b) 'notADominator'
+				return false
+			end 'notADominator'
+
+			top = defBlock
+		end 'defInsideTheRegion'
+
+		self.intervals.push(spanOf(top + 1, hi: b))
+		try self.liveInStamp.set(b, value: gen) otherwise panic("LivenessMarkScratch.coversUpTo: liveInStamp.set OOB")
+		self.visitLiveOut(gen, blockLocal: top)
+		pending.push(top)
+		return true
+	end 'coversUpTo'
+
+	function mergeIntervals()
+		sortColumnAscending(self.intervals, scratch: self.sortBuf)
+		self.mergedLo.clear()
+		self.mergedHi.clear()
+
+		for k in 0 upto self.intervals.count() 'eachInterval'
+			let packed = try self.intervals.get(k) otherwise panic("LivenessMarkScratch.mergeIntervals: intervals.get OOB at {k}")
+			let lo = spanLoOf(packed)
+			let hi = spanHiOf(packed)
+			let last = self.mergedHi.count()
+
+			if last > 0 and lo <= (try self.mergedHi.get(last - 1) otherwise panic("LivenessMarkScratch.mergeIntervals: mergedHi.get OOB")) + 1 'extends'
+				if hi > (try self.mergedHi.get(last - 1) otherwise panic("LivenessMarkScratch.mergeIntervals: mergedHi.get OOB")) 'reachesFurther'
+					try self.mergedHi.set(last - 1, value: hi) otherwise panic("LivenessMarkScratch.mergeIntervals: mergedHi.set OOB")
+				end 'reachesFurther'
+			end 'extends' else 'startsNew'
+				self.mergedLo.push(lo)
+				self.mergedHi.push(hi)
+			end 'startsNew'
+		end 'eachInterval'
+	end 'mergeIntervals'
+
+	function inMergedIntervals(b ElementIndex) returns bool
+		var lo = 0 as Count
+		var hi = self.mergedLo.count()
+
+		while lo < hi 'bisect'
+			let mid = lo + (hi - lo) / 2
+
+			if (try self.mergedLo.get(mid) otherwise panic("LivenessMarkScratch.inMergedIntervals: mergedLo.get OOB")) <= b 'rightHalf'
+				lo = mid + 1
+			end 'rightHalf' else 'leftHalf'
+				hi = mid
+			end 'leftHalf'
+		end 'bisect'
+
+		if lo == 0 'beforeAll'
+			return false
+		end 'beforeAll'
+
+		return b <= (try self.mergedHi.get(lo - 1) otherwise panic("LivenessMarkScratch.inMergedIntervals: mergedHi.get OOB"))
+	end 'inMergedIntervals'
+
+	function liveInHolds(b ElementIndex, gen VersionStamp) returns bool
+		return (try self.liveInStamp.get(b) otherwise panic("LivenessMarkScratch.liveInHolds: liveInStamp.get OOB")) == gen or self.inMergedIntervals(b)
+	end 'liveInHolds'
+
+	function anySuccessorLiveIn(topo FuncTopology, b ElementIndex, gen VersionStamp) returns bool
+		let deg = topo.succ.degree(b as CsrIndex)
+
+		for k in 0 upto deg 'eachSucc'
+			if self.liveInHolds(topo.succ.neighbour(b as CsrIndex, k: k), gen: gen) 'liveBeyond'
+				return true
+			end 'liveBeyond'
+		end 'eachSucc'
+
+		return false
+	end 'anySuccessorLiveIn'
+
+	// Only a candidate — a block that defines or reads the value — can be live on one side alone.
+	// Every other block the walk visited or covered is live straight through, so those become runs,
+	// cut at each candidate that is live-in (it holds an explicit entry instead).
+	function installSkipped(topo FuncTopology, live LiveSets, v ValueId, class RegClass, gen VersionStamp, touched BlockSet, defBlock ElementIndex)
+		self.mergeIntervals()
+		sortColumnAscending(self.candidates, scratch: self.sortBuf)
+		self.cuts.clear()
+
+		for k in 0 upto self.candidates.count() 'eachCandidate'
+			let t = (try self.candidates.get(k) otherwise panic("LivenessMarkScratch.installSkipped: candidates.get OOB at {k}")) as ElementIndex
+			let liveIn = t != defBlock and self.liveInHolds(t, gen: gen)
+			var liveOut = (try self.liveOutStamp.get(t) otherwise panic("LivenessMarkScratch.installSkipped: liveOutStamp.get OOB")) == gen
+
+			if not liveOut 'askTheSuccessors'
+				liveOut = self.anySuccessorLiveIn(topo, b: t, gen: gen)
+			end 'askTheSuccessors'
+
+			if liveIn 'enters'
+				try self.liveInStamp.set(t, value: gen) otherwise panic("LivenessMarkScratch.installSkipped: liveInStamp.set OOB")
+				self.cuts.push(t)
+				touched.add(t)
+				live.installExplicit(t, v: v, isOut: false)
+			end 'enters'
+
+			if liveOut 'leaves'
+				try self.liveOutStamp.set(t, value: gen) otherwise panic("LivenessMarkScratch.installSkipped: liveOutStamp.set OOB")
+				touched.add(t)
+				live.installExplicit(t, v: v, isOut: true)
+			end 'leaves'
+		end 'eachCandidate'
+
+		self.pieces.clear()
+
+		for k in 0 upto self.mergedLo.count() 'eachMerged'
+			self.pieces.push(spanOf(try self.mergedLo.get(k) otherwise panic("LivenessMarkScratch.installSkipped: mergedLo.get OOB"), hi: try self.mergedHi.get(k) otherwise panic("LivenessMarkScratch.installSkipped: mergedHi.get OOB")))
+		end 'eachMerged'
+
+		for k in 0 upto self.inVisited.count() 'eachWalked'
+			let b = try self.inVisited.get(k) otherwise panic("LivenessMarkScratch.installSkipped: inVisited.get OOB at {k}")
+			self.pieces.push(spanOf(b, hi: b))
+		end 'eachWalked'
+
+		if self.pieces.count() == 0 'nothingTransparent'
+			return
+		end 'nothingTransparent'
+
+		sortColumnAscending(self.pieces, scratch: self.sortBuf)
+		self.cutCursor = 0
+		var runLo = spanLoOf(try self.pieces.get(0) otherwise panic("LivenessMarkScratch.installSkipped: pieces.get(0) failed"))
+		var runHi = spanHiOf(try self.pieces.get(0) otherwise panic("LivenessMarkScratch.installSkipped: pieces.get(0) failed"))
+
+		for k in 1 upto self.pieces.count() 'eachPiece'
+			let packed = try self.pieces.get(k) otherwise panic("LivenessMarkScratch.installSkipped: pieces.get OOB at {k}")
+			let lo = spanLoOf(packed)
+			let hi = spanHiOf(packed)
+
+			if lo <= runHi + 1 'extendsTheRun'
+				if hi > runHi 'reachesFurther'
+					runHi = hi
+				end 'reachesFurther'
+			end 'extendsTheRun' else 'startsANewRun'
+				self.installAroundCuts(live, v: v, class: class, lo: runLo, hi: runHi)
+				runLo = lo
+				runHi = hi
+			end 'startsANewRun'
+		end 'eachPiece'
+
+		self.installAroundCuts(live, v: v, class: class, lo: runLo, hi: runHi)
+	end 'installSkipped'
+
+	function installAroundCuts(live LiveSets, v ValueId, class RegClass, lo ElementIndex, hi ElementIndex)
+		var start = lo
+
+		while self.cutCursor < self.cuts.count() and (try self.cuts.get(self.cutCursor) otherwise panic("LivenessMarkScratch.installAroundCuts: cuts.get OOB")) < lo 'skipEarlierCuts'
+			self.cutCursor = self.cutCursor + 1
+		end 'skipEarlierCuts'
+
+		while self.cutCursor < self.cuts.count() and (try self.cuts.get(self.cutCursor) otherwise panic("LivenessMarkScratch.installAroundCuts: cuts.get OOB")) <= hi 'eachCutInside'
+			let cut = try self.cuts.get(self.cutCursor) otherwise panic("LivenessMarkScratch.installAroundCuts: cuts.get OOB")
+
+			if cut > start 'somethingBefore'
+				live.installRun(v, class: class, lo: start, hi: cut - 1)
+			end 'somethingBefore'
+
+			start = cut + 1
+			self.cutCursor = self.cutCursor + 1
+		end 'eachCutInside'
+
+		if start <= hi 'somethingLeft'
+			live.installRun(v, class: class, lo: start, hi: hi)
+		end 'somethingLeft'
+	end 'installAroundCuts'
+
+	function visitLiveOut(gen VersionStamp, blockLocal ElementIndex)
+		let cur = try self.liveOutStamp.get(blockLocal) otherwise panic("LivenessMarkScratch.visitLiveOut: liveOutStamp.get OOB")
 
 		if cur == gen 'already'
 			return
 		end 'already'
 
-		try self.liveOutStamp.set(blockLocal, value: gen) otherwise panic("LivenessMarkScratch.editLiveOut: liveOutStamp.set OOB")
+		try self.liveOutStamp.set(blockLocal, value: gen) otherwise panic("LivenessMarkScratch.visitLiveOut: liveOutStamp.set OOB")
+		self.outVisited.push(blockLocal)
+	end 'visitLiveOut'
 
-		touched.add(blockLocal)
+	function installVisited(live LiveSets, v ValueId, class RegClass, gen VersionStamp, touched BlockSet)
+		let installed = live.hasRange(v)
+		let expand = self.expandRuns or installed
+		self.transparent.clear()
 
-		if adding 'mark'
-			live.addLiveOut(blockLocal, v: v)
-		end 'mark' else 'unmark'
-			live.removeLiveOut(blockLocal, v: v)
-		end 'unmark'
-	end 'editLiveOut'
+		for k in 0 upto self.inVisited.count() 'eachLiveIn'
+			let b = try self.inVisited.get(k) otherwise panic("LivenessMarkScratch.installVisited: inVisited.get OOB at {k}")
+
+			if (try self.liveOutStamp.get(b) otherwise panic("LivenessMarkScratch.installVisited: liveOutStamp.get OOB")) == gen and (try self.touchStamp.get(b) otherwise panic("LivenessMarkScratch.installVisited: touchStamp.get OOB")) != gen 'transparentHere'
+				self.transparent.push(b)
+
+				if expand 'dirtyTheTransparentBlock'
+					touched.add(b)
+				end 'dirtyTheTransparentBlock'
+			end 'transparentHere' else 'explicitIn'
+				touched.add(b)
+
+				if not installed 'installIt'
+					live.installExplicit(b, v: v, isOut: false)
+				end 'installIt'
+			end 'explicitIn'
+		end 'eachLiveIn'
+
+		for k in 0 upto self.outVisited.count() 'eachLiveOut'
+			let b = try self.outVisited.get(k) otherwise panic("LivenessMarkScratch.installVisited: outVisited.get OOB at {k}")
+
+			if not ((try self.liveInStamp.get(b) otherwise panic("LivenessMarkScratch.installVisited: liveInStamp.get OOB")) == gen and (try self.touchStamp.get(b) otherwise panic("LivenessMarkScratch.installVisited: touchStamp.get OOB")) != gen) 'explicitOut'
+				touched.add(b)
+
+				if not installed 'installIt'
+					live.installExplicit(b, v: v, isOut: true)
+				end 'installIt'
+			end 'explicitOut'
+		end 'eachLiveOut'
+
+		if installed or self.transparent.count() == 0 'noRunsToInstall'
+			return
+		end 'noRunsToInstall'
+
+		sortColumnAscending(self.transparent, scratch: self.sortBuf)
+		var lo = (try self.transparent.get(0) otherwise panic("LivenessMarkScratch.installVisited: transparent.get(0) failed")) as ElementIndex
+		var hi = lo
+
+		for k in 1 upto self.transparent.count() 'eachTransparent'
+			let b = (try self.transparent.get(k) otherwise panic("LivenessMarkScratch.installVisited: transparent.get OOB at {k}")) as ElementIndex
+
+			if b == hi + 1 'extendsTheRun'
+				hi = b
+			end 'extendsTheRun' else 'startsANewRun'
+				live.installRun(v, class: class, lo: lo, hi: hi)
+				lo = b
+				hi = b
+			end 'startsANewRun'
+		end 'eachTransparent'
+
+		live.installRun(v, class: class, lo: lo, hi: hi)
+	end 'installVisited'
+
+	function unmarkValue(live LiveSets, v ValueId, class RegClass, gen VersionStamp, touched BlockSet) returns EventCount
+		var markSteps = 0 as EventCount
+		var entry = live.firstEntryOf(v)
+
+		while entry != 0 'eachExplicitEntry'
+			let b = live.entryBlockAt(entry)
+			let isOut = live.entryIsOutAt(entry)
+			markSteps = markSteps + 1
+
+			if isOut 'aLiveOutEntry'
+				try self.liveOutStamp.set(b, value: gen) otherwise panic("LivenessMarkScratch.unmarkValue: liveOutStamp.set OOB")
+			end 'aLiveOutEntry' else 'aLiveInEntry'
+				try self.liveInStamp.set(b, value: gen) otherwise panic("LivenessMarkScratch.unmarkValue: liveInStamp.set OOB")
+			end 'aLiveInEntry'
+
+			touched.add(b)
+			live.removeExplicit(b, v: v, isOut: isOut)
+			entry = live.nextEntryOf(entry)
+		end 'eachExplicitEntry'
+
+		live.releaseEntries(v)
+		var run = live.runs.firstRunOf(v)
+
+		while run != 0 'eachRun'
+			live.cover.add(class, lo: live.runs.loOf(run), hi: live.runs.hiOf(run), by: -1)
+
+			if self.expandRuns 'expandTheRun'
+				for b in live.runs.loOf(run) upto live.runs.hiOf(run) + 1 'eachBlockOfTheRun'
+					markSteps = markSteps + 1
+					try self.liveInStamp.set(b, value: gen) otherwise panic("LivenessMarkScratch.unmarkValue: liveInStamp.set OOB")
+					try self.liveOutStamp.set(b, value: gen) otherwise panic("LivenessMarkScratch.unmarkValue: liveOutStamp.set OOB")
+					touched.add(b)
+				end 'eachBlockOfTheRun'
+			end 'expandTheRun'
+
+			run = live.runs.nextRunOf(run)
+		end 'eachRun'
+
+		live.runs.removeValue(v)
+		return markSteps
+	end 'unmarkValue'
+
+	// These two are exact only for a block the last walk added to `touched`: a skipping walk leaves
+	// the blocks it covered in one step unstamped.
+	export function liveInMarkedByLastWalk(blockLocal ElementIndex) returns bool
+		return (try self.liveInStamp.get(blockLocal) otherwise panic("LivenessMarkScratch.liveInMarkedByLastWalk: block {blockLocal} out of range")) == self.generation
+	end 'liveInMarkedByLastWalk'
+
+	export function liveOutMarkedByLastWalk(blockLocal ElementIndex) returns bool
+		return (try self.liveOutStamp.get(blockLocal) otherwise panic("LivenessMarkScratch.liveOutMarkedByLastWalk: block {blockLocal} out of range")) == self.generation
+	end 'liveOutMarkedByLastWalk'
 end 'LivenessMarkScratch'
 
 // ==========================================================================
@@ -3655,6 +4214,8 @@ export type PressureSweepScratch
 	export var liveRow as BitRow
 	export var buf as OperandList
 	export var liveBuf as ValueIdArray
+	export var seedList as ValueIdArray
+	export var events as ClobberEvents
 	export var ordered as OpIndexArray
 
 	// The per-class working rows: the live population being swept, one op's pressure, and the block's
@@ -3671,9 +4232,10 @@ export type PressureSweepScratch
 	// Per op position of the block being swept: the physical registers live AFTER the op
 	// (`sweepEstablishedRegisters`).
 	export var physLiveAfter as RegMaskColumn
+	export var pendingBefore as RegMaskColumn
 
 	export static function create() returns PressureSweepScratch
-		return Self{liveRow: BitRow.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), ordered: OpIndexArray.create(), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow(), coldRun: ColdRunSweep.create(), physLiveAfter: RegMaskColumn.create()}
+		return Self{liveRow: BitRow.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), seedList: ValueIdArray.create(), events: ClobberEvents.create(), ordered: OpIndexArray.create(), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow(), coldRun: ColdRunSweep.create(), physLiveAfter: RegMaskColumn.create(), pendingBefore: RegMaskColumn.create()}
 	end 'create'
 
 	// Widen the working rows to `wordsPerRow`, ZEROING only the words the growth added — the rest of
@@ -3725,13 +4287,14 @@ end 'PressureSweepScratch'
 // must add the join, not merely re-measure; the symptom would be a wrong ANSWER at one call site, not
 // a failing build.
 //
-// ⚠ IT IS ASSIGNED, NOT OR-ED, so re-running it on a block a split dirtied RESTATES that block's
-// answers instead of accumulating stale ones. Nothing a split inserts or removes names a physical
-// register or carries an implicit mask (`storeSlotReg` / `loadRegSlot` / a constant materialization
-// all read 0), so both windows at every PRE-EXISTING def are invariant under a split and only the
-// fresh ids get a new entry — but the sweep does not depend on that being true, because it rewrites
-// the block.
-export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology, blockLocal ElementIndex, establishedAtDef RegMaskColumn, scratch PressureSweepScratch, opFacts OpVariantFacts)
+// ⚠ IT IS ASSIGNED, NOT OR-ED, so re-running it on a block RESTATES that block's answers instead of
+// accumulating stale ones. A split never re-runs it, and relies on this: nothing a split inserts or
+// removes names a physical register or carries an implicit mask (`storeSlotReg` / `loadRegSlot` / a
+// constant materialization all read 0), so both windows at every PRE-EXISTING def are invariant
+// under a split. `recordWindows` keeps them per op for the positional index, which derives a
+// spliced op's from its neighbour's, and `remarkValue` restates only the fresh ids' entries and a
+// victim the split left with no def.
+export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology, blockLocal ElementIndex, establishedAtDef RegMaskColumn, scratch PressureSweepScratch, opFacts OpVariantFacts, recordWindows bool)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var buf = scratch.buf
 	var ordered = scratch.ordered
@@ -3741,6 +4304,8 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
 	let opCount = ordered.count()
 	var physLiveAfter = scratch.physLiveAfter
 	physLiveAfter.growFilled(opCount, value: 0)
+	var pendingBefore = scratch.pendingBefore
+	pendingBefore.growFilled(opCount, value: 0)
 
 	// Backward first: a register is live after an op iff a later op reads it before one writes it, and
 	// the block's exit holds none (the block-boundary assumption above).
@@ -3752,7 +4317,7 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
 		try physLiveAfter.set(pos, value: live) otherwise panic("sweepEstablishedRegisters: physLiveAfter.set OOB at position {pos} — the column was just grown to {opCount}")
 		let op = try module.ops.get(try ordered.get(pos) otherwise panic("sweepEstablishedRegisters: ordered.get OOB at position {pos}")) otherwise panic("sweepEstablishedRegisters: an op of block {blockLocal} is not in module.ops")
 		targetOpOperands(op, buf: buf)
-		live = (live and not rawClobberMask(op, buf: buf, opFacts: opFacts)) or physicalOperandMask(buf, census: OperandCensus.readByName) or opFacts.implicitUsesOf(op)
+		live = physicalLiveBefore(op, buf: buf, liveAfter: live, opFacts: opFacts)
 	end 'eachOpBackward'
 
 	var pending = 0 as RegMask
@@ -3769,25 +4334,40 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
 			end 'virtualDef'
 		end 'eachOperand'
 
+		if recordWindows 'recordThem'
+			try pendingBefore.set(forwardPos, value: pending) otherwise panic("sweepEstablishedRegisters: pendingBefore.set OOB at position {forwardPos}")
+		end 'recordThem'
+
 		// This op's own physical defs join the pending set AFTER its defs are stated: a value defined by
 		// the very op that establishes a register is not clobbered by it (nothing else writes it in
 		// between), and today no op does both.
-		pending = (pending and not opFacts.implicitDefsOf(op)) or physicalOperandMask(buf, census: OperandCensus.writtenByName)
+		pending = pendingAfter(op, buf: buf, pendingBefore: pending, opFacts: opFacts)
 	end 'eachOp'
 end 'sweepEstablishedRegisters'
 
-// ONE block's backward per-op sweep: track the exact live set at each program point, fold each op's
-// physical/implicit register writes into `forbidden` for every value live ACROSS it, record the
-// block's dead-phi count, and return the block's REGISTER DEMAND (its peak simultaneous live count,
-// carrying the reuse-copy transient, plus its dead-phi reservations). `maxPressure` is the max of
-// these over the function — the χ = ω the feasibility decision needs.
+export function physicalLiveBefore(op TargetOp, buf OperandList, liveAfter RegMask, opFacts OpVariantFacts) returns RegMask
+	return (liveAfter and not rawClobberMask(op, buf: buf, opFacts: opFacts)) or physicalOperandMask(buf, census: OperandCensus.readByName) or opFacts.implicitUsesOf(op)
+end 'physicalLiveBefore'
+
+export function pendingAfter(op TargetOp, buf OperandList, pendingBefore RegMask, opFacts OpVariantFacts) returns RegMask
+	return (pendingBefore and not opFacts.implicitDefsOf(op)) or physicalOperandMask(buf, census: OperandCensus.writtenByName)
+end 'pendingAfter'
+
+// ONE block's backward per-op sweep over its EXPLICIT values: track their exact live set at each
+// program point, fold each op's physical/implicit register writes into `forbidden` for every one
+// live ACROSS it (`ClobberEvents`), record the block's whole clobber mask for the values live
+// straight through it (`BlockClobbers`), record its dead-phi count, and return its REGISTER DEMAND
+// (its peak simultaneous live count, carrying the reuse-copy transient, plus the values live
+// straight through it, plus its dead-phi reservations). `maxPressure` is the max of these over the
+// function — the χ = ω the feasibility decision needs.
 //
-// ⚠ IT IS THE WHOLE-FUNCTION BUILD'S ONLY. Per-block would mean the SPLITTER re-running it per dirty
-// block — and on a function that is one basic block that is a walk of the whole function, once per
-// split. All three of its outputs are restated against what a split actually moved:
-// `forbidden` from `PressureIndex.clobberOr` (a range OR per block of the value's range),
-// the dead-phi count only for the one block a block-arg's liveness can move in, and the demand off the
-// positional index in O(1). See `rebuildForbiddenOf`, `refreshDeadPhisFor` and `refreshBlockDemands`.
+// ⚠ IT IS THE WHOLE-FUNCTION BUILD'S ONLY. Per-block would mean the SPLITTER re-running it per
+// dirty block — and on a function that is one basic block that is a walk of the whole function,
+// once per split. All three of its outputs are restated against what a split actually moved:
+// `forbidden` from `PressureIndex.clobberOr` (a range OR per block the value is explicitly live in)
+// and `LiveSets.runClobbersOf`, the dead-phi count only for the one block a block-arg's liveness
+// can move in, and the demand off the positional index and the cover in O(1). See
+// `rebuildForbiddenOf`, `refreshDeadPhisFor` and `refreshBlockDemands`.
 //
 // It stays per block because the build calls it per block, and because that is the granularity its
 // three outputs are keyed at.
@@ -3819,10 +4399,10 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal E
 	var opPressure = scratch.opPressure
 	var blockMax = scratch.blockMax
 
-	// The stored list itself, not a copy into a scratch buffer: this sweep only READS the live sets,
-	// so there is nothing to copy it away from. The per-class tally is seeded from the same list, in
-	// the same O(live) walk that seeds the bit row.
-	let liveOutList = live.liveOut(blockLocal)
+	// The per-class tally is seeded from the same list, in the same O(live) walk that seeds the bit
+	// row.
+	var liveOutList = scratch.seedList
+	live.explicitOutInto(blockLocal, out: liveOutList)
 
 	for v in liveOutList 'seedLiveOut'
 		liveRow.add(v as BitIndex)
@@ -3838,14 +4418,23 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal E
 	ordered.clear()
 	collectBlockOps(block, out: ordered)
 
+	var events = scratch.events
+	events.beginBlock()
+
+	for v in liveOutList 'enterLiveOut'
+		events.enter(v, pos: ordered.count())
+	end 'enterLiveOut'
+
 	if block.heat == BlockHeat.cold 'coldBlock'
 		scratch.coldRun.emptyReadLater()
 	end 'coldBlock'
 
+	var blockClobber = 0 as RegMask
+
 	for ri in 0 upto ordered.count() 'eachOpRev'
 		let pos = ordered.count() - 1 - ri
 		let opIdx = try ordered.get(pos) otherwise panic("sweepBlockPressure: ordered.get OOB")
-		stepBackwardOverOp(module, opIdx: opIdx, heat: block.heat, pos: pos as ElementIndex, runs: runs, liveRow: liveRow, forbidden: forbidden, buf: buf, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts, coldRun: scratch.coldRun)
+		blockClobber = blockClobber or stepBackwardOverOp(module, opIdx: opIdx, heat: block.heat, pos: pos as ElementIndex, runs: runs, liveRow: liveRow, forbidden: forbidden, buf: buf, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts, coldRun: scratch.coldRun, events: events)
 
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
@@ -3853,14 +4442,32 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal E
 		end 'eachClass'
 	end 'eachOpRev'
 
+	live.clobbers.set(blockLocal, mask: blockClobber)
+
+	live.explicitInInto(blockLocal, out: liveOutList)
+
+	for v in liveOutList 'closeLiveInWindows'
+		if liveRow.test(v as BitIndex) 'aLiveIn'
+			events.finalize(v, forbidden: forbidden)
+		end 'aLiveIn'
+	end 'closeLiveInWindows'
+
+	for arg in block.blockArgs 'closePhiWindows'
+		if liveRow.test(arg.valueId as BitIndex) 'aLivePhi'
+			events.finalize(arg.valueId, forbidden: forbidden)
+		end 'aLivePhi'
+	end 'closePhiWindows'
+
 	// After the backward sweep `liveRow` is the live-IN view: a block-arg is present iff it is live
 	// (used here or live-out); a dead phi is absent.
 	countDeadPhis(block, liveRow: liveRow, classes: classes, deadPhis: deadPhis, blockLocal: blockLocal)
 
 	// Return the working row to zero for the next block, in O(live). What it holds now is the block's
-	// LIVE-IN set plus any of its own block-args the sweep re-added (a phi read by an op in the block),
-	// so removing exactly those two sets clears it.
-	for v in live.liveIn(blockLocal) 'clearLiveIn'
+	// EXPLICIT live-in set plus any of its own block-args the sweep re-added (a phi read by an op in
+	// the block), so removing exactly those two sets clears it.
+	live.explicitInInto(blockLocal, out: liveOutList)
+
+	for v in liveOutList 'clearLiveIn'
 		liveRow.remove(v as BitIndex)
 	end 'clearLiveIn'
 
@@ -3868,12 +4475,12 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal E
 		liveRow.remove(arg.valueId as BitIndex)
 	end 'clearPhis'
 
-	// The block's demand, per file: that file's peak simultaneous count plus its own dead-phi
-	// reservations. A dead phi of one file reserves a register of THAT file and competes for nothing
-	// in the other.
+	// The block's demand, per file: that file's peak simultaneous count plus the values live straight
+	// through it plus its own dead-phi reservations. A dead phi of one file reserves a register of
+	// THAT file and competes for nothing in the other.
 	for classOrdinal in 0 upto RegClassCount 'demand'
 		let class = regClassAt(classOrdinal)
-		classRowSet(demandOut, class: class, value: classRowGet(blockMax, class: class) + (try deadPhis.get(classRowIndex(blockLocal, class: class)) otherwise panic("sweepBlockPressure: deadPhis.get OOB for block {blockLocal}")))
+		classRowSet(demandOut, class: class, value: classRowGet(blockMax, class: class) + (live.cover.at(class, blockLocal: blockLocal) as RegCount) + (try deadPhis.get(classRowIndex(blockLocal, class: class)) otherwise panic("sweepBlockPressure: deadPhis.get OOB for block {blockLocal}")))
 	end 'demand'
 end 'sweepBlockPressure'
 
@@ -4196,11 +4803,12 @@ export function nonSweptForbidOf(v ValueId, paramCross ParamCrossForbid, establi
 	return paramCross.maskFor(v) or established
 end 'nonSweptForbidOf'
 
-// Process one op backward: fold its register clobbers into `forbidden` for values
-// live across it, then transform `liveRow` from live-after to live-before. Returns the
-// pressure this op contributes — the live-before population, PLUS this op's transient
-// register (see `addOpTransientPressure`).
-function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockHeat, pos ElementIndex, runs ColdBlockRuns, liveRow BitRow, forbidden RegMaskColumn, buf OperandList, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts, coldRun ColdRunSweep)
+// Process one op backward: record its register clobbers for the values live across it
+// (`ClobberEvents`), then transform `liveRow` from live-after to live-before. `pressureOut`
+// receives the pressure this op contributes — the live-before population, PLUS this op's
+// transient register (see `addOpTransientPressure`); the op's clobber mask is returned for the
+// block's whole-block OR (`BlockClobbers`).
+function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockHeat, pos ElementIndex, runs ColdBlockRuns, liveRow BitRow, forbidden RegMaskColumn, buf OperandList, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn, opFacts OpVariantFacts, coldRun ColdRunSweep, events ClobberEvents) returns RegMask
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 
 	// This also fills `buf` with the op's operands, which everything below reads.
@@ -4214,8 +4822,16 @@ function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockH
 	classRowZero(pressureOut)
 	addOpTransientPressure(buf, liveRow: liveRow, classes: classes, pressureOut: pressureOut)
 
+	// A def's window closes BEFORE this op's clobber is recorded, and a use that dies here opens its
+	// window AFTER it: neither is live ACROSS the op, so neither may take its clobber.
+	for o in buf 'closeDefWindows'
+		if operandIsDef(o) and operandIsVirtual(o) and liveRow.test(operandValueId(o) as BitIndex) 'aLiveDef'
+			events.finalize(operandValueId(o), forbidden: forbidden)
+		end 'aLiveDef'
+	end 'closeDefWindows'
+
 	if clobberMask != 0 'hasClobber'
-		applyForbidden(liveRow, forbidden: forbidden, buf: buf, clobberMask: clobberMask, liveBuf: liveBuf)
+		events.record(pos, mask: clobberMask)
 	end 'hasClobber'
 
 	if heat == BlockHeat.cold 'coldBlock'
@@ -4226,7 +4842,7 @@ function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockH
 	end 'coldBlock'
 
 	// An op's EXPLICIT virtual operands must additionally avoid the op's IMPLICIT
-	// registers (its implicit reads AND writes). `applyForbidden` above only covers
+	// registers (its implicit reads AND writes). The clobber windows (`ClobberEvents`) only cover
 	// values LIVE ACROSS the op (present in the live-after set); an operand that DIES at
 	// the op — the common case for `idiv`'s divisor — is absent from that set, so it
 	// would otherwise be free to color into RAX/RDX. But at the `idiv` the divisor cannot
@@ -4239,6 +4855,12 @@ function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockH
 		forbidOperandsFromImplicit(forbidden, buf: buf, implicitMask: implicitTouch)
 	end 'hasImplicit'
 
+	for o in buf 'openUseWindows'
+		if not operandIsDef(o) and operandIsVirtual(o) and (not liveRow.test(operandValueId(o) as BitIndex) or operandDefinesValue(buf, v: operandValueId(o))) 'aNewWindow'
+			events.enter(operandValueId(o), pos: pos)
+		end 'aNewWindow'
+	end 'openUseWindows'
+
 	stepRowBackwardOverOperands(liveRow, buf: buf, liveByClass: liveByClass, classes: classes)
 
 	// This op's pressure, per file: the live-BEFORE population of that file, plus the op's transient
@@ -4247,6 +4869,8 @@ function stepBackwardOverOp(module TargetModule, opIdx ElementIndex, heat BlockH
 		let class = regClassAt(classOrdinal)
 		classRowSet(pressureOut, class: class, value: classRowGet(pressureOut, class: class) + classRowGet(liveByClass, class: class))
 	end 'eachClass'
+
+	return clobberMask
 end 'stepBackwardOverOp'
 
 // Every register `op` WRITES without being a virtual def that a value live ACROSS the op must avoid:
@@ -4975,26 +5599,8 @@ export function stepRowBackwardOverOperands(row BitRow, buf OperandList, liveByC
 	end 'addUses'
 end 'stepRowBackwardOverOperands'
 
-// For each value LIVE ACROSS this op (in `liveRow`, and not one of the op's own defs), add
-// `clobberMask` to its forbidden registers.
-//
-// ⚠ IT IS THE WHOLE-FUNCTION BUILD'S ONLY, and takes no SCOPE. A split re-deriving just the handful of
-// masks it invalidated would re-walk every op of every dirty block; it reads `PressureIndex.clobberOr`
-// instead — one RANGE OR per block of the value's live range — so a narrow scope has no caller.
-//
-// It walks the SET BITS of the live row, not the value space: this runs at every CLOBBER op, so
-// both testing each value id and reading every word of the row would be O(clobber-ops × values) for
-// an answer of size O(live). `liveBuf` is scratch reused across ops.
-function applyForbidden(liveRow BitRow, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, liveBuf ValueIdArray)
-	liveRow.collect(liveBuf)
-
-	for v in liveBuf 'eachTarget'
-		forbidLiveValue(v, forbidden: forbidden, buf: buf, clobberMask: clobberMask)
-	end 'eachTarget'
-end 'applyForbidden'
-
-// `applyForbidden` over the values of `liveRow` that are ALSO in `within` — a cold run's clobber, which
-// confines only the values read later in the run (`ColdRunSweep`).
+// `clobberMask` forbidden to the values of `liveRow` that are ALSO in `within` — a cold run's
+// clobber, which confines only the values read later in the run (`ColdRunSweep`).
 function applyForbiddenWithin(liveRow BitRow, within BitRow, forbidden RegMaskColumn, buf OperandList, clobberMask RegMask, liveBuf ValueIdArray)
 	liveRow.collect(liveBuf)
 
@@ -5011,8 +5617,8 @@ function forbidLiveValue(v ValueId, forbidden RegMaskColumn, buf OperandList, cl
 		return
 	end 'ownDef'
 
-	let cur = try forbidden.get(v) otherwise panic("applyForbidden: forbidden.get OOB")
-	try forbidden.set(v, value: cur or clobberMask) otherwise panic("applyForbidden: forbidden.set OOB")
+	let cur = try forbidden.get(v) otherwise panic("forbidLiveValue: forbidden.get OOB")
+	try forbidden.set(v, value: cur or clobberMask) otherwise panic("forbidLiveValue: forbidden.set OOB")
 end 'forbidLiveValue'
 
 function operandDefinesValue(buf OperandList, v ValueId) returns bool
@@ -5039,7 +5645,7 @@ export function operandImplicitTouchOf(op TargetOp, opFacts OpVariantFacts) retu
 end 'operandImplicitTouchOf'
 
 // Add `implicitMask` (the op's implicit reads ∪ writes) to the forbidden set of every
-// EXPLICIT VIRTUAL operand of the op. Unlike `applyForbidden` (which forbids values live
+// EXPLICIT VIRTUAL operand of the op. Unlike `ClobberEvents` (which forbids values live
 // ACROSS the op), this forbids the op's OWN operands regardless of whether they outlive
 // it — so `idiv`'s divisor, which dies at the op and is thus absent from the live-across
 // set, is still kept out of the implicit RAX/RDX pair.
@@ -5054,8 +5660,9 @@ end 'operandImplicitTouchOf'
 // carries NO explicit register operands — its arguments are PRE-MOVED into their physical
 // ABI registers by separate `mov argReg[k], arg_k` ops (see StdToX64Conversion.lowerCall),
 // so `targetOpOperands(callDirect)` is empty and this helper iterates nothing on a call.
-// The call's caller-saved `implicitDefs` still flow, correctly, ONLY through `applyForbidden`
-// (values LIVE ACROSS the call, never the call's own — non-existent — operands). So the only
+// The call's caller-saved `implicitDefs` still flow, correctly, ONLY through `ClobberEvents` and
+// `LiveSets.runClobbersOf` (values LIVE ACROSS the call, never the call's own — non-existent —
+// operands). So the only
 // caller whose operands this touches is `idiv`/`cqo` (simultaneous-conflict), for which the
 // simple form is sound. Reads the operand model rather than hardcoding opcodes.
 function forbidOperandsFromImplicit(forbidden RegMaskColumn, buf OperandList, implicitMask RegMask)

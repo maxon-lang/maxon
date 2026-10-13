@@ -1838,6 +1838,10 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 
 	runStdPassesOverTheBand(project, module: pipeline.stdModule, members: buildEmittedBandPasses(), firstFuncIndex: firstEmittedFuncIndex)
 
+	// The declaration-hygiene drain (E3012 unused, E3077 var-should-be-let) sits between the Std-tier
+	// passes and the backend. See `reportBindingHygieneDiagnostics`.
+	try reportBindingHygieneDiagnostics(project)
+
 	// The backend owns its own error gate, and TWO of its stages use it: the register allocator
 	// reports E5001 (register pressure) onto `project.diagnostics` and throws when a loop genuinely
 	// overflows the register file, and the reachability prune reports E4015 and throws when a
@@ -1850,11 +1854,6 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 		try refuseCompile(project)
 	end 'backendFailed'
 
-	// ⭐ **THE DECLARATION-HYGIENE DRAIN (E3012 unused, E3077 var-should-be-let) — AFTER THE BACKEND, which
-	// is the first point at which nothing else has anything to say about a body.** See
-	// `reportBindingHygieneDiagnostics`.
-	try reportBindingHygieneDiagnostics(project)
-
 	return codeResult
 end 'codeResultOf'
 
@@ -1863,27 +1862,19 @@ end 'codeResultOf'
 // settled at its `end` during the parse; only the REPORTING waits, and `Project.bindingHygieneDiagnostics`
 // carries the measured cascade that makes it wait.
 //
-// ⭐⭐ **IT IS CALLED AFTER `buildBackend`, AND EACH STEP OF THAT POSITION WAS PAID FOR BY A MEASUREMENT.**
-// Reported where they are DECIDED, they gate the pipeline ahead of `resolveTypes`, and 26 committed
-// error-cases moved — `let x = 256 as Byte` reported *"unused variable: 'x'"* instead of the out-of-range
-// cast `type-casting.md` exists to pin, and that file is a canonical `/specs` port whose program may not be
-// edited to suit us. Moved to the end of `semanticCheck` that specific case STILL moved, because the
-// compile-time narrowing (E3005) is `InsertRangeChecks`, a Std-tier pass. And after the lowering stage two
-// BACKEND diagnostics still followed it: **E5001** (the register allocator out of registers) and **E4015**
-// (the reachability prune) — and the co-occurrence is not hypothetical, since `register-stress.md`'s whole
-// subject is a function stuffed with idle `var`s. Here there is nothing left below.
-//
-// The cost is that a doomed compile pays one codegen pass it will throw away. That is the right trade for a
-// diagnostic whose entire purpose is to be the LAST thing a reader is told.
+// It is called after the band's Std-tier passes, because the compile-time narrowing (E3005) is
+// `InsertRangeChecks`, a Std-tier pass: drained any earlier, `let x = 256 as Byte` in
+// `type-casting.md` (a canonical `/specs` port whose program may not be edited) reports the unused
+// `x` instead of the out-of-range cast it pins. It is called before `buildBackend`, so a
+// hygiene-refused program never pays for register allocation or codegen
+// (`tests/cli/a-hygiene-refusal-stops-before-register-allocation`); a program that would also raise
+// E5001 or E4015 reports its hygiene diagnostic.
 //
 // ⚠ **THE SUPPRESSION IS WHOLE-PROGRAM RATHER THAN PER FUNCTION.** A per-function rule needs a second
 // index from a diagnostic's position back to the body containing it, and every case in the suite that
 // reaches this point has ONE complaint in the whole program — so the finer
 // rule would cost an index to make a distinction nothing observes. It errs toward reporting LESS, which for
 // a hygiene diagnostic is the harmless direction.
-//
-// `checkFrontEndWithoutWriting` calls it with no backend behind it, so an editor can show a hygiene
-// diagnostic where a build stops at E5001 or E4015 instead.
 //
 // ⚠ **THE GATE IS NOT REDUNDANT, THOUGH NOTHING CAN TRIP IT FROM HERE TODAY.** Both callers reach this
 // call only once every stage before it has passed its error gate, so the sink is empty — but that is a

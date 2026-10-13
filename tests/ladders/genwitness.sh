@@ -38,13 +38,14 @@
 # turn the `<methods>` knob under `dispatch` instead. (This also means the two walks can never meet a
 # slot whose callee dead-function elimination removed, which is the invariant their panics assert.)
 #
-# ⚠ **EVERY INTERFACE-METHOD PARAMETER HERE IS A PLAIN `int`, DELIBERATELY.** An indirect call declares
-# every non-float argument an i64 (the Std op carries a per-argument FLOAT mask, not a WIDTH), so a `bool`
-# or an `ExitCode` parameter on an indirectly-reachable callee is refused at compile time by
-# `requireIndirectlyReachableParamsAreMachineWords`. That refusal doubles as the cheapest way to CONFIRM
-# the ladder is reaching the path at all: change one `other int` below to `other bool`, build
-# `--target=wasm32-wasi`, and read the slot the diagnostic names — `__witness_P0.Digest'+48` is one blob
-# per conformer with a slot per method, which is the reloc count this generator claims.
+# ⚠ **EVERY INTERFACE-METHOD PARAMETER HERE IS A FULL-WIDTH `LadderInt`, DELIBERATELY.** An indirect
+# call declares every non-float argument an i64 (the Std op carries a per-argument FLOAT mask, not a
+# WIDTH), so a `bool` or an `ExitCode` parameter on an indirectly-reachable callee is refused at
+# compile time by `requireIndirectlyReachableParamsAreMachineWords`. That refusal doubles as the
+# cheapest way to CONFIRM the ladder is reaching the path at all: change one `other LadderInt` below
+# to `other bool`, build `--target=wasm32-wasi`, and read the slot the diagnostic names —
+# `__witness_P0.Digest'+48` is one blob per conformer with a slot per method, which is the reloc
+# count this generator claims.
 #
 # ⚠ Nothing here calls an opaque `scaleOpaque` the way most ladders do. It does not need one: a witness
 # call is an INDIRECT call through a slot loaded from memory, which no optimizer in the tree can see
@@ -137,12 +138,13 @@ fi
     printf '\tlet p%06d = P%06d.create(1)\n' "$i" "$i"
     printf '\tlet b%06d = B%06d.create(p%06d)\n' "$i" "$i" "$i"
     if [ "$MODE" = "dispatch" ]; then
-      printf '\ttotal = total + b%06d.run()\n' "$i"
+      printf '\ttotal = total +  b%06d.run()\n' "$i"
     else
-      # Byte-matched to the dispatch line — `p000000.x + 0` is exactly as long as `b000000.run()` — so
-      # the control differs from the shape ONLY in where the value comes from, and the two programs are
-      # the same size to the byte at every rung.
-      printf '\ttotal = total + p%06d.x + 0\n' "$i"
+      # Byte-matched to the dispatch line — `b000000.item.x` is exactly as long as ` b000000.run()`,
+      # the dispatch line's extra space included — so the control differs from the shape ONLY in
+      # where the value comes from, and the two programs are the same size to the byte at every
+      # rung.
+      printf '\ttotal = total + b%06d.item.x\n' "$i"
     fi
     i=$(( i + 1 ))
   done

@@ -30,17 +30,16 @@
 #     comparison loop, in `paramFloatMask`'s mask walk and in `widenIntArgsToFloatParams`.
 #
 # ⭐⭐ `<indirect|direct>` IS THE CONTROL AND IT IS THE SAME PROGRAM SHAPE. `direct` emits the
-# identical alias declarations, the identical callee functions, the identical body statements and the
+# identical callee functions, the identical body statements and the
 # identical CALL COUNT — but calls each callee BY NAME instead of through a function value, so the
 # program contains no function reference, no indirect call and no function-type door. Every path this
 # rung touched runs exactly zero times in it while parse, lowering, regalloc and codegen see the same
 # number of calls with the same arguments. Subtracting `direct` from `indirect` is therefore the
 # function-value machinery and nothing else.
 #
-# ⚠ The function typealiases are still DECLARED in `direct` mode, so `resolveFunctionAliasShapes`
-# runs over them in both. That is deliberate: it keeps the declaration cost out of the subtraction,
-# leaving the difference to be the CALL and DOOR paths alone. To price the declaration itself,
-# compare `direct` against a run with `<aliases>` halved.
+# ⚠ `direct` declares NO function typealias: one nothing uses is refused (E3062). So the subtraction
+# carries the declarations too — `resolveFunctionAliasShapes`' loop over them beside the CALL and
+# DOOR paths.
 #
 # ⚠ Alias, callee, wrapper and parameter names are all FIXED-WIDTH (`Op000123`, `f000123`, `a0001`),
 # so a rung's program differs in COUNT and never in how many digits N has — the byte-column artifact
@@ -116,11 +115,12 @@ done
   echo "typealias Integer = int(i64.min to i64.max)"
   echo ""
 
-  # One function TYPEALIAS and one matching declared FUNCTION per unit. Both modes emit both, so the
-  # declaration cost is common and cancels in the subtraction.
+  # One declared FUNCTION per unit, and in `indirect` mode the function TYPEALIAS that matches it.
   i=0
   while [ "$i" -lt "$ALIASES" ]; do
-    printf 'typealias Op%06d = function(%s) returns Integer\n' "$i" "$TYPE_PARAMS"
+    if [ "$MODE" = "indirect" ]; then
+      printf 'typealias Op%06d = function(%s) returns Integer\n' "$i" "$TYPE_PARAMS"
+    fi
     printf 'function f%06d(%s) returns Integer\n' "$i" "$PARAM_DECL"
     printf '\treturn %s\n' "$BODY_SUM"
     printf "end 'f%06d'\n\n" "$i"
@@ -152,7 +152,7 @@ done
       # CONTROL: the same statement count and the same call count, by NAME. No function value exists,
       # so no door is recorded and no indirect call is emitted.
       printf 'function u%06d(g Integer) returns Integer\n' "$i"
-      printf '\tvar acc = 0\n'
+      printf '\tvar acc = g\n'
       s=0
       while [ "$s" -lt "$SITES" ]; do
         printf '\tacc = acc + f%06d(%s)\n' "$i" "$ARG_LIST_LABELLED"

@@ -106,7 +106,7 @@ esac
   while [ "$s" -lt "$SITES" ]; do
     # `src.n` is a FIELD READ — a borrowed aggregate — so each site asks the gate afresh.
     echo -e "\tout.push(Cell.create(src.n))"
-    echo -e "\tacc = acc + scaleOpaque(out.count())"
+    echo -e "\tacc = acc + scaleOpaque(out.count() as Integer)"
     s=$(( s + 1 ))
   done
   printf '\tif out.count() == %d and acc > 0 %s\n' "$SITES" "'ok'"

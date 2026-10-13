@@ -60,18 +60,18 @@ esac
   k=1
   while [ "$k" -le "$DEPTH" ]; do
     prev=$(( k - 1 ))
-    # Only the deepest alias is exported; every earlier one is used by its successor.
-    lead=""
-    if [ "$k" -eq "$DEPTH" ]; then
-      lead="export "
-    fi
     if [ "$MODE" = "doubling" ]; then
-      printf '%stypealias P%d = Pair with (P%d, P%d)\n' "$lead" "$k" "$prev" "$prev"
+      printf 'typealias P%d = Pair with (P%d, P%d)\n' "$k" "$prev" "$prev"
     else
-      printf '%stypealias P%d = Pair with (P%d, Count)\n' "$lead" "$k" "$prev"
+      printf 'typealias P%d = Pair with (P%d, Count)\n' "$k" "$prev"
     fi
     k=$(( k + 1 ))
   done
+  echo ""
+
+  echo "function deepest(t P${DEPTH}) returns P${DEPTH}"
+  echo -e "\treturn t"
+  echo "end 'deepest'"
   echo ""
 
   echo "function main() returns ExitCode"

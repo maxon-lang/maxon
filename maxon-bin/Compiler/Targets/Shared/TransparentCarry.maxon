@@ -1,0 +1,113 @@
+// The census of the values live straight through each block, carried across a whole-function sweep
+// that visits every block once in ascending order: a run enters the census at its first block and
+// leaves after its last, so it costs two edits rather than one per block it covers. A block's sweep
+// adds only its explicit values on top (`seedSweepRow`) and takes them back out (`finishSweepRow`).
+export type TransparentCarry
+	var track as bool
+	var next as ElementIndex
+	var startOffsets as CfgIndexArray
+	var startCursor as CfgIndexArray
+	var startValues as ValueIdArray
+	var endOffsets as CfgIndexArray
+	var endCursor as CfgIndexArray
+	var endValues as ValueIdArray
+
+	export static function create() returns TransparentCarry
+		return Self{track: false, next: 0, startOffsets: CfgIndexArray.create(), startCursor: CfgIndexArray.create(), startValues: ValueIdArray.create(), endOffsets: CfgIndexArray.create(), endCursor: CfgIndexArray.create(), endValues: ValueIdArray.create()}
+	end 'create'
+
+	export function begin(liveness LivenessResult, census RegPoolCensus, pool RegMask, carrying bool)
+		self.track = carrying
+		self.next = 0
+
+		if not carrying 'nothingToCarry'
+			return
+		end 'nothingToCarry'
+
+		let numBlocks = liveness.cfg.topo.numBlocks
+		census.reset(pool, file: liveness.registerFile)
+		self.startOffsets.refill(numBlocks + 1, value: 0)
+		self.endOffsets.refill(numBlocks + 1, value: 0)
+
+		for v in 0 upto liveness.valueCount 'countEvents'
+			var run = liveness.live.runs.firstRunOf(v)
+
+			while run != 0 'eachRunOfCount'
+				self.bump(self.startOffsets, at: liveness.live.runs.loOf(run))
+
+				if liveness.live.runs.hiOf(run) + 1 < numBlocks 'endsInsideTheFunction'
+					self.bump(self.endOffsets, at: liveness.live.runs.hiOf(run) + 1)
+				end 'endsInsideTheFunction'
+
+				run = liveness.live.runs.nextRunOf(run)
+			end 'eachRunOfCount'
+		end 'countEvents'
+
+		let startTotal = self.prefixSum(self.startOffsets, cursor: self.startCursor)
+		let endTotal = self.prefixSum(self.endOffsets, cursor: self.endCursor)
+		self.startValues.refill(startTotal, value: 0)
+		self.endValues.refill(endTotal, value: 0)
+
+		for v in 0 upto liveness.valueCount 'placeEvents'
+			var run = liveness.live.runs.firstRunOf(v)
+
+			while run != 0 'eachRunOfPlace'
+				self.place(self.startValues, cursor: self.startCursor, at: liveness.live.runs.loOf(run), v: v)
+
+				if liveness.live.runs.hiOf(run) + 1 < numBlocks 'endsInsideTheFunction'
+					self.place(self.endValues, cursor: self.endCursor, at: liveness.live.runs.hiOf(run) + 1, v: v)
+				end 'endsInsideTheFunction'
+
+				run = liveness.live.runs.nextRunOf(run)
+			end 'eachRunOfPlace'
+		end 'placeEvents'
+	end 'begin'
+
+	export function advanceTo(blockLocal ElementIndex, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn)
+		if blockLocal != self.next 'outOfOrder'
+			panic("TransparentCarry.advanceTo: block {blockLocal} asked for when block {self.next} is next — the carried census is only valid when every block is visited once, in ascending order")
+		end 'outOfOrder'
+
+		self.next = blockLocal + 1
+
+		if not self.track 'nothingCarried'
+			return
+		end 'nothingCarried'
+
+		for k in (try self.endOffsets.get(blockLocal) otherwise panic("TransparentCarry.advanceTo: endOffsets.get OOB at {blockLocal}")) upto (try self.endOffsets.get(blockLocal + 1) otherwise panic("TransparentCarry.advanceTo: endOffsets.get OOB at {blockLocal + 1}")) 'eachRunThatEnds'
+			let v = try self.endValues.get(k) otherwise panic("TransparentCarry.advanceTo: endValues.get OOB at {k}")
+			census.remove(try effPoolSizes.get(v) otherwise panic("TransparentCarry.advanceTo: value {v} is outside the function's value space"), class: try classes.get(v) otherwise panic("TransparentCarry.advanceTo: value {v} has no recorded register class"))
+		end 'eachRunThatEnds'
+
+		for k in (try self.startOffsets.get(blockLocal) otherwise panic("TransparentCarry.advanceTo: startOffsets.get OOB at {blockLocal}")) upto (try self.startOffsets.get(blockLocal + 1) otherwise panic("TransparentCarry.advanceTo: startOffsets.get OOB at {blockLocal + 1}")) 'eachRunThatStarts'
+			let v = try self.startValues.get(k) otherwise panic("TransparentCarry.advanceTo: startValues.get OOB at {k}")
+			census.add(try effPoolSizes.get(v) otherwise panic("TransparentCarry.advanceTo: value {v} is outside the function's value space"), class: try classes.get(v) otherwise panic("TransparentCarry.advanceTo: value {v} has no recorded register class"))
+		end 'eachRunThatStarts'
+	end 'advanceTo'
+
+	function bump(offsets CfgIndexArray, at ElementIndex)
+		try offsets.set(at + 1, value: (try offsets.get(at + 1) otherwise panic("TransparentCarry.bump: offsets.get OOB at {at + 1}")) + 1) otherwise panic("TransparentCarry.bump: offsets.set OOB at {at + 1}")
+	end 'bump'
+
+	function prefixSum(offsets CfgIndexArray, cursor CfgIndexArray) returns ElementIndex
+		cursor.refill(offsets.count(), value: 0)
+		var total = 0 as ElementIndex
+
+		for b in 0 upto offsets.count() 'eachBucket'
+			total = total + (try offsets.get(b) otherwise panic("TransparentCarry.prefixSum: offsets.get OOB at {b}"))
+			try offsets.set(b, value: total) otherwise panic("TransparentCarry.prefixSum: offsets.set OOB at {b}")
+		end 'eachBucket'
+
+		for b in 0 upto offsets.count() - 1 'eachStart'
+			try cursor.set(b, value: try offsets.get(b) otherwise panic("TransparentCarry.prefixSum: offsets.get OOB at {b}")) otherwise panic("TransparentCarry.prefixSum: cursor.set OOB at {b}")
+		end 'eachStart'
+
+		return total
+	end 'prefixSum'
+
+	function place(values ValueIdArray, cursor CfgIndexArray, at ElementIndex, v ValueId)
+		let slot = try cursor.get(at) otherwise panic("TransparentCarry.place: cursor.get OOB at {at}")
+		try values.set(slot, value: v) otherwise panic("TransparentCarry.place: values.set OOB at {slot}")
+		try cursor.set(at, value: slot + 1) otherwise panic("TransparentCarry.place: cursor.set OOB at {at}")
+	end 'place'
+end 'TransparentCarry'

@@ -814,7 +814,7 @@ index 7447898..255deaa 100644
  
  		for _ in CompilePhase.allCases 'eachPhase'
 diff --git a/maxon-bin/Compiler/Compiler.maxon b/maxon-bin/Compiler/Compiler.maxon
-index a360c51..a23e60b 100644
+index 1edf1a1..da74e20 100644
 --- a/maxon-bin/Compiler/Compiler.maxon
 +++ b/maxon-bin/Compiler/Compiler.maxon
 @@ -1816,7 +1816,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
@@ -837,9 +837,9 @@ index a360c51..a23e60b 100644
 -	runStdPassesOverTheBand(project, module: pipeline.stdModule, members: buildEmittedBandPasses(), firstFuncIndex: firstEmittedFuncIndex)
 +	runStdPassesOverTheBand(project, module: pipeline.stdModule, members: buildEmittedBandPasses(), firstFuncIndex: (firstEmittedFuncIndex as ElementIndex))
  
- 	// The backend owns its own error gate, and TWO of its stages use it: the register allocator
- 	// reports E5001 (register pressure) onto `project.diagnostics` and throws when a loop genuinely
-@@ -1846,7 +1846,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
+ 	// The declaration-hygiene drain (E3012 unused, E3077 var-should-be-let) sits between the Std-tier
+ 	// passes and the backend. See `reportBindingHygieneDiagnostics`.
+@@ -1850,7 +1850,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
  	// them apart, and at its root set, for the half of that rule with no pair to count. Passing
  	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it
  	// maps a Target ValueId back to its source span through.
@@ -848,7 +848,7 @@ index a360c51..a23e60b 100644
  		try refuseCompile(project)
  	end 'backendFailed'
  
-@@ -2356,7 +2356,7 @@ end 'testSourceNameFor'
+@@ -2347,7 +2347,7 @@ end 'testSourceNameFor'
  
  function nameWithoutSuffix(name String, suffix String) returns String
  	let bytes = name.toByteArray()
@@ -857,7 +857,7 @@ index a360c51..a23e60b 100644
  
  	return String.from(stem)
  end 'nameWithoutSuffix'
-@@ -2442,7 +2442,7 @@ end 'StagedSourceOrigin'
+@@ -2433,7 +2433,7 @@ end 'StagedSourceOrigin'
  export typealias StagedSourceOriginArray = Array with StagedSourceOrigin
  
  typealias ReportedPathMap = Map with (FilePath, FilePath)
@@ -2879,7 +2879,7 @@ index 3c9ebc6..8ed9eaa 100644
  		end 'popMember'
  	end 'closeComponent'
 diff --git a/maxon-bin/Compiler/IR/IrBlock.maxon b/maxon-bin/Compiler/IR/IrBlock.maxon
-index 68ee92d..1ae13fb 100644
+index ee7fb0c..2e0561f 100644
 --- a/maxon-bin/Compiler/IR/IrBlock.maxon
 +++ b/maxon-bin/Compiler/IR/IrBlock.maxon
 @@ -165,7 +165,7 @@ end 'cacheWriteIrBlockArgArray'
@@ -2936,7 +2936,16 @@ index 68ee92d..1ae13fb 100644
  		panic("insertOpRef: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={block.opRefs.count()})")
  	end 'oob'
  
-@@ -911,27 +911,27 @@ export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs Op
+@@ -938,7 +938,7 @@ export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs Op
+ 	let oldCount = block.opRefs.count()
+ 
+ 	if pending <= SpliceByShiftLimit 'fewEnoughToShift'
+-		insertBatchByShifting(block, positions: positions, opIdxs: opIdxs, from: from, to: to, oldCount: oldCount)
++		insertBatchByShifting(block, positions: positions, opIdxs: opIdxs, from: from, to: to, oldCount: (oldCount as ElementIndex))
+ 		return
+ 	end 'fewEnoughToShift'
+ 
+@@ -951,19 +951,19 @@ export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs Op
  	// documents that trap). Geometric growth makes the same sequence amortized linear. The zeros it
  	// writes into the added tail are all overwritten by the pass below; that fill is the price of using
  	// the one extension operation rather than a second one.
@@ -2949,17 +2958,8 @@ index 68ee92d..1ae13fb 100644
  	var k = to
  
  	while k > from 'eachPendingSplice'
- 		let at = try positions.get(k - 1) otherwise panic("spliceOpRefs: positions.get OOB at {k - 1}")
- 
--		if at > oldCount 'pastTheEnd'
-+		if at > (oldCount as ElementIndex) 'pastTheEnd'
- 			panic("spliceOpRefs: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={oldCount})")
- 		end 'pastTheEnd'
- 
--		if at > read 'outOfOrder'
-+		if at > (read as ElementIndex) 'outOfOrder'
- 			panic("spliceOpRefs: entry {k - 1} of this batch asks for position {at} of block '{String.from(block.label)}', but the entry after it already claimed position {read} or lower — a batch must be ASCENDING by position, because it is materialized in ONE backward pass")
- 		end 'outOfOrder'
+-		let at = batchPositionAt(block, positions: positions, k: k, oldCount: oldCount, ceiling: read)
++		let at = batchPositionAt(block, positions: positions, k: k, oldCount: (oldCount as ElementIndex), ceiling: (read as ElementIndex))
  
 -		while read > at 'shiftTail'
 +		while (read as ElementIndex) > at 'shiftTail'
@@ -8392,7 +8392,7 @@ index a308020..7c456de 100644
  end 'NameTable'
  
 diff --git a/maxon-bin/Compiler/ParseStaging.maxon b/maxon-bin/Compiler/ParseStaging.maxon
-index 0093e1b..c5cf8f5 100644
+index d83ca07..3846495 100644
 --- a/maxon-bin/Compiler/ParseStaging.maxon
 +++ b/maxon-bin/Compiler/ParseStaging.maxon
 @@ -280,7 +280,7 @@ end 'cacheWriteFuncSignatureEntryArray'
@@ -11930,7 +11930,7 @@ index ee34cef..22f7e38 100644
  
  function ambiguousTypeNameRefusal(name ByteArray, candidates StringArray, ownDeclarationUnqualifiable bool, anchor Token) returns SourceParseError
 diff --git a/maxon-bin/Compiler/Project.maxon b/maxon-bin/Compiler/Project.maxon
-index 1a699ff..f11e383 100644
+index 700a890..54b5a07 100644
 --- a/maxon-bin/Compiler/Project.maxon
 +++ b/maxon-bin/Compiler/Project.maxon
 @@ -16,7 +16,7 @@ end 'cacheWriteBoolArray'
@@ -17916,6 +17916,59 @@ index 1ae433c..b304710 100644
  	return CondBranch.opIndex(condOpIndex) if condOpIndex == lastBodyOp else CondBranch.none
  end 'invertibleCondBranchIn'
  
+diff --git a/maxon-bin/Compiler/Targets/Shared/ClobberEvents.maxon b/maxon-bin/Compiler/Targets/Shared/ClobberEvents.maxon
+index 4ec41a1..f26fcb4 100644
+--- a/maxon-bin/Compiler/Targets/Shared/ClobberEvents.maxon
++++ b/maxon-bin/Compiler/Targets/Shared/ClobberEvents.maxon
+@@ -16,7 +16,7 @@ export type ClobberEvents
+ 	end 'create'
+ 
+ 	export function widen(valueCount ValueId)
+-		self.entry.growFilled(valueCount, value: 0)
++		self.entry.growFilled((valueCount as ElementIndex), value: 0)
+ 	end 'widen'
+ 
+ 	export function beginBlock()
+@@ -28,7 +28,7 @@ export type ClobberEvents
+ 
+ 		while remaining != 0 'eachRegister'
+ 			let regNum = regMaskLowest(remaining)
+-			try self.seenAt.set(regNum, value: pos) otherwise panic("ClobberEvents.record: seenAt.set OOB at register {regNum}")
++			try self.seenAt.set((regNum as ElementIndex), value: pos) otherwise panic("ClobberEvents.record: seenAt.set OOB at register {regNum}")
+ 			remaining = regMaskRemove(remaining, regNum: regNum)
+ 		end 'eachRegister'
+ 
+@@ -36,18 +36,18 @@ export type ClobberEvents
+ 	end 'record'
+ 
+ 	export function enter(v ValueId, pos ElementIndex)
+-		try self.entry.set(v, value: pos) otherwise panic("ClobberEvents.enter: entry.set OOB for value {v}")
++		try self.entry.set((v as ElementIndex), value: pos) otherwise panic("ClobberEvents.enter: entry.set OOB for value {v}")
+ 	end 'enter'
+ 
+ 	export function finalize(v ValueId, forbidden RegMaskColumn)
+-		let entryPos = try self.entry.get(v) otherwise panic("ClobberEvents.finalize: entry.get OOB for value {v}")
++		let entryPos = try self.entry.get((v as ElementIndex)) otherwise panic("ClobberEvents.finalize: entry.get OOB for value {v}")
+ 		var remaining = self.seenMask
+ 		var crossed = 0 as RegMask
+ 
+ 		while remaining != 0 'eachSeenRegister'
+ 			let regNum = regMaskLowest(remaining)
+ 
+-			if (try self.seenAt.get(regNum) otherwise panic("ClobberEvents.finalize: seenAt.get OOB at register {regNum}")) < entryPos 'insideTheWindow'
++			if (try self.seenAt.get((regNum as ElementIndex)) otherwise panic("ClobberEvents.finalize: seenAt.get OOB at register {regNum}")) < entryPos 'insideTheWindow'
+ 				crossed = regMaskAdd(crossed, regNum: regNum)
+ 			end 'insideTheWindow'
+ 
+@@ -55,7 +55,7 @@ export type ClobberEvents
+ 		end 'eachSeenRegister'
+ 
+ 		if crossed != 0 'somethingCrossed'
+-			try forbidden.set(v, value: (try forbidden.get(v) otherwise panic("ClobberEvents.finalize: forbidden.get OOB for value {v}")) or crossed) otherwise panic("ClobberEvents.finalize: forbidden.set OOB for value {v}")
++			try forbidden.set((v as ElementIndex), value: (try forbidden.get((v as ElementIndex)) otherwise panic("ClobberEvents.finalize: forbidden.get OOB for value {v}")) or crossed) otherwise panic("ClobberEvents.finalize: forbidden.set OOB for value {v}")
+ 		end 'somethingCrossed'
+ 	end 'finalize'
+ end 'ClobberEvents'
 diff --git a/maxon-bin/Compiler/Targets/Shared/CodeResult.maxon b/maxon-bin/Compiler/Targets/Shared/CodeResult.maxon
 index 8124ad0..db66b7d 100644
 --- a/maxon-bin/Compiler/Targets/Shared/CodeResult.maxon
@@ -17976,6 +18029,59 @@ index 8124ad0..db66b7d 100644
  
  	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, stdModule StdModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray) returns CodeResult
  		return Self{
+diff --git a/maxon-bin/Compiler/Targets/Shared/DomSkip.maxon b/maxon-bin/Compiler/Targets/Shared/DomSkip.maxon
+index d5563e8..76f8137 100644
+--- a/maxon-bin/Compiler/Targets/Shared/DomSkip.maxon
++++ b/maxon-bin/Compiler/Targets/Shared/DomSkip.maxon
+@@ -46,8 +46,8 @@ export type DomSkip
+ 				for k in 0 upto deg 'firstForwardPred'
+ 					let p = topo.pred.neighbour(b as CsrIndex, k: k)
+ 
+-					if not haveForward and p < b and (try processed.get(p) otherwise panic("DomSkip.build: processed.get OOB")) 'aForwardPred'
+-						candidate = p
++					if not haveForward and p < b and (try processed.get((p as ElementIndex)) otherwise panic("DomSkip.build: processed.get OOB")) 'aForwardPred'
++						candidate = (p as ElementIndex)
+ 						haveForward = true
+ 					end 'aForwardPred'
+ 				end 'firstForwardPred'
+@@ -59,8 +59,8 @@ export type DomSkip
+ 				for k in 0 upto deg 'eachPred'
+ 					let p = topo.pred.neighbour(b as CsrIndex, k: k)
+ 
+-					if p != candidate and (try processed.get(p) otherwise panic("DomSkip.build: processed.get OOB")) 'aProcessedPred'
+-						candidate = intersectDominators(idom, a: p, b: candidate)
++					if (p as ElementIndex) != candidate and (try processed.get((p as ElementIndex)) otherwise panic("DomSkip.build: processed.get OOB")) 'aProcessedPred'
++						candidate = intersectDominators(idom, a: (p as ElementIndex), b: candidate)
+ 					end 'aProcessedPred'
+ 				end 'eachPred'
+ 
+@@ -153,7 +153,7 @@ function intervalIsClean(topo FuncTopology, reach CfgIndexArray, a ElementIndex,
+ 	let ownDeg = topo.pred.degree(b as CsrIndex)
+ 
+ 	for k in 0 upto ownDeg 'eachOwnPred'
+-		if topo.pred.neighbour(b as CsrIndex, k: k) >= b 'aRetreatingEdge'
++		if (topo.pred.neighbour(b as CsrIndex, k: k) as ElementIndex) >= b 'aRetreatingEdge'
+ 			return false
+ 		end 'aRetreatingEdge'
+ 	end 'eachOwnPred'
+@@ -169,7 +169,7 @@ function intervalIsClean(topo FuncTopology, reach CfgIndexArray, a ElementIndex,
+ 		for k in 0 upto predDeg 'eachPred'
+ 			let q = topo.pred.neighbour(y as CsrIndex, k: k)
+ 
+-			if q < a or q >= b 'leavesTheInterval'
++			if (q as ElementIndex) < a or (q as ElementIndex) >= b 'leavesTheInterval'
+ 				return false
+ 			end 'leavesTheInterval'
+ 		end 'eachPred'
+@@ -180,7 +180,7 @@ function intervalIsClean(topo FuncTopology, reach CfgIndexArray, a ElementIndex,
+ 		for k in 0 upto succDeg 'eachSucc'
+ 			let s = topo.succ.neighbour(y as CsrIndex, k: k)
+ 
+-			if s > y and s <= b and (try reach.get(s) otherwise panic("intervalIsClean: reach.get OOB")) == mark 'reachesB'
++			if (s as ElementIndex) > y and (s as ElementIndex) <= b and (try reach.get((s as ElementIndex)) otherwise panic("intervalIsClean: reach.get OOB")) == mark 'reachesB'
+ 				reaches = true
+ 			end 'reachesB'
+ 		end 'eachSucc'
 diff --git a/maxon-bin/Compiler/Targets/Shared/GlobalDataTable.maxon b/maxon-bin/Compiler/Targets/Shared/GlobalDataTable.maxon
 index 4d22fe5..d436695 100644
 --- a/maxon-bin/Compiler/Targets/Shared/GlobalDataTable.maxon
@@ -18171,6 +18277,118 @@ index 51016ec..6279181 100644
  		let u = try queue.get(head) otherwise panic("tightRegisterSet: queue.get OOB at {head}")
  		head = head + 1
  
+diff --git a/maxon-bin/Compiler/Targets/Shared/LiveCover.maxon b/maxon-bin/Compiler/Targets/Shared/LiveCover.maxon
+index cc1ade5..7fb831c 100644
+--- a/maxon-bin/Compiler/Targets/Shared/LiveCover.maxon
++++ b/maxon-bin/Compiler/Targets/Shared/LiveCover.maxon
+@@ -20,7 +20,7 @@ export type LiveCover
+ 	end 'create'
+ 
+ 	export function begin(numBlocks ElementIndex)
+-		self.leafBase = roundUpToPowerOfTwo(numBlocks as BytePos)
++		self.leafBase = (roundUpToPowerOfTwo(numBlocks as BytePos) as ElementIndex)
+ 		self.cells.refill(self.leafBase * 2 * RegClassCount, value: 0)
+ 		self.armed = false
+ 	end 'begin'
+@@ -143,7 +143,7 @@ type DemandTree
+ 	end 'create'
+ 
+ 	function begin(numBlocks ElementIndex)
+-		self.leafBase = roundUpToPowerOfTwo(numBlocks as BytePos)
++		self.leafBase = (roundUpToPowerOfTwo(numBlocks as BytePos) as ElementIndex)
+ 		self.maxv.refill(self.leafBase + self.leafBase, value: 0)
+ 		self.present.refill(self.leafBase + self.leafBase, value: false)
+ 		self.lazy.refill(self.leafBase + self.leafBase, value: 0)
+@@ -204,7 +204,7 @@ type DemandTree
+ 		end 'collect'
+ 
+ 		for ri in 0 upto self.path.count() 'topDown'
+-			self.pushDown(try self.path.get(self.path.count() - 1 - ri) otherwise panic("DemandTree.pushPath: path.get OOB"))
++			self.pushDown(try self.path.get(((self.path.count() - 1 - ri) as ElementIndex)) otherwise panic("DemandTree.pushPath: path.get OOB"))
+ 		end 'topDown'
+ 	end 'pushPath'
+ 
+@@ -285,7 +285,7 @@ export type BlockClobbers
+ 	end 'create'
+ 
+ 	export function begin(numBlocks ElementIndex)
+-		self.leafBase = roundUpToPowerOfTwo(numBlocks as BytePos)
++		self.leafBase = (roundUpToPowerOfTwo(numBlocks as BytePos) as ElementIndex)
+ 		self.tree.refill(self.leafBase + self.leafBase, value: 0)
+ 	end 'begin'
+ 
+diff --git a/maxon-bin/Compiler/Targets/Shared/LiveRuns.maxon b/maxon-bin/Compiler/Targets/Shared/LiveRuns.maxon
+index 2505b62..ed3b57c 100644
+--- a/maxon-bin/Compiler/Targets/Shared/LiveRuns.maxon
++++ b/maxon-bin/Compiler/Targets/Shared/LiveRuns.maxon
+@@ -25,7 +25,7 @@ export type LiveRuns
+ 	end 'create'
+ 
+ 	export function begin(numBlocks ElementIndex, valueCount ValueId)
+-		self.leafBase = roundUpToPowerOfTwo(numBlocks as BytePos)
++		self.leafBase = (roundUpToPowerOfTwo(numBlocks as BytePos) as ElementIndex)
+ 		self.nodeHead.refill(self.leafBase + self.leafBase, value: 0)
+ 		self.runValue.clear()
+ 		self.runLo.clear()
+@@ -39,15 +39,15 @@ export type LiveRuns
+ 		self.entryNextOfRun.clear()
+ 		self.entryNode.clear()
+ 		self.freeEntries.clear()
+-		self.firstRunOfValue.refill(valueCount, value: 0)
++		self.firstRunOfValue.refill((valueCount as ElementIndex), value: 0)
+ 	end 'begin'
+ 
+ 	export function growValues(valueCount ValueId)
+-		self.firstRunOfValue.growFilled(valueCount, value: 0)
++		self.firstRunOfValue.growFilled((valueCount as ElementIndex), value: 0)
+ 	end 'growValues'
+ 
+ 	export function firstRunOf(v ValueId) returns ElementIndex
+-		return try self.firstRunOfValue.get(v) otherwise panic("LiveRuns.firstRunOf: firstRunOfValue.get OOB for value {v}")
++		return try self.firstRunOfValue.get((v as ElementIndex)) otherwise panic("LiveRuns.firstRunOf: firstRunOfValue.get OOB for value {v}")
+ 	end 'firstRunOf'
+ 
+ 	export function nextRunOf(run ElementIndex) returns ElementIndex
+@@ -106,7 +106,7 @@ export type LiveRuns
+ 			try self.runHi.set(run, value: hi) otherwise panic("LiveRuns.addRun: runHi.set OOB at {run}")
+ 			try self.runFirstEntry.set(run, value: 0) otherwise panic("LiveRuns.addRun: runFirstEntry.set OOB at {run}")
+ 		end 'reuse' else 'fresh'
+-			run = self.runValue.count()
++			run = (self.runValue.count() as ElementIndex)
+ 			self.runValue.push(v)
+ 			self.runLo.push(lo)
+ 			self.runHi.push(hi)
+@@ -114,8 +114,8 @@ export type LiveRuns
+ 			self.runFirstEntry.push(0)
+ 		end 'fresh'
+ 
+-		try self.runNextOfValue.set(run, value: try self.firstRunOfValue.get(v) otherwise panic("LiveRuns.addRun: firstRunOfValue.get OOB for value {v}")) otherwise panic("LiveRuns.addRun: runNextOfValue.set OOB at {run}")
+-		try self.firstRunOfValue.set(v, value: run + 1) otherwise panic("LiveRuns.addRun: firstRunOfValue.set OOB for value {v}")
++		try self.runNextOfValue.set(run, value: try self.firstRunOfValue.get((v as ElementIndex)) otherwise panic("LiveRuns.addRun: firstRunOfValue.get OOB for value {v}")) otherwise panic("LiveRuns.addRun: runNextOfValue.set OOB at {run}")
++		try self.firstRunOfValue.set((v as ElementIndex), value: run + 1) otherwise panic("LiveRuns.addRun: firstRunOfValue.set OOB for value {v}")
+ 
+ 		var covering = self.nodes
+ 		collectCoveringNodes(self.leafBase, lo: lo, hi: hi, out: covering)
+@@ -134,7 +134,7 @@ export type LiveRuns
+ 			try self.entryRun.set(entry, value: run) otherwise panic("LiveRuns.addEntry: entryRun.set OOB at {entry}")
+ 			try self.entryNode.set(entry, value: node) otherwise panic("LiveRuns.addEntry: entryNode.set OOB at {entry}")
+ 		end 'reuse' else 'fresh'
+-			entry = self.entryRun.count()
++			entry = (self.entryRun.count() as ElementIndex)
+ 			self.entryRun.push(run)
+ 			self.entryNode.push(node)
+ 			self.entryNextAtNode.push(0)
+@@ -174,8 +174,8 @@ export type LiveRuns
+ 			run = next
+ 		end 'eachRun'
+ 
+-		if v < self.firstRunOfValue.count() 'hadASlot'
+-			try self.firstRunOfValue.set(v, value: 0) otherwise panic("LiveRuns.removeValue: firstRunOfValue.set OOB for value {v}")
++		if (v as ElementIndex) < (self.firstRunOfValue.count() as ElementIndex) 'hadASlot'
++			try self.firstRunOfValue.set((v as ElementIndex), value: 0) otherwise panic("LiveRuns.removeValue: firstRunOfValue.set OOB for value {v}")
+ 		end 'hadASlot'
+ 	end 'removeValue'
+ 
 diff --git a/maxon-bin/Compiler/Targets/Shared/ParallelCopy.maxon b/maxon-bin/Compiler/Targets/Shared/ParallelCopy.maxon
 index ff1ce9a..629dd04 100644
 --- a/maxon-bin/Compiler/Targets/Shared/ParallelCopy.maxon
@@ -18258,7 +18476,7 @@ index df7747f..befe55d 100644
  // The FIRST XMM's register number in the X64 file — its GPR/XMM boundary, and the bit that
  // classifies one x64 register. Named because `regClassOf` and `x64RegisterFile` would otherwise
 diff --git a/maxon-bin/Compiler/Targets/Shared/RegisterAllocator.maxon b/maxon-bin/Compiler/Targets/Shared/RegisterAllocator.maxon
-index afdd08c..b0dfa88 100644
+index b384cf6..db0ef0b 100644
 --- a/maxon-bin/Compiler/Targets/Shared/RegisterAllocator.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/RegisterAllocator.maxon
 @@ -87,7 +87,7 @@ export type Allocation
@@ -18451,9 +18669,9 @@ index afdd08c..b0dfa88 100644
 +	var startOrd = DebugAnchorColumn.absent((roster.valueIds.count() as ElementIndex))
 +	var endOrd = DebugAnchorColumn.absent((roster.valueIds.count() as ElementIndex))
  	var active = DebugNamedSlotColumn.create()
+ 	var members = ValueIdArray.create()
  
- 	for (place, local) in localOfPlace.withIterator() 'eachBlocksRuns'
-@@ -1425,12 +1425,12 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness
+@@ -1430,12 +1430,12 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness
  		var opening = 0 as ElementIndex
  
  		for slot in active 'eachRun'
@@ -18471,7 +18689,7 @@ index afdd08c..b0dfa88 100644
  		end 'eachRun'
  	end 'eachBlocksRuns'
  end 'harvestDebugValueRanges'
-@@ -1460,7 +1460,7 @@ type DebugNameIndex
+@@ -1465,7 +1465,7 @@ type DebugNameIndex
  		for site in 0 upto bySite.nodeCount() 'eachSite'
  			for k in 0 upto bySite.degree(site) 'eachNameOfTheSite'
  				let name = bySite.neighbour(site, k: k)
@@ -18480,7 +18698,7 @@ index afdd08c..b0dfa88 100644
  				siteOrdered.push(name)
  			end 'eachNameOfTheSite'
  		end 'eachSite'
-@@ -1511,7 +1511,7 @@ type DebugNameIndex
+@@ -1516,7 +1516,7 @@ type DebugNameIndex
  	end 'collectNamesAt'
  
  	function siteKeyOf(name CsrIndex) returns DebugSiteKey
@@ -18489,7 +18707,7 @@ index afdd08c..b0dfa88 100644
  	end 'siteKeyOf'
  end 'DebugNameIndex'
  
-@@ -1544,16 +1544,16 @@ function openNamedRuns(active DebugNamedSlotColumn, startOrd DebugAnchorColumn,
+@@ -1549,16 +1549,16 @@ function openNamedRuns(active DebugNamedSlotColumn, startOrd DebugAnchorColumn,
  end 'openNamedRuns'
  
  function openDebugRun(active DebugNamedSlotColumn, startOrd DebugAnchorColumn, endOrd DebugAnchorColumn, slot DebugNamedSlot, at DebugOpAnchor)
@@ -18511,7 +18729,7 @@ index afdd08c..b0dfa88 100644
  	end 'widens'
  end 'openDebugRun'
  
-@@ -1594,12 +1594,12 @@ end 'noteOpTouches'
+@@ -1599,12 +1599,12 @@ end 'noteOpTouches'
  
  function notePhiDefTouches(touches DebugTouches, names DebugNameIndex, value ValueId, placeOfLocal DebugPlaceColumn, local ElementIndex, blockFirst DebugAnchorColumn, siteKeyOfPlace DebugSiteKeyColumn, scratch DebugNamedSlotColumn)
  	let place = try placeOfLocal.get(local) otherwise return
@@ -18526,7 +18744,7 @@ index afdd08c..b0dfa88 100644
  
  	for slot in scratch 'eachApplicable'
  		touches.note(slot, anchor: ordinal)
-@@ -1673,7 +1673,7 @@ type StuckValues
+@@ -1678,7 +1678,7 @@ type StuckValues
  			end 'heldByAnOccupant'
  		end 'eachAllowedRegister'
  
@@ -18535,7 +18753,7 @@ index afdd08c..b0dfa88 100644
  	end 'record'
  
  	function count() returns Count
-@@ -1875,12 +1875,12 @@ type ColorHints
+@@ -1880,12 +1880,12 @@ type ColorHints
  	export var copyHint as CopyPartnerColumn
  
  	static function create(valueCount ValueId) returns ColorHints
@@ -18551,7 +18769,7 @@ index afdd08c..b0dfa88 100644
  		end 'unset'
  	end 'setFixedIfUnset'
  
-@@ -1889,25 +1889,25 @@ type ColorHints
+@@ -1894,25 +1894,25 @@ type ColorHints
  			return
  		end 'selfPartner'
  
@@ -18583,7 +18801,7 @@ index afdd08c..b0dfa88 100644
  	end 'hasCopy'
  end 'ColorHints'
  
-@@ -2895,7 +2895,7 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness
+@@ -2900,7 +2900,7 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness
  
  	for ri in 0 upto n 'eachOpRev'
  		let pos = n - 1 - ri
@@ -18593,10 +18811,10 @@ index afdd08c..b0dfa88 100644
  		targetOpOperands(op, buf: buf)
  
 diff --git a/maxon-bin/Compiler/Targets/Shared/SplitLiveRanges.maxon b/maxon-bin/Compiler/Targets/Shared/SplitLiveRanges.maxon
-index f28a3ac..2ab1611 100644
+index a74dd5a..db67a90 100644
 --- a/maxon-bin/Compiler/Targets/Shared/SplitLiveRanges.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/SplitLiveRanges.maxon
-@@ -185,7 +185,7 @@
+@@ -186,7 +186,7 @@
  // have, so there are at most `numBlocks` of them.
  // It shares the CFG's dense numbering space but is NOT a block index: row 3 is "the walk for the
  // third def block we met", not "block 3".
@@ -18605,7 +18823,7 @@ index f28a3ac..2ab1611 100644
  typealias ReachRowColumn = Array with ReachRow
  
  // The stamp of one peak the cache was aimed at: a row slot or a `rowOf` entry is live under the current
-@@ -623,8 +623,8 @@ export type SplitEdits
+@@ -621,8 +621,8 @@ export type SplitEdits
  		let recorded = self.blocks.count()
  
  		if recorded > 0 'notTheFirst'
@@ -18616,7 +18834,7 @@ index f28a3ac..2ab1611 100644
  
  			if blockLocal < lastBlock or (blockLocal == lastBlock and pos < lastPos) 'outOfOrder'
  				panic("SplitEdits.recordInsert: a splice at block {blockLocal} position {pos} follows one at block {lastBlock} position {lastPos} — one split's insertions must be recorded in ASCENDING (block, position) order, which SSA guarantees (the store anchors at the def, which dominates every use; the reloads follow the use thread, which is ascending by sequence). Materializing them takes one backward pass per block, so an out-of-order entry would land in the wrong slot")
-@@ -661,11 +661,11 @@ export type SplitEdits
+@@ -658,11 +658,11 @@ export type SplitEdits
  		var removalPending = self.hasRemoval
  		var k = 0 as ElementIndex
  
@@ -18630,7 +18848,16 @@ index f28a3ac..2ab1611 100644
  				runEnd = runEnd + 1
  			end 'sameBlock'
  
-@@ -852,7 +852,7 @@ type PeakTree
+@@ -740,7 +740,7 @@ export type SplitEdits
+ 		while lo < hi 'narrow'
+ 			let mid = lo + (hi - lo) / 2
+ 
+-			if (try self.blocks.get(mid) otherwise panic("SplitEdits.firstEntryOf: blocks.get OOB at {mid}")) < blockLocal 'before'
++			if (try self.blocks.get((mid as ElementIndex)) otherwise panic("SplitEdits.firstEntryOf: blocks.get OOB at {mid}")) < blockLocal 'before'
+ 				lo = mid + 1
+ 			end 'before' else 'atOrAfter'
+ 				hi = mid
+@@ -850,7 +850,7 @@ type PeakTree
  	function reset(blockCount ElementIndex)
  		self.numBlocks = blockCount
  		let base = roundUpToPowerOfTwo(blockCount as BytePos)
@@ -18639,7 +18866,7 @@ index f28a3ac..2ab1611 100644
  
  		self.found.refill(blockCount, value: false)
  		self.pressure.refill(blockCount, value: 0)
-@@ -1047,7 +1047,7 @@ end 'emptyRank'
+@@ -1042,7 +1042,7 @@ end 'emptyRank'
  
  // A slot in the positional pressure index — the STABLE coordinate an op keeps for as long as it is in
  // the function. Unlike a block POSITION it does not move when an op is spliced in ahead of it.
@@ -18648,7 +18875,7 @@ index f28a3ac..2ab1611 100644
  export typealias PressureSlotColumn = Array with PressureSlot
  
  // A per-op contribution to the BACKWARD-running live population — SIGNED, because an op that defines a
-@@ -1207,7 +1207,7 @@ export type PressureIndex
+@@ -1227,7 +1227,7 @@ export type PressureIndex
  			next = first + run
  		end 'eachBlock'
  
@@ -18657,7 +18884,7 @@ index f28a3ac..2ab1611 100644
  
  		for b in 0 upto topo.numBlocks 'eachNode'
  			// The node covering `[first, first + len)`: the leaves start at `slotCount`, so dividing the
-@@ -1219,7 +1219,7 @@ export type PressureIndex
+@@ -1239,7 +1239,7 @@ export type PressureIndex
  			// line above as `roundUpToPowerOfTwo(…)`, which is 1 or more, but `blockLen` is a `PressureSlotColumn`
  			// (`Array with PressureSlot`, `int(0 to u64.max)`) and a read out of it carries the ELEMENT's range,
  			// not the writer's. So `divisorProof` sees a divisor that may be zero and is right to.
@@ -18666,7 +18893,7 @@ index f28a3ac..2ab1611 100644
  			try self.blockNode.set(b, value: node) otherwise panic("PressureIndex.placeRuns: blockNode.set OOB for block {b}")
  		end 'eachNode'
  
-@@ -1254,7 +1254,7 @@ export type PressureIndex
+@@ -1291,7 +1291,7 @@ export type PressureIndex
  
  	// The tree node that is slot `slot`'s leaf: the leaves start at `slotCount`.
  	function leafNodeOf(slot PressureSlot) returns ElementIndex
@@ -18675,7 +18902,7 @@ index f28a3ac..2ab1611 100644
  	end 'leafNodeOf'
  
  	function slotOfLeafNode(node ElementIndex) returns PressureSlot
-@@ -1285,13 +1285,13 @@ export type PressureIndex
+@@ -1322,13 +1322,13 @@ export type PressureIndex
  	//
  	// The caller publishes the leaf's population numbers and the change with `promote`.
  	function seatOp(slot PressureSlot, op TargetOp, opIdx ElementIndex, heat BlockHeat, opFacts OpVariantFacts, buf OperandList)
@@ -18692,7 +18919,7 @@ index f28a3ac..2ab1611 100644
  			end 'virtualDef'
  		end 'eachOperand'
  	end 'seatOp'
-@@ -1299,44 +1299,44 @@ export type PressureIndex
+@@ -1336,44 +1336,44 @@ export type PressureIndex
  	// The slot of the op that DEFINES `valueId`. Only asked of a value `UseIndex.defKindOf` has already
  	// said has an op def, so an unwritten entry is unreachable rather than a sentinel to test.
  	export function defSlotOf(valueId ValueId) returns PressureSlot
@@ -18746,7 +18973,7 @@ index f28a3ac..2ab1611 100644
  	end 'setTransient'
  
  	// Add `by` to the per-op contribution at `slot` for ONE file, and republish. THE edit the incremental
-@@ -1382,7 +1382,7 @@ export type PressureIndex
+@@ -1413,7 +1413,7 @@ export type PressureIndex
  	// BOUNDARY rather than a program point the peak-finder visits.
  	function refreshLeaf(slot PressureSlot)
  		let node = self.leafNodeOf(slot)
@@ -18755,16 +18982,179 @@ index f28a3ac..2ab1611 100644
  		try self.nodeOps.set(node, value: 1 if isOp else 0) otherwise panic("PressureIndex.refreshLeaf: nodeOps.set OOB at leaf {node}")
  
  		// The clobber leaf is NOT restated here: it is a property of the op, written once by `seatOp`, and
-@@ -1745,7 +1745,7 @@ export type PressureIndex
- 	// survives as a phantom program point. The tree is NOT republished here: `removeOp` does that for its
- 	// one slot, `respaceRange` does it once for a whole subtree.
+@@ -1515,7 +1515,7 @@ export type PressureIndex
+ 	end 'rebuildConfinedRange'
+ 
+ 	function confinedRefreshLeaf(slot PressureSlot)
+-		let found = try self.confFound.get(slot) otherwise panic("PressureIndex.confinedRefreshLeaf: confFound.get OOB at slot {slot}")
++		let found = try self.confFound.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedRefreshLeaf: confFound.get OOB at slot {slot}")
+ 		let leaf = self.leafNodeOf(slot)
+ 		try self.confHas.set(leaf, value: found) otherwise panic("PressureIndex.confinedRefreshLeaf: confHas.set OOB at slot {slot}")
+ 
+@@ -1564,19 +1564,19 @@ export type PressureIndex
+ 	end 'confinedPick'
+ 
+ 	export function confinedPressureAt(slot PressureSlot) returns RegCount
+-		return try self.confPressure.get(slot) otherwise panic("PressureIndex.confinedPressureAt: confPressure.get OOB at slot {slot}")
++		return try self.confPressure.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedPressureAt: confPressure.get OOB at slot {slot}")
+ 	end 'confinedPressureAt'
+ 
+ 	export function confinedAtFixedAt(slot PressureSlot) returns bool
+-		return try self.confAtFixed.get(slot) otherwise panic("PressureIndex.confinedAtFixedAt: confAtFixed.get OOB at slot {slot}")
++		return try self.confAtFixed.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedAtFixedAt: confAtFixed.get OOB at slot {slot}")
+ 	end 'confinedAtFixedAt'
+ 
+ 	export function confinedWitnessAt(slot PressureSlot) returns RegMask
+-		return try self.confWitness.get(slot) otherwise panic("PressureIndex.confinedWitnessAt: confWitness.get OOB at slot {slot}")
++		return try self.confWitness.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedWitnessAt: confWitness.get OOB at slot {slot}")
+ 	end 'confinedWitnessAt'
+ 
+ 	export function confinedClassAt(slot PressureSlot) returns RegClass
+-		return try self.confClass.get(slot) otherwise panic("PressureIndex.confinedClassAt: confClass.get OOB at slot {slot}")
++		return try self.confClass.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedClassAt: confClass.get OOB at slot {slot}")
+ 	end 'confinedClassAt'
+ 
+ 	export function confinedIsActive() returns bool
+@@ -1644,7 +1644,7 @@ export type PressureIndex
+ 	function nextOpSlotByScan(slot PressureSlot) returns PressureSlot
+ 		var next = slot + 1
+ 
+-		while not (try self.holdsOp.get(next) otherwise panic("PressureIndex.nextOpSlotByScan: no op follows slot {slot}")) 'scan'
++		while not (try self.holdsOp.get((next as ElementIndex)) otherwise panic("PressureIndex.nextOpSlotByScan: no op follows slot {slot}")) 'scan'
+ 			next = next + 1
+ 		end 'scan'
+ 
+@@ -1654,7 +1654,7 @@ export type PressureIndex
+ 	function prevOpSlotByScan(slot PressureSlot) returns PressureSlot
+ 		var prev = slot - 1
+ 
+-		while not (try self.holdsOp.get(prev) otherwise panic("PressureIndex.prevOpSlotByScan: no op precedes slot {slot}")) 'scan'
++		while not (try self.holdsOp.get((prev as ElementIndex)) otherwise panic("PressureIndex.prevOpSlotByScan: no op precedes slot {slot}")) 'scan'
+ 			prev = prev - 1
+ 		end 'scan'
+ 
+@@ -1696,7 +1696,7 @@ export type PressureIndex
+ 	end 'publishConfinedLeafIfChanged'
+ 
+ 	function confinedLeafDiffers(slot PressureSlot, found bool, pressure RegCount, atFixed bool, witness RegMask, witnessClass RegClass) returns bool
+-		if (try self.confFound.get(slot) otherwise panic("PressureIndex.confinedLeafDiffers: confFound.get OOB at slot {slot}")) != found 'foundDiffers'
++		if (try self.confFound.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedLeafDiffers: confFound.get OOB at slot {slot}")) != found 'foundDiffers'
+ 			return true
+ 		end 'foundDiffers'
+ 
+@@ -1704,7 +1704,7 @@ export type PressureIndex
+ 			return false
+ 		end 'bothAbsent'
+ 
+-		return (try self.confPressure.get(slot) otherwise panic("PressureIndex.confinedLeafDiffers: confPressure.get OOB at slot {slot}")) != pressure or (try self.confAtFixed.get(slot) otherwise panic("PressureIndex.confinedLeafDiffers: confAtFixed.get OOB at slot {slot}")) != atFixed or (try self.confWitness.get(slot) otherwise panic("PressureIndex.confinedLeafDiffers: confWitness.get OOB at slot {slot}")) != witness or (try self.confClass.get(slot) otherwise panic("PressureIndex.confinedLeafDiffers: confClass.get OOB at slot {slot}")) != witnessClass
++		return (try self.confPressure.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedLeafDiffers: confPressure.get OOB at slot {slot}")) != pressure or (try self.confAtFixed.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedLeafDiffers: confAtFixed.get OOB at slot {slot}")) != atFixed or (try self.confWitness.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedLeafDiffers: confWitness.get OOB at slot {slot}")) != witness or (try self.confClass.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedLeafDiffers: confClass.get OOB at slot {slot}")) != witnessClass
+ 	end 'confinedLeafDiffers'
+ 
+ 	export function setConfinedLeaf(slot PressureSlot, found bool, pressure RegCount, atFixed bool, witness RegMask, witnessClass RegClass)
+@@ -1716,11 +1716,11 @@ export type PressureIndex
+ 			self.confFoundInSweep = true
+ 		end 'somethingOverflows'
+ 
+-		try self.confFound.set(slot, value: found) otherwise panic("PressureIndex.setConfinedLeaf: confFound.set OOB at slot {slot}")
+-		try self.confPressure.set(slot, value: pressure) otherwise panic("PressureIndex.setConfinedLeaf: confPressure.set OOB at slot {slot}")
+-		try self.confAtFixed.set(slot, value: atFixed) otherwise panic("PressureIndex.setConfinedLeaf: confAtFixed.set OOB at slot {slot}")
+-		try self.confWitness.set(slot, value: witness) otherwise panic("PressureIndex.setConfinedLeaf: confWitness.set OOB at slot {slot}")
+-		try self.confClass.set(slot, value: witnessClass) otherwise panic("PressureIndex.setConfinedLeaf: confClass.set OOB at slot {slot}")
++		try self.confFound.set((slot as ElementIndex), value: found) otherwise panic("PressureIndex.setConfinedLeaf: confFound.set OOB at slot {slot}")
++		try self.confPressure.set((slot as ElementIndex), value: pressure) otherwise panic("PressureIndex.setConfinedLeaf: confPressure.set OOB at slot {slot}")
++		try self.confAtFixed.set((slot as ElementIndex), value: atFixed) otherwise panic("PressureIndex.setConfinedLeaf: confAtFixed.set OOB at slot {slot}")
++		try self.confWitness.set((slot as ElementIndex), value: witness) otherwise panic("PressureIndex.setConfinedLeaf: confWitness.set OOB at slot {slot}")
++		try self.confClass.set((slot as ElementIndex), value: witnessClass) otherwise panic("PressureIndex.setConfinedLeaf: confClass.set OOB at slot {slot}")
+ 	end 'setConfinedLeaf'
+ 
+ 	export function publishConfinedLeaf(blockLocal ElementIndex, slot PressureSlot)
+@@ -1740,7 +1740,7 @@ export type PressureIndex
+ 		let first = self.firstSlotOf(blockLocal)
+ 
+ 		for k in 0 upto self.runLengthOf(blockLocal) 'eachSlot'
+-			if (try self.confFound.get(first + k) otherwise panic("PressureIndex.confinedScanHasWinner: confFound.get OOB at slot {first + k}")) 'aLeaf'
++			if (try self.confFound.get(((first + k) as ElementIndex)) otherwise panic("PressureIndex.confinedScanHasWinner: confFound.get OOB at slot {first + k}")) 'aLeaf'
+ 				return true
+ 			end 'aLeaf'
+ 		end 'eachSlot'
+@@ -1756,7 +1756,7 @@ export type PressureIndex
+ 		for k in 0 upto self.runLengthOf(blockLocal) 'eachSlot'
+ 			let slot = first + k
+ 
+-			if not (try self.confFound.get(slot) otherwise panic("PressureIndex.confinedScanWinner: confFound.get OOB at slot {slot}")) 'notALeaf'
++			if not (try self.confFound.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedScanWinner: confFound.get OOB at slot {slot}")) 'notALeaf'
+ 				continue
+ 			end 'notALeaf'
+ 
+@@ -1780,11 +1780,11 @@ export type PressureIndex
+ 	end 'confinedBestSlot'
+ 
+ 	export function pendingAt(slot PressureSlot) returns RegMask
+-		return try self.leafPending.get(slot) otherwise panic("PressureIndex.pendingAt: leafPending.get OOB at slot {slot}")
++		return try self.leafPending.get((slot as ElementIndex)) otherwise panic("PressureIndex.pendingAt: leafPending.get OOB at slot {slot}")
+ 	end 'pendingAt'
+ 
+ 	export function physLiveAt(slot PressureSlot) returns RegMask
+-		return try self.leafPhysLive.get(slot) otherwise panic("PressureIndex.physLiveAt: leafPhysLive.get OOB at slot {slot}")
++		return try self.leafPhysLive.get((slot as ElementIndex)) otherwise panic("PressureIndex.physLiveAt: leafPhysLive.get OOB at slot {slot}")
+ 	end 'physLiveAt'
+ 
+ 	export function establishedAt(slot PressureSlot) returns RegMask
+@@ -1792,12 +1792,12 @@ export type PressureIndex
+ 	end 'establishedAt'
+ 
+ 	export function confinedFoundAt(slot PressureSlot) returns bool
+-		return try self.confFound.get(slot) otherwise panic("PressureIndex.confinedFoundAt: confFound.get OOB at slot {slot}")
++		return try self.confFound.get((slot as ElementIndex)) otherwise panic("PressureIndex.confinedFoundAt: confFound.get OOB at slot {slot}")
+ 	end 'confinedFoundAt'
+ 
+ 	function setPhysicalWindows(slot PressureSlot, pending RegMask, physLive RegMask)
+-		try self.leafPending.set(slot, value: pending) otherwise panic("PressureIndex.setPhysicalWindows: leafPending.set OOB at slot {slot}")
+-		try self.leafPhysLive.set(slot, value: physLive) otherwise panic("PressureIndex.setPhysicalWindows: leafPhysLive.set OOB at slot {slot}")
++		try self.leafPending.set((slot as ElementIndex), value: pending) otherwise panic("PressureIndex.setPhysicalWindows: leafPending.set OOB at slot {slot}")
++		try self.leafPhysLive.set((slot as ElementIndex), value: physLive) otherwise panic("PressureIndex.setPhysicalWindows: leafPhysLive.set OOB at slot {slot}")
+ 	end 'setPhysicalWindows'
+ 
+ 	// Re-publish ONE leaf up to its BLOCK's node — O(log slots in the block).
+@@ -2096,8 +2096,8 @@ export type PressureIndex
+ 			let successor = self.slotOfPosition(blockLocal, pos: pos)
+ 			let op = try module.ops.get(self.opAtSlot(successor)) otherwise panic("PressureIndex.derivePhysicalWindows: the op at slot {successor} is not in module.ops")
+ 			targetOpOperands(op, buf: buf)
+-			let liveAfterSuccessor = try self.leafPhysLive.get(successor) otherwise panic("PressureIndex.derivePhysicalWindows: leafPhysLive.get OOB at slot {successor}")
+-			let pendingBeforeSuccessor = try self.leafPending.get(successor) otherwise panic("PressureIndex.derivePhysicalWindows: leafPending.get OOB at slot {successor}")
++			let liveAfterSuccessor = try self.leafPhysLive.get((successor as ElementIndex)) otherwise panic("PressureIndex.derivePhysicalWindows: leafPhysLive.get OOB at slot {successor}")
++			let pendingBeforeSuccessor = try self.leafPending.get((successor as ElementIndex)) otherwise panic("PressureIndex.derivePhysicalWindows: leafPending.get OOB at slot {successor}")
+ 			self.setPhysicalWindows(slot, pending: pendingBeforeSuccessor, physLive: physicalLiveBefore(op, buf: buf, liveAfter: liveAfterSuccessor, opFacts: opFacts))
+ 			return
+ 		end 'hasASuccessor'
+@@ -2106,7 +2106,7 @@ export type PressureIndex
+ 			let predecessor = self.slotOfPosition(blockLocal, pos: pos - 1)
+ 			let op = try module.ops.get(self.opAtSlot(predecessor)) otherwise panic("PressureIndex.derivePhysicalWindows: the op at slot {predecessor} is not in module.ops")
+ 			targetOpOperands(op, buf: buf)
+-			let pendingBeforePredecessor = try self.leafPending.get(predecessor) otherwise panic("PressureIndex.derivePhysicalWindows: leafPending.get OOB at slot {predecessor}")
++			let pendingBeforePredecessor = try self.leafPending.get((predecessor as ElementIndex)) otherwise panic("PressureIndex.derivePhysicalWindows: leafPending.get OOB at slot {predecessor}")
+ 			self.setPhysicalWindows(slot, pending: pendingAfter(op, buf: buf, pendingBefore: pendingBeforePredecessor, opFacts: opFacts), physLive: 0)
+ 			return
+ 		end 'hasAPredecessor'
+@@ -2149,7 +2149,7 @@ export type PressureIndex
+ 	// confined leaf too: a leaf republishes only when its rank changes, so a later re-rank that finds
+ 	// nothing here would leave the old winner standing.
  	function vacateLeaf(slot PressureSlot)
 -		try self.holdsOp.set(slot, value: false) otherwise panic("PressureIndex.vacateLeaf: holdsOp.set OOB at slot {slot}")
 +		try self.holdsOp.set((slot as ElementIndex), value: false) otherwise panic("PressureIndex.vacateLeaf: holdsOp.set OOB at slot {slot}")
  		try self.nodeClobber.set(self.leafNodeOf(slot), value: 0) otherwise panic("PressureIndex.vacateLeaf: nodeClobber.set OOB at slot {slot}")
  
  		for classOrdinal in 0 upto RegClassCount 'eachClass'
-@@ -1773,7 +1773,7 @@ export type PressureIndex
+@@ -2161,7 +2161,7 @@ export type PressureIndex
+ 		self.setPhysicalWindows(slot, pending: 0, physLive: 0)
+ 
+ 		if self.confinedActive 'clearTheConfinedLeaf'
+-			try self.confFound.set(slot, value: false) otherwise panic("PressureIndex.vacateLeaf: confFound.set OOB at slot {slot}")
++			try self.confFound.set((slot as ElementIndex), value: false) otherwise panic("PressureIndex.vacateLeaf: confFound.set OOB at slot {slot}")
+ 		end 'clearTheConfinedLeaf'
+ 	end 'vacateLeaf'
+ 
+@@ -2187,7 +2187,7 @@ export type PressureIndex
  	export function rebuild(module TargetModule, liveness LivenessResult, sweep PressureSweepScratch, seedBuf ValueIdArray, scratch PressureRelayoutScratch)
  		let topo = liveness.cfg.topo
  		self.layOut(module, topo: topo, opCounts: scratch.opCounts)
@@ -18773,7 +19163,7 @@ index f28a3ac..2ab1611 100644
  
  		var liveRow = sweep.liveRow
  		var buf = sweep.buf
-@@ -1803,7 +1803,7 @@ export type PressureIndex
+@@ -2217,7 +2217,7 @@ export type PressureIndex
  
  			for ri in 0 upto opCount 'eachOpRev'
  				let forwardPos = opCount - 1 - ri
@@ -18782,18 +19172,30 @@ index f28a3ac..2ab1611 100644
  				let op = try module.ops.get(opIdx) otherwise panic("PressureIndex.rebuild: opIdx not in module.ops")
  				targetOpOperands(op, buf: buf)
  
-@@ -1819,7 +1819,7 @@ export type PressureIndex
+@@ -2233,9 +2233,9 @@ export type PressureIndex
  
  				stepRowBackwardOverOperands(liveRow, buf: buf, liveByClass: liveByClass, classes: liveness.valueClass)
  
 -				let slot = self.evenSlot(b, pos: forwardPos)
 +				let slot = self.evenSlot(b, pos: (forwardPos as ElementIndex))
  				self.seatOp(slot, op: op, opIdx: opIdx, heat: block.heat, opFacts: liveness.opFacts, buf: buf)
+-				self.setPhysicalWindows(slot, pending: try sweep.pendingBefore.get(forwardPos) otherwise panic("PressureIndex.rebuild: pendingBefore.get OOB at position {forwardPos}"), physLive: try sweep.physLiveAfter.get(forwardPos) otherwise panic("PressureIndex.rebuild: physLiveAfter.get OOB at position {forwardPos}"))
++				self.setPhysicalWindows(slot, pending: try sweep.pendingBefore.get((forwardPos as ElementIndex)) otherwise panic("PressureIndex.rebuild: pendingBefore.get OOB at position {forwardPos}"), physLive: try sweep.physLiveAfter.get((forwardPos as ElementIndex)) otherwise panic("PressureIndex.rebuild: physLiveAfter.get OOB at position {forwardPos}"))
  
  				for classOrdinal in 0 upto RegClassCount 'eachClass'
-@@ -2030,11 +2030,11 @@ export type PressureRelayoutScratch
+ 					let class = regClassAt(classOrdinal)
+@@ -2267,7 +2267,7 @@ export type PressureIndex
+ 			let exit = self.exitSlotOf(b)
+ 
+ 			for slot in first upto exit + 1 'eachSlot'
+-				if slot == exit or (try self.holdsOp.get(slot) otherwise panic("PressureIndex.rebuildSparse: holdsOp.get OOB at slot {slot}")) 'aPopulatedLeaf'
++				if slot == exit or (try self.holdsOp.get((slot as ElementIndex)) otherwise panic("PressureIndex.rebuildSparse: holdsOp.get OOB at slot {slot}")) 'aPopulatedLeaf'
+ 					self.refreshLeaf(slot)
+ 					nodes.push(self.leafNodeOf(slot))
+ 				end 'aPopulatedLeaf'
+@@ -2541,18 +2541,18 @@ export type PressureRelayoutScratch
  	// so a window smaller than the last one neither reads a stale tail nor reallocates.
- 	export function captureWindow(runHoldsOp BoolArray, runOpAt OpIndexArray, runDelta PressureDeltaColumn, runTransient PressureDeltaColumn, from PressureSlot, count PressureSlot)
+ 	export function captureWindow(runHoldsOp BoolArray, runOpAt OpIndexArray, runDelta PressureDeltaColumn, runTransient PressureDeltaColumn, index PressureIndex, from PressureSlot, count PressureSlot)
  		self.windowFirst = from
 -		self.holdsOp.refill(count, value: false)
 -		self.opAt.refill(count, value: 0)
@@ -18802,11 +19204,25 @@ index f28a3ac..2ab1611 100644
  		self.delta.refill(((count * RegClassCount) as ElementIndex), value: 0)
  		self.transient.refill(((count * RegClassCount) as ElementIndex), value: 0)
 -		self.moved.refill(count, value: 0)
+-		self.capturedPending.refill(count, value: 0)
+-		self.capturedPhysLive.refill(count, value: 0)
+-		self.confFound.refill(count, value: false)
+-		self.confPressure.refill(count, value: 0)
+-		self.confAtFixed.refill(count, value: false)
+-		self.confWitness.refill(count, value: 0)
+-		self.confClass.refill(count, value: RegClass.gpr)
 +		self.moved.refill((count as ElementIndex), value: 0)
++		self.capturedPending.refill((count as ElementIndex), value: 0)
++		self.capturedPhysLive.refill((count as ElementIndex), value: 0)
++		self.confFound.refill((count as ElementIndex), value: false)
++		self.confPressure.refill((count as ElementIndex), value: 0)
++		self.confAtFixed.refill((count as ElementIndex), value: false)
++		self.confWitness.refill((count as ElementIndex), value: 0)
++		self.confClass.refill((count as ElementIndex), value: RegClass.gpr)
  
  		for k in 0 upto count 'eachSlot'
  			try self.holdsOp.set(k, value: try runHoldsOp.get((from + k) as ElementIndex) otherwise panic("PressureRelayoutScratch.captureWindow: holdsOp.get OOB at slot {from + k}")) otherwise panic("PressureRelayoutScratch.captureWindow: holdsOp.set OOB at {k}")
-@@ -2099,19 +2099,19 @@ export type PressureRelayoutScratch
+@@ -2675,47 +2675,47 @@ export type PressureRelayoutScratch
  	end 'windowIndexOf'
  
  	export function holdsOpAt(slot PressureSlot) returns bool
@@ -18829,8 +19245,65 @@ index f28a3ac..2ab1611 100644
 +		return try self.transient.get(classRowIndex((self.windowIndexOf(slot) as ElementIndex), class: class)) otherwise panic("PressureRelayoutScratch.transientAt: slot {slot} out of range")
  	end 'transientAt'
  
+ 	export function pendingAt(slot PressureSlot) returns RegMask
+-		return try self.capturedPending.get(self.windowIndexOf(slot)) otherwise panic("PressureRelayoutScratch.pendingAt: slot {slot} out of range")
++		return try self.capturedPending.get((self.windowIndexOf(slot) as ElementIndex)) otherwise panic("PressureRelayoutScratch.pendingAt: slot {slot} out of range")
+ 	end 'pendingAt'
+ 
+ 	export function physLiveAt(slot PressureSlot) returns RegMask
+-		return try self.capturedPhysLive.get(self.windowIndexOf(slot)) otherwise panic("PressureRelayoutScratch.physLiveAt: slot {slot} out of range")
++		return try self.capturedPhysLive.get((self.windowIndexOf(slot) as ElementIndex)) otherwise panic("PressureRelayoutScratch.physLiveAt: slot {slot} out of range")
+ 	end 'physLiveAt'
+ 
+ 	export function confFoundAt(slot PressureSlot) returns bool
+-		return try self.confFound.get(self.windowIndexOf(slot)) otherwise panic("PressureRelayoutScratch.confFoundAt: slot {slot} out of range")
++		return try self.confFound.get((self.windowIndexOf(slot) as ElementIndex)) otherwise panic("PressureRelayoutScratch.confFoundAt: slot {slot} out of range")
+ 	end 'confFoundAt'
+ 
+ 	export function confPressureAt(slot PressureSlot) returns RegCount
+-		return try self.confPressure.get(self.windowIndexOf(slot)) otherwise panic("PressureRelayoutScratch.confPressureAt: slot {slot} out of range")
++		return try self.confPressure.get((self.windowIndexOf(slot) as ElementIndex)) otherwise panic("PressureRelayoutScratch.confPressureAt: slot {slot} out of range")
+ 	end 'confPressureAt'
+ 
+ 	export function confAtFixedAt(slot PressureSlot) returns bool
+-		return try self.confAtFixed.get(self.windowIndexOf(slot)) otherwise panic("PressureRelayoutScratch.confAtFixedAt: slot {slot} out of range")
++		return try self.confAtFixed.get((self.windowIndexOf(slot) as ElementIndex)) otherwise panic("PressureRelayoutScratch.confAtFixedAt: slot {slot} out of range")
+ 	end 'confAtFixedAt'
+ 
+ 	export function confWitnessAt(slot PressureSlot) returns RegMask
+-		return try self.confWitness.get(self.windowIndexOf(slot)) otherwise panic("PressureRelayoutScratch.confWitnessAt: slot {slot} out of range")
++		return try self.confWitness.get((self.windowIndexOf(slot) as ElementIndex)) otherwise panic("PressureRelayoutScratch.confWitnessAt: slot {slot} out of range")
+ 	end 'confWitnessAt'
+ 
+ 	export function confClassAt(slot PressureSlot) returns RegClass
+-		return try self.confClass.get(self.windowIndexOf(slot)) otherwise panic("PressureRelayoutScratch.confClassAt: slot {slot} out of range")
++		return try self.confClass.get((self.windowIndexOf(slot) as ElementIndex)) otherwise panic("PressureRelayoutScratch.confClassAt: slot {slot} out of range")
+ 	end 'confClassAt'
+ 
  	// How many op slots block `blockLocal` held in the layout this holds — the count its new run is
-@@ -2584,7 +2584,7 @@ function liveAcrossSpanIn(liveness LivenessResult, pressure PressureIndex, w Val
+@@ -2808,10 +2808,10 @@ function planGapsOf(liveness LivenessResult, pressure PressureIndex, v ValueId,
+ 	end 'noDefSite'
+ 
+ 	if defKind == ValueDefKind.opDef 'definedByAnOp'
+-		start = pressure.defSlotOf(v)
++		start = (pressure.defSlotOf(v) as ElementIndex)
+ 	end 'definedByAnOp' else 'definedByAPhi'
+ 		entry = index.defBlockOf(v) + 1
+-		start = pressure.firstSlotOf(index.defBlockOf(v))
++		start = (pressure.firstSlotOf(index.defBlockOf(v)) as ElementIndex)
+ 	end 'definedByAPhi'
+ 
+ 	var record = index.firstUseOf(v)
+@@ -2824,7 +2824,7 @@ function planGapsOf(liveness LivenessResult, pressure PressureIndex, v ValueId,
+ 			sawEdge = true
+ 		end 'anEdgeUse' else 'anOpUse'
+ 			plan.push(start, entry: entry, endRecord: record, isOpen: false, tailKey: 0)
+-			start = pressure.slotOfSeq(index.useSeqAt(record))
++			start = (pressure.slotOfSeq(index.useSeqAt(record)) as ElementIndex)
+ 			entry = 0
+ 			lastOpBlock = index.useBlockAt(record)
+ 			sawOp = true
+@@ -3249,7 +3249,7 @@ function liveAcrossSpanIn(liveness LivenessResult, pressure PressureIndex, w Val
  		return
  	end 'readNowhereHereAndNotLiveOut'
  
@@ -18839,16 +19312,16 @@ index f28a3ac..2ab1611 100644
  
  	if lastUseSlot <= lo 'closesBeforeItOpens'
  		out.becomeEmpty()
-@@ -2670,7 +2670,7 @@ end 'lastReadWithin'
- // A use's position within its block. Narrower than `ElementIndex` so that a `BlockLastUse` fits a word
- // and packs inline, and exact rather than a truncation: `seqAt` panics at `SeqStride` ops in one block
- // and `SeqStride` is 2^32, so no position this reads back can exceed the range.
+@@ -3335,7 +3335,7 @@ end 'lastReadWithin'
+ // A use's position within its block. Narrower than `ElementIndex` so that a `BlockLastUse` fits a
+ // word and packs inline. `freshSeqAt` refuses a block of 2^30 ops when the function is indexed,
+ // which keeps every position this reads back far inside the range.
 -typealias BlockUsePos = int(0 to u32.max) implements ElementIndex
 +typealias BlockUsePos = int(0 to u32.max)
  
  // The LAST position `w` is read at in `blockLocal`, or `found: false` when it is read there not at all.
  // A value's use thread is ascending by sequence, so the last record in the block is the last one before
-@@ -3462,7 +3462,7 @@ export type SplitDriver
+@@ -4283,7 +4283,7 @@ export type SplitDriver
  	// WHY a whole ROUND could relieve nothing — for `repairStuckValues`'s panic, which reports a
  	// contradiction rather than a shortfall. Both cures are named, because both must have failed.
  	export function describeUnrepairable(v ValueId, free RegMask, occupants ElementIndex) returns String
@@ -18857,7 +19330,18 @@ index f28a3ac..2ab1611 100644
  		return "value {v}: (a) it is live across NO clobber that takes a register of its own file, so there is nothing to cut to widen its allowed set — its forbid is {self.liveness.forbiddenOf(v)}, of which {self.paramCross.maskFor(v)} comes from a SIBLING PARAMETER's incoming register (`ParamCrossForbid`) and {established} from registers ESTABLISHED at its def (`establishedAtDef`), and whatever remains came from an op that names {v} as an OPERAND (`forbidOperandsFromImplicit`) — none of the three is a clobber inside a live range. And (b) all {occupants} occupant(s) of the registers it IS allowed were refused, which happens only when the failing point itself NAMES every one of them — the op reads it, or the op defines it, or its last use is at or before the point. All three say the same thing: that occupant is live AT the point, so evicting it frees nothing there. Free registers at the point were {free}."
  	end 'describeUnrepairable'
  
-@@ -3783,7 +3783,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
+@@ -4592,8 +4592,8 @@ function recordVictimWindows(index UseIndex, scratch SplitScratch, victim ValueI
+ 		end 'liveOnEveryExit' else 'diesInThisBlock'
+ 			let lastUse = lastUsePositionIn(index, pressure: pressure, w: victim, blockLocal: blockLocal)
+ 
+-			if lastUse.found and lastUse.position > hi 'readLater'
+-				hi = lastUse.position
++			if lastUse.found and (lastUse.position as ElementIndex) > hi 'readLater'
++				hi = (lastUse.position as ElementIndex)
+ 			end 'readLater'
+ 		end 'diesInThisBlock'
+ 
+@@ -4658,7 +4658,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
  	if VerifyIncrementalSplit 'theVerifiersOwnDerivation'
  		// The walk still writes this column on the CONFINED path, so it has to reach the ids the split
  		// just minted — even though nothing but the verifier ever reads it.
@@ -18866,7 +19350,20 @@ index f28a3ac..2ab1611 100644
  	end 'theVerifiersOwnDerivation'
  
  	// Re-derive the index facts of the values the split touched, from the dirty region alone. It must be
-@@ -4210,7 +4210,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
+@@ -4754,10 +4754,10 @@ function remarkValue(module TargetModule, liveness LivenessResult, scratch Split
+ 	// rematerialized constant — establishes nothing, where a kept entry would forbid it registers a
+ 	// rebuild frees.
+ 	if index.defKindOf(w) == ValueDefKind.none 'withoutADef'
+-		try liveness.establishedAtDef.set(w, value: 0) otherwise panic("remarkValue: establishedAtDef.set OOB for value {w}")
++		try liveness.establishedAtDef.set((w as ElementIndex), value: 0) otherwise panic("remarkValue: establishedAtDef.set OOB for value {w}")
+ 	end 'withoutADef' else 'withADef'
+ 		if w != split.victim 'aMintedId'
+-			try liveness.establishedAtDef.set(w, value: scratch.pressure.establishedAt(scratch.pressure.defSlotOf(w))) otherwise panic("remarkValue: establishedAtDef.set OOB for value {w}")
++			try liveness.establishedAtDef.set((w as ElementIndex), value: scratch.pressure.establishedAt(scratch.pressure.defSlotOf(w))) otherwise panic("remarkValue: establishedAtDef.set OOB for value {w}")
+ 		end 'aMintedId'
+ 	end 'withADef'
+ 
+@@ -5367,7 +5367,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
  	scratch.effPools.fillAll(liveness, pool: pool)
  
  	if VerifyIncrementalSplit 'theVerifiersOwnDerivation'
@@ -18875,8 +19372,8 @@ index f28a3ac..2ab1611 100644
  	end 'theVerifiersOwnDerivation'
  
  	if intoTree 'sizeTheTournament'
-@@ -4416,7 +4416,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
- 		census.reset(pool, file: liveness.registerFile)
+@@ -5553,7 +5553,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
+ 		end 'denseCensus'
  
  		for v in seedBuf 'seedCensus'
 -			census.add(try effPoolSizes.get(v) otherwise panic("analyzeBlockPressure: live-out value {v} is outside the function's value space"), class: liveness.classOf(v))
@@ -18884,43 +19381,20 @@ index f28a3ac..2ab1611 100644
  		end 'seedCensus'
  	end 'seedTheCensus'
  
-@@ -4437,7 +4437,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
- 	// forward): op at reverse-index `ri` sits at forward position `opCount - 1 - ri`.
+@@ -5570,9 +5570,9 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
+ 
  	for ri in 0 upto opCount 'eachOpRev'
  		let forwardPos = opCount - 1 - ri
 -		let opIdx = try ordered.get(forwardPos) otherwise panic("analyzeBlockPressure: ordered.get OOB")
+-		let slot = scratch.pressure.slotOfPosition(i, pos: forwardPos) if leaves else 0 as PressureSlot
+-		visitOpBackward(module, liveness: liveness, pool: pool, scratch: scratch, block: block, blockLocal: i, forwardPos: forwardPos, opIdx: opIdx, slot: slot, censusNeeded: censusNeeded, wantFullPool: wantFullPool, leaves: leaves, best: best)
 +		let opIdx = try ordered.get((forwardPos as ElementIndex)) otherwise panic("analyzeBlockPressure: ordered.get OOB")
- 		let op = try module.ops.get(opIdx) otherwise panic("analyzeBlockPressure: opIdx not in module.ops")
- 		targetOpOperands(op, buf: buf)
++		let slot = scratch.pressure.slotOfPosition(i, pos: (forwardPos as ElementIndex)) if leaves else 0 as PressureSlot
++		visitOpBackward(module, liveness: liveness, pool: pool, scratch: scratch, block: block, blockLocal: i, forwardPos: (forwardPos as ElementIndex), opIdx: opIdx, slot: slot, censusNeeded: censusNeeded, wantFullPool: wantFullPool, leaves: leaves, best: best)
+ 	end 'eachOpRev'
  
-@@ -4488,7 +4488,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
- 			classRowSet(effective, class: class, value: classRowGet(effective, class: class) + classRowGet(liveByClass, class: class) + liveness.deadPhiCountOf(i, class: class))
- 		end 'eachClass'
- 
--		let seq = seqAt(i, pos: forwardPos)
-+		let seq = seqAt(i, pos: (forwardPos as ElementIndex))
- 
- 		// TWO overflows, counting TWO different demands. Lumping them over-counts the confined
- 		// case — it would over-spill at every call and inflate an E5001 deficit.
-@@ -4527,7 +4527,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
- 				anyFullPoolOverflow = true
- 
- 				if wantFullPool 'thisWalkOwnsTheFullPoolHalf'
--					betterPeak(best, pressure: classRowGet(effective, class: class), blockLocal: i, forwardPos: forwardPos, peakSeq: seq, clobberOnly: false, witness: poolOfClass(pool, class: class, file: liveness.registerFile), witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
-+					betterPeak(best, pressure: classRowGet(effective, class: class), blockLocal: i, forwardPos: (forwardPos as ElementIndex), peakSeq: seq, clobberOnly: false, witness: poolOfClass(pool, class: class, file: liveness.registerFile), witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
- 				end 'thisWalkOwnsTheFullPoolHalf'
- 			end 'fullPoolOverflow'
- 		end 'eachClass'
-@@ -4557,7 +4557,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
- 					liveAtOp.push(transientValue)
- 				end 'theTransientIsAtThisPointToo'
- 
--				confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, forwardPos: forwardPos, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, hall: scratch.hall)
-+				confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, forwardPos: (forwardPos as ElementIndex), peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, hall: scratch.hall)
- 			end 'screenFired'
- 
- 			if transientCompetes 'transientLeavesTheCensus'
-@@ -4593,7 +4593,7 @@ end 'analyzeBlockPressure'
+ 	// A PHI has no defining op, so the sweep above never recorded a def-point pressure for it.
+@@ -5777,7 +5777,7 @@ end 'visitOpBackward'
  // own `forbidden` set. Named because the census add and the matching remove must quote the same
  // number, and a second `sizes.get` spelled at each would be that number written twice.
  function effectivePoolOf(scratch SplitScratch, valueId ValueId) returns RegCount
@@ -18928,8 +19402,8 @@ index f28a3ac..2ab1611 100644
 +	return try scratch.effPools.sizes.get((valueId as ElementIndex)) otherwise panic("effectivePoolOf: value {valueId} is outside the function's value space — `effPools.growTo` sizes the column to the CFG's value count before any sweep reads it")
  end 'effectivePoolOf'
  
- // The winning rank, with its live-before row attached — the `PressurePeak` the driver, `chooseVictim`
-@@ -4870,8 +4870,8 @@ end 'peakOutranks'
+ function ensurePeakRow(module TargetModule, liveness LivenessResult, scratch SplitScratch, peak PressurePeak)
+@@ -6161,8 +6161,8 @@ end 'peakOutranks'
  // Record each block-arg's def-point live count — the block's live-in population (see the caller).
  function recordPhiDefLiveAfter(defLiveAfter DefPressureColumn, block IrBlock, liveInByClass RegCountColumn, classes ValueClassColumn)
  	for arg in block.blockArgs 'eachPhi'
@@ -18940,7 +19414,7 @@ index f28a3ac..2ab1611 100644
  	end 'eachPhi'
  end 'recordPhiDefLiveAfter'
  
-@@ -4886,7 +4886,7 @@ end 'recordPhiDefLiveAfter'
+@@ -6177,7 +6177,7 @@ end 'recordPhiDefLiveAfter'
  function recordDefLiveAfter(defLiveAfter DefPressureColumn, buf OperandList, liveByClass RegCountColumn, classes ValueClassColumn)
  	for o in buf 'eachOperand'
  		if operandIsDef(o) and operandIsVirtual(o) 'def'
@@ -18949,7 +19423,106 @@ index f28a3ac..2ab1611 100644
  		end 'def'
  	end 'eachOperand'
  end 'recordDefLiveAfter'
-@@ -5941,7 +5941,7 @@ type ReachCache
+@@ -6271,7 +6271,7 @@ function chooseVictimByScan(module TargetModule, index UseIndex, liveness Livene
+ 	reach.retargetTo(peak.blockLocal)
+ 
+ 	var recheck = scratch.fitRecheck
+-	recheck.growFilled(liveness.valueCount, value: 0)
++	recheck.growFilled((liveness.valueCount as ElementIndex), value: 0)
+ 	let epoch = scratch.splitEpoch
+ 
+ 	var bestRemat = BeladyBest.create()
+@@ -6511,7 +6511,7 @@ function isSpillWinner(module TargetModule, index UseIndex, liveness LivenessRes
+ 	let epoch = scratch.splitEpoch
+ 
+ 	if not storeFitsPoolRemembering(liveness, pressure: scratch.pressure, valueId: v, poolSize: poolSize, recheck: scratch.fitRecheck, epoch: epoch) 'theStoreDoesNotFitYet'
+-		let notBefore = try scratch.fitRecheck.get(v) otherwise panic("isSpillWinner: fitRecheck.get OOB for value {v}")
++		let notBefore = try scratch.fitRecheck.get((v as ElementIndex)) otherwise panic("isSpillWinner: fitRecheck.get OOB for value {v}")
+ 
+ 		if notBefore > (epoch as DenseInt) 'sleepsUntilThen'
+ 			scratch.gaps.sleepUntil(v, epoch: notBefore, index: index)
+@@ -6540,7 +6540,7 @@ function victimFromGaps(module TargetModule, index UseIndex, liveness LivenessRe
+ 	var reach = scratch.reach
+ 	reach.retargetTo(peak.blockLocal)
+ 	var recheck = scratch.fitRecheck
+-	recheck.growFilled(liveness.valueCount, value: 0)
++	recheck.growFilled((liveness.valueCount as ElementIndex), value: 0)
+ 	var gaps = scratch.gaps
+ 	gaps.wakeUpTo(scratch.splitEpoch as DenseInt, index: index)
+ 	let pressure = scratch.pressure
+@@ -6549,7 +6549,7 @@ function victimFromGaps(module TargetModule, index UseIndex, liveness LivenessRe
+ 	collectPeakReads(module, liveness: liveness, peak: peak, scratch: scratch)
+ 	var tailValues = scratch.tailValues
+ 
+-	gatherTailValues(gaps.constant.tail, peakSlot: peakSlot, peakSeq: peak.peakSeq, index: index, out: tailValues)
++	gatherTailValues(gaps.constant.tail, peakSlot: (peakSlot as ElementIndex), peakSeq: peak.peakSeq, index: index, out: tailValues)
+ 
+ 	for v in tailValues 'eachConstantTail'
+ 		if isRematWinner(module, index: index, liveness: liveness, scratch: scratch, peak: peak, pool: pool, v: v, peakPos: peakPos, reach: reach) 'aTailRemat'
+@@ -6558,7 +6558,7 @@ function victimFromGaps(module TargetModule, index UseIndex, liveness LivenessRe
+ 	end 'eachConstantTail'
+ 
+ 	var constants = gaps.constant.finite
+-	var cursor = constants.bestStartingUpTo(peakSlot, afterSeq: peak.peakSeq, index: index)
++	var cursor = constants.bestStartingUpTo((peakSlot as ElementIndex), afterSeq: peak.peakSeq, index: index)
+ 	var rematValue = 0 as ValueId
+ 	var haveRemat = false
+ 
+@@ -6572,7 +6572,7 @@ function victimFromGaps(module TargetModule, index UseIndex, liveness LivenessRe
+ 			break
+ 		end 'aRematWinner'
+ 
+-		cursor = constants.bestStartingUpTo(peakSlot, afterSeq: peak.peakSeq, index: index)
++		cursor = constants.bestStartingUpTo((peakSlot as ElementIndex), afterSeq: peak.peakSeq, index: index)
+ 	end 'eachConstantGap'
+ 
+ 	constants.unmaskAll(index)
+@@ -6581,7 +6581,7 @@ function victimFromGaps(module TargetModule, index UseIndex, liveness LivenessRe
+ 		return SpillChoice.remat(rematValue, scope: SplitScope.afterPeakUses)
+ 	end 'tierOne'
+ 
+-	gatherTailValues(gaps.spill.tail, peakSlot: peakSlot, peakSeq: peak.peakSeq, index: index, out: tailValues)
++	gatherTailValues(gaps.spill.tail, peakSlot: (peakSlot as ElementIndex), peakSeq: peak.peakSeq, index: index, out: tailValues)
+ 
+ 	for v in tailValues 'eachTail'
+ 		if isSpillWinner(module, index: index, liveness: liveness, scratch: scratch, peak: peak, pool: pool, v: v, peakPos: peakPos, reach: reach, poolSize: poolSize) 'aTailSpill'
+@@ -6590,7 +6590,7 @@ function victimFromGaps(module TargetModule, index UseIndex, liveness LivenessRe
+ 	end 'eachTail'
+ 
+ 	var everyValue = gaps.spill.finite
+-	cursor = everyValue.bestStartingUpTo(peakSlot, afterSeq: peak.peakSeq, index: index)
++	cursor = everyValue.bestStartingUpTo((peakSlot as ElementIndex), afterSeq: peak.peakSeq, index: index)
+ 	var spillValue = 0 as ValueId
+ 	var haveSpill = false
+ 
+@@ -6604,7 +6604,7 @@ function victimFromGaps(module TargetModule, index UseIndex, liveness LivenessRe
+ 			break
+ 		end 'aSpillWinner'
+ 
+-		cursor = everyValue.bestStartingUpTo(peakSlot, afterSeq: peak.peakSeq, index: index)
++		cursor = everyValue.bestStartingUpTo((peakSlot as ElementIndex), afterSeq: peak.peakSeq, index: index)
+ 	end 'eachGap'
+ 
+ 	everyValue.unmaskAll(index)
+@@ -6721,7 +6721,7 @@ end 'storeExcessOverPool'
+ // `excess` registers over the pool cannot fit for the next `excess` splits, and is not asked again
+ // until then.
+ function storeFitsPoolRemembering(liveness LivenessResult, pressure PressureIndex, valueId ValueId, poolSize RegCount, recheck DenseColumn, epoch EventCount) returns bool
+-	let notBefore = try recheck.get(valueId) otherwise panic("storeFitsPoolRemembering: recheck.get OOB for value {valueId}")
++	let notBefore = try recheck.get((valueId as ElementIndex)) otherwise panic("storeFitsPoolRemembering: recheck.get OOB for value {valueId}")
+ 
+ 	if (epoch as DenseInt) < notBefore 'cannotFitYet'
+ 		if VerifyIncrementalSplit and storeFitsPool(liveness, pressure: pressure, valueId: valueId, poolSize: poolSize) 'theMemoIsWrong'
+@@ -6737,7 +6737,7 @@ function storeFitsPoolRemembering(liveness LivenessResult, pressure PressureInde
+ 		return true
+ 	end 'fits'
+ 
+-	try recheck.set(valueId, value: (epoch as DenseInt) + (excess as DenseInt)) otherwise panic("storeFitsPoolRemembering: recheck.set OOB for value {valueId}")
++	try recheck.set((valueId as ElementIndex), value: (epoch as DenseInt) + (excess as DenseInt)) otherwise panic("storeFitsPoolRemembering: recheck.set OOB for value {valueId}")
+ 	return false
+ end 'storeFitsPoolRemembering'
+ 
+@@ -7537,7 +7537,7 @@ type ReachCache
  	// The flat index of `(row, block)` in the row-major `rows` matrix — the ONE place its layout is
  	// spelled, so the read above and the walk that fills a row cannot disagree about it.
  	function slotOf(row ReachRow, block ElementIndex) returns ElementIndex
@@ -18958,7 +19531,7 @@ index f28a3ac..2ab1611 100644
  	end 'slotOf'
  
  	function rowFor(topo FuncTopology, defBlock ElementIndex) returns ReachRow
-@@ -5999,7 +5999,7 @@ type ReachCache
+@@ -7595,7 +7595,7 @@ type ReachCache
  			loops.collect(topo.pred, header: header as CsrIndex, into: member)
  
  			for b in member.blocks 'eachMember'
@@ -18967,16 +19540,16 @@ index f28a3ac..2ab1611 100644
  			end 'eachMember'
  		end 'eachHeaderInLayoutOrder'
  	end 'buildLowReach'
-@@ -6300,7 +6300,7 @@ end 'spillOneValue'
+@@ -7896,7 +7896,7 @@ end 'spillOneValue'
  // `--metrics`; only reading finds it, and removing it leaves both of those columns unmoved.
- function markRunStarts(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, class RegClass, pool RegMask, file RegisterFile, runStarts BoolArray, buf OperandList, opFacts OpVariantFacts)
+ function markRunStarts(module TargetModule, index UseIndex, pressure PressureIndex, topo FuncTopology, valueId ValueId, class RegClass, pool RegMask, file RegisterFile, runStarts BoolArray, buf OperandList, opFacts OpVariantFacts)
  	let useSites = index.useCount(valueId)
 -	runStarts.refill(useSites, value: false)
 +	runStarts.refill((useSites as ElementIndex), value: false)
  
  	if useSites == 0 'neverUsed'
  		return
-@@ -6380,7 +6380,7 @@ function useContinuesRun(runStarts BoolArray, useOrdinal UseOrdinal, runStart Us
+@@ -7976,7 +7976,7 @@ function useContinuesRun(runStarts BoolArray, useOrdinal UseOrdinal, runStart Us
  		return true
  	end 'theUseTheReloadWasPlacedFor'
  
@@ -18985,19 +19558,19 @@ index f28a3ac..2ab1611 100644
  end 'useContinuesRun'
  
  // The last position the reload for the run opening at `record` may serve (`reloadRunBoundFrom`): an
-@@ -6388,8 +6388,8 @@ end 'useContinuesRun'
- function reloadRunBoundOf(module TargetModule, index UseIndex, cfg FuncCfg, record ElementIndex, blockLocal ElementIndex, buf OperandList, opFacts OpVariantFacts) returns ElementIndex
+@@ -7984,8 +7984,8 @@ end 'useContinuesRun'
+ function reloadRunBoundOf(module TargetModule, index UseIndex, pressure PressureIndex, cfg FuncCfg, record ElementIndex, blockLocal ElementIndex, buf OperandList, opFacts OpVariantFacts) returns ElementIndex
  	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
  	return match index.useKindAt(record) 'kind'
--		op gives reloadRunBoundFrom(module, block: block, pos: opUseReloadPosition(index, block: block, record: record), buf: buf, opFacts: opFacts)
+-		op gives reloadRunBoundFrom(module, block: block, pos: opUseReloadPosition(index, pressure: pressure, block: block, record: record), buf: buf, opFacts: opFacts)
 -		edge gives block.opRefs.count()
-+		op gives (reloadRunBoundFrom(module, block: block, pos: opUseReloadPosition(index, block: block, record: record), buf: buf, opFacts: opFacts))
++		op gives (reloadRunBoundFrom(module, block: block, pos: opUseReloadPosition(index, pressure: pressure, block: block, record: record), buf: buf, opFacts: opFacts))
 +		edge gives (block.opRefs.count() as ElementIndex)
  	end 'kind'
  end 'reloadRunBoundOf'
  
-@@ -6535,13 +6535,13 @@ function usePositionIn(index UseIndex, block IrBlock, record ElementIndex) retur
- 	let pos = index.usePosAt(record)
+@@ -8129,13 +8129,13 @@ function usePositionIn(index UseIndex, pressure PressureIndex, block IrBlock, re
+ 	let pos = pressure.positionOfSeq(index.useSeqAt(record))
  	let bodyOps = block.opRefs.count()
  
 -	if pos > bodyOps 'pastTheTerminator'
@@ -19012,25 +19585,25 @@ index f28a3ac..2ab1611 100644
  		let at = try block.opRefs.get(pos) otherwise panic("usePositionIn: opRefs.get OOB at {pos}")
  
  		if at != index.useOpAt(record) 'positionDisagreesWithTheOp'
-@@ -6569,7 +6569,7 @@ end 'usePositionIn'
- function opUseReloadPosition(index UseIndex, block IrBlock, record ElementIndex) returns ElementIndex
- 	let pos = usePositionIn(index, block: block, record: record)
+@@ -8163,7 +8163,7 @@ end 'usePositionIn'
+ function opUseReloadPosition(index UseIndex, pressure PressureIndex, block IrBlock, record ElementIndex) returns ElementIndex
+ 	let pos = usePositionIn(index, pressure: pressure, block: block, record: record)
  
 -	if pos >= block.opRefs.count() 'theTerminatorItselfReadsIt'
 +	if pos >= (block.opRefs.count() as ElementIndex) 'theTerminatorItselfReadsIt'
  		return beforeBranchPosition(block)
  	end 'theTerminatorItselfReadsIt'
  
-@@ -6584,7 +6584,7 @@ end 'opUseReloadPosition'
- function bodyPositionOfUse(index UseIndex, block IrBlock, record ElementIndex) returns ElementIndex
- 	let pos = usePositionIn(index, block: block, record: record)
+@@ -8178,7 +8178,7 @@ end 'opUseReloadPosition'
+ function bodyPositionOfUse(index UseIndex, pressure PressureIndex, block IrBlock, record ElementIndex) returns ElementIndex
+ 	let pos = usePositionIn(index, pressure: pressure, block: block, record: record)
  
 -	if pos >= block.opRefs.count() 'notABodyOp'
 +	if pos >= (block.opRefs.count() as ElementIndex) 'notABodyOp'
  		panic("bodyPositionOfUse: use record {record} is anchored at position {pos} of block '{String.from(block.label)}', whose body holds {block.opRefs.count()} op(s) — that position is the block's TERMINATOR, and a spill op cannot be spliced after one")
  	end 'notABodyOp'
  
-@@ -6618,7 +6618,7 @@ function appendOp(module TargetModule, op TargetOp) returns ElementIndex
+@@ -8212,7 +8212,7 @@ function appendOp(module TargetModule, op TargetOp) returns ElementIndex
  
  	// A spill or a reload is the ALLOCATOR's op, not the author's: a line row at it would stop a debugger
  	// on a statement whose code it is not.
@@ -19039,8 +19612,17 @@ index f28a3ac..2ab1611 100644
  	return idx
  end 'appendOp'
  
-@@ -7334,14 +7334,14 @@ function verifyIncremental(module TargetModule, cfg FuncCfg, func IrFunction, li
- end 'verifyIncremental'
+@@ -8805,7 +8805,7 @@ function positionInBlock(block IrBlock, opIdx ElementIndex) returns ElementIndex
+ 	while pos > 0 'eachBackward'
+ 		pos = pos - 1
+ 
+-		if (try block.opRefs.get(pos) otherwise panic("positionInBlock: opRefs.get OOB")) == opIdx 'match'
++		if (try block.opRefs.get((pos as ElementIndex)) otherwise panic("positionInBlock: opRefs.get OOB")) == opIdx 'match'
+ 			return pos
+ 		end 'match'
+ 	end 'eachBackward'
+@@ -9025,14 +9025,14 @@ function verifyFirstBuild(module TargetModule, cfg FuncCfg, func IrFunction, liv
+ end 'verifyFirstBuild'
  
  function verifyDefPointPressure(liveness LivenessResult, pressure PressureIndex, freshDefLiveAfter DefPressureColumn, valueId ValueId, name String, iterations EventCount)
 -	if valueId >= freshDefLiveAfter.count() 'outsideTheSweep'
@@ -19288,7 +19870,7 @@ index 7ec2c82..bdd39ed 100644
  
  // The operands a POSIX lane's `osNetpoll` chunk is called with — the prefix `posixNetpollOperandCount` names.
 diff --git a/maxon-bin/Compiler/Targets/Shared/TargetLiveness.maxon b/maxon-bin/Compiler/Targets/Shared/TargetLiveness.maxon
-index c75e189..34b297c 100644
+index b135c6f..f97f83c 100644
 --- a/maxon-bin/Compiler/Targets/Shared/TargetLiveness.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/TargetLiveness.maxon
 @@ -54,7 +54,7 @@ export typealias LoopDepthArray = Array with LoopDepth
@@ -19299,8 +19881,8 @@ index c75e189..34b297c 100644
 +export typealias OpSeq = int(0 to u64.max)
  export typealias OpSeqArray = Array with OpSeq
  
- // An `OpSeq` is `blockLocal * SeqStride + positionInBlock` — BLOCK-RELATIVE, not a dense global
-@@ -104,7 +104,7 @@ export typealias UseRecordIndexArray = Array with ElementIndex
+ // An `OpSeq` is `blockLocal * SeqStride + offset`, the offset being the op's slot LABEL within its
+@@ -132,7 +132,7 @@ export typealias UseRecordIndexArray = Array with ElementIndex
  // (`useCount` / `blockUseCount`), never an index into anything. A record's identity is its
  // `ElementIndex`; there is no "k-th use" address, because the uses of one value are a linked thread
  // rather than a contiguous run, and an addressable k would be an O(k) walk pretending to be an index.
@@ -19309,7 +19891,7 @@ index c75e189..34b297c 100644
  export typealias UseOrdinalArray = Array with UseOrdinal
  
  // A count of things the allocator DID: functions allocated, copies inserted, hints honoured, values
-@@ -263,7 +263,7 @@ end 'operandClass'
+@@ -291,7 +291,7 @@ end 'operandClass'
  // `opTransientDefOf`'s callers hold once they have decoded the operand it selected, so the class read
  // may not be a second `classes.get` spelled beside each use.
  function valueClass(v ValueId, classes ValueClassColumn) returns RegClass
@@ -19318,7 +19900,7 @@ index c75e189..34b297c 100644
  end 'valueClass'
  
  // Move `v` into or out of ITS OWN file's live tally. ONE implementation for both directions: the
-@@ -274,7 +274,7 @@ end 'valueClass'
+@@ -302,7 +302,7 @@ end 'valueClass'
  // MAINTAINED, never rebuilt, so a drift from the row it mirrors would silently corrupt every pressure
  // figure downstream of it rather than fail where it happened.
  export function stepClassLive(liveByClass RegCountColumn, classes ValueClassColumn, v ValueId, entering bool)
@@ -19327,7 +19909,7 @@ index c75e189..34b297c 100644
  	let cur = classRowGet(liveByClass, class: class)
  
  	if entering 'entered'
-@@ -354,15 +354,15 @@ function sortColumnAscending(list DenseColumn, scratch DenseColumn)
+@@ -382,15 +382,15 @@ function sortColumnAscending(list DenseColumn, scratch DenseColumn)
  		return
  	end 'nothingToDo'
  
@@ -19348,12 +19930,96 @@ index c75e189..34b297c 100644
  			mergeRuns(list, scratch: scratch, lo: lo, mid: mid, hi: hi)
  			lo = hi
  		end 'eachPair'
-@@ -801,13 +801,13 @@ export type LivenessResult
+@@ -607,12 +607,12 @@ export type LiveSets
+ 		var clobbers = BlockClobbers.create()
+ 		clobbers.begin(numBlocks)
+ 		var firstEntry = CfgIndexArray.create()
+-		firstEntry.refill(valueCount, value: 0)
++		firstEntry.refill((valueCount as ElementIndex), value: 0)
+ 		return Self{inSets: emptyListColumn(numBlocks), outSets: emptyListColumn(numBlocks), ledger: LiveOutLedger.create(), high: CfgIndexArray.create(), runs: runs, cover: cover, clobbers: clobbers, entryBlock: CfgIndexArray.create(), entryIsOut: BoolArray.create(), entryNext: CfgIndexArray.create(), firstEntry: firstEntry, freeEntries: CfgIndexArray.create()}
+ 	end 'create'
+ 
+ 	export function growValues(valueCount ValueId)
+-		self.firstEntry.growFilled(valueCount, value: 0)
++		self.firstEntry.growFilled((valueCount as ElementIndex), value: 0)
+ 		self.runs.growValues(valueCount)
+ 	end 'growValues'
+ 
+@@ -665,24 +665,24 @@ export type LiveSets
+ 	end 'explicitEntryAgrees'
+ 
+ 	export function highBlockOf(v ValueId) returns ElementIndex
+-		if v >= self.high.count() 'neverMarked'
++		if (v as ElementIndex) >= (self.high.count() as ElementIndex) 'neverMarked'
+ 			return 0
+ 		end 'neverMarked'
+ 
+-		return try self.high.get(v) otherwise panic("LiveSets.highBlockOf: high.get OOB for value {v}")
++		return try self.high.get((v as ElementIndex)) otherwise panic("LiveSets.highBlockOf: high.get OOB for value {v}")
+ 	end 'highBlockOf'
+ 
+ 	export function resetHigh(v ValueId)
+-		if v < self.high.count() 'hasAnEntry'
+-			try self.high.set(v, value: 0) otherwise panic("LiveSets.resetHigh: high.set OOB for value {v}")
++		if (v as ElementIndex) < (self.high.count() as ElementIndex) 'hasAnEntry'
++			try self.high.set((v as ElementIndex), value: 0) otherwise panic("LiveSets.resetHigh: high.set OOB for value {v}")
+ 		end 'hasAnEntry'
+ 	end 'resetHigh'
+ 
+ 	function noteHigh(blockLocal ElementIndex, v ValueId)
+-		self.high.growFilled(v + 1, value: 0)
++		self.high.growFilled(((v + 1) as ElementIndex), value: 0)
+ 
+-		if blockLocal > (try self.high.get(v) otherwise panic("LiveSets.noteHigh: high.get OOB for value {v}")) 'higher'
+-			try self.high.set(v, value: blockLocal) otherwise panic("LiveSets.noteHigh: high.set OOB for value {v}")
++		if blockLocal > (try self.high.get((v as ElementIndex)) otherwise panic("LiveSets.noteHigh: high.get OOB for value {v}")) 'higher'
++			try self.high.set((v as ElementIndex), value: blockLocal) otherwise panic("LiveSets.noteHigh: high.set OOB for value {v}")
+ 		end 'higher'
+ 	end 'noteHigh'
+ 
+@@ -704,14 +704,14 @@ export type LiveSets
+ 			try self.entryBlock.set(entry, value: blockLocal) otherwise panic("LiveSets.installExplicit: entryBlock.set OOB at {entry}")
+ 			try self.entryIsOut.set(entry, value: isOut) otherwise panic("LiveSets.installExplicit: entryIsOut.set OOB at {entry}")
+ 		end 'reuse' else 'fresh'
+-			entry = self.entryBlock.count()
++			entry = (self.entryBlock.count() as ElementIndex)
+ 			self.entryBlock.push(blockLocal)
+ 			self.entryIsOut.push(isOut)
+ 			self.entryNext.push(0)
+ 		end 'fresh'
+ 
+-		try self.entryNext.set(entry, value: try self.firstEntry.get(v) otherwise panic("LiveSets.installExplicit: firstEntry.get OOB for value {v}")) otherwise panic("LiveSets.installExplicit: entryNext.set OOB at {entry}")
+-		try self.firstEntry.set(v, value: entry + 1) otherwise panic("LiveSets.installExplicit: firstEntry.set OOB for value {v}")
++		try self.entryNext.set(entry, value: try self.firstEntry.get((v as ElementIndex)) otherwise panic("LiveSets.installExplicit: firstEntry.get OOB for value {v}")) otherwise panic("LiveSets.installExplicit: entryNext.set OOB at {entry}")
++		try self.firstEntry.set((v as ElementIndex), value: entry + 1) otherwise panic("LiveSets.installExplicit: firstEntry.set OOB for value {v}")
+ 	end 'installExplicit'
+ 
+ 	export function installRun(v ValueId, class RegClass, lo ElementIndex, hi ElementIndex)
+@@ -737,7 +737,7 @@ export type LiveSets
+ 	end 'hasRange'
+ 
+ 	export function firstEntryOf(v ValueId) returns ElementIndex
+-		return try self.firstEntry.get(v) otherwise panic("LiveSets.firstEntryOf: firstEntry.get OOB for value {v}")
++		return try self.firstEntry.get((v as ElementIndex)) otherwise panic("LiveSets.firstEntryOf: firstEntry.get OOB for value {v}")
+ 	end 'firstEntryOf'
+ 
+ 	export function entryBlockAt(entry ElementIndex) returns ElementIndex
+@@ -769,7 +769,7 @@ export type LiveSets
+ 			entry = next
+ 		end 'eachEntry'
+ 
+-		try self.firstEntry.set(v, value: 0) otherwise panic("LiveSets.releaseEntries: firstEntry.set OOB for value {v}")
++		try self.firstEntry.set((v as ElementIndex), value: 0) otherwise panic("LiveSets.releaseEntries: firstEntry.set OOB for value {v}")
+ 	end 'releaseEntries'
+ 
+ 	export function explicitInInto(blockLocal ElementIndex, out ValueIdArray)
+@@ -1025,14 +1025,14 @@ export type LivenessResult
  			panic("LivenessResult.growValueSpace: cannot shrink the value space from {self.valueCount} to {newValueCount}")
  		end 'shrink'
  
 -		self.forbidden.growFilled(newValueCount, value: 0)
 +		self.forbidden.growFilled((newValueCount as ElementIndex), value: 0)
+ 		self.live.growValues(newValueCount)
  
  		// A fresh id establishes nothing until the dirty-block re-sweep says what was pending where the
  		// split put its def (`sweepEstablishedRegisters`), which runs before its mask is rebuilt.
@@ -19366,7 +20032,7 @@ index c75e189..34b297c 100644
  
  		self.valueCount = newValueCount
  		self.wordsPerRow = bitsetWordsFor(newValueCount as BitIndex)
-@@ -825,12 +825,12 @@ export type LivenessResult
+@@ -1050,12 +1050,12 @@ export type LivenessResult
  	// correct and load-bearing, and it runs on every victim and every fresh id — so a class encoded
  	// here would be erased mid-allocation, and the float that lost it would be coloured into a GPR.
  	export function clearForbidden(v ValueId)
@@ -19381,7 +20047,7 @@ index c75e189..34b297c 100644
  	end 'addForbidden'
  
  	// The values live on ENTRY to `local`, into `out` (cleared first). O(live) — this is the seed
-@@ -876,14 +876,14 @@ export type LivenessResult
+@@ -1121,14 +1121,14 @@ export type LivenessResult
  	// The register mask value `v` must avoid: the registers an op writes while `v` is live across it,
  	// UNIONED with everything `nonSweptForbidOf` contributes.
  	export function forbiddenOf(v ValueId) returns RegMask
@@ -19398,7 +20064,7 @@ index c75e189..34b297c 100644
  	end 'classOf'
  end 'LivenessResult'
  
-@@ -895,7 +895,7 @@ end 'LivenessResult'
+@@ -1140,7 +1140,7 @@ end 'LivenessResult'
  // the skeleton alone. That is what lets the critical-edge split — which has no loop depths
  // and no value count — call the same one implementation the allocator calls.
  export function localOfBlockId(topo FuncTopology, blockId BlockId) returns ElementIndex
@@ -19407,7 +20073,7 @@ index c75e189..34b297c 100644
  
  	if local == topo.numBlocks 'notInFunc'
  		panic("localOfBlockId: block id {blockId} is not in this function")
-@@ -936,7 +936,7 @@ export type PhiEdgeView
+@@ -1181,7 +1181,7 @@ export type PhiEdgeView
  			panic("PhiEdgeView.resolve ({context.name}): edge to '{String.from(targetBlock.label)}' carries {argIds.count()} args but the block has {phiCount} phis")
  		end 'arity'
  
@@ -19416,7 +20082,7 @@ index c75e189..34b297c 100644
  	end 'resolve'
  
  	// The value id of the k-th phi (block-arg) of the target block.
-@@ -964,7 +964,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
+@@ -1209,7 +1209,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
  	let wordsPerRow = bitsetWordsFor(valueCount as BitIndex)
  	let numBlocks = cfg.topo.numBlocks
  
@@ -19425,7 +20091,7 @@ index c75e189..34b297c 100644
  		panic("computeLivenessOn: '{String.from(func.name)}' now has {func.blockRefs.count()} blocks but the caller's FuncCfg was built with {numBlocks} — a pass added or removed a block, which the reused-CFG contract forbids")
  	end 'cfgStale'
  
-@@ -1021,7 +1021,7 @@ end 'computeLivenessOn'
+@@ -1274,7 +1274,7 @@ end 'computeLivenessOn'
  // A zeroed per-value register-mask column.
  function makeRegMaskColumn(valueCount ValueId) returns RegMaskColumn
  	var col = RegMaskColumn.create()
@@ -19434,7 +20100,7 @@ index c75e189..34b297c 100644
  	return col
  end 'makeRegMaskColumn'
  
-@@ -1094,7 +1094,7 @@ export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) retur
+@@ -1347,7 +1347,7 @@ export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) retur
  	newRefs.reserve(topo.numBlocks)
  
  	for ri in 0 upto postorder.count() 'reverse'
@@ -19443,7 +20109,7 @@ index c75e189..34b297c 100644
  		oldByNew.push(local)
  		newRefs.push(try topo.blockRefByLocal.get(local) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB"))
  	end 'reverse'
-@@ -1149,7 +1149,7 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
+@@ -1402,7 +1402,7 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
  	// `numBlocks` stays the "not in this function" sentinel, so only real entries are remapped.
  	let idSpace = old.localByBlockId.count()
  	var localByBlockId = CfgIndexArray.create()
@@ -19452,7 +20118,7 @@ index c75e189..34b297c 100644
  
  	for bid in 0 upto idSpace 'remapIds'
  		let oldLocal = try old.localByBlockId.get(bid) otherwise panic("permuteTopology: localByBlockId.get OOB")
-@@ -1163,9 +1163,9 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
+@@ -1416,9 +1416,9 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
  	end 'remapIds'
  
  	var edgeFrom = CsrColumn.create()
@@ -19464,7 +20130,7 @@ index c75e189..34b297c 100644
  
  	for u in 0 upto numBlocks 'eachNewBlock'
  		let oldU = try oldByNew.get(u) otherwise panic("permuteTopology: oldByNew.get OOB")
-@@ -1173,7 +1173,7 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
+@@ -1426,7 +1426,7 @@ function permuteTopology(old FuncTopology, oldByNew CfgIndexArray) returns FuncT
  		for k in 0 upto old.succ.degree(oldU as CsrIndex) 'eachSucc'
  			let oldV = old.succ.neighbour(oldU as CsrIndex, k: k)
  			edgeFrom.push(u)
@@ -19473,7 +20139,7 @@ index c75e189..34b297c 100644
  		end 'eachSucc'
  	end 'eachNewBlock'
  
-@@ -1204,8 +1204,8 @@ function rpoDfs(topo FuncTopology, root ElementIndex, visited BoolArray, postord
+@@ -1457,8 +1457,8 @@ function rpoDfs(topo FuncTopology, root ElementIndex, visited BoolArray, postord
  
  	while stackNode.count() > 0 'dfs'
  		let top = stackNode.count() - 1
@@ -19484,7 +20150,7 @@ index c75e189..34b297c 100644
  		let deg = topo.succ.degree(u as CsrIndex)
  
  		if k >= deg 'subtreeDone'
-@@ -1215,12 +1215,12 @@ function rpoDfs(topo FuncTopology, root ElementIndex, visited BoolArray, postord
+@@ -1468,12 +1468,12 @@ function rpoDfs(topo FuncTopology, root ElementIndex, visited BoolArray, postord
  			continue
  		end 'subtreeDone'
  
@@ -19500,7 +20166,7 @@ index c75e189..34b297c 100644
  			stackNode.push(s)
  			stackNextSucc.push(0)
  		end 'unvisited'
-@@ -1232,9 +1232,9 @@ end 'rpoDfs'
+@@ -1485,9 +1485,9 @@ end 'rpoDfs'
  // `FuncTopology`. The allocator's `buildFuncCfg` adds the two analyses on top.
  export function buildFuncTopology(module TargetModule, func IrFunction) returns FuncTopology
  	var blockRefByLocal = BlockRefArray.create()
@@ -19512,7 +20178,7 @@ index c75e189..34b297c 100644
  	var maxBlockId = 0 as BlockId
  
  	for blockRef in func.blockRefs 'eachRef'
-@@ -1258,13 +1258,13 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns
+@@ -1511,13 +1511,13 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns
  	// surfaces far away (values from one loop appearing live inside another) and looks like an
  	// allocator bug. Assert it here, at the one place the collision would be absorbed.
  	var localByBlockId = CfgIndexArray.create()
@@ -19528,7 +20194,7 @@ index c75e189..34b297c 100644
  			panic("buildFuncTopology: function '{String.from(func.name)}' has TWO blocks with BlockId {bid} (local {prior} and local {i}) — BlockIds must be unique within a function, because every branch target resolves through this index and a duplicate silently re-points edges at the wrong block")
  		end 'duplicateId'
  
-@@ -1282,7 +1282,7 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns
+@@ -1535,7 +1535,7 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns
  		let block = try module.blocks.get(try blockRefByLocal.get(i) otherwise panic("buildFuncTopology: blockRefByLocal.get OOB")) otherwise panic("buildFuncTopology: block ref not in blocks")
  		succIds.clear()
  		collectBlockSuccessorIds(module, block: block, out: succIds)
@@ -19537,7 +20203,7 @@ index c75e189..34b297c 100644
  	end 'countEdges'
  
  	// Edge list (fromLocal, toLocal), then CSR for succ and its inverse for pred.
-@@ -1297,9 +1297,9 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns
+@@ -1550,9 +1550,9 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns
  		collectBlockSuccessorIds(module, block: block, out: succIds)
  
  		for sid in succIds 'eachSucc'
@@ -19549,7 +20215,7 @@ index c75e189..34b297c 100644
  				panic("buildFuncTopology: block '{String.from(block.label)}' branches to block id {sid} which is not in function '{String.from(func.name)}'")
  			end 'notInFunc'
  
-@@ -1311,7 +1311,7 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns
+@@ -1564,7 +1564,7 @@ export function buildFuncTopology(module TargetModule, func IrFunction) returns
  	let succ = buildCsr(edgeFrom, to: edgeTo, nodeCount: numBlocks as CsrIndex)
  	let pred = buildCsr(edgeTo, to: edgeFrom, nodeCount: numBlocks as CsrIndex)
  
@@ -19557,8 +20223,8 @@ index c75e189..34b297c 100644
 +	return FuncTopology.create((numBlocks as ElementIndex), blockRefByLocal: blockRefByLocal, localByBlockId: localByBlockId, succ: succ, pred: pred)
  end 'buildFuncTopology'
  
- // Complete a topology into the CFG the ALLOCATOR consumes, by adding the two analyses only it
-@@ -1765,20 +1765,20 @@ end 'collectBlockSuccessorIds'
+ // Complete a topology into the CFG the ALLOCATOR consumes, by adding the three analyses only it
+@@ -2020,20 +2020,20 @@ end 'collectBlockSuccessorIds'
  // than on every iteration.
  module function lineEntryColumn(module TargetModule, func IrFunction, encoding FunctionEncodingFacts) returns BoolArray
  	var firstSpans = SpanIdArray.create()
@@ -19584,7 +20250,7 @@ index c75e189..34b297c 100644
  
  	if not someSpanIn(firstSpans) 'noLineToEnter'
  		return entered
-@@ -1791,16 +1791,16 @@ module function lineEntryColumn(module TargetModule, func IrFunction, encoding F
+@@ -2046,16 +2046,16 @@ module function lineEntryColumn(module TargetModule, func IrFunction, encoding F
  
  		for k in 0 upto ways.successors.degree(block.id as CsrIndex) 'eachTarget'
  			let target = ways.successors.neighbour(block.id as CsrIndex, k: k) as BlockId
@@ -19605,7 +20271,7 @@ index c75e189..34b297c 100644
  
  	return entered
  end 'lineEntryColumn'
-@@ -1846,7 +1846,7 @@ type LineWays
+@@ -2101,7 +2101,7 @@ type LineWays
  		var leaving = CsrColumn.create()
  		var entering = CsrColumn.create()
  		var lineClasses = BlockLineClassArray.create()
@@ -19614,7 +20280,7 @@ index c75e189..34b297c 100644
  		var sourceLineOrdinals = LineClassMap.create()
  		var classIds = LineClassMap.create()
  		let siteSlots = encoding.siteCount as LineClassKey + FirstSplicedSiteSlot
-@@ -1863,7 +1863,7 @@ type LineWays
+@@ -2118,7 +2118,7 @@ type LineWays
  			if lastSpan != NoSpanId 'positioned'
  				let sourceLine = denseOrdinalOf(sourceLineOrdinals, key: encoding.lines.lineKeyOf(lastSpan) as LineClassKey)
  				let lineClass = denseOrdinalOf(classIds, key: lineClassKeyOf(sourceLine, site: block.inlineSite, siteSlots: siteSlots))
@@ -19623,7 +20289,7 @@ index c75e189..34b297c 100644
  			end 'positioned'
  
  			successors.clear()
-@@ -1876,11 +1876,11 @@ type LineWays
+@@ -2131,11 +2131,11 @@ type LineWays
  		end 'eachBlock'
  
  		var frontiers = LineFrontierArray.create()
@@ -19638,7 +20304,7 @@ index c75e189..34b297c 100644
  
  		var ways = Self{successors: buildCsr(leaving, to: entering, nodeCount: func.nextBlockId as CsrIndex), predecessors: buildCsr(entering, to: leaving, nodeCount: func.nextBlockId as CsrIndex), sites: sites, lineClasses: lineClasses, encoding: encoding, entry: entry, frontiers: frontiers, reachesEntry: reachesEntry, classStamps: classStamps, joinGeneration: 0}
  		ways.settleFrontiers(func, layout: layout)
-@@ -1890,7 +1890,7 @@ type LineWays
+@@ -2145,7 +2145,7 @@ type LineWays
  
  	function settleFrontiers(func IrFunction, layout BlockIdArray)
  		var queued = BoolArray.create()
@@ -19647,7 +20313,7 @@ index c75e189..34b297c 100644
  		var pending = CsrColumn.create()
  
  		// Seeded in layout order: BlockIds are creation order, so an edge-split block sits far from its
-@@ -1904,7 +1904,7 @@ type LineWays
+@@ -2159,7 +2159,7 @@ type LineWays
  		while head < pending.count() as CsrIndex 'eachChangedBlock'
  			let block = try pending.get(head as ElementIndex) otherwise panic("LineWays.settleFrontiers: pending.get({head}) below its own count")
  			head = head + 1
@@ -19656,7 +20322,7 @@ index c75e189..34b297c 100644
  
  			if self.refreshedFrontier(block) 'itChanged'
  				self.requeueTransparentSuccessors(block, queued: queued, pending: pending)
-@@ -1935,11 +1935,11 @@ type LineWays
+@@ -2190,11 +2190,11 @@ type LineWays
  	end 'frontierChanged'
  
  	function queueIfTransparent(block BlockId, queued BoolArray, pending CsrColumn)
@@ -19670,7 +20336,7 @@ index c75e189..34b297c 100644
  		end 'transparent'
  	end 'queueIfTransparent'
  
-@@ -1978,8 +1978,8 @@ type LineWays
+@@ -2233,8 +2233,8 @@ type LineWays
  		end 'eachWayIn'
  
  		let grew = self.frontierChanged(self.frontierOf(block), after: frontier) or fromEntry != self.entryReachedThrough(block)
@@ -19681,7 +20347,7 @@ index c75e189..34b297c 100644
  
  		return grew
  	end 'refreshedFrontier'
-@@ -2008,13 +2008,13 @@ type LineWays
+@@ -2263,13 +2263,13 @@ type LineWays
  	// too, or the dedup drops a block whose answer differs.
  	function claimsItsLine(block BlockId) returns bool
  		let lineClass = self.lineClassOf(block)
@@ -19697,7 +20363,7 @@ index c75e189..34b297c 100644
  
  		return true
  	end 'claimsItsLine'
-@@ -2027,15 +2027,15 @@ type LineWays
+@@ -2282,15 +2282,15 @@ type LineWays
  	end 'lineClassOf'
  
  	function lineHeldBy(block BlockId) returns BlockLineClass
@@ -19716,7 +20382,7 @@ index c75e189..34b297c 100644
  	end 'entryReachedThrough'
  
  	function leavesAnotherLine(block BlockId, arriving SpanId, targetSite InlineSiteRef) returns bool
-@@ -2071,7 +2071,7 @@ type LineWays
+@@ -2326,7 +2326,7 @@ type LineWays
  	end 'spanLeaving'
  
  	function siteOf(block BlockId) returns InlineSiteRef
@@ -19725,7 +20391,7 @@ index c75e189..34b297c 100644
  	end 'siteOf'
  
  	function leftFromAnotherLine(block BlockId, arriving SpanId, targetSite InlineSiteRef) returns bool
-@@ -2275,8 +2275,8 @@ function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks ElementIndex)
+@@ -2530,8 +2530,8 @@ function computeLoopDepth(succ CsrGraph, pred CsrGraph, numBlocks ElementIndex)
  		loops.collect(pred, header: h, into: member)
  
  		for b in member.blocks 'bump'
@@ -19736,7 +20402,7 @@ index c75e189..34b297c 100644
  		end 'bump'
  	end 'eachLoop'
  
-@@ -2322,7 +2322,7 @@ export function enclosingLoopBlocks(topo FuncTopology, blockLocal ElementIndex)
+@@ -2577,7 +2577,7 @@ export function enclosingLoopBlocks(topo FuncTopology, blockLocal ElementIndex)
  		found = true
  
  		for b in member.blocks 'union'
@@ -19745,7 +20411,7 @@ index c75e189..34b297c 100644
  		end 'union'
  	end 'eachLoop'
  
-@@ -2549,29 +2549,29 @@ export type UseIndex
+@@ -2805,29 +2805,29 @@ export type UseIndex
  	// fills in place, through the very same mutators a split edits it with.
  	static function create(valueCount ValueId, numBlocks ElementIndex) returns UseIndex
  		var useCountOfValue = UseOrdinalArray.create()
@@ -19771,8 +20437,8 @@ index c75e189..34b297c 100644
 -		spillSlot.resize(valueCount)
 +		spillSlot.resize((valueCount as ElementIndex))
  
--		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount), phiBlock: phiBlock, edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), slotResident: falseColumn(valueCount), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount)}
-+		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn((valueCount as ElementIndex)), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn((valueCount as ElementIndex)), phiBlock: phiBlock, edgePassed: falseColumn((valueCount as ElementIndex)), spillStored: falseColumn((valueCount as ElementIndex)), slotResident: falseColumn((valueCount as ElementIndex)), spillSlot: spillSlot, touchesHotLoop: falseColumn((valueCount as ElementIndex))}
+-		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount), constDef: falseColumn(valueCount), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn(valueCount), phiBlock: phiBlock, edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), slotResident: falseColumn(valueCount), spillSlot: spillSlot, touchesHotLoop: falseColumn(valueCount)}
++		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: useCountOfValue, lastUseOfValue: lastUseOfValue, nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: useCountInBlock, firstUseInBlock: firstUseInBlock, nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn((valueCount as ElementIndex)), constDef: falseColumn((valueCount as ElementIndex)), defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: falseColumn((valueCount as ElementIndex)), phiBlock: phiBlock, edgePassed: falseColumn((valueCount as ElementIndex)), spillStored: falseColumn((valueCount as ElementIndex)), slotResident: falseColumn((valueCount as ElementIndex)), spillSlot: spillSlot, touchesHotLoop: falseColumn((valueCount as ElementIndex))}
  	end 'create'
  
  	// How many use sites `valueId` has — the BOUND of the walk below, and the only thing that says a
@@ -19783,7 +20449,7 @@ index c75e189..34b297c 100644
  	end 'useCount'
  
  	// Value `valueId`'s FIRST use record — the earliest by sequence, and the head of its thread, which
-@@ -2593,7 +2593,7 @@ export type UseIndex
+@@ -2849,7 +2849,7 @@ export type UseIndex
  			panic("UseIndex.firstUseOf: value {valueId} has no uses — walks are bounded by useCount()")
  		end 'neverUsed'
  
@@ -19792,7 +20458,13 @@ index c75e189..34b297c 100644
  		return self.nextUseOf(tail)
  	end 'firstUseOf'
  
-@@ -2665,24 +2665,24 @@ export type UseIndex
+@@ -2903,29 +2903,29 @@ export type UseIndex
+ 	end 'useKindAt'
+ 
+ 	export function isConstDef(valueId ValueId) returns bool
+-		return try self.constDef.get(valueId) otherwise panic("UseIndex.isConstDef: value {valueId} out of range")
++		return try self.constDef.get((valueId as ElementIndex)) otherwise panic("UseIndex.isConstDef: value {valueId} out of range")
+ 	end 'isConstDef'
  
  	// True iff `valueId` is a block-arg (phi) of any block in the function.
  	export function isPhiValue(valueId ValueId) returns bool
@@ -19821,7 +20493,7 @@ index c75e189..34b297c 100644
  	end 'isSlotResident'
  
  	// The slot memory already holds `valueId` in, or `none` (see `ValueSpillSlot`).
-@@ -2691,7 +2691,7 @@ export type UseIndex
+@@ -2934,7 +2934,7 @@ export type UseIndex
  			return ValueSpillSlot.none
  		end 'notInASlot'
  
@@ -19830,7 +20502,7 @@ index c75e189..34b297c 100644
  	end 'spillSlotOf'
  
  	// True iff `valueId`'s def block and every block that touches it — as an OP OPERAND *or* as a
-@@ -2708,13 +2708,13 @@ export type UseIndex
+@@ -2951,13 +2951,13 @@ export type UseIndex
  	// used ZERO times in it. The fact a cold spill actually needs is a DEPTH, and a depth is what this
  	// column holds for both kinds of use.
  	export function defAndUsesOffTheHotPath(valueId ValueId) returns bool
@@ -19846,7 +20518,7 @@ index c75e189..34b297c 100644
  
  		if opDefined 'opDefined'
  			return ValueDefKind.opDef
-@@ -2727,8 +2727,8 @@ export type UseIndex
+@@ -2970,8 +2970,8 @@ export type UseIndex
  	// this function does not define at all.
  	export function defBlockOf(valueId ValueId) returns ElementIndex
  		match self.defKindOf(valueId) 'kind'
@@ -19857,7 +20529,7 @@ index c75e189..34b297c 100644
  			none then panic("UseIndex.defBlockOf: value {valueId} has neither an op def nor a phi block")
  		end 'kind'
  	end 'defBlockOf'
-@@ -2748,7 +2748,7 @@ export type UseIndex
+@@ -2991,7 +2991,7 @@ export type UseIndex
  	// the value has an op def).
  	export function requireDefOp(valueId ValueId) returns ElementIndex
  		match self.defKindOf(valueId) 'kind'
@@ -19866,7 +20538,7 @@ index c75e189..34b297c 100644
  			phiDef then panic("UseIndex.requireDefOp: value {valueId} is a phi, not an op def")
  			none then panic("UseIndex.requireDefOp: value {valueId} has no op def")
  		end 'kind'
-@@ -2788,7 +2788,7 @@ export type UseIndex
+@@ -3031,7 +3031,7 @@ export type UseIndex
  		end 'wrongBlock'
  
  		if self.useCount(valueId) > 0 'appendMustNotGoBackwards'
@@ -19875,7 +20547,7 @@ index c75e189..34b297c 100644
  
  			if seq < self.useSeqAt(tail) 'outOfOrder'
  				panic("UseIndex.addUseRecord: use of value {valueId} at sequence {seq} lands before that value's last use (sequence {self.useSeqAt(tail)}) — a value's uses must be added in layout order")
-@@ -2805,8 +2805,8 @@ export type UseIndex
+@@ -3048,8 +3048,8 @@ export type UseIndex
  		self.nextUseOfValue.push(record)
  		self.nextUseInBlock.push(record)
  
@@ -19886,7 +20558,7 @@ index c75e189..34b297c 100644
  	end 'addUseRecord'
  
  	// Append `record` at the TAIL of `valueId`'s circular thread — the order-preserving link, and the
-@@ -2816,14 +2816,14 @@ export type UseIndex
+@@ -3059,14 +3059,14 @@ export type UseIndex
  		let count = self.useCount(valueId)
  
  		if count > 0 'hasUses'
@@ -19904,7 +20576,7 @@ index c75e189..34b297c 100644
  	end 'appendToValueThread'
  
  	// Push `record` at the HEAD of `blockLocal`'s thread. A block's records have no order to keep, so
-@@ -2853,7 +2853,7 @@ export type UseIndex
+@@ -3096,7 +3096,7 @@ export type UseIndex
  			return false
  		end 'neverUsed'
  
@@ -19913,7 +20585,7 @@ index c75e189..34b297c 100644
  
  		if self.useBlockAt(tail) != blockLocal 'earlierBlock'
  			return false
-@@ -2874,7 +2874,7 @@ export type UseIndex
+@@ -3117,7 +3117,7 @@ export type UseIndex
  	// repair sequence numbers, and a record no value points at is reachable from no value ever again
  	// (`addUseRecord` always mints a new record; a detached one is never re-threaded).
  	export function removeUseRecordsOf(valueId ValueId)
@@ -19921,18 +20593,20 @@ index c75e189..34b297c 100644
 +		try self.useCountOfValue.set((valueId as ElementIndex), value: 0) otherwise panic("UseIndex.removeUseRecordsOf: value {valueId} out of range (valueCount={self.valueCount})")
  	end 'removeUseRecordsOf'
  
- 	// Repoint one record's sequence number — what an op INSERTED into a block costs its uses.
-@@ -2919,33 +2919,33 @@ export type UseIndex
+ 	// Repoint one record's sequence number — what a RE-SPACE costs the uses of the ops it moved
+@@ -3161,35 +3161,35 @@ export type UseIndex
  	// here, so a stale one is unreachable, and rewriting it would be work with no reader.
  	export function resetValue(valueId ValueId)
  		self.removeUseRecordsOf(valueId)
 -		try self.hasOpDef.set(valueId, value: false) otherwise panic("UseIndex.resetValue: value {valueId} out of range (valueCount={self.valueCount})")
+-		try self.constDef.set(valueId, value: false) otherwise panic("UseIndex.resetValue: constDef.set OOB for value {valueId}")
 -		try self.isPhi.set(valueId, value: false) otherwise panic("UseIndex.resetValue: isPhi.set OOB for value {valueId}")
 -		try self.edgePassed.set(valueId, value: false) otherwise panic("UseIndex.resetValue: edgePassed.set OOB for value {valueId}")
 -		try self.spillStored.set(valueId, value: false) otherwise panic("UseIndex.resetValue: spillStored.set OOB for value {valueId}")
 -		try self.slotResident.set(valueId, value: false) otherwise panic("UseIndex.resetValue: slotResident.set OOB for value {valueId}")
 -		try self.touchesHotLoop.set(valueId, value: false) otherwise panic("UseIndex.resetValue: touchesHotLoop.set OOB for value {valueId}")
 +		try self.hasOpDef.set((valueId as ElementIndex), value: false) otherwise panic("UseIndex.resetValue: value {valueId} out of range (valueCount={self.valueCount})")
++		try self.constDef.set((valueId as ElementIndex), value: false) otherwise panic("UseIndex.resetValue: constDef.set OOB for value {valueId}")
 +		try self.isPhi.set((valueId as ElementIndex), value: false) otherwise panic("UseIndex.resetValue: isPhi.set OOB for value {valueId}")
 +		try self.edgePassed.set((valueId as ElementIndex), value: false) otherwise panic("UseIndex.resetValue: edgePassed.set OOB for value {valueId}")
 +		try self.spillStored.set((valueId as ElementIndex), value: false) otherwise panic("UseIndex.resetValue: spillStored.set OOB for value {valueId}")
@@ -19942,11 +20616,13 @@ index c75e189..34b297c 100644
  
  	// Record `valueId`'s def: an op at `opIdx`, in block `blockLocal`. A split MINTS values — each
  	// reload defines a fresh id — and a fresh id has no def site until this gives it one.
- 	export function setOpDef(valueId ValueId, opIdx ElementIndex, blockLocal ElementIndex)
+ 	export function setOpDef(valueId ValueId, opIdx ElementIndex, blockLocal ElementIndex, constMaterialization bool)
 -		try self.hasOpDef.set(valueId, value: true) otherwise panic("UseIndex.setOpDef: value {valueId} out of range (valueCount={self.valueCount})")
+-		try self.constDef.set(valueId, value: constMaterialization) otherwise panic("UseIndex.setOpDef: constDef.set OOB for value {valueId}")
 -		try self.defOpIdx.set(valueId, value: opIdx) otherwise panic("UseIndex.setOpDef: defOpIdx.set OOB for value {valueId}")
 -		try self.defOpBlock.set(valueId, value: blockLocal) otherwise panic("UseIndex.setOpDef: defOpBlock.set OOB for value {valueId}")
 +		try self.hasOpDef.set((valueId as ElementIndex), value: true) otherwise panic("UseIndex.setOpDef: value {valueId} out of range (valueCount={self.valueCount})")
++		try self.constDef.set((valueId as ElementIndex), value: constMaterialization) otherwise panic("UseIndex.setOpDef: constDef.set OOB for value {valueId}")
 +		try self.defOpIdx.set((valueId as ElementIndex), value: opIdx) otherwise panic("UseIndex.setOpDef: defOpIdx.set OOB for value {valueId}")
 +		try self.defOpBlock.set((valueId as ElementIndex), value: blockLocal) otherwise panic("UseIndex.setOpDef: defOpBlock.set OOB for value {valueId}")
  	end 'setOpDef'
@@ -19968,7 +20644,7 @@ index c75e189..34b297c 100644
  	end 'setSlotResidency'
  
  	// The op-level answer: a `spillStore` wrote the value into its slot and a `slotReload` read it out of
-@@ -2971,18 +2971,18 @@ export type UseIndex
+@@ -3215,18 +3215,18 @@ export type UseIndex
  
  	// Record `valueId` as a block-arg (phi) of `blockLocal`.
  	function setPhiDef(valueId ValueId, blockLocal ElementIndex)
@@ -19991,7 +20667,7 @@ index c75e189..34b297c 100644
  	end 'setTouchesHotLoop'
  
  	// Grow the value space to `newValueCount`, keeping every column's contents. A split MINTS value ids
-@@ -2998,19 +2998,19 @@ export type UseIndex
+@@ -3242,20 +3242,20 @@ export type UseIndex
  
  		// The value THREADS: a fresh value has no uses, and a zero count is what says so — the tail entry
  		// beside it is never read until an `addUseRecord` writes it.
@@ -19999,6 +20675,7 @@ index c75e189..34b297c 100644
 -		self.lastUseOfValue.growFilled(newValueCount, value: 0)
 -
 -		self.hasOpDef.growFilled(newValueCount, value: false)
+-		self.constDef.growFilled(newValueCount, value: false)
 -		self.defOpIdx.growFilled(newValueCount, value: 0)
 -		self.defOpBlock.growFilled(newValueCount, value: 0)
 -		self.isPhi.growFilled(newValueCount, value: false)
@@ -20012,6 +20689,7 @@ index c75e189..34b297c 100644
 +		self.lastUseOfValue.growFilled((newValueCount as ElementIndex), value: 0)
 +
 +		self.hasOpDef.growFilled((newValueCount as ElementIndex), value: false)
++		self.constDef.growFilled((newValueCount as ElementIndex), value: false)
 +		self.defOpIdx.growFilled((newValueCount as ElementIndex), value: 0)
 +		self.defOpBlock.growFilled((newValueCount as ElementIndex), value: 0)
 +		self.isPhi.growFilled((newValueCount as ElementIndex), value: false)
@@ -20024,7 +20702,16 @@ index c75e189..34b297c 100644
  
  		self.valueCount = newValueCount
  	end 'growTo'
-@@ -3215,7 +3215,7 @@ function lastOpOf(block IrBlock) returns ElementIndex
+@@ -3342,7 +3342,7 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
+ 		indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, heat: block.heat, seq: freshSeqAt(blockLocal, pos: pos), opIdx: try ordered.get(pos) otherwise panic("indexBlockFacts: ordered.get OOB"), which: which, buf: buf, opFacts: opFacts)
+ 	end 'eachOp'
+ 
+-	let terminatorSeq = freshSeqAt(blockLocal, pos: opCount - 1) if opCount > 0 else 0 as OpSeq
++	let terminatorSeq = freshSeqAt(blockLocal, pos: ((opCount - 1) as ElementIndex)) if opCount > 0 else 0 as OpSeq
+ 	indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: opCount as OpSeq, terminatorSeq: terminatorSeq, which: which)
+ 	return opCount
+ end 'indexBlockFacts'
+@@ -3461,7 +3461,7 @@ function lastOpOf(block IrBlock) returns ElementIndex
  		return block.terminatorIndex()
  	end 'terminated'
  
@@ -20033,7 +20720,7 @@ index c75e189..34b297c 100644
  end 'lastOpOf'
  
  // Build the index in ONE pass over the function: create it empty, then record every def, flag and use
-@@ -3283,7 +3283,7 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
+@@ -3529,7 +3529,7 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
  		// dirty block, so one cursor walks them together — no search, no per-block filter.
  		let runEnd = pressure.exitSlotOf(blockLocal)
  
@@ -20042,8 +20729,8 @@ index c75e189..34b297c 100644
  			let slot = try candidates.get(next) otherwise panic("reindexSplitValues: candidates.get OOB at {next}")
  
  			if slot > runEnd as DenseInt 'inALaterBlock'
-@@ -3313,8 +3313,8 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
- 		indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: blockOpCount(block) as OpSeq, which: which)
+@@ -3560,8 +3560,8 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
+ 		indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: blockOpCount(block) as OpSeq, terminatorSeq: terminatorSeq, which: which)
  	end 'eachDirtyBlock'
  
 -	if next != candidates.count() 'candidatesOutsideTheDirtyRegion'
@@ -20053,25 +20740,82 @@ index c75e189..34b297c 100644
  	end 'candidatesOutsideTheDirtyRegion'
  end 'reindexSplitValues'
  
-@@ -3610,7 +3610,7 @@ export type LivenessMarkScratch
+@@ -3864,7 +3864,7 @@ export type LivenessMarkScratch
  
  			for k in 0 upto deg 'eachPred'
  				let p = topo.pred.neighbour(b as CsrIndex, k: k)
--				self.editLiveOut(live, gen: gen, blockLocal: p, v: v, adding: adding, touched: touched)
-+				self.editLiveOut(live, gen: gen, blockLocal: (p as ElementIndex), v: v, adding: adding, touched: touched)
+-				self.visitLiveOut(gen, blockLocal: p)
++				self.visitLiveOut(gen, blockLocal: (p as ElementIndex))
  				pending.push(p)
  			end 'eachPred'
  		end 'walkUp'
-@@ -3740,7 +3740,7 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
+@@ -3936,9 +3936,9 @@ export type LivenessMarkScratch
+ 			let hi = spanHiOf(packed)
+ 			let last = self.mergedHi.count()
+ 
+-			if last > 0 and lo <= (try self.mergedHi.get(last - 1) otherwise panic("LivenessMarkScratch.mergeIntervals: mergedHi.get OOB")) + 1 'extends'
+-				if hi > (try self.mergedHi.get(last - 1) otherwise panic("LivenessMarkScratch.mergeIntervals: mergedHi.get OOB")) 'reachesFurther'
+-					try self.mergedHi.set(last - 1, value: hi) otherwise panic("LivenessMarkScratch.mergeIntervals: mergedHi.set OOB")
++			if last > 0 and lo <= (try self.mergedHi.get(((last - 1) as ElementIndex)) otherwise panic("LivenessMarkScratch.mergeIntervals: mergedHi.get OOB")) + 1 'extends'
++				if hi > (try self.mergedHi.get(((last - 1) as ElementIndex)) otherwise panic("LivenessMarkScratch.mergeIntervals: mergedHi.get OOB")) 'reachesFurther'
++					try self.mergedHi.set(((last - 1) as ElementIndex), value: hi) otherwise panic("LivenessMarkScratch.mergeIntervals: mergedHi.set OOB")
+ 				end 'reachesFurther'
+ 			end 'extends' else 'startsNew'
+ 				self.mergedLo.push(lo)
+@@ -3954,7 +3954,7 @@ export type LivenessMarkScratch
+ 		while lo < hi 'bisect'
+ 			let mid = lo + (hi - lo) / 2
+ 
+-			if (try self.mergedLo.get(mid) otherwise panic("LivenessMarkScratch.inMergedIntervals: mergedLo.get OOB")) <= b 'rightHalf'
++			if (try self.mergedLo.get((mid as ElementIndex)) otherwise panic("LivenessMarkScratch.inMergedIntervals: mergedLo.get OOB")) <= b 'rightHalf'
+ 				lo = mid + 1
+ 			end 'rightHalf' else 'leftHalf'
+ 				hi = mid
+@@ -3965,7 +3965,7 @@ export type LivenessMarkScratch
+ 			return false
+ 		end 'beforeAll'
+ 
+-		return b <= (try self.mergedHi.get(lo - 1) otherwise panic("LivenessMarkScratch.inMergedIntervals: mergedHi.get OOB"))
++		return b <= (try self.mergedHi.get(((lo - 1) as ElementIndex)) otherwise panic("LivenessMarkScratch.inMergedIntervals: mergedHi.get OOB"))
+ 	end 'inMergedIntervals'
+ 
+ 	function liveInHolds(b ElementIndex, gen VersionStamp) returns bool
+@@ -3976,7 +3976,7 @@ export type LivenessMarkScratch
+ 		let deg = topo.succ.degree(b as CsrIndex)
+ 
+ 		for k in 0 upto deg 'eachSucc'
+-			if self.liveInHolds(topo.succ.neighbour(b as CsrIndex, k: k), gen: gen) 'liveBeyond'
++			if self.liveInHolds((topo.succ.neighbour(b as CsrIndex, k: k) as ElementIndex), gen: gen) 'liveBeyond'
+ 				return true
+ 			end 'liveBeyond'
+ 		end 'eachSucc'
+@@ -4057,11 +4057,11 @@ export type LivenessMarkScratch
+ 	function installAroundCuts(live LiveSets, v ValueId, class RegClass, lo ElementIndex, hi ElementIndex)
+ 		var start = lo
+ 
+-		while self.cutCursor < self.cuts.count() and (try self.cuts.get(self.cutCursor) otherwise panic("LivenessMarkScratch.installAroundCuts: cuts.get OOB")) < lo 'skipEarlierCuts'
++		while self.cutCursor < (self.cuts.count() as ElementIndex) and (try self.cuts.get(self.cutCursor) otherwise panic("LivenessMarkScratch.installAroundCuts: cuts.get OOB")) < lo 'skipEarlierCuts'
+ 			self.cutCursor = self.cutCursor + 1
+ 		end 'skipEarlierCuts'
+ 
+-		while self.cutCursor < self.cuts.count() and (try self.cuts.get(self.cutCursor) otherwise panic("LivenessMarkScratch.installAroundCuts: cuts.get OOB")) <= hi 'eachCutInside'
++		while self.cutCursor < (self.cuts.count() as ElementIndex) and (try self.cuts.get(self.cutCursor) otherwise panic("LivenessMarkScratch.installAroundCuts: cuts.get OOB")) <= hi 'eachCutInside'
+ 			let cut = try self.cuts.get(self.cutCursor) otherwise panic("LivenessMarkScratch.installAroundCuts: cuts.get OOB")
+ 
+ 			if cut > start 'somethingBefore'
+@@ -4303,9 +4303,9 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
  	collectBlockOps(block, out: ordered)
  	let opCount = ordered.count()
  	var physLiveAfter = scratch.physLiveAfter
 -	physLiveAfter.growFilled(opCount, value: 0)
 +	physLiveAfter.growFilled((opCount as ElementIndex), value: 0)
+ 	var pendingBefore = scratch.pendingBefore
+-	pendingBefore.growFilled(opCount, value: 0)
++	pendingBefore.growFilled((opCount as ElementIndex), value: 0)
  
  	// Backward first: a register is live after an op iff a later op reads it before one writes it, and
  	// the block's exit holds none (the block-boundary assumption above).
-@@ -3749,8 +3749,8 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
+@@ -4314,8 +4314,8 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
  
  	while pos > 0 'eachOpBackward'
  		pos = pos - 1
@@ -20080,9 +20824,9 @@ index c75e189..34b297c 100644
 +		try physLiveAfter.set((pos as ElementIndex), value: live) otherwise panic("sweepEstablishedRegisters: physLiveAfter.set OOB at position {pos} — the column was just grown to {opCount}")
 +		let op = try module.ops.get(try ordered.get((pos as ElementIndex)) otherwise panic("sweepEstablishedRegisters: ordered.get OOB at position {pos}")) otherwise panic("sweepEstablishedRegisters: an op of block {blockLocal} is not in module.ops")
  		targetOpOperands(op, buf: buf)
- 		live = (live and not rawClobberMask(op, buf: buf, opFacts: opFacts)) or physicalOperandMask(buf, census: OperandCensus.readByName) or opFacts.implicitUsesOf(op)
+ 		live = physicalLiveBefore(op, buf: buf, liveAfter: live, opFacts: opFacts)
  	end 'eachOpBackward'
-@@ -3765,7 +3765,7 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
+@@ -4330,7 +4330,7 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
  
  		for o in buf 'eachOperand'
  			if operandIsDef(o) and operandIsVirtual(o) 'virtualDef'
@@ -20091,16 +20835,25 @@ index c75e189..34b297c 100644
  			end 'virtualDef'
  		end 'eachOperand'
  
-@@ -3844,7 +3844,7 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal E
+@@ -4422,7 +4422,7 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal E
+ 	events.beginBlock()
+ 
+ 	for v in liveOutList 'enterLiveOut'
+-		events.enter(v, pos: ordered.count())
++		events.enter(v, pos: (ordered.count() as ElementIndex))
+ 	end 'enterLiveOut'
+ 
+ 	if block.heat == BlockHeat.cold 'coldBlock'
+@@ -4433,7 +4433,7 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal E
  
  	for ri in 0 upto ordered.count() 'eachOpRev'
  		let pos = ordered.count() - 1 - ri
 -		let opIdx = try ordered.get(pos) otherwise panic("sweepBlockPressure: ordered.get OOB")
 +		let opIdx = try ordered.get((pos as ElementIndex)) otherwise panic("sweepBlockPressure: ordered.get OOB")
- 		stepBackwardOverOp(module, opIdx: opIdx, heat: block.heat, pos: pos as ElementIndex, runs: runs, liveRow: liveRow, forbidden: forbidden, buf: buf, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts, coldRun: scratch.coldRun)
+ 		blockClobber = blockClobber or stepBackwardOverOp(module, opIdx: opIdx, heat: block.heat, pos: pos as ElementIndex, runs: runs, liveRow: liveRow, forbidden: forbidden, buf: buf, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure, opFacts: opFacts, coldRun: scratch.coldRun, events: events)
  
  		for classOrdinal in 0 upto RegClassCount 'eachClass'
-@@ -3892,7 +3892,7 @@ function countDeadPhis(block IrBlock, liveRow BitRow, classes ValueClassColumn,
+@@ -4499,7 +4499,7 @@ function countDeadPhis(block IrBlock, liveRow BitRow, classes ValueClassColumn,
  
  	for arg in block.blockArgs 'each'
  		if not liveRow.test(arg.valueId as BitIndex) 'deadPhi'
@@ -20109,7 +20862,7 @@ index c75e189..34b297c 100644
  			let idx = classRowIndex(blockLocal, class: class)
  			try deadPhis.set(idx, value: (try deadPhis.get(idx) otherwise panic("countDeadPhis: deadPhis.get OOB")) + 1) otherwise panic("countDeadPhis: deadPhis.set OOB")
  		end 'deadPhi'
-@@ -4191,7 +4191,7 @@ end 'ParamCrossForbid'
+@@ -4798,7 +4798,7 @@ end 'ParamCrossForbid'
  // It is asked per VALUE, so `ParamCrossForbid.maskFor` answers in O(1) for the functions that have no
  // sibling parameters at all and O(captures) — at most one per parameter — for the rest.
  export function nonSweptForbidOf(v ValueId, paramCross ParamCrossForbid, establishedAtDef RegMaskColumn) returns RegMask
@@ -20118,7 +20871,7 @@ index c75e189..34b297c 100644
  
  	return paramCross.maskFor(v) or established
  end 'nonSweptForbidOf'
-@@ -4408,7 +4408,7 @@ export type ColdBlockRuns
+@@ -5032,7 +5032,7 @@ export type ColdBlockRuns
  
  	// The run the body op at `pos` belongs to; the terminator's position (past the body) is in none.
  	export function runAt(pos ElementIndex) returns ColdRunAt
@@ -20127,7 +20880,7 @@ index c75e189..34b297c 100644
  			return ColdRunAt.none
  		end 'notInARun'
  
-@@ -4426,8 +4426,8 @@ export type ColdBlockRuns
+@@ -5050,8 +5050,8 @@ export type ColdBlockRuns
  	// The one forward walk. Refills in place, so a block re-walked after a split allocates nothing new.
  	export function rebuild(module TargetModule, block IrBlock, buf OperandList, opFacts OpVariantFacts)
  		let count = block.opRefs.count()
@@ -20138,7 +20891,7 @@ index c75e189..34b297c 100644
  		self.first.clear()
  		self.last.clear()
  
-@@ -4532,7 +4532,7 @@ end 'ColdRunTable'
+@@ -5156,7 +5156,7 @@ end 'ColdRunTable'
  // `pos` is a pre-move or its call, `pos` itself otherwise — see `ColdBlockRuns`.
  export function firstPreMoveBefore(module TargetModule, block IrBlock, pos ElementIndex, buf OperandList, opFacts OpVariantFacts) returns ElementIndex
  	// A read by the terminator lands the reload past the body, where no group is.
@@ -20147,7 +20900,7 @@ index c75e189..34b297c 100644
  		return pos
  	end 'pastTheBody'
  
-@@ -4558,13 +4558,13 @@ end 'firstPreMoveBefore'
+@@ -5182,13 +5182,13 @@ end 'firstPreMoveBefore'
  export function reloadRunBoundFrom(module TargetModule, block IrBlock, pos ElementIndex, buf OperandList, opFacts OpVariantFacts) returns ElementIndex
  	let count = block.opRefs.count()
  
@@ -20163,7 +20916,7 @@ index c75e189..34b297c 100644
  		let kind = coldRunKindAt(module, block: block, pos: at, buf: buf, opFacts: opFacts)
  
  		if kind == ColdRunOpKind.call 'theGroupsCall'
-@@ -4572,7 +4572,7 @@ export function reloadRunBoundFrom(module TargetModule, block IrBlock, pos Eleme
+@@ -5196,7 +5196,7 @@ export function reloadRunBoundFrom(module TargetModule, block IrBlock, pos Eleme
  		end 'theGroupsCall'
  
  		if kind != ColdRunOpKind.clobber 'notAGroup'
@@ -20172,7 +20925,7 @@ index c75e189..34b297c 100644
  		end 'notAGroup'
  
  		at = at + 1
-@@ -4719,7 +4719,7 @@ end 'ConfinedTransient'
+@@ -5343,7 +5343,7 @@ end 'ConfinedTransient'
  // `opTransientDefOf`'s own loop reads `buf` directly instead of through here: it is SEARCHING for the
  // operand rather than decoding a recorded index, and it is the innermost loop of the sweep.
  module function transientDefOperand(buf OperandList, at OperandIndex) returns Operand
@@ -20181,18 +20934,18 @@ index c75e189..34b297c 100644
  end 'transientDefOperand'
  
  // Add this op's TRANSIENT register demand to `pressureOut`, in the FILE the register belongs to: the
-@@ -5011,8 +5011,8 @@ function forbidLiveValue(v ValueId, forbidden RegMaskColumn, buf OperandList, cl
+@@ -5617,8 +5617,8 @@ function forbidLiveValue(v ValueId, forbidden RegMaskColumn, buf OperandList, cl
  		return
  	end 'ownDef'
  
--	let cur = try forbidden.get(v) otherwise panic("applyForbidden: forbidden.get OOB")
--	try forbidden.set(v, value: cur or clobberMask) otherwise panic("applyForbidden: forbidden.set OOB")
-+	let cur = try forbidden.get((v as ElementIndex)) otherwise panic("applyForbidden: forbidden.get OOB")
-+	try forbidden.set((v as ElementIndex), value: cur or clobberMask) otherwise panic("applyForbidden: forbidden.set OOB")
+-	let cur = try forbidden.get(v) otherwise panic("forbidLiveValue: forbidden.get OOB")
+-	try forbidden.set(v, value: cur or clobberMask) otherwise panic("forbidLiveValue: forbidden.set OOB")
++	let cur = try forbidden.get((v as ElementIndex)) otherwise panic("forbidLiveValue: forbidden.get OOB")
++	try forbidden.set((v as ElementIndex), value: cur or clobberMask) otherwise panic("forbidLiveValue: forbidden.set OOB")
  end 'forbidLiveValue'
  
  function operandDefinesValue(buf OperandList, v ValueId) returns bool
-@@ -5062,8 +5062,8 @@ function forbidOperandsFromImplicit(forbidden RegMaskColumn, buf OperandList, im
+@@ -5669,8 +5669,8 @@ function forbidOperandsFromImplicit(forbidden RegMaskColumn, buf OperandList, im
  	for o in buf 'each'
  		if operandIsVirtual(o) 'virt'
  			let v = operandValueId(o)
@@ -20203,7 +20956,7 @@ index c75e189..34b297c 100644
  		end 'virt'
  	end 'each'
  end 'forbidOperandsFromImplicit'
-@@ -5107,7 +5107,7 @@ typealias OpSlotRoleColumn = Array with OpSlotRole
+@@ -5714,7 +5714,7 @@ typealias OpSlotRoleColumn = Array with OpSlotRole
  // A `TargetOp` case's zero-based DECLARATION POSITION (`op.ordinal`) — the key `OpVariantFacts` is
  // indexed by. Dense over the union's own cases, and the space is the case count, so a column over it is
  // a constant however large the module is. Wide because the case count has no literal to bound it with.
@@ -20212,7 +20965,7 @@ index c75e189..34b297c 100644
  
  // THE STATIC FACTS OF A `TargetOp` VARIANT, derived on first sight of that variant and then read.
  //
-@@ -5156,35 +5156,35 @@ export type OpVariantFacts
+@@ -5763,35 +5763,35 @@ export type OpVariantFacts
  	export static function create() returns OpVariantFacts
  		var facts = Self{implicitDefs: RegMaskColumn.create(), implicitUses: RegMaskColumn.create(), slotRole: OpSlotRoleColumn.create(), isCall: BoolArray.create(), known: BoolArray.create()}
  		let variantCount = TargetOp.unionCases.allCases.count()
@@ -20257,7 +21010,7 @@ index c75e189..34b297c 100644
  	end 'slotRoleOf'
  
  	// `op`'s variant, with every column holding that variant's answers. The ONE derivation site, so a
-@@ -5192,7 +5192,7 @@ export type OpVariantFacts
+@@ -5799,7 +5799,7 @@ export type OpVariantFacts
  	function learn(op TargetOp) returns TargetOpVariant
  		let variant = op.ordinal as TargetOpVariant
  
@@ -20266,7 +21019,7 @@ index c75e189..34b297c 100644
  
  		if derived 'alreadyDerived'
  			if VerifyOpVariantFacts 'checkAgainstTheOpItself'
-@@ -5202,27 +5202,27 @@ export type OpVariantFacts
+@@ -5809,27 +5809,27 @@ export type OpVariantFacts
  			return variant
  		end 'alreadyDerived'
  
@@ -20303,7 +21056,7 @@ index c75e189..34b297c 100644
  		let rederivedRole = deriveSlotRole(op)
  
  		if memoRole != rederivedRole 'roleDiverged'
-@@ -5449,7 +5449,7 @@ end 'blockOpCount'
+@@ -6056,7 +6056,7 @@ end 'blockOpCount'
  // list-building consumers never see there, and the two would disagree silently about which op the peak
  // is.
  export function blockOpAt(block IrBlock, pos ElementIndex) returns ElementIndex
@@ -20312,6 +21065,302 @@ index c75e189..34b297c 100644
  		return try block.opRefs.get(pos) otherwise panic("blockOpAt: opRefs.get OOB at {pos} of block '{String.from(block.label)}'")
  	end 'aBodyOp'
  
+diff --git a/maxon-bin/Compiler/Targets/Shared/TransparentCarry.maxon b/maxon-bin/Compiler/Targets/Shared/TransparentCarry.maxon
+index 65edfb1..90ccdbf 100644
+--- a/maxon-bin/Compiler/Targets/Shared/TransparentCarry.maxon
++++ b/maxon-bin/Compiler/Targets/Shared/TransparentCarry.maxon
+@@ -76,12 +76,12 @@ export type TransparentCarry
+ 
+ 		for k in (try self.endOffsets.get(blockLocal) otherwise panic("TransparentCarry.advanceTo: endOffsets.get OOB at {blockLocal}")) upto (try self.endOffsets.get(blockLocal + 1) otherwise panic("TransparentCarry.advanceTo: endOffsets.get OOB at {blockLocal + 1}")) 'eachRunThatEnds'
+ 			let v = try self.endValues.get(k) otherwise panic("TransparentCarry.advanceTo: endValues.get OOB at {k}")
+-			census.remove(try effPoolSizes.get(v) otherwise panic("TransparentCarry.advanceTo: value {v} is outside the function's value space"), class: try classes.get(v) otherwise panic("TransparentCarry.advanceTo: value {v} has no recorded register class"))
++			census.remove(try effPoolSizes.get((v as ElementIndex)) otherwise panic("TransparentCarry.advanceTo: value {v} is outside the function's value space"), class: try classes.get((v as ElementIndex)) otherwise panic("TransparentCarry.advanceTo: value {v} has no recorded register class"))
+ 		end 'eachRunThatEnds'
+ 
+ 		for k in (try self.startOffsets.get(blockLocal) otherwise panic("TransparentCarry.advanceTo: startOffsets.get OOB at {blockLocal}")) upto (try self.startOffsets.get(blockLocal + 1) otherwise panic("TransparentCarry.advanceTo: startOffsets.get OOB at {blockLocal + 1}")) 'eachRunThatStarts'
+ 			let v = try self.startValues.get(k) otherwise panic("TransparentCarry.advanceTo: startValues.get OOB at {k}")
+-			census.add(try effPoolSizes.get(v) otherwise panic("TransparentCarry.advanceTo: value {v} is outside the function's value space"), class: try classes.get(v) otherwise panic("TransparentCarry.advanceTo: value {v} has no recorded register class"))
++			census.add(try effPoolSizes.get((v as ElementIndex)) otherwise panic("TransparentCarry.advanceTo: value {v} is outside the function's value space"), class: try classes.get((v as ElementIndex)) otherwise panic("TransparentCarry.advanceTo: value {v} has no recorded register class"))
+ 		end 'eachRunThatStarts'
+ 	end 'advanceTo'
+ 
+@@ -90,7 +90,7 @@ export type TransparentCarry
+ 	end 'bump'
+ 
+ 	function prefixSum(offsets CfgIndexArray, cursor CfgIndexArray) returns ElementIndex
+-		cursor.refill(offsets.count(), value: 0)
++		cursor.refill((offsets.count() as ElementIndex), value: 0)
+ 		var total = 0 as ElementIndex
+ 
+ 		for b in 0 upto offsets.count() 'eachBucket'
+diff --git a/maxon-bin/Compiler/Targets/Shared/VictimGaps.maxon b/maxon-bin/Compiler/Targets/Shared/VictimGaps.maxon
+index e7d4e54..0ff13c8 100644
+--- a/maxon-bin/Compiler/Targets/Shared/VictimGaps.maxon
++++ b/maxon-bin/Compiler/Targets/Shared/VictimGaps.maxon
+@@ -212,7 +212,7 @@ export type GapTree
+ 	end 'create'
+ 
+ 	function size(slotCount ElementIndex, valueCount ValueId)
+-		self.leafBase = roundUpToPowerOfTwo(gapCellCountOf(slotCount) as BytePos)
++		self.leafBase = (roundUpToPowerOfTwo(gapCellCountOf(slotCount) as BytePos) as ElementIndex)
+ 		self.best.refill(self.leafBase + self.leafBase, value: 0)
+ 		self.headAt.refill(self.leafBase, value: 0)
+ 		self.gapValue.clear()
+@@ -229,20 +229,20 @@ export type GapTree
+ 		self.maskedStack.clear()
+ 		self.wakeEpochs.clear()
+ 		self.wakeValues.clear()
+-		self.firstOfValue.refill(valueCount, value: 0)
+-		self.asleep.refill(valueCount, value: false)
+-		self.wakeAt.refill(valueCount, value: 0)
++		self.firstOfValue.refill((valueCount as ElementIndex), value: 0)
++		self.asleep.refill((valueCount as ElementIndex), value: false)
++		self.wakeAt.refill((valueCount as ElementIndex), value: 0)
+ 	end 'size'
+ 
+ 	function growValues(valueCount ValueId)
+-		self.firstOfValue.growFilled(valueCount, value: 0)
+-		self.asleep.growFilled(valueCount, value: false)
+-		self.wakeAt.growFilled(valueCount, value: 0)
++		self.firstOfValue.growFilled((valueCount as ElementIndex), value: 0)
++		self.asleep.growFilled((valueCount as ElementIndex), value: false)
++		self.wakeAt.growFilled((valueCount as ElementIndex), value: 0)
+ 	end 'growValues'
+ 
+ 	export function gapCountOf(value ValueId) returns ElementIndex
+ 		var count = 0 as ElementIndex
+-		var g = try self.firstOfValue.get(value) otherwise panic("GapTree.gapCountOf: firstOfValue.get OOB for value {value}")
++		var g = try self.firstOfValue.get((value as ElementIndex)) otherwise panic("GapTree.gapCountOf: firstOfValue.get OOB for value {value}")
+ 
+ 		while g != 0 'eachGap'
+ 			count = count + 1
+@@ -253,12 +253,12 @@ export type GapTree
+ 	end 'gapCountOf'
+ 
+ 	export function holdsGap(value ValueId, startSlot ElementIndex, endRecord ElementIndex, isOpen bool, tailKey OpSeq) returns bool
+-		var g = try self.firstOfValue.get(value) otherwise panic("GapTree.holdsGap: firstOfValue.get OOB for value {value}")
++		var g = try self.firstOfValue.get((value as ElementIndex)) otherwise panic("GapTree.holdsGap: firstOfValue.get OOB for value {value}")
+ 
+ 		while g != 0 'eachGap'
+ 			let id = g - 1
+ 
+-			if (try self.gapStart.get(id) otherwise panic("GapTree.holdsGap: gapStart.get OOB at {id}")) == startSlot and (try self.gapOpen.get(id) otherwise panic("GapTree.holdsGap: gapOpen.get OOB at {id}")) == isOpen and ((isOpen and (try self.gapTailKey.get(id) otherwise panic("GapTree.holdsGap: gapTailKey.get OOB at {id}")) == tailKey) or (not isOpen and (try self.gapEnd.get(id) otherwise panic("GapTree.holdsGap: gapEnd.get OOB at {id}")) == endRecord)) 'thisOne'
++			if ((try self.gapStart.get(id) otherwise panic("GapTree.holdsGap: gapStart.get OOB at {id}")) as ElementIndex) == startSlot and (try self.gapOpen.get(id) otherwise panic("GapTree.holdsGap: gapOpen.get OOB at {id}")) == isOpen and ((isOpen and (try self.gapTailKey.get(id) otherwise panic("GapTree.holdsGap: gapTailKey.get OOB at {id}")) == tailKey) or (not isOpen and (try self.gapEnd.get(id) otherwise panic("GapTree.holdsGap: gapEnd.get OOB at {id}")) == endRecord)) 'thisOne'
+ 				return true
+ 			end 'thisOne'
+ 
+@@ -331,7 +331,7 @@ export type GapTree
+ 			let id = g - 1
+ 			let masked = try self.gapMasked.get(id) otherwise panic("GapTree.leafWinner: gapMasked.get OOB at {id}")
+ 			let value = try self.gapValue.get(id) otherwise panic("GapTree.leafWinner: gapValue.get OOB at {id}")
+-			let sleeping = try self.asleep.get(value) otherwise panic("GapTree.leafWinner: asleep.get OOB for value {value}")
++			let sleeping = try self.asleep.get((value as ElementIndex)) otherwise panic("GapTree.leafWinner: asleep.get OOB for value {value}")
+ 
+ 			if not masked and not sleeping 'awake'
+ 				winner = self.better(winner, b: g, index: index)
+@@ -415,14 +415,14 @@ export type GapTree
+ 	export function mask(gap ElementIndex, index UseIndex)
+ 		try self.gapMasked.set(gap - 1, value: true) otherwise panic("GapTree.mask: gapMasked.set OOB at {gap - 1}")
+ 		self.maskedStack.push(gap)
+-		self.refreshLeaf((try self.gapStart.get(gap - 1) otherwise panic("GapTree.mask: gapStart.get OOB at {gap - 1}")), index: index)
++		self.refreshLeaf(((try self.gapStart.get(gap - 1) otherwise panic("GapTree.mask: gapStart.get OOB at {gap - 1}")) as ElementIndex), index: index)
+ 	end 'mask'
+ 
+ 	export function unmaskAll(index UseIndex)
+ 		while self.maskedStack.count() > 0 'eachMasked'
+ 			let gap = try self.maskedStack.pop() otherwise panic("GapTree.unmaskAll: pop on a non-empty stack failed")
+ 			try self.gapMasked.set(gap - 1, value: false) otherwise panic("GapTree.unmaskAll: gapMasked.set OOB at {gap - 1}")
+-			self.refreshLeaf((try self.gapStart.get(gap - 1) otherwise panic("GapTree.unmaskAll: gapStart.get OOB at {gap - 1}")), index: index)
++			self.refreshLeaf(((try self.gapStart.get(gap - 1) otherwise panic("GapTree.unmaskAll: gapStart.get OOB at {gap - 1}")) as ElementIndex), index: index)
+ 		end 'eachMasked'
+ 	end 'unmaskAll'
+ 
+@@ -434,7 +434,7 @@ export type GapTree
+ 			let id = g - 1
+ 			let value = try self.gapValue.get(id) otherwise panic("GapTree.bestInCellUpTo: gapValue.get OOB at {id}")
+ 
+-			if (try self.gapStart.get(id) otherwise panic("GapTree.bestInCellUpTo: gapStart.get OOB at {id}")) <= slot and not (try self.gapMasked.get(id) otherwise panic("GapTree.bestInCellUpTo: gapMasked.get OOB at {id}")) and not (try self.asleep.get(value) otherwise panic("GapTree.bestInCellUpTo: asleep.get OOB for value {value}")) 'startsInTime'
++			if ((try self.gapStart.get(id) otherwise panic("GapTree.bestInCellUpTo: gapStart.get OOB at {id}")) as ElementIndex) <= slot and not (try self.gapMasked.get(id) otherwise panic("GapTree.bestInCellUpTo: gapMasked.get OOB at {id}")) and not (try self.asleep.get((value as ElementIndex)) otherwise panic("GapTree.bestInCellUpTo: asleep.get OOB for value {value}")) 'startsInTime'
+ 				winner = self.better(winner, b: g, index: index)
+ 			end 'startsInTime'
+ 
+@@ -485,7 +485,7 @@ export type GapTree
+ 			try self.gapEntryBlock.set(id, value: entryBlock) otherwise panic("GapTree.addGap: gapEntryBlock.set OOB at {id}")
+ 			try self.gapMasked.set(id, value: false) otherwise panic("GapTree.addGap: gapMasked.set OOB at {id}")
+ 		end 'reuse' else 'fresh'
+-			id = self.gapValue.count()
++			id = (self.gapValue.count() as ElementIndex)
+ 			self.gapValue.push(value)
+ 			self.gapStart.push(startSlot as PressureSlot)
+ 			self.gapEnd.push(endRecord)
+@@ -498,50 +498,50 @@ export type GapTree
+ 			self.gapMasked.push(false)
+ 		end 'fresh'
+ 
+-		let first = try self.firstOfValue.get(value) otherwise panic("GapTree.addGap: firstOfValue.get OOB for value {value}")
++		let first = try self.firstOfValue.get((value as ElementIndex)) otherwise panic("GapTree.addGap: firstOfValue.get OOB for value {value}")
+ 		try self.gapNextOfValue.set(id, value: first) otherwise panic("GapTree.addGap: gapNextOfValue.set OOB at {id}")
+-		try self.firstOfValue.set(value, value: id + 1) otherwise panic("GapTree.addGap: firstOfValue.set OOB for value {value}")
++		try self.firstOfValue.set((value as ElementIndex), value: id + 1) otherwise panic("GapTree.addGap: firstOfValue.set OOB for value {value}")
+ 		self.linkIntoBucket(id, slot: startSlot)
+ 		self.refreshLeaf(startSlot, index: index)
+ 	end 'addGap'
+ 
+ 	function dropValue(value ValueId, index UseIndex)
+-		var g = try self.firstOfValue.get(value) otherwise panic("GapTree.dropValue: firstOfValue.get OOB for value {value}")
++		var g = try self.firstOfValue.get((value as ElementIndex)) otherwise panic("GapTree.dropValue: firstOfValue.get OOB for value {value}")
+ 
+ 		while g != 0 'eachGap'
+ 			let id = g - 1
+ 			let slot = (try self.gapStart.get(id) otherwise panic("GapTree.dropValue: gapStart.get OOB at {id}"))
+ 			let next = try self.gapNextOfValue.get(id) otherwise panic("GapTree.dropValue: gapNextOfValue.get OOB at {id}")
+-			self.unlinkFromBucket(id, slot: slot)
+-			self.refreshLeaf(slot, index: index)
++			self.unlinkFromBucket(id, slot: (slot as ElementIndex))
++			self.refreshLeaf((slot as ElementIndex), index: index)
+ 			self.freeIds.push(id)
+ 			g = next
+ 		end 'eachGap'
+ 
+-		try self.firstOfValue.set(value, value: 0) otherwise panic("GapTree.dropValue: firstOfValue.set OOB for value {value}")
+-		try self.asleep.set(value, value: false) otherwise panic("GapTree.dropValue: asleep.set OOB for value {value}")
+-		try self.wakeAt.set(value, value: 0) otherwise panic("GapTree.dropValue: wakeAt.set OOB for value {value}")
++		try self.firstOfValue.set((value as ElementIndex), value: 0) otherwise panic("GapTree.dropValue: firstOfValue.set OOB for value {value}")
++		try self.asleep.set((value as ElementIndex), value: false) otherwise panic("GapTree.dropValue: asleep.set OOB for value {value}")
++		try self.wakeAt.set((value as ElementIndex), value: 0) otherwise panic("GapTree.dropValue: wakeAt.set OOB for value {value}")
+ 	end 'dropValue'
+ 
+ 	function refreshValue(value ValueId, index UseIndex)
+-		var g = try self.firstOfValue.get(value) otherwise panic("GapTree.refreshValue: firstOfValue.get OOB for value {value}")
++		var g = try self.firstOfValue.get((value as ElementIndex)) otherwise panic("GapTree.refreshValue: firstOfValue.get OOB for value {value}")
+ 
+ 		while g != 0 'eachGap'
+ 			let id = g - 1
+-			self.refreshLeaf((try self.gapStart.get(id) otherwise panic("GapTree.refreshValue: gapStart.get OOB at {id}")), index: index)
++			self.refreshLeaf(((try self.gapStart.get(id) otherwise panic("GapTree.refreshValue: gapStart.get OOB at {id}")) as ElementIndex), index: index)
+ 			g = try self.gapNextOfValue.get(id) otherwise panic("GapTree.refreshValue: gapNextOfValue.get OOB at {id}")
+ 		end 'eachGap'
+ 	end 'refreshValue'
+ 
+ 	export function sleepForever(value ValueId, index UseIndex)
+-		try self.asleep.set(value, value: true) otherwise panic("GapTree.sleepForever: asleep.set OOB for value {value}")
+-		try self.wakeAt.set(value, value: 0) otherwise panic("GapTree.sleepForever: wakeAt.set OOB for value {value}")
++		try self.asleep.set((value as ElementIndex), value: true) otherwise panic("GapTree.sleepForever: asleep.set OOB for value {value}")
++		try self.wakeAt.set((value as ElementIndex), value: 0) otherwise panic("GapTree.sleepForever: wakeAt.set OOB for value {value}")
+ 		self.refreshValue(value, index: index)
+ 	end 'sleepForever'
+ 
+ 	export function sleepUntil(value ValueId, epoch DenseInt, index UseIndex)
+-		try self.asleep.set(value, value: true) otherwise panic("GapTree.sleepUntil: asleep.set OOB for value {value}")
+-		try self.wakeAt.set(value, value: epoch) otherwise panic("GapTree.sleepUntil: wakeAt.set OOB for value {value}")
++		try self.asleep.set((value as ElementIndex), value: true) otherwise panic("GapTree.sleepUntil: asleep.set OOB for value {value}")
++		try self.wakeAt.set((value as ElementIndex), value: epoch) otherwise panic("GapTree.sleepUntil: wakeAt.set OOB for value {value}")
+ 		self.refreshValue(value, index: index)
+ 		self.pushWake(epoch, value: value)
+ 	end 'sleepUntil'
+@@ -551,12 +551,12 @@ export type GapTree
+ 			let due = try self.wakeEpochs.get(0) otherwise panic("GapTree.wakeUpTo: wakeEpochs.get(0) failed")
+ 			let value = try self.wakeValues.get(0) otherwise panic("GapTree.wakeUpTo: wakeValues.get(0) failed")
+ 			self.popWake()
+-			let sleeping = try self.asleep.get(value) otherwise panic("GapTree.wakeUpTo: asleep.get OOB for value {value}")
+-			let scheduled = try self.wakeAt.get(value) otherwise panic("GapTree.wakeUpTo: wakeAt.get OOB for value {value}")
++			let sleeping = try self.asleep.get((value as ElementIndex)) otherwise panic("GapTree.wakeUpTo: asleep.get OOB for value {value}")
++			let scheduled = try self.wakeAt.get((value as ElementIndex)) otherwise panic("GapTree.wakeUpTo: wakeAt.get OOB for value {value}")
+ 
+ 			if sleeping and scheduled == due 'stillAsleepForThisWake'
+-				try self.asleep.set(value, value: false) otherwise panic("GapTree.wakeUpTo: asleep.set OOB for value {value}")
+-				try self.wakeAt.set(value, value: 0) otherwise panic("GapTree.wakeUpTo: wakeAt.set OOB for value {value}")
++				try self.asleep.set((value as ElementIndex), value: false) otherwise panic("GapTree.wakeUpTo: asleep.set OOB for value {value}")
++				try self.wakeAt.set((value as ElementIndex), value: 0) otherwise panic("GapTree.wakeUpTo: wakeAt.set OOB for value {value}")
+ 				self.refreshValue(value, index: index)
+ 			end 'stillAsleepForThisWake'
+ 		end 'eachDue'
+@@ -569,30 +569,30 @@ export type GapTree
+ 
+ 		while node > 0 'siftUp'
+ 			let parent = (node - 1) / 2
+-			let nodeEpoch = try self.wakeEpochs.get(node) otherwise panic("GapTree.pushWake: wakeEpochs.get OOB at {node}")
+-			let parentEpoch = try self.wakeEpochs.get(parent) otherwise panic("GapTree.pushWake: wakeEpochs.get OOB at {parent}")
++			let nodeEpoch = try self.wakeEpochs.get((node as ElementIndex)) otherwise panic("GapTree.pushWake: wakeEpochs.get OOB at {node}")
++			let parentEpoch = try self.wakeEpochs.get((parent as ElementIndex)) otherwise panic("GapTree.pushWake: wakeEpochs.get OOB at {parent}")
+ 
+ 			if parentEpoch <= nodeEpoch 'settled'
+ 				return
+ 			end 'settled'
+ 
+-			self.swapWake(node, b: parent)
++			self.swapWake((node as ElementIndex), b: (parent as ElementIndex))
+ 			node = parent
+ 		end 'siftUp'
+ 	end 'pushWake'
+ 
+ 	function popWake()
+ 		let last = self.wakeEpochs.count() - 1
+-		self.swapWake(0, b: last)
++		self.swapWake(0, b: (last as ElementIndex))
+ 		_ = try self.wakeEpochs.pop() otherwise panic("GapTree.popWake: pop on a non-empty heap failed")
+ 		_ = try self.wakeValues.pop() otherwise panic("GapTree.popWake: pop on a non-empty heap failed")
+ 		let size = self.wakeEpochs.count()
+ 		var node = 0 as ElementIndex
+ 
+-		while node * 2 + 1 < size 'siftDown'
++		while node * 2 + 1 < (size as ElementIndex) 'siftDown'
+ 			var child = node * 2 + 1
+ 
+-			if child + 1 < size and (try self.wakeEpochs.get(child + 1) otherwise panic("GapTree.popWake: wakeEpochs.get OOB at {child + 1}")) < (try self.wakeEpochs.get(child) otherwise panic("GapTree.popWake: wakeEpochs.get OOB at {child}")) 'rightIsEarlier'
++			if child + 1 < (size as ElementIndex) and (try self.wakeEpochs.get(child + 1) otherwise panic("GapTree.popWake: wakeEpochs.get OOB at {child + 1}")) < (try self.wakeEpochs.get(child) otherwise panic("GapTree.popWake: wakeEpochs.get OOB at {child}")) 'rightIsEarlier'
+ 				child = child + 1
+ 			end 'rightIsEarlier'
+ 
+@@ -626,8 +626,8 @@ export type GapTree
+ 			return
+ 		end 'nothingMoved'
+ 
+-		let firstCell = gapCellOf(first)
+-		let lastCell = gapCellOf(first + count - 1)
++		let firstCell = gapCellOf((first as ElementIndex))
++		let lastCell = gapCellOf((first as ElementIndex) + count - 1)
+ 
+ 		for cell in firstCell upto lastCell + 1 'eachWindowCell'
+ 			var g = try self.headAt.get(cell) otherwise panic("GapTree.relocate: headAt.get OOB at cell {cell}")
+@@ -637,9 +637,9 @@ export type GapTree
+ 				let next = try self.gapNextAt.get(id) otherwise panic("GapTree.relocate: gapNextAt.get OOB at {id}")
+ 				let start = try self.gapStart.get(id) otherwise panic("GapTree.relocate: gapStart.get OOB at {id}")
+ 
+-				if start >= first and start < first + count 'inTheWindow'
++				if start >= first and (start as ElementIndex) < (first as ElementIndex) + count 'inTheWindow'
+ 					self.moving.push(id)
+-					self.unlinkFromBucket(id, slot: start)
++					self.unlinkFromBucket(id, slot: (start as ElementIndex))
+ 				end 'inTheWindow'
+ 
+ 				g = next
+@@ -649,12 +649,12 @@ export type GapTree
+ 		var lo = firstCell
+ 		var span = lastCell + 1 - firstCell
+ 
+-		if newBase != self.leafBase 'theTreeIsResized'
+-			self.leafBase = newBase
++		if (newBase as ElementIndex) != self.leafBase 'theTreeIsResized'
++			self.leafBase = (newBase as ElementIndex)
+ 			self.best.refill((newBase + newBase) as ElementIndex, value: 0)
+-			self.headAt.refill(newBase, value: 0)
++			self.headAt.refill((newBase as ElementIndex), value: 0)
+ 			lo = 0
+-			span = newBase
++			span = (newBase as ElementIndex)
+ 		end 'theTreeIsResized'
+ 
+ 		for k in 0 upto self.moving.count() 'eachMovingGap'
+@@ -663,7 +663,7 @@ export type GapTree
+ 			let oldSlot = try self.gapStart.get(id) otherwise panic("GapTree.relocate: gapStart.get OOB at {id}")
+ 			let newSlot = pressure.firstSlotOf(entry - 1) if entry != 0 else scratch.movedTo(oldSlot)
+ 			try self.gapStart.set(id, value: newSlot) otherwise panic("GapTree.relocate: gapStart.set OOB at {id}")
+-			self.linkIntoBucket(id, slot: newSlot)
++			self.linkIntoBucket(id, slot: (newSlot as ElementIndex))
+ 		end 'eachMovingGap'
+ 
+ 		self.rebuildRange(lo, span: span, index: index)
 diff --git a/maxon-bin/Compiler/Targets/Wasm/StdToWasm.maxon b/maxon-bin/Compiler/Targets/Wasm/StdToWasm.maxon
 index fd042f5..9c62b90 100644
 --- a/maxon-bin/Compiler/Targets/Wasm/StdToWasm.maxon
@@ -20477,7 +21526,7 @@ index 67168c6..9c37df8 100644
  // The version resource for one output.
  //
 diff --git a/maxon-bin/Compiler/Targets/X64/StdToX64Conversion.maxon b/maxon-bin/Compiler/Targets/X64/StdToX64Conversion.maxon
-index 11cd87e..8acef99 100644
+index f7a0aef..563e6bb 100644
 --- a/maxon-bin/Compiler/Targets/X64/StdToX64Conversion.maxon
 +++ b/maxon-bin/Compiler/Targets/X64/StdToX64Conversion.maxon
 @@ -85,7 +85,7 @@ let hostChunkArgRegisters = [X64Register.rcx, X64Register.rdx, X64Register.r8, X

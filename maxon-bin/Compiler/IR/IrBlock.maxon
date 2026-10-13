@@ -879,6 +879,41 @@ export function insertOpRef(block IrBlock, at ElementIndex, opIdx ElementIndex)
 	block.opRefs.insert(at, value: opIdx)
 end 'insertOpRef'
 
+// A batch this small is inserted one shift of the suffix at a time: a bounded number of shifts
+// keeps it Θ(M), and for a few ops that is cheaper than the grow-and-fill pass.
+let SpliceByShiftLimit = 8 as ElementIndex
+
+function batchPositionAt(block IrBlock, positions BlockOpPosArray, k ElementIndex, oldCount ElementIndex, ceiling ElementIndex) returns ElementIndex
+	let at = try positions.get(k - 1) otherwise panic("spliceOpRefs: positions.get OOB at {k - 1}")
+
+	if at > oldCount 'pastTheEnd'
+		panic("spliceOpRefs: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={oldCount})")
+	end 'pastTheEnd'
+
+	if at > ceiling 'outOfOrder'
+		panic("spliceOpRefs: entry {k - 1} of this batch asks for position {at} of block '{String.from(block.label)}', but the entry after it already claimed position {ceiling} or lower — a batch must be ASCENDING by position")
+	end 'outOfOrder'
+
+	return at
+end 'batchPositionAt'
+
+function batchOpAt(opIdxs OpIndexArray, k ElementIndex) returns ElementIndex
+	return try opIdxs.get(k - 1) otherwise panic("spliceOpRefs: opIdxs.get OOB at {k - 1}")
+end 'batchOpAt'
+
+function insertBatchByShifting(block IrBlock, positions BlockOpPosArray, opIdxs OpIndexArray, from ElementIndex, to ElementIndex, oldCount ElementIndex)
+	var ceiling = 0 as ElementIndex
+	ceiling = oldCount
+	var k = to
+
+	while k > from 'eachPendingInsert'
+		let at = batchPositionAt(block, positions: positions, k: k, oldCount: oldCount, ceiling: ceiling)
+		block.opRefs.insert(at, value: batchOpAt(opIdxs, k: k))
+		ceiling = at
+		k = k - 1
+	end 'eachPendingInsert'
+end 'insertBatchByShifting'
+
 // Insert a whole BATCH of op references in ONE pass — `opIdxs[k]` at position `positions[k]`, for k in
 // `[from, to)`.
 //
@@ -892,7 +927,7 @@ end 'insertOpRef'
 // f64 locals read after each of N calls put ~2N reloads into one straight-line block of ~10N ops. This
 // pays Θ(M + K) instead, and it allocates nothing beyond the one growth. The insertions being held back
 // until the batch is complete is also what keeps every position in one coordinate system, which is what
-// lets the splitter read a position out of its use index rather than search for it.
+// lets the splitter read a position off its positional index rather than search for it.
 export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs OpIndexArray, from ElementIndex, to ElementIndex)
 	let pending = to - from
 
@@ -901,6 +936,11 @@ export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs Op
 	end 'nothingToSplice'
 
 	let oldCount = block.opRefs.count()
+
+	if pending <= SpliceByShiftLimit 'fewEnoughToShift'
+		insertBatchByShifting(block, positions: positions, opIdxs: opIdxs, from: from, to: to, oldCount: oldCount)
+		return
+	end 'fewEnoughToShift'
 
 	// Grow FIRST and fill BACKWARD: every slot written is either one already copied out or one the
 	// growth just added, so no original op ref is clobbered before it has been moved.
@@ -918,15 +958,7 @@ export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs Op
 	var k = to
 
 	while k > from 'eachPendingSplice'
-		let at = try positions.get(k - 1) otherwise panic("spliceOpRefs: positions.get OOB at {k - 1}")
-
-		if at > oldCount 'pastTheEnd'
-			panic("spliceOpRefs: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={oldCount})")
-		end 'pastTheEnd'
-
-		if at > read 'outOfOrder'
-			panic("spliceOpRefs: entry {k - 1} of this batch asks for position {at} of block '{String.from(block.label)}', but the entry after it already claimed position {read} or lower — a batch must be ASCENDING by position, because it is materialized in ONE backward pass")
-		end 'outOfOrder'
+		let at = batchPositionAt(block, positions: positions, k: k, oldCount: oldCount, ceiling: read)
 
 		while read > at 'shiftTail'
 			write = write - 1
@@ -935,9 +967,8 @@ export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs Op
 			try block.opRefs.set(write, value: moved) otherwise panic("spliceOpRefs: opRefs.set OOB at {write}")
 		end 'shiftTail'
 
-		let spliced = try opIdxs.get(k - 1) otherwise panic("spliceOpRefs: opIdxs.get OOB at {k - 1}")
 		write = write - 1
-		try block.opRefs.set(write, value: spliced) otherwise panic("spliceOpRefs: opRefs.set OOB at {write}")
+		try block.opRefs.set(write, value: batchOpAt(opIdxs, k: k)) otherwise panic("spliceOpRefs: opRefs.set OOB at {write}")
 		k = k - 1
 	end 'eachPendingSplice'
 end 'spliceOpRefs'
