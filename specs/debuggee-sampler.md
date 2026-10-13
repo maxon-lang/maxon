@@ -249,7 +249,9 @@ ready false
 
 <!-- test: a-closed-process-trace-panics-when-it-needs-its-region -->
 `wait` writes the status word of the scratch region first, so a closed trace panics there instead of reading pages it
-no longer holds.
+no longer holds. The status word sits after the register block and the vector block (`TraceStatusSlot`), which are
+216 and 512 bytes on x64 and 272 and 528 on arm64, so the offset the panic names is 744 on every lane but arm64 and
+816 on both arm64 lanes.
 
 ```maxon
 function main() returns ExitCode
@@ -265,6 +267,26 @@ end 'main'
 ```
 ```stderr
 panic at Debuggee.maxon:97: ScratchPages: offset 744 was asked of pages that are not held — a caller used them before reserving them or after releasing them
+Stack trace:
+  in ScratchPages.requireWordInside
+  in ScratchPages.heldBase
+  in ScratchPages.setWord
+  in ProcessTrace.wait
+  in main
+  in mrt_start
+```
+```Stderr:arm64-linux
+panic at Debuggee.maxon:97: ScratchPages: offset 816 was asked of pages that are not held — a caller used them before reserving them or after releasing them
+Stack trace:
+  in ScratchPages.requireWordInside
+  in ScratchPages.heldBase
+  in ScratchPages.setWord
+  in ProcessTrace.wait
+  in main
+  in mrt_start
+```
+```Stderr:arm64-macos
+panic at Debuggee.maxon:97: ScratchPages: offset 816 was asked of pages that are not held — a caller used them before reserving them or after releasing them
 Stack trace:
   in ScratchPages.requireWordInside
   in ScratchPages.heldBase

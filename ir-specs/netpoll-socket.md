@@ -642,55 +642,56 @@ data {
   __gt_seed_sum_seen@144 = i64 0
   __gt_seed_count_seen@152 = i64 0
   __gt_keeps_cpu_clock@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_async_preempt_off@216 = i64 0
-  __sched_midle@224 = i64 0
-  __sched_pidle@232 = i64 0
-  __gt_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __sched_npidle@272 = i64 0
-  __sched_runq_size@280 = i64 0
-  __sched_global_pushes@288 = i64 0
-  __sched_timer_scan_steps@296 = i64 0
-  __sched_mcount@304 = i64 0
-  __sched_nmidle@312 = i64 0
-  __sched_main_m@320 = i64 0
-  __sched_phase@328 = i64 0
-  __sched_lastpoll@336 = i64 0
-  __sched_poll_until@344 = i64 0
-  __sched_regain_head@352 = i64 0
-  __np_poller@360 = i64 0
-  __np_break@368 = i64 0
-  __np_wake_sig@376 = i64 0
-  __np_pd_table@384 = i64 0
-  __np_pd_cap@392 = i64 0
-  __np_waiters@400 = i64 0
-  __sched_num_procs@408 = i64 0
-  __sched_shutdown_flag@416 = i64 0
-  __sched_lock@424 = i64 0
-  __sched_lock_depth_sink@432 = i64 0
-  __sched_nmspinning@440 = i64 0
-  __sched_needspinning@448 = i64 0
-  __sched_sysmon_event@456 = i64 0
-  __sched_sysmon_wait@464 = i64 0
-  __sched_timer_starts@472 = i64 0
-  __mrt_envp@480 = i64 0
-  __mrt_signal_stack_bytes@488 = i64 0
-  __mrt_tls_next_key@496 = i64 0
-  __mrt_errno@504 = i64 0
-  __mrt_tls_ready@512 = i64 0
-  __slab_arena_list@520 = i64 0
-  __slab_arena_map_l1@528 = i64 0
-  __slab_state@536 = i64 0
-  __ms_wsa_started@544 = i64 0
-  __mrt_program_started@552 = i8 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __mrt_envp@488 = i64 0
+  __mrt_signal_stack_bytes@496 = i64 0
+  __mrt_tls_next_key@504 = i64 0
+  __mrt_errno@512 = i64 0
+  __mrt_tls_ready@520 = i64 0
+  __slab_arena_list@528 = i64 0
+  __slab_arena_map_l1@536 = i64 0
+  __slab_state@544 = i64 0
+  __ms_wsa_started@552 = i64 0
+  __mrt_program_started@560 = i8 0
 }
 
 func @holdSilently {
@@ -975,7 +976,7 @@ func @readPastTheDeadline {
     x64.popReg rbp
     x64.ret
   __rc_panic#27:
-    x64.leaRegRdata rcx, [rip + __str_blob_34]  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_34]  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -1018,7 +1019,7 @@ func @main {
     x64.leaRegFunc rcx, [rip + holdSilently]
     x64.callDirect __gt_spawn
     x64.movRegReg r13, r8
-    x64.storeBaseDispReg.word64 [r13 + 200], r12
+    x64.storeBaseDispReg.word64 [r13 + 208], r12
     x64.leaRegFunc rax, [rip + __gt_release_holdSilently]
     x64.storeBaseDispReg.word64 [r13 + 176], rax
     x64.movRegReg rcx, r13
@@ -1081,7 +1082,7 @@ func @__np_pd_mark_timed_out {
     x64.movRegImm32 rdx, 0
     x64.subRegReg rdx, rdx, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 584
+    x64.leaRegRegImm32 rcx, rcx, 592
     x64.leaRegGlobal rsi, __sched_lock_depth_sink
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
@@ -1119,7 +1120,7 @@ func @__np_pd_mark_timed_out {
     x64.movRegImm32 rdx, 0
     x64.subRegReg rdx, rdx, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 584
+    x64.leaRegRegImm32 rcx, rcx, 592
     x64.leaRegGlobal rsi, __sched_lock_depth_sink
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
@@ -1132,17 +1133,11 @@ func @__np_pd_mark_timed_out {
     x64.popReg rbp
     x64.ret
   npnopd:
-    x64.leaRegRdata rbx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    x64.movRegImm32 r12, 54
-    x64.callDirect __sched_enter_syscall
-    x64.movRegImm32 rdi, 2
-    x64.movRegReg rsi, rbx
-    x64.movRegReg rdx, r12
-    x64.x64Syscall 1
-    x64.callDirect __sched_exit_syscall
-    x64.movRegImm32 rdi, 104
-    x64.movReg32Reg32 rdi, rdi
-    x64.x64Syscall 231
+    x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    x64.movRegImm32 rdx, 54
+    x64.movRegImm32 rax, 104
+    x64.callDirect __rt_abort
+    x64.movRegReg rax, r8
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
@@ -1174,50 +1169,51 @@ data {
   __gt_seed_sum_seen@144 = i64 0
   __gt_seed_count_seen@152 = i64 0
   __gt_keeps_cpu_clock@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_async_preempt_off@216 = i64 0
-  __sched_midle@224 = i64 0
-  __sched_pidle@232 = i64 0
-  __gt_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __sched_npidle@272 = i64 0
-  __sched_runq_size@280 = i64 0
-  __sched_global_pushes@288 = i64 0
-  __sched_timer_scan_steps@296 = i64 0
-  __sched_mcount@304 = i64 0
-  __sched_nmidle@312 = i64 0
-  __sched_main_m@320 = i64 0
-  __sched_phase@328 = i64 0
-  __sched_lastpoll@336 = i64 0
-  __sched_poll_until@344 = i64 0
-  __sched_regain_head@352 = i64 0
-  __np_poller@360 = i64 0
-  __np_break@368 = i64 0
-  __np_wake_sig@376 = i64 0
-  __np_pd_table@384 = i64 0
-  __np_pd_cap@392 = i64 0
-  __np_waiters@400 = i64 0
-  __sched_num_procs@408 = i64 0
-  __sched_shutdown_flag@416 = i64 0
-  __sched_lock@424 = i64 0
-  __sched_lock_depth_sink@432 = i64 0
-  __sched_nmspinning@440 = i64 0
-  __sched_needspinning@448 = i64 0
-  __sched_sysmon_event@456 = i64 0
-  __sched_sysmon_wait@464 = i64 0
-  __sched_timer_starts@472 = i64 0
-  __slab_arena_list@480 = i64 0
-  __slab_arena_map_l1@488 = i64 0
-  __slab_state@496 = i64 0
-  __ms_wsa_started@504 = i64 0
-  __mrt_program_started@512 = i8 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __slab_arena_list@488 = i64 0
+  __slab_arena_map_l1@496 = i64 0
+  __slab_state@504 = i64 0
+  __ms_wsa_started@512 = i64 0
+  __mrt_program_started@520 = i8 0
 }
 
 func @holdSilently {
@@ -1520,7 +1516,7 @@ func @readPastTheDeadline {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#27:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
+    arm64.leaRdata x0, __str_blob_34  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.movImm x9, 0
@@ -1564,7 +1560,7 @@ func @main {
     arm64.leaFuncAddr x0, holdSilently
     arm64.bl __gt_spawn
     arm64.movRegReg x21, x0
-    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.storeBaseDispReg.word64 [x21 + 208], x20
     arm64.leaFuncAddr x0, __gt_release_holdSilently
     arm64.storeBaseDispReg.word64 [x21 + 176], x0
     arm64.movRegReg x0, x21
@@ -1628,7 +1624,7 @@ func @__np_pd_mark_timed_out {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -1671,7 +1667,7 @@ func @__np_pd_mark_timed_out {
     arm64.movImm x3, 0
     arm64.sub x3, x3, x1
     arm64.sub x1, x1, 1
-    arm64.add x2, x2, 584
+    arm64.add x2, x2, 592
     arm64.leaGlobal x4, __sched_lock_depth_sink
     arm64.and x2, x2, x3
     arm64.and x1, x4, x1
@@ -1683,17 +1679,11 @@ func @__np_pd_mark_timed_out {
     arm64.epilogue 32
     arm64.ret
   npnopd:
-    arm64.leaRdata x19, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    arm64.movImm x20, 54
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.importCall 1
-    arm64.bl mrt_host_status_or_errno
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 104
-    arm64.importCall 0
+    arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 104
+    arm64.bl __rt_abort
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
@@ -1724,54 +1714,55 @@ data {
   __gt_seed_sum_seen@144 = i64 0
   __gt_seed_count_seen@152 = i64 0
   __gt_keeps_cpu_clock@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_async_preempt_off@216 = i64 0
-  __sched_midle@224 = i64 0
-  __sched_pidle@232 = i64 0
-  __gt_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __sched_npidle@272 = i64 0
-  __sched_runq_size@280 = i64 0
-  __sched_global_pushes@288 = i64 0
-  __sched_timer_scan_steps@296 = i64 0
-  __sched_mcount@304 = i64 0
-  __sched_nmidle@312 = i64 0
-  __sched_main_m@320 = i64 0
-  __sched_phase@328 = i64 0
-  __sched_lastpoll@336 = i64 0
-  __sched_poll_until@344 = i64 0
-  __sched_regain_head@352 = i64 0
-  __np_poller@360 = i64 0
-  __np_break@368 = i64 0
-  __np_wake_sig@376 = i64 0
-  __np_pd_table@384 = i64 0
-  __np_pd_cap@392 = i64 0
-  __np_waiters@400 = i64 0
-  __sched_num_procs@408 = i64 0
-  __sched_shutdown_flag@416 = i64 0
-  __sched_lock@424 = i64 0
-  __sched_lock_depth_sink@432 = i64 0
-  __sched_nmspinning@440 = i64 0
-  __sched_needspinning@448 = i64 0
-  __sched_sysmon_event@456 = i64 0
-  __sched_sysmon_wait@464 = i64 0
-  __sched_timer_starts@472 = i64 0
-  __mrt_errno@480 = i64 0
-  __mrt_envp@488 = i64 0
-  __mrt_signal_stack_bytes@496 = i64 0
-  __mrt_tls_next_key@504 = i64 0
-  __slab_arena_list@512 = i64 0
-  __slab_arena_map_l1@520 = i64 0
-  __slab_state@528 = i64 0
-  __ms_wsa_started@536 = i64 0
-  __mrt_program_started@544 = i8 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __mrt_errno@488 = i64 0
+  __mrt_envp@496 = i64 0
+  __mrt_signal_stack_bytes@504 = i64 0
+  __mrt_tls_next_key@512 = i64 0
+  __slab_arena_list@520 = i64 0
+  __slab_arena_map_l1@528 = i64 0
+  __slab_state@536 = i64 0
+  __ms_wsa_started@544 = i64 0
+  __mrt_program_started@552 = i8 0
 }
 
 func @holdSilently {
@@ -2074,7 +2065,7 @@ func @readPastTheDeadline {
     arm64.epilogue 128
     arm64.ret
   __rc_panic#27:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at Clock.maxon:39: Range check failed: value outside typealias 'DurationMs'\x0a"
+    arm64.leaRdata x0, __str_blob_34  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.movImm x9, 0
@@ -2118,7 +2109,7 @@ func @main {
     arm64.leaFuncAddr x0, holdSilently
     arm64.bl __gt_spawn
     arm64.movRegReg x21, x0
-    arm64.storeBaseDispReg.word64 [x21 + 200], x20
+    arm64.storeBaseDispReg.word64 [x21 + 208], x20
     arm64.leaFuncAddr x0, __gt_release_holdSilently
     arm64.storeBaseDispReg.word64 [x21 + 176], x0
     arm64.movRegReg x0, x21
@@ -2182,7 +2173,7 @@ func @__np_pd_mark_timed_out {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -2225,7 +2216,7 @@ func @__np_pd_mark_timed_out {
     arm64.movImm x3, 0
     arm64.sub x3, x3, x1
     arm64.sub x1, x1, 1
-    arm64.add x2, x2, 584
+    arm64.add x2, x2, 592
     arm64.leaGlobal x4, __sched_lock_depth_sink
     arm64.and x2, x2, x3
     arm64.and x1, x4, x1
@@ -2237,16 +2228,11 @@ func @__np_pd_mark_timed_out {
     arm64.epilogue 32
     arm64.ret
   npnopd:
-    arm64.leaRdata x19, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    arm64.movImm x20, 54
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.syscall 64
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 104
-    arm64.syscall 94
+    arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 104
+    arm64.bl __rt_abort
+    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
@@ -3158,55 +3144,56 @@ data {
   __gt_seed_sum_seen@144 = i64 0
   __gt_seed_count_seen@152 = i64 0
   __gt_keeps_cpu_clock@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_async_preempt_off@216 = i64 0
-  __sched_midle@224 = i64 0
-  __sched_pidle@232 = i64 0
-  __gt_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __sched_npidle@272 = i64 0
-  __sched_runq_size@280 = i64 0
-  __sched_global_pushes@288 = i64 0
-  __sched_timer_scan_steps@296 = i64 0
-  __sched_mcount@304 = i64 0
-  __sched_nmidle@312 = i64 0
-  __sched_main_m@320 = i64 0
-  __sched_phase@328 = i64 0
-  __sched_lastpoll@336 = i64 0
-  __sched_poll_until@344 = i64 0
-  __sched_regain_head@352 = i64 0
-  __np_poller@360 = i64 0
-  __np_break@368 = i64 0
-  __np_wake_sig@376 = i64 0
-  __np_pd_table@384 = i64 0
-  __np_pd_cap@392 = i64 0
-  __np_waiters@400 = i64 0
-  __sched_num_procs@408 = i64 0
-  __sched_shutdown_flag@416 = i64 0
-  __sched_lock@424 = i64 0
-  __sched_lock_depth_sink@432 = i64 0
-  __sched_nmspinning@440 = i64 0
-  __sched_needspinning@448 = i64 0
-  __sched_sysmon_event@456 = i64 0
-  __sched_sysmon_wait@464 = i64 0
-  __sched_timer_starts@472 = i64 0
-  __mrt_envp@480 = i64 0
-  __mrt_signal_stack_bytes@488 = i64 0
-  __mrt_tls_next_key@496 = i64 0
-  __mrt_errno@504 = i64 0
-  __mrt_tls_ready@512 = i64 0
-  __slab_arena_list@520 = i64 0
-  __slab_arena_map_l1@528 = i64 0
-  __slab_state@536 = i64 0
-  __ms_wsa_started@544 = i64 0
-  __mrt_program_started@552 = i8 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __mrt_envp@488 = i64 0
+  __mrt_signal_stack_bytes@496 = i64 0
+  __mrt_tls_next_key@504 = i64 0
+  __mrt_errno@512 = i64 0
+  __mrt_tls_ready@520 = i64 0
+  __slab_arena_list@528 = i64 0
+  __slab_arena_map_l1@536 = i64 0
+  __slab_state@544 = i64 0
+  __ms_wsa_started@552 = i64 0
+  __mrt_program_started@560 = i8 0
 }
 
 func @main {
@@ -3284,9 +3271,9 @@ func @main {
     x64.leaRegFunc rcx, [rip + TcpClient.connect]
     x64.callDirect __gt_spawn
     x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 200], r14
+    x64.storeBaseDispReg.word64 [r12 + 208], r14
     x64.loadRegSlot rax, slot24
-    x64.storeBaseDispReg.word64 [r12 + 208], rax
+    x64.storeBaseDispReg.word64 [r12 + 216], rax
     x64.leaRegFunc rax, [rip + __gt_release_TcpClient.connect]
     x64.storeBaseDispReg.word64 [r12 + 176], rax
     x64.movRegReg rcx, r12
@@ -3820,50 +3807,51 @@ data {
   __gt_seed_sum_seen@144 = i64 0
   __gt_seed_count_seen@152 = i64 0
   __gt_keeps_cpu_clock@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_async_preempt_off@216 = i64 0
-  __sched_midle@224 = i64 0
-  __sched_pidle@232 = i64 0
-  __gt_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __sched_npidle@272 = i64 0
-  __sched_runq_size@280 = i64 0
-  __sched_global_pushes@288 = i64 0
-  __sched_timer_scan_steps@296 = i64 0
-  __sched_mcount@304 = i64 0
-  __sched_nmidle@312 = i64 0
-  __sched_main_m@320 = i64 0
-  __sched_phase@328 = i64 0
-  __sched_lastpoll@336 = i64 0
-  __sched_poll_until@344 = i64 0
-  __sched_regain_head@352 = i64 0
-  __np_poller@360 = i64 0
-  __np_break@368 = i64 0
-  __np_wake_sig@376 = i64 0
-  __np_pd_table@384 = i64 0
-  __np_pd_cap@392 = i64 0
-  __np_waiters@400 = i64 0
-  __sched_num_procs@408 = i64 0
-  __sched_shutdown_flag@416 = i64 0
-  __sched_lock@424 = i64 0
-  __sched_lock_depth_sink@432 = i64 0
-  __sched_nmspinning@440 = i64 0
-  __sched_needspinning@448 = i64 0
-  __sched_sysmon_event@456 = i64 0
-  __sched_sysmon_wait@464 = i64 0
-  __sched_timer_starts@472 = i64 0
-  __slab_arena_list@480 = i64 0
-  __slab_arena_map_l1@488 = i64 0
-  __slab_state@496 = i64 0
-  __ms_wsa_started@504 = i64 0
-  __mrt_program_started@512 = i8 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __slab_arena_list@488 = i64 0
+  __slab_arena_map_l1@496 = i64 0
+  __slab_state@504 = i64 0
+  __ms_wsa_started@512 = i64 0
+  __mrt_program_started@520 = i8 0
 }
 
 func @main {
@@ -3953,8 +3941,8 @@ func @main {
     arm64.leaFuncAddr x0, TcpClient.connect
     arm64.bl __gt_spawn
     arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 200], x23
-    arm64.storeBaseDispReg.word64 [x20 + 208], x21
+    arm64.storeBaseDispReg.word64 [x20 + 208], x23
+    arm64.storeBaseDispReg.word64 [x20 + 216], x21
     arm64.leaFuncAddr x0, __gt_release_TcpClient.connect
     arm64.storeBaseDispReg.word64 [x20 + 176], x0
     arm64.movRegReg x0, x20
@@ -4480,54 +4468,55 @@ data {
   __gt_seed_sum_seen@144 = i64 0
   __gt_seed_count_seen@152 = i64 0
   __gt_keeps_cpu_clock@160 = i64 0
-  __sched_active_workers@168 = i64 1
-  __sched_max_active_workers@176 = i64 1
-  __sched_tls_index@184 = i64 0
-  __sched_tls_teb_offset@192 = i64 0
-  __sched_procs@200 = i64 0
-  __sched_allm@208 = i64 0
-  __sched_async_preempt_off@216 = i64 0
-  __sched_midle@224 = i64 0
-  __sched_pidle@232 = i64 0
-  __gt_gfree_head@240 = i64 0
-  __sched_arena_cursor@248 = i64 0
-  __sched_arena_limit@256 = i64 0
-  __gt_records_carved@264 = i64 0
-  __sched_npidle@272 = i64 0
-  __sched_runq_size@280 = i64 0
-  __sched_global_pushes@288 = i64 0
-  __sched_timer_scan_steps@296 = i64 0
-  __sched_mcount@304 = i64 0
-  __sched_nmidle@312 = i64 0
-  __sched_main_m@320 = i64 0
-  __sched_phase@328 = i64 0
-  __sched_lastpoll@336 = i64 0
-  __sched_poll_until@344 = i64 0
-  __sched_regain_head@352 = i64 0
-  __np_poller@360 = i64 0
-  __np_break@368 = i64 0
-  __np_wake_sig@376 = i64 0
-  __np_pd_table@384 = i64 0
-  __np_pd_cap@392 = i64 0
-  __np_waiters@400 = i64 0
-  __sched_num_procs@408 = i64 0
-  __sched_shutdown_flag@416 = i64 0
-  __sched_lock@424 = i64 0
-  __sched_lock_depth_sink@432 = i64 0
-  __sched_nmspinning@440 = i64 0
-  __sched_needspinning@448 = i64 0
-  __sched_sysmon_event@456 = i64 0
-  __sched_sysmon_wait@464 = i64 0
-  __sched_timer_starts@472 = i64 0
-  __mrt_errno@480 = i64 0
-  __mrt_envp@488 = i64 0
-  __mrt_signal_stack_bytes@496 = i64 0
-  __mrt_tls_next_key@504 = i64 0
-  __slab_arena_list@512 = i64 0
-  __slab_arena_map_l1@520 = i64 0
-  __slab_state@528 = i64 0
-  __ms_wsa_started@536 = i64 0
-  __mrt_program_started@544 = i8 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __mrt_errno@488 = i64 0
+  __mrt_envp@496 = i64 0
+  __mrt_signal_stack_bytes@504 = i64 0
+  __mrt_tls_next_key@512 = i64 0
+  __slab_arena_list@520 = i64 0
+  __slab_arena_map_l1@528 = i64 0
+  __slab_state@536 = i64 0
+  __ms_wsa_started@544 = i64 0
+  __mrt_program_started@552 = i8 0
 }
 
 func @main {
@@ -4617,8 +4606,8 @@ func @main {
     arm64.leaFuncAddr x0, TcpClient.connect
     arm64.bl __gt_spawn
     arm64.movRegReg x20, x0
-    arm64.storeBaseDispReg.word64 [x20 + 200], x23
-    arm64.storeBaseDispReg.word64 [x20 + 208], x21
+    arm64.storeBaseDispReg.word64 [x20 + 208], x23
+    arm64.storeBaseDispReg.word64 [x20 + 216], x21
     arm64.leaFuncAddr x0, __gt_release_TcpClient.connect
     arm64.storeBaseDispReg.word64 [x20 + 176], x0
     arm64.movRegReg x0, x20

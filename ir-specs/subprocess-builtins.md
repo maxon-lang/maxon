@@ -12,7 +12,7 @@ The cases of `specs/subprocess-builtins.md` whose subject is the emitted code. E
 ## Tests
 
 <!-- test: subprocess-builtins.posix-a-collected-child-costs-no-timer-poll -->
-<!-- unsupported-targets: x64-windows -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
 <!-- procs: 1 -->
 ⭐ **THE COLLECT LOOP WAITS ON THE POLLER, SO A SLOW CHILD COSTS IT NOTHING TO WAIT FOR.**
 `posix-collect-echo`'s child answers at once and says nothing about the wait; this one takes a whole
@@ -71,186 +71,79 @@ __np_pd_wait_any
 
 ```TargetIr:x64-linux
 data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_hold_epoch@24 = i64 0
-  __gt_run_queue_head@32 = i64 0
-  __gt_run_queue_tail@40 = i64 0
-  __gt_timer_count@48 = i64 0
-  __gt_timer_heap_base@56 = i64 0
-  __gt_timer_capacity@64 = i64 0
-  __gt_timer_seq@72 = i64 0
-  __gt_timer_when@80 = i64 9223372036854775807
-  __gt_live_count@88 = i64 0
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_quiesce_stuck@104 = i64 0
-  __gt_seed_bytes@112 = i64 2048
-  __gt_stack_bytes_sum@120 = i64 0
-  __gt_stack_bytes_count@128 = i64 0
-  __gt_seed_sum_seen@136 = i64 0
-  __gt_seed_count_seen@144 = i64 0
-  __gt_keeps_cpu_clock@152 = i64 0
-  __sched_active_workers@160 = i64 1
-  __sched_max_active_workers@168 = i64 1
-  __sched_tls_index@176 = i64 0
-  __sched_tls_teb_offset@184 = i64 0
-  __sched_procs@192 = i64 0
-  __sched_allm@200 = i64 0
-  __sched_async_preempt_off@208 = i64 0
-  __sched_midle@216 = i64 0
-  __sched_pidle@224 = i64 0
-  __gt_gfree_head@232 = i64 0
-  __sched_arena_cursor@240 = i64 0
-  __sched_arena_limit@248 = i64 0
-  __gt_records_carved@256 = i64 0
-  __sched_npidle@264 = i64 0
-  __sched_runq_size@272 = i64 0
-  __sched_global_pushes@280 = i64 0
-  __sched_timer_scan_steps@288 = i64 0
-  __sched_mcount@296 = i64 0
-  __sched_nmidle@304 = i64 0
-  __sched_main_m@312 = i64 0
-  __sched_phase@320 = i64 0
-  __sched_lastpoll@328 = i64 0
-  __sched_poll_until@336 = i64 0
-  __sched_regain_head@344 = i64 0
-  __np_poller@352 = i64 0
-  __np_break@360 = i64 0
-  __np_wake_sig@368 = i64 0
-  __np_pd_table@376 = i64 0
-  __np_pd_cap@384 = i64 0
-  __np_waiters@392 = i64 0
-  __sched_num_procs@400 = i64 0
-  __sched_shutdown_flag@408 = i64 0
-  __sched_lock@416 = i64 0
-  __sched_lock_depth_sink@424 = i64 0
-  __sched_nmspinning@432 = i64 0
-  __sched_needspinning@440 = i64 0
-  __sched_sysmon_event@448 = i64 0
-  __sched_sysmon_wait@456 = i64 0
-  __sched_timer_starts@464 = i64 0
-  __mrt_envp@472 = i64 0
-  __mrt_signal_stack_bytes@480 = i64 0
-  __mrt_tls_next_key@488 = i64 0
-  __mrt_errno@496 = i64 0
-  __mrt_tls_ready@504 = i64 0
-  __io_pipe_seq@512 = i64 0
-  __subp_table@520 = i64 0
-  __subp_last_error@528 = i64 0
-  __slab_arena_list@536 = i64 0
-  __slab_arena_map_l1@544 = i64 0
-  __slab_state@552 = i64 0
-  __mrt_program_started@560 = i8 0
-}
-
-func @appendToken {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-  __il_body#17:
-    x64.movRegImm32 rax, 0
-  __il_body#22:
-    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
-  __il_cont#21:
-    x64.movRegReg rcx, rdx
-    x64.movRegReg rdx, rax
-    x64.movRegReg rax, rsi
-    x64.callDirect __managed_slice
-    x64.movRegReg r12, r8
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#18
-  tryerr#19:
-    x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at String.maxon:149: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok#18:
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_retain
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_decref
-  __il_cont#16:
-    x64.loadRegBaseDisp.word64 r12, [r13 + 8]
-    x64.movRegImm32 r14, 0
-    x64.jmp forhdr
-  byteLoop:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 24]
-    x64.cmpRegImm32 rax, 8
-    x64.jcc notEqual, __im_stride
-  __im_word:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
-    x64.cmpRegReg r14, rax
-    x64.jcc aboveEqual, __im_slow
-  __im_load#14:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.loadRegBaseIndexScale.word64 rax, [rax + r14*8 + 0]
-    x64.jmp __im_loaded
-  __im_stride:
-    x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, __im_slow
-  __im_byte:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 8]
-    x64.cmpRegReg r14, rax
-    x64.jcc aboveEqual, __im_slow
-  __im_load#15:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
-    x64.leaRegRegReg rax, rax, r14
-    x64.loadRegBaseDisp.byte rax, [rax + 0]
-  __im_loaded:
-    x64.movRegReg rdx, rax
-    x64.jmp tryok#5
-  __im_slow:
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r14
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#6
-  critsplit:
-    x64.movRegReg rdx, r8
-  tryok#5:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-  forstep:
-    x64.leaRegRegImm32 r14, r14, 1
-  forhdr:
-    x64.cmpRegReg r14, r12
-    x64.jcc less, byteLoop
-  forexit:
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_push
-    x64.movRegReg rcx, r13
-    x64.callDirect __managed_decref
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#6:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:16: appendToken: get is in range\x0a"
-    x64.callDirect mrt_panic
-    x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_allg@8 = i64 0
+  __gt_allglen@16 = i64 0
+  __gt_allgcap@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_live_count@96 = i64 0
+  __gt_quiesce_waiter@104 = i64 0
+  __gt_quiesce_stuck@112 = i64 0
+  __gt_seed_bytes@120 = i64 2048
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __gt_keeps_cpu_clock@160 = i64 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __mrt_envp@488 = i64 0
+  __mrt_signal_stack_bytes@496 = i64 0
+  __mrt_tls_next_key@504 = i64 0
+  __mrt_errno@512 = i64 0
+  __mrt_tls_ready@520 = i64 0
+  __io_pipe_seq@528 = i64 0
+  __subp_table@536 = i64 0
+  __subp_last_error@544 = i64 0
+  __slab_arena_list@552 = i64 0
+  __slab_arena_map_l1@560 = i64 0
+  __slab_state@568 = i64 0
+  __mrt_program_started@576 = i8 0
 }
 
 func @main {
@@ -262,305 +155,241 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 328
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
+    x64.prologue 232
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
-    x64.leaRegRdata rdx, [rip + __str_rec_11]  ; "/bin/sh"
+    x64.leaRegRdata rcx, [rip + __str_rec_76]  ; "-c"
+    x64.callDirect __str_retain
     x64.movRegReg rcx, rbx
-    x64.callDirect appendToken
-    x64.leaRegRdata rdx, [rip + __str_rec_12]  ; "-c"
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.leaRegRdata rcx, [rip + __str_rec_77]  ; "sleep 1; echo hi"
+    x64.callDirect __str_retain
     x64.movRegReg rcx, rbx
-    x64.callDirect appendToken
-    x64.leaRegRdata rdx, [rip + __str_rec_13]  ; "sleep 1; echo hi"
-    x64.movRegReg rcx, rbx
-    x64.callDirect appendToken
-    x64.leaRegRdata r12, [rip + __str_rec_14]  ; ""
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 1
-    x64.callDirect __managed_mem_create
-    x64.movRegReg r13, r8
-    x64.storeSlotReg slot1, r13
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-  tryok#1:
-    x64.callDirect __sched_park_wake_count
-    x64.storeSlotReg slot25, r8
-    x64.callDirect __sched_netpoll_block_count
-    x64.storeSlotReg slot22, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect String.cstr
-    x64.storeSlotReg slot28, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect String.cstr
-    x64.movRegReg r14, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect String.cstr
-    x64.movRegReg r15, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect String.cstr
-    x64.movRegImm32 rax, 0
-    x64.movRegImm32 rcx, 0
-    x64.storeBaseDispReg.word64 [rsp + 32], r14
-    x64.movRegImm32 rdx, 2
-    x64.storeBaseDispReg.word64 [rsp + 40], rdx
-    x64.storeBaseDispReg.word64 [rsp + 48], r15
-    x64.movRegImm32 rdx, 0
-    x64.storeBaseDispReg.word64 [rsp + 56], rdx
-    x64.movRegImm32 rdx, 2
-    x64.storeBaseDispReg.word64 [rsp + 64], rdx
-    x64.storeBaseDispReg.word64 [rsp + 72], r8
-    x64.storeBaseDispReg.word64 [rsp + 80], rax
-    x64.storeBaseDispReg.word64 [rsp + 88], rcx
-    x64.movRegReg rcx, rbx
-    x64.movRegImm32 rdx, 3
-    x64.loadRegSlot rax, slot28
-    x64.movRegReg r9, r13
-    x64.movRegImm32 rsi, 1
-    x64.movRegImm32 rdi, 0
-    x64.callDirect __gt_subp_attached_spawn
-    x64.storeSlotReg slot4, r8
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_subp_wait_collect
-    x64.movRegReg rbx, r8
-    x64.storeSlotReg slot5, rbx
-    x64.callDirect __sched_park_wake_count
-    x64.loadRegSlot rax, slot25
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.callDirect Scheduler.counters
     x64.movRegReg r12, r8
-    x64.subRegReg r12, r8, rax
-    x64.callDirect __sched_netpoll_block_count
-    x64.loadRegSlot rax, slot22
-    x64.movRegReg r13, r8
-    x64.subRegReg r13, r8, rax
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_subp_result_stdout
-    x64.movRegReg rbx, r8
-  __il_body#15:
-    x64.loadRegBaseDisp.word64 r14, [rbx + 8]
-    x64.movRegImm32 r15, 0
-    x64.jmp forhdr
-  scan:
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r15
-    x64.callDirect __managed_byte_at
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#21
-  tryok#20:
-    x64.cmpRegImm32 r8, 128
-    x64.movRegImm32 rax, 1
-    x64.jcc greaterEqual, scmerge
-  orrhs:
-    x64.cmpRegImm32 r8, 13
-    x64.setccReg equal, rax
-  scmerge:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc equal, forstep
-  notSingleByte:
-    x64.movRegImm32 rdx, 0
-    x64.jmp __il_cont#14
-  forstep:
-    x64.leaRegRegImm32 r15, r15, 1
-  forhdr:
-    x64.cmpRegReg r15, r14
-    x64.jcc less, scan
-  forexit:
-    x64.movRegImm32 rdx, 1
-  __il_cont#14:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __str_of_buffer
-    x64.movRegReg r14, r8
-    x64.storeSlotReg slot2, r14
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
-  __il_body#27:
-    x64.loadRegBaseDisp.word64 rbx, [r14 + 8]
-    x64.storeSlotReg slot3, rbx
-  __il_cont#26:
-    x64.leaRegRdata rdx, [rip + __str_rec_15]  ; "hi"
-    x64.movRegReg rcx, r14
-    x64.callDirect String.startsWith
-    x64.movRegReg r14, r8
-    x64.leaRegRdata rax, [rip + __str_rec_16]  ; "timerpolls="
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot17, rcx
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.storeSlotReg slot26, rax
-    x64.cmpRegImm32 r12, 16
-    x64.setccReg lessEqual, r12
-    x64.movRegImm32 rcx, 5
+    x64.storeSlotReg slot1, r12
+    x64.leaRegRdata r13, [rip + __str_rec_78]  ; "/bin/sh"
+    x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot16, r8
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __bool_to_string
-    x64.movRegReg r12, r8
-    x64.storeSlotReg slot24, r12
-    x64.leaRegRdata rax, [rip + __str_rec_17]  ; " onpoller="
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __str_retain
+    x64.movRegReg rcx, r8
+    x64.callDirect __str_unshare
+    x64.storeBaseDispReg.word64 [r14 + 8], r8
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.callDirect Subprocess.run
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot2, rbx
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+  tryok:
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_Executable
+    x64.callDirect Scheduler.counters
+    x64.storeSlotReg slot3, r8
+    x64.loadRegBaseDisp.word64 r13, [r8 + 64]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 64]
+    x64.subRegReg r13, r13, rax
+    x64.loadRegBaseDisp.word64 r14, [r8 + 72]
+    x64.loadRegBaseDisp.word64 rax, [r12 + 72]
+    x64.subRegReg r14, r14, rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+  __il_body#13:
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.storeSlotReg slot4, r12
+  __il_cont#12:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.leaRegRdata rdx, [rip + __str_rec_79]  ; "hi"
+    x64.callDirect String.startsWith
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_80]  ; "timerpolls="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot15, rcx
+    x64.storeSlotReg slot16, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot23, rax
-    x64.cmpRegImm32 r13, 1
-    x64.setccReg greaterEqual, r13
+    x64.cmpRegImm32 r13, 16
+    x64.setccReg belowEqual, r13
     x64.movRegImm32 rcx, 5
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot14, r8
+    x64.storeSlotReg slot15, r8
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r8
     x64.callDirect __bool_to_string
     x64.movRegReg r13, r8
-    x64.storeSlotReg slot21, r13
-    x64.leaRegRdata rax, [rip + __str_rec_18]  ; " outLen="
+    x64.storeSlotReg slot22, r13
+    x64.leaRegRdata rax, [rip + __str_rec_81]  ; " onpoller="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot11, rcx
+    x64.storeSlotReg slot14, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.storeSlotReg slot20, rax
-    x64.movRegImm32 rcx, 20
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeSlotReg slot7, r8
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.callDirect __uint_to_string
-    x64.movRegReg rbx, r8
-    x64.storeSlotReg slot6, rbx
-    x64.leaRegRdata rax, [rip + __str_rec_19]  ; " matches="
-    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot9, rcx
-    x64.loadRegBaseDisp.word64 r15, [rax + 8]
-    x64.storeSlotReg slot8, r15
+    x64.storeSlotReg slot21, rax
+    x64.cmpRegImm32 r14, 1
+    x64.setccReg aboveEqual, r14
     x64.movRegImm32 rcx, 5
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot10, r8
+    x64.storeSlotReg slot13, r8
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r8
     x64.callDirect __bool_to_string
-    x64.storeSlotReg slot27, r8
-    x64.leaRegRdata rax, [rip + __str_rec_20]  ; "\x0a"
+    x64.movRegReg r14, r8
+    x64.storeSlotReg slot20, r14
+    x64.leaRegRdata rax, [rip + __str_rec_82]  ; " outLen="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
-    x64.storeSlotReg slot12, rcx
+    x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot19, rax
-    x64.loadRegSlot r14, slot26
-    x64.leaRegRegReg rax, r14, r12
-    x64.loadRegSlot r12, slot23
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot6, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __uint_to_string
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot5, r12
+    x64.leaRegRdata rax, [rip + __str_rec_83]  ; " matches="
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot8, rcx
+    x64.loadRegBaseDisp.word64 r15, [rax + 8]
+    x64.storeSlotReg slot7, r15
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot9, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __bool_to_string
+    x64.storeSlotReg slot24, r8
+    x64.leaRegRdata rax, [rip + __str_rec_84]  ; "\x0a"
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot11, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot18, rax
+    x64.loadRegSlot rbx, slot23
+    x64.leaRegRegReg rax, rbx, r13
+    x64.loadRegSlot r13, slot21
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegSlot r14, slot19
+    x64.leaRegRegReg rax, rax, r14
     x64.leaRegRegReg rax, rax, r12
-    x64.leaRegRegReg rax, rax, r13
-    x64.loadRegSlot r13, slot20
-    x64.leaRegRegReg rax, rax, r13
-    x64.leaRegRegReg rax, rax, rbx
     x64.leaRegRegReg rax, rax, r15
-    x64.loadRegSlot rbx, slot27
-    x64.leaRegRegReg rax, rax, rbx
-    x64.loadRegSlot rcx, slot19
+    x64.loadRegSlot r12, slot24
+    x64.leaRegRegReg rax, rax, r12
+    x64.loadRegSlot rcx, slot18
     x64.leaRegRegReg rax, rax, rcx
-    x64.storeSlotReg slot13, rax
+    x64.storeSlotReg slot12, rax
     x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot18, r8
+    x64.storeSlotReg slot17, r8
     x64.leaRegRegImm32 r15, r8, 56
-    x64.loadRegSlot rdx, slot17
-    x64.movRegReg rcx, r15
-    x64.movRegReg rax, r14
-    x64.callDirect __str_copy
-    x64.leaRegRegReg r14, r15, r14
     x64.loadRegSlot rdx, slot16
-    x64.loadRegSlot rax, slot24
-    x64.movRegReg rcx, r14
-    x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot24
-    x64.leaRegRegReg r14, r14, rax
-    x64.loadRegSlot rdx, slot15
-    x64.movRegReg rcx, r14
-    x64.movRegReg rax, r12
-    x64.callDirect __str_copy
-    x64.leaRegRegReg r12, r14, r12
-    x64.loadRegSlot rdx, slot14
-    x64.loadRegSlot rax, slot21
-    x64.movRegReg rcx, r12
-    x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot21
-    x64.leaRegRegReg r12, r12, rax
-    x64.loadRegSlot rdx, slot11
-    x64.movRegReg rcx, r12
-    x64.movRegReg rax, r13
-    x64.callDirect __str_copy
-    x64.leaRegRegReg r12, r12, r13
-    x64.loadRegSlot rax, slot6
-    x64.loadRegSlot rdx, slot7
-    x64.movRegReg rcx, r12
-    x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot6
-    x64.leaRegRegReg r12, r12, rax
-    x64.loadRegSlot rax, slot8
-    x64.loadRegSlot rdx, slot9
-    x64.movRegReg rcx, r12
-    x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot8
-    x64.leaRegRegReg r12, r12, rax
-    x64.loadRegSlot rdx, slot10
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, r15
     x64.movRegReg rax, rbx
     x64.callDirect __str_copy
-    x64.leaRegRegReg rbx, r12, rbx
-    x64.loadRegSlot rdx, slot12
-    x64.loadRegSlot rax, slot19
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.loadRegSlot rdx, slot15
+    x64.loadRegSlot rax, slot22
     x64.movRegReg rcx, rbx
     x64.callDirect __str_copy
-    x64.loadRegSlot rax, slot19
-    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot22
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rdx, slot14
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r13
+    x64.loadRegSlot rdx, slot13
+    x64.loadRegSlot rax, slot20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot20
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rdx, slot10
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r14
+    x64.loadRegSlot rax, slot5
+    x64.loadRegSlot rdx, slot6
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot5
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rax, slot7
+    x64.loadRegSlot rdx, slot8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot7
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.loadRegSlot rdx, slot9
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, rbx, r12
+    x64.loadRegSlot rdx, slot11
     x64.loadRegSlot rax, slot18
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_copy
+    x64.loadRegSlot rax, slot18
+    x64.leaRegRegReg rax, rbx, rax
+    x64.loadRegSlot rax, slot17
     x64.storeBaseDispReg.word64 [rax + 0], r15
-    x64.loadRegSlot rcx, slot13
+    x64.loadRegSlot rcx, slot12
     x64.storeBaseDispReg.word64 [rax + 8], rcx
     x64.movRegImm rcx, 18446744073709551613
     x64.storeBaseDispReg.word64 [rax + 16], rcx
     x64.movRegImm32 rcx, 1
     x64.storeBaseDispReg.word64 [rax + 24], rcx
-    x64.loadRegSlot rcx, slot16
+    x64.loadRegSlot rcx, slot15
     x64.callDirect __mm_decref
-    x64.loadRegSlot rcx, slot14
+    x64.loadRegSlot rcx, slot13
     x64.callDirect __mm_decref
-    x64.loadRegSlot rcx, slot7
+    x64.loadRegSlot rcx, slot6
     x64.callDirect __mm_decref
-    x64.loadRegSlot rcx, slot10
+    x64.loadRegSlot rcx, slot9
     x64.callDirect __mm_decref
-  __il_body#10:
-    x64.loadRegSlot rcx, slot18
+  __il_body#11:
+    x64.loadRegSlot rcx, slot17
     x64.callDirect __write_stdout
-  __il_cont#9:
-    x64.loadRegSlot rcx, slot18
+  __il_cont#10:
+    x64.loadRegSlot rcx, slot17
     x64.callDirect __str_decref
-    x64.loadRegSlot rcx, slot5
-    x64.callDirect __gt_subp_result_release
-    x64.loadRegSlot rcx, slot4
-    x64.callDirect __gt_subp_release
-    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rax, slot4
     x64.cmpRegImm32 rax, 0
     x64.jcc less, __rc_panic
   __rc_chk:
-    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rax, slot4
     x64.cmpRegImm32 rax, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
-    x64.loadRegSlot rcx, slot2
-    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __mm_decref
   exitdrop#4:
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __destruct_CollectedOutput
   exitdrop#5:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_decref
+  exitdrop#6:
     x64.loadRegSlot rcx, slot0
     x64.callDirect __managed_decref
   exitterminal:
-    x64.loadRegSlot r8, slot3
-    x64.epilogue 328
+    x64.loadRegSlot r8, slot4
+    x64.epilogue 232
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -568,23 +397,11 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryerr#2:
-    x64.leaRegRdata rcx, [rip + __str_blob_21]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:27: create(1, 1) cannot fail\x0a"
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_85]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 328
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryerr#21:
-    x64.leaRegRdata rcx, [rip + __str_blob_25]  ; "panic at String.maxon:1122: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 328
+    x64.epilogue 232
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -593,10 +410,10 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_27]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_243]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 328
+    x64.epilogue 232
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -630,7 +447,7 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 0
     x64.subRegReg rdx, rdx, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 584
+    x64.leaRegRegImm32 rcx, rcx, 592
     x64.leaRegGlobal rsi, __sched_lock_depth_sink
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
@@ -674,7 +491,7 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 0
     x64.subRegReg rdx, rdx, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 584
+    x64.leaRegRegImm32 rcx, rcx, 592
     x64.leaRegGlobal rsi, __sched_lock_depth_sink
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
@@ -698,7 +515,7 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 0
     x64.subRegReg rdx, rdx, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 584
+    x64.leaRegRegImm32 rcx, rcx, 592
     x64.leaRegGlobal rsi, __sched_lock_depth_sink
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
@@ -732,7 +549,7 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 0
     x64.subRegReg rdx, rdx, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 584
+    x64.leaRegRegImm32 rcx, rcx, 592
     x64.leaRegGlobal rsi, __sched_lock_depth_sink
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
@@ -795,17 +612,10 @@ func @__np_pd_wait_any {
     x64.cmpRegReg rax, rcx
     x64.jcc notEqual, npholdlost
   npholdpublished:
-    x64.leaRegRdata rbx, [rip + __abort_msg_109]  ; "fatal error: runtime abort 109 (netpollUnhookMissed)\x0a"
-    x64.movRegImm32 r12, 53
-    x64.callDirect __sched_enter_syscall
-    x64.movRegImm32 rdi, 2
-    x64.movRegReg rsi, rbx
-    x64.movRegReg rdx, r12
-    x64.x64Syscall 1
-    x64.callDirect __sched_exit_syscall
-    x64.movRegImm32 rdi, 109
-    x64.movReg32Reg32 rdi, rdi
-    x64.x64Syscall 231
+    x64.leaRegRdata rcx, [rip + __abort_msg_109]  ; "fatal error: runtime abort 109 (netpollUnhookMissed)\x0a"
+    x64.movRegImm32 rdx, 53
+    x64.movRegImm32 rax, 109
+    x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
     x64.epilogue 56
     x64.popReg r15
@@ -816,17 +626,10 @@ func @__np_pd_wait_any {
     x64.popReg rbp
     x64.ret
   npholdlost:
-    x64.leaRegRdata rbx, [rip + __abort_msg_115]  ; "fatal error: runtime abort 115 (netpollHoldLost)\x0a"
-    x64.movRegImm32 r12, 49
-    x64.callDirect __sched_enter_syscall
-    x64.movRegImm32 rdi, 2
-    x64.movRegReg rsi, rbx
-    x64.movRegReg rdx, r12
-    x64.x64Syscall 1
-    x64.callDirect __sched_exit_syscall
-    x64.movRegImm32 rdi, 115
-    x64.movReg32Reg32 rdi, rdi
-    x64.x64Syscall 231
+    x64.leaRegRdata rcx, [rip + __abort_msg_115]  ; "fatal error: runtime abort 115 (netpollHoldLost)\x0a"
+    x64.movRegImm32 rdx, 49
+    x64.movRegImm32 rax, 115
+    x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
     x64.epilogue 56
     x64.popReg r15
@@ -840,17 +643,10 @@ func @__np_pd_wait_any {
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp npgaclearhdr
   npnopd#30:
-    x64.leaRegRdata rbx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    x64.movRegImm32 r12, 54
-    x64.callDirect __sched_enter_syscall
-    x64.movRegImm32 rdi, 2
-    x64.movRegReg rsi, rbx
-    x64.movRegReg rdx, r12
-    x64.x64Syscall 1
-    x64.callDirect __sched_exit_syscall
-    x64.movRegImm32 rdi, 104
-    x64.movReg32Reg32 rdi, rdi
-    x64.x64Syscall 231
+    x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    x64.movRegImm32 rdx, 54
+    x64.movRegImm32 rax, 104
+    x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
     x64.epilogue 56
     x64.popReg r15
@@ -883,17 +679,10 @@ func @__np_pd_wait_any {
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp npgamarkhdr
   npnopd#29:
-    x64.leaRegRdata rbx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    x64.movRegImm32 r12, 54
-    x64.callDirect __sched_enter_syscall
-    x64.movRegImm32 rdi, 2
-    x64.movRegReg rsi, rbx
-    x64.movRegReg rdx, r12
-    x64.x64Syscall 1
-    x64.callDirect __sched_exit_syscall
-    x64.movRegImm32 rdi, 104
-    x64.movReg32Reg32 rdi, rdi
-    x64.x64Syscall 231
+    x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    x64.movRegImm32 rdx, 54
+    x64.movRegImm32 rax, 104
+    x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
     x64.epilogue 56
     x64.popReg r15
@@ -943,7 +732,7 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 0
     x64.subRegReg rdx, rdx, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 584
+    x64.leaRegRegImm32 rcx, rcx, 592
     x64.leaRegGlobal rsi, __sched_lock_depth_sink
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
@@ -968,17 +757,10 @@ func @__np_pd_wait_any {
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp npgalookhdr
   npwsdouble:
-    x64.leaRegRdata rbx, [rip + __abort_msg_107]  ; "fatal error: runtime abort 107 (netpollDoubleWait)\x0a"
-    x64.movRegImm32 r12, 51
-    x64.callDirect __sched_enter_syscall
-    x64.movRegImm32 rdi, 2
-    x64.movRegReg rsi, rbx
-    x64.movRegReg rdx, r12
-    x64.x64Syscall 1
-    x64.callDirect __sched_exit_syscall
-    x64.movRegImm32 rdi, 107
-    x64.movReg32Reg32 rdi, rdi
-    x64.x64Syscall 231
+    x64.leaRegRdata rcx, [rip + __abort_msg_107]  ; "fatal error: runtime abort 107 (netpollDoubleWait)\x0a"
+    x64.movRegImm32 rdx, 51
+    x64.movRegImm32 rax, 107
+    x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
     x64.epilogue 56
     x64.popReg r15
@@ -989,17 +771,10 @@ func @__np_pd_wait_any {
     x64.popReg rbp
     x64.ret
   npnopd#26:
-    x64.leaRegRdata rbx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    x64.movRegImm32 r12, 54
-    x64.callDirect __sched_enter_syscall
-    x64.movRegImm32 rdi, 2
-    x64.movRegReg rsi, rbx
-    x64.movRegReg rdx, r12
-    x64.x64Syscall 1
-    x64.callDirect __sched_exit_syscall
-    x64.movRegImm32 rdi, 104
-    x64.movReg32Reg32 rdi, rdi
-    x64.x64Syscall 231
+    x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    x64.movRegImm32 rdx, 54
+    x64.movRegImm32 rax, 104
+    x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
     x64.epilogue 56
     x64.popReg r15
@@ -1055,7 +830,7 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 0
     x64.subRegReg rdx, rdx, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 584
+    x64.leaRegRegImm32 rcx, rcx, 592
     x64.leaRegGlobal rsi, __sched_lock_depth_sink
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
@@ -1072,17 +847,10 @@ func @__np_pd_wait_any {
     x64.popReg rbp
     x64.ret
   npnopd#25:
-    x64.leaRegRdata rbx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    x64.movRegImm32 r12, 54
-    x64.callDirect __sched_enter_syscall
-    x64.movRegImm32 rdi, 2
-    x64.movRegReg rsi, rbx
-    x64.movRegReg rdx, r12
-    x64.x64Syscall 1
-    x64.callDirect __sched_exit_syscall
-    x64.movRegImm32 rdi, 104
-    x64.movReg32Reg32 rdi, rdi
-    x64.x64Syscall 231
+    x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    x64.movRegImm32 rdx, 54
+    x64.movRegImm32 rax, 104
+    x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
     x64.epilogue 56
     x64.popReg r15
@@ -1097,596 +865,348 @@ func @__np_pd_wait_any {
 
 ```TargetIr:arm64-macos
 data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_hold_epoch@24 = i64 0
-  __gt_run_queue_head@32 = i64 0
-  __gt_run_queue_tail@40 = i64 0
-  __gt_timer_count@48 = i64 0
-  __gt_timer_heap_base@56 = i64 0
-  __gt_timer_capacity@64 = i64 0
-  __gt_timer_seq@72 = i64 0
-  __gt_timer_when@80 = i64 9223372036854775807
-  __gt_live_count@88 = i64 0
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_quiesce_stuck@104 = i64 0
-  __gt_seed_bytes@112 = i64 2048
-  __gt_stack_bytes_sum@120 = i64 0
-  __gt_stack_bytes_count@128 = i64 0
-  __gt_seed_sum_seen@136 = i64 0
-  __gt_seed_count_seen@144 = i64 0
-  __gt_keeps_cpu_clock@152 = i64 0
-  __sched_active_workers@160 = i64 1
-  __sched_max_active_workers@168 = i64 1
-  __sched_tls_index@176 = i64 0
-  __sched_tls_teb_offset@184 = i64 0
-  __sched_procs@192 = i64 0
-  __sched_allm@200 = i64 0
-  __sched_async_preempt_off@208 = i64 0
-  __sched_midle@216 = i64 0
-  __sched_pidle@224 = i64 0
-  __gt_gfree_head@232 = i64 0
-  __sched_arena_cursor@240 = i64 0
-  __sched_arena_limit@248 = i64 0
-  __gt_records_carved@256 = i64 0
-  __sched_npidle@264 = i64 0
-  __sched_runq_size@272 = i64 0
-  __sched_global_pushes@280 = i64 0
-  __sched_timer_scan_steps@288 = i64 0
-  __sched_mcount@296 = i64 0
-  __sched_nmidle@304 = i64 0
-  __sched_main_m@312 = i64 0
-  __sched_phase@320 = i64 0
-  __sched_lastpoll@328 = i64 0
-  __sched_poll_until@336 = i64 0
-  __sched_regain_head@344 = i64 0
-  __np_poller@352 = i64 0
-  __np_break@360 = i64 0
-  __np_wake_sig@368 = i64 0
-  __np_pd_table@376 = i64 0
-  __np_pd_cap@384 = i64 0
-  __np_waiters@392 = i64 0
-  __sched_num_procs@400 = i64 0
-  __sched_shutdown_flag@408 = i64 0
-  __sched_lock@416 = i64 0
-  __sched_lock_depth_sink@424 = i64 0
-  __sched_nmspinning@432 = i64 0
-  __sched_needspinning@440 = i64 0
-  __sched_sysmon_event@448 = i64 0
-  __sched_sysmon_wait@456 = i64 0
-  __sched_timer_starts@464 = i64 0
-  __io_pipe_seq@472 = i64 0
-  __subp_table@480 = i64 0
-  __subp_last_error@488 = i64 0
-  __slab_arena_list@496 = i64 0
-  __slab_arena_map_l1@504 = i64 0
-  __slab_state@512 = i64 0
-  __mrt_program_started@520 = i8 0
-}
-
-func @appendToken {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-  __il_body#17:
-    arm64.movImm x2, 0
-  __il_body#22:
-    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
-  __il_cont#21:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.bl __managed_slice
-    arm64.movRegReg x20, x0
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#18
-  tryerr#19:
-    arm64.leaRdata x0, __str_blob_22  ; "panic at String.maxon:149: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
-    arm64.bl mrt_panic
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  tryok#18:
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_retain
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
-  __il_cont#16:
-    arm64.loadRegBaseDisp.word64 x20, [x21 + 8]
-    arm64.movImm x22, 0
-    arm64.b forhdr
-  byteLoop:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x22, x0
-    arm64.b.hs __im_slow
-  __im_load#14:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x22*8 + 0]
-    arm64.b __im_loaded
-  __im_stride:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow
-  __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x22, x0
-    arm64.b.hs __im_slow
-  __im_load#15:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.add x0, x0, x22
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-  __im_loaded:
-    arm64.movRegReg x1, x0
-    arm64.b tryok#5
-  __im_slow:
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x22
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#6
-  critsplit:
-    arm64.movRegReg x1, x0
-  tryok#5:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-  forstep:
-    arm64.add x22, x22, 1
-  forhdr:
-    arm64.cmp x22, x20
-    arm64.b.lt byteLoop
-  forexit:
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movRegReg x0, x21
-    arm64.bl __managed_decref
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  tryerr#6:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:16: appendToken: get is in range\x0a"
-    arm64.bl mrt_panic
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_allg@8 = i64 0
+  __gt_allglen@16 = i64 0
+  __gt_allgcap@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_live_count@96 = i64 0
+  __gt_quiesce_waiter@104 = i64 0
+  __gt_quiesce_stuck@112 = i64 0
+  __gt_seed_bytes@120 = i64 2048
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __gt_keeps_cpu_clock@160 = i64 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __io_pipe_seq@488 = i64 0
+  __subp_table@496 = i64 0
+  __subp_last_error@504 = i64 0
+  __slab_arena_list@512 = i64 0
+  __slab_arena_map_l1@520 = i64 0
+  __slab_state@528 = i64 0
+  __mrt_program_started@536 = i8 0
 }
 
 func @main {
   entry:
-    arm64.prologue 288 record@48
-    arm64.storeSlotReg slot26, x28
-    arm64.storeSlotReg slot25, x27
-    arm64.storeSlotReg slot24, x26
-    arm64.storeSlotReg slot23, x25
-    arm64.storeSlotReg slot22, x24
-    arm64.storeSlotReg slot21, x23
-    arm64.storeSlotReg slot20, x22
-    arm64.storeSlotReg slot19, x21
-    arm64.storeSlotReg slot18, x20
-    arm64.storeSlotReg slot17, x19
-    arm64.movImm x0, 1
-    arm64.movImm x1, 0
+    arm64.prologue 224
+    arm64.storeSlotReg slot25, x28
+    arm64.storeSlotReg slot24, x27
+    arm64.storeSlotReg slot23, x26
+    arm64.storeSlotReg slot22, x25
+    arm64.storeSlotReg slot21, x24
+    arm64.storeSlotReg slot20, x23
+    arm64.storeSlotReg slot19, x22
+    arm64.storeSlotReg slot18, x21
+    arm64.storeSlotReg slot17, x20
+    arm64.storeSlotReg slot16, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x1, __str_rec_11  ; "/bin/sh"
-    arm64.movRegReg x0, x19
-    arm64.bl appendToken
-    arm64.leaRdata x1, __str_rec_12  ; "-c"
-    arm64.movRegReg x0, x19
-    arm64.bl appendToken
-    arm64.leaRdata x1, __str_rec_13  ; "sleep 1; echo hi"
-    arm64.movRegReg x0, x19
-    arm64.bl appendToken
-    arm64.leaRdata x20, __str_rec_14  ; ""
-    arm64.movImm x0, 1
-    arm64.movImm x1, 1
-    arm64.bl __managed_mem_create
-    arm64.movRegReg x21, x0
-    arm64.storeSlotReg slot1, x21
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#2
-  tryok#1:
-    arm64.bl __sched_park_wake_count
-    arm64.movRegReg x22, x0
-    arm64.bl __sched_netpoll_block_count
-    arm64.movRegReg x23, x0
-    arm64.movRegReg x0, x20
-    arm64.bl String.cstr
-    arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x20
-    arm64.bl String.cstr
-    arm64.movRegReg x25, x0
-    arm64.movRegReg x0, x20
-    arm64.bl String.cstr
-    arm64.movRegReg x26, x0
-    arm64.movImm x27, 0
-    arm64.movImm x28, 2
-    arm64.movRegReg x0, x20
-    arm64.bl String.cstr
-    arm64.movImm x1, 0
-    arm64.movImm x2, 0
-    arm64.storeOutgoingArg [sp + arg0], x26
-    arm64.storeOutgoingArg [sp + arg1], x27
-    arm64.storeOutgoingArg [sp + arg2], x28
-    arm64.storeOutgoingArg [sp + arg3], x0
-    arm64.storeOutgoingArg [sp + arg4], x1
-    arm64.storeOutgoingArg [sp + arg5], x2
-    arm64.movRegReg x0, x19
-    arm64.movImm x1, 3
-    arm64.movRegReg x2, x24
-    arm64.movRegReg x3, x21
-    arm64.movImm x4, 1
-    arm64.movImm x5, 0
-    arm64.movRegReg x6, x25
-    arm64.movImm x7, 2
-    arm64.bl __gt_subp_attached_spawn
-    arm64.storeSlotReg slot4, x0
-    arm64.movImm x1, 0
-    arm64.bl __gt_subp_wait_collect
-    arm64.movRegReg x19, x0
-    arm64.storeSlotReg slot5, x19
-    arm64.bl __sched_park_wake_count
-    arm64.sub x20, x0, x22
-    arm64.bl __sched_netpoll_block_count
-    arm64.sub x21, x0, x23
-    arm64.movRegReg x0, x19
-    arm64.bl __gt_subp_result_stdout
-    arm64.movRegReg x19, x0
-  __il_body#16:
-    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
-    arm64.movImm x23, 0
-    arm64.b forhdr#17
-  scan:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
-    arm64.bl __managed_byte_at
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#22
-  tryok#21:
-    arm64.cmp x0, 128
-    arm64.movImm x1, 1
-    arm64.b.ge scmerge
-  orrhs:
-    arm64.cmp x0, 13
-    arm64.cset x0, eq
+    arm64.leaRdata x0, __str_rec_76  ; "-c"
+    arm64.bl __str_retain
     arm64.movRegReg x1, x0
-  scmerge:
-    arm64.cbz x1, forstep#19
-  notSingleByte:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.leaRdata x0, __str_rec_77  ; "sleep 1; echo hi"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.bl Scheduler.counters
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.leaRdata x21, __str_rec_78  ; "/bin/sh"
+    arm64.movImm x0, 16
     arm64.movImm x1, 0
-    arm64.b __il_cont#15
-  forstep#19:
-    arm64.add x23, x23, 1
-  forhdr#17:
-    arm64.cmp x23, x22
-    arm64.b.lt scan
-  forexit#20:
-    arm64.movImm x1, 1
-  __il_cont#15:
-    arm64.movRegReg x0, x19
-    arm64.bl __str_of_buffer
+    arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
-    arm64.storeSlotReg slot2, x22
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-  __il_body#47:
-    arm64.loadRegBaseDisp.word64 x19, [x22 + 8]
-    arm64.storeSlotReg slot3, x19
-  __il_cont#46:
-    arm64.leaRdata x23, __str_rec_15  ; "hi"
-  __il_body#50:
-    arm64.loadRegBaseDisp.word64 x24, [x23 + 8]
-  __il_body#51:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-  __il_cont#48:
-    arm64.cmp x24, x0
-    arm64.b.ls __il_body#31
-  tooLong:
-    arm64.movImm x22, 0
-    arm64.b __il_cont#11
-  __il_body#31:
-    arm64.movImm x25, 0
-    arm64.b forhdr#32
-  __rc_ok#42:
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x25
-    arm64.bl String.byteAt
-    arm64.movRegReg x26, x0
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#37
-  __rc_ok#44:
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x25
-    arm64.bl String.byteAt
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#39
-  tryok#38:
-    arm64.cmp x26, x0
-    arm64.b.eq forstep#34
-  byte_check:
     arm64.movImm x0, 0
-    arm64.b __il_cont#30
-  forstep#34:
-    arm64.add x25, x25, 1
-  forhdr#32:
-    arm64.cmp x25, x24
-    arm64.b.lt __rc_ok#42
-  forexit#35:
-    arm64.movImm x0, 1
-  __il_cont#30:
-    arm64.movRegReg x22, x0
-  __il_cont#11:
-    arm64.leaRdata x0, __str_rec_16  ; "timerpolls="
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.bl __str_unshare
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.bl Subprocess.run
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot2, x19
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Executable
+    arm64.bl Scheduler.counters
+    arm64.storeSlotReg slot3, x0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 64]
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 64]
+    arm64.sub x21, x1, x2
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 72]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 72]
+    arm64.sub x20, x0, x1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.storeSlotReg slot4, x22
+  __il_cont#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.leaRdata x1, __str_rec_79  ; "hi"
+    arm64.bl String.startsWith
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_80  ; "timerpolls="
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
-    arm64.cmp x20, 16
-    arm64.cset x20, le
+    arm64.cmp x21, 16
+    arm64.cset x21, ls
     arm64.movImm x0, 5
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeSlotReg slot16, x1
-    arm64.movRegReg x0, x20
-    arm64.bl __bool_to_string
-    arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_17  ; " onpoller="
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot15, x1
-    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
-    arm64.cmp x21, 1
-    arm64.cset x21, ge
-    arm64.movImm x0, 5
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.storeSlotReg slot14, x1
     arm64.movRegReg x0, x21
     arm64.bl __bool_to_string
     arm64.movRegReg x21, x0
-    arm64.leaRdata x0, __str_rec_18  ; " outLen="
+    arm64.leaRdata x0, __str_rec_81  ; " onpoller="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot14, x1
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.cmp x20, 1
+    arm64.cset x20, hs
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
     arm64.storeSlotReg slot13, x1
+    arm64.movRegReg x0, x20
+    arm64.bl __bool_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_82  ; " outLen="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot12, x1
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeSlotReg slot12, x1
-    arm64.movRegReg x0, x19
-    arm64.bl __uint_to_string
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_19  ; " matches="
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot11, x1
+    arm64.movRegReg x0, x22
+    arm64.bl __uint_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_83  ; " matches="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot10, x1
     arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
     arm64.movImm x0, 5
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x28, x0
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x28
     arm64.bl __bool_to_string
-    arm64.storeSlotReg slot10, x0
-    arm64.leaRdata x1, __str_rec_20  ; "\x0a"
+    arm64.storeSlotReg slot9, x0
+    arm64.leaRdata x1, __str_rec_84  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
-    arm64.storeSlotReg slot9, x2
+    arm64.storeSlotReg slot8, x2
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-    arm64.storeSlotReg slot8, x1
-    arm64.add x2, x24, x20
+    arm64.storeSlotReg slot7, x1
+    arm64.add x2, x24, x21
     arm64.add x2, x2, x25
-    arm64.add x2, x2, x21
+    arm64.add x2, x2, x20
     arm64.add x2, x2, x26
-    arm64.add x2, x2, x19
+    arm64.add x2, x2, x22
     arm64.add x2, x2, x27
     arm64.add x0, x2, x0
     arm64.add x0, x0, x1
-    arm64.storeSlotReg slot6, x0
+    arm64.storeSlotReg slot5, x0
     arm64.add x0, x0, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeSlotReg slot7, x0
-    arm64.add x22, x0, 56
-    arm64.movRegReg x0, x22
+    arm64.storeSlotReg slot6, x0
+    arm64.add x19, x0, 56
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
     arm64.movRegReg x2, x24
     arm64.bl __str_copy
-    arm64.add x23, x22, x24
-    arm64.loadRegSlot x1, slot16
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x2, x20
-    arm64.bl __str_copy
-    arm64.add x20, x23, x20
+    arm64.add x23, x19, x24
     arm64.loadRegSlot x1, slot15
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x2, x25
-    arm64.bl __str_copy
-    arm64.add x20, x20, x25
-    arm64.loadRegSlot x1, slot14
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x23
     arm64.movRegReg x2, x21
     arm64.bl __str_copy
-    arm64.add x20, x20, x21
+    arm64.add x21, x23, x21
+    arm64.loadRegSlot x1, slot14
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x21, x21, x25
     arm64.loadRegSlot x1, slot13
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x20, x21, x20
+    arm64.loadRegSlot x1, slot12
     arm64.movRegReg x0, x20
     arm64.movRegReg x2, x26
     arm64.bl __str_copy
     arm64.add x20, x20, x26
-    arm64.loadRegSlot x1, slot12
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x2, x19
-    arm64.bl __str_copy
-    arm64.add x19, x20, x19
     arm64.loadRegSlot x1, slot11
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x20, x20, x22
+    arm64.loadRegSlot x1, slot10
+    arm64.movRegReg x0, x20
     arm64.movRegReg x2, x27
     arm64.bl __str_copy
-    arm64.add x19, x19, x27
-    arm64.loadRegSlot x2, slot10
-    arm64.movRegReg x0, x19
+    arm64.add x20, x20, x27
+    arm64.loadRegSlot x2, slot9
+    arm64.movRegReg x0, x20
     arm64.movRegReg x1, x28
     arm64.bl __str_copy
-    arm64.loadRegSlot x0, slot10
-    arm64.add x19, x19, x0
-    arm64.loadRegSlot x2, slot8
-    arm64.loadRegSlot x1, slot9
-    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x0, slot9
+    arm64.add x20, x20, x0
+    arm64.loadRegSlot x2, slot7
+    arm64.loadRegSlot x1, slot8
+    arm64.movRegReg x0, x20
     arm64.bl __str_copy
-    arm64.loadRegSlot x0, slot8
-    arm64.add x0, x19, x0
     arm64.loadRegSlot x0, slot7
-    arm64.storeBaseDispReg.word64 [x0 + 0], x22
-    arm64.loadRegSlot x1, slot6
+    arm64.add x0, x20, x0
+    arm64.loadRegSlot x0, slot6
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x1, slot5
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
     arm64.movImm x1, 1
     arm64.storeBaseDispReg.word64 [x0 + 24], x1
-    arm64.loadRegSlot x0, slot16
+    arm64.loadRegSlot x0, slot15
     arm64.bl __mm_decref
-    arm64.loadRegSlot x0, slot14
+    arm64.loadRegSlot x0, slot13
     arm64.bl __mm_decref
-    arm64.loadRegSlot x0, slot12
+    arm64.loadRegSlot x0, slot11
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-  __il_body#10:
-    arm64.loadRegSlot x0, slot7
+  __il_body#11:
+    arm64.loadRegSlot x0, slot6
     arm64.bl __write_stdout
-  __il_cont#9:
-    arm64.loadRegSlot x0, slot7
+  __il_cont#10:
+    arm64.loadRegSlot x0, slot6
     arm64.bl __str_decref
-    arm64.loadRegSlot x0, slot5
-    arm64.bl __gt_subp_result_release
     arm64.loadRegSlot x0, slot4
-    arm64.bl __gt_subp_release
-    arm64.loadRegSlot x0, slot3
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.loadRegSlot x0, slot3
+    arm64.loadRegSlot x0, slot4
     arm64.cmp x0, 255
     arm64.b.gt __rc_panic
-  __rc_ok#6:
-    arm64.loadRegSlot x0, slot2
-    arm64.bl __str_decref
+  __rc_ok:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __mm_decref
   exitdrop#4:
-    arm64.loadRegSlot x0, slot1
-    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __destruct_CollectedOutput
   exitdrop#5:
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __mm_decref
+  exitdrop#6:
     arm64.loadRegSlot x0, slot0
     arm64.bl __managed_decref
   exitterminal:
-    arm64.loadRegSlot x0, slot3
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
+    arm64.loadRegSlot x0, slot4
+    arm64.loadRegSlot x19, slot16
+    arm64.loadRegSlot x20, slot17
+    arm64.loadRegSlot x21, slot18
+    arm64.loadRegSlot x22, slot19
+    arm64.loadRegSlot x23, slot20
+    arm64.loadRegSlot x24, slot21
+    arm64.loadRegSlot x25, slot22
+    arm64.loadRegSlot x26, slot23
+    arm64.loadRegSlot x27, slot24
+    arm64.loadRegSlot x28, slot25
+    arm64.epilogue 224
     arm64.ret
-  tryerr#2:
-    arm64.leaRdata x0, __str_blob_21  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:27: create(1, 1) cannot fail\x0a"
+  tryerr:
+    arm64.leaRdata x0, __str_blob_85  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
-    arm64.ret
-  tryerr#22:
-    arm64.leaRdata x0, __str_blob_25  ; "panic at String.maxon:1122: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
-    arm64.ret
-  tryerr#37:
-    arm64.leaRdata x0, __str_blob_23  ; "panic at String.maxon:1007: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
-    arm64.ret
-  tryerr#39:
-    arm64.leaRdata x0, __str_blob_24  ; "panic at String.maxon:1008: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
+    arm64.loadRegSlot x19, slot16
+    arm64.loadRegSlot x20, slot17
+    arm64.loadRegSlot x21, slot18
+    arm64.loadRegSlot x22, slot19
+    arm64.loadRegSlot x23, slot20
+    arm64.loadRegSlot x24, slot21
+    arm64.loadRegSlot x25, slot22
+    arm64.loadRegSlot x26, slot23
+    arm64.loadRegSlot x27, slot24
+    arm64.loadRegSlot x28, slot25
+    arm64.epilogue 224
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_27  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_243  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
+    arm64.loadRegSlot x19, slot16
+    arm64.loadRegSlot x20, slot17
+    arm64.loadRegSlot x21, slot18
+    arm64.loadRegSlot x22, slot19
+    arm64.loadRegSlot x23, slot20
+    arm64.loadRegSlot x24, slot21
+    arm64.loadRegSlot x25, slot22
+    arm64.loadRegSlot x26, slot23
+    arm64.loadRegSlot x27, slot24
+    arm64.loadRegSlot x28, slot25
+    arm64.epilogue 224
     arm64.ret
 }
 
@@ -1717,7 +1237,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -1766,7 +1286,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -1795,7 +1315,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -1834,7 +1354,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -1897,17 +1417,10 @@ func @__np_pd_wait_any {
     arm64.cmp x0, x1
     arm64.b.ne npholdlost
   npholdpublished:
-    arm64.leaRdata x19, __abort_msg_109  ; "fatal error: runtime abort 109 (netpollUnhookMissed)\x0a"
-    arm64.movImm x20, 53
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.importCall 1
-    arm64.bl mrt_host_status_or_errno
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 109
-    arm64.importCall 0
+    arm64.leaRdata x0, __abort_msg_109  ; "fatal error: runtime abort 109 (netpollUnhookMissed)\x0a"
+    arm64.movImm x1, 53
+    arm64.movImm x2, 109
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -1917,17 +1430,10 @@ func @__np_pd_wait_any {
     arm64.epilogue 64
     arm64.ret
   npholdlost:
-    arm64.leaRdata x19, __abort_msg_115  ; "fatal error: runtime abort 115 (netpollHoldLost)\x0a"
-    arm64.movImm x20, 49
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.importCall 1
-    arm64.bl mrt_host_status_or_errno
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 115
-    arm64.importCall 0
+    arm64.leaRdata x0, __abort_msg_115  ; "fatal error: runtime abort 115 (netpollHoldLost)\x0a"
+    arm64.movImm x1, 49
+    arm64.movImm x2, 115
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -1940,17 +1446,10 @@ func @__np_pd_wait_any {
     arm64.add x21, x21, 1
     arm64.b npgaclearhdr
   npnopd#30:
-    arm64.leaRdata x19, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    arm64.movImm x20, 54
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.importCall 1
-    arm64.bl mrt_host_status_or_errno
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 104
-    arm64.importCall 0
+    arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 104
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -1979,17 +1478,10 @@ func @__np_pd_wait_any {
     arm64.add x21, x21, 1
     arm64.b npgamarkhdr
   npnopd#29:
-    arm64.leaRdata x19, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    arm64.movImm x20, 54
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.importCall 1
-    arm64.bl mrt_host_status_or_errno
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 104
-    arm64.importCall 0
+    arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 104
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -2040,7 +1532,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -2063,17 +1555,10 @@ func @__np_pd_wait_any {
     arm64.add x21, x21, 1
     arm64.b npgalookhdr
   npwsdouble:
-    arm64.leaRdata x19, __abort_msg_107  ; "fatal error: runtime abort 107 (netpollDoubleWait)\x0a"
-    arm64.movImm x20, 51
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.importCall 1
-    arm64.bl mrt_host_status_or_errno
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 107
-    arm64.importCall 0
+    arm64.leaRdata x0, __abort_msg_107  ; "fatal error: runtime abort 107 (netpollDoubleWait)\x0a"
+    arm64.movImm x1, 51
+    arm64.movImm x2, 107
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -2083,17 +1568,10 @@ func @__np_pd_wait_any {
     arm64.epilogue 64
     arm64.ret
   npnopd#26:
-    arm64.leaRdata x19, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    arm64.movImm x20, 54
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.importCall 1
-    arm64.bl mrt_host_status_or_errno
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 104
-    arm64.importCall 0
+    arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 104
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -2148,7 +1626,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -2164,17 +1642,10 @@ func @__np_pd_wait_any {
     arm64.epilogue 64
     arm64.ret
   npnopd#25:
-    arm64.leaRdata x19, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    arm64.movImm x20, 54
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.importCall 1
-    arm64.bl mrt_host_status_or_errno
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 104
-    arm64.importCall 0
+    arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 104
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -2188,600 +1659,352 @@ func @__np_pd_wait_any {
 
 ```TargetIr:arm64-linux
 data {
-  __gt_allg@0 = i64 0
-  __gt_allglen@8 = i64 0
-  __gt_allgcap@16 = i64 0
-  __gt_hold_epoch@24 = i64 0
-  __gt_run_queue_head@32 = i64 0
-  __gt_run_queue_tail@40 = i64 0
-  __gt_timer_count@48 = i64 0
-  __gt_timer_heap_base@56 = i64 0
-  __gt_timer_capacity@64 = i64 0
-  __gt_timer_seq@72 = i64 0
-  __gt_timer_when@80 = i64 9223372036854775807
-  __gt_live_count@88 = i64 0
-  __gt_quiesce_waiter@96 = i64 0
-  __gt_quiesce_stuck@104 = i64 0
-  __gt_seed_bytes@112 = i64 2048
-  __gt_stack_bytes_sum@120 = i64 0
-  __gt_stack_bytes_count@128 = i64 0
-  __gt_seed_sum_seen@136 = i64 0
-  __gt_seed_count_seen@144 = i64 0
-  __gt_keeps_cpu_clock@152 = i64 0
-  __sched_active_workers@160 = i64 1
-  __sched_max_active_workers@168 = i64 1
-  __sched_tls_index@176 = i64 0
-  __sched_tls_teb_offset@184 = i64 0
-  __sched_procs@192 = i64 0
-  __sched_allm@200 = i64 0
-  __sched_async_preempt_off@208 = i64 0
-  __sched_midle@216 = i64 0
-  __sched_pidle@224 = i64 0
-  __gt_gfree_head@232 = i64 0
-  __sched_arena_cursor@240 = i64 0
-  __sched_arena_limit@248 = i64 0
-  __gt_records_carved@256 = i64 0
-  __sched_npidle@264 = i64 0
-  __sched_runq_size@272 = i64 0
-  __sched_global_pushes@280 = i64 0
-  __sched_timer_scan_steps@288 = i64 0
-  __sched_mcount@296 = i64 0
-  __sched_nmidle@304 = i64 0
-  __sched_main_m@312 = i64 0
-  __sched_phase@320 = i64 0
-  __sched_lastpoll@328 = i64 0
-  __sched_poll_until@336 = i64 0
-  __sched_regain_head@344 = i64 0
-  __np_poller@352 = i64 0
-  __np_break@360 = i64 0
-  __np_wake_sig@368 = i64 0
-  __np_pd_table@376 = i64 0
-  __np_pd_cap@384 = i64 0
-  __np_waiters@392 = i64 0
-  __sched_num_procs@400 = i64 0
-  __sched_shutdown_flag@408 = i64 0
-  __sched_lock@416 = i64 0
-  __sched_lock_depth_sink@424 = i64 0
-  __sched_nmspinning@432 = i64 0
-  __sched_needspinning@440 = i64 0
-  __sched_sysmon_event@448 = i64 0
-  __sched_sysmon_wait@456 = i64 0
-  __sched_timer_starts@464 = i64 0
-  __mrt_errno@472 = i64 0
-  __mrt_envp@480 = i64 0
-  __mrt_signal_stack_bytes@488 = i64 0
-  __mrt_tls_next_key@496 = i64 0
-  __io_pipe_seq@504 = i64 0
-  __subp_table@512 = i64 0
-  __subp_last_error@520 = i64 0
-  __slab_arena_list@528 = i64 0
-  __slab_arena_map_l1@536 = i64 0
-  __slab_state@544 = i64 0
-  __mrt_program_started@552 = i8 0
-}
-
-func @appendToken {
-  entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-  __il_body#17:
-    arm64.movImm x2, 0
-  __il_body#22:
-    arm64.loadRegBaseDisp.word64 x3, [x1 + 8]
-  __il_cont#21:
-    arm64.movRegReg x0, x1
-    arm64.movRegReg x1, x2
-    arm64.movRegReg x2, x3
-    arm64.bl __managed_slice
-    arm64.movRegReg x20, x0
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#18
-  tryerr#19:
-    arm64.leaRdata x0, __str_blob_22  ; "panic at String.maxon:149: String.toByteArray: slice 0..byteLength() is in bounds by construction\x0a"
-    arm64.bl mrt_panic
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  tryok#18:
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_retain
-    arm64.movRegReg x21, x0
-    arm64.movRegReg x0, x20
-    arm64.bl __managed_decref
-  __il_cont#16:
-    arm64.loadRegBaseDisp.word64 x20, [x21 + 8]
-    arm64.movImm x22, 0
-    arm64.b forhdr
-  byteLoop:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 24]
-    arm64.cmp x0, 8
-    arm64.b.ne __im_stride
-  __im_word:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x22, x0
-    arm64.b.hs __im_slow
-  __im_load#14:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.loadRegBaseIndexScale.word64 x0, [x0 + x22*8 + 0]
-    arm64.b __im_loaded
-  __im_stride:
-    arm64.cmp x0, 1
-    arm64.b.ne __im_slow
-  __im_byte:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 8]
-    arm64.cmp x22, x0
-    arm64.b.hs __im_slow
-  __im_load#15:
-    arm64.loadRegBaseDisp.word64 x0, [x21 + 0]
-    arm64.add x0, x0, x22
-    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
-  __im_loaded:
-    arm64.movRegReg x1, x0
-    arm64.b tryok#5
-  __im_slow:
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x22
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#6
-  critsplit:
-    arm64.movRegReg x1, x0
-  tryok#5:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-  forstep:
-    arm64.add x22, x22, 1
-  forhdr:
-    arm64.cmp x22, x20
-    arm64.b.lt byteLoop
-  forexit:
-    arm64.movImm x1, 0
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_push
-    arm64.movRegReg x0, x21
-    arm64.bl __managed_decref
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
-  tryerr#6:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:16: appendToken: get is in range\x0a"
-    arm64.bl mrt_panic
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
-    arm64.ret
+  __data_CharacterSet.cachedWhitespacesAndNewlines@0 = i64 0
+  __gt_allg@8 = i64 0
+  __gt_allglen@16 = i64 0
+  __gt_allgcap@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_live_count@96 = i64 0
+  __gt_quiesce_waiter@104 = i64 0
+  __gt_quiesce_stuck@112 = i64 0
+  __gt_seed_bytes@120 = i64 2048
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __gt_keeps_cpu_clock@160 = i64 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __mrt_errno@488 = i64 0
+  __mrt_envp@496 = i64 0
+  __mrt_signal_stack_bytes@504 = i64 0
+  __mrt_tls_next_key@512 = i64 0
+  __io_pipe_seq@520 = i64 0
+  __subp_table@528 = i64 0
+  __subp_last_error@536 = i64 0
+  __slab_arena_list@544 = i64 0
+  __slab_arena_map_l1@552 = i64 0
+  __slab_state@560 = i64 0
+  __mrt_program_started@568 = i8 0
 }
 
 func @main {
   entry:
-    arm64.prologue 288 record@48
-    arm64.storeSlotReg slot26, x28
-    arm64.storeSlotReg slot25, x27
-    arm64.storeSlotReg slot24, x26
-    arm64.storeSlotReg slot23, x25
-    arm64.storeSlotReg slot22, x24
-    arm64.storeSlotReg slot21, x23
-    arm64.storeSlotReg slot20, x22
-    arm64.storeSlotReg slot19, x21
-    arm64.storeSlotReg slot18, x20
-    arm64.storeSlotReg slot17, x19
-    arm64.movImm x0, 1
-    arm64.movImm x1, 0
+    arm64.prologue 224
+    arm64.storeSlotReg slot25, x28
+    arm64.storeSlotReg slot24, x27
+    arm64.storeSlotReg slot23, x26
+    arm64.storeSlotReg slot22, x25
+    arm64.storeSlotReg slot21, x24
+    arm64.storeSlotReg slot20, x23
+    arm64.storeSlotReg slot19, x22
+    arm64.storeSlotReg slot18, x21
+    arm64.storeSlotReg slot17, x20
+    arm64.storeSlotReg slot16, x19
+    arm64.movImm x0, 8
+    arm64.leaFuncAddr x1, __str_decref
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x1, __str_rec_11  ; "/bin/sh"
-    arm64.movRegReg x0, x19
-    arm64.bl appendToken
-    arm64.leaRdata x1, __str_rec_12  ; "-c"
-    arm64.movRegReg x0, x19
-    arm64.bl appendToken
-    arm64.leaRdata x1, __str_rec_13  ; "sleep 1; echo hi"
-    arm64.movRegReg x0, x19
-    arm64.bl appendToken
-    arm64.leaRdata x20, __str_rec_14  ; ""
-    arm64.movImm x0, 1
-    arm64.movImm x1, 1
-    arm64.bl __managed_mem_create
-    arm64.movRegReg x21, x0
-    arm64.storeSlotReg slot1, x21
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#2
-  tryok#1:
-    arm64.bl __sched_park_wake_count
-    arm64.movRegReg x22, x0
-    arm64.bl __sched_netpoll_block_count
-    arm64.movRegReg x23, x0
-    arm64.movRegReg x0, x20
-    arm64.bl String.cstr
-    arm64.movRegReg x24, x0
-    arm64.movRegReg x0, x20
-    arm64.bl String.cstr
-    arm64.movRegReg x25, x0
-    arm64.movRegReg x0, x20
-    arm64.bl String.cstr
-    arm64.movRegReg x26, x0
-    arm64.movImm x27, 0
-    arm64.movImm x28, 2
-    arm64.movRegReg x0, x20
-    arm64.bl String.cstr
-    arm64.movImm x1, 0
-    arm64.movImm x2, 0
-    arm64.storeOutgoingArg [sp + arg0], x26
-    arm64.storeOutgoingArg [sp + arg1], x27
-    arm64.storeOutgoingArg [sp + arg2], x28
-    arm64.storeOutgoingArg [sp + arg3], x0
-    arm64.storeOutgoingArg [sp + arg4], x1
-    arm64.storeOutgoingArg [sp + arg5], x2
-    arm64.movRegReg x0, x19
-    arm64.movImm x1, 3
-    arm64.movRegReg x2, x24
-    arm64.movRegReg x3, x21
-    arm64.movImm x4, 1
-    arm64.movImm x5, 0
-    arm64.movRegReg x6, x25
-    arm64.movImm x7, 2
-    arm64.bl __gt_subp_attached_spawn
-    arm64.storeSlotReg slot4, x0
-    arm64.movImm x1, 0
-    arm64.bl __gt_subp_wait_collect
-    arm64.movRegReg x19, x0
-    arm64.storeSlotReg slot5, x19
-    arm64.bl __sched_park_wake_count
-    arm64.sub x20, x0, x22
-    arm64.bl __sched_netpoll_block_count
-    arm64.sub x21, x0, x23
-    arm64.movRegReg x0, x19
-    arm64.bl __gt_subp_result_stdout
-    arm64.movRegReg x19, x0
-  __il_body#16:
-    arm64.loadRegBaseDisp.word64 x22, [x19 + 8]
-    arm64.movImm x23, 0
-    arm64.b forhdr#17
-  scan:
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x23
-    arm64.bl __managed_byte_at
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#22
-  tryok#21:
-    arm64.cmp x0, 128
-    arm64.movImm x1, 1
-    arm64.b.ge scmerge
-  orrhs:
-    arm64.cmp x0, 13
-    arm64.cset x0, eq
+    arm64.leaRdata x0, __str_rec_76  ; "-c"
+    arm64.bl __str_retain
     arm64.movRegReg x1, x0
-  scmerge:
-    arm64.cbz x1, forstep#19
-  notSingleByte:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.leaRdata x0, __str_rec_77  ; "sleep 1; echo hi"
+    arm64.bl __str_retain
+    arm64.movRegReg x1, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.bl Scheduler.counters
+    arm64.movRegReg x20, x0
+    arm64.storeSlotReg slot1, x20
+    arm64.leaRdata x21, __str_rec_78  ; "/bin/sh"
+    arm64.movImm x0, 16
     arm64.movImm x1, 0
-    arm64.b __il_cont#15
-  forstep#19:
-    arm64.add x23, x23, 1
-  forhdr#17:
-    arm64.cmp x23, x22
-    arm64.b.lt scan
-  forexit#20:
-    arm64.movImm x1, 1
-  __il_cont#15:
-    arm64.movRegReg x0, x19
-    arm64.bl __str_of_buffer
+    arm64.bl __mm_alloc
     arm64.movRegReg x22, x0
-    arm64.storeSlotReg slot2, x22
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
-  __il_body#47:
-    arm64.loadRegBaseDisp.word64 x19, [x22 + 8]
-    arm64.storeSlotReg slot3, x19
-  __il_cont#46:
-    arm64.leaRdata x23, __str_rec_15  ; "hi"
-  __il_body#50:
-    arm64.loadRegBaseDisp.word64 x24, [x23 + 8]
-  __il_body#51:
-    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
-  __il_cont#48:
-    arm64.cmp x24, x0
-    arm64.b.ls __il_body#31
-  tooLong:
-    arm64.movImm x22, 0
-    arm64.b __il_cont#11
-  __il_body#31:
-    arm64.movImm x25, 0
-    arm64.b forhdr#32
-  __rc_ok#42:
-    arm64.movRegReg x0, x22
-    arm64.movRegReg x1, x25
-    arm64.bl String.byteAt
-    arm64.movRegReg x26, x0
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#37
-  __rc_ok#44:
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x1, x25
-    arm64.bl String.byteAt
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#39
-  tryok#38:
-    arm64.cmp x26, x0
-    arm64.b.eq forstep#34
-  byte_check:
     arm64.movImm x0, 0
-    arm64.b __il_cont#30
-  forstep#34:
-    arm64.add x25, x25, 1
-  forhdr#32:
-    arm64.cmp x25, x24
-    arm64.b.lt __rc_ok#42
-  forexit#35:
-    arm64.movImm x0, 1
-  __il_cont#30:
-    arm64.movRegReg x22, x0
-  __il_cont#11:
-    arm64.leaRdata x0, __str_rec_16  ; "timerpolls="
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.movRegReg x0, x21
+    arm64.bl __str_retain
+    arm64.bl __str_unshare
+    arm64.storeBaseDispReg.word64 [x22 + 8], x0
+    arm64.movRegReg x0, x22
+    arm64.movRegReg x1, x19
+    arm64.bl Subprocess.run
+    arm64.movRegReg x19, x0
+    arm64.storeSlotReg slot2, x19
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr
+  tryok:
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_Executable
+    arm64.bl Scheduler.counters
+    arm64.storeSlotReg slot3, x0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 64]
+    arm64.loadRegBaseDisp.word64 x2, [x20 + 64]
+    arm64.sub x21, x1, x2
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 72]
+    arm64.loadRegBaseDisp.word64 x1, [x20 + 72]
+    arm64.sub x20, x0, x1
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+  __il_body#13:
+    arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
+    arm64.storeSlotReg slot4, x22
+  __il_cont#12:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
+    arm64.leaRdata x1, __str_rec_79  ; "hi"
+    arm64.bl String.startsWith
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_80  ; "timerpolls="
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
-    arm64.cmp x20, 16
-    arm64.cset x20, le
+    arm64.cmp x21, 16
+    arm64.cset x21, ls
     arm64.movImm x0, 5
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeSlotReg slot16, x1
-    arm64.movRegReg x0, x20
-    arm64.bl __bool_to_string
-    arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_17  ; " onpoller="
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot15, x1
-    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
-    arm64.cmp x21, 1
-    arm64.cset x21, ge
-    arm64.movImm x0, 5
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x1, x0
-    arm64.storeSlotReg slot14, x1
     arm64.movRegReg x0, x21
     arm64.bl __bool_to_string
     arm64.movRegReg x21, x0
-    arm64.leaRdata x0, __str_rec_18  ; " outLen="
+    arm64.leaRdata x0, __str_rec_81  ; " onpoller="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot14, x1
+    arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
+    arm64.cmp x20, 1
+    arm64.cset x20, hs
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
     arm64.storeSlotReg slot13, x1
+    arm64.movRegReg x0, x20
+    arm64.bl __bool_to_string
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_82  ; " outLen="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot12, x1
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
     arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeSlotReg slot12, x1
-    arm64.movRegReg x0, x19
-    arm64.bl __uint_to_string
-    arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_19  ; " matches="
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot11, x1
+    arm64.movRegReg x0, x22
+    arm64.bl __uint_to_string
+    arm64.movRegReg x22, x0
+    arm64.leaRdata x0, __str_rec_83  ; " matches="
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.storeSlotReg slot10, x1
     arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
     arm64.movImm x0, 5
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x28, x0
-    arm64.movRegReg x0, x22
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x28
     arm64.bl __bool_to_string
-    arm64.storeSlotReg slot10, x0
-    arm64.leaRdata x1, __str_rec_20  ; "\x0a"
+    arm64.storeSlotReg slot9, x0
+    arm64.leaRdata x1, __str_rec_84  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
-    arm64.storeSlotReg slot9, x2
+    arm64.storeSlotReg slot8, x2
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
-    arm64.storeSlotReg slot8, x1
-    arm64.add x2, x24, x20
+    arm64.storeSlotReg slot7, x1
+    arm64.add x2, x24, x21
     arm64.add x2, x2, x25
-    arm64.add x2, x2, x21
+    arm64.add x2, x2, x20
     arm64.add x2, x2, x26
-    arm64.add x2, x2, x19
+    arm64.add x2, x2, x22
     arm64.add x2, x2, x27
     arm64.add x0, x2, x0
     arm64.add x0, x0, x1
-    arm64.storeSlotReg slot6, x0
+    arm64.storeSlotReg slot5, x0
     arm64.add x0, x0, 57
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
-    arm64.storeSlotReg slot7, x0
-    arm64.add x22, x0, 56
-    arm64.movRegReg x0, x22
+    arm64.storeSlotReg slot6, x0
+    arm64.add x19, x0, 56
+    arm64.movRegReg x0, x19
     arm64.movRegReg x1, x23
     arm64.movRegReg x2, x24
     arm64.bl __str_copy
-    arm64.add x23, x22, x24
-    arm64.loadRegSlot x1, slot16
-    arm64.movRegReg x0, x23
-    arm64.movRegReg x2, x20
-    arm64.bl __str_copy
-    arm64.add x20, x23, x20
+    arm64.add x23, x19, x24
     arm64.loadRegSlot x1, slot15
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x2, x25
-    arm64.bl __str_copy
-    arm64.add x20, x20, x25
-    arm64.loadRegSlot x1, slot14
-    arm64.movRegReg x0, x20
+    arm64.movRegReg x0, x23
     arm64.movRegReg x2, x21
     arm64.bl __str_copy
-    arm64.add x20, x20, x21
+    arm64.add x21, x23, x21
+    arm64.loadRegSlot x1, slot14
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x2, x25
+    arm64.bl __str_copy
+    arm64.add x21, x21, x25
     arm64.loadRegSlot x1, slot13
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x2, x20
+    arm64.bl __str_copy
+    arm64.add x20, x21, x20
+    arm64.loadRegSlot x1, slot12
     arm64.movRegReg x0, x20
     arm64.movRegReg x2, x26
     arm64.bl __str_copy
     arm64.add x20, x20, x26
-    arm64.loadRegSlot x1, slot12
-    arm64.movRegReg x0, x20
-    arm64.movRegReg x2, x19
-    arm64.bl __str_copy
-    arm64.add x19, x20, x19
     arm64.loadRegSlot x1, slot11
-    arm64.movRegReg x0, x19
+    arm64.movRegReg x0, x20
+    arm64.movRegReg x2, x22
+    arm64.bl __str_copy
+    arm64.add x20, x20, x22
+    arm64.loadRegSlot x1, slot10
+    arm64.movRegReg x0, x20
     arm64.movRegReg x2, x27
     arm64.bl __str_copy
-    arm64.add x19, x19, x27
-    arm64.loadRegSlot x2, slot10
-    arm64.movRegReg x0, x19
+    arm64.add x20, x20, x27
+    arm64.loadRegSlot x2, slot9
+    arm64.movRegReg x0, x20
     arm64.movRegReg x1, x28
     arm64.bl __str_copy
-    arm64.loadRegSlot x0, slot10
-    arm64.add x19, x19, x0
-    arm64.loadRegSlot x2, slot8
-    arm64.loadRegSlot x1, slot9
-    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x0, slot9
+    arm64.add x20, x20, x0
+    arm64.loadRegSlot x2, slot7
+    arm64.loadRegSlot x1, slot8
+    arm64.movRegReg x0, x20
     arm64.bl __str_copy
-    arm64.loadRegSlot x0, slot8
-    arm64.add x0, x19, x0
     arm64.loadRegSlot x0, slot7
-    arm64.storeBaseDispReg.word64 [x0 + 0], x22
-    arm64.loadRegSlot x1, slot6
+    arm64.add x0, x20, x0
+    arm64.loadRegSlot x0, slot6
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x1, slot5
     arm64.storeBaseDispReg.word64 [x0 + 8], x1
     arm64.movImm x1, 18446744073709551613
     arm64.storeBaseDispReg.word64 [x0 + 16], x1
     arm64.movImm x1, 1
     arm64.storeBaseDispReg.word64 [x0 + 24], x1
-    arm64.loadRegSlot x0, slot16
+    arm64.loadRegSlot x0, slot15
     arm64.bl __mm_decref
-    arm64.loadRegSlot x0, slot14
+    arm64.loadRegSlot x0, slot13
     arm64.bl __mm_decref
-    arm64.loadRegSlot x0, slot12
+    arm64.loadRegSlot x0, slot11
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-  __il_body#10:
-    arm64.loadRegSlot x0, slot7
+  __il_body#11:
+    arm64.loadRegSlot x0, slot6
     arm64.bl __write_stdout
-  __il_cont#9:
-    arm64.loadRegSlot x0, slot7
+  __il_cont#10:
+    arm64.loadRegSlot x0, slot6
     arm64.bl __str_decref
-    arm64.loadRegSlot x0, slot5
-    arm64.bl __gt_subp_result_release
     arm64.loadRegSlot x0, slot4
-    arm64.bl __gt_subp_release
-    arm64.loadRegSlot x0, slot3
     arm64.cmp x0, 0
     arm64.b.lt __rc_panic
   __rc_chk:
-    arm64.loadRegSlot x0, slot3
+    arm64.loadRegSlot x0, slot4
     arm64.cmp x0, 255
     arm64.b.gt __rc_panic
-  __rc_ok#6:
-    arm64.loadRegSlot x0, slot2
-    arm64.bl __str_decref
+  __rc_ok:
+    arm64.loadRegSlot x0, slot3
+    arm64.bl __mm_decref
   exitdrop#4:
-    arm64.loadRegSlot x0, slot1
-    arm64.bl __managed_decref
+    arm64.loadRegSlot x0, slot2
+    arm64.bl __destruct_CollectedOutput
   exitdrop#5:
+    arm64.loadRegSlot x0, slot1
+    arm64.bl __mm_decref
+  exitdrop#6:
     arm64.loadRegSlot x0, slot0
     arm64.bl __managed_decref
   exitterminal:
-    arm64.loadRegSlot x0, slot3
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
+    arm64.loadRegSlot x0, slot4
+    arm64.loadRegSlot x19, slot16
+    arm64.loadRegSlot x20, slot17
+    arm64.loadRegSlot x21, slot18
+    arm64.loadRegSlot x22, slot19
+    arm64.loadRegSlot x23, slot20
+    arm64.loadRegSlot x24, slot21
+    arm64.loadRegSlot x25, slot22
+    arm64.loadRegSlot x26, slot23
+    arm64.loadRegSlot x27, slot24
+    arm64.loadRegSlot x28, slot25
+    arm64.epilogue 224
     arm64.ret
-  tryerr#2:
-    arm64.leaRdata x0, __str_blob_21  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:27: create(1, 1) cannot fail\x0a"
+  tryerr:
+    arm64.leaRdata x0, __str_blob_85  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
-    arm64.ret
-  tryerr#22:
-    arm64.leaRdata x0, __str_blob_25  ; "panic at String.maxon:1122: scanSingleByteGraphemes: byteAt OOB \xe2\x80\x94 i < len invariant\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
-    arm64.ret
-  tryerr#37:
-    arm64.leaRdata x0, __str_blob_23  ; "panic at String.maxon:1007: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees aOffset + len <= a.byteLength()\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
-    arm64.ret
-  tryerr#39:
-    arm64.leaRdata x0, __str_blob_24  ; "panic at String.maxon:1008: bytesEqual: byteAt OOB \xe2\x80\x94 caller guarantees bOffset + len <= b.byteLength()\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
+    arm64.loadRegSlot x19, slot16
+    arm64.loadRegSlot x20, slot17
+    arm64.loadRegSlot x21, slot18
+    arm64.loadRegSlot x22, slot19
+    arm64.loadRegSlot x23, slot20
+    arm64.loadRegSlot x24, slot21
+    arm64.loadRegSlot x25, slot22
+    arm64.loadRegSlot x26, slot23
+    arm64.loadRegSlot x27, slot24
+    arm64.loadRegSlot x28, slot25
+    arm64.epilogue 224
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_27  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:40: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_243  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot17
-    arm64.loadRegSlot x20, slot18
-    arm64.loadRegSlot x21, slot19
-    arm64.loadRegSlot x22, slot20
-    arm64.loadRegSlot x23, slot21
-    arm64.loadRegSlot x24, slot22
-    arm64.loadRegSlot x25, slot23
-    arm64.loadRegSlot x26, slot24
-    arm64.loadRegSlot x27, slot25
-    arm64.loadRegSlot x28, slot26
-    arm64.epilogue 288 record@48
+    arm64.loadRegSlot x19, slot16
+    arm64.loadRegSlot x20, slot17
+    arm64.loadRegSlot x21, slot18
+    arm64.loadRegSlot x22, slot19
+    arm64.loadRegSlot x23, slot20
+    arm64.loadRegSlot x24, slot21
+    arm64.loadRegSlot x25, slot22
+    arm64.loadRegSlot x26, slot23
+    arm64.loadRegSlot x27, slot24
+    arm64.loadRegSlot x28, slot25
+    arm64.epilogue 224
     arm64.ret
 }
 
@@ -2812,7 +2035,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -2861,7 +2084,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -2890,7 +2113,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -2929,7 +2152,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -2992,16 +2215,10 @@ func @__np_pd_wait_any {
     arm64.cmp x0, x1
     arm64.b.ne npholdlost
   npholdpublished:
-    arm64.leaRdata x19, __abort_msg_109  ; "fatal error: runtime abort 109 (netpollUnhookMissed)\x0a"
-    arm64.movImm x20, 53
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.syscall 64
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 109
-    arm64.syscall 94
+    arm64.leaRdata x0, __abort_msg_109  ; "fatal error: runtime abort 109 (netpollUnhookMissed)\x0a"
+    arm64.movImm x1, 53
+    arm64.movImm x2, 109
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -3011,16 +2228,10 @@ func @__np_pd_wait_any {
     arm64.epilogue 64
     arm64.ret
   npholdlost:
-    arm64.leaRdata x19, __abort_msg_115  ; "fatal error: runtime abort 115 (netpollHoldLost)\x0a"
-    arm64.movImm x20, 49
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.syscall 64
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 115
-    arm64.syscall 94
+    arm64.leaRdata x0, __abort_msg_115  ; "fatal error: runtime abort 115 (netpollHoldLost)\x0a"
+    arm64.movImm x1, 49
+    arm64.movImm x2, 115
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -3033,16 +2244,10 @@ func @__np_pd_wait_any {
     arm64.add x21, x21, 1
     arm64.b npgaclearhdr
   npnopd#30:
-    arm64.leaRdata x19, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    arm64.movImm x20, 54
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.syscall 64
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 104
-    arm64.syscall 94
+    arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 104
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -3071,16 +2276,10 @@ func @__np_pd_wait_any {
     arm64.add x21, x21, 1
     arm64.b npgamarkhdr
   npnopd#29:
-    arm64.leaRdata x19, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    arm64.movImm x20, 54
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.syscall 64
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 104
-    arm64.syscall 94
+    arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 104
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -3131,7 +2330,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -3154,16 +2353,10 @@ func @__np_pd_wait_any {
     arm64.add x21, x21, 1
     arm64.b npgalookhdr
   npwsdouble:
-    arm64.leaRdata x19, __abort_msg_107  ; "fatal error: runtime abort 107 (netpollDoubleWait)\x0a"
-    arm64.movImm x20, 51
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.syscall 64
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 107
-    arm64.syscall 94
+    arm64.leaRdata x0, __abort_msg_107  ; "fatal error: runtime abort 107 (netpollDoubleWait)\x0a"
+    arm64.movImm x1, 51
+    arm64.movImm x2, 107
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -3173,16 +2366,10 @@ func @__np_pd_wait_any {
     arm64.epilogue 64
     arm64.ret
   npnopd#26:
-    arm64.leaRdata x19, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    arm64.movImm x20, 54
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.syscall 64
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 104
-    arm64.syscall 94
+    arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 104
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -3237,7 +2424,7 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.sub x2, x2, x0
     arm64.sub x0, x0, 1
-    arm64.add x1, x1, 584
+    arm64.add x1, x1, 592
     arm64.leaGlobal x3, __sched_lock_depth_sink
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
@@ -3253,16 +2440,10 @@ func @__np_pd_wait_any {
     arm64.epilogue 64
     arm64.ret
   npnopd#25:
-    arm64.leaRdata x19, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
-    arm64.movImm x20, 54
-    arm64.bl __sched_enter_syscall
-    arm64.movImm x0, 2
-    arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x20
-    arm64.syscall 64
-    arm64.bl __sched_exit_syscall
-    arm64.movImm x0, 104
-    arm64.syscall 94
+    arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
+    arm64.movImm x1, 54
+    arm64.movImm x2, 104
+    arm64.bl __rt_abort
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

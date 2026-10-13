@@ -1690,28 +1690,37 @@ has held its processor too long, and a guard that fails on the poison reaches th
 fits. The loop calls nothing of the program's own, so it passes only the guards of the runtime bodies that
 allocate and free, which withdraw a request rather than honour it, and a request stored after that withdrawal
 and before the compare reaches the grower, which finds that the frame fits and leaves the stack as it is. A
-thread that never needs more than its first stack therefore ends on it, and repeated requests cannot double the
-stack up to the ceiling and end in `panic: stack overflow`.
+thread whose stack already holds its working set therefore ends on it, and repeated requests cannot double the
+stack up to the ceiling and end in `panic: stack overflow`. A warm-up round first brings the stack to the size the
+loop needs (the first stack differs by target, so the loop may legitimately grow once on the way); the rounds
+measured after it must leave that size alone.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 typealias SpinWords = Array with (Integer)
 
+let warmupRounds = 100000
 let spinRounds = 25000000
 
-function spinAllocating() returns Integer
-	let before = Scheduler.currentStackBytes()
+function spin(rounds Integer) returns Integer
 	var total = 0
 	var round = 0
-	while round < spinRounds 'rounds'
+	while round < rounds 'rounds'
 		var words = SpinWords.create()
 		words.push(round)
 		words.push(round + 1)
 		total = total + words.count()
 		round = round + 1
 	end 'rounds'
+	return total
+end 'spin'
+
+function spinAllocating() returns Integer
+	let warmed = spin(warmupRounds)
+	let before = Scheduler.currentStackBytes()
+	let total = spin(spinRounds)
 	let after = Scheduler.currentStackBytes()
-	print("total={total} grew={after > before}\n")
+	print("total={total} grew={after > before} warmed={warmed == warmupRounds * 2}\n")
 	return 0
 end 'spinAllocating'
 
@@ -1723,7 +1732,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-total=50000000 grew=false
+total=50000000 grew=false warmed=true
 ```
 ```exitcode
 0
