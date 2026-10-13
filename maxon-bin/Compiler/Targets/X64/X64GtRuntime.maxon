@@ -1320,6 +1320,8 @@ let GtMorestackProjectedRspReg = X64Register.r8
 let GrowDoubleLabel = 0 as BlockId
 let GrowExhaustedLabel = 1 as BlockId
 let GrowRefusedLabel = 2 as BlockId
+let GrowFitsLabel = 3 as BlockId
+let GrowRestoreBoundsLabel = 4 as BlockId
 
 // The string-copy opcodes `__gt_stack_relocate`'s memcpy uses — `cld` (clear DF, so `movsb` ascends), then the
 // `rep movsb` pair (F3 prefix + A4). Nothing else in the compiler emits a string op, so they live here rather than in the
@@ -1384,6 +1386,12 @@ end 'emitGtFpArgumentSlots'
 // the new (larger) stack so the frame whose guard called us fits. All of it runs on the system stack (entered r10
 // = system-stack top), so the near-overflow GT stack never holds this frame. A growth past `GtMaxStackBytes` ends the
 // process with `panic: stack overflow`, and a refused allocation with `RuntimeAbort.greenThreadStackAllocationFailed`.
+//
+// It grows only when the frame does not fit. A guard that withdraws a preemption request (one that may
+// not park, `guardSiteMayPark`) still trips on a request `__sysmon` stores between the withdrawal and
+// the compare, and a stack shrinks only at a park, so growing on every trip would ratchet a long
+// compute phase to `GtMaxStackBytes` and panic. A frame that fits returns with the request still in
+// the guard word, for the next function-entry guard to honour.
 function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -1412,7 +1420,7 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 
 	// Step 3: repoint the TIB at the system stack for this routine's own page calls — VirtualAlloc here and the
 	// VirtualFree inside `__gt_stack_relocate` (r10 = systemStackTop still). r10 is CONSUMED here: it is dead
-	// until step 9 reloads it, so the shared helper may destroy it rather than spend a scratch register
+	// until step 8 reloads it, so the shared helper may destroy it rather than spend a scratch register
 	// preserving it.
 	//
 	// ⚠ **THE LINUX ARM HAS NO STEP 3 AT ALL**: the kernel probes no bounds pair, so `mmap` may be issued with rsp
@@ -1430,6 +1438,8 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: GtMoreNewBaseReg, src: GtMoreOldSizeReg, wide: true)  // r15 = old_top
 	encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: GtMoreNewBaseReg, src: GtMorestackProjectedRspReg, wide: true)
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: GtMoreNewBaseReg, imm: gtStackGuardHeight(target) as Imm32)  // r15 = need
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: GtMoreNewBaseReg, src: GtMoreOldSizeReg, wide: true)  // need - old_size
+	encodeJcc(code, rel32Fixups: growFixups, cond: X64CondCode.belowEqual, targetBlockId: GrowFitsLabel)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewSizeReg, src: GtMoreOldSizeReg, wide: true)
 
 	growLabels.place(GrowDoubleLabel, value: codeHere(code))
@@ -1465,20 +1475,28 @@ function buildGtMorestackChunk(target Target) returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: GtMoreGtReg, disp: GtOffFp as Imm32, wide: true)
 	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: savedRbpDisp, srcReg: X64Register.rcx, wide: true)
 
-	// Step 8: set the TIB to the NEW GT-stack bounds (`__gt_stack_relocate` wrote them to the struct) BEFORE we
-	// pop rbx=gt. rcx is free scratch. After this, gs:[] describes the stack we return onto.
+	// Step 8: r10 = the rsp to return onto, the rebased `gt.sp`, read while the GT is still in rbx — the restore
+	// overwrites it. Then the TIB gets the GT-stack bounds from the struct (`__gt_stack_relocate` wrote the new
+	// ones) BEFORE we pop rbx=gt. rcx is free scratch. After this, gs:[] describes the stack we return onto.
+	// The fits path joins between the two with the ferried entry rsp in r10: step 3 repointed the TIB on
+	// both paths, so both must restore it.
+	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: GtMoreGtReg, disp: GtOffSp as Imm32, wide: true)  // r10 = relocated rsp
+	growLabels.place(GrowRestoreBoundsLabel, value: codeHere(code))
+
 	if x64OsProbesStackBounds(target.os) 'restoreTheBounds'
 		emitLoadTibFromGt(code, gtReg: GtMoreGtReg, scratch: X64Register.rcx)
 	end 'restoreTheBounds'
 
-	// Step 9: tear down + return onto the RELOCATED GT stack, at the rebased `gt.sp`, read while the GT is still in
-	// rbx — the restore overwrites it. The FP argument registers come back after the last page call, which is the
-	// call that can destroy them.
-	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: GtMoreGtReg, disp: GtOffSp as Imm32, wide: true)  // r10 = relocated rsp
+	// Step 9: tear down + return onto the GT stack at r10. The FP argument registers come back after the last
+	// page call, which is the call that can destroy them.
 	_ = emitGtRegisterBlock(code, gprs: savedGprs, stackedBytes: StackWordBytes as StackSize, direction: GtRegisterBlockDirection.restore)
 	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rsp, imm: MorestackFerrySkipBytes)  // add rsp, 8 (skip ferried slot)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: ShimGtRspReg, wide: true)  // rsp = relocated GT rsp
 	code.push(OpcodeRet)  // ret into the copied return address, now on the new stack
+
+	growLabels.place(GrowFitsLabel, value: codeHere(code))
+	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: X64Register.rsp, disp: ferriedRspDisp, wide: true)
+	encodeJmp(code, rel32Fixups: growFixups, targetBlockId: GrowRestoreBoundsLabel)
 
 	// The two refusals. rsp is on the system stack, 16-aligned, with the TIB describing it (step 3).
 	//
@@ -1691,9 +1709,10 @@ let LargestGuardProjection = i32.max as ParsedInt
 // overflow does and is answered without growing; the guard then runs again on whatever stack the
 // park left the thread, and a request that hid a real overflow grows on the second pass.
 //
-// `mrt_panic`'s guard never parks (`GtGuardSite.mrtPanic`): it withdraws a request before its
-// compare and calls `__gt_morestack` itself, with no jump back, because the grower makes the frame
-// fit in one call. A request `__sysmon` stores after the withdrawal costs one needless grow.
+// A guard that may not park (`guardSiteMayPark`: a runtime entry's and `mrt_panic`'s) withdraws a
+// request before its compare and calls `__gt_morestack` itself, with no jump back, because the
+// grower makes the frame fit in one call. A request `__sysmon` stores after the withdrawal reaches
+// the grower, which leaves it in place when the frame fits.
 export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, site GtGuardSite, target Target)
 	var guardFixups = ChunkRel32FixupArray.create()
 	var guardLabels = BlockOffsetTable.create()

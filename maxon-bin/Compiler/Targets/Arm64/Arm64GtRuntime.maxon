@@ -549,6 +549,8 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	let doubling = asm.newLabel()
 	let exhausted = asm.newLabel()
 	let refused = asm.newLabel()
+	let fits = asm.newLabel()
+	let returning = asm.newLabel()
 
 	// Step 1: ferry the GT stack pointer and switch to the system stack.
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64MoreSpReg))
@@ -562,12 +564,15 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 
 	// Step 3: old_base, old_size; TempB = need = old_top - projected + guard height; TempA = the ceiling;
 	// new_size = old_size doubled until it holds `need`. The ceiling is tested ahead of the fit, so the loop ends
-	// even on a `need` no stack could hold, and a refusal comes BEFORE anything is allocated.
+	// even on a `need` no stack could hold, and a refusal comes BEFORE anything is allocated. A `need` within
+	// old_size returns without growing, for the reason x64's `buildGtMorestackChunk` gives.
 	arm64EmitLoadWord64At(asm, dest: Arm64MoreOldBaseReg, base: Arm64MoreGtReg, byteOffset: GtOffStackBase)
 	arm64EmitLoadWord64At(asm, dest: Arm64MoreOldSizeReg, base: Arm64MoreGtReg, byteOffset: GtOffStackSize)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64MoreTempB, lhs: Arm64MoreOldBaseReg, rhs: Arm64MoreOldSizeReg)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64MoreTempB, lhs: Arm64MoreTempB, rhs: Arm64MorestackEntryProjectedSpReg)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64MoreTempB, base: Arm64MoreTempB, imm: gtStackGuardHeight(target) as Imm32)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64MoreTempB, rhs: Arm64MoreOldSizeReg)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ls, label: fits)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64MoreTempA, value: GtMaxStackBytes as MachineWord)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64MoreNewSizeReg, src: Arm64MoreOldSizeReg)
 
@@ -607,10 +612,16 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	// Step 7: tear down and return onto the RELOCATED stack, at the rebased `gt.sp`, read BEFORE the register
 	// restores because the GT's register is one of the registers those restores overwrite.
 	arm64EmitLoadWord64At(asm, dest: Arm64MoreSpReg, base: Arm64MoreGtReg, byteOffset: GtOffSp)
+
+	asm.placeLabel(returning)
 	emitArm64RegisterBlock(asm, gprs: savedGprs, base: Arm64MorestackSaveBase, direction: Arm64GtBlockDirection.pop)
 	arm64EmitStackFree(asm.code, amount: frameBytes)
 	arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64MoreSpReg))
 	arm64EmitRet(asm.code)
+
+	asm.placeLabel(fits)
+	arm64GtLoadSp(asm, dest: Arm64MoreSpReg, byteOffset: Arm64MorestackEntrySpSlot)
+	arm64EmitBranchTo(asm, label: returning)
 
 	// The two refusals, on the system stack with SP 16-aligned by `arm64MorestackFrameBytes`.
 	//
@@ -865,8 +876,8 @@ end 'arm64WidestGuardedFrame'
 // instructions that fall through. A no-op for a P's inline scheduler GT (`stackGuard` is the slab
 // zero, so the `hs` is always taken) and off a green thread entirely (the three null tests bail).
 // At a function entry the cold path calls `__gt_guard_tripped` and runs the whole guard again;
-// `mrt_panic`'s withdraws a preemption request and only grows
-// (`Arm64PanicRuntime.arm64EmitPanicStackGuard`). x64's twin carries why both shapes are sound.
+// a guard that may not park (`guardSiteMayPark`) withdraws a preemption request and calls
+// `__gt_morestack` directly. x64's twin carries why both shapes are sound.
 //
 // ⚠ It preserves x30 itself, which is the whole shape difference from x64's — see this file's
 // header.

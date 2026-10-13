@@ -1683,3 +1683,48 @@ deep=256000 shallow=128 raised=true restored=true
 ```exitcode
 0
 ```
+
+<!-- test: async-stack-growth.a-preemption-request-never-grows-a-stack-that-fits -->
+**A STACK GROWS ONLY WHEN THE FRAME THAT ASKED DOES NOT FIT.** The monitor poisons the guard word of a thread that
+has held its processor too long, and a guard that fails on the poison reaches the grower with a frame that
+fits. The loop calls nothing of the program's own, so it passes only the guards of the runtime bodies that
+allocate and free, which withdraw a request rather than honour it, and a request stored after that withdrawal
+and before the compare reaches the grower, which finds that the frame fits and leaves the stack as it is. A
+thread that never needs more than its first stack therefore ends on it, and repeated requests cannot double the
+stack up to the ceiling and end in `panic: stack overflow`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+typealias SpinWords = Array with (Integer)
+
+let spinRounds = 25000000
+
+function spinAllocating() returns Integer
+	let before = Scheduler.currentStackBytes()
+	var total = 0
+	var round = 0
+	while round < spinRounds 'rounds'
+		var words = SpinWords.create()
+		words.push(round)
+		words.push(round + 1)
+		total = total + words.count()
+		round = round + 1
+	end 'rounds'
+	let after = Scheduler.currentStackBytes()
+	print("total={total} grew={after > before}\n")
+	return 0
+end 'spinAllocating'
+
+function main() returns ExitCode
+	sleep(1)
+	let p = async spinAllocating()
+	let r = await p
+	return r as ExitCode
+end 'main'
+```
+```stdout
+total=50000000 grew=false
+```
+```exitcode
+0
+```

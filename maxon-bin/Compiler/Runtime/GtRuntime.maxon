@@ -105,7 +105,7 @@ export let GtOffStackGuard = 0x50
 // has held its processor too long (`SchedRuntime.__sched_preemptone`). Read unsigned it is above every stack
 // pointer, so the prologue guard's one compare fails into its cold path and calls `__gt_guard_tripped`, which
 // tells the request from an overflow by this exact value and yields (`__gt_preempt`). There is no request field
-// beside it: the guard word IS the request. `mrt_panic`'s guard withdraws it instead (`GtGuardSite.mrtPanic`).
+// beside it: the guard word IS the request. A guard that may not park withdraws it instead (`guardSiteMayPark`).
 // EXPORTED for both lanes' guards and `__gt_guard_tripped`, and for the monitor.
 export let GtStackGuardPreempt = -1314 as ParsedInt
 
@@ -1100,7 +1100,7 @@ export enum GtGuardSite
 	functionEntry
 
 	// `mrt_panic`, which runtime code reaches too — code that may hold `__sched_lock`, where a park would never
-	// end. Its guard withdraws a request before its compare and only ever grows.
+	// end. Its guard withdraws a request before its compare and goes to the grower, never to a park.
 	mrtPanic
 
 	// A guarded runtime body (`IrFunction.pinsItsThread`), which runtime code may reach while it holds
