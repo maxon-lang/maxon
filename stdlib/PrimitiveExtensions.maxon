@@ -1,8 +1,14 @@
 // `HashValue` is 32 bits wide, so every hash here ends by keeping the low 32 bits.
 let hashLow32Mask = 0xFFFFFFFF
 
-// How far `float.hash` shifts a bit pattern to bring its high half down onto its low half.
-let floatHashHalfShift = 32
+// How far a hash shifts a 64-bit pattern to bring its high half down onto its low half.
+let hashHalfShift = 32
+
+let intHashSignShift = 63
+
+// Odd, so `wide * M` is injective mod 2^32; below 2^32, so with `wide` under 2^31 in magnitude the
+// product cannot overflow.
+let intHashHighHalfMultiplier = 0x9E3779B1
 
 // `-0.0`'s IEEE-754 pattern: the sign bit alone.
 let floatNegativeZeroBits = i64.min
@@ -10,7 +16,13 @@ let floatNegativeZeroBits = i64.min
 /// Extension methods for primitive types implementing core interfaces.
 extension int implements Hashable, Equatable, Comparable, Stringable, Cloneable
 	public function hash() returns HashValue
-		return self and hashLow32Mask
+		// `wide` is 0 exactly on [-2^32, 2^32), so those values hash to their low 32 bits: the
+		// compiler's native array hash relies on that for zero-extended 4-byte slots
+		// (`requireNativeHashSlotWidth`), and `emitIntHashTerm` spells this body op for op.
+		// `self xor (self shr 63)` in place of the subtraction would collide every wide key with
+		// `self xor 0xFFFFFFFF00000000`.
+		let wide = (self shr hashHalfShift) - (self shr intHashSignShift)
+		return (self xor (wide * intHashHighHalfMultiplier)) and hashLow32Mask
 	end 'hash'
 
 	public function equals(other Self) returns bool
@@ -49,7 +61,7 @@ extension float implements Hashable, Equatable, Comparable, Stringable, Cloneabl
 			return 0
 		end 'negzero'
 
-		return (bits xor (bits shr floatHashHalfShift)) and hashLow32Mask
+		return (bits xor (bits shr hashHalfShift)) and hashLow32Mask
 	end 'hash'
 
 	public function equals(other Self) returns bool

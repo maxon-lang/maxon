@@ -41,9 +41,9 @@
 // nothing, and `eliminateDeadFunctions` would prune an over-installed impl anyway.
 //
 // The SEMANTICS match the corpus's monomorphizing source (`stdlib/PrimitiveExtensions.maxon`,
-// `stdlib/helpers/string/hash.maxon`): `int.hash() = self & 0xFFFFFFFF` (the low-32 mask — identity for a
-// value that already fits u32); `float.hash() = bitcast(self) & 0xFFFFFFFF`, whose mask ALSO normalizes
-// `-0.0` — see `buildFloatHash`, which omits the `-0.0` branch that mask makes dead;
+// `stdlib/helpers/string/hash.maxon`): `int.hash()` = `emitIntHashTerm` masked to the low 32 bits
+// (the identity for a value that already fits u32); `float.hash()` = the IEEE-754 pattern's two
+// halves folded, with a `-0.0` arm (`buildFloatHash`);
 // `<scalar>.equals(other) = self == other`; `<scalar>.compare(other)` = the
 // `lessThan`/`greaterThan`/`equalTo` cascade, which `float.compare` precedes with a NaN preamble
 // (`buildFloatCompare`); `String.hash() = djb2` over the bytes; `String.equals(other) = __str_eq`'s content
@@ -92,8 +92,12 @@
 // `emitLow32Masked` is the one place the truncation is spelled.
 let HashLow32Mask = 0xFFFFFFFF
 
-// How far `float.hash` shifts a float's bit pattern to bring its high half down onto its low half.
-let FloatHashHalfShift = 32
+// How far a builtin hash shifts a 64-bit pattern to bring its high half down onto its low half.
+let HashHalfShift = 32
+
+let IntHashSignShift = 63
+
+let IntHashHighHalfMultiplier = 0x9E3779B1
 
 // ⭐ **`-0.0`'s IEEE-754 BIT PATTERN.** `+0.0` is 64 zero bits and `-0.0` is those bits with the SIGN
 // BIT set, so the pattern IS the sign bit alone: `0x8000000000000000`. It is spelled `i64.min` because
@@ -490,9 +494,9 @@ function noteBuiltinImplReference(name ByteArray, impls NameRoster, referenced F
 	end 'eachImpl'
 end 'noteBuiltinImplReference'
 
-// `int.hash(self) -> HashValue` — `self & 0xFFFFFFFF`, one `and` against the low-32 mask. The receiver is a
-// by-value scalar i64 in arg-0 (the witness dispatch passes `self.item`, a scalar `T` field read, straight in
-// — no pointer indirection), so the whole body is a mask and a return.
+// `int.hash(self) -> HashValue` — `emitIntHashTerm` and the low-32 mask. The receiver is a by-value
+// scalar i64 in arg-0 (the witness dispatch passes `self.item`, a scalar `T` field read, straight
+// in — no pointer indirection).
 function buildIntHash(module StdModule, name ByteArray)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -501,14 +505,31 @@ function buildIntHash(module StdModule, name ByteArray)
 	emitParams(module, block: entry, count: 1)
 	let receiver = 0 as ValueId
 
-	returnLow32Masked(module, block: entry, value: receiver, ids: ids)
+	returnLow32Masked(module, block: entry, value: emitIntHashTerm(module, block: entry, value: receiver, ids: ids), ids: ids)
 
 	module.functions.push(func)
 end 'buildIntHash'
 
+function emitHighHalf(module StdModule, block IrBlock, value ValueId, opcode StdBinOpcode, ids ValueMinter) returns ValueId
+	let halfShift = emitConst(module, block: block, value: HashHalfShift, ids: ids)
+	return emitBin(module, block: block, a: value, b: halfShift, opcode: opcode, ids: ids)
+end 'emitHighHalf'
+
+// `stdlib/PrimitiveExtensions.maxon`'s `int.hash` before its mask, op for op. The native array hash
+// folds this term where the stdlib `Array.hash` folds `item.hash()`, so a change to either spelling
+// alone gives equal arrays different hashes on the two paths.
+export function emitIntHashTerm(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
+	let highHalf = emitHighHalf(module, block: block, value: value, opcode: StdBinOpcode.shr, ids: ids)
+	let signShift = emitConst(module, block: block, value: IntHashSignShift, ids: ids)
+	let sign = emitBin(module, block: block, a: value, b: signShift, opcode: StdBinOpcode.shr, ids: ids)
+	let wide = emitBin(module, block: block, a: highHalf, b: sign, opcode: StdBinOpcode.sub, ids: ids)
+	let multiplier = emitConst(module, block: block, value: IntHashHighHalfMultiplier, ids: ids)
+	let scattered = emitBin(module, block: block, a: wide, b: multiplier, opcode: StdBinOpcode.mul, ids: ids)
+	return emitBin(module, block: block, a: value, b: scattered, opcode: StdBinOpcode.bitXor, ids: ids)
+end 'emitIntHashTerm'
+
 function emitFloatBitsFold(module StdModule, block IrBlock, bits ValueId, ids ValueMinter) returns ValueId
-	let halfShift = emitConst(module, block: block, value: FloatHashHalfShift, ids: ids)
-	let highHalf = emitBin(module, block: block, a: bits, b: halfShift, opcode: StdBinOpcode.shrLogical, ids: ids)
+	let highHalf = emitHighHalf(module, block: block, value: bits, opcode: StdBinOpcode.shrLogical, ids: ids)
 	let folded = emitBin(module, block: block, a: bits, b: highHalf, opcode: StdBinOpcode.bitXor, ids: ids)
 	return emitLow32Masked(module, block: block, value: folded, ids: ids)
 end 'emitFloatBitsFold'

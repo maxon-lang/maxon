@@ -32,7 +32,10 @@ var fh = f.hash()   // both halves of the bit pattern, folded: 300063655
 ```
 
 **Notes:**
-- `int.hash()` is the low 32 bits of the value (`self and 0xFFFFFFFF`)
+- `int.hash()` is `(self xor (wide * 0x9E3779B1)) and 0xFFFFFFFF`, where
+  `wide = (self shr 32) - (self shr 63)`. `wide` is 0 from -2^32 up to 2^32 (exclusive), so there the
+  hash is the low 32 bits of the value. Two values with the same low 32 bits hash alike only when both
+  lie in that range, so a `Map` keyed by wide or packed ints separates keys that differ above bit 31
 - `float.hash()` folds the WHOLE 64-bit IEEE-754 pattern into 32 bits:
   `(bits xor (bits shr 32)) and 0xFFFFFFFF`. Both halves contribute, so floats that differ only in the
   high half — the sign, the exponent, the top of the mantissa — hash differently: `2.5` and `5.0` differ,
@@ -97,6 +100,53 @@ function main() returns ExitCode
 		equalTo then return 4
 		greaterThan then return 0
 	end 'cmp'
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: int.hash.values-within-32-bits-keep-their-low-half -->
+Every value in `[-2^32, 2^32)` hashes to its low 32 bits, signed or unsigned.
+```maxon
+function main() returns ExitCode
+	let small = 42
+	let negative = -1
+	let top = 4294967295
+	let bottom = -4294967296
+	if small.hash() != 42 'small'
+		return 1
+	end 'small'
+	if negative.hash() != 4294967295 'negative'
+		return 2
+	end 'negative'
+	if top.hash() != 4294967295 'top'
+		return 3
+	end 'top'
+	if bottom.hash() != 0 'bottom'
+		return 4
+	end 'bottom'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: int.hash.a-wide-value-and-its-high-half-complement-hash-apart -->
+`4294967303` is `2^32 + 7` and `-8589934585` is `-2^33 + 7`: the same low half, and high halves that are
+complements of each other. A fold that took the magnitude of the high half would hash them alike.
+```maxon
+function main() returns ExitCode
+	let up = 4294967303
+	let down = -8589934585
+	if up.hash() == down.hash() 'twins'
+		return 1
+	end 'twins'
+	if up.hash() == 7 'lowHalfOnly'
+		return 2
+	end 'lowHalfOnly'
+	return 0
 end 'main'
 ```
 ```exitcode

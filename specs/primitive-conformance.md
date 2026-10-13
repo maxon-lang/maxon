@@ -13,9 +13,9 @@ The primitive `int` conforms to the `Hashable` and `Equatable` protocol interfac
 type-side twin of the synthesized `Hashable`/`Equatable` interfaces. A ranged int alias (`Integer =
 int(0 to u32.max)`) conforms through its primitive, so `Box with Integer where T is Hashable` is legal.
 
-- `int.hash()` returns the low 32 bits of the value (`self and 0xFFFFFFFF`, type `HashValue = int(0 to
-  u32.max)`) — identity for a value that already fits `u32`. This is exactly what a hash-based `Set`/`Map`
-  needs of its keys.
+- `int.hash()` returns a `HashValue = int(0 to u32.max)`: the low 32 bits of a value from -2^32 up to
+  2^32 (exclusive) — identity for a value that already fits `u32` — and, for a wider value, those bits
+  xored with its high half scattered by an odd multiplier (`primitive-hashable.md` gives the formula).
 - `int.equals(other)` returns `self == other`.
 - `byte` (`int(0 to u8.max)`) rides `int`'s conformance, since it IS a ranged int.
 
@@ -80,9 +80,11 @@ end 'main'
 0
 ```
 
-<!-- test: primitive-conformance.hash-low32-mask -->
-`int.hash()` masks to the low 32 bits: a value above `u32.max` folds down, and a negative value's two's
-complement folds to its low 32 bits (`-1` -> `4294967295`).
+<!-- test: primitive-conformance.hash-folds-the-high-half -->
+`int.hash()` is the low 32 bits for every value that fits 32 bits, signed or unsigned (`42` -> `42`, `-1` ->
+`4294967295`), and folds a wider value's high half in: `4294967303` (`2^32 + 7`) hashes to `7` xor
+`2654435761` (`0x9E3779B1`, the scatter of its high half `1`), which is `2654435766`; `-4294967297` has the signed high half `-1` and
+hashes to `2654435760`.
 ```maxon
 typealias Wide = int(i64.min to i64.max)
 
@@ -104,13 +106,17 @@ function main() returns ExitCode
 		return 1
 	end 'p1'
 	let b = WideBox.create(4294967303)
-	if b.itemHash() != 7 'p2'
+	if b.itemHash() != 2654435766 'p2'
 		return 2
 	end 'p2'
 	let c = WideBox.create(-1)
 	if c.itemHash() != 4294967295 'p3'
 		return 3
 	end 'p3'
+	let d = WideBox.create(-4294967297)
+	if d.itemHash() != 2654435760 'p4'
+		return 4
+	end 'p4'
 	return 0
 end 'main'
 ```

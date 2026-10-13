@@ -4374,8 +4374,11 @@ end 'emitFloatElementHashStep'
 
 // The stdlib body's fold — `h = (h * 33 + element.hash()) and 0xFFFFFFFF` from `5381` — masked once
 // at the end instead, which keeps the same low 32 bits (`emitDjb2HashOverByteRange` states why). An
-// integer element's term is its loaded slot, which equals its own `hash` mod 2^32 only for an
-// element that loads as its value (`ProgramSignatures.elementLoadsAsItsValue`).
+// integer element's term is `emitIntHashTerm` of its loaded slot, which is the element's `hash` for
+// an element that loads as its value (`ProgramSignatures.elementLoadsAsItsValue`). A negative value
+// in a 4-byte slot loads zero-extended and still agrees: slot and value both lie in [-2^32, 2^32),
+// where `int.hash` keeps only the low 32 bits. `ProgramSignatures.requireNativeHashSlotWidth`
+// refuses any slot width at which a load could leave that range.
 function buildArrayHash(module StdModule, name ByteArray, element ArrayHashElement)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -4408,7 +4411,7 @@ function buildArrayHash(module StdModule, name ByteArray, element ArrayHashEleme
 	let loaded = emitLoadElemAt(module, func: func, cur: body, exit: fold, buffer: buffer, index: i, es: es, ids: ids)
 
 	match element 'kind'
-		integerValue then emitArrayHashStepTail(module, block: fold, header: header, i: i, h: h, term: loaded, ids: ids)
+		integerValue then emitArrayHashStepTail(module, block: fold, header: header, i: i, h: h, term: emitIntHashTerm(module, block: fold, value: loaded, ids: ids), ids: ids)
 		floatBits then emitFloatElementHashStep(module, func: func, fold: fold, header: header, i: i, h: h, bits: loaded, ids: ids)
 	end 'kind'
 

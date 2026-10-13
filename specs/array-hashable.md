@@ -440,6 +440,9 @@ function main() returns ExitCode
 	let holder = H.create(1)
 	var items = ValArray.create()
 	items.push(41)
+	items.push(1099511627817)
+	items.push(-1099511627817)
+	items.push(-5)
 	print("{holder.digest(items) == items.hash()}\n")
 	return 0
 end 'main'

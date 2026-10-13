@@ -1440,3 +1440,30 @@ end 'main'
 ```exitcode
 7
 ```
+
+## Keys that differ only above bit 32
+
+A key's hash is 32 bits wide, so the bits of a 64-bit key above bit 31 reach the table only through how `int.hash()` folds them in. A hash that kept the low half alone would give every key below the same hash, and the table would degrade to one probe chain as it grew.
+
+<!-- test: high-bits.keys-differing-above-bit-32-hash-apart -->
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallySet = Set with Tally
+
+let KeyCount = 4096 as Tally
+let HighShift = 40
+
+function main() returns ExitCode
+	var hashes = TallySet.create()
+
+	for k in 0 upto KeyCount 'eachKey'
+		let key = k shl HighShift
+		hashes.insert(key.hash() as Tally)
+	end 'eachKey'
+
+	return 7 if hashes.count() == 4096 else 1
+end 'main'
+```
+```exitcode
+7
+```

@@ -9112,7 +9112,10 @@ export enum ArrayBitwiseKind
 	floatHashOnly
 end 'ArrayBitwiseKind'
 
+let EightBitElementBytes = 1 as ElementStride
+let SixteenBitElementBytes = 2 as ElementStride
 let ThirtyTwoBitElementBytes = 4 as ElementStride
+let SixtyFourBitElementBytes = 8 as ElementStride
 
 enum ArrayElementClass
 	notBitwise
@@ -32947,8 +32950,22 @@ export type ProgramSignatures
 			return ArrayBitwiseKind.equalsOnly
 		end 'theProgramOwnsHash'
 
+		if natural == ArrayBitwiseKind.equalsAndHash 'hashedNatively'
+			self.requireNativeHashSlotWidth(id)
+		end 'hashedNatively'
+
 		return natural
 	end 'afterUserDeclarations'
+
+	function requireNativeHashSlotWidth(id GenericInstanceId)
+		let stride = self.arrayElementSize(id)
+
+		if stride < 0 or stride == EightBitElementBytes or stride == SixteenBitElementBytes or stride == ThirtyTwoBitElementBytes or stride == SixtyFourBitElementBytes 'onTheLadder'
+			return
+		end 'onTheLadder'
+
+		panic("SignatureIndex.requireNativeHashSlotWidth: an array element slot of {stride} bytes is hashed natively, but only 1, 2, 4 and 8-byte slots and sub-byte packed slots load zero-extended inside [-2^32, 2^32), where the native hash and the stdlib body agree")
+	end 'requireNativeHashSlotWidth'
 
 	export function calleeIsArrayRecordMember(callee ByteArray, member ByteArray) returns bool
 		return qualifiedNameIs(callee, typeName: self.arrayRecordBaseName(), member: member)

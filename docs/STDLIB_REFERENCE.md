@@ -3139,7 +3139,7 @@ Output: `0.0 1.0 3.0 1024.0` and `0.7853981633974483 true`.
 
 | Type | Conforms to | Notes |
 |------|-------------|-------|
-| `int` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `hash()` is the low 32 bits of the value. |
+| `int` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `hash()` is `(self xor (wide * 0x9E3779B1)) and 0xFFFFFFFF`, where `wide = (self shr 32) - (self shr 63)`. `wide` is 0 from -2^32 up to 2^32 (exclusive), so there the hash is the low 32 bits of the value; outside it the high half reaches the hash too. |
 | `float` | `Hashable`, `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `compare` is a total order: NaN equals NaN and sorts below every other value. `hash()` folds the 64-bit IEEE-754 pattern into 32 bits, `(bits xor (bits shr 32)) and 0xFFFFFFFF`, except that `-0.0` hashes as `0.0` does (`0`). |
 | `bool` | `Equatable`, `Comparable`, `Stringable`, `Cloneable` | `false` sorts before `true`. |
 

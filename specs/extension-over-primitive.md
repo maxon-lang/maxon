@@ -151,7 +151,7 @@ end 'main'
 
 <!-- test: a-declared-hash-beats-the-synthesized-impl -->
 ⭐⭐ **THE DIFFERING-DECLARATIONS CONTROL for the conformance half.** the compiler's synthesized `int.hash`
-answers the receiver masked to 32 bits — for a receiver of `5` it answers `5`. This body answers `77`
+answers a value inside `-2^32 to 2^32` as its low 32 bits — for a receiver of `5` it answers `5`. This body answers `77`
 for every receiver, so `77` can only come from the declaration.
 ```maxon
 extension int implements Hashable
