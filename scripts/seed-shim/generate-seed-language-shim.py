@@ -12,8 +12,13 @@ whole, which the tree affords because the compiler calls none; an inferred field
 the type its initializer names; the two qualifiers are withdrawn, which leaves the container and union
 types the seed always held. This script copies the tree's `maxon-bin/`, `stdlib/` and `runtime/` into a
 scratch directory, stages every other patch in `scripts/seed-shim/` in sorted order, strips all five
-forms, and then builds with the seed for each native target until every build is clean, so the code a
-lane's `#if` selects is judged by the seed as well, writing at every site the seed refuses the cast to
+forms, and then builds with the seed for one native target at a time until it is clean, and again for any lane
+the tree changed under since its last clean build, so the code a lane's `#if` selects is judged by the seed as
+well. The seed's parser ends a file's parse at its first type refusal, so a file that keeps failing is built
+through a split view (`view/` in the work directory) that spreads its functions over small files, each of which
+reports its own first refusal. Only the refusals a cast answers are read from those builds; one this script
+cannot cast or place on a line of the real file, or a round that changes nothing, drops the view for the lane,
+and the unsplit build decides. It writes at every site the seed refuses the cast to
 the parent it names: on each arm of a match whose arms disagree, after an `otherwise` fallback, and,
 where one operand of a binary operator is a number literal, on the other operand, cast to the
 literal's alias. A cast the seed calls unneeded (E3010) is dropped. A `Compiler.`-qualified name is
@@ -46,6 +51,7 @@ without changing the declaration it names, a field default with no inferable typ
 it does not cast, including a loop it cannot prove leaves its iterated collection unmutated.
 """
 import argparse
+import filecmp
 import hashlib
 import os
 import re
@@ -53,6 +59,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "library-cache"))
 
@@ -63,6 +70,25 @@ SOURCE_DIRS = ["maxon-bin", "stdlib", "runtime"]
 NATIVE_TARGETS = ["x64-windows", "x64-linux", "arm64-macos", "arm64-linux"]
 MAX_ROUNDS = 800
 MAX_ATTEMPTS_PER_SITE = 10
+VIEW_DIR = "view"
+MAXON_EXTENSION = ".maxon"
+RESERVED_NAME_PREFIX = "__"
+SEED_DIR = ".bootstrap"
+VIEW_PART_INFIX = "ViewPart"
+VIEW_VISIBILITY = "module"
+VIEW_VISIBILITY_WORDS = {"export", "module", "public"}
+VIEW_CAST_CODES = {"E3005", "E2028", "E3059", "E3010"}
+SPLIT_PART_LINES = 600
+STUBBORN_ROUNDS = 2
+STATEMENT_KEYWORDS = {"typealias", "let", "var"}
+MEMBER_KEYWORDS = {"function", "let", "var"}
+MEMBER_INDENT = "\t"
+ARM_SERVED_INDEX_LABELS = {"get": "index", "set": "index", "resize": "newLength"}
+WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+CONSTANT = re.compile(r"^let (?P<name>[A-Za-z_][A-Za-z0-9_]*)(?: as [A-Za-z0-9_]+)? = (?P<value>.+)$")
+STRING_LITERAL = re.compile(r'^b?"(?:[^"\\]|\\.)*"$')
+SCOPE_OPENERS = ("if let ", "if var ", "while let ", "while var ", "for ")
+PLAIN_BINDERS = ("let ", "var ")
 
 HEADER = """# The seed cannot parse a `readonly` qualifier on a container's element type (`Array with readonly T`,
 # `Map with (K, readonly V)`) or a `let` on a union case's payload (`case(let name T)`), so each is withdrawn. Without
@@ -136,15 +162,14 @@ ASSIGNMENT = re.compile(r"\s*[-+*/%]?=(?!=)")
 STDLIB_DIR = "stdlib"
 COLLECTION_TYPES = {"Array", "List", "Map", "Set", "Vector"}
 READ_ONLY_COLLECTION_METHODS = {"capacity", "clone", "contains", "count", "equals", "first", "get", "getCapacity", "hash", "isEmpty", "last", "slice"}
-MEMBER_DECLARATION = re.compile(r"^[ \t]*(?:[a-z]+ )*(?:function|let|var) (?P<name>[A-Za-z_][A-Za-z0-9_]*)", re.M)
-TOP_LEVEL_DECLARATION = re.compile(r"^(?:[a-z]+ )*(?P<keyword>type|extension|interface|enum|union|function|typealias|let|var) (?P<name>[A-Za-z_][A-Za-z0-9_]*)")
+SOURCE_DECLARATION = re.compile(r"^(?P<indent>\t*)(?P<modifiers>(?:[a-z]+ )*)(?P<keyword>type|extension|interface|enum|union|function|typealias|let|var) (?P<name>[A-Za-z_][A-Za-z0-9_]*)")
 
-TYPE_BODY_OPENER = re.compile(r"^(?P<indent>\t*)(?:[a-z]+ )*(?P<keyword>type|function) ")
 BLOCK_CLOSE = re.compile(r"^(?P<indent>\t*)end '")
 FIELD_DECLARATION = re.compile(r"^(?P<indent>\t+)(?P<modifiers>(?:[a-z]+ )*)(?:var|let) (?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P<separator> = )(?P<value>.*)$")
 BARE_LITERAL = re.compile(r"^(?:true|false|-?(?:0x[0-9A-Fa-f_]+|[0-9][0-9_]*(?:\.[0-9][0-9_]*)?))$")
 STATIC_MODIFIER = "static"
 TYPE_KEYWORD = "type"
+FUNCTION_KEYWORD = "function"
 
 KEYWORDS = {"if", "else", "while", "return", "not", "and", "or", "then", "gives", "let", "var", "for", "in", "upto", "downto", "match", "try", "otherwise", "throw", "as"}
 IDENT = re.compile(r"[A-Za-z0-9_]")
@@ -196,13 +221,13 @@ def stage_work(tree, work, seed, output):
 		os.makedirs(os.path.dirname(dst), exist_ok=True)
 		shutil.copyfile(src, dst)
 
-	os.makedirs(os.path.join(work, ".bootstrap"), exist_ok=True)
-	shutil.copy2(seed, os.path.join(work, ".bootstrap", os.path.basename(seed)))
+	os.makedirs(os.path.join(work, SEED_DIR), exist_ok=True)
+	shutil.copy2(seed, os.path.join(work, SEED_DIR, os.path.basename(seed)))
 
 	git(work, "init", "-q")
 
 	with open(os.path.join(work, ".git", "info", "exclude"), "a", encoding="utf-8") as exclude:
-		exclude.write("/.bootstrap/\n/maxon-bin/.maxon/\n/out/\n")
+		exclude.write(f"/{SEED_DIR}/\n/maxon-bin/.maxon/\n/out/\n")
 
 	shim_dir = os.path.join(tree, "scripts", "seed-shim")
 	patches = sorted(p for p in os.listdir(shim_dir) if p.endswith(".patch"))
@@ -219,12 +244,15 @@ def stage_work(tree, work, seed, output):
 	git(work, "commit", "-q", "-m", "base")
 
 
-def maxon_sources(work, directories):
+def tree_files(work, directories=SOURCE_DIRS):
 	for directory in directories:
 		for dirpath, _, files in os.walk(os.path.join(work, directory)):
 			for name in sorted(files):
-				if name.endswith(".maxon"):
-					yield os.path.join(dirpath, name)
+				yield os.path.join(dirpath, name)
+
+
+def maxon_sources(work, directories):
+	return (path for path in tree_files(work, directories) if path.endswith(MAXON_EXTENSION))
 
 
 def collect_aliases(root):
@@ -781,9 +809,9 @@ def annotate_inferred_fields(work):
 
 				continue
 
-			opener = TYPE_BODY_OPENER.match(line)
+			opener = SOURCE_DECLARATION.match(line)
 
-			if opener:
+			if opener and opener.group("keyword") in (TYPE_KEYWORD, FUNCTION_KEYWORD):
 				enclosing.append((len(opener.group("indent")), opener.group("keyword")))
 
 		rewritten = "\n".join(lines)
@@ -1088,6 +1116,10 @@ def cast_match_arms(lines, line_number, message, parents):
 	if close is None:
 		raise Unhandled(f"the match {label.group(0)} has no `end {label.group(0)}`")
 
+	# All arms or none: a refusal from the split view does not stop the run, so a partly cast match would
+	# stay in the tree.
+	cast_arms = {}
+
 	for j in range(line_number, close):
 		arm = lines[j]
 
@@ -1101,7 +1133,10 @@ def cast_match_arms(lines, line_number, message, parents):
 
 		start = at + len(ARM_SEPARATOR)
 		stop = len(arm.rstrip("\r"))
-		lines[j] = cast(arm, start, stop, target)
+		cast_arms[j] = cast(arm, start, stop, target)
+
+	for j, arm in cast_arms.items():
+		lines[j] = arm
 
 
 def fix_line(line, column, code, message, parents, ranges):
@@ -1278,15 +1313,16 @@ class MemberDeclarations:
 			enclosing = None
 
 			for line in read(path).split("\n"):
-				top = TOP_LEVEL_DECLARATION.match(line)
+				declared = SOURCE_DECLARATION.match(line)
 
-				if top:
-					enclosing = (top.group("keyword"), top.group("name"))
+				if declared is None:
+					continue
 
-				member = MEMBER_DECLARATION.match(line)
+				if not declared.group("indent"):
+					enclosing = (declared.group("keyword"), declared.group("name"))
 
-				if member:
-					self.sites.setdefault(member.group("name"), set()).add((rel, enclosing))
+				if declared.group("keyword") in MEMBER_KEYWORDS:
+					self.sites.setdefault(declared.group("name"), set()).add((rel, enclosing))
 
 	def proves_read_only(self, method):
 		if method not in READ_ONLY_COLLECTION_METHODS:
@@ -1350,6 +1386,8 @@ def index_loop_element(lines, loop_index):
 	lines[loop_index] = f"{indent}for {position} in 0 upto {iterated}.count() {loop.group('label')}{eol}"
 	lines.insert(loop_index + 1, f'{indent}\tvar {element} = try {iterated}.get({position}) otherwise panic("{POSITION_IN_RANGE}"){eol}')
 
+	return loop_index + 1
+
 
 def clone_borrowing_let(lines, borrow_index, element):
 	bound = LET_BINDING.match(lines[borrow_index])
@@ -1411,6 +1449,8 @@ def hoist_loop_borrow(lines, line_number, borrow, members, rel):
 	eol = loop.group("eol")
 	lines[borrow_index] = f"{indent}for {element} in {held} {label}{eol}"
 	lines.insert(borrow_index, f"{indent}let {held} = {snapshot}{eol}")
+
+	return borrow_index
 
 
 def loop_digest(lines, regions, loop_index, close):
@@ -1580,12 +1620,12 @@ def argument_span(line, at, label):
 	raise Unhandled(f"no argument for '{label}' in the call")
 
 
-def build(work, seed_name):
+def build(work, seed_name, lanes, base=""):
 	code = 0
 	logs = []
 
-	for target in NATIVE_TARGETS:
-		result = run([os.path.join(work, ".bootstrap", seed_name), "build", "maxon-bin", f"--target={target}", f"--output=out/c1-{target}"], cwd=work, check=False)
+	for target in lanes:
+		result = run([os.path.join(work, base, SEED_DIR, seed_name), "build", os.path.join(base, AUTHOR_SOURCE_DIR).replace("\\", "/"), f"--target={target}", f"--output=out/c1-{target}"], cwd=work, check=False)
 		code = code or result.returncode
 		logs.append(result.stdout + result.stderr)
 
@@ -1598,7 +1638,10 @@ def resolve(work, path):
 	if not os.path.isabs(path):
 		path = os.path.join(work, path)
 
-	rel = os.path.relpath(path, work).replace("\\", "/")
+	try:
+		rel = os.path.relpath(path, work).replace("\\", "/")
+	except ValueError:
+		raise Unhandled(f"{path} lies on another drive than the tree the seed was given")
 
 	if rel.startswith(".."):
 		raise Unhandled(f"{path} lies outside the tree the seed was given")
@@ -1613,7 +1656,774 @@ def report_refusals(what, refused, work):
 	return 1
 
 
+class Unit:
+	def __init__(self, owner, name, start, end):
+		self.owner = owner
+		self.name = name
+		self.start = start
+		self.end = end
+
+
+class FileScan:
+	def __init__(self, lines):
+		self.lines = lines
+		self.units = []
+		self.prefixed = set()
+		self.constants = {}
+		self.scan()
+
+	def lacks_visibility(self, modifiers):
+		return not VIEW_VISIBILITY_WORDS.intersection(modifiers.split())
+
+	def find_end(self, start, closer):
+		for j in range(start + 1, len(self.lines)):
+			if self.lines[j] == closer:
+				return j
+
+		raise Unhandled(f"line {start + 1} opens a block with no `{closer.strip()}`")
+
+	def constant_name(self, declared, line):
+		if declared.group("keyword") != "let" or declared.group("modifiers"):
+			return None
+
+		constant = CONSTANT.match(line)
+
+		if constant is None or constant.group("name").startswith(RESERVED_NAME_PREFIX):
+			return None
+
+		value = constant.group("value")
+		return constant.group("name") if BARE_LITERAL.fullmatch(value) or STRING_LITERAL.match(value) else None
+
+	def scan(self):
+		lines = self.lines
+		i = 0
+		top = None
+
+		while i < len(lines):
+			line = lines[i]
+			declared = SOURCE_DECLARATION.match(line)
+
+			if top is None:
+				if declared is None or declared.group("indent"):
+					i += 1
+					continue
+
+				keyword, name = declared.group("keyword"), declared.group("name")
+
+				if keyword in STATEMENT_KEYWORDS:
+					constant = self.constant_name(declared, line)
+
+					if constant is not None:
+						self.constants[constant] = i
+					elif self.lacks_visibility(declared.group("modifiers")):
+						self.prefixed.add(i)
+
+					i += 1
+					continue
+
+				if self.lacks_visibility(declared.group("modifiers")) and keyword != "extension":
+					self.prefixed.add(i)
+
+				if keyword == FUNCTION_KEYWORD:
+					end = self.find_end(i, f"end '{name}'")
+
+					if not name.startswith(RESERVED_NAME_PREFIX):
+						self.units.append(Unit(None, name, i, end))
+
+					i = end + 1
+					continue
+
+				top = (keyword, name)
+				i += 1
+				continue
+
+			kind, name = top
+
+			if line == f"end '{name}'":
+				top = None
+				i += 1
+				continue
+
+			if kind == "interface" or declared is None or declared.group("indent") != MEMBER_INDENT:
+				i += 1
+				continue
+
+			keyword = declared.group("keyword")
+
+			if keyword == FUNCTION_KEYWORD:
+				member = declared.group("name")
+				end = self.find_end(i, f"{MEMBER_INDENT}end '{member}'")
+
+				if self.lacks_visibility(declared.group("modifiers")):
+					self.prefixed.add(i)
+
+				if kind == TYPE_KEYWORD and STATIC_MODIFIER not in declared.group("modifiers").split() and not member.startswith(RESERVED_NAME_PREFIX):
+					self.units.append(Unit(name, member, i, end))
+
+				i = end + 1
+				continue
+
+			if keyword in STATEMENT_KEYWORDS and self.lacks_visibility(declared.group("modifiers")):
+				self.prefixed.add(i)
+
+			i += 1
+
+
+class SplitFile:
+	def __init__(self, rel, lines):
+		self.rel = rel
+		self.scan = FileScan(lines)
+		self.lines = lines
+		self.outputs = {}
+
+		groups = {}
+		order = []
+
+		for unit in self.scan.units:
+			key = (unit.owner, unit.name)
+
+			if key not in groups:
+				groups[key] = []
+				order.append(key)
+
+			groups[key].append(unit)
+
+		parts = [[]]
+		size = 0
+
+		for key in order:
+			parts[-1].append(key)
+			size += sum(u.end - u.start + 1 for u in groups[key])
+
+			if size >= SPLIT_PART_LINES:
+				parts.append([])
+				size = 0
+
+		moved = {i for units in groups.values() for u in units for i in range(u.start, u.end + 1)}
+		self.emit(self.rel, [i for i in range(len(lines)) if i not in moved])
+
+		stem, extension = os.path.splitext(self.rel)
+
+		for number, keys in enumerate(parts, start=1):
+			if not keys:
+				continue
+
+			units = sorted((u for key in keys for u in groups[key]), key=lambda u: u.start)
+			body = []
+			owner = None
+
+			for unit in units:
+				if unit.owner != owner:
+					if owner is not None:
+						body.append(f"end '{owner}'")
+
+					if unit.owner is not None:
+						body.append(f"extension {unit.owner}")
+
+					owner = unit.owner
+
+				body.extend(range(unit.start, unit.end + 1))
+				body.append("")
+
+			if owner is not None:
+				body.append(f"end '{owner}'")
+
+			code = "\n".join(self.lines[i] for i in body if isinstance(i, int))
+			used = set(WORD.findall(code))
+			copies = sorted(index for name, index in self.scan.constants.items() if name in used)
+			self.emit(f"{stem}{VIEW_PART_INFIX}{number}{extension}", copies + [""] + body)
+
+	def emit(self, rel, entries):
+		text = []
+		origin = []
+
+		for entry in entries:
+			if isinstance(entry, str):
+				text.append(entry)
+				origin.append((0, 0))
+				continue
+
+			index = entry
+			line = self.lines[index]
+			shift = 0
+
+			if index in self.scan.prefixed:
+				body = line.lstrip("\t")
+				indent = line[:len(line) - len(body)]
+				line = indent + VIEW_VISIBILITY + " " + body
+				shift = len(VIEW_VISIBILITY) + 1
+
+			text.append(line)
+			origin.append((index + 1, shift))
+
+		self.outputs[rel] = ("\n".join(text), origin)
+
+
+class SplitView:
+	def __init__(self, work):
+		self.work = work
+		self.root = os.path.join(work, VIEW_DIR)
+		self.whole = set()
+		self.discard()
+
+	def discard(self):
+		shutil.rmtree(self.root, ignore_errors=True)
+		self.origins = {}
+		self.written = set()
+
+	def refresh(self, split_rels, seed_name):
+		self.origins = {}
+		written = set()
+		seed = os.path.join(self.root, SEED_DIR, seed_name)
+
+		if not os.path.isfile(seed):
+			os.makedirs(os.path.dirname(seed), exist_ok=True)
+			shutil.copy2(os.path.join(self.work, SEED_DIR, seed_name), seed)
+
+		for path in tree_files(self.work):
+			rel = os.path.relpath(path, self.work).replace("\\", "/")
+
+			if not path.endswith(MAXON_EXTENSION):
+				destination = os.path.join(self.root, rel)
+				os.makedirs(os.path.dirname(destination), exist_ok=True)
+
+				if not os.path.isfile(destination) or not filecmp.cmp(path, destination, shallow=False):
+					shutil.copyfile(path, destination)
+
+				written.add(os.path.normpath(destination))
+				continue
+
+			text = read(path)
+			pieces = {rel: (text, None)}
+
+			if rel in split_rels:
+				try:
+					pieces = SplitFile(rel, text.split("\n")).outputs
+				except Unhandled as e:
+					self.whole.add(rel)
+					print(f"generate-seed-language-shim.py: {rel} stays whole in the split view: {e}", file=sys.stderr, flush=True)
+
+			for out_rel, (out_text, origin) in pieces.items():
+				destination = os.path.join(self.root, out_rel)
+				os.makedirs(os.path.dirname(destination), exist_ok=True)
+
+				if not os.path.isfile(destination) or read(destination) != out_text:
+					write(destination, out_text)
+
+				written.add(os.path.normpath(destination))
+
+				if origin is not None:
+					self.origins[out_rel] = (rel, origin)
+
+		for stale in self.written - written:
+			if os.path.isfile(stale):
+				os.remove(stale)
+
+		self.written = written
+
+	def to_canonical(self, view_path, line, column):
+		rel = resolve(self.work, view_path)[1]
+
+		if rel.startswith(VIEW_DIR + "/"):
+			rel = rel[len(VIEW_DIR) + 1:]
+
+		if rel not in self.origins:
+			return rel, line, column
+
+		canonical, origin = self.origins[rel]
+
+		if not 1 <= line <= len(origin):
+			raise Unhandled(f"{rel}:{line} is outside the {len(origin)} lines the split view wrote")
+
+		canonical_line, shift = origin[line - 1]
+
+		if canonical_line == 0:
+			raise Unhandled(f"{rel}:{line} is a line the split view wrote itself")
+
+		return canonical, canonical_line, column - shift if column > shift else column
+
+
+class MappedDiagnostic:
+	def __init__(self, original, path, line, column):
+		self.fields = {"code": original.group("code"), "path": path, "line": str(line), "column": str(column), "message": original.group("message")}
+		self.text = f"error {self.fields['code']}: {path}:{line}:{column}: {self.fields['message']}"
+
+	def group(self, key):
+		return self.text if key == 0 else self.fields[key]
+
+
+def enclosing_function(lines, index):
+	for j in range(index, -1, -1):
+		header = SOURCE_DECLARATION.match(lines[j])
+
+		if header is None or header.group("keyword") != FUNCTION_KEYWORD or header.group("indent") not in ("", MEMBER_INDENT):
+			continue
+
+		close = f"{header.group('indent')}end '{header.group('name')}'"
+
+		for k in range(j + 1, len(lines)):
+			if lines[k] == close:
+				return (j, k) if k >= index else None
+
+		return None
+
+	return None
+
+
+def indent_of(line):
+	return len(line) - len(line.lstrip("\t"))
+
+
+def binding_roots(text):
+	roots = []
+
+	for word in WORD.finditer(text):
+		before = text[word.start() - 1] if word.start() > 0 else ""
+		after = text[word.end()] if word.end() < len(text) else ""
+
+		if before == "." or word.group(0) in KEYWORDS:
+			continue
+
+		if after == "(":
+			return None
+
+		roots.append(word.group(0))
+
+	return roots
+
+
+def binder_lines(lines, bounds, word):
+	start, end = bounds
+	escaped = re.escape(word)
+	parameter = re.compile(r"[(,] ?" + escaped + r" [A-Za-z(]")
+	binders = [
+		re.compile(r"\b(?:let|var)\b[^=\n]*\b" + escaped + r"\b"),
+		re.compile(r"\bfor\b[^\n]*?\b" + escaped + r"\b[^\n]*?\bin\b"),
+		re.compile(r"\([^()\n]*\b" + escaped + r"\b[^()\n]*\)\s*(?:then|gives)\b"),
+		re.compile(r"\botherwise\s*\([^()\n]*\b" + escaped + r"\b"),
+		re.compile(r"\bfunction\s*\([^()\n]*\b" + escaped + r"\b"),
+	]
+	found = []
+
+	for i in range(start, end + 1):
+		line = lines[i]
+
+		if word not in line:
+			continue
+
+		if parameter.search(line) if i == start else any(binder.search(line) for binder in binders):
+			found.append(i)
+
+	return found
+
+
+def binding_covers(lines, bounds, declaration, first, second):
+	if declaration == bounds[0]:
+		return True
+
+	if declaration >= min(first, second):
+		return False
+
+	text = lines[declaration].lstrip("\t")
+
+	if text.startswith(SCOPE_OPENERS):
+		closes_at_depth = True
+	elif text.startswith(PLAIN_BINDERS):
+		closes_at_depth = False
+	else:
+		return False
+
+	depth = indent_of(lines[declaration])
+
+	for k in range(declaration + 1, bounds[1] + 1):
+		if not lines[k].strip():
+			continue
+
+		level = indent_of(lines[k])
+
+		if level < depth or (closes_at_depth and level <= depth):
+			return k > max(first, second)
+
+	return False
+
+
+def same_bindings(lines, bounds, binders, first, second):
+	for found in binders.values():
+		if len(found) > 1 or (found and not binding_covers(lines, bounds, found[0], first, second)):
+			return False
+
+	return True
+
+
+def receiver_of(line, method_start):
+	if method_start < 1 or line[method_start - 1] != ".":
+		raise Unhandled("a call with no receiver")
+
+	start, stop = atom_before(line, method_start - 1)
+	return line[start:stop]
+
+
+class Twin:
+	def __init__(self, index, method, receiver, text, expected):
+		self.index = index
+		self.method = method
+		self.receiver = receiver
+		self.text = text
+		self.expected = expected
+
+	def key(self):
+		return (self.method, self.receiver, self.text, self.expected)
+
+
+def twin_of(line, index, column, message):
+	argument = ARGUMENT.match(message)
+
+	if argument is None:
+		return None
+
+	method = WORD.match(line, column - 1)
+
+	if method is None or ARM_SERVED_INDEX_LABELS.get(method.group(0)) != argument.group("label"):
+		return None
+
+	try:
+		start, end = argument_span(line, column - 1, argument.group("label"))
+		receiver = receiver_of(line, column - 1)
+	except Unhandled:
+		return None
+
+	text = line[start:end]
+
+	if not text or '"' in text or "'" in text or NUMBER_LITERAL.fullmatch(text):
+		return None
+
+	return Twin(index, method.group(0), receiver, text, argument.group("expected"))
+
+
+class Speculation:
+	def __init__(self, index, twin):
+		self.index = index
+		self.twin = twin.key()
+		self.text = twin.text
+		self.cast_text = cast(twin.text, 0, len(twin.text), twin.expected)
+
+
+class Rewriter:
+	def __init__(self, work, parents, ranges):
+		self.work = work
+		self.parents = parents
+		self.ranges = ranges
+		self.members = MemberDeclarations(work)
+		self.casts = 0
+		self.generation = 0
+		self.seen = set()
+		self.attempts = {}
+		self.speculated = {}
+		self.declined = set()
+
+	def speculate(self, rel, lines, twins):
+		if not twins:
+			return
+
+		try:
+			regions = CodeRegions(lines).per_line
+		except Unhandled:
+			return
+
+		snapshot = list(lines)
+
+		for twin in twins:
+			bounds = enclosing_function(lines, twin.index)
+			roots = binding_roots(twin.receiver + " " + twin.text)
+
+			if (rel, twin.key()) in self.declined or bounds is None or roots is None:
+				continue
+
+			binders = {word: binder_lines(lines, bounds, word) for word in set(roots)}
+			label = ARM_SERVED_INDEX_LABELS[twin.method]
+			call = re.compile(r"\." + re.escape(twin.method) + r"\(")
+
+			for j in range(bounds[0], bounds[1] + 1):
+				line = lines[j]
+
+				if twin.text not in line:
+					continue
+
+				try:
+					spans = regions[j] if line is snapshot[j] else CodeRegions([line]).per_line[0]
+				except Unhandled:
+					continue
+
+				rewritten = line
+
+				for m in reversed(list(call.finditer(line))):
+					if not any(start <= m.start() < stop for start, stop in spans):
+						continue
+
+					try:
+						receiver = receiver_of(rewritten, m.start() + 1)
+						start, stop = argument_span(rewritten, m.start() + 1, label)
+					except Unhandled:
+						continue
+
+					if receiver == twin.receiver and rewritten[start:stop] == twin.text and same_bindings(lines, bounds, binders, twin.index, j):
+						rewritten = cast(rewritten, start, stop, twin.expected)
+						self.speculated.setdefault(rel, []).append(Speculation(j, twin))
+
+				if rewritten != line:
+					lines[j] = rewritten
+					self.casts += 1
+
+	def regret(self, rel, lines, index):
+		records = [record for record in self.speculated.get(rel, []) if record.index == index]
+
+		if not records:
+			return False
+
+		line = lines[index]
+
+		for record in records:
+			line = line.replace(record.cast_text, record.text)
+			self.speculated[rel].remove(record)
+			self.declined.add((rel, record.twin))
+
+		if line == lines[index]:
+			return False
+
+		lines[index] = line
+		self.casts -= 1
+		return True
+
+	def forget(self, rel, index):
+		if rel in self.speculated:
+			self.speculated[rel] = [record for record in self.speculated[rel] if record.index != index]
+
+	def insert_at(self, rel, position):
+		for record in self.speculated.get(rel, []):
+			if record.index >= position:
+				record.index += 1
+
+	def apply(self, diagnostics):
+		by_file = {}
+		refused = []
+
+		for d in diagnostics:
+			try:
+				path, rel = resolve(self.work, d.group("path"))
+			except Unhandled as e:
+				refused.append(f"{d.group(0)}\n    {e}")
+				continue
+
+			by_file.setdefault(path, []).append((int(d.group("line")), int(d.group("column")), d, rel))
+
+		for path, sites in by_file.items():
+			text = read(path)
+			lines = text.split("\n")
+			rel = sites[0][3]
+			hoists = []
+			clones = {}
+			twins = []
+
+			for line_number, column, d, _ in sorted(sites, key=lambda s: (s[0], s[1]), reverse=True):
+				index = line_number - 1
+
+				if not 0 <= index < len(lines):
+					refused.append(f"{d.group(0)}\n    the line is outside the {len(lines)} lines of {rel}")
+					continue
+
+				if not UNNEEDED_CAST.match(d.group("message")) and self.regret(rel, lines, index):
+					continue
+
+				key = (rel, line_number, lines[index], d.group("message"))
+				site = (rel, line_number, d.group("message"))
+				self.attempts[site] = self.attempts.get(site, 0) + 1
+
+				if key in self.seen or self.attempts[site] > MAX_ATTEMPTS_PER_SITE:
+					refused.append(f"{d.group(0)}\n    the cast written for it did not answer it")
+					continue
+
+				borrow = BORROWED_BY_LOOP.match(d.group("message"))
+
+				if d.group("code") == "E3070" and borrow:
+					borrow_index = int(borrow.group("line")) - 1
+
+					if LET_BINDING.match(lines[borrow_index]):
+						clones.setdefault(borrow_index, (borrow, d, []))[2].append(key)
+					else:
+						hoists.append((borrow_index + 1, d, lambda borrow=borrow, line_number=line_number, rel=rel: hoist_loop_borrow(lines, line_number, borrow, self.members, rel), key))
+
+					continue
+
+				immutable = IMMUTABLE_LOOP_ELEMENT.match(d.group("message"))
+
+				if d.group("code") == "E2013" and immutable:
+					try:
+						loop_index = enclosing_loop_of(lines, index, immutable.group("name"))
+						hoists.append((loop_index + 1, d, lambda loop_index=loop_index: index_loop_element(lines, loop_index), key))
+					except Unhandled as e:
+						refused.append(f"{d.group(0)}\n    {e}")
+
+					continue
+
+				try:
+					if d.group("code") == "E3005" and MATCH_ARMS.match(d.group("message")):
+						cast_match_arms(lines, line_number, d.group("message"), self.parents)
+					else:
+						twin = twin_of(lines[index], index, column, d.group("message")) if d.group("code") == "E3005" else None
+						lines[index] = fix_line(lines[index], column, d.group("code"), d.group("message"), self.parents, self.ranges)
+
+						if twin is not None:
+							twins.append(twin)
+
+					self.seen.add(key)
+					self.casts += 1
+				except Unhandled as e:
+					refused.append(f"{d.group(0)}\n    {e}")
+
+				if UNNEEDED_CAST.match(d.group("message")):
+					self.forget(rel, index)
+
+			self.speculate(rel, lines, twins)
+
+			for borrow_index, (borrow, d, keys) in clones.items():
+				try:
+					clone_borrowing_let(lines, borrow_index, borrow.group("element"))
+					self.seen.update(keys)
+					self.casts += 1
+				except Unhandled as e:
+					refused.append(f"{d.group(0)}\n    {e}")
+
+			hoisted = set()
+
+			for anchor_line, d, rewrite, key in sorted(hoists, key=lambda s: s[0], reverse=True):
+				if anchor_line in hoisted:
+					self.seen.add(key)
+					continue
+
+				try:
+					position = rewrite()
+					hoisted.add(anchor_line)
+					self.seen.add(key)
+					self.insert_at(rel, position)
+					self.casts += 1
+				except Unhandled as e:
+					refused.append(f"{d.group(0)}\n    {e}")
+
+			rewritten = "\n".join(lines)
+
+			if rewritten != text:
+				write(path, rewritten)
+				self.generation += 1
+
+		return refused
+
+
+def parse_diagnostics(log):
+	return list({m.group(0): m for m in map(DIAGNOSTIC.match, log.splitlines()) if m}.values())
+
+
+def view_diagnostics(view, diagnostics):
+	mapped = {}
+	unmapped = []
+
+	for d in diagnostics:
+		if d.group("code") not in VIEW_CAST_CODES:
+			continue
+
+		try:
+			rel, line, column = view.to_canonical(d.group("path"), int(d.group("line")), int(d.group("column")))
+		except Unhandled as e:
+			unmapped.append(f"{d.group(0)}\n    {e}")
+			continue
+
+		site = MappedDiagnostic(d, rel.replace("/", "\\"), line, column)
+		mapped[site.group(0)] = site
+
+	return list(mapped.values()), unmapped
+
+
+def converge(work, seed_name, lanes, rewriter, rounds, started, verified):
+	view = SplitView(work)
+	streaks = {}
+	view_off = False
+
+	try:
+		while True:
+			rounds += 1
+
+			if rounds > MAX_ROUNDS:
+				raise SystemExit(f"generate-seed-language-shim.py: the seed still refuses the tree after {MAX_ROUNDS} rounds")
+
+			split = {rel for rel, count in streaks.items() if count >= STUBBORN_ROUNDS and rel not in view.whole}
+			use_view = bool(split) and not view_off
+
+			if use_view:
+				view.refresh(split, seed_name)
+				split -= view.whole
+				use_view = bool(split)
+
+			if use_view:
+				code, log = build(work, seed_name, lanes, base=VIEW_DIR)
+			else:
+				code, log = build(work, seed_name, lanes)
+
+			with open(os.path.join(work, f"round-{rounds:03}{'-view' if use_view else ''}.log"), "w", encoding="utf-8") as f:
+				f.write(log)
+
+			elapsed = time.monotonic() - started
+			diagnostics = parse_diagnostics(log)
+
+			if use_view:
+				diagnostics, refused = view_diagnostics(view, diagnostics)
+				generation = rewriter.generation
+				refused += rewriter.apply(diagnostics)
+				changed = rewriter.generation != generation
+
+				if refused or not changed:
+					view_off = True
+					view.discard()
+					print(f"round {rounds} ({', '.join(lanes)}): the split view of {len(split)} files is dropped for this lane, {len(refused)} refusals, {'tree changed' if changed else 'tree unchanged'}, {elapsed:.0f} s", flush=True)
+
+					if refused:
+						print("\n".join(refused), file=sys.stderr, flush=True)
+
+					if not changed:
+						continue
+
+				label = f"{len(diagnostics)} refusals cast through a split view of {len(split)} files"
+			else:
+				if code == 0:
+					print(f"round {rounds} ({', '.join(lanes)}): clean, {rewriter.casts} casts, {elapsed:.0f} s", flush=True)
+					verified.update({lane: rewriter.generation for lane in lanes})
+					return rounds
+
+				if not diagnostics:
+					raise SystemExit(f"generate-seed-language-shim.py: the seed exited {code} with no diagnostic\n{log}")
+
+				refused = rewriter.apply(diagnostics)
+
+				if refused:
+					report_refusals("the seed refused the shimmed tree with what this script does not cast", refused, work)
+					return None
+
+				label = f"{len(diagnostics)} refusals cast"
+
+			per_file = {}
+
+			for d in diagnostics:
+				rel = resolve(work, d.group("path"))[1]
+				per_file[rel] = per_file.get(rel, 0) + 1
+
+			# A split file reports several sites per round; counting every file in a view round keeps it split.
+			refused_once = {rel for rel, count in per_file.items() if use_view or count == 1}
+			streaks = {rel: streaks.get(rel, 0) + 1 for rel in refused_once}
+			print(f"round {rounds} ({', '.join(lanes)}): {label}, {elapsed:.0f} s", flush=True)
+	finally:
+		view.discard()
+
+
 def main():
+	started = time.monotonic()
 	here = os.path.dirname(os.path.abspath(__file__))
 	parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 	parser.add_argument("--tree", default=os.path.dirname(os.path.dirname(here)))
@@ -1624,7 +2434,7 @@ def main():
 	args = parser.parse_args()
 
 	tree = os.path.abspath(args.tree)
-	seed = args.seed or os.path.join(tree, ".bootstrap", "maxon.exe" if os.name == "nt" else "maxon")
+	seed = args.seed or os.path.join(tree, SEED_DIR, "maxon.exe" if os.name == "nt" else "maxon")
 	output = os.path.abspath(args.output or os.path.join(tree, "scripts", "seed-shim", PATCH_NAME))
 	work = os.path.abspath(args.work or tempfile.mkdtemp(prefix="seed-language-shim-"))
 
@@ -1666,116 +2476,18 @@ def main():
 		payload_lets = strip_payload_lets(work)
 		print(f"withdrew {payload_lets} `let` union payload qualifiers", flush=True)
 
-	members = MemberDeclarations(work)
-	casts = 0
-	seen = set()
-	attempts = {}
+	rewriter = Rewriter(work, parents, ranges)
+	rounds = 0
+	verified = {}
 
-	for round_number in range(1, MAX_ROUNDS + 1):
-		code, log = build(work, os.path.basename(seed))
+	while any(verified.get(lane) != rewriter.generation for lane in NATIVE_TARGETS):
+		stale = next(lane for lane in NATIVE_TARGETS if verified.get(lane) != rewriter.generation)
+		rounds = converge(work, os.path.basename(seed), [stale], rewriter, rounds, started, verified)
 
-		with open(os.path.join(work, f"round-{round_number:03}.log"), "w", encoding="utf-8") as f:
-			f.write(log)
+		if rounds is None:
+			return 1
 
-		if code == 0:
-			print(f"round {round_number}: the seed builds the shimmed tree ({casts} casts)", flush=True)
-			break
-
-		diagnostics = list({m.group(0): m for m in map(DIAGNOSTIC.match, log.splitlines()) if m}.values())
-
-		if not diagnostics:
-			raise SystemExit(f"generate-seed-language-shim.py: the seed exited {code} with no diagnostic\n{log}")
-
-		by_file = {}
-		refused = []
-
-		for d in diagnostics:
-			try:
-				path, rel = resolve(work, d.group("path"))
-			except Unhandled as e:
-				refused.append(f"{d.group(0)}\n    {e}")
-				continue
-
-			by_file.setdefault(path, []).append((int(d.group("line")), int(d.group("column")), d, rel))
-
-		for path, sites in by_file.items():
-			lines = read(path).split("\n")
-			hoists = []
-			clones = {}
-
-			for line_number, column, d, rel in sorted(sites, key=lambda s: (s[0], s[1]), reverse=True):
-				key = (rel, line_number, lines[line_number - 1], d.group("message"))
-
-				site = (rel, line_number, d.group("message"))
-				attempts[site] = attempts.get(site, 0) + 1
-
-				if key in seen or attempts[site] > MAX_ATTEMPTS_PER_SITE:
-					refused.append(f"{d.group(0)}\n    the cast written for it did not answer it")
-					continue
-
-				seen.add(key)
-
-				borrow = BORROWED_BY_LOOP.match(d.group("message"))
-
-				if d.group("code") == "E3070" and borrow:
-					borrow_index = int(borrow.group("line")) - 1
-
-					if LET_BINDING.match(lines[borrow_index]):
-						clones.setdefault(borrow_index, (borrow, d))
-					else:
-						hoists.append((borrow_index + 1, d, lambda borrow=borrow, line_number=line_number, rel=rel: hoist_loop_borrow(lines, line_number, borrow, members, rel)))
-
-					continue
-
-				immutable = IMMUTABLE_LOOP_ELEMENT.match(d.group("message"))
-
-				if d.group("code") == "E2013" and immutable:
-					try:
-						loop_index = enclosing_loop_of(lines, line_number - 1, immutable.group("name"))
-						hoists.append((loop_index + 1, d, lambda loop_index=loop_index: index_loop_element(lines, loop_index)))
-					except Unhandled as e:
-						refused.append(f"{d.group(0)}\n    {e}")
-
-					continue
-
-				try:
-					if d.group("code") == "E3005" and MATCH_ARMS.match(d.group("message")):
-						cast_match_arms(lines, line_number, d.group("message"), parents)
-					else:
-						lines[line_number - 1] = fix_line(lines[line_number - 1], column, d.group("code"), d.group("message"), parents, ranges)
-
-					casts += 1
-				except Unhandled as e:
-					refused.append(f"{d.group(0)}\n    {e}")
-
-			for borrow_index, (borrow, d) in clones.items():
-				try:
-					clone_borrowing_let(lines, borrow_index, borrow.group("element"))
-					casts += 1
-				except Unhandled as e:
-					refused.append(f"{d.group(0)}\n    {e}")
-
-			hoisted = set()
-
-			for anchor_line, d, rewrite in sorted(hoists, key=lambda s: s[0], reverse=True):
-				if anchor_line in hoisted:
-					continue
-
-				try:
-					rewrite()
-					hoisted.add(anchor_line)
-					casts += 1
-				except Unhandled as e:
-					refused.append(f"{d.group(0)}\n    {e}")
-
-			write(path, "\n".join(lines))
-
-		if refused:
-			return report_refusals("the seed refused the shimmed tree with what this script does not cast", refused, work)
-
-		print(f"round {round_number}: {len(diagnostics)} refusals cast", flush=True)
-	else:
-		raise SystemExit(f"generate-seed-language-shim.py: the seed still refuses the tree after {MAX_ROUNDS} rounds")
+	print(f"the seed builds the shimmed tree for every lane after {rounds} rounds, {rewriter.casts} casts, {time.monotonic() - started:.0f} s", flush=True)
 
 	diff = git(work, "diff", "--no-color", "--", *SOURCE_DIRS).stdout
 

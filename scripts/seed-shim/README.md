@@ -44,8 +44,9 @@ qualifier on a container's element type (`Array with readonly T`, `Map with (K, 
 union case's payload (`case(let name T)`) are parse errors to a release that predates them, and the patch
 withdraws the qualifier at every declaration, which leaves the container and union types the seed always held.
 Only those forms and the casts go; the declarations and every table stay, so `C1` knows the forms and compiles the
-unshimmed tree. The casts are found by building with the seed for each of the four native targets until every build
-is clean, so the code a lane's `#if` selects is judged too. The one patch for every such form is written by
+unshimmed tree. The casts are found by building with the seed for one native target at a time until it is clean,
+and again for any lane the tree changed under since its last clean build, so the code a lane's `#if` selects is
+judged too. The one patch for every such form is written by
 `generate-seed-language-shim.py` and not by hand — regenerate it whenever the sources it touches move, and
 after the documenter has written its comments, since a comment edit moves the context a hunk is matched on.
 
@@ -75,8 +76,31 @@ loop over a `var` alias of the element it reads; the `var` is a `let`; the assig
 seed asks for. These rewrites exist only in `C1`, which the restore removes before `C2` is built, and what
 stands behind them is the fixed point rather than an argument: `scripts/fixpoint.sh` from a compiler this
 script built must reproduce the bytes a slot-built compiler reproduces. The script finds the sites by building
-with the seed for each of the four native targets until every build is clean, so the code a lane's `#if`
-selects is judged too. A refusal it cannot rewrite stops it, naming the site.
+with the seed for one native target at a time until it is clean, and again for any lane the tree changed under
+since its last clean build, so the code a lane's `#if` selects is judged too. A refusal it cannot rewrite stops it,
+naming the site.
+
+The seed's parser ends a file's parse at its first type refusal, so one build reports at most one such site per
+file, and a file holding hundreds would cost hundreds of builds. Once a file has been refused at a single site in
+two rounds running, the script builds a copy of the tree under the work directory's `view/` in which that file's
+top-level functions and the instance methods of its `type` blocks are spread over files of about 600 lines each (a
+method moves through an `extension <Type>` block; `static` methods, `__`-named functions and the methods of enums,
+unions, interfaces and extensions stay where they are; each literal constant a piece reads is copied into it, and
+the file's other declarations that name no visibility are written `module`), so each piece reports its own first
+site. Only the casts those builds report are used, written into the real file at the line they came from.
+
+The unsplit build decides. Only the refusals a cast answers (E3005, E2028, E3059, E3010) are read from it. One of
+those the script cannot rewrite or cannot place on a line of the real file, or a round in which it changes
+nothing, drops the copy for the rest of the lane and is printed, and the unsplit builds decide from there: a
+refusal that is real reaches them and stops the script naming the site. Every lane's last build is of the unsplit
+tree, so the patch is one the seed builds unsplit for every lane.
+
+A cast the seed asked for at a `get`, `set` or `resize` argument is also written at the other calls of the same
+method in the same function whose receiver text and argument text are identical, at calls in code outside strings,
+character literals and comments, when every identifier those texts name is bound at most once in the function and
+that binding's scope covers both calls. The seed must then refuse each of them the same way, so the cast is the
+one it would have asked for. When the seed refuses a line holding such a cast, the cast is taken back, and that
+speculation is retired for the file.
 
 ⭐ **A CONSTRUCT THE SEED MISCOMPILES IS THE SEVENTH CASE.** The seed also compiles a comparison against a literal
 from 2^63 up as a signed one, so a `C1` it builds derives wrong division constants and panics in
