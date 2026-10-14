@@ -2301,12 +2301,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		ir.refillBlockIndexById(func, into: self.blockIndex)
 		self.calls.beginWalk(index)
 		self.changed = true
+		let order = callSiteWalkOrder(ir, func: func)
 
 		while self.changed 'untilNothingGrows'
 			self.changed = false
 			self.calls.startPass()
 
-			for blockRef in func.blockRefs 'eachBlock'
+			for position in order 'eachBlock'
+				let blockRef = try func.blockRefs.get(position) otherwise panic("ProvenanceTracer.walk: position {position} from the walk order is past func.blockRefs")
 				let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.walk: blockRef from func.blockRefs not in module.blocks")
 				self.traceBlock(func, ir: ir, block: block)
 			end 'eachBlock'
@@ -3448,7 +3450,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.calls.replay(index)
 		var writesARawResource = false
 
-		for blockRef in func.blockRefs 'eachBlock'
+		for position in callSiteWalkOrder(ir, func: func) 'eachBlock'
+			let blockRef = try func.blockRefs.get(position) otherwise panic("ProvenanceTracer.stageParamEdges: position {position} from the walk order is past func.blockRefs")
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.stageParamEdges: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'

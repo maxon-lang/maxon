@@ -780,3 +780,98 @@ end 'main'
 5: 2-245
 6: 2-245
 ```
+
+### A Block Routing Two Error Types Releases Its Owners Through Shared Drops
+
+The body binds owners between calls that throw two different error enums, so the handler's `match` dispatches
+on one fused value and the drops shared by every throw edge carry that value along. Each failing call is driven
+in turn, with the owners bound before it released and the ones after it never built.
+
+<!-- test: routed-throw-of-two-error-types-through-shared-drops -->
+```maxon
+typealias Index = int(0 to 255)
+
+enum NetError implements Error
+	timeout
+	refused
+end 'NetError'
+
+enum DiskError implements Error
+	missing
+	full
+end 'DiskError'
+
+function build(i Index) returns String
+	return "owner {i} padded out long enough to heap allocate"
+end 'build'
+
+function net(i Index, stop Index) returns String throws NetError
+	if i == stop 'timedOut'
+		throw NetError.timeout
+	end 'timedOut'
+
+	if i == stop + 10 'turnedAway'
+		throw NetError.refused
+	end 'turnedAway'
+
+	return build(i + 100)
+end 'net'
+
+function disk(i Index, stop Index) returns String throws DiskError
+	if i == stop 'isFull'
+		throw DiskError.full
+	end 'isFull'
+
+	if i == stop + 10 'isGone'
+		throw DiskError.missing
+	end 'isGone'
+
+	return build(i + 150)
+end 'disk'
+
+function run(k Index) returns String
+	var log = "start"
+
+	try 'work'
+		let a = build(1)
+		let b = net(1, stop: k)
+		let c = build(2)
+		let d = disk(2, stop: k)
+		let e = build(3)
+		let f = net(3, stop: k)
+		let g = disk(4, stop: k)
+		let h = net(5, stop: k)
+		log = "{log} {a.byteLength() + b.byteLength() + c.byteLength() + d.byteLength() + e.byteLength() + f.byteLength() + g.byteLength() + h.byteLength()}"
+	end 'work' otherwise (caught) 'bad'
+		match caught 'kind'
+			NetError.timeout then log = "{log} net timeout"
+			NetError.refused then log = "{log} net refused"
+			DiskError.missing then log = "{log} disk missing"
+			DiskError.full then log = "{log} disk full"
+		end 'kind'
+	end 'bad'
+
+	return log
+end 'run'
+
+function main() returns ExitCode
+	for k in 0 to 7 'each'
+		print("{k}: {run(k)}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0: start 386
+1: start net timeout
+2: start disk full
+3: start net timeout
+4: start disk full
+5: start net timeout
+6: start 386
+7: start 386
+```

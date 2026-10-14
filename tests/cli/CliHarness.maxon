@@ -1799,9 +1799,20 @@ export enum ErrorPathExit
 	propagatingTry
 	throwStatement
 	earlyReturn
-	handedOffReturn
-	routedThrow
 end 'ErrorPathExit'
+
+export enum SelfContainedErrorPath
+	handedOffReturn
+	freshReturn
+	reassignedOwner
+	routedThrow
+	routedBoxThrow
+end 'SelfContainedErrorPath'
+
+union ErrorPathFixture
+	guarded(exitKind ErrorPathExit)
+	selfContained(path SelfContainedErrorPath)
+end 'ErrorPathFixture'
 
 typealias BindingTally = int(0 to 64)
 
@@ -1819,6 +1830,7 @@ let LinearGrowthDenominator = 2
 
 let ErrorPathFixturePrelude = "typealias Word = int(0 to u32.max)\n\n"
 let RefusalDeclaration = "enum Refusal implements Error\n\trefused\nend 'Refusal'\n\n"
+let BoxedFailureDeclaration = "union Failure implements Error\n\tdetail(message String)\nend 'Failure'\n\n"
 let ThrowingMakeDeclaration = "function make(seed Word, index Word) returns String throws Refusal\n\tif seed == index 'refuse'\n\t\tthrow Refusal.refused\n\tend 'refuse'\n\n\treturn \"\{seed\}-\{index\}\"\nend 'make'\n\n"
 let PlainMakeDeclaration = "function make(seed Word, index Word) returns String\n\treturn \"\{seed\}-\{index\}\"\nend 'make'\n\n"
 let ThrowingWorkOpening = "function work(seed Word) returns Word throws Refusal\n"
@@ -1832,16 +1844,29 @@ let PlainWorkCall = "\tlet answer = work(seed)\n"
 let ErrorPathMainClosing = "\n\treturn 0 if answer > 0 else 1\nend 'main'\n"
 
 export function requireErrorPathDropsGrowLinearly(exitKind ErrorPathExit) throws TestFailure
-	try requireHeldOutsideCheckout("{ErrorPathCaseDirNamePrefix}{exitKind.name}", check: ErrorPathDropsGrowLinearly.create(exitKind))
+	try requireFixtureDropsGrowLinearly(ErrorPathFixture.guarded(exitKind))
 end 'requireErrorPathDropsGrowLinearly'
+
+export function requireSelfContainedDropsGrowLinearly(path SelfContainedErrorPath) throws TestFailure
+	try requireFixtureDropsGrowLinearly(ErrorPathFixture.selfContained(path))
+end 'requireSelfContainedDropsGrowLinearly'
+
+function requireFixtureDropsGrowLinearly(fixture ErrorPathFixture) throws TestFailure
+	try requireHeldOutsideCheckout("{ErrorPathCaseDirNamePrefix}{errorPathFixtureName(fixture)}", check: ErrorPathDropsGrowLinearly.create(fixture))
+end 'requireFixtureDropsGrowLinearly'
+
+function errorPathFixtureName(fixture ErrorPathFixture) returns String
+	return match fixture 'which'
+		guarded(exitKind) gives exitKind.name
+		selfContained(path) gives path.name
+	end 'which'
+end 'errorPathFixtureName'
 
 function errorPathFixtureOpening(exitKind ErrorPathExit) returns String
 	return match exitKind 'opening'
 		propagatingTry gives "{ErrorPathFixturePrelude}{RefusalDeclaration}{ThrowingMakeDeclaration}{ThrowingWorkOpening}"
 		throwStatement gives "{ErrorPathFixturePrelude}{RefusalDeclaration}{PlainMakeDeclaration}{ThrowingWorkOpening}"
 		earlyReturn gives "{ErrorPathFixturePrelude}{PlainMakeDeclaration}{PlainWorkOpening}"
-		handedOffReturn or
-		routedThrow panic("errorPathFixtureOpening: this exit has its own fixture, built by errorPathFixtureSource")
 	end 'opening'
 end 'errorPathFixtureOpening'
 
@@ -1850,8 +1875,6 @@ function errorPathBindingLines(exitKind ErrorPathExit, index BindingTally) retur
 		propagatingTry gives "\tlet s{index} = try make(seed, index: {index})\n"
 		throwStatement gives guardedBindingLines(index, exitStatement: RefusalThrow)
 		earlyReturn gives guardedBindingLines(index, exitStatement: "return {index}")
-		handedOffReturn or
-		routedThrow panic("errorPathBindingLines: this exit has its own fixture, built by errorPathFixtureSource")
 	end 'binding'
 end 'errorPathBindingLines'
 
@@ -1864,28 +1887,69 @@ function errorPathWorkCall(exitKind ErrorPathExit) returns String
 		propagatingTry or
 		throwStatement gives ThrowingWorkCall
 		earlyReturn gives PlainWorkCall
-		handedOffReturn or
-		routedThrow panic("errorPathWorkCall: this exit has its own fixture, built by errorPathFixtureSource")
 	end 'call'
 end 'errorPathWorkCall'
 
-function errorPathExitDescription(exitKind ErrorPathExit) returns String
+function guardedExitDescription(exitKind ErrorPathExit) returns String
 	return match exitKind 'description'
 		propagatingTry gives "a propagating `try`"
 		throwStatement gives "a `throw`"
 		earlyReturn gives "an early `return`"
-		handedOffReturn gives "a `return` of one binding while the rest are live"
-		routedThrow gives "a throwing call routed to one `try` block handler"
 	end 'description'
+end 'guardedExitDescription'
+
+function selfContainedDescription(path SelfContainedErrorPath) returns String
+	return match path 'description'
+		handedOffReturn gives "a `return` of one of them while the others are live"
+		freshReturn gives "a `return` of a fresh value"
+		reassignedOwner gives "a `return`, with a low owned `var` reassigned between the exits"
+		routedThrow gives "a throwing call routed to one `try` block handler"
+		routedBoxThrow gives "a `throw` of one bound boxed error from a `try` block"
+	end 'description'
+end 'selfContainedDescription'
+
+function errorPathExitDescription(fixture ErrorPathFixture) returns String
+	return match fixture 'which'
+		guarded(exitKind) gives guardedExitDescription(exitKind)
+		selfContained(path) gives selfContainedDescription(path)
+	end 'which'
 end 'errorPathExitDescription'
+
+function appendLets(out String, bindings BindingTally, indent String)
+	for index in 0 upto bindings 'eachBinding'
+		out.append("{indent}let s{index} = make(seed, index: {index})\n")
+	end 'eachBinding'
+end 'appendLets'
+
+function appendUses(out String, bindings BindingTally, indent String)
+	for index in 0 upto bindings 'eachUse'
+		out.append("{indent}total = (total + (s{index}.byteLength() as Word)) and 0xFFFF\n")
+	end 'eachUse'
+end 'appendUses'
+
+function guardedFixtureSource(exitKind ErrorPathExit, bindings BindingTally) returns String
+	var out = errorPathFixtureOpening(exitKind)
+
+	for index in 0 upto bindings 'eachBinding'
+		out.append(errorPathBindingLines(exitKind, index: index))
+	end 'eachBinding'
+
+	out.append(TotalOpening)
+	appendUses(out, bindings: bindings, indent: "\t")
+	out.append(WorkClosing)
+	out.append(ErrorPathMainOpening)
+	out.append(errorPathWorkCall(exitKind))
+	out.append(ErrorPathMainClosing)
+	return out
+end 'guardedFixtureSource'
+
+function stringAnswerMainClosing() returns String
+	return "\n\treturn 0 if answer.byteLength() > 0 else 1\nend 'main'\n"
+end 'stringAnswerMainClosing'
 
 function handedOffReturnFixtureSource(bindings BindingTally) returns String
 	var out = "{ErrorPathFixturePrelude}{PlainMakeDeclaration}function work(seed Word) returns String\n"
-
-	for index in 0 upto bindings 'eachBinding'
-		out.append("\tlet s{index} = make(seed, index: {index})\n")
-	end 'eachBinding'
-
+	appendLets(out, bindings: bindings, indent: "\t")
 	out.append("\n")
 
 	for index in 0 upto bindings 'eachReturn'
@@ -1895,21 +1959,46 @@ function handedOffReturnFixtureSource(bindings BindingTally) returns String
 	out.append("\treturn \"\{seed\}\"\nend 'work'\n\n")
 	out.append(ErrorPathMainOpening)
 	out.append(PlainWorkCall)
-	out.append("\n\treturn 0 if answer.byteLength() > 0 else 1\nend 'main'\n")
+	out.append(stringAnswerMainClosing())
 	return out
 end 'handedOffReturnFixtureSource'
 
-function routedThrowFixtureSource(bindings BindingTally) returns String
-	var out = "{ErrorPathFixturePrelude}{RefusalDeclaration}{ThrowingMakeDeclaration}function work(seed Word) returns Word\n\tvar total = seed\n\n\ttry 'block'\n"
+function freshReturnFixtureSource(bindings BindingTally) returns String
+	var out = "{ErrorPathFixturePrelude}{PlainMakeDeclaration}function work(seed Word) returns String\n"
 
 	for index in 0 upto bindings 'eachBinding'
-		out.append("\t\tlet s{index} = make(seed, index: {index})\n")
+		out.append("\tlet s{index} = make(seed, index: {index})\n\n\tif seed == {index} 'exit{index}'\n\t\treturn make(seed, index: 1000)\n\tend 'exit{index}'\n\n")
 	end 'eachBinding'
 
-	for index in 0 upto bindings 'eachUse'
-		out.append("\t\ttotal = (total + (s{index}.byteLength() as Word)) and 0xFFFF\n")
-	end 'eachUse'
+	out.append("\tvar total = seed\n")
+	appendUses(out, bindings: bindings, indent: "\t")
+	out.append("\n\treturn \"\{total\}\"\nend 'work'\n\n")
+	out.append(ErrorPathMainOpening)
+	out.append(PlainWorkCall)
+	out.append(stringAnswerMainClosing())
+	return out
+end 'freshReturnFixtureSource'
 
+function reassignedOwnerFixtureSource(bindings BindingTally) returns String
+	var out = "{ErrorPathFixturePrelude}{PlainMakeDeclaration}{PlainWorkOpening}\tvar low = make(seed, index: 0)\n\n"
+
+	for index in 0 upto bindings 'eachBinding'
+		out.append("\tlet s{index} = make(seed, index: {index})\n\tlow = make(seed, index: 1000)\n\n\tif seed == {index} 'exit{index}'\n\t\treturn {index}\n\tend 'exit{index}'\n\n")
+	end 'eachBinding'
+
+	out.append("\tvar total = seed + (low.byteLength() as Word)\n")
+	appendUses(out, bindings: bindings, indent: "\t")
+	out.append(WorkClosing)
+	out.append(ErrorPathMainOpening)
+	out.append(PlainWorkCall)
+	out.append(ErrorPathMainClosing)
+	return out
+end 'reassignedOwnerFixtureSource'
+
+function routedThrowFixtureSource(bindings BindingTally) returns String
+	var out = "{ErrorPathFixturePrelude}{RefusalDeclaration}{ThrowingMakeDeclaration}{PlainWorkOpening}\tvar total = seed\n\n\ttry 'block'\n"
+	appendLets(out, bindings: bindings, indent: "\t\t")
+	appendUses(out, bindings: bindings, indent: "\t\t")
 	out.append("\tend 'block' otherwise (caught) 'handler'\n\t\tmatch caught 'kind'\n\t\t\trefused then total = total + 1\n\t\tend 'kind'\n\tend 'handler'\n")
 	out.append(WorkClosing)
 	out.append(ErrorPathMainOpening)
@@ -1918,54 +2007,66 @@ function routedThrowFixtureSource(bindings BindingTally) returns String
 	return out
 end 'routedThrowFixtureSource'
 
-function errorPathFixtureSource(exitKind ErrorPathExit, bindings BindingTally) returns String
-	match exitKind 'family'
-		handedOffReturn then return handedOffReturnFixtureSource(bindings)
-		routedThrow then return routedThrowFixtureSource(bindings)
-		propagatingTry or
-		throwStatement or
-		earlyReturn then break
-	end 'family'
+function routedBoxThrowFixtureSource(bindings BindingTally) returns String
+	var out = "{ErrorPathFixturePrelude}{BoxedFailureDeclaration}{PlainMakeDeclaration}{PlainWorkOpening}\tvar total = seed\n\n\ttry 'block'\n"
 
-	var out = errorPathFixtureOpening(exitKind)
+	for index in 0 upto bindings 'eachBox'
+		out.append("\t\tlet e{index} = Failure.detail(make(seed, index: {index}))\n")
+	end 'eachBox'
 
-	for index in 0 upto bindings 'eachBinding'
-		out.append(errorPathBindingLines(exitKind, index: index))
-	end 'eachBinding'
+	appendLets(out, bindings: bindings, indent: "\t\t")
+	out.append("\n")
 
-	out.append(TotalOpening)
+	for index in 0 upto bindings 'eachThrow'
+		out.append("\t\tif seed == {index} 'exit{index}'\n\t\t\tthrow e{index}\n\t\tend 'exit{index}'\n\n")
+	end 'eachThrow'
 
-	for index in 0 upto bindings 'eachUse'
-		out.append("\ttotal = (total + (s{index}.byteLength() as Word)) and 0xFFFF\n")
-	end 'eachUse'
-
+	appendUses(out, bindings: bindings, indent: "\t\t")
+	out.append("\tend 'block' otherwise (caught) 'handler'\n\t\tmatch caught 'kind'\n\t\t\tdetail(message) then total = total + (message.byteLength() as Word)\n\t\tend 'kind'\n\tend 'handler'\n")
 	out.append(WorkClosing)
 	out.append(ErrorPathMainOpening)
-	out.append(errorPathWorkCall(exitKind))
+	out.append(PlainWorkCall)
 	out.append(ErrorPathMainClosing)
 	return out
+end 'routedBoxThrowFixtureSource'
+
+function selfContainedFixtureSource(path SelfContainedErrorPath, bindings BindingTally) returns String
+	return match path 'source'
+		handedOffReturn gives handedOffReturnFixtureSource(bindings)
+		freshReturn gives freshReturnFixtureSource(bindings)
+		reassignedOwner gives reassignedOwnerFixtureSource(bindings)
+		routedThrow gives routedThrowFixtureSource(bindings)
+		routedBoxThrow gives routedBoxThrowFixtureSource(bindings)
+	end 'source'
+end 'selfContainedFixtureSource'
+
+function errorPathFixtureSource(fixture ErrorPathFixture, bindings BindingTally) returns String
+	return match fixture 'which'
+		guarded(exitKind) gives guardedFixtureSource(exitKind, bindings: bindings)
+		selfContained(path) gives selfContainedFixtureSource(path, bindings: bindings)
+	end 'which'
 end 'errorPathFixtureSource'
 
-function errorPathCodeBytes(dir FilePath, exitKind ErrorPathExit, bindings BindingTally) returns ReportedTally throws TestFailure
-	let table = try stagedProgramMetrics(dir, name: "{ErrorPathAppDirNamePrefix}{bindings}", source: errorPathFixtureSource(exitKind, bindings: bindings), described: "the {bindings}-binding fixture whose bindings are each followed by {errorPathExitDescription(exitKind)}")
+function errorPathCodeBytes(dir FilePath, fixture ErrorPathFixture, bindings BindingTally) returns ReportedTally throws TestFailure
+	let table = try stagedProgramMetrics(dir, name: "{ErrorPathAppDirNamePrefix}{bindings}", source: errorPathFixtureSource(fixture, bindings: bindings), described: "the {bindings}-binding fixture whose bindings are each followed by {errorPathExitDescription(fixture)}")
 	return metricsCell(table, kind: MetricsCodeKind, name: MetricsUnnamedRow, field: MetricsBytesField)
 end 'errorPathCodeBytes'
 
 type ErrorPathDropsGrowLinearly implements OutsideCheckoutCase
-	var exitKind as ErrorPathExit
+	var fixture as ErrorPathFixture
 
-	static function create(exitKind ErrorPathExit) returns ErrorPathDropsGrowLinearly
-		return Self{exitKind: exitKind}
+	static function create(fixture ErrorPathFixture) returns ErrorPathDropsGrowLinearly
+		return Self{fixture: fixture}
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		let small = try errorPathCodeBytes(dir, exitKind: self.exitKind, bindings: SmallBindings)
-		let medium = try errorPathCodeBytes(dir, exitKind: self.exitKind, bindings: MediumBindings)
-		let large = try errorPathCodeBytes(dir, exitKind: self.exitKind, bindings: LargeBindings)
+		let small = try errorPathCodeBytes(dir, fixture: self.fixture, bindings: SmallBindings)
+		let medium = try errorPathCodeBytes(dir, fixture: self.fixture, bindings: MediumBindings)
+		let large = try errorPathCodeBytes(dir, fixture: self.fixture, bindings: LargeBindings)
 
 		let firstGrowth = medium - small
 		let secondGrowth = large - medium
-		let description = errorPathExitDescription(self.exitKind)
+		let description = errorPathExitDescription(self.fixture)
 
 		if firstGrowth <= 0 'noGrowth'
 			panic("error-path-drops: the gate could not run - a function of {SmallBindings} owned bindings, each followed by {description}, compiled to {small} bytes of code and one of {MediumBindings} to {medium}, so doubling the bindings grew no code and there is no growth to compare.")

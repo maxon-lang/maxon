@@ -394,6 +394,10 @@ tests/
     error-path-drops-grow-linearly-with-early-returns.maxtest      the same with a guarded early `return` after each binding
     error-path-drops-grow-linearly-with-handed-off-returns.maxtest   the same with a guarded `return` of each binding, the rest still live
     error-path-drops-grow-linearly-with-routed-throws.maxtest      the same with every binding bound by a throwing call inside one `try` block
+    error-path-drops-grow-linearly-with-fresh-returns.maxtest      the same with a guarded `return` of a fresh value after each binding
+    error-path-drops-grow-linearly-with-reassigned-owners.maxtest  the same with a low owned `var` reassigned between the exits
+    error-path-drops-grow-linearly-with-routed-box-throws.maxtest  the same with a guarded `throw` of one bound boxed error from a `try` block
+    owned-binding-move-state-is-written-through-the-ledger-setters.maxtest   no compiler source writes an owned binding's `movedFrom` or `boundValue` except through the setters that tell the move ledger
     build-unchanged-is-up-to-date.maxtest                   a second build of an unchanged program says `Up to date ->`, compiles nothing and leaves the executable as it was
     build-unchanged-wasm-is-up-to-date.maxtest              the same for a wasm32-wasi build
     build-an-edit-in-the-same-second-recompiles.maxtest     a source edited in the second its last compile started is compiled again, and the program runs the edit

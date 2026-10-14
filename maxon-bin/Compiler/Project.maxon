@@ -1168,6 +1168,25 @@ export type VarInfo
 		return self.cellEpoch.epochValue() if self.isCellBinding else self.boundValue
 	end 'moveStateValue'
 
+	// `movedFrom` and `boundValue` are written only through these setters, because each write owes the
+	// move ledger a note (`MoveLedger.noteDirty`). Gated by
+	// `tests/cli/owned-binding-move-state-is-written-through-the-ledger-setters.maxtest`.
+	export function setMovedFrom(moved bool, ledger MoveLedger)
+		self.movedFrom = moved
+		self.noteWritten(ledger)
+	end 'setMovedFrom'
+
+	export function setBoundValue(value ValueId, ledger MoveLedger)
+		self.boundValue = value
+		self.noteWritten(ledger)
+	end 'setBoundValue'
+
+	export function noteWritten(ledger MoveLedger)
+		if self.isEnrolled 'anOwnedBinding'
+			ledger.noteDirty(self.enrolledAt)
+		end 'anOwnedBinding'
+	end 'noteWritten'
+
 	// ⭐ **IS THIS BINDING A LIVE NAME OF `value`?** — the predicate every symbol-table scan over "who else
 	// is reading this value" filters on, and it lives on the binding because it is a fact ABOUT one.
 	//

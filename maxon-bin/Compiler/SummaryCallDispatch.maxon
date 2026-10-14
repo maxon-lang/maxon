@@ -21,6 +21,47 @@ function functionValueBodiesKey(calleeType ByteArray, readerFilePath FilePath) r
 	return "{String.from(calleeType)}{FunctionValueReaderSeparator}{readerFilePath}".toByteArray()
 end 'functionValueBodiesKey'
 
+// The block order of `ProvenanceTracer.walk`, `ProvenanceTracer.stageParamEdges` and
+// `CycleTrace.walk`, which must agree: the first walk of a body files its call sites in the order
+// it meets them, and the others replay that list by position, so a walker in another order reads
+// another site's resolution. Reverse postorder lets the fixpoint see a block's predecessors first
+// whatever order the blocks were created in; unreachable blocks are appended so their call sites
+// are still filed.
+module function callSiteWalkOrder(ir MaxonModule, func IrFunction) returns BlockPositionColumn
+	let blockCount = func.blockRefs.count()
+	let byId = ir.blockIndexById(func)
+	var edgeFrom = CsrColumn.create()
+	var edgeTo = CsrColumn.create()
+	var successors = BlockIdArray.create()
+
+	for position in 0 upto blockCount 'eachBlock'
+		let block = ir.blockAtPosition(func, position: position)
+		successors.clear()
+		collectMaxonBlockSuccessors(ir, block: block, into: successors)
+
+		for successorId in successors 'eachSuccessor'
+			edgeFrom.push(position)
+			edgeTo.push(try byId.get(successorId) otherwise panic("callSiteWalkOrder: block_{block.id} branches to block_{successorId}, which is not a block of '{String.from(func.name)}'"))
+		end 'eachSuccessor'
+	end 'eachBlock'
+
+	var order = StdDominatorTree.reversePostorder(buildCsr(edgeFrom, to: edgeTo, nodeCount: blockCount as CsrIndex), blockCount: blockCount)
+	var reached = BoolArray.create()
+	reached.growFilled(blockCount, value: false)
+
+	for position in order 'eachReached'
+		try reached.set(position, value: true) otherwise panic("callSiteWalkOrder: reached.set OOB at {position}")
+	end 'eachReached'
+
+	for position in 0 upto blockCount 'eachUnreached'
+		if not (try reached.get(position) otherwise panic("callSiteWalkOrder: reached.get OOB at {position}")) 'unreachable'
+			order.push(position)
+		end 'unreachable'
+	end 'eachUnreached'
+
+	return order
+end 'callSiteWalkOrder'
+
 module interface SummaryCallWalker
 	function callSiteCursor() returns CallSiteCursor
 	function tracksValue(value ValueId) returns bool

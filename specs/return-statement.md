@@ -522,3 +522,297 @@ end 'main'
 3: 47 188
 4: 47 188
 ```
+
+<!-- test: return-past-owners-after-an-older-owner-was-moved-between-two-exits -->
+Exits that hand back one of seven live owners share one chain of drops. An owner declared before all of them
+is moved between two of the exits, so the later exits must skip its drop while the earlier ones still owe it:
+the shared chain is rebuilt below the moved owner and the exits on either side agree with their own state.
+```maxon
+typealias Index = int(0 to 255)
+
+function build(i Index) returns String
+	return "owner {i} padded out long enough to heap allocate"
+end 'build'
+
+function pick(k Index) returns String
+	var kept = build(50)
+	kept.append("+")
+	let s0 = build(0)
+	let s1 = build(1)
+	let s2 = build(2)
+	let s3 = build(3)
+	let s4 = build(4)
+	let s5 = build(5)
+
+	if k == 0 'beforeTheMove'
+		return s2
+	end 'beforeTheMove'
+
+	let moved = kept
+
+	if k == 1 'afterTheMove'
+		return s3
+	end 'afterTheMove'
+
+	let s6 = build(6)
+
+	if k == 2 'again'
+		return s1
+	end 'again'
+
+	if k == 3 'last'
+		return moved
+	end 'last'
+
+	return "{s0.byteLength() + s4.byteLength() + s5.byteLength() + s6.byteLength()}"
+end 'pick'
+
+function main() returns ExitCode
+	for k in 0 to 5 'each'
+		print("{k}: {pick(k)}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0: owner 2 padded out long enough to heap allocate
+1: owner 3 padded out long enough to heap allocate
+2: owner 1 padded out long enough to heap allocate
+3: owner 50 padded out long enough to heap allocate+
+4: 188
+5: 188
+```
+
+<!-- test: return-past-owners-while-an-argument-is-handed-over-conditionally -->
+A call whose overloads disagree about taking an argument settles the hand-over after the call is parsed. The
+`otherwise return` of that very statement leaves with the argument conditionally given, with six other owners
+live and a returned binding below them: the argument is dropped on the error edge, where nothing took it, and
+stays with the shelf on the success edge.
+```maxon
+typealias Index = int(0 to 255)
+typealias Strings = Array with String
+
+enum Refusal implements Error
+	refused
+end 'Refusal'
+
+type Shelf
+	export var items as Strings
+	export var room as Index
+
+	static function create(room Index) returns Self
+		return Self{items: Strings.create(), room: room}
+	end 'create'
+end 'Shelf'
+
+function build(i Index) returns String
+	return "owner {i} padded out long enough to heap allocate"
+end 'build'
+
+function keep(shelf Shelf, item String, n Index) throws Refusal
+	if shelf.room == 0 or n > 200 'full'
+		throw Refusal.refused
+	end 'full'
+
+	shelf.room = shelf.room - 1
+	shelf.items.push(item)
+end 'keep'
+
+function keep(shelf Shelf, item String, n bool) throws Refusal
+	if (n and item.byteLength() > 1000) or shelf.room > 1000 'tooLong'
+		throw Refusal.refused
+	end 'tooLong'
+end 'keep'
+
+function run(k Index) returns String
+	var shelf = Shelf.create(k mod 2)
+	let s0 = build(0)
+	let s1 = build(1)
+	let s2 = build(2)
+	let s3 = build(3)
+	let s4 = build(4)
+	let s5 = build(5)
+	let s6 = build(6)
+
+	try keep(shelf, item: s5, n: 1) otherwise return s2
+
+	return "{s0.byteLength() + s1.byteLength() + s3.byteLength() + s4.byteLength() + s6.byteLength()} {shelf.items.count()}"
+end 'run'
+
+function main() returns ExitCode
+	for k in 0 to 3 'each'
+		print("{k}: {run(k)}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0: owner 2 padded out long enough to heap allocate
+1: 235 1
+2: owner 2 padded out long enough to heap allocate
+3: 235 1
+```
+
+<!-- test: return-past-owners-whose-rebound-value-changes-type-between-scopes -->
+Exits after a rebound owner share drop blocks that take the owner's current value as an argument. Once the scope
+holding a rebound `String` is gone, a rebound `Array` at the same position must get blocks of its own: a block
+that dropped the `String` would release the array without releasing the strings it holds.
+```maxon
+typealias Index = int(0 to 255)
+typealias Strings = Array with String
+
+function build(i Index) returns String
+	return "owner {i} padded out long enough to heap allocate"
+end 'build'
+
+function run(seed Index) returns Index
+	if seed > 100 'big'
+		var low = build(1)
+		let s0 = build(2)
+
+		if seed == 101 'first'
+			return 1
+		end 'first'
+
+		low = build(3)
+
+		if seed == 102 'second'
+			return 2
+		end 'second'
+
+		if low.byteLength() + s0.byteLength() > 1000 'never'
+			return 9
+		end 'never'
+	end 'big'
+
+	var words = Strings.create()
+	words.push(build(4))
+	let t0 = build(5)
+
+	if seed == 1 'third'
+		return 3
+	end 'third'
+
+	words = Strings.create()
+	words.push(build(6))
+
+	if seed == 2 'fourth'
+		return 4
+	end 'fourth'
+
+	if words.count() + t0.byteLength() > 1000 'unreachable'
+		return 9
+	end 'unreachable'
+
+	return 5
+end 'run'
+
+function main() returns ExitCode
+	for seed in 100 to 103 'big'
+		print("{seed}: {run(seed)}\n")
+	end 'big'
+
+	for seed in 0 to 3 'small'
+		print("{seed}: {run(seed)}\n")
+	end 'small'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+100: 5
+101: 1
+102: 2
+103: 5
+0: 5
+1: 3
+2: 4
+3: 5
+```
+
+<!-- test: return-past-owners-with-several-rebound-owners -->
+Several owners rebound between the exits each carry their current value into the shared drop blocks, and the
+owners beyond the ones the blocks carry are dropped through blocks keyed on their value.
+```maxon
+typealias Index = int(0 to 255)
+
+function build(i Index) returns String
+	return "owner {i} padded out long enough to heap allocate"
+end 'build'
+
+function run(seed Index) returns Index
+	var a = build(1)
+	var b = build(2)
+	var c = build(3)
+	var d = build(4)
+	var e = build(5)
+	var f = build(6)
+	var g = build(7)
+	var h = build(8)
+	let anchor = build(9)
+
+	if seed == 0 'e0'
+		return 10
+	end 'e0'
+
+	a = build(11)
+	b = build(12)
+	c = build(13)
+	d = build(14)
+	e = build(15)
+	f = build(16)
+	g = build(17)
+	h = build(18)
+
+	if seed == 1 'e1'
+		return 11
+	end 'e1'
+
+	a = build(21)
+	b = build(22)
+	c = build(23)
+	d = build(24)
+	e = build(25)
+	f = build(26)
+	g = build(27)
+	h = build(28)
+
+	if seed == 2 'e2'
+		return 12
+	end 'e2'
+
+	if a.byteLength() + b.byteLength() + c.byteLength() + d.byteLength() + e.byteLength() + f.byteLength() + g.byteLength() + h.byteLength() + anchor.byteLength() > 1000 'unreachable'
+		return 9
+	end 'unreachable'
+
+	return 3
+end 'run'
+
+function main() returns ExitCode
+	for seed in 0 to 3 'each'
+		print("{seed}: {run(seed)}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0: 10
+1: 11
+2: 12
+3: 3
+```

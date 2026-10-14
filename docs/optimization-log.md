@@ -1834,3 +1834,21 @@ by throwing calls inside one `try` block:
 | total compile per doubling, both ladders | ×3.9 rising to ×7.9 | ×2.0–2.2 |
 
 Runtime benchmarks are unchanged.
+
+### Result — 2026-10-14, a reassigned owner and a routed throw stay on the shared chain
+
+Two exit families still fell off the shared chains. An owner reassigned between exits invalidated every
+node from its rank up at each write, and a throw routed to a block-form `try`'s handler was barred from the
+flagged chain, so each built its own copies.
+
+A reassigned owner's current value now travels to its node as an edge argument (a lane), and the chain
+rechecks only the positions written since the last exit. A routed throw takes the flagged chain, with the
+fused error-union phi appended to the skip nodes' edges too.
+
+Measured on `tests/ladders/genownedexits.sh <N> reassign` and `<N> box` at N = 500:
+
+| | before | after |
+|---|---|---|
+| `reassign`, total compile | panicked after 618 s (`did not converge after 65536 splits`) | 3 s |
+| `box`, total compile | 52 s | 3.7 s |
+| `box`, executable | 5.76 MB | 662 KB |

@@ -1,0 +1,60 @@
+let CompilerSourceRoot = "maxon-bin"
+let CompilerSourceExtension = ".maxon"
+let HiddenEntryPrefix = "."
+let LineComment = "//"
+let LineFeed = "\n"
+let MovedFromWrite = ".movedFrom = "
+let BoundValueWrite = ".boundValue = "
+let SetterMovedFromWrite = "self.movedFrom = "
+let SetterBoundValueWrite = "self.boundValue = "
+
+test 'an owned binding is moved and rebound only through the setters that tell the move ledger'
+	var offenders = StringArray.create()
+	collectDirectWrites(compilerSourceRoot(), into: offenders)
+
+	var listed = ""
+
+	for offender in offenders 'eachOffender'
+		listed.append("\n  {offender}")
+	end 'eachOffender'
+
+	Expect.isEmpty(listed, message: "these lines write `movedFrom` or `boundValue` directly. The exit-drop chains cache their release decisions per owned binding and revalidate only the positions the move ledger was told about, so an unreported write is read stale: write through `VarInfo.setMovedFrom`, `VarInfo.setBoundValue` or `Scope.setValue`, which report it.{listed}")
+end 'an owned binding is moved and rebound only through the setters that tell the move ledger'
+
+function compilerSourceRoot() returns FilePath
+	return try FilePath.from(CompilerSourceRoot) otherwise panic("owned-binding-move-state: the gate could not run - '{CompilerSourceRoot}' is not a spellable path")
+end 'compilerSourceRoot'
+
+function collectDirectWrites(dir FilePath, into StringArray)
+	let entries = try Directory.list(dir) otherwise panic("owned-binding-move-state: the gate could not run - could not list {dir.toString()}. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`.")
+
+	for entry in entries 'eachEntry'
+		if entry.filename().startsWith(HiddenEntryPrefix) 'aBuildOutputDirectory'
+			continue
+		end 'aBuildOutputDirectory'
+
+		if Directory.isDirectory(entry) 'aSubdirectory'
+			collectDirectWrites(entry, into: into)
+		end 'aSubdirectory' else if entry.filename().endsWith(CompilerSourceExtension) 'aSource'
+			collectDirectWritesIn(entry, into: into)
+		end 'aSource'
+	end 'eachEntry'
+end 'collectDirectWrites'
+
+function collectDirectWritesIn(source FilePath, into StringArray)
+	let text = try File.readText(source) otherwise panic("owned-binding-move-state: the gate could not run - could not read {source.toString()}")
+	var number = 0
+
+	for line in text.split(LineFeed) 'eachLine'
+		number = number + 1
+		let trimmed = line.trim()
+
+		if trimmed.startsWith(LineComment) or trimmed.startsWith(SetterMovedFromWrite) or trimmed.startsWith(SetterBoundValueWrite) 'notAWrite'
+			continue
+		end 'notAWrite'
+
+		if trimmed.contains(MovedFromWrite) or trimmed.contains(BoundValueWrite) 'aDirectWrite'
+			into.push("{source.toString()}:{number}: {trimmed}")
+		end 'aDirectWrite'
+	end 'eachLine'
+end 'collectDirectWritesIn'

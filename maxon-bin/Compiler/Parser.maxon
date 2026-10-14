@@ -11723,9 +11723,10 @@ let SkipTestNodeLabel = b"exitskip"
 let ExitTerminalLabel = b"exitterminal"
 
 // An exit handing off an owner with at most this many releasable owners above it gets its own
-// nodes for those owners, joining the shared chain below the handed-off one. Deeper, it enters the
-// flagged chain, where each rank down to the handed-off one compares itself with the skip rank the
-// exit carries. The bound trades nodes per exit against a compare per rank at run time.
+// nodes for those owners, joining the shared chain below the handed-off one. Deeper, or on a chain
+// that carries lanes, it enters the flagged chain, where each rank down to the handed-off one
+// compares itself with the skip rank the exit carries. The bound trades nodes per exit against a
+// compare per rank at run time.
 let ExplicitExclusionDepth = 3 as ElementIndex
 
 enum ExitKind
@@ -11734,7 +11735,6 @@ enum ExitKind
 	throwBoxed
 	returnValue
 	returnVoid
-	routedThrow
 end 'ExitKind'
 
 union FunctionExit
@@ -11760,42 +11760,62 @@ end 'CarriedSlot'
 
 typealias CarriedSlotArray = Array with CarriedSlot
 
-type ExitShape
-	export let kind as ExitKind
-	export let tag as ValueTypeTag
-	export let nameId as TypeNameId
-	export let destination as BlockId
-	export let slots as CarriedSlotArray
-
-	static function create(kind ExitKind, tag ValueTypeTag, nameId TypeNameId) returns Self
-		return Self{kind: kind, tag: tag, nameId: nameId, destination: FunctionEntryBlockId, slots: CarriedSlotArray.create()}
-	end 'create'
-
-	static function routedThrow(destination BlockId, slots CarriedSlotArray) returns Self
-		return Self{kind: ExitKind.routedThrow, tag: ValueTypeTag.void, nameId: UnnamedTypeId, destination: destination, slots: slots}
-	end 'routedThrow'
-
-	function matches(other ExitShape) returns bool
-		if self.kind != other.kind or self.tag != other.tag or self.nameId != other.nameId or self.destination != other.destination or self.slots.count() != other.slots.count() 'differs'
-			return false
-		end 'differs'
-
-		for position in 0 upto self.slots.count() 'eachSlot'
-			let mine = try self.slots.get(position) otherwise panic("ExitShape.matches: slots.get OOB at {position} below the count both shapes agreed on")
-			let theirs = try other.slots.get(position) otherwise panic("ExitShape.matches: other.slots.get OOB at {position} below the count both shapes agreed on")
-
-			if not mine.matches(theirs) 'slotDiffers'
-				return false
-			end 'slotDiffers'
-		end 'eachSlot'
-
-		return true
-	end 'matches'
-
-	function carriesAWitness() returns bool
-		return self.tag == ValueTypeTag.interfaceRef
-	end 'carriesAWitness'
+union ExitShape
+	functionExit(kind ExitKind, tag ValueTypeTag, nameId TypeNameId)
+	routedThrow(destination BlockId, slots CarriedSlotArray)
 end 'ExitShape'
+
+function slotsMatch(first CarriedSlotArray, second CarriedSlotArray) returns bool
+	if first.count() != second.count() 'differentCounts'
+		return false
+	end 'differentCounts'
+
+	for position in 0 upto first.count() 'eachSlot'
+		let mine = try first.get(position) otherwise panic("slotsMatch: first.get OOB at {position} below the count both arrays agreed on")
+		let theirs = try second.get(position) otherwise panic("slotsMatch: second.get OOB at {position} below the count both arrays agreed on")
+
+		if not mine.matches(theirs) 'slotDiffers'
+			return false
+		end 'slotDiffers'
+	end 'eachSlot'
+
+	return true
+end 'slotsMatch'
+
+function functionShapeMatches(shape ExitShape, kind ExitKind, tag ValueTypeTag, nameId TypeNameId) returns bool
+	match shape 'which'
+		functionExit(otherKind, otherTag, otherNameId) then return kind == otherKind and tag == otherTag and nameId == otherNameId
+		routedThrow then return false
+	end 'which'
+end 'functionShapeMatches'
+
+function routedShapeMatches(shape ExitShape, destination BlockId, slots CarriedSlotArray) returns bool
+	match shape 'which'
+		functionExit then return false
+		routedThrow(otherDestination, otherSlots) then return destination == otherDestination and slotsMatch(slots, second: otherSlots)
+	end 'which'
+end 'routedShapeMatches'
+
+function exitShapesMatch(first ExitShape, second ExitShape) returns bool
+	match first 'which'
+		functionExit(kind, tag, nameId) then return functionShapeMatches(second, kind: kind, tag: tag, nameId: nameId)
+		routedThrow(destination, slots) then return routedShapeMatches(second, destination: destination, slots: slots)
+	end 'which'
+end 'exitShapesMatch'
+
+function exitShapeCarriesAWitness(shape ExitShape) returns bool
+	match shape 'which'
+		functionExit(_, tag, _) then return tag == ValueTypeTag.interfaceRef
+		routedThrow then return false
+	end 'which'
+end 'exitShapeCarriesAWitness'
+
+function exitShapeRoutesTo(shape ExitShape, destination BlockId) returns bool
+	match shape 'which'
+		functionExit then return false
+		routedThrow(held, _) then return held == destination
+	end 'which'
+end 'exitShapeRoutesTo'
 
 union HandedOff
 	nothing
@@ -11804,9 +11824,20 @@ end 'HandedOff'
 
 union ExitRoute
 	direct
-	chained(first ElementIndex, entry BlockId)
-	flagged(first ElementIndex, entry BlockId, skip ElementIndex)
+	chained(first ElementIndex, entry BlockId, lanes ValueIdArray)
+	flagged(first ElementIndex, entry BlockId, lanes ValueIdArray, skip ElementIndex)
 end 'ExitRoute'
+
+enum ReleaseDisposition
+	release
+	skip
+	unmatchedObligation
+end 'ReleaseDisposition'
+
+enum ChainNodeRole
+	drop
+	skipTest
+end 'ChainNodeRole'
 
 enum ReleaseShape
 	plain
@@ -11816,19 +11847,36 @@ end 'ReleaseShape'
 
 typealias OwnedBindingPositionArray = Array with ElementIndex
 
+let LaneNodeValueBucket = 0 as ValueId
+
+// Every node at or above a lane carries one phi per lane below it, so lanes cost nodes × lanes; capping
+// them keeps that linear, and an owner rebound past the cap is baked into its node instead.
+let MaxReleaseLanes = 6 as ElementIndex
+
 // The hand-off set is part of the key: `emitDecref` makes a drop conditional on the path's
 // `conditionalGives`, so two exits under different hand-offs owe different drops of one value.
 type DropNodeKey
 	export let released as ValueId
 	export let releaseShape as ReleaseShape
 	export let handoffs as ArgumentHandoffArray
+	export let role as ChainNodeRole
+	export let lanes as CarriedSlotArray
+	export let ownLane as bool
 
-	static function create(released ValueId, releaseShape ReleaseShape, handoffs ArgumentHandoffArray) returns Self
-		return Self{released: released, releaseShape: releaseShape, handoffs: handoffs}
-	end 'create'
+	static function bakedValue(released ValueId, releaseShape ReleaseShape, handoffs ArgumentHandoffArray, role ChainNodeRole, lanes CarriedSlotArray) returns Self
+		return Self{released: released, releaseShape: releaseShape, handoffs: handoffs, role: role, lanes: lanes, ownLane: false}
+	end 'bakedValue'
+
+	static function laneValue(role ChainNodeRole, lanes CarriedSlotArray) returns Self
+		return Self{released: LaneNodeValueBucket, releaseShape: ReleaseShape.plain, handoffs: noHandoffs, role: role, lanes: lanes, ownLane: true}
+	end 'laneValue'
 
 	function matches(other DropNodeKey) returns bool
-		return self.released == other.released and self.releaseShape == other.releaseShape and not handoffsDiffer(self.handoffs, b: other.handoffs)
+		if self.ownLane != other.ownLane or self.role != other.role or self.releaseShape != other.releaseShape or not slotsMatch(self.lanes, second: other.lanes) 'differs'
+			return false
+		end 'differs'
+
+		return (self.ownLane or self.released == other.released) and not handoffsDiffer(self.handoffs, b: other.handoffs)
 	end 'matches'
 end 'DropNodeKey'
 
@@ -11836,14 +11884,15 @@ type DropNode
 	export let heldKey as DropNodeKey
 	export let carriedShape as ExitShape
 	export let onward as BlockId
+	export let alsoOnward as BlockId
 	export let entry as BlockId
 
-	static function create(key DropNodeKey, exitShape ExitShape, successor BlockId, blockId BlockId) returns Self
-		return Self{heldKey: key, carriedShape: exitShape, onward: successor, entry: blockId}
+	static function create(key DropNodeKey, exitShape ExitShape, successor BlockId, alternate BlockId, blockId BlockId) returns Self
+		return Self{heldKey: key, carriedShape: exitShape, onward: successor, alsoOnward: alternate, entry: blockId}
 	end 'create'
 
-	function answers(key DropNodeKey, exitShape ExitShape, successor BlockId) returns bool
-		return self.onward == successor and self.heldKey.matches(key) and self.carriedShape.matches(exitShape)
+	function answers(key DropNodeKey, exitShape ExitShape, successor BlockId, alternate BlockId) returns bool
+		return self.onward == successor and self.alsoOnward == alternate and self.heldKey.matches(key) and exitShapesMatch(self.carriedShape, second: exitShape)
 	end 'answers'
 end 'DropNode'
 
@@ -11862,13 +11911,21 @@ end 'ExitTerminal'
 
 typealias ExitTerminalArray = Array with ExitTerminal
 
+typealias ValueIdArrayColumn = Array with ValueIdArray
+
 type RoutedNode
 	export var block as IrBlock
-	export var args as ValueIdArray
+	export var outgoing as ValueIdArrayColumn
 
-	static function create(block IrBlock, args ValueIdArray) returns Self
-		return Self{block: block, args: args}
+	static function create(block IrBlock, outgoing ValueIdArrayColumn) returns Self
+		return Self{block: block, outgoing: outgoing}
 	end 'create'
+
+	function attachArgument(phi ValueId)
+		for edge in self.outgoing 'eachOutgoingEdge'
+			edge.push(phi)
+		end 'eachOutgoingEdge'
+	end 'attachArgument'
 end 'RoutedNode'
 
 typealias RoutedNodeArray = Array with RoutedNode
@@ -11886,37 +11943,53 @@ end 'UnmatchedObligation'
 
 typealias UnmatchedObligationArray = Array with UnmatchedObligation
 typealias ReleasableRankColumn = Array with ElementIndex
+typealias ReleaseDispositionColumn = Array with ReleaseDisposition
 
 // Releasable owners above `floor` are ranked from 1 in binding order. The entry at rank r drops
 // that owner and every lower rank, then reaches the base: the shape's exit terminal, or the `try`'s
 // error block. An exit drops its innermost owner inline and enters the rank below it, so a
 // function's drops, and the uses its register allocator splits, grow linearly in its exits rather
 // than as their square. Gated by `tests/cli/error-path-drops-grow-linearly-with-*.maxtest`.
+//
+// A lane is an owner rebound after its rank's node was built. That node drops a block-arg phi, and
+// every exit passes the owner's current value after the carried ones, so the node stays shared
+// across the owner's values.
 type ReleaseChain
 	export let shape as ExitShape
 	export let context as BlockId
 	export let floor as ElementIndex
 	var keyedByHandoffs as bool
-	export var entries as BlockIdArray
-	export var skipEntries as BlockIdArray
-	export var unmatched as UnmatchedObligationArray
+	var entries as BlockIdArray
+	var skipEntries as BlockIdArray
+	var unmatched as UnmatchedObligationArray
 	var scanned as ElementIndex
+	var dispositions as ReleaseDispositionColumn
+	var scannedBindings as VarInfoArray
+	var scannedValues as ValueIdArray
 	var releasable as OwnedBindingPositionArray
 	var releasableThrough as ReleasableRankColumn
+	var laneRanks as ReleasableRankColumn
+	var laneBindings as VarInfoArray
 
 	static function create(shape ExitShape, context BlockId, floor ElementIndex) returns Self
-		return Self{shape: shape, context: context, floor: floor, keyedByHandoffs: false, entries: BlockIdArray.create(), skipEntries: BlockIdArray.create(), unmatched: UnmatchedObligationArray.create(), scanned: floor, releasable: OwnedBindingPositionArray.create(), releasableThrough: ReleasableRankColumn.create()}
+		return Self{shape: shape, context: context, floor: floor, keyedByHandoffs: false, entries: BlockIdArray.create(), skipEntries: BlockIdArray.create(), unmatched: UnmatchedObligationArray.create(), scanned: floor, dispositions: ReleaseDispositionColumn.create(), scannedBindings: VarInfoArray.create(), scannedValues: ValueIdArray.create(), releasable: OwnedBindingPositionArray.create(), releasableThrough: ReleasableRankColumn.create(), laneRanks: ReleasableRankColumn.create(), laneBindings: VarInfoArray.create()}
 	end 'create'
 
 	function matches(wanted ExitShape, wantedContext BlockId, wantedFloor ElementIndex) returns bool
-		return self.floor == wantedFloor and self.context == wantedContext and self.shape.matches(wanted)
+		return self.floor == wantedFloor and self.context == wantedContext and exitShapesMatch(self.shape, second: wanted)
 	end 'matches'
 
 	function scannedHeight() returns ElementIndex
 		return self.scanned
 	end 'scannedHeight'
 
+	// A lane node's key carries no hand-offs (`DropNodeKey.laneValue`), so under `conditionalGives`
+	// every owner's value is baked into its node again.
 	function keyUnderHandoffs(handoffsNow bool)
+		if handoffsNow 'noLanesUnderHandoffs'
+			self.laneBindings = VarInfoArray.create()
+		end 'noLanesUnderHandoffs'
+
 		if handoffsNow or self.keyedByHandoffs 'nodesKeyedByHandoffs'
 			self.invalidateFrom(self.floor)
 		end 'nodesKeyedByHandoffs'
@@ -11936,26 +12009,137 @@ type ReleaseChain
 		return try self.releasableThrough.get(position - self.floor) otherwise panic("ReleaseChain.rankOfPosition: position {position} is outside the [{self.floor}, {self.scanned}) the chain scanned")
 	end 'rankOfPosition'
 
+	function entryCount() returns ElementIndex
+		return self.entries.count()
+	end 'entryCount'
+
 	function entryAt(rank ElementIndex) returns BlockId
 		return try self.entries.get(rank - 1) otherwise panic("ReleaseChain.entryAt: rank {rank} has no entry among the {self.entries.count()} built")
 	end 'entryAt'
+
+	function noteEntry(entry BlockId)
+		self.entries.push(entry)
+	end 'noteEntry'
+
+	function skipEntryCount() returns ElementIndex
+		return self.skipEntries.count()
+	end 'skipEntryCount'
 
 	function skipEntryAt(rank ElementIndex) returns BlockId
 		return try self.skipEntries.get(rank - 1) otherwise panic("ReleaseChain.skipEntryAt: rank {rank} has no entry among the {self.skipEntries.count()} built")
 	end 'skipEntryAt'
 
-	function noteScanned(position ElementIndex, holdsARelease bool)
+	function noteSkipEntry(entry BlockId)
+		self.skipEntries.push(entry)
+	end 'noteSkipEntry'
+
+	function unmatchedCount() returns ElementIndex
+		return self.unmatched.count()
+	end 'unmatchedCount'
+
+	function unmatchedAt(index ElementIndex) returns UnmatchedObligation
+		return try self.unmatched.get(index) otherwise panic("ReleaseChain.unmatchedAt: unmatched.get OOB at {index} below the count {self.unmatched.count()}")
+	end 'unmatchedAt'
+
+	function dispositionAt(position ElementIndex) returns ReleaseDisposition
+		return try self.dispositions.get(position - self.floor) otherwise panic("ReleaseChain.dispositionAt: position {position} is outside the [{self.floor}, {self.scanned}) the chain scanned")
+	end 'dispositionAt'
+
+	function holdsBindingAt(position ElementIndex, binding VarInfo) returns bool
+		let scannedBinding = try self.scannedBindings.get(position - self.floor) otherwise panic("ReleaseChain.holdsBindingAt: position {position} is outside the [{self.floor}, {self.scanned}) the chain scanned")
+		return scannedBinding is binding
+	end 'holdsBindingAt'
+
+	function valueAt(position ElementIndex) returns ValueId
+		return try self.scannedValues.get(position - self.floor) otherwise panic("ReleaseChain.valueAt: position {position} is outside the [{self.floor}, {self.scanned}) the chain scanned")
+	end 'valueAt'
+
+	function noteValueAt(position ElementIndex, value ValueId)
+		try self.scannedValues.set(position - self.floor, value: value) otherwise panic("ReleaseChain.noteValueAt: position {position} is outside the [{self.floor}, {self.scanned}) the chain scanned")
+	end 'noteValueAt'
+
+	function laneCount() returns ElementIndex
+		return self.laneRanks.count()
+	end 'laneCount'
+
+	function laneRankAt(index ElementIndex) returns ElementIndex
+		return try self.laneRanks.get(index) otherwise panic("ReleaseChain.laneRankAt: laneRanks.get OOB at {index} below the count {self.laneRanks.count()}")
+	end 'laneRankAt'
+
+	function isLaneRank(rank ElementIndex) returns bool
+		for lane in self.laneRanks 'eachLane'
+			if lane == rank 'thisLane'
+				return true
+			end 'thisLane'
+		end 'eachLane'
+
+		return false
+	end 'isLaneRank'
+
+	function laneBindingCount() returns ElementIndex
+		return self.laneBindings.count()
+	end 'laneBindingCount'
+
+	function laneBindingAt(index ElementIndex) returns VarInfo
+		return try self.laneBindings.get(index) otherwise panic("ReleaseChain.laneBindingAt: laneBindings.get OOB at {index} below the count {self.laneBindings.count()}")
+	end 'laneBindingAt'
+
+	function hasRoomForLane() returns bool
+		return self.laneBindings.count() < MaxReleaseLanes
+	end 'hasRoomForLane'
+
+	function markLane(binding VarInfo)
+		self.laneBindings.push(binding)
+	end 'markLane'
+
+	function unmarkLane(binding VarInfo)
+		var kept = VarInfoArray.create()
+
+		for held in self.laneBindings 'eachLaneBinding'
+			if not (held is binding) 'another'
+				kept.push(held)
+			end 'another'
+		end 'eachLaneBinding'
+
+		self.laneBindings = kept
+	end 'unmarkLane'
+
+	function carriesLaneBinding(binding VarInfo) returns bool
+		for held in self.laneBindings 'eachLaneBinding'
+			if held is binding 'thisOne'
+				return true
+			end 'thisOne'
+		end 'eachLaneBinding'
+
+		return false
+	end 'carriesLaneBinding'
+
+	function noteScanned(position ElementIndex, binding VarInfo, disposition ReleaseDisposition)
 		if position != self.scanned 'outOfOrder'
 			panic("ReleaseChain.noteScanned: position {position} is not the next unscanned one, {self.scanned}")
 		end 'outOfOrder'
 
-		if holdsARelease 'aRelease'
-			self.releasable.push(position)
-		end 'aRelease'
+		self.dispositions.push(disposition)
+		self.scannedBindings.push(binding)
+		self.scannedValues.push(binding.boundValue)
+
+		match disposition 'which'
+			release then self.noteRelease(position, binding: binding)
+			unmatchedObligation then self.unmatched.push(UnmatchedObligation.create(position, name: binding.name, flag: binding.boundValue))
+			skip then break
+		end 'which'
 
 		self.releasableThrough.push(self.releasable.count())
 		self.scanned = self.scanned + 1
 	end 'noteScanned'
+
+	function noteRelease(position ElementIndex, binding VarInfo)
+		self.releasable.push(position)
+
+		if self.carriesLaneBinding(binding) 'aLane'
+			self.laneRanks.push(self.releasable.count())
+		end 'aLane'
+	end 'noteRelease'
 
 	function invalidateFrom(position ElementIndex)
 		if position >= self.scanned 'nothingScannedThere'
@@ -11970,8 +12154,12 @@ type ReleaseChain
 			keptRanks = try self.releasableThrough.get(keptPositions - 1) otherwise panic("ReleaseChain.invalidateFrom: releasableThrough.get OOB at {keptPositions - 1} below the count scanned")
 		end 'somethingBelow'
 
+		self.dispositions.truncate(keptPositions)
+		self.scannedBindings.truncate(keptPositions)
+		self.scannedValues.truncate(keptPositions)
 		self.releasableThrough.truncate(keptPositions)
 		self.releasable.truncate(keptRanks)
+		self.laneRanks = ranksUpTo(self.laneRanks, limit: keptRanks)
 
 		if self.entries.count() > keptRanks 'entriesAbove'
 			self.entries.truncate(keptRanks)
@@ -11993,6 +12181,18 @@ type ReleaseChain
 		self.scanned = kept
 	end 'invalidateFrom'
 end 'ReleaseChain'
+
+function ranksUpTo(ranks ReleasableRankColumn, limit ElementIndex) returns ReleasableRankColumn
+	var kept = ReleasableRankColumn.create()
+
+	for rank in ranks 'eachRank'
+		if rank <= limit 'withinTheLimit'
+			kept.push(rank)
+		end 'withinTheLimit'
+	end 'eachRank'
+
+	return kept
+end 'ranksUpTo'
 
 typealias ReleaseChainArray = Array with ReleaseChain
 
@@ -12028,9 +12228,22 @@ type DropCascade
 		self.chains = kept
 	end 'discardContext'
 
+	function discardRoutedTo(destination BlockId)
+		var kept = ReleaseChainArray.create()
+
+		for chain in self.chains 'eachChain'
+			if not exitShapeRoutesTo(chain.shape, destination: destination) 'anotherHandler'
+				kept.push(chain)
+			end 'anotherHandler'
+		end 'eachChain'
+
+		self.chains = kept
+		_ = self.routed.remove(destination)
+	end 'discardRoutedTo'
+
 	function terminalFor(shape ExitShape) returns BlockId throws AbsentError
 		for terminal in self.terminals 'eachTerminal'
-			if terminal.shape.matches(shape) 'thisShape'
+			if exitShapesMatch(terminal.shape, second: shape) 'thisShape'
 				return terminal.blockId
 			end 'thisShape'
 		end 'eachTerminal'
@@ -12038,12 +12251,12 @@ type DropCascade
 		throw AbsentError.absent
 	end 'terminalFor'
 
-	function nodeFor(key DropNodeKey, exitShape ExitShape, context BlockId, successor BlockId) returns BlockId throws AbsentError
+	function nodeFor(key DropNodeKey, exitShape ExitShape, context BlockId, successor BlockId, alternate BlockId) returns BlockId throws AbsentError
 		let inContext = try self.nodes.get(context) otherwise throw AbsentError.absent
 		let candidates = try inContext.get(key.released) otherwise throw AbsentError.absent
 
 		for candidate in candidates 'eachCandidate'
-			if candidate.answers(key, exitShape: exitShape, successor: successor) 'thisNode'
+			if candidate.answers(key, exitShape: exitShape, successor: successor, alternate: alternate) 'thisNode'
 				return candidate.entry
 			end 'thisNode'
 		end 'eachCandidate'
@@ -12055,10 +12268,10 @@ type DropCascade
 		self.terminals.push(ExitTerminal.create(shape, blockId: blockId))
 	end 'noteTerminal'
 
-	function noteNode(key DropNodeKey, exitShape ExitShape, context BlockId, successor BlockId, blockId BlockId)
+	function noteNode(key DropNodeKey, exitShape ExitShape, context BlockId, successor BlockId, alternate BlockId, blockId BlockId)
 		var inContext = try self.nodes.get(context) otherwise DropNodesByValue.create()
 		var candidates = try inContext.get(key.released) otherwise DropNodeArray.create()
-		candidates.push(DropNode.create(key, exitShape: exitShape, successor: successor, blockId: blockId))
+		candidates.push(DropNode.create(key, exitShape: exitShape, successor: successor, alternate: alternate, blockId: blockId))
 		inContext.upsert(key.released, value: candidates)
 		self.nodes.upsert(context, value: inContext)
 	end 'noteNode'
@@ -12117,11 +12330,23 @@ function handedOffHolds(handedOff HandedOff, candidate ValueId) returns bool
 	return held == candidate
 end 'handedOffHolds'
 
-enum ReleaseDisposition
-	release
-	skip
-	unmatchedObligation
-end 'ReleaseDisposition'
+function chainEdgeArgs(carried ValueIdArray, lanes ValueIdArray, count ElementIndex) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.append(carried)
+
+	for index in 0 upto count 'eachLane'
+		args.push(try lanes.get(index) otherwise panic("chainEdgeArgs: lanes.get OOB at {index} below the {lanes.count()} a block minted"))
+	end 'eachLane'
+
+	return args
+end 'chainEdgeArgs'
+
+function functionExitKind(shape ExitShape) returns ExitKind throws AbsentError
+	match shape 'which'
+		functionExit(kind, _, _) then return kind
+		routedThrow then throw AbsentError.absent
+	end 'which'
+end 'functionExitKind'
 
 // ⭐ **DROP-SKIP FOR A MOVED-FROM BINDING.** Its owned value was transferred to another
 // binding by a `let u = t` / `s = t`, which now owns and drops it — decref-ing it here too
@@ -12147,17 +12372,6 @@ function releaseDispositionOf(binding VarInfo) returns ReleaseDisposition
 	return ReleaseDisposition.release
 end 'releaseDispositionOf'
 
-function appendedArg(args ValueIdArray, extra ValueId) returns ValueIdArray
-	var extended = ValueIdArray.create()
-
-	for arg in args 'eachArg'
-		extended.push(arg)
-	end 'eachArg'
-
-	extended.push(extra)
-	return extended
-end 'appendedArg'
-
 function exitCarriedValue(carried ValueIdArray) returns ValueId
 	return try carried.get(0) otherwise panic("exitCarriedValue: an exit that carries a value was handed an empty payload")
 end 'exitCarriedValue'
@@ -12169,7 +12383,6 @@ function exitTerminatorOp(kind ExitKind, carried ValueIdArray) returns MaxonOp
 		throwBoxed then return MaxonOp.throwError(exitCarriedValue(carried), errorIsBoxed: true)
 		returnValue then return MaxonOp.ret(exitCarriedValue(carried))
 		returnVoid then return MaxonOp.retVoid
-		routedThrow then panic("exitTerminatorOp: a routed throw ends in a branch to its handler, which has no terminator op")
 	end 'kind'
 end 'exitTerminatorOp'
 
@@ -38455,7 +38668,7 @@ export type Parser
 		awaiting.push(site)
 		lists.push(awaiting)
 		binding.awaitingMoveReads = (lists.count() - 1) as ElementIndex
-		self.noteMoveStateWritten(binding)
+		binding.noteWritten(self.bodyState.moveLedger)
 	end 'awaitReadAfterDoor'
 
 	// COPY-ON-WRITE off `ParserAnchors.moveSiteLists`.
@@ -38475,7 +38688,7 @@ export type Parser
 		end 'eachPending'
 
 		binding.awaitingMoveReads = NoMoveSiteList
-		self.noteMoveStateWritten(binding)
+		binding.noteWritten(self.bodyState.moveLedger)
 	end 'noteReadAfterDoors'
 
 	// ⭐⭐ **`let (x, y) = <a tuple>` — DESTRUCTURING, DESUGARED TO A HIDDEN BINDING PLUS ONE FIELD LOAD
@@ -39818,7 +40031,7 @@ export type Parser
 
 		if not self.cellOwnsItsOccupant(binding.varType, crossesByReference: crossesByReference) 'scalarCell'
 			stored.cellEpoch = CellEpoch.current(self.mintCellEpoch(CellOccupantExclusivity.coOwned))
-			self.noteMoveStateWritten(stored)
+			stored.noteWritten(self.bodyState.moveLedger)
 			self.emitCellStore(binding, value: value, range: range)
 			return
 		end 'scalarCell'
@@ -39841,9 +40054,8 @@ export type Parser
 		self.emitCellStore(binding, value: owned, range: range)
 		self.noteWritableValue(func, value: owned)
 		stored.cellEpoch = CellEpoch.current(self.mintCellEpoch(self.storedOccupantExclusivity(owned)))
-		self.noteMoveStateWritten(stored)
-		stored.movedFrom = false
-		self.noteMoveStateWritten(stored)
+		stored.noteWritten(self.bodyState.moveLedger)
+		stored.setMovedFrom(false, ledger: self.bodyState.moveLedger)
 
 		// A by-reference PARAMETER's cell is the caller's mutable name, which outlives this frame: what is
 		// written here is bound to it (`StorageProvenance`'s parameter-to-name summary).
@@ -39885,8 +40097,7 @@ export type Parser
 		// this binding instead of the source's.
 		if oldValue == value and not binding.movedFrom 'selfAssign'
 			self.recordDebugRebindByName(nameTok.value, value: value)
-			self.bodyState.scope.setValue(nameTok.value, value: value)
-			self.noteMoveStateWritten(binding)
+			self.bodyState.scope.setValue(nameTok.value, value: value, ledger: self.bodyState.moveLedger)
 			return
 		end 'selfAssign'
 
@@ -39932,15 +40143,13 @@ export type Parser
 
 			let alreadyInSet = self.bindingIsOwned(binding) or binding.movedFrom
 			self.recordDebugRebindByName(nameTok.value, value: value)
-			self.bodyState.scope.setValue(nameTok.value, value: value)
-			self.noteMoveStateWritten(binding)
+			self.bodyState.scope.setValue(nameTok.value, value: value, ledger: self.bodyState.moveLedger)
 
 			if newIsPromise 'revivePromise'
 				// The binding owns the fresh thread — revive it for reads and its scope-exit drop, and enrol
 				// once (a re-armed promise is already in the set as a moved ghost; a non-promise binding first
 				// taking a promise — `var x = 5; x = async f()` — joins now).
-				binding.movedFrom = false
-				self.noteMoveStateWritten(binding)
+				binding.setMovedFrom(false, ledger: self.bodyState.moveLedger)
 				binding.partiallyMoved = false
 
 				if not alreadyInSet 'enrolPromise'
@@ -39957,8 +40166,7 @@ export type Parser
 				// this one is that `setValue` has ALREADY re-pointed `boundValue` at the scalar: the binding
 				// being asked about is no longer a promise. (A consume record an earlier `await` made is keyed
 				// on the OLD value and stays there — correctly, since an alias may still name that thread.)
-				binding.movedFrom = true
-				self.noteMoveStateWritten(binding)
+				binding.setMovedFrom(true, ledger: self.bodyState.moveLedger)
 				binding.partiallyMoved = false
 			end 'becameScalar'
 
@@ -40037,8 +40245,7 @@ export type Parser
 		end 'dropOld'
 
 		self.recordDebugRebindByName(nameTok.value, value: newValue)
-		self.bodyState.scope.setValue(nameTok.value, value: newValue)
-		self.noteMoveStateWritten(binding)
+		self.bodyState.scope.setValue(nameTok.value, value: newValue, ledger: self.bodyState.moveLedger)
 		self.noteWritableValue(func, value: newValue)
 
 		// A WRITE REVIVES the binding: it owns `newValue` now, so a later read of it is legal again. Both
@@ -40047,8 +40254,7 @@ export type Parser
 		// binding-match is fully live once overwritten. Clearing only `movedFrom` left `requireBindingLive`
 		// (which rejects on EITHER flag) refusing every use of a reassigned `var` union — an over-rejection
 		// of a valid program.
-		binding.movedFrom = false
-		self.noteMoveStateWritten(binding)
+		binding.setMovedFrom(false, ledger: self.bodyState.moveLedger)
 		binding.partiallyMoved = false
 
 		if newIsOwned 'trackNew'
@@ -42882,7 +43088,7 @@ export type Parser
 		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.errorFlagEncode(flag, errorValue: errValue, errorIsBoxed: errorIsBoxed), range: SourceRange.ofToken(anchor))
 		let fused = self.routedEdgeFusedValue(ctx, member: member, flag: flag)
 
-		let errArgs = self.tryBlockErrorEdgeArgs(ctx, flag: flag)
+		var errArgs = self.tryBlockErrorEdgeArgs(ctx, flag: flag)
 		var inFlight = HandedOff.nothing
 
 		if self.valueIsOwnedHeap(errValue) 'boxInFlight'
@@ -44834,8 +45040,7 @@ export type Parser
 				throw errorMatchInsideALoopRefusal(owned.name, at: SourceRange.ofToken(matchTok))
 			end 'insideALoop'
 
-			owned.movedFrom = true
-			self.noteMoveStateWritten(owned)
+			owned.setMovedFrom(true, ledger: self.bodyState.moveLedger)
 			return
 		end 'eachOwned'
 	end 'consumeErrorMatchObligation'
@@ -45146,6 +45351,10 @@ export type Parser
 		// has recorded its own args.**
 		let errorUnion = self.synthesizeErrorUnion(ctx, errBlock: self.bodyState.currentBlock)
 
+		// After `synthesizeErrorUnion`: it appends the fused phi to the edges of the routed nodes this
+		// discards, and a node it misses branches to the error block one argument short.
+		self.discardRoutedReleaseChains(ctx.errBlockId)
+
 		let handler = try self.parseTryBlockHandler(func, shape: shape, flag: self.caughtFlagOf(ctx), errorType: self.tryErrorEnumType(ctx.throwsClause()), errorUnion: errorUnion)
 		var errEnd = self.bodyState.currentBlock
 		let handlerMoveMark = self.captureMoveMark()
@@ -45224,7 +45433,7 @@ export type Parser
 
 		// Shared chain nodes forward the error block's args by position, so each takes the fused phi too.
 		for node in self.dropCascade().routedNodesTo(ctx.errBlockId) 'eachSharedDropNode'
-			node.args.push(self.mintPhi(node.block, tag: ValueTypeTag.integer, nameId: UnnamedTypeId))
+			node.attachArgument(self.mintPhi(node.block, tag: ValueTypeTag.integer, nameId: UnnamedTypeId))
 		end 'eachSharedDropNode'
 
 		var ordinals = ValueIdArray.create()
@@ -45934,7 +46143,7 @@ export type Parser
 		let fused = self.routedEdgeFusedValue(ctx, member: member, flag: flag)
 		let isErr = self.emitErrorFlagTest(flag, op: MaxonCmpOp.ne, anchor: ctx.tryTok)
 
-		let errArgs = self.tryBlockErrorEdgeArgs(ctx, flag: flag)
+		var errArgs = self.tryBlockErrorEdgeArgs(ctx, flag: flag)
 
 		// This op's own result is owned only on the ok edge, so it comes off the pending list while the
 		// error edge is built. A managed result arrives already enrolled (`enrolOwnedCallTemp`), and the
@@ -46468,7 +46677,7 @@ export type Parser
 
 	function emitScopeReleasesInto(into IrBlock, releases OwnedBindingPositionArray, anchor Token)
 		for position in releases 'eachRelease'
-			self.emitReleaseInto(into, position: position, anchor: anchor)
+			self.emitReleaseInto(into, position: position, value: self.ownedBindingAt(position).boundValue, anchor: anchor)
 		end 'eachRelease'
 	end 'emitScopeReleasesInto'
 
@@ -46478,11 +46687,10 @@ export type Parser
 
 		while i > floor 'eachOwned'
 			i = i - 1
-			let binding = self.ownedBindingAt(i)
 
-			match releaseDispositionOf(binding) 'disposition'
+			match releaseDispositionOf(self.ownedBindingAt(i)) 'disposition'
 				release then releases.push(i)
-				unmatchedObligation then self.holdErrorMatchRefusal(binding.name, reason: ErrorMatchLeavesUnmatchedReason, anchor: anchor)
+				unmatchedObligation then self.holdErrorMatchRefusal(self.ownedBindingAt(i).name, reason: ErrorMatchLeavesUnmatchedReason, anchor: anchor)
 				skip then break
 			end 'disposition'
 		end 'eachOwned'
@@ -46504,9 +46712,8 @@ export type Parser
 		return ReleaseShape.cellWithOccupant if self.cellOwnsItsOccupant(binding.varType, crossesByReference: binding.cellCrossesByReference) else ReleaseShape.cellBox
 	end 'releaseShapeAt'
 
-	function emitScopeRelease(position ElementIndex, anchor Token)
+	function emitScopeRelease(position ElementIndex, value ValueId, anchor Token)
 		let range = SourceRange.ofToken(anchor)
-		let value = self.ownedBindingAt(position).boundValue
 		let shape = self.releaseShapeAt(position)
 
 		if shape == ReleaseShape.plain 'aRecord'
@@ -46540,7 +46747,8 @@ export type Parser
 			route = self.exitRouteOf(self.releaseChain(shape, floor: WholeFunctionScopeFloor), handedOff: handedOff, anchor: anchor)
 		end 'mayOweBindings'
 
-		self.emitExitRoute(into, route: route, shape: shape, carried: self.exitPayloadOf(exit, shape: shape), anchor: anchor)
+		var carried = self.exitPayloadOf(exit, shape: shape)
+		self.emitExitRoute(into, route: route, shape: shape, carried: carried, anchor: anchor)
 	end 'emitFunctionExit'
 
 	// Each exit keeps its innermost release inline, under its own statement's span, so every exit
@@ -46549,46 +46757,67 @@ export type Parser
 	function emitExitRoute(into IrBlock, route ExitRoute, shape ExitShape, carried ValueIdArray, anchor Token)
 		match route 'route'
 			direct then self.emitExitTail(into, shape: shape, carried: carried, range: SourceRange.ofToken(anchor))
-			chained(first, entry) then self.emitReleaseAndJump(into, first: first, entry: entry, carried: carried, shape: shape, anchor: anchor)
-			flagged(first, entry, skip) then self.emitSkippingJump(into, first: first, entry: entry, skip: skip, carried: carried, shape: shape, anchor: anchor)
+			chained(first, entry, lanes) then self.emitReleaseAndJump(into, first: first, entry: entry, lanes: lanes, carried: carried, shape: shape, anchor: anchor)
+			flagged(first, entry, lanes, skip) then self.emitSkippingJump(into, first: first, entry: entry, lanes: lanes, skip: skip, carried: carried, shape: shape, anchor: anchor)
 		end 'route'
 	end 'emitExitRoute'
 
 	function emitExitTail(into IrBlock, shape ExitShape, carried ValueIdArray, range SourceRange)
-		if shape.kind == ExitKind.routedThrow 'toTheHandler'
-			self.recordBranchEdge(into, targetId: shape.destination, argIds: carried)
-			self.artifact.emitTerminator(into, op: MaxonOp.branch(shape.destination), range: range)
-			return
-		end 'toTheHandler'
-
-		self.artifact.emitTerminator(into, op: exitTerminatorOp(shape.kind, carried: carried), range: range)
+		match shape 'which'
+			functionExit(kind, _, _) then self.artifact.emitTerminator(into, op: exitTerminatorOp(kind, carried: carried), range: range)
+			routedThrow(destination, _) then self.emitChainJump(into, target: destination, edgeArgs: carried, range: range)
+		end 'which'
 	end 'emitExitTail'
 
-	function emitReleaseAndJump(into IrBlock, first ElementIndex, entry BlockId, carried ValueIdArray, shape ExitShape, anchor Token)
-		self.emitReleaseInto(into, position: first, anchor: anchor)
-		self.emitJumpInto(into, entry: entry, edgeArgs: carried, shape: shape, anchor: anchor)
+	function emitReleaseAndJump(into IrBlock, first ElementIndex, entry BlockId, lanes ValueIdArray, carried ValueIdArray, shape ExitShape, anchor Token)
+		self.emitReleaseInto(into, position: first, value: self.ownedBindingAt(first).boundValue, anchor: anchor)
+		carried.append(lanes)
+		self.emitExitJump(into, entry: entry, edgeArgs: carried, shape: shape, anchor: anchor)
 	end 'emitReleaseAndJump'
 
-	function emitSkippingJump(into IrBlock, first ElementIndex, entry BlockId, skip ElementIndex, carried ValueIdArray, shape ExitShape, anchor Token)
-		self.emitReleaseInto(into, position: first, anchor: anchor)
+	function emitSkippingJump(into IrBlock, first ElementIndex, entry BlockId, lanes ValueIdArray, skip ElementIndex, carried ValueIdArray, shape ExitShape, anchor Token)
+		self.emitReleaseInto(into, position: first, value: self.ownedBindingAt(first).boundValue, anchor: anchor)
+		carried.append(lanes)
 
-		let saved = self.bodyState.currentBlock
-		self.bodyState.currentBlock = into
-		let skipValue = self.emitLiteral(skip as ParsedInt, valueType: MaxonType.integer, range: SourceRange.ofToken(anchor))
-		self.bodyState.currentBlock = saved
+		let previous = self.swapCurrentBlock(into)
+		carried.push(self.emitLiteral(skip as ParsedInt, valueType: MaxonType.integer, range: SourceRange.ofToken(anchor)))
+		_ = self.swapCurrentBlock(previous)
 
-		self.emitJumpInto(into, entry: entry, edgeArgs: appendedArg(carried, extra: skipValue), shape: shape, anchor: anchor)
+		self.emitExitJump(into, entry: entry, edgeArgs: carried, shape: shape, anchor: anchor)
 	end 'emitSkippingJump'
 
-	function emitJumpInto(into IrBlock, entry BlockId, edgeArgs ValueIdArray, shape ExitShape, anchor Token)
-		if shape.kind != ExitKind.routedThrow 'aFunctionExit'
-			var exitSite = into
-			exitSite.role = BlockRole.exitSite
-		end 'aFunctionExit'
+	function emitExitJump(into IrBlock, entry BlockId, edgeArgs ValueIdArray, shape ExitShape, anchor Token)
+		match shape 'which'
+			functionExit then self.markExitSite(into)
+			routedThrow then break
+		end 'which'
 
-		self.recordBranchEdge(into, targetId: entry, argIds: edgeArgs)
-		self.artifact.emitTerminator(into, op: MaxonOp.branch(entry), range: SourceRange.ofToken(anchor))
-	end 'emitJumpInto'
+		self.emitChainJump(into, target: entry, edgeArgs: edgeArgs, range: SourceRange.ofToken(anchor))
+	end 'emitExitJump'
+
+	function markExitSite(block IrBlock)
+		var exitSite = block
+		exitSite.role = BlockRole.exitSite
+	end 'markExitSite'
+
+	function emitChainJump(block IrBlock, target BlockId, edgeArgs ValueIdArray, range SourceRange)
+		self.recordBranchEdge(block, targetId: target, argIds: edgeArgs)
+		self.artifact.emitTerminator(block, op: MaxonOp.branch(target), range: range)
+	end 'emitChainJump'
+
+	function swapCurrentBlock(block IrBlock) returns IrBlock
+		let previous = self.bodyState.currentBlock
+		self.bodyState.currentBlock = block
+		return previous
+	end 'swapCurrentBlock'
+
+	// `currentBlock` is restored because a routed call's caller emits its `condBranch` into the block
+	// it stood in; left pointing here, that branch would terminate this block instead.
+	function emitReleaseInto(block IrBlock, position ElementIndex, value ValueId, anchor Token)
+		let previous = self.swapCurrentBlock(block)
+		self.emitScopeRelease(position, value: value, anchor: anchor)
+		_ = self.swapCurrentBlock(previous)
+	end 'emitReleaseInto'
 
 	// A closed loop's context is never asked for again, and every exit scans and validates the whole
 	// chain list, so keeping its chains would make each later exit pay for every loop before it.
@@ -46598,6 +46827,14 @@ export type Parser
 			unbuilt then break
 		end 'state'
 	end 'discardLoopReleaseChains'
+
+	// For `discardLoopReleaseChains`' reason: nothing routes to a closed `try`'s handler again.
+	function discardRoutedReleaseChains(destination BlockId)
+		match self.bodyState.dropCascade 'state'
+			built(cascade) then cascade.discardRoutedTo(destination)
+			unbuilt then break
+		end 'state'
+	end 'discardRoutedReleaseChains'
 
 	function releaseChain(shape ExitShape, floor ElementIndex) returns ReleaseChain
 		var cascade = self.dropCascade()
@@ -46615,15 +46852,92 @@ export type Parser
 	end 'releaseChain'
 
 	// A chain caches each position's release disposition, and a move-state write changes it: a stale
-	// one drops a moved-out value twice or leaks a revived one. Dispositions below the lowest position
-	// written since the last exit still hold, so only the ranks from there up are rescanned.
+	// one drops a moved-out value twice or leaks a revived one. Only the positions written since the
+	// last exit are rechecked, and ranks below the lowest one that changed stay built.
 	function validateReleaseChains(cascade DropCascade)
-		let dirtyFrom = try self.bodyState.moveLedger.takeChainDirtyFloor() otherwise return
+		let top = self.bodyState.ownedBindings.count()
+		let dirty = self.bodyState.moveLedger.takeChainDirtyPositions(top)
+
+		if dirty.isEmpty() 'nothingWritten'
+			return
+		end 'nothingWritten'
 
 		for chain in cascade.chains 'eachChain'
-			chain.invalidateFrom(dirtyFrom)
+			chain.invalidateFrom(top)
+
+			for position in dirty 'eachDirtyPosition'
+				self.revalidatePosition(chain, position: position)
+			end 'eachDirtyPosition'
 		end 'eachChain'
 	end 'validateReleaseChains'
+
+	function revalidatePosition(chain ReleaseChain, position ElementIndex)
+		if position < chain.floor or position >= chain.scannedHeight() 'outsideTheScan'
+			return
+		end 'outsideTheScan'
+
+		let binding = self.ownedBindingAt(position)
+		let disposition = releaseDispositionOf(binding)
+
+		if not chain.holdsBindingAt(position, binding: binding) or disposition != chain.dispositionAt(position) 'aDifferentRelease'
+			chain.invalidateFrom(position)
+			return
+		end 'aDifferentRelease'
+
+		if disposition != ReleaseDisposition.release or binding.boundValue == chain.valueAt(position) 'valueUnchanged'
+			return
+		end 'valueUnchanged'
+
+		self.revalidateChangedValue(chain, position: position, binding: binding)
+	end 'revalidatePosition'
+
+	function revalidateChangedValue(chain ReleaseChain, position ElementIndex, binding VarInfo)
+		let rank = chain.rankOfPosition(position)
+		let current = binding.boundValue
+
+		if chain.entryCount() < rank and chain.skipEntryCount() < rank 'nothingBuiltThere'
+			chain.noteValueAt(position, value: current)
+			return
+		end 'nothingBuiltThere'
+
+		if chain.isLaneRank(rank) and self.valueDropsThroughAPhi(current) 'stillALane'
+			chain.noteValueAt(position, value: current)
+			return
+		end 'stillALane'
+
+		if chain.isLaneRank(rank) 'noLongerALane'
+			chain.unmarkLane(binding)
+		end 'noLongerALane' else if chain.hasRoomForLane() and self.bindingMayBecomeALane(binding) 'newLane'
+			chain.markLane(binding)
+		end 'newLane'
+
+		chain.invalidateFrom(position)
+	end 'revalidateChangedValue'
+
+	function bindingMayBecomeALane(binding VarInfo) returns bool
+		if not self.bodyState.loopScans.isEmpty() or not self.bodyState.conditionalGives.isEmpty() or binding.isCellBinding 'laneUnsafe'
+			return false
+		end 'laneUnsafe'
+
+		return self.valueDropsThroughAPhi(binding.boundValue)
+	end 'bindingMayBecomeALane'
+
+	function valueDropsThroughAPhi(value ValueId) returns bool
+		let tag = self.tagOf(value)
+
+		if tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.typeParameter or self.valueOwnsGreenThread(value) or self.valueIsImmortalFunction(value) 'aSpecialDrop'
+			return false
+		end 'aSpecialDrop'
+
+		if valueIsMarked(self.bodyState.recordsOwningOpaqueSlots, value: value) or valueIsMarked(self.bodyState.witnessCursorElements, value: value) 'aMarkedRecord'
+			return false
+		end 'aMarkedRecord'
+
+		return match self.holdKindOf(value) 'hold'
+			found gives false
+			none gives true
+		end 'hold'
+	end 'valueDropsThroughAPhi'
 
 	function syncReleaseChain(chain ReleaseChain)
 		self.validateReleaseChains(self.dropCascade())
@@ -46635,33 +46949,54 @@ export type Parser
 
 		chain.keyUnderHandoffs(not self.bodyState.conditionalGives.isEmpty())
 		chain.invalidateFrom(top)
+		self.dropStaleLaneBindings(chain, top: top)
+		self.dropDisqualifiedLanes(chain)
 
 		for position in chain.scannedHeight() upto top 'eachNewBinding'
-			self.classifyForRelease(chain, position: position)
+			let binding = self.ownedBindingAt(position)
+
+			if chain.carriesLaneBinding(binding) and not self.bindingMayBecomeALane(binding) 'noLongerQualifies'
+				chain.unmarkLane(binding)
+			end 'noLongerQualifies'
+
+			chain.noteScanned(position, binding: binding, disposition: releaseDispositionOf(binding))
 		end 'eachNewBinding'
 	end 'syncReleaseChain'
 
-	function classifyForRelease(chain ReleaseChain, position ElementIndex)
-		let binding = self.ownedBindingAt(position)
+	function dropStaleLaneBindings(chain ReleaseChain, top ElementIndex)
+		var index = chain.laneBindingCount()
 
-		match releaseDispositionOf(binding) 'disposition'
-			release then chain.noteScanned(position, holdsARelease: true)
-			unmatchedObligation then self.noteUnmatchedObligation(chain, position: position, binding: binding)
-			skip then chain.noteScanned(position, holdsARelease: false)
-		end 'disposition'
-	end 'classifyForRelease'
+		while index > 0 'eachLaneBinding'
+			index = index - 1
+			let held = chain.laneBindingAt(index)
 
-	function noteUnmatchedObligation(chain ReleaseChain, position ElementIndex, binding VarInfo)
-		chain.unmatched.push(UnmatchedObligation.create(position, name: binding.name, flag: binding.boundValue))
-		chain.noteScanned(position, holdsARelease: false)
-	end 'noteUnmatchedObligation'
+			if not held.isEnrolled or held.enrolledAt >= top or not (self.ownedBindingAt(held.enrolledAt) is held) 'noLongerInScope'
+				chain.unmarkLane(held)
+			end 'noLongerInScope'
+		end 'eachLaneBinding'
+	end 'dropStaleLaneBindings'
+
+	function dropDisqualifiedLanes(chain ReleaseChain)
+		var index = chain.laneCount()
+
+		while index > 0 'eachLane'
+			index = index - 1
+			let position = chain.positionOfRank(chain.laneRankAt(index))
+			let binding = self.ownedBindingAt(position)
+
+			if not self.bindingMayBecomeALane(binding) 'noLongerQualifies'
+				chain.unmarkLane(binding)
+				chain.invalidateFrom(position)
+			end 'noLongerQualifies'
+		end 'eachLane'
+	end 'dropDisqualifiedLanes'
 
 	function refuseUnmatchedObligations(chain ReleaseChain, handedOff HandedOff, anchor Token)
-		var index = chain.unmatched.count()
+		var index = chain.unmatchedCount()
 
 		while index > 0 'eachObligation'
 			index = index - 1
-			let obligation = try chain.unmatched.get(index) otherwise panic("refuseUnmatchedObligations: unmatched.get OOB at {index} below the count just read")
+			let obligation = chain.unmatchedAt(index)
 
 			if handedOffHolds(handedOff, candidate: obligation.flag) 'inFlight'
 				continue
@@ -46684,14 +47019,14 @@ export type Parser
 
 	function exitShapeOf(exit FunctionExit) returns ExitShape
 		let kind = exitKindOf(exit)
-		let value = try exitValueOf(exit) otherwise return ExitShape.create(kind, tag: ValueTypeTag.void, nameId: UnnamedTypeId)
-		return ExitShape.create(kind, tag: self.tagOf(value), nameId: self.valueNameId(value))
+		let value = try exitValueOf(exit) otherwise return ExitShape.functionExit(kind, tag: ValueTypeTag.void, nameId: UnnamedTypeId)
+		return ExitShape.functionExit(kind, tag: self.tagOf(value), nameId: self.valueNameId(value))
 	end 'exitShapeOf'
 
 	function exitPayloadOf(exit FunctionExit, shape ExitShape) returns ValueIdArray
 		let value = try exitValueOf(exit) otherwise return ValueIdArray.create()
 
-		if shape.carriesAWitness() 'anExistential'
+		if exitShapeCarriesAWitness(shape) 'anExistential'
 			return pairArgs(value, second: self.witnessOfValue(value))
 		end 'anExistential'
 
@@ -46737,7 +47072,7 @@ export type Parser
 			return ExitRoute.direct
 		end 'nothingToRelease'
 
-		return ExitRoute.chained(chain.positionOfRank(count), entry: self.chainEntry(chain, rank: count - 1, anchor: anchor))
+		return ExitRoute.chained(chain.positionOfRank(count), entry: self.chainEntry(chain, rank: count - 1, anchor: anchor), lanes: self.laneValuesThrough(chain, rank: count - 1))
 	end 'routeAll'
 
 	function routeExcluding(chain ReleaseChain, rank ElementIndex, anchor Token) returns ExitRoute
@@ -46749,93 +47084,119 @@ export type Parser
 				return ExitRoute.direct
 			end 'nothingElseToRelease'
 
-			return ExitRoute.chained(chain.positionOfRank(rank - 1), entry: self.chainEntry(chain, rank: rank - 2, anchor: anchor))
+			return ExitRoute.chained(chain.positionOfRank(rank - 1), entry: self.chainEntry(chain, rank: rank - 2, anchor: anchor), lanes: self.laneValuesThrough(chain, rank: rank - 2))
 		end 'theInnermostIsInFlight'
 
 		let first = chain.positionOfRank(count)
 
-		// A routed throw never takes the flagged chain: its skip nodes are not noted as routed nodes, so
-		// `synthesizeErrorUnion` would append the fused ordinal to none of their edges.
-		if above > ExplicitExclusionDepth and chain.shape.kind != ExitKind.routedThrow 'tooDeepToCopy'
-			return ExitRoute.flagged(first, entry: self.skipChainEntry(chain, rank: count - 1, anchor: anchor), skip: rank)
-		end 'tooDeepToCopy'
+		if above > ExplicitExclusionDepth or chain.laneCount() > 0 'sharedSkipChain'
+			return ExitRoute.flagged(first, entry: self.skipChainEntry(chain, rank: count - 1, anchor: anchor), lanes: self.laneValuesThrough(chain, rank: count - 1), skip: rank)
+		end 'sharedSkipChain'
 
-		return ExitRoute.chained(first, entry: self.exclusionSegmentEntry(chain, excludedRank: rank, anchor: anchor))
+		return ExitRoute.chained(first, entry: self.exclusionSegmentEntry(chain, excludedRank: rank, anchor: anchor), lanes: ValueIdArray.create())
 	end 'routeExcluding'
 
-	function chainBase(shape ExitShape, anchor Token) returns BlockId
-		if shape.kind == ExitKind.routedThrow 'theHandlerItself'
-			return shape.destination
-		end 'theHandlerItself'
+	function laneSlotsThrough(chain ReleaseChain, rank ElementIndex) returns CarriedSlotArray
+		var slots = CarriedSlotArray.create()
 
-		return self.dropCascadeTerminal(self.dropCascade(), shape: shape, anchor: anchor)
+		for index in 0 upto chain.laneCount() 'eachLane'
+			let laneRank = chain.laneRankAt(index)
+
+			if laneRank <= rank 'atOrBelow'
+				let current = self.ownedBindingAt(chain.positionOfRank(laneRank)).boundValue
+				slots.push(CarriedSlot.create(self.tagOf(current), nameId: self.valueNameId(current)))
+			end 'atOrBelow'
+		end 'eachLane'
+
+		return slots
+	end 'laneSlotsThrough'
+
+	function laneValuesThrough(chain ReleaseChain, rank ElementIndex) returns ValueIdArray
+		var values = ValueIdArray.create()
+
+		for index in 0 upto chain.laneCount() 'eachLane'
+			let laneRank = chain.laneRankAt(index)
+
+			if laneRank <= rank 'atOrBelow'
+				values.push(self.ownedBindingAt(chain.positionOfRank(laneRank)).boundValue)
+			end 'atOrBelow'
+		end 'eachLane'
+
+		return values
+	end 'laneValuesThrough'
+
+	function chainBase(shape ExitShape, anchor Token) returns BlockId
+		match shape 'which'
+			functionExit then return self.dropCascadeTerminal(self.dropCascade(), shape: shape, anchor: anchor)
+			routedThrow(destination, _) then return destination
+		end 'which'
 	end 'chainBase'
+
+	function ensureEntries(chain ReleaseChain, through ElementIndex, anchor Token)
+		let built = chain.entryCount()
+
+		if built < through 'nodesToBuild'
+			self.extendEntries(chain, built: built, through: through, anchor: anchor)
+		end 'nodesToBuild'
+	end 'ensureEntries'
 
 	function chainEntry(chain ReleaseChain, rank ElementIndex, anchor Token) returns BlockId
 		if rank == 0 'theBase'
 			return self.chainBase(chain.shape, anchor: anchor)
 		end 'theBase'
 
-		let built = chain.entries.count()
-
-		if built < rank 'nodesToBuild'
-			self.extendEntries(chain, built: built, rank: rank, anchor: anchor)
-		end 'nodesToBuild'
-
+		self.ensureEntries(chain, through: rank, anchor: anchor)
 		return chain.entryAt(rank)
 	end 'chainEntry'
 
-	function extendEntries(chain ReleaseChain, built ElementIndex, rank ElementIndex, anchor Token)
+	function extendEntries(chain ReleaseChain, built ElementIndex, through ElementIndex, anchor Token)
 		let below = self.chainEntry(chain, rank: built, anchor: anchor)
-		var positions = OwnedBindingPositionArray.create()
-		var next = rank
+		var ranks = ReleasableRankColumn.create()
+		var next = through
 
 		while next > built 'eachNewRank'
-			positions.push(chain.positionOfRank(next))
+			ranks.push(next)
 			next = next - 1
 		end 'eachNewRank'
 
-		let nodes = self.materializeNodes(chain, positions: positions, below: below, anchor: anchor)
+		let nodes = self.materializeNodes(chain, ranks: ranks, below: below, anchor: anchor)
 		var position = nodes.count()
 
 		while position > 0 'eachNodeInRankOrder'
 			position = position - 1
-			chain.entries.push(try nodes.get(position) otherwise panic("extendEntries: nodes.get OOB at {position} below the count just read"))
+			chain.noteEntry(try nodes.get(position) otherwise panic("extendEntries: nodes.get OOB at {position} below the count just read"))
 		end 'eachNodeInRankOrder'
 	end 'extendEntries'
 
 	function exclusionSegmentEntry(chain ReleaseChain, excludedRank ElementIndex, anchor Token) returns BlockId
 		let below = self.chainEntry(chain, rank: excludedRank - 1, anchor: anchor)
-		var positions = OwnedBindingPositionArray.create()
+		var ranks = ReleasableRankColumn.create()
 		var rank = chain.releasableCount() - 1
 
 		while rank > excludedRank 'eachRankAbove'
-			positions.push(chain.positionOfRank(rank))
+			ranks.push(rank)
 			rank = rank - 1
 		end 'eachRankAbove'
 
-		if positions.isEmpty() 'nothingAboveTheInlineRelease'
+		if ranks.isEmpty() 'nothingAboveTheInlineRelease'
 			return below
 		end 'nothingAboveTheInlineRelease'
 
-		return try self.materializeNodes(chain, positions: positions, below: below, anchor: anchor).get(0) otherwise panic("exclusionSegmentEntry: a segment with positions to release built no node")
+		return try self.materializeNodes(chain, ranks: ranks, below: below, anchor: anchor).get(0) otherwise panic("exclusionSegmentEntry: a segment with ranks to release built no node")
 	end 'exclusionSegmentEntry'
 
 	// Nodes and terminals carry the span of the exit that created them, and an exit sharing them later
 	// leaves it: `StorageProvenance.rootReachesTheDoorUnhanded` orders ops by this span
 	// (`opLiesBetween`). A chain's debug span is chosen apart from it, in `LowerMaxonToStd`.
-	//
-	// New nodes are created in execution order: `ProvenanceTracer.walk` iterates to a fixpoint over
-	// blocks in creation order, so a chain created backwards costs it a pass per node.
-	function materializeNodes(chain ReleaseChain, positions OwnedBindingPositionArray, below BlockId, anchor Token) returns BlockIdArray
+	function materializeNodes(chain ReleaseChain, ranks ReleasableRankColumn, below BlockId, anchor Token) returns BlockIdArray
 		var cascade = self.dropCascade()
 		var hits = BlockIdArray.create()
 		var successor = below
-		var pending = positions.count()
+		var pending = ranks.count()
 
 		while pending > 0 'sharedSuffix'
-			let owned = try positions.get(pending - 1) otherwise panic("materializeNodes: positions.get OOB at {pending - 1} below its own count")
-			successor = try cascade.nodeFor(self.dropNodeKeyAt(owned), exitShape: chain.shape, context: chain.context, successor: successor) otherwise break
+			let rank = try ranks.get(pending - 1) otherwise panic("materializeNodes: ranks.get OOB at {pending - 1} below its own count")
+			successor = try cascade.nodeFor(self.nodeKeyOf(chain, rank: rank, role: ChainNodeRole.drop), exitShape: chain.shape, context: chain.context, successor: successor, alternate: successor) otherwise break
 			hits.push(successor)
 			pending = pending - 1
 		end 'sharedSuffix'
@@ -46855,7 +47216,7 @@ export type Parser
 				nextId = (try fresh.get(index + 1) otherwise panic("materializeNodes: fresh.get OOB at {index + 1} below its own count")).id
 			end 'anotherNewNodeFollows'
 
-			self.emitDropNode(block, position: try positions.get(index) otherwise panic("materializeNodes: positions.get OOB at {index} below its own count"), successor: nextId, shape: chain.shape, cascade: cascade, context: chain.context, anchor: anchor)
+			self.emitDropNode(block, chain: chain, rank: try ranks.get(index) otherwise panic("materializeNodes: ranks.get OOB at {index} below its own count"), successor: nextId, cascade: cascade, anchor: anchor)
 		end 'eachNewNodeInExecutionOrder'
 
 		var nodes = BlockIdArray.create()
@@ -46875,103 +47236,167 @@ export type Parser
 	end 'materializeNodes'
 
 	function skipChainEntry(chain ReleaseChain, rank ElementIndex, anchor Token) returns BlockId
-		let built = chain.skipEntries.count()
+		let built = chain.skipEntryCount()
 
 		if built < rank 'ranksToBuild'
-			self.extendSkipEntries(chain, built: built, rank: rank, anchor: anchor)
+			self.extendSkipEntries(chain, built: built, through: rank, anchor: anchor)
 		end 'ranksToBuild'
 
 		return chain.skipEntryAt(rank)
 	end 'skipChainEntry'
 
-	// Blocks are created in execution order, for `materializeNodes`' reason.
-	function extendSkipEntries(chain ReleaseChain, built ElementIndex, rank ElementIndex, anchor Token)
-		_ = self.chainEntry(chain, rank: rank - 1, anchor: anchor)
+	function skipBelowOf(chain ReleaseChain, rank ElementIndex, anchor Token) returns BlockId
+		if rank == 1 'theBase'
+			return self.chainBase(chain.shape, anchor: anchor)
+		end 'theBase'
+
+		return chain.skipEntryAt(rank - 1)
+	end 'skipBelowOf'
+
+	function extendSkipEntries(chain ReleaseChain, built ElementIndex, through ElementIndex, anchor Token)
+		self.ensureEntries(chain, through: through - 1, anchor: anchor)
+
+		var cascade = self.dropCascade()
+		var next = built + 1
+
+		while next <= through 'sharedSuffix'
+			let plainBelow = self.chainEntry(chain, rank: next - 1, anchor: anchor)
+			let hit = try cascade.nodeFor(self.nodeKeyOf(chain, rank: next, role: ChainNodeRole.skipTest), exitShape: chain.shape, context: chain.context, successor: self.skipBelowOf(chain, rank: next, anchor: anchor), alternate: plainBelow) otherwise break
+			chain.noteSkipEntry(hit)
+			next = next + 1
+		end 'sharedSuffix'
+
+		if next > through 'allShared'
+			return
+		end 'allShared'
 
 		var func = self.bodyFunction()
 		var tests = IrBlockArray.create()
 		var drops = IrBlockArray.create()
 
-		for _ in built upto rank 'eachNewRankInExecutionOrder'
+		for _ in next to through 'eachNewRankInExecutionOrder'
 			tests.push(self.artifact.module.addBlock(func, label: SkipTestNodeLabel, heat: BlockHeat.normal, role: BlockRole.exitChain))
 			drops.push(self.artifact.module.addBlock(func, label: DropCascadeNodeLabel, heat: BlockHeat.normal, role: BlockRole.exitChain))
 		end 'eachNewRankInExecutionOrder'
 
-		for next in built + 1 to rank 'eachNewRankBottomUp'
-			let index = rank - next
+		for rank in next to through 'eachNewRankBottomUp'
+			let index = through - rank
 			var test = try tests.get(index) otherwise panic("extendSkipEntries: tests.get OOB at {index} below the count just built")
 			var drop = try drops.get(index) otherwise panic("extendSkipEntries: drops.get OOB at {index} below the count just built")
-			self.buildSkipRank(chain, rank: next, test: test, drop: drop, anchor: anchor)
+			self.emitSkipNode(chain, rank: rank, test: test, drop: drop, cascade: cascade, anchor: anchor)
 		end 'eachNewRankBottomUp'
 	end 'extendSkipEntries'
 
-	function buildSkipRank(chain ReleaseChain, rank ElementIndex, test IrBlock, drop IrBlock, anchor Token)
-		let shape = chain.shape
+	function emitSkipNode(chain ReleaseChain, rank ElementIndex, test IrBlock, drop IrBlock, cascade DropCascade, anchor Token)
 		let range = SourceRange.ofToken(anchor)
 		let plainBelow = self.chainEntry(chain, rank: rank - 1, anchor: anchor)
-		let testCarried = self.mintExitPhis(test, shape: shape)
+		let skipBelow = self.skipBelowOf(chain, rank: rank, anchor: anchor)
+		let testCarried = self.mintExitPhis(test, shape: chain.shape)
+		let testLanes = self.mintLanePhis(test, chain: chain, through: rank)
 		let testSkip = self.mintPhi(test, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
-		let saved = self.bodyState.currentBlock
-		self.bodyState.currentBlock = test
+		let previous = self.swapCurrentBlock(test)
 		let isSkipped = self.emitCompareAgainstLiteral(testSkip, literal: rank as ParsedInt, op: MaxonCmpOp.eq, opTok: anchor)
-		self.bodyState.currentBlock = saved
+		_ = self.swapCurrentBlock(previous)
 
-		let dropCarried = self.mintExitPhis(drop, shape: shape)
+		let dropCarried = self.mintExitPhis(drop, shape: chain.shape)
+		let dropLanes = self.mintLanePhis(drop, chain: chain, through: rank)
 		let dropSkip = self.mintPhi(drop, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
-		self.emitReleaseInto(drop, position: chain.positionOfRank(rank), anchor: anchor)
+		self.emitChainRelease(drop, chain: chain, rank: rank, lanes: dropLanes, anchor: anchor)
 
-		if rank == 1 'nothingBelow'
-			self.recordBranchEdge(drop, targetId: plainBelow, argIds: dropCarried)
-			self.artifact.emitTerminator(drop, op: MaxonOp.branch(plainBelow), range: range)
-		end 'nothingBelow' else 'moreBelow'
-			let skipBelow = chain.skipEntryAt(rank - 1)
-			self.recordBranchEdge(drop, targetId: skipBelow, argIds: appendedArg(dropCarried, extra: dropSkip))
-			self.artifact.emitTerminator(drop, op: MaxonOp.branch(skipBelow), range: range)
+		let onwardLanes = dropLanes.count() - 1 if chain.isLaneRank(rank) else dropLanes.count()
+		var afterDrop = chainEdgeArgs(dropCarried, lanes: dropLanes, count: onwardLanes)
+
+		if rank > 1 'moreBelow'
+			afterDrop.push(dropSkip)
 		end 'moreBelow'
 
-		self.recordBranchEdge(test, targetId: plainBelow, argIds: testCarried)
-		self.recordBranchEdge(test, targetId: drop.id, argIds: appendedArg(testCarried, extra: testSkip))
+		self.emitChainJump(drop, target: skipBelow if rank > 1 else plainBelow, edgeArgs: afterDrop, range: range)
+
+		let toPlain = chainEdgeArgs(testCarried, lanes: testLanes, count: onwardLanes)
+		var toDrop = chainEdgeArgs(testCarried, lanes: testLanes, count: testLanes.count())
+		toDrop.push(testSkip)
+		self.recordBranchEdge(test, targetId: plainBelow, argIds: toPlain)
+		self.recordBranchEdge(test, targetId: drop.id, argIds: toDrop)
 		self.emitCondBranch(test, cond: isSkipped, thenId: plainBelow, elseId: drop.id, ifTok: anchor)
-		chain.skipEntries.push(test.id)
-	end 'buildSkipRank'
+		chain.noteSkipEntry(test.id)
+		cascade.noteNode(self.nodeKeyOf(chain, rank: rank, role: ChainNodeRole.skipTest), exitShape: chain.shape, context: chain.context, successor: skipBelow, alternate: plainBelow, blockId: test.id)
 
-	// `currentBlock` is restored because a routed call's caller emits its `condBranch` into the block
-	// it stood in; left pointing here, that branch would terminate this block instead.
-	function emitReleaseInto(block IrBlock, position ElementIndex, anchor Token)
-		let saved = self.bodyState.currentBlock
-		self.bodyState.currentBlock = block
-		self.emitScopeRelease(position, anchor: anchor)
-		self.bodyState.currentBlock = saved
-	end 'emitReleaseInto'
+		var testEdges = ValueIdArrayColumn.create()
+		testEdges.push(toPlain)
+		testEdges.push(toDrop)
+		self.noteRoutedBlock(cascade, shape: chain.shape, block: test, edges: testEdges)
 
-	function dropNodeKeyAt(position ElementIndex) returns DropNodeKey
+		var dropEdges = ValueIdArrayColumn.create()
+		dropEdges.push(afterDrop)
+		self.noteRoutedBlock(cascade, shape: chain.shape, block: drop, edges: dropEdges)
+	end 'emitSkipNode'
+
+	function noteRoutedBlock(cascade DropCascade, shape ExitShape, block IrBlock, edges ValueIdArrayColumn)
+		match shape 'which'
+			functionExit then break
+			routedThrow(destination, _) then cascade.noteRoutedNode(destination, node: RoutedNode.create(block, outgoing: edges))
+		end 'which'
+	end 'noteRoutedBlock'
+
+	function mintLanePhis(block IrBlock, chain ReleaseChain, through ElementIndex) returns ValueIdArray
+		var phis = ValueIdArray.create()
+
+		for slot in self.laneSlotsThrough(chain, rank: through) 'eachLane'
+			phis.push(self.mintPhi(block, tag: slot.tag, nameId: slot.nameId))
+		end 'eachLane'
+
+		return phis
+	end 'mintLanePhis'
+
+	function emitChainRelease(block IrBlock, chain ReleaseChain, rank ElementIndex, lanes ValueIdArray, anchor Token)
+		let position = chain.positionOfRank(rank)
+
+		if chain.isLaneRank(rank) 'dropsItsLane'
+			self.emitReleaseInto(block, position: position, value: try lanes.last() otherwise panic("emitChainRelease: rank {rank} is a lane yet the block minted none"), anchor: anchor)
+			return
+		end 'dropsItsLane'
+
+		self.emitReleaseInto(block, position: position, value: self.ownedBindingAt(position).boundValue, anchor: anchor)
+	end 'emitChainRelease'
+
+	function nodeKeyOf(chain ReleaseChain, rank ElementIndex, role ChainNodeRole) returns DropNodeKey
+		let lanes = self.laneSlotsThrough(chain, rank: rank)
+
+		if chain.isLaneRank(rank) 'dropsItsLane'
+			return DropNodeKey.laneValue(role, lanes: lanes)
+		end 'dropsItsLane'
+
+		let position = chain.positionOfRank(rank)
 		let released = self.ownedBindingAt(position).boundValue
-		return DropNodeKey.create(released, releaseShape: self.releaseShapeAt(position), handoffs: givesOf(self.bodyState.conditionalGives, value: released))
-	end 'dropNodeKeyAt'
+		return DropNodeKey.bakedValue(released, releaseShape: self.releaseShapeAt(position), handoffs: givesOf(self.bodyState.conditionalGives, value: released), role: role, lanes: lanes)
+	end 'nodeKeyOf'
 
 	function dropCascadeTerminal(cascade DropCascade, shape ExitShape, anchor Token) returns BlockId
 		if let existing = try cascade.terminalFor(shape) 'alreadyBuilt'
 			return existing
 		end 'alreadyBuilt'
 
+		let kind = try functionExitKind(shape) otherwise panic("dropCascadeTerminal: a routed throw ends at its handler and has no terminal block")
 		var block = self.artifact.module.addBlock(self.bodyFunction(), label: ExitTerminalLabel, heat: BlockHeat.normal, role: BlockRole.exitChain)
 		let carried = self.mintExitPhis(block, shape: shape)
-		self.artifact.emitTerminator(block, op: exitTerminatorOp(shape.kind, carried: carried), range: SourceRange.ofToken(anchor))
+		self.artifact.emitTerminator(block, op: exitTerminatorOp(kind, carried: carried), range: SourceRange.ofToken(anchor))
 		cascade.noteTerminal(shape, blockId: block.id)
 		return block.id
 	end 'dropCascadeTerminal'
 
-	function emitDropNode(block IrBlock, position ElementIndex, successor BlockId, shape ExitShape, cascade DropCascade, context BlockId, anchor Token)
-		let carried = self.mintExitPhis(block, shape: shape)
-		let key = self.dropNodeKeyAt(position)
-		self.emitReleaseInto(block, position: position, anchor: anchor)
-		self.recordBranchEdge(block, targetId: successor, argIds: carried)
-		self.artifact.emitTerminator(block, op: MaxonOp.branch(successor), range: SourceRange.ofToken(anchor))
-		cascade.noteNode(key, exitShape: shape, context: context, successor: successor, blockId: block.id)
+	function emitDropNode(block IrBlock, chain ReleaseChain, rank ElementIndex, successor BlockId, cascade DropCascade, anchor Token)
+		let carried = self.mintExitPhis(block, shape: chain.shape)
+		let lanes = self.mintLanePhis(block, chain: chain, through: rank)
+		self.emitChainRelease(block, chain: chain, rank: rank, lanes: lanes, anchor: anchor)
 
-		if shape.kind == ExitKind.routedThrow 'reachesAHandler'
-			cascade.noteRoutedNode(shape.destination, node: RoutedNode.create(block, args: carried))
-		end 'reachesAHandler'
+		let onwardLanes = lanes.count() - 1 if chain.isLaneRank(rank) else lanes.count()
+		let onward = chainEdgeArgs(carried, lanes: lanes, count: onwardLanes)
+		self.emitChainJump(block, target: successor, edgeArgs: onward, range: SourceRange.ofToken(anchor))
+		cascade.noteNode(self.nodeKeyOf(chain, rank: rank, role: ChainNodeRole.drop), exitShape: chain.shape, context: chain.context, successor: successor, alternate: successor, blockId: block.id)
+
+		var edges = ValueIdArrayColumn.create()
+		edges.push(onward)
+		self.noteRoutedBlock(cascade, shape: chain.shape, block: block, edges: edges)
 	end 'emitDropNode'
 
 	function mintSlotPhis(block IrBlock, slots CarriedSlotArray, into ValueIdArray)
@@ -46993,26 +47418,28 @@ export type Parser
 		end 'eachSlot'
 	end 'mintSlotPhis'
 
+	function mintFunctionExitPhis(block IrBlock, kind ExitKind, tag ValueTypeTag, nameId TypeNameId, into ValueIdArray)
+		if kind == ExitKind.returnVoid 'nothingCarried'
+			return
+		end 'nothingCarried'
+
+		let carried = self.mintPhi(block, tag: tag, nameId: nameId)
+		into.push(carried)
+
+		if tag == ValueTypeTag.interfaceRef 'anExistential'
+			let witness = self.mintPhi(block, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
+			self.pairInterfaceWitness(carried, witness: witness)
+			into.push(witness)
+		end 'anExistential'
+	end 'mintFunctionExitPhis'
+
 	function mintExitPhis(block IrBlock, shape ExitShape) returns ValueIdArray
 		var phis = ValueIdArray.create()
 
-		if shape.kind == ExitKind.returnVoid 'nothingCarried'
-			return phis
-		end 'nothingCarried'
-
-		if shape.kind == ExitKind.routedThrow 'theHandlersArguments'
-			self.mintSlotPhis(block, slots: shape.slots, into: phis)
-			return phis
-		end 'theHandlersArguments'
-
-		let carried = self.mintPhi(block, tag: shape.tag, nameId: shape.nameId)
-		phis.push(carried)
-
-		if shape.carriesAWitness() 'anExistential'
-			let witness = self.mintPhi(block, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
-			self.pairInterfaceWitness(carried, witness: witness)
-			phis.push(witness)
-		end 'anExistential'
+		match shape 'which'
+			functionExit(kind, tag, nameId) then self.mintFunctionExitPhis(block, kind: kind, tag: tag, nameId: nameId, into: phis)
+			routedThrow(_, slots) then self.mintSlotPhis(block, slots: slots, into: phis)
+		end 'which'
 
 		return phis
 	end 'mintExitPhis'
@@ -47256,12 +47683,6 @@ export type Parser
 		self.bodyState.ownedBindings.truncate(height)
 	end 'truncateOwnedBindings'
 
-	function noteMoveStateWritten(binding VarInfo)
-		if binding.isEnrolled 'anOwnedBinding'
-			self.bodyState.moveLedger.noteDirty(binding.enrolledAt)
-		end 'anOwnedBinding'
-	end 'noteMoveStateWritten'
-
 	function markedConditionalGives() returns ConditionalGiveArray
 		if self.bodyState.conditionalGives.isEmpty() 'nothingGivenOnThisPath'
 			return self.emptyMoveMark.conditionallyGiven
@@ -47299,7 +47720,7 @@ export type Parser
 
 		for position in self.syncedMoveSlots().differences(mark.slots) 'eachDifference'
 			var binding = try self.bodyState.ownedBindings.get(position) otherwise panic("restoreMoveMark: ownedBindings.get OOB at {position}")
-			binding.movedFrom = mark.movedAt(position)
+			binding.setMovedFrom(mark.movedAt(position), ledger: self.bodyState.moveLedger)
 
 			if binding.isCellBinding 'restoreTheCellsEpoch'
 				binding.cellEpoch = CellEpoch.current(mark.valueAt(position))
@@ -47481,7 +47902,7 @@ export type Parser
 		var binding = try self.bodyState.ownedBindings.get(position) otherwise panic("reconcileBindingAtMerge: ownedBindings.get OOB at {position}")
 
 		if joinedIsCell 'aCellsEpochIsSettledAbove'
-			binding.movedFrom = anyMoved
+			binding.setMovedFrom(anyMoved, ledger: self.bodyState.moveLedger)
 		end 'aCellsEpochIsSettledAbove' else if anyMoved 'movedOnAnEdge'
 			if not edgesCarryOneValue(edges, position: position) 'theMergeMintsAPhi'
 				self.noteSettledMerge(edges, position: position, settlement: MoveSettlement.moved)
@@ -47490,7 +47911,7 @@ export type Parser
 			self.reconcileGivesAtMerge(edges, position: position, binding: binding, anchor: anchor)
 		end 'liveOnEveryEdge'
 
-		binding.movedFrom = anyMoved
+		binding.setMovedFrom(anyMoved, ledger: self.bodyState.moveLedger)
 		var awaiting = NoMoveSiteList
 
 		for edge in edges 'joinAwaiting'
@@ -48684,8 +49105,7 @@ export type Parser
 			self.recordPromiseConsume(promise, kind: PromiseConsume.movedIntoStorage)
 		end 'givenToAnotherOwner'
 
-		owned.movedFrom = true
-		self.noteMoveStateWritten(owned)
+		owned.setMovedFrom(true, ledger: self.bodyState.moveLedger)
 	end 'consumePromiseThread'
 
 	// The one writer of `promiseConsumes`, and FIRST WINS: a door that reclaimed the thread must not be
@@ -48929,8 +49349,7 @@ export type Parser
 		// observed by every holder — `ownedBindings`, `Scope.vars`, any loop-phi list.
 		var owned = try self.bodyState.ownedBindings.get(index) otherwise panic("poisonOwningBinding: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 
-		owned.movedFrom = true
-		self.noteMoveStateWritten(owned)
+		owned.setMovedFrom(true, ledger: self.bodyState.moveLedger)
 		self.bodyState.movedBindingValues = withValueMarked(self.bodyState.movedBindingValues, value: value)
 
 		// ⭐⭐ **E3077's COMPILER-ONLY DOOR: BEING MOVED OUT OF IS A USE OF MUTABILITY HERE, AND IN NEITHER
@@ -48984,8 +49403,7 @@ export type Parser
 			// be written THROUGH the shared `VarInfo` so every holder observes it — the `Scope.setValue`
 			// idiom `poisonOwningBinding` uses, for its reason.
 			var alias = self.bodyState.scope.getInfo(name)
-			alias.movedFrom = true
-			self.noteMoveStateWritten(alias)
+			alias.setMovedFrom(true, ledger: self.bodyState.moveLedger)
 		end 'eachBinding'
 	end 'poisonValueAliases'
 
@@ -50870,13 +51288,11 @@ export type Parser
 
 			if a == b 'same'
 				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: a)
-				binding.boundValue = a
-				self.noteMoveStateWritten(binding)
+				binding.setBoundValue(a, ledger: self.bodyState.moveLedger)
 			end 'same' else 'differ'
 				let phiId = self.mintPhiForBinding(cont, binding: binding)
 				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: phiId)
-				binding.boundValue = phiId
-				self.noteMoveStateWritten(binding)
+				binding.setBoundValue(phiId, ledger: self.bodyState.moveLedger)
 				self.pushMergedEdgeValue(edgeArgsA, binding: binding, value: a)
 				self.pushMergedEdgeValue(edgeArgsB, binding: binding, value: b)
 				self.markPhiImmortalIfEveryEdgeIs(phiId, edges: pairArgs(a, second: b))
@@ -50916,8 +51332,7 @@ export type Parser
 			var binding = try bindings.get(k) otherwise panic("restoreBindings: bindings.get OOB at {k}")
 			let saved = try snapshot.get(k) otherwise panic("restoreBindings: snapshot.get OOB at {k}")
 			self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: saved)
-			binding.boundValue = saved
-			self.noteMoveStateWritten(binding)
+			binding.setBoundValue(saved, ledger: self.bodyState.moveLedger)
 		end 'each'
 	end 'restoreBindings'
 
@@ -51133,8 +51548,7 @@ export type Parser
 		for k in 0 upto phiVars.count() 'install'
 			var phiVar = try phiVars.get(k) otherwise panic("installCarriedPhis: phiVars.get OOB at {k}")
 			self.recordDebugRebind(phiVar.binding.debugLocalSlot, recorded: phiVar.binding.debugLocalRecorded, current: phiVar.binding.boundValue, value: phiVar.phiId)
-			phiVar.binding.boundValue = phiVar.phiId
-			self.noteMoveStateWritten(phiVar.binding)
+			phiVar.binding.setBoundValue(phiVar.phiId, ledger: self.bodyState.moveLedger)
 		end 'install'
 	end 'installCarriedPhis'
 
@@ -51794,8 +52208,7 @@ export type Parser
 			var pv = try ctx.phiVars.get(k) otherwise panic("parseForStatement: phiVars.get OOB at {k}")
 			let stepPhiId = self.mintPhiForBinding(step, binding: pv.binding)
 			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: stepPhiId)
-			pv.binding.boundValue = stepPhiId
-			self.noteMoveStateWritten(pv.binding)
+			pv.binding.setBoundValue(stepPhiId, ledger: self.bodyState.moveLedger)
 		end 'mkStepPhi'
 
 		// ⭐ **WHAT ONE STEP IS.** A range and an array advance by ONE (an ordinal); a String advances to the
@@ -52033,8 +52446,7 @@ export type Parser
 			var pv = try phiVars.get(k) otherwise panic("joinAfterEmptyIterable: phiVars.get OOB at {k}")
 			let joinPhiId = self.mintPhiForBinding(join, binding: pv.binding)
 			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: joinPhiId)
-			pv.binding.boundValue = joinPhiId
-			self.noteMoveStateWritten(pv.binding)
+			pv.binding.setBoundValue(joinPhiId, ledger: self.bodyState.moveLedger)
 		end 'mkJoinPhi'
 
 		self.recordBranchEdge(exit, targetId: join.id, argIds: loopVals)
@@ -53905,8 +54317,7 @@ export type Parser
 			for k in 0 upto ctx.phiVars.count() 'inherit'
 				var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
 				self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: pv.phiId)
-				pv.binding.boundValue = pv.phiId
-				self.noteMoveStateWritten(pv.binding)
+				pv.binding.setBoundValue(pv.phiId, ledger: self.bodyState.moveLedger)
 			end 'inherit'
 
 			return
@@ -53918,8 +54329,7 @@ export type Parser
 			var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
 			let exitPhiId = self.mintPhiForBinding(exit, binding: pv.binding)
 			self.recordDebugRebind(pv.binding.debugLocalSlot, recorded: pv.binding.debugLocalRecorded, current: pv.binding.boundValue, value: exitPhiId)
-			pv.binding.boundValue = exitPhiId
-			self.noteMoveStateWritten(pv.binding)
+			pv.binding.setBoundValue(exitPhiId, ledger: self.bodyState.moveLedger)
 			self.pushMergedEdgeValue(headerVals, binding: pv.binding, value: pv.phiId)
 		end 'mkExitPhi'
 
@@ -54156,7 +54566,7 @@ export type Parser
 			let entering = binding.cellEpoch.epochValue()
 			let headerEpoch = self.mintCellEpoch(joinedOccupantExclusivity(self.cellEpochExclusivityOf(entering), b: CellOccupantExclusivity.unproven))
 			binding.cellEpoch = CellEpoch.current(headerEpoch)
-			self.noteMoveStateWritten(binding)
+			binding.noteWritten(self.bodyState.moveLedger)
 			self.noteDerivedCellEpoch(headerEpoch, from: entering)
 		end 'eachCell'
 	end 'mintCellHeaderEpochs'
@@ -54173,7 +54583,7 @@ export type Parser
 		let handed = self.mintCellEpoch(CellOccupantExclusivity.unproven)
 		var handedOver = binding
 		handedOver.cellEpoch = CellEpoch.current(handed)
-		self.noteMoveStateWritten(handedOver)
+		handedOver.noteWritten(self.bodyState.moveLedger)
 		self.noteDerivedCellEpoch(handed, from: entering)
 		self.openByRefHandOffs.push(OpenByRefHandOff.create(self.artifact.currentFuncIndex, epoch: handed, anchor: anchor))
 	end 'noteCellHandedByReference'
@@ -54184,7 +54594,7 @@ export type Parser
 		if edgesCarryOneValue(edges, position: position) 'oneEpoch'
 			let first = try edges.get(0) otherwise panic("settleCellEpochAtMerge: a merge is settled only with a reaching edge")
 			binding.cellEpoch = CellEpoch.current(first.mark.valueAt(position))
-			self.noteMoveStateWritten(binding)
+			binding.noteWritten(self.bodyState.moveLedger)
 			return
 		end 'oneEpoch'
 
@@ -54196,7 +54606,7 @@ export type Parser
 
 		let merged = self.mintCellEpoch(joined)
 		binding.cellEpoch = CellEpoch.current(merged)
-		self.noteMoveStateWritten(binding)
+		binding.noteWritten(self.bodyState.moveLedger)
 
 		for edge in edges 'eachEdge'
 			self.noteDerivedCellEpoch(merged, from: edge.mark.valueAt(position))
@@ -55997,13 +56407,11 @@ export type Parser
 
 			if entryV == prevV 'same'
 				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: entryV)
-				binding.boundValue = entryV
-				self.noteMoveStateWritten(binding)
+				binding.setBoundValue(entryV, ledger: self.bodyState.moveLedger)
 			end 'same' else 'differ'
 				let phiId = self.mintPhiForBinding(bodyBlock, binding: binding)
 				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: phiId)
-				binding.boundValue = phiId
-				self.noteMoveStateWritten(binding)
+				binding.setBoundValue(phiId, ledger: self.bodyState.moveLedger)
 				self.pushMergedEdgeValue(matchEdgeArgs, binding: binding, value: entryV)
 				self.pushMergedEdgeValue(fallthroughEdgeArgs, binding: binding, value: prevV)
 			end 'differ'
@@ -56326,8 +56734,7 @@ export type Parser
 			if isDifferent 'phiVar'
 				let phiId = self.mintPhiForBinding(merge, binding: binding)
 				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: phiId)
-				binding.boundValue = phiId
-				self.noteMoveStateWritten(binding)
+				binding.setBoundValue(phiId, ledger: self.bodyState.moveLedger)
 
 				// ⭐ **A CARRIED BINDING'S MERGE IS THE `if` CONTINUATION'S TWIN, ONE CONSTRUCT OVER** — same
 				// withheld claim, same complete incoming set, same two costs when it is never lifted: a
@@ -56346,8 +56753,7 @@ export type Parser
 			end 'phiVar' else 'common'
 				let commonValue = try firstArm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
 				self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: commonValue)
-				binding.boundValue = commonValue
-				self.noteMoveStateWritten(binding)
+				binding.setBoundValue(commonValue, ledger: self.bodyState.moveLedger)
 			end 'common'
 		end 'setBindings'
 
@@ -96390,8 +96796,7 @@ export type Parser
 		end 'theCellWasStoredSinceTheRead'
 
 		self.storeCellOccupant(binding.boundValue, cellType: binding.varType, value: self.emitStringLiteral(EmptySourceText, range: range), range: range)
-		binding.movedFrom = true
-		self.noteMoveStateWritten(binding)
+		binding.setMovedFrom(true, ledger: self.bodyState.moveLedger)
 		self.markMutabilityExercised(binding)
 		forgetCellOccupantRead(self.bodyState.cellOccupantReads, occupant: value)
 		self.markValueOwnsHeap(value, exclusivity: OwnedHeapExclusivity.sole if self.cellEpochExclusivityOf(read.epoch) == CellOccupantExclusivity.sole else OwnedHeapExclusivity.coOwned)
