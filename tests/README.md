@@ -389,6 +389,7 @@ tests/
     a-record-layout-guard-fails-the-compile-when-the-record-grows.maxtest        a record guarded by its byte size stops compiling when a field is added without regenerating the guard
     a-warm-trivial-build-adopts-one-front-end-worker.maxtest      a warm build of a one-file program adopts at most one front-end worker
     regalloc-splitting-allocates-per-split-not-per-op.maxtest     a larger function adds fewer `splitting` allocations to the register allocator than it adds statements
+    regalloc-a-function-split-past-65536-times-compiles-and-runs.maxtest   a function the splitter must split more than 65536 times compiles and computes the right answer
     error-path-drops-grow-linearly-with-propagating-trys.maxtest   a function of 16, 32 and 64 owned bindings, each bound by a propagating `try`, compiles to code that grows linearly in the bindings
     error-path-drops-grow-linearly-with-throws.maxtest             the same with a guarded `throw` after each binding
     error-path-drops-grow-linearly-with-early-returns.maxtest      the same with a guarded early `return` after each binding

@@ -1,0 +1,105 @@
+// regalloc-a-function-split-past-65536-times-compiles-and-runs.maxtest - the splitter has no fixed split
+// budget: a legal function that needs more than 65536 splits compiles and computes the right answer.
+//
+// The fixture must be this large because each split relieves one unit of pressure, so no small function
+// can need that many; the gate refuses to pass if the build reports fewer splits than it is meant to need.
+
+typealias UnitTally = int(0 to 100000)
+typealias UnitValue = int(0 to u32.max)
+
+let CaseDirName = "regalloc-split-past-65536"
+let AppDirName = "app"
+let MainFileName = "main.maxon"
+let LogFlag = "--log=codegen:debug"
+let ValuesSplitFieldPrefix = "valuesSplit="
+
+let Units = 9000 as UnitTally
+let ValuesPerUnit = 12 as UnitTally
+let SplitsTheFixtureMustNeed = 65537 as ReportedTally
+
+let Low16 = 0xFFFF as UnitValue
+let OpaqueThreshold = 100 as UnitValue
+let PathLengthMask = 0xFF as UnitValue
+
+let FixtureHeader = "typealias Word = int(0 to u32.max)\n\nfunction opaque(x Word) returns Word\n\tif x > 100 'big'\n\t\treturn (x - 100) and 0xFFFF\n\tend 'big'\n\n\treturn x + 1\nend 'opaque'\n\nfunction work(seed Word) returns Word\n\tvar total = seed\n"
+let FixtureFooter = "\treturn total\nend 'work'\n\nfunction main() returns ExitCode\n\tlet spelled = try Process.environmentVariable(\"PATH\") otherwise \"\"\n\tprint(\"\{work((spelled.byteLength() and 0xFF) as Word)\}\")\n\treturn 0\nend 'main'\n"
+
+function fixtureSource() returns String
+	var out = FixtureHeader
+
+	for unit in 0 upto Units 'eachUnit'
+		for k in 0 upto ValuesPerUnit 'eachValue'
+			out.append("\tlet a{unit}_{k} = opaque(total + {k})\n")
+		end 'eachValue'
+
+		out.append("\ttotal = opaque(total)\n\ttotal = (total")
+
+		for k in 0 upto ValuesPerUnit 'eachSummand'
+			out.append(" + a{unit}_{k}")
+		end 'eachSummand'
+
+		out.append(") and 0xFFFF\n")
+	end 'eachUnit'
+
+	out.append(FixtureFooter)
+	return out
+end 'fixtureSource'
+
+function opaque(x UnitValue) returns UnitValue
+	if x > OpaqueThreshold 'big'
+		return (x - OpaqueThreshold) and Low16
+	end 'big'
+
+	return x + 1
+end 'opaque'
+
+function expectedAnswer() returns UnitValue
+	let spelled = try Process.environmentVariable("PATH") otherwise ""
+	var total = (spelled.byteLength() as UnitValue) and PathLengthMask
+
+	for _ in 0 upto Units 'eachUnit'
+		var sum = 0 as UnitValue
+
+		for k in 0 upto ValuesPerUnit 'eachValue'
+			sum = sum + opaque(total + (k as UnitValue))
+		end 'eachValue'
+
+		total = (opaque(total) + sum) and Low16
+	end 'eachUnit'
+
+	return total
+end 'expectedAnswer'
+
+function valuesSplitIn(stderr String) returns ReportedTally
+	let parts = stderr.split(ValuesSplitFieldPrefix)
+	let tail = try parts.get(1) otherwise panic("regalloc-split-past-65536: the gate could not run - the `{LogFlag}` report carries no `{ValuesSplitFieldPrefix}` field, so the splits were never counted. It wrote to stderr: {stderr}")
+	return try reportedTally(tail) otherwise panic("regalloc-split-past-65536: the gate could not run - `{ValuesSplitFieldPrefix}` states no count. It wrote to stderr: {stderr}")
+end 'valuesSplitIn'
+
+test 'a function whose relief takes more than 65536 splits compiles and runs'
+	requireHeldOutsideCheckout(CaseDirName, check: SplitPast65536.create())
+end 'a function whose relief takes more than 65536 splits compiles and runs'
+
+type SplitPast65536 implements OutsideCheckoutCase
+	static function create() returns SplitPast65536
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = createdStagedDirectory(dir.join(AppDirName))
+		writeStagedFile(app.join(MainFileName), content: fixtureSource())
+
+		let built = runDriver([BuildCommandWord, AppDirName, LogFlag], workingDirectory: dir)
+		try Expect.equal(built.exitCode(), expected: 0, message: "a function of {Units} units, each holding {ValuesPerUnit} call results live across a call, did not build. It wrote to stderr: {built.stderr}")
+
+		let splits = valuesSplitIn(built.stderr)
+
+		if splits < SplitsTheFixtureMustNeed 'tooFewSplits'
+			panic("regalloc-split-past-65536: the gate could not run - the fixture split only {splits} values, under the {SplitsTheFixtureMustNeed} it exists to exceed. Raise `Units`.")
+		end 'tooFewSplits'
+
+		let ran = runDriver(ListedWordArray.create(), binary: app.join("{AppDirName}{executableSuffix()}"), workingDirectory: dir)
+		try Expect.equal(ran.exitCode(), expected: 0, message: "the program built from {splits} splits exited {ran.exitCode()}. It wrote to stderr: {ran.stderr}")
+		try Expect.equal(ran.stdout.trim(), expected: "{expectedAnswer()}", message: "the program built from {splits} splits computed the wrong answer.")
+	end 'requireHeldIn'
+end 'SplitPast65536'

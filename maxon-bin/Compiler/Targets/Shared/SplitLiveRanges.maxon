@@ -4560,18 +4560,8 @@ end 'SplitDriver'
 // (`valueCount` grows as fresh reload ids are minted; the bound is computed ONCE, from the initial
 // figures, because the split count is bounded by the INITIAL potential.)
 export function splitRunawayBound(liveness LivenessResult) returns EventCount
-	return minEventCount((liveness.useIndex.opCount as EventCount) * ((liveness.valueCount + 1) as EventCount) + RegisterFileSize, b: SplitCeiling)
+	return (liveness.useIndex.opCount as EventCount) * ((liveness.valueCount + 1) as EventCount) + RegisterFileSize
 end 'splitRunawayBound'
-
-// The product above is a hang in practice on a large function — thousands of ops times thousands of
-// values — and a legitimate relief count is a small multiple of the values a function holds over its
-// pool, so the bound is also capped here: a driver still splitting past this many is stuck, and the
-// panic is owed while the function is still recognisable.
-let SplitCeiling = 65536 as EventCount
-
-function minEventCount(a EventCount, b EventCount) returns EventCount
-	return a if a < b else b
-end 'minEventCount'
 
 // WHERE a colouring failed, in the coordinates a split anchor needs — plus whether an OP sits there at
 // all, which is the one question cure (b) must ask of it. A BLOCK-ARG fails at its block's entry, and a
