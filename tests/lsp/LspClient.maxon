@@ -743,20 +743,20 @@ public type LspClient
 		throw LspClientError.transportFailed("no textDocument/publishDiagnostics for {uri} arrived within {UnaddressedMessageBudget} messages")
 	end 'awaitPublishedDiagnostics'
 
-	public function awaitProjectCheckPublish(uri String) returns PublishedDiagnostics throws LspClientError
-		return try self.awaitPublishesOfThisVersion(uri, still: PublishesPerProjectDocumentVersion)
+	public function awaitProjectCheckPublish(uri String, within DurationMs = ProjectCheckPublishFailureBoundMs) returns PublishedDiagnostics throws LspClientError
+		return try self.awaitPublishesOfThisVersion(uri, still: PublishesPerProjectDocumentVersion, within: within)
 	end 'awaitProjectCheckPublish'
 
 	public function awaitProjectCheckPublishAfterTheFastOne(uri String) returns PublishedDiagnostics throws LspClientError
-		return try self.awaitPublishesOfThisVersion(uri, still: PublishesPerProjectDocumentVersion - FastPublishesPerDocumentVersion)
+		return try self.awaitPublishesOfThisVersion(uri, still: PublishesPerProjectDocumentVersion - FastPublishesPerDocumentVersion, within: ProjectCheckPublishFailureBoundMs)
 	end 'awaitProjectCheckPublishAfterTheFastOne'
 
-	function awaitPublishesOfThisVersion(uri String, still VersionPublishTally) returns PublishedDiagnostics throws LspClientError
+	function awaitPublishesOfThisVersion(uri String, still VersionPublishTally, within DurationMs) returns PublishedDiagnostics throws LspClientError
 		let started = Clock.nowMs()
 		var arrived = 0 as VersionPublishTally
 		var latest = PublishedDiagnostics.of(uri.clone(), items: PublishedDiagnosticArray.create())
 
-		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilChecked'
+		while Clock.elapsedMs(started) < within 'untilChecked'
 			// A request is what reads the wire: every notification that arrives ahead of its reply is stashed.
 			_ = try self.documentSymbols(uri)
 
@@ -776,7 +776,7 @@ public type LspClient
 			sleep(ProjectCheckPollPauseMs)
 		end 'untilChecked'
 
-		throw LspClientError.transportFailed("{arrived} of the {still} publishes still owed for one version of {uri} arrived within {ProjectCheckPublishFailureBoundMs} ms, so the project check's set never did; the last publish held {latest.items.count()} diagnostic(s)")
+		throw LspClientError.transportFailed("{arrived} of the {still} publishes still owed for one version of {uri} arrived within {within} ms, so the project check's set never did; the last publish held {latest.items.count()} diagnostic(s)")
 	end 'awaitPublishesOfThisVersion'
 
 	// The OLDEST stashed publish for `uri`, and only that one. A project document gets two per version, so

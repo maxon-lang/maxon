@@ -34,7 +34,7 @@ function supersedeTheRunningCheck(client LspClient, root FilePath) returns Super
 		sleep(BusyCheckPastTheDebounceMs)
 
 		client.changeDocument(uri, content: SupersededCheckEditedSource, version: SupersededCheckEditedVersion)
-		_ = client.awaitProjectCheckPublish(uri)
+		_ = client.awaitProjectCheckPublish(uri, within: BusyCheckPublishFailureBoundMs)
 		outcome = SupersededCheckOutcome.reported(client.awaitProjectCheckReports(uri, through: SupersededCheckEditedVersion))
 	end 'session' otherwise (e) 'failed'
 		match e 'reason'
