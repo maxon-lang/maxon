@@ -312,9 +312,15 @@ prompt=true spinners=true ping=1
 <!-- procs: 1 -->
 **A PREEMPTION TAKES THE PROCESSOR, NEVER THE TURN.** A coroutine gives up its green thread only where it
 waits (`async` is a coroutine, not a thread), so its owner and its siblings may observe what it wrote only
-at those points. `busy` writes `phase = 1`, computes for 150 ms without waiting, then writes `phase = 2`.
-`main` and `nap` both become runnable 30 ms in, while `busy` is being preempted every 10 ms; neither may run
-until `busy` has finished, so both read 2. One ATTEMPT owns its disturbance: a host that holds the
+at those points. `busy` writes `phase = 1`, computes without waiting, then writes `phase = 2`. `main` and
+`nap` both become runnable 30 ms in, and `busy` keeps computing until at least 150 ms have passed AND a
+preemption has been honoured after both deadlines were due; neither may run until `busy` has finished, so
+both read 2. The preemption is waited for rather than assumed on a clock: the monitor asks on WALL time,
+so a host that gives the monitor thread no core for most of an interval delays the first request by an
+unbounded amount while nothing about preemption has changed (MEASURED: 24 CPU-bound processes on 12
+cores put the first request 330 to 965 ms after the spin began, and a fixed 150 ms spin saw no preemption
+at all in 57 of 60 runs). `spinCapMs` bounds the wait, and a spin that ends without the post-deadline
+preemption reports `preempted=false` and reddens the pinned line. One ATTEMPT owns its disturbance: a host that holds the
 process off a core for most of those 30 ms leaves `busy` still at its own `sleep(1)` when `main`'s
 deadline comes due, `__gt_timer_check` fires what is due in `(deadline, seq)` order, and
 `__gt_ready_locked` puts a woken OWNER at the FRONT of its strand queue and a woken coroutine at the
@@ -324,15 +330,20 @@ discarded and retried; a 1 in either reading is the regression this case exists 
 and reddens the pinned line, so the retry is not a tolerance. `seenBySibling` is never the 0: `nap` is
 enqueued behind `busy` at its `async`, holds the later of the two deadlines so pop-min wakes `busy`
 first, and `busy` never waits once started. `attemptCap` is a time budget, every attempt paying the
-full 150 ms spin, and exhausting it prints its own non-matching line and exits 3. `preempted` reads
-`Scheduler.counters().preempts` against a baseline taken inside the attempt: the counter is process-global and
-monotonic, so a discarded attempt's spin would otherwise leave it true for nothing.
+full spin, and exhausting it prints its own non-matching line and exits 3. `preempted` is set by `busy`
+itself from `Scheduler.counters().preempts` read against a baseline taken once the deadlines are due: the
+counter is process-global and monotonic, so a baseline taken any earlier would count a preemption that
+came before `main` and `nap` were runnable, which exercises nothing.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 let attemptCap = 8
+let spinFloorMs = 150
+let deadlinesDueMs = 35
+let spinCapMs = 8000
 
 var phase = 0
+var honoured = false
 
 // Recursive, so it is never inlined and every iteration passes a function prologue.
 function step(acc Integer, depth Integer) returns Integer
@@ -347,12 +358,25 @@ function busy() returns Integer
 	phase = 1
 	let start = Clock.nowMs()
 	var acc = 0
-	while (Clock.elapsedMs(start) as Integer) < 150 'spin'
+	var elapsed = 0
+	var baseline = Scheduler.counters().preempts
+	var baselined = false
+	while elapsed < spinCapMs and (elapsed < spinFloorMs or not honoured) 'spin'
 		var i = 0
 		while i < 1000 'burst'
 			acc = step(acc, depth: 4)
 			i = i + 1
 		end 'burst'
+		elapsed = Clock.elapsedMs(start) as Integer
+		if elapsed >= deadlinesDueMs 'deadlinesDue'
+			let now = Scheduler.counters().preempts
+			if not baselined 'firstLook'
+				baseline = now
+				baselined = true
+			end 'firstLook' else if now > baseline 'honouredAfterDue'
+				honoured = true
+			end 'honouredAfterDue'
+		end 'deadlinesDue'
 	end 'spin'
 	phase = 2
 	return acc mod 2 + 1
@@ -368,7 +392,7 @@ function main() returns ExitCode
 	while tries < attemptCap 'attempts'
 		tries = tries + 1
 		phase = 0
-		let preemptsBefore = Scheduler.counters().preempts
+		honoured = false
 		let a = async busy()
 		let b = async nap()
 		sleep(30)
@@ -379,7 +403,7 @@ function main() returns ExitCode
 			continue
 		end 'neverStarted'
 
-		print("owner={seenByOwner} sibling={seenBySibling} busy={q > 0} preempted={Scheduler.counters().preempts > preemptsBefore}\n")
+		print("owner={seenByOwner} sibling={seenBySibling} busy={q > 0} preempted={honoured}\n")
 		return 0
 	end 'attempts'
 
