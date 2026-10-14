@@ -2741,7 +2741,7 @@ function opAt(module TargetModule, opIdx ElementIndex) returns TargetOp
 end 'opAt'
 
 function opRefAt(block IrBlock, pos ElementIndex) returns ElementIndex
-	return try block.opRefs.get(pos) otherwise panic("emitFunctionChunk: op position {pos} is past the end of block '{String.from(block.label)}'")
+	return try block.bodyOpAt(pos) otherwise panic("emitFunctionChunk: op position {pos} is past the end of block '{String.from(block.label)}'")
 end 'opRefAt'
 
 // Emit `first`, then `last` when it is a second op, returning where the unit's last op begins.
@@ -2882,7 +2882,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 		isFirstBlock = false
 
-		let opCount = block.opRefs.count()
+		let opCount = block.bodyOpCount()
 		var opPos = 0 as ElementIndex
 
 		while opPos < opCount 'eachOp'

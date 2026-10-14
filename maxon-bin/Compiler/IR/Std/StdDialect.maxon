@@ -4861,7 +4861,7 @@ export function collectFunctionValueUses(module StdModule, func IrFunction, refe
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("collectFunctionValueUses: blockRef from func.blockRefs not in module.blocks")
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			collectStdOpUses(try module.ops.get(opIdx) otherwise panic("collectFunctionValueUses: opIdx {opIdx} not in module.ops"), referenced: referenced)
 		end 'eachOp'
 
@@ -5042,7 +5042,7 @@ export function nextFreeValueId(module StdModule, func IrFunction) returns Value
 			maxId = maxValueId(maxId, other: arg.valueId)
 		end 'eachArg'
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			maxId = maxDefinedIdAfter(module, opIdx: opIdx, maxId: maxId, def: def)
 		end 'eachOp'
 
@@ -5971,7 +5971,7 @@ end 'substituteValuesInFunc'
 // edge args — for a caller that rewrites a SUBSET of a function's blocks (`unswitchInvariantGuards`
 // rewrites the readers of an exit phi everywhere but inside the loop that defines the value).
 module function substituteValuesInBlock(module StdModule, block IrBlock, subst ValueIdArray)
-	for opIdx in block.opRefs 'eachOp'
+	for opIdx in block.bodyOps() 'eachOp'
 		substituteOpUses(module, opIdx: opIdx, subst: subst)
 	end 'eachOp'
 
@@ -6062,7 +6062,7 @@ module function removeOpsDefining(module StdModule, func IrFunction, doomed StdV
 
 		var kept = OpIndexArray.create()
 
-		for opIdx in block.opRefs 'eachRef'
+		for opIdx in block.bodyOps() 'eachRef'
 			if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed, def: def) 'removed'
 				continue
 			end 'removed'
@@ -6070,14 +6070,14 @@ module function removeOpsDefining(module StdModule, func IrFunction, doomed StdV
 			kept.push(opIdx)
 		end 'eachRef'
 
-		block.opRefs = kept
+		block.replaceBodyOps(kept)
 	end 'eachBlock'
 end 'removeOpsDefining'
 
 // Whether `block` holds any op the removal would drop — the question that decides whether its `opRefs`
 // column has to be rebuilt at all.
 function blockDefinesADoomedValue(module StdModule, block IrBlock, doomed StdValueUseSet, def StdDefinedValues) returns bool
-	for opIdx in block.opRefs 'eachRef'
+	for opIdx in block.bodyOps() 'eachRef'
 		if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed, def: def) 'found'
 			return true
 		end 'found'
@@ -6087,7 +6087,7 @@ function blockDefinesADoomedValue(module StdModule, block IrBlock, doomed StdVal
 end 'blockDefinesADoomedValue'
 
 function opDefinesADoomedValue(module StdModule, opIdx ElementIndex, doomed StdValueUseSet, def StdDefinedValues) returns bool
-	stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("removeOpsDefining: opIdx {opIdx} from block.opRefs not in module.ops"), def: def)
+	stdOpDefinedValue(try module.ops.get(opIdx) otherwise panic("removeOpsDefining: opIdx {opIdx} from block.bodyOps() not in module.ops"), def: def)
 
 	if def.definesNothing() 'noDef'
 		return false

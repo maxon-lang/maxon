@@ -739,14 +739,14 @@ export type StdToArm64Lowering
 
 	function stdBlockOpCount(blockRef ElementIndex) returns ElementIndex
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpCount: blockRef {blockRef} not in stdModule.blocks")
-		return block.opRefs.count()
+		return block.bodyOpCount()
 	end 'stdBlockOpCount'
 
 	// The flat `stdModule.ops` index a block names at `index` — the coordinate a span is keyed by,
 	// which `stdBlockOpAt` resolves away.
 	function stdBlockOpIndexAt(blockRef ElementIndex, index ElementIndex) returns ElementIndex
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpIndexAt: blockRef {blockRef} not in stdModule.blocks")
-		return try block.opRefs.get(index) otherwise panic("stdBlockOpIndexAt: opRefs.get OOB at {index}")
+		return try block.bodyOpAt(index) otherwise panic("stdBlockOpIndexAt: bodyOpAt OOB at {index}")
 	end 'stdBlockOpIndexAt'
 
 	// The flat `stdModule.ops` index of a block's terminator, for the same reason.
@@ -757,7 +757,7 @@ export type StdToArm64Lowering
 
 	function stdBlockOpAt(blockRef ElementIndex, index ElementIndex) returns StdOp
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpAt: blockRef {blockRef} not in stdModule.blocks")
-		let opIdx = try block.opRefs.get(index) otherwise panic("stdBlockOpAt: opRefs.get OOB at {index}")
+		let opIdx = try block.bodyOpAt(index) otherwise panic("stdBlockOpAt: bodyOpAt OOB at {index}")
 		return try self.stdModule.ops.get(opIdx) otherwise panic("stdBlockOpAt: opIdx {opIdx} not in stdModule.ops")
 	end 'stdBlockOpAt'
 

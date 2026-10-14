@@ -724,7 +724,7 @@ THE STORE ANCHOR IS THE DEF, and this program is why. `t` is used once BEFORE th
 as the branch-edge ARG the `then` arm passes to `m`'s merge phi — and once after it, in the
 return sum. Anchoring a store "after the value's last before-peak use" would here anchor at an EDGE
 arg whose anchor op is the block's TERMINATOR: a store cannot be spliced after a terminator, and the
-splitter would panic outright (`positionInBlock: op N not in block 'br' opRefs`).
+splitter would panic outright (`positionInBlock: op N not in the body of block B`).
 
 Anchoring at the last before-peak use is unsound even when it does not crash: the `then` block
 does not DOMINATE the merge, so the store would never run on the `else` path and the reload after

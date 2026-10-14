@@ -15157,7 +15157,7 @@ end 'ConstantSliceFold'
 //     fails and the removal is DECLINED. A declined removal keeps a correct program that pays one
 //     allocation; a removal on a stale position would delete somebody else's op.
 //   * `siteMark` is `rangeCheckSites.count()` at the instant the op was appended. A site records
-//     `maxonOpPos = opRefs.count()` in the block it is recorded in, so every site filed BEFORE this op was
+//     `maxonOpPos = bodyOpCount()` in the block it is recorded in, so every site filed BEFORE this op was
 //     appended names a position at or below it and cannot be moved by its removal. Only the sites after
 //     the mark can, which is `rehomeArmRangeSites`' bounded sub-range for a removal rather than a
 //     relocation.
@@ -43016,12 +43016,12 @@ export type Parser
 	function detachOpRefsAbove(block IrBlock, mark ElementIndex) returns OpIndexArray
 		var detached = OpIndexArray.create()
 
-		for i in mark upto block.opRefs.count() 'collect'
-			detached.push(try block.opRefs.get(i) otherwise panic("detachOpRefsAbove: block {block.id} opRefs.get OOB at {i}"))
+		for i in mark upto block.bodyOpCount() 'collect'
+			detached.push(try block.bodyOpAt(i) otherwise panic("detachOpRefsAbove: block {block.id} bodyOpAt OOB at {i}"))
 		end 'collect'
 
-		while block.opRefs.count() > mark 'truncate'
-			_ = try block.opRefs.pop() otherwise panic("detachOpRefsAbove: block {block.id} opRefs.pop above the mark {mark} failed")
+		while block.bodyOpCount() > mark 'truncate'
+			_ = try block.popBodyOp() otherwise panic("detachOpRefsAbove: block {block.id} popBodyOp above the mark {mark} failed")
 		end 'truncate'
 
 		return detached
@@ -43061,9 +43061,9 @@ export type Parser
 	// constant-slice fold's op REMOVAL, which shifts by one instead of relocating and skips instead of
 	// asserting. The two loops are the same rule with different failure policies, and nothing but this
 	// cross-reference makes them agree: **a change to `RangeCheckSite`'s position representation must be
-	// made in BOTH, and a THIRD mutation of any block's `opRefs` owes the same walk.** There are exactly two
-	// `opRefs` mutations in this parser (`detachOpRefsAbove` and `removeCurrentBlockOpAt`); a grep for
-	// `opRefs.pop` / `opRefs.set` is what enumerates them.
+	// made in BOTH, and a THIRD mutation of any block's body ops owes the same walk.** There are exactly two
+	// body-op mutations in this parser (`detachOpRefsAbove` and `removeCurrentBlockOpAt`); a grep for
+	// `popBodyOp` / `setBodyOp` is what enumerates them.
 	function rehomeArmRangeSites(fromBlock BlockId, toBlock BlockId, opShift ElementIndex, firstSite ElementIndex, endSite ElementIndex)
 		for i in firstSite upto endSite 'eachArmSite'
 			var site = try self.bodyState.rangeCheckSites.get(i) otherwise panic("rehomeArmRangeSites: rangeCheckSites.get OOB at {i}, inside the range the ternary's own marks bound")
@@ -43240,13 +43240,13 @@ export type Parser
 	// accessor, so the handler caught the array's error and the E3057 the bare accessor owed vanished
 	// with its `call`.
 	function opProducingTheValue(floor ElementIndex) returns ValueProducer
-		let refCount = self.bodyState.currentBlock.opRefs.count()
+		let refCount = self.bodyState.currentBlock.bodyOpCount()
 
 		if refCount == 0 'theBlockHoldsNoOp'
 			return ValueProducer.noOwnOp
 		end 'theBlockHoldsNoOp'
 
-		let lastIdx = try self.bodyState.currentBlock.opRefs.get(refCount - 1) otherwise panic("opProducingTheValue: opRefs.get OOB on a block whose count was just read as non-zero")
+		let lastIdx = try self.bodyState.currentBlock.bodyOpAt(refCount - 1) otherwise panic("opProducingTheValue: bodyOpAt OOB on a block whose count was just read as non-zero")
 
 		if lastIdx < floor 'emittedBeforeTheFloor'
 			return ValueProducer.noOwnOp
@@ -43270,7 +43270,7 @@ export type Parser
 			return lastIdx
 		end 'noOpBehindIt'
 
-		let prevIdx = try self.bodyState.currentBlock.opRefs.get(refCount - 2) otherwise panic("tryTargetCallOpIndex: opRefs.get OOB at {refCount - 2} on a block with {refCount} ops")
+		let prevIdx = try self.bodyState.currentBlock.bodyOpAt(refCount - 2) otherwise panic("tryTargetCallOpIndex: bodyOpAt OOB at {refCount - 2} on a block with {refCount} ops")
 
 		if prevIdx < targetOpFloor 'beforeTheTarget'
 			return lastIdx
@@ -43513,7 +43513,7 @@ export type Parser
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try self.artifact.module.blocks.get(blockRef) otherwise panic("resolveAsyncCallee: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				match asyncCalleeIfMatch(try self.artifact.module.ops.get(opIdx) otherwise panic("resolveAsyncCallee: opIdx {opIdx} not in module.ops"), promise: promise) 'm'
 					found(callee) then return AsyncCalleeLookup.found(callee)
 					serviceReply(messageName, awaitedService) then return AsyncCalleeLookup.serviceReply(messageName, awaitedService: awaitedService)
@@ -59512,7 +59512,7 @@ export type Parser
 		let armTok = self.current()
 		let armStart = self.pos
 
-		let markOpRefCount = block.opRefs.count()
+		let markOpRefCount = block.bodyOpCount()
 		let markBlockRefCount = func.blockRefs.count()
 
 		// ⭐ **AND THE RANGE-CHECK SITE HEIGHT AT THE SAME INSTANT (`rehomeArmRangeSites`).** A site records
@@ -59727,7 +59727,7 @@ export type Parser
 		// where its value lives now: the true branch itself when the arm was straight-line, else the arm's own
 		// (relocated) exit block.
 		var trueBranch = self.artifact.module.addBlock(func, label: b"ternarytrue", heat: BlockHeat.normal)
-		trueBranch.opRefs = relocatedOpRefs
+		trueBranch.replaceBodyOps(relocatedOpRefs)
 		trueBranch.terminator = savedTerminator
 		trueBranch.branchEdges = savedEdges
 
@@ -62364,7 +62364,7 @@ export type Parser
 
 		// The site's own copy: the alias is the signature index's record, and the site rides the
 		// artifact, which may hold no record from outside itself.
-		self.bodyState.rangeCheckSites.push(RangeCheckSite.create(value, target: RangeCheckSiteTarget.alias(target.clone()), block: self.bodyState.currentBlock.id, maxonOpPos: self.bodyState.currentBlock.opRefs.count(), line: line, column: column))
+		self.bodyState.rangeCheckSites.push(RangeCheckSite.create(value, target: RangeCheckSiteTarget.alias(target.clone()), block: self.bodyState.currentBlock.id, maxonOpPos: self.bodyState.currentBlock.bodyOpCount(), line: line, column: column))
 	end 'recordRangedTargetSite'
 
 	// Is `t` in the FLOAT domain — the bare `float` keyword, or a `named` type that denotes a ranged
@@ -66435,7 +66435,7 @@ export type Parser
 			return
 		end 'nothingDeferred'
 
-		self.bodyState.nascentSelfChecks.push(NascentSelfCheck.create(deferred, typeName: layout.name, block: self.bodyState.currentBlock.id, position: self.bodyState.currentBlock.opRefs.count(), line: anchor.line, column: anchor.column))
+		self.bodyState.nascentSelfChecks.push(NascentSelfCheck.create(deferred, typeName: layout.name, block: self.bodyState.currentBlock.id, position: self.bodyState.currentBlock.bodyOpCount(), line: anchor.line, column: anchor.column))
 	end 'fillFromNascentSelfSlots'
 
 	// ⭐⭐ **`<InnerAlias>{}` IS THE ALIAS'S EMPTY CONTAINER — the very value `<InnerAlias>.create()` builds**
@@ -82187,7 +82187,7 @@ export type Parser
 		// parameter belongs to a callee that may be in another file — `RangeCheckArgSite`), so it can record
 		// no positioned site at all. An element's alias is RIGHT HERE, in the instance's declared element
 		// type, and this runs BEFORE the store call is emitted — so `recordRangeCheckSite`'s
-		// `opRefs.count()` is the ordinal the `__managed_*` call is about to take, and the split lands the
+		// `bodyOpCount()` is the ordinal the `__managed_*` call is about to take, and the split lands the
 		// cascade immediately in front of it. It is the ordinary alias-named site every other door records.
 		//
 		// ⚠ **WHAT IS STILL UNENFORCED IS NOT A DOOR** — it is the zero-initialized slot `Array.resize`
@@ -83697,7 +83697,7 @@ export type Parser
 			throw SourceParseError.unsupported("deferring field '{String.from(fieldTok.value)}' of `type {String.from(layout.name)}` to a `self.{String.from(fieldTok.value)} = …` assignment — the field's type owns heap, and a deferred slot holds its value across control flow with no place to release it on a path that assigns and then leaves without building the `Self\{…\}`. Give the field in the literal instead", line: fieldTok.line, column: fieldTok.column)
 		end 'noSlotForThisField'
 
-		self.bodyState.nascentSelfWrites.push(NascentSelfWrite.create(fieldTok.value, block: self.bodyState.currentBlock.id, position: self.bodyState.currentBlock.opRefs.count()))
+		self.bodyState.nascentSelfWrites.push(NascentSelfWrite.create(fieldTok.value, block: self.bodyState.currentBlock.id, position: self.bodyState.currentBlock.bodyOpCount()))
 		try self.reassignBindingValue(func, binding: self.bodyState.scope.getInfo(slotTok.value), nameTok: slotTok, value: value, rhsBareLocalName: sourceName if not sourceReadsAField else SourceBinding.none)
 	end 'parseNascentSelfAssignment'
 
@@ -87592,7 +87592,7 @@ export type Parser
 		for blockRef in lifted.blockRefs 'eachBlock'
 			let block = try self.artifact.module.blocks.get(blockRef) otherwise panic("closureBodyReads: blockRef from lifted.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				if self.opReads(try self.artifact.module.ops.get(opIdx) otherwise panic("closureBodyReads: opIdx {opIdx} not in module.ops"), word: word) 'aReader'
 					return true
 				end 'aReader'
@@ -94562,11 +94562,11 @@ export type Parser
 	// the recorded position now names a different op or no op at all, and the removal is DECLINED: the call
 	// stays, the program is correct, and it pays the one allocation this fold would have saved.
 	function currentBlockStillHoldsFiledOp(site FoldedIndexCallSite) returns bool
-		if site.block != self.bodyState.currentBlock.id or site.blockOpPos >= self.bodyState.currentBlock.opRefs.count() 'theBlockHasMovedOnFromIt'
+		if site.block != self.bodyState.currentBlock.id or site.blockOpPos >= self.bodyState.currentBlock.bodyOpCount() 'theBlockHasMovedOnFromIt'
 			return false
 		end 'theBlockHasMovedOnFromIt'
 
-		let standingThere = try self.bodyState.currentBlock.opRefs.get(site.blockOpPos) otherwise panic("currentBlockStillHoldsFiledOp: opRefs.get OOB at {site.blockOpPos} of {self.bodyState.currentBlock.opRefs.count()} — the bound was just checked")
+		let standingThere = try self.bodyState.currentBlock.bodyOpAt(site.blockOpPos) otherwise panic("currentBlockStillHoldsFiledOp: bodyOpAt OOB at {site.blockOpPos} of {self.bodyState.currentBlock.bodyOpCount()} — the bound was just checked")
 		return standingThere == site.opIndex
 	end 'currentBlockStillHoldsFiledOp'
 
@@ -94574,7 +94574,7 @@ export type Parser
 	// drop it without hunting. `recordCharLiteralOp`'s twin — same COW-off-the-shared-empty discipline, same
 	// reason — differing only in what a site is: see `FoldedIndexCallSite` for why it takes four numbers.
 	function recordFoldedIndexCallSite(value ValueId, opIndex ElementIndex)
-		let landedAt = self.bodyState.currentBlock.opRefs.count() - 1
+		let landedAt = self.bodyState.currentBlock.bodyOpCount() - 1
 		let site = FoldedIndexCallSite.create(self.bodyState.currentBlock.id, blockOpPos: landedAt, opIndex: opIndex, siteMark: self.bodyState.rangeCheckSites.count())
 		var filed = self.foldedIndexCallSitesForWrite()
 		filed.upsert(value, value: site)
@@ -94596,7 +94596,7 @@ export type Parser
 	//     in a block whose length grows with the number of folds: an O(F²) that the ladder cannot see because
 	//     its corpus emits no constant slice at all.
 	//   * `siteMark` is `rangeCheckSites.count()` at the instant the op was appended, and a site records
-	//     `maxonOpPos = opRefs.count()` of the block it is recorded in — so every site filed before that
+	//     `maxonOpPos = bodyOpCount()` of the block it is recorded in — so every site filed before that
 	//     instant names a position at or below `removedAt` and is unmoved by definition. Only the sites after
 	//     the mark can move, which is `rehomeArmRangeSites`' bounded sub-range in the other direction.
 	//
@@ -94606,14 +94606,14 @@ export type Parser
 	// visited-and-skipped, and rewriting the index space to close the gap would invalidate every index
 	// already filed against it (`ConstPayloadDomain.stringLiteralOp`'s among them).
 	function removeCurrentBlockOpAt(removedAt ElementIndex, siteMark ElementIndex)
-		let lastPos = self.bodyState.currentBlock.opRefs.count() - 1
+		let lastPos = self.bodyState.currentBlock.bodyOpCount() - 1
 
 		for i in removedAt upto lastPos 'shiftTheTailDown'
-			let following = try self.bodyState.currentBlock.opRefs.get(i + 1) otherwise panic("removeCurrentBlockOpAt: opRefs.get OOB at {i + 1} of {self.bodyState.currentBlock.opRefs.count()}")
-			try self.bodyState.currentBlock.opRefs.set(i, value: following) otherwise panic("removeCurrentBlockOpAt: opRefs.set OOB at {i} of {self.bodyState.currentBlock.opRefs.count()}")
+			let following = try self.bodyState.currentBlock.bodyOpAt(i + 1) otherwise panic("removeCurrentBlockOpAt: bodyOpAt OOB at {i + 1} of {self.bodyState.currentBlock.bodyOpCount()}")
+			try self.bodyState.currentBlock.setBodyOp(i, value: following) otherwise panic("removeCurrentBlockOpAt: setBodyOp OOB at {i} of {self.bodyState.currentBlock.bodyOpCount()}")
 		end 'shiftTheTailDown'
 
-		_ = try self.bodyState.currentBlock.opRefs.pop() otherwise panic("removeCurrentBlockOpAt: opRefs.pop on a block the caller proved holds position {removedAt}")
+		_ = try self.bodyState.currentBlock.popBodyOp() otherwise panic("removeCurrentBlockOpAt: popBodyOp on a block the caller proved holds position {removedAt}")
 
 		for i in siteMark upto self.bodyState.rangeCheckSites.count() 'eachSiteSinceTheOpWasAppended'
 			var site = try self.bodyState.rangeCheckSites.get(i) otherwise panic("removeCurrentBlockOpAt: rangeCheckSites.get OOB at {i} of {self.bodyState.rangeCheckSites.count()}")
@@ -95183,7 +95183,7 @@ export type Parser
 			end 'noSignFloorAtThisSlot'
 
 			let target = RangeCheckSiteTarget.callArgument(callResult, argIndex: i, label: label, sourceMayBeNegative: not self.valueIsNonNegativeSource(argValue))
-			self.bodyState.rangeCheckSites.push(RangeCheckSite.create(argValue, target: target, block: self.bodyState.currentBlock.id, maxonOpPos: self.bodyState.currentBlock.opRefs.count(), line: range.line, column: range.column))
+			self.bodyState.rangeCheckSites.push(RangeCheckSite.create(argValue, target: target, block: self.bodyState.currentBlock.id, maxonOpPos: self.bodyState.currentBlock.bodyOpCount(), line: range.line, column: range.column))
 		end 'eachArg'
 	end 'recordCallArgumentSites'
 
@@ -95255,7 +95255,7 @@ export type Parser
 	// obstacle — *"a check is a BRANCH, and a call argument is evaluated part-way through building an
 	// argument list, so the guard would land PAST the call"* — is about a site recorded WHILE the list is
 	// being built. This runs after the last argument is parsed and before the `call` op is emitted, so
-	// `recordRangeCheckSite`'s `opRefs.count()` is the ordinal that op is about to take and the split puts
+	// `recordRangeCheckSite`'s `bodyOpCount()` is the ordinal that op is about to take and the split puts
 	// the cascade immediately in FRONT of the call. Every argument has been evaluated and the callee has not
 	// run: observably the entry guard's position, in the one frame that can hold it. It is the same
 	// reasoning — and the same anchor arithmetic — as `requireContainerElementType`'s store guard.

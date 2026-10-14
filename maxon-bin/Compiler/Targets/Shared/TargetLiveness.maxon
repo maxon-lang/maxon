@@ -48,7 +48,7 @@ export typealias LoopDepth = int(0 to u64.max)
 export typealias LoopDepthArray = Array with LoopDepth
 
 // The FORWARD LAYOUT SEQUENCE number of an op within one function: blocks in `func.blockRefs` order,
-// each block's body ops then its terminator (the `collectBlockOps` numbering). It is the ONE
+// each block's body ops then its terminator (the `collectOpsInRunOrder` numbering). It is the ONE
 // numbering the `UseIndex`, the splitter's peak, and the colorer's reuse-copy plan all key on, so
 // they can compare "before/after the peak" at all — and it is GLOBAL to the function, unlike
 // an op's position within its block, which restarts at every block. `UseIndex.seqLimit` is strictly
@@ -1597,7 +1597,7 @@ end 'buildFuncCfg'
 // missing from every CFG built from that block, and liveness, loop depth, pressure and spill
 // placement would all follow a CFG the program does not have — surfacing far from the cause, as an
 // allocator bug. `SplitLiveRanges` additionally mints its ops through its OWN append (append to
-// `module.ops`, then `opRefs.insert`), which bypasses `IrModule.appendOp`'s guard entirely. This
+// `module.ops`, then `IrBlock.restoreOps` at the flush), which bypasses `IrModule.appendOp`'s guard entirely. This
 // sweep is the only thing that makes the whole class unspellable rather than merely unlikely.
 //
 // WHERE IT RUNS. Here, once per function, on EVERY build — `buildFuncCfg` is the sole constructor
@@ -1617,7 +1617,7 @@ function checkCondBranchIndex(module TargetModule, block IrBlock, funcName ByteA
 	var seen = 0 as ElementIndex
 	var seenIdx = 0 as ElementIndex
 
-	for opIdx in block.opRefs 'eachOp'
+	for opIdx in block.bodyOps() 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("checkCondBranchIndex: opIdx {opIdx} not in module.ops")
 
 		if opIsCondBranch(op) 'isCond'
@@ -2482,7 +2482,7 @@ export function scanFunctionValueCount(module TargetModule, func IrFunction) ret
 			end 'eachEdgeArg'
 		end 'eachEdge'
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("scanFunctionValueCount: opIdx not in module.ops")
 			targetOpOperands(op, buf: buf)
 
@@ -3335,15 +3335,19 @@ function indexBlockFacts(module TargetModule, cfg FuncCfg, index UseIndex, block
 	indexBlockArgDefs(index, cfg: cfg, block: block, blockLocal: blockLocal, which: which)
 
 	ordered.clear()
-	collectBlockOps(block, out: ordered)
+	block.collectOpsInRunOrder(ordered)
 	let opCount = ordered.count()
 
 	for pos in 0 upto opCount 'eachOp'
 		indexOneOpFacts(module, cfg: cfg, index: index, blockLocal: blockLocal, heat: block.heat, seq: freshSeqAt(blockLocal, pos: pos), opIdx: try ordered.get(pos) otherwise panic("indexBlockFacts: ordered.get OOB"), which: which, buf: buf, opFacts: opFacts)
 	end 'eachOp'
 
-	let terminatorSeq = freshSeqAt(blockLocal, pos: opCount - 1) if opCount > 0 else 0 as OpSeq
-	indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: opCount as OpSeq, terminatorSeq: terminatorSeq, which: which)
+	if opCount == 0 'noOpsToBranchWith'
+		requireNoEdgeArgs(block, blockLocal: blockLocal)
+	end 'noOpsToBranchWith' else 'hasOps'
+		indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, terminatorSeq: freshSeqAt(blockLocal, pos: opCount - 1), lastOp: try ordered.get(opCount - 1) otherwise panic("indexBlockFacts: ordered.get OOB at {opCount - 1}"), which: which)
+	end 'hasOps'
+
 	return opCount
 end 'indexBlockFacts'
 
@@ -3421,7 +3425,7 @@ end 'indexOneOpFacts'
 // The EDGE uses of one block, which go LAST for it, at the terminator's sequence — where the edge is
 // genuinely read (after every body op). That ordering is what lets the reload a split places before the
 // block's first after-peak use dominate the edge too.
-function indexBlockEdgeUses(index UseIndex, cfg FuncCfg, block IrBlock, blockLocal ElementIndex, opCount OpSeq, terminatorSeq OpSeq, which ScannedValues)
+function indexBlockEdgeUses(index UseIndex, cfg FuncCfg, block IrBlock, blockLocal ElementIndex, terminatorSeq OpSeq, lastOp ElementIndex, which ScannedValues)
 	// An edge arg is READ at the end of this block, so a block inside a loop touches its args once per
 	// iteration exactly as an op operand does — and `touchesHotLoop` is the one column that says so. It
 	// is recorded here rather than left to `isColdSpillable`'s old blanket edge bar, which could not tell
@@ -3445,24 +3449,18 @@ function indexBlockEdgeUses(index UseIndex, cfg FuncCfg, block IrBlock, blockLoc
 				continue
 			end 'dedupe'
 
-			if opCount == 0 'noTerminator'
-				panic("indexBlockEdgeUses: block local {blockLocal} ('{String.from(block.label)}') passes value {argId} on a branch edge but has no ops to branch with")
-			end 'noTerminator'
-
-			index.addUseRecord(argId, blockLocal: blockLocal, opIdx: lastOpOf(block), seq: terminatorSeq, onEdge: true)
+			index.addUseRecord(argId, blockLocal: blockLocal, opIdx: lastOp, seq: terminatorSeq, onEdge: true)
 		end 'eachArg'
 	end 'eachEdge'
 end 'indexBlockEdgeUses'
 
-// The block's LAST op in execution order — its terminator, or its last body op when it has none. The
-// sequence anchor every edge use of the block is recorded at.
-function lastOpOf(block IrBlock) returns ElementIndex
-	if block.hasTerminatorOp() 'terminated'
-		return block.terminatorIndex()
-	end 'terminated'
-
-	return try block.opRefs.get(block.opRefs.count() - 1) otherwise panic("lastOpOf: block '{String.from(block.label)}' has neither a terminator nor a body op to anchor an edge use at")
-end 'lastOpOf'
+function requireNoEdgeArgs(block IrBlock, blockLocal ElementIndex)
+	for edge in block.branchEdges 'eachEdge'
+		for argId in edge.argIds 'eachArg'
+			panic("requireNoEdgeArgs: block local {blockLocal} ('{String.from(block.label)}') passes value {argId} on a branch edge but has no ops to branch with")
+		end 'eachArg'
+	end 'eachEdge'
+end 'requireNoEdgeArgs'
 
 // Build the index in ONE pass over the function: create it empty, then record every def, flag and use
 // site on the way through — through the index's own mutators, which are the ones a SPLIT edits it with
@@ -3551,13 +3549,13 @@ export function reindexSplitValues(module TargetModule, cfg FuncCfg, index UseIn
 			next = next + 1
 		end 'eachCandidateHere'
 
-		// `blockOpCount`, not the positional index's occupancy — the SAME source the whole-block walk
-		// counts with. An edge use is anchored at the sequence of position `opCount - 1`, the
-		// terminator's BLOCK POSITION, and block positions are stated by `opRefs` + the terminator; the
-		// index's count is a copy derived from that. Reading the copy here would put an edge record at a
-		// sequence the block does not have the moment the two ever disagree.
-		let terminatorSeq = pressure.seqOfPosition(blockLocal, pos: blockOpCount(block) - 1) if blockOpCount(block) > 0 else 0 as OpSeq
-		indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, opCount: blockOpCount(block) as OpSeq, terminatorSeq: terminatorSeq, which: which)
+		let opCount = pressure.opCountOf(blockLocal)
+
+		if opCount == 0 'noOpsToBranchWith'
+			requireNoEdgeArgs(block, blockLocal: blockLocal)
+		end 'noOpsToBranchWith' else 'hasOps'
+			indexBlockEdgeUses(index, cfg: cfg, block: block, blockLocal: blockLocal, terminatorSeq: pressure.seqOfPosition(blockLocal, pos: opCount - 1), lastOp: pressure.opAtPosition(blockLocal, pos: opCount - 1), which: which)
+		end 'hasOps'
 	end 'eachDirtyBlock'
 
 	if next != candidates.count() 'candidatesOutsideTheDirtyRegion'
@@ -4300,7 +4298,7 @@ export function sweepEstablishedRegisters(module TargetModule, topo FuncTopology
 	var ordered = scratch.ordered
 
 	ordered.clear()
-	collectBlockOps(block, out: ordered)
+	block.collectOpsInRunOrder(ordered)
 	let opCount = ordered.count()
 	var physLiveAfter = scratch.physLiveAfter
 	physLiveAfter.growFilled(opCount, value: 0)
@@ -4416,7 +4414,7 @@ function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal E
 	end 'seedMax'
 
 	ordered.clear()
-	collectBlockOps(block, out: ordered)
+	block.collectOpsInRunOrder(ordered)
 
 	var events = scratch.events
 	events.beginBlock()
@@ -4541,7 +4539,7 @@ function collectEntryParamCaptures(module TargetModule, topo FuncTopology, param
 
 	let entry = blockAt(module, topo: topo, local: 0)
 
-	for opIdx in entry.opRefs 'eachOp'
+	for opIdx in entry.bodyOps() 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("collectEntryParamCaptures: opIdx not in module.ops")
 
 		match op 'capture'
@@ -5048,8 +5046,8 @@ export type ColdBlockRuns
 	end 'lastOf'
 
 	// The one forward walk. Refills in place, so a block re-walked after a split allocates nothing new.
-	export function rebuild(module TargetModule, block IrBlock, buf OperandList, opFacts OpVariantFacts)
-		let count = block.opRefs.count()
+	export function rebuild(module TargetModule, block IrBlock, bodyOps OpIndexArray, buf OperandList, opFacts OpVariantFacts)
+		let count = bodyOps.count()
 		self.inRun.refill(count, value: false)
 		self.runIdOfPos.refill(count, value: 0)
 		self.first.clear()
@@ -5058,7 +5056,7 @@ export type ColdBlockRuns
 		var lastKind = ColdRunOpKind.none
 
 		for pos in 0 upto count 'eachOp'
-			let op = try module.ops.get(try block.opRefs.get(pos) otherwise panic("ColdBlockRuns.rebuild: opRefs.get OOB at {pos}")) otherwise panic("ColdBlockRuns.rebuild: op at position {pos} of '{String.from(block.label)}' not in module.ops")
+			let op = try module.ops.get(try bodyOps.get(pos) otherwise panic("ColdBlockRuns.rebuild: bodyOps.get OOB at {pos}")) otherwise panic("ColdBlockRuns.rebuild: op at position {pos} of '{String.from(block.label)}' not in module.ops")
 			targetOpOperands(op, buf: buf)
 			let kind = walkKindOf(coldRunOpKind(op, buf: buf, opFacts: opFacts), lastKind: lastKind, block: block, pos: pos)
 
@@ -5125,7 +5123,7 @@ export type ColdRunTable
 
 			if block.heat == BlockHeat.cold 'cold'
 				var runs = ColdBlockRuns.create()
-				runs.rebuild(module, block: block, buf: buf, opFacts: opFacts)
+				runs.rebuild(module, block: block, bodyOps: block.bodyOps(), buf: buf, opFacts: opFacts)
 				blocks.push(runs)
 			end 'cold' else 'notCold'
 				blocks.push(noRuns)
@@ -5140,27 +5138,31 @@ export type ColdRunTable
 	end 'of'
 
 	// Re-walk one block after a split moved its positions; a block that is not cold has nothing to walk.
-	export function rebuildBlock(module TargetModule, topo FuncTopology, local ElementIndex, buf OperandList, opFacts OpVariantFacts)
+	export function rebuildBlock(module TargetModule, topo FuncTopology, local ElementIndex, pressure PressureIndex, bodyOps OpIndexArray, buf OperandList, opFacts OpVariantFacts)
 		let block = blockAt(module, topo: topo, local: local)
 
 		if block.heat != BlockHeat.cold 'notCold'
 			return
 		end 'notCold'
 
+		bodyOps.clear()
+		pressure.collectBodyOps(local, block: block, out: bodyOps)
 		var runs = self.of(local)
-		runs.rebuild(module, block: block, buf: buf, opFacts: opFacts)
+		runs.rebuild(module, block: block, bodyOps: bodyOps, buf: buf, opFacts: opFacts)
 	end 'rebuildBlock'
 end 'ColdRunTable'
 
 // The position a reload for the read at `pos` lands before: the group's first pre-move when the op at
 // `pos` is a pre-move or its call, `pos` itself otherwise — see `ColdBlockRuns`.
-export function firstPreMoveBefore(module TargetModule, block IrBlock, pos ElementIndex, buf OperandList, opFacts OpVariantFacts) returns ElementIndex
+export function firstPreMoveBefore(module TargetModule, pressure PressureIndex, blockLocal ElementIndex, pos ElementIndex, buf OperandList, opFacts OpVariantFacts) returns ElementIndex
 	// A read by the terminator lands the reload past the body, where no group is.
-	if pos >= block.opRefs.count() 'pastTheBody'
+	if pos >= pressure.bodyOpCountOf(blockLocal) 'pastTheBody'
 		return pos
 	end 'pastTheBody'
 
-	let kind = coldRunKindAt(module, block: block, pos: pos, buf: buf, opFacts: opFacts)
+	var cursor = pressure.walker
+	cursor.placeAtPosition(pressure, blockLocal: blockLocal, pos: pos)
+	let kind = coldRunKindAt(module, cursor: cursor, pressure: pressure, buf: buf, opFacts: opFacts)
 
 	if kind != ColdRunOpKind.clobber and kind != ColdRunOpKind.call 'notInAGroup'
 		return pos
@@ -5168,7 +5170,13 @@ export function firstPreMoveBefore(module TargetModule, block IrBlock, pos Eleme
 
 	var first = pos
 
-	while first > 0 and coldRunKindAt(module, block: block, pos: first - 1, buf: buf, opFacts: opFacts) == ColdRunOpKind.clobber 'extend'
+	while first > 0 'extend'
+		cursor.retreat(pressure)
+
+		if coldRunKindAt(module, cursor: cursor, pressure: pressure, buf: buf, opFacts: opFacts) != ColdRunOpKind.clobber 'groupStartsHere'
+			break
+		end 'groupStartsHere'
+
 		first = first - 1
 	end 'extend'
 
@@ -5179,17 +5187,19 @@ end 'firstPreMoveBefore'
 // group when the read is a pre-move or the call itself, the block's end otherwise. A reload hoisted
 // above a group (`firstPreMoveBefore`) that also served a read past the group's call would be live
 // across that call — confined to the callee-saved half, exactly what the split was to relieve.
-export function reloadRunBoundFrom(module TargetModule, block IrBlock, pos ElementIndex, buf OperandList, opFacts OpVariantFacts) returns ElementIndex
-	let count = block.opRefs.count()
+export function reloadRunBoundFrom(module TargetModule, pressure PressureIndex, blockLocal ElementIndex, pos ElementIndex, buf OperandList, opFacts OpVariantFacts) returns ElementIndex
+	let count = pressure.bodyOpCountOf(blockLocal)
 
 	if pos >= count 'pastTheBody'
 		return pos
 	end 'pastTheBody'
 
 	var at = pos
+	var cursor = pressure.walker
+	cursor.placeAtPosition(pressure, blockLocal: blockLocal, pos: pos)
 
 	while at < count 'toTheCall'
-		let kind = coldRunKindAt(module, block: block, pos: at, buf: buf, opFacts: opFacts)
+		let kind = coldRunKindAt(module, cursor: cursor, pressure: pressure, buf: buf, opFacts: opFacts)
 
 		if kind == ColdRunOpKind.call 'theGroupsCall'
 			return at
@@ -5200,20 +5210,20 @@ export function reloadRunBoundFrom(module TargetModule, block IrBlock, pos Eleme
 		end 'notAGroup'
 
 		at = at + 1
+
+		if at < count 'moreToWalk'
+			cursor.advance(pressure)
+		end 'moreToWalk'
 	end 'toTheCall'
 
 	return count
 end 'reloadRunBoundFrom'
 
-function coldRunKindAt(module TargetModule, block IrBlock, pos ElementIndex, buf OperandList, opFacts OpVariantFacts) returns ColdRunOpKind
-	let op = try module.ops.get(try block.opRefs.get(pos) otherwise panic("coldRunKindAt: opRefs.get OOB at {pos}")) otherwise panic("coldRunKindAt: op at position {pos} not in module.ops")
+function coldRunKindAt(module TargetModule, cursor OpCursor, pressure PressureIndex, buf OperandList, opFacts OpVariantFacts) returns ColdRunOpKind
+	let op = try module.ops.get(cursor.op(pressure)) otherwise panic("coldRunKindAt: op at position {cursor.position()} not in module.ops")
 	targetOpOperands(op, buf: buf)
 	return coldRunOpKind(op, buf: buf, opFacts: opFacts)
 end 'coldRunKindAt'
-
-function captureAt(module TargetModule, block IrBlock, pos ElementIndex) returns bool
-	return isCaptureMove(try module.ops.get(try block.opRefs.get(pos) otherwise panic("captureAt: opRefs.get OOB at {pos}")) otherwise panic("captureAt: op at position {pos} not in module.ops"))
-end 'captureAt'
 
 // The backward sweep's ONE confinement inside a cold block: a value READ by a later op of the same run
 // than a clobber it is live across cannot sit in a register that clobber writes — the read would see
@@ -6040,39 +6050,6 @@ function slotOfSlotOp(op TargetOp) returns SpillSlot
 		default panic("slotOfSlotOp: this op has no spill slot — only `storeSlotReg` and `loadRegSlot` do. Either the caller reached here without asking `OpVariantFacts.slotRoleOf` first, or a new slot-touching op was classified in `deriveSlotRole` and this match was not extended with the arm that reads its slot")
 	end 'slot'
 end 'slotOfSlotOp'
-
-// How many ops a block lays out in execution order — its body plus its terminator.
-export function blockOpCount(block IrBlock) returns ElementIndex
-	return block.opRefs.count() + (1 if block.hasTerminatorOp() else 0)
-end 'blockOpCount'
-
-// The op at forward position `pos` — THE one statement of a block's execution order, which is its body
-// `opRefs` followed by its terminator.
-//
-// ⚠ IT IS WHAT `collectBlockOps` IS BUILT FROM, and that is the point rather than a convenience. A
-// consumer that wants a SUFFIX of a block (the splitter's `fillLiveBeforeOp`, walking back from the end
-// to the peak) must not build the whole list to reach it, and must not spell the order out a second
-// time either: a positional accessor that put the terminator anywhere else would hand back an op the
-// list-building consumers never see there, and the two would disagree silently about which op the peak
-// is.
-export function blockOpAt(block IrBlock, pos ElementIndex) returns ElementIndex
-	if pos < block.opRefs.count() 'aBodyOp'
-		return try block.opRefs.get(pos) otherwise panic("blockOpAt: opRefs.get OOB at {pos} of block '{String.from(block.label)}'")
-	end 'aBodyOp'
-
-	if pos >= blockOpCount(block) 'pastTheEnd'
-		panic("blockOpAt: position {pos} is past the end of block '{String.from(block.label)}', which lays out {blockOpCount(block)} op(s)")
-	end 'pastTheEnd'
-
-	return block.terminatorIndex()
-end 'blockOpAt'
-
-// The block's ops in execution order.
-export function collectBlockOps(block IrBlock, out OpIndexArray)
-	for pos in 0 upto blockOpCount(block) 'eachOp'
-		out.push(blockOpAt(block, pos: pos))
-	end 'eachOp'
-end 'collectBlockOps'
 
 // The integer `max` the builtin does not provide (it promotes to float), once per alias it is asked over:
 // the value-count scan takes the larger of two ValueIds, the pressure sweep of two RegCounts.

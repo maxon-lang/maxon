@@ -136,7 +136,7 @@ export function collectFnRefThunkTargets(module MaxonModule, funcSignatures Func
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("collectFnRefThunkTargets: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("collectFnRefThunkTargets: opIdx {opIdx} not in module.ops")
 				noteIfFunctionRef(op, seen: seen, targets: targets, funcSignatures: funcSignatures)
 			end 'eachOp'
@@ -314,7 +314,7 @@ export type UncheckedCallPaths
 			for blockRef in func.blockRefs 'eachBlock'
 				let block = try module.blocks.get(blockRef) otherwise panic("UncheckedCallPaths.collect: blockRef from func.blockRefs not in module.blocks")
 
-				for opIdx in block.opRefs 'eachOp'
+				for opIdx in block.bodyOps() 'eachOp'
 					let op = try module.ops.get(opIdx) otherwise panic("UncheckedCallPaths.collect: opIdx {opIdx} not in module.ops")
 
 					match uncheckedCallPathOf(op, marks: marks) 'path'

@@ -210,7 +210,7 @@ export function x64PrologueFrameOf(module TargetModule, func IrFunction) returns
 	var pushed = 0 as RegMask
 	var frameBytes = 0 as StackSize
 
-	for opIdx in entry.opRefs 'eachOp'
+	for opIdx in entry.bodyOps() 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("x64PrologueFrameOf: opIdx {opIdx} not in module.ops")
 
 		match op 'frameOp'
@@ -543,7 +543,7 @@ function prependOp(module TargetModule, block IrBlock, op TargetOp)
 
 	// Frame setup is the ABI's, not the author's — it precedes the function's first statement.
 	module.spans.pushNone(opIdx)
-	insertOpRef(block, at: 0, opIdx: opIdx)
+	block.insertBodyOp(0, opIdx: opIdx)
 end 'prependOp'
 
 // True when the function makes a call — the frame trigger that forces 16-byte alignment
@@ -553,7 +553,7 @@ function functionMakesCall(module TargetModule, func IrFunction) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("functionMakesCall: blockRef from func.blockRefs not in module.blocks")
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			if opAtIsCall(module, opIdx: opIdx) 'call'
 				return true
 			end 'call'

@@ -1320,7 +1320,7 @@ module function markOneReachable(name ByteArray, byName FuncIndexByName, reached
 	worklist.push(idx)
 end 'markOneReachable'
 
-// Walk `block.opRefs` DIRECTLY — not `IrModule.liveOpIndices`, which allocates a fresh op-index array
+// Walk `block.bodyOps()` DIRECTLY — not `IrModule.liveOpIndices`, which allocates a fresh op-index array
 // per function and answers the same question here, since a terminator names no callee. Walking `opRefs`
 // is what makes this ORPHAN-PROOF, and that is load-bearing: `Parser.removeCurrentBlockOpAt` (the
 // constant-slice fold) leaves a dropped `startIndex()`/`endIndex()` call holding its `module.ops` index and
@@ -1336,7 +1336,7 @@ function markMaxonCallees(module MaxonModule, project Project, signatures Progra
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
 			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 			markCorpusSlotInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
@@ -1555,7 +1555,7 @@ function seedCorpusSlotInitCalleesOfUserCode(module MaxonModule, project Project
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("seedCorpusSlotInitCalleesOfUserCode: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("seedCorpusSlotInitCalleesOfUserCode: opRef {opIdx} not in module.ops")
 				markCorpusSlotInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 			end 'eachOp'
@@ -1650,12 +1650,12 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 			continue
 		end 'skipStdlibBody'
 
-		// Direct `block.opRefs` walk — allocation-free, and safe for the same reason `markMaxonCallees`
+		// Direct `block.bodyOps()` walk — allocation-free, and safe for the same reason `markMaxonCallees`
 		// and `scanRuntimeUsage` use it at this tier (pre-pipeline: no orphan ops; callees are body ops).
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("userCodeReachesStdlib: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("userCodeReachesStdlib: opRef {opIdx} not in module.ops")
 
 				// ⚠ This short-circuit must answer TRUE for every edge a precise-walk seed roots, or the walk it
@@ -1839,7 +1839,7 @@ function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unre
 			for blockRef in func.blockRefs 'eachBlock'
 				let block = try module.blocks.get(blockRef) otherwise panic("stdlibSubstrateEntries: blockRef from func.blockRefs not in module.blocks")
 
-				for opIdx in block.opRefs 'eachOp'
+				for opIdx in block.bodyOps() 'eachOp'
 					let op = try module.ops.get(opIdx) otherwise panic("stdlibSubstrateEntries: opRef {opIdx} not in module.ops")
 					noteSubstrateEdge(op, callerNode: node, nodeOf: nodeOf, state: state)
 				end 'eachOp'

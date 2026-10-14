@@ -134,8 +134,8 @@ end 'Allocation'
 // no-op, never recorded).
 //
 // KEYED BY THE OP'S LAYOUT SEQUENCE within the function (blocks in order, each block's body ops
-// then its terminator — the `collectBlockOps` numbering), so the lookup is a column index rather
-// than a scan. The colorer records at that sequence and `applyAllocation`'s splice walks the
+// then its terminator — the `IrBlock.collectOpsInRunOrder` numbering), so the lookup is a column
+// index rather than a scan. The colorer records at that sequence and `applyAllocation`'s splice walks the
 // function in exactly that order and reads at exactly that sequence. It cannot be keyed by
 // `module.ops` index instead: op
 // indices are module-global and a function's are not contiguous (the splitter appends its spill
@@ -1364,7 +1364,7 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 		let block = try module.blocks.get(blockRef) otherwise panic("harvestDebugValueRanges: blockRef from func.blockRefs not in module.blocks")
 		let opened = ordinal
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			ordinalOfOp.set(opIdx, value: ordinal)
 			ordinal = ordinal + 1
 		end 'eachOp'
@@ -1787,6 +1787,7 @@ end 'colorRepairingConfinements'
 // this is `repairedByWidening` / `repairedByEviction`, which count the repairs themselves and not the
 // passes.
 function colorOnce(module TargetModule, driver SplitDriver, pool RegMask, callerSaved RegMask, counters RegAllocCounters, reuseCopies ReuseCopyPlan, brackets ColdCallBracketPlan, stuck StuckValues, costs PoolPhaseCosts) returns Allocation
+	driver.requireOpsFlushed()
 	reuseCopies.clear()
 	brackets.beginPass(driver.frameSlotCount())
 	stuck.clear()
@@ -1851,6 +1852,8 @@ function repairStuckValues(module TargetModule, driver SplitDriver, func IrFunct
 		// two — for EVERY stuck value at once.
 		panic("repairStuckValues: '{String.from(func.name)}' — the colorer could not place {stuck.count()} value(s) and BOTH cures were refused for every one of them. Taking the first: {driver.describeUnrepairable(stuck.valueAt(0), free: stuck.freeAt(0), occupants: stuck.occupantCountAt(0))}")
 	end 'nothingRepairable'
+
+	driver.flushOps(module)
 
 	// Every block's demand restated, and the function's per-file maximum re-folded from them.
 	//
@@ -1928,7 +1931,7 @@ function computeHints(module TargetModule, topo FuncTopology, valueCount ValueId
 		let block = blockAt(module, topo: topo, local: local)
 
 		var ordered = OpIndexArray.create()
-		collectBlockOps(block, out: ordered)
+		block.collectOpsInRunOrder(ordered)
 
 		for opIdx in ordered 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("computeHints: opIdx not in module.ops")
@@ -2192,7 +2195,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	var deathsLiveByClass = zeroClassRow()
 
 	// The op's LAYOUT SEQUENCE across the whole function — the key `reuseCopies` is recorded
-	// under, and the same numbering the rewrite re-derives from `collectBlockOps`.
+	// under, and the same numbering the rewrite re-derives from `IrBlock.collectOpsInRunOrder`.
 	var blockBaseSeq = 0 as OpSeq
 
 	for local in 0 upto topo.numBlocks 'eachBlock'
@@ -2207,7 +2210,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 		end 'eachPhi'
 
 		ordered.clear()
-		collectBlockOps(block, out: ordered)
+		block.collectOpsInRunOrder(ordered)
 		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, block: block, buf: buf, seenBelow: seenBelow, seedBuf: seedBuf, liveByClass: deathsLiveByClass)
 
 		let runs = liveness.coldRuns.of(local)

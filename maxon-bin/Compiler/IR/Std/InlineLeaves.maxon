@@ -558,7 +558,7 @@ function scanLeafBody(module StdModule, func IrFunction, meta StdOpMetaMemo, byN
 			refused then return LeafBodyScan.create(LeafVerdict.notALeaf, opCount: ops)
 		end 'blockShape'
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			// Bound ONCE: this runs on every op of every function in the module, and the role is a `match`
 			// over a union with ninety variants.
 			let op = module.getOp(opIdx)
@@ -657,7 +657,7 @@ function scanSpliceableShape(module StdModule, func IrFunction, meta StdOpMetaMe
 			refused(reason) then return SpliceableShape.refused(reason)
 		end 'blockShape'
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			if inlineOpRole(module.getOp(opIdx), meta: meta) == InlineOpRole.refusing 'unsupported'
 				return SpliceableShape.refused(CalledOnceRefusal.unsupportedOp)
 			end 'unsupported'
@@ -1507,7 +1507,7 @@ function bodyOpRefusalText(module StdModule, calleeIndex ElementIndex, byName Fu
 			refused(reason) then return calledOnceRefusalText(reason)
 		end 'blockShape'
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			let op = module.getOp(opIdx)
 
 			if leafOpRefusesTheBody(inlineOpRole(op, meta: meta), op: op, module: module, alwaysSpliced: true, byName: byName, reference: reference) 'thisOpRefuses'
@@ -1654,8 +1654,10 @@ type CalledOnceCensus
 			for position in 0 upto func.blockRefs.count() 'eachBlock'
 				let block = module.blockAtPosition(func, position: position)
 
-				for opPos in 0 upto block.opRefs.count() 'eachOp'
-					let opIdx = try block.opRefs.get(opPos) otherwise panic("CalledOnceCensus.take: opRefs.get OOB at {opPos} inside its own count")
+				let ops = block.bodyOps()
+
+				for opPos in 0 upto ops.count() 'eachOp'
+					let opIdx = try ops.get(opPos) otherwise panic("CalledOnceCensus.take: ops.get OOB at {opPos} inside its own count")
 					census.noteReferences(module.getOp(opIdx), from: funcIndex, position: position, opPos: opPos, byName: byName)
 				end 'eachOp'
 
@@ -2016,7 +2018,7 @@ end 'compareSiteCoordinates'
 // call of that callee, since a coordinate that drifted would otherwise splice a body over some other op.
 function siteArgsOf(module StdModule, caller IrFunction, position ElementIndex, opPos ElementIndex, calleeIndex ElementIndex, byName FunctionNameIndex) returns ValueIdArray
 	let block = module.blockAtPosition(caller, position: position)
-	let opIdx = try block.opRefs.get(opPos) otherwise panic("siteArgsOf: block {position} of '{String.from(caller.name)}' has no op at position {opPos}, where the census placed a call")
+	let opIdx = try block.bodyOpAt(opPos) otherwise panic("siteArgsOf: block {position} of '{String.from(caller.name)}' has no op at position {opPos}, where the census placed a call")
 
 	match module.getOp(opIdx) 'kind'
 		call(_, callee, args) then return argsOfCensusedCall(callee, args: args, calleeIndex: calleeIndex, caller: caller, byName: byName)
@@ -2327,7 +2329,7 @@ function filledTours(count ElementIndex) returns NestTourColumn
 end 'filledTours'
 
 function collectBlockReads(module StdModule, block IrBlock, reads StdValueUseSet)
-	for opIdx in block.opRefs 'eachOp'
+	for opIdx in block.bodyOps() 'eachOp'
 		collectStdOpUses(module.getOp(opIdx), referenced: reads)
 	end 'eachOp'
 
@@ -3102,8 +3104,8 @@ type SiteSplicer
 
 		let block = self.blockAt(blockRef)
 
-		for pos in 0 upto block.opRefs.count() 'eachOp'
-			match self.module.getOp(try block.opRefs.get(pos) otherwise panic("SiteSplicer.collectSites: opRefs.get OOB at {pos} inside its own count")) 'kind'
+		for pos in 0 upto block.bodyOpCount() 'eachOp'
+			match self.module.getOp(try block.bodyOpAt(pos) otherwise panic("SiteSplicer.collectSites: bodyOpAt OOB at {pos} inside its own count")) 'kind'
 				const or
 				binOp or
 				unaryOp or
@@ -3310,7 +3312,7 @@ type SiteSplicer
 	// (`IrModule.ops` is append-only and retains what block-rebuilding passes replace), and it is why
 	// every reader asks `liveOpIndices` rather than scanning the array.
 	function spliceCallAtTailOf(predRef ElementIndex, contRef ElementIndex, calleeIndex ElementIndex)
-		let tail = self.blockAt(predRef).opRefs.count() - 1
+		let tail = self.blockAt(predRef).bodyOpCount() - 1
 
 		// The splice's own op — the branch into the copied entry — is the CALLER's statement. The clone loop
 		// before it re-points the cursor per callee op and leaves it there, so the site's span is CARRIED
@@ -3444,7 +3446,7 @@ type SiteSplicer
 		end 'site'
 
 		var pred = self.blockAt(predRef)
-		pred.opRefs.truncate(tail)
+		pred.truncateBodyOps(tail)
 		self.stats.noteInlined()
 	end 'spliceCallAtTailOf'
 
@@ -3783,7 +3785,7 @@ type SiteSplicer
 	function copyBlockOps(calleeBlock IrBlock, freshRef ElementIndex, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction) returns bool
 		var fresh = self.blockAt(freshRef)
 
-		for opIdx in calleeBlock.opRefs 'eachOp'
+		for opIdx in calleeBlock.bodyOps() 'eachOp'
 			let op = self.module.getOp(opIdx)
 
 			// The dialect's own role names the `param` variant and nothing else, so it answers what
@@ -4026,7 +4028,7 @@ type SiteSplicer
 
 	// The flat `module.ops` index a block names at `pos`.
 	function blockOpRefAt(blockRef ElementIndex, pos ElementIndex) returns ElementIndex
-		return try self.blockAt(blockRef).opRefs.get(pos) otherwise panic("SiteSplicer: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
+		return try self.blockAt(blockRef).bodyOpAt(pos) otherwise panic("SiteSplicer: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
 	end 'blockOpRefAt'
 
 	function opAt(blockRef ElementIndex, pos ElementIndex) returns StdOp

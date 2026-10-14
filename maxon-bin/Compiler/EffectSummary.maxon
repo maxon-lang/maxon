@@ -369,7 +369,7 @@ type ValueOrigins
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("ValueOrigins.collectDefinitions: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				self.noteDefinition(try module.ops.get(opIdx) otherwise panic("ValueOrigins.collectDefinitions: opIdx {opIdx} not in module.ops"))
 			end 'eachOp'
 
@@ -457,7 +457,7 @@ type ValueOrigins
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("ValueOrigins.refine: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				if self.refineOp(try module.ops.get(opIdx) otherwise panic("ValueOrigins.refine: opIdx {opIdx} not in module.ops"), func: func, soleKept: soleKept) 'moved'
 					changed = true
 				end 'moved'
@@ -823,7 +823,7 @@ type ValueOrigins
 	// The parser ends an aborting block with a `ret` of a placeholder that never runs; counting it would
 	// make every `otherwise panic(...)` turn the function's return foreign.
 	function blockPanics(module MaxonModule, block IrBlock) returns bool
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			if opAbortsTheProcess(try module.ops.get(opIdx) otherwise panic("ValueOrigins.blockPanics: opIdx {opIdx} not in module.ops")) 'aborts'
 				return true
 			end 'aborts'
@@ -1374,7 +1374,7 @@ type EffectSummaryBuilder
 			for blockRef in func.blockRefs 'eachBlock'
 				let block = try module.blocks.get(blockRef) otherwise panic("EffectSummaryBuilder.settleTaint: blockRef from func.blockRefs not in module.blocks")
 
-				for opIdx in block.opRefs 'eachOp'
+				for opIdx in block.bodyOps() 'eachOp'
 					self.taintOp(origins, op: try module.ops.get(opIdx) otherwise panic("EffectSummaryBuilder.settleTaint: opIdx {opIdx} not in module.ops"), func: func)
 				end 'eachOp'
 			end 'eachBlock'
@@ -1695,7 +1695,7 @@ type EffectSummaryBuilder
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("EffectSummaryBuilder.walkNode: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				self.walkOp(try module.ops.get(opIdx) otherwise panic("EffectSummaryBuilder.walkNode: opIdx {opIdx} not in module.ops"), node: node, func: func)
 			end 'eachOp'
 

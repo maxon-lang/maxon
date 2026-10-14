@@ -224,7 +224,7 @@ end 'resolveJumpChains'
 function emptyJumpTargetOf(module TargetModule, topo FuncTopology, local ElementIndex) returns ElementIndex
 	let block = blockAt(module, topo: topo, local: local)
 
-	if block.opRefs.count() > 0 or block.hasCondBranchOp() 'carriesWork'
+	if block.bodyOpCount() > 0 or block.hasCondBranchOp() 'carriesWork'
 		return local
 	end 'carriesWork'
 
@@ -309,11 +309,11 @@ function returnTailsOf(module TargetModule, func IrFunction) returns ReturnTails
 	for position in 1 upto func.blockRefs.count() 'eachBlockButTheEntry'
 		let block = try module.blocks.get(try func.blockRefs.get(position) otherwise panic("returnTailsOf: blockRefs.get OOB at {position}")) otherwise panic("returnTailsOf: a block ref of '{String.from(func.name)}' is not in module.blocks")
 
-		if block.opRefs.count() > ReturnTailMaxBodyOps or block.hasCondBranchOp() or not terminatorReturns(module, block: block) 'notASmallReturn'
+		if block.bodyOpCount() > ReturnTailMaxBodyOps or block.hasCondBranchOp() or not terminatorReturns(module, block: block) 'notASmallReturn'
 			continue
 		end 'notASmallReturn'
 
-		tails.upsert(block.id, value: ReturnTail.create(block.opRefs, terminator: block.terminatorIndex()))
+		tails.upsert(block.id, value: ReturnTail.create(block.bodyOps(), terminator: block.terminatorIndex()))
 	end 'eachBlockButTheEntry'
 
 	return tails
@@ -904,14 +904,14 @@ end 'elideAgainstNext'
 // exactly once — see `invertCondBranchOntoElse`.
 function invertibleCondBranchIn(module TargetModule, blockRef ElementIndex) returns CondBranch
 	let block = try module.blocks.get(blockRef) otherwise panic("invertibleCondBranchIn: blockRef {blockRef} not in module.blocks")
-	let bodyCount = block.opRefs.count()
+	let bodyCount = block.bodyOpCount()
 
 	if bodyCount == 0 or not block.hasCondBranchOp() 'noConditionalHalf'
 		return CondBranch.none
 	end 'noConditionalHalf'
 
 	let condOpIndex = block.condBranchIndex()
-	let lastBodyOp = try block.opRefs.get(bodyCount - 1) otherwise panic("invertibleCondBranchIn: opRefs.get OOB at {bodyCount - 1}")
+	let lastBodyOp = try block.bodyOpAt(bodyCount - 1) otherwise panic("invertibleCondBranchIn: bodyOpAt OOB at {bodyCount - 1}")
 	return CondBranch.opIndex(condOpIndex) if condOpIndex == lastBodyOp else CondBranch.none
 end 'invertibleCondBranchIn'
 

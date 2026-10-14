@@ -2324,7 +2324,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'walk'
 
 	function traceBlock(func IrFunction, ir MaxonModule, block IrBlock)
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			self.traceOp(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.traceBlock: opIdx {opIdx} not in module.ops"), opIdx: opIdx)
 		end 'eachOp'
 
@@ -3451,7 +3451,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.stageParamEdges: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.stageParamEdges: opIdx {opIdx} not in module.ops")
 				self.addParameterRecordEdgesAt(func, op: op, callerIndex: index)
 				writesARawResource = writesARawResource or opWritesARawResource(op)
@@ -3851,7 +3851,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in init.blockRefs 'eachBlock'
 			let block = self.module.getBlock(blockRef)
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try self.module.ops.get(opIdx) otherwise panic("ProvenanceTracer.checkVarInitializersTakeNoSharedRecord: opRef {opIdx} not in module.ops")
 
 				if not opLoadsOrStoresASlot(op) 'neitherLoadsNorStores'
@@ -3916,7 +3916,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try self.module.blocks.get(blockRef) otherwise panic("ProvenanceTracer.callMayHandBackAModuleLetsRecord: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try self.module.ops.get(opIdx) otherwise panic("ProvenanceTracer.callMayHandBackAModuleLetsRecord: opRef {opIdx} not in module.ops")
 
 				if self.opLoadsALetFieldRecord(func, op: op) 'readsALetField'
@@ -4088,7 +4088,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.rootReachesTheDoorUnhanded: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				if opIdx == defining or not self.opLiesBetween(opIdx, bound: bound, door: door) 'outsideTheSpan'
 					continue
 				end 'outsideTheSpan'
@@ -4596,7 +4596,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.collectFieldStores: blockRef not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.collectFieldStores: op {opIdx} not in module.ops")
 
 				if not self.opKeepsFieldStoresInView(func, ir: ir, op: op, root: root, field: field, otherField: otherField, into: into, otherInto: otherInto) 'outOfView'
@@ -4907,7 +4907,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				end 'aValueOfIt'
 			end 'eachArg'
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				self.indexDefinition(try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.indexDefinitions: op {opIdx} not in module.ops"), opIdx: opIdx, valueCount: valueCount)
 			end 'eachOp'
 		end 'eachBlock'
@@ -4923,7 +4923,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.indexUseCounts: blockRef not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				self.countUsesOf(try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.indexUseCounts: op {opIdx} not in module.ops"), valueCount: valueCount)
 			end 'eachOp'
 
@@ -5557,8 +5557,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in func.blockRefs 'findTheRead'
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.slotReachedUnstored: blockRef from func.blockRefs not in module.blocks")
 
-			for at in 0 upto block.opRefs.count() 'eachOp'
-				if (try block.opRefs.get(at) otherwise panic("ProvenanceTracer.slotReachedUnstored: opRefs.get OOB at {at}")) != from 'anotherOp'
+			for at in 0 upto block.bodyOpCount() 'eachOp'
+				if (try block.bodyOpAt(at) otherwise panic("ProvenanceTracer.slotReachedUnstored: bodyOpAt OOB at {at}")) != from 'anotherOp'
 					continue
 				end 'anotherOp'
 
@@ -5625,7 +5625,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.rootPutIntoSlotBefore: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.rootPutIntoSlotBefore: opIdx {opIdx} not in module.ops")
 
 				if opLoadsOrStoresASlot(op) and self.putsRootIntoSlot(slotReadOfOp(op, opIndex: opIdx), rootRead: rootRead, addr: addr, offset: offset, rank: rank) and self.slotReachedUnstored(func, ir: ir, from: opIdx, to: to, addr: addr, offset: offset, rank: rank) 'reachesTheRead'
@@ -5652,8 +5652,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	// What `block`'s ops from `start` meet first: op `to`, a store into `(addr, offset)` of a value that cannot be root
 	// `rank`'s record, or neither.
 	function scanForSlotRead(ir MaxonModule, block IrBlock, start ElementIndex, to ElementIndex, addr ValueId, offset ByteOffset, rank ElementIndex) returns SlotScan
-		for i in start upto block.opRefs.count() 'eachOp'
-			let opIdx = try block.opRefs.get(i) otherwise panic("ProvenanceTracer.scanForSlotRead: opRefs.get OOB at {i}")
+		for i in start upto block.bodyOpCount() 'eachOp'
+			let opIdx = try block.bodyOpAt(i) otherwise panic("ProvenanceTracer.scanForSlotRead: bodyOpAt OOB at {i}")
 
 			if opIdx == to 'theRead'
 				return SlotScan.reached
@@ -6597,7 +6597,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.sweepFreshGraph: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				if not self.sweepFreshOp(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.sweepFreshGraph: opIdx {opIdx} not in module.ops")) 'aUseKeepsItElsewhere'
 					return false
 				end 'aUseKeepsItElsewhere'
@@ -7002,8 +7002,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in func.blockRefs 'findTheLoad'
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.ownerIsUntouchedFrom: blockRef from func.blockRefs not in module.blocks")
 
-			for at in 0 upto block.opRefs.count() 'eachOp'
-				if (try block.opRefs.get(at) otherwise panic("ProvenanceTracer.ownerIsUntouchedFrom: opRefs.get OOB at {at}")) != loadOp 'anotherOp'
+			for at in 0 upto block.bodyOpCount() 'eachOp'
+				if (try block.bodyOpAt(at) otherwise panic("ProvenanceTracer.ownerIsUntouchedFrom: bodyOpAt OOB at {at}")) != loadOp 'anotherOp'
 					continue
 				end 'anotherOp'
 
@@ -7047,8 +7047,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	function scanOwnerBlock(func IrFunction, block IrBlock, from ElementIndex, mint ElementIndex, ownerBase ValueId, key StoreSlotKey) returns OwnerBlockScan
 		let ir = self.module
 
-		for at in from upto block.opRefs.count() 'eachOp'
-			let opIdx = try block.opRefs.get(at) otherwise panic("ProvenanceTracer.scanOwnerBlock: opRefs.get OOB at {at}")
+		for at in from upto block.bodyOpCount() 'eachOp'
+			let opIdx = try block.bodyOpAt(at) otherwise panic("ProvenanceTracer.scanOwnerBlock: bodyOpAt OOB at {at}")
 
 			if opIdx == mint 'theOwnerIsMintedAgain'
 				return OwnerBlockScan.remintsTheOwner
@@ -7146,7 +7146,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.loadIsSwappedOut: blockRef from func.blockRefs not in module.blocks")
 			var inWindow = false
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				if opIdx == loadOp 'theLoad'
 					inWindow = true
 					continue
@@ -7375,7 +7375,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			for blockRef in func.blockRefs 'eachBlock'
 				let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.indexSlotAccesses: blockRef from func.blockRefs not in module.blocks")
 
-				for opIdx in block.opRefs 'eachOp'
+				for opIdx in block.bodyOps() 'eachOp'
 					self.indexSlotAccess(func, functionIndex: index, opIdx: opIdx)
 				end 'eachOp'
 			end 'eachBlock'
@@ -7503,7 +7503,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			for blockRef in func.blockRefs 'eachBlock'
 				let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.recordUseOf: blockRef from func.blockRefs not in module.blocks")
 
-				for opIdx in block.opRefs 'eachOp'
+				for opIdx in block.bodyOps() 'eachOp'
 					worst = worseRecordUse(worst, next: self.useOfAliasIn(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.recordUseOf: opIdx {opIdx} not in module.ops"), aliases: aliases))
 				end 'eachOp'
 
@@ -8283,7 +8283,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.scanHandedOutValues: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				match slotReadOfOp(try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.scanHandedOutValues: opIdx {opIdx} not in module.ops"), opIndex: opIdx) 'access'
 					store(addr, offset, value) then self.noteStoreHandsOut(func, addr: addr, offset: offset, value: value)
 

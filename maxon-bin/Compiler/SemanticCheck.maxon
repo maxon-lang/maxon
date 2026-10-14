@@ -1167,7 +1167,7 @@ function withdrawBlockOpsDefining(module MaxonModule, block IrBlock, results Val
 	var kept = OpIndexArray.create()
 	var withdrewAny = false
 
-	for opIdx in block.opRefs 'eachOp'
+	for opIdx in block.bodyOps() 'eachOp'
 		if opDefinesOneOf(try module.ops.get(opIdx) otherwise panic("withdrawBlockOpsDefining: opIdx {opIdx} not in module.ops"), results: results) 'aDropTheCalleeNowOwes'
 			withdrewAny = true
 			continue
@@ -1177,7 +1177,7 @@ function withdrawBlockOpsDefining(module MaxonModule, block IrBlock, results Val
 	end 'eachOp'
 
 	if withdrewAny 'rebuilt'
-		block.opRefs = kept
+		block.replaceBodyOps(kept)
 	end 'rebuilt'
 end 'withdrawBlockOpsDefining'
 
@@ -2071,7 +2071,7 @@ function collectCallParamEdges(project Project, signatures ProgramSignatures, mo
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("collectCallParamEdges: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				collectCallParamEdgesAt(project, signatures: signatures, op: try module.ops.get(opIdx) otherwise panic("collectCallParamEdges: opIdx {opIdx} not in module.ops"), func: func, callerIndex: i, funcIndexByName: funcIndexByName, edges: edges, conformers: conformers, witnessSlots: witnessSlots, landing: landing, unknownWrites: unknownWrites)
 			end 'eachOp'
 		end 'eachBlock'
@@ -2441,7 +2441,7 @@ function functionConsumesAPromise(func IrFunction, module MaxonModule) returns b
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("functionConsumesAPromise: blockRef from func.blockRefs not in module.blocks")
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			if opConsumesAPromise(try module.ops.get(opIdx) otherwise panic("functionConsumesAPromise: opIdx {opIdx} not in module.ops")) 'aConsume'
 				return true
 			end 'aConsume'
@@ -2529,8 +2529,8 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("collectAwaitSites: blockRef from func.blockRefs not in module.blocks")
 
-		for pos in 0 upto block.opRefs.count() 'eachOp'
-			let opIdx = try block.opRefs.get(pos) otherwise panic("collectAwaitSites: opRefs.get OOB at {pos}")
+		for pos in 0 upto block.bodyOpCount() 'eachOp'
+			let opIdx = try block.bodyOpAt(pos) otherwise panic("collectAwaitSites: bodyOpAt OOB at {pos}")
 
 			match try module.ops.get(opIdx) otherwise panic("collectAwaitSites: opIdx {opIdx} not in module.ops") 'op'
 				// ⭐ A `p.cancel()` is a consume site — see `PromiseConsume`. It is recognized by
@@ -2757,8 +2757,8 @@ end 'blockRedefinesPromise'
 // re-arming definition (`rearmed`), or neither (`ranOff`). Only BODY ops (`opRefs`) can be an `await`/`asyncCall`
 // — a terminator is a branch/return, handled by `collectMaxonBlockSuccessors` — so this never inspects the terminator.
 function scanBlockForReawait(module MaxonModule, block IrBlock, from ElementIndex, promise ValueId) returns AwaitScan
-	for pos in from upto block.opRefs.count() 'eachOp'
-		let opIdx = try block.opRefs.get(pos) otherwise panic("scanBlockForReawait: opRefs.get OOB at {pos}")
+	for pos in from upto block.bodyOpCount() 'eachOp'
+		let opIdx = try block.bodyOpAt(pos) otherwise panic("scanBlockForReawait: bodyOpAt OOB at {pos}")
 
 		match classifyOpForPromise(try module.ops.get(opIdx) otherwise panic("scanBlockForReawait: opIdx {opIdx} not in module.ops"), promise: promise) 'role'
 			reawaitOf then return AwaitScan.foundSecond(opIdx)
@@ -3031,7 +3031,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("checkCalls: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("checkCalls: opIdx {opIdx} not in module.ops")
 
 				match op 'op'
@@ -4102,7 +4102,7 @@ function checkAsyncYielding(project Project, module MaxonModule, funcNames Funct
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("checkAsyncYielding: blockRef from func.blockRefs not in module.blocks")
 
-			for opIndex in block.opRefs 'eachOp'
+			for opIndex in block.bodyOps() 'eachOp'
 				reportIfNonYielding(project, op: try module.ops.get(opIndex) otherwise panic("checkAsyncYielding: opIndex {opIndex} not in module.ops"), opIndex: opIndex, func: func, funcNames: funcNames, yields: yields)
 			end 'eachOp'
 		end 'eachBlock'
@@ -4606,7 +4606,7 @@ function functionYieldsDirectly(module MaxonModule, func IrFunction, funcIndexBy
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("functionYieldsDirectly: blockRef from func.blockRefs not in module.blocks")
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			if opYields(try module.ops.get(opIdx) otherwise panic("functionYieldsDirectly: opIdx {opIdx} not in module.ops"), funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier) 'yields'
 				return true
 			end 'yields'

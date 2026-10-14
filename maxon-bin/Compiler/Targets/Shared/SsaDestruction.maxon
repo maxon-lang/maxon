@@ -173,7 +173,7 @@ end 'applyAllocation'
 // splicing each reuse-def copy `mov dest, input` immediately BEFORE its op (the
 // two-address input that outlived, so the destination is a different register).
 // `seq` re-derives the op's LAYOUT SEQUENCE — blocks in `func.blockRefs` order, each block's body
-// ops then its terminator. That is the `collectBlockOps` numbering the colorer recorded its reuse
+// ops then its terminator. That is the `collectOpsInRunOrder` numbering the colorer recorded its reuse
 // copies and cold-call brackets under, so a copy is spliced before exactly the op that could not
 // coalesce into its input, and a bracket around exactly the call it was planned for.
 //
@@ -188,7 +188,8 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
-		let bodyCount = block.opRefs.count()
+		let bodyOps = block.bodyOps()
+		let bodyCount = bodyOps.count()
 
 		// Whether the plan's open bracket has had its saves spliced and its reloads not yet.
 		var owesReloads = false
@@ -201,7 +202,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		// take the result's register while the result is live — neither move can overwrite the other's
 		// source.
 		for pos in 0 upto bodyCount 'eachOp'
-			let opIdx = try block.opRefs.get(pos) otherwise panic("colorAndDropSelfMoves: opRefs.get OOB")
+			let opIdx = try bodyOps.get(pos) otherwise panic("colorAndDropSelfMoves: bodyOps.get OOB")
 			let atSeq = seq + pos
 			let uncolored = try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops")
 			let colored = colorTargetOp(uncolored, alloc: alloc)
@@ -224,7 +225,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 			panic("colorAndDropSelfMoves: block '{String.from(block.label)}' ends with a cold run's reloads still owed — the plan's reload sequence lies past the block's body, so the colorer's run and the rewrite's numbering have drifted")
 		end 'runLeftOpen'
 
-		block.opRefs = newRefs
+		block.replaceBodyOps(newRefs)
 		seq = seq + bodyCount as OpSeq
 
 		if block.hasTerminatorOp() 'hasTerm'
@@ -266,7 +267,7 @@ function spliceBracketReloadsAfter(module TargetModule, block IrBlock, brackets 
 		return owesReloads
 	end 'notTheRunsEnd'
 
-	if pos + 1 < block.opRefs.count() and isCaptureMoveAt(module, block: block, pos: pos + 1) 'aCaptureFollows'
+	if pos + 1 < block.bodyOpCount() and isCaptureMoveAt(module, block: block, pos: pos + 1) 'aCaptureFollows'
 		panic("spliceBracketReloadsAfter: in cold block '{String.from(block.label)}' a capture move follows the run's reload point at sequence {seq} — it would read a register the reloads restore in place of the call's answer, so the colorer's run end and the captures have come apart")
 	end 'aCaptureFollows'
 
@@ -496,7 +497,7 @@ end 'vregIsPhysical'
 
 // Read on the op's UNCOLORED form: a capture's dest is only virtual before the rewrite reaches it.
 function isCaptureMoveAt(module TargetModule, block IrBlock, pos ElementIndex) returns bool
-	let opIdx = try block.opRefs.get(pos) otherwise panic("isCaptureMoveAt: opRefs.get OOB at {pos}")
+	let opIdx = try block.bodyOpAt(pos) otherwise panic("isCaptureMoveAt: bodyOpAt OOB at {pos}")
 	let op = try module.ops.get(opIdx) otherwise panic("isCaptureMoveAt: opIdx {opIdx} not in module.ops")
 	return isCaptureMove(op)
 end 'isCaptureMoveAt'
@@ -765,7 +766,7 @@ function spliceSuccStart(module TargetModule, plan EdgeMovePlan)
 		module.ops.push(moveOpOf(plan, i: i))
 		module.spans.pushNone(opIdx)
 		var succBlock = try module.blocks.get(plan.succBlockRef) otherwise panic("spliceSuccStart: succBlockRef {plan.succBlockRef} not in module.blocks")
-		insertOpRef(succBlock, at: i, opIdx: opIdx)
+		succBlock.insertBodyOp(i, opIdx: opIdx)
 	end 'eachMove'
 end 'spliceSuccStart'
 

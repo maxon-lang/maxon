@@ -2595,7 +2595,7 @@ function removeDoomedOps(module StdModule, func IrFunction, doomed DoomedOpSet)
 		var block = try module.blocks.get(blockRef) otherwise panic("removeDoomedOps: blockRef from func.blockRefs not in module.blocks")
 		var kept = OpIndexArray.create()
 
-		for opIdx in block.opRefs 'eachRef'
+		for opIdx in block.bodyOps() 'eachRef'
 			if doomed.contains(opIdx) 'removed'
 				continue
 			end 'removed'
@@ -2603,6 +2603,6 @@ function removeDoomedOps(module StdModule, func IrFunction, doomed DoomedOpSet)
 			kept.push(opIdx)
 		end 'eachRef'
 
-		block.opRefs = kept
+		block.replaceBodyOps(kept)
 	end 'eachBlock'
 end 'removeDoomedOps'

@@ -472,11 +472,11 @@ module function reduceDivisionsInFunc(module StdModule, func IrFunction, reducti
 		var block = try module.blocks.get(blockRef) otherwise panic("reduceDivisionsInFunc: blockRef from func.blockRefs not in module.blocks")
 		var rebuilt = OpIndexArray.create()
 
-		for opIdx in block.opRefs 'eachRef'
+		for opIdx in block.bodyOps() 'eachRef'
 			appendReducedOp(module, opIdx: opIdx, constMap: constMap, reduction: reduction, magic: magic, mint: mint, rebuilt: rebuilt, detached: detachedDivisors)
 		end 'eachRef'
 
-		block.opRefs = rebuilt
+		block.replaceBodyOps(rebuilt)
 	end 'eachBlock'
 
 	retireDetachedDivisors(module, func: func, detached: detachedDivisors)
@@ -492,8 +492,8 @@ function funcHoldsADivision(module StdModule, func IrFunction) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("funcHoldsADivision: blockRef from func.blockRefs not in module.blocks")
 
-		for opIdx in block.opRefs 'eachRef'
-			let op = try module.ops.get(opIdx) otherwise panic("funcHoldsADivision: opIdx {opIdx} from block.opRefs not in module.ops")
+		for opIdx in block.bodyOps() 'eachRef'
+			let op = try module.ops.get(opIdx) otherwise panic("funcHoldsADivision: opIdx {opIdx} from block.bodyOps() not in module.ops")
 
 			if opIsIntegerDivision(op) 'found'
 				return true
@@ -637,7 +637,7 @@ end 'opIsIntegerDivision'
 // Append the ops that belong at `opIdx` — the original op, or the sequence a reducible division
 // becomes.
 function appendReducedOp(module StdModule, opIdx ElementIndex, constMap ConstValueMap, reduction DivisionReduction, magic DivisionMagic, mint ValueMinter, rebuilt OpIndexArray, detached ValueIdArray)
-	let op = try module.ops.get(opIdx) otherwise panic("appendReducedOp: opIdx {opIdx} from block.opRefs not in module.ops")
+	let op = try module.ops.get(opIdx) otherwise panic("appendReducedOp: opIdx {opIdx} from block.bodyOps() not in module.ops")
 
 	match op 'site'
 		const or

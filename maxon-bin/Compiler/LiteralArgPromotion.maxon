@@ -121,7 +121,7 @@ function callsAWritingCallee(module MaxonModule, func IrFunction, mutationSummar
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("callsAWritingCallee: blockRef from func.blockRefs not in module.blocks")
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			if opCallsAWritingCallee(try module.ops.get(opIdx) otherwise panic("callsAWritingCallee: opIdx {opIdx} not in module.ops"), mutationSummary: mutationSummary) 'found'
 				return true
 			end 'found'
@@ -239,7 +239,7 @@ type ArgProvenance
 			let block = try module.blocks.get(blockRef) otherwise panic("ArgProvenance.of: blockRef from func.blockRefs not in module.blocks")
 			provenance.notePhis(block, func: func)
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				provenance.noteOp(try module.ops.get(opIdx) otherwise panic("ArgProvenance.of: opIdx {opIdx} not in module.ops"), func: func)
 			end 'eachOp'
 		end 'eachBlock'
@@ -349,7 +349,7 @@ function promoteInBlock(project Project, module MaxonModule, block IrBlock, func
 	var newRefs = OpIndexArray.create()
 	var promotedAny = false
 
-	for opIdx in block.opRefs 'eachOp'
+	for opIdx in block.bodyOps() 'eachOp'
 		promotedAny = promoteCallAt(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs) or promotedAny
 	end 'eachOp'
 
@@ -357,7 +357,7 @@ function promoteInBlock(project Project, module MaxonModule, block IrBlock, func
 		return
 	end 'unchanged'
 
-	block.opRefs = newRefs
+	block.replaceBodyOps(newRefs)
 end 'promoteInBlock'
 
 // The per-op arm of the rewrite walk. Appends `opIdx` to `newRefs` — preceded by its promotions and followed

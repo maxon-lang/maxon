@@ -605,7 +605,7 @@ type RangeCheckEmitter
 	// minted empty. So the cost is one arity-bounded walk per guarded function, not per op.
 	function requireGuardHeadHoldsOnlyParams(site GuardSite)
 		for pos in 0 upto site.position 'eachPrefixOp'
-			let opIdx = try site.block.opRefs.get(pos) otherwise panic("requireGuardHeadHoldsOnlyParams: block {site.block.id} of '{String.from(self.func.name)}' has no op at position {pos}, inside the prefix `guardSiteAt` resolved")
+			let opIdx = try site.block.bodyOpAt(pos) otherwise panic("requireGuardHeadHoldsOnlyParams: block {site.block.id} of '{String.from(self.func.name)}' has no op at position {pos}, inside the prefix `guardSiteAt` resolved")
 
 			match self.module.getOp(opIdx) 'op'
 				const or
@@ -837,7 +837,7 @@ type RangeCheckEmitter
 
 			match self.retBlockOf(site) 'ret'
 				notFound then break
-				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), operand: GuardedOperand.asIs(site.value), alias: alias, chain: GuardChain.retChain, filePath: checks.filePath, line: site.line, column: site.column)
+				found(retBlock) then _ = self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.bodyOpCount()), operand: GuardedOperand.asIs(site.value), alias: alias, chain: GuardChain.retChain, filePath: checks.filePath, line: site.line, column: site.column)
 			end 'ret'
 		end 'eachSite'
 	end 'guardReturns'
@@ -1094,7 +1094,7 @@ type RangeCheckEmitter
 			segment.push(opIdx)
 		end 'carveSegment'
 
-		headBlock.opRefs = segment
+		headBlock.replaceBodyOps(segment)
 
 		let ok = splitBlockExit(self.module, func: self.func, head: headBlock, label: RangeCheckOkLabel)
 		self.extendGuardChain(sourceBlockId, continuation: ok, splitAt: site.position)
@@ -1112,7 +1112,7 @@ type RangeCheckEmitter
 	// return), and a block nothing split must keep its own list.
 	function chainSourceOps(sourceBlockId BlockId, chainEnd IrBlock) returns OpIndexArray
 		if chainEnd.id == sourceBlockId 'stillItsOwnChainEnd'
-			return chainEnd.opRefs
+			return chainEnd.bodyOps()
 		end 'stillItsOwnChainEnd'
 
 		return try self.guardChainSource.get(sourceBlockId) otherwise panic("chainSourceOps: guardChainSource has no row for block id {sourceBlockId} of '{String.from(self.func.name)}', whose chain end `guardChainTail` has already been moved off it")
@@ -1145,8 +1145,8 @@ type RangeCheckEmitter
 				continue
 			end 'neverSplit'
 
-			if not chainEnd.opRefs.isEmpty() 'alreadyHoldsOps'
-				panic("materializeChainTails: the chain end of block {blockId} in '{String.from(self.func.name)}' already holds {chainEnd.opRefs.count()} op(s) — a continuation is minted empty and receives its ops only here, so something appended to one before its tail was placed")
+			if chainEnd.bodyOpCount() > 0 'alreadyHoldsOps'
+				panic("materializeChainTails: the chain end of block {blockId} in '{String.from(self.func.name)}' already holds {chainEnd.bodyOpCount()} op(s) — a continuation is minted empty and receives its ops only here, so something appended to one before its tail was placed")
 			end 'alreadyHoldsOps'
 
 			let base = try self.guardChainBase.get(blockId) otherwise panic("materializeChainTails: guardChainBase has no entry for block id {blockId}, which guardChainTail just answered for")
@@ -1154,7 +1154,7 @@ type RangeCheckEmitter
 
 			for i in base upto source.count() 'eachPendingOp'
 				let opIdx = try source.get(i) otherwise panic("materializeChainTails: pre-split list of block {blockId} holds {source.count()} ops but its last split cut at {base}")
-				chainEnd.opRefs.push(opIdx)
+				chainEnd.pushBodyOp(opIdx)
 			end 'eachPendingOp'
 		end 'eachBlockId'
 	end 'materializeChainTails'
@@ -1237,7 +1237,7 @@ type RangeCheckEmitter
 	// ⚠ THE POSITION IS THE WHOLE POINT. A guard anchored at the END of its block runs after the whole
 	// straight-line body — after every print, call, store and division the out-of-range value reached, so
 	// the language's own check never fires first. No Maxon-tier op position survives `lowerMaxonToStd`'s
-	// 1:N desugaring, so the lowering RECORDS one per site out of the `opRefs.count()` its own walk
+	// 1:N desugaring, so the lowering RECORDS one per site out of the `bodyOpCount()` its own walk
 	// already stands at (`RangeSiteWalk`), and this pass spends it into `GuardSite.position`.
 	//
 	// ⭐⭐ **"THE END OF THE BLOCK" MOVES AS SOON AS THE FIRST GUARD SPLITS IT, AND RESOLVING EVERY SITE
@@ -1605,7 +1605,7 @@ let RangeCheckOkLabel = b"__rc_ok"
 // OTHER.** A return site has no chain to extend (see `GuardChain`), and the block it splits can be a
 // continuation an alias site minted — `retBlockOf` resolves its recorded block to that block's current
 // chain END — so it is a block no site's coordinates describe and no pre-split list covers. It is also
-// split at its very END (`guardReturns` passes `opRefs.count()`), which is why splitting in place costs
+// split at its very END (`guardReturns` passes `bodyOpCount()`), which is why splitting in place costs
 // nothing there: the loop moves no op and the truncate drops none. `splitChainEnd` cannot work this way
 // because it repeats on the SAME source block, and that is exactly where moving the ops past the cut
 // becomes Θ(guards × block).
@@ -1631,15 +1631,15 @@ export function splitBlockInPlace(module StdModule, func IrFunction, head IrBloc
 	var headBlock = head
 	var tailOps = OpIndexArray.create()
 
-	for i in position upto headBlock.opRefs.count() 'moveTail'
-		let opIdx = try headBlock.opRefs.get(i) otherwise panic("splitBlockInPlace: opRefs.get OOB at {i}")
+	for i in position upto headBlock.bodyOpCount() 'moveTail'
+		let opIdx = try headBlock.bodyOpAt(i) otherwise panic("splitBlockInPlace: bodyOpAt OOB at {i}")
 		tailOps.push(opIdx)
 	end 'moveTail'
 
-	headBlock.opRefs.truncate(position)
+	headBlock.truncateBodyOps(position)
 
 	var ok = splitBlockExit(module, func: func, head: headBlock, label: label)
-	ok.opRefs = tailOps
+	ok.replaceBodyOps(tailOps)
 	return ok
 end 'splitBlockInPlace'
 

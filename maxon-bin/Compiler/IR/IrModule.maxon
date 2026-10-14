@@ -290,7 +290,7 @@ export type IrModule uses Op
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try self.blocks.get(blockRef) otherwise panic("collectLiveOpIndices: blockRef from func.blockRefs not in blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				into.push(opIdx)
 			end 'eachOp'
 
@@ -675,7 +675,7 @@ export type IrModule uses Op
 		let idx = self.ops.count()
 		self.ops.push(op)
 		self.spans.pushCurrent(idx)
-		block.opRefs.push(idx)
+		block.pushBodyOp(idx)
 	end 'appendOp'
 
 	// Append the block's CONDITIONAL-branch body op (x64 `jcc`) and record where it landed.
@@ -697,7 +697,7 @@ export type IrModule uses Op
 		let idx = self.ops.count()
 		self.ops.push(op)
 		self.spans.pushCurrent(idx)
-		block.opRefs.push(idx)
+		block.pushBodyOp(idx)
 		block.condBranch = CondBranch.opIndex(idx)
 	end 'appendCondBranch'
 
@@ -928,7 +928,7 @@ function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArray, opC
 		for blockRef in func.blockRefs 'markBlock'
 			let block = try blocks.get(blockRef) otherwise panic("computeOpCompaction: blockRef from func.blockRefs not in blocks")
 
-			for opIdx in block.opRefs 'markOpRef'
+			for opIdx in block.bodyOps() 'markOpRef'
 				try live.set(opIdx, value: true) otherwise panic("computeOpCompaction: live.set OOB at opRef {opIdx} (opCount={opCount})")
 			end 'markOpRef'
 
@@ -952,15 +952,17 @@ function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArray, plan
 		for blockRef in func.blockRefs 'rewriteBlock'
 			var block = try blocks.get(blockRef) otherwise panic("rewriteBlockOpRefs: blockRef from func.blockRefs not in blocks")
 
-			for pos in 0 upto block.opRefs.count() 'eachRef'
-				let oldIdx = try block.opRefs.get(pos) otherwise panic("rewriteBlockOpRefs: opRefs.get OOB at {pos}")
+			var ops = block.bodyOps()
+
+			for pos in 0 upto ops.count() 'eachRef'
+				let oldIdx = try ops.get(pos) otherwise panic("rewriteBlockOpRefs: ops.get OOB at {pos}")
 				let newIdx = try plan.forward.get(oldIdx) otherwise panic("rewriteBlockOpRefs: forward.get OOB at opRef {oldIdx}")
 
 				if newIdx == plan.deadMarker 'orphanRef'
 					panic("rewriteBlockOpRefs: block '{String.from(block.label)}' references orphaned op {oldIdx} — live op marked dead")
 				end 'orphanRef'
 
-				try block.opRefs.set(pos, value: newIdx) otherwise panic("rewriteBlockOpRefs: opRefs.set OOB at {pos}")
+				try ops.set(pos, value: newIdx) otherwise panic("rewriteBlockOpRefs: ops.set OOB at {pos}")
 			end 'eachRef'
 
 			if block.hasTerminatorOp() 'rewriteTerm'
@@ -1044,7 +1046,7 @@ function relocateIrBlock(src IrBlock, opOffset ElementIndex) returns IrBlock
 	var block = IrBlock.createLike(src)
 	block.blockArgs = src.blockArgs
 	block.branchEdges = src.branchEdges
-	block.opRefs = src.opRefs.clone()
+	block.replaceBodyOps(src.bodyOps().clone())
 	block.terminator = src.terminator
 	block.condBranch = src.condBranch
 	block.shiftOpIndices(opOffset)

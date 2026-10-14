@@ -175,11 +175,11 @@ function collectThreadCandidates(module StdModule, func IrFunction, scratch Thre
 		let blockRef = try func.blockRefs.get(position) otherwise panic("threadConstantBranches: blockRefs.get OOB at {position}")
 		let block = module.getBlock(blockRef)
 
-		if block.blockArgs.count() == 0 or block.opRefs.count() != 1 or not block.hasTerminatorOp() 'notTheShape'
+		if block.blockArgs.count() == 0 or block.bodyOpCount() != 1 or not block.hasTerminatorOp() 'notTheShape'
 			continue
 		end 'notTheShape'
 
-		let compareOpIdx = try block.opRefs.get(0) otherwise panic("threadConstantBranches: opRefs.get(0) on a one-op block")
+		let compareOpIdx = try block.bodyOpAt(0) otherwise panic("threadConstantBranches: bodyOpAt(0) on a one-op block")
 		classifyArithOperands(module.getOp(compareOpIdx), operands: scratch.arith)
 
 		if not scratch.arith.isComparisonImm() 'notACompare'
@@ -396,7 +396,7 @@ function refuseEscapingReads(module StdModule, func IrFunction, analysis Functio
 	for position in 0 upto func.blockRefs.count() 'eachBlock'
 		let block = module.blockAtPosition(func, position: position)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			refuseEscapingOpReads(module, opIdx: opIdx, position: position, analysis: analysis, candidates: candidates, argOwner: argOwner, reads: reads)
 		end 'eachOp'
 

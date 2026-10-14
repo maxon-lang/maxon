@@ -387,7 +387,7 @@ end 'recognizeRecordConstructor'
 function scanConstructorBody(module StdModule, func IrFunction, block IrBlock, box ValueId) returns RecordConstructor
 	var scan = ConstructorScan.create(func.paramCount)
 
-	for opIdx in block.opRefs 'eachOp'
+	for opIdx in block.bodyOps() 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("scanConstructorBody: opIdx {opIdx} not in module.ops")
 
 		if not scan.admit(op, box: box) 'refused'
@@ -1465,7 +1465,7 @@ function planPromotions(module StdModule, func IrFunction, valueBound ValueId, s
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("planPromotions: blockRef from func.blockRefs not in module.blocks")
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
 				notAConstructorCall then break
 				builds(resultId, sizeBytes, fields, args) then planOnePromotion(opIdx, resultId: resultId, sizeBytes: sizeBytes, fields: fields, args: args, scan: scan, retained: retained, plans: plans)
@@ -1577,11 +1577,11 @@ function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, 
 		var block = try module.blocks.get(blockRef) otherwise panic("applyPromotions: blockRef from func.blockRefs not in module.blocks")
 		var rebuilt = OpIndexArray.create()
 
-		for opIdx in block.opRefs 'eachRef'
+		for opIdx in block.bodyOps() 'eachRef'
 			appendRewrittenOp(module, opIdx: opIdx, plans: plans, planAtOp: planAtOp, promoted: promoted, mint: mint, rebuilt: rebuilt)
 		end 'eachRef'
 
-		block.opRefs = rebuilt
+		block.replaceBodyOps(rebuilt)
 	end 'eachBlock'
 end 'applyPromotions'
 

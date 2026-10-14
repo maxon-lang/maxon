@@ -562,14 +562,18 @@ enum DefPointLookup implements Error
 	noDefPoint
 end 'DefPointLookup'
 
-// The op INSERTIONS and REMOVALS one split made — RECORDED as it makes them, MATERIALIZED in one pass
-// per block when it is done.
+// The op INSERTIONS and REMOVALS one split made — RECORDED as it makes them, MATERIALIZED into the
+// positional index in one pass per block when it is done.
 //
 // THE SPLICES ARE HELD BACK, rather than applied as the ops go in. Two separate Θ(block) costs
 // would otherwise be paid on EVERY op a split inserted: the search for its anchor op's position and
 // the suffix shift `Array.insert` does. A split placing K ops into a block of M ops would cost
-// Θ(K × M) — invisible to `scale-test`, because neither ALLOCATES. Held back, the batch costs
-// Θ(M + K) (`spliceOpRefs`).
+// Θ(K × M) — invisible to `scale-test`, because neither ALLOCATES.
+//
+// THE BLOCK'S OWN LIST IS NOT EDITED AT ALL WHILE SPLITTING. Splicing it at every commit is Θ(block)
+// per split, which on a function of one long block is quadratic in the function. So from a block's
+// first commit its order lives in the positional index ALONE (`IrBlock.holdOpsElsewhere`), and
+// `flushUnflushed` writes it back once.
 //
 // It also puts every position in ONE COORDINATE SYSTEM — the block's PRE-SPLIT layout — because
 // nothing moves until `commit`. That is what lets a reload's anchor position come straight out of
@@ -581,8 +585,8 @@ end 'DefPointLookup'
 // anchors its store at the value's DEF, which dominates every use of it and therefore precedes every one
 // of them — in RPO block order, and in position within a block they share. The reloads then follow the
 // value's use thread, which is held ascending by sequence, hence ascending by (block, position). A remat
-// re-emits along that same thread. `recordInsert` refuses a batch that is not ascending, because the
-// backward pass would otherwise place an op silently in the wrong slot.
+// re-emits along that same thread. `recordInsert` refuses a batch that is not ascending, because
+// `commitBlock`'s carry-forward would otherwise seat an op silently at the wrong position.
 //
 // THE REMOVAL is a scalar rather than a list entry: a split removes at most ONE op — a fully
 // rematerialized constant's def, which nothing reads — and it is applied AFTER the splices.
@@ -604,9 +608,85 @@ export type SplitEdits
 	// by `splicesAtOrBefore`, so an off-by-one there would delete a LIVE op out of the block, silently.
 	var removalOpIdx as ElementIndex
 
+	var held as CfgIndexArray
+
+	// Under `VerifyIncrementalSplit` only, entry `k` shadowing `held[k]`: an eager copy of the block's
+	// list that takes every edit as it commits. Verify mode runs the shipping hold-and-flush path
+	// unchanged and checks it against this oracle — the index at every commit, the written list at every
+	// flush — so what it proves is the code that ships, not a substitute for it.
+	var shadows as OpIndexArrayArray
+
 	static function create() returns SplitEdits
-		return Self{blocks: CfgIndexArray.create(), positions: BlockOpPosArray.create(), opIdxs: OpIndexArray.create(), insertedSlots: DenseColumn.create(), hasRemoval: false, removalBlock: 0, removalPos: 0, removalOpIdx: 0}
+		return Self{blocks: CfgIndexArray.create(), positions: BlockOpPosArray.create(), opIdxs: OpIndexArray.create(), insertedSlots: DenseColumn.create(), hasRemoval: false, removalBlock: 0, removalPos: 0, removalOpIdx: 0, held: CfgIndexArray.create(), shadows: OpIndexArrayArray.create()}
 	end 'create'
+
+	export function unflushedCount() returns Count
+		return self.held.count()
+	end 'unflushedCount'
+
+	function holdInTheIndex(block IrBlock, blockLocal ElementIndex, pressure PressureIndex)
+		if block.opsAreHeldElsewhere() 'alreadyHeld'
+			return
+		end 'alreadyHeld'
+
+		if VerifyIncrementalSplit 'seedTheShadow'
+			var shadow = OpIndexArray.create()
+			shadow.append(block.bodyOps())
+			self.shadows.push(shadow)
+		end 'seedTheShadow'
+
+		block.holdOpsElsewhere(pressure.bodyOpCountOf(blockLocal))
+		self.held.push(blockLocal)
+	end 'holdInTheIndex'
+
+	function shadowOf(blockLocal ElementIndex) returns OpIndexArray
+		for k in 0 upto self.held.count() 'eachHeld'
+			if (try self.held.get(k) otherwise panic("SplitEdits.shadowOf: held.get OOB at {k}")) == blockLocal 'thisBlock'
+				return try self.shadows.get(k) otherwise panic("SplitEdits.shadowOf: shadows.get OOB at {k}")
+			end 'thisBlock'
+		end 'eachHeld'
+
+		panic("SplitEdits.shadowOf: block {blockLocal} is not held, so it has no shadow list")
+	end 'shadowOf'
+
+	// Run at every exit from splitting — the end of a relief loop, the end of a repair round, the E5001
+	// refusal, and before each verify-mode rebuild — because everything past those points reads the
+	// block's own list, which a held block refuses. A block stays held across splits until then, so it
+	// pays one Θ(block) write-back per exit rather than one per split.
+	export function flushUnflushed(module TargetModule, topo FuncTopology, pressure PressureIndex, ordered OpIndexArray)
+		for k in 0 upto self.held.count() 'eachBlock'
+			let blockLocal = try self.held.get(k) otherwise panic("SplitEdits.flushUnflushed: held.get OOB at {k}")
+			var block = blockAt(module, topo: topo, local: blockLocal)
+			ordered.clear()
+			pressure.collectBodyOps(blockLocal, block: block, out: ordered)
+			block.restoreOps(ordered)
+
+			if VerifyIncrementalSplit 'compareWithTheShadow'
+				self.requireWrittenOpsMatchShadow(k, block: block, blockLocal: blockLocal)
+			end 'compareWithTheShadow'
+		end 'eachBlock'
+
+		self.held.clear()
+		self.shadows.clear()
+	end 'flushUnflushed'
+
+	function requireWrittenOpsMatchShadow(k ElementIndex, block IrBlock, blockLocal ElementIndex)
+		let shadow = try self.shadows.get(k) otherwise panic("SplitEdits.requireWrittenOpsMatchShadow: shadows.get OOB at {k}")
+		let written = block.bodyOps()
+
+		if written.count() != shadow.count() 'lengthDiffers'
+			panic("SplitEdits.requireWrittenOpsMatchShadow: block {blockLocal} ('{String.from(block.label)}') was flushed with {written.count()} body op(s) but its shadow list holds {shadow.count()}")
+		end 'lengthDiffers'
+
+		for pos in 0 upto written.count() 'eachOp'
+			let flushed = try written.get(pos) otherwise panic("SplitEdits.requireWrittenOpsMatchShadow: written.get OOB at {pos}")
+			let expected = try shadow.get(pos) otherwise panic("SplitEdits.requireWrittenOpsMatchShadow: shadow.get OOB at {pos}")
+
+			if flushed != expected 'opDiffers'
+				panic("SplitEdits.requireWrittenOpsMatchShadow: position {pos} of block {blockLocal} ('{String.from(block.label)}') was flushed as op {flushed} but its shadow list holds op {expected}")
+			end 'opDiffers'
+		end 'eachOp'
+	end 'requireWrittenOpsMatchShadow'
 
 	function clear()
 		self.blocks.clear()
@@ -625,7 +705,7 @@ export type SplitEdits
 			let lastPos = try self.positions.get(recorded - 1) otherwise panic("SplitEdits.recordInsert: positions.get OOB at {recorded - 1}")
 
 			if blockLocal < lastBlock or (blockLocal == lastBlock and pos < lastPos) 'outOfOrder'
-				panic("SplitEdits.recordInsert: a splice at block {blockLocal} position {pos} follows one at block {lastBlock} position {lastPos} — one split's insertions must be recorded in ASCENDING (block, position) order, which SSA guarantees (the store anchors at the def, which dominates every use; the reloads follow the use thread, which is ascending by sequence). Materializing them takes one backward pass per block, so an out-of-order entry would land in the wrong slot")
+				panic("SplitEdits.recordInsert: a splice at block {blockLocal} position {pos} follows one at block {lastBlock} position {lastPos} — one split's insertions must be recorded in ASCENDING (block, position) order, which SSA guarantees (the store anchors at the def, which dominates every use; the reloads follow the use thread, which is ascending by sequence). `commitBlock` carries each position forward past the splices before it, so an out-of-order entry would land in the wrong slot")
 			end 'outOfOrder'
 		end 'notTheFirst'
 
@@ -647,9 +727,9 @@ export type SplitEdits
 		self.removalOpIdx = opIdx
 	end 'recordRemoval'
 
-	// Materialize every recorded edit: splice the pending ops into their blocks, drop the removed one,
-	// seat the new ops in the positional index, update the op count, and register every block that
-	// took an edit as DIRTY — those are the only blocks whose op layout can have changed.
+	// Materialize every recorded edit: seat the new ops in the positional index, drop the removed one,
+	// update the op count, and register every block that took an edit as DIRTY — those are the only
+	// blocks whose op layout can have changed.
 	//
 	// ONE PASS PER BLOCK, walking the recorded edits as runs of one block. Blocks are INDEPENDENT — a
 	// splice into one moves nothing in any other — so the runs may be taken in any order, and the
@@ -681,12 +761,18 @@ export type SplitEdits
 	// belongs to this block.
 	function commitBlock(module TargetModule, topo FuncTopology, index UseIndex, gaps VictimGaps, dirty BlockSet, pressure PressureIndex, relayout PressureRelayoutScratch, opFacts OpVariantFacts, buf OperandList, blockLocal ElementIndex, from ElementIndex, to ElementIndex, withRemoval bool)
 		var block = blockAt(module, topo: topo, local: blockLocal)
-		spliceOpRefs(block, positions: self.positions, opIdxs: self.opIdxs, from: from, to: to)
+		self.holdInTheIndex(block, blockLocal: blockLocal, pressure: pressure)
+		self.requireSplicesFit(block, blockLocal: blockLocal, pressure: pressure, from: from, to: to)
+
+		if VerifyIncrementalSplit 'shadowTheSplices'
+			spliceOpArray(self.shadowOf(blockLocal), label: block.label, positions: self.positions, opIdxs: self.opIdxs, from: from, to: to)
+		end 'shadowTheSplices'
+
 		index.addOps(((to - from) as OpSeq))
 
-		// The POSITIONAL index takes the same ops, in the same ascending order, each at the position the
-		// backward splice above just put it at: entry `j` of this block's run was recorded at a PRE-split
-		// position and the `j` entries ahead of it each pushed it along by one. Seating them here rather
+		// The POSITIONAL index takes the ops in their recorded ascending order: entry `j` of this block's
+		// run was recorded at a PRE-split position and the `j` entries ahead of it each push it along by
+		// one. Seating them one at a time rather
 		// than after the whole batch is what keeps every later `slotOfPosition` in this loop reading the
 		// layout that actually exists.
 		for j in 0 upto to - from 'eachSplice'
@@ -701,27 +787,81 @@ export type SplitEdits
 
 		if withRemoval 'dropTheDeadDef'
 			// Stated in PRE-SPLIT coordinates like every other position here, so it is carried through the
-			// splices that just went in ahead of it — landing exactly where it landed when the removal was
-			// applied by hand, after the inserts.
+			// splices that just went in ahead of it.
 			let at = self.removalPos + self.splicesAtOrBefore(self.removalPos, from: from, to: to)
-			let standing = try block.opRefs.get(at) otherwise panic("SplitEdits.commitBlock: opRefs.get OOB at {at} of block {blockLocal}")
 
-			// The carry-forward and `spliceOpRefs`' backward pass are two statements of ONE shift rule,
+			if at >= pressure.bodyOpCountOf(blockLocal) 'notABodyOp'
+				panic("SplitEdits.commitBlock: the removal of op {self.removalOpIdx} carries forward to position {at} of block {blockLocal}, which holds {pressure.bodyOpCountOf(blockLocal)} body op(s) — a split removes a body op, never the terminator")
+			end 'notABodyOp'
+
+			let removedSlot = pressure.slotOfPosition(blockLocal, pos: at)
+			let standing = pressure.opAtSlot(removedSlot)
+
+			// The carry-forward and the positional index's own seating are two statements of ONE shift rule,
 			// and this is the one place a disagreement between them would DELETE something. Removing a
 			// live op is not a crash — the block simply stops computing a value someone reads.
 			if standing != self.removalOpIdx 'wouldDropTheWrongOp'
-				panic("SplitEdits.commitBlock: the removal meant op {self.removalOpIdx} at pre-split position {self.removalPos} of block {blockLocal}, but after {to - from} splice(s) that position carries forward to {at}, which holds op {standing} — the splice shift `spliceOpRefs` performs and the one `splicesAtOrBefore` predicts have diverged")
+				panic("SplitEdits.commitBlock: the removal meant op {self.removalOpIdx} at pre-split position {self.removalPos} of block {blockLocal}, but after {to - from} splice(s) that position carries forward to {at}, which holds op {standing} — the splice shift the positional index performs and the one `splicesAtOrBefore` predicts have diverged")
 			end 'wouldDropTheWrongOp'
 
-			// Its LEAF is vacated first, while `at` still names it: freeing it afterwards would resolve the
-			// position against a block the op has already left.
-			pressure.removeOp(blockLocal, slot: pressure.slotOfPosition(blockLocal, pos: at))
-			_ = try block.opRefs.remove(at) otherwise panic("SplitEdits.commitBlock: opRefs.remove OOB at {at} of block {blockLocal}")
+			pressure.removeOp(blockLocal, slot: removedSlot)
+
+			if VerifyIncrementalSplit 'shadowTheRemoval'
+				self.shadowRemoval(blockLocal, at: at, standing: standing)
+			end 'shadowTheRemoval'
+
 			index.removeOp()
 		end 'dropTheDeadDef'
 
+		if VerifyIncrementalSplit 'checkTheIndexAgainstTheShadow'
+			self.verifyIndexMatchesShadow(block, blockLocal: blockLocal, pressure: pressure)
+		end 'checkTheIndexAgainstTheShadow'
+
 		dirty.add(blockLocal)
 	end 'commitBlock'
+
+	function requireSplicesFit(block IrBlock, blockLocal ElementIndex, pressure PressureIndex, from ElementIndex, to ElementIndex)
+		if to == from 'nothingToAdmit'
+			return
+		end 'nothingToAdmit'
+
+		let last = try self.positions.get(to - 1) otherwise panic("SplitEdits.requireSplicesFit: positions.get OOB at {to - 1}")
+		let bodyOps = pressure.bodyOpCountOf(blockLocal)
+
+		if last > bodyOps 'pastTheBody'
+			panic("SplitEdits.requireSplicesFit: a splice is recorded at position {last} of block {blockLocal} ('{String.from(block.label)}'), which holds {bodyOps} body op(s) — a spill op goes into the body, never after the terminator")
+		end 'pastTheBody'
+	end 'requireSplicesFit'
+
+	function shadowRemoval(blockLocal ElementIndex, at ElementIndex, standing ElementIndex)
+		var shadow = self.shadowOf(blockLocal)
+		let listed = try shadow.get(at) otherwise panic("SplitEdits.shadowRemoval: shadow.get OOB at {at} of block {blockLocal}")
+
+		if listed != standing 'listDisagrees'
+			panic("SplitEdits.shadowRemoval: the shadow list of block {blockLocal} holds op {listed} at position {at} but the positional index holds op {standing} there")
+		end 'listDisagrees'
+
+		_ = try shadow.remove(at) otherwise panic("SplitEdits.shadowRemoval: shadow.remove OOB at {at} of block {blockLocal}")
+	end 'shadowRemoval'
+
+	function verifyIndexMatchesShadow(block IrBlock, blockLocal ElementIndex, pressure PressureIndex)
+		let shadow = self.shadowOf(blockLocal)
+		var materialised = OpIndexArray.create()
+		pressure.collectBodyOps(blockLocal, block: block, out: materialised)
+
+		if materialised.count() != shadow.count() 'lengthDiffers'
+			panic("SplitEdits.verifyIndexMatchesShadow: block {blockLocal} ('{String.from(block.label)}') materialises {materialised.count()} body op(s) from the positional index but the shadow list holds {shadow.count()}")
+		end 'lengthDiffers'
+
+		for k in 0 upto materialised.count() 'eachOp'
+			let fromIndex = try materialised.get(k) otherwise panic("SplitEdits.verifyIndexMatchesShadow: materialised.get OOB at {k}")
+			let fromShadow = try shadow.get(k) otherwise panic("SplitEdits.verifyIndexMatchesShadow: shadow.get OOB at {k}")
+
+			if fromIndex != fromShadow 'opDiffers'
+				panic("SplitEdits.verifyIndexMatchesShadow: position {k} of block {blockLocal} ('{String.from(block.label)}') materialises as op {fromIndex} from the positional index but the shadow list holds op {fromShadow}")
+			end 'opDiffers'
+		end 'eachOp'
+	end 'verifyIndexMatchesShadow'
 
 	// The slots this batch's spliced ops were seated at, appended to `out`.
 	//
@@ -1118,6 +1258,45 @@ function suffixBestIsInLeft(leftBest PressureDelta, rightSum PressureDelta, righ
 	return rightSum + leftBest >= rightBest
 end 'suffixBestIsInLeft'
 
+export type OpCursor
+	var cursorPos as ElementIndex
+	var cursorSlot as PressureSlot
+
+	export static function create() returns OpCursor
+		return Self{cursorPos: 0, cursorSlot: 0}
+	end 'create'
+
+	export function placeAtPosition(pressure PressureIndex, blockLocal ElementIndex, pos ElementIndex)
+		self.cursorPos = pos
+		self.cursorSlot = pressure.slotOfPosition(blockLocal, pos: pos)
+	end 'placeAtPosition'
+
+	export function placeAt(pos ElementIndex, slot PressureSlot)
+		self.cursorPos = pos
+		self.cursorSlot = slot
+	end 'placeAt'
+
+	export function op(pressure PressureIndex) returns ElementIndex
+		return pressure.opAtSlot(self.cursorSlot)
+	end 'op'
+
+	export function position() returns ElementIndex
+		return self.cursorPos
+	end 'position'
+
+	export function advance(pressure PressureIndex)
+		self.cursorSlot = pressure.nextOpSlot(self.cursorSlot)
+		self.cursorPos = self.cursorPos + 1
+	end 'advance'
+
+	export function retreat(pressure PressureIndex)
+		self.cursorSlot = pressure.prevOpSlot(self.cursorSlot)
+		self.cursorPos = self.cursorPos - 1
+	end 'retreat'
+end 'OpCursor'
+
+export typealias OpIndexArrayArray = Array with OpIndexArray
+
 export type PressureIndex
 	// A power of two: leaf `s` is node `slotCount + s`, node 1 is the root, node `n`'s children are `2n`
 	// and `2n + 1`.
@@ -1128,6 +1307,8 @@ export type PressureIndex
 	var blockFirst as PressureSlotColumn
 	var blockLen as PressureSlotColumn
 	var blockNode as ColumnLengthColumn
+	var terminated as BoolArray
+	export var walker as OpCursor
 
 	// LEAVES. `holdsOp` is what makes a slot a POSITION and a peak candidate; the exit leaf and every
 	// free slot carry `false`. `opAt` is meaningful only under it.
@@ -1192,7 +1373,7 @@ export type PressureIndex
 	var confFoundInSweep as bool
 
 	export static function create() returns PressureIndex
-		return Self{slotCount: 1, blockFirst: PressureSlotColumn.create(), blockLen: PressureSlotColumn.create(), blockNode: ColumnLengthColumn.create(), holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), leafDelta: PressureDeltaColumn.create(), leafTransient: PressureDeltaColumn.create(), nodeOps: BlockOpPosArray.create(), nodeSum: PressureDeltaColumn.create(), nodeBest: PressureDeltaColumn.create(), nodeClobber: RegMaskColumn.create(), defSlot: PressureSlotColumn.create(), peak: BlockPeakSlot.create(), scanPeak: BlockPeakSlot.create(), leafPending: RegMaskColumn.create(), leafPhysLive: RegMaskColumn.create(), confinedActive: false, confFound: BoolArray.create(), confPressure: RegCountColumn.create(), confAtFixed: BoolArray.create(), confWitness: RegMaskColumn.create(), confClass: ValueClassColumn.create(), confWinner: PressureSlotColumn.create(), confHas: BoolArray.create(), confFresh: BoolArray.create(), sparseNodes: CfgIndexArray.create(), confLeafChanged: false, confFoundInSweep: false}
+		return Self{slotCount: 1, blockFirst: PressureSlotColumn.create(), blockLen: PressureSlotColumn.create(), blockNode: ColumnLengthColumn.create(), terminated: BoolArray.create(), walker: OpCursor.create(), holdsOp: BoolArray.create(), opAt: OpIndexArray.create(), leafDelta: PressureDeltaColumn.create(), leafTransient: PressureDeltaColumn.create(), nodeOps: BlockOpPosArray.create(), nodeSum: PressureDeltaColumn.create(), nodeBest: PressureDeltaColumn.create(), nodeClobber: RegMaskColumn.create(), defSlot: PressureSlotColumn.create(), peak: BlockPeakSlot.create(), scanPeak: BlockPeakSlot.create(), leafPending: RegMaskColumn.create(), leafPhysLive: RegMaskColumn.create(), confinedActive: false, confFound: BoolArray.create(), confPressure: RegCountColumn.create(), confAtFixed: BoolArray.create(), confWitness: RegMaskColumn.create(), confClass: ValueClassColumn.create(), confWinner: PressureSlotColumn.create(), confHas: BoolArray.create(), confFresh: BoolArray.create(), sparseNodes: CfgIndexArray.create(), confLeafChanged: false, confFoundInSweep: false}
 	end 'create'
 
 	// ----------------------------------------------------------------------
@@ -1273,10 +1454,12 @@ export type PressureIndex
 	// Size the index for a function, from the IR's own op counts.
 	function layOut(module TargetModule, topo FuncTopology, opCounts DenseColumn)
 		opCounts.refill(topo.numBlocks, value: 0)
+		self.terminated.refill(topo.numBlocks, value: false)
 
 		for b in 0 upto topo.numBlocks 'eachBlock'
 			let block = blockAt(module, topo: topo, local: b)
-			try opCounts.set(b, value: blockOpCount(block)) otherwise panic("PressureIndex.layOut: opCounts.set OOB for block {b}")
+			try opCounts.set(b, value: block.opCountInRunOrder()) otherwise panic("PressureIndex.layOut: opCounts.set OOB for block {b}")
+			try self.terminated.set(b, value: block.hasTerminatorOp()) otherwise panic("PressureIndex.layOut: terminated.set OOB for block {b}")
 		end 'eachBlock'
 
 		self.placeRuns(topo, opCounts: opCounts)
@@ -2057,6 +2240,40 @@ export type PressureIndex
 		return self.slotOfLeafNode(node)
 	end 'slotOfPosition'
 
+	function isTerminated(blockLocal ElementIndex) returns bool
+		return try self.terminated.get(blockLocal) otherwise panic("PressureIndex.isTerminated: block {blockLocal} out of range")
+	end 'isTerminated'
+
+	export function bodyOpCountOf(blockLocal ElementIndex) returns ElementIndex
+		return self.opCountOf(blockLocal) - (1 if self.isTerminated(blockLocal) else 0)
+	end 'bodyOpCountOf'
+
+	export function opAtPosition(blockLocal ElementIndex, pos ElementIndex) returns ElementIndex
+		return self.opAtSlot(self.slotOfPosition(blockLocal, pos: pos))
+	end 'opAtPosition'
+
+	export function collectOps(blockLocal ElementIndex, out OpIndexArray)
+		let exit = self.exitSlotOf(blockLocal)
+
+		for slot in self.firstSlotOf(blockLocal) upto exit 'eachSlot'
+			if (try self.holdsOp.get(slot) otherwise panic("PressureIndex.collectOps: holdsOp.get OOB at slot {slot}")) 'anOp'
+				out.push(try self.opAt.get(slot) otherwise panic("PressureIndex.collectOps: opAt.get OOB at slot {slot}"))
+			end 'anOp'
+		end 'eachSlot'
+	end 'collectOps'
+
+	export function collectBodyOps(blockLocal ElementIndex, block IrBlock, out OpIndexArray)
+		self.collectOps(blockLocal, out: out)
+
+		if self.isTerminated(blockLocal) 'dropTheTerminator'
+			let last = try out.pop() otherwise panic("PressureIndex.collectBodyOps: block {blockLocal} is terminated yet laid out no op")
+
+			if not block.hasTerminatorOp() or block.terminatorIndex() != last 'wrongTerminator'
+				panic("PressureIndex.collectBodyOps: block {blockLocal} ('{String.from(block.label)}') lays out op {last} after its body, but its terminator is not that op")
+			end 'wrongTerminator'
+		end 'dropTheTerminator'
+	end 'collectBodyOps'
+
 	// ----------------------------------------------------------------------
 	// EDITS
 	// ----------------------------------------------------------------------
@@ -2212,7 +2429,7 @@ export type PressureIndex
 			self.setExitPopulation(b, population: liveByClass)
 
 			ordered.clear()
-			collectBlockOps(block, out: ordered)
+			block.collectOpsInRunOrder(ordered)
 			let opCount = ordered.count()
 
 			for ri in 0 upto opCount 'eachOpRev'
@@ -3272,7 +3489,7 @@ function liveAcrossClobbersIn(module TargetModule, liveness LivenessResult, pres
 	let block = blockAt(module, topo: liveness.cfg.topo, local: blockLocal)
 
 	if block.heat == BlockHeat.cold 'coldBlock'
-		return coldRunClobbersFor(module, liveness: liveness, pressure: pressure, w: w, block: block, blockLocal: blockLocal, span: span, buf: buf)
+		return coldRunClobbersFor(module, liveness: liveness, pressure: pressure, w: w, blockLocal: blockLocal, span: span, buf: buf)
 	end 'coldBlock'
 
 	return pressure.clobberOr(blockLocal, lo: span.lo, hi: span.hi)
@@ -3281,13 +3498,13 @@ end 'liveAcrossClobbersIn'
 // The cold block's one confinement of `w`, stated per value as `ColdRunSweep` states it per op and read
 // off the same `ColdBlockRuns`: for each run of the block, the raw clobbers of the run ops `w` is live
 // across (inside `span`) that precede `w`'s last read in that run.
-function coldRunClobbersFor(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, block IrBlock, blockLocal ElementIndex, span LiveAcrossSpan, buf OperandList) returns RegMask
+function coldRunClobbersFor(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, blockLocal ElementIndex, span LiveAcrossSpan, buf OperandList) returns RegMask
 	let runs = liveness.coldRuns.of(blockLocal)
 	var mask = 0 as RegMask
 
 	for id in 0 upto runs.runCount() 'eachRun'
 		let first = runs.firstOf(id)
-		let lastRead = lastReadWithin(liveness.useIndex, pressure: pressure, w: w, block: block, blockLocal: blockLocal, from: first, to: runs.lastOf(id))
+		let lastRead = lastReadWithin(liveness.useIndex, pressure: pressure, w: w, blockLocal: blockLocal, from: first, to: runs.lastOf(id))
 
 		for k in first upto lastRead 'eachClobberBeforeTheRead'
 			let slot = pressure.slotOfPosition(blockLocal, pos: k)
@@ -3296,7 +3513,7 @@ function coldRunClobbersFor(module TargetModule, liveness LivenessResult, pressu
 				continue
 			end 'notLiveAcrossIt'
 
-			let clobbering = try module.ops.get(try block.opRefs.get(k) otherwise panic("coldRunClobbersFor: opRefs.get OOB at {k}")) otherwise panic("coldRunClobbersFor: op at position {k} not in module.ops")
+			let clobbering = try module.ops.get(pressure.opAtSlot(slot)) otherwise panic("coldRunClobbersFor: op at position {k} not in module.ops")
 			targetOpOperands(clobbering, buf: buf)
 			mask = mask or rawClobberMask(clobbering, buf: buf, opFacts: liveness.opFacts)
 		end 'eachClobberBeforeTheRead'
@@ -3307,7 +3524,7 @@ end 'coldRunClobbersFor'
 
 // The last position in `[from, to]` of `block` at which an op reads `w`, or `from` when none does — so
 // a range `from upto` it is empty exactly when nothing in the run reads `w`.
-function lastReadWithin(index UseIndex, pressure PressureIndex, w ValueId, block IrBlock, blockLocal ElementIndex, from ElementIndex, to ElementIndex) returns ElementIndex
+function lastReadWithin(index UseIndex, pressure PressureIndex, w ValueId, blockLocal ElementIndex, from ElementIndex, to ElementIndex) returns ElementIndex
 	var lastRead = from
 	let useSites = index.useCount(w)
 
@@ -3319,7 +3536,7 @@ function lastReadWithin(index UseIndex, pressure PressureIndex, w ValueId, block
 
 	for _ in 0 upto useSites 'eachUse'
 		if index.useBlockAt(record) == blockLocal and index.useKindAt(record) == UseKind.op 'anOpUseHere'
-			let position = usePositionIn(index, pressure: pressure, block: block, record: record)
+			let position = usePositionIn(index, pressure: pressure, record: record)
 
 			if position > lastRead and position <= to 'laterInTheRun'
 				lastRead = position
@@ -3851,7 +4068,7 @@ export type SplitDriver
 		while peak.found 'relieve'
 			if iterations >= iterationBound 'runaway'
 				let peakBlock = blockAt(module, topo: funcLiveness.cfg.topo, local: peak.blockLocal)
-				panic("SplitDriver.relievePressure: '{String.from(func.name)}' did not converge after {iterations} splits (peak effective pressure {peak.pressure} still over its pool, at block '{String.from(peakBlock.label)}' ({peakBlock.heat.name}) sequence {peak.peakSeq} (op index {peak.peakOpIdx}: {opShapeDescription(module, opIdx: peak.peakOpIdx, buf: work.splitOperands, opFacts: funcLiveness.opFacts)}), clobberOnly={peak.clobberOnly}; last victim {lastVictim}: def {funcLiveness.useIndex.defKindOf(lastVictim).name} at {defSeqDescription(module, liveness: funcLiveness, valueId: lastVictim)}, uses at {useSeqsDescription(module, liveness: funcLiveness, valueId: lastVictim)}, slotResident={funcLiveness.useIndex.isSlotResident(lastVictim)}; as chosen: {lastVictimAsChosen}) — a splitter bug")
+				panic("SplitDriver.relievePressure: '{String.from(func.name)}' did not converge after {iterations} splits (peak effective pressure {peak.pressure} still over its pool, at block '{String.from(peakBlock.label)}' ({peakBlock.heat.name}) sequence {peak.peakSeq} (op index {peak.peakOpIdx}: {opShapeDescription(module, opIdx: peak.peakOpIdx, buf: work.splitOperands, opFacts: funcLiveness.opFacts)}), clobberOnly={peak.clobberOnly}; last victim {lastVictim}: def {funcLiveness.useIndex.defKindOf(lastVictim).name} at {defSeqDescription(module, liveness: funcLiveness, pressure: work.pressure, valueId: lastVictim)}, uses at {useSeqsDescription(module, liveness: funcLiveness, valueId: lastVictim)}, slotResident={funcLiveness.useIndex.isSlotResident(lastVictim)}; as chosen: {lastVictimAsChosen}) — a splitter bug")
 			end 'runaway'
 
 			iterations = iterations + 1
@@ -3911,7 +4128,7 @@ export type SplitDriver
 
 			// A `none` choice does not come back: at a FULL-pool peak it is the E5001 this design exists to
 			// raise, and at a CONFINED one it is a splitter bug (`noVictimAtPeak`).
-			let victim = try victimAtPeak(choice, refusal: refusal, func: func, hasAuthor: hasAuthor, liveness: funcLiveness, peak: peak, pool: self.pool, lineage: self.lineage, scratch: work)
+			let victim = try victimAtPeak(module, choice: choice, refusal: refusal, func: func, hasAuthor: hasAuthor, liveness: funcLiveness, peak: peak, pool: self.pool, lineage: self.lineage, scratch: work)
 			lastVictim = victim
 
 			if iterations == iterationBound 'theLastIterationBeforeThePanic'
@@ -3944,7 +4161,7 @@ export type SplitDriver
 
 			match choice 'act'
 				none then panic("SplitDriver.relievePressure: `victimAtPeak` returned for a `none` choice — it must throw")
-				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, topo: self.cfg.topo, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: self.nextValueId, counters: counters, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
+				remat(v, scope) then self.nextValueId = rematerializeConstant(module, index: index, valueId: v, peakSeq: peak.peakSeq, scope: scope, nextValueId: self.nextValueId, counters: counters, lineage: self.lineage, scratch: work, opFacts: funcLiveness.opFacts)
 				spill(v, scope) then self.nextValueId = spillOneValue(module, index: index, cfg: self.cfg, liveness: funcLiveness, valueId: v, anchor: work.anchor, scope: scope, slot: slot, pool: self.pool, nextValueId: self.nextValueId, counters: counters, lineage: self.lineage, scratch: work)
 			end 'act'
 
@@ -3952,9 +4169,12 @@ export type SplitDriver
 			peak = refreshPeak(module, liveness: funcLiveness, pool: self.pool, scratch: work, cut: CutSeed.at(peak.blockLocal, atPos: peakPos, ofVictim: victim, mintedFrom: freshFrom, mintedTo: self.nextValueId, row: peak.liveBefore, ready: peak.rowReady))
 
 			if VerifyIncrementalSplit 'checkAgainstAFullRebuild'
+				self.flushOps(module)
 				verifyIncremental(module, cfg: self.cfg, func: func, liveness: funcLiveness, peak: peak, scratch: work, pool: self.pool, iterations: iterations)
 			end 'checkAgainstAFullRebuild'
 		end 'relieve'
+
+		self.flushOps(module)
 
 		// The per-block demands are current (every dirtied block was re-swept); the function's max is the
 		// max over them, taken ONCE here rather than re-folded on every split.
@@ -3986,6 +4206,16 @@ export type SplitDriver
 			end 'residual'
 		end 'eachClass'
 	end 'relievePressure'
+
+	export function flushOps(module TargetModule)
+		self.scratch.edits.flushUnflushed(module, topo: self.cfg.topo, pressure: self.scratch.pressure, ordered: self.scratch.sweep.ordered)
+	end 'flushOps'
+
+	export function requireOpsFlushed()
+		if self.scratch.edits.unflushedCount() > 0 'stillHeldInTheIndex'
+			panic("SplitDriver.requireOpsFlushed: {self.scratch.edits.unflushedCount()} block(s) still hold their ops in the positional index and not in `bodyOps()` — every reader outside the splitter reads `bodyOps()`, so the splitter must flush before it hands the function on")
+		end 'stillHeldInTheIndex'
+	end 'requireOpsFlushed'
 
 	// Every block's demand, restated before the maximum is read: a split moves the cover of blocks it
 	// never dirties (a transparent run spans them), so the per-split refresh leaves those demands
@@ -4467,9 +4697,9 @@ end 'findConfiningClobber'
 //
 // It is read out BEFORE the mutation because the incremental update needs the PRE-split index's answer
 // for where the victim is live and where it is used.
-function victimAtPeak(choice SpillChoice, refusal RegAllocRefusalSite, func IrFunction, hasAuthor bool, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage, scratch SplitScratch) returns ValueId throws RegAllocRefusal
+function victimAtPeak(module TargetModule, choice SpillChoice, refusal RegAllocRefusalSite, func IrFunction, hasAuthor bool, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage, scratch SplitScratch) returns ValueId throws RegAllocRefusal
 	match choice 'act'
-		none then try noVictimAtPeak(refusal, func: func, hasAuthor: hasAuthor, liveness: liveness, peak: peak, pool: pool, lineage: lineage, scratch: scratch)
+		none then try noVictimAtPeak(module, refusal: refusal, func: func, hasAuthor: hasAuthor, liveness: liveness, peak: peak, pool: pool, lineage: lineage, scratch: scratch)
 		remat(v, _) then return v
 		spill(v, _) then return v
 	end 'act'
@@ -4632,13 +4862,13 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	scratch.gaps.growValues(cfg.valueCount)
 	scratch.gaps.dropValue(split.victim, index: index)
 
-	// The split's op insertions and its one possible removal, spliced into their blocks — plus the op
+	// The split's op insertions and its one possible removal, applied to the positional index — plus the op
 	// count, the new ops' slots, and the blocks that took an edit.
 	scratch.edits.commit(module, topo: topo, index: index, gaps: scratch.gaps, dirty: dirty, pressure: scratch.pressure, relayout: scratch.relayout, opFacts: liveness.opFacts, buf: scratch.sweep.buf)
 
 	// The splice moved positions in every dirty block; a cold one's runs are stated in positions.
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
-		liveness.coldRuns.rebuildBlock(module, topo: topo, local: dirty.at(k), buf: scratch.sweep.buf, opFacts: liveness.opFacts)
+		liveness.coldRuns.rebuildBlock(module, topo: topo, local: dirty.at(k), pressure: scratch.pressure, bodyOps: scratch.sweep.ordered, buf: scratch.sweep.buf, opFacts: liveness.opFacts)
 	end 'eachDirtyBlock'
 
 	// The value space grew by the ids the split minted; every column keyed by it follows.
@@ -5218,7 +5448,9 @@ end 'choiceFound'
 //     therefore not DEAD, it is UNREACHED-BY-TODAY'S-OPS — a statement about the current op set, not
 //     about this code. It costs one compare on the panic path and is the only thing standing between
 //     a future op's clobber mask and a false E5001 against a program that fits the machine.
-function noVictimAtPeak(refusal RegAllocRefusalSite, func IrFunction, hasAuthor bool, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage, scratch SplitScratch) throws RegAllocRefusal
+function noVictimAtPeak(module TargetModule, refusal RegAllocRefusalSite, func IrFunction, hasAuthor bool, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage, scratch SplitScratch) throws RegAllocRefusal
+	scratch.edits.flushUnflushed(module, topo: liveness.cfg.topo, pressure: scratch.pressure, ordered: scratch.sweep.ordered)
+
 	if peak.clobberOnly 'splitterBug'
 		if peak.witness == 0 'confinedToNothing'
 			panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow at a peak whose witness is EMPTY — {peak.pressure} {peak.witnessClass.name} value(s) allowed NO register at all, against a full pool of {classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)} — and `chooseVictim` refused every one of them. With an empty witness the usual counting argument gives nothing (the tight set need only outnumber ZERO), so a tight set of two values that ONE op reads leaves nothing to choose. Every value confined to ∅ should be an ORIGINAL, relieved at the op that confines it, because a split must never MINT one: look first at the run-break (`markRunStarts` / `opStrandsClass`), which exists to stop a reload being born with nowhere to live. It must never surface as E5001: this program fits the machine.")
@@ -5243,6 +5475,10 @@ function noVictimAtPeak(refusal RegAllocRefusalSite, func IrFunction, hasAuthor 
 	// worker, which has no `Project` and may not reach one. The site carries the two things no later
 	// frame can rebuild (this driver's liveness and lineage, and the peak the overflow was measured at)
 	// to whoever holds a `Project`; see `RegAllocRefusalSite`.
+	if scratch.edits.unflushedCount() > 0 'refusingWithBlocksHeld'
+		panic("noVictimAtPeak: {scratch.edits.unflushedCount()} block(s) still hold their ops in the positional index, and the E5001 diagnostic reads them from the block")
+	end 'refusingWithBlocksHeld'
+
 	refusal.refused = RefusedAllocation.at(liveness, lineage: lineage, peak: peak)
 	throw RegAllocRefusal.hotOverflow
 end 'noVictimAtPeak'
@@ -5257,13 +5493,13 @@ end 'choiceScopeName'
 
 // The runaway panic's two descriptions of its victim: where it is defined, as a block position, and
 // where it is read, as sequence numbers — the coordinates the peak is stated in.
-function defSeqDescription(module TargetModule, liveness LivenessResult, valueId ValueId) returns String
+function defSeqDescription(module TargetModule, liveness LivenessResult, pressure PressureIndex, valueId ValueId) returns String
 	let index = liveness.useIndex
 
 	match index.defKindOf(valueId) 'kind'
 		none then return "no def"
 		phiDef then return "block {index.defBlockOf(valueId)} entry"
-		opDef then return "position {positionInBlock(blockAt(module, topo: liveness.cfg.topo, local: index.defBlockOf(valueId)), opIdx: index.requireDefOp(valueId))} (op index {index.requireDefOp(valueId)}: {opShapeDescription(module, opIdx: index.requireDefOp(valueId), buf: OperandList.create(), opFacts: liveness.opFacts)})"
+		opDef then return "position {pressure.positionOfSlot(index.defBlockOf(valueId), slot: pressure.defSlotOf(valueId))} (op index {index.requireDefOp(valueId)}: {opShapeDescription(module, opIdx: index.requireDefOp(valueId), buf: OperandList.create(), opFacts: liveness.opFacts)})"
 	end 'kind'
 end 'defSeqDescription'
 
@@ -5565,7 +5801,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	var liveByClass = scratch.sweep.liveByClass
 
 	ordered.clear()
-	collectBlockOps(block, out: ordered)
+	collectOrderedOps(scratch.pressure, block: block, blockLocal: i, out: ordered)
 	let opCount = ordered.count()
 
 	for ri in 0 upto opCount 'eachOpRev'
@@ -5605,6 +5841,15 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	// the running best of the blocks before it. See `PeakRank.snapshot`.
 	return best.snapshot()
 end 'analyzeBlockPressure'
+
+function collectOrderedOps(pressure PressureIndex, block IrBlock, blockLocal ElementIndex, out OpIndexArray)
+	if pressure.isLaidOut() 'theIndexIsTheOrder'
+		pressure.collectOps(blockLocal, out: out)
+		return
+	end 'theIndexIsTheOrder'
+
+	block.collectOpsInRunOrder(out)
+end 'collectOrderedOps'
 
 // On a sparse sweep the row holds only the block's EXPLICIT values. The values live straight
 // through it are counted from `cover` here, carried in the census by `TransparentCarry`, and listed
@@ -5920,12 +6165,11 @@ end 'seedRowAtCut'
 // fail loudly: `peakOpIdx` feeds `usesAtPeakOp` (which values the peak op READS, hence which are
 // excluded as victims) and the mutators, so it is a different victim and different code, never a crash.
 //
-// The ONE statement of a block's execution order is `blockOpAt` — body `opRefs`, then the terminator —
-// and `collectBlockOps` is BUILT from it rather than spelling it out a second time. So reading the
-// suffix positionally here is the same statement the list-building consumers read, which is what makes
-// it safe to skip building the list at all: this walk usually wants a fraction of a block, and on a
-// function that is one basic block `collectBlockOps` was Θ(the function) once per split before the
-// walk even started.
+// Once the positional index is laid out it IS the block's order — a block the splitter has edited holds
+// its ops there alone (`IrBlock.holdOpsElsewhere`) — so the walk steps back through it from the end and
+// pays for the suffix only. Building the whole list instead is Θ(the block) per split, which on a
+// function that is one basic block is the whole function. Before the layout nothing can be held, and
+// the block's own list is read.
 //
 // It costs ONE partial block sweep per pressure analysis, and it is what buys the removal of a heap
 // row plus a full `wordsPerRow` copy at EVERY tying op of EVERY block (see `PeakRank`).
@@ -5937,7 +6181,9 @@ function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLoc
 	// that tally panics on underflow — so seed it truthfully, as every other sweep does.
 	seedClassLive(scratch.sweep.liveByClass, classes: liveness.valueClass, values: scratch.seedBuf)
 
-	let opCount = blockOpCount(block)
+	let pressure = scratch.pressure
+	let walksTheIndex = pressure.isLaidOut()
+	let opCount = pressure.opCountOf(blockLocal) if walksTheIndex else block.opCountInRunOrder()
 
 	if forwardPos >= opCount 'positionPastTheEnd'
 		panic("fillLiveBeforeOp: position {forwardPos} past the end of block {blockLocal}, which lays out {opCount} op(s) — a `PeakRank`'s forward position always names an op the sweep that produced it visited")
@@ -5946,19 +6192,27 @@ function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLoc
 	// Step back over the ops at forward positions `opCount-1` down to `forwardPos` INCLUSIVE: after the
 	// step over the op AT `forwardPos`, the row is that op's live-BEFORE set — and the op it just
 	// stepped over is the one at `forwardPos`, which is what comes back.
-	//
-	// ⚠ READ POSITIONALLY, NOT FROM A LIST. `collectBlockOps` would be Θ(the block) before this walk even
-	// starts, which on a function that is one basic block is the whole function once per split — for a
-	// suffix that is usually a fraction of it. `blockOpAt` is the same statement of the block's order the
-	// list is built from, so the two cannot disagree about where the terminator sits.
 	var atForwardPos = 0 as ElementIndex
+	var cursor = scratch.pressure.walker
+	var ordered = scratch.sweep.ordered
+
+	if walksTheIndex 'startAtTheLastOp'
+		cursor.placeAtPosition(pressure, blockLocal: blockLocal, pos: opCount - 1)
+	end 'startAtTheLastOp' else 'listTheBlock'
+		ordered.clear()
+		block.collectOpsInRunOrder(ordered)
+	end 'listTheBlock'
 
 	for ri in 0 upto opCount - forwardPos 'stepBackToPeak'
-		let opIdx = blockOpAt(block, pos: opCount - 1 - ri)
+		let opIdx = cursor.op(pressure) if walksTheIndex else (try ordered.get(opCount - 1 - ri) otherwise panic("fillLiveBeforeOp: ordered.get OOB at {opCount - 1 - ri}"))
 		let op = try module.ops.get(opIdx) otherwise panic("fillLiveBeforeOp: opIdx not in module.ops")
 		targetOpOperands(op, buf: scratch.sweep.buf)
 		stepRowBackwardOverOperands(row, buf: scratch.sweep.buf, liveByClass: scratch.sweep.liveByClass, classes: liveness.valueClass)
 		atForwardPos = opIdx
+
+		if walksTheIndex and ri + 1 < opCount - forwardPos 'moreToStepOver'
+			cursor.retreat(pressure)
+		end 'moreToStepOver'
 	end 'stepBackToPeak'
 
 	return atForwardPos
@@ -6773,7 +7027,7 @@ function unrelievableAtPeak(module TargetModule, index UseIndex, topo FuncTopolo
 
 	if index.defKindOf(valueId) == ValueDefKind.opDef and index.defBlockOf(valueId) == anchor.blockLocal 'definedInThePeaksBlock'
 		let defPos = pressure.positionOfSlot(anchor.blockLocal, slot: pressure.defSlotOf(valueId))
-		let storePos = storePositionOf(module, index: index, pressure: pressure, block: block, blockLocal: anchor.blockLocal, valueId: valueId, defPos: defPos, opFacts: opFacts)
+		let storePos = storePositionOf(module, index: index, pressure: pressure, blockLocal: anchor.blockLocal, valueId: valueId, defPos: defPos, opFacts: opFacts)
 
 		if pressure.seqOfPosition(anchor.blockLocal, pos: defPos) < anchor.seq and anchor.seq <= pressure.seqOfPosition(anchor.blockLocal, pos: storePos) 'storeKeepsItLive'
 			return true
@@ -6790,7 +7044,7 @@ function unrelievableAtPeak(module TargetModule, index UseIndex, topo FuncTopolo
 
 	for _ in 0 upto useSites 'eachUse'
 		if index.useBlockAt(record) == anchor.blockLocal and index.useKindAt(record) == UseKind.op and index.useSeqAt(record) > anchor.seq 'readAfterThePeakHere'
-			let reloadPos = firstPreMoveBefore(module, block: block, pos: opUseReloadPosition(index, pressure: pressure, block: block, record: record), buf: buf, opFacts: opFacts)
+			let reloadPos = firstPreMoveBefore(module, pressure: pressure, blockLocal: anchor.blockLocal, pos: opUseReloadPosition(index, pressure: pressure, block: block, record: record), buf: buf, opFacts: opFacts)
 
 			if pressure.seqOfPosition(anchor.blockLocal, pos: reloadPos) <= anchor.seq 'reloadWouldSpanThePeak'
 				return true
@@ -6805,13 +7059,13 @@ end 'unrelievableAtPeak'
 
 // Where `valueId`'s spill store sits in `block`, or would: the store it already has there, else its def
 // (`insertStoreAfter`).
-function storePositionOf(module TargetModule, index UseIndex, pressure PressureIndex, block IrBlock, blockLocal ElementIndex, valueId ValueId, defPos ElementIndex, opFacts OpVariantFacts) returns ElementIndex
+function storePositionOf(module TargetModule, index UseIndex, pressure PressureIndex, blockLocal ElementIndex, valueId ValueId, defPos ElementIndex, opFacts OpVariantFacts) returns ElementIndex
 	let useSites = index.useCount(valueId)
 	var record = index.firstUseOf(valueId)
 
 	for _ in 0 upto useSites 'eachUse'
 		if index.useBlockAt(record) == blockLocal and index.useKindAt(record) == UseKind.op and useIsSpillStore(module, index: index, record: record, opFacts: opFacts) 'itsStore'
-			return usePositionIn(index, pressure: pressure, block: block, record: record)
+			return usePositionIn(index, pressure: pressure, record: record)
 		end 'itsStore'
 
 		record = index.nextUseOf(record)
@@ -7790,7 +8044,7 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, livenes
 			let runStart = j
 			let runBound = reloadRunBoundOf(module, index: index, pressure: scratch.pressure, cfg: cfg, record: record, blockLocal: blockLocal, buf: buf, opFacts: liveness.opFacts)
 
-			while j < useSites and useContinuesRun(scratch.runStarts, useOrdinal: j, runStart: runStart) and useIsInRun(index, record: record, blockLocal: blockLocal, afterPeak: afterPeak, peakSeq: peakSeq) and useWithinRunBound(index, pressure: scratch.pressure, cfg: cfg, module: module, record: record, blockLocal: blockLocal, bound: runBound) 'sameRun'
+			while j < useSites and useContinuesRun(scratch.runStarts, useOrdinal: j, runStart: runStart) and useIsInRun(index, record: record, blockLocal: blockLocal, afterPeak: afterPeak, peakSeq: peakSeq) and useWithinRunBound(index, pressure: scratch.pressure, record: record, bound: runBound) 'sameRun'
 				match index.useKindAt(record) 'kind'
 					op then rewriteOpAt(module, opIdx: index.useOpAt(record), from: valueId, to: freshId, buf: buf, opFacts: liveness.opFacts)
 					edge then rewriteEdgeArgsIn(module, topo: cfg.topo, blockLocal: blockLocal, from: valueId, to: freshId)
@@ -7904,6 +8158,7 @@ function markRunStarts(module TargetModule, index UseIndex, pressure PressureInd
 
 	let classPool = poolOfClass(pool, class: class, file: file)
 	var record = index.firstUseOf(valueId)
+	var cursor = pressure.walker
 
 	// `numBlocks` is "no block walked yet" — no block index can equal it (the same sentinel
 	// `PeakTree` uses). It is what makes the first iteration take the `newBlock` arm,
@@ -7911,6 +8166,7 @@ function markRunStarts(module TargetModule, index UseIndex, pressure PressureInd
 	var walkedBlock = topo.numBlocks
 	var block = blockAt(module, topo: topo, local: 0)
 	var previousPos = 0 as ElementIndex
+	var previousSlot = 0 as PressureSlot
 	var havePrevious = false
 
 	for k in 0 upto useSites 'eachUse'
@@ -7922,7 +8178,7 @@ function markRunStarts(module TargetModule, index UseIndex, pressure PressureInd
 			havePrevious = false
 		end 'newBlock'
 
-		let pos = usePositionIn(index, pressure: pressure, block: block, record: record)
+		let pos = usePositionIn(index, pressure: pressure, record: record)
 
 		// TWO records can name the SAME op, hence the same position — a value read by a block's
 		// terminator (an `x64JumpTable` index) and also passed on one of that block's edges yields an op
@@ -7940,17 +8196,22 @@ function markRunStarts(module TargetModule, index UseIndex, pressure PressureInd
 			// the block's TERMINATOR, but only as the right-hand endpoint, since nothing follows it.
 			let firstBetween = previousPos + 1
 
-			for scan in firstBetween upto pos 'between'
-				let scanned = try block.opRefs.get(scan) otherwise panic("markRunStarts: opRefs.get OOB at {scan} of block {blockLocal}, scanning between uses {k - 1} and {k} of value {valueId}")
+			if firstBetween < pos 'somethingBetween'
+				cursor.placeAt(previousPos, slot: previousSlot)
 
-				if opStrandsClass(module, opIdx: scanned, heat: block.heat, classPool: classPool, buf: buf, opFacts: opFacts) 'noRegisterLeft'
-					try runStarts.set(k, value: true) otherwise panic("markRunStarts: runStarts.set OOB at use {k}")
-					break
-				end 'noRegisterLeft'
-			end 'between'
+				for _ in firstBetween upto pos 'between'
+					cursor.advance(pressure)
+
+					if opStrandsClass(module, opIdx: cursor.op(pressure), heat: block.heat, classPool: classPool, buf: buf, opFacts: opFacts) 'noRegisterLeft'
+						try runStarts.set(k, value: true) otherwise panic("markRunStarts: runStarts.set OOB at use {k}")
+						break
+					end 'noRegisterLeft'
+				end 'between'
+			end 'somethingBetween'
 		end 'hasAPredecessorInThisBlock'
 
 		previousPos = pos
+		previousSlot = pressure.slotOfSeq(index.useSeqAt(record))
 		havePrevious = true
 		record = index.nextUseOf(record)
 	end 'eachUse'
@@ -7982,17 +8243,16 @@ end 'useContinuesRun'
 // The last position the reload for the run opening at `record` may serve (`reloadRunBoundFrom`): an
 // edge use is read at the block's end and bounds nothing.
 function reloadRunBoundOf(module TargetModule, index UseIndex, pressure PressureIndex, cfg FuncCfg, record ElementIndex, blockLocal ElementIndex, buf OperandList, opFacts OpVariantFacts) returns ElementIndex
-	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	return match index.useKindAt(record) 'kind'
-		op gives reloadRunBoundFrom(module, block: block, pos: opUseReloadPosition(index, pressure: pressure, block: block, record: record), buf: buf, opFacts: opFacts)
-		edge gives block.opRefs.count()
+		op gives reloadRunBoundFrom(module, pressure: pressure, blockLocal: blockLocal, pos: opUseReloadPosition(index, pressure: pressure, block: blockAt(module, topo: cfg.topo, local: blockLocal), record: record), buf: buf, opFacts: opFacts)
+		edge gives pressure.bodyOpCountOf(blockLocal)
 	end 'kind'
 end 'reloadRunBoundOf'
 
 // Does `record`'s read lie at or before the run's bound — a read past the group's call starts a run of
 // its own.
-function useWithinRunBound(index UseIndex, pressure PressureIndex, cfg FuncCfg, module TargetModule, record ElementIndex, blockLocal ElementIndex, bound ElementIndex) returns bool
-	return usePositionIn(index, pressure: pressure, block: blockAt(module, topo: cfg.topo, local: blockLocal), record: record) <= bound
+function useWithinRunBound(index UseIndex, pressure PressureIndex, record ElementIndex, bound ElementIndex) returns bool
+	return usePositionIn(index, pressure: pressure, record: record) <= bound
 end 'useWithinRunBound'
 
 // Is `record` in the run one reload serves — the same block, on the same side of the peak? A run may
@@ -8038,7 +8298,7 @@ end 'insertStore'
 function insertReloadFor(module TargetModule, cfg FuncCfg, index UseIndex, pressure PressureIndex, useRecord ElementIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement, edits SplitEdits, buf OperandList, opFacts OpVariantFacts)
 	let blockLocal = index.useBlockAt(useRecord)
 	assertPlacementLegal(module, cfg: cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
-	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
+	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
 
 	// An OP use takes the reload immediately before it — or before the first pre-move of the call group
 	// the use belongs to, so no reload lands among a call's pre-moves (`firstPreMoveBefore`). An EDGE use
@@ -8046,8 +8306,8 @@ function insertReloadFor(module TargetModule, cfg FuncCfg, index UseIndex, press
 	// value is only forwarded to a phi and the reload goes at the END of the block's body — after every
 	// op, ahead of the branch, and so ahead of every branch edge that reads it.
 	let at = match index.useKindAt(useRecord) 'k'
-		op gives firstPreMoveBefore(module, block: block, pos: opUseReloadPosition(index, pressure: pressure, block: block, record: useRecord), buf: buf, opFacts: opFacts)
-		edge gives beforeBranchPosition(block)
+		op gives firstPreMoveBefore(module, pressure: pressure, blockLocal: blockLocal, pos: opUseReloadPosition(index, pressure: pressure, block: block, record: useRecord), buf: buf, opFacts: opFacts)
+		edge gives beforeBranchPosition(pressure, block: block, blockLocal: blockLocal)
 	end 'k'
 
 	spliceOp(module, at: at, op: TargetOp.loadRegSlot(TargetVReg.virtual(freshId), slot: slot), blockLocal: blockLocal, edits: edits)
@@ -8112,34 +8372,39 @@ function insertStoreAtBlockEntry(module TargetModule, cfg FuncCfg, valueId Value
 	spliceOp(module, at: 0, op: TargetOp.storeSlotReg(slot, srcReg: TargetVReg.virtual(valueId)), blockLocal: blockLocal, edits: edits)
 end 'insertStoreAtBlockEntry'
 
-// The position a use sits at in `collectBlockOps` order — read off the positional index from the
-// use record's sequence number, which is its op's slot label (`PressureIndex.positionOfSeq`), while
-// nothing has moved yet (`SplitEdits`). Searching the block for the anchor op instead was O(block)
-// at EVERY insertion, which is the Θ(insertions × block) a split would pay.
+// The position a use sits at in run order (`IrBlock.collectOpsInRunOrder`) — read off the positional
+// index from the use record's sequence number, which is its op's slot label
+// (`PressureIndex.positionOfSeq`), while nothing has moved yet (`SplitEdits`). Searching the block for
+// the anchor op instead is O(block) at EVERY insertion, which is the Θ(insertions × block) a split
+// would pay.
 //
-// ⚠ AND IT PROVES THE IDENTITY IT RESTS ON, FOR ONE COMPARE. Two separate structures state a
-// block's order: `opRefs`, which `spliceOpRefs` edits, and the index's slot occupancy, which
-// `insertOp` and `removeOp` edit. Nothing derives one from the other, so they are exactly the pair
-// this project's own bugs are made of — and a drift between them is silent: every anchor here would
-// then name a position one or two ops away from the op the record actually reads, a reload would be
-// spliced in ahead of the wrong instruction, and the answer would simply be wrong. So the op at the
-// position IS compared against the op the record names, on every read, always on. It is O(1)
-// against a walk that is already Θ(uses).
-function usePositionIn(index UseIndex, pressure PressureIndex, block IrBlock, record ElementIndex) returns ElementIndex
-	let pos = pressure.positionOfSeq(index.useSeqAt(record))
-	let bodyOps = block.opRefs.count()
+// ⚠ AND IT PROVES THE IDENTITY IT RESTS ON, FOR ONE COMPARE. The use record names its op twice — by
+// index (`useOpAt`) and by sequence — and the index's slot occupancy, which `insertOp` and `removeOp`
+// edit, is what turns the sequence back into an op. Nothing derives one from the other, and a drift
+// between them is silent: every anchor here would then name a position one or two ops away from the op
+// the record actually reads, a reload would be spliced in ahead of the wrong instruction, and the
+// answer would simply be wrong. So the op at the slot IS compared against the op the record names, on
+// every read, always on. It is O(1) against a walk that is already Θ(uses).
+function usePositionIn(index UseIndex, pressure PressureIndex, record ElementIndex) returns ElementIndex
+	let seq = index.useSeqAt(record)
+	let blockLocal = seqBlock(seq)
+
+	if blockLocal != index.useBlockAt(record) 'sequenceNamesAnotherBlock'
+		panic("usePositionIn: use record {record} sits in block {index.useBlockAt(record)} but its sequence number {seq} names block {blockLocal}")
+	end 'sequenceNamesAnotherBlock'
+
+	let pos = pressure.positionOfSeq(seq)
+	let bodyOps = pressure.bodyOpCountOf(blockLocal)
 
 	if pos > bodyOps 'pastTheTerminator'
-		panic("usePositionIn: use record {record} is anchored at position {pos} of block '{String.from(block.label)}', which holds {bodyOps} body op(s) and one terminator — no record can sit past the terminator")
+		panic("usePositionIn: use record {record} is anchored at position {pos} of block {blockLocal}, which holds {bodyOps} body op(s) and one terminator — no record can sit past the terminator")
 	end 'pastTheTerminator'
 
-	// The TERMINATOR is numbered one past the body, so `opRefs` cannot answer for it; a record there is
-	// an edge use (or a use the terminator itself reads), and `useOpAt` already returns that op.
 	if pos < bodyOps 'aBodyOp'
-		let at = try block.opRefs.get(pos) otherwise panic("usePositionIn: opRefs.get OOB at {pos}")
+		let at = pressure.opAtSlot(pressure.slotOfSeq(seq))
 
 		if at != index.useOpAt(record) 'positionDisagreesWithTheOp'
-			panic("usePositionIn: use record {record} of block '{String.from(block.label)}' claims position {pos}, but that position holds op {at} while the record reads through op {index.useOpAt(record)} — a use's sequence number has drifted from its block's layout, so the two halves of the splice-shift rule (`spliceOpRefs` and `SplitEdits.splicesAtOrBefore`) no longer agree")
+			panic("usePositionIn: use record {record} of block {blockLocal} claims position {pos}, but that position holds op {at} while the record reads through op {index.useOpAt(record)} — a use's sequence number has drifted from its block's layout")
 		end 'positionDisagreesWithTheOp'
 	end 'aBodyOp'
 
@@ -8149,7 +8414,7 @@ end 'usePositionIn'
 // ⭐⭐ **WHERE A RELOAD FOR AN *OP* USE GOES — AND THE TERMINATOR IS AN OP LIKE ANY OTHER.**
 // `usePositionIn`'s own header says so (*"a record there is an edge use, OR A USE THE TERMINATOR ITSELF
 // READS"*), and a `ret v` / `errorReturn v` is exactly that: the value's only reader in its block is the
-// block's last instruction. Such a use is anchored one past the body, where `opRefs` has no slot — so the
+// block's last instruction. Such a use is anchored one past the body, where the body has no slot — so the
 // reload goes where an EDGE use's does, at the end of the body and ahead of a conditional branch if the
 // block has one. That position dominates the terminator, which is the whole requirement.
 //
@@ -8161,45 +8426,47 @@ end 'usePositionIn'
 // needs a body op (`rematerializeConstant` re-emits a constant BEFORE the op that reads it, and a
 // terminator has no "before" inside the body).
 function opUseReloadPosition(index UseIndex, pressure PressureIndex, block IrBlock, record ElementIndex) returns ElementIndex
-	let pos = usePositionIn(index, pressure: pressure, block: block, record: record)
+	let blockLocal = index.useBlockAt(record)
+	let pos = usePositionIn(index, pressure: pressure, record: record)
 
-	if pos >= block.opRefs.count() 'theTerminatorItselfReadsIt'
-		return beforeBranchPosition(block)
+	if pos >= pressure.bodyOpCountOf(blockLocal) 'theTerminatorItselfReadsIt'
+		return beforeBranchPosition(pressure, block: block, blockLocal: blockLocal)
 	end 'theTerminatorItselfReadsIt'
 
 	return pos
 end 'opUseReloadPosition'
 
-// The `opRefs` position of an OP use, which must name a BODY op. The one position a record can carry
-// that `opRefs` does not hold is the block's TERMINATOR — `collectBlockOps` numbers it one past the
+// The body position of an OP use, which must name a BODY op. The one position a record can carry
+// that the body does not hold is the block's TERMINATOR — run order numbers it one past the
 // body, and every EDGE use is anchored there — so reaching here with one is a caller that should have
 // gone to `beforeBranchPosition`. That is the same bug a search reports when it runs off the end of
 // the body.
-function bodyPositionOfUse(index UseIndex, pressure PressureIndex, block IrBlock, record ElementIndex) returns ElementIndex
-	let pos = usePositionIn(index, pressure: pressure, block: block, record: record)
+function bodyPositionOfUse(index UseIndex, pressure PressureIndex, record ElementIndex) returns ElementIndex
+	let pos = usePositionIn(index, pressure: pressure, record: record)
+	let blockLocal = index.useBlockAt(record)
 
-	if pos >= block.opRefs.count() 'notABodyOp'
-		panic("bodyPositionOfUse: use record {record} is anchored at position {pos} of block '{String.from(block.label)}', whose body holds {block.opRefs.count()} op(s) — that position is the block's TERMINATOR, and a spill op cannot be spliced after one")
+	if pos >= pressure.bodyOpCountOf(blockLocal) 'notABodyOp'
+		panic("bodyPositionOfUse: use record {record} is anchored at position {pos} of block {blockLocal}, whose body holds {pressure.bodyOpCountOf(blockLocal)} op(s) — that position is the block's TERMINATOR, and a spill op cannot be spliced after one")
 	end 'notABodyOp'
 
 	return pos
 end 'bodyPositionOfUse'
 
-// The `opRefs` position at which an op runs after the whole body but on EVERY edge out of the
+// The body position at which an op runs after the whole body but on EVERY edge out of the
 // block: past the last real body op, but before the conditional branch when the block has one.
 //
-// "Ahead of the branch" is NOT the end of `opRefs` when the block branches two ways: a `jcc` is a BODY
+// "Ahead of the branch" is NOT the end of the body when the block branches two ways: a `jcc` is a BODY
 // op paired with a `jmp` terminator, so an op past the end of the body sits BETWEEN them and runs only
 // on the not-taken path — the then-edge would then read an unloaded register. A reload placed here goes
 // immediately BEFORE the conditional branch, which dominates both outgoing edges. A `loadRegSlot` is a
 // plain `mov r, [rsp+disp]` and writes no flags, so it is safe between the compare and the `jcc` that
 // reads that compare's EFLAGS.
-function beforeBranchPosition(block IrBlock) returns ElementIndex
+function beforeBranchPosition(pressure PressureIndex, block IrBlock, blockLocal ElementIndex) returns ElementIndex
 	if block.hasCondBranchOp() 'twoWay'
-		return positionInBlock(block, opIdx: block.condBranchIndex())
+		return positionInBlock(pressure, blockLocal: blockLocal, opIdx: block.condBranchIndex())
 	end 'twoWay'
 
-	return block.opRefs.count()
+	return pressure.bodyOpCountOf(blockLocal)
 end 'beforeBranchPosition'
 
 // Append `op` to the module's op table and return its index — the one place a splitter-minted op
@@ -8217,12 +8484,13 @@ function appendOp(module TargetModule, op TargetOp) returns ElementIndex
 end 'appendOp'
 
 // Mint an op and LOG it for splicing into `blockLocal` at forward position `at`. Every op the splitter
-// inserts goes through here; none of them may reach `insertOpRef` or `spliceOpRefs` directly.
+// inserts goes through here; none of them may reach `IrBlock.insertBodyOp` or `spliceBodyOps`
+// directly.
 //
 // The log is both the insertion itself and what the incremental update replays to seat the op in
 // the positional index and to register the block as dirty (see `SplitEdits`). An UNLOGGED insert
-// would reach `opRefs` but not the index, so every position the index reads back past it would name
-// a different op than `opRefs` holds there.
+// would reach the block's list but not the index, so every position the index reads back past it
+// would name a different op than the block holds there.
 //
 // `at` is a PRE-SPLIT position, and it stays valid because nothing is spliced until the split is done.
 function spliceOp(module TargetModule, at ElementIndex, op TargetOp, blockLocal ElementIndex, edits SplitEdits)
@@ -8245,7 +8513,7 @@ end 'spliceOp'
 // `everyUse` remat rewrites all of them, which is the ONLY thing that kills a constant kept alive
 // across the peak by a before-peak use AROUND A BACK EDGE. Either way the original def is dropped
 // exactly when nothing reads it.
-function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, counters RegAllocCounters, lineage SplitLineage, scratch SplitScratch, opFacts OpVariantFacts) returns ValueId
+function rematerializeConstant(module TargetModule, index UseIndex, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, counters RegAllocCounters, lineage SplitLineage, scratch SplitScratch, opFacts OpVariantFacts) returns ValueId
 	let defOpIdx = index.requireDefOp(valueId)
 
 	// The immediate AND which ISA's const op the original def is, read ONCE: the re-emit at each use
@@ -8284,8 +8552,7 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 
 			let useOpIdx = index.useOpAt(record)
 			let useBlockLocal = index.useBlockAt(record)
-			var block = blockAt(module, topo: topo, local: useBlockLocal)
-			let usePos = bodyPositionOfUse(index, pressure: scratch.pressure, block: block, record: record)
+			let usePos = bodyPositionOfUse(index, pressure: scratch.pressure, record: record)
 
 			// The SAME op builder the ISel used, so the re-emitted constant is byte-identical to
 			// the one it replaces — x64's `constMaterializationOp` (not a second copy of the 32-vs-64-bit
@@ -8792,25 +9059,36 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 	end 'rewrite'
 end 'substituteValueInOp'
 
-// The position of `opIdx` within `block.opRefs` (body ops only — spill/reload/remat are always body
-// ops, never terminators), by SEARCH.
+// The position of `opIdx` among the body ops of `blockLocal` (spill/reload/remat are always body ops,
+// never terminators), by a backward SEARCH of the positional index.
 //
 // It is O(block), so it is only for the anchors the `UseIndex` cannot answer for: a DEF site, which
 // carries no use record, and a block's conditional branch. Both are asked at most once per split. A
 // reload's anchor is a USE, and a use record already knows its own position — see `bodyPositionOfUse`,
 // which is what a per-insertion search here would cost.
-function positionInBlock(block IrBlock, opIdx ElementIndex) returns ElementIndex
-	var pos = block.opRefs.count()
+function positionInBlock(pressure PressureIndex, blockLocal ElementIndex, opIdx ElementIndex) returns ElementIndex
+	let bodyOps = pressure.bodyOpCountOf(blockLocal)
 
-	while pos > 0 'eachBackward'
-		pos = pos - 1
+	if bodyOps == 0 'noBodyOps'
+		panic("positionInBlock: block {blockLocal} holds no body op, so op {opIdx} is not in it")
+	end 'noBodyOps'
 
-		if (try block.opRefs.get(pos) otherwise panic("positionInBlock: opRefs.get OOB")) == opIdx 'match'
-			return pos
+	var cursor = pressure.walker
+	cursor.placeAtPosition(pressure, blockLocal: blockLocal, pos: bodyOps - 1)
+
+	while true 'eachBackward'
+		if cursor.op(pressure) == opIdx 'match'
+			return cursor.position()
 		end 'match'
+
+		if cursor.position() == 0 'reachedTheTop'
+			break
+		end 'reachedTheTop'
+
+		cursor.retreat(pressure)
 	end 'eachBackward'
 
-	panic("positionInBlock: op {opIdx} not in block '{String.from(block.label)}' opRefs (a terminator or wrong block?)")
+	panic("positionInBlock: op {opIdx} not in the body of block {blockLocal} (a terminator or wrong block?)")
 end 'positionInBlock'
 
 // ==========================================================================

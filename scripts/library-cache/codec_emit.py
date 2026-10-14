@@ -307,7 +307,7 @@ class Emitter:
                 literal.append("%s: %s" % (field.name, config.SKIPPED_FIELDS[(declaration.name, field.name)]))
                 continue
 
-            writes.append(self.write_statement(node, "self.%s" % field.name, 2))
+            writes.append(self.write_statement(node, config.FIELD_READERS.get((declaration.name, field.name), "self.%s" % field.name), 2))
             written += 1
             variable = "f_" + field.name
             reads.append(self.read_statement(node, variable, 2))

@@ -129,7 +129,7 @@ export function liveGlobalLabels(module MaxonModule, storedGlobals StoredGlobalC
 			continue
 		end 'notInTheProgram'
 
-		// Walk `block.opRefs` DIRECTLY rather than `IrModule.liveOpIndices`, which allocates a fresh
+		// Walk `block.bodyOps()` DIRECTLY rather than `IrModule.liveOpIndices`, which allocates a fresh
 		// op-index array per function: this runs at the Maxon tier BEFORE any block-rebuilding pass, so
 		// `opRefs` holds no orphan ops — the same reason `StdlibSource.markMaxonCallees` and
 		// `scanRuntimeUsage` walk it this way. A TERMINATOR can never carry a label (`globalAddr` defines
@@ -137,7 +137,7 @@ export function liveGlobalLabels(module MaxonModule, storedGlobals StoredGlobalC
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("liveGlobalLabels: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("liveGlobalLabels: opRef {opIdx} not in module.ops")
 				noteGlobalLabel(op, live: live)
 			end 'eachOp'

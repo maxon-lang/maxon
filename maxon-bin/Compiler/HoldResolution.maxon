@@ -760,7 +760,7 @@ type HoldEventBuilder
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("HoldEventBuilder.scanFunction: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				if self.noteOp(module.getOp(opIdx), opIdx: opIdx, callerIndex: callerIndex, judge: judge, eventIds: eventIds) 'everything'
 					reachesEverything = true
 				end 'everything'
@@ -1176,8 +1176,8 @@ type HoldResolver
 		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
 			let block = self.module.blockAtPosition(func, position: blockPosition)
 
-			for position in 0 upto block.opRefs.count() 'eachOp'
-				let opIdx = try block.opRefs.get(position) otherwise panic("HoldResolver.collectEntries: opRefs.get OOB at {position}")
+			for position in 0 upto block.bodyOpCount() 'eachOp'
+				let opIdx = try block.bodyOpAt(position) otherwise panic("HoldResolver.collectEntries: bodyOpAt OOB at {position}")
 				self.noteEntry(self.module.getOp(opIdx), opIdx: opIdx, blockPosition: blockPosition, position: position)
 			end 'eachOp'
 		end 'eachBlock'
@@ -1265,7 +1265,7 @@ type HoldResolver
 				try self.isBlockArg.set(arg.valueId, value: true) otherwise panic("HoldResolver.collectDefs: block arg v{arg.valueId} is outside the function's {valueCount} values")
 			end 'eachBlockArg'
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				self.noteDef(self.module.getOp(opIdx), opIdx: opIdx)
 			end 'eachOp'
 		end 'eachBlock'
@@ -1495,11 +1495,11 @@ type HoldResolver
 
 	function scanWindowBlock(func IrFunction, site ElementIndex, blockPosition ElementIndex, from ElementIndex, stamp ElementIndex)
 		let block = self.module.blockAtPosition(func, position: blockPosition)
-		let count = block.opRefs.count()
+		let count = block.bodyOpCount()
 		var position = from
 
 		while position < count 'eachOp'
-			let opIdx = try block.opRefs.get(position) otherwise panic("HoldResolver.scanWindowBlock: opRefs.get OOB at {position}")
+			let opIdx = try block.bodyOpAt(position) otherwise panic("HoldResolver.scanWindowBlock: bodyOpAt OOB at {position}")
 
 			if self.noteWindowOp(self.module.getOp(opIdx), site: site, blockPosition: blockPosition, position: position, stamp: stamp) != WindowScan.open 'leftTheWindow'
 				return
@@ -1919,7 +1919,7 @@ type HoldResolver
 		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
 			let block = self.module.blockAtPosition(func, position: blockPosition)
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				self.noteReceiverLoad(self.module.getOp(opIdx))
 			end 'eachOp'
 		end 'eachBlock'
@@ -2124,16 +2124,16 @@ type HoldResolver
 			var kept = OpIndexArray.create()
 			var next = cursor
 
-			for position in 0 upto block.opRefs.count() 'eachOp'
+			for position in 0 upto block.bodyOpCount() 'eachOp'
 				if next < self.deletedKeys.count() and (try self.deletedKeys.get(next) otherwise panic("HoldResolver.removeDeletedOps: deletedKeys.get OOB at {next}")) == holdKey(blockPosition, position: position) 'aDeletedOp'
 					next = next + 1
 					continue
 				end 'aDeletedOp'
 
-				kept.push(try block.opRefs.get(position) otherwise panic("HoldResolver.removeDeletedOps: opRefs.get OOB at {position}"))
+				kept.push(try block.bodyOpAt(position) otherwise panic("HoldResolver.removeDeletedOps: bodyOpAt OOB at {position}"))
 			end 'eachOp'
 
-			block.opRefs = kept
+			block.replaceBodyOps(kept)
 			cursor = next
 		end 'eachAffectedBlock'
 	end 'removeDeletedOps'

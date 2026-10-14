@@ -238,7 +238,8 @@ suite catches; a worse one — an extra spill, a lost coalesce — shows in the 
 `TargetIr:<lane>` pins in `ir-specs/` hold block by block for the cases that carry them. The allocator asserts its invariants as it runs, and
 two compile-time constants, off in shipping builds, add exhaustive self-checks: `VerifyIncrementalSplit`
 compares every incremental repair with a full rebuild, the first liveness build with a walk that skips
-nothing, and the gap trees' victim with a scan of the peak's live row; `VerifyOpVariantFacts` checks the
+nothing, the gap trees' victim with a scan of the peak's live row, and each edited block's op order — held
+in the pressure index alone while splitting runs — with an eagerly edited copy of its list; `VerifyOpVariantFacts` checks the
 per-op fact cache.
 
 To watch it work: `--emit-ir` (or the MCP `dump_ir` tool) shows the target IR after allocation;

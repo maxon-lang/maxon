@@ -957,7 +957,7 @@ function buildIndirectCallTypeIdxMap(module StdModule, builder WasmModuleBuilder
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("buildIndirectCallTypeIdxMap: blockRef {blockRef} not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("buildIndirectCallTypeIdxMap: opIdx {opIdx} not in module.ops")
 				internIndirectCallTypeFor(op, map: map, builder: builder)
 			end 'eachOp'
@@ -1555,7 +1555,7 @@ function buildValtypeTable(module StdModule, func IrFunction, funcNames Function
 			setValtype(valtypes, v: arg.valueId, vt: wasmValTypeOf(arg.argType))
 		end 'eachArg'
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			recordDefValtype(try module.ops.get(opIdx) otherwise panic("buildValtypeTable: opIdx {opIdx} not in module.ops"), valtypes: valtypes, funcNames: funcNames)
 		end 'eachOp'
 
@@ -1939,7 +1939,7 @@ type WasmFuncEmitter
 		let block = try self.module.blocks.get(blockRef) otherwise panic("emitSingleBlock: blockRef {blockRef} not in module.blocks")
 		self.currentSite = copiedInlineSite(block.inlineSite)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			self.emitBodyOp(try self.module.ops.get(opIdx) otherwise panic("emitSingleBlock: opIdx {opIdx} not in module.ops"))
 		end 'eachOp'
 
@@ -2109,7 +2109,7 @@ type WasmFuncEmitter
 			let block = try self.module.blocks.get(blockRef) otherwise panic("emitDispatcher: blockRef {blockRef} not in module.blocks")
 			self.currentSite = copiedInlineSite(block.inlineSite)
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				self.emitBodyOp(try self.module.ops.get(opIdx) otherwise panic("emitDispatcher: opIdx {opIdx} not in module.ops"))
 			end 'eachOp'
 

@@ -599,7 +599,7 @@ end 'recordBlockArgClasses'
 function recordBlockOpClasses(stdModule StdModule, blockRef ElementIndex, column ValueClassColumn, abi CalleeAbiTable)
 	let block = try stdModule.blocks.get(blockRef) otherwise panic("recordBlockOpClasses: blockRef {blockRef} not in stdModule.blocks")
 
-	for opIdx in block.opRefs 'eachOp'
+	for opIdx in block.bodyOps() 'eachOp'
 		let op = try stdModule.ops.get(opIdx) otherwise panic("recordBlockOpClasses: opIdx {opIdx} not in stdModule.ops")
 		recordOpResultClass(op, column: column, abi: abi)
 	end 'eachOp'
@@ -929,7 +929,7 @@ export type ScaledIndexFolds
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("computeScaledIndexFolds: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("computeScaledIndexFolds: opIdx {opIdx} not in module.ops")
 				self.recordOp(op, blockRef: blockRef, memoryForm: memoryForm)
 			end 'eachOp'
@@ -1813,11 +1813,11 @@ export type CompareFusionCensus
 	// compare that DEFINES it. Walked backward from the end of the body, because that is
 	// the order the flags are overwritten in.
 	function recordFusableCompare(module StdModule, block IrBlock, blockRef ElementIndex, condId ValueId, fused FusedPredColumn, floatCmps StdValueUseSet, unsignedCmps StdValueUseSet)
-		var i = block.opRefs.count()
+		var i = block.bodyOpCount()
 
 		while i > 0 'scanBackward'
 			i = i - 1
-			let opIdx = try block.opRefs.get(i) otherwise panic("recordFusableCompare: opRefs.get OOB at {i}")
+			let opIdx = try block.bodyOpAt(i) otherwise panic("recordFusableCompare: bodyOpAt OOB at {i}")
 			let op = try module.ops.get(opIdx) otherwise panic("recordFusableCompare: opIdx {opIdx} not in stdModule.ops")
 
 			if not op.rawValue.clobbersFlags 'flagsPreserved'
@@ -1870,7 +1870,7 @@ export type CompareFusionCensus
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("computeValuesReadFromRegisters: blockRef from func.blockRefs not in stdModule.blocks")
 
-			for opIdx in block.opRefs 'eachBodyOp'
+			for opIdx in block.bodyOps() 'eachBodyOp'
 				let op = try module.ops.get(opIdx) otherwise panic("computeValuesReadFromRegisters: opIdx {opIdx} not in stdModule.ops")
 				collectStdOpUses(op, referenced: readAsValue)
 			end 'eachBodyOp'
@@ -1977,7 +1977,7 @@ export type MemoryDestinationFolds
 			self.unwrittenLoads.clear()
 			var position = 0 as ElementIndex
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("MemoryDestinationFolds: opIdx {opIdx} not in module.ops")
 				self.recordOp(op, module: module, defs: defs, blockRef: blockRef, position: position, uses: uses, compareFusion: compareFusion)
 

@@ -213,7 +213,7 @@ end 'CseScopeStack'
 
 // Analyse every op of one block, in execution order.
 //
-// `block.opRefs` and not `liveOpIndices`: the terminator is deliberately excluded, and it costs this
+// `block.bodyOps()` and not `liveOpIndices`: the terminator is deliberately excluded, and it costs this
 // walk nothing to exclude it. A terminator computes no value (branches, returns, the jump table and the
 // process exits are all `StdArithShape.neither`) and it is not a CALL either, so neither the expression
 // half nor the call-barrier half of `analyzeOp` has anything to learn from one.
@@ -221,7 +221,7 @@ function analyzeBlock(module StdModule, func IrFunction, position ElementIndex, 
 	let blockRef = try func.blockRefs.get(position) otherwise panic("eliminateCommonSubexpressions: blockRefs.get OOB at {position}")
 	let block = try module.blocks.get(blockRef) otherwise panic("eliminateCommonSubexpressions: blockRef from func.blockRefs not in module.blocks")
 
-	for opIdx in block.opRefs 'eachOp'
+	for opIdx in block.bodyOps() 'eachOp'
 		analyzeOp(module, opIdx: opIdx, subst: subst, scratch: scratch)
 	end 'eachOp'
 end 'analyzeBlock'
@@ -233,7 +233,7 @@ end 'analyzeBlock'
 // value this pass has already redirected is compared as its canonical self — which is what lets a chain
 // collapse in one walk: the third `x * 31` matches the first through the second.
 function analyzeOp(module StdModule, opIdx ElementIndex, subst ValueIdArray, scratch CseScratch)
-	let op = try module.ops.get(opIdx) otherwise panic("eliminateCommonSubexpressions: op index {opIdx} from block.opRefs not in module.ops")
+	let op = try module.ops.get(opIdx) otherwise panic("eliminateCommonSubexpressions: op index {opIdx} from block.bodyOps() not in module.ops")
 	canonicalExpressionOf(op, operands: scratch.current, subst: subst)
 
 	if not scratch.current.isArithmetic() 'notAnExpression'
@@ -324,14 +324,14 @@ end 'secondKeyOf'
 // moved mid-walk would send that write to a different bucket. Sizing it from the op count keeps the
 // chains short without a resize: a function cannot record more expressions than it has ops.
 //
-// It walks `blockRefs` -> `opRefs.count()` rather than `liveOpIndices`, which allocates a fresh column
+// It walks `blockRefs` -> `bodyOpCount()` rather than `liveOpIndices`, which allocates a fresh column
 // of every op index in the function to answer a question that is a sum of counts.
 function bucketCountFor(module StdModule, func IrFunction) returns CseBucketCount
 	var buckets = SmallestUsefulBucketCount as Count
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("bucketCountFor: blockRef from func.blockRefs not in module.blocks")
-		buckets = buckets + block.opRefs.count()
+		buckets = buckets + block.bodyOpCount()
 	end 'eachBlock'
 
 	return buckets as CseBucketCount

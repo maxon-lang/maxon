@@ -590,7 +590,7 @@ type CycleTrace implements SummaryCallWalker
 
 			self.successors.push(blockSuccessors)
 
-			for (opIter, opIdx) in block.opRefs.withIterator() 'eachOp'
+			for (opIter, opIdx) in block.bodyOps().withIterator() 'eachOp'
 				self.opPositions.upsert(opIdx, value: keyOf(blockIter.index(), low: opIter.index()))
 			end 'eachOp'
 		end 'eachBlock'
@@ -605,7 +605,7 @@ type CycleTrace implements SummaryCallWalker
 		for (blockIter, blockRef) in self.traced.blockRefs.withIterator() 'eachBlock'
 			var known = self.knownStoresEntering(blockIter.index(), predecessorCounts: predecessorCounts, lastPredecessor: lastPredecessor, exits: exits)
 
-			for opIdx in self.blockAt(blockRef).opRefs 'eachOp'
+			for opIdx in self.blockAt(blockRef).bodyOps() 'eachOp'
 				self.noteKnownStores(try module.ops.get(opIdx) otherwise panic("CycleTrace.indexForwardedLoads: opIdx {opIdx} not in module.ops"), opIdx: opIdx, known: known)
 			end 'eachOp'
 
@@ -740,7 +740,7 @@ type CycleTrace implements SummaryCallWalker
 	function walkBlock(block IrBlock)
 		let module = self.checker.module
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			self.walkOp(try module.ops.get(opIdx) otherwise panic("CycleTrace.walkBlock: opIdx {opIdx} not in module.ops"), opIdx: opIdx)
 		end 'eachOp'
 

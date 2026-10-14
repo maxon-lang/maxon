@@ -118,9 +118,11 @@ function copiedBlock(module StdModule, blockRef ElementIndex, into StdModule) re
 	requireNoCondBranchOp(block)
 	var copy = block.clone()
 
-	for pos in 0 upto copy.opRefs.count() 'eachOp'
-		let opIdx = try copy.opRefs.get(pos) otherwise panic("copiedBlock: opRefs.get OOB at {pos}")
-		try copy.opRefs.set(pos, value: copiedOp(module, opIdx: opIdx, into: into)) otherwise panic("copiedBlock: opRefs.set OOB at {pos}")
+	var ops = copy.bodyOps()
+
+	for pos in 0 upto ops.count() 'eachOp'
+		let opIdx = try ops.get(pos) otherwise panic("copiedBlock: ops.get OOB at {pos}")
+		try ops.set(pos, value: copiedOp(module, opIdx: opIdx, into: into)) otherwise panic("copiedBlock: ops.set OOB at {pos}")
 	end 'eachOp'
 
 	if copy.hasTerminatorOp() 'terminated'
@@ -172,9 +174,11 @@ module function spliceStdUnit(module StdModule, func IrFunction, unitModule StdM
 		var block = unitModule.getBlock(unitRef)
 		requireNoCondBranchOp(block)
 
-		for pos in 0 upto block.opRefs.count() 'eachOp'
-			let unitIdx = try block.opRefs.get(pos) otherwise panic("spliceStdUnit: opRefs.get OOB at {pos}")
-			try block.opRefs.set(pos, value: placedOp(module, slots: scratch.slots, unitModule: unitModule, unitIdx: unitIdx)) otherwise panic("spliceStdUnit: opRefs.set OOB at {pos}")
+		var ops = block.bodyOps()
+
+		for pos in 0 upto ops.count() 'eachOp'
+			let unitIdx = try ops.get(pos) otherwise panic("spliceStdUnit: ops.get OOB at {pos}")
+			try ops.set(pos, value: placedOp(module, slots: scratch.slots, unitModule: unitModule, unitIdx: unitIdx)) otherwise panic("spliceStdUnit: ops.set OOB at {pos}")
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'terminated'

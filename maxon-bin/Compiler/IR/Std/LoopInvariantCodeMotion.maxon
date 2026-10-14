@@ -427,8 +427,8 @@ function scanLoopEffects(module StdModule, func IrFunction, scratch LicmScratch)
 	for position in scratch.members.blocks 'eachBlock'
 		let block = blockAtPosition(module, func: func, position: position)
 
-		for opIdx in block.opRefs 'eachOp'
-			scratch.effects.note(try module.ops.get(opIdx) otherwise panic("scanLoopEffects: op index {opIdx} from block.opRefs not in module.ops"))
+		for opIdx in block.bodyOps() 'eachOp'
+			scratch.effects.note(try module.ops.get(opIdx) otherwise panic("scanLoopEffects: op index {opIdx} from block.bodyOps() not in module.ops"))
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
@@ -469,8 +469,8 @@ function analyzeLoopBlock(module StdModule, block IrBlock, position ElementIndex
 	let mustExecute = scratch.mustExecute.holds(position)
 	scratch.leaving.clear()
 
-	for slot in 0 upto block.opRefs.count() 'eachOp'
-		let opIdx = try block.opRefs.get(slot) otherwise panic("analyzeLoopBlock: opRefs.get OOB at {slot}")
+	for slot in 0 upto block.bodyOpCount() 'eachOp'
+		let opIdx = try block.bodyOpAt(slot) otherwise panic("analyzeLoopBlock: bodyOpAt OOB at {slot}")
 
 		if not admitsOp(module, opIdx: opIdx, mustExecute: mustExecute, memoryIsStable: memoryIsStable, scratch: scratch) 'staysInTheLoop'
 			continue
@@ -484,7 +484,7 @@ function analyzeLoopBlock(module StdModule, block IrBlock, position ElementIndex
 		return
 	end 'nothingLeft'
 
-	block.opRefs = keepingAllBut(block.opRefs, leaving: scratch.leaving)
+	block.replaceBodyOps(keepingAllBut(block.bodyOps(), leaving: scratch.leaving))
 end 'analyzeLoopBlock'
 
 // `refs` without the entries at the ASCENDING positions in `leaving` — one pass, using the fact that the
@@ -525,7 +525,7 @@ end 'keepingAllBut'
 // Decide ONE op, recording its result as invariant when the answer is yes — the two phases' single
 // admission point.
 function admitsOp(module StdModule, opIdx ElementIndex, mustExecute bool, memoryIsStable bool, scratch LicmScratch) returns bool
-	let op = try module.ops.get(opIdx) otherwise panic("admitsOp: op index {opIdx} from block.opRefs not in module.ops")
+	let op = try module.ops.get(opIdx) otherwise panic("admitsOp: op index {opIdx} from block.bodyOps() not in module.ops")
 
 	classifyArithOperands(op, operands: scratch.arith)
 
@@ -603,7 +603,7 @@ function appendToPreheader(module StdModule, func IrFunction, preheader ElementI
 	var block = blockAtPosition(module, func: func, position: preheader)
 
 	for opIdx in ops 'eachHoisted'
-		block.opRefs.push(opIdx)
+		block.pushBodyOp(opIdx)
 	end 'eachHoisted'
 end 'appendToPreheader'
 

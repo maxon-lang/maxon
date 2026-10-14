@@ -344,7 +344,7 @@ type PrimitiveInliner
 	// carve moves everything past the site into a continuation, so that continuation is where the next site
 	// can only be, and the scan restarts at its first op.
 	//
-	// ⚠ **IT WALKS `block.opRefs`, WHICH IS THE BODY HALF OF `IrModule.liveOpIndices`' OWN DESCENT — never
+	// ⚠ **IT WALKS `block.bodyOps()`, WHICH IS THE BODY HALF OF `IrModule.liveOpIndices`' OWN DESCENT — never
 	// the flat `module.ops`.** That array is append-only and full of orphans from every earlier pass; and a
 	// site needs its POSITION IN ITS BLOCK, which the flat array cannot give. A terminator is never a call,
 	// so the half this walk omits holds no site.
@@ -361,7 +361,7 @@ type PrimitiveInliner
 		var current = blockRef
 		var pos = 0 as ElementIndex
 
-		while pos < self.blockAt(current).opRefs.count() 'eachOp'
+		while pos < self.blockAt(current).bodyOpCount() 'eachOp'
 			let next = self.expandAt(current, pos: pos)
 
 			if next == current 'nothingCarved'
@@ -1122,7 +1122,7 @@ type PrimitiveInliner
 	function carve(blockRef ElementIndex, pos ElementIndex) returns IrBlock
 		var head = self.blockAt(blockRef)
 		let cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: ManagedContLabel)
-		head.opRefs.truncate(pos)
+		head.truncateBodyOps(pos)
 		return cont
 	end 'carve'
 
@@ -1140,7 +1140,7 @@ type PrimitiveInliner
 	end 'blockAt'
 
 	function opIndexAt(blockRef ElementIndex, pos ElementIndex) returns ElementIndex
-		return try self.blockAt(blockRef).opRefs.get(pos) otherwise panic("PrimitiveInliner: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
+		return try self.blockAt(blockRef).bodyOpAt(pos) otherwise panic("PrimitiveInliner: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
 	end 'opIndexAt'
 
 	function opAt(blockRef ElementIndex, pos ElementIndex) returns StdOp

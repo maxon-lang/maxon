@@ -374,13 +374,13 @@ function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSi
 		let func = module.getFunc(idx)
 		markWitnessEdges(func, project: project, signatures: signatures, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
 
-		// `block.opRefs` directly, for `StdlibSource.markMaxonCallees`' reason: this runs at the Maxon tier,
+		// `block.bodyOps()` directly, for `StdlibSource.markMaxonCallees`' reason: this runs at the Maxon tier,
 		// where a dropped op keeps its `module.ops` index and belongs to no block, so a flat scan of
 		// `module.ops` is not the same walk.
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("slotsReadFrom: blockRef from func.blockRefs not in module.blocks")
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("slotsReadFrom: opRef {opIdx} not in module.ops")
 				markOpCallee(op, project: project, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
 				noteSlotNamed(op, slotOf: slotOf, claimed: claimed, found: found)

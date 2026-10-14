@@ -265,7 +265,7 @@ module type StdLiveness
 	end 'segmentedSuccessors'
 
 	function opRefAt(block IrBlock, pos ElementIndex) returns ElementIndex
-		return try block.opRefs.get(pos) otherwise panic("StdLiveness: block '{String.from(block.label)}' has no op at position {pos}")
+		return try block.bodyOpAt(pos) otherwise panic("StdLiveness: block '{String.from(block.label)}' has no op at position {pos}")
 	end 'opRefAt'
 
 	function definingBlockOf(valueId ValueId) returns ElementIndex
@@ -305,7 +305,7 @@ module type StdLiveness
 				self.recordDef(arg.valueId, position: segment)
 			end 'eachPhi'
 
-			for opPosition in 0 upto block.opRefs.count() 'eachOp'
+			for opPosition in 0 upto block.bodyOpCount() 'eachOp'
 				let op = module.getOp(self.opRefAt(block, pos: opPosition))
 
 				if cutsHere and (try cutOp.get(cut) otherwise panic("StdLiveness.collectDefsAndUses: cutOp.get OOB at {cut}")) == opPosition 'segmentEnds'

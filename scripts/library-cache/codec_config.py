@@ -37,6 +37,11 @@ SKIPPED_FIELDS = {
     ("SettledDeclarations", "declTokenStreams"): "DeclTokenStreamMap.create()",
     ("VarInfo", "isEnrolled"): "false",
     ("VarInfo", "enrolledAt"): "0",
+    ("IrBlock", "opsHeld"): "false",
+}
+
+FIELD_READERS = {
+    ("IrBlock", "opRefs"): "self.bodyOps()",
 }
 
 ROOTS = [

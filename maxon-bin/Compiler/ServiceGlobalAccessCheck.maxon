@@ -452,7 +452,7 @@ module function initializerCallees(project Project, module MaxonModule, funcName
 	for blockRef in functionAt(funcNames, index: initIndex).blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("initializerCallees: blockRef from `__module_init`'s blockRefs not in module.blocks")
 
-		for opIndex in block.opRefs 'eachOp'
+		for opIndex in block.bodyOps() 'eachOp'
 			if rows.count() == globalCount 'everySlotIsFilled'
 				return rows
 			end 'everySlotIsFilled'
@@ -543,7 +543,7 @@ function firstRegistryUseIn(project Project, module MaxonModule, func IrFunction
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("firstRegistryUseIn: blockRef from func.blockRefs not in module.blocks")
 
-		for opIndex in block.opRefs 'eachOp'
+		for opIndex in block.bodyOps() 'eachOp'
 			if project.registryUseSites.contains(opIndex) 'aRegistryUse'
 				return opIndex
 			end 'aRegistryUse'

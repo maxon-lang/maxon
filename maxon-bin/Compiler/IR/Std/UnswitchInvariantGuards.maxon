@@ -225,7 +225,7 @@ module function holdsAManagedCallee(module StdModule, func IrFunction, call StdC
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = module.getBlock(blockRef)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			let op = module.getOp(opIdx)
 
 			if not op.rawValue.isCall 'notACall'
@@ -317,7 +317,7 @@ type ReadSites
 		for position in 0 upto func.blockRefs.count() 'eachBlock'
 			let block = module.blockAtPosition(func, position: position)
 
-			for opIdx in block.opRefs 'eachOp'
+			for opIdx in block.bodyOps() 'eachOp'
 				sites.recordOpSite(module, opIdx: opIdx, position: position, readValue: readValue, readSite: readSite, scratch: scratch)
 			end 'eachOp'
 
@@ -593,13 +593,13 @@ function sizeFits(module StdModule, func IrFunction, plan UnswitchPlan, scratch 
 			return refuse(UnswitchRefusal.oplessMember, scratch: scratch)
 		end 'fallsThrough'
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			if module.getOp(opIdx).rawValue.isUnsupportedInInlineBody 'notClonable'
 				return refuse(UnswitchRefusal.unclonableOp, scratch: scratch)
 			end 'notClonable'
 		end 'eachOp'
 
-		ops = ops + block.opRefs.count() as LoopOpCount
+		ops = ops + block.bodyOpCount() as LoopOpCount
 	end 'eachMember'
 
 	if ops > MaxOpsPerLoop 'overBudget'
@@ -616,7 +616,7 @@ function scanCalls(module StdModule, func IrFunction, plan UnswitchPlan, scratch
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
 		let block = module.blockAtPosition(func, position: position)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			if not admitCall(module, opIdx: opIdx, plan: plan, scratch: scratch) 'refused'
 				return false
 			end 'refused'
@@ -683,7 +683,7 @@ function classifyBody(module StdModule, func IrFunction, analysis UnswitchFuncti
 		let position = try plan.walkOrder.get(index) otherwise panic("unswitchInvariantGuards: walkOrder.get OOB at {index}")
 		let block = module.blockAtPosition(func, position: position)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			if not classifyBodyOp(module, opIdx: opIdx, position: position, analysis: analysis, plan: plan, scratch: scratch) 'refused'
 				return false
 			end 'refused'
@@ -882,7 +882,7 @@ function refuseEscapingOpResults(module StdModule, func IrFunction, analysis Uns
 	for position in plan.members 'eachMember'
 		let block = module.blockAtPosition(func, position: position)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			if opResultEscapes(module, opIdx: opIdx, analysis: analysis, scratch: scratch) 'escapes'
 				return refuse(UnswitchRefusal.escapingOpResult, scratch: scratch)
 			end 'escapes'
@@ -1005,7 +1005,7 @@ function markHoisted(module StdModule, func IrFunction, analysis UnswitchFunctio
 	for position in plan.walkOrder 'eachBlock'
 		let block = module.blockAtPosition(func, position: position)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
 
 			if not scratch.def.definesNothing() and scratch.hoistableLoads.contains(scratch.def.first) 'hoistable'
@@ -1110,7 +1110,7 @@ function numberHoisted(module StdModule, func IrFunction, analysis UnswitchFunct
 		let position = try plan.walkOrder.get(index) otherwise panic("unswitchInvariantGuards: walkOrder.get OOB at {index}")
 		let block = module.blockAtPosition(func, position: position)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
 
 			if scratch.def.definesNothing() or not plan.hoisted.contains(scratch.def.first) 'notHoisted'
@@ -1175,7 +1175,7 @@ function hoistFitsBudget(module StdModule, func IrFunction, plan UnswitchPlan, b
 	for position in plan.walkOrder 'eachBlock'
 		let block = module.blockAtPosition(func, position: position)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
 
 			if not scratch.def.definesNothing() and plan.hoisted.contains(scratch.def.first) 'leavesTheCopy'
@@ -1228,7 +1228,7 @@ function estimateLiveAcross(module StdModule, func IrFunction, plan UnswitchPlan
 	for position in plan.members 'eachMember'
 		let block = module.blockAtPosition(func, position: position)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			count = count + outsideReadsOf(module, opIdx: opIdx, scratch: scratch)
 		end 'eachOp'
 
@@ -1407,7 +1407,7 @@ function readHoistedInPlace(module StdModule, func IrFunction, plan UnswitchPlan
 		var block = module.blockAtPosition(func, position: position)
 		var kept = OpIndexArray.create()
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
 
 			if not scratch.def.definesNothing() and plan.hoisted.contains(scratch.def.first) 'leaves'
@@ -1417,7 +1417,7 @@ function readHoistedInPlace(module StdModule, func IrFunction, plan UnswitchPlan
 			kept.push(opIdx)
 		end 'eachOp'
 
-		block.opRefs = kept
+		block.replaceBodyOps(kept)
 		substituteValuesInBlock(module, block: block, subst: columns.valueSubst)
 	end 'eachMember'
 end 'readHoistedInPlace'
@@ -1432,7 +1432,7 @@ function mintCopyValues(module StdModule, func IrFunction, plan UnswitchPlan, sc
 			columns.mapCopy(blockArg.valueId, minter: minter)
 		end 'eachPhi'
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
 
 			if scratch.def.definesNothing() or plan.hoisted.contains(scratch.def.first) 'noCopyDef'
@@ -1517,7 +1517,7 @@ function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, ana
 	for position in plan.walkOrder 'eachBlock'
 		let block = module.blockAtPosition(func, position: position)
 
-		for opIdx in block.opRefs 'eachOp'
+		for opIdx in block.bodyOps() 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
 
 			if scratch.def.definesNothing() or not plan.hoisted.contains(scratch.def.first) 'staysInTheCopy'
@@ -1582,11 +1582,11 @@ function preheaderLoadOf(module StdModule, func IrFunction, plan UnswitchPlan, a
 	let offset = analysis.reader.load.offset
 	let valueType = analysis.reader.load.valueType
 	let preheader = module.blockAtPosition(func, position: plan.preheader)
-	var k = preheader.opRefs.count()
+	var k = preheader.bodyOpCount()
 
 	while k > 0 'eachOpBackwards'
 		k = k - 1
-		let op = module.getOp(try preheader.opRefs.get(k) otherwise panic("unswitchInvariantGuards: opRefs.get OOB at {k}"))
+		let op = module.getOp(try preheader.bodyOpAt(k) otherwise panic("unswitchInvariantGuards: bodyOpAt OOB at {k}"))
 
 		if opMayWriteAHeader(op, analysis: analysis, scratch: scratch) 'mayWriteTheHeader'
 			return false
@@ -1718,7 +1718,7 @@ function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, positi
 		copy.blockArgs = blockArgs
 	end 'hasPhis'
 
-	for opIdx in original.opRefs 'eachOp'
+	for opIdx in original.bodyOps() 'eachOp'
 		stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
 
 		if not scratch.def.definesNothing() and plan.hoisted.contains(scratch.def.first) 'hoisted'

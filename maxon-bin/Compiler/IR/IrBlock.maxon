@@ -623,7 +623,7 @@ export type IrBlock
 	// The spliced body this block was copied under, so a frame printer can name the callee the block's
 	// code came from. Carried by every copy of the block, exactly as `heat` is.
 	export var inlineSite as InlineSiteRef
-	export var opRefs as OpIndexArray
+	var opRefs as OpIndexArray
 	export var terminator as Terminator
 
 	// The block's conditional-branch body op, when it has one. Set ONLY by
@@ -643,6 +643,11 @@ export type IrBlock
 	// silently drop every non-phi edge — which is why successors come from the ops.
 	export var branchEdges as BranchEdgeArray
 
+	// Set while the live-range splitter keeps this block's order in its positional index alone, until
+	// `SplitEdits.flushUnflushed` restores it. `opRefs` is stale for that whole window, so every accessor
+	// refuses rather than answer a read, copy or compare about a list the block no longer has.
+	var opsHeld as bool
+
 	// The heat is REQUIRED: a block minted without saying how often it runs is the omission that leaves a
 	// cold arm's call confined, so no creator may default it. The inline site is required for the same
 	// reason: a block minted inside a spliced body without saying so is a frame a panic trace loses.
@@ -657,7 +662,8 @@ export type IrBlock
 			terminator: Terminator.unset,
 			condBranch: CondBranch.none,
 			blockArgs: IrBlockArgArray.create(),
-			branchEdges: BranchEdgeArray.create()
+			branchEdges: BranchEdgeArray.create(),
+			opsHeld: false
 		}
 	end 'create'
 
@@ -667,6 +673,123 @@ export type IrBlock
 		return IrBlock.create(src.id, label: src.label, heat: src.heat, inlineSite: src.inlineSite, role: src.role)
 	end 'createLike'
 
+	function refuseHeldAccess()
+		panic("IrBlock '{String.from(self.label)}': the live-range splitter holds this block's body ops in its positional index and has not restored them, so this access would read or write a list that no longer matches the block")
+	end 'refuseHeldAccess'
+
+	export function opsAreHeldElsewhere() returns bool
+		return self.opsHeld
+	end 'opsAreHeldElsewhere'
+
+	export function holdOpsElsewhere(count ElementIndex)
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		if self.opRefs.count() != count 'countDisagrees'
+			panic("IrBlock.holdOpsElsewhere: block '{String.from(self.label)}' holds {self.opRefs.count()} body op(s) but the holder lays out {count}")
+		end 'countDisagrees'
+
+		self.opsHeld = true
+	end 'holdOpsElsewhere'
+
+	export function restoreOps(from OpIndexArray)
+		if not self.opsHeld 'notHeld'
+			panic("IrBlock.restoreOps: block '{String.from(self.label)}' is not held elsewhere, so there is nothing to restore")
+		end 'notHeld'
+
+		self.opRefs.clear()
+		self.opRefs.append(from)
+		self.opsHeld = false
+	end 'restoreOps'
+
+	export function bodyOpCount() returns Count
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		return self.opRefs.count()
+	end 'bodyOpCount'
+
+	export function bodyOpAt(position ElementIndex) returns ElementIndex throws ArrayError
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		return try self.opRefs.get(position)
+	end 'bodyOpAt'
+
+	export function bodyOps() returns OpIndexArray
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		return self.opRefs
+	end 'bodyOps'
+
+	export function setBodyOp(position ElementIndex, value ElementIndex) throws ArrayError
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		try self.opRefs.set(position, value: value)
+	end 'setBodyOp'
+
+	export function pushBodyOp(opIdx ElementIndex)
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		self.opRefs.push(opIdx)
+	end 'pushBodyOp'
+
+	export function popBodyOp() returns ElementIndex throws ArrayError
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		return try self.opRefs.pop()
+	end 'popBodyOp'
+
+	export function truncateBodyOps(newLength ElementIndex)
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		self.opRefs.truncate(newLength)
+	end 'truncateBodyOps'
+
+	export function replaceBodyOps(ops OpIndexArray)
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		self.opRefs = ops
+	end 'replaceBodyOps'
+
+	// One op only: each call shifts the suffix, so K ops into one block go through `spliceBodyOps`.
+	export function insertBodyOp(at ElementIndex, opIdx ElementIndex)
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		// `Array.insert` clamps a position past the end to the tail, which would place a spill or reload
+		// silently at the wrong op; every caller derives `at` from a position inside the block.
+		if at > self.opRefs.count() 'oob'
+			panic("insertBodyOp: position {at} is past the end of block '{String.from(self.label)}' (body count={self.opRefs.count()})")
+		end 'oob'
+
+		self.opRefs.insert(at, value: opIdx)
+	end 'insertBodyOp'
+
+	export function spliceBodyOps(positions BlockOpPosArray, opIdxs OpIndexArray, from ElementIndex, to ElementIndex)
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		spliceOpArray(self.opRefs, label: self.label, positions: positions, opIdxs: opIdxs, from: from, to: to)
+	end 'spliceBodyOps'
+
 	// Shift everything that names an op by index — `opRefs`, the terminator, the cond-branch — by
 	// `shift`: the block's ops were appended after `shift` others in the module it now belongs to
 	// (`IrModule.merge`, the backend unit splice). The two unions are re-minted whole, so the block shares
@@ -674,9 +797,11 @@ export type IrBlock
 	export function shiftOpIndices(shift ElementIndex)
 		let delta = shift
 
-		for pos in 0 upto self.opRefs.count() 'eachOp'
-			let opIdx = try self.opRefs.get(pos) otherwise panic("IrBlock.shiftOpIndices: opRefs.get OOB at {pos}")
-			try self.opRefs.set(pos, value: opIdx + delta) otherwise panic("IrBlock.shiftOpIndices: opRefs.set OOB at {pos}")
+		var ops = self.bodyOps()
+
+		for pos in 0 upto ops.count() 'eachOp'
+			let opIdx = try ops.get(pos) otherwise panic("IrBlock.shiftOpIndices: ops.get OOB at {pos}")
+			try ops.set(pos, value: opIdx + delta) otherwise panic("IrBlock.shiftOpIndices: ops.set OOB at {pos}")
 		end 'eachOp'
 
 		self.terminator = match self.terminator 'relocate'
@@ -714,14 +839,27 @@ export type IrBlock
 
 	// ⭐ **HOW MANY OPS THE BLOCK RUNS, AND WHICH ONE RUNS AT EACH POSITION** — its body ops, then the terminator,
 	// which lives in a slot of its own (`Terminator`) and so is NOT in `opRefs`. A caller ordering two program
-	// points within a block asks these rather than `opRefs`, whose last position is one op short of the block's end.
+	// points within a block asks these rather than `bodyOpCount`/`bodyOpAt`, whose last position is one op short
+	// of the block's end.
 	export function opCountInRunOrder() returns ElementIndex
-		return self.opRefs.count() + 1 if terminatorNamesAnOp(self.terminator) else self.opRefs.count()
+		return self.bodyOpCount() + 1 if terminatorNamesAnOp(self.terminator) else self.bodyOpCount()
 	end 'opCountInRunOrder'
 
+	export function collectOpsInRunOrder(out OpIndexArray)
+		if self.opsHeld 'heldElsewhere'
+			self.refuseHeldAccess()
+		end 'heldElsewhere'
+
+		out.append(self.opRefs)
+
+		if terminatorNamesAnOp(self.terminator) 'terminated'
+			out.push(self.terminatorIndex())
+		end 'terminated'
+	end 'collectOpsInRunOrder'
+
 	export function opInRunOrderAt(position ElementIndex) returns ElementIndex
-		if position < self.opRefs.count() 'aBodyOp'
-			return try self.opRefs.get(position) otherwise panic("opInRunOrderAt: opRefs.get OOB at {position}")
+		if position < self.bodyOpCount() 'aBodyOp'
+			return try self.bodyOpAt(position) otherwise panic("opInRunOrderAt: bodyOpAt OOB at {position}")
 		end 'aBodyOp'
 
 		if position >= self.opCountInRunOrder() 'pastTheBlock'
@@ -791,7 +929,7 @@ export type IrBlock
 		writer.unsigned(self.heat.ordinal as CacheUnsigned)
 		writer.unsigned(self.role.ordinal as CacheUnsigned)
 		cacheWriteInlineSiteRef(writer, value: self.inlineSite)
-		cacheWriteOpIndexArray(writer, value: self.opRefs)
+		cacheWriteOpIndexArray(writer, value: self.bodyOps())
 		cacheWriteTerminator(writer, value: self.terminator)
 		cacheWriteCondBranch(writer, value: self.condBranch)
 		cacheWriteIrBlockArgArray(writer, value: self.blockArgs)
@@ -810,11 +948,11 @@ export type IrBlock
 		let f_blockArgs = try cacheReadIrBlockArgArray(reader)
 		let f_branchEdges = try cacheReadBranchEdgeArray(reader)
 
-		return Self{id: f_id, label: f_label, heat: f_heat, role: f_role, inlineSite: f_inlineSite, opRefs: f_opRefs, terminator: f_terminator, condBranch: f_condBranch, blockArgs: f_blockArgs, branchEdges: f_branchEdges}
+		return Self{id: f_id, label: f_label, heat: f_heat, role: f_role, inlineSite: f_inlineSite, opRefs: f_opRefs, terminator: f_terminator, condBranch: f_condBranch, blockArgs: f_blockArgs, branchEdges: f_branchEdges, opsHeld: false}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize80
-		return sizeof(IrBlock) as CacheSize80
+	static function cacheLayoutBytes() returns CacheSize88
+		return sizeof(IrBlock) as CacheSize88
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -856,59 +994,36 @@ end 'cacheReadIrBlockArray'
 // the block header and every branch operand alike. That also retired this scan, which ran once per
 // branch operand and made printing a function quadratic in its own block count.
 
-// Insert ONE op reference at `at`, which must name a position INSIDE the block or one
-// past its end.
-//
-// This exists because `Array.insert` CLAMPS an out-of-range index to the tail, and every
-// caller here computes `at` from a live-range position or an op's index within the block
-// — so a position past the end is a bug in the caller, not a request to append. Clamping
-// would put a spill store or a reload at the wrong place and miscompile silently, so an
-// out-of-range `at` panics here rather than reaching `Array.insert`.
-//
-// ⚠ IT SHIFTS A SUFFIX OF `opRefs`, SO IT IS FOR ONE OP AND NOT FOR K OF THEM. A caller
-// placing several ops into one block must use `spliceOpRefs` below — a loop here costs
-// Θ(K × block) and it also forces each iteration to re-derive its position in coordinates
-// the previous iteration has already moved. That is not a style preference: it is the
-// quadratic the register allocator's splitter is MEASURED paying, and the reason its
-// positions are read out of an index instead of searched for.
-export function insertOpRef(block IrBlock, at ElementIndex, opIdx ElementIndex)
-	if at > block.opRefs.count() 'oob'
-		panic("insertOpRef: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={block.opRefs.count()})")
-	end 'oob'
-
-	block.opRefs.insert(at, value: opIdx)
-end 'insertOpRef'
-
 // A batch this small is inserted one shift of the suffix at a time: a bounded number of shifts
 // keeps it Θ(M), and for a few ops that is cheaper than the grow-and-fill pass.
 let SpliceByShiftLimit = 8 as ElementIndex
 
-function batchPositionAt(block IrBlock, positions BlockOpPosArray, k ElementIndex, oldCount ElementIndex, ceiling ElementIndex) returns ElementIndex
-	let at = try positions.get(k - 1) otherwise panic("spliceOpRefs: positions.get OOB at {k - 1}")
+function batchPositionAt(label ByteArray, positions BlockOpPosArray, k ElementIndex, oldCount ElementIndex, ceiling ElementIndex) returns ElementIndex
+	let at = try positions.get(k - 1) otherwise panic("spliceOpArray: positions.get OOB at {k - 1}")
 
 	if at > oldCount 'pastTheEnd'
-		panic("spliceOpRefs: position {at} is past the end of block '{String.from(block.label)}' (opRefs count={oldCount})")
+		panic("spliceOpArray: position {at} is past the end of block '{String.from(label)}' (body count={oldCount})")
 	end 'pastTheEnd'
 
 	if at > ceiling 'outOfOrder'
-		panic("spliceOpRefs: entry {k - 1} of this batch asks for position {at} of block '{String.from(block.label)}', but the entry after it already claimed position {ceiling} or lower — a batch must be ASCENDING by position")
+		panic("spliceOpArray: entry {k - 1} of this batch asks for position {at} of block '{String.from(label)}', but the entry after it already claimed position {ceiling} or lower — a batch must be ASCENDING by position")
 	end 'outOfOrder'
 
 	return at
 end 'batchPositionAt'
 
 function batchOpAt(opIdxs OpIndexArray, k ElementIndex) returns ElementIndex
-	return try opIdxs.get(k - 1) otherwise panic("spliceOpRefs: opIdxs.get OOB at {k - 1}")
+	return try opIdxs.get(k - 1) otherwise panic("spliceOpArray: opIdxs.get OOB at {k - 1}")
 end 'batchOpAt'
 
-function insertBatchByShifting(block IrBlock, positions BlockOpPosArray, opIdxs OpIndexArray, from ElementIndex, to ElementIndex, oldCount ElementIndex)
+function insertBatchByShifting(ops OpIndexArray, label ByteArray, positions BlockOpPosArray, opIdxs OpIndexArray, from ElementIndex, to ElementIndex, oldCount ElementIndex)
 	var ceiling = 0 as ElementIndex
 	ceiling = oldCount
 	var k = to
 
 	while k > from 'eachPendingInsert'
-		let at = batchPositionAt(block, positions: positions, k: k, oldCount: oldCount, ceiling: ceiling)
-		block.opRefs.insert(at, value: batchOpAt(opIdxs, k: k))
+		let at = batchPositionAt(label, positions: positions, k: k, oldCount: oldCount, ceiling: ceiling)
+		ops.insert(at, value: batchOpAt(opIdxs, k: k))
 		ceiling = at
 		k = k - 1
 	end 'eachPendingInsert'
@@ -919,26 +1034,23 @@ end 'insertBatchByShifting'
 //
 // EVERY POSITION IS STATED IN THE BLOCK'S PRE-BATCH COORDINATES, and they must be ASCENDING. Entry `k`
 // lands immediately before whatever sat at `positions[k]` before any of this batch went in, and after
-// every earlier entry of the batch — which is exactly the layout `to - from` separate `insertOpRef`
+// every earlier entry of the batch — which is exactly the layout `to - from` separate `insertBodyOp`
 // calls produce when each one re-derives its own position from the anchor op it must follow.
 //
-// WHY IT EXISTS. `insertOpRef` shifts a suffix of `opRefs` on every call, so a caller placing K ops
-// into a block of M paid Θ(K × M) — and the register allocator's splitter is exactly that caller: two
-// f64 locals read after each of N calls put ~2N reloads into one straight-line block of ~10N ops. This
-// pays Θ(M + K) instead, and it allocates nothing beyond the one growth. The insertions being held back
-// until the batch is complete is also what keeps every position in one coordinate system, which is what
-// lets the splitter read a position off its positional index rather than search for it.
-export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs OpIndexArray, from ElementIndex, to ElementIndex)
+// WHY IT EXISTS. `insertBodyOp` shifts a suffix of the list on every call, so placing K ops into a
+// block of M one at a time costs Θ(K × M). This pays Θ(M + K), and it allocates nothing beyond the one
+// growth.
+export function spliceOpArray(ops OpIndexArray, label ByteArray, positions BlockOpPosArray, opIdxs OpIndexArray, from ElementIndex, to ElementIndex)
 	let pending = to - from
 
 	if pending == 0 'nothingToSplice'
 		return
 	end 'nothingToSplice'
 
-	let oldCount = block.opRefs.count()
+	let oldCount = ops.count()
 
 	if pending <= SpliceByShiftLimit 'fewEnoughToShift'
-		insertBatchByShifting(block, positions: positions, opIdxs: opIdxs, from: from, to: to, oldCount: oldCount)
+		insertBatchByShifting(ops, label: label, positions: positions, opIdxs: opIdxs, from: from, to: to, oldCount: oldCount)
 		return
 	end 'fewEnoughToShift'
 
@@ -951,27 +1063,27 @@ export function spliceOpRefs(block IrBlock, positions BlockOpPosArray, opIdxs Op
 	// documents that trap). Geometric growth makes the same sequence amortized linear. The zeros it
 	// writes into the added tail are all overwritten by the pass below; that fill is the price of using
 	// the one extension operation rather than a second one.
-	block.opRefs.growFilled(((oldCount + pending) as ElementIndex), value: 0)
+	ops.growFilled(((oldCount + pending) as ElementIndex), value: 0)
 
 	var write = oldCount + pending
 	var read = oldCount
 	var k = to
 
 	while k > from 'eachPendingSplice'
-		let at = batchPositionAt(block, positions: positions, k: k, oldCount: oldCount, ceiling: read)
+		let at = batchPositionAt(label, positions: positions, k: k, oldCount: oldCount, ceiling: read)
 
 		while read > at 'shiftTail'
 			write = write - 1
 			read = read - 1
-			let moved = try block.opRefs.get(read) otherwise panic("spliceOpRefs: opRefs.get OOB at {read}")
-			try block.opRefs.set(write, value: moved) otherwise panic("spliceOpRefs: opRefs.set OOB at {write}")
+			let moved = try ops.get(read) otherwise panic("spliceOpArray: ops.get OOB at {read}")
+			try ops.set(write, value: moved) otherwise panic("spliceOpArray: ops.set OOB at {write}")
 		end 'shiftTail'
 
 		write = write - 1
-		try block.opRefs.set(write, value: batchOpAt(opIdxs, k: k)) otherwise panic("spliceOpRefs: opRefs.set OOB at {write}")
+		try ops.set(write, value: batchOpAt(opIdxs, k: k)) otherwise panic("spliceOpArray: ops.set OOB at {write}")
 		k = k - 1
 	end 'eachPendingSplice'
-end 'spliceOpRefs'
+end 'spliceOpArray'
 
 // Collect the IrBlocks referenced by a function's blockRefs list.
 // Used by IR printers across all phases to iterate a function's blocks.
