@@ -75,24 +75,24 @@ report what felt awkward, what was missing, and what worked.
 
 ## The development loop
 
-Maxon is written in Maxon, so building it needs a released Maxon compiler as a seed. The build scripts
-are bash: on Windows, run them in Git Bash. Fetching the seed needs the [GitHub CLI](https://cli.github.com/),
-signed in. Then:
+Maxon is written in Maxon, so building it needs a Maxon compiler as a seed: a frozen compiler, published
+as a `seed-*` pre-release and pinned by `scripts/seed-tag`. The build scripts are bash: on Windows, run
+them in Git Bash. Fetching the seed needs the [GitHub CLI](https://cli.github.com/), signed in. Then:
 
 ```bash
 git clone https://github.com/maxon-lang/maxon.git
 cd maxon
 
-scripts/fetch-seed.sh              # seed .bootstrap/ with the latest release's compiler
+scripts/fetch-seed.sh              # seed .bootstrap/ with the pinned seed's compiler
 scripts/build-from-seed.sh         # build the compiler, then rebuild it with itself
 maxon-bin/.maxon/maxon spec-test   # run the full spec-test suite
 ```
 
-The seed is the release's **binary** alone, not the unpacked archive: the compiler finds `stdlib/` by
+The seed is the archive's **binary** alone, not the unpacked archive: the compiler finds `stdlib/` by
 walking up from its own executable, so a released standard library left beside the seed would be
-compiled in place of the checkout's own. Run `scripts/fetch-seed.sh` again after each release — the
-checkout can depend on something only the newest release provides. For the same reason, build and test with the compiler inside
-the checkout, never the `maxon` on your PATH.
+compiled in place of the checkout's own. The seed changes only when a commit moves `scripts/seed-tag`, so
+run `scripts/fetch-seed.sh` again after pulling one that does. For the same reason, build and test with the
+compiler inside the checkout, never the `maxon` on your PATH.
 
 After a change, rebuild and re-run the suite:
 

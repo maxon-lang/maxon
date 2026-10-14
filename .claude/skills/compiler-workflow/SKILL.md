@@ -1,11 +1,11 @@
 ---
 name: compiler-workflow
-description: Procedures for measuring and host-testing the Maxon compiler that are too long to keep always-loaded — the `run_scale_test` doubling ladder and how to read it, `scripts/fixpoint.sh` (does the compiler reproduce itself byte for byte), hosting the x64-linux lane locally under WSL, hosting the arm64-macos lane on the shared Mac through `scripts/mac-host.sh`, and staging `vendor/`. Load when running or interpreting the scale ladder, when checking that the compiler is a fixed point of itself, when a defect might be specific to a host rather than a target, when anything must run on the Mac, or when `vendor/wasmtime` is missing.
+description: Procedures for measuring and host-testing the Maxon compiler that are too long to keep always-loaded — the `run_scale_test` doubling ladder and how to read it, `scripts/fixpoint.sh` (does the compiler reproduce itself byte for byte), hosting the x64-linux lane locally under WSL, hosting the arm64-macos lane on the shared Mac through `scripts/mac-host.sh`, freezing a new bootstrap seed with `scripts/freeze-seed.sh`, and staging `vendor/`. Load when running or interpreting the scale ladder, when checking that the compiler is a fixed point of itself, when a defect might be specific to a host rather than a target, when anything must run on the Mac, when the pinned seed no longer accepts the tree, or when `vendor/wasmtime` is missing.
 ---
 
 # Compiler workflow — instruments and host lanes
 
-The always-loaded rules live in `maxon-bin/AGENTS.md`. This skill holds the five procedures that are
+The always-loaded rules live in `maxon-bin/AGENTS.md`. This skill holds the six procedures that are
 reference material rather than standing constraints.
 
 ## `run_scale_test` — the scaling INSTRUMENT. ⚠ NOT A GATE.
@@ -89,7 +89,7 @@ scripts/mac-host.sh unlock <session> <TOKEN>                    # only while no 
 scripts/mac-host.sh drop <session> <KEY>
 ```
 
-- `<commit>` must be pushed: the clone is made from `origin`. `--seed` places the latest release's
+- `<commit>` must be pushed: the clone is made from `origin`. `--seed` places the pinned seed's
   arm64-macos compiler at `.bootstrap/maxon`. Clone before locking — a clone needs no lock and does
   not refresh one.
 - **A lock runs one job, and the job's exit releases it.** Watch the job with a Monitor that polls
@@ -98,6 +98,30 @@ scripts/mac-host.sh drop <session> <KEY>
 - `drop` the session when done; it releases a lock the session still holds.
 - ⚠ **`mac-host.sh: skipped — MAXON_MAC_HOST is not set` means no Mac is configured.** It exits 0 and
   touches nothing. Skip the arm64-macos work and say so in the report — it is not a failure.
+
+## Freezing a bootstrap seed
+
+The seed that builds every commit is the `seed-*` pre-release `scripts/seed-tag` pins (`docs/RELEASING.md`
+owns the rule). Freeze a new one when the pinned seed refuses the tree — E2015 or E3004 from
+`build-from-seed.sh` that no `scripts/seed-shim/` patch covers.
+
+```
+./maxon-bin/.maxon/maxon run build        # the slot must be built from HEAD; the script refuses a stale one
+scripts/freeze-seed.sh                    # four builds, serial, below-normal priority; ~1 minute each
+```
+
+It writes `temp/seed/dist/` (four archives, `SHA256SUMS`, `NOTES.md`) and `temp/seed/publish.txt`, and prints
+the `gh release create` command **without running it**. Publishing, tagging and moving the pin are the
+user's. Before the pin moves, prove the seed accepts the tree with NO shim:
+
+- **Windows:** a fresh clone of `HEAD` at a short path (`git clone --no-hardlinks . /c/s1`), every
+  `scripts/seed-shim/*.patch` deleted, the archive's `maxon.exe` at `.bootstrap/maxon.exe`
+  (`scripts/fetch-seed.sh x64-windows --output=/c/s1/.bootstrap/maxon.exe` reads a pre-release; a local
+  `gh` stand-in on `PATH` serving `temp/seed/dist/` exercises the script before anything is published), then
+  `bash scripts/build-from-seed.sh` in the clone: exit 0.
+- **x64-linux:** the same clone and the archive's `maxon`, but run under WSL as in the section above
+  (`wsl -- bash scripts/build-from-seed.sh` from the clone, with `.bootstrap/maxon` executable there).
+- The arm64 archives cannot run on an x64 host; their proof is CI's seed step on the commit that moves the pin.
 
 ## Staging `vendor/`
 

@@ -73,7 +73,7 @@ and report what felt awkward, what was missing, and what worked.
 ## Building from source
 
 Maxon is written in Maxon, so building it needs a Maxon compiler. There is no second implementation
-in this repo to fall back on — the published release is what seeds a build.
+in this repo to fall back on — a frozen seed compiler, pinned in the repository, is what seeds a build.
 
 ### Prerequisites
 
@@ -86,14 +86,14 @@ in this repo to fall back on — the published release is what seeds a build.
 
 ### Build and test
 
-Seed the build with `scripts/fetch-seed.sh`, which downloads the latest release (it needs an authenticated
-`gh`) and puts its binary alone at `.bootstrap/maxon`. Only the binary: the compiler resolves `stdlib/` and
-its sibling `runtime/` by walking up from its own executable, and released ones left beside it would be
-compiled in place of this tree's. Run it again after each release — the tree may use builtins only a newer
-release has, and an out-of-date seed fails the first build.
+Seed the build with `scripts/fetch-seed.sh`, which downloads the seed release that `scripts/seed-tag` pins
+(a `seed-*` pre-release; it needs an authenticated `gh`) and puts its binary alone at `.bootstrap/maxon`.
+Only the binary: the compiler resolves `stdlib/` and its sibling `runtime/` by walking up from its own
+executable, and released ones left beside it would be compiled in place of this tree's. The seed changes
+only when a commit moves the pin, so run the script again after pulling a commit that does.
 
 ```bash
-scripts/fetch-seed.sh                          # seed .bootstrap/ from the latest release
+scripts/fetch-seed.sh                          # seed .bootstrap/ from the pinned seed
 ./.bootstrap/maxon build maxon-bin --output=maxon-bin/.maxon/maxon   # first build, with the seed
 ./maxon-bin/.maxon/maxon run build            # afterwards, it rebuilds itself
 ./maxon-bin/.maxon/maxon spec-test

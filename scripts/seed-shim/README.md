@@ -1,10 +1,10 @@
 # Seed shims
 
-Patches that withdraw, from the first build only, a declaration the previous published release refuses.
+Patches that withdraw, from the first build only, a declaration the pinned seed (`scripts/seed-tag`) refuses.
 
 `scripts/build-from-seed.sh` applies every `*.patch` here — in sorted order, over a clean worktree —
 when a plain build with the seed fails, and restores the files it touched before the second build runs.
-`docs/RELEASING.md`'s "Maxon compiles Maxon, so a release needs a release" says why that is sound and
+`docs/RELEASING.md`'s "A tree can declare something its own seed refuses, and a shim is how it is still built" says why that is sound and
 when a patch belongs here.
 
 ⛔ **A patch never withdraws the compiler's own DECLARATION of an entry** — its tables are what teach `C1`
@@ -14,7 +14,7 @@ constants of a new `__Builtins` intrinsic. An error CASE the seed's runtime cann
 and the fifth case below withdraws it.
 
 ⭐ **A CALL SITE IN COMPILER SOURCE IS THE OTHER CASE, AND IT IS ADMITTED.** The compiler is itself a Maxon
-program, so it can call an intrinsic this tree adds and no published release knows — and the seed then
+program, so it can call an intrinsic this tree adds and the pinned seed does not know — and the seed then
 refuses the tree with E3004 at that call, not at the declaration. Withdrawing the call leaves every table
 standing, so `C1` knows the intrinsic and compiles the unshimmed tree into `C2`; the first build is merely
 one whose instrument reports nothing. Keep such a patch to the single function that calls, so what the
@@ -24,14 +24,14 @@ function the seed can compile (`0007-withdraw-the-method-call-on-a-captured-enum
 `C1` knows the construct.
 
 ⭐ **A VISIBILITY TIER IS THE THIRD CASE, AND IT SPANS MANY DECLARATIONS.** A rule about what a
-signature may name decides a declaration's tier, so a release that predates the rule audits those tiers
+signature may name decides a declaration's tier, so a seed that predates the rule audits those tiers
 by the older one and refuses the tree at every declaration the new rule widened — E3092/E3093/E3094, not
 E3004, and one finding per declaration rather than one call site. Such a patch withdraws the MODIFIER and
 nothing else: the declarations, their bodies and every table stay, which is what leaves `C1` able to
 compile the unshimmed tree.
 
 ⭐ **A LANGUAGE FORM THE SEED CANNOT PARSE IS THE FOURTH CASE, AND ITS PATCH IS GENERATED.** A clause
-such as `typealias X = int(range) implements Parent` is an E2001 to a release that predates it, and
+such as `typealias X = int(range) implements Parent` is an E2001 to a seed that predates it, and
 withdrawing it is not enough: the seed then judges every crossing the clause licensed by its older rule,
 so the patch also writes each cast that rule demands, and wraps a division whose divisor such a cast widened to
 admit 0 in the `try … otherwise panic` the seed then requires. A generic function (`function f(...) uses T`) is
@@ -41,7 +41,7 @@ decimal integer literal above `i64.max` is written in hex (a typealias range bou
 `Compiler.`-qualified name is written bare, which the seed resolves to the same declaration, and an `export` whose
 only reach beyond its file was a crossing the patch turned into a cast is withdrawn (E3092). A `readonly`
 qualifier on a container's element type (`Array with readonly T`, `Map with (K, readonly V)`) and a `let` on a
-union case's payload (`case(let name T)`) are parse errors to a release that predates them, and the patch
+union case's payload (`case(let name T)`) are parse errors to a seed that predates them, and the patch
 withdraws the qualifier at every declaration, which leaves the container and union types the seed always held.
 Only those forms and the casts go; the declarations and every table stay, so `C1` knows the forms and compiles the
 unshimmed tree. The casts are found by building with the seed for one native target at a time until it is clean,
@@ -109,6 +109,7 @@ from 2^63 up as a signed one, so a `C1` it builds derives wrong division constan
 `C2`. It is hand-written, and like the second case it withdraws behaviour in one function and leaves every table
 standing.
 
-⛔ **Delete a patch once a release has shipped the compiler that accepts what it withdraws.** It is dead
+⛔ **Delete a patch once the pinned seed accepts what it withdraws.** `scripts/freeze-seed.sh` makes that seed from the tree,
+so the patches a freeze makes dead are all of them: the directory holds none while the pin is current. A patch is dead
 from that moment — the plain build succeeds and nothing here is read — and a patch that no longer
 applies turns the next genuine refusal into a confusing failure.

@@ -31,7 +31,7 @@ readonly ReadonlyDeclarationPattern='^declare -[a-z]*r'
 readonly EnvLinePattern='^MAXON_MAC_HOST[[:space:]]*=[[:space:]]*(.*)$'
 readonly SessionPattern='^[A-Za-z0-9_][A-Za-z0-9._-]*$'
 readonly SecretPattern="^[0-9a-f]{$((TokenBytes * 2))}\$"
-readonly SeedTagPattern='^v[0-9][A-Za-z0-9.+-]*$'
+readonly SeedTagPattern='^(v[0-9]|seed-[0-9])[A-Za-z0-9.+-]*$'
 readonly LoginUserPattern='^[A-Za-z0-9._-]+$'
 readonly LoginHostPattern='^[A-Za-z0-9.:%-]+$'
 readonly Ipv4Pattern='^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
@@ -64,7 +64,7 @@ usage() {
 		"                                     must not exist yet; prints session-key=<KEY>, which drop asks for;" \
 		"                                     a failed clone leaves nothing behind. --seed" \
 		"                                     also places the $MacTarget compiler of release TAG (default: the" \
-		"                                     latest release, the one CI seeds from) at .bootstrap/maxon, fetched" \
+		"                                     seed scripts/seed-tag pins, the one CI builds with) at .bootstrap/maxon, fetched" \
 		"                                     here with gh into a temporary directory" \
 		"  run <session> <token> <program> [arguments...]" \
 		"                                     run <program> detached in the session's clone under a login bash;" \
@@ -1024,7 +1024,7 @@ cmd_clone() {
 		--seed=*)
 			seeding=yes
 			tag="${option#--seed=}"
-			[[ "$tag" =~ $SeedTagPattern ]] || die "a seed is a release tag such as v0.2.2; got '$tag'"
+			[[ "$tag" =~ $SeedTagPattern ]] || die "a seed is a release tag such as seed-2026-10-14 or v0.2.2; got '$tag'"
 			;;
 		*) usage ;;
 	esac

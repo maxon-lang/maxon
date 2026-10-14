@@ -97,16 +97,16 @@ terminal you ran them from as well as in new ones; `maxon upgrade` updates the i
 ## Building from source
 
 Maxon is written in Maxon, so building it needs a Maxon compiler. There is no second implementation
-to fall back on — the published release is what seeds a build.
+to fall back on — a frozen seed compiler, pinned in the repository, is what seeds a build.
 
 **Prerequisites**
 
 - Git
 - Node.js 20+ (only needed to build the VS Code extension)
 
-**Seed the build.** `scripts/fetch-seed.sh` downloads the latest release (with an authenticated `gh`)
-and places its binary at `.bootstrap/maxon`. Run it again after each release: an out-of-date seed can
-fail the first build.
+**Seed the build.** `scripts/fetch-seed.sh` downloads the seed release that `scripts/seed-tag` pins (with an
+authenticated `gh`) and places its binary at `.bootstrap/maxon`. Run it again after pulling a commit that
+moves the pin.
 
 > ⚠ The **binary alone**, not the unpacked archive — the script copies only the executable. The
 > compiler finds `stdlib/` by walking up from its own executable, so a released `stdlib/` left beside
@@ -115,7 +115,7 @@ fail the first build.
 **Build and run**
 
 ```bash
-scripts/fetch-seed.sh                          # seed .bootstrap/ from the latest release
+scripts/fetch-seed.sh                          # seed .bootstrap/ from the pinned seed
 ./.bootstrap/maxon build maxon-bin --output=maxon-bin/.maxon/maxon   # first build, with the seed
 ./maxon-bin/.maxon/maxon run build            # afterwards, it rebuilds itself
 maxon-bin/.maxon/maxon execute examples/basic.maxon    # compile if needed, then run it

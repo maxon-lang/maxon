@@ -3,32 +3,64 @@
 Cutting a release means producing four tested compilers and the package manifests that point at
 them — then publishing the lot under one version.
 
-Almost all of it is automated. This document exists for the parts that are not, and for the one
-release that cannot use the automation at all.
+Almost all of it is automated. This document exists for the parts that are not.
 
 ---
 
-## ⛔ Maxon compiles Maxon, so a release needs a release
+## ⛔ Maxon compiles Maxon, so every build needs a seed — and the seed is pinned
 
 There is no second implementation. Every machine that builds the compiler needs a compiler first, and
-the one it takes is **the previous published release for its own target**. That makes the chain
-self-sustaining from v0.1.1 onward and makes **v0.1.0 the base case it cannot serve** — there is
-nothing to seed from, so its four archives are built and tested by hand and published without the
-workflow. `release.yml` says so and refuses rather than failing obscurely.
+the one it takes is **the seed: the `seed-*` pre-release named by [`scripts/seed-tag`](../scripts/seed-tag)**,
+for its own target. `scripts/fetch-seed.sh` downloads it, checks the archive against the release's
+`SHA256SUMS`, and places the binary alone at `.bootstrap/maxon`; CI, `release.yml` and the VS Code
+extension workflow all start there, and `scripts/build-from-seed.sh` builds the tree with it.
 
-The same fact makes `ci.yml` inert until the first release exists. Its seed step skips the run and
-writes a notice; it becomes real the moment a release is published, with no edit to the file.
+⭐ **The seed is frozen, not rolling.** A release does not change it: the seed changes when a commit moves
+`scripts/seed-tag`, so a commit and the compiler that builds it travel together, and a published release can
+be deleted or superseded without breaking the build of any commit. A seed pre-release is never the
+`releases/latest`, which the installers and `maxon upgrade` follow.
+
+⛔ **A seed tag is never moved and its assets are never replaced.** The pin means exactly the bytes that were
+frozen; a different compiler is a different `seed-*` tag. `fetch-seed.sh` refuses an archive that does not
+match the release's `SHA256SUMS`.
+
+### Freezing a new seed
+
+A tree needs a new seed when it uses something the pinned one does not accept — a declaration, a language
+form, a rule. `scripts/freeze-seed.sh` is the procedure, run in a checkout whose slot compiler was built from
+`HEAD` with `maxon run build`:
+
+```bash
+scripts/freeze-seed.sh                      # tag seed-<today>; --date=YYYY-MM-DD names another day
+```
+
+It builds `maxon-bin` for `x64-windows`, `x64-linux`, `arm64-macos` and `arm64-linux` with the slot compiler
+(`maxon run build --target=<t> --output=<stage>/maxon`, the way `release.sh --package --target=` cross-builds),
+packages each as `maxon-seed-<date>-<target>` (`.zip` for Windows, `.tar.gz` for the rest, the binary alone),
+writes `SHA256SUMS` and the notes into `temp/seed/dist/`, and **prints the `gh release create` command without
+running it**. The steps after it are the maintainer's:
+
+1. Push the commit the seed was built from, so `--target` names a commit the remote has.
+2. Run the printed command. It creates the `seed-<date>` tag as a pre-release at that commit.
+3. Put the tag in `scripts/seed-tag`, delete every `scripts/seed-shim/*.patch` the new seed makes dead, and
+   commit both with the change that needed the seed. Verify first, from a fresh clone at a short path with
+   the new seed's binary as `.bootstrap/maxon` and no patch left: `scripts/build-from-seed.sh` must exit 0.
+
+The arm64 binaries cannot be run on an x64 host, so the first run of those two is CI's seed step on the
+commit that moves the pin; an unusable one fails that lane at its first build.
 
 ### ⛔ A tree can declare something its own seed refuses, and a shim is how it is still built
 
-`stdlib/` is parsed by every compile, so a `__Managed*` entry the previous release has never heard of
-fails the seed's FIRST build with E2015 — not only in this tree but on every CI lane and every release
-runner, none of which has another compiler to reach for. Nothing later on `main` can fix that: the
-compiler that accepts the entry is the one the release has not shipped yet.
+`stdlib/` is parsed by every compile, so a `__Managed*` entry the pinned seed has never heard of fails the
+seed's FIRST build with E2015 — not only in this tree but on every CI lane and every release runner, none
+of which has another compiler to reach for. Nothing later on `main` can fix that: the compiler that accepts
+the entry is the one the seed does not contain yet. The cure is a new seed (above). A shim covers the window
+before one exists.
 
 `scripts/seed-shim/` closes it. Each patch there withdraws one thing the seed refuses, and
 `scripts/build-from-seed.sh` stages them only when a plain seed build has already been refused, then
-restores every file before `C1` builds `C2`.
+restores every file before `C1` builds `C2`. The directory holds no patch while the pinned seed accepts the
+tree.
 
 ⭐ **A patch never withdraws the tables that teach `C1` the entry**, which is what makes this sound rather
 than a way of shipping a hobbled compiler: the seed accepts the compiler's own parser arm, runtime
@@ -61,9 +93,9 @@ The fifth is the LIBRARY linked into `C1`: a `stdlib/` body that names a type or
 know is rewritten to calls it does, for the first build only. Only `C1`'s own behaviour is weaker, because the
 restore runs before `C1` builds `C2` against the unshimmed library.
 
-⛔ **Delete the patch in the release after the one that ships the entry.** It is inert from the moment a
-published seed accepts the declaration — the plain build succeeds and the directory is never read — and
-a patch left to rot no longer applies, turning the next genuine refusal into a confusing failure.
+⛔ **Delete a patch when the pin moves to a seed that accepts what it withdraws.** It is inert from that
+moment — the plain build succeeds and the directory is never read — and a patch left to rot no longer
+applies, turning the next genuine refusal into a confusing failure.
 
 ---
 
@@ -446,16 +478,10 @@ the branch, because the tag is exactly what shipped.
 offer this one's changes again as new. If `main` has moved since the branch was cut, build the merge and
 run the suite before pushing it — it combines runtime work nobody has tested together.
 
-### 6. Retire the seed shims the release made dead
+### 6. The seed stays where it is
 
-Once the merge is pushed, fetch the new seed (`scripts/fetch-seed.sh`) and build `main` from it with every
-`scripts/seed-shim/*.patch` removed — `scripts/build-from-seed.sh` in a throwaway clone at a short path. If
-it builds, the release accepts everything the patches withdraw: delete them all in one commit on `main`. If
-it is refused, a shim withdraws something the release still does not accept — find out why before the next
-release, because that patch is the only thing keeping CI's first build alive.
-
-**For v0.1.0**, the same steps ran by hand: package each target on hardware of its own architecture,
-collect the archives into one `dist/`, then `--publish`.
+A release does not touch the seed: `scripts/seed-tag` pins a `seed-*` pre-release, and the tag just cut builds with
+the same seed the commit before it did. Freeze a new seed only when the tree needs one, as above.
 
 ---
 

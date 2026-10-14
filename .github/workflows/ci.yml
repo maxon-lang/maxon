@@ -3,10 +3,10 @@
 # ⭐⭐ EACH TARGET IS BUILT AND TESTED ON ITS OWN ARCHITECTURE, for the release workflow's reason: a
 # green matrix that cross-compiled three of its lanes reports coverage it never had.
 #
-# ⚠ THIS IS INERT UNTIL v0.1.0 EXISTS, AND SAYS SO RATHER THAN FAILING. Maxon compiles Maxon, so a
-# runner needs a compiler before it can build one and takes the last published release. Until there is
-# one, every job would fail on a condition no contributor can fix — so the seed step SKIPS the run and
-# writes a notice instead. It becomes real the moment a release is published, with no edit here.
+# ⚠ A REPOSITORY THAT HAS NOT PUBLISHED THE PINNED SEED IS INERT, AND SAYS SO RATHER THAN FAILING. Maxon
+# compiles Maxon, so a runner needs a compiler before it can build one and takes the seed that
+# `scripts/seed-tag` pins. A fork without that release would fail every job on a condition no contributor
+# can fix — so the seed step SKIPS the run and writes a notice instead.
 
 # ⭐ A COMMIT THAT TOUCHES NOTHING THIS WORKFLOW READS DOES NOT RUN IT. The build reads `maxon-bin/`,
 # `stdlib/`, `runtime/`, `vendor/`, `project.maxon` and the scripts re-included below; the jobs read
@@ -62,6 +62,7 @@ on:
       - 'tests/examples/**'
       - '!scripts/**'
       - 'scripts/fetch-seed.sh'
+      - 'scripts/seed-tag'
       - 'scripts/build-from-seed.sh'
       - 'scripts/fetch-vendor.sh'
       - 'scripts/fixpoint.sh'
@@ -125,18 +126,19 @@ jobs:
         run: python3 scripts/library-cache/generate-codecs.py --check
 
       # The seed is the binary alone; `scripts/fetch-seed.sh` says why and is the one place that fetches it.
-      - name: Seed from the last release
+      - name: Seed from the pinned seed release
         id: seed
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ./scripts/fetch-seed.sh ${{ matrix.target }} --allow-none
+          allow_none=""; [ "${{ github.repository }}" = "maxon-lang/maxon" ] || allow_none="--allow-none"
+          ./scripts/fetch-seed.sh ${{ matrix.target }} $allow_none
           . scripts/lib/host-binaries.sh
           if [ -x "$(maxon_downloaded_path)" ]; then
             echo "seeded=yes" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::no published release to seed from yet — CI is inert until v0.1.0"
+            echo "::notice::the pinned seed release is not published in this repository — CI is inert"
             echo "seeded=no" >> "$GITHUB_OUTPUT"
           fi
 

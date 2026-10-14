@@ -202,16 +202,14 @@ shipped.
 merge keeps the tag an ancestor of `main`; rebased copies would reappear in the next release's
 `--commits-since`.
 
-**Then refresh the local seed:** `scripts/fetch-seed.sh`. From here on `main` may call a `__Builtins`
-intrinsic this release introduced, which CI's seed already has and a stale `.bootstrap/` does not.
+## 7 · The seed does not move with a release
 
-## 7 · Retire the seed shims the release made dead
-
-With the new seed in `.bootstrap/`, run `scripts/build-from-seed.sh` in a throwaway clone of `main` at a
-short path with every `scripts/seed-shim/*.patch` deleted. Exit 0 ⇒ delete the patches in one commit on
-`main` (`scripts/seed-shim/README.md`: a patch is dead once a release accepts what it withdraws, and a dead
-one stops applying and hides the next genuine refusal). A refusal ⇒ a shim still withdraws something the
-release does not accept — tell the user; do not delete that patch.
+The seed is the `seed-*` pre-release that `scripts/seed-tag` pins, frozen and independent of releases:
+cutting one changes nothing about what builds `main`, and there is nothing to refresh locally. A new seed
+is made only when the tree needs one — `scripts/freeze-seed.sh` builds the four binaries and prints the
+`gh release create` command, which is the user's to run; the pin moves in the commit that relies on it, with
+every `scripts/seed-shim/*.patch` the new seed makes dead deleted (`scripts/seed-shim/README.md`: a dead
+patch stops applying and hides the next genuine refusal). `docs/RELEASING.md` owns the procedure.
 
 ## What this skill may not do
 

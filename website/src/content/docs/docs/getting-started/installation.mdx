@@ -210,18 +210,23 @@ A Homebrew install is removed with `brew uninstall maxon-lang/tap/maxon`.
 Maxon is written in Maxon, so building it needs a Maxon compiler — there is no second implementation
 to fall back on.
 
-**Prerequisites:** Git, and Node.js 20+ only if you are building the VS Code extension.
+**Prerequisites:** Git, the [GitHub CLI](https://cli.github.com/) signed in, and Node.js 20+ only if you are
+building the VS Code extension.
 
-Install a release first, as above, then clone the repository, put your installed compiler in
-`.bootstrap/` as the seed, build the compiler with it, and run the suite:
+Clone the repository, fetch the seed it pins into `.bootstrap/`, build the compiler with it, and run the
+suite:
 
 ```bash
 git clone https://github.com/maxon-lang/maxon.git
 cd maxon
-mkdir -p .bootstrap && cp "$(command -v maxon)" .bootstrap/
+scripts/fetch-seed.sh
 scripts/build-from-seed.sh
 maxon-bin/.maxon/maxon spec-test
 ```
+
+The seed is a frozen compiler published as a `seed-*` pre-release, and `scripts/seed-tag` names the one
+this checkout builds with. An installed release is not a substitute: the checkout may depend on something
+only its pinned seed accepts.
 
 The seed builds the compiler, and that compiler then rebuilds itself: the compiler emits its runtime
 into everything it builds, itself included, so only the second build carries this tree's runtime.
@@ -232,7 +237,7 @@ Build this tree with the compiler inside it, never the `maxon` on your PATH: tha
 repository against its own release's standard library, and succeed.
 
 :::caution[Seed with the binary alone]
-Copy the `maxon` **binary** into `.bootstrap/`, not the unpacked archive. The compiler resolves
+`.bootstrap/` holds the `maxon` **binary**, not an unpacked archive. The compiler resolves
 `stdlib/` by walking up from its own executable, so a released `stdlib/` left beside the seed would be
 compiled in place of the checkout's own — the build would succeed, and compile the wrong library.
 :::

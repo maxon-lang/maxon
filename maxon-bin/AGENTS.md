@@ -27,14 +27,17 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   maxon-bin` from the root is a PATH build** — the root holds no `.maxproj`, so the word is a path: it
   compiles the same sources and stamps NO version, which is what the seed rule below relies on and what
   you keep away from the slot.
-- **Get a compiler to build it WITH:** `scripts/fetch-seed.sh` places the latest release's binary at
-  `.bootstrap/maxon.exe`, which you run directly when the slot is empty. **Re-run it after every
-  release:** the stdlib may call a `__Builtins` intrinsic once a published release has it, so an older
-  seed fails the first build with E3004. Maxon compiles Maxon, so there is no second
+- **Get a compiler to build it WITH:** `scripts/fetch-seed.sh` places the pinned seed's binary at
+  `.bootstrap/maxon.exe`, which you run directly when the slot is empty. **The seed is the `seed-*`
+  pre-release that `scripts/seed-tag` names, a frozen compiler:** it changes only when a commit moves the
+  pin, so re-run the script after pulling one that does. Maxon compiles Maxon, so there is no second
   implementation here — a previous build of this compiler is the only thing that can build it.
-  ⛔ **A DECLARATION NO PUBLISHED RELEASE KNOWS IS REFUSED BY EVERY SEED THERE IS** — E2015 on a
-  `__Managed*` entry this tree adds, which no re-fetch can cure. `scripts/build-from-seed.sh` stages
-  `scripts/seed-shim/` over the first build for exactly that; `docs/RELEASING.md` owns the rule.
+  ⛔ **A TREE THAT DECLARES WHAT THE PINNED SEED DOES NOT KNOW IS REFUSED BY THE SEED** — E2015 on a
+  `__Managed*` entry this tree adds, or E3004 on a `__Builtins` intrinsic the stdlib calls, which no
+  re-fetch can cure. The cure is a new seed: `scripts/freeze-seed.sh` builds the four binaries from the
+  tree, prints the command that publishes them as a `seed-*` pre-release, and the pin moves to it.
+  `scripts/build-from-seed.sh` stages `scripts/seed-shim/` over the first build when a plain build is
+  refused (the directory holds no patch while the pin is current); `docs/RELEASING.md` owns the rule.
   ⛔ **NAME THE OUTPUT WHEN YOU BUILD WITH THE SEED, ALWAYS:**
   ```
   ./.bootstrap/maxon.exe build maxon-bin --output=maxon-bin/.maxon/maxon

@@ -36,6 +36,7 @@ on:
       - 'runtime/Process.maxon'
       - 'scripts/seed-shim/**'
       - 'scripts/fetch-seed.sh'
+      - 'scripts/seed-tag'
       - 'scripts/build-from-seed.sh'
       - 'scripts/lib/host-binaries.sh'
       - 'maxon-bin/Debug/**'
@@ -91,21 +92,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # `ci.yml`'s seed step, for its reason: Maxon compiles Maxon, so a runner takes the last
-      # published release to build this tree with — and until one exists there is nothing to build.
-      - name: Seed from the last release
+      # `ci.yml`'s seed step, for its reason: Maxon compiles Maxon, so a runner takes the pinned seed
+      # release (`scripts/seed-tag`) to build this tree with — and without it there is nothing to build.
+      - name: Seed from the pinned seed release
         id: seed
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ./scripts/fetch-seed.sh --allow-none
+          allow_none=""; [ "${{ github.repository }}" = "maxon-lang/maxon" ] || allow_none="--allow-none"
+          ./scripts/fetch-seed.sh $allow_none
           . scripts/lib/host-binaries.sh
           if [ -x "$(maxon_downloaded_path)" ]; then
             echo "seeded=yes" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::no published release to seed from yet — the extension suite is inert until v0.1.0"
+            echo "::notice::the pinned seed release is not published in this repository — the extension suite is inert"
             echo "seeded=no" >> "$GITHUB_OUTPUT"
           fi
 

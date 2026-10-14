@@ -4,10 +4,9 @@
 # from one host and marking three lanes SKIP produces four archives and one tested compiler; this
 # produces four tested compilers. The one thing worse than not testing arm64 is believing you did.
 #
-# ⚠ THE SEED IS THE PREVIOUS RELEASE. Maxon compiles Maxon, so each runner needs a compiler before it
-# can build one, and it takes the last published release for its own target. That makes v0.1.0 the
-# base case this workflow CANNOT serve: there is nothing to seed from, so its four archives are built
-# and tested by hand and published without it. From v0.1.1 the chain is self-sustaining.
+# ⚠ THE SEED IS THE PINNED SEED RELEASE. Maxon compiles Maxon, so each runner needs a compiler before it
+# can build one, and it takes the `seed-*` pre-release that `scripts/seed-tag` names, for its own target.
+# A release does not change it: the seed moves only when a commit moves the pin.
 #
 # `gh` is used here and nowhere else. It is preinstalled on every GitHub runner with a token already
 # in the environment — a CI convenience, not a dependency this project asks a contributor to install.
@@ -105,23 +104,24 @@ jobs:
       - uses: actions/checkout@v5
 
       # The seed is the binary alone; `scripts/fetch-seed.sh` says why and is the one place that fetches it.
-      - name: Seed from the previous release
+      - name: Seed from the pinned seed release
         id: seed
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # ⛔ NO RELEASES AT ALL IS THE BOOTSTRAP CASE AND IS NOT A FAILURE. It happens exactly once,
-          # for the first release, whose archives are built by hand — so it SKIPS with a notice rather
-          # than going red. A red mark on the very release that introduces the workflow teaches people
-          # to ignore red marks, which is the reason the tap job skips too. A release that exists but
-          # serves no archive for this target still fails inside the script.
-          ./scripts/fetch-seed.sh ${{ matrix.target }} --allow-none
+          # ⛔ IN A FORK, A PINNED SEED THE FORK HAS NOT PUBLISHED SKIPS WITH A NOTICE rather than going red: the
+          # run cannot build anything, and no contributor can fix that from the fork. In maxon-lang/maxon a
+          # missing seed fails, because there a green skip would hide a pin nobody published. A seed release that exists
+          # but serves no archive for this target, or one whose archive does not match its SHA256SUMS,
+          # still fails inside the script.
+          allow_none=""; [ "${{ github.repository }}" = "maxon-lang/maxon" ] || allow_none="--allow-none"
+          ./scripts/fetch-seed.sh ${{ matrix.target }} $allow_none
           . scripts/lib/host-binaries.sh
           if [ -x "$(maxon_downloaded_path)" ]; then
             echo "seeded=yes" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::no published release to seed from yet — v0.1.0's archives are built and published by hand (see this file's header)"
+            echo "::notice::the pinned seed release is not published in this repository"
             echo "seeded=no" >> "$GITHUB_OUTPUT"
           fi
 
@@ -203,9 +203,9 @@ jobs:
       # binary what version it is (`maxon version`) and refuses a tag that disagrees — so a publish
       # that was simply TOLD the version would delete the one check the whole scheme rests on.
       #
-      # ⛔ **IT MUST BE THIS RELEASE'S OWN COMPILER, NOT THE PREVIOUS RELEASE'S.** `package` seeds from
-      # the last published release because it needs something that can BUILD; this job needs something
-      # that can ANSWER, and last release's binary answers with last release's number — which
+      # ⛔ **IT MUST BE THIS RELEASE'S OWN COMPILER, NOT THE SEED.** `package` seeds from
+      # the pinned seed release because it needs something that can BUILD; this job needs something
+      # that can ANSWER, and the seed answers with its own number — which
       # `release.sh` would then correctly refuse. The x64-linux archive sitting in `dist/` was built
       # from this very tag, so the compiler inside it is the one whose word is being taken.
       #

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
-# Build this tree's compiler from a released seed at `.bootstrap/maxon`: the seed builds `C1`, and
-# `C1` builds `C2` into the slot. Prints the result's `maxon version`.
+# Build this tree's compiler from the pinned seed at `.bootstrap/maxon` (`scripts/seed-tag`, placed by
+# `scripts/fetch-seed.sh`): the seed builds `C1`, and `C1` builds `C2` into the slot. Prints the result's
+# `maxon version`.
 #
 # ⛔⛔ **ONE BUILD FROM THE SEED IS NOT THIS TREE'S COMPILER, IN THREE WAYS.**
 #
 #   * **ITS OWN RUNTIME IS THE SEED'S.** `C1` emits the new runtime into what it builds, but the
-#     runtime inside `C1` was emitted by the previous release. `spec-test`'s worker IS the compiler,
-#     so a suite run by `C1` exercises last release's scheduler, subprocess and console handling.
+#     runtime inside `C1` was emitted by the seed. `spec-test`'s worker IS the compiler,
+#     so a suite run by `C1` exercises the seed's scheduler, subprocess and console handling.
 #   * **ITS FRONT END RUNS IN PROCESS.** A seed never binds `FrontEndPool.RuntimeMovesSharedRecords`, so `C1`
 #     lexes and parses serially, and only a compile `C2` runs reports the pool under `--log=compiler:debug`.
 #   * **IT REPORTS `dev`.** The seed builds `maxon-bin` as a PATH, so `maxon-bin/maxon.maxproj` —
@@ -18,12 +19,13 @@
 # writes the compiler to a default of its own choosing — MEASURED: `maxon-bin/Profile/ProfileSampler`
 # — and exits 0. `--output=` is correct under both readings. `C1` builds by NAME, so it runs the manifest.
 #
-# ⛔ **A TREE DECLARING A BUILTIN THE PREVIOUS RELEASE DOES NOT KNOW CANNOT BE BUILT BY ITS OWN SEED**,
-# and the seed is the one compiler nothing here can regenerate — every CI lane and every release runner
-# starts with this script, so a refusal is four red lanes that no later commit can fix.
-# `scripts/seed-shim/` holds the patches that withdraw such a declaration; they are staged only after a
-# plain build has been tried and refused, so the fallback falls silent by itself once a published
-# release carries the entry.
+# ⛔ **A TREE DECLARING WHAT THE PINNED SEED DOES NOT KNOW CANNOT BE BUILT BY IT**, and the seed is the one
+# compiler nothing here can regenerate — every CI lane and every release runner starts with this script,
+# so a refusal is four red lanes that no later commit can fix. The cure is a new seed:
+# `scripts/freeze-seed.sh` builds one from the tree, and the pin moves to it. `scripts/seed-shim/` holds
+# the patches that withdraw such a declaration when a new seed is not yet published; they are staged only
+# after a plain build has been tried and refused, and the directory holds none while the pinned seed
+# accepts the tree.
 #
 # ⛔ **THE SHIM IS WITHDRAWN BEFORE `C1` BUILDS `C2`, AND THAT IS WHAT MAKES IT SOUND.** A patch
 # withdraws a DECLARATION the seed refuses, a CALL SITE in compiler source the seed refuses the tree at,
@@ -77,7 +79,7 @@ stage_shim() {
 	fi
 
 	if [ -z "$patches" ]; then
-		echo "build-from-seed.sh: the seed refused this tree and $shim_dir holds no patch withdrawing what it does not know" >&2
+		echo "build-from-seed.sh: the seed refused this tree and $shim_dir holds no patch withdrawing what it does not know — freeze a new seed with scripts/freeze-seed.sh" >&2
 		exit 1
 	fi
 
