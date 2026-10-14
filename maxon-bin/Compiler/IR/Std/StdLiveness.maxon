@@ -1,5 +1,6 @@
-// StdLiveness — the live-in value sets of every block of one Std function, as SPARSE lists: a block's
-// list holds the values simultaneously live at its entry (tens), never the value space.
+// StdLiveness — the live ranges of one Std function's values, walked one value at a time and
+// handed to a `LiveRangeVisitor`, which counts only the nodes it asks about. No live-in list is
+// built per block: one per block for every value would be the blocks times the values.
 //
 // ⭐ **SOLVED PER VALUE, NOT BY A FIXPOINT SWEEP.** SSA gives every value one definition, so its live
 // range is exactly the blocks a backward walk reaches from its uses before meeting that definition — and
@@ -8,41 +9,93 @@
 // the register allocator's own solver (`TargetLiveness.solveLivenessSsa`) declines to pay for the same
 // reason: a nest as deep as the program is long makes the sweep quadratic.
 //
-// ⭐ **ONE WORKSPACE, RECOMPUTED PER FUNCTION.** Asked by the inliner's register-pressure estimate of
-// every called-once callee and of every caller, thousands of times per compile, so the columns are kept
-// and refilled: `recompute` allocates only the CSR graphs of the function in hand, never a column per
-// value or a list per block.
+// ⭐ **ONE WORKSPACE, RECOMPUTED PER FUNCTION.** Asked by the inliner's register-pressure estimate
+// thousands of times per compile, so the workspace's columns are kept and refilled.
 
-// One stamp per block, so a value's walk marks each block once without a set per value. The stamp
+// One stamp per node, so a value's walk marks each node once without a set per value. The stamp
 // counts up across every function the workspace serves, so a column that keeps stale entries from a
 // larger function never reads one as marked.
 typealias WalkStamp = int(0 to u64.max)
 typealias WalkStampColumn = Array with WalkStamp
 
+// A cost gate, not a correctness bound: the prune never changes an answer, and below this many
+// nodes its own walks cost more than they save.
+let ReachMinNodes = 64 as CsrIndex
+
+module interface LiveRangeVisitor
+	function isSatisfied() returns bool
+	function wantsValue(valueId ValueId) returns bool
+	function visitLiveNode(valueId ValueId, node ElementIndex)
+end 'LiveRangeVisitor'
+
+type PeakCounter implements LiveRangeVisitor
+	var heldParams as BoolArray
+	var queried as BoolArray
+	var counts as RegCountColumn
+	var cap as RegCount
+	var peak as RegCount
+
+	static function create(heldParams BoolArray, queried BoolArray, counts RegCountColumn, cap RegCount) returns PeakCounter
+		return Self{heldParams: heldParams, queried: queried, counts: counts, cap: cap, peak: 0}
+	end 'create'
+
+	function capped() returns RegCount
+		return (self.cap + 1) if self.peak > self.cap else self.peak
+	end 'capped'
+
+	function isSatisfied() returns bool
+		return self.peak > self.cap
+	end 'isSatisfied'
+
+	function wantsValue(valueId ValueId) returns bool
+		if not valueIsAParameter(valueId, paramCount: self.heldParams.count() as ParamCount) 'aBodyValue'
+			return true
+		end 'aBodyValue'
+
+		return not (try self.heldParams.get(paramPositionOfValueId(valueId)) otherwise panic("PeakCounter.wantsValue: heldParams.get OOB at {valueId}"))
+	end 'wantsValue'
+
+	function visitLiveNode(_ ValueId, node ElementIndex)
+		if not (try self.queried.get(node) otherwise panic("PeakCounter.visitLiveNode: queried.get OOB at {node}")) 'notAsked'
+			return
+		end 'notAsked'
+
+		let count = (try self.counts.get(node) otherwise panic("PeakCounter.visitLiveNode: counts.get OOB at {node}")) + 1
+		try self.counts.set(node, value: count) otherwise panic("PeakCounter.visitLiveNode: counts.set OOB at {node}")
+
+		if count > self.peak 'aNewPeak'
+			self.peak = count
+		end 'aNewPeak'
+	end 'visitLiveNode'
+end 'PeakCounter'
+
 module type StdLiveness
-	var blockCount as ElementIndex
+	// Nodes are the blocks, then one continuation per cut: node `blockCount + k` is the rest of its
+	// block after cut `k`.
+	module var blockCount as ElementIndex
+	var nodeCount as ElementIndex
 
-	// The CFG of the function last computed, in both directions — kept readable so the loop nest and
-	// the natural-loop finder are built over the same graph rather than a second copy of it.
-	module var succ as CsrGraph
-	module var pred as CsrGraph
+	module var blockSucc as CsrGraph
 
-	// Value id -> the block position defining it; `blockCount` — one past every position, so it collides
-	// with none — for a value no block of the function defines.
+	var succ as CsrGraph
+	var pred as CsrGraph
+
+	// Value id -> the node defining it; `nodeCount` for a value no node defines, such as a
+	// parameter, which `QueriedReach.restrictsAt` reads as unpruned.
 	var definedIn as BlockPositionColumn
 
-	// Block position -> the values live on entry, ascending by id. Built from the (block, value) pairs
-	// the range walk pushes, so a block costs no list of its own.
-	var liveIn as CsrGraph
-	var liveInBlock as CsrColumn
-	var liveInValue as CsrColumn
-
-	// The (value, block) pairs of every cross-block read, the use graph's edge list.
 	var useValue as CsrColumn
 	var useBlock as CsrColumn
+	var useGraph as CsrGraph
 
-	// A membership stamp over the value space, for the sets the readers build.
-	var seen as LoopValueStamps
+	var noCuts as BlockPositionColumn
+	module var reach as QueriedReach
+	var queried as BoolArray
+	var counts as RegCountColumn
+
+	var liveNodes as BlockPositionColumn
+	module var liveNodeCount as ElementIndex
+
 	var reads as StdValueUseSet
 	var def as StdDefinedValues
 	var marked as WalkStampColumn
@@ -51,71 +104,165 @@ module type StdLiveness
 
 	module static function create() returns StdLiveness
 		let empty = CsrGraph.create(CsrColumn.create(), list: CsrColumn.create())
-		return Self{blockCount: 0, succ: empty, pred: empty, definedIn: BlockPositionColumn.create(), liveIn: empty, liveInBlock: CsrColumn.create(), liveInValue: CsrColumn.create(), useValue: CsrColumn.create(), useBlock: CsrColumn.create(), seen: LoopValueStamps.create(), reads: StdValueUseSet.createRecordingIds(), def: StdDefinedValues.create(), marked: WalkStampColumn.create(), stamp: 0, stack: BlockPositionColumn.create()}
+		return Self{blockCount: 0, nodeCount: 0, blockSucc: empty, succ: empty, pred: empty, definedIn: BlockPositionColumn.create(), useValue: CsrColumn.create(), useBlock: CsrColumn.create(), useGraph: empty, noCuts: BlockPositionColumn.create(), reach: QueriedReach.create(), queried: BoolArray.create(), counts: RegCountColumn.create(), liveNodes: BlockPositionColumn.create(), liveNodeCount: 0, reads: StdValueUseSet.createRecordingIds(), def: StdDefinedValues.create(), marked: WalkStampColumn.create(), stamp: 0, stack: BlockPositionColumn.create()}
 	end 'create'
 
-	// The liveness of `func`, over a value space of `valueBound`, replacing whatever the workspace held.
-	module function recompute(module StdModule, func IrFunction, valueBound ValueId)
+	module function recomputeBlocks(module StdModule, func IrFunction, valueBound ValueId)
+		self.recomputeSegmented(module, func: func, valueBound: valueBound, cutBlock: self.noCuts, cutOp: self.noCuts)
+	end 'recomputeBlocks'
+
+	// Cut `k` ends its block's segment after the op at (`cutBlock[k]`, `cutOp[k]`), so the values
+	// live across that op are exactly node `blockCount + k`'s live-in. The op's reads stay in the
+	// segment it ends and its defs open the continuation, so a value the op defines is never live
+	// into it.
+	module function recomputeSegmented(module StdModule, func IrFunction, valueBound ValueId, cutBlock BlockPositionColumn, cutOp BlockPositionColumn)
 		self.blockCount = func.blockRefs.count()
+		self.nodeCount = self.blockCount + cutBlock.count()
 		self.definedIn.resize(valueBound)
 
 		for v in 0 upto valueBound 'eachValue'
-			try self.definedIn.set(v, value: self.blockCount) otherwise panic("StdLiveness.recompute: definedIn.set OOB at {v}")
+			try self.definedIn.set(v, value: self.nodeCount) otherwise panic("StdLiveness.recomputeSegmented: definedIn.set OOB at {v}")
 		end 'eachValue'
 
-		self.succ = buildStdSuccessorGraph(module, func: func, blockCount: self.blockCount)
+		self.blockSucc = buildStdSuccessorGraph(module, func: func, blockCount: self.blockCount)
+
+		if cutBlock.count() == 0 'noSegments'
+			self.succ = self.blockSucc
+		end 'noSegments' else 'segmented'
+			self.succ = self.segmentedSuccessors(cutBlock)
+		end 'segmented'
+
 		self.pred = reversedGraph(self.succ)
-		self.markLiveRanges(self.collectDefsAndUses(module, func: func), valueBound: valueBound)
-	end 'recompute'
 
-	// The values live on entry to the block at `position`, into `out`.
-	module function collectLiveIn(position ElementIndex, out ValueIdArray)
-		out.clear()
+		self.useGraph = self.collectDefsAndUses(module, func: func, cutBlock: cutBlock, cutOp: cutOp)
+		self.marked.resize(self.nodeCount)
+	end 'recomputeSegmented'
 
-		for k in 0 upto self.liveIn.degree(position as CsrIndex) 'eachLive'
-			out.push(self.liveInAt(position, k: k))
-		end 'eachLive'
-	end 'collectLiveIn'
+	// Answers min(peak, `cap + 1`). A caller compares only its sum against a budget, and every
+	// peak past `cap` fails it alike, so the walk stops at the first count past `cap`.
+	module function peakLiveIn(module StdModule, func IrFunction, valueBound ValueId, heldParams BoolArray, cap RegCount) returns RegCount
+		self.recomputeBlocks(module, func: func, valueBound: valueBound)
+		let loops = NaturalLoops.find(self.succ, nodeCount: self.blockCount as CsrIndex)
+		let loopless = loops.headers.count() == 0
+		self.queried.refill(self.blockCount, value: loopless)
 
-	// The values live immediately AFTER the op at `opPos` of the block at `position`, less the values that
-	// op itself defines — what its successors need plus what the ops after it read, less what those ops
-	// and the op itself define — inserted into `into`.
-	module function collectLiveAcrossOp(module StdModule, func IrFunction, position ElementIndex, opPos ElementIndex, into StdValueUseSet)
-		let block = module.blockAtPosition(func, position: position)
+		for header in loops.headers 'eachHeader'
+			try self.queried.set(header, value: true) otherwise panic("StdLiveness.peakLiveIn: queried.set OOB at {header}")
+		end 'eachHeader'
 
-		// The stamp marks what the ops from `opPos` on define; a value they define is not live across.
-		self.seen.beginLoop()
+		if loopless 'everyBlockIsAsked'
+			self.reach.disable()
+		end 'everyBlockIsAsked' else 'onlyHeadersAreAsked'
+			self.reach.build(self.succ, queried: self.queried)
+		end 'onlyHeadersAreAsked'
 
-		for pos in opPos upto block.opRefs.count() 'eachOpFromTheSite'
-			self.markDefs(module.getOp(self.opRefAt(block, pos: pos)))
-		end 'eachOpFromTheSite'
+		self.counts.refill(self.blockCount, value: 0)
+		var counter = PeakCounter.create(heldParams, queried: self.queried, counts: self.counts, cap: cap)
+		self.walkLiveRanges(valueBound, visitor: counter)
 
-		for pos in opPos + 1 upto block.opRefs.count() 'eachLaterOp'
-			self.insertReadsUnlessMarked(module.getOp(self.opRefAt(block, pos: pos)), into: into)
-		end 'eachLaterOp'
+		return counter.capped()
+	end 'peakLiveIn'
 
-		if block.hasTerminatorOp() 'terminated'
-			self.insertReadsUnlessMarked(module.getOp(block.terminatorIndex()), into: into)
-		end 'terminated'
+	module function walkLiveRanges(valueBound ValueId, visitor LiveRangeVisitor)
+		for valueId in 0 upto valueBound 'eachValue'
+			if visitor.isSatisfied() 'nothingMoreToLearn'
+				return
+			end 'nothingMoreToLearn'
 
-		for edge in block.branchEdges 'eachEdge'
-			for argId in edge.argIds 'eachArg'
-				self.insertUnlessMarked(argId, into: into)
-			end 'eachArg'
-		end 'eachEdge'
+			if not visitor.wantsValue(valueId) 'notAsked'
+				continue
+			end 'notAsked'
 
-		for k in 0 upto self.succ.degree(position as CsrIndex) 'eachSuccessor'
-			let successor = self.succ.neighbour(position as CsrIndex, k: k)
+			self.rangeOf(valueId)
 
-			for j in 0 upto self.liveIn.degree(successor) 'eachLive'
-				self.insertUnlessMarked(self.liveInAt(successor, k: j), into: into)
-			end 'eachLive'
-		end 'eachSuccessor'
-	end 'collectLiveAcrossOp'
+			for i in 0 upto self.liveNodeCount 'eachLiveNode'
+				visitor.visitLiveNode(valueId, node: self.nodeAt(i))
+			end 'eachLiveNode'
+		end 'eachValue'
+	end 'walkLiveRanges'
 
-	function liveInAt(position ElementIndex, k CsrIndex) returns ValueId
-		return self.liveIn.neighbour(position as CsrIndex, k: k) as ValueId
-	end 'liveInAt'
+	module function askAboutContinuations()
+		self.queried.refill(self.nodeCount, value: false)
+
+		for node in self.blockCount upto self.nodeCount 'eachContinuation'
+			try self.queried.set(node, value: true) otherwise panic("StdLiveness.askAboutContinuations: queried.set OOB at {node}")
+		end 'eachContinuation'
+
+		self.reach.build(self.succ, queried: self.queried)
+	end 'askAboutContinuations'
+
+	module function continuationsByDescendingRank() returns BlockPositionColumn
+		var cuts = BlockPositionColumn.create()
+		let cutCount = self.nodeCount - self.blockCount
+
+		if not self.reach.isEnabled() 'ranksAreUnknown'
+			for cut in 0 upto cutCount 'eachCut'
+				cuts.push(cut)
+			end 'eachCut'
+
+			return cuts
+		end 'ranksAreUnknown'
+
+		var rankColumn = CsrColumn.create()
+		var cutColumn = CsrColumn.create()
+
+		for cut in 0 upto cutCount 'eachCutRank'
+			rankColumn.push(self.reach.rankOfNode(self.blockCount + cut))
+			cutColumn.push(cut)
+		end 'eachCutRank'
+
+		let byRank = buildCsr(rankColumn, to: cutColumn, nodeCount: self.nodeCount as CsrIndex)
+		var rank = self.nodeCount
+
+		while rank > 0 'fromTheHighestRank'
+			rank = rank - 1
+
+			for k in 0 upto byRank.degree(rank as CsrIndex) 'eachCutOfTheRank'
+				cuts.push(byRank.neighbour(rank as CsrIndex, k: k))
+			end 'eachCutOfTheRank'
+		end 'fromTheHighestRank'
+
+		return cuts
+	end 'continuationsByDescendingRank'
+
+	module function mayBeLiveAt(valueId ValueId, askedRank CsrIndex) returns bool
+		return self.reach.definedBelow(self.definingBlockOf(valueId), rank: askedRank)
+	end 'mayBeLiveAt'
+
+	module function nodeAt(i ElementIndex) returns ElementIndex
+		return try self.liveNodes.get(i) otherwise panic("StdLiveness.nodeAt: liveNodes.get OOB at {i}")
+	end 'nodeAt'
+
+	function segmentedSuccessors(cutBlock BlockPositionColumn) returns CsrGraph
+		var tail = BlockPositionColumn.create()
+		tail.resize(self.blockCount)
+
+		for block in 0 upto self.blockCount 'eachBlock'
+			try tail.set(block, value: block) otherwise panic("StdLiveness.segmentedSuccessors: tail.set OOB at {block}")
+		end 'eachBlock'
+
+		var edgeFrom = CsrColumn.create()
+		var edgeTo = CsrColumn.create()
+
+		for cut in 0 upto cutBlock.count() 'eachCut'
+			let block = try cutBlock.get(cut) otherwise panic("StdLiveness.segmentedSuccessors: cutBlock.get OOB at {cut}")
+			let continuation = self.blockCount + cut
+			edgeFrom.push(try tail.get(block) otherwise panic("StdLiveness.segmentedSuccessors: tail.get OOB at {block}"))
+			edgeTo.push(continuation)
+			try tail.set(block, value: continuation) otherwise panic("StdLiveness.segmentedSuccessors: tail.set OOB at {block}")
+		end 'eachCut'
+
+		for block in 0 upto self.blockCount 'eachBlockExit'
+			let last = try tail.get(block) otherwise panic("StdLiveness.segmentedSuccessors: tail.get OOB at {block}")
+
+			for k in 0 upto self.blockSucc.degree(block as CsrIndex) 'eachSuccessor'
+				edgeFrom.push(last)
+				edgeTo.push(self.blockSucc.neighbour(block as CsrIndex, k: k))
+			end 'eachSuccessor'
+		end 'eachBlockExit'
+
+		return buildCsr(edgeFrom, to: edgeTo, nodeCount: self.nodeCount as CsrIndex)
+	end 'segmentedSuccessors'
 
 	function opRefAt(block IrBlock, pos ElementIndex) returns ElementIndex
 		return try block.opRefs.get(pos) otherwise panic("StdLiveness: block '{String.from(block.label)}' has no op at position {pos}")
@@ -143,31 +290,38 @@ module type StdLiveness
 		try self.definedIn.set(valueId, value: position) otherwise panic("StdLiveness.recordDef: value {valueId} is outside the {self.definedIn.count()}-value space this liveness was computed over")
 	end 'recordDef'
 
-	// Every def's block — a block's phis, then its ops and terminator — and value id -> the blocks reading
-	// it without defining it, as a CSR over the value space, from ONE walk of the ops. A read of a value
-	// defined in the block itself follows its def in SSA, so "defined elsewhere" is the whole test, and the
-	// block's own defs are all recorded by the time its reads are filtered; a def in another block is
-	// "elsewhere" whether or not the walk has reached it yet. An edge's args are reads at the block's
-	// end. The recording set gathers one block's reads whole, so a value read several times by one block
-	// is listed once and the set is emptied once per block.
-	function collectDefsAndUses(module StdModule, func IrFunction) returns CsrGraph
+	function collectDefsAndUses(module StdModule, func IrFunction, cutBlock BlockPositionColumn, cutOp BlockPositionColumn) returns CsrGraph
 		self.useValue.clear()
 		self.useBlock.clear()
+		var cut = 0 as ElementIndex
 
 		for position in 0 upto self.blockCount 'eachBlock'
 			let block = module.blockAtPosition(func, position: position)
+			var segment = position
+			var cutsHere = self.cutIsIn(cut, cutBlock: cutBlock, block: position)
 			self.reads.clear()
 
 			for arg in block.blockArgs 'eachPhi'
-				self.recordDef(arg.valueId, position: position)
+				self.recordDef(arg.valueId, position: segment)
 			end 'eachPhi'
 
-			for opIdx in block.opRefs 'eachOp'
-				self.recordOpDefsAndUses(module.getOp(opIdx), position: position)
+			for opPosition in 0 upto block.opRefs.count() 'eachOp'
+				let op = module.getOp(self.opRefAt(block, pos: opPosition))
+
+				if cutsHere and (try cutOp.get(cut) otherwise panic("StdLiveness.collectDefsAndUses: cutOp.get OOB at {cut}")) == opPosition 'segmentEnds'
+					collectStdOpUses(op, referenced: self.reads)
+					self.flushReads(segment)
+					segment = self.blockCount + cut
+					cut = cut + 1
+					cutsHere = self.cutIsIn(cut, cutBlock: cutBlock, block: position)
+					self.recordOpDefs(op, position: segment)
+				end 'segmentEnds' else 'sameSegment'
+					self.recordOpDefsAndUses(op, position: segment)
+				end 'sameSegment'
 			end 'eachOp'
 
 			if block.hasTerminatorOp() 'terminated'
-				self.recordOpDefsAndUses(module.getOp(block.terminatorIndex()), position: position)
+				self.recordOpDefsAndUses(module.getOp(block.terminatorIndex()), position: segment)
 			end 'terminated'
 
 			for edge in block.branchEdges 'eachEdge'
@@ -176,102 +330,88 @@ module type StdLiveness
 				end 'eachArg'
 			end 'eachEdge'
 
-			for i in 0 upto self.reads.insertedIdCount() 'eachRead'
-				let valueId = self.reads.insertedIdAt(i)
-
-				if self.definingBlockOf(valueId) != position 'definedElsewhere'
-					self.useValue.push(valueId)
-					self.useBlock.push(position)
-				end 'definedElsewhere'
-			end 'eachRead'
+			self.flushReads(segment)
 		end 'eachBlock'
+
+		if cut != cutBlock.count() 'aCutWasNotReached'
+			panic("StdLiveness.collectDefsAndUses: {cutBlock.count() - cut} of {cutBlock.count()} cut(s) were never reached — the cuts must name ops of '{String.from(func.name)}' in ascending (block, op) order")
+		end 'aCutWasNotReached'
 
 		return buildCsr(self.useValue, to: self.useBlock, nodeCount: self.definedIn.count() as CsrIndex)
 	end 'collectDefsAndUses'
+
+	function cutIsIn(cut ElementIndex, cutBlock BlockPositionColumn, block ElementIndex) returns bool
+		return cut < cutBlock.count() and (try cutBlock.get(cut) otherwise panic("StdLiveness.cutIsIn: cutBlock.get OOB at {cut}")) == block
+	end 'cutIsIn'
+
+	// In SSA a read of a value the segment defines follows that def, which is recorded by the time the
+	// segment's reads are flushed, so "defined elsewhere" is the whole test.
+	function flushReads(segment ElementIndex)
+		for i in 0 upto self.reads.insertedIdCount() 'eachRead'
+			let valueId = self.reads.insertedIdAt(i)
+
+			if self.definingBlockOf(valueId) != segment 'definedElsewhere'
+				self.useValue.push(valueId)
+				self.useBlock.push(segment)
+			end 'definedElsewhere'
+		end 'eachRead'
+
+		self.reads.clear()
+	end 'flushReads'
 
 	function recordOpDefsAndUses(op StdOp, position ElementIndex)
 		self.recordOpDefs(op, position: position)
 		collectStdOpUses(op, referenced: self.reads)
 	end 'recordOpDefsAndUses'
 
-	// Each value's live range: from every block reading it, backwards through the predecessors, stopping
-	// at the block that defines it (the value is live OUT of that block, never IN) and at a block the
-	// value's own walk already marked. Values are walked in id order, so every block's list comes out
-	// ascending.
-	function markLiveRanges(uses CsrGraph, valueBound ValueId)
-		self.marked.resize(self.blockCount)
-		self.liveInBlock.clear()
-		self.liveInValue.clear()
+	module function rangeOf(valueId ValueId)
+		self.liveNodeCount = 0
 
-		for valueId in 0 upto valueBound 'eachValue'
-			if uses.degree(valueId as CsrIndex) == 0 'neverRead'
-				continue
-			end 'neverRead'
-
-			self.stamp = self.stamp + 1
-			let defBlock = self.definingBlockOf(valueId)
-
-			for k in 0 upto uses.degree(valueId as CsrIndex) 'eachReadingBlock'
-				self.stack.push(uses.neighbour(valueId as CsrIndex, k: k))
-			end 'eachReadingBlock'
-
-			while self.stack.count() != 0 'walk'
-				let position = try self.stack.pop() otherwise panic("StdLiveness.markLiveRanges: pop from a non-empty stack")
-				let markedAt = try self.marked.get(position) otherwise panic("StdLiveness.markLiveRanges: marked.get OOB at {position}")
-
-				if markedAt == self.stamp 'alreadyLiveHere'
-					continue
-				end 'alreadyLiveHere'
-
-				try self.marked.set(position, value: self.stamp) otherwise panic("StdLiveness.markLiveRanges: marked.set OOB at {position}")
-				self.liveInBlock.push(position)
-				self.liveInValue.push(valueId)
-
-				for k in 0 upto self.pred.degree(position as CsrIndex) 'eachPredecessor'
-					let predecessor = self.pred.neighbour(position as CsrIndex, k: k)
-
-					if predecessor != defBlock 'notTheDefiningBlock'
-						self.stack.push(predecessor)
-					end 'notTheDefiningBlock'
-				end 'eachPredecessor'
-			end 'walk'
-		end 'eachValue'
-
-		self.liveIn = buildCsr(self.liveInBlock, to: self.liveInValue, nodeCount: self.blockCount as CsrIndex)
-	end 'markLiveRanges'
-
-	function markDefs(op StdOp)
-		stdOpDefinedValue(op, def: self.def)
-
-		if self.def.definesNothing() 'noDef'
+		if self.useGraph.degree(valueId as CsrIndex) == 0 'neverRead'
 			return
-		end 'noDef'
+		end 'neverRead'
 
-		self.seen.insert(self.def.first)
+		self.stamp = self.stamp + 1
+		let defBlock = self.definingBlockOf(valueId)
 
-		if self.def.definesPair() 'twoDefs'
-			self.seen.insert(self.def.second)
-		end 'twoDefs'
-	end 'markDefs'
+		for k in 0 upto self.useGraph.degree(valueId as CsrIndex) 'eachReadingBlock'
+			self.stack.push(self.useGraph.neighbour(valueId as CsrIndex, k: k))
+		end 'eachReadingBlock'
 
-	function insertReadsUnlessMarked(op StdOp, into StdValueUseSet)
-		self.reads.clear()
-		collectStdOpUses(op, referenced: self.reads)
+		while self.stack.count() != 0 'walk'
+			let position = try self.stack.pop() otherwise panic("StdLiveness.rangeOf: pop from a non-empty stack")
+			let markedAt = try self.marked.get(position) otherwise panic("StdLiveness.rangeOf: marked.get OOB at {position}")
 
-		for i in 0 upto self.reads.insertedIdCount() 'eachRead'
-			self.insertUnlessMarked(self.reads.insertedIdAt(i), into: into)
-		end 'eachRead'
-	end 'insertReadsUnlessMarked'
+			if markedAt == self.stamp or not self.reach.admits(position, defBlock: defBlock) 'notLiveHere'
+				continue
+			end 'notLiveHere'
 
-	function insertUnlessMarked(valueId ValueId, into StdValueUseSet)
-		if not self.seen.contains(valueId) 'liveAcross'
-			into.insert(valueId)
-		end 'liveAcross'
-	end 'insertUnlessMarked'
+			try self.marked.set(position, value: self.stamp) otherwise panic("StdLiveness.rangeOf: marked.set OOB at {position}")
+			self.noteLiveNode(position)
+
+			for k in 0 upto self.pred.degree(position as CsrIndex) 'eachPredecessor'
+				let predecessor = self.pred.neighbour(position as CsrIndex, k: k)
+
+				if predecessor != defBlock 'notTheDefiningBlock'
+					self.stack.push(predecessor)
+				end 'notTheDefiningBlock'
+			end 'eachPredecessor'
+		end 'walk'
+	end 'rangeOf'
+
+	function noteLiveNode(position ElementIndex)
+		if self.liveNodeCount == self.liveNodes.count() 'growing'
+			self.liveNodes.push(position)
+		end 'growing' else 'overwriting'
+			try self.liveNodes.set(self.liveNodeCount, value: position) otherwise panic("StdLiveness.noteLiveNode: liveNodes.set OOB at {self.liveNodeCount}")
+		end 'overwriting'
+
+		self.liveNodeCount = self.liveNodeCount + 1
+	end 'noteLiveNode'
 end 'StdLiveness'
 
 // The predecessor relation of `succ`: the same edges, read the other way round.
-function reversedGraph(succ CsrGraph) returns CsrGraph
+module function reversedGraph(succ CsrGraph) returns CsrGraph
 	var edgeFrom = CsrColumn.create()
 	var edgeTo = CsrColumn.create()
 
@@ -284,3 +424,111 @@ function reversedGraph(succ CsrGraph) returns CsrGraph
 
 	return buildCsr(edgeFrom, to: edgeTo, nodeCount: succ.nodeCount())
 end 'reversedGraph'
+
+// Prunes a value's backward walk to the nodes that can lead it to a queried node. Under strict SSA
+// a value live into a queried node is defined in a node that strictly dominates it, so at a lower
+// RPO rank; the walk need enter a node only if a queried node of higher rank than the def reaches
+// it. `topRank` is one past the highest rank of a queried node reaching each node, 0 for none.
+//
+// An unreachable node has no rank and no dominator, so with one present `build` leaves the prune
+// off.
+module type QueriedReach
+	var enabled as bool
+	var rankOf as CsrColumn
+	var topRank as CsrColumn
+	var stack as BlockPositionColumn
+
+	static function create() returns QueriedReach
+		return Self{enabled: false, rankOf: CsrColumn.create(), topRank: CsrColumn.create(), stack: BlockPositionColumn.create()}
+	end 'create'
+
+	function disable()
+		self.enabled = false
+	end 'disable'
+
+	module function isEnabled() returns bool
+		return self.enabled
+	end 'isEnabled'
+
+	module function rankOfNode(node ElementIndex) returns CsrIndex
+		return try self.rankOf.get(node) otherwise panic("QueriedReach.rankOfNode: rankOf.get OOB at {node}")
+	end 'rankOfNode'
+
+	function restrictsAt(defBlock ElementIndex) returns bool
+		return self.enabled and defBlock < self.rankOf.count()
+	end 'restrictsAt'
+
+	function definedBelow(defBlock ElementIndex, rank CsrIndex) returns bool
+		if not self.restrictsAt(defBlock) 'unrestricted'
+			return true
+		end 'unrestricted'
+
+		return self.rankOfNode(defBlock) < rank
+	end 'definedBelow'
+
+	function build(succ CsrGraph, queried BoolArray)
+		let blockCount = succ.nodeCount()
+
+		if blockCount < ReachMinNodes 'tooSmallToPay'
+			self.enabled = false
+			return
+		end 'tooSmallToPay'
+
+		let order = StdDominatorTree.reversePostorder(succ, blockCount: blockCount)
+
+		if order.count() != blockCount 'someBlockIsUnreachable'
+			self.enabled = false
+			return
+		end 'someBlockIsUnreachable'
+
+		self.enabled = true
+		self.rankOf.refill(blockCount, value: 0)
+		self.topRank.refill(blockCount, value: 0)
+
+		for rank in 0 upto blockCount 'eachRank'
+			let position = try order.get(rank) otherwise panic("QueriedReach.build: order.get OOB at {rank}")
+			try self.rankOf.set(position, value: rank) otherwise panic("QueriedReach.build: rankOf.set OOB at {position}")
+		end 'eachRank'
+
+		var rank = blockCount
+
+		while rank > 0 'fromTheHighestRank'
+			rank = rank - 1
+			let position = try order.get(rank) otherwise panic("QueriedReach.build: order.get OOB at {rank}")
+
+			if (try queried.get(position) otherwise panic("QueriedReach.build: queried.get OOB at {position}")) and self.topRankOf(position) == 0 'anUnclaimedQueriedBlock'
+				self.claimReachableFrom(position, succ: succ, claimRank: rank + 1)
+			end 'anUnclaimedQueriedBlock'
+		end 'fromTheHighestRank'
+	end 'build'
+
+	function claimReachableFrom(root ElementIndex, succ CsrGraph, claimRank CsrIndex)
+		try self.topRank.set(root, value: claimRank) otherwise panic("QueriedReach.claimReachableFrom: topRank.set OOB at {root}")
+		self.stack.push(root)
+
+		while self.stack.count() != 0 'walk'
+			let position = try self.stack.pop() otherwise panic("QueriedReach.claimReachableFrom: pop from a non-empty stack")
+
+			for k in 0 upto succ.degree(position as CsrIndex) 'eachSuccessor'
+				let successor = succ.neighbour(position as CsrIndex, k: k)
+
+				if self.topRankOf(successor) == 0 'unclaimed'
+					try self.topRank.set(successor, value: claimRank) otherwise panic("QueriedReach.claimReachableFrom: topRank.set OOB at {successor}")
+					self.stack.push(successor)
+				end 'unclaimed'
+			end 'eachSuccessor'
+		end 'walk'
+	end 'claimReachableFrom'
+
+	function topRankOf(position ElementIndex) returns CsrIndex
+		return try self.topRank.get(position) otherwise panic("QueriedReach.topRankOf: topRank.get OOB at {position}")
+	end 'topRankOf'
+
+	function admits(position ElementIndex, defBlock ElementIndex) returns bool
+		if not self.restrictsAt(defBlock) 'unrestricted'
+			return true
+		end 'unrestricted'
+
+		return self.topRankOf(position) > self.rankOfNode(defBlock) + 1
+	end 'admits'
+end 'QueriedReach'

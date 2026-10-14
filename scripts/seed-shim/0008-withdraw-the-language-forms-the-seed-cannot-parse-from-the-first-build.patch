@@ -5234,7 +5234,7 @@ index 89ce735..6c1dd89 100644
  		end 'noCompareCloses'
  
 diff --git a/maxon-bin/Compiler/IR/Std/InlineLeaves.maxon b/maxon-bin/Compiler/IR/Std/InlineLeaves.maxon
-index 3f4d84d..10d7048 100644
+index f1649b0..8d5a287 100644
 --- a/maxon-bin/Compiler/IR/Std/InlineLeaves.maxon
 +++ b/maxon-bin/Compiler/IR/Std/InlineLeaves.maxon
 @@ -451,7 +451,7 @@ type LeafPlan
@@ -5365,34 +5365,53 @@ index 3f4d84d..10d7048 100644
  		end 'calleeState'
  	end 'stepCalleesFirstWalk'
  end 'AlwaysSplicedPlan'
-@@ -1866,13 +1866,13 @@ type CallerSiteFacts
+@@ -1870,12 +1870,12 @@ type CallerSiteFacts
  
  		for k in 0 upto calleesOfCallers.degree(callerIndex as CsrIndex) 'eachSite'
  			let calleeIndex = calleesOfCallers.neighbour(callerIndex as CsrIndex, k: k)
 -			let position = census.sitePositionOf(calleeIndex)
 -			let opPos = census.siteOpPositionOf(calleeIndex)
 -			let args = siteArgsOf(module, caller: func, position: position, opPos: opPos, calleeIndex: calleeIndex, byName: byName)
+-			siteIndexOfCallee.upsert(calleeIndex, value: sites.count())
+-			appendToGroup(sitesAtBlock, key: position, member: sites.count())
+-			sites.push(SiteAcross.create(calleeIndex, position: position, opPos: opPos, args: args))
 +			let position = census.sitePositionOf((calleeIndex as ElementIndex))
 +			let opPos = census.siteOpPositionOf((calleeIndex as ElementIndex))
 +			let args = siteArgsOf(module, caller: func, position: position, opPos: opPos, calleeIndex: (calleeIndex as ElementIndex), byName: byName)
- 			across.clear()
- 			liveness.collectLiveAcrossOp(module, func: func, position: position, opPos: opPos, into: across)
- 			loops.keepReadsAround(module, func: func, position: position, valueBound: valueBound, across: across)
--			sites.push(SiteAcross.create(calleeIndex, position: position, opPos: opPos, args: args, across: across))
-+			sites.push(SiteAcross.create((calleeIndex as ElementIndex), position: position, opPos: opPos, args: args, across: across))
++			siteIndexOfCallee.upsert((calleeIndex as ElementIndex), value: (sites.count() as ElementIndex))
++			appendToGroup(sitesAtBlock, key: position, member: (sites.count() as ElementIndex))
++			sites.push(SiteAcross.create((calleeIndex as ElementIndex), position: position, opPos: opPos, args: args))
  		end 'eachSite'
  
- 		return Self{sites: sites, ids: ValueMinter.resuming(valueBound)}
-@@ -1978,7 +1978,7 @@ type FunctionLoops
- 	// Over the CFG the caller's liveness already built, in both directions.
- 	static function of(func IrFunction, succ CsrGraph, pred CsrGraph) returns FunctionLoops
- 		let blockCount = func.blockRefs.count()
--		var loops = Self{blockCount: blockCount, pred: pred, loops: NaturalLoops.find(succ, nodeCount: blockCount as CsrIndex), innermostHeaderOf: filledPositions(blockCount, value: blockCount), parentHeaderOf: filledPositions(blockCount, value: blockCount), preOf: NestTourColumn.create(), postOf: NestTourColumn.create(), readTours: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), toursGathered: false}
-+		var loops = Self{blockCount: (blockCount as ElementIndex), pred: pred, loops: NaturalLoops.find(succ, nodeCount: blockCount as CsrIndex), innermostHeaderOf: filledPositions((blockCount as ElementIndex), value: (blockCount as ElementIndex)), parentHeaderOf: filledPositions((blockCount as ElementIndex), value: (blockCount as ElementIndex)), preOf: NestTourColumn.create(), postOf: NestTourColumn.create(), readTours: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), toursGathered: false}
+ 		match budget 'b'
+@@ -1953,7 +1953,7 @@ type SiteAcrossCensus implements LiveRangeVisitor
+ 
+ 	function isSatisfied() returns bool
+ 		self.advanceSettled()
+-		return self.settled == self.cutsByRank.count()
++		return self.settled == (self.cutsByRank.count() as ElementIndex)
+ 	end 'isSatisfied'
+ 
+ 	// `cutsByRank` descends, so the first unsettled cut has the highest rank still open, and a value
+@@ -1974,7 +1974,7 @@ type SiteAcrossCensus implements LiveRangeVisitor
+ 	end 'visitLiveNode'
+ 
+ 	function advanceSettled()
+-		while self.settled < self.cutsByRank.count() and self.isFull(self.indexAt(self.cutsByRank, index: self.settled)) 'eachFullSite'
++		while self.settled < (self.cutsByRank.count() as ElementIndex) and self.isFull(self.indexAt(self.cutsByRank, index: self.settled)) 'eachFullSite'
+ 			self.settled = self.settled + 1
+ 		end 'eachFullSite'
+ 	end 'advanceSettled'
+@@ -2081,7 +2081,7 @@ type FunctionLoops
+ 			pred = reversedGraph(succ)
+ 		end 'aLoopNeedsItsPredecessors'
+ 
+-		var loops = Self{blockCount: blockCount, pred: pred, loops: natural, innermostHeaderOf: filledPositions(blockCount, value: blockCount), parentHeaderOf: filledPositions(blockCount, value: blockCount), preOf: NestTourColumn.create(), postOf: NestTourColumn.create(), readTours: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), toursGathered: false}
++		var loops = Self{blockCount: (blockCount as ElementIndex), pred: pred, loops: natural, innermostHeaderOf: filledPositions((blockCount as ElementIndex), value: (blockCount as ElementIndex)), parentHeaderOf: filledPositions((blockCount as ElementIndex), value: (blockCount as ElementIndex)), preOf: NestTourColumn.create(), postOf: NestTourColumn.create(), readTours: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), toursGathered: false}
  		loops.assignInnermostHeaders()
  		return loops
  	end 'of'
-@@ -1988,7 +1988,7 @@ type FunctionLoops
+@@ -2091,7 +2091,7 @@ type FunctionLoops
  
  		for header in self.loops.headers 'eachLoop'
  			let headerPosition = header
@@ -5401,7 +5420,7 @@ index 3f4d84d..10d7048 100644
  
  			for k in 0 upto self.loops.latches.degree(header) 'eachLatch'
  				worklist.push(self.loops.latches.neighbour(header, k: k))
-@@ -1996,7 +1996,7 @@ type FunctionLoops
+@@ -2099,7 +2099,7 @@ type FunctionLoops
  
  			while worklist.count() != 0 'walk'
  				let position = try worklist.pop() otherwise panic("FunctionLoops.assignInnermostHeaders: pop from a non-empty worklist")
@@ -5410,7 +5429,7 @@ index 3f4d84d..10d7048 100644
  			end 'walk'
  		end 'eachLoop'
  	end 'assignInnermostHeaders'
-@@ -2130,7 +2130,7 @@ type FunctionLoops
+@@ -2222,7 +2222,7 @@ type FunctionLoops
  			reads.clear()
  
  			for k in 0 upto blocksByHeader.degree(header as CsrIndex) 'eachOwnBlock'
@@ -5419,7 +5438,7 @@ index 3f4d84d..10d7048 100644
  			end 'eachOwnBlock'
  
  			for i in 0 upto reads.insertedIdCount() 'eachRead'
-@@ -2167,7 +2167,7 @@ type FunctionLoops
+@@ -2259,7 +2259,7 @@ type FunctionLoops
  		var roots = BlockPositionColumn.create()
  
  		for header in self.loops.headers 'eachLoop'
@@ -5428,7 +5447,7 @@ index 3f4d84d..10d7048 100644
  
  			if parent == self.blockCount 'outermost'
  				roots.push(header)
-@@ -2191,8 +2191,8 @@ type FunctionLoops
+@@ -2283,8 +2283,8 @@ type FunctionLoops
  
  			while stack.count() != 0 'walk'
  				let top = stack.count() - 1
@@ -5439,7 +5458,7 @@ index 3f4d84d..10d7048 100644
  
  				if k == 0 'entering'
  					try self.preOf.set(header, value: next) otherwise panic("FunctionLoops.numberNest: preOf.set OOB at {header}")
-@@ -2207,7 +2207,7 @@ type FunctionLoops
+@@ -2299,7 +2299,7 @@ type FunctionLoops
  					continue
  				end 'childrenDone'
  
@@ -5448,7 +5467,7 @@ index 3f4d84d..10d7048 100644
  				stack.push(children.neighbour(header as CsrIndex, k: k))
  				nextChild.push(0)
  			end 'walk'
-@@ -2263,7 +2263,7 @@ end 'collectBlockReads'
+@@ -2355,7 +2355,7 @@ end 'collectBlockReads'
  function spliceCalledOnceCallees(project Project, module StdModule, byName FunctionNameIndex, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, namedByIrRequest BoolArray, round SpliceRound)
  	let funcCount = module.funcCount()
  	let census = CalledOnceCensus.take(project, module: module, byName: byName)
@@ -5457,7 +5476,7 @@ index 3f4d84d..10d7048 100644
  	var candidate = BoolArray.create()
  	candidate.resize(funcCount)
  	var pendingCallees = SiteCountArray.create()
-@@ -2533,7 +2533,7 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
+@@ -2625,7 +2625,7 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
  			let valueBound = calleeValueBound(callerFacts, module: module, callee: callee, calleeIndex: calleeIndex)
  
  			if fitsSpliceBudget(module, budget: budget, facts: facts, callee: callee, calleeIndex: calleeIndex, calleeValueBound: valueBound, across: across, liveness: liveness) 'admitted'
@@ -5466,25 +5485,16 @@ index 3f4d84d..10d7048 100644
  				admittedAny = true
  			end 'admitted' else 'overBudget'
  				refusals.add(CalledOnceRefusal.pressureBudgetExceeded.ordinal, count: 1)
-@@ -2715,7 +2715,7 @@ function largestBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId
- 	end 'loopless'
+@@ -2795,7 +2795,7 @@ function largestBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId
+ 	end 'everyValueDefinedInTheOneBlock'
  
- 	for header in loops.headers 'eachHeader'
--		largest = maxRegCount(largest, other: bodyLiveInBeyondTheSite(liveness, position: header, paramCount: func.paramCount, args: args, across: across, liveIn: liveIn))
-+		largest = maxRegCount(largest, other: bodyLiveInBeyondTheSite(liveness, position: (header as ElementIndex), paramCount: func.paramCount, args: args, across: across, liveIn: liveIn))
- 	end 'eachHeader'
+ 	var heldAcross = BoolArray.create()
+-	heldAcross.resize(func.paramCount)
++	heldAcross.resize((func.paramCount as ElementIndex))
  
- 	return largest
-@@ -2733,7 +2733,7 @@ function bodyLiveInBeyondTheSite(liveness StdLiveness, position ElementIndex, pa
- 			continue
- 		end 'aBodyValue'
- 
--		let arg = try args.get(paramPositionOfValueId(valueId)) otherwise panic("bodyLiveInBeyondTheSite: parameter {valueId} has no argument among the site's {args.count()} — the arity check refuses a mismatch before any splice")
-+		let arg = try args.get((paramPositionOfValueId(valueId) as ElementIndex)) otherwise panic("bodyLiveInBeyondTheSite: parameter {valueId} has no argument among the site's {args.count()} — the arity check refuses a mismatch before any splice")
- 
- 		if not across.contains(arg) 'diesAtTheCall'
- 			count = count + 1
-@@ -2903,12 +2903,12 @@ type SiteSplicer
+ 	for position in 0 upto func.paramCount 'eachParameter'
+ 		let arg = try args.get(position) otherwise panic("largestBodyLiveIn: parameter {position} has no argument among the site's {args.count()} — the arity check refuses a mismatch before any splice")
+@@ -2968,12 +2968,12 @@ type SiteSplicer
  
  		var first = 0 as ElementIndex
  
@@ -5499,20 +5509,27 @@ index 3f4d84d..10d7048 100644
  				var site = plannedSiteAt(plan, index: next)
  
  				if site.spliced 'twice'
-@@ -2945,10 +2945,10 @@ type SiteSplicer
+@@ -3017,8 +3017,8 @@ type SiteSplicer
+ 			end 'aheadOfEverySplicedSite'
  
- 			while k > 0 'eachSplicedSiteBackwards'
- 				k = k - 1
--				let splicedAt = try self.sitePositions.get(k) otherwise panic("SiteSplicer.recoordinatePendingSites: sitePositions.get OOB at {k}")
-+				let splicedAt = try self.sitePositions.get((k as ElementIndex)) otherwise panic("SiteSplicer.recoordinatePendingSites: sitePositions.get OOB at {k}")
+ 			let nearest = before - 1
+-			let splicedAt = try self.sitePositions.get(nearest) otherwise panic("SiteSplicer.recoordinatePendingSites: sitePositions.get OOB at {nearest}")
+-			site.position = try self.contPositions.get(nearest) otherwise panic("SiteSplicer.recoordinatePendingSites: contPositions.get OOB at {nearest} — one continuation is recorded per spliced site")
++			let splicedAt = try self.sitePositions.get((nearest as ElementIndex)) otherwise panic("SiteSplicer.recoordinatePendingSites: sitePositions.get OOB at {nearest}")
++			site.position = try self.contPositions.get((nearest as ElementIndex)) otherwise panic("SiteSplicer.recoordinatePendingSites: contPositions.get OOB at {nearest} — one continuation is recorded per spliced site")
+ 			site.opPos = site.opPos - splicedAt - 1
+ 			appendToGroup(facts.sitesAtBlock, key: site.position, member: index)
+ 		end 'eachSite'
+@@ -3033,7 +3033,7 @@ type SiteSplicer
+ 		while lo < hi 'partition'
+ 			let mid = lo + ((hi - lo) shr 1)
  
- 				if splicedAt < site.opPos 'theNearestSplicedSiteBefore'
--					site.position = try self.contPositions.get(k) otherwise panic("SiteSplicer.recoordinatePendingSites: contPositions.get OOB at {k} — one continuation is recorded per spliced site")
-+					site.position = try self.contPositions.get((k as ElementIndex)) otherwise panic("SiteSplicer.recoordinatePendingSites: contPositions.get OOB at {k} — one continuation is recorded per spliced site")
- 					site.opPos = site.opPos - splicedAt - 1
- 					break
- 				end 'theNearestSplicedSiteBefore'
-@@ -2970,17 +2970,17 @@ type SiteSplicer
+-			if (try self.sitePositions.get(mid) otherwise panic("SiteSplicer.splicedSitesBefore: sitePositions.get OOB at {mid}")) < opPos 'beforeTheSite'
++			if (try self.sitePositions.get((mid as ElementIndex)) otherwise panic("SiteSplicer.splicedSitesBefore: sitePositions.get OOB at {mid}")) < opPos 'beforeTheSite'
+ 				lo = mid + 1
+ 			end 'beforeTheSite' else 'atOrPastTheSite'
+ 				hi = mid
+@@ -3057,17 +3057,17 @@ type SiteSplicer
  		_ = self.valueIds()
  
  		var contRefs = BlockRefArray.create()
@@ -5533,7 +5550,7 @@ index 3f4d84d..10d7048 100644
  		end 'eachSiteBackwards'
  
  		// The continuations were registered last-site-first, so the i-th site's is the i-th block from the
-@@ -3228,10 +3228,10 @@ type SiteSplicer
+@@ -3315,10 +3315,10 @@ type SiteSplicer
  		// The splice's own op — the branch into the copied entry — is the CALLER's statement. The clone loop
  		// before it re-points the cursor per callee op and leaves it there, so the site's span is CARRIED
  		// rather than left on the cursor.
@@ -5546,7 +5563,7 @@ index 3f4d84d..10d7048 100644
  			const or
  			binOp or
  			unaryOp or
-@@ -3357,7 +3357,7 @@ type SiteSplicer
+@@ -3444,7 +3444,7 @@ type SiteSplicer
  		end 'site'
  
  		var pred = self.blockAt(predRef)
@@ -5555,7 +5572,7 @@ index 3f4d84d..10d7048 100644
  		self.stats.noteInlined()
  	end 'spliceCallAtTailOf'
  
-@@ -3428,12 +3428,12 @@ type SiteSplicer
+@@ -3515,12 +3515,12 @@ type SiteSplicer
  		// The admission measured pressure over this body and sized its column by it; a body that grew since
  		// is not the one that was admitted. Every splice adds blocks, so the block count is the tripwire —
  		// asked in O(1) where a fresh `nextFreeValueId` would walk the body a second time per copy.
@@ -5570,7 +5587,7 @@ index 3f4d84d..10d7048 100644
  
  		for i in 0 upto calleeFunc.paramCount 'eachParam'
  			let arg = try args.get(i) otherwise panic("SiteSplicer.buildValueColumn: args.get OOB at {i} despite the arity check")
-@@ -3470,7 +3470,7 @@ type SiteSplicer
+@@ -3557,7 +3557,7 @@ type SiteSplicer
  	// already uses (`TypeRules`), so this pass reaches no verdict of its own and cannot come to disagree
  	// with the guard it is declining.
  	function callerProvesArg(args ValueIdArray, guard RangeCheckParamGuard) returns bool
@@ -5579,7 +5596,7 @@ index 3f4d84d..10d7048 100644
  		return self.callerParamProves(arg, alias: guard.alias) or self.provenRangeProves(arg, alias: guard.alias)
  	end 'callerProvesArg'
  
-@@ -3553,7 +3553,7 @@ type SiteSplicer
+@@ -3640,7 +3640,7 @@ type SiteSplicer
  			// in front of it was declined — `__il_body` is a claim about this copy, not about the callee, so
  			// it follows the entry rather than position 0.
  			let fresh = self.module.addBlock(self.func, label: InlineBodyLabel if calleeBlock.id == entryId else calleeBlock.label, heat: calleeBlock.heat, inlineSite: blocks.siteOf(calleeBlock.inlineSite), role: calleeBlock.role)
@@ -5588,7 +5605,7 @@ index 3f4d84d..10d7048 100644
  			let freshRef = registeredBlockRef(self.module, func: self.func, block: fresh)
  			blocks.copiedRefs.push(freshRef)
  		end 'eachBlock'
-@@ -3582,7 +3582,7 @@ type SiteSplicer
+@@ -3669,7 +3669,7 @@ type SiteSplicer
  			end 'stillEmitted'
  
  			let landing = guards.entryFrom(guard.okBlockId)
@@ -5597,20 +5614,6 @@ index 3f4d84d..10d7048 100644
  		end 'eachGuard'
  	end 'mapDeclinedCascadeHeads'
  
-@@ -3952,11 +3952,11 @@ end 'SiteSplicer'
- function insertByCoordinates(plan SiteAcrossArray, site SiteAcross)
- 	var at = plan.count()
- 
--	while at > 0 and precedesSite(site, other: plannedSiteAt(plan, index: at - 1)) 'findThePlace'
-+	while at > 0 and precedesSite(site, other: plannedSiteAt(plan, index: ((at - 1) as ElementIndex))) 'findThePlace'
- 		at = at - 1
- 	end 'findThePlace'
- 
--	plan.insert(at, value: site)
-+	plan.insert((at as ElementIndex), value: site)
- end 'insertByCoordinates'
- 
- function precedesSite(site SiteAcross, other SiteAcross) returns bool
 diff --git a/maxon-bin/Compiler/IR/Std/InlineManagedPrimitives.maxon b/maxon-bin/Compiler/IR/Std/InlineManagedPrimitives.maxon
 index 9e1e97e..f3b5e68 100644
 --- a/maxon-bin/Compiler/IR/Std/InlineManagedPrimitives.maxon
@@ -6605,7 +6608,7 @@ index a823ee8..b3fa5b4 100644
  
  // A dense `switch` table's whole target list, mapped. A jump table names MANY blocks and one default,
 diff --git a/maxon-bin/Compiler/IR/Std/StdDominatorTree.maxon b/maxon-bin/Compiler/IR/Std/StdDominatorTree.maxon
-index ecb08c2..8b04077 100644
+index 65fb237..ff1baf6 100644
 --- a/maxon-bin/Compiler/IR/Std/StdDominatorTree.maxon
 +++ b/maxon-bin/Compiler/IR/Std/StdDominatorTree.maxon
 @@ -70,7 +70,7 @@ export type StdDominatorTree
@@ -6617,7 +6620,7 @@ index ecb08c2..8b04077 100644
  	end 'build'
  
  	// The same tree, from a successor graph the CALLER already has.
-@@ -144,8 +144,8 @@ export type StdDominatorTree
+@@ -145,8 +145,8 @@ export type StdDominatorTree
  
  		while stackNode.count() > 0 'depthFirst'
  			let top = stackNode.count() - 1
@@ -6628,7 +6631,7 @@ index ecb08c2..8b04077 100644
  
  			if nextChild >= graph.degree(position as CsrIndex) 'everySuccessorVisited'
  				postorder.push(position)
-@@ -154,13 +154,13 @@ export type StdDominatorTree
+@@ -155,13 +155,13 @@ export type StdDominatorTree
  				continue
  			end 'everySuccessorVisited'
  
@@ -6636,16 +6639,16 @@ index ecb08c2..8b04077 100644
 +			try stackNextChild.set((top as ElementIndex), value: nextChild + 1) otherwise panic("StdDominatorTree.buildReversePostorder: stackNextChild.set OOB at {top}")
  
  			let successor = graph.neighbour(position as CsrIndex, k: nextChild)
--			let seenBefore = try self.reachable.get(successor) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.get OOB at {successor}")
-+			let seenBefore = try self.reachable.get((successor as ElementIndex)) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.get OOB at {successor}")
+-			let seenBefore = try reachable.get(successor) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.get OOB at {successor}")
++			let seenBefore = try reachable.get((successor as ElementIndex)) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.get OOB at {successor}")
  
  			if not seenBefore 'firstVisit'
--				try self.reachable.set(successor, value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at {successor}")
-+				try self.reachable.set((successor as ElementIndex), value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at {successor}")
+-				try reachable.set(successor, value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at {successor}")
++				try reachable.set((successor as ElementIndex), value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at {successor}")
  				stackNode.push(successor)
  				stackNextChild.push(0)
  			end 'firstVisit'
-@@ -218,11 +218,11 @@ export type StdDominatorTree
+@@ -225,11 +225,11 @@ export type StdDominatorTree
  		for k in 0 upto predecessors.degree(position as CsrIndex) 'eachPredecessor'
  			let predecessor = predecessors.neighbour(position as CsrIndex, k: k)
  
@@ -6659,7 +6662,7 @@ index ecb08c2..8b04077 100644
  			haveCandidate = true
  		end 'eachPredecessor'
  
-@@ -391,8 +391,8 @@ export type StdDominatorWalk
+@@ -398,8 +398,8 @@ export type StdDominatorWalk
  		end 'finished'
  
  		let top = self.open.count() - 1
@@ -6670,7 +6673,7 @@ index ecb08c2..8b04077 100644
  
  		if slot >= tree.children.degree(parent as CsrIndex) 'everyChildVisited'
  			_ = try self.open.pop() otherwise panic("StdDominatorWalk.advance: open.pop on a non-empty walk failed")
-@@ -402,18 +402,18 @@ export type StdDominatorWalk
+@@ -409,18 +409,18 @@ export type StdDominatorWalk
  			return true
  		end 'everyChildVisited'
  
@@ -6692,7 +6695,7 @@ index ecb08c2..8b04077 100644
  		return true
  	end 'advance'
  
-@@ -458,7 +458,7 @@ type RpoOrder
+@@ -465,7 +465,7 @@ type RpoOrder
  
  		while remaining > 0 'reverse'
  			remaining = remaining - 1
@@ -6702,44 +6705,41 @@ index ecb08c2..8b04077 100644
  			order.push(position)
  		end 'reverse'
 diff --git a/maxon-bin/Compiler/IR/Std/StdLiveness.maxon b/maxon-bin/Compiler/IR/Std/StdLiveness.maxon
-index 3161e22..b7b6b1a 100644
+index fca535f..53a9d81 100644
 --- a/maxon-bin/Compiler/IR/Std/StdLiveness.maxon
 +++ b/maxon-bin/Compiler/IR/Std/StdLiveness.maxon
-@@ -56,8 +56,8 @@ module type StdLiveness
+@@ -52,7 +52,7 @@ type PeakCounter implements LiveRangeVisitor
+ 			return true
+ 		end 'aBodyValue'
  
- 	// The liveness of `func`, over a value space of `valueBound`, replacing whatever the workspace held.
- 	module function recompute(module StdModule, func IrFunction, valueBound ValueId)
+-		return not (try self.heldParams.get(paramPositionOfValueId(valueId)) otherwise panic("PeakCounter.wantsValue: heldParams.get OOB at {valueId}"))
++		return not (try self.heldParams.get((paramPositionOfValueId(valueId) as ElementIndex)) otherwise panic("PeakCounter.wantsValue: heldParams.get OOB at {valueId}"))
+ 	end 'wantsValue'
+ 
+ 	function visitLiveNode(_ ValueId, node ElementIndex)
+@@ -116,9 +116,9 @@ module type StdLiveness
+ 	// segment it ends and its defs open the continuation, so a value the op defines is never live
+ 	// into it.
+ 	module function recomputeSegmented(module StdModule, func IrFunction, valueBound ValueId, cutBlock BlockPositionColumn, cutOp BlockPositionColumn)
 -		self.blockCount = func.blockRefs.count()
+-		self.nodeCount = self.blockCount + cutBlock.count()
 -		self.definedIn.resize(valueBound)
 +		self.blockCount = (func.blockRefs.count() as ElementIndex)
++		self.nodeCount = self.blockCount + (cutBlock.count() as ElementIndex)
 +		self.definedIn.resize((valueBound as ElementIndex))
  
  		for v in 0 upto valueBound 'eachValue'
- 			try self.definedIn.set(v, value: self.blockCount) otherwise panic("StdLiveness.recompute: definedIn.set OOB at {v}")
-@@ -86,11 +86,11 @@ module type StdLiveness
- 		// The stamp marks what the ops from `opPos` on define; a value they define is not live across.
- 		self.seen.beginLoop()
+ 			try self.definedIn.set(v, value: self.nodeCount) otherwise panic("StdLiveness.recomputeSegmented: definedIn.set OOB at {v}")
+@@ -147,7 +147,7 @@ module type StdLiveness
+ 		self.queried.refill(self.blockCount, value: loopless)
  
--		for pos in opPos upto block.opRefs.count() 'eachOpFromTheSite'
-+		for pos in opPos upto (block.opRefs.count() as ElementIndex) 'eachOpFromTheSite'
- 			self.markDefs(module.getOp(self.opRefAt(block, pos: pos)))
- 		end 'eachOpFromTheSite'
+ 		for header in loops.headers 'eachHeader'
+-			try self.queried.set(header, value: true) otherwise panic("StdLiveness.peakLiveIn: queried.set OOB at {header}")
++			try self.queried.set((header as ElementIndex), value: true) otherwise panic("StdLiveness.peakLiveIn: queried.set OOB at {header}")
+ 		end 'eachHeader'
  
--		for pos in opPos + 1 upto block.opRefs.count() 'eachLaterOp'
-+		for pos in opPos + 1 upto (block.opRefs.count() as ElementIndex) 'eachLaterOp'
- 			self.insertReadsUnlessMarked(module.getOp(self.opRefAt(block, pos: pos)), into: into)
- 		end 'eachLaterOp'
- 
-@@ -108,7 +108,7 @@ module type StdLiveness
- 			let successor = self.succ.neighbour(position as CsrIndex, k: k)
- 
- 			for j in 0 upto self.liveIn.degree(successor) 'eachLive'
--				self.insertUnlessMarked(self.liveInAt(successor, k: j), into: into)
-+				self.insertUnlessMarked(self.liveInAt((successor as ElementIndex), k: j), into: into)
- 			end 'eachLive'
- 		end 'eachSuccessor'
- 	end 'collectLiveAcrossOp'
-@@ -122,7 +122,7 @@ module type StdLiveness
+ 		if loopless 'everyBlockIsAsked'
+@@ -269,7 +269,7 @@ module type StdLiveness
  	end 'opRefAt'
  
  	function definingBlockOf(valueId ValueId) returns ElementIndex
@@ -6748,7 +6748,7 @@ index 3161e22..b7b6b1a 100644
  	end 'definingBlockOf'
  
  	function recordOpDefs(op StdOp, position ElementIndex)
-@@ -140,7 +140,7 @@ module type StdLiveness
+@@ -287,7 +287,7 @@ module type StdLiveness
  	end 'recordOpDefs'
  
  	function recordDef(valueId ValueId, position ElementIndex)
@@ -6756,16 +6756,94 @@ index 3161e22..b7b6b1a 100644
 +		try self.definedIn.set((valueId as ElementIndex), value: position) otherwise panic("StdLiveness.recordDef: value {valueId} is outside the {self.definedIn.count()}-value space this liveness was computed over")
  	end 'recordDef'
  
- 	// Every def's block — a block's phis, then its ops and terminator — and value id -> the blocks reading
-@@ -230,7 +230,7 @@ module type StdLiveness
- 				for k in 0 upto self.pred.degree(position as CsrIndex) 'eachPredecessor'
- 					let predecessor = self.pred.neighbour(position as CsrIndex, k: k)
+ 	function collectDefsAndUses(module StdModule, func IrFunction, cutBlock BlockPositionColumn, cutOp BlockPositionColumn) returns CsrGraph
+@@ -333,15 +333,15 @@ module type StdLiveness
+ 			self.flushReads(segment)
+ 		end 'eachBlock'
  
--					if predecessor != defBlock 'notTheDefiningBlock'
-+					if (predecessor as ElementIndex) != defBlock 'notTheDefiningBlock'
- 						self.stack.push(predecessor)
- 					end 'notTheDefiningBlock'
- 				end 'eachPredecessor'
+-		if cut != cutBlock.count() 'aCutWasNotReached'
+-			panic("StdLiveness.collectDefsAndUses: {cutBlock.count() - cut} of {cutBlock.count()} cut(s) were never reached — the cuts must name ops of '{String.from(func.name)}' in ascending (block, op) order")
++		if cut != (cutBlock.count() as ElementIndex) 'aCutWasNotReached'
++			panic("StdLiveness.collectDefsAndUses: {(cutBlock.count() as ElementIndex) - cut} of {cutBlock.count()} cut(s) were never reached — the cuts must name ops of '{String.from(func.name)}' in ascending (block, op) order")
+ 		end 'aCutWasNotReached'
+ 
+ 		return buildCsr(self.useValue, to: self.useBlock, nodeCount: self.definedIn.count() as CsrIndex)
+ 	end 'collectDefsAndUses'
+ 
+ 	function cutIsIn(cut ElementIndex, cutBlock BlockPositionColumn, block ElementIndex) returns bool
+-		return cut < cutBlock.count() and (try cutBlock.get(cut) otherwise panic("StdLiveness.cutIsIn: cutBlock.get OOB at {cut}")) == block
++		return cut < (cutBlock.count() as ElementIndex) and (try cutBlock.get(cut) otherwise panic("StdLiveness.cutIsIn: cutBlock.get OOB at {cut}")) == block
+ 	end 'cutIsIn'
+ 
+ 	// In SSA a read of a value the segment defines follows that def, which is recorded by the time the
+@@ -392,7 +392,7 @@ module type StdLiveness
+ 			for k in 0 upto self.pred.degree(position as CsrIndex) 'eachPredecessor'
+ 				let predecessor = self.pred.neighbour(position as CsrIndex, k: k)
+ 
+-				if predecessor != defBlock 'notTheDefiningBlock'
++				if (predecessor as ElementIndex) != defBlock 'notTheDefiningBlock'
+ 					self.stack.push(predecessor)
+ 				end 'notTheDefiningBlock'
+ 			end 'eachPredecessor'
+@@ -400,7 +400,7 @@ module type StdLiveness
+ 	end 'rangeOf'
+ 
+ 	function noteLiveNode(position ElementIndex)
+-		if self.liveNodeCount == self.liveNodes.count() 'growing'
++		if self.liveNodeCount == (self.liveNodes.count() as ElementIndex) 'growing'
+ 			self.liveNodes.push(position)
+ 		end 'growing' else 'overwriting'
+ 			try self.liveNodes.set(self.liveNodeCount, value: position) otherwise panic("StdLiveness.noteLiveNode: liveNodes.set OOB at {self.liveNodeCount}")
+@@ -455,7 +455,7 @@ module type QueriedReach
+ 	end 'rankOfNode'
+ 
+ 	function restrictsAt(defBlock ElementIndex) returns bool
+-		return self.enabled and defBlock < self.rankOf.count()
++		return self.enabled and defBlock < (self.rankOf.count() as ElementIndex)
+ 	end 'restrictsAt'
+ 
+ 	function definedBelow(defBlock ElementIndex, rank CsrIndex) returns bool
+@@ -474,16 +474,16 @@ module type QueriedReach
+ 			return
+ 		end 'tooSmallToPay'
+ 
+-		let order = StdDominatorTree.reversePostorder(succ, blockCount: blockCount)
++		let order = StdDominatorTree.reversePostorder(succ, blockCount: (blockCount as ElementIndex))
+ 
+-		if order.count() != blockCount 'someBlockIsUnreachable'
++		if (order.count() as ElementIndex) != (blockCount as ElementIndex) 'someBlockIsUnreachable'
+ 			self.enabled = false
+ 			return
+ 		end 'someBlockIsUnreachable'
+ 
+ 		self.enabled = true
+-		self.rankOf.refill(blockCount, value: 0)
+-		self.topRank.refill(blockCount, value: 0)
++		self.rankOf.refill((blockCount as ElementIndex), value: 0)
++		self.topRank.refill((blockCount as ElementIndex), value: 0)
+ 
+ 		for rank in 0 upto blockCount 'eachRank'
+ 			let position = try order.get(rank) otherwise panic("QueriedReach.build: order.get OOB at {rank}")
+@@ -494,7 +494,7 @@ module type QueriedReach
+ 
+ 		while rank > 0 'fromTheHighestRank'
+ 			rank = rank - 1
+-			let position = try order.get(rank) otherwise panic("QueriedReach.build: order.get OOB at {rank}")
++			let position = try order.get((rank as ElementIndex)) otherwise panic("QueriedReach.build: order.get OOB at {rank}")
+ 
+ 			if (try queried.get(position) otherwise panic("QueriedReach.build: queried.get OOB at {position}")) and self.topRankOf(position) == 0 'anUnclaimedQueriedBlock'
+ 				self.claimReachableFrom(position, succ: succ, claimRank: rank + 1)
+@@ -512,8 +512,8 @@ module type QueriedReach
+ 			for k in 0 upto succ.degree(position as CsrIndex) 'eachSuccessor'
+ 				let successor = succ.neighbour(position as CsrIndex, k: k)
+ 
+-				if self.topRankOf(successor) == 0 'unclaimed'
+-					try self.topRank.set(successor, value: claimRank) otherwise panic("QueriedReach.claimReachableFrom: topRank.set OOB at {successor}")
++				if self.topRankOf((successor as ElementIndex)) == 0 'unclaimed'
++					try self.topRank.set((successor as ElementIndex), value: claimRank) otherwise panic("QueriedReach.claimReachableFrom: topRank.set OOB at {successor}")
+ 					self.stack.push(successor)
+ 				end 'unclaimed'
+ 			end 'eachSuccessor'
 diff --git a/maxon-bin/Compiler/IR/Std/StdPassPool.maxon b/maxon-bin/Compiler/IR/Std/StdPassPool.maxon
 index 12e4ca2..4aa75b6 100644
 --- a/maxon-bin/Compiler/IR/Std/StdPassPool.maxon

@@ -89,7 +89,7 @@ export type StdDominatorTree
 		tree.reachable.growFilled(blockCount, value: false)
 		tree.idom.resize(blockCount)
 
-		let rpo = tree.buildReversePostorder(succ)
+		let rpo = Self.buildReversePostorder(succ, blockCount: blockCount, reachable: tree.reachable)
 		tree.solveImmediateDominators(pred, rpo: rpo)
 		tree.children = buildCsr(tree.idomOfEachNonEntryReachableBlock(rpo), to: rpo.copyOfReachableNonEntryBlocks(), nodeCount: blockCount as CsrIndex)
 		tree.reverseOrder = rpo.order
@@ -124,21 +124,22 @@ export type StdDominatorTree
 
 	// The DFS postorder of the blocks the entry reaches, REVERSED — the order the dominator solve
 	// iterates in, which is what makes it converge in a couple of rounds instead of in tree-depth ones.
+	// `reachable` arrives all false and leaves marking every block the entry reaches.
 	//
 	// An EXPLICIT STACK, not recursion: a function's block chain can be tens of thousands long (the
 	// register allocator's own liveness note measures a 19,200-block function), and a recursive DFS over
 	// one is a host stack overflow rather than a compiler diagnostic.
-	function buildReversePostorder(graph CsrGraph) returns RpoOrder
+	static function buildReversePostorder(graph CsrGraph, blockCount ElementIndex, reachable BoolArray) returns RpoOrder
 		var postorder = BlockPositionColumn.create()
 
-		if self.blockCount == 0 'noBlocks'
+		if blockCount == 0 'noBlocks'
 			return RpoOrder.create(postorder, rpoIndex: BlockPositionColumn.create())
 		end 'noBlocks'
 
 		var stackNode = BlockPositionColumn.create()
 		var stackNextChild = CsrColumn.create()
 
-		try self.reachable.set(StdEntryBlockPosition, value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at the entry")
+		try reachable.set(StdEntryBlockPosition, value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at the entry")
 		stackNode.push(StdEntryBlockPosition)
 		stackNextChild.push(0)
 
@@ -157,17 +158,23 @@ export type StdDominatorTree
 			try stackNextChild.set(top, value: nextChild + 1) otherwise panic("StdDominatorTree.buildReversePostorder: stackNextChild.set OOB at {top}")
 
 			let successor = graph.neighbour(position as CsrIndex, k: nextChild)
-			let seenBefore = try self.reachable.get(successor) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.get OOB at {successor}")
+			let seenBefore = try reachable.get(successor) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.get OOB at {successor}")
 
 			if not seenBefore 'firstVisit'
-				try self.reachable.set(successor, value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at {successor}")
+				try reachable.set(successor, value: true) otherwise panic("StdDominatorTree.buildReversePostorder: reachable.set OOB at {successor}")
 				stackNode.push(successor)
 				stackNextChild.push(0)
 			end 'firstVisit'
 		end 'depthFirst'
 
-		return RpoOrder.fromPostorder(postorder, blockCount: self.blockCount)
+		return RpoOrder.fromPostorder(postorder, blockCount: blockCount)
 	end 'buildReversePostorder'
+
+	export static function reversePostorder(succ CsrGraph, blockCount ElementIndex) returns BlockPositionColumn
+		var reachable = BoolArray.create()
+		reachable.growFilled(blockCount, value: false)
+		return Self.buildReversePostorder(succ, blockCount: blockCount, reachable: reachable).order
+	end 'reversePostorder'
 
 	// ⭐ **THE COOPER–HARVEY–KENNEDY ITERATIVE SOLVE.** Each block's immediate dominator is the meet of
 	// its already-solved predecessors', computed by walking both candidates up the partially-built tree

@@ -1848,9 +1848,13 @@ end 'CalledOnceWave'
 // def or use past another site, defines nothing another site's loop reads that the call it replaced did
 // not, and adds no block outside the region the call held.
 type CallerSiteFacts
-	// Every candidate site of the caller, in the order the census's caller grouping lists the callees. A
-	// handful per caller, so a callee's site is found by a scan of them.
+	// Every candidate site of the caller, in the order the census's caller grouping lists the callees.
 	export var sites as SiteAcrossArray
+
+	var siteIndexOfCallee as SiteIndexMap
+
+	// Block position -> the indices into `sites` of the sites standing in it.
+	export var sitesAtBlock as IndexGroupMap
 
 	// The caller's fresh-`ValueId` counter. Seeded past every id the caller uses before its first splice;
 	// after each wave `SiteSplicer` re-seeds it to one past the highest id a copy DEFINED, since the copy of
@@ -1858,34 +1862,33 @@ type CallerSiteFacts
 	// hold the counter above where a fresh seed from the function's ops would put it.
 	export var ids as ValueMinter
 
-	static function of(module StdModule, func IrFunction, callerIndex ElementIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, byName FunctionNameIndex, liveness StdLiveness, across StdValueUseSet) returns CallerSiteFacts
+	static function of(module StdModule, func IrFunction, callerIndex ElementIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, byName FunctionNameIndex, budget HoistPressureBudget, liveness StdLiveness) returns CallerSiteFacts
 		let valueBound = nextFreeValueId(module, func: func)
-		liveness.recompute(module, func: func, valueBound: valueBound)
-		var loops = FunctionLoops.of(func, succ: liveness.succ, pred: liveness.pred)
 		var sites = SiteAcrossArray.create()
+		var siteIndexOfCallee = SiteIndexMap.create()
+		var sitesAtBlock = IndexGroupMap.create()
 
 		for k in 0 upto calleesOfCallers.degree(callerIndex as CsrIndex) 'eachSite'
 			let calleeIndex = calleesOfCallers.neighbour(callerIndex as CsrIndex, k: k)
 			let position = census.sitePositionOf(calleeIndex)
 			let opPos = census.siteOpPositionOf(calleeIndex)
 			let args = siteArgsOf(module, caller: func, position: position, opPos: opPos, calleeIndex: calleeIndex, byName: byName)
-			across.clear()
-			liveness.collectLiveAcrossOp(module, func: func, position: position, opPos: opPos, into: across)
-			loops.keepReadsAround(module, func: func, position: position, valueBound: valueBound, across: across)
-			sites.push(SiteAcross.create(calleeIndex, position: position, opPos: opPos, args: args, across: across))
+			siteIndexOfCallee.upsert(calleeIndex, value: sites.count())
+			appendToGroup(sitesAtBlock, key: position, member: sites.count())
+			sites.push(SiteAcross.create(calleeIndex, position: position, opPos: opPos, args: args))
 		end 'eachSite'
 
-		return Self{sites: sites, ids: ValueMinter.resuming(valueBound)}
+		match budget 'b'
+			unbounded then break
+			registers(count) then SiteAcrossCensus.collect(module, func: func, sites: sites, cap: count, valueBound: valueBound, liveness: liveness)
+		end 'b'
+
+		return Self{sites: sites, siteIndexOfCallee: siteIndexOfCallee, sitesAtBlock: sitesAtBlock, ids: ValueMinter.resuming(valueBound)}
 	end 'of'
 
 	function siteOf(calleeIndex ElementIndex, callee IrFunction) returns SiteAcross
-		for site in self.sites 'eachSite'
-			if site.calleeIndex == calleeIndex 'theSite'
-				return site
-			end 'theSite'
-		end 'eachSite'
-
-		panic("CallerSiteFacts.siteOf: the caller holds no call of '{String.from(callee.name)}', whose one site the census placed there")
+		let index = try self.siteIndexOfCallee.get(calleeIndex) otherwise panic("CallerSiteFacts.siteOf: the caller holds no call of '{String.from(callee.name)}', whose one site the census placed there")
+		return plannedSiteAt(self.sites, index: index)
 	end 'siteOf'
 end 'CallerSiteFacts'
 
@@ -1893,8 +1896,11 @@ end 'CallerSiteFacts'
 typealias CallerSiteFactsMap = Map with (ElementIndex, CallerSiteFacts)
 
 // One candidate site of a caller: where its call stands, what the call passes, and the values live across
-// it that the loop around it reads, in the order the liveness listed them. The coordinates FOLLOW the call
-// as splices ahead of it in the block move it into a continuation, so they name the op until it is spliced.
+// it that the loop around it reads. The coordinates FOLLOW the call as splices ahead of it in the
+// block move it into a continuation, so they name the op until it is spliced.
+//
+// `across` is filled only under a register budget, and stops at budget + 1 ids: a site past the
+// budget is refused on its count alone, so the ids past that are never read.
 type SiteAcross
 	export var calleeIndex as ElementIndex
 	export var position as ElementIndex
@@ -1903,18 +1909,108 @@ type SiteAcross
 	export var across as ValueIdArray
 	export var spliced as bool
 
-	static function create(calleeIndex ElementIndex, position ElementIndex, opPos ElementIndex, args ValueIdArray, across StdValueUseSet) returns SiteAcross
-		var ids = ValueIdArray.create()
-
-		for i in 0 upto across.insertedIdCount() 'eachAcross'
-			ids.push(across.insertedIdAt(i))
-		end 'eachAcross'
-
-		return Self{calleeIndex: calleeIndex, position: position, opPos: opPos, args: args, across: ids, spliced: false}
+	static function create(calleeIndex ElementIndex, position ElementIndex, opPos ElementIndex, args ValueIdArray) returns SiteAcross
+		return Self{calleeIndex: calleeIndex, position: position, opPos: opPos, args: args, across: ValueIdArray.create(), spliced: false}
 	end 'create'
 end 'SiteAcross'
 
 typealias SiteAcrossArray = Array with SiteAcross
+
+type SiteAcrossCensus implements LiveRangeVisitor
+	var cutSites as SiteAcrossArray
+	var loops as FunctionLoops
+	var liveness as StdLiveness
+	var cap as RegCount
+	var cutsByRank as BlockPositionColumn
+	var settled as ElementIndex
+
+	static function collect(module StdModule, func IrFunction, sites SiteAcrossArray, cap RegCount, valueBound ValueId, liveness StdLiveness)
+		var cutSites = SiteAcrossArray.create()
+
+		for site in sites 'eachSite'
+			cutSites.push(site)
+		end 'eachSite'
+
+		sortByCoordinates(cutSites)
+		var cutBlock = BlockPositionColumn.create()
+		var cutOp = BlockPositionColumn.create()
+
+		for site in cutSites 'eachCut'
+			cutBlock.push(site.position)
+			cutOp.push(site.opPos)
+		end 'eachCut'
+
+		liveness.recomputeSegmented(module, func: func, valueBound: valueBound, cutBlock: cutBlock, cutOp: cutOp)
+		liveness.askAboutContinuations()
+		var census = Self{cutSites: cutSites, loops: FunctionLoops.of(func, succ: liveness.blockSucc), liveness: liveness, cap: cap, cutsByRank: liveness.continuationsByDescendingRank(), settled: 0}
+
+		for site in sites 'eachSiteInTheCaller'
+			census.loops.prepareReadsAround(module, func: func, position: site.position, valueBound: valueBound)
+		end 'eachSiteInTheCaller'
+
+		liveness.walkLiveRanges(valueBound, visitor: census)
+	end 'collect'
+
+	function isSatisfied() returns bool
+		self.advanceSettled()
+		return self.settled == self.cutsByRank.count()
+	end 'isSatisfied'
+
+	// `cutsByRank` descends, so the first unsettled cut has the highest rank still open, and a value
+	// defined at or above that rank is live into none of the open cuts (see `QueriedReach`).
+	function wantsValue(valueId ValueId) returns bool
+		if not self.liveness.reach.isEnabled() 'ranksAreUnknown'
+			return true
+		end 'ranksAreUnknown'
+
+		let cut = self.indexAt(self.cutsByRank, index: self.settled)
+		return self.liveness.mayBeLiveAt(valueId, askedRank: self.liveness.reach.rankOfNode(self.liveness.blockCount + cut))
+	end 'wantsValue'
+
+	function visitLiveNode(valueId ValueId, node ElementIndex)
+		if node >= self.liveness.blockCount 'aContinuation'
+			self.offer(node - self.liveness.blockCount, valueId: valueId)
+		end 'aContinuation'
+	end 'visitLiveNode'
+
+	function advanceSettled()
+		while self.settled < self.cutsByRank.count() and self.isFull(self.indexAt(self.cutsByRank, index: self.settled)) 'eachFullSite'
+			self.settled = self.settled + 1
+		end 'eachFullSite'
+	end 'advanceSettled'
+
+	function indexAt(column BlockPositionColumn, index ElementIndex) returns ElementIndex
+		return try column.get(index) otherwise panic("SiteAcrossCensus.indexAt: column.get OOB at {index}")
+	end 'indexAt'
+
+	function isFull(cut ElementIndex) returns bool
+		return (plannedSiteAt(self.cutSites, index: cut).across.count() as RegCount) > self.cap
+	end 'isFull'
+
+	function offer(cut ElementIndex, valueId ValueId)
+		var site = plannedSiteAt(self.cutSites, index: cut)
+
+		if (site.across.count() as RegCount) > self.cap or not self.loops.readsAround(valueId, position: site.position) 'notKept'
+			return
+		end 'notKept'
+
+		site.across.push(valueId)
+	end 'offer'
+end 'SiteAcrossCensus'
+
+function sortByCoordinates(sites SiteAcrossArray)
+	sites.sort(function(left SiteAcross, right SiteAcross) gives compareSiteCoordinates(left, right: right))
+end 'sortByCoordinates'
+
+function compareSiteCoordinates(left SiteAcross, right SiteAcross) returns Ordering
+	let byBlock = left.position.compare(right.position)
+
+	if byBlock != Ordering.equalTo 'differentBlocks'
+		return byBlock
+	end 'differentBlocks'
+
+	return left.opPos.compare(right.opPos)
+end 'compareSiteCoordinates'
 
 // The argument list of the call at the census's coordinates for `calleeIndex` — checked to BE a direct
 // call of that callee, since a coordinate that drifted would otherwise splice a body over some other op.
@@ -1975,10 +2071,17 @@ type FunctionLoops
 	var readTours as CsrGraph
 	var toursGathered as bool
 
-	// Over the CFG the caller's liveness already built, in both directions.
-	static function of(func IrFunction, succ CsrGraph, pred CsrGraph) returns FunctionLoops
+	// Over the caller's block graph, never a segmented one: every position here is a block position.
+	static function of(func IrFunction, succ CsrGraph) returns FunctionLoops
 		let blockCount = func.blockRefs.count()
-		var loops = Self{blockCount: blockCount, pred: pred, loops: NaturalLoops.find(succ, nodeCount: blockCount as CsrIndex), innermostHeaderOf: filledPositions(blockCount, value: blockCount), parentHeaderOf: filledPositions(blockCount, value: blockCount), preOf: NestTourColumn.create(), postOf: NestTourColumn.create(), readTours: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), toursGathered: false}
+		let natural = NaturalLoops.find(succ, nodeCount: blockCount as CsrIndex)
+		var pred = CsrGraph.create(CsrColumn.create(), list: CsrColumn.create())
+
+		if natural.headers.count() != 0 'aLoopNeedsItsPredecessors'
+			pred = reversedGraph(succ)
+		end 'aLoopNeedsItsPredecessors'
+
+		var loops = Self{blockCount: blockCount, pred: pred, loops: natural, innermostHeaderOf: filledPositions(blockCount, value: blockCount), parentHeaderOf: filledPositions(blockCount, value: blockCount), preOf: NestTourColumn.create(), postOf: NestTourColumn.create(), readTours: CsrGraph.create(CsrColumn.create(), list: CsrColumn.create()), toursGathered: false}
 		loops.assignInnermostHeaders()
 		return loops
 	end 'of'
@@ -2055,32 +2158,21 @@ type FunctionLoops
 		return try self.parentHeaderOf.get(header) otherwise panic("FunctionLoops.parentHeaderAt: block position {header} is outside the {self.blockCount}-block function")
 	end 'parentHeaderAt'
 
-	// Narrow `across` to the values the innermost loop around `position` reads, over its whole nest; a
-	// site outside every loop keeps them all.
-	function keepReadsAround(module StdModule, func IrFunction, position ElementIndex, valueBound ValueId, across StdValueUseSet)
+	function prepareReadsAround(module StdModule, func IrFunction, position ElementIndex, valueBound ValueId)
+		if self.innermostHeaderAt(position) != self.blockCount 'inALoop'
+			self.gatherReadTours(module, func: func, valueBound: valueBound)
+		end 'inALoop'
+	end 'prepareReadsAround'
+
+	function readsAround(valueId ValueId, position ElementIndex) returns bool
 		let header = self.innermostHeaderAt(position)
 
 		if header == self.blockCount 'noLoop'
-			return
+			return true
 		end 'noLoop'
 
-		self.gatherReadTours(module, func: func, valueBound: valueBound)
-		var kept = ValueIdArray.create()
-
-		for i in 0 upto across.insertedIdCount() 'eachAcross'
-			let valueId = across.insertedIdAt(i)
-
-			if self.isReadInNest(valueId, header: header) 'read'
-				kept.push(valueId)
-			end 'read'
-		end 'eachAcross'
-
-		across.clear()
-
-		for valueId in kept 'eachKept'
-			across.insert(valueId)
-		end 'eachKept'
-	end 'keepReadsAround'
+		return self.isReadInNest(valueId, header: header)
+	end 'readsAround'
 
 	// Whether some loop of `header`'s nest reads `valueId`: the value's read tours ascend, so the first
 	// one at or past the nest's own number lies inside the nest exactly when it is not past its last.
@@ -2511,13 +2603,13 @@ end 'isProcessed'
 // are spliced caller by caller, and all of them are retired. Answers how many candidates it retired.
 function spliceWave(project Project, module StdModule, byName FunctionNameIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, budget HoistPressureBudget, candidate BoolArray, processed BoolArray, pendingCallees SiteCountArray, ready FuncIndexArray, refusals OrdinalTally, stats InlineLeafStats, def StdDefinedValues, cloner StdOpCloner, meta StdOpMetaMemo, origins ValueOriginRowIndex, wave CalledOnceWave, callerFacts CallerSiteFactsMap, liveness StdLiveness, across StdValueUseSet) returns ElementIndex
 	var retiring = FuncIndexArray.create()
-	var calleesByCaller = CalleesByCallerMap.create()
+	var calleesByCaller = IndexGroupMap.create()
 
 	// The ready list is consumed whole, then refilled by the retirements below — a caller made ready by
 	// this wave's splices belongs to the next.
 	for calleeIndex in ready 'eachReady'
 		retiring.push(calleeIndex)
-		groupByCaller(calleesByCaller, callerIndex: census.callerOfCallee(calleeIndex), calleeIndex: calleeIndex)
+		appendToGroup(calleesByCaller, key: census.callerOfCallee(calleeIndex), member: calleeIndex)
 	end 'eachReady'
 
 	ready.clear()
@@ -2525,7 +2617,7 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 
 	for (callerIndex, callees) in calleesByCaller 'eachCaller'
 		let caller = module.getFunc(callerIndex)
-		let facts = siteFactsOf(callerFacts, module: module, caller: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, liveness: liveness, across: across)
+		let facts = siteFactsOf(callerFacts, module: module, caller: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, budget: budget, liveness: liveness)
 		var admittedAny = false
 
 		for calleeIndex in callees 'eachCandidate'
@@ -2564,7 +2656,8 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 
 		var facts = try callerFacts.get(callerIndex) otherwise panic("spliceWave: no site facts for a caller whose callees this wave admitted — the admission loop above takes them first")
 		var splicer = SiteSplicer.create(project, module: module, func: module.getFunc(callerIndex), funcIndex: callerIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: facts.ids, seeded: true)
-		splicer.spliceCalledOnceSites(facts, wave: wave)
+		let readyCallees = try calleesByCaller.get(callerIndex) otherwise panic("spliceWave: no ready callees for a caller this wave admitted callees of")
+		splicer.spliceCalledOnceSites(facts, readyCallees: readyCallees, wave: wave)
 	end 'eachSplicingCaller'
 
 	for calleeIndex in retiring 'eachRetired'
@@ -2585,19 +2678,20 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 	return retiring.count()
 end 'spliceWave'
 
-// Caller -> the wave's ready callees whose one site it holds.
-typealias CalleesByCallerMap = Map with (ElementIndex, FuncIndexArray)
+typealias IndexGroupMap = Map with (ElementIndex, FuncIndexArray)
 
-function groupByCaller(calleesByCaller CalleesByCallerMap, callerIndex ElementIndex, calleeIndex ElementIndex)
-	if var known = try calleesByCaller.get(callerIndex) 'grouped'
-		known.push(calleeIndex)
+typealias SiteIndexMap = Map with (ElementIndex, ElementIndex)
+
+function appendToGroup(groups IndexGroupMap, key ElementIndex, member ElementIndex)
+	if var known = try groups.get(key) 'grouped'
+		known.push(member)
 		return
 	end 'grouped'
 
-	var callees = FuncIndexArray.create()
-	callees.push(calleeIndex)
-	calleesByCaller.upsert(callerIndex, value: callees)
-end 'groupByCaller'
+	var members = FuncIndexArray.create()
+	members.push(member)
+	groups.upsert(key, value: members)
+end 'appendToGroup'
 
 // ⭐ **THE PRESSURE BUDGET — the unswitcher's, asked of the splice's two halves.** After the splice, the
 // caller's values live across the site are live through the callee's whole body, on top of whatever the
@@ -2624,8 +2718,8 @@ end 'fitsSpliceBudget'
 // ⭐ **THE BODY IS MEASURED ONLY WHERE THE ANSWER TURNS ON IT.** Its count is never negative, so a site
 // already over the budget refuses before the body is read; and it is bounded by the body's own value count,
 // so a body too small to reach the budget from the site's count admits before it is read. Both answer
-// exactly what the full measurement would, and between them a liveness over a copied body is asked only of
-// the callees whose answer is not already known.
+// exactly what the full measurement would, and between them the body's live ranges are walked only
+// for the callees whose answer is not already known.
 function spliceFitsRegisters(module StdModule, facts CallerSiteFacts, callee IrFunction, calleeIndex ElementIndex, calleeValueBound ValueId, budget RegCount, across StdValueUseSet, liveness StdLiveness) returns bool
 	let site = facts.siteOf(calleeIndex, callee: callee)
 	let acrossCount = site.across.count() as RegCount
@@ -2646,7 +2740,7 @@ function spliceFitsRegisters(module StdModule, facts CallerSiteFacts, callee IrF
 		return true
 	end 'fitsWhateverTheBodyHolds'
 
-	let bodyCount = largestBodyLiveIn(module, func: callee, valueBound: calleeValueBound, args: site.args, across: across, liveness: liveness)
+	let bodyCount = largestBodyLiveIn(module, func: callee, valueBound: calleeValueBound, args: site.args, across: across, cap: budget - acrossCount, liveness: liveness)
 
 	return acrossCount + bodyCount <= budget
 end 'spliceFitsRegisters'
@@ -2664,12 +2758,12 @@ function calleeValueBound(callerFacts CallerSiteFactsMap, module StdModule, call
 end 'calleeValueBound'
 
 // The caller's site facts, computed the first wave it is spliced into and kept for the rest.
-function siteFactsOf(callerFacts CallerSiteFactsMap, module StdModule, caller IrFunction, callerIndex ElementIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, byName FunctionNameIndex, liveness StdLiveness, across StdValueUseSet) returns CallerSiteFacts
+function siteFactsOf(callerFacts CallerSiteFactsMap, module StdModule, caller IrFunction, callerIndex ElementIndex, census CalledOnceCensus, calleesOfCallers CsrGraph, byName FunctionNameIndex, budget HoistPressureBudget, liveness StdLiveness) returns CallerSiteFacts
 	if let known = try callerFacts.get(callerIndex) 'known'
 		return known
 	end 'known'
 
-	let facts = CallerSiteFacts.of(module, func: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, liveness: liveness, across: across)
+	let facts = CallerSiteFacts.of(module, func: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, budget: budget, liveness: liveness)
 	callerFacts.upsert(callerIndex, value: facts)
 	return facts
 end 'siteFactsOf'
@@ -2689,63 +2783,30 @@ function bodyLiveInBound(func IrFunction, valueBound ValueId, args ValueIdArray,
 	return count
 end 'bodyLiveInBound'
 
-// The body's busiest point: its largest loop-header live-in set, or its largest block live-in when it
-// holds no loop — less the parameters whose argument the caller already holds across the site.
+// The body's busiest point, capped at `cap + 1` (see `StdLiveness.peakLiveIn`): its largest
+// loop-header live-in set, or its largest block live-in when it holds no loop — less the parameters
+// whose argument the caller already holds across the site.
 //
 // A one-block body is answered without a liveness: every value it holds is defined in that block, so
 // nothing is live into it, loop header or not.
-function largestBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId, args ValueIdArray, across StdValueUseSet, liveness StdLiveness) returns RegCount
-	let blockCount = func.blockRefs.count()
-
-	if blockCount == 1 'everyValueDefinedInTheOneBlock'
+function largestBodyLiveIn(module StdModule, func IrFunction, valueBound ValueId, args ValueIdArray, across StdValueUseSet, cap RegCount, liveness StdLiveness) returns RegCount
+	if func.blockRefs.count() == 1 'everyValueDefinedInTheOneBlock'
 		return 0
 	end 'everyValueDefinedInTheOneBlock'
 
-	liveness.recompute(module, func: func, valueBound: valueBound)
-	let loops = NaturalLoops.find(liveness.succ, nodeCount: blockCount as CsrIndex)
-	var liveIn = ValueIdArray.create()
-	var largest = 0 as RegCount
+	var heldAcross = BoolArray.create()
+	heldAcross.resize(func.paramCount)
 
-	if loops.headers.count() == 0 'loopless'
-		for position in 0 upto blockCount 'eachBlock'
-			largest = maxRegCount(largest, other: bodyLiveInBeyondTheSite(liveness, position: position, paramCount: func.paramCount, args: args, across: across, liveIn: liveIn))
-		end 'eachBlock'
+	for position in 0 upto func.paramCount 'eachParameter'
+		let arg = try args.get(position) otherwise panic("largestBodyLiveIn: parameter {position} has no argument among the site's {args.count()} — the arity check refuses a mismatch before any splice")
 
-		return largest
-	end 'loopless'
+		if across.contains(arg) 'heldByTheCaller'
+			try heldAcross.set(position, value: true) otherwise panic("largestBodyLiveIn: heldAcross.set OOB at parameter {position}")
+		end 'heldByTheCaller'
+	end 'eachParameter'
 
-	for header in loops.headers 'eachHeader'
-		largest = maxRegCount(largest, other: bodyLiveInBeyondTheSite(liveness, position: header, paramCount: func.paramCount, args: args, across: across, liveIn: liveIn))
-	end 'eachHeader'
-
-	return largest
+	return liveness.peakLiveIn(module, func: func, valueBound: valueBound, heldParams: heldAcross, cap: cap)
 end 'largestBodyLiveIn'
-
-// The values live into one body block that the caller does not already hold across the site: every
-// non-parameter, and every parameter whose argument dies at the call.
-function bodyLiveInBeyondTheSite(liveness StdLiveness, position ElementIndex, paramCount ParamCount, args ValueIdArray, across StdValueUseSet, liveIn ValueIdArray) returns RegCount
-	liveness.collectLiveIn(position, out: liveIn)
-	var count = 0 as RegCount
-
-	for valueId in liveIn 'eachLive'
-		if valueId >= valueIdAtParamPosition(paramCount) 'aBodyValue'
-			count = count + 1
-			continue
-		end 'aBodyValue'
-
-		let arg = try args.get(paramPositionOfValueId(valueId)) otherwise panic("bodyLiveInBeyondTheSite: parameter {valueId} has no argument among the site's {args.count()} — the arity check refuses a mismatch before any splice")
-
-		if not across.contains(arg) 'diesAtTheCall'
-			count = count + 1
-		end 'diesAtTheCall'
-	end 'eachLive'
-
-	return count
-end 'bodyLiveInBeyondTheSite'
-
-function maxRegCount(a RegCount, other RegCount) returns RegCount
-	return a if a >= other else other
-end 'maxRegCount'
 
 // ══════════════════════════════════════════════════════════════════════════
 // The splice
@@ -2886,20 +2947,24 @@ type SiteSplicer
 		self.spliceRecordedSites(blockRef)
 	end 'inlineSitesIn'
 
-	// ⭐ **THE CALLED-ONCE RULE'S WALK IS THE CALLER'S SITE TABLE, NOT ITS BLOCKS.** Every candidate site
-	// of the caller was located once (`CallerSiteFacts`), so a wave splices the sites this wave admits —
-	// in block order, ascending within a block, exactly the order a walk would meet them — and moves the
-	// coordinates of the sites it leaves for a later wave. `main` is a caller in many waves, and a walk
-	// of it per wave is the whole program per wave.
-	function spliceCalledOnceSites(facts CallerSiteFacts, wave CalledOnceWave)
+	// ⭐ **THE CALLED-ONCE RULE'S WALK IS THE WAVE'S READY CALLEES, NOT THE CALLER'S BLOCKS.** Every
+	// candidate site of the caller was located once (`CallerSiteFacts`), so a wave looks up the
+	// sites of the ready callees it admits, splices them in block order, ascending within a block —
+	// exactly the order a walk would meet them — and moves the coordinates of the sites it leaves
+	// for a later wave. `main` is a caller in many waves, and a walk of it, or of all its sites, per
+	// wave is the whole program per wave.
+	function spliceCalledOnceSites(facts CallerSiteFacts, readyCallees FuncIndexArray, wave CalledOnceWave)
 		self.highestDefined = self.valueIds().nextId() - 1
-		var plan = SiteAcrossArray.create()
+		var admitted = SiteAcrossArray.create()
 
-		for site in facts.sites 'eachSite'
-			if wave.admits(site.calleeIndex) 'admittedThisWave'
-				insertByCoordinates(plan, site: site)
+		for calleeIndex in readyCallees 'eachReadyCallee'
+			if wave.admits(calleeIndex) 'admittedThisWave'
+				admitted.push(facts.siteOf(calleeIndex, callee: self.module.getFunc(calleeIndex)))
 			end 'admittedThisWave'
-		end 'eachSite'
+		end 'eachReadyCallee'
+
+		sortByCoordinates(admitted)
+		var plan = admitted
 
 		var first = 0 as ElementIndex
 
@@ -2934,27 +2999,49 @@ type SiteSplicer
 	// later wave now stands in the continuation of the nearest spliced site before it, at its distance
 	// past that site's call; a site ahead of every spliced one has not moved.
 	function recoordinatePendingSites(facts CallerSiteFacts, position ElementIndex)
-		for i in 0 upto facts.sites.count() 'eachSite'
-			var site = plannedSiteAt(facts.sites, index: i)
+		let standing = try facts.sitesAtBlock.get(position) otherwise panic("SiteSplicer.recoordinatePendingSites: the caller's facts hold no site in block {position}, where this wave just spliced one")
+		var staying = FuncIndexArray.create()
 
-			if site.spliced or site.position != position 'notLeftInThisBlock'
+		for index in standing 'eachSite'
+			var site = plannedSiteAt(facts.sites, index: index)
+
+			if site.spliced 'gone'
 				continue
-			end 'notLeftInThisBlock'
+			end 'gone'
 
-			var k = self.sitePositions.count()
+			let before = self.splicedSitesBefore(site.opPos)
 
-			while k > 0 'eachSplicedSiteBackwards'
-				k = k - 1
-				let splicedAt = try self.sitePositions.get(k) otherwise panic("SiteSplicer.recoordinatePendingSites: sitePositions.get OOB at {k}")
+			if before == 0 'aheadOfEverySplicedSite'
+				staying.push(index)
+				continue
+			end 'aheadOfEverySplicedSite'
 
-				if splicedAt < site.opPos 'theNearestSplicedSiteBefore'
-					site.position = try self.contPositions.get(k) otherwise panic("SiteSplicer.recoordinatePendingSites: contPositions.get OOB at {k} — one continuation is recorded per spliced site")
-					site.opPos = site.opPos - splicedAt - 1
-					break
-				end 'theNearestSplicedSiteBefore'
-			end 'eachSplicedSiteBackwards'
+			let nearest = before - 1
+			let splicedAt = try self.sitePositions.get(nearest) otherwise panic("SiteSplicer.recoordinatePendingSites: sitePositions.get OOB at {nearest}")
+			site.position = try self.contPositions.get(nearest) otherwise panic("SiteSplicer.recoordinatePendingSites: contPositions.get OOB at {nearest} — one continuation is recorded per spliced site")
+			site.opPos = site.opPos - splicedAt - 1
+			appendToGroup(facts.sitesAtBlock, key: site.position, member: index)
 		end 'eachSite'
+
+		facts.sitesAtBlock.upsert(position, value: staying)
 	end 'recoordinatePendingSites'
+
+	function splicedSitesBefore(opPos ElementIndex) returns Count
+		var lo = 0 as Count
+		var hi = self.sitePositions.count()
+
+		while lo < hi 'partition'
+			let mid = lo + ((hi - lo) shr 1)
+
+			if (try self.sitePositions.get(mid) otherwise panic("SiteSplicer.splicedSitesBefore: sitePositions.get OOB at {mid}")) < opPos 'beforeTheSite'
+				lo = mid + 1
+			end 'beforeTheSite' else 'atOrPastTheSite'
+				hi = mid
+			end 'atOrPastTheSite'
+		end 'partition'
+
+		return lo
+	end 'splicedSitesBefore'
 
 	// The recorded sites of `blockRef` (`sitePositions`/`siteCallees`, ascending), spliced.
 	function spliceRecordedSites(blockRef ElementIndex)
@@ -3946,22 +4033,6 @@ type SiteSplicer
 		return self.module.getOp(self.blockOpRefAt(blockRef, pos: pos))
 	end 'opAt'
 end 'SiteSplicer'
-
-// `site` into `plan` at its place in (block position, op position) order — a handful of sites per caller
-// per wave, so an insertion is the whole sort.
-function insertByCoordinates(plan SiteAcrossArray, site SiteAcross)
-	var at = plan.count()
-
-	while at > 0 and precedesSite(site, other: plannedSiteAt(plan, index: at - 1)) 'findThePlace'
-		at = at - 1
-	end 'findThePlace'
-
-	plan.insert(at, value: site)
-end 'insertByCoordinates'
-
-function precedesSite(site SiteAcross, other SiteAcross) returns bool
-	return site.position < other.position or (site.position == other.position and site.opPos < other.opPos)
-end 'precedesSite'
 
 function plannedSiteAt(plan SiteAcrossArray, index ElementIndex) returns SiteAcross
 	return try plan.get(index) otherwise panic("plannedSiteAt: plan.get OOB at {index} against {plan.count()} planned site(s)")

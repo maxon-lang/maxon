@@ -1783,3 +1783,27 @@ passes to run, which is why that figure is not the gate. The stage-2 and stage-3
 **Filed, not fixed.** `resolveHoldMarkers` still scans every op of every function twice, and the four
 permanence passes still each re-index every function that returns a record. With the ladder at parity neither is
 on the gate's path: the hold resolver is 3 of 34 main-thread `semanticCheck` samples at rung 4.
+
+### Result — 2026-10-13, `inlineLeaves`' register-budget checks stop listing live-in sets per block
+
+`inlineLeaves` read ×3.5–4.0 per doubling on every inliner ladder. Its register-budget checks built a whole
+function's live-in list per block, blocks times values, for every caller and for every callee whose answer
+was not already known; the splice path found a callee's site and re-coordinated the pending sites by scans.
+
+The body half now asks `StdLiveness.peakLiveIn`, which walks each value's live range once, counts only the
+queried blocks (loop headers, or every block of a loopless body) and stops once the peak passes what the
+budget leaves. The caller half cuts the caller after each call site, so a site's live-across set is its
+continuation node's live-in, and caps each site's list at the budget plus one. Both prune a range walk to the
+nodes a queried node of higher rank than the value's def reaches. The splice path looks a site up by callee,
+sorts once, and finds the nearest spliced site by binary search.
+
+Measured with `phase:inlineLeaves` on `tests/ladders/gentryeach.sh <N> each`, one function of N
+`let sᵢ = try make(seed + i) otherwise return 0` sites, N = 500 to 4000:
+
+| | before | after |
+|---|---|---|
+| ticks at N = 4000 | 9.4 G | 0.29 G |
+| bytes allocated at N = 4000 | 3.23 GB | 39 MB |
+| per doubling, every ladder | ×3.5–4.0 | ×1.8–2.1 |
+
+Inline decisions are unchanged and the emitted IR is byte-identical. The self-compile is within 0.3%.
