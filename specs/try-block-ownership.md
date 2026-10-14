@@ -537,3 +537,246 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:21:2: Unsupported: a block-form `try` whose body MOVES a value declared outside the block (into a field, a union payload, a consuming call or a `return`) BETWEEN two throwing calls — the block's throw edges share one handler, and they would reach it with that value still owned on the earlier edges and already given away on the later ones, so its drop belongs on some throw edges and not others. Move the value before the `try` block or after it, or give the two throwing calls their own `try` blocks
 ```
+
+### A Throw From the Middle of a Block Body Releases Exactly the Owners Bound Before It
+
+Seven `fetch` results are bound in one block body and the call that fails is each index in turn, so the
+routed throw leaves with zero to six owners live; an owner bound before the block is not released by
+the block's throw edge but at the function's exit, and the carried `log` and `steps` reach the handler
+with the values the failing call left them.
+
+<!-- test: routed-throw-releases-every-owner-bound-so-far -->
+```maxon
+typealias Index = int(0 to 255)
+
+enum Refusal implements Error
+	refused
+end 'Refusal'
+
+function fetch(i Index, stop Index) returns String throws Refusal
+	if i == stop 'refuse'
+		throw Refusal.refused
+	end 'refuse'
+
+	return "fetched {i} padded out long enough to heap allocate"
+end 'fetch'
+
+function run(stop Index) returns String
+	let outer = fetchOuter(stop)
+	var log = "start"
+	var steps = 0 as Index
+
+	try 'work'
+		let s0 = fetch(0, stop: stop)
+		log = "{log},{s0.byteLength()}"
+		steps = steps + 1
+		let s1 = fetch(1, stop: stop)
+		log = "{log},{s1.byteLength()}"
+		steps = steps + 1
+		let s2 = fetch(2, stop: stop)
+		log = "{log},{s2.byteLength()}"
+		steps = steps + 1
+		let s3 = fetch(3, stop: stop)
+		log = "{log},{s3.byteLength()}"
+		steps = steps + 1
+		let s4 = fetch(4, stop: stop)
+		log = "{log},{s4.byteLength()}"
+		steps = steps + 1
+		let s5 = fetch(5, stop: stop)
+		log = "{log},{s5.byteLength()}"
+		steps = steps + 1
+		let s6 = fetch(6, stop: stop)
+		log = "{log},{s6.byteLength()}"
+		steps = steps + 1
+	end 'work' otherwise (e) 'bad'
+		match e 'kind'
+			refused then log = "{log} refused"
+		end 'kind'
+	end 'bad'
+
+	return "{outer} {log} {steps}"
+end 'run'
+
+function fetchOuter(stop Index) returns String
+	return "outer {stop} padded out long enough to heap allocate"
+end 'fetchOuter'
+
+function main() returns ExitCode
+	for k in 0 to 8 'each'
+		print("{run(k)}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+outer 0 padded out long enough to heap allocate start refused 0
+outer 1 padded out long enough to heap allocate start,49 refused 1
+outer 2 padded out long enough to heap allocate start,49,49 refused 2
+outer 3 padded out long enough to heap allocate start,49,49,49 refused 3
+outer 4 padded out long enough to heap allocate start,49,49,49,49 refused 4
+outer 5 padded out long enough to heap allocate start,49,49,49,49,49 refused 5
+outer 6 padded out long enough to heap allocate start,49,49,49,49,49,49 refused 6
+outer 7 padded out long enough to heap allocate start,49,49,49,49,49,49,49 7
+outer 8 padded out long enough to heap allocate start,49,49,49,49,49,49,49 7
+```
+
+### A Routed `throw` of a Bound Box Releases the Owners Around It and Not the Box
+
+A boxed error bound in the middle of the body is thrown while owners bound before and after it are
+live. The box is in flight to the handler, so the throw edge drops every owner except it; the
+handler adopts the box once.
+
+<!-- test: routed-throw-of-a-bound-box-releases-the-owners-around-it -->
+```maxon
+typealias Index = int(0 to 255)
+
+union Failure implements Error
+	detail(message String)
+	code(value Index)
+end 'Failure'
+
+function build(i Index) returns String
+	return "owner {i} padded out long enough to heap allocate"
+end 'build'
+
+function run(k Index) returns String
+	var log = "start"
+
+	try 'work'
+		let a = build(1)
+		let err = Failure.detail("{a} thrown after {k} padded out long enough to heap allocate")
+		let b = build(2)
+		let c = build(3)
+
+		if k == 1 'early'
+			throw err
+		end 'early'
+
+		let d = build(4)
+		let e = build(5)
+		let g = build(6)
+
+		if k == 2 'late'
+			throw err
+		end 'late'
+
+		log = "{log} {b.byteLength()} {c.byteLength()} {d.byteLength()} {e.byteLength()} {g.byteLength()}"
+	end 'work' otherwise (caught) 'bad'
+		match caught 'kind'
+			detail(message) then log = "{log} detail {message}"
+			code(value) then log = "{log} code {value}"
+		end 'kind'
+	end 'bad'
+
+	return log
+end 'run'
+
+function main() returns ExitCode
+	for k in 0 to 3 'each'
+		print("{run(k)}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+start 47 47 47 47 47
+start detail owner 1 padded out long enough to heap allocate thrown after 1 padded out long enough to heap allocate
+start detail owner 1 padded out long enough to heap allocate thrown after 2 padded out long enough to heap allocate
+start 47 47 47 47 47
+```
+
+### A Carried Interface Value Reaches the Handler Through the Owners' Drops
+
+An interface-typed `var` reassigned inside the body is carried to the handler as a value and its
+witness while the throw edge releases the owners bound so far. The handler dispatches on the
+value the failing call left it.
+
+<!-- test: routed-throw-carries-an-interface-value-past-the-owners -->
+```maxon
+typealias Index = int(0 to 255)
+
+enum Refusal implements Error
+	refused
+end 'Refusal'
+
+interface Voice
+	function say() returns Index
+end 'Voice'
+
+type Low implements Voice
+	function say() returns Index
+		return 1
+	end 'say'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Low'
+
+type High implements Voice
+	function say() returns Index
+		return 2
+	end 'say'
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'High'
+
+function fetch(i Index, stop Index) returns String throws Refusal
+	if i == stop 'refuse'
+		throw Refusal.refused
+	end 'refuse'
+
+	return "fetched {i} padded out long enough to heap allocate"
+end 'fetch'
+
+function run(stop Index, first Voice, second Voice) returns String
+	var current = first
+	var seen = 0 as Index
+
+	try 'work'
+		let a = fetch(0, stop: stop)
+		let b = fetch(1, stop: stop)
+		current = second
+		let c = fetch(2, stop: stop)
+		let d = fetch(3, stop: stop)
+		let e = fetch(4, stop: stop)
+		seen = (a.byteLength() + b.byteLength() + c.byteLength() + d.byteLength() + e.byteLength()) as Index
+	end 'work' otherwise (caught) 'bad'
+		match caught 'kind'
+			refused then seen = seen + 1
+		end 'kind'
+	end 'bad'
+
+	return "{current.say()}-{seen}"
+end 'run'
+
+function main() returns ExitCode
+	for stop in 0 to 6 'each'
+		print("{stop}: {run(stop, first: Low.create(), second: High.create())}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0: 1-1
+1: 1-1
+2: 2-1
+3: 2-1
+4: 2-1
+5: 2-245
+6: 2-245
+```

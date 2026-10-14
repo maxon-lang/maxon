@@ -1807,3 +1807,30 @@ Measured with `phase:inlineLeaves` on `tests/ladders/gentryeach.sh <N> each`, on
 | per doubling, every ladder | ×3.5–4.0 | ×1.8–2.1 |
 
 Inline decisions are unchanged and the emitted IR is byte-identical. The self-compile is within 0.3%.
+
+### Result — 2026-10-14, exits that leave owners behind share one release chain
+
+Owned-value cleanup at exits cost owners × exits. A `return` handing back a binding from the middle of the
+owned stack emitted the drops of every other owner unshared, and each throwing call in a block-form `try`
+had its own landing pad releasing every owner bound so far.
+
+Each exit shape now has one lazily built release chain per loop context and floor. Its entries are ranked in
+binding order, and the entry at rank r drops that owner and every one below it, down to the shape's exit
+terminal or the `try`'s error block. An exit drops its innermost owner inline and branches into the entry
+below it, so every exit reuses the nodes the earlier ones built. A handed-off owner is excluded from the
+chain rather than removed from the owned stack: with up to three owners above it the exit gets its own copy
+of those drops, and deeper it enters a flagged chain that compares a carried skip rank at each step. A move
+written to an owner invalidates the chains from that owner's position up.
+
+Measured on `tests/ladders/genreturns.sh <N>`, one function of N owned `String` bindings followed by N
+guarded `return sᵢ` exits (the returns ladder), and `tests/ladders/gentryeach.sh <N> block`, N lets bound
+by throwing calls inside one `try` block:
+
+| | before | after |
+|---|---|---|
+| returns ladder, total compile at N = 1000 | 347 s | 3.1 s |
+| returns ladder, executable at N = 1000 | 7.28 MB | 487 KB |
+| `gentryeach.sh block`, total compile at N = 200 | 17.7 s | 0.47 s |
+| total compile per doubling, both ladders | ×3.9 rising to ×7.9 | ×2.0–2.2 |
+
+Runtime benchmarks are unchanged.

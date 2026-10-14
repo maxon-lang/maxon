@@ -239,32 +239,13 @@ export type OwnedBindingIndex
 	var heldCell as BoolArray
 	var owners as OwnerPositionByValue
 	var cells as MoveSlotIndexColumn
-	var complete as bool
 
 	export static function create() returns OwnedBindingIndex
-		return Self{heldLive: BoolArray.create(), heldValue: ValueIdArray.create(), heldCell: BoolArray.create(), owners: OwnerPositionByValue.create(), cells: MoveSlotIndexColumn.create(), complete: true}
+		return Self{heldLive: BoolArray.create(), heldValue: ValueIdArray.create(), heldCell: BoolArray.create(), owners: OwnerPositionByValue.create(), cells: MoveSlotIndexColumn.create()}
 	end 'create'
-
-	function reset()
-		self.heldLive.clear()
-		self.heldValue.clear()
-		self.heldCell.clear()
-		self.owners = OwnerPositionByValue.create()
-		self.cells.clear()
-		self.complete = false
-	end 'reset'
 
 	function refresh(bindings VarInfoArray, pending PositionSet)
 		let height = bindings.count()
-
-		if not self.complete 'rebuildEverything'
-			for position in 0 upto height 'eachPosition'
-				pending.note(position)
-			end 'eachPosition'
-
-			self.complete = true
-		end 'rebuildEverything'
-
 		self.dropBeyond(height)
 
 		let changed = pending.drain(height)
@@ -407,9 +388,11 @@ export type MoveLedger
 	var owned as OwnedBindingIndex
 	var dirty as PositionSet
 	var ownedDirty as PositionSet
+	var chainDirty as bool
+	var chainDirtyFrom as ElementIndex
 
 	export static function create() returns MoveLedger
-		return Self{live: MoveSlots.empty(), owned: OwnedBindingIndex.create(), dirty: PositionSet.create(), ownedDirty: PositionSet.create()}
+		return Self{live: MoveSlots.empty(), owned: OwnedBindingIndex.create(), dirty: PositionSet.create(), ownedDirty: PositionSet.create(), chainDirty: false, chainDirtyFrom: 0}
 	end 'create'
 
 	export function refreshedOwners(bindings VarInfoArray) returns OwnedBindingIndex
@@ -423,14 +406,26 @@ export type MoveLedger
 	export function noteDirty(position ElementIndex)
 		self.ownedDirty.note(position)
 		self.dirty.note(position)
+		self.noteChainDirty(position)
 	end 'noteDirty'
 
-	export function invalidate()
-		self.dirty.clear()
-		self.ownedDirty.clear()
-		self.live = MoveSlots.empty()
-		self.owned.reset()
-	end 'invalidate'
+	function noteChainDirty(position ElementIndex)
+		if self.chainDirty and self.chainDirtyFrom <= position 'alreadyLower'
+			return
+		end 'alreadyLower'
+
+		self.chainDirty = true
+		self.chainDirtyFrom = position
+	end 'noteChainDirty'
+
+	export function takeChainDirtyFloor() returns ElementIndex throws AbsentError
+		if not self.chainDirty 'nothingWritten'
+			throw AbsentError.absent
+		end 'nothingWritten'
+
+		self.chainDirty = false
+		return self.chainDirtyFrom
+	end 'takeChainDirtyFloor'
 
 	export function takeRefreshPositions(height ElementIndex) returns MoveSlotIndexColumn
 		let kept = self.live.height if self.live.height < height else height

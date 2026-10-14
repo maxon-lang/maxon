@@ -392,6 +392,8 @@ tests/
     error-path-drops-grow-linearly-with-propagating-trys.maxtest   a function of 16, 32 and 64 owned bindings, each bound by a propagating `try`, compiles to code that grows linearly in the bindings
     error-path-drops-grow-linearly-with-throws.maxtest             the same with a guarded `throw` after each binding
     error-path-drops-grow-linearly-with-early-returns.maxtest      the same with a guarded early `return` after each binding
+    error-path-drops-grow-linearly-with-handed-off-returns.maxtest   the same with a guarded `return` of each binding, the rest still live
+    error-path-drops-grow-linearly-with-routed-throws.maxtest      the same with every binding bound by a throwing call inside one `try` block
     build-unchanged-is-up-to-date.maxtest                   a second build of an unchanged program says `Up to date ->`, compiles nothing and leaves the executable as it was
     build-unchanged-wasm-is-up-to-date.maxtest              the same for a wasm32-wasi build
     build-an-edit-in-the-same-second-recompiles.maxtest     a source edited in the second its last compile started is compiled again, and the program runs the edit

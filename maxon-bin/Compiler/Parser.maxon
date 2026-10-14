@@ -11718,12 +11718,15 @@ end 'BlockMark'
 
 let FunctionEntryBlockId = 0 as BlockId
 
-// Each exit keeps its innermost release inline, under its own statement's span, so every exit holds
-// an instruction (and a line-table row) without padding: a debug-info build emits the bytes a plain
-// one does.
-let ExitInlineReleaseCount = 1 as ElementIndex
 let DropCascadeNodeLabel = b"exitdrop"
+let SkipTestNodeLabel = b"exitskip"
 let ExitTerminalLabel = b"exitterminal"
+
+// An exit handing off an owner with at most this many releasable owners above it gets its own
+// nodes for those owners, joining the shared chain below the handed-off one. Deeper, it enters the
+// flagged chain, where each rank down to the handed-off one compares itself with the skip rank the
+// exit carries. The bound trades nodes per exit against a compare per rank at run time.
+let ExplicitExclusionDepth = 3 as ElementIndex
 
 enum ExitKind
 	propagate
@@ -11731,6 +11734,7 @@ enum ExitKind
 	throwBoxed
 	returnValue
 	returnVoid
+	routedThrow
 end 'ExitKind'
 
 union FunctionExit
@@ -11741,23 +11745,68 @@ union FunctionExit
 	returnVoid
 end 'FunctionExit'
 
+type CarriedSlot
+	export let tag as ValueTypeTag
+	export let nameId as TypeNameId
+
+	static function create(tag ValueTypeTag, nameId TypeNameId) returns Self
+		return Self{tag: tag, nameId: nameId}
+	end 'create'
+
+	function matches(other CarriedSlot) returns bool
+		return self.tag == other.tag and self.nameId == other.nameId
+	end 'matches'
+end 'CarriedSlot'
+
+typealias CarriedSlotArray = Array with CarriedSlot
+
 type ExitShape
 	export let kind as ExitKind
 	export let tag as ValueTypeTag
 	export let nameId as TypeNameId
+	export let destination as BlockId
+	export let slots as CarriedSlotArray
 
 	static function create(kind ExitKind, tag ValueTypeTag, nameId TypeNameId) returns Self
-		return Self{kind: kind, tag: tag, nameId: nameId}
+		return Self{kind: kind, tag: tag, nameId: nameId, destination: FunctionEntryBlockId, slots: CarriedSlotArray.create()}
 	end 'create'
 
+	static function routedThrow(destination BlockId, slots CarriedSlotArray) returns Self
+		return Self{kind: ExitKind.routedThrow, tag: ValueTypeTag.void, nameId: UnnamedTypeId, destination: destination, slots: slots}
+	end 'routedThrow'
+
 	function matches(other ExitShape) returns bool
-		return self.kind == other.kind and self.tag == other.tag and self.nameId == other.nameId
+		if self.kind != other.kind or self.tag != other.tag or self.nameId != other.nameId or self.destination != other.destination or self.slots.count() != other.slots.count() 'differs'
+			return false
+		end 'differs'
+
+		for position in 0 upto self.slots.count() 'eachSlot'
+			let mine = try self.slots.get(position) otherwise panic("ExitShape.matches: slots.get OOB at {position} below the count both shapes agreed on")
+			let theirs = try other.slots.get(position) otherwise panic("ExitShape.matches: other.slots.get OOB at {position} below the count both shapes agreed on")
+
+			if not mine.matches(theirs) 'slotDiffers'
+				return false
+			end 'slotDiffers'
+		end 'eachSlot'
+
+		return true
 	end 'matches'
 
 	function carriesAWitness() returns bool
 		return self.tag == ValueTypeTag.interfaceRef
 	end 'carriesAWitness'
 end 'ExitShape'
+
+union HandedOff
+	nothing
+	value(held ValueId)
+end 'HandedOff'
+
+union ExitRoute
+	direct
+	chained(first ElementIndex, entry BlockId)
+	flagged(first ElementIndex, entry BlockId, skip ElementIndex)
+end 'ExitRoute'
 
 enum ReleaseShape
 	plain
@@ -11813,13 +11862,171 @@ end 'ExitTerminal'
 
 typealias ExitTerminalArray = Array with ExitTerminal
 
+type RoutedNode
+	export var block as IrBlock
+	export var args as ValueIdArray
+
+	static function create(block IrBlock, args ValueIdArray) returns Self
+		return Self{block: block, args: args}
+	end 'create'
+end 'RoutedNode'
+
+typealias RoutedNodeArray = Array with RoutedNode
+typealias RoutedNodesByDestination = Map with (BlockId, RoutedNodeArray)
+
+type UnmatchedObligation
+	export let position as ElementIndex
+	export let name as ByteArray
+	export let flag as ValueId
+
+	static function create(position ElementIndex, name ByteArray, flag ValueId) returns Self
+		return Self{position: position, name: name, flag: flag}
+	end 'create'
+end 'UnmatchedObligation'
+
+typealias UnmatchedObligationArray = Array with UnmatchedObligation
+typealias ReleasableRankColumn = Array with ElementIndex
+
+// Releasable owners above `floor` are ranked from 1 in binding order. The entry at rank r drops
+// that owner and every lower rank, then reaches the base: the shape's exit terminal, or the `try`'s
+// error block. An exit drops its innermost owner inline and enters the rank below it, so a
+// function's drops, and the uses its register allocator splits, grow linearly in its exits rather
+// than as their square. Gated by `tests/cli/error-path-drops-grow-linearly-with-*.maxtest`.
+type ReleaseChain
+	export let shape as ExitShape
+	export let context as BlockId
+	export let floor as ElementIndex
+	var keyedByHandoffs as bool
+	export var entries as BlockIdArray
+	export var skipEntries as BlockIdArray
+	export var unmatched as UnmatchedObligationArray
+	var scanned as ElementIndex
+	var releasable as OwnedBindingPositionArray
+	var releasableThrough as ReleasableRankColumn
+
+	static function create(shape ExitShape, context BlockId, floor ElementIndex) returns Self
+		return Self{shape: shape, context: context, floor: floor, keyedByHandoffs: false, entries: BlockIdArray.create(), skipEntries: BlockIdArray.create(), unmatched: UnmatchedObligationArray.create(), scanned: floor, releasable: OwnedBindingPositionArray.create(), releasableThrough: ReleasableRankColumn.create()}
+	end 'create'
+
+	function matches(wanted ExitShape, wantedContext BlockId, wantedFloor ElementIndex) returns bool
+		return self.floor == wantedFloor and self.context == wantedContext and self.shape.matches(wanted)
+	end 'matches'
+
+	function scannedHeight() returns ElementIndex
+		return self.scanned
+	end 'scannedHeight'
+
+	function keyUnderHandoffs(handoffsNow bool)
+		if handoffsNow or self.keyedByHandoffs 'nodesKeyedByHandoffs'
+			self.invalidateFrom(self.floor)
+		end 'nodesKeyedByHandoffs'
+
+		self.keyedByHandoffs = handoffsNow
+	end 'keyUnderHandoffs'
+
+	function releasableCount() returns ElementIndex
+		return self.releasable.count()
+	end 'releasableCount'
+
+	function positionOfRank(rank ElementIndex) returns ElementIndex
+		return try self.releasable.get(rank - 1) otherwise panic("ReleaseChain.positionOfRank: rank {rank} is past the {self.releasable.count()} releasable bindings the chain scanned")
+	end 'positionOfRank'
+
+	function rankOfPosition(position ElementIndex) returns ElementIndex
+		return try self.releasableThrough.get(position - self.floor) otherwise panic("ReleaseChain.rankOfPosition: position {position} is outside the [{self.floor}, {self.scanned}) the chain scanned")
+	end 'rankOfPosition'
+
+	function entryAt(rank ElementIndex) returns BlockId
+		return try self.entries.get(rank - 1) otherwise panic("ReleaseChain.entryAt: rank {rank} has no entry among the {self.entries.count()} built")
+	end 'entryAt'
+
+	function skipEntryAt(rank ElementIndex) returns BlockId
+		return try self.skipEntries.get(rank - 1) otherwise panic("ReleaseChain.skipEntryAt: rank {rank} has no entry among the {self.skipEntries.count()} built")
+	end 'skipEntryAt'
+
+	function noteScanned(position ElementIndex, holdsARelease bool)
+		if position != self.scanned 'outOfOrder'
+			panic("ReleaseChain.noteScanned: position {position} is not the next unscanned one, {self.scanned}")
+		end 'outOfOrder'
+
+		if holdsARelease 'aRelease'
+			self.releasable.push(position)
+		end 'aRelease'
+
+		self.releasableThrough.push(self.releasable.count())
+		self.scanned = self.scanned + 1
+	end 'noteScanned'
+
+	function invalidateFrom(position ElementIndex)
+		if position >= self.scanned 'nothingScannedThere'
+			return
+		end 'nothingScannedThere'
+
+		let kept = position if position > self.floor else self.floor
+		let keptPositions = kept - self.floor
+		var keptRanks = 0 as ElementIndex
+
+		if keptPositions > 0 'somethingBelow'
+			keptRanks = try self.releasableThrough.get(keptPositions - 1) otherwise panic("ReleaseChain.invalidateFrom: releasableThrough.get OOB at {keptPositions - 1} below the count scanned")
+		end 'somethingBelow'
+
+		self.releasableThrough.truncate(keptPositions)
+		self.releasable.truncate(keptRanks)
+
+		if self.entries.count() > keptRanks 'entriesAbove'
+			self.entries.truncate(keptRanks)
+		end 'entriesAbove'
+
+		if self.skipEntries.count() > keptRanks 'skipEntriesAbove'
+			self.skipEntries.truncate(keptRanks)
+		end 'skipEntriesAbove'
+
+		var stillUnmatched = UnmatchedObligationArray.create()
+
+		for obligation in self.unmatched 'eachObligation'
+			if obligation.position < kept 'belowTheCut'
+				stillUnmatched.push(obligation)
+			end 'belowTheCut'
+		end 'eachObligation'
+
+		self.unmatched = stillUnmatched
+		self.scanned = kept
+	end 'invalidateFrom'
+end 'ReleaseChain'
+
+typealias ReleaseChainArray = Array with ReleaseChain
+
 type DropCascade
 	export var terminals as ExitTerminalArray
 	export var nodes as DropNodesByContext
+	export var chains as ReleaseChainArray
+	export var routed as RoutedNodesByDestination
 
 	static function create() returns Self
-		return Self{terminals: ExitTerminalArray.create(), nodes: DropNodesByContext.create()}
+		return Self{terminals: ExitTerminalArray.create(), nodes: DropNodesByContext.create(), chains: ReleaseChainArray.create(), routed: RoutedNodesByDestination.create()}
 	end 'create'
+
+	function routedNodesTo(destination BlockId) returns RoutedNodeArray
+		return try self.routed.get(destination) otherwise RoutedNodeArray.create()
+	end 'routedNodesTo'
+
+	function noteRoutedNode(destination BlockId, node RoutedNode)
+		var held = try self.routed.get(destination) otherwise RoutedNodeArray.create()
+		held.push(node)
+		self.routed.upsert(destination, value: held)
+	end 'noteRoutedNode'
+
+	function discardContext(context BlockId)
+		var kept = ReleaseChainArray.create()
+
+		for chain in self.chains 'eachChain'
+			if chain.context != context 'otherContext'
+				kept.push(chain)
+			end 'otherContext'
+		end 'eachChain'
+
+		self.chains = kept
+	end 'discardContext'
 
 	function terminalFor(shape ExitShape) returns BlockId throws AbsentError
 		for terminal in self.terminals 'eachTerminal'
@@ -11890,21 +12097,79 @@ function exitValueOf(exit FunctionExit) returns ValueId throws AbsentError
 	end 'exit'
 end 'exitValueOf'
 
-function inlineReleaseCountOf(releases OwnedBindingPositionArray) returns ElementIndex
-	return releases.count() if releases.count() < ExitInlineReleaseCount else ExitInlineReleaseCount
-end 'inlineReleaseCountOf'
+function exitRouteIsDirect(route ExitRoute) returns bool
+	return match route 'route'
+		direct gives true
+		chained or
+		flagged gives false
+	end 'route'
+end 'exitRouteIsDirect'
+
+function handedOffValue(handedOff HandedOff) returns ValueId throws AbsentError
+	match handedOff 'which'
+		nothing then throw AbsentError.absent
+		value(held) then return held
+	end 'which'
+end 'handedOffValue'
+
+function handedOffHolds(handedOff HandedOff, candidate ValueId) returns bool
+	let held = try handedOffValue(handedOff) otherwise return false
+	return held == candidate
+end 'handedOffHolds'
+
+enum ReleaseDisposition
+	release
+	skip
+	unmatchedObligation
+end 'ReleaseDisposition'
+
+// ⭐ **DROP-SKIP FOR A MOVED-FROM BINDING.** Its owned value was transferred to another
+// binding by a `let u = t` / `s = t`, which now owns and drops it — decref-ing it here too
+// would double-free. The moved-from binding stays in
+// the list (removal would desync the block/loop drop marks), so the SKIP is what makes a
+// moved-out value drop exactly once. This one guard serves every exit that funnels through
+// here — `return`, a block fall-through, a `break`/`continue`.
+function releaseDispositionOf(binding VarInfo) returns ReleaseDisposition
+	let movedFrom = binding.movedFrom
+
+	if binding.isErrorMatchObligation 'anObligation'
+		if movedFrom 'matched'
+			return ReleaseDisposition.skip
+		end 'matched'
+
+		return ReleaseDisposition.unmatchedObligation
+	end 'anObligation'
+
+	if movedFrom and not binding.isCellBinding 'movedOut'
+		return ReleaseDisposition.skip
+	end 'movedOut'
+
+	return ReleaseDisposition.release
+end 'releaseDispositionOf'
+
+function appendedArg(args ValueIdArray, extra ValueId) returns ValueIdArray
+	var extended = ValueIdArray.create()
+
+	for arg in args 'eachArg'
+		extended.push(arg)
+	end 'eachArg'
+
+	extended.push(extra)
+	return extended
+end 'appendedArg'
 
 function exitCarriedValue(carried ValueIdArray) returns ValueId
 	return try carried.get(0) otherwise panic("exitCarriedValue: an exit that carries a value was handed an empty payload")
 end 'exitCarriedValue'
 
 function exitTerminatorOp(kind ExitKind, carried ValueIdArray) returns MaxonOp
-	return match kind 'kind'
-		propagate gives MaxonOp.propagateError(exitCarriedValue(carried))
-		throwScalar gives MaxonOp.throwError(exitCarriedValue(carried), errorIsBoxed: false)
-		throwBoxed gives MaxonOp.throwError(exitCarriedValue(carried), errorIsBoxed: true)
-		returnValue gives MaxonOp.ret(exitCarriedValue(carried))
-		returnVoid gives MaxonOp.retVoid
+	match kind 'kind'
+		propagate then return MaxonOp.propagateError(exitCarriedValue(carried))
+		throwScalar then return MaxonOp.throwError(exitCarriedValue(carried), errorIsBoxed: false)
+		throwBoxed then return MaxonOp.throwError(exitCarriedValue(carried), errorIsBoxed: true)
+		returnValue then return MaxonOp.ret(exitCarriedValue(carried))
+		returnVoid then return MaxonOp.retVoid
+		routedThrow then panic("exitTerminatorOp: a routed throw ends in a branch to its handler, which has no terminator op")
 	end 'kind'
 end 'exitTerminatorOp'
 
@@ -13753,6 +14018,7 @@ end 'ErrorMatchRefusal'
 
 // E3161's reason where two paths reach one point with a combined error matched on one and not the other.
 let ErrorMatchPathsDisagreeReason = "it is matched on some of the paths that join here and not on others"
+let ErrorMatchLeavesUnmatchedReason = "a path leaves the handler here without having matched it"
 
 // The refusal for moving the owned binding `owned` out of the innermost loop — E3161 when it is a combined
 // error's match obligation, whose move is its match.
@@ -38888,8 +39154,7 @@ export type Parser
 	//
 	// ⚠ It relies on the stack being STRICTLY LIFO — the popped binding's name must be the one the
 	// index currently maps to this position. `openBlock`/`closeBlock` are the only things that move
-	// the height, and they nest, so it is; a mid-stack removal (the shape `removeFromOwnedBindings`
-	// deliberately avoids for the drop marks) would desync the index instead.
+	// the height, and they nest, so it is; a mid-stack removal would desync the index instead.
 	function popMutableVar()
 		let dropped = try self.bodyState.mutableVars.pop() otherwise panic("popMutableVar: mutableVars.pop failed on a non-empty stack")
 		let shadowed = try self.bodyState.mutableVarShadowed.pop() otherwise panic("popMutableVar: the shadow column ran out before `mutableVars` did — the two grew apart")
@@ -42406,12 +42671,12 @@ export type Parser
 	//     owned, so they pass through here. This half is return-specific and stays here; the MOVE below is
 	//     the shared hand-off cleanup.
 	//   • MOVE the owned return OUT of both drop sets — the shared `emitHandoffExit` (the throw twin
-	//     performs the SAME move). It belongs to the caller now: out of `ownedBindings` so `emitFunctionExit`
-	//     does not double-free `return t`, and out of `pendingTempDrops` so the interp/promoted temporary is
-	//     not dropped on the dead path the `ret` leaves behind. The `ownedBindings` removal is SCOPED to
-	//     this return's drops and UNDONE after them (the helper's `savedOwnedBindings`), because
-	//     `ownedBindings` OUTLIVES the `return` and the returned binding may sit in an enclosing block with
-	//     other LIVE exit edges whose drops are emitted LATER in the parse and still own it.
+	//     performs the SAME move). It belongs to the caller now: excluded from this exit's
+	//     owned-binding drops so `emitFunctionExit` does not double-free `return t`, and out of
+	//     `pendingTempDrops` so the interp/promoted temporary is not dropped on the dead path the
+	//     `ret` leaves behind. The binding stays in `ownedBindings`, because the list OUTLIVES the
+	//     `return` and the returned binding may sit in an enclosing block with other LIVE exit edges
+	//     whose drops are emitted LATER in the parse and still own it.
 	//
 	// ⭐⭐ **A RETURNED STRUCT / BOXED UNION MUST BE OWNED, AND A BORROWED ONE IS CO-OWNED RATHER THAN
 	// REFUSED.** An OWNED box carries the provenance bit and is moved out, so exactly one owner drops it. A
@@ -42607,8 +42872,8 @@ export type Parser
 	// THROW'S CLOTHES.** A `throw U.case(x)` builds an owned box and hands it to the handler, which adopts it
 	// (`enrollCaughtBox`); left in `pendingTempDrops`/`ownedBindings` the landing pad would release it on the
 	// very edge that transfers it — a double free. `emitHandoffExit` performs exactly this move-out for
-	// the function-exit form, and its save/restore of `ownedBindings` is kept for its reason: a SIBLING edge
-	// (another arm, the path that did not throw) still owns whatever this one gave away.
+	// the function-exit form. A bound box stays in `ownedBindings` and is excluded from this edge's
+	// drops (`HandedOff`): a SIBLING edge (another arm, the path that did not throw) still owns it.
 	function routeBareThrowToTryBlock(errValue ValueId, errorType MaxonType, errorIsBoxed bool, anchor Token)
 		var ctx = self.innermostTryBlock()
 		let member = self.recordRoutedEdge(ctx, clause: self.thrownTypeClause(errorType))
@@ -42618,15 +42883,14 @@ export type Parser
 		let fused = self.routedEdgeFusedValue(ctx, member: member, flag: flag)
 
 		let errArgs = self.tryBlockErrorEdgeArgs(ctx, flag: flag)
-		var savedOwnedBindings = self.bodyState.ownedBindings
+		var inFlight = HandedOff.nothing
 
 		if self.valueIsOwnedHeap(errValue) 'boxInFlight'
-			self.removeFromOwnedBindings(errValue)
+			inFlight = HandedOff.value(errValue)
 			self.removeFromPendingTemps(errValue)
 		end 'boxInFlight'
 
-		let errTargetId = self.tryBlockThrowEdgeTarget(ctx, errArgs: errArgs, flag: flag, member: member, fusedValue: fused, anchor: anchor)
-		self.restoreOwnedBindings(savedOwnedBindings)
+		let errTargetId = self.tryBlockThrowEdgeTarget(ctx, errArgs: errArgs, flag: flag, member: member, fusedValue: fused, anchor: anchor, handedOff: inFlight)
 
 		self.emitBranch(self.bodyState.currentBlock, targetId: errTargetId)
 	end 'routeBareThrowToTryBlock'
@@ -44958,6 +45222,11 @@ export type Parser
 
 		let fusedPhi = self.mintPhi(errBlock, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
 
+		// Shared chain nodes forward the error block's args by position, so each takes the fused phi too.
+		for node in self.dropCascade().routedNodesTo(ctx.errBlockId) 'eachSharedDropNode'
+			node.args.push(self.mintPhi(node.block, tag: ValueTypeTag.integer, nameId: UnnamedTypeId))
+		end 'eachSharedDropNode'
+
 		var ordinals = ValueIdArray.create()
 
 		for k in 0 upto ctx.routedEdges.count() 'computeEach'
@@ -45717,9 +45986,10 @@ export type Parser
 	// statement built (`f(Item.create())` where `f` throws) and every owned binding the body declared
 	// before this point would both leak. They cannot be released in the shared error block — it is
 	// reached from every routed call, each owing a DIFFERENT set — so each site that owes anything
-	// gets its own one-way pad. It is the SAME RULE the expression-level `try` reaches by another
-	// route: release what the half-finished statement owes on each path that ABANDONS it, never once
-	// per construct. That fork suspends its temporaries as owned bindings instead
+	// gets its own one-way pad, which releases its temporaries and its innermost owner and joins the
+	// `ReleaseChain` every routed site shares. It is the SAME RULE the expression-level `try` reaches
+	// by another route: release what the half-finished statement owes on each path that ABANDONS it,
+	// never once per construct. That fork suspends its temporaries as owned bindings instead
 	// (`Parser.suspendForkTempsAsOwned`), because its abandoning paths are the handler's own exits and
 	// those already carry scope drops; here the abandoning paths are routed CALL SITES, which do not,
 	// so each gets a pad.
@@ -45734,34 +46004,55 @@ export type Parser
 	// ⚠ **A BOXED MEMBER'S EDGE ALWAYS TAKES A PAD, WHETHER OR NOT IT OWES A DROP.** Its fused ordinal
 	// is the tag LOADED out of the box, and on the success edge the flag is `0` — so the load has
 	// exactly one place it can stand: a block only the error edge reaches. That is what the pad is.
-	function tryBlockThrowEdgeTarget(ctx TryBlockContext, errArgs ValueIdArray, flag ValueId, member TryBlockErrorMember, fusedValue ValueId, anchor Token) returns BlockId
+	function tryBlockThrowEdgeTarget(ctx TryBlockContext, errArgs ValueIdArray, flag ValueId, member TryBlockErrorMember, fusedValue ValueId, anchor Token, handedOff HandedOff = HandedOff.nothing) returns BlockId
 		let owesTemps = self.bodyState.pendingTempDrops.count() > WholeStatementTempFloor
-		let owesBindings = self.bodyState.ownedBindings.count() > ctx.ownedFloor
+		let mayOweBindings = self.bodyState.ownedBindings.count() > ctx.ownedFloor
 
-		if not owesTemps and not owesBindings and not member.isBoxed 'nothingToRelease'
-			self.recordBranchEdge(self.bodyState.currentBlock, targetId: ctx.errBlockId, argIds: errArgs)
-			ctx.routedEdges.push(RoutedErrorEdge.create(errArgs, flag: flag, block: self.bodyState.currentBlock, member: member, fusedValue: fusedValue, anchor: anchor))
-			return ctx.errBlockId
+		if not owesTemps and not mayOweBindings and not member.isBoxed 'nothingToRelease'
+			return self.routeStraightToHandler(ctx, errArgs: errArgs, flag: flag, member: member, fusedValue: fusedValue, anchor: anchor)
 		end 'nothingToRelease'
+
+		let shape = self.routedThrowShape(ctx, errArgs: errArgs)
+		var route = ExitRoute.direct
+
+		if mayOweBindings 'bindingsToRelease'
+			route = self.exitRouteOf(self.releaseChain(shape, floor: ctx.ownedFloor), handedOff: handedOff, anchor: ctx.tryTok)
+		end 'bindingsToRelease'
+
+		if not owesTemps and exitRouteIsDirect(route) and not member.isBoxed 'allMoved'
+			return self.routeStraightToHandler(ctx, errArgs: errArgs, flag: flag, member: member, fusedValue: fusedValue, anchor: anchor)
+		end 'allMoved'
 
 		var func = self.bodyFunction()
 		var pad = self.artifact.module.addBlock(func, label: b"tryblkthrow", heat: BlockHeat.normal)
 
-		// ⚠ **THE PARSER'S POSITION MOVES INTO THE PAD AND BACK, AND THE RESTORE IS LOAD-BEARING.** The two
-		// drop routines take their destination differently — `emitScopeDrops` by parameter, `emitTempDrops`
-		// through `emitDecref` → `currentBlock` — and the CALLER emits its `condBranch` into the block this
-		// was entered in. Left pointing at the pad, that branch would terminate the pad instead.
-		let saved = self.bodyState.currentBlock
-		self.bodyState.currentBlock = pad
-		self.emitTempDrops(self.bodyState.pendingTempDrops, floor: WholeStatementTempFloor, anchor: ctx.tryTok)
-		self.emitScopeDrops(pad, floor: ctx.ownedFloor, anchor: ctx.tryTok)
-		self.bodyState.currentBlock = saved
-
-		self.recordBranchEdge(pad, targetId: ctx.errBlockId, argIds: errArgs)
+		self.emitTempDropsInto(pad, temps: self.bodyState.pendingTempDrops, anchor: ctx.tryTok)
+		self.emitExitRoute(pad, route: route, shape: shape, carried: errArgs, anchor: ctx.tryTok)
 		ctx.routedEdges.push(RoutedErrorEdge.create(errArgs, flag: flag, block: pad, member: member, fusedValue: fusedValue, anchor: anchor))
-		self.emitBranch(pad, targetId: ctx.errBlockId)
 		return pad.id
 	end 'tryBlockThrowEdgeTarget'
+
+	function routeStraightToHandler(ctx TryBlockContext, errArgs ValueIdArray, flag ValueId, member TryBlockErrorMember, fusedValue ValueId, anchor Token) returns BlockId
+		self.recordBranchEdge(self.bodyState.currentBlock, targetId: ctx.errBlockId, argIds: errArgs)
+		ctx.routedEdges.push(RoutedErrorEdge.create(errArgs, flag: flag, block: self.bodyState.currentBlock, member: member, fusedValue: fusedValue, anchor: anchor))
+		return ctx.errBlockId
+	end 'routeStraightToHandler'
+
+	function routedThrowShape(ctx TryBlockContext, errArgs ValueIdArray) returns ExitShape
+		let errBlock = try self.artifact.module.getBlockByIdIn(self.bodyFunction(), id: ctx.errBlockId) otherwise panic("routedThrowShape: the error block {ctx.errBlockId} of '{String.from(ctx.label)}' is not in its own function")
+
+		if errBlock.blockArgs.count() != errArgs.count() 'argsAndPhisDisagree'
+			panic("routedThrowShape: a routed edge carries {errArgs.count()} values but the error block of '{String.from(ctx.label)}' holds {errBlock.blockArgs.count()} phis — the two are positional")
+		end 'argsAndPhisDisagree'
+
+		var slots = CarriedSlotArray.create()
+
+		for arg in errBlock.blockArgs 'eachPhi'
+			slots.push(CarriedSlot.create(self.tagOf(arg.valueId), nameId: self.valueNameId(arg.valueId)))
+		end 'eachPhi'
+
+		return ExitShape.routedThrow(ctx.errBlockId, slots: slots)
+	end 'routedThrowShape'
 
 	// ⭐⭐ **THE FUSED ORDINAL THIS EDGE WILL CARRY, computed where the edge leaves from — or NOT computed at
 	// all, which is the case that matters most.** Three shapes, and `RoutedErrorEdge`'s header argues each:
@@ -46172,19 +46463,13 @@ export type Parser
 	// free once per loop iteration (`specs/character-ownership.md`'s
 	// `local-dropped-once-after-a-loop`). Every caller states the block it means.
 	function emitScopeDrops(into IrBlock, floor ElementIndex, anchor Token)
-		let releases = self.scopeReleasesAbove(floor, anchor: anchor)
-		self.emitScopeReleasesInto(into, releases: releases, start: 0, stop: releases.count(), anchor: anchor)
+		self.emitScopeReleasesInto(into, releases: self.scopeReleasesAbove(floor, anchor: anchor), anchor: anchor)
 	end 'emitScopeDrops'
 
-	function emitScopeReleasesInto(into IrBlock, releases OwnedBindingPositionArray, start ElementIndex, stop ElementIndex, anchor Token)
-		let saved = self.bodyState.currentBlock
-		self.bodyState.currentBlock = into
-
-		for index in start upto stop 'eachRelease'
-			self.emitScopeRelease(try releases.get(index) otherwise panic("emitScopeReleasesInto: releases.get OOB at {index} below the bound {stop} its caller read off the list"), anchor: anchor)
+	function emitScopeReleasesInto(into IrBlock, releases OwnedBindingPositionArray, anchor Token)
+		for position in releases 'eachRelease'
+			self.emitReleaseInto(into, position: position, anchor: anchor)
 		end 'eachRelease'
-
-		self.bodyState.currentBlock = saved
 	end 'emitScopeReleasesInto'
 
 	function scopeReleasesAbove(floor ElementIndex, anchor Token) returns OwnedBindingPositionArray
@@ -46193,29 +46478,13 @@ export type Parser
 
 		while i > floor 'eachOwned'
 			i = i - 1
-			let binding = try self.bodyState.ownedBindings.get(i) otherwise panic("scopeReleasesAbove: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
+			let binding = self.ownedBindingAt(i)
 
-			let bindingMovedFrom = binding.movedFrom
-			let bindingIsObligation = binding.isErrorMatchObligation
-			let bindingName = binding.name
-			let bindingIsCell = binding.isCellBinding
-
-			// ⭐ **DROP-SKIP FOR A MOVED-FROM BINDING.** Its owned value was transferred to another
-			// binding by a `let u = t` / `s = t`, which now owns and drops it — decref-ing it here too
-			// would double-free. The moved-from binding stays in
-			// the list (removal would desync the block/loop drop marks), so the SKIP is what makes a
-			// moved-out value drop exactly once. This one guard serves every exit that funnels through
-			// here — `return`, a block fall-through, a `break`/`continue`.
-			if bindingIsObligation and not bindingMovedFrom 'leavesUnmatched'
-				self.holdErrorMatchRefusal(bindingName, reason: "a path leaves the handler here without having matched it", anchor: anchor)
-				continue
-			end 'leavesUnmatched'
-
-			if bindingMovedFrom and not bindingIsCell 'movedOut'
-				continue
-			end 'movedOut'
-
-			releases.push(i)
+			match releaseDispositionOf(binding) 'disposition'
+				release then releases.push(i)
+				unmatchedObligation then self.holdErrorMatchRefusal(binding.name, reason: ErrorMatchLeavesUnmatchedReason, anchor: anchor)
+				skip then break
+			end 'disposition'
 		end 'eachOwned'
 
 		return releases
@@ -46263,29 +46532,155 @@ export type Parser
 		self.emitOwnershipRuntimeCall(MmDecrefName, args: singletonArgs(value), range: range)
 	end 'emitScopeRelease'
 
-	// Every whole-function exit drops its innermost owned binding inline and branches into a chain of
-	// drop nodes shared by every exit that releases the same bindings, so a function's drops, and the
-	// uses its register allocator splits, grow linearly in its exits rather than as their square.
-	// Gated by `tests/cli/error-path-drops-grow-linearly-with-*.maxtest`.
-	function emitFunctionExit(into IrBlock, exit FunctionExit, anchor Token)
-		let releases = self.scopeReleasesAbove(WholeFunctionScopeFloor, anchor: anchor)
+	function emitFunctionExit(into IrBlock, exit FunctionExit, anchor Token, handedOff HandedOff = HandedOff.nothing)
 		let shape = self.exitShapeOf(exit)
-		let carried = self.exitPayloadOf(exit, shape: shape)
-		let range = SourceRange.ofToken(anchor)
+		var route = ExitRoute.direct
 
-		if releases.count() == 0 'nothingToRelease'
-			self.artifact.emitTerminator(into, op: exitTerminatorOp(shape.kind, carried: carried), range: range)
-			return
-		end 'nothingToRelease'
+		if self.bodyState.ownedBindings.count() > WholeFunctionScopeFloor 'mayOweBindings'
+			route = self.exitRouteOf(self.releaseChain(shape, floor: WholeFunctionScopeFloor), handedOff: handedOff, anchor: anchor)
+		end 'mayOweBindings'
 
-		self.emitScopeReleasesInto(into, releases: releases, start: 0, stop: inlineReleaseCountOf(releases), anchor: anchor)
-
-		let entryId = self.dropCascadeEntry(releases, shape: shape, anchor: anchor)
-		var exitSite = into
-		exitSite.role = BlockRole.exitSite
-		self.recordBranchEdge(into, targetId: entryId, argIds: carried)
-		self.artifact.emitTerminator(into, op: MaxonOp.branch(entryId), range: range)
+		self.emitExitRoute(into, route: route, shape: shape, carried: self.exitPayloadOf(exit, shape: shape), anchor: anchor)
 	end 'emitFunctionExit'
+
+	// Each exit keeps its innermost release inline, under its own statement's span, so every exit
+	// holds an instruction (and a line-table row) without padding: a debug-info build emits the bytes
+	// a plain one does.
+	function emitExitRoute(into IrBlock, route ExitRoute, shape ExitShape, carried ValueIdArray, anchor Token)
+		match route 'route'
+			direct then self.emitExitTail(into, shape: shape, carried: carried, range: SourceRange.ofToken(anchor))
+			chained(first, entry) then self.emitReleaseAndJump(into, first: first, entry: entry, carried: carried, shape: shape, anchor: anchor)
+			flagged(first, entry, skip) then self.emitSkippingJump(into, first: first, entry: entry, skip: skip, carried: carried, shape: shape, anchor: anchor)
+		end 'route'
+	end 'emitExitRoute'
+
+	function emitExitTail(into IrBlock, shape ExitShape, carried ValueIdArray, range SourceRange)
+		if shape.kind == ExitKind.routedThrow 'toTheHandler'
+			self.recordBranchEdge(into, targetId: shape.destination, argIds: carried)
+			self.artifact.emitTerminator(into, op: MaxonOp.branch(shape.destination), range: range)
+			return
+		end 'toTheHandler'
+
+		self.artifact.emitTerminator(into, op: exitTerminatorOp(shape.kind, carried: carried), range: range)
+	end 'emitExitTail'
+
+	function emitReleaseAndJump(into IrBlock, first ElementIndex, entry BlockId, carried ValueIdArray, shape ExitShape, anchor Token)
+		self.emitReleaseInto(into, position: first, anchor: anchor)
+		self.emitJumpInto(into, entry: entry, edgeArgs: carried, shape: shape, anchor: anchor)
+	end 'emitReleaseAndJump'
+
+	function emitSkippingJump(into IrBlock, first ElementIndex, entry BlockId, skip ElementIndex, carried ValueIdArray, shape ExitShape, anchor Token)
+		self.emitReleaseInto(into, position: first, anchor: anchor)
+
+		let saved = self.bodyState.currentBlock
+		self.bodyState.currentBlock = into
+		let skipValue = self.emitLiteral(skip as ParsedInt, valueType: MaxonType.integer, range: SourceRange.ofToken(anchor))
+		self.bodyState.currentBlock = saved
+
+		self.emitJumpInto(into, entry: entry, edgeArgs: appendedArg(carried, extra: skipValue), shape: shape, anchor: anchor)
+	end 'emitSkippingJump'
+
+	function emitJumpInto(into IrBlock, entry BlockId, edgeArgs ValueIdArray, shape ExitShape, anchor Token)
+		if shape.kind != ExitKind.routedThrow 'aFunctionExit'
+			var exitSite = into
+			exitSite.role = BlockRole.exitSite
+		end 'aFunctionExit'
+
+		self.recordBranchEdge(into, targetId: entry, argIds: edgeArgs)
+		self.artifact.emitTerminator(into, op: MaxonOp.branch(entry), range: SourceRange.ofToken(anchor))
+	end 'emitJumpInto'
+
+	// A closed loop's context is never asked for again, and every exit scans and validates the whole
+	// chain list, so keeping its chains would make each later exit pay for every loop before it.
+	function discardLoopReleaseChains(context BlockId)
+		match self.bodyState.dropCascade 'state'
+			built(cascade) then cascade.discardContext(context)
+			unbuilt then break
+		end 'state'
+	end 'discardLoopReleaseChains'
+
+	function releaseChain(shape ExitShape, floor ElementIndex) returns ReleaseChain
+		var cascade = self.dropCascade()
+		let context = self.dropCascadeContext()
+
+		for chain in cascade.chains 'eachChain'
+			if chain.matches(shape, wantedContext: context, wantedFloor: floor) 'thisChain'
+				return chain
+			end 'thisChain'
+		end 'eachChain'
+
+		let fresh = ReleaseChain.create(shape, context: context, floor: floor)
+		cascade.chains.push(fresh)
+		return fresh
+	end 'releaseChain'
+
+	// A chain caches each position's release disposition, and a move-state write changes it: a stale
+	// one drops a moved-out value twice or leaks a revived one. Dispositions below the lowest position
+	// written since the last exit still hold, so only the ranks from there up are rescanned.
+	function validateReleaseChains(cascade DropCascade)
+		let dirtyFrom = try self.bodyState.moveLedger.takeChainDirtyFloor() otherwise return
+
+		for chain in cascade.chains 'eachChain'
+			chain.invalidateFrom(dirtyFrom)
+		end 'eachChain'
+	end 'validateReleaseChains'
+
+	function syncReleaseChain(chain ReleaseChain)
+		self.validateReleaseChains(self.dropCascade())
+		let top = self.bodyState.ownedBindings.count()
+
+		if top < chain.floor 'belowItsFloor'
+			panic("syncReleaseChain: {top} owned bindings are below the chain's floor {chain.floor}, which a scope drains only after its exits")
+		end 'belowItsFloor'
+
+		chain.keyUnderHandoffs(not self.bodyState.conditionalGives.isEmpty())
+		chain.invalidateFrom(top)
+
+		for position in chain.scannedHeight() upto top 'eachNewBinding'
+			self.classifyForRelease(chain, position: position)
+		end 'eachNewBinding'
+	end 'syncReleaseChain'
+
+	function classifyForRelease(chain ReleaseChain, position ElementIndex)
+		let binding = self.ownedBindingAt(position)
+
+		match releaseDispositionOf(binding) 'disposition'
+			release then chain.noteScanned(position, holdsARelease: true)
+			unmatchedObligation then self.noteUnmatchedObligation(chain, position: position, binding: binding)
+			skip then chain.noteScanned(position, holdsARelease: false)
+		end 'disposition'
+	end 'classifyForRelease'
+
+	function noteUnmatchedObligation(chain ReleaseChain, position ElementIndex, binding VarInfo)
+		chain.unmatched.push(UnmatchedObligation.create(position, name: binding.name, flag: binding.boundValue))
+		chain.noteScanned(position, holdsARelease: false)
+	end 'noteUnmatchedObligation'
+
+	function refuseUnmatchedObligations(chain ReleaseChain, handedOff HandedOff, anchor Token)
+		var index = chain.unmatched.count()
+
+		while index > 0 'eachObligation'
+			index = index - 1
+			let obligation = try chain.unmatched.get(index) otherwise panic("refuseUnmatchedObligations: unmatched.get OOB at {index} below the count just read")
+
+			if handedOffHolds(handedOff, candidate: obligation.flag) 'inFlight'
+				continue
+			end 'inFlight'
+
+			self.holdErrorMatchRefusal(obligation.name, reason: ErrorMatchLeavesUnmatchedReason, anchor: anchor)
+		end 'eachObligation'
+	end 'refuseUnmatchedObligations'
+
+	function excludedRankOf(chain ReleaseChain, handedOff HandedOff) returns ElementIndex throws AbsentError
+		let held = try handedOffValue(handedOff)
+		let position = try self.liveOwnerIndexOf(held) otherwise throw AbsentError.absent
+
+		if position < chain.floor 'belowTheScope'
+			throw AbsentError.absent
+		end 'belowTheScope'
+
+		return chain.rankOfPosition(position)
+	end 'excludedRankOf'
 
 	function exitShapeOf(exit FunctionExit) returns ExitShape
 		let kind = exitKindOf(exit)
@@ -46324,48 +46719,230 @@ export type Parser
 		return self.innermostLoopScan().blockFloor
 	end 'dropCascadeContext'
 
+	function exitRouteOf(chain ReleaseChain, handedOff HandedOff, anchor Token) returns ExitRoute
+		self.syncReleaseChain(chain)
+		self.refuseUnmatchedObligations(chain, handedOff: handedOff, anchor: anchor)
+
+		if let rank = try self.excludedRankOf(chain, handedOff: handedOff) 'aBindingInFlight'
+			return self.routeExcluding(chain, rank: rank, anchor: anchor)
+		end 'aBindingInFlight'
+
+		return self.routeAll(chain, anchor: anchor)
+	end 'exitRouteOf'
+
+	function routeAll(chain ReleaseChain, anchor Token) returns ExitRoute
+		let count = chain.releasableCount()
+
+		if count == 0 'nothingToRelease'
+			return ExitRoute.direct
+		end 'nothingToRelease'
+
+		return ExitRoute.chained(chain.positionOfRank(count), entry: self.chainEntry(chain, rank: count - 1, anchor: anchor))
+	end 'routeAll'
+
+	function routeExcluding(chain ReleaseChain, rank ElementIndex, anchor Token) returns ExitRoute
+		let count = chain.releasableCount()
+		let above = count - rank
+
+		if above == 0 'theInnermostIsInFlight'
+			if rank == 1 'nothingElseToRelease'
+				return ExitRoute.direct
+			end 'nothingElseToRelease'
+
+			return ExitRoute.chained(chain.positionOfRank(rank - 1), entry: self.chainEntry(chain, rank: rank - 2, anchor: anchor))
+		end 'theInnermostIsInFlight'
+
+		let first = chain.positionOfRank(count)
+
+		// A routed throw never takes the flagged chain: its skip nodes are not noted as routed nodes, so
+		// `synthesizeErrorUnion` would append the fused ordinal to none of their edges.
+		if above > ExplicitExclusionDepth and chain.shape.kind != ExitKind.routedThrow 'tooDeepToCopy'
+			return ExitRoute.flagged(first, entry: self.skipChainEntry(chain, rank: count - 1, anchor: anchor), skip: rank)
+		end 'tooDeepToCopy'
+
+		return ExitRoute.chained(first, entry: self.exclusionSegmentEntry(chain, excludedRank: rank, anchor: anchor))
+	end 'routeExcluding'
+
+	function chainBase(shape ExitShape, anchor Token) returns BlockId
+		if shape.kind == ExitKind.routedThrow 'theHandlerItself'
+			return shape.destination
+		end 'theHandlerItself'
+
+		return self.dropCascadeTerminal(self.dropCascade(), shape: shape, anchor: anchor)
+	end 'chainBase'
+
+	function chainEntry(chain ReleaseChain, rank ElementIndex, anchor Token) returns BlockId
+		if rank == 0 'theBase'
+			return self.chainBase(chain.shape, anchor: anchor)
+		end 'theBase'
+
+		let built = chain.entries.count()
+
+		if built < rank 'nodesToBuild'
+			self.extendEntries(chain, built: built, rank: rank, anchor: anchor)
+		end 'nodesToBuild'
+
+		return chain.entryAt(rank)
+	end 'chainEntry'
+
+	function extendEntries(chain ReleaseChain, built ElementIndex, rank ElementIndex, anchor Token)
+		let below = self.chainEntry(chain, rank: built, anchor: anchor)
+		var positions = OwnedBindingPositionArray.create()
+		var next = rank
+
+		while next > built 'eachNewRank'
+			positions.push(chain.positionOfRank(next))
+			next = next - 1
+		end 'eachNewRank'
+
+		let nodes = self.materializeNodes(chain, positions: positions, below: below, anchor: anchor)
+		var position = nodes.count()
+
+		while position > 0 'eachNodeInRankOrder'
+			position = position - 1
+			chain.entries.push(try nodes.get(position) otherwise panic("extendEntries: nodes.get OOB at {position} below the count just read"))
+		end 'eachNodeInRankOrder'
+	end 'extendEntries'
+
+	function exclusionSegmentEntry(chain ReleaseChain, excludedRank ElementIndex, anchor Token) returns BlockId
+		let below = self.chainEntry(chain, rank: excludedRank - 1, anchor: anchor)
+		var positions = OwnedBindingPositionArray.create()
+		var rank = chain.releasableCount() - 1
+
+		while rank > excludedRank 'eachRankAbove'
+			positions.push(chain.positionOfRank(rank))
+			rank = rank - 1
+		end 'eachRankAbove'
+
+		if positions.isEmpty() 'nothingAboveTheInlineRelease'
+			return below
+		end 'nothingAboveTheInlineRelease'
+
+		return try self.materializeNodes(chain, positions: positions, below: below, anchor: anchor).get(0) otherwise panic("exclusionSegmentEntry: a segment with positions to release built no node")
+	end 'exclusionSegmentEntry'
+
 	// Nodes and terminals carry the span of the exit that created them, and an exit sharing them later
 	// leaves it: `StorageProvenance.rootReachesTheDoorUnhanded` orders ops by this span
 	// (`opLiesBetween`). A chain's debug span is chosen apart from it, in `LowerMaxonToStd`.
-	function dropCascadeEntry(releases OwnedBindingPositionArray, shape ExitShape, anchor Token) returns BlockId
+	//
+	// New nodes are created in execution order: `ProvenanceTracer.walk` iterates to a fixpoint over
+	// blocks in creation order, so a chain created backwards costs it a pass per node.
+	function materializeNodes(chain ReleaseChain, positions OwnedBindingPositionArray, below BlockId, anchor Token) returns BlockIdArray
 		var cascade = self.dropCascade()
-		let context = self.dropCascadeContext()
-		let inline = inlineReleaseCountOf(releases)
-		var successor = self.dropCascadeTerminal(cascade, shape: shape, anchor: anchor)
-		var pending = releases.count()
+		var hits = BlockIdArray.create()
+		var successor = below
+		var pending = positions.count()
 
-		while pending > inline 'sharedSuffix'
-			let owned = try releases.get(pending - 1) otherwise panic("dropCascadeEntry: releases.get OOB at {pending - 1} below its own count")
-			successor = try cascade.nodeFor(self.dropNodeKeyAt(owned), exitShape: shape, context: context, successor: successor) otherwise break
+		while pending > 0 'sharedSuffix'
+			let owned = try positions.get(pending - 1) otherwise panic("materializeNodes: positions.get OOB at {pending - 1} below its own count")
+			successor = try cascade.nodeFor(self.dropNodeKeyAt(owned), exitShape: chain.shape, context: chain.context, successor: successor) otherwise break
+			hits.push(successor)
 			pending = pending - 1
 		end 'sharedSuffix'
-
-		let newNodes = pending - inline
-
-		if newNodes == 0 'wholeChainExists'
-			return successor
-		end 'wholeChainExists'
 
 		var func = self.bodyFunction()
 		var fresh = IrBlockArray.create()
 
-		for _ in 0 upto newNodes 'eachNewNode'
+		for _ in 0 upto pending 'eachNewNode'
 			fresh.push(self.artifact.module.addBlock(func, label: DropCascadeNodeLabel, heat: BlockHeat.normal, role: BlockRole.exitChain))
 		end 'eachNewNode'
 
-		for position in 0 upto newNodes 'eachNewNodeInExecutionOrder'
-			var block = try fresh.get(position) otherwise panic("dropCascadeEntry: fresh.get OOB at {position} below its own count")
+		for index in 0 upto pending 'eachNewNodeInExecutionOrder'
+			var block = try fresh.get(index) otherwise panic("materializeNodes: fresh.get OOB at {index} below its own count")
 			var nextId = successor
 
-			if position + 1 < newNodes 'anotherNewNodeFollows'
-				nextId = (try fresh.get(position + 1) otherwise panic("dropCascadeEntry: fresh.get OOB at {position + 1} below its own count")).id
+			if index + 1 < pending 'anotherNewNodeFollows'
+				nextId = (try fresh.get(index + 1) otherwise panic("materializeNodes: fresh.get OOB at {index + 1} below its own count")).id
 			end 'anotherNewNodeFollows'
 
-			self.emitDropNode(block, releases: releases, index: position + inline, successor: nextId, shape: shape, cascade: cascade, context: context, anchor: anchor)
+			self.emitDropNode(block, position: try positions.get(index) otherwise panic("materializeNodes: positions.get OOB at {index} below its own count"), successor: nextId, shape: chain.shape, cascade: cascade, context: chain.context, anchor: anchor)
 		end 'eachNewNodeInExecutionOrder'
 
-		return (try fresh.get(0) otherwise panic("dropCascadeEntry: a chain with nodes still to build holds none")).id
-	end 'dropCascadeEntry'
+		var nodes = BlockIdArray.create()
+
+		for block in fresh 'eachFresh'
+			nodes.push(block.id)
+		end 'eachFresh'
+
+		var hit = hits.count()
+
+		while hit > 0 'eachSharedNode'
+			hit = hit - 1
+			nodes.push(try hits.get(hit) otherwise panic("materializeNodes: hits.get OOB at {hit} below the count just read"))
+		end 'eachSharedNode'
+
+		return nodes
+	end 'materializeNodes'
+
+	function skipChainEntry(chain ReleaseChain, rank ElementIndex, anchor Token) returns BlockId
+		let built = chain.skipEntries.count()
+
+		if built < rank 'ranksToBuild'
+			self.extendSkipEntries(chain, built: built, rank: rank, anchor: anchor)
+		end 'ranksToBuild'
+
+		return chain.skipEntryAt(rank)
+	end 'skipChainEntry'
+
+	// Blocks are created in execution order, for `materializeNodes`' reason.
+	function extendSkipEntries(chain ReleaseChain, built ElementIndex, rank ElementIndex, anchor Token)
+		_ = self.chainEntry(chain, rank: rank - 1, anchor: anchor)
+
+		var func = self.bodyFunction()
+		var tests = IrBlockArray.create()
+		var drops = IrBlockArray.create()
+
+		for _ in built upto rank 'eachNewRankInExecutionOrder'
+			tests.push(self.artifact.module.addBlock(func, label: SkipTestNodeLabel, heat: BlockHeat.normal, role: BlockRole.exitChain))
+			drops.push(self.artifact.module.addBlock(func, label: DropCascadeNodeLabel, heat: BlockHeat.normal, role: BlockRole.exitChain))
+		end 'eachNewRankInExecutionOrder'
+
+		for next in built + 1 to rank 'eachNewRankBottomUp'
+			let index = rank - next
+			var test = try tests.get(index) otherwise panic("extendSkipEntries: tests.get OOB at {index} below the count just built")
+			var drop = try drops.get(index) otherwise panic("extendSkipEntries: drops.get OOB at {index} below the count just built")
+			self.buildSkipRank(chain, rank: next, test: test, drop: drop, anchor: anchor)
+		end 'eachNewRankBottomUp'
+	end 'extendSkipEntries'
+
+	function buildSkipRank(chain ReleaseChain, rank ElementIndex, test IrBlock, drop IrBlock, anchor Token)
+		let shape = chain.shape
+		let range = SourceRange.ofToken(anchor)
+		let plainBelow = self.chainEntry(chain, rank: rank - 1, anchor: anchor)
+		let testCarried = self.mintExitPhis(test, shape: shape)
+		let testSkip = self.mintPhi(test, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
+		let saved = self.bodyState.currentBlock
+		self.bodyState.currentBlock = test
+		let isSkipped = self.emitCompareAgainstLiteral(testSkip, literal: rank as ParsedInt, op: MaxonCmpOp.eq, opTok: anchor)
+		self.bodyState.currentBlock = saved
+
+		let dropCarried = self.mintExitPhis(drop, shape: shape)
+		let dropSkip = self.mintPhi(drop, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.emitReleaseInto(drop, position: chain.positionOfRank(rank), anchor: anchor)
+
+		if rank == 1 'nothingBelow'
+			self.recordBranchEdge(drop, targetId: plainBelow, argIds: dropCarried)
+			self.artifact.emitTerminator(drop, op: MaxonOp.branch(plainBelow), range: range)
+		end 'nothingBelow' else 'moreBelow'
+			let skipBelow = chain.skipEntryAt(rank - 1)
+			self.recordBranchEdge(drop, targetId: skipBelow, argIds: appendedArg(dropCarried, extra: dropSkip))
+			self.artifact.emitTerminator(drop, op: MaxonOp.branch(skipBelow), range: range)
+		end 'moreBelow'
+
+		self.recordBranchEdge(test, targetId: plainBelow, argIds: testCarried)
+		self.recordBranchEdge(test, targetId: drop.id, argIds: appendedArg(testCarried, extra: testSkip))
+		self.emitCondBranch(test, cond: isSkipped, thenId: plainBelow, elseId: drop.id, ifTok: anchor)
+		chain.skipEntries.push(test.id)
+	end 'buildSkipRank'
+
+	// `currentBlock` is restored because a routed call's caller emits its `condBranch` into the block
+	// it stood in; left pointing here, that branch would terminate this block instead.
+	function emitReleaseInto(block IrBlock, position ElementIndex, anchor Token)
+		let saved = self.bodyState.currentBlock
+		self.bodyState.currentBlock = block
+		self.emitScopeRelease(position, anchor: anchor)
+		self.bodyState.currentBlock = saved
+	end 'emitReleaseInto'
 
 	function dropNodeKeyAt(position ElementIndex) returns DropNodeKey
 		let released = self.ownedBindingAt(position).boundValue
@@ -46384,14 +46961,37 @@ export type Parser
 		return block.id
 	end 'dropCascadeTerminal'
 
-	function emitDropNode(block IrBlock, releases OwnedBindingPositionArray, index ElementIndex, successor BlockId, shape ExitShape, cascade DropCascade, context BlockId, anchor Token)
+	function emitDropNode(block IrBlock, position ElementIndex, successor BlockId, shape ExitShape, cascade DropCascade, context BlockId, anchor Token)
 		let carried = self.mintExitPhis(block, shape: shape)
-		let key = self.dropNodeKeyAt(try releases.get(index) otherwise panic("emitDropNode: releases.get OOB at {index} below the count of the nodes still to build"))
-		self.emitScopeReleasesInto(block, releases: releases, start: index, stop: index + 1, anchor: anchor)
+		let key = self.dropNodeKeyAt(position)
+		self.emitReleaseInto(block, position: position, anchor: anchor)
 		self.recordBranchEdge(block, targetId: successor, argIds: carried)
 		self.artifact.emitTerminator(block, op: MaxonOp.branch(successor), range: SourceRange.ofToken(anchor))
 		cascade.noteNode(key, exitShape: shape, context: context, successor: successor, blockId: block.id)
+
+		if shape.kind == ExitKind.routedThrow 'reachesAHandler'
+			cascade.noteRoutedNode(shape.destination, node: RoutedNode.create(block, args: carried))
+		end 'reachesAHandler'
 	end 'emitDropNode'
+
+	function mintSlotPhis(block IrBlock, slots CarriedSlotArray, into ValueIdArray)
+		var position = 0 as ElementIndex
+
+		while position < slots.count() 'eachSlot'
+			let slot = try slots.get(position) otherwise panic("mintSlotPhis: slots.get OOB at {position} below the count just read")
+			let phi = self.mintPhi(block, tag: slot.tag, nameId: slot.nameId)
+			into.push(phi)
+			position = position + 1
+
+			if slot.tag == ValueTypeTag.interfaceRef 'itsWitnessFollows'
+				let witnessSlot = try slots.get(position) otherwise panic("mintSlotPhis: an interface slot at {position - 1} is not followed by its witness slot")
+				let witness = self.mintPhi(block, tag: witnessSlot.tag, nameId: witnessSlot.nameId)
+				self.pairInterfaceWitness(phi, witness: witness)
+				into.push(witness)
+				position = position + 1
+			end 'itsWitnessFollows'
+		end 'eachSlot'
+	end 'mintSlotPhis'
 
 	function mintExitPhis(block IrBlock, shape ExitShape) returns ValueIdArray
 		var phis = ValueIdArray.create()
@@ -46399,6 +46999,11 @@ export type Parser
 		if shape.kind == ExitKind.returnVoid 'nothingCarried'
 			return phis
 		end 'nothingCarried'
+
+		if shape.kind == ExitKind.routedThrow 'theHandlersArguments'
+			self.mintSlotPhis(block, slots: shape.slots, into: phis)
+			return phis
+		end 'theHandlersArguments'
 
 		let carried = self.mintPhi(block, tag: shape.tag, nameId: shape.nameId)
 		phis.push(carried)
@@ -46650,24 +47255,6 @@ export type Parser
 
 		self.bodyState.ownedBindings.truncate(height)
 	end 'truncateOwnedBindings'
-
-	// Any other list, even one of equal length, may hold different bindings at the same positions, and the
-	// ledger's snapshot and owner index are keyed by position.
-	function restoreOwnedBindings(saved VarInfoArray)
-		if not (saved is self.bodyState.ownedBindings) 'theListWasChanged'
-			self.restampOwnedPositions(saved)
-			self.bodyState.moveLedger.invalidate()
-		end 'theListWasChanged'
-
-		self.bodyState.ownedBindings = saved
-	end 'restoreOwnedBindings'
-
-	function restampOwnedPositions(bindings VarInfoArray)
-		for position in 0 upto bindings.count() 'eachBinding'
-			var binding = try bindings.get(position) otherwise panic("restampOwnedPositions: bindings.get OOB at {position}")
-			binding.enrolledAt = position
-		end 'eachBinding'
-	end 'restampOwnedPositions'
 
 	function noteMoveStateWritten(binding VarInfo)
 		if binding.isEnrolled 'anOwnedBinding'
@@ -47743,52 +48330,24 @@ export type Parser
 		self.enrolOwnedBinding(VarInfo.createValueBinding(name, varType: self.typeOf(value), mutable: false, boundValue: value))
 	end 'giveTemporaryScopeLifetime'
 
-	// The value a binding holds has been MOVED OUT — a `return` hands its box to the caller — so the
-	// binding must leave `ownedBindings`, else `emitFunctionExit` would decref a box the callee no longer
-	// owns (a double-free with the caller's own drop). Keyed on the bound VALUE rather than on position:
-	// a returned binding is rarely the last declared, so identity is what stays correct. A filter-rebuild,
-	// the `removeFromPendingTemps` shape for the owned-BINDING list.
-	//
-	// ⛔ **IT IS DELIBERATELY *NOT* `liveOwnerIndexOf`, AND IT MUST NOT BE "CONSOLIDATED" ONTO IT.** That lookup
-	// finds the ONE LIVE owner (`OwnedBindingIndex` skips `movedFrom` ghosts); this asks a different
-	// question — which entries HOLD this value, ghosts included, ALL of them. A moved-from ghost left behind
-	// here would be dropped at scope exit against a box the caller now owns, which is the double-free the
-	// removal exists to prevent. Every OTHER owner lookup does go through `liveOwnerIndexOf`.
-	function removeFromOwnedBindings(value ValueId)
-		var kept = VarInfoArray.create()
-
-		for binding in self.bodyState.ownedBindings 'each'
-			if binding.boundValue != value 'notMovedOut'
-				kept.push(binding)
-			end 'notMovedOut'
-		end 'each'
-
-		if kept.count() == self.bodyState.ownedBindings.count() 'nothingHeldIt'
-			return
-		end 'nothingHeldIt'
-
-		self.restampOwnedPositions(kept)
-		self.bodyState.moveLedger.invalidate()
-		self.bodyState.ownedBindings = kept
-	end 'removeFromOwnedBindings'
-
 	// ⭐ **THE OWNED-VALUE CLEANUP A `return <value>` AND A `throw <value>` SHARE** — the two exits that
 	// HAND a heap value to the caller. Both must, in this exact order, drop every owned value this function
 	// still holds EXCEPT the one in flight, then leave the function:
 	//
-	//   • MOVE the handed-off value out of the local drop sets — it leaves BOTH the pending-temp list (a
-	//     freshly built `return U.case(x)` / `throw U.case(x)` temporary) and the owned-binding list (a
-	//     `return t` / re-thrown `throw e` caught binding), one call each, both no-ops on the other's case —
-	//     so the caller becomes its sole owner and neither drop below frees it. A promise owns a
+	//   • MOVE the handed-off value out of the local drops — it leaves the pending-temp list (a
+	//     freshly built `return U.case(x)` / `throw U.case(x)` temporary) and is passed to
+	//     `emitFunctionExit` as the owned binding to exclude (a `return t` / re-thrown `throw e`
+	//     caught binding), each a no-op on the other's case — so the caller becomes its sole owner
+	//     and neither drop below frees it. A promise owns a
 	//     green thread rather than heap, and is moved out the same way, or the callee would cancel the
 	//     thread it returns. A no-op for a scalar.
 	//   • DROP the exit expression's leftover TEMPORARIES: `return wrap("v{x}")` / `throw E.p(len("v{x}"))`
 	//     build an interpolation this statement owns but does NOT hand back. The `count() > 0` guard is
 	//     `drainPendingTemps`' own — almost no exit leaves a temporary, so the common exit pays nothing.
-	//   • DROP every owned BINDING in scope and LEAVE (`emitFunctionExit`).
-	//   • RESTORE the owned-binding list past those drops: it OUTLIVES this exit, and a SIBLING exit edge of
-	//     an enclosing block still owns the handed-off binding on ITS runtime path (this exit terminated only
-	//     its own), so `removeFromOwnedBindings`' NEW array leaves the original for those edges.
+	//   • DROP every other owned BINDING in scope and LEAVE (`emitFunctionExit`). The handed-off
+	//     binding stays in the owned-binding list: the list OUTLIVES this exit, and a SIBLING exit
+	//     edge of an enclosing block still owns it on ITS runtime path (this exit terminated only its
+	//     own).
 	//
 	// The drops land AFTER the caller computed the handed-off value (already a register read, no
 	// longer a heap access) and BEFORE the exit's terminator (a terminator ENDS the block — anything
@@ -47796,10 +48355,10 @@ export type Parser
 	// sequence, not just the move-out, is what keeps the two exits from drifting on it.
 	function emitHandoffExit(exit FunctionExit, anchor Token)
 		let handedOff = try exitValueOf(exit) otherwise panic("emitHandoffExit: a void return carries nothing to hand off")
-		var savedOwnedBindings = self.bodyState.ownedBindings
+		var inFlight = HandedOff.nothing
 
 		if self.valueIsOwnedHeap(handedOff) or self.valueOwnsGreenThread(handedOff) 'movedOut'
-			self.removeFromOwnedBindings(handedOff)
+			inFlight = HandedOff.value(handedOff)
 			self.removeFromPendingTemps(handedOff)
 		end 'movedOut'
 
@@ -47807,8 +48366,7 @@ export type Parser
 			self.drainPendingTemps(WholeStatementTempFloor, anchor: anchor)
 		end 'dropExitTemps'
 
-		self.emitFunctionExit(self.bodyState.currentBlock, exit: exit, anchor: anchor)
-		self.restoreOwnedBindings(savedOwnedBindings)
+		self.emitFunctionExit(self.bodyState.currentBlock, exit: exit, anchor: anchor, handedOff: inFlight)
 	end 'emitHandoffExit'
 
 	// Does `binding` currently owe a scope-exit drop — i.e. is it a LIVE owner in `ownedBindings`? The
@@ -49262,8 +49820,8 @@ export type Parser
 	// They go back UNDER everything enrolled since (the value merge's phi, a re-enrolled managed try-result),
 	// because the drop order is creation order reversed and these were built first.
 	//
-	// ⚠ The owned-binding pop is a TRUNCATION to the recorded mark rather than a `removeFromOwnedBindings`
-	// per temp: mid-stack removal desyncs every block and loop drop mark taken since, which is the reason
+	// ⚠ The owned-binding pop is a TRUNCATION to the recorded mark rather than a removal per temp:
+	// mid-stack removal desyncs every block and loop drop mark taken since, which is the reason
 	// `reassignBindingValue` gives for leaving a moved-from ghost in the list rather than deleting it.
 	function resumeForkTemps(forkTemps ValueIdArray, suspendedMark ElementIndex)
 		self.truncateOwnedBindings(suspendedMark)
@@ -53390,6 +53948,7 @@ export type Parser
 
 	function finishLoopMoves(func IrFunction, falseSource IrBlock, exit IrBlock, anchor Token) returns FinishedLoop throws SourceParseError
 		var scan = try self.bodyState.loopScans.pop() otherwise panic("finishLoopMoves: the loop scan stack is empty at the end of a loop that opened one")
+		self.discardLoopReleaseChains(scan.blockFloor)
 		var movedAtTheHeader = ValueMarkSet.create()
 		var givenAtTheHeader = ConditionalGiveArray.create()
 		let touched = self.loopTouchedPositions(scan)
@@ -54799,7 +55358,7 @@ export type Parser
 				// — and the DIVERGING one did not pay it (measured: a compiler panic).** `default throws
 				// E.p(Box.make().name)` takes a member borrow off a temporary, so `dispatchMethodOnBase` calls
 				// `giveTemporaryScopeLifetime`, which moves the box from `pendingTempDrops` into
-				// `ownedBindings`; `emitHandoffExit` then RESTORES `ownedBindings`, so the record survives
+				// `ownedBindings`; `emitHandoffExit` leaves `ownedBindings` intact, so the record survives
 				// the arm with nothing draining it. With no floor to drain to, the mark and the owned-binding
 				// stack fell out of lockstep and `reconcileMovesAtMerge` panicked *"a reaching edge's mark
 				// holds 0 entries but 1 owned bindings are in scope"*, on a legal program.

@@ -1799,6 +1799,8 @@ export enum ErrorPathExit
 	propagatingTry
 	throwStatement
 	earlyReturn
+	handedOffReturn
+	routedThrow
 end 'ErrorPathExit'
 
 typealias BindingTally = int(0 to 64)
@@ -1838,6 +1840,8 @@ function errorPathFixtureOpening(exitKind ErrorPathExit) returns String
 		propagatingTry gives "{ErrorPathFixturePrelude}{RefusalDeclaration}{ThrowingMakeDeclaration}{ThrowingWorkOpening}"
 		throwStatement gives "{ErrorPathFixturePrelude}{RefusalDeclaration}{PlainMakeDeclaration}{ThrowingWorkOpening}"
 		earlyReturn gives "{ErrorPathFixturePrelude}{PlainMakeDeclaration}{PlainWorkOpening}"
+		handedOffReturn or
+		routedThrow panic("errorPathFixtureOpening: this exit has its own fixture, built by errorPathFixtureSource")
 	end 'opening'
 end 'errorPathFixtureOpening'
 
@@ -1846,6 +1850,8 @@ function errorPathBindingLines(exitKind ErrorPathExit, index BindingTally) retur
 		propagatingTry gives "\tlet s{index} = try make(seed, index: {index})\n"
 		throwStatement gives guardedBindingLines(index, exitStatement: RefusalThrow)
 		earlyReturn gives guardedBindingLines(index, exitStatement: "return {index}")
+		handedOffReturn or
+		routedThrow panic("errorPathBindingLines: this exit has its own fixture, built by errorPathFixtureSource")
 	end 'binding'
 end 'errorPathBindingLines'
 
@@ -1858,6 +1864,8 @@ function errorPathWorkCall(exitKind ErrorPathExit) returns String
 		propagatingTry or
 		throwStatement gives ThrowingWorkCall
 		earlyReturn gives PlainWorkCall
+		handedOffReturn or
+		routedThrow panic("errorPathWorkCall: this exit has its own fixture, built by errorPathFixtureSource")
 	end 'call'
 end 'errorPathWorkCall'
 
@@ -1866,10 +1874,59 @@ function errorPathExitDescription(exitKind ErrorPathExit) returns String
 		propagatingTry gives "a propagating `try`"
 		throwStatement gives "a `throw`"
 		earlyReturn gives "an early `return`"
+		handedOffReturn gives "a `return` of one binding while the rest are live"
+		routedThrow gives "a throwing call routed to one `try` block handler"
 	end 'description'
 end 'errorPathExitDescription'
 
+function handedOffReturnFixtureSource(bindings BindingTally) returns String
+	var out = "{ErrorPathFixturePrelude}{PlainMakeDeclaration}function work(seed Word) returns String\n"
+
+	for index in 0 upto bindings 'eachBinding'
+		out.append("\tlet s{index} = make(seed, index: {index})\n")
+	end 'eachBinding'
+
+	out.append("\n")
+
+	for index in 0 upto bindings 'eachReturn'
+		out.append("\tif seed == {index} 'exit{index}'\n\t\treturn s{index}\n\tend 'exit{index}'\n\n")
+	end 'eachReturn'
+
+	out.append("\treturn \"\{seed\}\"\nend 'work'\n\n")
+	out.append(ErrorPathMainOpening)
+	out.append(PlainWorkCall)
+	out.append("\n\treturn 0 if answer.byteLength() > 0 else 1\nend 'main'\n")
+	return out
+end 'handedOffReturnFixtureSource'
+
+function routedThrowFixtureSource(bindings BindingTally) returns String
+	var out = "{ErrorPathFixturePrelude}{RefusalDeclaration}{ThrowingMakeDeclaration}function work(seed Word) returns Word\n\tvar total = seed\n\n\ttry 'block'\n"
+
+	for index in 0 upto bindings 'eachBinding'
+		out.append("\t\tlet s{index} = make(seed, index: {index})\n")
+	end 'eachBinding'
+
+	for index in 0 upto bindings 'eachUse'
+		out.append("\t\ttotal = (total + (s{index}.byteLength() as Word)) and 0xFFFF\n")
+	end 'eachUse'
+
+	out.append("\tend 'block' otherwise (caught) 'handler'\n\t\tmatch caught 'kind'\n\t\t\trefused then total = total + 1\n\t\tend 'kind'\n\tend 'handler'\n")
+	out.append(WorkClosing)
+	out.append(ErrorPathMainOpening)
+	out.append(PlainWorkCall)
+	out.append(ErrorPathMainClosing)
+	return out
+end 'routedThrowFixtureSource'
+
 function errorPathFixtureSource(exitKind ErrorPathExit, bindings BindingTally) returns String
+	match exitKind 'family'
+		handedOffReturn then return handedOffReturnFixtureSource(bindings)
+		routedThrow then return routedThrowFixtureSource(bindings)
+		propagatingTry or
+		throwStatement or
+		earlyReturn then break
+	end 'family'
+
 	var out = errorPathFixtureOpening(exitKind)
 
 	for index in 0 upto bindings 'eachBinding'
