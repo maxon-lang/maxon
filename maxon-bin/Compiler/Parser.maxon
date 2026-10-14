@@ -12248,6 +12248,20 @@ function moveMarkPrefix(mark MoveMark, height ElementIndex) returns MoveMark
 	return MoveMark.create(mark.slots.truncated(height), consumes: mark.consumes, gives: mark.conditionallyGiven)
 end 'moveMarkPrefix'
 
+// Conditional gives are keyed by value outside the slot chunks, so marks whose gives differ may differ
+// at any position.
+function positionsThatMayDiffer(a MoveMark, b MoveMark) returns MoveSlotIndexColumn
+	if b.height() < a.height() 'shorter'
+		panic("positionsThatMayDiffer: the second mark holds {b.height()} entries, fewer than the first mark's {a.height()} — both are cut at the owned height of one construct")
+	end 'shorter'
+
+	if givesDiffer(a.conditionallyGiven, b: b.conditionallyGiven) 'anyBindingMayBeGivenDifferently'
+		return allPositions(a.height())
+	end 'anyBindingMayBeGivenDifferently'
+
+	return a.slots.differences(b.slots)
+end 'positionsThatMayDiffer'
+
 // How a `try … otherwise …`'s error handler affects the merge. The success (`ok`) block always
 // carries the tryCall's `result`; the error block's shape is one of:
 //   • `value(v)`      — `otherwise <expr>` produced a fallback value; both edges merge into a result phi.
@@ -13767,7 +13781,7 @@ end 'edgesCarryOneValue'
 
 function exitEdgesDisagree(falseMark MoveMark, breaks ReachingMoveEdgeArray) returns bool
 	for breakEdge in breaks 'eachBreak'
-		for position in 0 upto falseMark.height() 'eachBinding'
+		for position in positionsThatMayDiffer(falseMark, b: breakEdge.mark) 'eachBinding'
 			let movedOnFalse = falseMark.movedAt(position)
 			let movedOnBreak = breakEdge.mark.movedAt(position)
 			let givenOnFalse = givesOf(falseMark.conditionallyGiven, value: falseMark.valueAt(position))
@@ -37952,8 +37966,8 @@ export type Parser
 				// one. Poison the source so a later read of it is use-after-move and only the new owner drops
 				// the value. A fresh owned temp (`build()`, `"{x}"`, a promoted mutable-string copy) is held by
 				// no binding, so nothing is poisoned — that is a CONSUME (move-in), not a source-poisoning
-				// move. Gated on `boundBareLocal`, so a consume never pays the owned-set scan; run BEFORE the
-				// push below, so the scan cannot find this new binding (it aliases the same value).
+				// move. Gated on `boundBareLocal`, so a consume never pays the owner lookup; run BEFORE the
+				// push below, so the lookup cannot find this new binding (it aliases the same value).
 				if boundBareLocal 'moveOnBind'
 					self.poisonMoveSource(boundValue)
 				end 'moveOnBind'
@@ -39690,8 +39704,8 @@ export type Parser
 		// ⭐ **MOVE-ON-ASSIGN.** A bare reference to an ALREADY-owned MUTABLE binding as the RHS (`s = t`)
 		// MOVES that value: poison the source so a later read of it is use-after-move and only the new owner
 		// drops the value. A fresh owned temp is held by no binding — a CONSUME, not a move. Gated on
-		// `rhsWasBareLocal`, so a consume never pays the owned-set scan; run BEFORE `setValue` below, so
-		// the scan matches the SOURCE's value rather than this binding's (which `setValue` is about to
+		// `rhsWasBareLocal`, so a consume never pays the owner lookup; run BEFORE `setValue` below, so
+		// the lookup matches the SOURCE's value rather than this binding's (which `setValue` is about to
 		// overwrite with the moved value).
 		//
 		// ⭐⭐ **AN IMMUTABLE SOURCE IS EXEMPT, EXACTLY AS IT IS AT THE DECLARATION DOOR.** `a = t` over a
@@ -45840,7 +45854,7 @@ export type Parser
 			return
 		end 'differentHeights'
 
-		for i in 0 upto edgeMark.height() 'eachOuter'
+		for i in positionsThatMayDiffer(ctx.edgeMoveMark, b: edgeMark) 'eachOuter'
 			let movedOnFirst = ctx.edgeMoveMark.movedAt(i)
 			let movedHere = edgeMark.movedAt(i)
 
@@ -46637,11 +46651,13 @@ export type Parser
 		self.bodyState.ownedBindings.truncate(height)
 	end 'truncateOwnedBindings'
 
+	// Any other list, even one of equal length, may hold different bindings at the same positions, and the
+	// ledger's snapshot and owner index are keyed by position.
 	function restoreOwnedBindings(saved VarInfoArray)
-		if saved.count() != self.bodyState.ownedBindings.count() 'aBindingWasLeftOut'
+		if not (saved is self.bodyState.ownedBindings) 'theListWasChanged'
 			self.restampOwnedPositions(saved)
 			self.bodyState.moveLedger.invalidate()
-		end 'aBindingWasLeftOut'
+		end 'theListWasChanged'
 
 		self.bodyState.ownedBindings = saved
 	end 'restoreOwnedBindings'
@@ -46824,15 +46840,7 @@ export type Parser
 		var positions = MoveSlotIndexColumn.create()
 
 		for edge in edges 'eachEdge'
-			if givesDiffer(first.mark.conditionallyGiven, b: edge.mark.conditionallyGiven) 'everyBindingMayBeGivenDifferently'
-				for position in 0 upto first.mark.height() 'eachPosition'
-					positions.push(position)
-				end 'eachPosition'
-
-				return positions
-			end 'everyBindingMayBeGivenDifferently'
-
-			positions.append(first.mark.slots.differences(edge.mark.slots))
+			positions.append(positionsThatMayDiffer(first.mark, b: edge.mark))
 		end 'eachEdge'
 
 		positions.append(self.syncedMoveSlots().differences(first.mark.slots))
@@ -47741,11 +47749,11 @@ export type Parser
 	// a returned binding is rarely the last declared, so identity is what stays correct. A filter-rebuild,
 	// the `removeFromPendingTemps` shape for the owned-BINDING list.
 	//
-	// ⛔ **IT IS DELIBERATELY *NOT* `liveOwnerIndexOf`, AND IT MUST NOT BE "CONSOLIDATED" ONTO IT.** That scan
-	// finds the ONE LIVE owner (`isLiveOwnerOf` skips `movedFrom` ghosts) and stops; this asks a different
+	// ⛔ **IT IS DELIBERATELY *NOT* `liveOwnerIndexOf`, AND IT MUST NOT BE "CONSOLIDATED" ONTO IT.** That lookup
+	// finds the ONE LIVE owner (`OwnedBindingIndex` skips `movedFrom` ghosts); this asks a different
 	// question — which entries HOLD this value, ghosts included, ALL of them. A moved-from ghost left behind
 	// here would be dropped at scope exit against a box the caller now owns, which is the double-free the
-	// removal exists to prevent. Every OTHER reader of `ownedBindings` does go through the one scan.
+	// removal exists to prevent. Every OTHER owner lookup does go through `liveOwnerIndexOf`.
 	function removeFromOwnedBindings(value ValueId)
 		var kept = VarInfoArray.create()
 
@@ -47809,27 +47817,9 @@ export type Parser
 	// loop-carried `var`'s current value is a header phi with no owned-heap provenance, so the value
 	// column would answer `false` for a binding the loop owns (see `reassignBindingValue`). Membership
 	// survives the phi; the provenance bit does not.
-	//
-	// Keyed on `boundValue`, the `removeFromOwnedBindings` idiom — an owned heap value has a single LIVE
-	// owner, so at most one non-moved owned binding holds any given value. `movedFrom` GHOSTS are
-	// skipped: a moved-from binding stays in the list but shares its stale value with the binding it
-	// moved to, so counting it would report two owners of one value. An O(ownedBindings) scan; a
-	// reassignment is not a hot path.
 	function bindingIsOwned(binding VarInfo) returns bool
 		return self.hasLiveOwner(binding.boundValue)
 	end 'bindingIsOwned'
-
-	// ⭐ **WHAT MAKES AN OWNED-SET ENTRY THE ONE LIVE OWNER OF `value`**: it holds that value AND has not
-	// itself been moved from. Single-homed on purpose — the `valueIsOwnedHeap` pattern. `bindingIsOwned`
-	// (does this binding still owe a drop?) and `poisonMoveSource` (which binding does a move poison?)
-	// both need exactly this predicate, and if it drifted between the two — a new ownership flag taught
-	// to one scan and not the other — one would count a `movedFrom` ghost as a live owner: a double-free
-	// or a wrongly-skipped drop, and invisible at either call site read alone. The GHOST skip is the
-	// load-bearing half: a moved-from binding shares its stale `boundValue` with the binding it moved to,
-	// so a value has exactly one owner only once the flag is checked.
-	function isLiveOwnerOf(owned VarInfo, value ValueId) returns bool
-		return not owned.movedFrom and not owned.isErrorMatchObligation and owned.boundValue == value
-	end 'isLiveOwnerOf'
 
 	// True iff the RHS just parsed — the tokens in `[startPos, self.pos)` — RESOLVES TO a bare reference
 	// to a LOCAL binding (`let u = t` / `s = t`, and equally `let u = (t)`). That is the ONLY RHS shape
@@ -47921,10 +47911,8 @@ export type Parser
 	//
 	// ⭐ **A GATE, NOT THE DECISION.** `poisonMoveSource` keeps the authority — given a bare-local RHS it
 	// still matches the value against the owned set, so a bare local that is NOT owned (a scalar) still
-	// poisons nothing. This only decides whether calling the scan can possibly do anything, so the
-	// common case — every consume `let u = build()` — skips the O(ownedBindings) scan the poison would
-	// otherwise run on EVERY owned bind and reassignment. Skipping it when this is false is a no-op: the
-	// scan cannot match a non-bare-local RHS.
+	// poisons nothing. This only decides whether calling the poison can possibly do anything. Skipping it
+	// when this is false is a no-op: the owner lookup cannot match a non-bare-local RHS.
 	//
 	// ⚠ **THE ROOT TOKEN MAY BE A KEYWORD, because a BINDING's name may be** — asked through
 	// `tokenCanBeAName`, exactly as `consumedParamAfterColon` (the SWEEP's copy of this same question, and
@@ -48022,11 +48010,10 @@ export type Parser
 	// the value of no binding, so nothing is poisoned — that is a CONSUME (move-in), not a
 	// source-poisoning move.
 	//
-	// Finds the ONE live owner via `isLiveOwnerOf` (the same predicate `bindingIsOwned` reads), so a
-	// value already moved once — a `movedFrom` ghost — can never be picked as a live source. An
-	// O(ownedBindings) scan. **The callers GATE it on `rhsWasBareLocalReference`**, so it runs only when
-	// the RHS actually was a bare local reference — never on a consume, which keeps it off the hot
-	// path of every owned bind (the scan-and-find-nothing makes accumulating N owned bindings O(N²)).
+	// Finds the ONE live owner via `liveOwnerIndexOf` (the same lookup `bindingIsOwned` reads), so a
+	// value already moved once — a `movedFrom` ghost — can never be picked as a live source. **The
+	// callers GATE it on `rhsWasBareLocalReference`**, so it runs only when the RHS actually was a bare
+	// local reference — never on a consume.
 	//
 	// ⚠ **A MOVE OF A BINDING DECLARED OUTSIDE THE INNERMOST LOOP IS REJECTED HERE** (`anchor` positions the
 	// diagnostic). The path-sensitive drop reconciliation (`reconcileMovesAtMerge`) settles an `if`/`match`
@@ -48340,9 +48327,9 @@ export type Parser
 	end 'threadNameAliasedBy'
 
 	function poisonMoveSource(value ValueId)
-		// The OWNER first, and the aliases only once it has been found: the owned-set scan reads
-		// `isLiveOwnerOf`, which a poisoned owner fails — so marking the names first would hide the owner
-		// from its own scan, and with it the loop-escape refusal below.
+		// The OWNER first, and the aliases only once it has been found: `liveOwnerIndexOf` skips a
+		// poisoned owner — so marking the names first would hide the owner from its own lookup, and with
+		// it the loop-escape refusal below.
 		self.poisonOwningBinding(value)
 		self.poisonValueAliases(value)
 	end 'poisonMoveSource'
@@ -48350,25 +48337,13 @@ export type Parser
 	// ⭐ **WHERE IN `ownedBindings` THE ONE LIVE OWNER OF `value` SITS** — it throws when this frame owns it
 	// through no BINDING at all (a statement-scoped temporary, or a value it does not own).
 	//
-	// ⚠ **ONE SCAN, BECAUSE ITS TWO CALLERS MUST AGREE ON *WHICH* BINDING THE MOVE IS ABOUT.** The move itself
+	// ⚠ **ONE LOOKUP, BECAUSE ITS TWO CALLERS MUST AGREE ON *WHICH* BINDING THE MOVE IS ABOUT.** The move itself
 	// (`poisonOwningBinding`, which marks that binding `movedFrom`) and the question asked BEFORE moving
 	// (`moveOfValueEscapesLoop`, which decides whether an opaque container store may move at all) would
-	// otherwise be two walks free to settle on two owners — and then a store would take a reference against one
-	// binding's position while the poison landed on another's.
+	// otherwise be two searches free to settle on two owners — and then a store would take a reference against
+	// one binding's position while the poison landed on another's.
 	function liveOwnerIndexOf(value ValueId) returns ElementIndex throws MapError
-		var i = 0
-
-		while i < self.bodyState.ownedBindings.count() 'each'
-			let owned = try self.bodyState.ownedBindings.get(i) otherwise panic("liveOwnerIndexOf: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
-
-			if self.isLiveOwnerOf(owned, value: value) 'source'
-				return i as ElementIndex
-			end 'source'
-
-			i = i + 1
-		end 'each'
-
-		throw MapError.keyNotFound
+		return try self.bodyState.moveLedger.refreshedOwners(self.bodyState.ownedBindings).ownerOf(value)
 	end 'liveOwnerIndexOf'
 
 	function hasLiveOwner(value ValueId) returns bool
@@ -48425,7 +48400,7 @@ export type Parser
 
 	// ⭐⭐ **A MOVE POISONS EVERY NAME THAT READS THE VALUE, NOT ONLY THE ONE THAT OWNS IT.** An immutable
 	// rebind (`let b = a`) enrols no second owner — `b` simply reads `a`'s value — so `poisonMoveSource`'s
-	// owned-set scan finds `a` and stops. That is the right OWNER, and it is not the whole answer: after
+	// owner lookup finds `a` and stops. That is the right OWNER, and it is not the whole answer: after
 	// `f(b)` or `return b` the callee has the value, and `b` would go on reading a box this frame no longer
 	// owns. The names are not interchangeable to the diagnostic either — a later `print(b)` must say `b`.
 	//
@@ -50249,7 +50224,7 @@ export type Parser
 	// drop on its other edge for (`finalizeIfNoElse`, `emitShortCircuit`)? A binding already moved at the first
 	// mark is moved on both edges, and one nothing touched is live on both.
 	function movesALiveBinding(before MoveMark, after MoveMark) returns bool
-		for i in 0 upto before.height() 'scan'
+		for i in positionsThatMayDiffer(before, b: after) 'scan'
 			if self.movedBetweenMarks(before, after: after, index: i) or not handoffsGivenBetweenMarks(before, after: after, index: i).isEmpty() or self.cellStoredBetweenMarks(before, after: after, index: i) 'movedBetween'
 				return true
 			end 'movedBetween'
@@ -53417,15 +53392,16 @@ export type Parser
 		var scan = try self.bodyState.loopScans.pop() otherwise panic("finishLoopMoves: the loop scan stack is empty at the end of a loop that opened one")
 		var movedAtTheHeader = ValueMarkSet.create()
 		var givenAtTheHeader = ConditionalGiveArray.create()
+		let touched = self.loopTouchedPositions(scan)
 
-		for position in 0 upto scan.entryMark.height() 'eachOuterBinding'
+		for position in touched 'eachTouchedBinding'
 			try self.settleBackEdgesOf(func, scan: scan, position: position, movedAtTheHeader: movedAtTheHeader, givenAtTheHeader: givenAtTheHeader, anchor: anchor)
-		end 'eachOuterBinding'
+		end 'eachTouchedBinding'
 
 		try self.settleBackEdgeConsumes(scan)
 		self.settleBackEdgeGives(scan)
 
-		let falseMark = self.loopExitEdgeMark(scan.exitMark, scan: scan, movedAtTheHeader: movedAtTheHeader, givenAtTheHeader: givenAtTheHeader)
+		let falseMark = self.loopExitEdgeMark(scan.exitMark, scan: scan, movedAtTheHeader: movedAtTheHeader, givenAtTheHeader: givenAtTheHeader, touched: touched)
 
 		if scan.breakEdges.isEmpty() 'onlyTheConditionLeaves'
 			self.restoreMoveMark(falseMark)
@@ -53435,7 +53411,7 @@ export type Parser
 		var edges = ReachingMoveEdgeArray.create()
 
 		for breakEdge in scan.breakEdges 'eachBreak'
-			edges.push(ReachingMoveEdge.create(breakEdge.block, mark: self.loopExitEdgeMark(breakEdge.mark, scan: scan, movedAtTheHeader: movedAtTheHeader, givenAtTheHeader: givenAtTheHeader)))
+			edges.push(ReachingMoveEdge.create(breakEdge.block, mark: self.loopExitEdgeMark(breakEdge.mark, scan: scan, movedAtTheHeader: movedAtTheHeader, givenAtTheHeader: givenAtTheHeader, touched: touched)))
 		end 'eachBreak'
 
 		let falseEdge = self.loopFalseEdgeBlock(func, falseSource: falseSource, exit: exit, falseMark: falseMark, breaks: edges)
@@ -53443,6 +53419,47 @@ export type Parser
 		self.reconcileMovesAtMerge(edges, anchor: anchor)
 		return FinishedLoop.create(falseEdge, scan: scan)
 	end 'finishLoopMoves'
+
+	function loopTouchedPositions(scan LoopMoveScan) returns MoveSlotIndexColumn
+		let entry = scan.entryMark
+
+		// The gives fallback `positionsThatMayDiffer` states.
+		for back in scan.backEdges 'eachBackEdgeGives'
+			if givesDiffer(entry.conditionallyGiven, b: back.mark.conditionallyGiven) 'anyBindingMayBeGivenDifferently'
+				return allPositions(entry.height())
+			end 'anyBindingMayBeGivenDifferently'
+		end 'eachBackEdgeGives'
+
+		var edges = MoveSlotsColumn.create()
+
+		for back in scan.backEdges 'eachBackEdge'
+			edges.push(back.mark.slots)
+		end 'eachBackEdge'
+
+		edges.push(scan.exitMark.slots)
+
+		for breakEdge in scan.breakEdges 'eachBreakEdge'
+			edges.push(breakEdge.mark.slots)
+		end 'eachBreakEdge'
+
+		var enclosing = MoveSlotsColumn.create()
+
+		for outer in self.bodyState.loopScans 'eachEnclosingLoop'
+			enclosing.push(outer.entryMark.slots)
+		end 'eachEnclosingLoop'
+
+		var positions = entry.slots.unsettledPositions(edges, enclosing: enclosing)
+
+		// A cell binding is settled even where its slots agree: its settlement reads occupant exclusivity
+		// and cell takes, which the slots do not hold.
+		for cell in self.bodyState.moveLedger.refreshedOwners(self.bodyState.ownedBindings).cellPositions() 'eachCell'
+			if cell < entry.height() 'declaredBeforeTheLoop'
+				positions.push(cell)
+			end 'declaredBeforeTheLoop'
+		end 'eachCell'
+
+		return sortedUniquePositions(positions)
+	end 'loopTouchedPositions'
 
 	function settleBackEdgesOf(func IrFunction, scan LoopMoveScan, position ElementIndex, movedAtTheHeader ValueMarkSet, givenAtTheHeader ConditionalGiveArray, anchor Token) throws SourceParseError
 		let headerValue = scan.entryMark.valueAt(position)
@@ -53575,19 +53592,14 @@ export type Parser
 	end 'raiseCellEpochExclusivity'
 
 	function mintCellHeaderEpochs()
-		for i in 0 upto self.bodyState.ownedBindings.count() 'eachOwned'
+		for i in self.bodyState.moveLedger.refreshedOwners(self.bodyState.ownedBindings).cellPositions() 'eachCell'
 			var binding = try self.bodyState.ownedBindings.get(i) otherwise panic("mintCellHeaderEpochs: ownedBindings.get OOB at {i} below its own count")
-
-			if not binding.isCellBinding 'notACell'
-				continue
-			end 'notACell'
-
 			let entering = binding.cellEpoch.epochValue()
 			let headerEpoch = self.mintCellEpoch(joinedOccupantExclusivity(self.cellEpochExclusivityOf(entering), b: CellOccupantExclusivity.unproven))
 			binding.cellEpoch = CellEpoch.current(headerEpoch)
 			self.noteMoveStateWritten(binding)
 			self.noteDerivedCellEpoch(headerEpoch, from: entering)
-		end 'eachOwned'
+		end 'eachCell'
 	end 'mintCellHeaderEpochs'
 
 	function noteDerivedCellEpoch(epoch ValueId, from ValueId)
@@ -53927,7 +53939,8 @@ export type Parser
 		end 'eachBackEdge'
 	end 'settleBackEdgeGives'
 
-	function loopExitEdgeMark(mark MoveMark, scan LoopMoveScan, movedAtTheHeader ValueMarkSet, givenAtTheHeader ConditionalGiveArray) returns MoveMark
+	function loopExitEdgeMark(mark MoveMark, scan LoopMoveScan, movedAtTheHeader ValueMarkSet, givenAtTheHeader ConditionalGiveArray, touched MoveSlotIndexColumn) returns MoveMark
+		var positions = MoveSlotIndexColumn.create()
 		var moved = BoolArray.create()
 		var values = ValueIdArray.create()
 		var awaiting = MoveSlotIndexColumn.create()
@@ -53940,7 +53953,19 @@ export type Parser
 			unionGives(given, from: back.mark.conditionallyGiven)
 		end 'eachBackEdge'
 
-		for position in 0 upto mark.height() 'eachBinding'
+		// An untouched outer position keeps the edge's own slot: no back edge moved it or left it awaiting,
+		// and under `OwnedBindingIndex`'s single-owner invariant no value moved at the header is its value.
+		for position in touched 'eachTouchedBinding'
+			if position < mark.height() 'withinTheMark'
+				positions.push(position)
+			end 'withinTheMark'
+		end 'eachTouchedBinding'
+
+		for position in scan.entryMark.height() upto mark.height() 'eachBindingOfTheLoop'
+			positions.push(position)
+		end 'eachBindingOfTheLoop'
+
+		for position in positions 'eachBinding'
 			let value = mark.valueAt(position)
 			values.push(value)
 			moved.push(mark.movedAt(position) or movedAtTheHeader.contains(value))
@@ -53953,7 +53978,7 @@ export type Parser
 			awaiting.push(waiting)
 		end 'eachBinding'
 
-		return MoveMark.create(self.bodyState.moveLedger.fromColumns(moved, values: values, awaiting: awaiting), consumes: consumes, gives: given)
+		return MoveMark.create(self.bodyState.moveLedger.overlay(mark.slots, height: mark.height(), positions: positions, moved: moved, values: values, awaiting: awaiting), consumes: consumes, gives: given)
 	end 'loopExitEdgeMark'
 
 	function loopFalseEdgeBlock(func IrFunction, falseSource IrBlock, exit IrBlock, falseMark MoveMark, breaks ReachingMoveEdgeArray) returns IrBlock
@@ -53969,8 +53994,20 @@ export type Parser
 		var moved = BoolArray.create()
 		var values = ValueIdArray.create()
 		var awaiting = MoveSlotIndexColumn.create()
+		var carried = MoveSlotIndexColumn.create()
 
-		for position in 0 upto height 'eachBinding'
+		// Only a header phi's value differs from its entry value, and `droppedBeforeTheLoop` holds only phi
+		// entry values, so every binding no phi carries keeps its entry slot (`OwnedBindingIndex`'s
+		// single-owner invariant rules out a second binding on a carried value).
+		for phiVar in scan.phiVars 'eachCarriedBinding'
+			if phiVar.binding.isEnrolled and phiVar.binding.enrolledAt < height 'anOwnedBinding'
+				carried.push(phiVar.binding.enrolledAt)
+			end 'anOwnedBinding'
+		end 'eachCarriedBinding'
+
+		let positions = sortedUniquePositions(carried)
+
+		for position in positions 'eachBinding'
 			let headerValue = prefix.valueAt(position)
 			let value = self.entryValueOrItself(scan, headerValue: headerValue)
 			values.push(value)
@@ -53978,7 +54015,7 @@ export type Parser
 			awaiting.push(prefix.awaitingAt(position))
 		end 'eachBinding'
 
-		return MoveMark.create(self.bodyState.moveLedger.fromColumns(moved, values: values, awaiting: awaiting), consumes: prefix.consumes, gives: prefix.conditionallyGiven)
+		return MoveMark.create(self.bodyState.moveLedger.overlay(prefix.slots, height: height, positions: positions, moved: moved, values: values, awaiting: awaiting), consumes: prefix.consumes, gives: prefix.conditionallyGiven)
 	end 'markOfASkippedLoop'
 
 	function entryValueOrItself(scan LoopMoveScan, headerValue ValueId) returns ValueId
@@ -69833,9 +69870,6 @@ export type Parser
 			end 'borrowedManaged'
 		end 'structOrUnion'
 
-		// The owned-set scan inside runs only under the cheap syntactic `argBareLocal` gate, which is the same
-		// arrangement (and the same reason) `poisonMoveSource`'s callers use: an unconditional O(ownedBindings)
-		// scan on every store is quadratic in a long function body.
 		if argBareLocal 'sourceMayBeALiveBinding'
 			return self.storeOwnedValueIntoDurableSink(arg, isString: isString, range: range)
 		end 'sourceMayBeALiveBinding'

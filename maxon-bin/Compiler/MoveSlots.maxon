@@ -6,15 +6,53 @@ export typealias MoveSlotIndexColumn = Array with ElementIndex
 let MoveChunkShift = 6 as ElementIndex
 let MoveChunkWidth = 64 as ElementIndex
 let MoveChunkMask = 63 as ElementIndex
+let UnheldValue = 0 as ValueId
+
+function chunksHolding(height ElementIndex) returns ElementIndex
+	return (height + MoveChunkMask) shr MoveChunkShift
+end 'chunksHolding'
+
+function chunkFirst(index ElementIndex) returns ElementIndex
+	return index shl MoveChunkShift
+end 'chunkFirst'
+
+function chunkStop(index ElementIndex, height ElementIndex) returns ElementIndex
+	let first = chunkFirst(index)
+	return (first + MoveChunkWidth) if first + MoveChunkWidth < height else height
+end 'chunkStop'
+
+export function allPositions(height ElementIndex) returns MoveSlotIndexColumn
+	var every = MoveSlotIndexColumn.create()
+
+	for position in 0 upto height 'eachPosition'
+		every.push(position)
+	end 'eachPosition'
+
+	return every
+end 'allPositions'
 
 type MoveChunk
 	let moved as BoolArray
 	let values as ValueIdArray
 	let awaiting as MoveSlotIndexColumn
+	let anyAwaiting as bool
 
 	static function create(moved BoolArray, values ValueIdArray, awaiting MoveSlotIndexColumn) returns MoveChunk
-		return Self{moved: moved, values: values, awaiting: awaiting}
+		var waiting = false
+
+		for slot in awaiting 'eachSlot'
+			if slot != NoMoveSiteList 'aDoorWaits'
+				waiting = true
+				break
+			end 'aDoorWaits'
+		end 'eachSlot'
+
+		return Self{moved: moved, values: values, awaiting: awaiting, anyAwaiting: waiting}
 	end 'create'
+
+	function holdsAwaiting() returns bool
+		return self.anyAwaiting
+	end 'holdsAwaiting'
 
 	function movedAt(slot ElementIndex) returns bool
 		return try self.moved.get(slot) otherwise panic("MoveChunk.movedAt: slot {slot} is past the chunk")
@@ -82,9 +120,8 @@ export type MoveSlots
 	export function differences(other MoveSlots) returns MoveSlotIndexColumn
 		var found = MoveSlotIndexColumn.create()
 		let shared = self.height if self.height < other.height else other.height
-		let chunkCount = (shared + MoveChunkMask) shr MoveChunkShift
 
-		for index in 0 upto chunkCount 'eachChunk'
+		for index in 0 upto chunksHolding(shared) 'eachChunk'
 			let mine = self.chunkAtIndex(index)
 			let theirs = other.chunkAtIndex(index)
 
@@ -92,10 +129,7 @@ export type MoveSlots
 				continue
 			end 'theSameChunk'
 
-			let first = index shl MoveChunkShift
-			let stop = (first + MoveChunkWidth) if first + MoveChunkWidth < shared else shared
-
-			for position in first upto stop 'eachPosition'
+			for position in chunkFirst(index) upto chunkStop(index, height: shared) 'eachPosition'
 				if not mine.sameSlot(theirs, slot: position and MoveChunkMask) 'aDifferingSlot'
 					found.push(position)
 				end 'aDifferingSlot'
@@ -104,51 +138,303 @@ export type MoveSlots
 
 		return found
 	end 'differences'
+
+	function chunkCount() returns ElementIndex
+		return chunksHolding(self.height)
+	end 'chunkCount'
+
+	function chunkIsQuiet(index ElementIndex, edges MoveSlotsColumn, enclosing MoveSlotsColumn) returns bool
+		let mine = self.chunkAtIndex(index)
+
+		if mine.holdsAwaiting() 'waiting'
+			return false
+		end 'waiting'
+
+		for edge in edges 'eachEdge'
+			if index >= edge.chunkCount() or not (edge.chunkAtIndex(index) is mine) 'differs'
+				return false
+			end 'differs'
+		end 'eachEdge'
+
+		for outer in enclosing 'eachEnclosing'
+			if index < outer.chunkCount() and not (outer.chunkAtIndex(index) is mine) 'differs'
+				return false
+			end 'differs'
+		end 'eachEnclosing'
+
+		return true
+	end 'chunkIsQuiet'
+
+	// A chunk every edge mark and every enclosing loop's entry mark shares by identity holds the same move
+	// state at all of those points, so settling its bindings is a no-op. A chunk holding an awaiting slot
+	// is visited anyway: a waiting move site is noted as read in a later iteration even when no slot
+	// changed.
+	export function unsettledPositions(edges MoveSlotsColumn, enclosing MoveSlotsColumn) returns MoveSlotIndexColumn
+		var found = MoveSlotIndexColumn.create()
+
+		for index in 0 upto self.chunkCount() 'eachChunk'
+			if self.chunkIsQuiet(index, edges: edges, enclosing: enclosing) 'quiet'
+				continue
+			end 'quiet'
+
+			for position in chunkFirst(index) upto chunkStop(index, height: self.height) 'eachPosition'
+				found.push(position)
+			end 'eachPosition'
+		end 'eachChunk'
+
+		return found
+	end 'unsettledPositions'
 end 'MoveSlots'
 
-export type MoveLedger
-	export var live as MoveSlots
-	var dirty as MoveSlotIndexColumn
-	var dirtyFlags as BoolArray
+export typealias MoveSlotsColumn = Array with MoveSlots
 
-	export static function create() returns MoveLedger
-		return Self{live: MoveSlots.empty(), dirty: MoveSlotIndexColumn.create(), dirtyFlags: BoolArray.create()}
+type PositionSet
+	var members as MoveSlotIndexColumn
+	var flags as BoolArray
+
+	static function create() returns PositionSet
+		return Self{members: MoveSlotIndexColumn.create(), flags: BoolArray.create()}
 	end 'create'
 
-	// Owed by every write to an owned binding's move state: `takeRefreshPositions` re-reads only the
-	// positions noted here, so an unnoted write never reaches the next snapshot.
-	export function noteDirty(position ElementIndex)
-		if position < self.dirtyFlags.count() and (try self.dirtyFlags.get(position) otherwise panic("MoveLedger.noteDirty: dirtyFlags.get OOB at {position}")) 'alreadyNoted'
+	function note(position ElementIndex)
+		if position < self.flags.count() and (try self.flags.get(position) otherwise panic("PositionSet.note: flags.get OOB at {position}")) 'alreadyNoted'
 			return
 		end 'alreadyNoted'
 
-		self.dirtyFlags.growFilled(position + 1, value: false)
-		try self.dirtyFlags.set(position, value: true) otherwise panic("MoveLedger.noteDirty: dirtyFlags.set OOB at {position}")
-		self.dirty.push(position)
+		self.flags.growFilled(position + 1, value: false)
+		try self.flags.set(position, value: true) otherwise panic("PositionSet.note: flags.set OOB at {position}")
+		self.members.push(position)
+	end 'note'
+
+	function drain(limit ElementIndex) returns MoveSlotIndexColumn
+		var taken = MoveSlotIndexColumn.create()
+
+		for position in self.members 'eachMember'
+			if position < limit 'withinTheLimit'
+				taken.push(position)
+			end 'withinTheLimit'
+		end 'eachMember'
+
+		self.clear()
+		return taken
+	end 'drain'
+
+	function clear()
+		for position in self.members 'eachMember'
+			try self.flags.set(position, value: false) otherwise panic("PositionSet.clear: flags.set OOB at {position}")
+		end 'eachMember'
+
+		self.members.clear()
+	end 'clear'
+end 'PositionSet'
+
+typealias OwnerPositionByValue = Map with (ValueId, ElementIndex)
+
+// Each value has at most one live owner, and `addOwner` panics on a second. The loop marks key
+// `movedAtTheHeader` and `droppedBeforeTheLoop` by value and settle only the positions a loop touched, so
+// a value shared by two live bindings would carry one binding's move onto the other.
+export type OwnedBindingIndex
+	var heldLive as BoolArray
+	var heldValue as ValueIdArray
+	var heldCell as BoolArray
+	var owners as OwnerPositionByValue
+	var cells as MoveSlotIndexColumn
+	var complete as bool
+
+	export static function create() returns OwnedBindingIndex
+		return Self{heldLive: BoolArray.create(), heldValue: ValueIdArray.create(), heldCell: BoolArray.create(), owners: OwnerPositionByValue.create(), cells: MoveSlotIndexColumn.create(), complete: true}
+	end 'create'
+
+	function reset()
+		self.heldLive.clear()
+		self.heldValue.clear()
+		self.heldCell.clear()
+		self.owners = OwnerPositionByValue.create()
+		self.cells.clear()
+		self.complete = false
+	end 'reset'
+
+	function refresh(bindings VarInfoArray, pending PositionSet)
+		let height = bindings.count()
+
+		if not self.complete 'rebuildEverything'
+			for position in 0 upto height 'eachPosition'
+				pending.note(position)
+			end 'eachPosition'
+
+			self.complete = true
+		end 'rebuildEverything'
+
+		self.dropBeyond(height)
+
+		let changed = pending.drain(height)
+
+		// Every changed position retires before any is admitted: a value passing between two changed
+		// positions would otherwise meet its old owner still held, and `addOwner` would panic on a false
+		// duplicate.
+		for position in changed 'eachChanged'
+			self.retire(bindings, position: position)
+		end 'eachChanged'
+
+		for position in changed 'eachChangedAgain'
+			self.admit(bindings, position: position)
+		end 'eachChangedAgain'
+	end 'refresh'
+
+	export function ownerOf(value ValueId) returns ElementIndex throws MapError
+		return try self.owners.get(value)
+	end 'ownerOf'
+
+	export function cellPositions() returns MoveSlotIndexColumn
+		var positions = MoveSlotIndexColumn.create()
+		positions.append(self.cells)
+		positions.sort()
+		return positions
+	end 'cellPositions'
+
+	function dropBeyond(height ElementIndex)
+		if height >= self.heldLive.count() 'nothingBeyond'
+			return
+		end 'nothingBeyond'
+
+		for position in height upto self.heldLive.count() 'eachBeyond'
+			self.release(position)
+		end 'eachBeyond'
+
+		self.heldLive.truncate(height)
+		self.heldValue.truncate(height)
+		self.heldCell.truncate(height)
+	end 'dropBeyond'
+
+	function release(position ElementIndex)
+		if self.liveAt(position) 'wasAnOwner'
+			self.removeOwner(self.valueAt(position), position: position)
+		end 'wasAnOwner'
+
+		if self.cellAt(position) 'wasACell'
+			self.removeCell(position)
+		end 'wasACell'
+	end 'release'
+
+	function liveAt(position ElementIndex) returns bool
+		return try self.heldLive.get(position) otherwise panic("OwnedBindingIndex.liveAt: heldLive.get OOB at {position}")
+	end 'liveAt'
+
+	function valueAt(position ElementIndex) returns ValueId
+		return try self.heldValue.get(position) otherwise panic("OwnedBindingIndex.valueAt: heldValue.get OOB at {position}")
+	end 'valueAt'
+
+	function cellAt(position ElementIndex) returns bool
+		return try self.heldCell.get(position) otherwise panic("OwnedBindingIndex.cellAt: heldCell.get OOB at {position}")
+	end 'cellAt'
+
+	function bindingAt(bindings VarInfoArray, position ElementIndex) returns VarInfo
+		return try bindings.get(position) otherwise panic("OwnedBindingIndex.bindingAt: bindings.get OOB at {position}")
+	end 'bindingAt'
+
+	function growHeldTo(position ElementIndex)
+		self.heldLive.growFilled(position + 1, value: false)
+		self.heldValue.growFilled(position + 1, value: UnheldValue)
+		self.heldCell.growFilled(position + 1, value: false)
+	end 'growHeldTo'
+
+	// A `movedFrom` ghost and an error-match obligation are never live owners, here and in `admit`. A ghost
+	// keeps the stale `boundValue` of the binding it moved to, so admitting it would report two owners of
+	// one value: a double-free or a wrongly skipped drop.
+	function retire(bindings VarInfoArray, position ElementIndex)
+		let binding = self.bindingAt(bindings, position: position)
+		self.growHeldTo(position)
+
+		if self.liveAt(position) and (binding.movedFrom or binding.isErrorMatchObligation or self.valueAt(position) != binding.boundValue) 'noLongerThatOwner'
+			self.removeOwner(self.valueAt(position), position: position)
+			try self.heldLive.set(position, value: false) otherwise panic("OwnedBindingIndex.retire: heldLive.set OOB at {position}")
+		end 'noLongerThatOwner'
+
+		if self.cellAt(position) and not binding.isCellBinding 'noLongerACell'
+			self.removeCell(position)
+			try self.heldCell.set(position, value: false) otherwise panic("OwnedBindingIndex.retire: heldCell.set OOB at {position}")
+		end 'noLongerACell'
+	end 'retire'
+
+	function admit(bindings VarInfoArray, position ElementIndex)
+		let binding = self.bindingAt(bindings, position: position)
+
+		if not self.liveAt(position) and not binding.movedFrom and not binding.isErrorMatchObligation 'nowAnOwner'
+			self.addOwner(binding.boundValue, position: position)
+			try self.heldLive.set(position, value: true) otherwise panic("OwnedBindingIndex.admit: heldLive.set OOB at {position}")
+			try self.heldValue.set(position, value: binding.boundValue) otherwise panic("OwnedBindingIndex.admit: heldValue.set OOB at {position}")
+		end 'nowAnOwner'
+
+		if binding.isCellBinding and not self.cellAt(position) 'nowACell'
+			self.cells.push(position)
+			try self.heldCell.set(position, value: true) otherwise panic("OwnedBindingIndex.admit: heldCell.set OOB at {position}")
+		end 'nowACell'
+	end 'admit'
+
+	function addOwner(value ValueId, position ElementIndex)
+		if self.owners.contains(value) 'aSecondOwner'
+			let held = try self.owners.get(value) otherwise panic("OwnedBindingIndex.addOwner: v{value} is held yet has no owner entry")
+			panic("OwnedBindingIndex.addOwner: v{value} would have two live owners, the binding at position {held} and the one at position {position}")
+		end 'aSecondOwner'
+
+		self.owners.upsert(value, value: position)
+	end 'addOwner'
+
+	function removeOwner(value ValueId, position ElementIndex)
+		let held = try self.owners.get(value) otherwise panic("OwnedBindingIndex.removeOwner: v{value} is held live at position {position} yet has no owner entry")
+
+		if held != position 'notThisOwner'
+			panic("OwnedBindingIndex.removeOwner: v{value} is owned by the binding at position {held}, not the one at position {position}")
+		end 'notThisOwner'
+
+		_ = self.owners.remove(value)
+	end 'removeOwner'
+
+	function removeCell(position ElementIndex)
+		for index in 0 upto self.cells.count() 'eachCell'
+			if (try self.cells.get(index) otherwise panic("OwnedBindingIndex.removeCell: cells.get OOB at {index}")) == position 'thisCell'
+				_ = try self.cells.remove(index) otherwise panic("OwnedBindingIndex.removeCell: cells.remove OOB at {index}")
+				return
+			end 'thisCell'
+		end 'eachCell'
+
+		panic("OwnedBindingIndex.removeCell: position {position} is held as a cell yet is not in the cell list")
+	end 'removeCell'
+end 'OwnedBindingIndex'
+
+export type MoveLedger
+	export var live as MoveSlots
+	var owned as OwnedBindingIndex
+	var dirty as PositionSet
+	var ownedDirty as PositionSet
+
+	export static function create() returns MoveLedger
+		return Self{live: MoveSlots.empty(), owned: OwnedBindingIndex.create(), dirty: PositionSet.create(), ownedDirty: PositionSet.create()}
+	end 'create'
+
+	export function refreshedOwners(bindings VarInfoArray) returns OwnedBindingIndex
+		self.owned.refresh(bindings, pending: self.ownedDirty)
+		return self.owned
+	end 'refreshedOwners'
+
+	// Owed by every write to an owned binding's move state: `takeRefreshPositions` and `refreshedOwners`
+	// re-read only the positions noted here, so an unnoted write never reaches the next snapshot or the
+	// owner index.
+	export function noteDirty(position ElementIndex)
+		self.ownedDirty.note(position)
+		self.dirty.note(position)
 	end 'noteDirty'
 
 	export function invalidate()
-		for position in self.dirty 'eachDirty'
-			try self.dirtyFlags.set(position, value: false) otherwise panic("MoveLedger.invalidate: dirtyFlags.set OOB at {position}")
-		end 'eachDirty'
-
 		self.dirty.clear()
+		self.ownedDirty.clear()
 		self.live = MoveSlots.empty()
+		self.owned.reset()
 	end 'invalidate'
 
 	export function takeRefreshPositions(height ElementIndex) returns MoveSlotIndexColumn
 		let kept = self.live.height if self.live.height < height else height
-		var positions = MoveSlotIndexColumn.create()
-
-		for position in self.dirty 'eachDirty'
-			try self.dirtyFlags.set(position, value: false) otherwise panic("MoveLedger.takeRefreshPositions: dirtyFlags.set OOB at {position}")
-
-			if position < kept 'stillOwned'
-				positions.push(position)
-			end 'stillOwned'
-		end 'eachDirty'
-
-		self.dirty.clear()
+		var positions = self.dirty.drain(kept)
 		positions.sort()
 
 		for position in kept upto height 'eachNewPosition'
@@ -163,16 +449,6 @@ export type MoveLedger
 		self.live = self.overlay(self.live, height: height, positions: positions, moved: moved, values: values, awaiting: awaiting)
 	end 'install'
 
-	export function fromColumns(moved BoolArray, values ValueIdArray, awaiting MoveSlotIndexColumn) returns MoveSlots
-		var positions = MoveSlotIndexColumn.create()
-
-		for position in 0 upto moved.count() 'eachPosition'
-			positions.push(position)
-		end 'eachPosition'
-
-		return self.overlay(MoveSlots.empty(), height: moved.count(), positions: positions, moved: moved, values: values, awaiting: awaiting)
-	end 'fromColumns'
-
 	// `positions` must ascend without repeats (`sortedUniquePositions`): the walk only ever looks at the next
 	// one, so a position out of order is never reached and its slot silently keeps the base value.
 	export function overlay(base MoveSlots, height ElementIndex, positions MoveSlotIndexColumn, moved BoolArray, values ValueIdArray, awaiting MoveSlotIndexColumn) returns MoveSlots
@@ -180,23 +456,20 @@ export type MoveLedger
 			return base
 		end 'nothingToOverlay'
 
-		let chunkCount = (height + MoveChunkMask) shr MoveChunkShift
 		var chunks = MoveChunkColumn.create()
 		var next = 0 as ElementIndex
 
-		for index in 0 upto chunkCount 'eachChunk'
+		for index in 0 upto chunksHolding(height) 'eachChunk'
 			if next >= positions.count() or ((try positions.get(next) otherwise panic("MoveLedger.overlay: positions.get OOB at {next}")) shr MoveChunkShift) != index 'untouched'
 				chunks.push(base.chunkAtIndex(index))
 				continue
 			end 'untouched'
 
-			let first = index shl MoveChunkShift
-			let stop = (first + MoveChunkWidth) if first + MoveChunkWidth < height else height
 			var chunkMoved = BoolArray.create()
 			var chunkValues = ValueIdArray.create()
 			var chunkAwaiting = MoveSlotIndexColumn.create()
 
-			for position in first upto stop 'eachPosition'
+			for position in chunkFirst(index) upto chunkStop(index, height: height) 'eachPosition'
 				if next < positions.count() and (try positions.get(next) otherwise panic("MoveLedger.overlay: positions.get OOB at {next}")) == position 'overlaid'
 					chunkMoved.push(try moved.get(next) otherwise panic("MoveLedger.overlay: moved.get OOB at {next}"))
 					chunkValues.push(try values.get(next) otherwise panic("MoveLedger.overlay: values.get OOB at {next}"))
