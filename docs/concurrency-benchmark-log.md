@@ -115,3 +115,59 @@ metric (wall, CPU = user + kernel, peak working set); `arm` names the compiler (
 | 2026-10-15 | f561e2d8c | dirty | wsl | shared-counter | 200000 | 1 | 3 | 154 | 1,330 | 8.61 | 8.65 | 296.50 | slot | s2r2: plain lock-depth step, envelope-free mailbox, Go park order + lock-free wake early-out, one lock per strand turn |
 | 2026-10-15 | f561e2d8c | dirty | wsl | shared-counter | 200000 | 12 | 3 | 709 | 4,810 | 6.79 | 7.08 | 327.06 | ref@f561e2d8c | s2r2: plain lock-depth step, envelope-free mailbox, Go park order + lock-free wake early-out, one lock per strand turn |
 | 2026-10-15 | f561e2d8c | dirty | wsl | shared-counter | 200000 | 12 | 3 | 709 | 2,871 | 4.05 | 5.50 | 245.94 | slot | s2r2: plain lock-depth step, envelope-free mailbox, Go park order + lock-free wake early-out, one lock per strand turn |
+| 2026-10-15 | eb401fad2 | clean | macos | thread-ring | 3000000 | 1 | 3 | 157 | 515 | 3.28 | 3.30 | 0.77 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | thread-ring | 3000000 | 1 | 3 | 157 | 464 | 2.95 | 2.97 | 0.77 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | thread-ring | 3000000 | 8 | 3 | 714 | 848 | 1.19 | 0.47 | 0.72 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | thread-ring | 3000000 | 8 | 3 | 714 | 832 | 1.17 | 0.44 | 0.70 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | ping-pong | 1000000 | 1 | 3 | 182 | 321 | 1.77 | 1.77 | 0.59 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | ping-pong | 1000000 | 1 | 3 | 182 | 282 | 1.55 | 1.55 | 0.59 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | ping-pong | 1000000 | 8 | 3 | 207 | 540 | 2.61 | 2.53 | 0.59 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | ping-pong | 1000000 | 8 | 3 | 207 | 541 | 2.61 | 2.51 | 0.60 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | fan-in | 100000 | 1 | 3 | 126 | 348 | 2.76 | 2.78 | 107.25 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | fan-in | 100000 | 1 | 3 | 126 | 288 | 2.28 | 2.27 | 80.66 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | fan-in | 100000 | 8 | 3 | 470 | 924 | 1.97 | 3.41 | 78.26 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | fan-in | 100000 | 8 | 3 | 470 | 702 | 1.50 | 2.67 | 58.66 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | worker-pool | 6000 250000 | 1 | 3 | 2,399 | 2,405 | 1.00 | 1.00 | 1.51 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | worker-pool | 6000 250000 | 1 | 3 | 2,399 | 2,398 | 1.00 | 1.00 | 1.48 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | worker-pool | 6000 250000 | 8 | 3 | 449 | 461 | 1.03 | 1.00 | 1.32 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | worker-pool | 6000 250000 | 8 | 3 | 449 | 473 | 1.05 | 1.00 | 1.29 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | spawn-many | 200000 | 1 | 3 | 110 | 174 | 1.59 | 1.62 | 2.71 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | spawn-many | 200000 | 1 | 3 | 110 | 162 | 1.48 | 1.50 | 2.70 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | spawn-many | 200000 | 8 | 3 | 29 | 409 | 14.12 | 19.33 | 9.01 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | spawn-many | 200000 | 8 | 3 | 29 | 419 | 14.44 | 20.43 | 9.01 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | coroutine-churn | 200000 | 1 | 3 | 189 | 131 | 0.70 | 0.68 | 1.46 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | coroutine-churn | 200000 | 1 | 3 | 189 | 133 | 0.70 | 0.69 | 1.46 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | coroutine-churn | 200000 | 8* | 3 | 170 | 131 | 0.77 | 0.76 | 1.46 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | coroutine-churn | 200000 | 8* | 3 | 170 | 132 | 0.78 | 0.76 | 1.46 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | shared-counter | 200000 | 1 | 3 | 36 | 687 | 18.89 | 19.32 | 215.74 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | shared-counter | 200000 | 1 | 3 | 36 | 572 | 15.71 | 15.93 | 162.11 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | shared-counter | 200000 | 8 | 3 | 1,084 | 1,849 | 1.71 | 1.90 | 158.32 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | clean | macos | shared-counter | 200000 | 8 | 3 | 1,084 | 1,441 | 1.33 | 1.42 | 118.25 | slot | arm64 A/B of R2-R4 (ref f561e2d8c, pre plain depth step / intrusive mailbox / Go park order) |
+| 2026-10-15 | eb401fad2 | dirty | orb | thread-ring | 3000000 | 1 | 3 | 156 | 509 | 3.27 | 3.28 | 0.69 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | thread-ring | 3000000 | 1 | 3 | 156 | 368 | 2.36 | 2.36 | 0.70 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | thread-ring | 3000000 | 7 | 3 | 249 | 466 | 1.87 | 1.06 | 0.64 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | thread-ring | 3000000 | 7 | 3 | 249 | 378 | 1.52 | 0.85 | 0.71 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | ping-pong | 1000000 | 1 | 3 | 179 | 316 | 1.76 | 1.76 | 0.30 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | ping-pong | 1000000 | 1 | 3 | 179 | 229 | 1.28 | 1.28 | 0.30 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | ping-pong | 1000000 | 7 | 3 | 158 | 285 | 1.80 | 1.80 | 0.23 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | ping-pong | 1000000 | 7 | 3 | 158 | 232 | 1.47 | 1.46 | 0.23 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | fan-in | 100000 | 1 | 3 | 124 | 357 | 2.88 | 2.88 | 200.36 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | fan-in | 100000 | 1 | 3 | 124 | 179 | 1.44 | 1.45 | 150.53 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | fan-in | 100000 | 7 | 3 | 153 | 480 | 3.13 | 4.48 | 161.46 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | fan-in | 100000 | 7 | 3 | 153 | 350 | 2.28 | 4.79 | 115.77 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,414 | 2,406 | 1.00 | 1.00 | 1.81 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,414 | 2,415 | 1.00 | 1.00 | 1.76 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 412 | 516 | 1.25 | 0.95 | 1.66 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 412 | 618 | 1.50 | 0.95 | 1.62 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | spawn-many | 200000 | 1 | 3 | 105 | 158 | 1.50 | 1.50 | 3.01 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | spawn-many | 200000 | 1 | 3 | 105 | 141 | 1.34 | 1.33 | 3.00 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | spawn-many | 200000 | 7 | 3 | 54 | 148 | 2.74 | 3.33 | 2.50 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | spawn-many | 200000 | 7 | 3 | 54 | 110 | 2.03 | 2.48 | 2.42 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 168 | 107 | 0.64 | 0.64 | 1.61 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 168 | 111 | 0.66 | 0.66 | 1.61 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 188 | 106 | 0.56 | 0.57 | 1.58 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 188 | 109 | 0.58 | 0.58 | 1.58 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 714 | 21.85 | 21.89 | 372.09 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 354 | 10.82 | 10.84 | 279.43 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | shared-counter | 200000 | 7 | 3 | 417 | 1,025 | 2.46 | 2.81 | 304.45 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | eb401fad2 | dirty | orb | shared-counter | 200000 | 7 | 3 | 417 | 675 | 1.62 | 2.45 | 218.79 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
