@@ -1,5 +1,4 @@
 let SkipMinBlocks = 48 as ElementIndex
-let SkipScanLimit = 1024 as ElementIndex
 let SkipMinSpan = 4 as ElementIndex
 
 // Lets a liveness walk mark a value live over a whole chain of blocks in one step (`coversUpTo`).
@@ -74,13 +73,12 @@ export type DomSkip
 
 		var edge = CfgIndexArray.create()
 		edge.refill(n, value: 0)
-		var reach = CfgIndexArray.create()
-		reach.refill(n, value: 0)
+		var bounds = IntervalBounds.build(topo)
 
 		for b in 1 upto n 'eachEdge'
 			let a = try idom.get(b) otherwise panic("DomSkip.build: idom.get OOB")
 
-			if intervalIsClean(topo, reach: reach, a: a, b: b) 'cleanBundle'
+			if intervalIsClean(topo, bounds: bounds, a: a, b: b) 'cleanBundle'
 				try edge.set(b, value: try edge.get(a) otherwise panic("DomSkip.build: edge.get OOB")) otherwise panic("DomSkip.build: edge.set OOB")
 			end 'cleanBundle' else 'ownBundle'
 				try edge.set(b, value: b) otherwise panic("DomSkip.build: edge.set OOB")
@@ -145,11 +143,7 @@ function intersectDominators(idom CfgIndexArray, a ElementIndex, b ElementIndex)
 	return left
 end 'intersectDominators'
 
-function intervalIsClean(topo FuncTopology, reach CfgIndexArray, a ElementIndex, b ElementIndex) returns bool
-	if b - a > SkipScanLimit 'tooWideToScan'
-		return false
-	end 'tooWideToScan'
-
+function intervalIsClean(topo FuncTopology, bounds IntervalBounds, a ElementIndex, b ElementIndex) returns bool
 	let ownDeg = topo.pred.degree(b as CsrIndex)
 
 	for k in 0 upto ownDeg 'eachOwnPred'
@@ -158,39 +152,99 @@ function intervalIsClean(topo FuncTopology, reach CfgIndexArray, a ElementIndex,
 		end 'aRetreatingEdge'
 	end 'eachOwnPred'
 
-	let mark = b + 1
-	try reach.set(b, value: mark) otherwise panic("intervalIsClean: reach.set OOB")
-	var y = b
-
-	while y > a + 1 'eachInterior'
-		y = y - 1
-		let predDeg = topo.pred.degree(y as CsrIndex)
-
-		for k in 0 upto predDeg 'eachPred'
-			let q = topo.pred.neighbour(y as CsrIndex, k: k)
-
-			if q < a or q >= b 'leavesTheInterval'
-				return false
-			end 'leavesTheInterval'
-		end 'eachPred'
-
-		var reaches = false
-		let succDeg = topo.succ.degree(y as CsrIndex)
-
-		for k in 0 upto succDeg 'eachSucc'
-			let s = topo.succ.neighbour(y as CsrIndex, k: k)
-
-			if s > y and s <= b and (try reach.get(s) otherwise panic("intervalIsClean: reach.get OOB")) == mark 'reachesB'
-				reaches = true
-			end 'reachesB'
-		end 'eachSucc'
-
-		if not reaches 'strandedInside'
-			return false
-		end 'strandedInside'
-
-		try reach.set(y, value: mark) otherwise panic("intervalIsClean: reach.set OOB")
-	end 'eachInterior'
-
-	return true
+	return bounds.confines(a, b: b)
 end 'intervalIsClean'
+
+// Answers the interior half of `intervalIsClean` as three range queries over `(a, b)`: every
+// predecessor is at least `a`, every predecessor is below `b`, and every block's nearest forward
+// successor is at most `b`. The last is "reaches `b` by forward edges": by descending induction from
+// `b`, a block `y` of the interval reaches `b` exactly when it has a forward successor in `(y, b]`.
+type IntervalBounds
+	var leafBase as ElementIndex
+	var lowestPred as CfgIndexArray
+	var highestPred as CfgIndexArray
+	var nearestForwardSucc as CfgIndexArray
+	var nodes as CfgIndexArray
+
+	static function build(topo FuncTopology) returns IntervalBounds
+		let n = topo.numBlocks
+		let leafBase = roundUpToPowerOfTwo(n as BytePos)
+		var lowestPred = CfgIndexArray.create()
+		lowestPred.refill(leafBase + leafBase, value: n)
+		var highestPred = CfgIndexArray.create()
+		highestPred.refill(leafBase + leafBase, value: 0)
+		var nearestForwardSucc = CfgIndexArray.create()
+		nearestForwardSucc.refill(leafBase + leafBase, value: 0)
+
+		for y in 0 upto n 'eachBlock'
+			var lowest = n
+			var highest = 0 as ElementIndex
+			var nearest = n
+			let predDeg = topo.pred.degree(y as CsrIndex)
+
+			for k in 0 upto predDeg 'eachPred'
+				let q = topo.pred.neighbour(y as CsrIndex, k: k)
+
+				if q < lowest 'lower'
+					lowest = q
+				end 'lower'
+
+				if q > highest 'higher'
+					highest = q
+				end 'higher'
+			end 'eachPred'
+
+			let succDeg = topo.succ.degree(y as CsrIndex)
+
+			for k in 0 upto succDeg 'eachSucc'
+				let s = topo.succ.neighbour(y as CsrIndex, k: k)
+
+				if s > y and s < nearest 'nearer'
+					nearest = s
+				end 'nearer'
+			end 'eachSucc'
+
+			try lowestPred.set(leafBase + y, value: lowest) otherwise panic("IntervalBounds.build: lowestPred.set OOB at block {y}")
+			try highestPred.set(leafBase + y, value: highest) otherwise panic("IntervalBounds.build: highestPred.set OOB at block {y}")
+			try nearestForwardSucc.set(leafBase + y, value: nearest) otherwise panic("IntervalBounds.build: nearestForwardSucc.set OOB at block {y}")
+		end 'eachBlock'
+
+		for ri in 1 upto leafBase 'eachNode'
+			let node = leafBase - ri
+			let left = node + node
+			let right = left + 1
+			let lowestLeft = try lowestPred.get(left) otherwise panic("IntervalBounds.build: lowestPred.get OOB at {left}")
+			let lowestRight = try lowestPred.get(right) otherwise panic("IntervalBounds.build: lowestPred.get OOB at {right}")
+			let highestLeft = try highestPred.get(left) otherwise panic("IntervalBounds.build: highestPred.get OOB at {left}")
+			let highestRight = try highestPred.get(right) otherwise panic("IntervalBounds.build: highestPred.get OOB at {right}")
+			let nearestLeft = try nearestForwardSucc.get(left) otherwise panic("IntervalBounds.build: nearestForwardSucc.get OOB at {left}")
+			let nearestRight = try nearestForwardSucc.get(right) otherwise panic("IntervalBounds.build: nearestForwardSucc.get OOB at {right}")
+			try lowestPred.set(node, value: lowestLeft if lowestLeft < lowestRight else lowestRight) otherwise panic("IntervalBounds.build: lowestPred.set OOB at {node}")
+			try highestPred.set(node, value: highestLeft if highestLeft > highestRight else highestRight) otherwise panic("IntervalBounds.build: highestPred.set OOB at {node}")
+			try nearestForwardSucc.set(node, value: nearestLeft if nearestLeft > nearestRight else nearestRight) otherwise panic("IntervalBounds.build: nearestForwardSucc.set OOB at {node}")
+		end 'eachNode'
+
+		return Self{leafBase: leafBase, lowestPred: lowestPred, highestPred: highestPred, nearestForwardSucc: nearestForwardSucc, nodes: CfgIndexArray.create()}
+	end 'build'
+
+	function confines(a ElementIndex, b ElementIndex) returns bool
+		var covering = self.nodes
+		collectCoveringNodes(self.leafBase, lo: a + 1, hi: b - 1, out: covering)
+
+		for node in covering 'eachCoveringNode'
+			if (try self.lowestPred.get(node) otherwise panic("IntervalBounds.confines: lowestPred.get OOB at {node}")) < a 'enteredFromBefore'
+				return false
+			end 'enteredFromBefore'
+
+			if (try self.highestPred.get(node) otherwise panic("IntervalBounds.confines: highestPred.get OOB at {node}")) >= b 'enteredFromBeyond'
+				return false
+			end 'enteredFromBeyond'
+
+			if (try self.nearestForwardSucc.get(node) otherwise panic("IntervalBounds.confines: nearestForwardSucc.get OOB at {node}")) > b 'strandedInside'
+				return false
+			end 'strandedInside'
+		end 'eachCoveringNode'
+
+		return true
+	end 'confines'
+end 'IntervalBounds'

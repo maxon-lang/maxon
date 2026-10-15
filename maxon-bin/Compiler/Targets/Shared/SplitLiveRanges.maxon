@@ -4155,6 +4155,7 @@ export type SplitDriver
 			end 'countSlot'
 
 			let peakPos = work.pressure.positionOfSeq(peak.peakSeq)
+			let before = PeakBeforeSplit.of(peak, pos: peakPos)
 			self.beginSplit(index, victim: victim, takesSlot: takesSlot)
 
 			let freshFrom = self.nextValueId
@@ -4166,7 +4167,9 @@ export type SplitDriver
 			end 'act'
 
 			self.commitSplit(module, victim: victim, freshFrom: freshFrom)
+			before.requireVictimDeadAcross(module, func: func, liveness: funcLiveness, scratch: work, victim: victim, iterations: iterations)
 			peak = refreshPeak(module, liveness: funcLiveness, pool: self.pool, scratch: work, cut: CutSeed.at(peak.blockLocal, atPos: peakPos, ofVictim: victim, mintedFrom: freshFrom, mintedTo: self.nextValueId, row: peak.liveBefore, ready: peak.rowReady))
+			before.requireRelieved(module, func: func, liveness: funcLiveness, scratch: work, refreshed: peak, victim: victim, iterations: iterations)
 
 			if VerifyIncrementalSplit 'checkAgainstAFullRebuild'
 				self.flushOps(module)
@@ -4542,6 +4545,51 @@ export type SplitDriver
 		self.nextSlot = slotCount
 	end 'extendFrameTo'
 end 'SplitDriver'
+
+// Restates the termination argument at every split: the victim is no longer live across the peak op,
+// and that op's pressure fell. The loop's only other bound is `splitRunawayBound`, the potential, so a
+// split that makes no progress panics here rather than spinning until that bound is reached.
+type PeakBeforeSplit
+	let blockLocal as ElementIndex
+	let pos as ElementIndex
+	let opIdx as ElementIndex
+	let pressure as RegCount
+	let clobberOnly as bool
+	let witness as RegMask
+	let witnessClass as RegClass
+
+	static function of(peak PressurePeak, pos ElementIndex) returns PeakBeforeSplit
+		return Self{blockLocal: peak.blockLocal, pos: pos, opIdx: peak.peakOpIdx, pressure: peak.pressure, clobberOnly: peak.clobberOnly, witness: peak.witness, witnessClass: peak.witnessClass}
+	end 'of'
+
+	function describe(module TargetModule, liveness LivenessResult, scratch SplitScratch) returns String
+		let block = blockAt(module, topo: liveness.cfg.topo, local: self.blockLocal)
+		return "block '{String.from(block.label)}' ({block.heat.name}) op index {self.opIdx} ({opShapeDescription(module, opIdx: self.opIdx, buf: scratch.splitOperands, opFacts: liveness.opFacts)}), {self.witnessClass.name} pressure {self.pressure} against witness {self.witness}, clobberOnly={self.clobberOnly}"
+	end 'describe'
+
+	function requireVictimDeadAcross(module TargetModule, func IrFunction, liveness LivenessResult, scratch SplitScratch, victim ValueId, iterations EventCount)
+		let slot = scratch.pressure.slotOfPosition(self.blockLocal, pos: scratch.edits.postSplitPosition(self.blockLocal, pos: self.pos))
+
+		if scratch.pressure.opAtSlot(slot) != self.opIdx 'peakOpLost'
+			panic("SplitDriver.relievePressure: '{String.from(func.name)}' lost the peak op after split {iterations} of value {victim}: the position the split edits map it to holds op {scratch.pressure.opAtSlot(slot)}, not the peak op at {self.describe(module, liveness: liveness, scratch: scratch)}")
+		end 'peakOpLost'
+
+		var span = scratch.span
+		liveAcrossSpanScanning(liveness, pressure: scratch.pressure, w: victim, blockLocal: self.blockLocal, out: span)
+
+		if span.found and span.lo <= slot and slot <= span.hi 'stillLiveAcrossThePeak'
+			panic("SplitDriver.relievePressure: '{String.from(func.name)}' made no progress at split {iterations}: value {victim} is still live across the peak op it was split to relieve, at {self.describe(module, liveness: liveness, scratch: scratch)}")
+		end 'stillLiveAcrossThePeak'
+	end 'requireVictimDeadAcross'
+
+	function requireRelieved(module TargetModule, func IrFunction, liveness LivenessResult, scratch SplitScratch, refreshed PressurePeak, victim ValueId, iterations EventCount)
+		let samePeak = refreshed.found and refreshed.peakOpIdx == self.opIdx and refreshed.clobberOnly == self.clobberOnly and refreshed.witnessClass == self.witnessClass and refreshed.witness == self.witness
+
+		if samePeak and refreshed.pressure >= self.pressure 'pressureDidNotFall'
+			panic("SplitDriver.relievePressure: '{String.from(func.name)}' made no progress at split {iterations}: after splitting value {victim} the peak op still carries {refreshed.pressure} against witness {refreshed.witness} (it carried {self.pressure}) at {self.describe(module, liveness: liveness, scratch: scratch)}")
+		end 'pressureDidNotFall'
+	end 'requireRelieved'
+end 'PeakBeforeSplit'
 
 // THE RUNAWAY BOUND every split loop in the allocator counts against — the splitter's own Φ→0 loop and
 // the colorer's repair rounds alike.

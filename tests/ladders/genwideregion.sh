@@ -2,17 +2,16 @@
 # THE WIDE-REGION LADDER — the worst case of the liveness walk's dominator skip, ISOLATED.
 #
 #     `DomSkip` marks a block "clean" when everything that reaches it without passing its immediate
-#     dominator is exactly the layout interval between the two. Proving that scans the interval, capped at
-#     `SkipScanLimit`. A scan that FAILS late (the block that does not reach the join sits at the far end
-#     of the interval) pays the whole interval before it gives up, so the question is whether many joins
-#     over wide regions cost O(blocks x cap) — linear — or something worse.
+#     dominator is exactly the layout interval between the two. Proving that is three range queries over
+#     the interval, O(log blocks) each whatever its width, so the question is whether many joins over
+#     wide regions stay linear in blocks.
 #
 # The shapes:
 #   nested   N nested `if`s, each opening with an early `return` arm. The join closing level i spans every
-#            level inside it, and the early-return block sits at its far end, so each scan walks the
-#            whole inner structure (up to the cap) and then fails.
-#   arms     one `match` over an enum of N cases, joined once: a single wide diamond whose scan succeeds
-#            for N within the cap and is refused outright beyond it.
+#            level inside it, and the early-return block sits at its far end, so each join's interval is
+#            the whole inner structure and its test fails.
+#   arms     one `match` over an enum of N cases, joined once: a single wide diamond whose test succeeds
+#            at every N.
 #   control  the nested shape's statements with no nesting and no early return: the same block count,
 #            every join narrow.
 #
