@@ -99,7 +99,7 @@ data {
   __gt_live_count@96 = i64 0
   __gt_quiesce_waiter@104 = i64 0
   __gt_quiesce_stuck@112 = i64 0
-  __gt_seed_bytes@120 = i64 8192
+  __gt_seed_bytes@120 = i64 16384
   __gt_stack_bytes_sum@128 = i64 0
   __gt_stack_bytes_count@136 = i64 0
   __gt_seed_sum_seen@144 = i64 0

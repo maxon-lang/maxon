@@ -68,7 +68,7 @@ when the next touch would be at or below the base, lands on the base, and touche
 covered — consecutive touches are one page apart and the base is less than a page below the last of them.
 
 ⚠ **x64-windows CANNOT SHOW THIS AND IS NOT EVIDENCE ABOUT IT.** That lane reserves
-`GtWindowsExceptionDispatchBytes` — one page — under the guard word for the OS's exception dispatch, so a
+`GtWindowsExceptionDispatchBytes` — two pages — under the guard word for the OS's exception dispatch, so a
 page of overshoot fits inside a reservation that exists for an unrelated reason. **x64-linux is the lane
 where this case's overshoot is a fault**, so a green result on another lane is not evidence that the walk
 stops at the base. arm64's prologue probes a frame over one page the same way, comparing before each

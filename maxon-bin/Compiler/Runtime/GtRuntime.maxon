@@ -674,14 +674,31 @@ function gtStackSystemBytes(target Target) returns ParsedInt
 	end 'home'
 end 'gtStackSystemBytes'
 
-// ⭐ **Go's Windows `stackSystem`, and a measurement agrees with it.** On an AVX2 host (Ryzen 7 5800X),
-// `CONTEXT.Rsp - rsp` read inside `mrt_fault_thunk` for a fault on a green thread is 0xA50 (2640) bytes — the
-// exception record, the CONTEXT with its XSAVE area, `KiUserExceptionDispatcher`, `RtlDispatchException` and
-// the vectored-handler walk, plus the thunk's own frame. The diagnostic chain under the thunk rides the margin
-// (`X64Runtime.UnguardedDiagnosticChainBytes`), so the whole path is about 3.3 KB below a faulting guarded
-// frame, which has `stackSystem + 2 * margin` less its pushes — about 5.9 KB — beneath it. AVX-512's larger
-// XSAVE area adds about 1.6 KB and still fits.
-let GtWindowsExceptionDispatchBytes = 0x1000 as ParsedInt
+// ⭐ **The room Windows needs to dispatch a fault on a green thread, sized for the widest host.** The kernel
+// builds the exception record, the CONTEXT with its XSAVE area and the dispatcher's frames on the faulting
+// stack, and the XSAVE area grows with the host's vector state, so the reserve is the sum of those parts at
+// their widest (AVX-512) and `requireWindowsDispatchFitsItsReserve` refuses a build where it would not fit;
+// too little room ends the process with the fault's own status (0xC0000005) instead of the runtime's report.
+// Measured on an AVX2 host: 0xA50 (2640) bytes from the thunk's frame up, plus the diagnostic chain that rides
+// the margin (`X64Runtime.UnguardedDiagnosticChainBytes`).
+let WindowsPageBytes = 0x1000 as ParsedInt
+let GtWindowsExceptionDispatchBytes = WindowsPageBytes * 2
+let WindowsContextRecordBytes = 1232 as ParsedInt
+let WindowsContextExtensionBytes = 256 as ParsedInt
+let WindowsWidestXStateBytes = 2688 as ParsedInt
+let WindowsExceptionRecordBytes = 152 as ParsedInt
+let WindowsDispatcherFramesBytes = 512 as ParsedInt
+let WindowsWidestDispatchBytes = WindowsContextRecordBytes + WindowsContextExtensionBytes + WindowsWidestXStateBytes + WindowsExceptionRecordBytes + WindowsDispatcherFramesBytes
+
+function requireWindowsDispatchFitsItsReserve(target Target)
+	if gtFaultFrameHome(target) != FaultFrameHome.faultingStack 'noFrameOnTheStack'
+		return
+	end 'noFrameOnTheStack'
+
+	if WindowsWidestDispatchBytes > GtWindowsExceptionDispatchBytes 'dispatchOutgrowsReserve'
+		panic("requireWindowsDispatchFitsItsReserve: the widest exception dispatch is {WindowsWidestDispatchBytes} bytes but the reserve under a green thread's guard word is {GtWindowsExceptionDispatchBytes} — a fault on a nearly full stack would have no room for the kernel to build its frame and the process would end with the fault's own status. Raise GtWindowsExceptionDispatchBytes")
+	end 'dispatchOutgrowsReserve'
+end 'requireWindowsDispatchFitsItsReserve'
 
 // How an M's system stack is guarded, decided by where a fault's frame lands (`FaultFrameHome`).
 enum SystemStackGuard
@@ -739,12 +756,6 @@ let WindowsSystemStackGuardRegionBytes = WindowsSystemStackHeadroomBytes + Windo
 let X64LinuxSystemStackGuardRegionBytes = 0x1000 as ParsedInt
 let Arm64MacosSystemStackGuardRegionBytes = 0x4000 as ParsedInt
 let Arm64LinuxSystemStackGuardRegionBytes = 0x10000 as ParsedInt
-
-let GtWindowsExceptionDispatchMeasured = 0xA50 as StackSize
-
-function gtWindowsExceptionDispatchMeasuredBytes() returns StackSize
-	return GtWindowsExceptionDispatchMeasured
-end 'gtWindowsExceptionDispatchMeasuredBytes'
 
 // ⭐⭐ **HOW FAR ABOVE A GREEN THREAD's STACK BASE ITS GUARD WORD SITS — Go's `stackGuard`.** Maxon's margin
 // for the frames that free-ride between checkpoints, plus the OS's reservation below them. `__gt_spawn` and
@@ -6552,6 +6563,7 @@ end 'buildGtStackFree'
 
 function buildGtSystemStackAlloc(module StdModule, target Target)
 	requireProbeStrideFitsTheSystemStackGuard(target)
+	requireWindowsDispatchFitsItsReserve(target)
 
 	var func = IrFunction.createFromStd(GtSystemStackAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)

@@ -5240,7 +5240,7 @@ data {
   __gt_live_count@96 = i64 0
   __gt_quiesce_waiter@104 = i64 0
   __gt_quiesce_stuck@112 = i64 0
-  __gt_seed_bytes@120 = i64 8192
+  __gt_seed_bytes@120 = i64 16384
   __gt_stack_bytes_sum@128 = i64 0
   __gt_stack_bytes_count@136 = i64 0
   __gt_seed_sum_seen@144 = i64 0
@@ -5372,7 +5372,7 @@ chunk @__gt_morestack {
     0040: 48 4c 89 db 65 4c 89 14 25 08 00 00 00 49 81 ea
     0050: 00 00 01 00 65 4c 89 14 25 10 00 00 00 65 4c 89
     0060: 14 25 78 14 00 00 4c 8b 63 18 4c 8b 6b 20 4d 89
-    0070: e7 4d 01 ef 4d 29 c7 49 81 c7 a0 13 00 00 4d 39
+    0070: e7 4d 01 ef 4d 29 c7 49 81 c7 a0 23 00 00 4d 39
     0080: ef 0f 86 dc 00 00 00 4d 89 ee 4d 01 f6 49 81 fe
     0090: 00 00 00 40 0f 87 d6 00 00 00 4d 39 fe 0f 82 e7
     00a0: ff ff ff 4c 89 f1 e8 00 00 00 00 4d 85 c0 0f 8e
