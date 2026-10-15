@@ -12750,3 +12750,87 @@ end 'main'
 ```maxoncstderr
 error E3138: <fragment>:14:3: the reply of the message `Maker.make` is a function value, a closure record that owns what it captures and does not cross to another thread. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 ```
+
+<!-- test: services.a-handle-bound-to-a-local-then-pushed-is-freed-once -->
+A handle moved from a local into an array is owned by the array alone, so each is released once when the array goes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias WorkerHandleArray = Array with Worker.handle
+
+type Worker
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function add(n Integer) returns Integer
+		self.total = self.total + n
+		return self.total
+	end 'add'
+end 'Worker'
+
+function main() returns ExitCode
+	var workers = WorkerHandleArray.create()
+
+	for _ in 1 to 4 'spawnThem'
+		let w = spawn Worker.create()
+		workers.push(w)
+	end 'spawnThem'
+
+	var sum = 0 as Integer
+
+	for w in workers 'useThem'
+		sum = sum + (try await w.add(1) otherwise 0)
+	end 'useThem'
+
+	if sum == 4 'allAnswered'
+		return 42
+	end 'allAnswered'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: services.an-array-of-handles-walks-with-its-iterator -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias WorkerHandleArray = Array with Worker.handle
+
+type Worker
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function add(n Integer) returns Integer
+		self.total = self.total + n
+		return self.total
+	end 'add'
+end 'Worker'
+
+function main() returns ExitCode
+	var workers = WorkerHandleArray.create()
+
+	for _ in 1 to 4 'spawnThem'
+		workers.push(spawn Worker.create())
+	end 'spawnThem'
+
+	var sum = 0 as Integer
+
+	for (_, w) in try workers.withIterator() otherwise panic("an array always yields an iterator") 'walk'
+		sum = sum + (try await w.add(1) otherwise 0)
+	end 'walk'
+
+	if sum == 4 'allSeen'
+		return 42
+	end 'allSeen'
+	return 1
+end 'main'
+```
+```exitcode
+42
+```

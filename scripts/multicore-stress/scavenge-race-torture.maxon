@@ -95,20 +95,12 @@ function main() returns ExitCode
 	let scav = spawn Scavenger.create()
 	scav.sweep()
 
-	// ⚠⚠ **THE `spawn` IS PUSHED DIRECTLY AND MUST STAY THAT WAY — binding it to a local first is a LIVE
-	// DEFECT in this tree, not a style choice.** `let w = spawn Churn.create()` followed by `workers.push(w)`
-	// moves the handle out of a local binding into the container and DOUBLE-FREES it: exit 89
-	// (`RuntimeAbort.slabFreeOfParkedSpan`) or a segfault, where the direct push below exits 42. It has
-	// nothing to do with the scavenger this program is about: it reproduces with every
-	// `HeapStats.scavenge()` call removed.
 	var workers = ChurnHandleArray.create()
 
 	for _ in 1 to ServiceCount 'spawnThem'
 		workers.push(spawn Churn.create())
 	end 'spawnThem'
 
-	// ⚠ A plain `for`-in, not `.withIterator()`: the latter over an `Array with <T>.handle` PANICS the
-	// compiler (`ProgramSignatures.substituteTupleThroughInstance`).
 	var seed = 0 as Integer
 
 	for w in workers 'grindThem'

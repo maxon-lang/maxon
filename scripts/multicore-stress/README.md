@@ -110,9 +110,6 @@ family a program is in decides what its rows mean**, so it is the first column h
   since been deleted, so it cannot go red here — which is itself the finding. What it still proves is
   that the global sweep, the pop-then-test in `__sched_find_runnable` and the ring/steal machinery
   survive concurrent scavenging.
-  ⛔ **ITS HEADER FILES TWO LIVE COMPILER DEFECTS** it works around rather than fixes: binding a
-  `spawn` to a local before pushing it double-frees, and `.withIterator()` over
-  `Array with <T>.handle` panics the compiler.
 - **`service-async-strand-torture.maxon`** — services shut down while a coroutine their handler
   started is PARKED: the handler yields after its `async` so the coroutine runs to its `sleep`, and
   keeps the promise in the service's state so the shutdown is what drops it. `parked=` witnesses that
