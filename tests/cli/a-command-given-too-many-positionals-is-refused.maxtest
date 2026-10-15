@@ -1,0 +1,37 @@
+// a-command-given-too-many-positionals-is-refused.maxtest - a command that reads at most N positional
+// arguments refuses the first one beyond N by name, prints its usage and exits non-zero, however many more
+// follow.
+//
+// Two words are typed beyond what a command reads on purpose: the refusal's count of what was typed is a
+// narrowing, and one extra word fits it where two do not. A refusal that panicked on the second would pass
+// a reading that typed only one.
+
+let FirstWord = "first-word"
+let SecondWord = "second-word"
+let OwnFailureExitCode = 1 as ExitInt
+let UnexpectedPhrase = "unexpected extra argument: "
+let UsagePhrase = "Usage: "
+let PanicPhrase = "panic at"
+
+function requireRefusal(line ListedWordArray, naming String, exitsWith ExitInt) throws TestFailure
+	let typed = listed(line)
+	let refused = runDriver(line)
+	let said = "It said: {refused.stdout}{refused.stderr}"
+
+	try Expect.equal(refused.exitCode(), expected: exitsWith, message: "`maxon {typed}` did not exit {exitsWith}. {said}")
+	try Expect.contains(refused.stderr, needle: "{UnexpectedPhrase}{naming}", message: "`maxon {typed}` does not name the argument beyond what it reads. {said}")
+	try Expect.contains(refused.stderr, needle: UsagePhrase, message: "`maxon {typed}` printed no usage line. {said}")
+	try Expect.isFalse(refused.stderr.contains(PanicPhrase), message: "`maxon {typed}` panicked instead of refusing. {said}")
+end 'requireRefusal'
+
+test 'a command given more positionals than it reads refuses the first beyond them, naming it'
+	for command in [HiddenAnchorCommand, HelpCommandWord, HiddenCheapCommand] 'readsOne'
+		requireRefusal([command, FirstWord, SecondWord, FirstWord], naming: SecondWord, exitsWith: OwnFailureExitCode)
+	end 'readsOne'
+
+	requireRefusal([TestCommandWord, FirstWord, SecondWord, FirstWord], naming: SecondWord, exitsWith: NothingRanExitCode)
+
+	for command in [VersionCommandWord, UpgradeCommandWord] 'readsNone'
+		requireRefusal([command, FirstWord, SecondWord], naming: FirstWord, exitsWith: OwnFailureExitCode)
+	end 'readsNone'
+end 'a command given more positionals than it reads refuses the first beyond them, naming it'
